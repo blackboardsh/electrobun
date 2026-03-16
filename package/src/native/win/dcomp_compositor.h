@@ -595,6 +595,7 @@ public:
     bool resize(int newWidth, int newHeight) {
         if (!initialized || !swapChain) return false;
         if (newWidth <= 0 || newHeight <= 0) return false;
+        if (newWidth == surfaceWidth && newHeight == surfaceHeight) return true;
 
         surfaceWidth = newWidth;
         surfaceHeight = newHeight;
@@ -610,11 +611,44 @@ public:
             return false;
         }
 
-        hr = dcompDevice->Commit();
-        if (FAILED(hr)) return false;
+        // Render a frame immediately after resize to avoid blank gap
+        if (trianglePipelineReady) {
+            renderTriangle(renderAngle);
+        } else {
+            // At least clear to background color
+            ComPtr<ID3D11Texture2D> bb;
+            if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&bb)))) {
+                ComPtr<ID3D11RenderTargetView> rtv;
+                if (SUCCEEDED(d3dDevice->CreateRenderTargetView(bb.Get(), nullptr, &rtv))) {
+                    float c[4] = { 0.05f, 0.05f, 0.1f, 1.0f };
+                    d3dContext->ClearRenderTargetView(rtv.Get(), c);
+                    swapChain->Present(0, 0);
+                }
+            }
+        }
 
-        printf("[DComp] Resized to %dx%d\n", surfaceWidth, surfaceHeight);
+        dcompDevice->Commit();
         return true;
+    }
+
+    // Enable native resize tracking: subclass the target HWND to intercept
+    // WM_SIZE and auto-resize the swap chain without TS FFI round-trip.
+    void enableNativeResize() {
+        if (!initialized || !targetHwnd || nativeResizeHooked) return;
+
+        // Store this pointer for the subclass callback
+        SetPropA(targetHwnd, "DCompCompositor", (HANDLE)this);
+
+        SetWindowSubclass(targetHwnd, resizeSubclassProc, 1, (DWORD_PTR)this);
+        nativeResizeHooked = true;
+        printf("[DComp] Native resize hook installed\n");
+    }
+
+    void disableNativeResize() {
+        if (!nativeResizeHooked || !targetHwnd) return;
+        RemoveWindowSubclass(targetHwnd, resizeSubclassProc, 1);
+        RemovePropA(targetHwnd, "DCompCompositor");
+        nativeResizeHooked = false;
     }
 
     void shutdown() {
@@ -622,6 +656,9 @@ public:
 
         // Stop render loop
         stopRenderLoop();
+
+        // Remove native resize hook
+        disableNativeResize();
 
         // Destroy WGPU child
         if (wgpuChildHwnd && IsWindow(wgpuChildHwnd)) {
@@ -743,6 +780,9 @@ private:
     // Phase 3: WGPU child HWND
     HWND wgpuChildHwnd = NULL;
 
+    // Native resize hook
+    bool nativeResizeHooked = false;
+
     // Phase 4: Layered visual tree (WGPU + WebView2)
     ComPtr<IDCompositionVisual> wgpuVisual;
     ComPtr<IDCompositionVisual> webview2Visual;
@@ -756,6 +796,22 @@ private:
     // Benchmark
     double lastFrameTimeMs = 0.0;
     uint64_t frameCount = 0;
+
+    // Native WM_SIZE subclass — resizes DComp swap chain at OS level
+    static LRESULT CALLBACK resizeSubclassProc(
+        HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+        UINT_PTR subclassId, DWORD_PTR refData
+    ) {
+        if (msg == WM_SIZE && wParam != SIZE_MINIMIZED) {
+            int w = LOWORD(lParam);
+            int h = HIWORD(lParam);
+            auto* self = (DCompCompositor*)refData;
+            if (self && self->isInitialized() && w > 0 && h > 0) {
+                self->resize(w, h);
+            }
+        }
+        return DefSubclassProc(hwnd, msg, wParam, lParam);
+    }
 
     // Timer callback for render loop (static, dispatches to global compositor)
     static void CALLBACK renderTimerProc(HWND, UINT, UINT_PTR, DWORD) {

@@ -11734,6 +11734,14 @@ extern "C" ELECTROBUN_EXPORT void dcompShutdown() {
     }
 }
 
+// Enable native WM_SIZE resize hook (no TS round-trip, minimal jank).
+extern "C" ELECTROBUN_EXPORT void dcompEnableNativeResize() {
+    if (!g_dcompCompositor) return;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        g_dcompCompositor->enableNativeResize();
+    });
+}
+
 // =============================================================================
 // DirectComposition Phase 3: Triangle rendering + WGPU integration
 // =============================================================================

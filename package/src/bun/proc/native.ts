@@ -471,6 +471,10 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.void,
 			},
+			dcompEnableNativeResize: {
+				args: [],
+				returns: FFIType.void,
+			},
 			// DirectComposition Phase 3: triangle + WGPU child
 			dcompInitTrianglePipeline: {
 				args: [],
@@ -1824,6 +1828,10 @@ export const DCompBridge = {
 	shutdown: (): void => {
 		if (!native?.symbols?.dcompShutdown) return;
 		native.symbols.dcompShutdown();
+	},
+	enableNativeResize: (): void => {
+		if (!native?.symbols?.dcompEnableNativeResize) return;
+		native.symbols.dcompEnableNativeResize();
 	},
 	// Phase 3: Triangle rendering + WGPU integration
 	initTrianglePipeline: (): boolean => {
