@@ -11730,3 +11730,67 @@ extern "C" ELECTROBUN_EXPORT void dcompShutdown() {
         g_dcompCompositor = nullptr;
     }
 }
+
+// =============================================================================
+// DirectComposition Phase 3: Triangle rendering + WGPU integration
+// =============================================================================
+
+// Initialize the D3D11 triangle rendering pipeline on the DComp swap chain.
+extern "C" ELECTROBUN_EXPORT bool dcompInitTrianglePipeline() {
+    if (!g_dcompCompositor) return false;
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->initTrianglePipeline();
+    });
+    return result;
+}
+
+// Render one frame of a rotating triangle to the DComp swap chain.
+extern "C" ELECTROBUN_EXPORT bool dcompRenderTriangle(float angle) {
+    if (!g_dcompCompositor) return false;
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->renderTriangle(angle);
+    });
+    return result;
+}
+
+// Start a 60 FPS render loop (rotating triangle).
+extern "C" ELECTROBUN_EXPORT void dcompStartRenderLoop() {
+    if (!g_dcompCompositor) return;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        g_dcompCompositor->initTrianglePipeline();
+        g_dcompCompositor->startRenderLoop();
+    });
+}
+
+// Stop the render loop.
+extern "C" ELECTROBUN_EXPORT void dcompStopRenderLoop() {
+    if (!g_dcompCompositor) return;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        g_dcompCompositor->stopRenderLoop();
+    });
+}
+
+// Get the last frame render time in milliseconds (for benchmarking).
+extern "C" ELECTROBUN_EXPORT double dcompGetLastFrameTimeMs() {
+    if (!g_dcompCompositor) return -1.0;
+    return g_dcompCompositor->getLastFrameTimeMs();
+}
+
+// Get total frame count (for benchmarking).
+extern "C" ELECTROBUN_EXPORT uint64_t dcompGetFrameCount() {
+    if (!g_dcompCompositor) return 0;
+    return g_dcompCompositor->getFrameCount();
+}
+
+// Create a child HWND within the DComp target for WGPU surface creation
+// (Option C: WGPU renders to child HWND, DComp composites the parent).
+extern "C" ELECTROBUN_EXPORT void* dcompCreateWGPUChildHwnd(int x, int y, int w, int h) {
+    if (!g_dcompCompositor) return nullptr;
+    HWND result = NULL;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->createWGPUChildHwnd(x, y, w, h);
+    });
+    return (void*)result;
+}

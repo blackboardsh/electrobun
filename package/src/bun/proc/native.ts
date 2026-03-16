@@ -471,6 +471,35 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.void,
 			},
+			// DirectComposition Phase 3: triangle + WGPU child
+			dcompInitTrianglePipeline: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompRenderTriangle: {
+				args: [FFIType.f32],
+				returns: FFIType.bool,
+			},
+			dcompStartRenderLoop: {
+				args: [],
+				returns: FFIType.void,
+			},
+			dcompStopRenderLoop: {
+				args: [],
+				returns: FFIType.void,
+			},
+			dcompGetLastFrameTimeMs: {
+				args: [],
+				returns: FFIType.f64,
+			},
+			dcompGetFrameCount: {
+				args: [],
+				returns: FFIType.u64,
+			},
+			dcompCreateWGPUChildHwnd: {
+				args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1781,6 +1810,35 @@ export const DCompBridge = {
 	shutdown: (): void => {
 		if (!native?.symbols?.dcompShutdown) return;
 		native.symbols.dcompShutdown();
+	},
+	// Phase 3: Triangle rendering + WGPU integration
+	initTrianglePipeline: (): boolean => {
+		if (!native?.symbols?.dcompInitTrianglePipeline) return false;
+		return native.symbols.dcompInitTrianglePipeline() as boolean;
+	},
+	renderTriangle: (angle: number): boolean => {
+		if (!native?.symbols?.dcompRenderTriangle) return false;
+		return native.symbols.dcompRenderTriangle(angle) as boolean;
+	},
+	startRenderLoop: (): void => {
+		if (!native?.symbols?.dcompStartRenderLoop) return;
+		native.symbols.dcompStartRenderLoop();
+	},
+	stopRenderLoop: (): void => {
+		if (!native?.symbols?.dcompStopRenderLoop) return;
+		native.symbols.dcompStopRenderLoop();
+	},
+	getLastFrameTimeMs: (): number => {
+		if (!native?.symbols?.dcompGetLastFrameTimeMs) return -1;
+		return native.symbols.dcompGetLastFrameTimeMs() as number;
+	},
+	getFrameCount: (): bigint => {
+		if (!native?.symbols?.dcompGetFrameCount) return 0n;
+		return native.symbols.dcompGetFrameCount() as bigint;
+	},
+	createWGPUChildHwnd: (x: number, y: number, w: number, h: number): Pointer | null => {
+		if (!native?.symbols?.dcompCreateWGPUChildHwnd) return null;
+		return native.symbols.dcompCreateWGPUChildHwnd(x, y, w, h) as Pointer;
 	},
 };
 

@@ -5,7 +5,7 @@
 // compositing pattern used in Electrobun for native GPU rendering.
 //
 // Phase 2: Prove the compositing pipeline with a solid color render.
-// Phase 3: Replace D3D11 clear with WGPU triangle rendering.
+// Phase 3: D3D11 triangle + WGPU child visual in DComp tree.
 // Phase 4: Layer WebView2 composition controller into the visual tree.
 
 #pragma once
@@ -13,13 +13,54 @@
 #include <dcomp.h>
 #include <dxgi1_2.h>
 #include <d3d11.h>
+#include <d3dcompiler.h>
 #include <wrl.h>
 #include <cstdio>
+#include <cmath>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
+#pragma comment(lib, "d3dcompiler.lib")
 
 using Microsoft::WRL::ComPtr;
+
+// ============================================================================
+// HLSL shaders for Phase 3 triangle rendering via D3D11
+// ============================================================================
+
+static const char* kDCompVertexShader = R"(
+struct VSInput {
+    float2 pos : POSITION;
+    float4 col : COLOR;
+};
+struct VSOutput {
+    float4 pos : SV_Position;
+    float4 col : COLOR;
+};
+VSOutput main(VSInput input) {
+    VSOutput output;
+    output.pos = float4(input.pos, 0.0, 1.0);
+    output.col = input.col;
+    return output;
+}
+)";
+
+static const char* kDCompPixelShader = R"(
+struct PSInput {
+    float4 pos : SV_Position;
+    float4 col : COLOR;
+};
+float4 main(PSInput input) : SV_Target {
+    // Premultiply alpha for DirectComposition
+    return float4(input.col.rgb * input.col.a, input.col.a);
+}
+)";
+
+// Triangle vertices: position (x, y) + color (r, g, b, a)
+struct DCompVertex {
+    float x, y;
+    float r, g, b, a;
+};
 
 class DCompCompositor {
 public:
@@ -141,48 +182,248 @@ public:
         return true;
     }
 
-    // Render a solid color to the composition surface (Phase 2 test).
+    // ========================================================================
+    // Phase 2: Solid color render
+    // ========================================================================
+
+    // Render a solid color to the composition surface.
     // Color values are 0.0-1.0, alpha-premultiplied for DirectComposition.
     bool renderSolidColor(float r, float g, float b, float a) {
         if (!initialized || !swapChain || !d3dDevice) return false;
 
-        // Get back buffer from swap chain
         ComPtr<ID3D11Texture2D> backBuffer;
         HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-        if (FAILED(hr)) {
-            printf("[DComp] GetBuffer failed: 0x%08lx\n", hr);
-            return false;
-        }
+        if (FAILED(hr)) return false;
 
-        // Create render target view for the back buffer
         ComPtr<ID3D11RenderTargetView> rtv;
         hr = d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, &rtv);
-        if (FAILED(hr)) {
-            printf("[DComp] CreateRenderTargetView failed: 0x%08lx\n", hr);
-            return false;
-        }
+        if (FAILED(hr)) return false;
 
-        // Clear to solid color (premultiplied alpha for DirectComposition)
         float clearColor[4] = { r * a, g * a, b * a, a };
         d3dContext->ClearRenderTargetView(rtv.Get(), clearColor);
 
-        // Present and commit the composition
         hr = swapChain->Present(1, 0);
+        if (FAILED(hr)) return false;
+
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    // ========================================================================
+    // Phase 3: D3D11 triangle rendering through DComp swap chain
+    // ========================================================================
+
+    // Initialize the D3D11 rendering pipeline for triangle rendering.
+    bool initTrianglePipeline() {
+        if (!initialized || !d3dDevice) return false;
+        if (trianglePipelineReady) return true;
+
+        // Compile vertex shader
+        ComPtr<ID3DBlob> vsBlob, vsErrors;
+        HRESULT hr = D3DCompile(
+            kDCompVertexShader, strlen(kDCompVertexShader),
+            "DCompVS", nullptr, nullptr,
+            "main", "vs_5_0", 0, 0,
+            &vsBlob, &vsErrors);
         if (FAILED(hr)) {
-            printf("[DComp] Present failed: 0x%08lx\n", hr);
+            if (vsErrors) printf("[DComp] VS compile error: %s\n", (char*)vsErrors->GetBufferPointer());
             return false;
         }
 
-        hr = dcompDevice->Commit();
+        hr = d3dDevice->CreateVertexShader(
+            vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+            nullptr, &vertexShader);
+        if (FAILED(hr)) return false;
+
+        // Compile pixel shader
+        ComPtr<ID3DBlob> psBlob, psErrors;
+        hr = D3DCompile(
+            kDCompPixelShader, strlen(kDCompPixelShader),
+            "DCompPS", nullptr, nullptr,
+            "main", "ps_5_0", 0, 0,
+            &psBlob, &psErrors);
         if (FAILED(hr)) {
-            printf("[DComp] Commit after present failed: 0x%08lx\n", hr);
+            if (psErrors) printf("[DComp] PS compile error: %s\n", (char*)psErrors->GetBufferPointer());
             return false;
         }
 
+        hr = d3dDevice->CreatePixelShader(
+            psBlob->GetBufferPointer(), psBlob->GetBufferSize(),
+            nullptr, &pixelShader);
+        if (FAILED(hr)) return false;
+
+        // Create input layout
+        D3D11_INPUT_ELEMENT_DESC layout[] = {
+            { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 0,                            D3D11_INPUT_PER_VERTEX_DATA, 0 },
+            { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, D3D11_APPEND_ALIGNED_ELEMENT, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        };
+        hr = d3dDevice->CreateInputLayout(
+            layout, 2,
+            vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+            &inputLayout);
+        if (FAILED(hr)) return false;
+
+        // Create vertex buffer with a colored triangle
+        DCompVertex vertices[] = {
+            {  0.0f,  0.5f,  0.1f, 0.9f, 0.4f, 1.0f },  // Top — green
+            {  0.5f, -0.5f,  0.9f, 0.1f, 0.1f, 1.0f },  // Right — red
+            { -0.5f, -0.5f,  0.1f, 0.3f, 0.9f, 1.0f },  // Left — blue
+        };
+
+        D3D11_BUFFER_DESC vbDesc = {};
+        vbDesc.ByteWidth = sizeof(vertices);
+        vbDesc.Usage = D3D11_USAGE_DYNAMIC;
+        vbDesc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+        vbDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+        D3D11_SUBRESOURCE_DATA initData = {};
+        initData.pSysMem = vertices;
+
+        hr = d3dDevice->CreateBuffer(&vbDesc, &initData, &vertexBuffer);
+        if (FAILED(hr)) return false;
+
+        // Create blend state for premultiplied alpha
+        D3D11_BLEND_DESC blendDesc = {};
+        blendDesc.RenderTarget[0].BlendEnable = TRUE;
+        blendDesc.RenderTarget[0].SrcBlend = D3D11_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+        blendDesc.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+        blendDesc.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+        blendDesc.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+
+        hr = d3dDevice->CreateBlendState(&blendDesc, &blendState);
+        if (FAILED(hr)) return false;
+
+        printf("[DComp] Triangle pipeline initialized\n");
+        trianglePipelineReady = true;
         return true;
     }
 
-    // Resize the composition surface (e.g. on window resize).
+    // Render a single frame of the triangle to the DComp swap chain.
+    // angle controls rotation (radians). Pass 0 for static triangle.
+    bool renderTriangle(float angle) {
+        if (!trianglePipelineReady || !swapChain || !d3dDevice) return false;
+
+        // Update vertex positions with rotation
+        float cosA = cosf(angle);
+        float sinA = sinf(angle);
+
+        DCompVertex baseVerts[] = {
+            {  0.0f,  0.5f,  0.1f, 0.9f, 0.4f, 1.0f },
+            {  0.5f, -0.5f,  0.9f, 0.1f, 0.1f, 1.0f },
+            { -0.5f, -0.5f,  0.1f, 0.3f, 0.9f, 1.0f },
+        };
+
+        // Rotate vertices
+        D3D11_MAPPED_SUBRESOURCE mapped;
+        HRESULT hr = d3dContext->Map(vertexBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
+        if (FAILED(hr)) return false;
+
+        DCompVertex* verts = (DCompVertex*)mapped.pData;
+        for (int i = 0; i < 3; i++) {
+            float x = baseVerts[i].x;
+            float y = baseVerts[i].y;
+            verts[i].x = x * cosA - y * sinA;
+            verts[i].y = x * sinA + y * cosA;
+            verts[i].r = baseVerts[i].r;
+            verts[i].g = baseVerts[i].g;
+            verts[i].b = baseVerts[i].b;
+            verts[i].a = baseVerts[i].a;
+        }
+        d3dContext->Unmap(vertexBuffer.Get(), 0);
+
+        // Get back buffer
+        ComPtr<ID3D11Texture2D> backBuffer;
+        hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) return false;
+
+        ComPtr<ID3D11RenderTargetView> rtv;
+        hr = d3dDevice->CreateRenderTargetView(backBuffer.Get(), nullptr, &rtv);
+        if (FAILED(hr)) return false;
+
+        // Set up pipeline
+        d3dContext->OMSetRenderTargets(1, rtv.GetAddressOf(), nullptr);
+
+        float blendFactor[4] = { 0, 0, 0, 0 };
+        d3dContext->OMSetBlendState(blendState.Get(), blendFactor, 0xFFFFFFFF);
+
+        D3D11_VIEWPORT viewport = {};
+        viewport.Width = (float)surfaceWidth;
+        viewport.Height = (float)surfaceHeight;
+        viewport.MaxDepth = 1.0f;
+        d3dContext->RSSetViewports(1, &viewport);
+
+        // Clear to transparent (premultiplied alpha)
+        float clearColor[4] = { 0.05f, 0.05f, 0.1f, 1.0f };
+        d3dContext->ClearRenderTargetView(rtv.Get(), clearColor);
+
+        // Draw triangle
+        d3dContext->IASetInputLayout(inputLayout.Get());
+        d3dContext->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+        UINT stride = sizeof(DCompVertex);
+        UINT offset = 0;
+        d3dContext->IASetVertexBuffers(0, 1, vertexBuffer.GetAddressOf(), &stride, &offset);
+
+        d3dContext->VSSetShader(vertexShader.Get(), nullptr, 0);
+        d3dContext->PSSetShader(pixelShader.Get(), nullptr, 0);
+
+        d3dContext->Draw(3, 0);
+
+        // Present and commit
+        hr = swapChain->Present(1, 0);
+        if (FAILED(hr)) return false;
+
+        return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    // ========================================================================
+    // Phase 3: WGPU child visual support (Option C)
+    // ========================================================================
+
+    // Create a child HWND suitable for WGPU surface creation, positioned within
+    // the DComp target window. WGPU creates its surface from this child HWND
+    // normally — the child HWND content appears in the DComp target window.
+    HWND createWGPUChildHwnd(int x, int y, int w, int h) {
+        if (!initialized || !targetHwnd) return NULL;
+
+        // Register a minimal window class for the WGPU child
+        static bool classRegistered = false;
+        if (!classRegistered) {
+            WNDCLASSA wc = {};
+            wc.lpfnWndProc = DefWindowProcA;
+            wc.hInstance = GetModuleHandle(NULL);
+            wc.lpszClassName = "DCompWGPUChild";
+            RegisterClassA(&wc);
+            classRegistered = true;
+        }
+
+        HWND child = CreateWindowExA(
+            0,
+            "DCompWGPUChild",
+            "",
+            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+            x, y, w, h,
+            targetHwnd,
+            NULL,
+            GetModuleHandle(NULL),
+            NULL
+        );
+
+        if (child) {
+            wgpuChildHwnd = child;
+            printf("[DComp] Created WGPU child HWND=%p at (%d,%d %dx%d)\n", child, x, y, w, h);
+        } else {
+            printf("[DComp] Failed to create WGPU child HWND\n");
+        }
+        return child;
+    }
+
+    // ========================================================================
+    // Lifecycle
+    // ========================================================================
+
     bool resize(int newWidth, int newHeight) {
         if (!initialized || !swapChain) return false;
         if (newWidth <= 0 || newHeight <= 0) return false;
@@ -190,7 +431,6 @@ public:
         surfaceWidth = newWidth;
         surfaceHeight = newHeight;
 
-        // Release all references to back buffer before resizing
         d3dContext->ClearState();
         d3dContext->Flush();
 
@@ -203,10 +443,7 @@ public:
         }
 
         hr = dcompDevice->Commit();
-        if (FAILED(hr)) {
-            printf("[DComp] Commit after resize failed: 0x%08lx\n", hr);
-            return false;
-        }
+        if (FAILED(hr)) return false;
 
         printf("[DComp] Resized to %dx%d\n", surfaceWidth, surfaceHeight);
         return true;
@@ -215,6 +452,24 @@ public:
     void shutdown() {
         if (!initialized) return;
 
+        // Stop render loop
+        stopRenderLoop();
+
+        // Destroy WGPU child
+        if (wgpuChildHwnd && IsWindow(wgpuChildHwnd)) {
+            DestroyWindow(wgpuChildHwnd);
+            wgpuChildHwnd = NULL;
+        }
+
+        // Release triangle pipeline
+        blendState.Reset();
+        vertexBuffer.Reset();
+        inputLayout.Reset();
+        pixelShader.Reset();
+        vertexShader.Reset();
+        trianglePipelineReady = false;
+
+        // Release DComp
         if (dcompTarget) dcompTarget->SetRoot(nullptr);
         if (dcompDevice) dcompDevice->Commit();
 
@@ -232,15 +487,40 @@ public:
 
     bool isInitialized() const { return initialized; }
 
-    // Accessors for Phase 3+ (WGPU integration, visual tree layering)
+    // ========================================================================
+    // Render loop (60 FPS timer-driven, matching Electrobun's WGPU test pattern)
+    // ========================================================================
+
+    void startRenderLoop() {
+        if (renderLoopActive) return;
+        renderLoopActive = true;
+        renderAngle = 0.0f;
+        // 16ms timer ≈ 60 FPS
+        renderTimerId = SetTimer(NULL, 0, 16, renderTimerProc);
+        printf("[DComp] Render loop started (timer=%llu)\n", (unsigned long long)renderTimerId);
+    }
+
+    void stopRenderLoop() {
+        if (!renderLoopActive) return;
+        renderLoopActive = false;
+        if (renderTimerId) {
+            KillTimer(NULL, renderTimerId);
+            renderTimerId = 0;
+        }
+        printf("[DComp] Render loop stopped\n");
+    }
+
+    bool isRenderLoopActive() const { return renderLoopActive; }
+
+    // Accessors for integration
     IDCompositionDevice* getDCompDevice() const { return dcompDevice.Get(); }
     IDCompositionVisual* getRootVisual() const { return rootVisual.Get(); }
     IDXGISwapChain1* getSwapChain() const { return swapChain.Get(); }
     ID3D11Device* getD3DDevice() const { return d3dDevice.Get(); }
     HWND getTargetHwnd() const { return targetHwnd; }
+    HWND getWGPUChildHwnd() const { return wgpuChildHwnd; }
 
-    // Phase 4: Add a child visual to the composition tree (for layering
-    // WebView2 above/below WGPU content)
+    // Phase 4: Add a child visual to the composition tree
     bool addChildVisual(IDCompositionVisual* child) {
         if (!initialized || !rootVisual) return false;
         HRESULT hr = rootVisual->AddVisual(child, TRUE, nullptr);
@@ -256,13 +536,17 @@ public:
         return SUCCEEDED(dcompDevice->Commit());
     }
 
+    // Benchmark: measure frame time for the last rendered frame
+    double getLastFrameTimeMs() const { return lastFrameTimeMs; }
+    uint64_t getFrameCount() const { return frameCount; }
+
 private:
     HWND targetHwnd = NULL;
     int surfaceWidth = 0;
     int surfaceHeight = 0;
     bool initialized = false;
 
-    // D3D11 (for creating DXGI swap chain + Phase 2 solid color render)
+    // D3D11
     ComPtr<ID3D11Device> d3dDevice;
     ComPtr<ID3D11DeviceContext> d3dContext;
 
@@ -274,4 +558,48 @@ private:
     ComPtr<IDCompositionDevice> dcompDevice;
     ComPtr<IDCompositionTarget> dcompTarget;
     ComPtr<IDCompositionVisual> rootVisual;
+
+    // Phase 3: Triangle pipeline
+    ComPtr<ID3D11VertexShader> vertexShader;
+    ComPtr<ID3D11PixelShader> pixelShader;
+    ComPtr<ID3D11InputLayout> inputLayout;
+    ComPtr<ID3D11Buffer> vertexBuffer;
+    ComPtr<ID3D11BlendState> blendState;
+    bool trianglePipelineReady = false;
+
+    // Phase 3: WGPU child HWND
+    HWND wgpuChildHwnd = NULL;
+
+    // Render loop
+    bool renderLoopActive = false;
+    UINT_PTR renderTimerId = 0;
+    float renderAngle = 0.0f;
+
+    // Benchmark
+    double lastFrameTimeMs = 0.0;
+    uint64_t frameCount = 0;
+
+    // Timer callback for render loop (static, dispatches to global compositor)
+    static void CALLBACK renderTimerProc(HWND, UINT, UINT_PTR, DWORD) {
+        // Access the global compositor (defined in nativeWrapper.cpp)
+        extern DCompCompositor* g_dcompCompositor;
+        if (!g_dcompCompositor || !g_dcompCompositor->isInitialized()) return;
+
+        auto start = std::chrono::high_resolution_clock::now();
+
+        g_dcompCompositor->renderAngle += 0.02f;
+        g_dcompCompositor->renderTriangle(g_dcompCompositor->renderAngle);
+
+        auto end = std::chrono::high_resolution_clock::now();
+        g_dcompCompositor->lastFrameTimeMs =
+            std::chrono::duration<double, std::milli>(end - start).count();
+        g_dcompCompositor->frameCount++;
+
+        // Log every 60 frames (~1 second)
+        if (g_dcompCompositor->frameCount % 60 == 0) {
+            printf("[DComp] Frame %llu, last frame: %.2fms\n",
+                   (unsigned long long)g_dcompCompositor->frameCount,
+                   g_dcompCompositor->lastFrameTimeMs);
+        }
+    }
 };
