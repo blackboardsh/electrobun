@@ -184,7 +184,9 @@ public:
         }
 
         // 6. Create composition target for the HWND
-        hr = dcompDevice->CreateTargetForHwnd(targetHwnd, TRUE, &dcompTarget);
+        // topmost=FALSE puts DComp content BEHIND child window content (WebView2),
+        // so HTML renders on top with transparent areas showing the GPU content.
+        hr = dcompDevice->CreateTargetForHwnd(targetHwnd, FALSE, &dcompTarget);
         if (FAILED(hr)) {
             printf("[DComp] CreateTargetForHwnd failed: 0x%08lx\n", hr);
             return false;
