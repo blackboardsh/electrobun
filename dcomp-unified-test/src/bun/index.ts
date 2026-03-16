@@ -641,8 +641,6 @@ function recreateRenderResources() {
 	const bufDesc = makeReadbackBufferDescriptor(readbackSize);
 	readbackBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(device, bufDesc.ptr as number);
 
-	camera.aspect = currentWidth / currentHeight;
-	camera.updateProjectionMatrix();
 	console.log(`[resize] ${currentWidth}x${currentHeight} bpr=${readbackBytesPerRow}`);
 }
 
@@ -982,6 +980,8 @@ function renderFrame() {
 		currentWidth = winSize.width;
 		currentHeight = winSize.height;
 		recreateRenderResources();
+		camera.aspect = currentWidth / currentHeight;
+		camera.updateProjectionMatrix();
 	}
 
 	camera.lookAt(lookAt);
