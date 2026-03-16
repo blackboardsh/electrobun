@@ -11992,6 +11992,12 @@ extern "C" ELECTROBUN_EXPORT bool dcompBlitFromWGPUBuffer(
     return result;
 }
 
+// Enable/disable bridge mode (skip render-on-resize for WGPU bridge).
+extern "C" ELECTROBUN_EXPORT void dcompSetBridgeMode(bool enabled) {
+    if (!g_dcompCompositor) return;
+    g_dcompCompositor->setBridgeMode(enabled);
+}
+
 // Blit raw BGRA pixel data from WGPU readback to the DComp swap chain.
 // pixelData: pointer to width*height*4 bytes of BGRA pixel data.
 extern "C" ELECTROBUN_EXPORT bool dcompBlitPixels(const void* pixelData, int width, int height) {

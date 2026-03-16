@@ -508,6 +508,10 @@ export const native = (() => {
 				args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
 				returns: FFIType.ptr,
 			},
+			dcompSetBridgeMode: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
 			// WGPU Bridge: blit pixels to DComp swap chain
 			dcompBlitPixels: {
 				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
@@ -1878,6 +1882,11 @@ export const DCompBridge = {
 	createWGPUChildHwnd: (x: number, y: number, w: number, h: number): Pointer | null => {
 		if (!native?.symbols?.dcompCreateWGPUChildHwnd) return null;
 		return native.symbols.dcompCreateWGPUChildHwnd(x, y, w, h) as Pointer;
+	},
+	// Bridge mode: skip render-on-resize (WGPU provides frames)
+	setBridgeMode: (enabled: boolean): void => {
+		if (!native?.symbols?.dcompSetBridgeMode) return;
+		native.symbols.dcompSetBridgeMode(enabled);
 	},
 	// WGPU Bridge: blit pixel data to DComp swap chain
 	blitPixels: (pixelData: Pointer, width: number, height: number): boolean => {

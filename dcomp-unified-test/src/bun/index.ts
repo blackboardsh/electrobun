@@ -617,29 +617,42 @@ const surfaceFormat = 0x00000017; // BGRA8Unorm
 let currentWidth = winW;
 let currentHeight = winH;
 
-// Offscreen render texture (replaces surface)
-let renderTextureDesc = makeTextureDescriptor(
-	currentWidth, currentHeight,
-	surfaceFormat,
-	WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
-);
-let renderTexture = WGPUNative.symbols.wgpuDeviceCreateTexture(device, renderTextureDesc.ptr as number);
-if (!renderTexture) {
-	throw new Error("Failed to create offscreen render texture");
+// Offscreen render resources (recreated on resize)
+let readbackBytesPerRow = alignTo(currentWidth * 4, 256);
+let readbackSize = readbackBytesPerRow * currentHeight;
+let renderTexture: any = null;
+let readbackBuffer: any = null;
+
+function recreateRenderResources() {
+	// Release old resources
+	if (renderTexture) WGPUNative.symbols.wgpuTextureRelease(renderTexture);
+	if (readbackBuffer) WGPUNative.symbols.wgpuBufferRelease(readbackBuffer);
+
+	readbackBytesPerRow = alignTo(currentWidth * 4, 256);
+	readbackSize = readbackBytesPerRow * currentHeight;
+
+	const texDesc = makeTextureDescriptor(
+		currentWidth, currentHeight,
+		surfaceFormat,
+		WGPUTextureUsage_RenderAttachment | WGPUTextureUsage_CopySrc,
+	);
+	renderTexture = WGPUNative.symbols.wgpuDeviceCreateTexture(device, texDesc.ptr as number);
+
+	const bufDesc = makeReadbackBufferDescriptor(readbackSize);
+	readbackBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(device, bufDesc.ptr as number);
+
+	camera.aspect = currentWidth / currentHeight;
+	camera.updateProjectionMatrix();
+	console.log(`[resize] ${currentWidth}x${currentHeight} bpr=${readbackBytesPerRow}`);
 }
 
-// Readback buffer: GPU → CPU transfer for DComp blit
-const readbackBytesPerRow = alignTo(currentWidth * 4, 256);
-const readbackSize = readbackBytesPerRow * currentHeight;
-const readbackBufDesc = makeReadbackBufferDescriptor(readbackSize);
-let readbackBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(device, readbackBufDesc.ptr as number);
-if (!readbackBuffer) {
-	throw new Error("Failed to create readback buffer");
+recreateRenderResources();
+if (!renderTexture || !readbackBuffer) {
+	throw new Error("Failed to create offscreen render resources");
 }
 
-// CPU pixel buffer for DComp blit (contiguous, no row padding)
-const pixelBuffer = new Uint8Array(currentWidth * currentHeight * 4);
-WGPU_KEEPALIVE.push(pixelBuffer);
+// Enable bridge mode: DComp won't clear/render on resize — WGPU provides frames
+DCompBridge.setBridgeMode(true);
 
 // ── Shader ──────────────────────────────────────────────────────────────────
 
@@ -962,7 +975,15 @@ function renderFrame() {
 
 	world.step(1 / 60, delta, 3);
 
-	// Fixed size for now (resize would need texture/buffer recreation)
+	// Check for resize
+	const winSize = win.getSize();
+	if (winSize.width > 0 && winSize.height > 0 &&
+		(winSize.width !== currentWidth || winSize.height !== currentHeight)) {
+		currentWidth = winSize.width;
+		currentHeight = winSize.height;
+		recreateRenderResources();
+	}
+
 	camera.lookAt(lookAt);
 	camera.updateMatrixWorld();
 	viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);

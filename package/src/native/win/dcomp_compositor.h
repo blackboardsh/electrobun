@@ -644,6 +644,14 @@ public:
     // Lifecycle
     // ========================================================================
 
+    // Enable bridge mode: skip render-on-resize (WGPU blitFromPixels handles it)
+    void setBridgeMode(bool enabled) {
+        bridgeMode = enabled;
+        printf("[DComp] Bridge mode %s\n", enabled ? "enabled" : "disabled");
+    }
+
+    bool isBridgeMode() const { return bridgeMode; }
+
     bool resize(int newWidth, int newHeight) {
         if (!initialized || !swapChain) return false;
         if (newWidth <= 0 || newHeight <= 0) return false;
@@ -663,11 +671,17 @@ public:
             return false;
         }
 
-        // Render a frame immediately after resize to avoid blank gap
+        // In bridge mode, skip the immediate render — the next blitFromPixels
+        // call will fill the swap chain with the correct WGPU content.
+        if (bridgeMode) {
+            dcompDevice->Commit();
+            return true;
+        }
+
+        // Non-bridge mode: render a frame immediately after resize to avoid blank gap
         if (trianglePipelineReady) {
             renderTriangle(renderAngle);
         } else {
-            // At least clear to background color
             ComPtr<ID3D11Texture2D> bb;
             if (SUCCEEDED(swapChain->GetBuffer(0, IID_PPV_ARGS(&bb)))) {
                 ComPtr<ID3D11RenderTargetView> rtv;
@@ -841,6 +855,9 @@ private:
 
     // Native resize hook
     bool nativeResizeHooked = false;
+
+    // Bridge mode: WGPU provides frames via blitFromPixels, skip render-on-resize
+    bool bridgeMode = false;
 
     // WebView2 composition controller (for mouse input forwarding)
     ComPtr<ICoreWebView2CompositionController> compController;
