@@ -37,6 +37,8 @@
 #include <shlguid.h>   // For CLSID_FileOpenDialog
 #include <commdlg.h>   // For COMDLG_FILTERSPEC
 #include <dcomp.h>     // For DirectComposition
+#include <dxgi1_2.h>   // For DXGI 1.2 (CreateSwapChainForComposition)
+#include <d3d11.h>     // For D3D11 (DComp swap chain creation)
 #include <locale>      // For string conversion
 #include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
@@ -60,6 +62,9 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+
+// DirectComposition compositor (GPU surface compositing for Windows)
+#include "dcomp_compositor.h"
 
 using namespace electrobun;
 
@@ -364,6 +369,8 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dcomp.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -11606,4 +11613,120 @@ extern "C" ELECTROBUN_EXPORT bool isDockIconVisible() {
 extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
     // Not yet implemented on Windows
     // TODO: Implement using SetWindowIcon/LoadImage APIs
+}
+
+// =============================================================================
+// DirectComposition API (Phase 2+)
+//
+// These exports expose the DCompCompositor to the Bun/TypeScript FFI layer.
+// Phase 2: dcompInit + dcompRenderColor prove the compositing pipeline.
+// Phase 3: dcompInitForWGPUView connects WGPU to the composition surface.
+// Phase 4: dcompAttachWebView2 layers WebView2 into the visual tree.
+// =============================================================================
+
+static DCompCompositor* g_dcompCompositor = nullptr;
+
+// Initialize DirectComposition on an AbstractView's container HWND.
+// The view's container window becomes the composition target.
+extern "C" ELECTROBUN_EXPORT bool dcompInitForView(AbstractView* view, int width, int height) {
+    if (!view) {
+        printf("[DComp] dcompInitForView: null view\n");
+        return false;
+    }
+
+    // Get the container HWND (parent of the WGPUView child window)
+    HWND targetHwnd = NULL;
+    if (view->hwnd) {
+        targetHwnd = GetParent(view->hwnd);
+        if (!targetHwnd) targetHwnd = view->hwnd;
+    }
+    if (!targetHwnd || !IsWindow(targetHwnd)) {
+        printf("[DComp] dcompInitForView: invalid HWND (view->hwnd=%p parent=%p)\n",
+               view->hwnd, targetHwnd);
+        return false;
+    }
+
+    // Tear down existing compositor if any
+    if (g_dcompCompositor) {
+        g_dcompCompositor->shutdown();
+        delete g_dcompCompositor;
+    }
+
+    g_dcompCompositor = new DCompCompositor();
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->init(targetHwnd, width, height);
+    });
+
+    if (!result) {
+        delete g_dcompCompositor;
+        g_dcompCompositor = nullptr;
+    }
+    return result;
+}
+
+// Initialize DirectComposition on a raw HWND (for standalone testing).
+extern "C" ELECTROBUN_EXPORT bool dcompInitForHwnd(void* hwnd, int width, int height) {
+    HWND targetHwnd = (HWND)hwnd;
+    if (!targetHwnd || !IsWindow(targetHwnd)) {
+        printf("[DComp] dcompInitForHwnd: invalid HWND=%p\n", hwnd);
+        return false;
+    }
+
+    if (g_dcompCompositor) {
+        g_dcompCompositor->shutdown();
+        delete g_dcompCompositor;
+    }
+
+    g_dcompCompositor = new DCompCompositor();
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->init(targetHwnd, width, height);
+    });
+
+    if (!result) {
+        delete g_dcompCompositor;
+        g_dcompCompositor = nullptr;
+    }
+    return result;
+}
+
+// Render a solid color to the DirectComposition surface.
+// RGBA values are 0.0-1.0. Alpha is premultiplied internally.
+extern "C" ELECTROBUN_EXPORT bool dcompRenderColor(float r, float g, float b, float a) {
+    if (!g_dcompCompositor) {
+        printf("[DComp] dcompRenderColor: compositor not initialized\n");
+        return false;
+    }
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->renderSolidColor(r, g, b, a);
+    });
+    return result;
+}
+
+// Resize the DirectComposition surface.
+extern "C" ELECTROBUN_EXPORT bool dcompResize(int width, int height) {
+    if (!g_dcompCompositor) return false;
+    bool result = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        result = g_dcompCompositor->resize(width, height);
+    });
+    return result;
+}
+
+// Check if DirectComposition is initialized.
+extern "C" ELECTROBUN_EXPORT bool dcompIsInitialized() {
+    return g_dcompCompositor && g_dcompCompositor->isInitialized();
+}
+
+// Shut down DirectComposition and release all resources.
+extern "C" ELECTROBUN_EXPORT void dcompShutdown() {
+    if (g_dcompCompositor) {
+        MainThreadDispatcher::dispatch_sync([&]() {
+            g_dcompCompositor->shutdown();
+        });
+        delete g_dcompCompositor;
+        g_dcompCompositor = nullptr;
+    }
 }

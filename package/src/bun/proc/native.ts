@@ -446,6 +446,31 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
 			},
+			// DirectComposition (Phase 2+)
+			dcompInitForView: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompInitForHwnd: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompRenderColor: {
+				args: [FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32],
+				returns: FFIType.bool,
+			},
+			dcompResize: {
+				args: [FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompIsInitialized: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompShutdown: {
+				args: [],
+				returns: FFIType.void,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1728,6 +1753,34 @@ export const WGPUBridge = {
 	createSurfaceForView: (instancePtr: Pointer, viewPtr: Pointer): Pointer | null => {
 		if (!native?.symbols?.wgpuCreateSurfaceForView) return null;
 		return native.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
+	},
+};
+
+// DirectComposition bridge (Phase 2+)
+export const DCompBridge = {
+	initForView: (viewPtr: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitForView) return false;
+		return native.symbols.dcompInitForView(viewPtr as any, width, height) as boolean;
+	},
+	initForHwnd: (hwnd: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitForHwnd) return false;
+		return native.symbols.dcompInitForHwnd(hwnd as any, width, height) as boolean;
+	},
+	renderColor: (r: number, g: number, b: number, a: number): boolean => {
+		if (!native?.symbols?.dcompRenderColor) return false;
+		return native.symbols.dcompRenderColor(r, g, b, a) as boolean;
+	},
+	resize: (width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompResize) return false;
+		return native.symbols.dcompResize(width, height) as boolean;
+	},
+	isInitialized: (): boolean => {
+		if (!native?.symbols?.dcompIsInitialized) return false;
+		return native.symbols.dcompIsInitialized() as boolean;
+	},
+	shutdown: (): void => {
+		if (!native?.symbols?.dcompShutdown) return;
+		native.symbols.dcompShutdown();
 	},
 };
 
