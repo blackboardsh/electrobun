@@ -7253,22 +7253,25 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
     // If DComp mode is enabled, init the compositor on the top-level HWND
     // BEFORE WebView2 creation so the composition controller path is used.
+    // MUST dispatch to main thread: SetWindowSubclass needs to be called
+    // from the UI thread to receive WM_SIZE messages for native resize.
     if (g_dcompModeEnabled && !g_dcompCompositor) {
         HWND topLevel = GetAncestor(hwnd, GA_ROOT);
         if (!topLevel) topLevel = hwnd;
-
-        g_dcompCompositor = new DCompCompositor();
         int w = g_dcompModeWidth > 0 ? g_dcompModeWidth : (int)width;
         int h = g_dcompModeHeight > 0 ? g_dcompModeHeight : (int)height;
 
-        if (g_dcompCompositor->init(topLevel, w, h)) {
-            g_dcompCompositor->enableNativeResize();
-            printf("[DComp] Pre-initialized for WebView2 composition controller (%dx%d)\n", w, h);
-        } else {
-            delete g_dcompCompositor;
-            g_dcompCompositor = nullptr;
-            printf("[DComp] Pre-init failed, falling back to standard controller\n");
-        }
+        MainThreadDispatcher::dispatch_sync([topLevel, w, h]() {
+            g_dcompCompositor = new DCompCompositor();
+            if (g_dcompCompositor->init(topLevel, w, h)) {
+                g_dcompCompositor->enableNativeResize();
+                printf("[DComp] Pre-initialized on main thread (%dx%d) HWND=%p\n", w, h, topLevel);
+            } else {
+                delete g_dcompCompositor;
+                g_dcompCompositor = nullptr;
+                printf("[DComp] Pre-init failed\n");
+            }
+        });
     }
 
     // Factory pattern - choose implementation based on renderer
