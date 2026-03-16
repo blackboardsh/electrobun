@@ -11912,6 +11912,86 @@ extern "C" ELECTROBUN_EXPORT bool dcompRenderTriangle(float angle) {
     return result;
 }
 
+// Map a WGPU readback buffer, copy pixels to DComp swap chain, unmap.
+// Combines readback + blit in one native call with proper Dawn callbacks.
+// wgpuInstance/wgpuBuffer: Dawn handles, bytesPerRow: readback buffer row pitch,
+// width/height: image dimensions (bytesPerRow may differ from width*4 due to alignment).
+extern "C" ELECTROBUN_EXPORT bool dcompBlitFromWGPUBuffer(
+    void* wgpuInstance, void* wgpuBuffer,
+    int bytesPerRow, int width, int height
+) {
+    if (!g_dcompCompositor || !wgpuInstance || !wgpuBuffer) return false;
+    if (!ensureWgpuSymbols()) return false;
+
+    size_t bufferSize = (size_t)bytesPerRow * height;
+
+    // Map the readback buffer with a real callback (null callback segfaults in Dawn)
+    struct MapCtx { std::atomic<bool> done{false}; };
+    MapCtx mapCtx;
+
+    WGPUBufferMapCallbackInfo mapInfo = {};
+    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
+    mapInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2) {
+        (void)status; (void)message; (void)userdata2;
+        if (userdata1) ((MapCtx*)userdata1)->done.store(true, std::memory_order_release);
+    };
+    mapInfo.userdata1 = &mapCtx;
+
+    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
+        (WGPUBuffer)wgpuBuffer,
+        WGPUMapMode_Read,
+        0, bufferSize,
+        mapInfo
+    );
+
+    // Wait for map to complete (with timed wait — instance must have TimedWaitAny)
+    WGPUFutureWaitInfo waitInfo;
+    waitInfo.future = mapFuture;
+    waitInfo.completed = WGPU_FALSE;
+    WGPUWaitStatus waitStatus = p_wgpuInstanceWaitAny(
+        (WGPUInstance)wgpuInstance, 1, &waitInfo, 5000000000ULL);
+
+    if (waitStatus != WGPUWaitStatus_Success || !waitInfo.completed) {
+        printf("[DComp] blitFromWGPUBuffer: map wait failed (status=%d)\n", waitStatus);
+        return false;
+    }
+
+    // Get mapped range
+    void* mapped = nullptr;
+    if (p_wgpuBufferGetConstMappedRange) {
+        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)wgpuBuffer, 0, bufferSize);
+    }
+    if (!mapped && p_wgpuBufferGetMappedRange) {
+        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)wgpuBuffer, 0, bufferSize);
+    }
+    if (!mapped) {
+        printf("[DComp] blitFromWGPUBuffer: mapped range is null\n");
+        p_wgpuBufferUnmap((WGPUBuffer)wgpuBuffer);
+        return false;
+    }
+
+    // If bytesPerRow matches width*4, blit directly; otherwise strip padding
+    bool result = false;
+    if (bytesPerRow == width * 4) {
+        MainThreadDispatcher::dispatch_sync([&]() {
+            result = g_dcompCompositor->blitFromPixels(mapped, width, height);
+        });
+    } else {
+        // Strip row padding
+        std::vector<uint8_t> unpadded(width * height * 4);
+        const uint8_t* src = (const uint8_t*)mapped;
+        for (int y = 0; y < height; y++) {
+            memcpy(unpadded.data() + y * width * 4, src + y * bytesPerRow, width * 4);
+        }
+        MainThreadDispatcher::dispatch_sync([&]() {
+            result = g_dcompCompositor->blitFromPixels(unpadded.data(), width, height);
+        });
+    }
+
+    p_wgpuBufferUnmap((WGPUBuffer)wgpuBuffer);
+    return result;
+}
+
 // Blit raw BGRA pixel data from WGPU readback to the DComp swap chain.
 // pixelData: pointer to width*height*4 bytes of BGRA pixel data.
 extern "C" ELECTROBUN_EXPORT bool dcompBlitPixels(const void* pixelData, int width, int height) {
