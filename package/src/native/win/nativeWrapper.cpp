@@ -11624,7 +11624,7 @@ extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPa
 // Phase 4: dcompAttachWebView2 layers WebView2 into the visual tree.
 // =============================================================================
 
-static DCompCompositor* g_dcompCompositor = nullptr;
+DCompCompositor* g_dcompCompositor = nullptr;
 
 // Initialize DirectComposition on an AbstractView's container HWND.
 // The view's container window becomes the composition target.
