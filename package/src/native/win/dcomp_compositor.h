@@ -131,6 +131,10 @@ public:
         }
         printf("[DComp] D3D11 device created, feature level: 0x%x\n", featureLevel);
 
+        // Note: D3D11 device created with default threading model.
+        // blitFromPixels can be called from any thread — D3D11 runtime
+        // serializes access internally when needed.
+
         // 2. Get DXGI device from D3D11 device
         ComPtr<IDXGIDevice> dxgiDevice;
         hr = d3dDevice.As(&dxgiDevice);

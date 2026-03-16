@@ -11970,12 +11970,11 @@ extern "C" ELECTROBUN_EXPORT bool dcompBlitFromWGPUBuffer(
         return false;
     }
 
-    // If bytesPerRow matches width*4, blit directly; otherwise strip padding
+    // Blit directly to DComp swap chain — skip dispatch_sync since D3D11
+    // supports multithreaded access and this avoids cross-thread latency.
     bool result = false;
     if (bytesPerRow == width * 4) {
-        MainThreadDispatcher::dispatch_sync([&]() {
-            result = g_dcompCompositor->blitFromPixels(mapped, width, height);
-        });
+        result = g_dcompCompositor->blitFromPixels(mapped, width, height);
     } else {
         // Strip row padding
         std::vector<uint8_t> unpadded(width * height * 4);
@@ -11983,9 +11982,7 @@ extern "C" ELECTROBUN_EXPORT bool dcompBlitFromWGPUBuffer(
         for (int y = 0; y < height; y++) {
             memcpy(unpadded.data() + y * width * 4, src + y * bytesPerRow, width * 4);
         }
-        MainThreadDispatcher::dispatch_sync([&]() {
-            result = g_dcompCompositor->blitFromPixels(unpadded.data(), width, height);
-        });
+        result = g_dcompCompositor->blitFromPixels(unpadded.data(), width, height);
     }
 
     p_wgpuBufferUnmap((WGPUBuffer)wgpuBuffer);
