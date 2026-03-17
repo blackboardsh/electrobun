@@ -59,6 +59,23 @@ export interface ElectrobunConfig {
 	};
 
 	/**
+	 * Bunny Ears / Carrot packaging metadata.
+	 * This lets an Electrobun app also declare how it should behave when distributed as a Carrot.
+	 */
+	bunny?: {
+		carrot?: {
+			/**
+			 * Carrot dependencies keyed by carrot id.
+			 * Supports npm-style specifiers such as:
+			 * - `file:../foundation-carrots/pty`
+			 * - `workspace:*`
+			 * - `^0.1.0`
+			 */
+			dependencies?: Record<string, string>;
+		};
+	};
+
+	/**
 	 * Build configuration options
 	 */
 	build?: {
@@ -168,6 +185,20 @@ export interface ElectrobunConfig {
 		locales?: string[] | "*";
 
 		/**
+		 * Additional file or directory paths to watch for changes during `electrobun dev --watch`.
+		 * Paths are relative to the project root.
+		 * Useful for files that affect your build but aren't listed as entrypoints or copy sources.
+		 */
+		watch?: string[];
+
+		/**
+		 * Glob patterns for files that should not trigger a rebuild when changed.
+		 * Patterns are matched against project-relative paths.
+		 * The `build/`, `artifacts/`, and `node_modules/` directories are always ignored automatically.
+		 */
+		watchIgnore?: string[];
+
+		/**
 		 * macOS-specific build configuration
 		 */
 		mac?: {
@@ -176,6 +207,13 @@ export interface ElectrobunConfig {
 			 * @default false
 			 */
 			codesign?: boolean;
+
+			/**
+			 * Create a DMG artifact for macOS builds.
+			 * Disable this for local prototype builds that only need the app bundle and update archive.
+			 * @default true
+			 */
+			createDmg?: boolean;
 
 			/**
 			 * Enable notarization for macOS builds (requires codesign)

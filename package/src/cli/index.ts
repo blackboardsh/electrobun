@@ -1360,6 +1360,7 @@ const defaultConfig = {
 		locales: undefined as string[] | "*" | undefined, // ICU locales subset (Linux/Windows)
 		mac: {
 			codesign: false,
+			createDmg: true,
 			notarize: false,
 			bundleCEF: false,
 			bundleWGPU: false,
@@ -3494,7 +3495,7 @@ Categories=Utility;Application;
 			}
 
 			// DMG creation for macOS only
-			if (targetOS === "macos") {
+			if (targetOS === "macos" && config.build.mac?.createDmg !== false) {
 				console.log("creating dmg...");
 				const finalDmgPath = join(buildFolder, `${appFileName}.dmg`);
 				// NOTE: For some ungodly reason using the bare name in CI can conflict with some mysterious
@@ -3564,6 +3565,9 @@ Categories=Utility;Application;
 					}
 				}
 			} else {
+				if (targetOS === "macos") {
+					console.log("skipping dmg");
+				}
 				// For Windows and Linux, add the self-extracting bundle directly
 				// @ts-expect-error - reserved for future use
 				const _platformBundlePath = join(

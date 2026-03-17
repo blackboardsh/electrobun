@@ -1,0 +1,13 @@
+<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- WebKit/Safari compass logo simplified for 16x16 -->
+  <circle cx="8" cy="8" r="7" stroke="#007AFF" stroke-width="1.5" fill="none"/>
+  <circle cx="8" cy="8" r="1.5" fill="#007AFF"/>
+  <!-- Compass needle pointing NW -->
+  <path d="M8 8 L5 5" stroke="#007AFF" stroke-width="1.5" stroke-linecap="round"/>
+  <path d="M8 8 L11 11" stroke="#FF3B30" stroke-width="1.5" stroke-linecap="round"/>
+  <!-- Compass marks -->
+  <line x1="8" y1="2" x2="8" y2="3.5" stroke="#007AFF" stroke-width="1"/>
+  <line x1="14" y1="8" x2="12.5" y2="8" stroke="#007AFF" stroke-width="1"/>
+  <line x1="8" y1="14" x2="8" y2="12.5" stroke="#007AFF" stroke-width="1"/>
+  <line x1="2" y1="8" x2="3.5" y2="8" stroke="#007AFF" stroke-width="1"/>
+</svg>

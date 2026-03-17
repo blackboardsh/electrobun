@@ -1,0 +1,69 @@
+/* Blackboard chalk-like text effects */
+.chalk-text {
+  color: #ffffff;
+  text-shadow: 
+    0 0 1px rgba(255, 255, 255, 0.8),
+    0 0 2px rgba(255, 255, 255, 0.4),
+    0 0 3px rgba(255, 255, 255, 0.2);
+  font-weight: 500;
+}
+
+.chalk-text-subtle {
+  color: #f0f0f0;
+  text-shadow: 
+    0 0 1px rgba(255, 255, 255, 0.3),
+    0 0 2px rgba(255, 255, 255, 0.1);
+}
+
+/* Mathematical formula styling */
+.math-formula {
+  font-family: "Times New Roman", Times, serif;
+  font-style: italic;
+  color: rgba(255, 255, 255, 0.15);
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.2);
+  user-select: none;
+  pointer-events: none;
+}
+
+/* Blackboard texture overlay */
+.blackboard-texture {
+  position: relative;
+}
+
+.blackboard-texture::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: 
+    radial-gradient(circle at 20% 50%, rgba(255,255,255,0.02) 1px, transparent 1px),
+    radial-gradient(circle at 80% 50%, rgba(255,255,255,0.02) 1px, transparent 1px),
+    radial-gradient(circle at 40% 20%, rgba(255,255,255,0.01) 1px, transparent 1px),
+    radial-gradient(circle at 60% 80%, rgba(255,255,255,0.01) 1px, transparent 1px);
+  background-size: 50px 50px, 60px 60px, 70px 70px, 80px 80px;
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+/* High contrast borders */
+.blackboard-border {
+  border: 1px solid #ffffff;
+  box-shadow: 0 0 2px rgba(255, 255, 255, 0.3);
+}
+
+/* Button chalk style */
+.chalk-button {
+  background: #000;
+  border: 1px solid #fff;
+  color: #fff;
+  text-shadow: 0 0 1px rgba(255, 255, 255, 0.5);
+  transition: all 0.2s ease;
+}
+
+.chalk-button:hover {
+  background: #111;
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.4);
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+}

@@ -436,6 +436,10 @@ static std::mutex g_webviewCreationMutex;
 // Global map to store preload scripts by browser ID (needs to be early for load handler)
 static std::map<int, std::string> g_preloadScripts;
 
+// Global map to track browser ID to webview ID mapping (for CEF scheme handler)
+static std::map<int, uint32_t> browserToWebviewMap;
+static std::mutex browserMapMutex;
+
 // Global map to store CEFViews by container window handle (using void* to avoid forward declaration issues)
 static std::map<HWND, void*> g_cefViews;
 // Global map to store WebView2Views by container window handle (using void* to avoid forward declaration issues)
@@ -644,6 +648,10 @@ public:
 
         // Remove browser from global tracking
         g_cefBrowsers.erase(browser->GetIdentifier());
+        {
+            std::lock_guard<std::mutex> lock(browserMapMutex);
+            browserToWebviewMap.erase(browser->GetIdentifier());
+        }
         g_browser_count--;
 
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
@@ -756,26 +764,38 @@ std::string getMimeTypeForFile(const std::string& path);
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
-    ElectrobunSchemeHandler() : offset_(0), hasResponse_(false) {}
+    ElectrobunSchemeHandler(uint32_t webviewId)
+        : webviewId_(webviewId), offset_(0), hasResponse_(false) {}
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         handle_request = true;
-        
+
         std::string url = request->GetURL();
         std::string path = url.substr(8); // Remove "views://" prefix
         if (path.empty()) path = "index.html";
-        
-        // Load file content using existing function
-        std::string content = loadViewsFile(path);
+
+        std::string content;
+        // Check for internal/index.html (inline HTML content)
+        if (path == "internal/index.html") {
+            const char* htmlContent = getWebviewHTMLContent(webviewId_);
+            if (htmlContent && strlen(htmlContent) > 0) {
+                content = std::string(htmlContent);
+                free((void*)htmlContent);
+            } else {
+                content = "<html><body><h1>No content set</h1></body></html>";
+            }
+        } else {
+            content = loadViewsFile(path);
+        }
         mimeType_ = getMimeTypeForFile(path);
-        
+
         if (!content.empty()) {
             responseData_.assign(content.begin(), content.end());
             hasResponse_ = true;
         } else {
             hasResponse_ = false;
         }
-        
+
         return hasResponse_;
     }
 
@@ -801,6 +821,7 @@ public:
     void Cancel() override {}
 
 private:
+    uint32_t webviewId_;
     std::string mimeType_;
     std::vector<char> responseData_;
     bool hasResponse_;
@@ -815,7 +836,17 @@ public:
                                        CefRefPtr<CefFrame> frame,
                                        const CefString& scheme_name,
                                        CefRefPtr<CefRequest> request) override {
-        return new ElectrobunSchemeHandler();
+        // Get webview ID from browser ID
+        uint32_t webviewId = 0;
+        if (browser) {
+            std::lock_guard<std::mutex> lock(browserMapMutex);
+            int browserId = browser->GetIdentifier();
+            auto it = browserToWebviewMap.find(browserId);
+            if (it != browserToWebviewMap.end()) {
+                webviewId = it->second;
+            }
+        }
+        return new ElectrobunSchemeHandler(webviewId);
     }
 
 private:
@@ -2989,6 +3020,7 @@ private:
 
 public:
     std::string pendingUrl;
+    std::string pendingHtml;  // Stored inline HTML for loading after async creation
     std::string electrobunScript;
     std::string customScript;
     bool isCreationComplete = false;
@@ -3072,55 +3104,67 @@ public:
     }
     
     void loadURL(const char* urlString) override {
-        if (webview) {
-            std::string urlStr(urlString);
-            std::wstring url = std::wstring(urlString, urlString + strlen(urlString));
-            bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+        if (!urlString) return;
+        std::string urlStr(urlString);
 
-            // For all URLs, fire will-navigate event before Navigate()
-            // WebView2 doesn't fire NavigationStarting consistently, especially for blocked navigations
-            if (webviewEventHandler) {
-                // Escape URL for JSON
-                std::string escapedUrl;
-                for (char c : urlStr) {
-                    switch (c) {
-                        case '"': escapedUrl += "\\\""; break;
-                        case '\\': escapedUrl += "\\\\"; break;
-                        default: escapedUrl += c; break;
-                    }
+        // Fire will-navigate event on the calling thread (before Navigate)
+        bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
+        if (webviewEventHandler) {
+            std::string escapedUrl;
+            for (char c : urlStr) {
+                switch (c) {
+                    case '"': escapedUrl += "\\\""; break;
+                    case '\\': escapedUrl += "\\\\"; break;
+                    default: escapedUrl += c; break;
                 }
-
-                // Fire will-navigate synchronously before Navigate()
-                std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
-                webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
             }
-
-            webview->Navigate(url.c_str());
-
-            // Fire did-navigate after Navigate() for views:// URLs only
-            // For https:// URLs, NavigationCompleted will fire did-navigate
-            if (isViewsUrl && webviewEventHandler) {
-                // Escape URL for JSON
-                std::string escapedUrl;
-                for (char c : urlStr) {
-                    switch (c) {
-                        case '"': escapedUrl += "\\\""; break;
-                        case '\\': escapedUrl += "\\\\"; break;
-                        default: escapedUrl += c; break;
-                    }
-                }
-
-                std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
-                webviewEventHandler(webviewId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
-            }
+            std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
+            webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
         }
+
+        // Navigate must happen on the UI thread — WebView2 APIs are single-threaded
+        WebviewEventHandler handler = webviewEventHandler;
+        uint32_t wvId = webviewId;
+        MainThreadDispatcher::dispatch_async([this, urlStr, isViewsUrl, handler, wvId]() {
+            if (webview) {
+                std::wstring url(urlStr.begin(), urlStr.end());
+                webview->Navigate(url.c_str());
+
+                // Fire did-navigate after Navigate() for views:// URLs only
+                // For https:// URLs, NavigationCompleted will fire did-navigate
+                if (isViewsUrl && handler) {
+                    std::string escapedUrl;
+                    for (char c : urlStr) {
+                        switch (c) {
+                            case '"': escapedUrl += "\\\""; break;
+                            case '\\': escapedUrl += "\\\\"; break;
+                            default: escapedUrl += c; break;
+                        }
+                    }
+                    std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
+                    handler(wvId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
+                }
+            } else {
+                // WebView2 not ready — store URL for creation callback to load
+                pendingUrl = urlStr;
+            }
+        });
     }
     
     void loadHTML(const char* htmlString) override {
-        if (webview && htmlString) {
-            std::wstring html = std::wstring(htmlString, htmlString + strlen(htmlString));
-            webview->NavigateToString(html.c_str());
-        }
+        if (!htmlString) return;
+        std::string htmlCopy(htmlString);
+        // Dispatch to main thread to avoid race with async WebView2 creation callback.
+        // Both this and the creation callback run on the main thread, so they can't interleave.
+        MainThreadDispatcher::dispatch_async([this, htmlCopy]() {
+            if (webview) {
+                std::wstring html(htmlCopy.begin(), htmlCopy.end());
+                webview->NavigateToString(html.c_str());
+            } else {
+                // WebView2 not ready — creation callback will load this
+                pendingHtml = htmlCopy;
+            }
+        });
     }
     
     void goBack() override {
@@ -6114,7 +6158,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
-                                            std::string content = loadViewsFile(filePath);
+                                            std::string content;
+
+                                            // Check for internal/index.html (inline HTML content)
+                                            if (filePath == "internal/index.html") {
+                                                const char* htmlContent = getWebviewHTMLContent(capturedWebviewId);
+                                                if (htmlContent && strlen(htmlContent) > 0) {
+                                                    content = std::string(htmlContent);
+                                                    free((void*)htmlContent);
+                                                } else {
+                                                    content = "<html><body><h1>No content set</h1></body></html>";
+                                                }
+                                            } else {
+                                                content = loadViewsFile(filePath);
+                                            }
 
                                             if (!content.empty()) {
                                                 // ::log("[WebView2] Loaded views file content, creating response");
@@ -6554,8 +6611,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             } else {
                             }
                             
-                            // Navigate to URL
-                            if (!view->pendingUrl.empty()) {
+                            // Navigate to URL or load pending HTML
+                            if (!view->pendingHtml.empty()) {
+                                std::wstring html(view->pendingHtml.begin(), view->pendingHtml.end());
+                                webview->NavigateToString(html.c_str());
+                                view->pendingHtml.clear();
+                            } else if (!view->pendingUrl.empty()) {
                                 view->loadURL(view->pendingUrl.c_str());
                             }
                             
@@ -6875,10 +6936,16 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             if (!combinedScript.empty()) {
                 g_preloadScripts[browser->GetIdentifier()] = combinedScript;
             }
-            
+
+            // Map browser ID to webview ID for CEF scheme handler
+            {
+                std::lock_guard<std::mutex> lock(browserMapMutex);
+                browserToWebviewMap[browser->GetIdentifier()] = webviewId;
+            }
+
             // Set browser on view immediately since we have it synchronously
             view->setBrowser(browser);
-            
+
             // Track browser in global map
             g_cefBrowsers[browser->GetIdentifier()] = browser;
             g_browser_count++;
@@ -7152,6 +7219,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript,
+                         const char *viewsRoot,
                          bool transparent,
                          bool sandbox) {
 
@@ -8337,9 +8405,7 @@ ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char 
         ::log("ERROR: Invalid parameters passed to loadHTMLInWebView");
         return;
     }
-    
-    // Use virtual method which handles threading and implementation details
-    
+
     abstractView->loadHTML(htmlString);
 }
 

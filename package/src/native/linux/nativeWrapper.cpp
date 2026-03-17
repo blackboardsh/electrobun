@@ -6539,6 +6539,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
+                         const char* viewsRoot,
                          bool transparent,
                          bool sandbox) {
     // Read and clear pre-set flags
