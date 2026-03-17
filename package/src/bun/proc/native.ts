@@ -1841,7 +1841,9 @@ export const WGPUBridge = {
 	},
 };
 
-// DirectComposition bridge (Phase 2+)
+// DirectComposition bridge.
+// Stable today: DComp back layer, triangle test path, and zero-copy/readback
+// bridge helpers. Composition-hosted WebView2 APIs remain experimental.
 export const DCompBridge = {
 	initForView: (viewPtr: Pointer, width: number, height: number): boolean => {
 		if (!native?.symbols?.dcompInitForView) return false;
@@ -1959,7 +1961,9 @@ export const DCompBridge = {
 		);
 		return ptr ? (ptr as Pointer) : null;
 	},
-	// Phase 4: WebView2 + WGPU visual tree
+	// Experimental: composition-hosted WebView2 visual tree helpers.
+	// The stable runtime keeps WebView2 on its normal controller path and these
+	// helpers intentionally return `false` until that path is production-ready.
 	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {
 		if (!native?.symbols?.dcompSetupLayeredTree) return false;
 		return native.symbols.dcompSetupLayeredTree(

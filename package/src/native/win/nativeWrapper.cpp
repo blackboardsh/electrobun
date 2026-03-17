@@ -12058,6 +12058,10 @@ static bool g_useSharedFenceSync = false;              // true if Dawn supports 
 static WGPUSharedTextureMemory g_sharedTexMem = nullptr;
 static WGPUTexture g_zeroCopyTexture = nullptr;
 
+// Serialize BeginFrame / EndFrameAndPresent / ResizeZeroCopyBridge so that
+// resize cannot invalidate resources while a frame is in flight.
+static std::mutex g_zeroCopyBridgeMutex;
+
 // Initialize zero-copy bridge:
 // 1. Create a dedicated presentation D3D11 device on Dawn's DXGI adapter
 // 2. Create DComp swap chain on the presentation device
@@ -12298,6 +12302,7 @@ extern "C" ELECTROBUN_EXPORT void* dcompInitZeroCopyBridge(void* wgpuDevice, int
 // Begin frame: tell Dawn it can use the shared texture.
 // Call BEFORE CopyTextureToTexture in the command encoder.
 extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyBeginFrame() {
+    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
     if (!g_sharedTexMem || !g_zeroCopyTexture) return false;
 
     WGPUSharedTextureMemoryBeginAccessDescriptor beginDesc = {};
@@ -12316,6 +12321,7 @@ extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyBeginFrame() {
 // via shared fences, copy staging → back buffer on presentation device, present.
 // Call AFTER queueSubmit.
 extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyEndFrameAndPresent() {
+    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
     if (!g_sharedTexMem || !g_zeroCopyTexture || !g_dcompCompositor || !g_presentDevice || !g_presentStagingTex) return false;
 
     auto* swapChain = g_dcompCompositor->getSwapChain();
@@ -12392,6 +12398,7 @@ extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyEndFrameAndPresent() {
 // presentation device, recreate staging texture + shared handle.
 // Returns the new WGPUTexture or nullptr on failure.
 extern "C" ELECTROBUN_EXPORT void* dcompResizeZeroCopyBridge(void* wgpuDevice, int width, int height) {
+    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
     if (!g_dcompCompositor || !wgpuDevice || width <= 0 || height <= 0) return nullptr;
     if (!g_presentDevice || !g_presentContext) return nullptr;
 
@@ -12425,6 +12432,10 @@ extern "C" ELECTROBUN_EXPORT void* dcompResizeZeroCopyBridge(void* wgpuDevice, i
         wgpuSharedTextureMemoryRelease(g_sharedTexMem);
         g_sharedTexMem = nullptr;
     }
+
+    // Release old sync resources (must be rebuilt for new staging texture)
+    g_syncWrappedResource.Reset();
+    g_d3d11on12Device.Reset();
 
     // Release old staging resources
     g_presentStagingTex.Reset();
@@ -12481,6 +12492,28 @@ extern "C" ELECTROBUN_EXPORT void* dcompResizeZeroCopyBridge(void* wgpuDevice, i
         printf("[DComp] Resize: CreateSharedHandle failed: 0x%08lx\n", hr);
         g_zeroCopyStagingDx12.Reset();
         return nullptr;
+    }
+
+    // Rebuild D3D11On12 sync for new staging texture
+    {
+        auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
+        if (d3d11on12) {
+            d3d11on12.As(&g_d3d11on12Device);
+            if (g_d3d11on12Device) {
+                D3D11_RESOURCE_FLAGS d3d11Flags = {};
+                d3d11Flags.BindFlags = 0;
+                HRESULT wrapHr = g_d3d11on12Device->CreateWrappedResource(
+                    g_zeroCopyStagingDx12.Get(), &d3d11Flags,
+                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
+                    IID_PPV_ARGS(&g_syncWrappedResource));
+                if (FAILED(wrapHr)) {
+                    printf("[DComp] Resize: CreateWrappedResource for sync failed: 0x%08lx\n", wrapHr);
+                    g_d3d11on12Device.Reset();
+                } else {
+                    printf("[DComp] Resize: D3D11On12 sync rebuilt\n");
+                }
+            }
+        }
     }
 
     // Open on presentation device (QI to ID3D11Device1 for OpenSharedResource1)

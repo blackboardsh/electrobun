@@ -977,6 +977,9 @@ addCube();
 let lastFrame = performance.now();
 let lastLeftDown = false;
 let _pendingResizeTime = 0;
+let _bridgeResizing = false;  // true while resize is in progress -- skip frames
+let _frameInFlight = false;   // true while renderFrame() is executing
+let _zeroCopyAccessActive = false;  // true between BeginFrame and EndFrameAndPresent
 
 const dragState = {
 	active: false,
@@ -1020,6 +1023,10 @@ function pickCube(ray: three.Ray) {
 // ── Render loop ─────────────────────────────────────────────────────────────
 
 function renderFrame() {
+	// Skip frame if bridge resize is in progress or another frame is in flight
+	if (_bridgeResizing || _frameInFlight) return;
+	_frameInFlight = true;
+	try {
 	const now = performance.now();
 	const delta = Math.min(0.05, (now - lastFrame) / 1000);
 	lastFrame = now;
@@ -1042,7 +1049,13 @@ function renderFrame() {
 	}
 	if (useZeroCopy && _pendingResizeTime > 0 && (now - _pendingResizeTime) > 150) {
 		_pendingResizeTime = 0;
-		recreateRenderResources(true);
+		_bridgeResizing = true;
+		try {
+			WGPUNative.symbols.wgpuInstanceProcessEvents(instance);
+			recreateRenderResources(true);
+		} finally {
+			_bridgeResizing = false;
+		}
 	}
 
 	camera.lookAt(lookAt);
@@ -1165,6 +1178,13 @@ function renderFrame() {
 
 	WGPUNative.symbols.wgpuInstanceProcessEvents(instance);
 
+	if (useZeroCopy && canRenderDirect) {
+		// Direct-render path writes into the shared DComp texture, so the access
+		// window must be opened before we create a view or encode rendering work.
+		if (!DCompBridge.zeroCopyBeginFrame()) return;
+		_zeroCopyAccessActive = true;
+	}
+
 	// Render to offscreen texture
 	const renderTextureView = WGPUNative.symbols.wgpuTextureCreateView(renderTexture, 0);
 	if (!renderTextureView) return;
@@ -1185,19 +1205,18 @@ function renderFrame() {
 
 	let commandBuffer: any;
 	if (useZeroCopy && canRenderDirect) {
-		// Single-copy: BeginAccess right before submit (not before encoding)
-		if (!DCompBridge.zeroCopyBeginFrame()) return;
-
 		commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
 		if (!commandBuffer) return;
 		const commandArray = makeCommandBufferArray(commandBuffer);
 		WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
 
-		if (!DCompBridge.zeroCopyEndFrameAndPresent()) return;
+		if (!DCompBridge.zeroCopyEndFrameAndPresent()) { _zeroCopyAccessActive = false; return; }
+		_zeroCopyAccessActive = false;
 	} else if (useZeroCopy) {
 		// Two-copy: render → staging via CopyTextureToTexture
 		if (!activeZeroCopyTexture) return;
 		if (!DCompBridge.zeroCopyBeginFrame()) return;
+		_zeroCopyAccessActive = true;
 
 		const copySrc = makeTexelCopyTextureInfo(renderTexture);
 		const copyDst = makeTexelCopyTextureInfo(activeZeroCopyTexture as number);
@@ -1210,7 +1229,8 @@ function renderFrame() {
 		const commandArray = makeCommandBufferArray(commandBuffer);
 		WGPUNative.symbols.wgpuQueueSubmit(queue, 1, commandArray.ptr as number);
 
-		if (!DCompBridge.zeroCopyEndFrameAndPresent()) return;
+		if (!DCompBridge.zeroCopyEndFrameAndPresent()) { _zeroCopyAccessActive = false; return; }
+		_zeroCopyAccessActive = false;
 	} else {
 		// Fallback: readback path (GPU → CPU → GPU)
 		const copySrc = makeTexelCopyTextureInfo(renderTexture);
@@ -1231,6 +1251,7 @@ function renderFrame() {
 	}
 
 	// Cleanup
+	WGPUNative.symbols.wgpuRenderPassEncoderRelease(pass);
 	WGPUNative.symbols.wgpuTextureViewRelease(renderTextureView);
 	WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
 	WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
@@ -1239,6 +1260,16 @@ function renderFrame() {
 	avgFrameTimeMs += (frameEndTime - now);
 	frameTimeSamples++;
 	statsFrameCount++;
+
+	} finally {
+		_frameInFlight = false;
+		// If BeginAccess was called but EndAccess was not (early return),
+		// release the shared texture to prevent leaked access state.
+		if (_zeroCopyAccessActive) {
+			DCompBridge.zeroCopyEndFrameAndPresent();
+			_zeroCopyAccessActive = false;
+		}
+	}
 }
 
 // Use setImmediate for the render loop — fires on next event loop tick

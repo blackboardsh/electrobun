@@ -29,10 +29,10 @@
 - [ ] Frame time logged every second via `[DComp] Frame N, last frame: X.XXms`
 
 ## Phase 4: WebView2 + WGPU Layering
+- [ ] Experimental only: composition-hosted WebView2 path is enabled
 - [ ] `dcompSetupLayeredTree` builds visual tree
-- [ ] WebView2 HTML renders on top of WGPU content
-- [ ] Transparent areas of WebView2 show WGPU content behind
-- [ ] Resize synchronization works
+- [ ] `dcompAttachWebView2` binds a composition controller via `put_RootVisualTarget`
+- [ ] Resize synchronization works in the composition-hosted path
 
 ## Phase 5: Three.js Hybrid
 - [ ] gametau battlestation scene renders via DirectComposition
@@ -43,7 +43,7 @@
 
 ### Phase 2-3 (DComp standalone)
 ```typescript
-import { DCompBridge, WGPUBridge } from "electrobun/bun/proc/native";
+import { DCompBridge } from "electrobun/bun";
 
 // Phase 2: Solid color
 DCompBridge.initForView(viewPtr, 800, 600);
@@ -60,13 +60,20 @@ DCompBridge.stopRenderLoop();
 
 ### Phase 5 (Three.js hybrid)
 ```typescript
-// 1. Create GpuWindow with DComp
-const win = new GpuWindow({ title: "Benchmark", frame: { width: 960, height: 960 } });
-DCompBridge.initForView(win.wgpuView.ptr, 960, 960);
+// Stable path: pre-init the DComp back layer before BrowserWindow creation.
+DCompBridge.enableMode(960, 960);
+
+// BrowserWindow/WebView2 still uses the standard child-HWND controller path.
+const win = new BrowserWindow({
+  title: "Benchmark",
+  frame: { width: 960, height: 960, x: 100, y: 100 },
+  transparent: true,
+  url: "views://mainview/index.html",
+});
 
 // 2. Run battlestation scene against DComp surface
 const scene = createDefenseSceneGpu(win, theme.scene);
 // ... runtime loop ...
 
-// 3. Measure frame times from DCompBridge.getLastFrameTimeMs()
+// 3. Measure frame times from your runtime loop / bridge stats
 ```
