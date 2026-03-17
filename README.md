@@ -36,7 +36,9 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [bestdiff](https://github.com/tesmond/bestdiff) - a git diff checker with curved connectors
 - [BuddyWriter](https://github.com/OxFrancesco/BuddyWriter) - BuddyWriter desktop and mobile apps
 - [burns](https://github.com/l3wi/burns) - a Smithers manager
+- [cbx-tool](https://github.com/jebin2/cbx-tool) - desktop app for reading and editing comic book archives (.cbz/.cbr)
 - [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
+- [codlogs](https://github.com/tobitege/codlogs) - search and export local Codex sessions via CLI or desktop app
 - [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
 - [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
 - [Deskdown](https://github.com/guarana-studio/deskdown) - transform any web address into a desktop app in under 20 seconds
