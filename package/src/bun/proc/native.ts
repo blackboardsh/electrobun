@@ -538,6 +538,10 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.bool,
 			},
+			dcompResizeZeroCopyBridge: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,
+			},
 			// DirectComposition Phase 4: WebView2 + WGPU visual tree
 			dcompSetupLayeredTree: {
 				args: [FFIType.ptr, FFIType.ptr],
@@ -1940,6 +1944,20 @@ export const DCompBridge = {
 	zeroCopyEndFrameAndPresent: (): boolean => {
 		if (!native?.symbols?.dcompZeroCopyEndFrameAndPresent) return false;
 		return native.symbols.dcompZeroCopyEndFrameAndPresent() as boolean;
+	},
+	// Recreate the zero-copy staging texture and swap chain for a new size.
+	resizeZeroCopyBridge: (
+		wgpuDevice: Pointer,
+		width: number,
+		height: number,
+	): Pointer | null => {
+		if (!native?.symbols?.dcompResizeZeroCopyBridge) return null;
+		const ptr = native.symbols.dcompResizeZeroCopyBridge(
+			wgpuDevice as any,
+			width,
+			height,
+		);
+		return ptr ? (ptr as Pointer) : null;
 	},
 	// Phase 4: WebView2 + WGPU visual tree
 	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {

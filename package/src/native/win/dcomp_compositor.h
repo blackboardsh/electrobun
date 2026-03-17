@@ -14,6 +14,7 @@
 #include <dxgi1_2.h>
 #include <dxgi1_4.h>
 #include <d3d11.h>
+#include <d3d11_4.h>
 #include <d3d11on12.h>
 #include <d3d12.h>
 #include <d3dcompiler.h>
@@ -1078,7 +1079,7 @@ private:
         if (msg == WM_SIZE && wParam != SIZE_MINIMIZED) {
             int w = LOWORD(lParam);
             int h = HIWORD(lParam);
-            if (self && self->isInitialized() && w > 0 && h > 0) {
+            if (self && self->isInitialized() && !self->isZeroCopyMode() && w > 0 && h > 0) {
                 self->resize(w, h);
             }
         }
