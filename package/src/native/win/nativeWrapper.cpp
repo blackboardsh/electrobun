@@ -471,11 +471,6 @@ static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
 static std::vector<ACCEL> g_menuAccelerators;
 static HACCEL g_hAccelTable = NULL;
 
-// Global state for custom window dragging
-static BOOL g_isMovingWindow = FALSE;
-static HWND g_targetWindow = NULL;
-static POINT g_initialCursorPos = {};
-static POINT g_initialWindowPos = {};
 
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
@@ -9103,98 +9098,83 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
 
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    // No-op: window move is now handled natively via WM_NCLBUTTONDOWN.
-    // The Windows Shell drag loop manages its own cleanup.
+    // No-op: the shell drag loop (WM_NCLBUTTONDOWN/HTCAPTION) manages its own
+    // cleanup when the mouse button is released.
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
         ::log("ERROR: Invalid window handle in startWindowMove");
         return;
     }
 
-    // A minimized window cannot enter the shell move loop directly.
+    // A minimized window cannot be moved.
     if (IsIconic(hwnd)) {
         return;
     }
 
-    // Start shell-managed window move on the window thread so drag regions work
-    // consistently even when the click originated from an embedded child view.
     MainThreadDispatcher::dispatch_sync([hwnd]() {
-        SetForegroundWindow(hwnd);
-        ReleaseCapture();
-
+        // Capture cursor position before any state change.
         POINT cursorPos = {};
-        bool hasCursorPos = GetCursorPos(&cursorPos);
+        GetCursorPos(&cursorPos);
 
+        // If maximized, restore first and reposition so the cursor stays
+        // proportionally under the title bar — matches Electron behaviour.
         if (IsZoomed(hwnd)) {
+            // Snapshot the maximized rect before restoring.
+            RECT maximizedRect = {};
+            GetWindowRect(hwnd, &maximizedRect);
+
             WINDOWPLACEMENT placement = {};
             placement.length = sizeof(placement);
-            bool hasPlacement = GetWindowPlacement(hwnd, &placement) == TRUE;
+            GetWindowPlacement(hwnd, &placement);
 
-            RECT restoredRect = hasPlacement ? placement.rcNormalPosition : RECT{};
+            RECT restoredRect = placement.rcNormalPosition;
             int restoredWidth = restoredRect.right - restoredRect.left;
             int restoredHeight = restoredRect.bottom - restoredRect.top;
 
             ShowWindow(hwnd, SW_RESTORE);
 
-            if (hasCursorPos && restoredWidth > 0 && restoredHeight > 0) {
-                RECT maximizedRect = {};
-                if (GetWindowRect(hwnd, &maximizedRect)) {
-                    int maximizedWidth =
-                        (std::max)(1, static_cast<int>(maximizedRect.right - maximizedRect.left));
-                    double cursorRatio =
-                        static_cast<double>(cursorPos.x - maximizedRect.left) /
-                        static_cast<double>(maximizedWidth);
+            if (restoredWidth > 0 && restoredHeight > 0) {
+                int maximizedWidth =
+                    (std::max)(1, static_cast<int>(maximizedRect.right - maximizedRect.left));
+                double cursorRatio =
+                    static_cast<double>(cursorPos.x - maximizedRect.left) /
+                    static_cast<double>(maximizedWidth);
 
-                    if (cursorRatio < 0.0) cursorRatio = 0.0;
-                    if (cursorRatio > 1.0) cursorRatio = 1.0;
+                cursorRatio = (std::max)(0.0, (std::min)(1.0, cursorRatio));
 
-                    UINT dpi = GetDpiForWindow(hwnd);
-                    int titleBarOffset = MulDiv(10, dpi, 96);
-                    int restoredLeft =
-                        cursorPos.x - static_cast<int>(std::round(cursorRatio * restoredWidth));
-                    int restoredTop = cursorPos.y - titleBarOffset;
+                UINT dpi = GetDpiForWindow(hwnd);
+                int titleBarOffset = MulDiv(10, dpi, 96);
+                int restoredLeft =
+                    cursorPos.x - static_cast<int>(std::round(cursorRatio * restoredWidth));
+                int restoredTop = cursorPos.y - titleBarOffset;
 
-                    HMONITOR monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
-                    MONITORINFO monitorInfo = {};
-                    monitorInfo.cbSize = sizeof(monitorInfo);
-                    if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
-                        int minLeft = monitorInfo.rcWork.left;
-                        int maxLeft = monitorInfo.rcWork.right - restoredWidth;
-                        int minTop = monitorInfo.rcWork.top;
-                        int maxTop = monitorInfo.rcWork.bottom - restoredHeight;
-
-                        if (maxLeft < minLeft) maxLeft = minLeft;
-                        if (maxTop < minTop) maxTop = minTop;
-
-                        restoredLeft = (std::max)(minLeft, (std::min)(restoredLeft, maxLeft));
-                        restoredTop = (std::max)(minTop, (std::min)(restoredTop, maxTop));
-                    }
-
-                    SetWindowPos(
-                        hwnd,
-                        NULL,
-                        restoredLeft,
-                        restoredTop,
-                        0,
-                        0,
-                        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE
-                    );
+                HMONITOR monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO monitorInfo = {};
+                monitorInfo.cbSize = sizeof(monitorInfo);
+                if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
+                    restoredLeft = (std::max)(monitorInfo.rcWork.left,
+                        (std::min)(restoredLeft, monitorInfo.rcWork.right - restoredWidth));
+                    restoredTop = (std::max)(monitorInfo.rcWork.top,
+                        (std::min)(restoredTop, monitorInfo.rcWork.bottom - restoredHeight));
                 }
+
+                SetWindowPos(hwnd, NULL, restoredLeft, restoredTop, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
         }
 
-        // WM_SYSCOMMAND/SC_MOVE is the standard programmatic move entry point.
-        // Fall back to WM_NCLBUTTONDOWN for parity with existing behavior.
-        SendMessage(hwnd, WM_SYSCOMMAND, SC_MOVE | HTCAPTION, 0);
-
-        if (hasCursorPos) {
-            SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(cursorPos.x, cursorPos.y));
-        }
+        // Enter the Windows shell drag loop — same approach as Electron/Tauri.
+        // DefWindowProc captures the mouse internally so it receives all
+        // subsequent WM_MOUSEMOVE and WM_LBUTTONUP messages even over WebView2.
+        // This gives snap-to-edge, drag-to-maximize, and layout-assist for free.
+        ReleaseCapture();
+        SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
+                    MAKELPARAM(cursorPos.x, cursorPos.y));
     });
 }
 
