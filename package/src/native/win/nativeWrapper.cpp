@@ -9157,10 +9157,14 @@ ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
                 MONITORINFO monitorInfo = {};
                 monitorInfo.cbSize = sizeof(monitorInfo);
                 if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
-                    restoredLeft = (std::max)(monitorInfo.rcWork.left,
-                        (std::min)(restoredLeft, monitorInfo.rcWork.right - restoredWidth));
-                    restoredTop = (std::max)(monitorInfo.rcWork.top,
-                        (std::min)(restoredTop, monitorInfo.rcWork.bottom - restoredHeight));
+                    LONG clampedLeft = (std::max)(monitorInfo.rcWork.left,
+                        (std::min)(static_cast<LONG>(restoredLeft),
+                            monitorInfo.rcWork.right - static_cast<LONG>(restoredWidth)));
+                    LONG clampedTop = (std::max)(monitorInfo.rcWork.top,
+                        (std::min)(static_cast<LONG>(restoredTop),
+                            monitorInfo.rcWork.bottom - static_cast<LONG>(restoredHeight)));
+                    restoredLeft = static_cast<int>(clampedLeft);
+                    restoredTop = static_cast<int>(clampedTop);
                 }
 
                 SetWindowPos(hwnd, NULL, restoredLeft, restoredTop, 0, 0,
