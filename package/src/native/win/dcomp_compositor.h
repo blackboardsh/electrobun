@@ -21,6 +21,7 @@
 #include <wrl.h>
 #include <cstdio>
 #include <cmath>
+#include <mutex>
 
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
@@ -110,6 +111,7 @@ public:
     // Initialize DirectComposition pipeline on an existing HWND.
     // Creates: D3D11 device -> DXGI swap chain (for composition) -> DComp visual tree
     bool init(HWND targetHwnd, int width, int height) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!isDCompAvailable()) return false;
 
         this->targetHwnd = targetHwnd;
@@ -135,10 +137,7 @@ public:
             return false;
         }
         printf("[DComp] D3D11 device created, feature level: 0x%x\n", featureLevel);
-
-        // Note: D3D11 device created with default threading model.
-        // blitFromPixels can be called from any thread — D3D11 runtime
-        // serializes access internally when needed.
+        enableMultithreadProtection(d3dContext.Get(), "primary");
 
         // 2. Get DXGI device from D3D11 device
         ComPtr<IDXGIDevice> dxgiDevice;
@@ -241,6 +240,7 @@ public:
     // The swap chain is created later via initSwapChainFromDevice() once Dawn's
     // D3D11On12 device is available.
     bool initMinimal(HWND hwnd, int width, int height) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!isDCompAvailable()) return false;
 
         this->targetHwnd = hwnd;
@@ -268,6 +268,7 @@ public:
                 printf("[DComp] Fallback D3D11CreateDevice failed: 0x%08lx\n", hr);
                 return false;
             }
+            enableMultithreadProtection(d3dContext.Get(), "fallback");
 
             ComPtr<IDXGIDevice> dxgiDevice;
             hr = d3dDevice.As(&dxgiDevice);
@@ -306,12 +307,14 @@ public:
     // Create a swap chain on an external D3D11 device (e.g., Dawn's D3D11On12).
     // Call after initMinimal() + Dawn device creation.
     bool initSwapChainFromDevice(ID3D11Device* externalDevice, int width, int height) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !dcompDevice || !rootVisual) return false;
         if (!externalDevice) return false;
 
         // Store the external device for blit/present operations
         externalD3dDevice = externalDevice;
         externalDevice->GetImmediateContext(&externalD3dContext);
+        enableMultithreadProtection(externalD3dContext.Get(), "external");
 
         // Get DXGI factory from external device
         ComPtr<IDXGIDevice> dxgiDevice;
@@ -364,6 +367,7 @@ public:
     // Zero-copy present: copy source D3D11 texture to swap chain back buffer.
     // sourceTexture must be on the same D3D11 device as the swap chain.
     bool zeroCopyPresent(ID3D11Texture2D* sourceTexture) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!swapChain || !externalD3dContext) return false;
 
         ComPtr<ID3D11Texture2D> backBuffer;
@@ -386,6 +390,7 @@ public:
 
     // Just Present + Commit (when the copy was already done externally).
     bool presentOnly() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!swapChain || !dcompDevice) return false;
 
         HRESULT hr = swapChain->Present(0, 0);
@@ -407,6 +412,7 @@ public:
     // Render a solid color to the composition surface.
     // Color values are 0.0-1.0, alpha-premultiplied for DirectComposition.
     bool renderSolidColor(float r, float g, float b, float a) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !swapChain || !d3dDevice) return false;
 
         ComPtr<ID3D11Texture2D> backBuffer;
@@ -432,6 +438,7 @@ public:
 
     // Initialize the D3D11 rendering pipeline for triangle rendering.
     bool initTrianglePipeline() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !d3dDevice) return false;
         if (trianglePipelineReady) return true;
 
@@ -521,6 +528,7 @@ public:
     // Render a single frame of the triangle to the DComp swap chain.
     // angle controls rotation (radians). Pass 0 for static triangle.
     bool renderTriangle(float angle) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!trianglePipelineReady || !swapChain || !d3dDevice) return false;
 
         // Update vertex positions with rotation
@@ -604,12 +612,15 @@ public:
     // Called once per frame from the Three.js render loop after WGPU readback.
     // pixelData must be width*height*4 bytes, BGRA format (matching swap chain).
     bool blitFromPixels(const void* pixelData, int width, int height) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !swapChain || !d3dDevice || !d3dContext) return false;
         if (!pixelData || width <= 0 || height <= 0) return false;
 
         // Resize swap chain if dimensions changed
         if (width != surfaceWidth || height != surfaceHeight) {
-            resize(width, height);
+            if (!resize(width, height)) {
+                return false;
+            }
         }
 
         // Get back buffer
@@ -655,6 +666,7 @@ public:
     // the DComp target window. WGPU creates its surface from this child HWND
     // normally — the child HWND content appears in the DComp target window.
     HWND createWGPUChildHwnd(int x, int y, int w, int h) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !targetHwnd) return NULL;
 
         // Register a minimal window class for the WGPU child
@@ -708,9 +720,16 @@ public:
         IDXGISwapChain1* wgpuSwapChain,   // WGPU layer content (can be nullptr for child HWND mode)
         IUnknown* webview2Surface           // WebView2 composition surface (from ICoreWebView2CompositionController)
     ) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !dcompDevice) return false;
 
         HRESULT hr;
+
+        layeredTreeActive = false;
+        wgpuVisual.Reset();
+        webview2Visual.Reset();
+        wgpuClip.Reset();
+        webview2Clip.Reset();
 
         // Create WGPU visual (back layer)
         hr = dcompDevice->CreateVisual(&wgpuVisual);
@@ -718,6 +737,17 @@ public:
             printf("[DComp] CreateVisual (WGPU) failed: 0x%08lx\n", hr);
             return false;
         }
+        hr = dcompDevice->CreateRectangleClip(&wgpuClip);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateRectangleClip (WGPU) failed: 0x%08lx\n", hr);
+            return false;
+        }
+        hr = wgpuVisual->SetClip(wgpuClip.Get());
+        if (FAILED(hr)) {
+            printf("[DComp] SetClip (WGPU) failed: 0x%08lx\n", hr);
+            return false;
+        }
+        updateVisualClip(wgpuClip.Get(), (float)surfaceWidth, (float)surfaceHeight);
 
         // Set WGPU content: either a swap chain or leave empty for child HWND mode
         if (wgpuSwapChain) {
@@ -734,6 +764,17 @@ public:
             printf("[DComp] CreateVisual (WebView2) failed: 0x%08lx\n", hr);
             return false;
         }
+        hr = dcompDevice->CreateRectangleClip(&webview2Clip);
+        if (FAILED(hr)) {
+            printf("[DComp] CreateRectangleClip (WebView2) failed: 0x%08lx\n", hr);
+            return false;
+        }
+        hr = webview2Visual->SetClip(webview2Clip.Get());
+        if (FAILED(hr)) {
+            printf("[DComp] SetClip (WebView2) failed: 0x%08lx\n", hr);
+            return false;
+        }
+        updateVisualClip(webview2Clip.Get(), (float)surfaceWidth, (float)surfaceHeight);
 
         if (webview2Surface) {
             hr = webview2Visual->SetContent(webview2Surface);
@@ -773,6 +814,7 @@ public:
 
     // Set/update the WebView2 composition surface on the WebView2 visual.
     bool setWebView2Content(IUnknown* surface) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!webview2Visual) return false;
         HRESULT hr = webview2Visual->SetContent(surface);
         if (FAILED(hr)) return false;
@@ -781,10 +823,29 @@ public:
 
     // Set/update the WGPU swap chain on the WGPU visual.
     bool setWGPUContent(IDXGISwapChain1* wgpuSwapChain) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!wgpuVisual) return false;
         HRESULT hr = wgpuVisual->SetContent(wgpuSwapChain);
         if (FAILED(hr)) return false;
         return SUCCEEDED(dcompDevice->Commit());
+    }
+
+    bool attachWebView2Controller(ICoreWebView2CompositionController* ctrl) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
+        if (!initialized || !dcompDevice || !webview2Visual || !ctrl) return false;
+        HRESULT hr = ctrl->put_RootVisualTarget(webview2Visual.Get());
+        if (FAILED(hr)) {
+            printf("[DComp] put_RootVisualTarget failed: 0x%08lx\n", hr);
+            return false;
+        }
+        compController = ctrl;
+        hr = dcompDevice->Commit();
+        if (FAILED(hr)) {
+            printf("[DComp] Commit (attach WebView2) failed: 0x%08lx\n", hr);
+            return false;
+        }
+        printf("[DComp] WebView2 composition controller attached to visual tree\n");
+        return true;
     }
 
     // Update visual positions and sizes (for resize synchronization).
@@ -792,17 +853,20 @@ public:
         float wgpuX, float wgpuY, float wgpuW, float wgpuH,
         float wv2X, float wv2Y, float wv2W, float wv2H
     ) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized) return false;
         HRESULT hr;
 
         if (wgpuVisual) {
             wgpuVisual->SetOffsetX(wgpuX);
             wgpuVisual->SetOffsetY(wgpuY);
+            updateVisualClip(wgpuClip.Get(), wgpuW, wgpuH);
         }
 
         if (webview2Visual) {
             webview2Visual->SetOffsetX(wv2X);
             webview2Visual->SetOffsetY(wv2Y);
+            updateVisualClip(webview2Clip.Get(), wv2W, wv2H);
         }
 
         hr = dcompDevice->Commit();
@@ -822,6 +886,7 @@ public:
 
     // Enable bridge mode: skip render-on-resize (WGPU blitFromPixels handles it)
     void setBridgeMode(bool enabled) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         bridgeMode = enabled;
         printf("[DComp] Bridge mode %s\n", enabled ? "enabled" : "disabled");
     }
@@ -829,12 +894,10 @@ public:
     bool isBridgeMode() const { return bridgeMode; }
 
     bool resize(int newWidth, int newHeight) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !swapChain) return false;
         if (newWidth <= 0 || newHeight <= 0) return false;
         if (newWidth == surfaceWidth && newHeight == surfaceHeight) return true;
-
-        surfaceWidth = newWidth;
-        surfaceHeight = newHeight;
 
         auto* ctx = externalD3dContext ? externalD3dContext.Get() : d3dContext.Get();
         if (ctx) {
@@ -843,12 +906,17 @@ public:
         }
 
         HRESULT hr = swapChain->ResizeBuffers(
-            2, surfaceWidth, surfaceHeight,
+            2, newWidth, newHeight,
             DXGI_FORMAT_B8G8R8A8_UNORM, 0);
         if (FAILED(hr)) {
             printf("[DComp] ResizeBuffers failed: 0x%08lx\n", hr);
             return false;
         }
+
+        surfaceWidth = newWidth;
+        surfaceHeight = newHeight;
+        updateVisualClip(wgpuClip.Get(), (float)newWidth, (float)newHeight);
+        updateVisualClip(webview2Clip.Get(), (float)newWidth, (float)newHeight);
 
         // In bridge mode, skip the immediate render — the next blitFromPixels
         // call will fill the swap chain with the correct WGPU content.
@@ -879,6 +947,7 @@ public:
     // Enable native resize tracking: subclass the target HWND to intercept
     // WM_SIZE and auto-resize the swap chain without TS FFI round-trip.
     void enableNativeResize() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !targetHwnd || nativeResizeHooked) return;
 
         // Store this pointer for the subclass callback
@@ -890,6 +959,7 @@ public:
     }
 
     void disableNativeResize() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!nativeResizeHooked || !targetHwnd) return;
         RemoveWindowSubclass(targetHwnd, resizeSubclassProc, 1);
         RemovePropA(targetHwnd, "DCompCompositor");
@@ -897,6 +967,7 @@ public:
     }
 
     void shutdown() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized) return;
 
         // Stop render loop
@@ -912,6 +983,8 @@ public:
         }
 
         // Release Phase 4 layered visuals
+        wgpuClip.Reset();
+        webview2Clip.Reset();
         webview2Visual.Reset();
         wgpuVisual.Reset();
         layeredTreeActive = false;
@@ -953,6 +1026,7 @@ public:
     // ========================================================================
 
     void startRenderLoop() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (renderLoopActive) return;
         renderLoopActive = true;
         renderAngle = 0.0f;
@@ -962,6 +1036,7 @@ public:
     }
 
     void stopRenderLoop() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!renderLoopActive) return;
         renderLoopActive = false;
         if (renderTimerId) {
@@ -983,6 +1058,7 @@ public:
 
     // Phase 4: Add a child visual to the composition tree
     bool addChildVisual(IDCompositionVisual* child) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!initialized || !rootVisual) return false;
         HRESULT hr = rootVisual->AddVisual(child, TRUE, nullptr);
         if (FAILED(hr)) {
@@ -993,6 +1069,7 @@ public:
     }
 
     bool commit() {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         if (!dcompDevice) return false;
         return SUCCEEDED(dcompDevice->Commit());
     }
@@ -1000,13 +1077,20 @@ public:
     // Set the WebView2 composition controller for mouse input forwarding.
     // Called after CreateCoreWebView2CompositionController succeeds.
     void setCompositionController(ICoreWebView2CompositionController* ctrl) {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
         compController = ctrl;
         printf("[DComp] WebView2 composition controller registered for input forwarding\n");
     }
 
     // Benchmark: measure frame time for the last rendered frame
-    double getLastFrameTimeMs() const { return lastFrameTimeMs; }
-    uint64_t getFrameCount() const { return frameCount; }
+    double getLastFrameTimeMs() const {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
+        return lastFrameTimeMs;
+    }
+    uint64_t getFrameCount() const {
+        std::lock_guard<std::recursive_mutex> lock(stateMutex);
+        return frameCount;
+    }
 
 private:
     HWND targetHwnd = NULL;
@@ -1057,6 +1141,8 @@ private:
     // Phase 4: Layered visual tree (WGPU + WebView2)
     ComPtr<IDCompositionVisual> wgpuVisual;
     ComPtr<IDCompositionVisual> webview2Visual;
+    ComPtr<IDCompositionRectangleClip> wgpuClip;
+    ComPtr<IDCompositionRectangleClip> webview2Clip;
     bool layeredTreeActive = false;
 
     // Render loop
@@ -1067,6 +1153,27 @@ private:
     // Benchmark
     double lastFrameTimeMs = 0.0;
     uint64_t frameCount = 0;
+    mutable std::recursive_mutex stateMutex;
+
+    void enableMultithreadProtection(ID3D11DeviceContext* context, const char* label) {
+        if (!context) return;
+        ComPtr<ID3D11Multithread> multithread;
+        HRESULT hr = context->QueryInterface(IID_PPV_ARGS(&multithread));
+        if (SUCCEEDED(hr) && multithread) {
+            multithread->SetMultithreadProtected(TRUE);
+            printf("[DComp] Enabled D3D11 multithread protection for %s context\n", label);
+        }
+    }
+
+    void updateVisualClip(IDCompositionRectangleClip* clip, float width, float height) {
+        if (!clip) return;
+        float clippedWidth = width > 0.0f ? width : 0.0f;
+        float clippedHeight = height > 0.0f ? height : 0.0f;
+        clip->SetLeft(0.0f);
+        clip->SetTop(0.0f);
+        clip->SetRight(clippedWidth);
+        clip->SetBottom(clippedHeight);
+    }
 
     // Native subclass — handles WM_SIZE and forwards mouse events to
     // WebView2 composition controller when in DComp mode.
@@ -1087,7 +1194,12 @@ private:
         // Forward mouse events to the WebView2 composition controller
         // (composition controllers don't have their own HWND, so they need
         // explicit mouse input routing from the parent window)
-        if (self && self->compController) {
+        ComPtr<ICoreWebView2CompositionController> compController;
+        if (self) {
+            std::lock_guard<std::recursive_mutex> lock(self->stateMutex);
+            compController = self->compController;
+        }
+        if (compController) {
             COREWEBVIEW2_MOUSE_EVENT_KIND mouseKind = (COREWEBVIEW2_MOUSE_EVENT_KIND)0;
             bool isMouse = true;
 
@@ -1112,7 +1224,7 @@ private:
                 UINT mouseData = 0;
                 if (msg == WM_MOUSEWHEEL) mouseData = GET_WHEEL_DELTA_WPARAM(wParam);
 
-                self->compController->SendMouseInput(mouseKind, vkeys, mouseData, pt);
+                compController->SendMouseInput(mouseKind, vkeys, mouseData, pt);
             }
         }
 
@@ -1123,23 +1235,34 @@ private:
     static void CALLBACK renderTimerProc(HWND, UINT, UINT_PTR, DWORD) {
         // Access the global compositor (defined in nativeWrapper.cpp)
         extern DCompCompositor* g_dcompCompositor;
-        if (!g_dcompCompositor || !g_dcompCompositor->isInitialized()) return;
+        auto* compositor = g_dcompCompositor;
+        if (!compositor || !compositor->isInitialized()) return;
 
         auto start = std::chrono::high_resolution_clock::now();
-
-        g_dcompCompositor->renderAngle += 0.02f;
-        g_dcompCompositor->renderTriangle(g_dcompCompositor->renderAngle);
+        float angle = 0.0f;
+        {
+            std::lock_guard<std::recursive_mutex> lock(compositor->stateMutex);
+            compositor->renderAngle += 0.02f;
+            angle = compositor->renderAngle;
+        }
+        compositor->renderTriangle(angle);
 
         auto end = std::chrono::high_resolution_clock::now();
-        g_dcompCompositor->lastFrameTimeMs =
+        uint64_t frameCountSnapshot = 0;
+        double frameTimeMs =
             std::chrono::duration<double, std::milli>(end - start).count();
-        g_dcompCompositor->frameCount++;
+        {
+            std::lock_guard<std::recursive_mutex> lock(compositor->stateMutex);
+            compositor->lastFrameTimeMs = frameTimeMs;
+            compositor->frameCount++;
+            frameCountSnapshot = compositor->frameCount;
+        }
 
         // Log every 60 frames (~1 second)
-        if (g_dcompCompositor->frameCount % 60 == 0) {
+        if (frameCountSnapshot % 60 == 0) {
             printf("[DComp] Frame %llu, last frame: %.2fms\n",
-                   (unsigned long long)g_dcompCompositor->frameCount,
-                   g_dcompCompositor->lastFrameTimeMs);
+                   (unsigned long long)frameCountSnapshot,
+                   frameTimeMs);
         }
     }
 };
