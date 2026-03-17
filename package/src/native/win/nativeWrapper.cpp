@@ -1623,6 +1623,9 @@ public:
         if (wParam & MK_CONTROL) mouse_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
         if (wParam & MK_SHIFT) mouse_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
         if (GetKeyState(VK_MENU) & 0x8000) mouse_event.modifiers |= EVENTFLAG_ALT_DOWN;
+        if (wParam & MK_LBUTTON) mouse_event.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+        if (wParam & MK_RBUTTON) mouse_event.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+        if (wParam & MK_MBUTTON) mouse_event.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
 
         switch (message) {
             case WM_MOUSEMOVE:
@@ -1632,11 +1635,13 @@ public:
             case WM_LBUTTONDOWN:
             case WM_RBUTTONDOWN:
             case WM_MBUTTONDOWN: {
+                if (message == WM_LBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+                if (message == WM_RBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+                if (message == WM_MBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+
                 CefBrowserHost::MouseButtonType btn_type =
                     (message == WM_LBUTTONDOWN) ? MBT_LEFT :
                     (message == WM_RBUTTONDOWN) ? MBT_RIGHT : MBT_MIDDLE;
-
-                printf("OSRWindow: Sending click at (%d, %d)\n", mouse_event.x, mouse_event.y);
 
                 host->SendMouseClickEvent(mouse_event, btn_type, false, 1);
                 break;
@@ -3482,9 +3487,10 @@ private:
     CefRefPtr<ElectrobunCefClient> client;
     OSRWindow* osr_window;
     bool is_osr_mode;
+    bool is_closing_;
 
 public:
-    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
+    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false), is_closing_(false) {
         this->webviewId = webviewId;
     }
 
@@ -3572,48 +3578,66 @@ public:
     }
     
     void remove() override {
-        if (browser) {
-            std::cout << "[CEF] CEFView::remove() called for browser ID " << browser->GetIdentifier() << std::endl;
+        if (is_closing_) {
+            return;
+        }
 
-            // Get the browser host before we clear the reference
-            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        CefRefPtr<CefBrowser> localBrowser = browser;
+        CefRefPtr<ElectrobunCefClient> localClient = client;
+        if (!localBrowser && !localClient) {
+            return;
+        }
 
-            // First, hide the browser window to make removal appear instant
+        is_closing_ = true;
+
+        if (localBrowser) {
+            std::cout << "[CEF] CEFView::remove() called for browser ID "
+                      << localBrowser->GetIdentifier() << std::endl;
+        } else {
+            std::cout << "[CEF] CEFView::remove() called with no live browser ref" << std::endl;
+        }
+
+        CefRefPtr<CefBrowserHost> host = localBrowser ? localBrowser->GetHost() : nullptr;
+        if (host) {
             HWND browserHwnd = host->GetWindowHandle();
             if (browserHwnd) {
                 ShowWindow(browserHwnd, SW_HIDE);
             }
+        }
 
-            // Invalidate the render handler's OSR window pointer BEFORE async close.
-            // CEF may still fire OnPaint() callbacks during the close sequence, and
-            // the OSRWindow will be deleted when this CEFView is destroyed.
-            if (client) {
-                client->ClearOSRWindow();
+        // Invalidate the render handler's OSR window pointer BEFORE async close.
+        // CEF may still fire OnPaint() callbacks during the close sequence, and
+        // the OSRWindow will be deleted when this CEFView is destroyed.
+        if (localClient) {
+            localClient->ClearOSRWindow();
+        }
+        if (osr_window) {
+            osr_window->SetBrowser(nullptr);
+        }
+
+        // Clean up global maps to prevent stale pointer access from window messages
+        for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
+            if (it->second == this) {
+                g_cefViews.erase(it);
+                break;
             }
-
-            // Clean up global maps to prevent stale pointer access from window messages
-            for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
-                if (it->second == this) {
-                    g_cefViews.erase(it);
-                    break;
-                }
+        }
+        for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
+            if (it->second.get() == localClient.get()) {
+                it = g_cefClients.erase(it);
+            } else {
+                ++it;
             }
-            for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
-                if (it->second == client) {
-                    it = g_cefClients.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+        }
 
-            // Clear our references
-            browser = nullptr;
-            client = nullptr;
+        // Clear our references only after taking local copies for async close.
+        browser = nullptr;
+        client = nullptr;
 
-            // Defer the actual browser close to avoid synchronous window message issues
-            // Use CloseBrowser(true) to force close since we return true from DoClose
-            // to prevent CEF from sending WM_CLOSE to parent window
-            MainThreadDispatcher::dispatch_async([host]() {
+        if (host) {
+            // Defer the actual browser close to avoid synchronous window message issues.
+            // Keep the browser/client refs alive until the close request is dispatched.
+            MainThreadDispatcher::dispatch_async([host, localBrowser, localClient]() {
                 std::cout << "[CEF] Calling CloseBrowser(true) from dispatch_async" << std::endl;
                 host->CloseBrowser(true);  // force=true since DoClose returns true
             });
@@ -4962,9 +4986,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (viewIt != g_cefViews.end()) {
                     auto cefView = static_cast<CEFView*>(viewIt->second);
                     if (cefView && cefView->isOSRMode()) {
-                        if (msg == WM_LBUTTONDOWN) {
-                            printf("WindowProc: WM_LBUTTONDOWN received for OSR window\n");
-                        }
                         cefView->HandleWindowMessage(msg, wParam, lParam);
                     }
                 }

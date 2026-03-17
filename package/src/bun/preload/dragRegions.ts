@@ -50,6 +50,10 @@ export function initDragRegions() {
 	const isWindows = isWindowsPlatform();
 
 	document.addEventListener("mousedown", (e) => {
+		if (e.button !== 0) {
+			return;
+		}
+
 		if (!isAppRegionDrag(e)) {
 			return;
 		}
@@ -69,7 +73,15 @@ export function initDragRegions() {
 		document.addEventListener(
 			"mousemove",
 			(e) => {
-				if (!pendingDrag || (e.buttons & 1) === 0) {
+				if (!pendingDrag) {
+					return;
+				}
+
+				// Some CEF OSR paths do not reliably populate MouseEvent.buttons during
+				// drag-region moves. Only cancel if the browser explicitly reports a
+				// non-primary button state; otherwise trust the pending mousedown state.
+				if (e.buttons !== 0 && (e.buttons & 1) === 0) {
+					clearPendingDrag();
 					return;
 				}
 
@@ -108,7 +120,7 @@ export function initDragRegions() {
 		if (isWindows) {
 			clearPendingDrag();
 		}
-		if (isAppRegionDrag(e)) {
+		if (e.button === 0 && isAppRegionDrag(e)) {
 			send("stopWindowMove", { id: window.__electrobunWindowId });
 		}
 	});
