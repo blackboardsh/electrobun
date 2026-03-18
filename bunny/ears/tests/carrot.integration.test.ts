@@ -23,15 +23,7 @@ const EARS_ROOT = resolve(import.meta.dir, "..");
 const TEST_CARROTS_ROOT = resolve(EARS_ROOT, "..", "test-carrots");
 const DASH_ROOT = resolve(EARS_ROOT, "..", "dash");
 const PACKAGE_ROOT = resolve(EARS_ROOT, "..", "..", "package");
-const COLAB_GOLDFISHDB_ROOT = resolve(
-  EARS_ROOT,
-  "..",
-  "..",
-  "..",
-  "colab",
-  "node_modules",
-  "goldfishdb",
-);
+const GOLDFISHDB_ROOT = resolve(EARS_ROOT, "..", "..", "..", "goldfishdb", "src", "node", "index.ts");
 
 process.env.BUNNY_EARS_SDK_VIEW_MODULE = join(
   EARS_ROOT,
@@ -48,7 +40,7 @@ process.env.BUNNY_EARS_SDK_BUN_MODULE = join(
 process.env.BUNNY_EARS_ZSTD_BIN = join(PACKAGE_ROOT, "dist-macos-arm64", "zig-zstd");
 
 const { buildCarrotSource } = await import("../src/bun/carrotBuilder");
-const GoldfishDB = (await import(COLAB_GOLDFISHDB_ROOT)).default;
+const GoldfishDB = (await import(GOLDFISHDB_ROOT)).default;
 
 const {
   array,

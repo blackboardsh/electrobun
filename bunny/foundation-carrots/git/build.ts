@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { builtinModules } from "node:module";
 import { join, resolve } from "node:path";
 
@@ -40,32 +40,6 @@ function sdkBunAliasPlugin(sdkBunModule: string) {
   };
 }
 
-function walk(dir: string, onEntry: (entryPath: string) => boolean | void) {
-  if (!existsSync(dir)) {
-    return false;
-  }
-
-  for (const entry of readdirSync(dir)) {
-    const entryPath = join(dir, entry);
-    let stat;
-    try {
-      stat = statSync(entryPath);
-    } catch {
-      continue;
-    }
-
-    if (onEntry(entryPath)) {
-      return true;
-    }
-
-    if (stat.isDirectory() && walk(entryPath, onEntry)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 function decodeOutput(bytes: Uint8Array<ArrayBufferLike> | undefined) {
   return new TextDecoder().decode(bytes || new Uint8Array());
 }
@@ -80,32 +54,13 @@ function findVendoredGitDir(sourceDir: string) {
     return resolve(explicitDir);
   }
 
-  const sourceVendorDir = resolve(sourceDir, "..", "..", "..", "..", "colab", "vendor");
+  const sourceVendorDir = resolve(sourceDir, "vendor");
   if (existsSync(join(sourceVendorDir, process.platform === "win32" ? "git.exe" : "git"))) {
     return sourceVendorDir;
   }
 
-  const buildRoot = resolve(sourceDir, "..", "..", "..", "..", "colab", "build");
-  let foundPath: string | null = null;
-
-  walk(buildRoot, (entryPath) => {
-    if (
-      entryPath.endsWith(`/vendor/${process.platform === "win32" ? "git.exe" : "git"}`) ||
-      entryPath.endsWith(`\\vendor\\${process.platform === "win32" ? "git.exe" : "git"}`)
-    ) {
-      foundPath = resolve(entryPath, "..");
-      return true;
-    }
-
-    return false;
-  });
-
-  if (foundPath) {
-    return foundPath;
-  }
-
   throw new Error(
-    "Missing vendored git assets for bunny.git. Set BUNNY_GIT_VENDOR_DIR or ensure colab/vendor exists.",
+    `Missing vendored git assets for bunny.git. Add them under ${sourceVendorDir} or set BUNNY_GIT_VENDOR_DIR.`,
   );
 }
 

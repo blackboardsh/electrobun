@@ -1,4 +1,4 @@
-import { cpSync, existsSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const FD_BINARY_NAME = process.platform === "win32" ? "fd.exe" : "fd";
@@ -11,46 +11,13 @@ type BuildContext = {
   defaultBuild: () => Promise<void>;
 };
 
-function walk(dir: string, onEntry: (entryPath: string) => boolean | void) {
-  if (!existsSync(dir)) {
-    return false;
+function resolveVendorBinary(sourceDir: string, binaryName: string) {
+  const localVendorPath = resolve(sourceDir, "vendor", binaryName);
+  if (existsSync(localVendorPath)) {
+    return localVendorPath;
   }
 
-  for (const entry of readdirSync(dir)) {
-    const entryPath = join(dir, entry);
-    let stat;
-    try {
-      stat = statSync(entryPath);
-    } catch {
-      continue;
-    }
-
-    if (onEntry(entryPath)) {
-      return true;
-    }
-
-    if (stat.isDirectory() && walk(entryPath, onEntry)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function findColabVendorBinary(sourceDir: string, binaryName: string) {
-  const buildRoot = resolve(sourceDir, "..", "..", "..", "..", "colab", "build");
-  let foundPath: string | null = null;
-
-  walk(buildRoot, (entryPath) => {
-    if (!entryPath.endsWith(`/vendor/${binaryName}`) && !entryPath.endsWith(`\\vendor\\${binaryName}`)) {
-      return false;
-    }
-
-    foundPath = entryPath;
-    return true;
-  });
-
-  return foundPath;
+  return null;
 }
 
 function copyVendorBinary(
@@ -62,11 +29,13 @@ function copyVendorBinary(
 ) {
   const sourcePath =
     (envOverride && existsSync(envOverride) ? envOverride : null) ||
-    findColabVendorBinary(sourceDir, binaryName);
+    resolveVendorBinary(sourceDir, binaryName);
 
   if (!sourcePath) {
     if (required) {
-      throw new Error(`Missing required search binary ${binaryName}. Set an override env var or build Colab locally first.`);
+      throw new Error(
+        `Missing required search binary ${binaryName}. Add it under ${resolve(sourceDir, "vendor")} or set an override env var.`,
+      );
     }
     return;
   }
