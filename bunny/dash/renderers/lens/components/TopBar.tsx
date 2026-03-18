@@ -149,7 +149,7 @@ export const TopBar = () => {
         <div
           data-bunny-tip
           style="position: absolute; right: 100%; top: 50%; transform: translateX(8px); margin-right: 6px; white-space: nowrap; background: #111; color: #c0c0c0; font-size: 12px; padding: 4px 10px; border-radius: 4px; border: 1px solid #333; z-index: 9999; pointer-events: none; opacity: 0; transition: opacity 0.3s ease, transform 0.3s ease; translate: 0 -50%;"
-        >Co(lab) is built with Electrobun</div>
+        >Bunny Dash is built with Electrobun</div>
         <div
           data-bunny-btn
           style={{
@@ -177,13 +177,13 @@ export const TopBar = () => {
         </div>
       </div>
 
-      {/* Colab Cloud button */}
+      {/* Bunny Cloud button */}
       <div
         style="font-size: 13px; margin: 8px 4px; cursor: pointer; display: flex; align-items: center; gap: 4px; background: #2d4a3e; border-radius: 4px; padding: 2px 8px;"
-        title="Open Colab Cloud settings"
+        title="Open Bunny Cloud settings"
         onClick={() => {
           setState("settingsPane", {
-            type: state.settingsPane.type === "colab-cloud-settings" ? "" : "colab-cloud-settings",
+            type: state.settingsPane.type === "bunny-cloud-settings" ? "" : "bunny-cloud-settings",
             data: {},
           });
         }}
@@ -194,15 +194,15 @@ export const TopBar = () => {
         <span style="color: #4ade80; font-weight: 500; font-size: 12px;">Cloud</span>
       </div>
 
-      {/* Colab button */}
+      {/* Bunny Dash button */}
       <div
         style={`font-size: 13px;margin: 8px 0px; margin-right: -2px; cursor: pointer; display: flex; align-items: center; gap: 6px; background: ${
           state.buildVars.channel === "dev" ? "#5a1616" :
           state.buildVars.channel === "canary" ? "#076310" :
           "#184d8b"
         }; border-radius: 4px; padding: 2px 8px 2px 4px;`}
-        title="This is a beta version of co(lab)"
-        onClick={() => openNewTabForNode("__COLAB_INTERNAL__/web", false, { url: "https://github.com/blackboardsh/colab" })}
+        title="This is a beta version of Bunny Dash"
+        onClick={() => openNewTabForNode("__BUNNY_INTERNAL__/web", false, { url: "https://github.com/blackboardsh/electrobun" })}
       >
         <img
           style={{
@@ -211,7 +211,7 @@ export const TopBar = () => {
           }}
           src="views://assets/icon_32x32@2x.png"
         />
-        <span style="color: #fff; font-weight: bold;">co(lab){state.buildVars.channel === "dev" ? " - dev" :
+        <span style="color: #fff; font-weight: bold;">Bunny Dash{state.buildVars.channel === "dev" ? " - dev" :
           state.buildVars.channel === "canary" ? " - canary" :
           ""}</span>
       </div>
@@ -254,7 +254,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
     { name: string; description: string; action: () => void }[]
   >([]);
 
-  const [colabCommands, setColabCommands] = createSignal<
+  const [bunnyCommands, setBunnyCommands] = createSignal<
     { name: string; description: string; action: () => void }[]
   >([]);
 
@@ -273,8 +273,8 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
       items.push({ type: 'workspace', ...cmd });
     });
 
-    colabCommands().forEach((cmd) => {
-      items.push({ type: 'colab', ...cmd });
+    bunnyCommands().forEach((cmd) => {
+      items.push({ type: 'bunny', ...cmd });
     });
 
     const files = fileMatches();
@@ -303,7 +303,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
       if (selectedItem) {
         if (selectedItem.type === 'tab') {
           focusTabWithId(selectedItem.tabId);
-        } else if (selectedItem.type === 'workspace' || selectedItem.type === 'colab') {
+        } else if (selectedItem.type === 'workspace' || selectedItem.type === 'bunny') {
           selectedItem.action();
         } else if (selectedItem.type === 'file') {
           openFileAt(selectedItem.path, 0, 0);
@@ -385,7 +385,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
   };
 
   const openWebTab = (url: string) => {
-    openNewTabForNode("__COLAB_INTERNAL__/web", false, { url });
+    openNewTabForNode("__BUNNY_INTERNAL__/web", false, { url });
   };
 
   const globalSettingsClick = () => {
@@ -432,7 +432,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
       { name: "Hide Workspace", description: "Hide the current workspace", action: () => electrobun.rpc?.send.hideWorkspace() },
       { name: "Plugins", description: "Browse and manage plugins", action: pluginsClick },
       { name: "Llama Settings", description: "Configure local AI model", action: llamaSettingsClick },
-      { name: "Colab Settings", description: "Configure global Colab settings", action: globalSettingsClick },
+      { name: "Bunny Dash Settings", description: "Configure global Bunny Dash settings", action: globalSettingsClick },
       { name: "Workspace Settings", description: "Configure workspace settings", action: workspaceSettingsClick },
       { name: "New Workspace", description: "Create a new workspace", action: () => electrobun.rpc?.send.createWorkspace() },
       {
@@ -447,12 +447,12 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
       },
     ];
 
-    // Define all colab menu commands
-    const allColabCommands = [
-      { name: "Submit an issue", description: "Report a Bug / Request a Feature", action: () => openWebTab("https://github.com/blackboardsh/colab") },
-      { name: "Changelog", description: "View Colab changelog", action: () => openWebTab("https://github.com/blackboardsh/colab/tags") },
+    // Define all Bunny Dash commands
+    const allBunnyCommands = [
+      { name: "Submit an issue", description: "Report a Bug / Request a Feature", action: () => openWebTab("https://github.com/blackboardsh/electrobun") },
+      { name: "Changelog", description: "View Bunny Dash changelog", action: () => openWebTab("https://github.com/blackboardsh/electrobun/tags") },
       { name: "Blackboard Blog", description: "Updates from the Blackboard Labs", action: () => openWebTab("https://blackboard.sh/blog/") },
-      { name: "Join co(lab) Discord", description: "Join our Discord community", action: () => openWebTab("https://discord.gg/ueKE4tjaCE") },
+      { name: "Join Discord", description: "Join the community Discord", action: () => openWebTab("https://discord.gg/ueKE4tjaCE") },
       { name: "Yoav", description: "Things Yoav says", action: () => openWebTab("https://bsky.app/profile/yoav.codes") },
     ];
 
@@ -462,14 +462,14 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
       return combined.match(queryRegex);
     });
 
-    // Filter colab commands
-    const filteredColab = allColabCommands.filter((cmd) => {
+    // Filter Bunny Dash commands
+    const filteredBunnyCommands = allBunnyCommands.filter((cmd) => {
       const combined = `${cmd.name} ${cmd.description}`;
       return combined.match(queryRegex);
     });
 
     setWorkspaceCommands(filteredWorkspace);
-    setColabCommands(filteredColab);
+    setBunnyCommands(filteredBunnyCommands);
   };
 
   // resetOpenTabs();
@@ -645,7 +645,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
                 const sectionTitle = () => {
                   if (item.type === 'tab') return 'Tabs';
                   if (item.type === 'workspace') return 'Workspace';
-                  if (item.type === 'colab') return 'Colab';
+                  if (item.type === 'bunny') return 'Bunny Dash';
                   if (item.type === 'file') return 'Files';
                   return '';
                 };
@@ -669,7 +669,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
                       icon={
                         item.type === 'tab' ? '✨' :
                         item.type === 'workspace' ? '⚙️' :
-                        item.type === 'colab' ? '🔧' :
+                        item.type === 'bunny' ? '🔧' :
                         '✨'
                       }
                       name={item.name}
@@ -678,7 +678,7 @@ const CommandPalette = ({ setOpen }: { setOpen: (value: boolean) => void }) => {
                       onSelect={() => {
                         if (item.type === 'tab') {
                           focusTabWithId(item.tabId);
-                        } else if (item.type === 'workspace' || item.type === 'colab') {
+                        } else if (item.type === 'workspace' || item.type === 'bunny') {
                           item.action();
                         } else if (item.type === 'file') {
                           openFileAt(item.path, 0, 0);
@@ -854,4 +854,3 @@ const Update = () => {
     </Show>
   );
 };
-

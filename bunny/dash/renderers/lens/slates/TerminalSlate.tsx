@@ -83,17 +83,17 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
           // Only open if Alt or Cmd/Meta is held
           if (event.altKey || event.metaKey) {
             event.preventDefault();
-            openNewTabForNode('__COLAB_INTERNAL__/web', false, { focusNewTab: true, url: uri });
+            openNewTabForNode('__BUNNY_INTERNAL__/web', false, { focusNewTab: true, url: uri });
           }
         },
         {
           hover: (event: MouseEvent, uri: string, range) => {
             // Remove any existing tooltip first
-            document.querySelector('.colab-link-tooltip')?.remove();
+            document.querySelector('.bunny-link-tooltip')?.remove();
 
             // Show tooltip explaining how to open the link
             const tooltip = document.createElement('div');
-            tooltip.className = 'colab-link-tooltip';
+            tooltip.className = 'bunny-link-tooltip';
             tooltip.textContent = `⌘+click or ⌥+click to open: ${uri.length > 50 ? uri.slice(0, 50) + '...' : uri}`;
             tooltip.style.cssText = `
               position: fixed;
@@ -114,7 +114,7 @@ export const TerminalSlate = ({ tabId }: { tabId: string }) => {
           },
           leave: () => {
             // Remove tooltip when mouse leaves the link
-            document.querySelector('.colab-link-tooltip')?.remove();
+            document.querySelector('.bunny-link-tooltip')?.remove();
           },
         }
       );

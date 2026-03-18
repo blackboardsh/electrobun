@@ -39,7 +39,7 @@ class GitHubService {
     return {
       'Authorization': `Bearer ${token}`,
       'Accept': 'application/vnd.github.v3+json',
-      'User-Agent': 'Colab-IDE/1.0.0',
+      'User-Agent': 'Bunny-Dash/1.0.0',
     };
   }
 

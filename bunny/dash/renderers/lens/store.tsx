@@ -264,7 +264,7 @@ export interface AppState {
       }
     | {
         // todo (yoav): may separate these out if they need to store metadata later
-        type: "global-settings" | "workspace-settings" | "llama-settings" | "github-settings" | "colab-cloud-settings" | "plugin-marketplace";
+        type: "global-settings" | "workspace-settings" | "llama-settings" | "github-settings" | "bunny-cloud-settings" | "plugin-marketplace";
         data: {};
       };
 
@@ -276,7 +276,7 @@ export interface AppState {
   accessToken: string | null;
   // fileTrees: { [projectId: string]: FileTreeType };
   fileCache: { [absolutePath: string]: CachedFileType };
-  // Slates is a cache of .colab.json config files. There are other types of slates.
+  // Slates is a cache of .bunny.json config files. There are other types of slates.
   // unlike some other slates like package.json, These slates are configs for the parent folders
   // typically turning the parent folder into a clickable web browser profile or portal dashboard
   // when needed for a particular folder it's read from disk and cached here, we then listen
@@ -373,7 +373,7 @@ export interface AppState {
       connectedAt: number | undefined;
       scopes: string[];
     };
-    colabCloud: {
+    bunnyCloud: {
       accessToken: string;
       refreshToken: string;
       userId: string;
@@ -499,7 +499,7 @@ const initialState: AppState = {
       connectedAt: undefined,
       scopes: [],
     },
-    colabCloud: {
+    bunnyCloud: {
       accessToken: "",
       refreshToken: "",
       userId: "",
@@ -1018,7 +1018,7 @@ export const getCurrentTab = (_state: AppState = state) => {
 
 // called by server for each window in workspace after deleting project
 // from the db
-export const removeProjectFromColab = (projectId: string) => {
+export const removeProjectFromBunnyDash = (projectId: string) => {
   setState(
     produce((_state: AppState) => {
       const _project = _state.projects[projectId];
@@ -1216,7 +1216,7 @@ export const getEditorForTab = (tabId: string) => {
 //     return;
 //   }
 //   // todo (yoav): [blocking] maybe the settings pane should close itself when the node is deleted
-//   // it also needs to refresh if the file changes outside of Colab
+//   // it also needs to refresh if the file changes outside of Bunny Dash
 //   if (
 //     "node" in state.settingsPane.data &&
 //     state.settingsPane.data.node.path === path
@@ -1227,9 +1227,9 @@ export const getEditorForTab = (tabId: string) => {
 //   // todo (yoav): [blocking] add a confirmation dialog
 //   safeTrashFileOrFolder(path);
 
-//   // todo (yoav): we need to update Colab file when removing slates
+//   // todo (yoav): we need to update Bunny Dash file when removing slates
 //   // todo (yoav): add a "remove slate" button to the context menu
-//   // todo (yoav): make slate settings reactive and save to .colab.json
+//   // todo (yoav): make slate settings reactive and save to .bunny.json
 // };
 
 export const openFileAt = (path: string, line: number, column: number) => {

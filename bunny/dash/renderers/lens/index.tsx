@@ -59,7 +59,7 @@ import {
 	openNewTab,
 	openNewTabForNode,
 	removeOpenFile,
-	removeProjectFromColab,
+	removeProjectFromBunnyDash,
 	setNodeExpanded,
 	setPreviewNode,
 	setPreviewNodeSlateConfig,
@@ -104,7 +104,7 @@ import { StatusBar } from "./components/StatusBar";
 import { Dialog } from "./components/Dialog";
 import { TopBar } from "./components/TopBar";
 import { type GitHubRepository, githubService } from "./services/githubService";
-import { ColabCloudSettings } from "./settings/ColabCloudSettings";
+import { BunnyCloudSettings } from "./settings/BunnyCloudSettings";
 import { GitHubSettings } from "./settings/GitHubSettings";
 import { LlamaSettings } from "./settings/LlamaSettings";
 import { PluginMarketplace } from "./settings/PluginMarketplace";
@@ -156,7 +156,7 @@ window.open = (url, target) => {
 	// Here we need to handle new windows opened from the browserWindow
 	// itself, ie: clicking on a mdn link in a code editor hover widget
 	console.log("opening window!", url, target);
-	openNewTabForNode("__COLAB_INTERNAL__/web", false, {
+	openNewTabForNode("__BUNNY_INTERNAL__/web", false, {
 		url,
 		focusNewTab: false,
 	});
@@ -1006,8 +1006,8 @@ const App = () => {
 											<Match when={state.settingsPane.type === "github-settings"}>
 												<GitHubSettings />
 											</Match>
-											<Match when={state.settingsPane.type === "colab-cloud-settings"}>
-												<ColabCloudSettings />
+											<Match when={state.settingsPane.type === "bunny-cloud-settings"}>
+												<BunnyCloudSettings />
 											</Match>
 											<Match when={state.settingsPane.type === "plugin-marketplace"}>
 												<PluginMarketplace />
@@ -1136,7 +1136,7 @@ const WorkspaceSettings = () => {
 												onClick={onClickDeleteWorkspace}
 												style="cursor: pointer;background: #dd4444;color: white;font-weight: bold;border: none;padding: 10px;margin: 4px 0 8px;"
 											>
-												Remove from co(lab) only
+												Remove from Bunny Dash only
 											</button>
 
 											<button
@@ -1144,7 +1144,7 @@ const WorkspaceSettings = () => {
 												onClick={onClickRemoveCompletely}
 												style="cursor: pointer;background: #dd4444;color: white;font-weight: bold;border: none;padding: 10px;margin: 4px 0 8px;"
 											>
-												Remove from co(lab) and Remove local files and folders
+												Remove from Bunny Dash and remove local files and folders
 											</button>
 											<span style="font-size: 11px;color: #999;background: #333;padding: 10px;">
 												Will instantly delete all files and folders in all the
@@ -1178,7 +1178,7 @@ const WorkspaceSettings = () => {
 		//         <div>token: {token.token}</div>
 		//         <button onClick={() => onDeleteClick(token.id)}>delete</button>
 		//         <span>
-		//           This will delete it from Colab, but you may still need to revoke
+		//           This will delete it from Bunny Dash, but you may still need to revoke
 		//           it in Webflow's settings
 		//         </span>
 		//       </>
@@ -1467,7 +1467,7 @@ const GlobalSettings = () => {
 															delete
 														</button>
 														<span style="font-size: 11px;color: #999;background: #333;padding: 10px;">
-															This will delete the token from co(lab), but you
+															This will delete the token from Bunny Dash, but you
 															may still need to revoke it in Webflow's settings
 														</span>
 													</SettingsPaneField>
@@ -1507,7 +1507,7 @@ const GlobalSettings = () => {
 		//         <div>token: {token.token}</div>
 		//         <button onClick={() => onDeleteClick(token.id)}>delete</button>
 		//         <span>
-		//           This will delete it from Colab, but you may still need to revoke
+		//           This will delete it from Bunny Dash, but you may still need to revoke
 		//           it in Webflow's settings
 		//         </span>
 		//       </>
@@ -1532,7 +1532,7 @@ const AnalyticsSettingsSection = ({
 		<SettingsPaneFormSection label="Privacy & Analytics">
 			<div style="margin-bottom: 16px;">
 				<p style="color: rgb(204, 204, 204); font-size: 14px; line-height: 1.4; margin: 0 0 16px 0;">
-					Help improve Colab by sharing anonymous usage data. This data helps us
+					Help improve Bunny Dash by sharing anonymous usage data. This data helps us
 					understand how features are used and identify issues.
 				</p>
 
@@ -1568,7 +1568,7 @@ const AnalyticsSettingsSection = ({
 						style="margin-right: 8px;"
 					/>
 					<span style="color: rgb(204, 204, 204); font-size: 14px;">
-						Enable analytics to help improve Colab
+						Enable analytics to help improve Bunny Dash
 					</span>
 				</label>
 			</SettingsPaneField>
@@ -2175,7 +2175,7 @@ const Pane = ({
 								"letter-spacing": "1px",
 							}}
 						>
-							co(lab)
+							Bunny Dash
 						</div>
 						<BlackboardAnimation />
 					</Show>
@@ -2249,7 +2249,7 @@ const TabContent = ({ tabId }: { tabId: string }) => {
 				<Match when={tab()?.type === "file" && !getNode(tab()?.path)}>
 					<div>
 						The file for this tab was deleted, renamed, or moved outside of
-						co(lab) and no longer exists
+						Bunny Dash and no longer exists
 					</div>
 				</Match>
 				<Match when={tab()?.type === "terminal"}>
@@ -2318,7 +2318,7 @@ const getIconForTab = (tab: TabType | undefined): string => {
 		return "views://assets/file-icons/terminal.svg";
 	}
 
-	if (tab.path === "__COLAB_INTERNAL__/web") {
+	if (tab.path === "__BUNNY_INTERNAL__/web") {
 		// Return a default globe icon for web tabs
 		return "views://assets/file-icons/bookmark.svg";
 	}
@@ -3001,7 +3001,7 @@ const NodeSettings = () => {
 					__previewNode?.slate?.type === "project" &&
 					__previewNode?.path !== prevPath
 				) {
-					const slateConfigPath = join(__previewNode.path, ".colab.json");
+					const slateConfigPath = join(__previewNode.path, ".bunny.json");
 					const slateConfigFromDisk = state.slateCache[slateConfigPath];
 
 					// If the slateConfig from disk is another type like browser profile then don't load it
@@ -3086,7 +3086,7 @@ const NodeSettings = () => {
 				}
 			}
 			// the only time it's ok to choose an existing path is when you're adding a new project
-			// because that folder won't already exist in Colab filetree etc.
+			// because that folder won't already exist in Bunny Dash filetree etc.
 
 			if (!isOkToChooseExisitingPath() && isFileNameConflict()) {
 				inputNameRef?.focus();
@@ -3135,7 +3135,7 @@ const NodeSettings = () => {
 				}
 			}
 
-			// Write .colab.json for directory slates (web, agent, etc.) but NOT for projects
+			// Write .bunny.json for directory slates (web, agent, etc.) but NOT for projects
 			// Projects are stored in GoldfishDB and detected via isProjectRoot()
 			if (_previewNode.type === "dir" && slateType && slateType !== "project") {
 				writeSlateConfigFile(_previewNode.path, getSlateForNode(_previewNode));
@@ -3591,7 +3591,7 @@ const NodeSettings = () => {
 
 	const onPathChooserClick = async () => {
 		const startingFolder =
-			previewNode()?.path || state.paths?.COLAB_PROJECTS_FOLDER || "";
+			previewNode()?.path || state.paths?.BUNNY_PROJECTS_FOLDER || "";
 		const filesAndFolders = await electrobun.rpc?.request.openFileDialog({
 			startingFolder,
 			allowedFileTypes: "",
@@ -3756,7 +3756,7 @@ const NodeSettings = () => {
 
 			if (projectForRoot) {
 				// For project root nodes, use the project-specific deletion
-				electrobun.rpc?.send.fullyDeleteProjectFromDiskAndColab({
+				electrobun.rpc?.send.fullyDeleteProjectFromDiskAndBunnyDash({
 					projectId: projectForRoot.id,
 				});
 			} else {
@@ -3768,14 +3768,14 @@ const NodeSettings = () => {
 		}
 	};
 
-	const onClickRemoveProjectFromColabOnly = () => {
+	const onClickRemoveProjectFromBunnyDashOnly = () => {
 		const _node = node();
 		if (_node) {
 			// Use getProjectByRootPath to find the project whose root IS this node
 			// (not just a project that contains this node)
 			const project = getProjectByRootPath(_node.path);
 			if (project) {
-				electrobun.rpc?.send.removeProjectFromColabOnly({
+				electrobun.rpc?.send.removeProjectFromBunnyDashOnly({
 					projectId: project.id,
 				});
 			}
@@ -3783,10 +3783,10 @@ const NodeSettings = () => {
 		}
 	};
 
-	const onClickRemoveBrowserProfileSlateFromColabOnly = async () => {
+	const onClickRemoveBrowserProfileSlateFromBunnyDashOnly = async () => {
 		const _node = node();
 		if (getSlateForNode(_node)?.type === "web" && _node?.path) {
-			const slateConfigPath = join(_node.path, ".colab.json");
+			const slateConfigPath = join(_node.path, ".bunny.json");
 			if (await electrobun.rpc?.request.exists({ path: slateConfigPath })) {
 				await electrobun.rpc?.request.safeDeleteFileOrFolder({
 					absolutePath: slateConfigPath,
@@ -4047,13 +4047,13 @@ const NodeSettings = () => {
 												<SettingsPaneField label="">
 													<button
 														type="button"
-														onClick={onClickRemoveProjectFromColabOnly}
+														onClick={onClickRemoveProjectFromBunnyDashOnly}
 														style="cursor: pointer;background: #dd4444;color: white;font-weight: bold;border: none;padding: 10px;margin: 4px 0 8px;"
 													>
 														Remove Project
 													</button>
 													<span style="font-size: 11px;color: #999;background: #333;padding: 10px;">
-														Will remove the project from co(lab), but files at{" "}
+														Will remove the project from Bunny Dash, but files at{" "}
 														{node()?.path} will remain. You can re-add the
 														project later if you'd like.
 													</span>
@@ -4160,14 +4160,14 @@ const NodeSettings = () => {
 													<button
 														type="button"
 														onClick={
-															onClickRemoveBrowserProfileSlateFromColabOnly
+															onClickRemoveBrowserProfileSlateFromBunnyDashOnly
 														}
 														style="cursor: pointer;background: #dd4444;color: white;font-weight: bold;border: none;padding: 10px;margin: 4px 0 8px;"
 													>
 														Remove Profile
 													</button>
 													<span style="font-size: 11px;color: #999;background: #333;padding: 10px;">
-														Will remove the profile from co(lab), converting
+														Will remove the profile from Bunny Dash, converting
 														this to a regular folder.
 													</span>
 												</SettingsPaneField>

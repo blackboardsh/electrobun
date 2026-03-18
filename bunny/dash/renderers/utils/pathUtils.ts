@@ -122,7 +122,7 @@ export function resolve() {
     if (i >= 0) path = arguments[i];
     else {
       // In browser environment, we don't have process.cwd()
-      // Since we're always dealing with absolute paths in Colab, use "/" as fallback
+      // Since we're always dealing with absolute paths in Bunny Dash, use "/" as fallback
       path = "/";
     }
 

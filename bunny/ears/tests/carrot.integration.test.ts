@@ -918,7 +918,7 @@ describe("Bunny Ears carrots", () => {
     expect((logAction.payload as { message: string }).message).toContain("workspace-settings");
   });
 
-  test("Bunny Dash builds from source and exposes a Colab-shaped shell snapshot", async () => {
+  test("Bunny Dash builds from source and exposes a Dash shell snapshot", async () => {
     const built = await buildCarrotAt(DASH_ROOT, "bunny-ears-dash-build-");
     expect(built.manifest.id).toBe("bunny-dash");
     expect(built.manifest.dependencies).toEqual({
@@ -1029,7 +1029,7 @@ describe("Bunny Ears carrots", () => {
         submenu: [
           { type: "normal", label: "Plugins", action: "plugin-marketplace" },
           { type: "normal", label: "Llama Settings", action: "llama-settings" },
-          { type: "normal", label: "Bunny Dash Settings", action: "colab-settings" },
+          { type: "normal", label: "Bunny Dash Settings", action: "bunny-settings" },
           { type: "normal", label: "Workspace Settings", action: "workspace-settings" },
         ],
       },
@@ -1049,7 +1049,7 @@ describe("Bunny Ears carrots", () => {
     const initialTrayMenu = await carrot.nextAction("set-tray-menu");
     expect(Array.isArray(initialTrayMenu.payload)).toBe(true);
 
-    const initialColabState = (await carrot.request("getInitialState")) as {
+    const initialBunnyDashState = (await carrot.request("getInitialState")) as {
       buildVars: { channel: string };
       workspace: { id: string; name: string; windows: Array<{ id: string }> };
       bunnyDash: {
@@ -1063,17 +1063,17 @@ describe("Bunny Ears carrots", () => {
       };
       projects: Array<{ id: string; name: string }>;
       tokens: unknown[];
-      appSettings: { colabCloud: { email: string } };
+      appSettings: { bunnyCloud: { email: string } };
     };
-    expect(initialColabState.buildVars.channel).toBe("dev");
-    expect(initialColabState.workspace.name).toBe("Local Workspace");
-    expect(initialColabState.workspace.windows[0]?.id).toBe("main");
-    expect(initialColabState.bunnyDash.currentWorkspaceId).toBe("local-workspace");
-    expect(initialColabState.bunnyDash.currentLensId).toBe("starter-lens");
-    expect(initialColabState.bunnyDash.workspaces[0]?.lenses[0]?.name).toBe("Starter Lens");
-    expect(initialColabState.projects).toEqual([]);
-    expect(initialColabState.tokens).toEqual([]);
-    expect(initialColabState.appSettings.colabCloud.email).toBe("");
+    expect(initialBunnyDashState.buildVars.channel).toBe("dev");
+    expect(initialBunnyDashState.workspace.name).toBe("Local Workspace");
+    expect(initialBunnyDashState.workspace.windows[0]?.id).toBe("main");
+    expect(initialBunnyDashState.bunnyDash.currentWorkspaceId).toBe("local-workspace");
+    expect(initialBunnyDashState.bunnyDash.currentLensId).toBe("starter-lens");
+    expect(initialBunnyDashState.bunnyDash.workspaces[0]?.lenses[0]?.name).toBe("Starter Lens");
+    expect(initialBunnyDashState.projects).toEqual([]);
+    expect(initialBunnyDashState.tokens).toEqual([]);
+    expect(initialBunnyDashState.appSettings.bunnyCloud.email).toBe("");
 
     const initial = (await carrot.request("getSnapshot")) as {
       shellTitle: string;

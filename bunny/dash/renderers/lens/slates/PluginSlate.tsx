@@ -99,10 +99,10 @@ export const PluginSlate = (props: PluginSlateProps) => {
       if (renderData.html !== undefined) {
         htmlMountRef.innerHTML = renderData.html;
 
-        // Set up colabSlate API for the script to use
+        // Set up bunnySlate API for the script to use
         // Provide both sendEvent and a scoped getElementById that searches within the slate
         const slateRoot = htmlMountRef;
-        (window as any).colabSlate = {
+        (window as any).bunnySlate = {
           sendEvent: (eventType: string, payload: unknown) => {
             electrobun.rpc?.request.pluginSlateEvent({
               instanceId: currentInstanceId,
@@ -115,15 +115,14 @@ export const PluginSlate = (props: PluginSlateProps) => {
           querySelectorAll: (selector: string) => slateRoot?.querySelectorAll(selector),
           root: slateRoot,
         };
-
         // Execute the script if provided
         if (renderData.script) {
           try {
             // Wrap script to provide scoped document functions
             const wrappedScript = `
-              const getElementById = window.colabSlate.getElementById;
-              const querySelector = window.colabSlate.querySelector;
-              const querySelectorAll = window.colabSlate.querySelectorAll;
+              const getElementById = window.bunnySlate.getElementById;
+              const querySelector = window.bunnySlate.querySelector;
+              const querySelectorAll = window.bunnySlate.querySelectorAll;
               ${renderData.script}
             `;
             const scriptFn = new Function(wrappedScript);
@@ -150,8 +149,8 @@ export const PluginSlate = (props: PluginSlateProps) => {
     if (html !== undefined) {
       htmlMountRef.innerHTML = html;
 
-      // Set up colabSlate API for the script to use
-      (window as any).colabSlate = {
+      // Set up bunnySlate API for the script to use
+      (window as any).bunnySlate = {
         sendEvent: (eventType: string, payload: unknown) => {
           electrobun.rpc?.request.pluginSlateEvent({
             instanceId: currentInstanceId,
@@ -160,7 +159,6 @@ export const PluginSlate = (props: PluginSlateProps) => {
           });
         },
       };
-
       // Execute the script if provided
       if (script) {
         try {

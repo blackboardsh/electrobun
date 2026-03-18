@@ -28,7 +28,7 @@ const getDashboardUrl = () => {
   return `${getApiBaseUrl()}/dashboard`;
 };
 
-export const ColabCloudSettings = (): JSXElement => {
+export const BunnyCloudSettings = (): JSXElement => {
   const [isLoggingIn, setIsLoggingIn] = createSignal(false);
   const [loginError, setLoginError] = createSignal<string>("");
   const [email, setEmail] = createSignal("");
@@ -54,10 +54,10 @@ export const ColabCloudSettings = (): JSXElement => {
   } | null>(null);
 
   // Check if passphrase is set
-  const hasPassphrase = () => !!state.appSettings.colabCloud?.syncPassphrase;
+  const hasPassphrase = () => !!state.appSettings.bunnyCloud?.syncPassphrase;
 
   const isConnected = () => {
-    return state.appSettings.colabCloud?.accessToken && state.appSettings.colabCloud?.email;
+    return state.appSettings.bunnyCloud?.accessToken && state.appSettings.bunnyCloud?.email;
   };
 
   const formatDate = (timestamp: number | undefined | null) => {
@@ -86,14 +86,14 @@ export const ColabCloudSettings = (): JSXElement => {
   };
 
   const verifyConnection = async () => {
-    if (!state.appSettings.colabCloud?.accessToken) return;
+    if (!state.appSettings.bunnyCloud?.accessToken) return;
 
     setConnectionStatus("Verifying connection...");
 
     try {
       const response = await fetch(`${getApiBaseUrl()}/api/user/profile`, {
         headers: {
-          'Authorization': `Bearer ${state.appSettings.colabCloud.accessToken}`,
+          'Authorization': `Bearer ${state.appSettings.bunnyCloud.accessToken}`,
           'Content-Type': 'application/json',
         },
       });
@@ -101,8 +101,8 @@ export const ColabCloudSettings = (): JSXElement => {
       if (response.ok) {
         const data = await response.json();
         // Update user info if changed
-        setState("appSettings", "colabCloud", {
-          ...state.appSettings.colabCloud,
+        setState("appSettings", "bunnyCloud", {
+          ...state.appSettings.bunnyCloud,
           email: data.user.email,
           name: data.user.name,
           emailVerified: data.user.email_verified === 1,
@@ -116,13 +116,13 @@ export const ColabCloudSettings = (): JSXElement => {
         setConnectionStatus("Connection error");
       }
     } catch (error) {
-      console.error("Error verifying Colab Cloud connection:", error);
+      console.error("Error verifying Bunny Cloud connection:", error);
       setConnectionStatus("Failed to verify connection");
     }
   };
 
   const refreshToken = async () => {
-    const refreshTokenValue = state.appSettings.colabCloud?.refreshToken;
+    const refreshTokenValue = state.appSettings.bunnyCloud?.refreshToken;
     if (!refreshTokenValue) {
       disconnect();
       return;
@@ -139,8 +139,8 @@ export const ColabCloudSettings = (): JSXElement => {
 
       if (response.ok) {
         const data = await response.json();
-        setState("appSettings", "colabCloud", {
-          ...state.appSettings.colabCloud,
+        setState("appSettings", "bunnyCloud", {
+          ...state.appSettings.bunnyCloud,
           accessToken: data.accessToken,
           refreshToken: data.refreshToken,
         });
@@ -181,7 +181,7 @@ export const ColabCloudSettings = (): JSXElement => {
       const data = await response.json();
 
       if (response.ok) {
-        setState("appSettings", "colabCloud", {
+        setState("appSettings", "bunnyCloud", {
           accessToken: data.accessToken,
           refreshToken: data.refreshToken,
           userId: data.user.id,
@@ -209,7 +209,7 @@ export const ColabCloudSettings = (): JSXElement => {
   const disconnect = async () => {
     // Try to logout on server
     try {
-      const refreshTokenValue = state.appSettings.colabCloud?.refreshToken;
+      const refreshTokenValue = state.appSettings.bunnyCloud?.refreshToken;
       if (refreshTokenValue) {
         await fetch(`${getApiBaseUrl()}/api/auth/logout`, {
           method: 'POST',
@@ -223,7 +223,7 @@ export const ColabCloudSettings = (): JSXElement => {
       // Ignore errors, we're logging out anyway
     }
 
-    setState("appSettings", "colabCloud", {
+    setState("appSettings", "bunnyCloud", {
       accessToken: "",
       refreshToken: "",
       userId: "",
@@ -253,8 +253,8 @@ export const ColabCloudSettings = (): JSXElement => {
       return;
     }
 
-    setState("appSettings", "colabCloud", {
-      ...state.appSettings.colabCloud,
+    setState("appSettings", "bunnyCloud", {
+      ...state.appSettings.bunnyCloud,
       syncPassphrase: newPassphrase(),
     });
     updateSyncedAppSettings();
@@ -273,7 +273,7 @@ export const ColabCloudSettings = (): JSXElement => {
   };
 
   const handleBackup = async () => {
-    const passphrase = state.appSettings.colabCloud?.syncPassphrase;
+    const passphrase = state.appSettings.bunnyCloud?.syncPassphrase;
     if (!passphrase) {
       showSyncMessage({ type: 'error', text: 'Please set a passphrase first' });
       return;
@@ -295,7 +295,7 @@ export const ColabCloudSettings = (): JSXElement => {
   };
 
   const handleRestore = async () => {
-    const passphrase = state.appSettings.colabCloud?.syncPassphrase;
+    const passphrase = state.appSettings.bunnyCloud?.syncPassphrase;
     if (!passphrase) {
       showSyncMessage({ type: 'error', text: 'Please set a passphrase first' });
       return;
@@ -326,7 +326,7 @@ export const ColabCloudSettings = (): JSXElement => {
       style="background: #404040; color: #d9d9d9; height: 100vh; overflow: hidden; display: flex; flex-direction: column;"
     >
       <form onSubmit={onSubmit} style="height: 100%; display: flex; flex-direction: column;">
-        <SettingsPaneSaveClose label="Colab Cloud" />
+        <SettingsPaneSaveClose label="Bunny Cloud" />
 
         <div style="flex: 1; overflow-y: auto; padding: 0; margin-bottom: 60px;">
           <SettingsPaneFormSection label="Connection Status">
@@ -356,12 +356,12 @@ export const ColabCloudSettings = (): JSXElement => {
                 <div style="background: #2b2b2b; padding: 12px; border-radius: 4px;">
                   <div style="display: flex; flex-direction: column; gap: 4px;">
                     <span style="font-size: 12px; font-weight: 500; color: #d9d9d9;">
-                      {state.appSettings.colabCloud?.name || state.appSettings.colabCloud?.email}
+                      {state.appSettings.bunnyCloud?.name || state.appSettings.bunnyCloud?.email}
                     </span>
                     <span style="font-size: 10px; color: #999;">
-                      {state.appSettings.colabCloud?.email}
+                      {state.appSettings.bunnyCloud?.email}
                     </span>
-                    <Show when={!state.appSettings.colabCloud?.emailVerified}>
+                    <Show when={!state.appSettings.bunnyCloud?.emailVerified}>
                       <span style="font-size: 10px; color: #ffa500; margin-top: 4px;">
                         Email not verified
                       </span>
@@ -372,7 +372,7 @@ export const ColabCloudSettings = (): JSXElement => {
 
               <SettingsPaneField label="Connected">
                 <div style="font-size: 11px; color: #999;">
-                  Connected on {formatDateShort(state.appSettings.colabCloud?.connectedAt)}
+                  Connected on {formatDateShort(state.appSettings.bunnyCloud?.connectedAt)}
                 </div>
               </SettingsPaneField>
             </Show>
@@ -454,7 +454,7 @@ export const ColabCloudSettings = (): JSXElement => {
                       // Open registration page in a web tab
                       const registerUrl = `${getApiBaseUrl()}/register`;
                       import("../store").then(({ openNewTabForNode }) => {
-                        openNewTabForNode("__COLAB_INTERNAL__/web", false, { url: registerUrl });
+                        openNewTabForNode("__BUNNY_INTERNAL__/web", false, { url: registerUrl });
                       });
                     }}
                   >
@@ -647,12 +647,12 @@ export const ColabCloudSettings = (): JSXElement => {
                 type="button"
                 onClick={() => {
                   import("../store").then(({ openNewTabForNode }) => {
-                    openNewTabForNode("__COLAB_INTERNAL__/web", false, { url: getDashboardUrl() });
+                    openNewTabForNode("__BUNNY_INTERNAL__/web", false, { url: getDashboardUrl() });
                   });
                 }}
                 style="background: #333; color: #d9d9d9; border: 1px solid #555; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-size: 12px; width: 100%;"
               >
-                Open Colab Cloud Dashboard
+                Open Bunny Cloud Dashboard
               </button>
               <div style="font-size: 11px; color: #999; margin-top: 8px; text-align: center;">
                 Manage your account, devices, and subscription.

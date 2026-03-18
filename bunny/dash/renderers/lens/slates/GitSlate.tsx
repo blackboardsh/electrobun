@@ -1201,7 +1201,7 @@ export const GitSlate = ({ node }: { node?: CachedFileType }) => {
   // Stash operations
   const createStash = async () => {
     try {
-      const message = stashMessage().trim() || "Stash from Colab";
+      const message = stashMessage().trim() || "Stash from Bunny Dash";
       const options = includeUntracked() ? ["-u"] : [];
       
       await electrobun.rpc?.request.gitStashCreate({

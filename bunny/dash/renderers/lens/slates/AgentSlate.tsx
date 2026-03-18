@@ -204,10 +204,10 @@ export const AgentSlate = ({
       };
       
       // Update slate cache
-      setState("slateCache", node.path + "/.colab.json", updatedSlate);
+      setState("slateCache", node.path + "/.bunny.json", updatedSlate);
       
       // Save to file
-      const configPath = node.path + "/.colab.json";
+      const configPath = node.path + "/.bunny.json";
       const contents = JSON.stringify(updatedSlate, null, 2);
       electrobun.rpc?.request.writeFile({
         path: configPath,

@@ -498,7 +498,7 @@ export const Editor = ({ currentTabId }: { currentTabId: string }) => {
     if (!_currentTab) {
       return;
     }
-    // sometimes a file is deleted or renamed outside of Colab but we still have a tab for it
+    // sometimes a file is deleted or renamed outside of Bunny Dash but we still have a tab for it
     // we should render a message or something i the editor to let users know
     // todo (yoav):
     if (!state.fileCache[_currentTab.path]) {

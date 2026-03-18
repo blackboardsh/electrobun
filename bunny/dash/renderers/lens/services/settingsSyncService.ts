@@ -212,12 +212,12 @@ export async function applySyncedSettings(settings: SyncedSettings): Promise<voi
 }
 
 /**
- * Upload settings to Colab Cloud
+ * Upload settings to Bunny Cloud
  */
 export async function uploadSettings(passphrase: string): Promise<{ success: boolean; error?: string }> {
-  const accessToken = state.appSettings.colabCloud?.accessToken;
+  const accessToken = state.appSettings.bunnyCloud?.accessToken;
   if (!accessToken) {
-    return { success: false, error: 'Not logged in to Colab Cloud' };
+    return { success: false, error: 'Not logged in to Bunny Cloud' };
   }
 
   try {
@@ -251,12 +251,12 @@ export async function uploadSettings(passphrase: string): Promise<{ success: boo
 }
 
 /**
- * Download and apply settings from Colab Cloud
+ * Download and apply settings from Bunny Cloud
  */
 export async function downloadSettings(passphrase: string): Promise<{ success: boolean; error?: string }> {
-  const accessToken = state.appSettings.colabCloud?.accessToken;
+  const accessToken = state.appSettings.bunnyCloud?.accessToken;
   if (!accessToken) {
-    return { success: false, error: 'Not logged in to Colab Cloud' };
+    return { success: false, error: 'Not logged in to Bunny Cloud' };
   }
 
   try {
@@ -314,7 +314,7 @@ export async function getSyncStatus(): Promise<{
   };
   error?: string;
 }> {
-  const accessToken = state.appSettings.colabCloud?.accessToken;
+  const accessToken = state.appSettings.bunnyCloud?.accessToken;
   if (!accessToken) {
     return { hasSyncedSettings: false, error: 'Not logged in' };
   }

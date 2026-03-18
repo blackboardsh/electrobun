@@ -47,12 +47,12 @@ setTimeout(() => setWindowStartupSettled(true), 1000);
 // };
 
 // todo: implement cmd + click to open in new tab. needs more thought
-const colabPreloadScript = `
+const bunnyPreloadScript = `
 (function() {
   // Notify host that the page loaded successfully (preload script executed)
   if (typeof window.__electrobunSendToHost === 'function') {
     window.__electrobunSendToHost({
-      type: 'colab:page-loaded'
+      type: 'bunny:page-loaded'
     });
   }
 
@@ -79,7 +79,7 @@ const colabPreloadScript = `
     if (e.key === 'Escape' || e.key === 'Enter') {
       if (typeof window.__electrobunSendToHost === 'function') {
         window.__electrobunSendToHost({
-          type: 'colab:keydown',
+          type: 'bunny:keydown',
           key: e.key,
           ctrlKey: e.ctrlKey,
           shiftKey: e.shiftKey,
@@ -93,7 +93,7 @@ const colabPreloadScript = `
       e.preventDefault();
       if (typeof window.__electrobunSendToHost === 'function') {
         window.__electrobunSendToHost({
-          type: 'colab:keydown',
+          type: 'bunny:keydown',
           key: e.key,
           ctrlKey: e.ctrlKey,
           shiftKey: e.shiftKey,
@@ -607,7 +607,7 @@ console.log('Preload script loaded for:', window.location.href);
 				return;
 			}
 
-			// Write the .colab.json slate config file
+			// Write the .bunny.json slate config file
 			// Preserve the renderer type from the current tab
 			const slateConfig = {
 				v: 1,
@@ -620,7 +620,7 @@ console.log('Preload script loaded for:', window.location.href);
 				},
 			};
 
-			const slateConfigPath = join(browserProfilePath, ".colab.json");
+			const slateConfigPath = join(browserProfilePath, ".bunny.json");
 			const writeResult = await electrobun.rpc?.request.writeFile({
 				path: slateConfigPath,
 				value: JSON.stringify(slateConfig, null, 2),
@@ -695,7 +695,7 @@ console.log('Preload script loaded for:', window.location.href);
 		try {
 			// Open folder picker
 			const result = await electrobun.rpc?.request.openFileDialog({
-				startingFolder: state.paths?.COLAB_HOME_FOLDER || "",
+				startingFolder: state.paths?.BUNNY_HOME_FOLDER || "",
 				allowedFileTypes: "",
 				canChooseFiles: false,
 				canChooseDirectory: true,
@@ -747,7 +747,7 @@ console.log('Preload script loaded for:', window.location.href);
 				return;
 			}
 
-			// Write the .colab.json slate config file
+			// Write the .bunny.json slate config file
 			const slateConfig = {
 				v: 1,
 				name: pageTitle || new URL(currentUrl).hostname,
@@ -759,7 +759,7 @@ console.log('Preload script loaded for:', window.location.href);
 				},
 			};
 
-			const slateConfigPath = join(browserProfilePath, ".colab.json");
+			const slateConfigPath = join(browserProfilePath, ".bunny.json");
 			const writeResult = await electrobun.rpc?.request.writeFile({
 				path: slateConfigPath,
 				value: JSON.stringify(slateConfig, null, 2),
@@ -818,13 +818,13 @@ console.log('Preload script loaded for:', window.location.href);
 	const isRealNode = createMemo(
 		() =>
 			node &&
-			!node.path.startsWith("__COLAB_INTERNAL__") &&
-			!node.path.startsWith("__COLAB_TEMPLATE__"),
+			!node.path.startsWith("__BUNNY_INTERNAL__") &&
+			!node.path.startsWith("__BUNNY_TEMPLATE__"),
 	);
 
 	// Check if this is a quick browser tab (opened from quick access)
 	const isQuickBrowser = createMemo(() =>
-		node?.path.startsWith("__COLAB_TEMPLATE__/browser-"),
+		node?.path.startsWith("__BUNNY_TEMPLATE__/browser-"),
 	);
 
 	// For real nodes, get the preload script path from the node's folder
@@ -906,7 +906,7 @@ console.log('Preload script loaded for:', window.location.href);
 	});
 
 	const preloadScript = () => {
-		const parts = [colabPreloadScript];
+		const parts = [bunnyPreloadScript];
 
 		// Add plugin preloads
 		const pluginScripts = pluginPreloads();
@@ -1541,7 +1541,7 @@ console.log('Preload script loaded for:', window.location.href);
 									if (favicon) {
 										// Update the tab's icon in the slate config if this is a real browser profile node
 										if (isRealNode() && node) {
-											const slateConfigPath = join(node.path, ".colab.json");
+											const slateConfigPath = join(node.path, ".bunny.json");
 											electrobun.rpc?.request
 												.readFile({ path: slateConfigPath })
 												.then((content) => {
@@ -1635,7 +1635,7 @@ console.log('Preload script loaded for:', window.location.href);
 							const msg = e.detail;
 
 							// Page loaded successfully - preload script executed
-							if (msg?.type === "colab:page-loaded") {
+							if (msg?.type === "bunny:page-loaded") {
 								console.log(
 									"[WebSlate] Page loaded message received from preload",
 								);
@@ -1644,7 +1644,7 @@ console.log('Preload script loaded for:', window.location.href);
 
 							// Keyboard shortcuts forwarded from webview
 							// This allows Ctrl+Tab/Ctrl+Shift+Tab and Cmd+F to work even when the webview OOPIF has focus
-							if (msg?.type === "colab:keydown") {
+							if (msg?.type === "bunny:keydown") {
 								// Handle Cmd+F locally for find-in-page
 								if (
 									msg.key === "f" &&

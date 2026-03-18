@@ -78,7 +78,7 @@ export const GitHubSettings = (): JSXElement => {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Accept': 'application/vnd.github.v3+json',
-          'User-Agent': 'Colab-IDE/1.0.0',
+          'User-Agent': 'Bunny-Dash/1.0.0',
         },
       });
 
@@ -196,7 +196,7 @@ export const GitHubSettings = (): JSXElement => {
   const openTokenPage = (e: Event) => {
     e.preventDefault();
     setState("githubAuth", {
-      authUrl: "https://github.com/settings/tokens/new?scopes=repo,read:user,read:org&description=Colab%20IDE",
+      authUrl: "https://github.com/settings/tokens/new?scopes=repo,read:user,read:org&description=Bunny%20Dash",
       resolver: () => setState("githubAuth", { authUrl: null, resolver: null }),
     });
   };

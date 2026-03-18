@@ -31,7 +31,7 @@ import {
   type WindowTabId,
 } from "./db";
 
-type ColabPane =
+type BunnyPane =
   | {
       id: string;
       tabIds: string[];
@@ -42,11 +42,11 @@ type ColabPane =
       id: string;
       direction: "row" | "column";
       divider: number;
-      panes: ColabPane[];
+      panes: BunnyPane[];
       type: "container";
     };
 
-type ColabWindow = {
+type BunnyWindow = {
   id: string;
   ui: {
     showSidebar: boolean;
@@ -59,19 +59,19 @@ type ColabWindow = {
     height: number;
   };
   expansions: string[];
-  rootPane: ColabPane;
+  rootPane: BunnyPane;
   currentPaneId: string;
   tabs: Record<string, any>;
 };
 
-type ColabWorkspace = {
+type BunnyWorkspace = {
   id: string;
   name: string;
   color: string;
-  windows: ColabWindow[];
+  windows: BunnyWindow[];
 };
 
-type ColabAppSettings = {
+type BunnyAppSettings = {
   llama: {
     enabled: boolean;
     baseUrl: string;
@@ -85,7 +85,7 @@ type ColabAppSettings = {
     connectedAt?: number | undefined;
     scopes: string[];
   };
-  colabCloud: {
+  bunnyCloud: {
     accessToken: string;
     refreshToken: string;
     userId: string;
@@ -96,9 +96,9 @@ type ColabAppSettings = {
   };
 };
 
-type PersistedColabState = {
-  workspaces?: Record<string, ColabWorkspace>;
-  appSettings?: ColabAppSettings;
+type PersistedBunnyDashState = {
+  workspaces?: Record<string, BunnyWorkspace>;
+  appSettings?: BunnyAppSettings;
   tokens?: any[];
 };
 
@@ -287,7 +287,7 @@ let currentState: CurrentState = {
   windows: [],
 };
 
-const defaultColabAppSettings: ColabAppSettings = {
+const defaultBunnyAppSettings: BunnyAppSettings = {
   llama: {
     enabled: true,
     baseUrl: "llama.cpp",
@@ -301,7 +301,7 @@ const defaultColabAppSettings: ColabAppSettings = {
     connectedAt: undefined,
     scopes: [],
   },
-  colabCloud: {
+  bunnyCloud: {
     accessToken: "",
     refreshToken: "",
     userId: "",
@@ -386,12 +386,16 @@ const builtInShortcuts: Array<{
   },
 ];
 
-let colabState: PersistedColabState = {
+let bunnyDashState: PersistedBunnyDashState = {
   workspaces: {},
-  appSettings: structuredClone(defaultColabAppSettings),
+  appSettings: structuredClone(defaultBunnyAppSettings),
   tokens: [],
 };
-const UNHANDLED_COLAB_REQUEST = Symbol("unhandled-colab-request");
+const UNHANDLED_DASH_REQUEST = Symbol("unhandled-bunny-dash-request");
+
+const ACTIVE_SLATE_CONFIG_FILE = ".bunny.json";
+const ACTIVE_INTERNAL_PREFIX = "__BUNNY_INTERNAL__";
+const ACTIVE_TEMPLATE_PREFIX = "__BUNNY_TEMPLATE__";
 
 let state: DashState = {
   sidebarCollapsed: false,
@@ -477,23 +481,23 @@ function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: stri
     return existing;
   }
 
-  const colabWindow = getColabWindowForRuntimeWindow(windowId);
+  const bunnyWindow = getBunnyWindowForRuntimeWindow(windowId);
   const win = new BrowserWindow({
     id: windowId,
     title: title || runtimeWindow.title,
     url: "views://lens/index.html",
     titleBarStyle: "hiddenInset",
     frame: {
-      x: colabWindow?.position.x ?? 120,
-      y: colabWindow?.position.y ?? 120,
-      width: colabWindow?.position.width ?? 1400,
-      height: colabWindow?.position.height ?? 920,
+      x: bunnyWindow?.position.x ?? 120,
+      y: bunnyWindow?.position.y ?? 120,
+      width: bunnyWindow?.position.width ?? 1400,
+      height: bunnyWindow?.position.height ?? 920,
     },
   });
   browserWindows.set(windowId, win);
 
   win.on("move", (event: any) => {
-    updateColabWindowFrame(windowId, {
+    updateBunnyWindowFrame(windowId, {
       x: typeof event?.data?.x === "number" ? event.data.x : undefined,
       y: typeof event?.data?.y === "number" ? event.data.y : undefined,
     });
@@ -501,7 +505,7 @@ function getOrCreateBrowserWindow(windowId = state.currentWindowId, title?: stri
   });
 
   win.on("resize", (event: any) => {
-    updateColabWindowFrame(windowId, {
+    updateBunnyWindowFrame(windowId, {
       x: typeof event?.data?.x === "number" ? event.data.x : undefined,
       y: typeof event?.data?.y === "number" ? event.data.y : undefined,
       width: typeof event?.data?.width === "number" ? event.data.width : undefined,
@@ -763,14 +767,14 @@ async function handleContextMenuAction(action: string, data: any) {
     case "open_node_in_finder":
       await Utils.showItemInFolder(String(data?.nodePath || ""));
       return;
-    case "remove_project_from_colab": {
+    case "remove_project_from_bunny_dash": {
       const project = findProjectMountByKey(String(data?.projectId || ""));
       if (project) {
         ensureDb().collection("projectMounts").remove(project.id);
         flushDb();
         syncProjectWatchers();
         emitSetProjects();
-        await writeCompatibilityState();
+        await writePersistedDashState();
       }
       return;
     }
@@ -811,11 +815,11 @@ async function handleContextMenuAction(action: string, data: any) {
 
 async function handleApplicationMenuAction(action: string) {
   if (action === "terms-of-service") {
-    openAboutWindow("https://colab.dev/terms-of-service");
+    openAboutWindow("https://blackboard.sh/terms");
     return;
   }
   if (action === "privacy-statement") {
-    openAboutWindow("https://colab.dev/privacy");
+    openAboutWindow("https://blackboard.sh/privacy");
     return;
   }
   if (action === "acknowledgements") {
@@ -877,7 +881,7 @@ async function handleApplicationMenuAction(action: string) {
     sendToFocusedDashWindow("openSettings", { settingsType: "llama-settings" });
     return;
   }
-  if (action === "colab-settings") {
+  if (action === "bunny-settings") {
     sendToFocusedDashWindow("openSettings", { settingsType: "global-settings" });
     return;
   }
@@ -1013,7 +1017,7 @@ function syncApplicationMenu() {
         {
           type: "normal",
           label: "Bunny Dash Settings",
-          action: "colab-settings",
+          action: "bunny-settings",
         },
         {
           type: "normal",
@@ -1238,7 +1242,7 @@ function ensureWorkspaceCurrentLens(workspaceId: string) {
     name: "Current",
     description: `Current working state for ${workspace.name}.`,
     workspaceId,
-    windowStateJson: serializeColabWindow(makeDefaultColabWindow("main")),
+    windowStateJson: serializeBunnyWindow(makeDefaultBunnyWindow("main")),
     sortOrder: listLenses().length,
     windows: [
       {
@@ -1264,14 +1268,14 @@ function getDashHomeDir() {
   return dirname(statePath);
 }
 
-function getColabProjectsFolder() {
+function getBunnyProjectsFolder() {
   const workspace = getCurrentWorkspaceUnsafe() || listWorkspaces()[0];
   const root = join(getDashHomeDir(), "projects", workspace?.key || "default");
   mkdirSync(root, { recursive: true });
   return root;
 }
 
-function makeDefaultColabWindow(id = "main"): ColabWindow {
+function makeDefaultBunnyWindow(id = "main"): BunnyWindow {
   return {
     id,
     ui: {
@@ -1296,18 +1300,18 @@ function makeDefaultColabWindow(id = "main"): ColabWindow {
   };
 }
 
-function cloneColabWindow(value: ColabWindow) {
+function cloneBunnyWindow(value: BunnyWindow) {
   return structuredClone(value);
 }
 
-function serializeColabWindow(value: ColabWindow) {
+function serializeBunnyWindow(value: BunnyWindow) {
   return JSON.stringify(value);
 }
 
-function parseStoredColabWindow(lens: LensDoc) {
+function parseStoredBunnyWindow(lens: LensDoc) {
   if (typeof lens.windowStateJson === "string" && lens.windowStateJson.trim()) {
     try {
-      return JSON.parse(lens.windowStateJson) as ColabWindow;
+      return JSON.parse(lens.windowStateJson) as BunnyWindow;
     } catch (error) {
       log(
         `failed to parse stored lens window for ${lens.key}: ${
@@ -1317,7 +1321,7 @@ function parseStoredColabWindow(lens: LensDoc) {
     }
   }
 
-  return makeDefaultColabWindow(lens.windows[0]?.id || "main");
+  return makeDefaultBunnyWindow(lens.windows[0]?.id || "main");
 }
 
 function getLensWorkspaceId(lens: LensDoc) {
@@ -1361,39 +1365,39 @@ function buildLiveWindowTitle(workspace: WorkspaceDoc, lens: LensDoc, windowTitl
   return windowTitle?.trim() || `${workspace.name} · ${lens.name}`;
 }
 
-function removeColabWindowFromAllWorkspaces(windowId: string) {
-  for (const workspace of Object.values(colabState.workspaces || {})) {
+function removeBunnyWindowFromAllWorkspaces(windowId: string) {
+  for (const workspace of Object.values(bunnyDashState.workspaces || {})) {
     workspace.windows = (workspace.windows || []).filter((window) => window.id !== windowId);
   }
 }
 
-function upsertColabWindowForWorkspace(workspaceId: string, window: ColabWindow) {
-  const workspace = getOrCreateColabWorkspace(workspaceId);
+function upsertBunnyWindowForWorkspace(workspaceId: string, window: BunnyWindow) {
+  const workspace = getOrCreateBunnyWorkspace(workspaceId);
   const existingIndex = workspace.windows.findIndex((candidate) => candidate.id === window.id);
   if (existingIndex >= 0) {
-    workspace.windows[existingIndex] = cloneColabWindow(window);
+    workspace.windows[existingIndex] = cloneBunnyWindow(window);
   } else {
-    workspace.windows = [...workspace.windows, cloneColabWindow(window)];
+    workspace.windows = [...workspace.windows, cloneBunnyWindow(window)];
   }
 }
 
-function ensureColabWorkspaceWindow(runtimeWindow: LensWindow, lens?: LensDoc) {
+function ensureBunnyWorkspaceWindow(runtimeWindow: LensWindow, lens?: LensDoc) {
   const workspaceId = runtimeWindow.workspaceId;
-  const workspace = getOrCreateColabWorkspace(workspaceId);
+  const workspace = getOrCreateBunnyWorkspace(workspaceId);
   const existing = workspace.windows.find((candidate) => candidate.id === runtimeWindow.id);
   if (existing) {
     return existing;
   }
 
   const resolvedLens = lens || findLensByKey(getLensIdForWindow(runtimeWindow)) || getCurrentLens();
-  const next = cloneColabWindow(parseStoredColabWindow(resolvedLens));
+  const next = cloneBunnyWindow(parseStoredBunnyWindow(resolvedLens));
   next.id = runtimeWindow.id;
-  upsertColabWindowForWorkspace(workspaceId, next);
+  upsertBunnyWindowForWorkspace(workspaceId, next);
   return next;
 }
 
-function getColabWindowForRuntimeWindow(windowId: string) {
-  for (const workspace of Object.values(colabState.workspaces || {})) {
+function getBunnyWindowForRuntimeWindow(windowId: string) {
+  for (const workspace of Object.values(bunnyDashState.workspaces || {})) {
     const existing = workspace.windows.find((candidate) => candidate.id === windowId);
     if (existing) {
       return existing;
@@ -1403,18 +1407,18 @@ function getColabWindowForRuntimeWindow(windowId: string) {
   if (!runtimeWindow) {
     return null;
   }
-  return ensureColabWorkspaceWindow(runtimeWindow);
+  return ensureBunnyWorkspaceWindow(runtimeWindow);
 }
 
-function getOrCreateColabWorkspace(workspaceId: string) {
+function getOrCreateBunnyWorkspace(workspaceId: string) {
   const workspaceDoc = getWorkspaceByKey(workspaceId);
-  const workspaces = (colabState.workspaces ||= {});
+  const workspaces = (bunnyDashState.workspaces ||= {});
   if (!workspaces[workspaceId]) {
     workspaces[workspaceId] = {
       id: workspaceId,
       name: workspaceDoc.name,
       color: "#184d8b",
-      windows: [makeDefaultColabWindow("main")],
+      windows: [makeDefaultBunnyWindow("main")],
     };
   }
 
@@ -1422,11 +1426,11 @@ function getOrCreateColabWorkspace(workspaceId: string) {
   return workspaces[workspaceId]!;
 }
 
-function currentColabWorkspace() {
-  return getOrCreateColabWorkspace(getCurrentWorkspace().key);
+function currentBunnyWorkspace() {
+  return getOrCreateBunnyWorkspace(getCurrentWorkspace().key);
 }
 
-function colabProjectsForWorkspace(workspaceId: string) {
+function bunnyProjectsForWorkspace(workspaceId: string) {
   return getProjectMountsForWorkspace(workspaceId).map((project) => ({
     id: project.key,
     name: project.name,
@@ -1434,7 +1438,7 @@ function colabProjectsForWorkspace(workspaceId: string) {
   }));
 }
 
-function colabBuildVars() {
+function bunnyBuildVars() {
   return {
     channel: "dev",
     version: manifestVersion,
@@ -1442,15 +1446,15 @@ function colabBuildVars() {
   };
 }
 
-function colabPaths() {
+function bunnyPaths() {
   const bunPath = Bun.which("bun") || "";
   const gitPath = Bun.which("git") || "";
   return {
     APP_PATH: getDashHomeDir(),
-    COLAB_HOME_FOLDER: getDashHomeDir(),
-    COLAB_PROJECTS_FOLDER: getColabProjectsFolder(),
-    COLAB_DEPS_PATH: "",
-    COLAB_ENV_PATH: "",
+    BUNNY_HOME_FOLDER: getDashHomeDir(),
+    BUNNY_PROJECTS_FOLDER: getBunnyProjectsFolder(),
+    BUNNY_DEPS_PATH: "",
+    BUNNY_ENV_PATH: "",
     BUN_BINARY_PATH: bunPath,
     BIOME_BINARY_PATH: "",
     TSSERVER_PATH: "",
@@ -1462,7 +1466,7 @@ function colabPaths() {
   };
 }
 
-function colabPeerDependencies() {
+function bunnyPeerDependencies() {
   return {
     bun: {
       installed: Boolean(Bun.which("bun")),
@@ -1850,15 +1854,15 @@ function emitSetProjectsForWindow(windowId: string) {
     return;
   }
 
-  const workspace = getOrCreateColabWorkspace(runtimeWindow.workspaceId);
-  ensureColabWorkspaceWindow(runtimeWindow);
+  const workspace = getOrCreateBunnyWorkspace(runtimeWindow.workspaceId);
+  ensureBunnyWorkspaceWindow(runtimeWindow);
   emitViewMessage(
     "setProjects",
     {
-      projects: colabProjectsForWorkspace(workspace.id),
-      tokens: colabState.tokens || [],
+      projects: bunnyProjectsForWorkspace(workspace.id),
+      tokens: bunnyDashState.tokens || [],
       workspace,
-      appSettings: colabState.appSettings || defaultColabAppSettings,
+      appSettings: bunnyDashState.appSettings || defaultBunnyAppSettings,
       bunnyDash: buildWorkspaceLensPayload(windowId),
     },
     windowId,
@@ -2091,7 +2095,7 @@ function ensureRuntimeState() {
     if (!window.sideTabIds.includes(window.currentSideTabId)) {
       window.currentSideTabId = window.sideTabIds[0]!;
     }
-    ensureColabWorkspaceWindow(window);
+    ensureBunnyWorkspaceWindow(window);
   }
 
   const activeWindow = getCurrentWindowUnsafe();
@@ -2101,7 +2105,7 @@ function ensureRuntimeState() {
   }
 
   const runtimeWindowIds = new Set(runtimeWindows.map((window) => window.id));
-  for (const workspace of Object.values(colabState.workspaces || {})) {
+  for (const workspace of Object.values(bunnyDashState.workspaces || {})) {
     workspace.windows = (workspace.windows || []).filter((window) =>
       runtimeWindowIds.has(window.id),
     );
@@ -2217,10 +2221,10 @@ function hydrateLensMetadata() {
 
     if (!lens.windowStateJson) {
       const fallbackWindow =
-        currentColabWorkspace().id === workspaceId
-          ? getColabWindowForRuntimeWindow(state.currentWindowId) || makeDefaultColabWindow()
-          : makeDefaultColabWindow(lens.windows[0]?.id || "main");
-      updates.windowStateJson = serializeColabWindow(fallbackWindow);
+        currentBunnyWorkspace().id === workspaceId
+          ? getBunnyWindowForRuntimeWindow(state.currentWindowId) || makeDefaultBunnyWindow()
+          : makeDefaultBunnyWindow(lens.windows[0]?.id || "main");
+      updates.windowStateJson = serializeBunnyWindow(fallbackWindow);
     }
 
     if (Object.keys(updates).length > 0) {
@@ -2521,7 +2525,7 @@ function buildTab(
         kind: "cloud",
         icon: "☁",
         body:
-          "Bunny Cloud will evolve from the existing colab-cloud flow. This pane becomes the bridge for account auth, fleet orchestration, remote surfaces, and browser-hosted Bunny Dash.",
+          "Bunny Cloud will evolve from today’s local-first flow. This pane becomes the bridge for account auth, fleet orchestration, remote surfaces, and browser-hosted Bunny Dash.",
       };
     case "browser":
       return {
@@ -2530,7 +2534,7 @@ function buildTab(
         kind: "fleet",
         icon: "◎",
         body:
-          "Browser surfaces will run as carrots inside Bunny Ears and attach into Bunny Dash locally or remotely. This is the Bunny Dash replacement path for Colab web slates.",
+          "Browser surfaces will run as carrots inside Bunny Ears and attach into Bunny Dash locally or remotely. This is the Bunny Dash replacement path for web slates.",
       };
     case "terminal":
       return {
@@ -2633,7 +2637,7 @@ function snapshot(): Snapshot {
     subtitle: "Local shell for Bunny Ears fleets, lenses, and project work.",
     permissions: [...permissions],
     cloudLabel: "Bunny Cloud",
-    cloudStatus: "colab-cloud is the working reference foundation for the future Bunny Cloud service.",
+    cloudStatus: "Bunny Cloud is the working foundation for the future remote service layer.",
     commandHint: process.platform === "darwin" ? "cmd+p" : "ctrl+p",
     topActions: [
       { id: "command-palette", label: "Command Palette" },
@@ -2724,7 +2728,7 @@ function syncActiveTreeNode() {
   }
 }
 
-async function writeCompatibilityState() {
+async function writePersistedDashState() {
   const persisted = {
     state: {
       sidebarCollapsed: state.sidebarCollapsed,
@@ -2744,7 +2748,7 @@ async function writeCompatibilityState() {
       engine: "goldfishdb",
       folder: dirname(statePath) + "/goldfishdb",
     },
-    colab: colabState,
+    bunnyDash: bunnyDashState,
   };
 
   await Bun.write(statePath, JSON.stringify(persisted, null, 2));
@@ -2774,17 +2778,17 @@ async function saveState() {
 
   if (currentWindow) {
     await syncRuntimeWindowFrameFromHost(currentWindow.id);
-    const currentColabWindow = getCurrentColabWindow();
+    const currentBunnyWindow = getCurrentBunnyWindow();
     const currentWorkspaceLens = ensureWorkspaceCurrentLens(currentWindow.workspaceId);
     db.collection("layouts").update(currentWorkspaceLens.id, {
       workspaceId: currentWindow.workspaceId,
-      windowStateJson: serializeColabWindow(currentColabWindow),
+      windowStateJson: serializeBunnyWindow(currentBunnyWindow),
       windows: [toLensTemplateWindow(currentWindow)],
     });
   }
 
   flushDb();
-  await writeCompatibilityState();
+  await writePersistedDashState();
 }
 
 async function loadState() {
@@ -2818,17 +2822,20 @@ async function loadState() {
 
   if (existsSync(statePath)) {
     try {
-      const persisted = JSON.parse(readFileSync(statePath, "utf8")) as { colab?: PersistedColabState };
-      if (persisted.colab) {
-        colabState = {
-          workspaces: persisted.colab.workspaces || {},
-          appSettings: persisted.colab.appSettings || structuredClone(defaultColabAppSettings),
-          tokens: persisted.colab.tokens || [],
+      const persisted = JSON.parse(readFileSync(statePath, "utf8")) as {
+        bunnyDash?: PersistedBunnyDashState;
+      };
+      const persistedDashState = persisted.bunnyDash;
+      if (persistedDashState) {
+        bunnyDashState = {
+          workspaces: persistedDashState.workspaces || {},
+          appSettings: persistedDashState.appSettings || structuredClone(defaultBunnyAppSettings),
+          tokens: persistedDashState.tokens || [],
         };
       }
     } catch (error) {
       log(
-        `failed to load persisted colab state: ${
+        `failed to load persisted Bunny Dash state: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -2845,7 +2852,7 @@ async function loadState() {
   hydrateLensMetadata();
   ensureRuntimeState();
   syncProjectWatchers();
-  await writeCompatibilityState();
+  await writePersistedDashState();
 }
 
 function setCommandQuery(query: string) {
@@ -2924,43 +2931,43 @@ function buildDefaultRuntimeWindowForWorkspace(workspaceId: string, windowId: st
 }
 
 function applyLensWindowStateToRuntimeWindow(lens: LensDoc, runtimeWindowId: string, workspaceId: string) {
-  removeColabWindowFromAllWorkspaces(runtimeWindowId);
-  const nextWindow = cloneColabWindow(parseStoredColabWindow(lens));
+  removeBunnyWindowFromAllWorkspaces(runtimeWindowId);
+  const nextWindow = cloneBunnyWindow(parseStoredBunnyWindow(lens));
   nextWindow.id = runtimeWindowId;
-  upsertColabWindowForWorkspace(workspaceId, nextWindow);
+  upsertBunnyWindowForWorkspace(workspaceId, nextWindow);
   return nextWindow;
 }
 
 function applyDefaultWorkspaceStateToRuntimeWindow(runtimeWindowId: string, workspaceId: string) {
-  removeColabWindowFromAllWorkspaces(runtimeWindowId);
-  const nextWindow = makeDefaultColabWindow(runtimeWindowId);
-  upsertColabWindowForWorkspace(workspaceId, nextWindow);
+  removeBunnyWindowFromAllWorkspaces(runtimeWindowId);
+  const nextWindow = makeDefaultBunnyWindow(runtimeWindowId);
+  upsertBunnyWindowForWorkspace(workspaceId, nextWindow);
   return nextWindow;
 }
 
-function getCurrentColabWindow() {
-  return ensureColabWorkspaceWindow(getCurrentWindow(), getCurrentLens());
+function getCurrentBunnyWindow() {
+  return ensureBunnyWorkspaceWindow(getCurrentWindow(), getCurrentLens());
 }
 
-function updateColabWindowFrame(
+function updateBunnyWindowFrame(
   windowId: string,
   frame: Partial<{ x: number; y: number; width: number; height: number }>,
 ) {
-  const colabWindow = getColabWindowForRuntimeWindow(windowId);
-  if (!colabWindow) {
+  const bunnyWindow = getBunnyWindowForRuntimeWindow(windowId);
+  if (!bunnyWindow) {
     return;
   }
 
-  colabWindow.position = {
-    ...colabWindow.position,
+  bunnyWindow.position = {
+    ...bunnyWindow.position,
     ...(typeof frame.x === "number" ? { x: frame.x } : {}),
     ...(typeof frame.y === "number" ? { y: frame.y } : {}),
     ...(typeof frame.width === "number" ? { width: frame.width } : {}),
     ...(typeof frame.height === "number" ? { height: frame.height } : {}),
   };
-  upsertColabWindowForWorkspace(
+  upsertBunnyWindowForWorkspace(
     runtimeWindows.find((window) => window.id === windowId)?.workspaceId || getCurrentWorkspace().key,
-    colabWindow,
+    bunnyWindow,
   );
 }
 
@@ -2983,24 +2990,24 @@ function schedulePersistWindowFrame(windowId: string) {
 }
 
 function isLensDirtyInWindow(lens: LensDoc, window: LensWindow) {
-  const currentColabWindow = getColabWindowForRuntimeWindow(window.id);
-  if (!currentColabWindow) {
+  const currentBunnyWindow = getBunnyWindowForRuntimeWindow(window.id);
+  if (!currentBunnyWindow) {
     return false;
   }
 
-  const savedColabWindow = parseStoredColabWindow(lens);
+  const savedBunnyWindow = parseStoredBunnyWindow(lens);
   const savedTemplate = lens.windows[0] || DEFAULT_STARTER_LENS_WINDOW;
   const currentTemplate = toLensTemplateWindow(window);
 
   return (
-    JSON.stringify(currentColabWindow) !== JSON.stringify(savedColabWindow) ||
+    JSON.stringify(currentBunnyWindow) !== JSON.stringify(savedBunnyWindow) ||
     !sameLensWindowTemplate(currentTemplate, savedTemplate)
   );
 }
 
 async function restoreLensInCurrentWindow(lensId: string) {
   const lens = getLensByKey(lensId);
-  const savedWindowState = parseStoredColabWindow(lens);
+  const savedWindowState = parseStoredBunnyWindow(lens);
   log(
     `restoreLensInCurrentWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
   );
@@ -3017,7 +3024,7 @@ async function restoreLensInCurrentWindow(lensId: string) {
   currentWindow.currentMainTabId = restoredWindow.currentMainTabId;
   currentWindow.currentSideTabId = restoredWindow.currentSideTabId;
 
-  const restoredColabWindow = applyLensWindowStateToRuntimeWindow(
+  const restoredBunnyWindow = applyLensWindowStateToRuntimeWindow(
     lens,
     currentWindow.id,
     restoredWindow.workspaceId,
@@ -3026,10 +3033,10 @@ async function restoreLensInCurrentWindow(lensId: string) {
   if (existingBrowserWindow) {
     existingBrowserWindow.setTitle(restoredWindow.title);
     existingBrowserWindow.setFrame(
-      restoredColabWindow.position.x,
-      restoredColabWindow.position.y,
-      restoredColabWindow.position.width,
-      restoredColabWindow.position.height,
+      restoredBunnyWindow.position.x,
+      restoredBunnyWindow.position.y,
+      restoredBunnyWindow.position.width,
+      restoredBunnyWindow.position.height,
     );
   }
   state.currentLayoutId = lens.key;
@@ -3046,7 +3053,7 @@ async function restoreLensInCurrentWindow(lensId: string) {
 
 async function openLensInNewWindow(lensId: string) {
   const lens = getLensByKey(lensId);
-  const savedWindowState = parseStoredColabWindow(lens);
+  const savedWindowState = parseStoredBunnyWindow(lens);
   log(
     `openLensInNewWindow begin: ${lens.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
   );
@@ -3131,13 +3138,13 @@ async function overwriteCurrentLens() {
   const lens = getCurrentLens();
   const currentWindow = getCurrentWindow();
   await syncRuntimeWindowFrameFromHost(currentWindow.id);
-  const currentColabWindow = getCurrentColabWindow();
+  const currentBunnyWindow = getCurrentBunnyWindow();
   log(
-    `overwriteCurrentLens begin: ${lens.key} rootPane=${currentColabWindow.rootPane.type} currentPane=${currentColabWindow.currentPaneId}`,
+    `overwriteCurrentLens begin: ${lens.key} rootPane=${currentBunnyWindow.rootPane.type} currentPane=${currentBunnyWindow.currentPaneId}`,
   );
   db.collection("layouts").update(lens.id, {
     workspaceId: currentWindow.workspaceId,
-    windowStateJson: serializeColabWindow(currentColabWindow),
+    windowStateJson: serializeBunnyWindow(currentBunnyWindow),
     windows: [toLensTemplateWindow(currentWindow)],
   });
   flushDb();
@@ -3163,7 +3170,7 @@ async function createLens(
   const useCurrentWindowState =
     !sourceLens && currentWindow.workspaceId === workspace.key;
 
-  let sourceColabWindow: ColabWindow;
+  let sourceBunnyWindow: BunnyWindow;
   let sourceRuntimeWindow: LensWindow;
 
   if (sourceLens) {
@@ -3172,9 +3179,9 @@ async function createLens(
     if (isCurrentLens && sourceWindow) {
       await syncRuntimeWindowFrameFromHost(sourceWindow.id);
     }
-    sourceColabWindow = isCurrentLens
-      ? getCurrentColabWindow()
-      : parseStoredColabWindow(sourceLens);
+    sourceBunnyWindow = isCurrentLens
+      ? getCurrentBunnyWindow()
+      : parseStoredBunnyWindow(sourceLens);
     sourceRuntimeWindow = sourceWindow
       ? sourceWindow
       : buildRuntimeWindowFromLens(
@@ -3183,11 +3190,11 @@ async function createLens(
         );
   } else if (useCurrentWindowState) {
     await syncRuntimeWindowFrameFromHost(currentWindow.id);
-    sourceColabWindow = getCurrentColabWindow();
+    sourceBunnyWindow = getCurrentBunnyWindow();
     sourceRuntimeWindow = currentWindow;
   } else {
     const workspaceCurrentLens = ensureWorkspaceCurrentLens(workspace.key);
-    sourceColabWindow = parseStoredColabWindow(workspaceCurrentLens);
+    sourceBunnyWindow = parseStoredBunnyWindow(workspaceCurrentLens);
     sourceRuntimeWindow = buildRuntimeWindowFromLens(
       workspaceCurrentLens,
       workspaceCurrentLens.windows[0]?.id || "main",
@@ -3199,7 +3206,7 @@ async function createLens(
     name: cleanName,
     description: description.trim() || (sourceLens ? `Forked from ${sourceLens.name}` : `Saved from ${workspace.name}`),
     workspaceId: workspace.key,
-    windowStateJson: serializeColabWindow(sourceColabWindow),
+    windowStateJson: serializeBunnyWindow(sourceBunnyWindow),
     sortOrder: lenses.length,
     windows: [toLensTemplateWindow(sourceRuntimeWindow)],
   });
@@ -3236,7 +3243,7 @@ async function createWorkspace(name: string, subtitle = "") {
   });
 
   const currentLens = ensureWorkspaceCurrentLens(created.key);
-  const starterColabWindow = parseStoredColabWindow(currentLens);
+  const starterBunnyWindow = parseStoredBunnyWindow(currentLens);
   const starterRuntimeWindow = buildRuntimeWindowFromLens(currentLens, getCurrentWindow().id);
 
   const currentWindow = getCurrentWindow();
@@ -3250,9 +3257,9 @@ async function createWorkspace(name: string, subtitle = "") {
   currentWindow.currentSideTabId = starterRuntimeWindow.currentSideTabId;
   state.currentLayoutId = currentLens.key;
   state.activeTreeNodeId = `workspace-overview:${created.key}`;
-  removeColabWindowFromAllWorkspaces(currentWindow.id);
-  upsertColabWindowForWorkspace(created.key, {
-    ...starterColabWindow,
+  removeBunnyWindowFromAllWorkspaces(currentWindow.id);
+  upsertBunnyWindowForWorkspace(created.key, {
+    ...starterBunnyWindow,
     id: currentWindow.id,
   });
   flushDb();
@@ -3328,9 +3335,9 @@ async function addProjectMount(params: {
 async function saveLens(name: string, description = "") {
   const workspace = getCurrentWorkspace();
   await syncRuntimeWindowFrameFromHost(getCurrentWindow().id);
-  const currentColabWindow = getCurrentColabWindow();
+  const currentBunnyWindow = getCurrentBunnyWindow();
   log(
-    `saveLens begin: workspace=${workspace.key} name=${name || "<auto>"} rootPane=${currentColabWindow.rootPane.type} currentPane=${currentColabWindow.currentPaneId}`,
+    `saveLens begin: workspace=${workspace.key} name=${name || "<auto>"} rootPane=${currentBunnyWindow.rootPane.type} currentPane=${currentBunnyWindow.currentPaneId}`,
   );
   return createLens(
     workspace.key,
@@ -3365,7 +3372,7 @@ async function renameLens(lensId: string, name: string, description = "") {
 async function openWorkspaceInNewWindow(workspaceId: string) {
   const workspace = getWorkspaceByKey(workspaceId);
   const currentLens = ensureWorkspaceCurrentLens(workspace.key);
-  const savedWindowState = parseStoredColabWindow(currentLens);
+  const savedWindowState = parseStoredBunnyWindow(currentLens);
   log(
     `openWorkspaceInNewWindow begin: ${workspace.key} rootPane=${savedWindowState.rootPane.type} currentPane=${savedWindowState.currentPaneId}`,
   );
@@ -3394,7 +3401,7 @@ async function syncRuntimeWindowFrameFromHost(windowId = state.currentWindowId) 
   if (!frame) {
     return null;
   }
-  updateColabWindowFrame(windowId, frame);
+  updateBunnyWindowFrame(windowId, frame);
   return frame;
 }
 
@@ -3420,7 +3427,7 @@ async function deleteLens(lensId: string) {
     runtimeWindow.currentMainTabId = restoredWindow.currentMainTabId;
     runtimeWindow.currentSideTabId = restoredWindow.currentSideTabId;
 
-    const restoredColabWindow = applyLensWindowStateToRuntimeWindow(
+    const restoredBunnyWindow = applyLensWindowStateToRuntimeWindow(
       replacementLens,
       runtimeWindow.id,
       restoredWindow.workspaceId,
@@ -3429,10 +3436,10 @@ async function deleteLens(lensId: string) {
     if (existingBrowserWindow) {
       existingBrowserWindow.setTitle(restoredWindow.title);
       existingBrowserWindow.setFrame(
-        restoredColabWindow.position.x,
-        restoredColabWindow.position.y,
-        restoredColabWindow.position.width,
-        restoredColabWindow.position.height,
+        restoredBunnyWindow.position.x,
+        restoredBunnyWindow.position.y,
+        restoredBunnyWindow.position.width,
+        restoredBunnyWindow.position.height,
       );
     }
   }
@@ -3635,7 +3642,7 @@ function getNodeForPath(path: string) {
 }
 
 function readSlateConfig(path: string) {
-  const configPath = statSync(path).isDirectory() ? join(path, ".colab.json") : path;
+  const configPath = statSync(path).isDirectory() ? join(path, ACTIVE_SLATE_CONFIG_FILE) : path;
   if (!existsSync(configPath)) {
     return null;
   }
@@ -3672,24 +3679,24 @@ async function createAdditionalWindow(offset?: { x?: number; y?: number }) {
   const currentWindow = getCurrentWindow();
   const currentLens = getCurrentLens();
   const currentWorkspace = getCurrentWorkspace();
-  const currentColabWindow = getCurrentColabWindow();
+  const currentBunnyWindow = getCurrentBunnyWindow();
   const nextWindowId = makeLiveWindowId(currentLens.key, currentWindow.id.split(LIVE_WINDOW_ID_SEPARATOR)[1] || "main");
   const nextRuntimeWindow = {
     ...structuredClone(currentWindow),
     id: nextWindowId,
   };
-  const nextColabWindow = cloneColabWindow(currentColabWindow);
-  nextColabWindow.id = nextWindowId;
+  const nextBunnyWindow = cloneBunnyWindow(currentBunnyWindow);
+  nextBunnyWindow.id = nextWindowId;
   if (offset) {
-    nextColabWindow.position = {
-      ...nextColabWindow.position,
-      x: nextColabWindow.position.x + Number(offset.x || 0),
-      y: nextColabWindow.position.y + Number(offset.y || 0),
+    nextBunnyWindow.position = {
+      ...nextBunnyWindow.position,
+      x: nextBunnyWindow.position.x + Number(offset.x || 0),
+      y: nextBunnyWindow.position.y + Number(offset.y || 0),
     };
   }
 
   runtimeWindows.push(nextRuntimeWindow);
-  upsertColabWindowForWorkspace(currentWorkspace.key, nextColabWindow);
+  upsertBunnyWindowForWorkspace(currentWorkspace.key, nextBunnyWindow);
   state.currentWindowId = nextWindowId;
   state.currentLayoutId = currentLens.key;
   state.commandPaletteOpen = false;
@@ -3717,25 +3724,25 @@ async function hideCurrentWorkspaceWindows() {
   log(`workspace hidden: ${workspaceId}`);
 }
 
-async function handleColabRequest(method: string, params: any) {
+async function handleBunnyDashRequest(method: string, params: any) {
   switch (method) {
     case "getInitialState": {
-      const workspace = currentColabWorkspace();
-      ensureColabWorkspaceWindow(getCurrentWindow());
+      const workspace = currentBunnyWorkspace();
+      ensureBunnyWorkspaceWindow(getCurrentWindow());
       return {
         windowId: getCurrentWindow().id,
-        buildVars: colabBuildVars(),
-        paths: colabPaths(),
-        peerDependencies: colabPeerDependencies(),
+        buildVars: bunnyBuildVars(),
+        paths: bunnyPaths(),
+        peerDependencies: bunnyPeerDependencies(),
         workspace,
         bunnyDash: buildWorkspaceLensPayload(getCurrentWindow().id),
-        projects: colabProjectsForWorkspace(workspace.id),
-        tokens: colabState.tokens || [],
-        appSettings: colabState.appSettings || defaultColabAppSettings,
+        projects: bunnyProjectsForWorkspace(workspace.id),
+        tokens: bunnyDashState.tokens || [],
+        appSettings: bunnyDashState.appSettings || defaultBunnyAppSettings,
       };
     }
     case "newPreviewNode": {
-      const parentPath = getColabProjectsFolder();
+      const parentPath = getBunnyProjectsFolder();
       const nodeName = getUniqueNewName(parentPath, params?.candidateName || "new-project");
       return {
         type: "dir",
@@ -3764,14 +3771,14 @@ async function handleColabRequest(method: string, params: any) {
       });
     case "syncWorkspace":
       log(`syncWorkspace request: workspace=${getCurrentWorkspace().key}`);
-      colabState.workspaces ||= {};
-      colabState.workspaces[getCurrentWorkspace().key] = params.workspace;
+      bunnyDashState.workspaces ||= {};
+      bunnyDashState.workspaces[getCurrentWorkspace().key] = params.workspace;
       await saveState();
       emitSetProjectsForWindow(getCurrentWindow().id);
       return;
     case "syncAppSettings":
-      colabState.appSettings = params.appSettings;
-      await writeCompatibilityState();
+      bunnyDashState.appSettings = params.appSettings;
+      await writePersistedDashState();
       return;
     case "openFileDialog":
       return Utils.openFileDialog({
@@ -4038,15 +4045,15 @@ async function handleColabRequest(method: string, params: any) {
         windowId: getCurrentWindow().id,
       });
     case "getTokens":
-      return colabState.tokens || [];
+      return bunnyDashState.tokens || [];
     case "setToken":
       return;
     default:
-      return UNHANDLED_COLAB_REQUEST;
+      return UNHANDLED_DASH_REQUEST;
   }
 }
 
-async function handleColabSend(name: string, payload: any) {
+async function handleBunnyDashSend(name: string, payload: any) {
   switch (name) {
     case "openBunnyWindow":
       app.openBunnyWindow({
@@ -4059,8 +4066,8 @@ async function handleColabSend(name: string, payload: any) {
       return;
     case "createWorkspace": {
       const nextName = `Workspace ${listWorkspaces().length + 1}`;
-      await createWorkspace(nextName, "Colab workspace inside Bunny Dash.");
-      getOrCreateColabWorkspace(getCurrentWorkspace().key);
+      await createWorkspace(nextName, "Workspace inside Bunny Dash.");
+      getOrCreateBunnyWorkspace(getCurrentWorkspace().key);
       emitSetProjects();
       return;
     }
@@ -4072,17 +4079,17 @@ async function handleColabSend(name: string, payload: any) {
         name: nextName,
         subtitle: workspace.subtitle,
       });
-      const colabWorkspace = getOrCreateColabWorkspace(workspace.key);
-      colabWorkspace.name = nextName;
+      const bunnyWorkspace = getOrCreateBunnyWorkspace(workspace.key);
+      bunnyWorkspace.name = nextName;
       if (typeof payload?.color === "string" && payload.color) {
-        colabWorkspace.color = payload.color;
+        bunnyWorkspace.color = payload.color;
       }
       flushDb();
       emitSetProjects();
-      await writeCompatibilityState();
+      await writePersistedDashState();
       return;
     }
-    case "removeProjectFromColabOnly": {
+    case "removeProjectFromBunnyDashOnly": {
       const projectId = String(payload?.projectId || "");
       const db = ensureDb();
       const project = findProjectMountByKey(projectId);
@@ -4091,11 +4098,11 @@ async function handleColabSend(name: string, payload: any) {
         flushDb();
         syncProjectWatchers();
         emitSetProjects();
-        await writeCompatibilityState();
+        await writePersistedDashState();
       }
       return;
     }
-    case "fullyDeleteProjectFromDiskAndColab": {
+    case "fullyDeleteProjectFromDiskAndBunnyDash": {
       const projectId = String(payload?.projectId || "");
       const project = findProjectMountByKey(projectId);
       if (project) {
@@ -4105,7 +4112,7 @@ async function handleColabSend(name: string, payload: any) {
         flushDb();
         syncProjectWatchers();
         emitSetProjects();
-        await writeCompatibilityState();
+        await writePersistedDashState();
       }
       return;
     }
@@ -4125,7 +4132,7 @@ async function handleColabSend(name: string, payload: any) {
       flushDb();
       syncProjectWatchers();
       emitSetProjects();
-      await writeCompatibilityState();
+      await writePersistedDashState();
       return;
     }
     case "deleteWorkspace":
@@ -4144,11 +4151,11 @@ async function handleColabSend(name: string, payload: any) {
         db.collection("projectMounts").remove(project.id);
       }
       db.collection("workspaces").remove(current.id);
-      delete (colabState.workspaces || {})[current.key];
+      delete (bunnyDashState.workspaces || {})[current.key];
       flushDb();
       await openWorkspace(listWorkspaces()[0]!.key);
       emitSetProjects();
-      await writeCompatibilityState();
+      await writePersistedDashState();
       return;
     }
     case "track":
@@ -4253,7 +4260,7 @@ self.onmessage = async (event) => {
       browserWindows.delete(closedWindowId);
       await closeTsServerEditorsForWindow(closedWindowId, closedRuntimeWindow?.workspaceId);
       await killTerminalsForWindow(closedWindowId);
-      removeColabWindowFromAllWorkspaces(closedWindowId);
+      removeBunnyWindowFromAllWorkspaces(closedWindowId);
       runtimeWindows = runtimeWindows.filter((window) => window.id !== closedWindowId);
       const pendingPersist = framePersistTimers.get(closedWindowId);
       if (pendingPersist) {
@@ -4288,7 +4295,7 @@ self.onmessage = async (event) => {
     setActiveWindow(typeof message.windowId === "string" ? message.windowId : undefined);
 
     if (typeof message.method === "string" && message.method.startsWith("send:")) {
-      await handleColabSend(message.method.slice(5), message.params);
+      await handleBunnyDashSend(message.method.slice(5), message.params);
       post({ type: "response", requestId: message.requestId, success: true, payload: null });
       return;
     }
@@ -4438,8 +4445,8 @@ self.onmessage = async (event) => {
         break;
       }
       default: {
-        const payload = await handleColabRequest(String(message.method), message.params);
-        if (payload === UNHANDLED_COLAB_REQUEST) {
+        const payload = await handleBunnyDashRequest(String(message.method), message.params);
+        if (payload === UNHANDLED_DASH_REQUEST) {
           post({
             type: "response",
             requestId: message.requestId,

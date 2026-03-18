@@ -3,7 +3,7 @@ export const makeFileNameSafe = (s: string) => {
 };
 
 export const isPathSafe = (absolutePath: string) => {
-  // eg: /Users/yoav/colab/projectfolder
+  // eg: /Users/yoav/bunny/projectfolder
   // eg: /Users/yoav/code/projectfolder
   // todo (yoav): add more checks for system folders and handle leading slash
   if (absolutePath.split("/").length >= 4) {

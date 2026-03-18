@@ -1,14 +1,14 @@
 /**
- * Colab Terminal Web Component
+ * Bunny Dash Terminal Web Component
  *
  * A web component that provides a full PTY terminal experience.
- * Can be used by plugins in their slates via <colab-terminal>.
+ * Can be used by plugins in their slates via <bunny-terminal>.
  *
  * Usage:
- *   <colab-terminal cwd="/path/to/dir"></colab-terminal>
+ *   <bunny-terminal cwd="/path/to/dir"></bunny-terminal>
  *
  *   // Get reference and run commands
- *   const terminal = document.querySelector('colab-terminal');
+ *   const terminal = document.querySelector('bunny-terminal');
  *   terminal.run('npm install');
  *   terminal.run('npm run dev');
  *
@@ -49,7 +49,7 @@ declare global {
   }
 }
 
-export class ColabTerminal extends HTMLElement {
+export class BunnyTerminal extends HTMLElement {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
   private terminalId: string | null = null;
@@ -283,13 +283,13 @@ export class ColabTerminal extends HTMLElement {
     const cwd = this._cwd || this.getAttribute('cwd') || '/';
     const shell = this._shell || this.getAttribute('shell') || undefined;
 
-    console.log('[ColabTerminal] initTerminal with cwd:', cwd);
+    console.log('[BunnyTerminal] initTerminal with cwd:', cwd);
 
     try {
       // Create terminal in main process via RPC
       const electrobun = window.electrobun;
       if (!electrobun?.rpc) {
-        console.error('[ColabTerminal] electrobun RPC not available');
+        console.error('[BunnyTerminal] electrobun RPC not available');
         return;
       }
 
@@ -299,7 +299,7 @@ export class ColabTerminal extends HTMLElement {
       });
 
       if (!terminalId) {
-        console.error('[ColabTerminal] Failed to create terminal');
+        console.error('[BunnyTerminal] Failed to create terminal');
         return;
       }
 
@@ -337,11 +337,11 @@ export class ColabTerminal extends HTMLElement {
         {
           hover: (event: MouseEvent, uri: string, range) => {
             // Remove any existing tooltip first
-            document.querySelector('.colab-link-tooltip')?.remove();
+            document.querySelector('.bunny-link-tooltip')?.remove();
 
             // Show tooltip explaining how to open the link
             const tooltip = document.createElement('div');
-            tooltip.className = 'colab-link-tooltip';
+            tooltip.className = 'bunny-link-tooltip';
             tooltip.textContent = `⌘+click or ⌥+click to open: ${uri.length > 50 ? uri.slice(0, 50) + '...' : uri}`;
             tooltip.style.cssText = `
               position: fixed;
@@ -362,7 +362,7 @@ export class ColabTerminal extends HTMLElement {
           },
           leave: () => {
             // Remove tooltip when mouse leaves the link
-            document.querySelector('.colab-link-tooltip')?.remove();
+            document.querySelector('.bunny-link-tooltip')?.remove();
           },
         }
       );
@@ -440,7 +440,7 @@ export class ColabTerminal extends HTMLElement {
       }, 100);
 
     } catch (error) {
-      console.error('[ColabTerminal] Failed to initialize:', error);
+      console.error('[BunnyTerminal] Failed to initialize:', error);
     }
   }
 
@@ -538,8 +538,8 @@ export class ColabTerminal extends HTMLElement {
 }
 
 // Register the web component
-export function registerColabTerminal() {
-  if (!customElements.get('colab-terminal')) {
-    customElements.define('colab-terminal', ColabTerminal);
+export function registerBunnyTerminal() {
+  if (!customElements.get('bunny-terminal')) {
+    customElements.define('bunny-terminal', BunnyTerminal);
   }
 }

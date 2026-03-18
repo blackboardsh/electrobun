@@ -218,7 +218,7 @@ export const createContextMenuAction = (action: string, data: any) => {
 
 // files and folders without an slate gui that we don't want to render
 const filesToFilter = {
-	simple: /\.DS_Store|node_modules|package-lock\.json|\.colab.json|.+\.d\.ts/,
+	simple: /\.DS_Store|node_modules|package-lock\.json|\.bunny\.json|.+\.d\.ts/,
 	showall: null,
 };
 
@@ -341,25 +341,25 @@ const TEMPLATE_NODES = [
 	// {
 	//   id: "browser-chromium",
 	//   name: "Chromium",
-	//   path: "__COLAB_TEMPLATE__/browser-chromium",
+	//   path: "__BUNNY_TEMPLATE__/browser-chromium",
 	//   icon: "views://assets/file-icons/chrome-logo.svg",
 	// },
 	{
 		id: "browser-webkit",
 		name: "Web Browser",
-		path: "__COLAB_TEMPLATE__/browser-webkit",
+		path: "__BUNNY_TEMPLATE__/browser-webkit",
 		icon: "views://assets/file-icons/webkit-logo.svg",
 	},
 	{
 		id: "terminal",
 		name: "Terminal",
-		path: "__COLAB_TEMPLATE__/terminal",
+		path: "__BUNNY_TEMPLATE__/terminal",
 		icon: "views://assets/file-icons/terminal.svg",
 	},
 	{
 		id: "agent",
 		name: "AI Chat",
-		path: "__COLAB_TEMPLATE__/agent",
+		path: "__BUNNY_TEMPLATE__/agent",
 		icon: "views://assets/file-icons/agent.svg",
 	},
 ] as const;
@@ -404,7 +404,7 @@ const TemplateNodeItem = ({
 			);
 
 			if (template.id === "terminal") {
-				const homeDir = state.paths?.COLAB_HOME_FOLDER || undefined;
+				const homeDir = state.paths?.BUNNY_HOME_FOLDER || undefined;
 				openNewTerminalTab(homeDir, {
 					targetPaneId,
 					targetTabIndex,
@@ -459,7 +459,7 @@ const TemplateNodeItem = ({
 					},
 				};
 
-				const slateConfigPath = join(browserProfilePath, ".colab.json");
+				const slateConfigPath = join(browserProfilePath, ".bunny.json");
 				await electrobun.rpc?.request.writeFile({
 					path: slateConfigPath,
 					value: JSON.stringify(slateConfig, null, 2),
@@ -484,7 +484,7 @@ const TemplateNodeItem = ({
 					config: {},
 				};
 
-				const slateConfigPath = join(agentPath, ".colab.json");
+				const slateConfigPath = join(agentPath, ".bunny.json");
 				await electrobun.rpc?.request.writeFile({
 					path: slateConfigPath,
 					value: JSON.stringify(slateConfig, null, 2),
@@ -501,7 +501,7 @@ const TemplateNodeItem = ({
 		// Handle different template types appropriately
 		if (template.id === "terminal") {
 			// Use home directory if available, otherwise fall back to current directory
-			const homeDir = state.paths?.COLAB_HOME_FOLDER || undefined;
+			const homeDir = state.paths?.BUNNY_HOME_FOLDER || undefined;
 			openNewTerminalTab(homeDir);
 		} else if (
 			template.id === "browser-chromium" ||
@@ -1426,7 +1426,7 @@ export const FileTree = ({
 							const resultNode: PreviewFileNodeType = {
 								type: "file",
 								name: `${matchStart}${query}${matchEnd}`,
-								path: `__COLAB_INTERNAL__/fileResult:${line}:${column}`,
+								path: `__BUNNY_INTERNAL__/fileResult:${line}:${column}`,
 								persistedContent: "",
 								isDirty: false,
 								model: null,
@@ -1681,7 +1681,7 @@ const NodeName = ({
 			}
 		}
 
-		if (node.path.startsWith("__COLAB_INTERNAL__")) {
+		if (node.path.startsWith("__BUNNY_INTERNAL__")) {
 			return node;
 		}
 
@@ -1696,7 +1696,7 @@ const NodeName = ({
 	const [fileDecoration] = createResource(
 		() => nodeToRender()?.path,
 		async (path) => {
-			if (!path || path.startsWith("__COLAB_INTERNAL__")) return null;
+			if (!path || path.startsWith("__BUNNY_INTERNAL__")) return null;
 			return getFileDecoration(path);
 		},
 	);
@@ -1710,7 +1710,7 @@ const NodeName = ({
 	};
 
 	// todo (yoav): [blocking] how reactive do we need this to be?
-	// ie: if the config changes outside of colab (eg: from a git pull or something)
+	// ie: if the config changes outside of Bunny Dash (eg: from a git pull or something)
 	// although we can also just for re-rendering the whole tree in that case
 	const slate = () => getSlateForNode(nodeToRender());
 
@@ -1742,7 +1742,7 @@ const NodeName = ({
 
 		const _node = nodeToRender();
 
-		if (_node.path.startsWith("__COLAB_INTERNAL__/fileResult:")) {
+		if (_node.path.startsWith("__BUNNY_INTERNAL__/fileResult:")) {
 			console.log("onLeftActionClick");
 			onLeftActionClick();
 			return;
@@ -2159,9 +2159,9 @@ const NodeName = ({
 
 			menuItems.push(
 				{
-					label: "Remove Project from Colab",
+					label: "Remove Project from Bunny Dash",
 					hidden: readonly || !nodeIsProjectRoot,
-					...createContextMenuAction("remove_project_from_colab", {
+					...createContextMenuAction("remove_project_from_bunny_dash", {
 						projectId: projectForRoot?.id,
 					}),
 				},

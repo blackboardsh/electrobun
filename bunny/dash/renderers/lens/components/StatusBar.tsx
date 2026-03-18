@@ -133,23 +133,23 @@ export const StatusBar = () => {
         <span>|</span>
         <GitHub />
         <span>|</span>
-        <ColabCloud />
+        <BunnyCloud />
         <span>|</span>
         <Plugins />
         <AnalyticsConsent />
         <span>|</span>
-        <Colab />
+        <BunnyDash />
       </div>
     </div>
   );
 };
 
-const Colab = () => {
+const BunnyDash = () => {
   const channelText = () =>
     state.buildVars.channel === "stable" ? "" : `-${state.buildVars.channel}`;
   return (
     <div style={{ margin: "0 5px" }}>
-      co(lab){channelText()} v{state.buildVars.version} - {state.buildVars.hash}
+      Bunny Dash{channelText()} v{state.buildVars.version} - {state.buildVars.hash}
     </div>
   );
 };
@@ -400,30 +400,30 @@ const GitHub = () => {
   );
 };
 
-const ColabCloud = () => {
+const BunnyCloud = () => {
   const isConnected = () => {
-    return state.appSettings.colabCloud?.accessToken && state.appSettings.colabCloud?.email;
+    return state.appSettings.bunnyCloud?.accessToken && state.appSettings.bunnyCloud?.email;
   };
 
-  const handleColabCloudClick = () => {
-    if (state.settingsPane.type === "colab-cloud-settings") {
+  const handleBunnyCloudClick = () => {
+    if (state.settingsPane.type === "bunny-cloud-settings") {
       setState("settingsPane", { type: "", data: {} });
     } else {
-      setState("settingsPane", { type: "colab-cloud-settings", data: {} });
+      setState("settingsPane", { type: "bunny-cloud-settings", data: {} });
     }
   };
 
   const getStatusText = () => {
     if (isConnected()) {
-      const displayName = state.appSettings.colabCloud.name || state.appSettings.colabCloud.email;
-      return `Colab Cloud: ${displayName}`;
+      const displayName = state.appSettings.bunnyCloud.name || state.appSettings.bunnyCloud.email;
+      return `Bunny Cloud: ${displayName}`;
     }
-    return "Colab Cloud";
+    return "Bunny Cloud";
   };
 
   const getStatusColor = () => {
     if (!isConnected()) return "#666"; // Gray if not connected
-    if (!state.appSettings.colabCloud.emailVerified) return "#ffa500"; // Orange if email not verified
+    if (!state.appSettings.bunnyCloud.emailVerified) return "#ffa500"; // Orange if email not verified
     return "#51cf66"; // Green if fully connected
   };
 
@@ -436,8 +436,8 @@ const ColabCloud = () => {
         "white-space": "nowrap",
         "font-size": "11px"
       }}
-      onClick={handleColabCloudClick}
-      title={isConnected() ? "Colab Cloud connected - click to open settings" : "Colab Cloud - click to login"}
+      onClick={handleBunnyCloudClick}
+      title={isConnected() ? "Bunny Cloud connected - click to open settings" : "Bunny Cloud - click to login"}
     >
       {getStatusText()}
     </div>
@@ -471,7 +471,7 @@ const AnalyticsConsent = () => {
           "font-size": "11px"
         }}
         onClick={handleAnalyticsClick}
-        title="Click to enable analytics and help improve Colab"
+        title="Click to enable analytics and help improve Bunny Dash"
       >
         Enable Analytics
       </div>

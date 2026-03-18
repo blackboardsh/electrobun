@@ -2,7 +2,7 @@
   "id": "bunny-dash",
   "name": "Bunny Dash",
   "version": "0.0.1",
-  "description": "A Colab-shaped Bunny Dash shell for managing local and remote Bunny Ears instances.",
+  "description": "Bunny Dash for managing local and remote Bunny Ears instances.",
   "mode": "background",
   "permissions": {
     "host": {

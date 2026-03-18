@@ -781,7 +781,7 @@ export type WorkspaceRPC = {
             keywords?: string[];
             date: string;
             score: number;
-            hasColabPlugin: boolean;
+            hasBunnyPlugin: boolean;
           }>;
           total: number;
         };
@@ -797,7 +797,7 @@ export type WorkspaceRPC = {
           description?: string;
           author?: string | { name: string; email?: string };
           keywords?: string[];
-          'colab-plugin'?: any;
+          'bunny-plugin'?: any;
         } | null;
       };
       pluginInstall: {
@@ -1067,10 +1067,10 @@ export type WorkspaceRPC = {
       };
       deleteWorkspace: void;
       deleteWorkspaceCompletely: void;
-      removeProjectFromColabOnly: {
+      removeProjectFromBunnyDashOnly: {
         projectId: string;
       };
-      fullyDeleteProjectFromDiskAndColab: {
+      fullyDeleteProjectFromDiskAndBunnyDash: {
         projectId: string;
       };
       fullyDeleteNodeFromDisk: {

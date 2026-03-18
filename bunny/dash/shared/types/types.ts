@@ -100,7 +100,7 @@ export type SlateType =
       };
     }
   | {
-      // not stored in .colab.json, based on subfolder
+      // not stored in .bunny.json, based on subfolder
       type: "devlink";
     }
   | {

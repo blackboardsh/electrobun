@@ -21,6 +21,8 @@ import { electrobun } from "./init";
 // other things can just be subscribed to the cache or the _getNode call
 // maybe that'll just work?
 const pendingNodeRequests: { [path: string]: boolean } = {};
+const ACTIVE_INTERNAL_PREFIX = "__BUNNY_INTERNAL__";
+const ACTIVE_TEMPLATE_PREFIX = "__BUNNY_TEMPLATE__";
 
 // doesn't cache the node, useful inside setState(produce(_state => {const _node = _getNode(path, _state)})) blocks
 
@@ -33,7 +35,7 @@ export const _getNode = (
   }
 
   // These are for pseudo nodes that don't exist on the filesystem
-  if (path.startsWith("__COLAB_INTERNAL__")) {
+  if (path.startsWith(ACTIVE_INTERNAL_PREFIX)) {
     return {
       name: path.split("/").pop() || "",
       type: "dir",
@@ -43,14 +45,14 @@ export const _getNode = (
   }
 
   // Template nodes for quick access (browser, file, terminal, agent)
-  if (path.startsWith("__COLAB_TEMPLATE__")) {
+  if (path.startsWith(ACTIVE_TEMPLATE_PREFIX)) {
     // Check if we already have this template cached
     if (_state.fileCache[path]) {
       return _state.fileCache[path];
     }
 
     // Extract the template type from the path (handles unique IDs like browser-chromium/abc123)
-    const pathParts = path.replace("__COLAB_TEMPLATE__/", "").split("/");
+    const pathParts = path.replace(`${ACTIVE_TEMPLATE_PREFIX}/`, "").split("/");
     const templateId = pathParts[0]; // e.g., "browser-chromium" or "browser-webkit"
     let templateNode: CachedFileType;
 
@@ -122,7 +124,7 @@ export const getNode = (path?: string): CachedFileType | undefined => {
 export const createModel = async (absolutePath: string) => {
   // Handle template file paths - they don't exist on disk, so provide empty content
   let contents = "";
-  if (absolutePath.startsWith("__COLAB_TEMPLATE__")) {
+  if (absolutePath.startsWith(ACTIVE_TEMPLATE_PREFIX)) {
     contents = "";
   } else {
     const fileContents = await electrobun.rpc?.request.readFile({

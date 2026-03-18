@@ -13,8 +13,8 @@ import {
 import { electrobun } from "./init";
 
 // const HOME_DIRECTORY = homedir();
-// const COLAB_DIRECTORY = join(HOME_DIRECTORY, "colab");
-// export const DEFAULT_CODE_DIRECTORY = join(HOME_DIRECTORY, "colab");
+// const BUNNY_DIRECTORY = join(HOME_DIRECTORY, "bunny");
+// export const DEFAULT_CODE_DIRECTORY = join(HOME_DIRECTORY, "bunny");
 
 // todo (yoav): [blocking] move this to store
 // export interface FileNodeType {
@@ -47,29 +47,33 @@ import { electrobun } from "./init";
 //   }
 // });
 // export const createFoldersForProjects = (projectsById: AppState['projects']) => {
-//   if (!state.paths?.COLAB_HOME_FOLDER) {
-//     throw new Error('Must set COLAB_HOME_FOLDER in state.paths')
+//   if (!state.paths?.BUNNY_HOME_FOLDER) {
+//     throw new Error('Must set BUNNY_HOME_FOLDER in state.paths')
 //   }
 //   for (const projectId in projectsById) {
 //     const project = projectsById[projectId];
 //     // TODO: connect this to branch changes later
-//     const projectPath = join(state.paths.COLAB_HOME_FOLDER, makeFileNameSafe(project.name));
+//     const projectPath = join(state.paths.BUNNY_HOME_FOLDER, makeFileNameSafe(project.name));
 //     if (!existsSync(projectPath)) {
 //       mkdirSync(projectPath, { recursive: true });
 //     }
 //   }
 // };
 
+const ACTIVE_SLATE_CONFIG_FILE = ".bunny.json";
+const ACTIVE_INTERNAL_PREFIX = "__BUNNY_INTERNAL__";
+const ACTIVE_TEMPLATE_PREFIX = "__BUNNY_TEMPLATE__";
+
 // todo (yoav): [blocking] move this to a store and make it reactive when state changes (wtf did I mean by this comment)
-// todo (yoav): [blocking] rename this to writeColabSlateConfigFile since it's different to writing a package.json config file
+// todo (yoav): [blocking] rename this to writeBunnySlateConfigFile since it's different to writing a package.json config file
 export const writeSlateConfigFile = (
   absoluteFolderPath: string,
   slate: SlateType
 ) => {
-  // Projects are stored in GoldfishDB, not .colab.json
-  // Only write .colab.json for web and agent slates
+  // Projects are stored in GoldfishDB, not .bunny.json
+  // Only write .bunny.json for web and agent slates
   if (slate.type === "web" || slate.type === "agent") {
-    const configPath = join(absoluteFolderPath, ".colab.json");
+    const configPath = join(absoluteFolderPath, ACTIVE_SLATE_CONFIG_FILE);
 
     let contents;
     if (slate.type === "agent") {
@@ -257,13 +261,13 @@ export const getSlateForNode = (
     return undefined;
   }
 
-  if (node.path.startsWith("__COLAB_INTERNAL__")) {
-    if (node.path === "__COLAB_INTERNAL__/web") {
+  if (node.path.startsWith(ACTIVE_INTERNAL_PREFIX)) {
+    if (node.path === `${ACTIVE_INTERNAL_PREFIX}/web`) {
       return {
         v: 1,
         name: "Web",
         type: "web",
-        url: "https://colab.dev",
+        url: "https://electrobun.dev",
         icon: "",
         config: {},
       };
@@ -272,9 +276,9 @@ export const getSlateForNode = (
   }
 
   // Handle template nodes
-  if (node.path.startsWith("__COLAB_TEMPLATE__")) {
+  if (node.path.startsWith(ACTIVE_TEMPLATE_PREFIX)) {
     // Extract template type from path (handles unique IDs like browser-chromium/abc123)
-    const pathParts = node.path.replace("__COLAB_TEMPLATE__/", "").split("/");
+    const pathParts = node.path.replace(`${ACTIVE_TEMPLATE_PREFIX}/`, "").split("/");
     const templateType = pathParts[0]; // e.g., "browser-chromium" or "browser-webkit"
 
     if (templateType === "browser-chromium") {
@@ -317,16 +321,12 @@ export const getSlateForNode = (
   }
 
   if (node.type === "dir") {
-    const colabConfigFile = (node as FolderNodeType).children?.includes(
-      ".colab.json"
-    );
-
-    if (colabConfigFile) {
-      const absoluteColabConfigPath = join(node.path, ".colab.json");
-      const cachedConfig = state.slateCache[absoluteColabConfigPath];
+    if ((node as FolderNodeType).children?.includes(ACTIVE_SLATE_CONFIG_FILE)) {
+      const absoluteBunnyConfigPath = join(node.path, ACTIVE_SLATE_CONFIG_FILE);
+      const cachedConfig = state.slateCache[absoluteBunnyConfigPath];
 
       if (cachedConfig) {
-        // Skip project slates from .colab.json - projects are now stored in GoldfishDB
+        // Skip project slates from .bunny.json - projects are now stored in GoldfishDB
         // and detected via isProjectRoot()
         if (cachedConfig.type === "project") {
           return undefined;
@@ -336,10 +336,10 @@ export const getSlateForNode = (
 
       // Note: readSlateConfigFile is async, so we can't filter here.
       // Project slates will be filtered when they're read from cache next time.
-      return readSlateConfigFile(absoluteColabConfigPath);
+      return readSlateConfigFile(absoluteBunnyConfigPath);
     }
 
-    // Note: currently .colab.json is the only nested slate type, but in the future
+    // Note: currently .bunny.json is the only nested slate type, but in the future
     // you could add more here
   }
 
@@ -371,7 +371,7 @@ export const getSlateForNode = (
   // return node.type;
 };
 
-// Note: this can be used to read and cache any slate config file .colab.json, package.json, etc.
+// Note: this can be used to read and cache any slate config file .bunny.json, package.json, etc.
 // currently only supports json files
 export const readSlateConfigFile = (path: string, cacheResult = true) => {
   electrobun.rpc?.request.readSlateConfigFile({ path }).then((slate) => {

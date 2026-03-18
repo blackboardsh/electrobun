@@ -564,7 +564,7 @@ export const PluginSettings = (): JSXElement => {
                       <span style="font-size: 14px;">⚠️</span>
                       <div>
                         <strong>Trust Notice:</strong> These are capabilities the plugin author declares it needs.
-                        They are <em>not enforced</em> by Colab. Only install plugins from sources you trust.
+                        They are <em>not enforced</em> by Bunny Dash. Only install plugins from sources you trust.
                       </div>
                     </div>
                   </div>

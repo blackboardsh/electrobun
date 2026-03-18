@@ -151,7 +151,7 @@ const LEGACY_PROJECT_KEYS = [
   "launch-assets",
   "electrobun",
   "bunny-cloud",
-  "colab-cloud-ref",
+  "bunny-cloud-ref",
   "alpha-portal",
   "alpha-deploy",
 ] as const;

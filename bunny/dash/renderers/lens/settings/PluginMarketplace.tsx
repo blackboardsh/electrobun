@@ -20,7 +20,7 @@ interface SearchResultItem {
   keywords?: string[];
   date: string;
   score: number;
-  hasColabPlugin: boolean;
+  hasBunnyPlugin: boolean;
 }
 
 interface InstalledPlugin {
@@ -350,8 +350,8 @@ export const PluginMarketplace = (): JSXElement => {
               onClick={(e) => {
                 e.preventDefault();
                 setState("settingsPane", { type: "", data: {} });
-                openNewTabForNode("__COLAB_INTERNAL__/web", false, {
-                  url: "https://blackboard.sh/colab/docs/plugins/overview/",
+                openNewTabForNode("__BUNNY_INTERNAL__/web", false, {
+                  url: "https://blackboard.sh/electrobun/docs/",
                   focusNewTab: true,
                 });
               }}
@@ -422,7 +422,7 @@ export const PluginMarketplace = (): JSXElement => {
             >
               <div style={{ "margin-bottom": "8px" }}>No plugins found</div>
               <div style={{ "font-size": "11px", color: "#666" }}>
-                Plugins must have "colab-plugin" in their keywords
+                Plugins must have "bunny-plugin" in their keywords
               </div>
             </div>
           </Show>

@@ -65,7 +65,7 @@ body,
 }
 
 function makeElectrobunViewAliasPlugin(sourceDir: string) {
-  const adapterPath = join(sourceDir, "colab", "electrobun-view.ts");
+  const adapterPath = join(sourceDir, "bridge", "electrobun-view.ts");
 
   return {
     name: "bunny-dash-electrobun-view-alias",

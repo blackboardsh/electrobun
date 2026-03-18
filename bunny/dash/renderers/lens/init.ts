@@ -14,7 +14,7 @@ import {
   openNewTabForNode,
   openNewTab,
   editNodeSettings,
-  removeProjectFromColab,
+  removeProjectFromBunnyDash,
   splitPane,
   openNewTerminalTab,
   setNodeExpanded,
@@ -29,14 +29,14 @@ import { trackFrontend } from "./analytics";
 import {untrack} from "solid-js";
 import { loadPluginSlates } from "./files";
 import { initializeSlateRegistry } from "./slates/pluginSlateRegistry";
-import { registerColabTerminal } from "../components/ColabTerminal";
+import { registerBunnyTerminal } from "../components/BunnyTerminal";
 // import { readSlateConfigFile } from "./files";
 
 // Initialize the slate component registry early
 initializeSlateRegistry();
 
 // Register web components for plugins to use
-registerColabTerminal();
+registerBunnyTerminal();
 
 const rpc = Electroview.defineRPC<WorkspaceRPC>({
   maxRequestTime: 60 * 1000,
@@ -69,7 +69,7 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
         // for open tabs, we could just create a node
         // for the tab directly if the file exists
 
-        // todo (yoav): [blocking] make this a util and core part of colab
+        // todo (yoav): [blocking] make this a util and core part of Bunny Dash
         // todo (yoav): [blocking] what stuff is actually synced with the server and what is just local to the window and ephemeral
         const activeWindow = workspace?.windows?.find(
           (window: { id: string; rootPane?: { type?: string }; currentPaneId?: string }) =>
@@ -130,7 +130,7 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
                   if (tab.path === absolutePath) {
                     // We do this so user can show a message that the file was deleted
                     // If the user was working in a tab and the file was deleted/rename/moved
-                    // from outside of Colab
+                    // from outside of Bunny Dash
                     tab.path = "";
                   }
                 }
@@ -278,7 +278,7 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
       },
       openUrlInNewTab: ({url}) => {
         console.log('openUrlInNewTab', url)
-        openNewTabForNode(`__COLAB_INTERNAL__/web`, false, { focusNewTab: false, url });
+        openNewTabForNode(`__BUNNY_INTERNAL__/web`, false, { focusNewTab: false, url });
       },
       showLensSettings: ({ mode, workspaceId, lensId, sourceLensId, name, description }) => {
         setState("settingsPane", {
@@ -414,8 +414,8 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
         openNewTerminalTab(node.path);
       },
       deleteProject: ({ projectId }) => {
-        console.log("removeProjectFromColab", projectId);
-        removeProjectFromColab(projectId);
+        console.log("removeProjectFromBunnyDash", projectId);
+        removeProjectFromBunnyDash(projectId);
       },
 
       splitPaneContainer: ({ pathToPane, direction }) => {
@@ -480,7 +480,7 @@ const rpc = Electroview.defineRPC<WorkspaceRPC>({
         // console.log("[DEBUG] newBrowserTab handler called", new Error().stack);
         // return;
         const uniqueId = Math.random().toString(36).substring(2, 11);
-        openNewTabForNode(`__COLAB_TEMPLATE__/browser-chromium/${uniqueId}`, false, {
+        openNewTabForNode(`__BUNNY_TEMPLATE__/browser-chromium/${uniqueId}`, false, {
           focusNewTab: true,
         });
       },
@@ -721,5 +721,5 @@ You are a helpful assistant with the following characteristics:
 
 export const electrobun = new Electroview({ rpc });
 
-// Expose electrobun on window for web components (like colab-terminal) to access
+// Expose electrobun on window for web components (like bunny-terminal) to access
 (window as any).electrobun = electrobun;
