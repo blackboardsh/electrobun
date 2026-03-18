@@ -138,6 +138,7 @@ class CarrotInstance {
   applicationMenu: any[] | null = null;
   controllerWindows = new Map<string, BrowserWindow>();
   controllerWindow: BrowserWindow | null = null;
+  webClients = new Map<string, { send: (data: string) => void }>();
   bunnyWindow: BrowserWindow | null = null;
   bunnyPollTimeout: ReturnType<typeof setTimeout> | null = null;
   worker: Worker | null = null;
@@ -837,6 +838,17 @@ class CarrotInstance {
             (target?.webview.rpc as any)?.send?.runtimeEvent(eventPayload);
           }
         }
+        // Also forward to all WebSocket clients — web clients mirror the
+        // primary window so they receive all view messages.
+        for (const client of this.webClients.values()) {
+          try {
+            client.send(JSON.stringify({
+              type: "message",
+              name: eventPayload.name,
+              payload: eventPayload.payload,
+            }));
+          } catch {}
+        }
         break;
       }
       case "emit-carrot-event": {
@@ -1058,7 +1070,114 @@ class BunnyEarsRuntime {
         });
       }
     }
+    this.startWebBridge();
     bootLog("runtime boot complete");
+  }
+
+  /**
+   * WebSocket bridge for web clients (e.g. Bunny Dash running in a browser).
+   *
+   * Web clients connect and specify a target carrot (default: bunny-dash).
+   * Requests are routed to the carrot worker via CarrotInstance.invoke(),
+   * and emit-view messages from the worker are forwarded back over WebSocket.
+   */
+  private startWebBridge() {
+    const WEB_BRIDGE_PORT = 9333;
+    const self = this;
+    let clientId = 0;
+
+    try {
+      Bun.serve({
+        port: WEB_BRIDGE_PORT,
+        fetch(req, server) {
+          if (server.upgrade(req, { data: { id: `web-${++clientId}` } })) {
+            return;
+          }
+          return new Response("Bunny Ears Web Bridge", { status: 200 });
+        },
+        websocket: {
+          open(ws) {
+            const id = (ws.data as any).id as string;
+            console.log(`[web-bridge] Client connected: ${id}`);
+
+            // Find the dash carrot and register this web client.
+            // The web client mirrors the primary native window — we register
+            // it under the carrot's current primary window ID so that
+            // emit-view messages targeted at that window also reach the
+            // web client. We also keep a "__web__" entry so broadcast
+            // (no windowId) messages reach it.
+            const dashCarrot = self.carrots.get("bunny-dash");
+            if (dashCarrot) {
+              const sender = {
+                send: (data: string) => {
+                  try { ws.send(data); } catch {}
+                },
+              };
+              // Register under a stable key for cleanup
+              dashCarrot.webClients.set(id, sender);
+
+              // Ask the carrot to emit initial state for the current window.
+              // We don't pass a windowId so the worker uses its current one.
+              dashCarrot.sendEvent("window-focus", {});
+            } else {
+              console.warn("[web-bridge] bunny-dash carrot not found");
+            }
+          },
+          async message(ws, data) {
+            const id = (ws.data as any).id as string;
+            try {
+              const msg = JSON.parse(String(data));
+              const dashCarrot = self.carrots.get("bunny-dash");
+              if (!dashCarrot) {
+                if (msg.type === "request") {
+                  ws.send(JSON.stringify({
+                    type: "response",
+                    id: msg.id,
+                    error: "bunny-dash carrot not running",
+                  }));
+                }
+                return;
+              }
+
+              if (msg.type === "request") {
+                try {
+                  // Don't pass a windowId — let the worker use its current
+                  // window so the request is processed in the right context.
+                  const result = await dashCarrot.invoke(msg.method, msg.params);
+                  ws.send(JSON.stringify({
+                    type: "response",
+                    id: msg.id,
+                    result,
+                  }));
+                } catch (err) {
+                  ws.send(JSON.stringify({
+                    type: "response",
+                    id: msg.id,
+                    error: err instanceof Error ? err.message : String(err),
+                  }));
+                }
+              }
+
+              if (msg.type === "message") {
+                // Fire-and-forget message to the carrot worker
+                dashCarrot.invoke(`send:${msg.name}`, msg.payload).catch(() => {});
+              }
+            } catch (err) {
+              console.error("[web-bridge] Failed to handle message:", err);
+            }
+          },
+          close(ws) {
+            const id = (ws.data as any).id as string;
+            console.log(`[web-bridge] Client disconnected: ${id}`);
+            const dashCarrot = self.carrots.get("bunny-dash");
+            dashCarrot?.webClients.delete(id);
+          },
+        },
+      });
+      console.log(`[web-bridge] Listening on ws://localhost:${WEB_BRIDGE_PORT}`);
+    } catch (err) {
+      console.error(`[web-bridge] Failed to start on port ${WEB_BRIDGE_PORT}:`, err);
+    }
   }
 
   summaries() {
