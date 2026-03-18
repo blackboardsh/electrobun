@@ -1,0 +1,9 @@
+{
+  "name": "bunny-biome",
+  "private": true,
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "@biomejs/biome": "2.3.13"
+  }
+}

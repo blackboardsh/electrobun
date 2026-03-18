@@ -13,6 +13,8 @@ export default {
         "bunny.search": "file:../foundation-carrots/search",
         "bunny.git": "file:../foundation-carrots/git",
         "bunny.tsserver": "file:../foundation-carrots/tsserver",
+        "bunny.biome": "file:../foundation-carrots/biome",
+        "bunny.llama": "file:../foundation-carrots/llama",
       },
     },
   },

@@ -1,0 +1,28 @@
+{
+  "id": "bunny.biome",
+  "name": "Bunny Biome",
+  "version": "0.0.1",
+  "description": "First-party Biome formatter carrot for Bunny Dash and other carrots.",
+  "mode": "background",
+  "permissions": {
+    "host": {
+      "storage": true
+    },
+    "bun": {
+      "read": true,
+      "write": true,
+      "run": true
+    },
+    "isolation": "shared-worker"
+  },
+  "view": {
+    "relativePath": "views/index.html",
+    "title": "Bunny Biome",
+    "width": 320,
+    "height": 220,
+    "hidden": true
+  },
+  "worker": {
+    "relativePath": "worker.js"
+  }
+}

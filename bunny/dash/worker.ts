@@ -143,6 +143,10 @@ type TypeScriptPeerDependencyStatus = {
   installed: boolean;
   version: string;
 };
+type BiomePeerDependencyStatus = {
+  installed: boolean;
+  version: string;
+};
 
 type Snapshot = {
   shellTitle: string;
@@ -241,9 +245,15 @@ const PTY_CARROT_ID = "bunny.pty";
 const SEARCH_CARROT_ID = "bunny.search";
 const GIT_CARROT_ID = "bunny.git";
 const TSSERVER_CARROT_ID = "bunny.tsserver";
+const BIOME_CARROT_ID = "bunny.biome";
+const LLAMA_CARROT_ID = "bunny.llama";
 const DEFAULT_PTY_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 let ptyHeartbeatIntervalMs = DEFAULT_PTY_HEARTBEAT_INTERVAL_MS;
 let typeScriptPeerDependencyStatus: TypeScriptPeerDependencyStatus = {
+  installed: false,
+  version: "",
+};
+let biomePeerDependencyStatus: BiomePeerDependencyStatus = {
   installed: false,
   version: "",
 };
@@ -1073,6 +1083,7 @@ function ensureBootPromise() {
       currentState = captureCurrentState();
       ensurePtyHeartbeatLoop();
       await refreshTypeScriptPeerDependencyStatus();
+      await refreshBiomePeerDependencyStatus();
       syncApplicationMenu();
       await reopenRuntimeWindowsOnBoot();
       post({ type: "ready" });
@@ -1462,8 +1473,8 @@ function colabPeerDependencies() {
       version: typeScriptPeerDependencyStatus.version,
     },
     biome: {
-      installed: false,
-      version: "",
+      installed: biomePeerDependencyStatus.installed,
+      version: biomePeerDependencyStatus.version,
     },
     git: {
       installed: Boolean(Bun.which("git")),
@@ -1616,6 +1627,22 @@ async function invokeTsServerCarrot<T = unknown>(
   return Carrots.invoke<T>(TSSERVER_CARROT_ID, method, params, options);
 }
 
+async function invokeBiomeCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(BIOME_CARROT_ID, method, params, options);
+}
+
+async function invokeLlamaCarrot<T = unknown>(
+  method: string,
+  params?: unknown,
+  options?: { windowId?: string },
+) {
+  return Carrots.invoke<T>(LLAMA_CARROT_ID, method, params, options);
+}
+
 async function refreshTypeScriptPeerDependencyStatus() {
   try {
     const status = await invokeTsServerCarrot<TypeScriptPeerDependencyStatus>("getTypeScriptStatus");
@@ -1625,6 +1652,21 @@ async function refreshTypeScriptPeerDependencyStatus() {
     };
   } catch {
     typeScriptPeerDependencyStatus = {
+      installed: false,
+      version: "",
+    };
+  }
+}
+
+async function refreshBiomePeerDependencyStatus() {
+  try {
+    const status = await invokeBiomeCarrot<BiomePeerDependencyStatus>("getBiomeStatus");
+    biomePeerDependencyStatus = {
+      installed: Boolean(status?.installed),
+      version: String(status?.version || ""),
+    };
+  } catch {
+    biomePeerDependencyStatus = {
       installed: false,
       version: "",
     };
@@ -3988,14 +4030,13 @@ async function handleColabRequest(method: string, params: any) {
     case "pluginExecuteCommand":
       return;
     case "llamaListModels":
-      return [];
     case "llamaCompletion":
-      return { content: "Llama is not wired into Bunny Dash yet." };
     case "llamaInstallModel":
     case "llamaRemoveModel":
-      return { success: false, error: "Not implemented in Bunny Dash yet." };
     case "llamaDownloadStatus":
-      return { status: "idle" };
+      return invokeLlamaCarrot(method, params, {
+        windowId: getCurrentWindow().id,
+      });
     case "getTokens":
       return colabState.tokens || [];
     case "setToken":
@@ -4114,8 +4155,16 @@ async function handleColabSend(name: string, payload: any) {
     case "installUpdateNow":
     case "addToken":
     case "deleteToken":
-    case "formatFile":
     case "syncDevlink":
+      return;
+    case "formatFile":
+      await invokeBiomeCarrot(
+        "formatFile",
+        {
+          path: String(payload?.path || ""),
+        },
+        { windowId: getCurrentWindow().id },
+      );
       return;
     case "tsServerRequest":
       await invokeTsServerCarrot<boolean>(
