@@ -276,8 +276,9 @@ class CarrotInstance {
     };
 
     const shouldCreateControllerWindow =
-      this.carrot.manifest.mode === "window" ||
-      this.carrot.manifest.view.hidden !== true;
+      this.carrot.manifest.view?.relativePath != null &&
+      (this.carrot.manifest.mode === "window" ||
+       this.carrot.manifest.view.hidden !== true);
 
     if (shouldCreateControllerWindow) {
       bootLog("creating carrot controller window", {
@@ -286,14 +287,27 @@ class CarrotInstance {
       });
       this.createControllerWindow("main");
     } else {
-      bootLog("skipping hidden background controller window", {
+      bootLog("skipping controller window (no view)", {
         id: this.carrot.manifest.id,
+      });
+      // For worker-only carrots (no view), send init directly to the worker
+      // since there's no controller window dom-ready to trigger it.
+      this.worker!.postMessage({
+        type: "init",
+        manifest: this.carrot.manifest,
+        context: {
+          statePath: this.statePath,
+          logsPath: this.logsPath,
+          permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
+          grantedPermissions: this.carrot.install.permissionsGranted,
+        },
       });
     }
 
     this.status = "running";
     bootLog("carrot running", { id: this.carrot.manifest.id });
     runtime.notifyDashboardChanged();
+
   }
 
   async stop() {
@@ -540,6 +554,19 @@ class CarrotInstance {
     switch (message.type) {
       case "ready": {
         this.pushLog("worker ready");
+        // Tell connected web clients to re-fetch state from the (new) worker.
+        // This handles the case where the carrot was restarted while web
+        // clients were still connected — their windowId is stale and they
+        // need to call getInitialState again to pick up the new runtime window.
+        for (const client of this.webClients.values()) {
+          try {
+            client.send(JSON.stringify({
+              type: "message",
+              name: "refreshBunnyDashState",
+              payload: {},
+            }));
+          } catch {}
+        }
         break;
       }
       case "response": {
@@ -1100,25 +1127,15 @@ class BunnyEarsRuntime {
             const id = (ws.data as any).id as string;
             console.log(`[web-bridge] Client connected: ${id}`);
 
-            // Find the dash carrot and register this web client.
-            // The web client mirrors the primary native window — we register
-            // it under the carrot's current primary window ID so that
-            // emit-view messages targeted at that window also reach the
-            // web client. We also keep a "__web__" entry so broadcast
-            // (no windowId) messages reach it.
             const dashCarrot = self.carrots.get("bunny-dash");
             if (dashCarrot) {
-              const sender = {
+              dashCarrot.webClients.set(id, {
                 send: (data: string) => {
                   try { ws.send(data); } catch {}
                 },
-              };
-              // Register under a stable key for cleanup
-              dashCarrot.webClients.set(id, sender);
-
-              // Ask the carrot to emit initial state for the current window.
-              // We don't pass a windowId so the worker uses its current one.
-              dashCarrot.sendEvent("window-focus", {});
+              });
+              // The web renderer will call getInitialState on its own when
+              // it mounts. No need to push state here.
             } else {
               console.warn("[web-bridge] bunny-dash carrot not found");
             }

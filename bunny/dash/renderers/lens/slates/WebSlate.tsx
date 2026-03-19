@@ -136,6 +136,11 @@ async function getPluginPreloads(): Promise<string> {
 // and a 'current url' saved to the tab's url. This lets you open multiple tabs to
 // say google or webflow, and have each one navigate around independently and remember
 // their current url
+// In the web build, esbuild defines __BUNNY_WEB_MODE__ as true.
+// In the carrot build it's undefined, so we default to false.
+declare const __BUNNY_WEB_MODE__: boolean | undefined;
+const isWebMode = typeof __BUNNY_WEB_MODE__ !== "undefined" && __BUNNY_WEB_MODE__ === true;
+
 export const WebSlate = ({
 	node,
 	tabId,
@@ -148,6 +153,71 @@ export const WebSlate = ({
 		console.error("WebSlate: No node provided for tabId:", tabId);
 		return null;
 	}
+
+	// In web mode, the electrobun-webview element doesn't exist.
+	// Show a simple fallback with a button to open the URL in a new browser tab.
+	if (isWebMode) {
+		const getUrl = () => {
+			const slate = getSlateForNode(node);
+			if (slate?.type === "web" && slate.url) return slate.url;
+			const currentTab = getWindow()?.tabs[tabId];
+			if (currentTab?.type === "web" && currentTab.url) return currentTab.url;
+			return "";
+		};
+
+		return (
+			<div style={{
+				width: "100%",
+				height: "100%",
+				display: "flex",
+				"flex-direction": "column",
+				"align-items": "center",
+				"justify-content": "center",
+				background: "#1e1e1e",
+				color: "#ccc",
+				gap: "16px",
+			}}>
+				<div style={{ "font-size": "14px", color: "#888" }}>
+					Web views are not available in the browser.
+				</div>
+				<Show when={getUrl()}>
+					<div style={{
+						"max-width": "500px",
+						"text-align": "center",
+						"word-break": "break-all",
+						"font-size": "12px",
+						color: "#999",
+						padding: "8px 16px",
+						background: "#2a2a2a",
+						"border-radius": "6px",
+						"margin-bottom": "4px",
+					}}>
+						{getUrl()}
+					</div>
+					<a
+						href={getUrl()}
+						target="_blank"
+						rel="noopener noreferrer"
+						style={{
+							background: "#f59e0b",
+							color: "#1e1e1e",
+							border: "none",
+							"border-radius": "6px",
+							padding: "8px 20px",
+							"font-size": "13px",
+							"font-weight": "600",
+							cursor: "pointer",
+							"text-decoration": "none",
+							display: "inline-block",
+						}}
+					>
+						Open in New Tab
+					</a>
+				</Show>
+			</div>
+		);
+	}
+
 	const getNodeUrl = () => {
 		const slate = getSlateForNode(node);
 		// Ensure we return a valid URL or undefined (not an empty string or invalid value)

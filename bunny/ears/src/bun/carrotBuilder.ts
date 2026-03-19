@@ -151,24 +151,19 @@ async function runDefaultBuild(sourceDir: string, outDir: string, manifest: Carr
     ? join(sourceDir, "worker.ts")
     : join(sourceDir, "worker.js");
   const viewsOutDir = join(outDir, "views");
+  const hasView = existsSync(webDir) && existsSync(viewEntry) && existsSync(viewHtml);
 
-  const sdkViewModule = getSdkViewModule();
   const sdkBunModule = getSdkBunModule();
-
-  if (!existsSync(sdkViewModule)) {
-    throw new Error(`Missing Bunny Ears SDK bundle: ${sdkViewModule}`);
-  }
 
   if (!existsSync(sdkBunModule)) {
     throw new Error(`Missing Bunny Ears Bun runtime bundle: ${sdkBunModule}`);
   }
 
-  if (!existsSync(viewEntry)) {
-    throw new Error(`Missing view entry: ${viewEntry}`);
-  }
-
-  if (!existsSync(viewHtml)) {
-    throw new Error(`Missing view html: ${viewHtml}`);
+  if (hasView) {
+    const sdkViewModule = getSdkViewModule();
+    if (!existsSync(sdkViewModule)) {
+      throw new Error(`Missing Bunny Ears SDK bundle: ${sdkViewModule}`);
+    }
   }
 
   if (!existsSync(workerEntry)) {
@@ -176,26 +171,31 @@ async function runDefaultBuild(sourceDir: string, outDir: string, manifest: Carr
   }
 
   rmSync(outDir, { recursive: true, force: true });
-  mkdirSync(viewsOutDir, { recursive: true });
+  mkdirSync(outDir, { recursive: true });
 
-  cpSync(viewHtml, join(viewsOutDir, "index.html"));
-  if (existsSync(viewCss)) {
-    cpSync(viewCss, join(viewsOutDir, "index.css"));
-  }
-  if (existsSync(webAssets)) {
-    cpSync(webAssets, join(viewsOutDir, "assets"), {
-      recursive: true,
-      force: true,
+  // Build the view if a web/ folder with index.ts + index.html exists
+  if (hasView) {
+    mkdirSync(viewsOutDir, { recursive: true });
+
+    cpSync(viewHtml, join(viewsOutDir, "index.html"));
+    if (existsSync(viewCss)) {
+      cpSync(viewCss, join(viewsOutDir, "index.css"));
+    }
+    if (existsSync(webAssets)) {
+      cpSync(webAssets, join(viewsOutDir, "assets"), {
+        recursive: true,
+        force: true,
+      });
+    }
+
+    const viewBuild = await Bun.build({
+      entrypoints: [viewEntry],
+      outdir: viewsOutDir,
+      target: "browser",
+      plugins: [sdkAliasPlugin()],
     });
+    assertBuildSuccess(`${manifest.name} view`, viewBuild);
   }
-
-  const viewBuild = await Bun.build({
-    entrypoints: [viewEntry],
-    outdir: viewsOutDir,
-    target: "browser",
-    plugins: [sdkAliasPlugin()],
-  });
-  assertBuildSuccess(`${manifest.name} view`, viewBuild);
 
   const workerBuild = await Bun.build({
     entrypoints: [workerEntry],
@@ -205,23 +205,26 @@ async function runDefaultBuild(sourceDir: string, outDir: string, manifest: Carr
   });
   assertBuildSuccess(`${manifest.name} worker`, workerBuild);
 
+  const { view: _sourceView, ...manifestWithoutView } = manifest;
+  const outputManifest: CarrotManifest = {
+    ...manifestWithoutView,
+    worker: {
+      ...manifest.worker,
+      relativePath: "worker.js",
+    },
+    ...(hasView
+      ? {
+          view: {
+            ...manifest.view,
+            relativePath: "views/index.html",
+          },
+        }
+      : {}),
+  } as CarrotManifest;
+
   writeFileSync(
     join(outDir, "carrot.json"),
-    JSON.stringify(
-      {
-        ...manifest,
-        view: {
-          ...manifest.view,
-          relativePath: "views/index.html",
-        },
-        worker: {
-          ...manifest.worker,
-          relativePath: "worker.js",
-        },
-      } satisfies CarrotManifest,
-      null,
-      2,
-    ),
+    JSON.stringify(outputManifest, null, 2),
   );
 }
 

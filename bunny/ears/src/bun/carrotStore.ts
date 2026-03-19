@@ -232,14 +232,16 @@ function assertPreparedCarrotPayload(sourceDir: string) {
 
   const manifest = readManifestAt(manifestPath);
   const workerPath = resolveInside(sourceDir, manifest.worker.relativePath);
-  const viewPath = resolveInside(sourceDir, manifest.view.relativePath);
 
   if (!existsSync(workerPath)) {
     throw new Error(`Missing worker for ${manifest.id}: ${workerPath}`);
   }
 
-  if (!existsSync(viewPath)) {
-    throw new Error(`Missing view entry for ${manifest.id}: ${viewPath}`);
+  if (manifest.view?.relativePath) {
+    const viewPath = resolveInside(sourceDir, manifest.view.relativePath);
+    if (!existsSync(viewPath)) {
+      throw new Error(`Missing view entry for ${manifest.id}: ${viewPath}`);
+    }
   }
 
   return { manifest };
@@ -278,9 +280,14 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
 
   const manifest = readManifestAt(manifestPath);
   const bundleWorkerPath = resolveInside(paths.currentDir, manifest.worker.relativePath);
-  const viewPath = resolveInside(paths.currentDir, manifest.view.relativePath);
+  const viewPath = manifest.view?.relativePath
+    ? resolveInside(paths.currentDir, manifest.view.relativePath)
+    : "";
 
-  if (!existsSync(bundleWorkerPath) || !existsSync(viewPath)) {
+  if (!existsSync(bundleWorkerPath)) {
+    return null;
+  }
+  if (viewPath && !existsSync(viewPath)) {
     return null;
   }
 
@@ -301,7 +308,7 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
     bundleWorkerPath,
     workerPath,
     viewPath,
-    viewUrl: toViewsUrl(manifest.view.relativePath),
+    viewUrl: manifest.view?.relativePath ? toViewsUrl(manifest.view.relativePath) : "",
   };
 }
 
@@ -436,6 +443,7 @@ function normalizeBuildError(error: unknown) {
 
 function looksLikeSourceDirectory(path: string) {
   return (
+    existsSync(join(path, "carrot.json")) ||
     existsSync(join(path, "web")) ||
     existsSync(join(path, "build.ts")) ||
     existsSync(join(path, "worker.ts"))
