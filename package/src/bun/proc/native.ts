@@ -2881,7 +2881,7 @@ export const internalRpcHandlers = {
 				);
 				return;
 			}
-			native.symbols.webviewRemove(webview.ptr);
+			webview.remove();
 		},
 		startWindowMove: (params: { id: number }) => {
 			const windowPtr = getWindowPtr(params.id);

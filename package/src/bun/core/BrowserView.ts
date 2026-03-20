@@ -9,7 +9,11 @@ import {
 } from "../../shared/rpc.js";
 import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
-import { rpcPort, sendMessageToWebviewViaSocket } from "./Socket";
+import {
+	rpcPort,
+	sendMessageToWebviewViaSocket,
+	removeSocketForWebview,
+} from "./Socket";
 import { randomBytes } from "crypto";
 import { type Pointer } from "bun:ffi";
 
@@ -102,6 +106,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	isRemoved: boolean = false;
 
 	constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
 		// const rpc = options.rpc;
@@ -211,6 +216,9 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	// so we have to chunk it
 	// TODO: is this still needed after switching from named pipes
 	executeJavascript(js: string) {
+		if (!this.ptr || this.isRemoved) {
+			return;
+		}
 		ffi.request.evaluateJavascriptWithNoCompletion({ id: this.id, js });
 	}
 
@@ -315,6 +323,9 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 		return {
 			send(message: any) {
+				if (!that.ptr || that.isRemoved) {
+					return;
+				}
 				const sentOverSocket = sendMessageToWebviewViaSocket(that.id, message);
 
 				if (!sentOverSocket) {
@@ -327,14 +338,31 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 				}
 			},
 			registerHandler(handler: (msg: unknown) => void) {
+				if (!that.ptr || that.isRemoved) {
+					return;
+				}
 				that.rpcHandler = handler;
 			},
 		};
 	};
 
 	remove() {
-		native.symbols.webviewRemove(this.ptr);
+		if (!this.ptr || this.isRemoved) {
+			return;
+		}
+		const ptr = this.ptr;
+		this.isRemoved = true;
+		// Drop JS-side references first so late callbacks cannot target a stale view.
 		delete BrowserViewMap[this.id];
+		removeSocketForWebview(this.id);
+		this.rpc?.setTransport({
+			send() {},
+			registerHandler() {},
+			unregisterHandler() {},
+		});
+		this.rpcHandler = undefined;
+		this.ptr = null as any;
+		native.symbols.webviewRemove(ptr);
 	}
 
 	static getById(id: number) {

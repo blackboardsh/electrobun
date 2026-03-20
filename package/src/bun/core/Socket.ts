@@ -47,6 +47,14 @@ export const socketMap: {
 	};
 } = {};
 
+export const removeSocketForWebview = (webviewId: number) => {
+	const rpc = socketMap[webviewId];
+	if (!rpc) return;
+
+	rpc.socket = null;
+	delete socketMap[webviewId];
+};
+
 const startRPCServer = () => {
 	const startPort = 50000;
 	const endPort = 65535;

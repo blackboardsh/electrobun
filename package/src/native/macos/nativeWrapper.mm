@@ -2652,6 +2652,12 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         uint32_t webviewIdForLogging = self.webviewId;
         WKWebView *webViewToClean = self.webView;
 
+        // Keep native tracking consistent even if this remove path is called
+        // directly instead of going through webviewRemove().
+        if (globalAbstractViews) {
+            [globalAbstractViews removeObjectForKey:@(self.webviewId)];
+        }
+
         // Dispatch all cleanup to main queue since WKWebView operations require it
         dispatch_async(dispatch_get_main_queue(), ^{
             [webViewToClean stopLoading];
@@ -6844,7 +6850,22 @@ extern "C" BOOL webviewCanGoForward(AbstractView *abstractView) {
 }
 
 extern "C" void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {                    
-    [abstractView evaluateJavaScriptWithNoCompletion:script];        
+    if (!abstractView) {
+        return;
+    }
+
+    NSNumber *webviewKey = @(abstractView.webviewId);
+    AbstractView *trackedView = globalAbstractViews[webviewKey];
+    if (!trackedView) {
+        NSLog(@"evaluateJavaScriptWithNoCompletion: webview %u not in tracking, skipping", abstractView.webviewId);
+        return;
+    }
+
+    if (trackedView != abstractView) {
+        NSLog(@"evaluateJavaScriptWithNoCompletion: WARNING - tracked view %p != passed view %p for webviewId %u", trackedView, abstractView, abstractView.webviewId);
+    }
+
+    [trackedView evaluateJavaScriptWithNoCompletion:script];
 }
 
 extern "C" void testFFI(void *ptr) {              
