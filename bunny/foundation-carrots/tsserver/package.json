@@ -1,9 +1,0 @@
-{
-  "name": "bunny-tsserver",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
-  "dependencies": {
-    "typescript": "5.9.3"
-  }
-}

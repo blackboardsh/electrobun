@@ -1,9 +1,0 @@
-{
-  "name": "bunny-git",
-  "private": true,
-  "version": "0.0.1",
-  "type": "module",
-  "dependencies": {
-    "simple-git": "3.22.0"
-  }
-}

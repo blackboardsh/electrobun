@@ -1,9 +1,0 @@
-# Local Carrot build and packaging output
-build/
-dist/
-artifacts/
-.cache/
-.tmp/
-node_modules/
-*.tsbuildinfo
-.DS_Store
