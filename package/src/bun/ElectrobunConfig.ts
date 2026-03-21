@@ -367,6 +367,20 @@ export interface ElectrobunConfig {
 	};
 
 	/**
+	 * Dev mode configuration.
+	 * Controls behaviour when running with `electrobun dev`.
+	 */
+	dev?: {
+		/**
+		 * When live-reloading (`electrobun dev --watch`), show windows without
+		 * stealing focus from the currently active app. The initial launch still
+		 * activates normally.
+		 * @default false
+		 */
+		reloadWithoutActivating?: boolean;
+	};
+
+	/**
 	 * Runtime behaviour configuration.
 	 * These values are copied into build.json and available to the Bun process at runtime.
 	 * You can add arbitrary keys here and access them via BuildConfig.
