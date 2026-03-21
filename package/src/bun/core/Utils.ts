@@ -78,6 +78,11 @@ export type NotificationOptions = {
 	 * If true, the notification will not play a sound
 	 */
 	silent?: boolean;
+	/**
+	 * Arbitrary serializable data attached to the notification.
+	 * Returned in the `notification-clicked` event when the user clicks the notification.
+	 */
+	userInfo?: Record<string, unknown>;
 };
 
 /**
@@ -88,35 +93,27 @@ export type NotificationOptions = {
  * @param options.body - The main body text
  * @param options.subtitle - A subtitle (macOS shows this between title and body)
  * @param options.silent - If true, no sound will be played
+ * @param options.userInfo - Arbitrary data returned in the `notification-clicked` event
  *
  * @example
  * // Simple notification
  * showNotification({ title: "Download Complete" });
  *
- * // Notification with body
+ * // Notification with userInfo for click handling
  * showNotification({
- *   title: "New Message",
- *   body: "You have a new message from John"
+ *   title: "Permission Required",
+ *   body: "Agent needs access to: /etc/hosts",
+ *   userInfo: { sessionId: "abc123", reason: "permission" },
  * });
  *
- * // Full notification
- * showNotification({
- *   title: "Reminder",
- *   subtitle: "Calendar Event",
- *   body: "Team meeting in 15 minutes",
- *   silent: false
- * });
- *
- * // Silent notification
- * showNotification({
- *   title: "Sync Complete",
- *   body: "All files have been synchronized",
- *   silent: true
+ * // Listen for notification clicks
+ * Electrobun.events.on("notification-clicked", (e) => {
+ *   console.log(e.data.userInfo); // { sessionId: "abc123", reason: "permission" }
  * });
  */
 export const showNotification = (options: NotificationOptions): void => {
-	const { title, body, subtitle, silent } = options;
-	ffi.request.showNotification({ title, body, subtitle, silent });
+	const { title, body, subtitle, silent, userInfo } = options;
+	ffi.request.showNotification({ title, body, subtitle, silent, userInfo });
 };
 
 let isQuitting = false;

@@ -45,6 +45,10 @@ typedef void (*AppReopenHandler)();
 // (e.g., dock icon quit, system shutdown, console close)
 typedef void (*QuitRequestedHandler)();
 
+// Notification clicked handler - called when user clicks a notification
+// userInfoJson is a JSON string of the userInfo dict attached to the notification
+typedef void (*NotificationClickedHandler)(const char* userInfoJson);
+
 // JS Utils callbacks (DEPRECATED: Now using map-based approach instead)
 typedef const char* (*GetMimeType)(const char* filePath);
 typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);

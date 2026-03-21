@@ -9255,7 +9255,8 @@ ELECTROBUN_EXPORT BOOL openPath(const char *pathString) {
 }
 
 // Show a native desktop notification using Shell_NotifyIcon balloon
-ELECTROBUN_EXPORT void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
+ELECTROBUN_EXPORT void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent, const char *userInfoJson) {
+    (void)userInfoJson; // Not yet used on Windows
     if (!title) {
         ::log("ERROR: NULL title passed to showNotification");
         return;
@@ -11589,6 +11590,12 @@ extern "C" ELECTROBUN_EXPORT void setURLOpenHandler(void (*callback)(const char*
 extern "C" ELECTROBUN_EXPORT void setAppReopenHandler(void (*callback)()) {
     (void)callback;
     // Not supported on Windows - stub to prevent dlopen failure
+}
+
+// Notification click handler - stub for Windows
+extern "C" ELECTROBUN_EXPORT void setNotificationClickedHandler(void (*callback)(const char*)) {
+    (void)callback;
+    // Not yet supported on Windows - stub to prevent dlopen failure
 }
 
 // Dock icon visibility - macOS only, stubs for Windows
