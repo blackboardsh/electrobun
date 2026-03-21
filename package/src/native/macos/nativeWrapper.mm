@@ -5800,7 +5800,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
       NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
 
       // Build path with identifier/channel structure to match root_cache_path logic
-      std::string cachePathStr = buildPartitionPath(
+      std::string cachePathStr = buildCEFPartitionPath(
           [appSupportPath UTF8String],
           g_electrobunIdentifier,
           g_electrobunChannel,
