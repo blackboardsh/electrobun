@@ -8727,6 +8727,19 @@ ELECTROBUN_EXPORT void showWindow(void *window) {
     });
 }
 
+ELECTROBUN_EXPORT void hideWindow(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in hideWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_HIDE);
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);

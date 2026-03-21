@@ -7166,6 +7166,12 @@ extern "C" void showWindow(NSWindow *window) {
     });
 }
 
+extern "C" void hideWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window orderOut:nil];
+    });
+}
+
 extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
 
