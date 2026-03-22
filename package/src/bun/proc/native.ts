@@ -446,6 +446,116 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
 			},
+			// DirectComposition (Phase 2+)
+			dcompInitForView: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompInitForHwnd: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompRenderColor: {
+				args: [FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32],
+				returns: FFIType.bool,
+			},
+			dcompResize: {
+				args: [FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompIsInitialized: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompShutdown: {
+				args: [],
+				returns: FFIType.void,
+			},
+			dcompEnableMode: {
+				args: [FFIType.i32, FFIType.i32],
+				returns: FFIType.void,
+			},
+			dcompEnableNativeResize: {
+				args: [],
+				returns: FFIType.void,
+			},
+			// DirectComposition Phase 3: triangle + WGPU child
+			dcompInitTrianglePipeline: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompRenderTriangle: {
+				args: [FFIType.f32],
+				returns: FFIType.bool,
+			},
+			dcompStartRenderLoop: {
+				args: [],
+				returns: FFIType.void,
+			},
+			dcompStopRenderLoop: {
+				args: [],
+				returns: FFIType.void,
+			},
+			dcompGetLastFrameTimeMs: {
+				args: [],
+				returns: FFIType.f64,
+			},
+			dcompGetFrameCount: {
+				args: [],
+				returns: FFIType.u64,
+			},
+			dcompCreateWGPUChildHwnd: {
+				args: [FFIType.i32, FFIType.i32, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,
+			},
+			dcompSetBridgeMode: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			// WGPU Bridge: blit pixels to DComp swap chain
+			dcompBlitPixels: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompBlitFromWGPUBuffer: {
+				args: [FFIType.ptr, FFIType.ptr, FFIType.i32, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			// Zero-copy bridge: Dawn D3D11On12 → DComp (no CPU readback)
+			dcompInitMinimal: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.bool,
+			},
+			dcompInitZeroCopyBridge: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,  // returns WGPUTexture
+			},
+			dcompZeroCopyBeginFrame: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompZeroCopyEndFrameAndPresent: {
+				args: [],
+				returns: FFIType.bool,
+			},
+			dcompResizeZeroCopyBridge: {
+				args: [FFIType.ptr, FFIType.i32, FFIType.i32],
+				returns: FFIType.ptr,
+			},
+			// DirectComposition Phase 4: WebView2 + WGPU visual tree
+			dcompSetupLayeredTree: {
+				args: [FFIType.ptr, FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			dcompAttachWebView2: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
+			dcompUpdateVisualBounds: {
+				args: [FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32,
+				       FFIType.f32, FFIType.f32, FFIType.f32, FFIType.f32],
+				returns: FFIType.bool,
+			},
 			// Tray
 			createTray: {
 				args: [
@@ -1728,6 +1838,149 @@ export const WGPUBridge = {
 	createSurfaceForView: (instancePtr: Pointer, viewPtr: Pointer): Pointer | null => {
 		if (!native?.symbols?.wgpuCreateSurfaceForView) return null;
 		return native.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
+	},
+};
+
+// DirectComposition bridge.
+// Stable today: DComp back layer, triangle test path, and zero-copy/readback
+// bridge helpers. Composition-hosted WebView2 APIs remain experimental.
+export const DCompBridge = {
+	initForView: (viewPtr: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitForView) return false;
+		return native.symbols.dcompInitForView(viewPtr as any, width, height) as boolean;
+	},
+	initForHwnd: (hwnd: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitForHwnd) return false;
+		return native.symbols.dcompInitForHwnd(hwnd as any, width, height) as boolean;
+	},
+	renderColor: (r: number, g: number, b: number, a: number): boolean => {
+		if (!native?.symbols?.dcompRenderColor) return false;
+		return native.symbols.dcompRenderColor(r, g, b, a) as boolean;
+	},
+	resize: (width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompResize) return false;
+		return native.symbols.dcompResize(width, height) as boolean;
+	},
+	isInitialized: (): boolean => {
+		if (!native?.symbols?.dcompIsInitialized) return false;
+		return native.symbols.dcompIsInitialized() as boolean;
+	},
+	shutdown: (): void => {
+		if (!native?.symbols?.dcompShutdown) return;
+		native.symbols.dcompShutdown();
+	},
+	enableMode: (width: number, height: number): void => {
+		if (!native?.symbols?.dcompEnableMode) return;
+		native.symbols.dcompEnableMode(width, height);
+	},
+	enableNativeResize: (): void => {
+		if (!native?.symbols?.dcompEnableNativeResize) return;
+		native.symbols.dcompEnableNativeResize();
+	},
+	// Phase 3: Triangle rendering + WGPU integration
+	initTrianglePipeline: (): boolean => {
+		if (!native?.symbols?.dcompInitTrianglePipeline) return false;
+		return native.symbols.dcompInitTrianglePipeline() as boolean;
+	},
+	renderTriangle: (angle: number): boolean => {
+		if (!native?.symbols?.dcompRenderTriangle) return false;
+		return native.symbols.dcompRenderTriangle(angle) as boolean;
+	},
+	startRenderLoop: (): void => {
+		if (!native?.symbols?.dcompStartRenderLoop) return;
+		native.symbols.dcompStartRenderLoop();
+	},
+	stopRenderLoop: (): void => {
+		if (!native?.symbols?.dcompStopRenderLoop) return;
+		native.symbols.dcompStopRenderLoop();
+	},
+	getLastFrameTimeMs: (): number => {
+		if (!native?.symbols?.dcompGetLastFrameTimeMs) return -1;
+		return native.symbols.dcompGetLastFrameTimeMs() as number;
+	},
+	getFrameCount: (): bigint => {
+		if (!native?.symbols?.dcompGetFrameCount) return 0n;
+		return native.symbols.dcompGetFrameCount() as bigint;
+	},
+	createWGPUChildHwnd: (x: number, y: number, w: number, h: number): Pointer | null => {
+		if (!native?.symbols?.dcompCreateWGPUChildHwnd) return null;
+		return native.symbols.dcompCreateWGPUChildHwnd(x, y, w, h) as Pointer;
+	},
+	// Bridge mode: skip render-on-resize (WGPU provides frames)
+	setBridgeMode: (enabled: boolean): void => {
+		if (!native?.symbols?.dcompSetBridgeMode) return;
+		native.symbols.dcompSetBridgeMode(enabled);
+	},
+	// WGPU Bridge: blit pixel data to DComp swap chain
+	blitPixels: (pixelData: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompBlitPixels) return false;
+		return native.symbols.dcompBlitPixels(pixelData as any, width, height) as boolean;
+	},
+	// WGPU Bridge: map readback buffer + blit to DComp in one native call
+	blitFromWGPUBuffer: (
+		wgpuInstance: Pointer, wgpuBuffer: Pointer,
+		bytesPerRow: number, width: number, height: number,
+	): boolean => {
+		if (!native?.symbols?.dcompBlitFromWGPUBuffer) return false;
+		return native.symbols.dcompBlitFromWGPUBuffer(
+			wgpuInstance as any, wgpuBuffer as any,
+			bytesPerRow, width, height) as boolean;
+	},
+	// Zero-copy bridge: Dawn D3D11On12 → DComp (no CPU readback)
+	initMinimal: (hwnd: Pointer, width: number, height: number): boolean => {
+		if (!native?.symbols?.dcompInitMinimal) return false;
+		return native.symbols.dcompInitMinimal(hwnd as any, width, height) as boolean;
+	},
+	// Returns WGPUTexture pointer — use as CopyTextureToTexture destination
+	initZeroCopyBridge: (wgpuDevice: Pointer, width: number, height: number): Pointer | null => {
+		if (!native?.symbols?.dcompInitZeroCopyBridge) return null;
+		const ptr = native.symbols.dcompInitZeroCopyBridge(wgpuDevice as any, width, height);
+		return ptr ? (ptr as Pointer) : null;
+	},
+	// Call before encoding CopyTextureToTexture to the staging texture
+	zeroCopyBeginFrame: (): boolean => {
+		if (!native?.symbols?.dcompZeroCopyBeginFrame) return false;
+		return native.symbols.dcompZeroCopyBeginFrame() as boolean;
+	},
+	// Call after queueSubmit — copies staging→back buffer and presents
+	zeroCopyEndFrameAndPresent: (): boolean => {
+		if (!native?.symbols?.dcompZeroCopyEndFrameAndPresent) return false;
+		return native.symbols.dcompZeroCopyEndFrameAndPresent() as boolean;
+	},
+	// Recreate the zero-copy staging texture and swap chain for a new size.
+	resizeZeroCopyBridge: (
+		wgpuDevice: Pointer,
+		width: number,
+		height: number,
+	): Pointer | null => {
+		if (!native?.symbols?.dcompResizeZeroCopyBridge) return null;
+		const ptr = native.symbols.dcompResizeZeroCopyBridge(
+			wgpuDevice as any,
+			width,
+			height,
+		);
+		return ptr ? (ptr as Pointer) : null;
+	},
+	// Experimental: composition-hosted WebView2 visual tree helpers.
+	// The stable runtime keeps WebView2 on its normal controller path and these
+	// helpers intentionally return `false` until that path is production-ready.
+	setupLayeredTree: (webviewViewPtr: Pointer, wgpuSwapChainPtr: Pointer | null): boolean => {
+		if (!native?.symbols?.dcompSetupLayeredTree) return false;
+		return native.symbols.dcompSetupLayeredTree(
+			webviewViewPtr as any, (wgpuSwapChainPtr ?? 0) as any) as boolean;
+	},
+	attachWebView2: (webviewViewPtr: Pointer): boolean => {
+		if (!native?.symbols?.dcompAttachWebView2) return false;
+		return native.symbols.dcompAttachWebView2(webviewViewPtr as any) as boolean;
+	},
+	updateVisualBounds: (
+		wgpuX: number, wgpuY: number, wgpuW: number, wgpuH: number,
+		wv2X: number, wv2Y: number, wv2W: number, wv2H: number,
+	): boolean => {
+		if (!native?.symbols?.dcompUpdateVisualBounds) return false;
+		return native.symbols.dcompUpdateVisualBounds(
+			wgpuX, wgpuY, wgpuW, wgpuH,
+			wv2X, wv2Y, wv2W, wv2H) as boolean;
 	},
 };
 

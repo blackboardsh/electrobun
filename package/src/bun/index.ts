@@ -32,7 +32,7 @@ import webgpu from "./webgpuAdapter";
 import * as three from "three";
 import * as babylon from "@babylonjs/core";
 import type { ElectrobunConfig } from "./ElectrobunConfig";
-import { GlobalShortcut, Screen, Session, WGPUBridge } from "./proc/native";
+import { GlobalShortcut, Screen, Session, WGPUBridge, DCompBridge } from "./proc/native";
 import type {
 	Display,
 	Rectangle,
@@ -92,6 +92,7 @@ export {
 	Screen,
 	Session,
 	WGPUBridge,
+	DCompBridge,
 	BuildConfig,
 };
 
@@ -110,6 +111,7 @@ const Electrobun = {
 	Screen,
 	Session,
 	WGPUBridge,
+	DCompBridge,
 	BuildConfig,
 	events: electobunEventEmmitter,
 	PATHS,
