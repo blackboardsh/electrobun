@@ -338,7 +338,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 				}
 			},
 			registerHandler(handler: (msg: unknown) => void) {
-				if (!that.ptr || that.isRemoved) {
+				if (that.isRemoved) {
 					return;
 				}
 				that.rpcHandler = handler;
