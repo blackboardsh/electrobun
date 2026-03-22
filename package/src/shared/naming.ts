@@ -92,17 +92,33 @@ export function getTarballFileName(
 }
 
 /**
- * Generates the Windows installer setup file name.
- * Preserves spaces in app name for user-friendly display.
- * Format: "App Name-Setup.exe" (stable) or "App Name-Setup-channel.exe" (non-stable)
+ * Generates the NSIS installer file name.
+ * Uses the sanitized (no-space) app name for artifact URLs.
+ * Format: "AppName-Setup-nsis.exe" (stable) or "AppName-canary-Setup-nsis.exe" (non-stable)
  */
-export function getWindowsSetupFileName(
+export function getNsisSetupFileName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	const sanitized = sanitizeAppName(appName);
 	return buildEnvironment === "stable"
-		? `${appName}-Setup.exe`
-		: `${appName}-Setup-${buildEnvironment}.exe`;
+		? `${sanitized}-Setup-nsis.exe`
+		: `${sanitized}-${buildEnvironment}-Setup-nsis.exe`;
+}
+
+/**
+ * Generates the MSI installer file name.
+ * Uses the sanitized (no-space) app name for artifact URLs.
+ * Format: "AppName-Setup.msi" (stable) or "AppName-canary-Setup.msi" (non-stable)
+ */
+export function getMsiFileName(
+	appName: string,
+	buildEnvironment: BuildEnvironment,
+): string {
+	const sanitized = sanitizeAppName(appName);
+	return buildEnvironment === "stable"
+		? `${sanitized}-Setup.msi`
+		: `${sanitized}-${buildEnvironment}-Setup.msi`;
 }
 
 /**
