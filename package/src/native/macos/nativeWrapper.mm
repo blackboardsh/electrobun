@@ -2442,8 +2442,18 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
                 [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
-                [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];                
-                
+                [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];
+
+                // Allow media playback without requiring a user gesture (enables autoplay)
+                configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+
+                // Keep WebView content process running at foreground priority even when
+                // the application loses focus, preventing audio/media suspension
+                [configuration setValue:@YES forKey:@"_alwaysRunsAtForegroundPriority"];
+
+                // Ensure media data loads automatically without waiting for user interaction
+                [configuration setValue:@YES forKey:@"_mediaDataLoadsAutomatically"];
+
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
                 // TODO: Consider storing views handler globally and not on each AbstractView                
