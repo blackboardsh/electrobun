@@ -177,6 +177,10 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
 			},
+			setWindowButtonPosition: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
 			setWindowSize: {
 				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
@@ -1010,6 +1014,15 @@ export const ffi = {
 			}
 
 			native.symbols.setWindowPosition(windowPtr, x, y);
+		},
+
+		setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = getWindowPtr(winId);
+			if (!windowPtr) {
+				throw `Can't set window button position. Window no longer exists`;
+			}
+			native.symbols.setWindowButtonPosition(windowPtr, x, y);
 		},
 
 		setWindowSize: (params: {

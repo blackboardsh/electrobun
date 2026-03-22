@@ -893,6 +893,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
     @property (nonatomic, assign) WindowBlurHandler blurHandler;
     @property (nonatomic, assign) WindowKeyHandler keyHandler;
+    @property (nonatomic, assign) BOOL hasCustomButtonPosition;
+    @property (nonatomic, assign) double buttonPositionX;
+    @property (nonatomic, assign) double buttonPositionY;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
 @end
@@ -6306,6 +6309,39 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     }
 @end
 
+static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
+    NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *minimizeBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+
+    if (!closeBtn || !minimizeBtn || !zoomBtn) return;
+
+    NSView *titlebarView = [closeBtn superview];
+    if (!titlebarView) return;
+
+    NSView *titlebarContainerView = [titlebarView superview];
+    if (!titlebarContainerView) return;
+
+    CGFloat buttonSpacing = 20.0;
+    CGFloat buttonHeight = closeBtn.frame.size.height;
+    CGFloat requiredHeight = y + buttonHeight;
+
+    NSRect containerFrame = titlebarContainerView.frame;
+    containerFrame.size.height = requiredHeight;
+    containerFrame.origin.y = NSHeight(window.frame) - requiredHeight;
+    [titlebarContainerView setFrame:containerFrame];
+
+    NSRect titlebarFrame = titlebarView.frame;
+    titlebarFrame.size.height = requiredHeight;
+    titlebarFrame.origin.y = 0;
+    [titlebarView setFrame:titlebarFrame];
+
+    CGFloat adjustedY = requiredHeight - y - buttonHeight;
+    [closeBtn setFrameOrigin:NSMakePoint(x, adjustedY)];
+    [minimizeBtn setFrameOrigin:NSMakePoint(x + buttonSpacing, adjustedY)];
+    [zoomBtn setFrameOrigin:NSMakePoint(x + 2 * buttonSpacing, adjustedY)];
+}
+
 @implementation WindowDelegate
     - (BOOL)windowShouldClose:(NSWindow *)sender {
     return YES;
@@ -6337,8 +6373,31 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
                                contentRect.size.width, contentRect.size.height);
+            if (self.hasCustomButtonPosition) {
+                applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+            }
         }
     }
+
+    - (void)windowWillExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
+    }
+
+    - (void)windowDidExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:NO];
+        }
+    }
+
     - (void)windowDidMove:(NSNotification *)notification {
         if (self.moveHandler) {
             NSWindow *window = [notification object];
@@ -7259,6 +7318,21 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
         // Convert from top-left origin (what users expect) to bottom-left origin (what macOS uses)
         CGFloat adjustedY = screenHeight - y - windowHeight;
         [window setFrameOrigin:NSMakePoint(x, adjustedY)];
+    });
+}
+
+extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+
+        WindowDelegate *delegate = (WindowDelegate *)[window delegate];
+        if (delegate) {
+            delegate.hasCustomButtonPosition = YES;
+            delegate.buttonPositionX = x;
+            delegate.buttonPositionY = y;
+        }
+
+        applyWindowButtonPosition(window, x, y);
     });
 }
 
