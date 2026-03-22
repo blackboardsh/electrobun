@@ -307,13 +307,172 @@ export interface ElectrobunConfig {
 			 */
 			chromiumFlags?: Record<string, string | boolean>;
 
-			/**
-			 * Path to application icon (.ico format)
-			 * Used for the installer/extractor wrapper, desktop shortcuts, and taskbar
-			 * Should include multiple sizes (16x16, 32x32, 48x48, 256x256) for best results
-			 * @example "assets/icon.ico"
-			 */
+		/**
+		 * Path to application icon (.ico format)
+		 * Used for the installer/extractor wrapper, desktop shortcuts, and taskbar
+		 * Should include multiple sizes (16x16, 32x32, 48x48, 256x256) for best results
+		 * @example "assets/icon.ico"
+		 */
 			icon?: string;
+
+			/**
+			 * NSIS .exe installer settings.
+			 * Electrobun auto-downloads NSIS if makensis is not found on PATH.
+			 */
+			nsis?: {
+				/**
+				 * Generate a NSIS installer during non-dev Windows builds.
+				 * @default true
+				 */
+				enabled?: boolean;
+
+				/**
+				 * Whether to install for the current user only or for all users.
+				 * "perMachine" requires the installer to run as Administrator.
+				 * @default "currentUser"
+				 */
+				installMode?: "currentUser" | "perMachine";
+
+				/**
+				 * Allow installing an older version over a newer one without
+				 * prompting the user to uninstall first.
+				 * @default false
+				 */
+				allowDowngrades?: boolean;
+
+				/**
+				 * Publisher / company name shown in Add/Remove Programs.
+				 * @default config.app.name
+				 */
+				publisher?: string;
+
+				/**
+				 * Homepage URL shown in Add/Remove Programs.
+				 */
+				homepage?: string;
+
+				/**
+				 * Create a desktop shortcut during install.
+				 * @default true
+				 */
+				desktopShortcut?: boolean;
+
+				/**
+				 * Start Menu folder name.
+				 * @default config.app.name
+				 */
+				startMenuFolder?: string;
+
+				/**
+				 * Paths relative to %LOCALAPPDATA% that the uninstaller will offer
+				 * to delete when the user checks "Also delete application data".
+				 * Wallet / credential data should NOT be listed here.
+				 *
+				 * @example ["MyApp", "MyApp\\Cache"]
+				 */
+				appDataPaths?: string[];
+			};
+
+			/**
+			 * WiX v3 .msi installer settings.
+			 * Produces a native Windows Installer package for GPO / SCCM / Intune.
+			 * Electrobun auto-downloads WiX v3 if candle.exe is not found on PATH.
+			 */
+			msi?: {
+				/**
+				 * Generate a MSI installer during non-dev Windows builds.
+				 * @default true
+				 */
+				enabled?: boolean;
+
+				/**
+				 * Publisher / manufacturer name embedded in the MSI.
+				 * @default config.app.name
+				 */
+				publisher?: string;
+
+				/**
+				 * Override the stable UpgradeCode GUID used by Windows Installer to
+				 * identify this product across upgrades. Must be a valid UUID.
+				 * By default, a deterministic UUID v5 is derived from config.app.identifier
+				 * so you only need this if you need to match an existing MSI already in
+				 * production.
+				 * @example "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+				 */
+				upgradeCode?: string;
+
+				/**
+				 * Whether to install for the current user only or for all users.
+				 * "perMachine" sets InstallScope to perMachine and requires the MSI to
+				 * run as Administrator (elevated). "currentUser" requires no elevation.
+				 * @default "currentUser"
+				 */
+				installMode?: "currentUser" | "perMachine";
+
+				/**
+				 * Allow installing an older version over a newer one.
+				 * When false, the installer shows an error if a newer version is detected.
+				 * @default false
+				 */
+				allowDowngrades?: boolean;
+
+				/**
+				 * Create a desktop shortcut during install.
+				 * @default true
+				 */
+				desktopShortcut?: boolean;
+
+				/**
+				 * Start Menu folder name for the application shortcut.
+				 * @default config.app.name
+				 */
+				startMenuFolder?: string;
+
+			/**
+			 * Path to an RTF license file displayed in the installer.
+			 * When omitted the license dialog is skipped entirely.
+			 * @example "assets/license.rtf"
+			 */
+			license?: string;
+
+			/**
+			 * Path to a 493 x 58 BMP used as the top banner on installer pages.
+			 * When omitted the default WiX banner is used.
+			 */
+			bannerImage?: string;
+
+			/**
+			 * Path to a 493 x 312 BMP used as the background on the
+			 * Welcome and Finish dialogs.
+			 * When omitted the default WiX dialog image is used.
+			 */
+			dialogImage?: string;
+
+			/**
+			 * Homepage URL shown in Add/Remove Programs.
+			 */
+			homepage?: string;
+
+			/**
+			 * Show a "Launch application" checkbox on the finish page.
+			 * @default true
+			 */
+			launchAfterInstall?: boolean;
+
+			/**
+			 * Extra arguments passed verbatim to candle.exe (WiX compiler).
+			 * Use for advanced WiX extensions or preprocessor defines.
+			 * @example ["-ext", "WixUtilExtension"]
+			 */
+			additionalCandleArgs?: string[];
+
+			/**
+			 * Extra arguments passed verbatim to light.exe (WiX linker).
+			 * Use for ICE suppression, cultures, or WiX extensions.
+			 * @example ["-cultures:en-US", "-ext", "WixUIExtension"]
+			 */
+			additionalLightArgs?: string[];
+		};
 		};
 
 		/**
