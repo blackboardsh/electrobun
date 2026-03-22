@@ -61,13 +61,6 @@ const ProgressIndicator = struct {
     }
 
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
-        // On Windows, start a spinner thread in the console
-        if (builtin.os.tag == .windows) {
-            // Start spinner thread
-            self.spinner_thread = try std.Thread.spawn(.{}, spinnerThread, .{self});
-            return;
-        }
-
         if (builtin.os.tag != .linux) return;
 
         // Try zenity first (most common)
@@ -142,138 +135,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const exe_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);
 
-    // For Windows, check for adjacent archive file first
-    if (builtin.os.tag == .windows) {
-        // Try to read from adjacent .tar.zst file
-        const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
-        const exe_name = std.fs.path.basename(exe_path);
-        const exe_stem = std.fs.path.stem(exe_name);
-
-        // Look for archive file - first in .installer subdirectory, then adjacent
-        const archive_name = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{exe_stem});
-        defer allocator.free(archive_name);
-
-        // Try .installer subdirectory first (new location)
-        const installer_archive_path = try std.fs.path.join(allocator, &.{ exe_dir, ".installer", archive_name });
-        defer allocator.free(installer_archive_path);
-
-        // Fallback to adjacent location (legacy)
-        const archive_path = try std.fs.path.join(allocator, &.{ exe_dir, archive_name });
-        defer allocator.free(archive_path);
-
-        // Determine which archive path exists
-        const final_archive_path = if (std.fs.accessAbsolute(installer_archive_path, .{})) |_|
-            installer_archive_path
-        else |_|
-            archive_path;
-
-        // Also check for metadata file
-        const metadata_name = try std.fmt.allocPrint(allocator, "{s}.metadata.json", .{exe_stem});
-        defer allocator.free(metadata_name);
-
-        // Try .installer subdirectory first (new location)
-        const installer_metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, ".installer", metadata_name });
-        defer allocator.free(installer_metadata_path);
-
-        // Fallback to adjacent location (legacy)
-        const metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, metadata_name });
-        defer allocator.free(metadata_path);
-
-        // Determine which metadata path exists
-        const final_metadata_path = if (std.fs.accessAbsolute(installer_metadata_path, .{})) |_|
-            installer_metadata_path
-        else |_|
-            metadata_path;
-
-        // Try to open the metadata file
-        if (std.fs.cwd().openFile(final_metadata_path, .{})) |metadata_file| {
-            defer metadata_file.close();
-
-            // Read metadata
-            const metadata_contents = try metadata_file.readToEndAlloc(allocator, 4096);
-            defer allocator.free(metadata_contents);
-
-            const parsed = try std.json.parseFromSlice(struct {
-                identifier: []const u8,
-                name: []const u8,
-                channel: []const u8,
-                hash: []const u8,
-            }, allocator, metadata_contents, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-
-            const metadata = AppMetadata{
-                .identifier = try allocator.dupe(u8, parsed.value.identifier),
-                .name = try allocator.dupe(u8, parsed.value.name),
-                .channel = try allocator.dupe(u8, parsed.value.channel),
-                .hash = try allocator.dupe(u8, parsed.value.hash),
-            };
-
-            std.debug.print("DEBUG: Parsed metadata hash: {s}\n", .{parsed.value.hash});
-
-            // Don't free metadata fields here - they need to persist through extractAndInstall
-            // They will be freed at the end of this function
-
-            // Try to open the archive file
-            if (std.fs.cwd().openFile(final_archive_path, .{})) |archive_file| {
-                defer archive_file.close();
-
-                std.debug.print("Found adjacent archive file: {s}\n", .{final_archive_path});
-                std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{ metadata.identifier, metadata.name, metadata.channel });
-
-                // Build application support directory path
-                const app_data_dir = try getAppDataDir(allocator);
-                defer allocator.free(app_data_dir);
-
-                // Use identifier + channel for the app data folder
-                // e.g., ~/Library/Application Support/sh.blackboard.myapp/canary/
-                const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, metadata.channel });
-                defer allocator.free(app_base_dir);
-
-                const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
-                defer allocator.free(self_extraction_dir);
-
-                // Handle Windows versioned app directories
-                std.debug.print("\nDEBUG: Building app_dir path...\n", .{});
-                std.debug.print("DEBUG: builtin.os.tag = {}\n", .{builtin.os.tag});
-                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
-                std.debug.print("DEBUG: app_base_dir = '{s}'\n", .{app_base_dir});
-
-                // Always use "app" folder instead of hash-based versioning
-                const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
-                defer allocator.free(app_dir);
-
-                std.debug.print("DEBUG: Final app_dir = '{s}'\n", .{app_dir});
-                std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
-
-                std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
-                std.debug.print("App will be installed to: {s}\n", .{app_dir});
-                std.debug.print("DEBUG: app_base_dir = {s}\n", .{app_base_dir});
-                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
-
-                // Read compressed data from archive file
-                const file_size = try archive_file.getEndPos();
-                const compressed_data = try allocator.alloc(u8, file_size);
-                defer allocator.free(compressed_data);
-
-                try archive_file.seekTo(0);
-                _ = try archive_file.read(compressed_data);
-
-                // Continue with decompression (shared code path)
-                const result = try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
-                // Clean up metadata fields
-                allocator.free(metadata.identifier);
-                allocator.free(metadata.name);
-                allocator.free(metadata.channel);
-                if (metadata.hash) |hash| {
-                    allocator.free(hash);
-                }
-
-                return result;
-            } else |_| {}
-        } else |_| {}
-    }
-
-    // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows)
+    // Embedded archive approach (Linux self-extracting installer)
     // Open self for reading
     const self_file = try std.fs.openFileAbsolute(exe_path, .{});
     defer self_file.close();
@@ -463,60 +325,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     };
     std.debug.print("DEBUG: Source directory exists\n", .{});
 
-    // On Windows, we need to create the parent directory first, then copy contents
-    if (builtin.os.tag == .windows) {
-        // Create the app directory and all parent directories
-        std.debug.print("\nDEBUG: Windows directory creation...\n", .{});
-        std.debug.print("DEBUG: Current working directory = {s}\n", .{try std.fs.cwd().realpathAlloc(allocator, ".")});
-        std.debug.print("DEBUG: About to create Windows app directory: '{s}'\n", .{app_dir});
-        std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
-
-        // Check if parent directory exists
-        if (std.fs.path.dirname(app_dir)) |parent| {
-            std.debug.print("DEBUG: Parent directory = '{s}'\n", .{parent});
-            std.fs.cwd().access(parent, .{}) catch |err| {
-                std.debug.print("DEBUG: Parent directory does not exist, will create it. Error: {}\n", .{err});
-            };
-        }
-
-        // Print each character to debug the string
-        std.debug.print("DEBUG: app_dir bytes: ", .{});
-        for (app_dir) |byte| {
-            if (byte >= 32 and byte <= 126) {
-                std.debug.print("'{c}' ", .{byte});
-            } else {
-                std.debug.print("0x{x:02} ", .{byte});
-            }
-        }
-        std.debug.print("\n", .{});
-
-        std.debug.print("DEBUG: Calling makePath...\n", .{});
-        std.fs.cwd().makePath(app_dir) catch |err| {
-            std.debug.print("ERROR: Failed to create app directory '{s}': {}\n", .{ app_dir, err });
-
-            // Try to create parent directory first
-            if (std.fs.path.dirname(app_dir)) |parent| {
-                std.debug.print("DEBUG: Trying to create parent directory first: '{s}'\n", .{parent});
-                std.fs.cwd().makePath(parent) catch |parent_err| {
-                    std.debug.print("ERROR: Failed to create parent directory: {}\n", .{parent_err});
-                };
-            }
-
-            return err;
-        };
-        std.debug.print("DEBUG: Successfully created app directory\n", .{});
-
-        // Copy contents from extracted path to app directory
-        try copyDirectory(allocator, extracted_app_path, app_dir);
-
-        // Remove the extracted directory after successful copy
-        std.fs.cwd().deleteTree(extracted_app_path) catch {};
-    } else {
-        // On Unix systems, rename works across directories
-        std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
-            return err;
-        };
-    }
+    // Move the extracted app to the target directory
+    std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
+        return err;
+    };
 
     // Fix executable permissions on extracted binaries
     try fixExecutablePermissions(allocator, app_dir);
@@ -530,22 +342,17 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     try fixCefSymlinks(allocator, app_dir);
 
     // On macOS, replace self with launcher shortcut (due to .app bundle structure)
-    // On Windows/Linux, keep the self-extractor and create desktop shortcuts
     if (builtin.os.tag == .macos) {
         try replaceSelfWithLauncher(allocator, exe_path, app_dir);
     }
 
-    // Create desktop shortcuts on Linux and Windows
+    // Create desktop shortcuts on Linux
     if (builtin.os.tag == .linux) {
         try createDesktopShortcut(allocator, app_dir, metadata);
     }
 
-    if (builtin.os.tag == .windows) {
-        try createWindowsShortcut(allocator, app_dir, metadata);
-    }
-
-    // Save tar file for Updater API on Linux and Windows after everything else is done
-    if (builtin.os.tag == .linux or builtin.os.tag == .windows) {
+    // Save tar file for Updater API on Linux after everything else is done
+    if (builtin.os.tag == .linux) {
         std.debug.print("\n✓ Saving tar file for Updater API...\n", .{});
         // Make a defensive copy of the hash to prevent memory corruption
         const safe_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
@@ -829,17 +636,6 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadat
 
 fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
     return switch (builtin.os.tag) {
-        .windows => blk: {
-            // Use %LOCALAPPDATA% on Windows
-            const local_appdata = std.process.getEnvVarOwned(allocator, "LOCALAPPDATA") catch
-                std.process.getEnvVarOwned(allocator, "APPDATA") catch {
-                // Fallback to user profile
-                const userprofile = try std.process.getEnvVarOwned(allocator, "USERPROFILE");
-                defer allocator.free(userprofile);
-                break :blk try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Local" });
-            };
-            break :blk local_appdata;
-        },
         .linux => blk: {
             // Use XDG_DATA_HOME or ~/.local/share on Linux
             const xdg_data_home = std.process.getEnvVarOwned(allocator, "XDG_DATA_HOME") catch {
@@ -1070,153 +866,6 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
-fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {
-    // Create a .lnk shortcut using PowerShell
-    const lnk_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
-    defer allocator.free(lnk_name);
-
-    const lnk_path = try std.fs.path.join(allocator, &.{ shortcut_dir, lnk_name });
-    defer allocator.free(lnk_path);
-
-    // Create PowerShell script to create the shortcut with icon
-    const ps_content = try std.fmt.allocPrint(allocator,
-        \\$WshShell = New-Object -ComObject WScript.Shell
-        \\$Shortcut = $WshShell.CreateShortcut("{s}")
-        \\$Shortcut.TargetPath = "{s}"
-        \\$Shortcut.WorkingDirectory = "{s}"
-        \\$Shortcut.IconLocation = "{s}"
-        \\$Shortcut.WindowStyle = 1
-        \\$Shortcut.Save()
-        \\
-    , .{ lnk_path, target_path, working_dir, icon_path });
-    defer allocator.free(ps_content);
-
-    // Execute PowerShell command
-    const ps_args = [_][]const u8{
-        "powershell",
-        "-NoProfile",
-        "-NonInteractive",
-        "-WindowStyle",
-        "Hidden",
-        "-Command",
-        ps_content,
-    };
-
-    var child = std.process.Child.init(&ps_args, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-
-    _ = child.spawn() catch |err| {
-        std.debug.print("Warning: Could not spawn PowerShell to create shortcut: {}\n", .{err});
-        return;
-    };
-
-    _ = child.wait() catch |err| {
-        std.debug.print("Warning: PowerShell shortcut creation failed: {}\n", .{err});
-        return;
-    };
-
-    std.debug.print("Created Windows shortcut: {s}\n", .{lnk_path});
-}
-
-fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
-    // Get user directories
-    const userprofile = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
-        std.debug.print("Warning: Could not get USERPROFILE directory\n", .{});
-        return;
-    };
-    defer allocator.free(userprofile);
-
-    const desktop_dir = try std.fs.path.join(allocator, &.{ userprofile, "Desktop" });
-    defer allocator.free(desktop_dir);
-
-    const start_menu_dir = try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs" });
-    defer allocator.free(start_menu_dir);
-
-    // Check if Desktop directory exists
-    std.fs.cwd().access(desktop_dir, .{}) catch {
-        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
-        // Continue anyway, might work
-    };
-
-    // Point directly to launcher.exe (no more run.bat wrapper)
-    const target_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
-    defer allocator.free(target_path);
-
-    // Check if target exists
-    std.fs.cwd().access(target_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not find launcher.exe at {s}: {}\n", .{ target_path, err });
-        return;
-    };
-
-    // Working directory is the bin directory
-    const working_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
-    defer allocator.free(working_dir);
-
-    // Icon is embedded in launcher.exe, so use it directly as icon source
-    const icon_to_use = target_path;
-
-    // Create desktop shortcut
-    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use);
-
-    // Create Start Menu shortcut
-    // Make sure Start Menu directory exists
-    std.fs.cwd().makePath(start_menu_dir) catch {
-        std.debug.print("Warning: Could not create Start Menu directory\n", .{});
-    };
-    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use);
-
-    std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
-
-    // Add uninstall registry entry for better Windows integration
-    try addWindowsUninstallEntry(allocator, metadata, app_dir);
-}
-
-fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata, app_dir: []const u8) !void {
-    // Create a simple registry file that users can double-click to install uninstall info
-    // This is a safer approach than directly modifying the registry from our code
-    const reg_name = try std.fmt.allocPrint(allocator, "{s}_uninstall.reg", .{metadata.name});
-    defer allocator.free(reg_name);
-
-    const reg_path = try std.fs.path.join(allocator, &.{ app_dir, reg_name });
-    defer allocator.free(reg_path);
-
-    const app_display_name = try std.fmt.allocPrint(allocator, "{s} ({s})", .{ metadata.name, metadata.channel });
-    defer allocator.free(app_display_name);
-
-    // Create registry content for Windows uninstall entry
-    const reg_content = try std.fmt.allocPrint(allocator,
-        \\Windows Registry Editor Version 5.00
-        \\
-        \\[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\{s}]
-        \\@="{s}"
-        \\"DisplayName"="{s}"
-        \\"DisplayVersion"="1.0"
-        \\"Publisher"="Electrobun"
-        \\"InstallLocation"="{s}"
-        \\"UninstallString"="cmd.exe /c rmdir /s /q \"{s}\""
-        \\"NoModify"=dword:00000001
-        \\"NoRepair"=dword:00000001
-        \\
-    , .{ metadata.identifier, app_display_name, app_display_name, app_dir, app_dir });
-    defer allocator.free(reg_content);
-
-    // Create and write registry file
-    const reg_file = std.fs.cwd().createFile(reg_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not create uninstall registry file: {}\n", .{err});
-        return;
-    };
-    defer reg_file.close();
-
-    reg_file.writeAll(reg_content) catch |err| {
-        std.debug.print("Warning: Could not write registry content: {}\n", .{err});
-        return;
-    };
-
-    std.debug.print("Created uninstall registry file: {s}\n", .{reg_path});
-    std.debug.print("Note: Users can double-click {s} to add uninstall info to Windows\n", .{reg_name});
-}
-
 pub fn main() !void {
     std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
     var allocator = std.heap.page_allocator;
@@ -1233,8 +882,8 @@ pub fn main() !void {
     const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
 
     // Platform-specific extraction
-    if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
-        // Windows and Linux ONLY use self-extraction with magic bytes
+    if (builtin.os.tag == .linux) {
+        // Linux uses self-extraction with magic bytes
         const extracted = try extractFromSelf(allocator);
         if (!extracted) {
             std.debug.print("ERROR: Not a valid self-extracting installer\n", .{});
@@ -1394,11 +1043,9 @@ pub fn main() !void {
     const argv = switch (builtin.os.tag) {
         .macos => &[_][]const u8{ "open", APPBUNDLE_PATH },
         .linux => blk: {
-            // On Linux, find the launcher binary inside the app bundle
             const launcher_path = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "bin", "launcher" });
             break :blk &[_][]const u8{launcher_path};
         },
-        .windows => &[_][]const u8{ "cmd", "/c", "start", "", APPBUNDLE_PATH },
         else => @compileError("Unsupported platform for app launching"),
     };
 
@@ -1714,110 +1361,3 @@ fn getPlistStringValue(plistContents: []const u8, key: []const u8) !?[]const u8 
     return null; // Key not found or malformed plist
 }
 
-fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
-    // Get the parent directory (contains app-<hash> and where run.bat should go)
-    const parent_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidPath;
-    const run_bat_path = try std.fs.path.join(allocator, &.{ parent_dir, "run.bat" });
-    defer allocator.free(run_bat_path);
-
-    // Create launcher batch file content
-    const launcher_content = try std.fmt.allocPrint(allocator,
-        \\@echo off
-        \\:: Electrobun App Launcher
-        \\:: This file launches the current version
-        \\
-        \\:: Set current version
-        \\set CURRENT_HASH={s}
-        \\set APP_DIR=%~dp0app-%CURRENT_HASH%
-        \\
-        \\:: TODO: Implement proper cleanup mechanism that checks for running processes
-        \\:: For now, old versions are kept to avoid race conditions during updates
-        \\:: :: Clean up old app versions (keep current only)
-        \\:: for /d %%D in ("%~dp0app-*") do (
-        \\::     if not "%%~nxD"=="app-%CURRENT_HASH%" (
-        \\::         echo Removing old version: %%~nxD
-        \\::         rmdir /s /q "%%D" 2>nul
-        \\::     )
-        \\:: )
-        \\
-        \\:: Launch the app
-        \\cd /d "%APP_DIR%\bin"
-        \\start "" launcher.exe
-        \\
-    , .{metadata.hash orelse "unknown"});
-    defer allocator.free(launcher_content);
-
-    // Write the launcher batch file
-    const run_bat_file = try std.fs.cwd().createFile(run_bat_path, .{});
-    defer run_bat_file.close();
-    try run_bat_file.writeAll(launcher_content);
-
-    std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
-}
-fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
-    std.debug.print("\nDEBUG copyDirectory: src='{s}' dest='{s}'\n", .{ src_path, dest_path });
-
-    var src_dir = std.fs.cwd().openDir(src_path, .{ .iterate = true }) catch |err| {
-        std.debug.print("ERROR: Failed to open source directory '{s}': {}\n", .{ src_path, err });
-        return err;
-    };
-    defer src_dir.close();
-
-    var iterator = src_dir.iterate();
-    while (try iterator.next()) |entry| {
-        const src_item_path = try std.fs.path.join(allocator, &.{ src_path, entry.name });
-        defer allocator.free(src_item_path);
-
-        const dest_item_path = try std.fs.path.join(allocator, &.{ dest_path, entry.name });
-        defer allocator.free(dest_item_path);
-
-        switch (entry.kind) {
-            .directory => {
-                // Create directory and recursively copy contents
-                std.fs.cwd().makeDir(dest_item_path) catch |err| switch (err) {
-                    error.PathAlreadyExists => {},
-                    else => return err,
-                };
-                try copyDirectory(allocator, src_item_path, dest_item_path);
-            },
-            .file => {
-                // Copy file
-                try std.fs.cwd().copyFile(src_item_path, std.fs.cwd(), dest_item_path, .{});
-            },
-            else => {
-                // Skip other file types (symlinks, etc.)
-                std.debug.print("Skipping file type for: {s}\n", .{entry.name});
-            },
-        }
-    }
-}
-
-fn sanitizeWindowsPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    // Windows invalid characters: < > : " | ? * and control chars (0-31)
-    var sanitized = try allocator.alloc(u8, path.len);
-    var write_pos: usize = 0;
-
-    for (path) |char| {
-        switch (char) {
-            // Replace invalid characters with underscore
-            '<', '>', ':', '"', '|', '?', '*' => {
-                sanitized[write_pos] = '_';
-                write_pos += 1;
-            },
-            // Skip control characters (0-31)
-            0...31 => {},
-            // Keep valid characters
-            else => {
-                sanitized[write_pos] = char;
-                write_pos += 1;
-            },
-        }
-    }
-
-    // Resize to actual length
-    const result = try allocator.alloc(u8, write_pos);
-    @memcpy(result, sanitized[0..write_pos]);
-    allocator.free(sanitized);
-
-    return result;
-}
