@@ -2454,6 +2454,11 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 // Ensure media data loads automatically without waiting for user interaction
                 [configuration setValue:@YES forKey:@"_mediaDataLoadsAutomatically"];
 
+                // Disable page visibility-based process suppression so WebKit does not
+                // throttle or suspend the content process when the window is occluded
+                // (e.g., when the user is 2+ Spaces/desktops away)
+                [configuration.preferences setValue:@NO forKey:@"_pageVisibilityBasedProcessSuppressionEnabled"];
+
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
                 // TODO: Consider storing views handler globally and not on each AbstractView                
@@ -7029,6 +7034,14 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 @implementation ElectrobunWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
+
+// Always report the window as visible to prevent WebKit from suspending
+// media playback when the window is occluded (e.g., on a non-adjacent Space).
+// macOS clears NSWindowOcclusionStateVisible for fully occluded windows,
+// which causes WKWebView to throttle/suspend audio and other media.
+- (NSWindowOcclusionState)occlusionState {
+    return [super occlusionState] | NSWindowOcclusionStateVisible;
+}
 @end
 
 NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
