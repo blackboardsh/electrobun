@@ -97,8 +97,11 @@ async function ensureCliBinary() {
     // Download tarball
     await downloadFile(tarballUrl, tarballPath);
 
-    // Extract using system tar (available on macOS, Linux, and Windows 10+)
-    execSync(`tar -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
+    // Extract using system tar (available on macOS, Linux, and Windows 10+).
+    // Use basename only: cwd is set to cacheDir, and tar on Windows (Git Bash)
+    // interprets absolute Windows paths like "C:\..." as remote URLs.
+    const tarballFilename = require('path').basename(tarballPath);
+    execSync(`tar -xzf "${tarballFilename}"`, { cwd: cacheDir, stdio: 'pipe' });
 
     // Clean up tarball
     unlinkSync(tarballPath);
