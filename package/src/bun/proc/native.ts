@@ -2888,6 +2888,17 @@ export const internalRpcHandlers = {
 			if (!windowPtr) return;
 			native.symbols.startWindowMove(windowPtr);
 		},
+		toggleWindowMaximize: (params: { id: number }) => {
+			const windowPtr = getWindowPtr(params.id);
+			if (!windowPtr) return;
+
+			if (native.symbols.isWindowMaximized(windowPtr)) {
+				native.symbols.unmaximizeWindow(windowPtr);
+				return;
+			}
+
+			native.symbols.maximizeWindow(windowPtr);
+		},
 		stopWindowMove: (_params: unknown) => {
 			native.symbols.stopWindowMove();
 		},

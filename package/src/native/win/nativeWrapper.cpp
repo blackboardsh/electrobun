@@ -3,6 +3,8 @@
 #include <winhttp.h>
 #include <Windows.h>
 #include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM
+#include <shellapi.h>  // For SHAppBarMessage / APPBARDATA
+#include <cmath>       // For roundf
 #include <string>
 #include <cstring>
 #include <functional>
@@ -473,11 +475,6 @@ static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
 static std::vector<ACCEL> g_menuAccelerators;
 static HACCEL g_hAccelTable = NULL;
 
-// Global state for custom window dragging
-static BOOL g_isMovingWindow = FALSE;
-static HWND g_targetWindow = NULL;
-static POINT g_initialCursorPos = {};
-static POINT g_initialWindowPos = {};
 
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
@@ -1626,6 +1623,9 @@ public:
         if (wParam & MK_CONTROL) mouse_event.modifiers |= EVENTFLAG_CONTROL_DOWN;
         if (wParam & MK_SHIFT) mouse_event.modifiers |= EVENTFLAG_SHIFT_DOWN;
         if (GetKeyState(VK_MENU) & 0x8000) mouse_event.modifiers |= EVENTFLAG_ALT_DOWN;
+        if (wParam & MK_LBUTTON) mouse_event.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+        if (wParam & MK_RBUTTON) mouse_event.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+        if (wParam & MK_MBUTTON) mouse_event.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
 
         switch (message) {
             case WM_MOUSEMOVE:
@@ -1635,11 +1635,13 @@ public:
             case WM_LBUTTONDOWN:
             case WM_RBUTTONDOWN:
             case WM_MBUTTONDOWN: {
+                if (message == WM_LBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+                if (message == WM_RBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+                if (message == WM_MBUTTONDOWN) mouse_event.modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+
                 CefBrowserHost::MouseButtonType btn_type =
                     (message == WM_LBUTTONDOWN) ? MBT_LEFT :
                     (message == WM_RBUTTONDOWN) ? MBT_RIGHT : MBT_MIDDLE;
-
-                printf("OSRWindow: Sending click at (%d, %d)\n", mouse_event.x, mouse_event.y);
 
                 host->SendMouseClickEvent(mouse_event, btn_type, false, 1);
                 break;
@@ -3485,9 +3487,10 @@ private:
     CefRefPtr<ElectrobunCefClient> client;
     OSRWindow* osr_window;
     bool is_osr_mode;
+    bool is_closing_;
 
 public:
-    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
+    CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false), is_closing_(false) {
         this->webviewId = webviewId;
     }
 
@@ -3575,48 +3578,66 @@ public:
     }
     
     void remove() override {
-        if (browser) {
-            std::cout << "[CEF] CEFView::remove() called for browser ID " << browser->GetIdentifier() << std::endl;
+        if (is_closing_) {
+            return;
+        }
 
-            // Get the browser host before we clear the reference
-            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        CefRefPtr<CefBrowser> localBrowser = browser;
+        CefRefPtr<ElectrobunCefClient> localClient = client;
+        if (!localBrowser && !localClient) {
+            return;
+        }
 
-            // First, hide the browser window to make removal appear instant
+        is_closing_ = true;
+
+        if (localBrowser) {
+            std::cout << "[CEF] CEFView::remove() called for browser ID "
+                      << localBrowser->GetIdentifier() << std::endl;
+        } else {
+            std::cout << "[CEF] CEFView::remove() called with no live browser ref" << std::endl;
+        }
+
+        CefRefPtr<CefBrowserHost> host = localBrowser ? localBrowser->GetHost() : nullptr;
+        if (host) {
             HWND browserHwnd = host->GetWindowHandle();
             if (browserHwnd) {
                 ShowWindow(browserHwnd, SW_HIDE);
             }
+        }
 
-            // Invalidate the render handler's OSR window pointer BEFORE async close.
-            // CEF may still fire OnPaint() callbacks during the close sequence, and
-            // the OSRWindow will be deleted when this CEFView is destroyed.
-            if (client) {
-                client->ClearOSRWindow();
+        // Invalidate the render handler's OSR window pointer BEFORE async close.
+        // CEF may still fire OnPaint() callbacks during the close sequence, and
+        // the OSRWindow will be deleted when this CEFView is destroyed.
+        if (localClient) {
+            localClient->ClearOSRWindow();
+        }
+        if (osr_window) {
+            osr_window->SetBrowser(nullptr);
+        }
+
+        // Clean up global maps to prevent stale pointer access from window messages
+        for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
+            if (it->second == this) {
+                g_cefViews.erase(it);
+                break;
             }
-
-            // Clean up global maps to prevent stale pointer access from window messages
-            for (auto it = g_cefViews.begin(); it != g_cefViews.end(); ++it) {
-                if (it->second == this) {
-                    g_cefViews.erase(it);
-                    break;
-                }
+        }
+        for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
+            if (it->second.get() == localClient.get()) {
+                it = g_cefClients.erase(it);
+            } else {
+                ++it;
             }
-            for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
-                if (it->second == client) {
-                    it = g_cefClients.erase(it);
-                } else {
-                    ++it;
-                }
-            }
+        }
 
-            // Clear our references
-            browser = nullptr;
-            client = nullptr;
+        // Clear our references only after taking local copies for async close.
+        browser = nullptr;
+        client = nullptr;
 
-            // Defer the actual browser close to avoid synchronous window message issues
-            // Use CloseBrowser(true) to force close since we return true from DoClose
-            // to prevent CEF from sending WM_CLOSE to parent window
-            MainThreadDispatcher::dispatch_async([host]() {
+        if (host) {
+            // Defer the actual browser close to avoid synchronous window message issues.
+            // Keep the browser/client refs alive until the close request is dispatched.
+            MainThreadDispatcher::dispatch_async([host, localBrowser, localClient]() {
                 std::cout << "[CEF] Calling CloseBrowser(true) from dispatch_async" << std::endl;
                 host->CloseBrowser(true);  // force=true since DoClose returns true
             });
@@ -4167,6 +4188,8 @@ void SetWebViewOnWebView2View(HWND containerWindow, void* webview) {
     }
 }
 
+static bool ShouldParentHandleHiddenTitleBarHitTest(HWND parentHwnd, POINT screenPt);
+
 // ContainerView class definition
 class ContainerView {
 private:
@@ -4198,6 +4221,17 @@ private:
     
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         switch (msg) {
+            case WM_NCHITTEST: {
+                HWND parentHwnd = GetParent(m_hwnd);
+                if (parentHwnd) {
+                    POINT screenPt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    if (ShouldParentHandleHiddenTitleBarHitTest(parentHwnd, screenPt)) {
+                        return HTTRANSPARENT;
+                    }
+                }
+                break;
+            }
+
             case WM_SIZE: {
                 // // Resize all full-size webviews when container resizes
                 // int width = LOWORD(lParam);
@@ -4621,7 +4655,6 @@ struct createNSWindowWithFrameAndStyleParams {
     const char *titleBarStyle;
 };
 
-// Define a struct to store window data
 typedef struct {
     uint32_t windowId;
     WindowCloseHandler closeHandler;
@@ -4630,7 +4663,54 @@ typedef struct {
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
+    bool isHiddenTitleBar; // titleBarStyle="hidden": extend client area over NC title bar region
 } WindowData;
+
+static bool GetHiddenTitleBarTopResizeHitTest(HWND hwnd, WindowData* data, POINT screenPt, LRESULT* hitResult) {
+    if (!hitResult || !data || !data->isHiddenTitleBar || IsZoomed(hwnd)) {
+        return false;
+    }
+
+    RECT windowRect;
+    if (!GetWindowRect(hwnd, &windowRect)) {
+        return false;
+    }
+
+    UINT dpi = GetDpiForWindow(hwnd);
+    int borderX = GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    int borderY = GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi)
+                + GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+    borderX = (std::max)(borderX, MulDiv(12, dpi, 96));
+    borderY = (std::max)(borderY, MulDiv(12, dpi, 96));
+
+    if (screenPt.x < windowRect.left || screenPt.x >= windowRect.right) {
+        return false;
+    }
+
+    if (screenPt.y < windowRect.top || screenPt.y >= windowRect.top + borderY) {
+        return false;
+    }
+
+    if (screenPt.x < windowRect.left + borderX) {
+        *hitResult = HTTOPLEFT;
+        return true;
+    }
+
+    if (screenPt.x >= windowRect.right - borderX) {
+        *hitResult = HTTOPRIGHT;
+        return true;
+    }
+
+    *hitResult = HTTOP;
+    return true;
+}
+
+static bool ShouldParentHandleHiddenTitleBarHitTest(HWND parentHwnd, POINT screenPt) {
+    auto* parentData = reinterpret_cast<WindowData*>(GetWindowLongPtr(parentHwnd, GWLP_USERDATA));
+    LRESULT hitResult = HTNOWHERE;
+    return GetHiddenTitleBarTopResizeHitTest(parentHwnd, parentData, screenPt, &hitResult);
+}
 
 
 // Handle application menu item selection
@@ -4767,67 +4847,115 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
-        
-        case WM_INPUT: {
-            if (g_isMovingWindow && g_targetWindow) {
-                UINT dwSize = 0;
-                GetRawInputData((HRAWINPUT)lParam, RID_INPUT, NULL, &dwSize, sizeof(RAWINPUTHEADER));
-                
-                LPBYTE lpb = new BYTE[dwSize];
-                if (GetRawInputData((HRAWINPUT)lParam, RID_INPUT, lpb, &dwSize, sizeof(RAWINPUTHEADER)) == dwSize) {
-                    RAWINPUT* raw = (RAWINPUT*)lpb;
-                    
-                    if (raw->header.dwType == RIM_TYPEMOUSE) {
-                        // Check for mouse button release
-                        if (raw->data.mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) {
-                            // Stop window move
-                            RAWINPUTDEVICE rid;
-                            rid.usUsagePage = 0x01;
-                            rid.usUsage = 0x02;
-                            rid.dwFlags = RIDEV_REMOVE;
-                            rid.hwndTarget = NULL;
-                            
-                            RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
-                            g_isMovingWindow = FALSE;
-                            g_targetWindow = NULL;
-                        }
-                        
-                        // Handle mouse movement using cursor position tracking
-                        else if (raw->data.mouse.lLastX != 0 || raw->data.mouse.lLastY != 0) {
-                            POINT currentCursor;
-                            GetCursorPos(&currentCursor);
-                            
-                            // Calculate delta from initial cursor position when drag started
-                            int deltaX = currentCursor.x - g_initialCursorPos.x;
-                            int deltaY = currentCursor.y - g_initialCursorPos.y;
-                            
-                            // Calculate new window position
-                            int newX = g_initialWindowPos.x + deltaX;
-                            int newY = g_initialWindowPos.y + deltaY;
-                            
-                            SetWindowPos(g_targetWindow, NULL, newX, newY, 0, 0, 
-                                       SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-                        }
+
+        case WM_NCCREATE: {
+            // Store window data early so WM_NCCALCSIZE (fired during creation) can access it
+            CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+            if (cs && cs->lpCreateParams) {
+                SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)cs->lpCreateParams);
+                data = (WindowData*)cs->lpCreateParams;
+            }
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
+
+        case WM_NCCALCSIZE:
+            // For titleBarStyle="hidden": extend client area over the title bar while
+            // keeping resize borders on L/R/B. Matches Tauri/tao implementation.
+            // See tauri-apps/tao: src/platform_impl/windows/event_loop.rs + util.rs
+            if (wParam == TRUE && data && data->isHiddenTitleBar) {
+                NCCALCSIZE_PARAMS* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+
+                if (IsZoomed(hwnd)) {
+                    // Maximized: clamp client rect to monitor work area so we don't
+                    // cover the taskbar (same as tao WM_NCCALCSIZE maximized branch).
+                    MONITORINFO mi = {};
+                    mi.cbSize = sizeof(MONITORINFO);
+                    HMONITOR hmon = MonitorFromRect(&params->rgrc[0], MONITOR_DEFAULTTONEAREST);
+                    if (GetMonitorInfoA(hmon, &mi)) {
+                        RECT work = mi.rcWork;
+                        // Keep 1px gap on any auto-hide taskbar edge (simplified check)
+                        APPBARDATA abd = {};
+                        abd.cbSize = sizeof(APPBARDATA);
+                        auto hasEdge = [&](UINT edge) -> bool {
+                            abd.uEdge = edge;
+                            return SHAppBarMessage(ABM_GETAUTOHIDEBAR, &abd) != 0;
+                        };
+                        if (hasEdge(ABE_BOTTOM)) work.bottom -= 1;
+                        if (hasEdge(ABE_LEFT))   work.left   += 1;
+                        if (hasEdge(ABE_TOP))    work.top    += 1;
+                        if (hasEdge(ABE_RIGHT))  work.right  -= 1;
+                        params->rgrc[0] = work;
+                    }
+                    return 0;
+                }
+
+                // Non-maximized: compute frame insets from system metrics (DPI-aware).
+                // frame_thickness = SM_CXSIZEFRAME + SM_CXPADDEDBORDER (Tauri formula)
+                UINT dpi = GetDpiForWindow(hwnd);
+                int szFrame  = GetSystemMetricsForDpi(SM_CXSIZEFRAME,   dpi);
+                int padded   = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                int frame    = szFrame + padded;
+
+                // top_inset:
+                //   Win10 (build < 22000): must be 0, otherwise Windows draws a full
+                //                          native title bar outside the client area.
+                //   Win11 (build >= 22000): empirically ~1px needed to avoid top-pixel
+                //                           artifact.
+                DWORD buildNumber = 0;
+                // RtlGetVersion returns the real build number (not masked by GetVersionEx)
+                typedef LONG(WINAPI* RtlGetVersionFn)(POSVERSIONINFOEXW);
+                HMODULE ntdll = GetModuleHandleA("ntdll.dll");
+                if (ntdll) {
+                    auto RtlGetVer = (RtlGetVersionFn)GetProcAddress(ntdll, "RtlGetVersion");
+                    if (RtlGetVer) {
+                        OSVERSIONINFOEXW ov = {};
+                        ov.dwOSVersionInfoSize = sizeof(ov);
+                        if (RtlGetVer(&ov) == 0)
+                            buildNumber = ov.dwBuildNumber;
                     }
                 }
-                delete[] lpb;
+                int topInset = (buildNumber >= 22000)
+                    ? (int)roundf((float)dpi / 96.0f)
+                    : 0;
+
+                params->rgrc[0].left   += frame;
+                params->rgrc[0].right  -= frame;
+                params->rgrc[0].bottom -= frame;
+                params->rgrc[0].top    += topInset;
+
+                return 0;
             }
             break;
-        }
+
         case WM_NCHITTEST:
             {
-                // For layered windows, we need to handle hit testing to receive mouse events
-                // Check if this is a CEF OSR window
+                // (1) For hidden titlebar: return HTTOP when cursor is within the
+                //     resize-border height of the top client edge. Matches tao's
+                //     MARKER_UNDECORATED_SHADOW hit-test branch.
+                if (data && data->isHiddenTitleBar && !IsZoomed(hwnd)) {
+                    LRESULT hit = DefWindowProc(hwnd, msg, wParam, lParam);
+                    if (hit == HTCLIENT) {
+                        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                        LRESULT topResizeHit = HTNOWHERE;
+                        if (GetHiddenTitleBarTopResizeHitTest(hwnd, data, pt, &topResizeHit)) {
+                            return topResizeHit;
+                        }
+                    }
+                    return hit;
+                }
+                // (2) For layered/OSR windows: always return HTCLIENT so the
+                //     CEF off-screen renderer receives all mouse events.
                 auto viewIt = g_cefViews.find(hwnd);
                 if (viewIt != g_cefViews.end()) {
                     auto cefView = static_cast<CEFView*>(viewIt->second);
                     if (cefView && cefView->isOSRMode()) {
-                        // Return HTCLIENT to indicate this is the client area and should receive mouse events
                         return HTCLIENT;
                     }
                 }
             }
             break;
+
+        // WM_NCHITTEST is handled above (merged with isHiddenTitleBar + OSR cases)
 
         case WM_COMMAND:
             // Check if this is an application menu command
@@ -4838,10 +4966,9 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
 
-        // Forward mouse and keyboard events to CEF OSR view if present
-        case WM_MOUSEMOVE:
         case WM_LBUTTONDOWN:
         case WM_LBUTTONUP:
+        case WM_MOUSEMOVE:
         case WM_RBUTTONDOWN:
         case WM_RBUTTONUP:
         case WM_MBUTTONDOWN:
@@ -4859,9 +4986,6 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (viewIt != g_cefViews.end()) {
                     auto cefView = static_cast<CEFView*>(viewIt->second);
                     if (cefView && cefView->isOSRMode()) {
-                        if (msg == WM_LBUTTONDOWN) {
-                            printf("WindowProc: WM_LBUTTONDOWN received for OSR window\n");
-                        }
                         cefView->HandleWindowMessage(msg, wParam, lParam);
                     }
                 }
@@ -8597,16 +8721,26 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
         DWORD windowExStyle = WS_EX_APPWINDOW;
 
-        // Handle titleBarStyle options
-        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
-            // "hidden" = borderless window (no titlebar, no native controls)
-            // This is for completely custom chrome
+        const bool isFrameless = (styleMask & 1) != 0; // Borderless bit from getWindowStyle
+        const bool isTitled = (styleMask & 2) != 0; // Titled bit from getWindowStyle
+        const bool isHidden =
+            (!isFrameless && !isTitled) ||
+            (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0);
+        const bool isHiddenInset = titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0;
+
+        data->isHiddenTitleBar = (isHidden && !isFrameless);
+
+        // Handle frameless mode first (popup/custom chrome)
+        if (isFrameless) {
             windowStyle = WS_POPUP | WS_VISIBLE;
-        } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
-            // "hiddenInset" = window with border but custom titlebar area
-            // On Windows, we can't easily do the exact macOS inset style,
-            // so we provide a borderless window with shadow for similar effect
-            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+        } else if (isHidden) {
+            // hidden (Windows): keep WS_OVERLAPPEDWINDOW so DWM provides animations;
+            // WM_NCCALCSIZE will extend the client area to cover the title bar area.
+            windowStyle = WS_OVERLAPPEDWINDOW;
+        } else if (isHiddenInset) {
+            // hiddenInset (Windows): hidden titlebar with native caption controls.
+            // This is closer to Electron's hidden + overlay style behavior.
+            windowStyle = WS_OVERLAPPED | WS_THICKFRAME | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
 
@@ -8616,7 +8750,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             windowExStyle |= WS_EX_LAYERED;
         }
 
-        // Create the window
+        // Create the window (pass data as lpParam so WM_NCCREATE can store it early)
         HWND hwnd = CreateWindowExA(  // Use CreateWindowExA to support extended styles
             windowExStyle,
             "BasicWindowClass",  // Use ANSI string
@@ -8624,12 +8758,24 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             windowStyle,
             (int)x, (int)y,
             (int)width, (int)height,
-            NULL, NULL, GetModuleHandle(NULL), NULL
+            NULL, NULL, GetModuleHandle(NULL), (LPVOID)data
         );
 
         if (hwnd) {
             // Store our data with the window
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+
+            // For titleBarStyle="hidden": trigger WM_NCCALCSIZE with wParam=TRUE so
+            // our handler can extend the client area over the title bar.
+            // WS_OVERLAPPEDWINDOW is kept intact for DWM animations (minimize/maximize/restore).
+            if (isHidden && !isFrameless) {
+                SetWindowPos(
+                    hwnd,
+                    NULL,
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED
+                );
+            }
 
             // Apply transparent window background if requested
             if (transparent) {
@@ -8640,9 +8786,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
             // Don't apply application menu to transparent or custom chrome windows
             // Only apply to windows with default titleBarStyle
-            bool isCustomChrome = transparent ||
-                                 (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) ||
-                                 (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0);
+            bool isCustomChrome = transparent || isFrameless || isHidden || isHiddenInset;
 
             if (!isCustomChrome && g_applicationMenu) {
                 if (SetMenu(hwnd, g_applicationMenu)) {
@@ -9041,61 +9185,97 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
 
 
 ELECTROBUN_EXPORT void stopWindowMove() {
-    if (g_isMovingWindow) {
-        // Unregister raw input device
-        RAWINPUTDEVICE rid;
-        rid.usUsagePage = 0x01;
-        rid.usUsage = 0x02;
-        rid.dwFlags = RIDEV_REMOVE;
-        rid.hwndTarget = NULL;
-        
-        RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE));
-        g_isMovingWindow = FALSE;
-        g_targetWindow = NULL;
-    }
+    // No-op: the shell drag loop (WM_NCLBUTTONDOWN/HTCAPTION) manages its own
+    // cleanup when the mouse button is released.
 }
 
 ELECTROBUN_EXPORT void startWindowMove(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
-    
+
     if (!IsWindow(hwnd)) {
         ::log("ERROR: Invalid window handle in startWindowMove");
         return;
     }
-    
-    // Set up window dragging state
-    g_targetWindow = hwnd;
-    g_isMovingWindow = TRUE;
-    
-    // Get initial cursor and window positions
-    GetCursorPos(&g_initialCursorPos);
-    RECT windowRect;
-    GetWindowRect(hwnd, &windowRect);
-    g_initialWindowPos.x = windowRect.left;
-    g_initialWindowPos.y = windowRect.top;
-    
-    // Register for raw mouse input to bypass WebView2 event consumption
-    RAWINPUTDEVICE rid;
-    rid.usUsagePage = 0x01;  // HID_USAGE_PAGE_GENERIC
-    rid.usUsage = 0x02;      // HID_USAGE_GENERIC_MOUSE
-    rid.dwFlags = RIDEV_INPUTSINK; // Receive input even when not in foreground
-    rid.hwndTarget = hwnd;   // Send messages to our window
-    
-    if (!RegisterRawInputDevices(&rid, 1, sizeof(RAWINPUTDEVICE))) {
-        ::log("ERROR: Failed to register raw input device - error: " + std::to_string(GetLastError()));
-        g_isMovingWindow = FALSE;
-        g_targetWindow = NULL;
+
+    // A minimized window cannot be moved.
+    if (IsIconic(hwnd)) {
+        return;
     }
+
+    MainThreadDispatcher::dispatch_sync([hwnd]() {
+        // Capture cursor position before any state change.
+        POINT cursorPos = {};
+        GetCursorPos(&cursorPos);
+
+        // If maximized, restore first and reposition so the cursor stays
+        // proportionally under the title bar — matches Electron behaviour.
+        if (IsZoomed(hwnd)) {
+            // Snapshot the maximized rect before restoring.
+            RECT maximizedRect = {};
+            GetWindowRect(hwnd, &maximizedRect);
+
+            WINDOWPLACEMENT placement = {};
+            placement.length = sizeof(placement);
+            GetWindowPlacement(hwnd, &placement);
+
+            RECT restoredRect = placement.rcNormalPosition;
+            int restoredWidth = restoredRect.right - restoredRect.left;
+            int restoredHeight = restoredRect.bottom - restoredRect.top;
+
+            ShowWindow(hwnd, SW_RESTORE);
+
+            if (restoredWidth > 0 && restoredHeight > 0) {
+                int maximizedWidth =
+                    (std::max)(1, static_cast<int>(maximizedRect.right - maximizedRect.left));
+                double cursorRatio =
+                    static_cast<double>(cursorPos.x - maximizedRect.left) /
+                    static_cast<double>(maximizedWidth);
+
+                cursorRatio = (std::max)(0.0, (std::min)(1.0, cursorRatio));
+
+                UINT dpi = GetDpiForWindow(hwnd);
+                int titleBarOffset = MulDiv(10, dpi, 96);
+                int restoredLeft =
+                    cursorPos.x - static_cast<int>(std::round(cursorRatio * restoredWidth));
+                int restoredTop = cursorPos.y - titleBarOffset;
+
+                HMONITOR monitor = MonitorFromPoint(cursorPos, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO monitorInfo = {};
+                monitorInfo.cbSize = sizeof(monitorInfo);
+                if (monitor && GetMonitorInfo(monitor, &monitorInfo)) {
+                    LONG clampedLeft = (std::max)(monitorInfo.rcWork.left,
+                        (std::min)(static_cast<LONG>(restoredLeft),
+                            monitorInfo.rcWork.right - static_cast<LONG>(restoredWidth)));
+                    LONG clampedTop = (std::max)(monitorInfo.rcWork.top,
+                        (std::min)(static_cast<LONG>(restoredTop),
+                            monitorInfo.rcWork.bottom - static_cast<LONG>(restoredHeight)));
+                    restoredLeft = static_cast<int>(clampedLeft);
+                    restoredTop = static_cast<int>(clampedTop);
+                }
+
+                SetWindowPos(hwnd, NULL, restoredLeft, restoredTop, 0, 0,
+                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        }
+
+        // Enter the Windows shell drag loop — same approach as Electron/Tauri.
+        // DefWindowProc captures the mouse internally so it receives all
+        // subsequent WM_MOUSEMOVE and WM_LBUTTONUP messages even over WebView2.
+        // This gives snap-to-edge, drag-to-maximize, and layout-assist for free.
+        ReleaseCapture();
+        SendMessage(hwnd, WM_NCLBUTTONDOWN, HTCAPTION,
+                    MAKELPARAM(cursorPos.x, cursorPos.y));
+    });
 }
 
-ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
+ELECTROBUN_EXPORT bool moveToTrash(char* pathString) {
     if (!pathString) {
-        ::log("ERROR: NULL path string passed to moveToTrash");
+        ::log("ERROR: NULL path passed to moveToTrash");
         return FALSE;
     }
-    
-    // Convert to wide string for Windows API
+
+    // Convert path to wide string
     int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
     if (wideCharLen == 0) {
         ::log("ERROR: Failed to convert path to wide string");
