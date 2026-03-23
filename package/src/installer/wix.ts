@@ -496,14 +496,31 @@ ${!bundleCEF ? `    <!-- ── WebView2 runtime detection and installation ─�
       ExeCommand='powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "&amp; { $$bootstrapper = Join-Path $$env:TEMP &apos;MicrosoftEdgeWebview2Setup.exe&apos;; Invoke-WebRequest -Uri &apos;https://go.microsoft.com/fwlink/p/?LinkId=2124703&apos; -OutFile $$bootstrapper -UseBasicParsing; Start-Process -FilePath $$bootstrapper -ArgumentList &apos;/silent /install&apos; -Wait; Remove-Item $$bootstrapper -ErrorAction SilentlyContinue }"'
       Return="ignore" />
 
+    <!-- Refresh Windows icon cache so shortcuts display the correct icon -->
+    <CustomAction
+      Id="RefreshIconCache"
+      Directory="TARGETDIR"
+      ExeCommand="ie4uinit.exe -show"
+      Return="ignore" />
+
     <InstallExecuteSequence>
       <Custom Action="InstallWebView2" Before="InstallFinalize">
         <![CDATA[NOT WEBVIEW2_INSTALLED AND NOT Installed]]>
       </Custom>
+      <Custom Action="RefreshIconCache" After="InstallFinalize">1</Custom>
       <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
     </InstallExecuteSequence>
 ` : `    <!-- CEF bundled — WebView2 runtime not required -->
+
+    <!-- Refresh Windows icon cache so shortcuts display the correct icon -->
+    <CustomAction
+      Id="RefreshIconCache"
+      Directory="TARGETDIR"
+      ExeCommand="ie4uinit.exe -show"
+      Return="ignore" />
+
     <InstallExecuteSequence>
+      <Custom Action="RefreshIconCache" After="InstallFinalize">1</Custom>
       <RemoveShortcuts>Installed AND NOT UPGRADINGPRODUCTCODE</RemoveShortcuts>
     </InstallExecuteSequence>
 `}
