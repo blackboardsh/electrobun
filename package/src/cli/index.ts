@@ -2517,6 +2517,15 @@ Categories=Utility;Application;
 			}
 		}
 
+		// Refresh Windows icon cache so updated icons display immediately
+		if (targetOS === "win" && OS === "win" && config.build.win?.icon) {
+			try {
+				Bun.spawnSync(["ie4uinit.exe", "-show"], { stdio: ["ignore", "ignore", "ignore"] });
+			} catch {
+				// Non-fatal: icon cache refresh is best-effort
+			}
+		}
+
 		// copy native wrapper dynamic library
 		if (targetOS === "macos") {
 			const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_MACOS;

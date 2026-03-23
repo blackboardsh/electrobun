@@ -340,6 +340,9 @@ Section "Install" SecInstall
     !endif
   $\{EndIf}
 
+  ; Refresh Windows icon cache so new shortcuts display the correct icon
+  nsExec::ExecToLog 'ie4uinit.exe -show'
+
   ; ── URL protocol registration ──────────────────────────────────────────────
 {{URL_PROTOCOLS_INSTALL}}
 
@@ -414,6 +417,9 @@ Section "Uninstall"
     RMDir  "$SMPROGRAMS\\{{START_MENU_FOLDER}}"
     Delete "$DESKTOP\\$\{APP_NAME}.lnk"
   $\{EndIf}
+
+  ; Refresh Windows icon cache after removing shortcuts
+  nsExec::ExecToLog 'ie4uinit.exe -show'
 
   ; Remove URL protocols
 {{URL_PROTOCOLS_UNINSTALL}}
