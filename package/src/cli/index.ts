@@ -15,7 +15,7 @@ import {
 	copyFileSync,
 	renameSync,
 } from "fs";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import * as readline from "readline";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
@@ -88,6 +88,37 @@ function resolveElectrobunDir(): string {
 }
 
 const ELECTROBUN_DEP_PATH = resolveElectrobunDir();
+
+function resolveLocalRceditBinaryPath() {
+	const rceditPackageJsonPath = require.resolve("rcedit/package.json", {
+		paths: [projectRoot],
+	});
+	const rceditPackageDir = dirname(rceditPackageJsonPath);
+	const candidatePaths = [
+		join(rceditPackageDir, "bin", "rcedit-x64.exe"),
+		join(rceditPackageDir, "bin", "rcedit.exe"),
+	];
+	const rceditBinaryPath = candidatePaths.find((candidatePath) =>
+		existsSync(candidatePath),
+	);
+
+	if (!rceditBinaryPath) {
+		throw new Error(
+			`Could not find a local rcedit executable in ${join(rceditPackageDir, "bin")}`,
+		);
+	}
+
+	return rceditBinaryPath;
+}
+
+function embedWindowsIconWithLocalRcedit(
+	executablePath: string,
+	iconPath: string,
+) {
+	execFileSync(resolveLocalRceditBinaryPath(), [executablePath, "--set-icon", iconPath], {
+		stdio: "pipe",
+	});
+}
 const ELECTROBUN_CACHE_PATH = join(dirname(ELECTROBUN_DEP_PATH), ".electrobun-cache");
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
@@ -2286,11 +2317,8 @@ Categories=Utility;Application;
 						);
 					}
 
-					// Use rcedit to embed the icon into launcher.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunCliLauncherDestination, {
-						icon: iconPath,
-					});
+					// Resolve rcedit from the local project install instead of a baked snapshot path.
+					embedWindowsIconWithLocalRcedit(bunCliLauncherDestination, iconPath);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
 					// Clean up temp ICO file
@@ -2383,11 +2411,8 @@ Categories=Utility;Application;
 						);
 					}
 
-					// Use rcedit to embed the icon into bun.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunBinaryDestInBundlePath, {
-						icon: iconPath,
-					});
+					// Resolve rcedit from the local project install instead of a baked snapshot path.
+					embedWindowsIconWithLocalRcedit(bunBinaryDestInBundlePath, iconPath);
 					console.log(`Successfully embedded icon into bun.exe`);
 
 					// Clean up temp ICO file
@@ -4430,11 +4455,8 @@ Categories=Utility;Application;
 						console.log(`Converted PNG to ICO format: ${tempIcoPath}`);
 					}
 
-					// Use rcedit to embed the icon
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(outputExePath, {
-						icon: iconPath,
-					});
+					// Resolve rcedit from the local project install instead of a baked snapshot path.
+					embedWindowsIconWithLocalRcedit(outputExePath, iconPath);
 					console.log(`Successfully embedded icon into ${setupFileName}`);
 
 					// Clean up temp ICO file
