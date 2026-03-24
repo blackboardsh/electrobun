@@ -49,6 +49,8 @@ export type BrowserViewOptions<T = undefined> = {
 	startTransparent: boolean;
 	// Set passthrough on the AbstractView at creation (before first paint)
 	startPassthrough: boolean;
+	// Allow background media playback (prevents suspension when app loses focus)
+	backgroundMedia: boolean;
 	// renderer:
 };
 
@@ -106,6 +108,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	backgroundMedia: boolean = false;
 	isRemoved: boolean = false;
 
 	constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
@@ -135,6 +138,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
+		this.backgroundMedia = options.backgroundMedia ?? false;
 
 		BrowserViewMap[this.id] = this;
 		this.ptr = this.init() as Pointer;
@@ -176,6 +180,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			sandbox: this.sandbox,
 			startTransparent: this.startTransparent,
 			startPassthrough: this.startPassthrough,
+			backgroundMedia: this.backgroundMedia,
 			// transparent is looked up from parent window in native.ts
 		});
 	}

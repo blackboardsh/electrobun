@@ -7093,11 +7093,13 @@ ELECTROBUN_EXPORT void shutdownApplication() {
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool backgroundMedia;
+} g_nextWebviewFlags = {false, false, false};
 
-ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool backgroundMedia) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.backgroundMedia = backgroundMedia;
 }
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern
@@ -7123,7 +7125,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool backgroundMedia = g_nextWebviewFlags.backgroundMedia;
+    (void)backgroundMedia; // Not used on Windows
+    g_nextWebviewFlags = {false, false, false};
 
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);

@@ -6452,7 +6452,8 @@ AbstractView* initCEFWebview(uint32_t webviewId,
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool backgroundMedia;
+} g_nextWebviewFlags = {false, false, false};
 
 AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          void* window,
@@ -6519,9 +6520,10 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
     return result;
 }
 
-ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool backgroundMedia) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.backgroundMedia = backgroundMedia;
 }
 
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
@@ -6545,7 +6547,9 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool backgroundMedia = g_nextWebviewFlags.backgroundMedia;
+    (void)backgroundMedia; // Not used on Linux
+    g_nextWebviewFlags = {false, false, false};
 
     // TODO: Implement transparent handling for Linux
 

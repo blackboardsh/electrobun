@@ -863,7 +863,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                backgroundMedia:(bool)backgroundMedia;
 @end
 
 @interface WGPUViewImpl : AbstractView
@@ -2421,6 +2422,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox
+                backgroundMedia:(bool)backgroundMedia
     {
         self = [super init];
         if (self) {
@@ -2434,30 +2436,32 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
             // TODO: rewrite this so we can return a reference to the AbstractRenderer and then call
             // init from zig after the handle is added to the webviewMap then we don't need this async stuff
             dispatch_async(dispatch_get_main_queue(), ^{
-                
+
                 // configuration
                 WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
-                
+
                 configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
-                
-                [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
-                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
+
+                [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
                 [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];
 
-                // Allow media playback without requiring a user gesture (enables autoplay)
-                configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
+                if (backgroundMedia) {
+                    // Allow media playback without requiring a user gesture (enables autoplay)
+                    configuration.mediaTypesRequiringUserActionForPlayback = WKAudiovisualMediaTypeNone;
 
-                // Keep WebView content process running at foreground priority even when
-                // the application loses focus, preventing audio/media suspension
-                [configuration setValue:@YES forKey:@"_alwaysRunsAtForegroundPriority"];
+                    // Keep WebView content process running at foreground priority even when
+                    // the application loses focus, preventing audio/media suspension
+                    [configuration setValue:@YES forKey:@"_alwaysRunsAtForegroundPriority"];
 
-                // Ensure media data loads automatically without waiting for user interaction
-                [configuration setValue:@YES forKey:@"_mediaDataLoadsAutomatically"];
+                    // Ensure media data loads automatically without waiting for user interaction
+                    [configuration setValue:@YES forKey:@"_mediaDataLoadsAutomatically"];
 
-                // Disable page visibility-based process suppression so WebKit does not
-                // throttle or suspend the content process when the window is occluded
-                // (e.g., when the user is 2+ Spaces/desktops away)
-                [configuration.preferences setValue:@NO forKey:@"_pageVisibilityBasedProcessSuppressionEnabled"];
+                    // Disable page visibility-based process suppression so WebKit does not
+                    // throttle or suspend the content process when the window is occluded
+                    // (e.g., when the user is 2+ Spaces/desktops away)
+                    [configuration.preferences setValue:@NO forKey:@"_pageVisibilityBasedProcessSuppressionEnabled"];
+                }
 
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
@@ -5490,7 +5494,8 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                backgroundMedia:(bool)backgroundMedia;
 
 @end
 
@@ -5867,6 +5872,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             viewsRoot:(const char *)viewsRoot
             transparent:(bool)transparent
             sandbox:(bool)sandbox
+            backgroundMedia:(bool)backgroundMedia
     {
         self = [super init];
         if (self) {
@@ -6556,11 +6562,13 @@ extern "C" void shutdownApplication() {
 static struct {
     bool startTransparent;
     bool startPassthrough;
-} g_nextWebviewFlags = {false, false};
+    bool backgroundMedia;
+} g_nextWebviewFlags = {false, false, false};
 
-extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
+extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough, bool backgroundMedia) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+    g_nextWebviewFlags.backgroundMedia = backgroundMedia;
 }
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
@@ -6585,7 +6593,8 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     // Read and clear pre-set flags
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
-    g_nextWebviewFlags = {false, false};
+    bool backgroundMedia = g_nextWebviewFlags.backgroundMedia;
+    g_nextWebviewFlags = {false, false, false};
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -6627,12 +6636,19 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                         customPreloadScript:strdup(customPreloadScript)
                                         viewsRoot:strdup(viewsRoot)
                                         transparent:transparent
-                                        sandbox:sandbox];
+                                        sandbox:sandbox
+                                        backgroundMedia:backgroundMedia];
 
         // Store initial state flags — applied later in each impl's deferred creation block
         // (nsView is nil at this point because view creation is async)
         impl.pendingStartTransparent = startTransparent;
         impl.pendingStartPassthrough = startPassthrough;
+
+        // Enable occlusion state override on the window so WebKit doesn't
+        // suspend media when the window is on a non-adjacent Space
+        if (backgroundMedia && [window isKindOfClass:[ElectrobunWindow class]]) {
+            ((ElectrobunWindow *)window).backgroundMediaEnabled = YES;
+        }
 
     });
 
@@ -7029,18 +7045,22 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
 
 
 @interface ElectrobunWindow : NSWindow
+@property (nonatomic, assign) BOOL backgroundMediaEnabled;
 @end
 
 @implementation ElectrobunWindow
 - (BOOL)canBecomeKeyWindow { return YES; }
 - (BOOL)canBecomeMainWindow { return YES; }
 
-// Always report the window as visible to prevent WebKit from suspending
-// media playback when the window is occluded (e.g., on a non-adjacent Space).
-// macOS clears NSWindowOcclusionStateVisible for fully occluded windows,
-// which causes WKWebView to throttle/suspend audio and other media.
+// When backgroundMedia is enabled, report the window as visible to prevent
+// WebKit from suspending media playback when the window is occluded
+// (e.g., on a non-adjacent Space). macOS clears NSWindowOcclusionStateVisible
+// for fully occluded windows, which causes WKWebView to throttle/suspend audio.
 - (NSWindowOcclusionState)occlusionState {
-    return [super occlusionState] | NSWindowOcclusionStateVisible;
+    if (self.backgroundMediaEnabled) {
+        return [super occlusionState] | NSWindowOcclusionStateVisible;
+    }
+    return [super occlusionState];
 }
 @end
 
