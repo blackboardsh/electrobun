@@ -1462,6 +1462,13 @@ const _commandDefaults = {
 	},
 };
 
+type FileAssociation = {
+	ext: string[];
+	name: string;
+	role?: "Editor" | "Viewer" | "Shell" | "None";
+	icon?: string;
+};
+
 // Default values merged with user's electrobun.config.ts
 // For the user-facing type, see ElectrobunConfig in src/bun/ElectrobunConfig.ts
 const defaultConfig = {
@@ -1471,6 +1478,7 @@ const defaultConfig = {
 		version: "0.1.0",
 		description: "" as string | undefined,
 		urlSchemes: undefined as string[] | undefined,
+		fileAssociations: undefined as FileAssociation[] | undefined,
 	},
 	build: {
 		buildFolder: "build",
@@ -1756,6 +1764,151 @@ function generateURLTypes(
 ${schemesXml}
             </array>
         </dict>
+    </array>`;
+}
+
+// Generates CFBundleDocumentTypes and UTExportedTypeDeclarations for file associations.
+// Each association gets a UTI derived from the app identifier (e.g., com.example.app.myext).
+// LSItemContentTypes in CFBundleDocumentTypes references these UTIs so Launch Services
+// properly associates files with the app on modern macOS.
+function generateDocumentTypes(
+	fileAssociations: FileAssociation[] | undefined,
+	projectRoot: string,
+	appIdentifier: string,
+): string {
+	if (!fileAssociations || fileAssociations.length === 0) {
+		return "";
+	}
+
+	const validAssociations = fileAssociations.filter((assoc) => {
+		if (!assoc.ext || assoc.ext.length === 0) {
+			console.log(
+				`WARNING: fileAssociations entry "${assoc.name || "(unnamed)"}" has no extensions — skipping`,
+			);
+			return false;
+		}
+		if (!assoc.name) {
+			console.log(
+				`WARNING: fileAssociations entry with extensions [${assoc.ext.join(", ")}] has no name — skipping`,
+			);
+			return false;
+		}
+		return true;
+	});
+
+	if (validAssociations.length === 0) {
+		return "";
+	}
+
+	// Clean extensions and warn about leading dots
+	const cleaned = validAssociations.map((assoc) => ({
+		...assoc,
+		ext: assoc.ext.map((ext) => {
+			const clean = ext.replace(/^\./, "");
+			if (clean !== ext) {
+				console.log(
+					`WARNING: fileAssociations ext "${ext}" has a leading dot — stripping to "${clean}"`,
+				);
+			}
+			return clean;
+		}),
+	}));
+
+	// Generate CFBundleDocumentTypes with LSItemContentTypes
+	const docTypes = cleaned
+		.map((assoc) => {
+			const role = assoc.role || "Viewer";
+			// Resolve icon: only reference if file exists to avoid dangling plist entries
+			let iconName = "";
+			if (assoc.icon) {
+				const iconSourcePath = join(projectRoot, assoc.icon);
+				if (existsSync(iconSourcePath)) {
+					iconName = basename(assoc.icon).replace(/\.icns$/i, "");
+				} else {
+					console.log(
+						`WARNING: Document type icon not found: ${iconSourcePath} — skipping icon reference`,
+					);
+				}
+			}
+			const iconLine = iconName
+				? `            <key>CFBundleTypeIconFile</key>\n            <string>${escapeXml(iconName)}</string>\n`
+				: "";
+			// One UTI per extension, all listed under LSItemContentTypes
+			const utiXml = assoc.ext
+				.map(
+					(ext) =>
+						`                <string>${escapeXml(appIdentifier)}.${escapeXml(ext)}</string>`,
+				)
+				.join("\n");
+			const extsXml = assoc.ext
+				.map(
+					(ext) =>
+						`                <string>${escapeXml(ext)}</string>`,
+				)
+				.join("\n");
+
+			return `        <dict>
+            <key>CFBundleTypeName</key>
+            <string>${escapeXml(assoc.name)}</string>
+            <key>CFBundleTypeRole</key>
+            <string>${escapeXml(role)}</string>
+${iconLine}            <key>LSItemContentTypes</key>
+            <array>
+${utiXml}
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+${extsXml}
+            </array>
+        </dict>`;
+		})
+		.join("\n");
+
+	// Generate UTExportedTypeDeclarations — one per extension
+	const utiDecls = cleaned
+		.flatMap((assoc) => {
+			let iconName = "";
+			if (assoc.icon) {
+				const iconSourcePath = join(projectRoot, assoc.icon);
+				if (existsSync(iconSourcePath)) {
+					iconName = basename(assoc.icon).replace(/\.icns$/i, "");
+				}
+			}
+			const iconLine = iconName
+				? `            <key>UTTypeIconFiles</key>
+            <array>
+                <string>${escapeXml(iconName)}</string>
+            </array>\n`
+				: "";
+			return assoc.ext.map(
+				(ext) => `        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>${escapeXml(appIdentifier)}.${escapeXml(ext)}</string>
+            <key>UTTypeDescription</key>
+            <string>${escapeXml(assoc.name)}</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+${iconLine}            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>${escapeXml(ext)}</string>
+                </array>
+            </dict>
+        </dict>`,
+			);
+		})
+		.join("\n");
+
+	return `    <key>CFBundleDocumentTypes</key>
+    <array>
+${docTypes}
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+${utiDecls}
     </array>`;
 }
 
@@ -2117,6 +2270,26 @@ Categories=Utility;Application;
 					cpSync(iconPath, targetIconPath, { dereference: true });
 				}
 			}
+
+			// Copy document type icon files to the app bundle Resources folder
+			if (targetOS === "macos" && config.app.fileAssociations) {
+				for (const assoc of config.app.fileAssociations) {
+					if (assoc.icon) {
+						const iconSourcePath = join(projectRoot, assoc.icon);
+						if (existsSync(iconSourcePath)) {
+							const iconFileName = basename(iconSourcePath);
+							const iconDestPath = join(
+								appBundleFolderResourcesPath,
+								iconFileName,
+							);
+							cpSync(iconSourcePath, iconDestPath, {
+								dereference: true,
+							});
+						}
+						// Missing icon warning is handled by generateDocumentTypes
+					}
+				}
+			}
 		};
 
 		// Run preBuild hook before anything starts
@@ -2171,6 +2344,12 @@ Categories=Utility;Application;
 			config.app.urlSchemes,
 			config.app.identifier,
 		);
+		// Generate document type associations
+		const documentTypes = generateDocumentTypes(
+			config.app.fileAssociations,
+			projectRoot,
+			config.app.identifier,
+		);
 
 		const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -2187,7 +2366,7 @@ Categories=Utility;Application;
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
+    <string>AppIcon</string>${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ? "\n" + documentTypes : ""}
 </dict>
 </plist>`;
 

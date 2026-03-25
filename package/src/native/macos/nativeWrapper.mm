@@ -506,6 +506,12 @@ typedef struct {
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
+// Buffer for URLs received before the handler is registered (cold-launch race).
+// The NSApp delegate fires on the main thread as soon as the event loop starts,
+// but the Bun Worker thread may not have registered its handler yet.
+// NOTE: This buffering fixes a pre-existing race in URL handling (not just file handling).
+static std::vector<std::string> g_pendingUrlOpenPaths;
+static std::mutex g_urlOpenMutex;
 static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
@@ -6284,11 +6290,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
     // Handle URLs opened via custom URL schemes (deep linking)
     - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
+        std::lock_guard<std::mutex> lock(g_urlOpenMutex);
         for (NSURL *url in urls) {
             if (g_urlOpenHandler) {
                 g_urlOpenHandler([[url absoluteString] UTF8String]);
             } else {
-                NSLog(@"[URL Handler] Received URL but no handler registered: %@", url);
+                // Buffer the URL — the Bun Worker hasn't registered its handler yet.
+                g_pendingUrlOpenPaths.push_back(std::string([[url absoluteString] UTF8String]));
             }
         }
     }
@@ -7779,9 +7787,19 @@ extern "C" const char* clipboardAvailableFormats() {
 // URL Scheme / Deep Linking API
 // ============================================================================
 
-// setURLOpenHandler - Set the callback for handling URLs opened via custom URL schemes
+// setURLOpenHandler - Set the callback for handling URLs opened via custom URL schemes.
+// Flushes any URLs that arrived before the handler was registered (cold-launch).
 extern "C" void setURLOpenHandler(URLOpenHandler handler) {
-    g_urlOpenHandler = handler;
+    std::vector<std::string> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_urlOpenMutex);
+        g_urlOpenHandler = handler;
+        pending = std::move(g_pendingUrlOpenPaths);
+    }
+    // Deliver outside the lock to avoid holding it during the FFI call into Bun
+    for (const auto& url : pending) {
+        handler(url.c_str());
+    }
 }
 
 extern "C" void setAppReopenHandler(AppReopenHandler handler) {
