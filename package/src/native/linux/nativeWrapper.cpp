@@ -9628,6 +9628,12 @@ ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(void* window) {
     return false;
 }
 
+ELECTROBUN_EXPORT void setWindowContentProtection(void* window, bool enabled) {
+    // Not supported on Linux - stub to prevent dlopen failure
+    // Linux does not have a native API equivalent to macOS NSWindowSharingNone
+    // or Windows WDA_EXCLUDEFROMCAPTURE for screen capture protection
+}
+
 ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     if (!window) return;
 
