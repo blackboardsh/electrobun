@@ -21,3 +21,16 @@ dist-*
 /package/src/bun/preload/.generated
 *.tar.gz
 settings.local.json
+
+# Bunny
+/bunny/ears/build
+/bunny/ears/build-bundled-carrots
+/bunny/ears/node_modules
+/bunny/dash/node_modules
+/bunny/dash/dist
+/bunny/dash/.tmp
+/bunny/foundation-carrots/*/node_modules
+/bunny/test-carrots/*/node_modules
+/bunny/carrot-artifacts
+**/.zig-cache
+**/zig-out
