@@ -1523,6 +1523,9 @@ const defaultConfig = {
 		watch: undefined as string[] | undefined,
 		watchIgnore: undefined as string[] | undefined,
 	},
+	dev: {
+		reloadWithoutActivating: false,
+	},
 	runtime: {} as Record<string, unknown>,
 	scripts: {
 		preBuild: "",
@@ -3234,6 +3237,7 @@ Categories=Utility;Application;
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
+			...(buildEnvironment === "dev" ? { dev: config.dev ?? {} } : {}),
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
 				: {}),
@@ -4235,14 +4239,19 @@ Categories=Utility;Application;
 		});
 
 		// Initial build + launch (watchers start after build completes)
+		// First launch should activate normally; reloads respect reloadWithoutActivating
+		const savedLaunchWithoutActivating = config.dev.reloadWithoutActivating;
+		config.dev.reloadWithoutActivating = false;
 		try {
 			await runBuild(config, "dev");
+			config.dev.reloadWithoutActivating = savedLaunchWithoutActivating;
 			appHandle = await runApp(config, {
 				onExit: () => {
 					appHandle = null;
 				},
 			});
 		} catch (error) {
+			config.dev.reloadWithoutActivating = savedLaunchWithoutActivating;
 			console.error("[electrobun dev --watch] Initial build failed:", error);
 			console.log("[electrobun dev --watch] Waiting for file changes...");
 		}
@@ -4342,6 +4351,10 @@ Categories=Utility;Application;
 					...defaultConfig.build.bun,
 					...(loadedConfig?.build?.bun || {}),
 				},
+			},
+			dev: {
+				...defaultConfig.dev,
+				...(loadedConfig?.dev || {}),
 			},
 			runtime: {
 				...defaultConfig.runtime,

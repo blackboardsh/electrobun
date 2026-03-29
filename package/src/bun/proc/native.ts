@@ -119,6 +119,12 @@ export const native = (() => {
 				],
 				returns: FFIType.void,
 			},
+			showWindowWithoutActivating: {
+				args: [
+					FFIType.ptr, // window ptr
+				],
+				returns: FFIType.void,
+			},
 			closeWindow: {
 				args: [
 					FFIType.ptr, // window ptr
@@ -757,6 +763,7 @@ export const ffi = {
 			titleBarStyle: string;
 			transparent: boolean;
 			hidden?: boolean;
+			showWithoutActivating?: boolean;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -780,6 +787,7 @@ export const ffi = {
 				titleBarStyle,
 				transparent,
 				hidden = false,
+				showWithoutActivating = false,
 			} = params;
 
 			const styleMask = native.symbols.getWindowStyle(
@@ -823,7 +831,11 @@ export const ffi = {
 
 			native.symbols.setWindowTitle(windowPtr, toCString(title));
 			if (!hidden) {
-				native.symbols.showWindow(windowPtr);
+				if (showWithoutActivating) {
+					native.symbols.showWindowWithoutActivating(windowPtr);
+				} else {
+					native.symbols.showWindow(windowPtr);
+				}
 			}
 
 			return windowPtr;
@@ -861,6 +873,16 @@ export const ffi = {
 			}
 
 			native.symbols.showWindow(windowPtr);
+		},
+
+		showWindowWithoutActivating: (params: { winId: number }) => {
+			const windowPtr = getWindowPtr(params.winId);
+
+			if (!windowPtr) {
+				throw `Can't show window. Window no longer exists`;
+			}
+
+			native.symbols.showWindowWithoutActivating(windowPtr);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
