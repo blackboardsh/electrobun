@@ -508,6 +508,7 @@ typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
 static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
+static NotificationClickedHandler g_notificationClickedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
 
@@ -883,7 +884,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     }
 @end
 
-@interface AppDelegate : NSObject <NSApplicationDelegate>
+@interface AppDelegate : NSObject <NSApplicationDelegate, UNUserNotificationCenterDelegate>
 @end
 
 @interface WindowDelegate : NSObject <NSWindowDelegate>
@@ -6304,6 +6305,26 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
         return YES;
     }
+
+    // UNUserNotificationCenterDelegate - handle notification clicks
+    - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+    didReceiveNotificationResponse:(UNNotificationResponse *)response
+             withCompletionHandler:(void (^)(void))completionHandler {
+        if (g_notificationClickedHandler) {
+            NSDictionary *userInfo = response.notification.request.content.userInfo;
+            NSData *jsonData = [NSJSONSerialization dataWithJSONObject:userInfo options:0 error:nil];
+            NSString *jsonString = jsonData ? [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding] : @"{}";
+            g_notificationClickedHandler([jsonString UTF8String]);
+        }
+        completionHandler();
+    }
+
+    // Show notifications while app is in foreground
+    - (void)userNotificationCenter:(UNUserNotificationCenter *)center
+           willPresentNotification:(UNNotification *)notification
+             withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+        completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionSound);
+    }
 @end
 
 @implementation WindowDelegate
@@ -7457,10 +7478,19 @@ static void showNotificationLegacy(NSString *titleStr, NSString *bodyStr, NSStri
     });
 }
 
-extern "C" void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent) {
+extern "C" void showNotification(const char *title, const char *body, const char *subtitle, BOOL silent, const char *userInfoJson) {
     NSString *titleStr = [NSString stringWithUTF8String:title ?: ""];
     NSString *bodyStr = [NSString stringWithUTF8String:body ?: ""];
     NSString *subtitleStr = subtitle ? [NSString stringWithUTF8String:subtitle] : nil;
+
+    // Parse userInfo JSON if provided
+    NSDictionary *userInfo = nil;
+    if (userInfoJson && strlen(userInfoJson) > 0) {
+        NSData *jsonData = [[NSString stringWithUTF8String:userInfoJson] dataUsingEncoding:NSUTF8StringEncoding];
+        if (jsonData) {
+            userInfo = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+        }
+    }
 
     // If we've already determined modern API doesn't work, use legacy
     if (!useModernNotifications) {
@@ -7473,6 +7503,12 @@ extern "C" void showNotification(const char *title, const char *body, const char
     // Request authorization if we haven't already
     if (!notificationAuthRequested) {
         notificationAuthRequested = YES;
+
+        // Set the delegate so we receive click callbacks
+        dispatch_async(dispatch_get_main_queue(), ^{
+            AppDelegate *appDelegate = (AppDelegate *)[NSApp delegate];
+            center.delegate = appDelegate;
+        });
 
         // Use a semaphore to wait for authorization result on first call
         dispatch_semaphore_t sem = dispatch_semaphore_create(0);
@@ -7511,6 +7547,9 @@ extern "C" void showNotification(const char *title, const char *body, const char
     }
     if (!silent) {
         content.sound = [UNNotificationSound defaultSound];
+    }
+    if (userInfo) {
+        content.userInfo = userInfo;
     }
 
     // Create a unique identifier for this notification
@@ -7786,6 +7825,10 @@ extern "C" void setURLOpenHandler(URLOpenHandler handler) {
 
 extern "C" void setAppReopenHandler(AppReopenHandler handler) {
     g_appReopenHandler = handler;
+}
+
+extern "C" void setNotificationClickedHandler(NotificationClickedHandler handler) {
+    g_notificationClickedHandler = handler;
 }
 
 extern "C" void setDockIconVisible(bool visible) {
