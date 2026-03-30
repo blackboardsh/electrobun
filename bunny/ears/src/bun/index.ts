@@ -866,8 +866,9 @@ class CarrotInstance {
         await this.toggleBunnyWindow(payload as { screenX?: number; screenY?: number } | undefined);
         break;
       }
-      case "open-manager": {
-        (runtime as any).openManagerWindow();
+      case "open-manager":
+      case "open-farm": {
+        void (runtime as any).handleTrayAction("open-farm");
         break;
       }
       case "remove-tray": {
