@@ -44,6 +44,107 @@ import type {
 	ApplicationMenuItemConfig,
 } from "./proc/native";
 import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
+import { bridge, hasFFI } from "./proc/native";
+
+// Carrot boot state — populated from __bunnyCarrotBootstrap injected by Bunny Ears
+let _carrotManifest: Record<string, unknown> | null = null;
+let _carrotContext: { currentDir?: string; statePath?: string; logsPath?: string; permissions?: string[]; grantedPermissions?: Record<string, unknown> } | null = null;
+
+const _bootstrap = (globalThis as any).__bunnyCarrotBootstrap as { manifest?: any; context?: any } | undefined;
+if (_bootstrap) {
+	_carrotManifest = _bootstrap.manifest ?? null;
+	_carrotContext = _bootstrap.context ?? null;
+}
+
+if (bridge) {
+	bridge.on("init", (payload: any) => {
+		if (payload?.manifest) _carrotManifest = payload.manifest;
+		if (payload?.context) _carrotContext = payload.context;
+	});
+
+	// Forward host events to the local event emitter so ApplicationMenu.on(),
+	// ContextMenu.on(), etc. work in carrot workers
+	for (const eventName of ["application-menu-clicked", "context-menu-clicked"]) {
+		bridge.on(eventName, (payload: unknown) => {
+			electobunEventEmmitter.emitEvent({ type: eventName, data: payload } as any);
+		});
+	}
+}
+
+export const Carrots = {
+	async invoke<T = unknown>(
+		carrotId: string,
+		method: string,
+		params?: unknown,
+		options?: { windowId?: string },
+	): Promise<T> {
+		if (!bridge) throw new Error("Carrots.invoke() is only available when running as a carrot inside Bunny Ears");
+		return bridge.requestHost<T>("invoke-carrot", { carrotId, method, params, windowId: options?.windowId });
+	},
+	emit(carrotId: string, name: string, payload?: unknown) {
+		if (!bridge) throw new Error("Carrots.emit() is only available when running as a carrot inside Bunny Ears");
+		bridge.sendAction("emit-carrot-event", { carrotId, name, payload });
+	},
+	async list() {
+		if (!bridge) throw new Error("Carrots.list() is only available when running as a carrot inside Bunny Ears");
+		return bridge.requestHost<Array<{
+			id: string; name: string; description: string; version: string;
+			mode: string; permissions: string[]; status: string; devMode: boolean;
+		}>>("list-carrots");
+	},
+	async start(carrotId: string) {
+		if (!bridge) throw new Error("Carrots.start() is only available when running as a carrot inside Bunny Ears");
+		return bridge.requestHost<{ ok: boolean }>("start-carrot", { id: carrotId });
+	},
+	async stop(carrotId: string) {
+		if (!bridge) throw new Error("Carrots.stop() is only available when running as a carrot inside Bunny Ears");
+		return bridge.requestHost<{ ok: boolean }>("stop-carrot", { id: carrotId });
+	},
+};
+
+export const app = {
+	on(name: string, handler: (payload: unknown) => void) {
+		if (bridge) {
+			return bridge.on(name, handler);
+		}
+		electobunEventEmmitter.on(name, (e: { data: unknown }) => handler(e.data));
+		return () => {};
+	},
+	quit() {
+		Utils.quit();
+	},
+	get isCarrotMode() {
+		return !hasFFI;
+	},
+	get manifest() {
+		return _carrotManifest;
+	},
+	get permissions() {
+		return _carrotContext?.permissions ?? [];
+	},
+	get grantedPermissions() {
+		return _carrotContext?.grantedPermissions ?? {};
+	},
+	get currentDir() {
+		return _carrotContext?.currentDir ?? "";
+	},
+	get statePath() {
+		return _carrotContext?.statePath ?? "";
+	},
+	get logsPath() {
+		return _carrotContext?.logsPath ?? "";
+	},
+	openManager() {
+		if (bridge) bridge.sendAction("open-manager");
+	},
+	openBunnyWindow(payload?: { screenX?: number; screenY?: number }) {
+		if (bridge) bridge.sendAction("open-bunny-window", payload);
+	},
+	async getWindowFrame(windowId?: string) {
+		if (!bridge) return null;
+		return bridge.requestHost<{ x: number; y: number; width: number; height: number } | null>("window-get-frame", { windowId });
+	},
+};
 
 // Named Exports
 export {

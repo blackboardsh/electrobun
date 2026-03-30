@@ -210,6 +210,7 @@ function writeWorkerBootstrap(
       `globalThis.__bunnyCarrotBootstrap = ${JSON.stringify({
         manifest,
         context: {
+          currentDir,
           statePath: join(stateDir, "state.json"),
           logsPath: join(stateDir, "logs.txt"),
           permissions: flattenCarrotPermissions(install.permissionsGranted),
@@ -275,6 +276,7 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
   const paths = getCarrotPaths(record.id);
   const manifestPath = join(paths.currentDir, "carrot.json");
   if (!existsSync(manifestPath)) {
+    console.warn(`[carrotStore] skipping ${record.id}: missing carrot.json at ${manifestPath}`);
     return null;
   }
 
@@ -285,9 +287,11 @@ function loadInstalledCarrot(record: CarrotInstallRecord): InstalledCarrot | nul
     : "";
 
   if (!existsSync(bundleWorkerPath)) {
+    console.warn(`[carrotStore] skipping ${record.id}: missing worker at ${bundleWorkerPath}`);
     return null;
   }
   if (viewPath && !existsSync(viewPath)) {
+    console.warn(`[carrotStore] skipping ${record.id}: missing view at ${viewPath}`);
     return null;
   }
 
@@ -443,10 +447,12 @@ function normalizeBuildError(error: unknown) {
 
 function looksLikeSourceDirectory(path: string) {
   return (
+    existsSync(join(path, "electrobun.config.ts")) ||
     existsSync(join(path, "carrot.json")) ||
     existsSync(join(path, "web")) ||
     existsSync(join(path, "build.ts")) ||
-    existsSync(join(path, "worker.ts"))
+    existsSync(join(path, "worker.ts")) ||
+    existsSync(join(path, "src", "bun", "worker.ts"))
   );
 }
 

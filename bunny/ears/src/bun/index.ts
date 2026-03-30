@@ -276,34 +276,17 @@ class CarrotInstance {
       void this.stop();
     };
 
-    const shouldCreateControllerWindow =
-      this.carrot.manifest.view?.relativePath != null &&
-      (this.carrot.manifest.mode === "window" ||
-       this.carrot.manifest.view.hidden !== true);
-
-    if (shouldCreateControllerWindow) {
-      bootLog("creating carrot controller window", {
-        id: this.carrot.manifest.id,
-        url: this.carrot.viewUrl,
-      });
-      this.createControllerWindow("main");
-    } else {
-      bootLog("skipping controller window (no view)", {
-        id: this.carrot.manifest.id,
-      });
-      // For worker-only carrots (no view), send init directly to the worker
-      // since there's no controller window dom-ready to trigger it.
-      this.worker!.postMessage({
-        type: "init",
-        manifest: this.carrot.manifest,
-        context: {
-          statePath: this.statePath,
-          logsPath: this.logsPath,
-          permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
-          grantedPermissions: this.carrot.install.permissionsGranted,
-        },
-      });
-    }
+    // Send init context to the worker so it has statePath, permissions, etc.
+    this.worker!.postMessage({
+      type: "init",
+      manifest: this.carrot.manifest,
+      context: {
+        statePath: this.statePath,
+        logsPath: this.logsPath,
+        permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
+        grantedPermissions: this.carrot.install.permissionsGranted,
+      },
+    });
 
     this.status = "running";
     bootLog("carrot running", { id: this.carrot.manifest.id });
@@ -1131,6 +1114,11 @@ class BunnyEarsRuntime {
 
     this.startWebBridge();
 
+    // Auto-open dash for development
+    this.handleTrayAction("open-dash").catch((err) => {
+      console.error("[bunny-ears] auto-open dash failed:", err);
+    });
+
     // Auth + instance registration — non-blocking, doesn't gate carrots
     this.loadAuthToken();
     if (this.authToken) {
@@ -1565,9 +1553,15 @@ class BunnyEarsRuntime {
   private async handleTrayAction(action: string) {
     if (action === "open-dash") {
       const dashCarrot = this.carrots.get("bunny-dash");
-      if (dashCarrot && dashCarrot.status === "running") {
-        await dashCarrot.openWindow();
+      if (!dashCarrot) return;
+      if (dashCarrot.status !== "running") {
+        await dashCarrot.start();
+        dashCarrot.sendEvent("boot");
       }
+      // Set dash as active menu owner so menu clicks route to it
+      this.activeApplicationMenuOwnerId = dashCarrot.carrot.manifest.id;
+      // Dash manages its own windows — send an event to focus/create
+      dashCarrot.sendEvent("open-window");
       return;
     }
     if (action === "open-farm") {

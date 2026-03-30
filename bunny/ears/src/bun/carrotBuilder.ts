@@ -55,18 +55,18 @@ type CustomBuildModule = {
 
 function readManifest(sourceDir: string) {
   const manifestPath = join(sourceDir, "carrot.json");
-  if (!existsSync(manifestPath)) {
-    throw new Error(`Missing carrot.json in ${sourceDir}`);
+  if (existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CarrotManifest & {
+      permissions?: CarrotManifest["permissions"] | string[];
+    };
+    return {
+      ...manifest,
+      permissions: normalizeCarrotPermissions(manifest.permissions),
+    } satisfies CarrotManifest;
   }
 
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as CarrotManifest & {
-    permissions?: CarrotManifest["permissions"] | string[];
-  };
-
-  return {
-    ...manifest,
-    permissions: normalizeCarrotPermissions(manifest.permissions),
-  } satisfies CarrotManifest;
+  // No carrot.json — will be constructed from electrobun.config.ts in buildCarrotSource
+  return null;
 }
 
 async function readCarrotAuthoringConfig(sourceDir: string) {
@@ -261,8 +261,86 @@ async function runCustomBuild(sourceDir: string, outDir: string, manifest: Carro
 
 export async function buildCarrotSource(sourceDir: string, outDir: string) {
   const normalizedSourceDir = resolve(sourceDir);
+  const { execSync: execSyncNode } = await import("node:child_process");
+  const { readdirSync } = await import("node:fs");
+
+  // Check if this is a new-style carrot (has electrobun.config.ts with build.carrot)
+  const hasElectrobunConfig = existsSync(join(normalizedSourceDir, "electrobun.config.ts"));
+  const hasCarrotJson = existsSync(join(normalizedSourceDir, "carrot.json"));
+
+  if (hasElectrobunConfig) {
+    // New path: run electrobun build and copy the carrot output
+    console.log(`  Running electrobun build in ${normalizedSourceDir}...`);
+    try {
+      const output = execSyncNode("npx electrobun build", {
+        cwd: normalizedSourceDir,
+        stdio: "pipe",
+        encoding: "utf8",
+      });
+      if (output) console.log(`  [electrobun build] ${output.trim()}`);
+    } catch (buildError: any) {
+      const stderr = buildError.stderr?.toString() || "";
+      const stdout = buildError.stdout?.toString() || "";
+      console.error(`  [electrobun build] FAILED in ${normalizedSourceDir}`);
+      if (stderr) console.error(`  stderr: ${stderr.slice(0, 500)}`);
+      if (stdout) console.error(`  stdout: ${stdout.slice(0, 500)}`);
+      throw buildError;
+    }
+
+    // Find the carrot output directory — it's at build/{platform}/carrot/{id}/
+    const buildRoot = join(normalizedSourceDir, "build");
+    if (!existsSync(buildRoot)) {
+      throw new Error(`electrobun build did not produce a build/ directory in ${normalizedSourceDir}`);
+    }
+
+    // Find the platform directory (e.g., dev-macos-arm64)
+    const platformDirs = readdirSync(buildRoot, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    if (platformDirs.length === 0) {
+      throw new Error(`No platform build directory found in ${buildRoot}`);
+    }
+
+    const carrotParent = join(buildRoot, platformDirs[0], "carrot");
+    if (!existsSync(carrotParent)) {
+      throw new Error(`No carrot output found in ${carrotParent}. Is build.carrot configured?`);
+    }
+
+    const carrotDirs = readdirSync(carrotParent, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+
+    if (carrotDirs.length === 0) {
+      throw new Error(`No carrot build found in ${carrotParent}`);
+    }
+
+    const carrotBuildDir = join(carrotParent, carrotDirs[0]);
+
+    // Copy the built carrot to the output directory
+    rmSync(outDir, { recursive: true, force: true });
+    mkdirSync(outDir, { recursive: true });
+    cpSync(carrotBuildDir, outDir, { recursive: true });
+
+    const builtManifestPath = join(outDir, "carrot.json");
+    if (!existsSync(builtManifestPath)) {
+      throw new Error(`Built carrot is missing carrot.json at ${builtManifestPath}`);
+    }
+
+    const builtManifest = JSON.parse(readFileSync(builtManifestPath, "utf8")) as CarrotManifest;
+    return {
+      ...builtManifest,
+      permissions: normalizeCarrotPermissions(builtManifest.permissions),
+    } satisfies CarrotManifest;
+  }
+
+  // Legacy path: carrot.json + old build system
+  if (!hasCarrotJson) {
+    throw new Error(`Missing carrot.json or electrobun.config.ts in ${normalizedSourceDir}`);
+  }
+
   const manifest = mergeCarrotConfig(
-    readManifest(normalizedSourceDir),
+    readManifest(normalizedSourceDir)!,
     await readCarrotAuthoringConfig(normalizedSourceDir),
   );
 

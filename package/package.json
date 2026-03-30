@@ -14,7 +14,8 @@
 	"exports": {
 		".": "./dist/api/bun/index.ts",
 		"./bun": "./dist/api/bun/index.ts",
-		"./view": "./dist/api/browser/index.ts"
+		"./view": "./dist/api/browser/index.ts",
+		"./carrot": "./dist/api/carrot/bun.ts"
 	},
 	"type": "module",
 	"bin": {
