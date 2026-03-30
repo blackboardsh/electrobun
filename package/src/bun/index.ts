@@ -48,7 +48,7 @@ import { bridge, hasFFI } from "./proc/native";
 
 // Carrot boot state — populated from __bunnyCarrotBootstrap injected by Bunny Ears
 let _carrotManifest: Record<string, unknown> | null = null;
-let _carrotContext: { currentDir?: string; statePath?: string; logsPath?: string; permissions?: string[]; grantedPermissions?: Record<string, unknown> } | null = null;
+let _carrotContext: { currentDir?: string; statePath?: string; logsPath?: string; permissions?: string[]; grantedPermissions?: Record<string, unknown>; authToken?: string | null; channel?: string } | null = null;
 
 const _bootstrap = (globalThis as any).__bunnyCarrotBootstrap as { manifest?: any; context?: any } | undefined;
 if (_bootstrap) {
@@ -69,6 +69,21 @@ if (bridge) {
 			electobunEventEmmitter.emitEvent({ type: eventName, data: payload } as any);
 		});
 	}
+
+	// Update local auth token when the host notifies of a change (e.g., Farm login)
+	bridge.on("auth-token-changed", (payload: unknown) => {
+		const token = (payload as any)?.token;
+		if (token && _carrotContext) {
+			_carrotContext.authToken = token;
+		}
+	});
+
+	// Clear local auth token on logout
+	bridge.on("auth-token-cleared", () => {
+		if (_carrotContext) {
+			_carrotContext.authToken = null;
+		}
+	});
 }
 
 export const Carrots = {
@@ -133,6 +148,27 @@ export const app = {
 	},
 	get logsPath() {
 		return _carrotContext?.logsPath ?? "";
+	},
+	get authToken() {
+		return _carrotContext?.authToken ?? null;
+	},
+	async fetchAuthToken(): Promise<string | null> {
+		if (!bridge) return null;
+		const result = await bridge.requestHost<{ token: string | null }>("get-auth-token");
+		if (result?.token && _carrotContext) {
+			_carrotContext.authToken = result.token;
+		}
+		return result?.token ?? null;
+	},
+	async setAuthToken(token: string): Promise<void> {
+		if (!bridge) return;
+		await bridge.requestHost("set-auth-token", { token });
+		if (_carrotContext) {
+			_carrotContext.authToken = token;
+		}
+	},
+	get channel() {
+		return _carrotContext?.channel ?? "";
 	},
 	openManager() {
 		if (bridge) bridge.sendAction("open-manager");

@@ -277,6 +277,7 @@ class CarrotInstance {
     };
 
     // Send init context to the worker so it has statePath, permissions, etc.
+    const channel = await Updater.localInfo.channel().catch(() => "dev");
     this.worker!.postMessage({
       type: "init",
       manifest: this.carrot.manifest,
@@ -285,6 +286,8 @@ class CarrotInstance {
         logsPath: this.logsPath,
         permissions: flattenCarrotPermissions(this.carrot.install.permissionsGranted),
         grantedPermissions: this.carrot.install.permissionsGranted,
+        authToken: runtime.authToken || null,
+        channel: channel || "dev",
       },
     });
 
@@ -651,6 +654,22 @@ class CarrotInstance {
       }
       case "screen-get-cursor-screen-point": {
         return Screen.getCursorScreenPoint();
+      }
+      case "get-auth-token": {
+        return { token: runtime.authToken || null };
+      }
+      case "set-auth-token": {
+        const token = String((params as any)?.token || "");
+        if (token) {
+          (runtime as any).saveAuthToken(token);
+          // Notify all running carrots about the new token
+          for (const carrot of runtime.carrots.values()) {
+            if (carrot.status === "running") {
+              carrot.sendEvent("auth-token-changed", { token });
+            }
+          }
+        }
+        return { ok: true };
       }
       case "list-carrots": {
         return runtime.summaries();
@@ -1137,13 +1156,18 @@ class BunnyEarsRuntime {
     bootLog("runtime boot complete");
   }
 
+  private getAuthTokenPath() {
+    const path = require("node:path");
+    const os = require("node:os");
+    // Store auth token in ~/.electrobunny/ (global, not per-channel)
+    return path.join(os.homedir(), ".electrobunny", ".auth-token");
+  }
+
   private loadAuthToken() {
     const fs = require("node:fs");
-    const path = require("node:path");
-    const dataDir = Utils.getAppDataDir?.() || "";
-    const tokenPath = dataDir ? path.join(dataDir, ".auth-token") : "";
+    const tokenPath = this.getAuthTokenPath();
 
-    if (tokenPath && fs.existsSync(tokenPath)) {
+    if (fs.existsSync(tokenPath)) {
       try {
         this.authToken = fs.readFileSync(tokenPath, "utf8").trim();
         bootLog("loaded auth token");
@@ -1154,8 +1178,7 @@ class BunnyEarsRuntime {
   private saveAuthToken(token: string) {
     const fs = require("node:fs");
     const path = require("node:path");
-    const dataDir = Utils.getAppDataDir?.() || "";
-    const tokenPath = dataDir ? path.join(dataDir, ".auth-token") : "";
+    const tokenPath = this.getAuthTokenPath();
 
     this.authToken = token;
     if (tokenPath) {
@@ -1191,6 +1214,12 @@ class BunnyEarsRuntime {
             setAuthToken: ({ accessToken }: { accessToken: string }) => {
               this.saveAuthToken(accessToken);
               bootLog("received auth token from Farm");
+              // Notify all running carrots about the new token
+              for (const carrot of this.carrots.values()) {
+                if (carrot.status === "running") {
+                  carrot.sendEvent("auth-token-changed", { token: accessToken });
+                }
+              }
 
               // Keep the Farm window open — user can see their dashboard.
               // Resize to a comfortable dashboard size.
@@ -1199,6 +1228,23 @@ class BunnyEarsRuntime {
                 this.farmWindow.setTitle("Electrobunny Farm");
               }
               resolve();
+              return { ok: true };
+            },
+            clearAuthToken: () => {
+              this.authToken = null;
+              // Delete saved token
+              try {
+                const fs = require("node:fs");
+                const tokenPath = this.getAuthTokenPath();
+                if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+              } catch {}
+              // Notify all running carrots
+              for (const carrot of this.carrots.values()) {
+                if (carrot.status === "running") {
+                  carrot.sendEvent("auth-token-cleared");
+                }
+              }
+              bootLog("auth token cleared");
               return { ok: true };
             },
           },
