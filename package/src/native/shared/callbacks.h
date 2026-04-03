@@ -48,6 +48,8 @@ typedef void (*QuitRequestedHandler)();
 // JS Utils callbacks (DEPRECATED: Now using map-based approach instead)
 typedef const char* (*GetMimeType)(const char* filePath);
 typedef const char* (*GetHTMLForWebviewSync)(uint32_t webviewId);
+typedef void (*ProtocolRequestHandler)(uint64_t requestId, uint32_t webviewId, const char* requestJSON);
+typedef void (*ProtocolRequestCancelledHandler)(uint64_t requestId);
 
 } // namespace electrobun
 

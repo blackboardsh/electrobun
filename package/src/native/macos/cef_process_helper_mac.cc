@@ -1,6 +1,7 @@
 #include "include/cef_app.h"
 #include "include/cef_v8.h"
 #include "include/wrapper/cef_library_loader.h"
+#include "../shared/protocol_config.h"
 #include <map>
 #include <mutex>
 
@@ -12,12 +13,29 @@ class HelperApp : public CefApp, public CefRenderProcessHandler {
 public:
     // CefApp methods:
     virtual void OnRegisterCustomSchemes(CefRawPtr<CefSchemeRegistrar> registrar) override {
+        CefRefPtr<CefCommandLine> command_line = CefCommandLine::GetGlobalCommandLine();
+        if (command_line && command_line->HasSwitch("electrobun-custom-protocols")) {
+            electrobun::setProtocolConfigJson(command_line->GetSwitchValue("electrobun-custom-protocols").ToString());
+        }
         registrar->AddCustomScheme("views",
             CEF_SCHEME_OPTION_STANDARD |
             CEF_SCHEME_OPTION_CORS_ENABLED |
             CEF_SCHEME_OPTION_SECURE | // treat it like https
             CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+
+        electrobun::forEachProtocolRegistration([&](const electrobun::ProtocolRegistration& registration) {
+            int options = 0;
+            if (registration.privileges.standard) options |= CEF_SCHEME_OPTION_STANDARD;
+            if (registration.privileges.secure) options |= CEF_SCHEME_OPTION_SECURE;
+            if (registration.privileges.corsEnabled) options |= CEF_SCHEME_OPTION_CORS_ENABLED;
+            if (registration.privileges.bypassCSP) options |= CEF_SCHEME_OPTION_CSP_BYPASSING;
+            if (registration.privileges.supportFetchAPI) options |= CEF_SCHEME_OPTION_FETCH_ENABLED;
+            if (registration.privileges.stream) options |= CEF_SCHEME_OPTION_STREAMING;
+            if (registration.privileges.codeCache) options |= CEF_SCHEME_OPTION_CODE_CACHE_ENABLED;
+            if (registration.privileges.allowServiceWorkers) options |= CEF_SCHEME_OPTION_SERVICE_WORKERS_ALLOWED;
+            registrar->AddCustomScheme(registration.scheme, options);
+        });
     }
 
     virtual CefRefPtr<CefRenderProcessHandler> GetRenderProcessHandler() override {
