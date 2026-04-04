@@ -3401,7 +3401,6 @@ Categories=Utility;Application;
 		// todo (yoav): add these to config
 		// Only codesign/notarize when building macOS targets on macOS host
 		const shouldCodesign =
-			buildEnvironment !== "dev" &&
 			targetOS === "macos" &&
 			OS === "macos" &&
 			config.build.mac.codesign;
@@ -3418,8 +3417,6 @@ Categories=Utility;Application;
 		}
 
 		// codesign
-		// NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
-		// see https://github.com/oven-sh/bun/issues/7208
 		if (shouldNotarize) {
 			notarizeAndStaple(appBundleFolderPath, config);
 		} else {
@@ -4701,21 +4698,26 @@ Categories=Utility;Application;
 		config: Awaited<ReturnType<typeof getConfig>>,
 	) {
 		console.log("code signing...");
-		if (OS !== "macos" || !config.build.mac.codesign) {
+		if (OS !== "macos") {
 			return;
 		}
 
 		const ELECTROBUN_DEVELOPER_ID = process.env["ELECTROBUN_DEVELOPER_ID"];
+		const useAdHocSigning = !ELECTROBUN_DEVELOPER_ID;
 
-		if (!ELECTROBUN_DEVELOPER_ID) {
-			console.error("Env var ELECTROBUN_DEVELOPER_ID is required to codesign");
-			process.exit(1);
+		if (useAdHocSigning) {
+			console.log("No ELECTROBUN_DEVELOPER_ID set, using ad-hoc signing");
 		}
+
+		const signIdentity = ELECTROBUN_DEVELOPER_ID || "-";
+		// --timestamp and --options runtime require a real Developer ID cert (used for notarization)
+		const timestampFlag = useAdHocSigning ? "" : "--timestamp";
+		const runtimeFlag = useAdHocSigning ? "" : "--options runtime";
 
 		// If this is a DMG file, sign it directly
 		if (appBundleOrDmgPath.endsWith(".dmg")) {
 			execSync(
-				`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${escapePathForTerminal(
+				`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${escapePathForTerminal(
 					appBundleOrDmgPath,
 				)}`,
 			);
@@ -4755,7 +4757,7 @@ Categories=Utility;Application;
 										const libraryPath = join(librariesPath, library);
 										console.log(`Signing CEF library: ${library}`);
 										execSync(
-											`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(libraryPath)}`,
+											`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${escapePathForTerminal(libraryPath)}`,
 										);
 									}
 								}
@@ -4768,7 +4770,7 @@ Categories=Utility;Application;
 						// Sign the framework bundle itself (for CEF and any other frameworks)
 						console.log(`Signing framework bundle: ${framework}`);
 						execSync(
-							`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${escapePathForTerminal(frameworkPath)}`,
+							`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${escapePathForTerminal(frameworkPath)}`,
 						);
 					}
 				}
@@ -4802,7 +4804,7 @@ Categories=Utility;Application;
 						? `--entitlements ${entitlementsFilePath}`
 						: "";
 					execSync(
-						`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperExecutablePath)}`,
+						`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${entitlementFlag} ${escapePathForTerminal(helperExecutablePath)}`,
 					);
 				}
 
@@ -4811,7 +4813,7 @@ Categories=Utility;Application;
 					? `--entitlements ${entitlementsFilePath}`
 					: "";
 				execSync(
-					`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(helperPath)}`,
+					`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${entitlementFlag} ${escapePathForTerminal(helperPath)}`,
 				);
 			}
 		}
@@ -4877,7 +4879,7 @@ Categories=Utility;Application;
 
 			try {
 				execSync(
-					`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime --identifier ${identifier} ${entitlementFlag} ${escapePathForTerminal(execPath)}`,
+					`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} --identifier ${identifier} ${entitlementFlag} ${escapePathForTerminal(execPath)}`,
 				);
 			} catch (err) {
 				console.error(
@@ -4921,13 +4923,13 @@ Categories=Utility;Application;
 				: "";
 			try {
 				execSync(
-					`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`,
+					`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`,
 				);
 			} catch (error) {
 				console.error("Failed to sign launcher:", (error as Error).message);
 				console.log("Attempting to sign launcher without runtime hardening...");
 				execSync(
-					`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`,
+					`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${entitlementFlag} ${escapePathForTerminal(launcherPath)}`,
 				);
 			}
 		}
@@ -4938,7 +4940,7 @@ Categories=Utility;Application;
 			? `--entitlements ${entitlementsFilePath}`
 			: "";
 		execSync(
-			`codesign --force --verbose --timestamp --sign "${ELECTROBUN_DEVELOPER_ID}" --options runtime ${entitlementFlag} ${escapePathForTerminal(appBundleOrDmgPath)}`,
+			`codesign --force --verbose ${timestampFlag} --sign "${signIdentity}" ${runtimeFlag} ${entitlementFlag} ${escapePathForTerminal(appBundleOrDmgPath)}`,
 		);
 	}
 
