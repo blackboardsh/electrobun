@@ -7041,6 +7041,15 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                              screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
+
+    // Enable native fullscreen support for all window styles.
+    // Without this, [window toggleFullScreen:nil] is silently ignored
+    // because macOS requires NSWindowCollectionBehaviorFullScreenPrimary
+    // in the window's collectionBehavior.
+    [window setCollectionBehavior:
+        NSWindowCollectionBehaviorFullScreenPrimary |
+        NSWindowCollectionBehaviorMoveToActiveSpace];
+
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
