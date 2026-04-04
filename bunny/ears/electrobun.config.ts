@@ -28,7 +28,7 @@ export default {
       "src/carrot-runtime/bun.ts": "carrot-runtime/bun.ts",
     },
     mac: {
-      createDmg: false,
+      createDmg: true,
       bundleCEF: false,
       bundleWGPU: true
     },
