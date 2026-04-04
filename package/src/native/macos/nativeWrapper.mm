@@ -530,6 +530,22 @@ bool isCEFAvailable() {
     return [[NSFileManager defaultManager] fileExistsAtPath:frameworkPath];
 }
 
+static NSScreen *getActiveScreen() {
+    NSPoint mouseLocation = [NSEvent mouseLocation];
+    for (NSScreen *screen in [NSScreen screens]) {
+        if (NSPointInRect(mouseLocation, screen.frame)) {
+            return screen;
+        }
+    }
+
+    NSScreen *mainScreen = [NSScreen mainScreen];
+    if (mainScreen) {
+        return mainScreen;
+    }
+
+    return [[NSScreen screens] firstObject];
+}
+
 extern "C" uint32_t getWindowStyle(
     bool Borderless,
     bool Titled,
@@ -7030,15 +7046,16 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowBlurHandler zigBlurHandler,
                                                      WindowKeyHandler zigKeyHandler) {
     
-    NSScreen *primaryScreen = [NSScreen screens][0];
-    NSRect screenFrame = [primaryScreen frame];
-    config.frame.origin.y = screenFrame.size.height - config.frame.origin.y;
+    NSScreen *activeScreen = getActiveScreen();
+    NSRect screenFrame = [activeScreen frame];
+    config.frame.origin.x += screenFrame.origin.x;
+    config.frame.origin.y = NSMaxY(screenFrame) - config.frame.origin.y;
     
     NSWindow *window = [[ElectrobunWindow alloc] initWithContentRect:config.frame
                                                           styleMask:config.styleMask
                                                             backing:NSBackingStoreBuffered
                                                               defer:YES
-                                                             screen:primaryScreen];
+                                                             screen:activeScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
