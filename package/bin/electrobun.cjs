@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 
 const { execSync, spawn } = require('child_process');
 const { existsSync, mkdirSync, unlinkSync, chmodSync, copyFileSync, createWriteStream } = require('fs');
@@ -32,18 +32,37 @@ const platform = getPlatform();
 const arch = platform === 'win' ? 'x64' : getArch();
 const binExt = platform === 'win' ? '.exe' : '';
 
+// On Windows, ensure we use the system tar (C:\Windows\System32\tar.exe)
+// rather than Cygwin, Git Bash, or GnuWin32
+function getTarCommand() {
+  if (platform !== 'win') {
+    return 'tar';
+  }
+  const systemTar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  if (existsSync(systemTar)) {
+    return `"${systemTar}"`;
+  }
+  // Fall back to whatever tar is on PATH
+  return 'tar';
+}
+
 // Paths
 const electrobunDir = join(__dirname, '..');
 const cacheDir = join(electrobunDir, '.cache');
 const cliBinary = join(cacheDir, `electrobun${binExt}`);
 
+/**
+ * @param {string} url
+ * @param {string} filePath
+ * @return {Promise<void>}
+ */
 async function downloadFile(url, filePath) {
   return new Promise((resolve, reject) => {
     mkdirSync(dirname(filePath), { recursive: true });
     const file = createWriteStream(filePath);
 
     https.get(url, {agent}, (response) => {
-      if (response.statusCode === 302 || response.statusCode === 301) {
+      if ((response.statusCode === 302 || response.statusCode === 301) && response.headers.location) {
         // Follow redirect
         return downloadFile(response.headers.location, filePath).then(resolve).catch(reject);
       }
@@ -98,7 +117,7 @@ async function ensureCliBinary() {
     await downloadFile(tarballUrl, tarballPath);
 
     // Extract using system tar (available on macOS, Linux, and Windows 10+)
-    execSync(`tar -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
+    execSync(`${getTarCommand()} -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
 
     // Clean up tarball
     unlinkSync(tarballPath);
