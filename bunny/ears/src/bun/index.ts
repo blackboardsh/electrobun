@@ -1051,6 +1051,7 @@ class BunnyEarsRuntime {
   carrots = new Map<string, CarrotInstance>();
   activeApplicationMenuOwnerId: string | null = null;
   activeContextMenuOwnerId: string | null = null;
+  updateStatus: "idle" | "checking" | "downloading" | "update-ready" | "error" = "idle";
   pendingConsent: {
     request: CarrotPermissionConsentRequest;
     prepared: PreparedCarrotInstall;
@@ -1154,7 +1155,55 @@ class BunnyEarsRuntime {
       this.openFarmForLogin().catch(() => {});
     }
 
+    // Check for updates on boot and every hour
+    this.checkForUpdates();
+    setInterval(() => this.checkForUpdates(), 60 * 60 * 1000);
+
     bootLog("runtime boot complete");
+  }
+
+  private async checkForUpdates() {
+    if (this.updateStatus === "checking" || this.updateStatus === "downloading") return;
+
+    try {
+      this.updateStatus = "checking";
+      const updateInfo = await Updater.checkForUpdate();
+
+      if (updateInfo.error) {
+        console.log(`[bunny-ears] Update check error: ${updateInfo.error}`);
+        this.updateStatus = "error";
+        return;
+      }
+
+      if (updateInfo.updateAvailable) {
+        console.log(`[bunny-ears] Update available: ${updateInfo.version}`);
+        this.updateStatus = "downloading";
+        this.tray?.setMenu(this.buildTrayMenu());
+
+        await Updater.downloadUpdate();
+
+        if (Updater.updateInfo().updateReady) {
+          console.log("[bunny-ears] Update ready to install");
+          this.updateStatus = "update-ready";
+          this.tray?.setMenu(this.buildTrayMenu());
+
+          // Show system notification
+          Utils.showNotification({
+            title: "Bunny Ears Update Available",
+            body: `Version ${updateInfo.version} is ready. Restart to update.`,
+          });
+        } else {
+          this.updateStatus = "error";
+        }
+      } else {
+        this.updateStatus = "idle";
+      }
+    } catch (err) {
+      console.log(`[bunny-ears] Update check failed: ${err instanceof Error ? err.message : err}`);
+      this.updateStatus = "idle";
+    }
+
+    this.tray?.setMenu(this.buildTrayMenu());
   }
 
   private getAuthTokenPath() {
@@ -1588,8 +1637,15 @@ class BunnyEarsRuntime {
       ? [{ type: "divider" as const }, ...this.dashTrayExtension]
       : [];
 
+    const updateLabel = this.updateStatus === "update-ready"
+      ? "Restart to Update"
+      : this.updateStatus === "downloading"
+        ? "Downloading Update..."
+        : "Check for Updates";
+
     const emergencyItems = [
       { type: "divider" as const },
+      { type: "normal" as const, label: updateLabel, action: "check-for-updates" },
       { type: "normal" as const, label: "Reset Local State", action: "emergency-reset" },
       { type: "normal" as const, label: "Quit Bunny Ears", action: "quit" },
     ];
@@ -1621,6 +1677,14 @@ class BunnyEarsRuntime {
     }
     if (action === "install-artifact") {
       await this.installCarrotArtifactFromDisk();
+      return;
+    }
+    if (action === "check-for-updates") {
+      if (this.updateStatus === "update-ready") {
+        Updater.applyUpdate();
+      } else {
+        this.checkForUpdates();
+      }
       return;
     }
     if (action === "quit") {

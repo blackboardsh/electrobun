@@ -28,6 +28,8 @@ export default {
       "src/carrot-runtime/bun.ts": "carrot-runtime/bun.ts",
     },
     mac: {
+      codesign: true,
+      notarize: true,
       createDmg: true,
       bundleCEF: false,
       bundleWGPU: true
@@ -40,5 +42,8 @@ export default {
       bundleCEF: false,
       bundleWGPU: true
     }
+  },
+  release: {
+    baseUrl: "https://ears.electrobunny.ai/",
   }
 } satisfies ElectrobunConfig;

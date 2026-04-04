@@ -3108,7 +3108,15 @@ Categories=Utility;Application;
 				description: carrotConfig.description || config.app.description || "",
 				mode: carrotConfig.mode || "window",
 				permissions: carrotConfig.permissions || {},
-				dependencies: carrotConfig.dependencies || {},
+				dependencies: Object.fromEntries(
+					Object.entries(carrotConfig.dependencies || {}).map(([id, spec]) => [
+						id,
+						// Strip file:/workspace: specifiers for artifact manifests — just keep the carrot ID
+						typeof spec === "string" && (spec.startsWith("file:") || spec.startsWith("workspace:"))
+							? "*"
+							: spec,
+					]),
+				),
 				worker: { relativePath: "worker.js" },
 				view: existsSync(viewsSrc) ? { relativePath: "views/index.html" } : undefined,
 			};
