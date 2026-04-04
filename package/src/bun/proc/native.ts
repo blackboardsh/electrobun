@@ -97,6 +97,8 @@ export const native = (() => {
 					FFIType.u32, // styleMask
 					FFIType.cstring, // titleBarStyle
 					FFIType.bool, // transparent
+					FFIType.f64, // trafficLightOffsetX
+					FFIType.f64, // trafficLightOffsetY
 					FFIType.function, // closeHandler
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
@@ -835,6 +837,10 @@ const _ffiImpl = {
 			titleBarStyle: string;
 			transparent: boolean;
 			hidden?: boolean;
+			trafficLightOffset?: {
+				x: number;
+				y: number;
+			};
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -858,6 +864,7 @@ const _ffiImpl = {
 				titleBarStyle,
 				transparent,
 				hidden = false,
+				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
 			const styleMask = native_.symbols.getWindowStyle(
@@ -886,6 +893,8 @@ const _ffiImpl = {
 				// style
 				toCString(titleBarStyle),
 				transparent,
+				trafficLightOffset.x,
+				trafficLightOffset.y,
 				// callbacks
 				windowCloseCallback,
 				windowMoveCallback,

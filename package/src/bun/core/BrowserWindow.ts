@@ -12,6 +12,10 @@ import { WGPUView } from "./WGPUView";
 const buildConfig = await BuildConfig.get();
 
 export type WindowOptionsType<T = undefined> = {
+	trafficLightOffset?: {
+		x: number;
+		y: number;
+	};
 	title: string;
 	frame: {
 		x: number;
@@ -123,6 +127,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	transparent: boolean = false;
 	passthrough: boolean = false;
 	hidden: boolean = false;
+	trafficLightOffset: { x: number; y: number } = { x: 0, y: 0 };
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -153,6 +158,10 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.transparent = options.transparent ?? false;
 		this.passthrough = options.passthrough ?? false;
 		this.hidden = options.hidden ?? false;
+		this.trafficLightOffset = {
+			x: options.trafficLightOffset?.x ?? 0,
+			y: options.trafficLightOffset?.y ?? 0,
+		};
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
@@ -208,6 +217,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
 			hidden: hidden ?? false,
+			trafficLightOffset: this.trafficLightOffset,
 		}) as Pointer;
 
 		BrowserWindowMap[this.id] = this;

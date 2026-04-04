@@ -499,7 +499,72 @@ typedef struct {
     NSRect frame;
     uint32_t styleMask;
     const char *titleBarStyle;
+    double trafficLightOffsetX;
+    double trafficLightOffsetY;
 } createNSWindowWithFrameAndStyleParams;
+
+static const void *kTrafficLightOffsetXKey = &kTrafficLightOffsetXKey;
+static const void *kTrafficLightOffsetYKey = &kTrafficLightOffsetYKey;
+static const void *kTrafficLightAppliedOffsetXKey = &kTrafficLightAppliedOffsetXKey;
+static const void *kTrafficLightAppliedOffsetYKey = &kTrafficLightAppliedOffsetYKey;
+
+static const void *kTrafficLightTitleBarStyleKey = &kTrafficLightTitleBarStyleKey;
+
+static bool shouldManageTrafficLights(NSWindow *window) {
+    if (!window) {
+        return false;
+    }
+
+    NSString *titleBarStyle = objc_getAssociatedObject(window, kTrafficLightTitleBarStyleKey);
+    return [titleBarStyle isEqualToString:@"hiddenInset"];
+}
+
+static void applyTrafficLightOffset(NSWindow *window) {
+    if (!shouldManageTrafficLights(window)) {
+        return;
+    }
+
+    NSNumber *offsetXValue = objc_getAssociatedObject(window, kTrafficLightOffsetXKey);
+    NSNumber *offsetYValue = objc_getAssociatedObject(window, kTrafficLightOffsetYKey);
+    const double offsetX = offsetXValue ? offsetXValue.doubleValue : 0;
+    const double offsetY = offsetYValue ? offsetYValue.doubleValue : 0;
+
+    if (offsetX == 0 && offsetY == 0) {
+        return;
+    }
+
+    NSNumber *appliedOffsetXValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetXKey);
+    NSNumber *appliedOffsetYValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetYKey);
+    const double appliedOffsetX = appliedOffsetXValue ? appliedOffsetXValue.doubleValue : 0;
+    const double appliedOffsetY = appliedOffsetYValue ? appliedOffsetYValue.doubleValue : 0;
+
+    NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *minimizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
+
+    for (NSButton *button in @[closeButton, minimizeButton, zoomButton]) {
+        if (button == nil) {
+            continue;
+        }
+
+        NSPoint origin = button.frame.origin;
+        NSView *superview = button.superview;
+        origin.x = origin.x - appliedOffsetX + offsetX;
+        origin.y = origin.y + appliedOffsetY - offsetY;
+
+        if (superview != nil) {
+            CGFloat maxX = NSWidth(superview.bounds) - NSWidth(button.frame);
+            CGFloat maxY = NSHeight(superview.bounds) - NSHeight(button.frame);
+            origin.x = MAX(0, MIN(origin.x, maxX));
+            origin.y = MAX(0, MIN(origin.y, maxY));
+        }
+
+        [button setFrameOrigin:origin];
+    }
+
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(offsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(offsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 
 // Window, tray, menu, and snapshot callbacks are defined in shared/callbacks.h
 // Platform-specific aliases
@@ -7045,6 +7110,11 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
     }
+    objc_setAssociatedObject(window, kTrafficLightTitleBarStyleKey, [NSString stringWithUTF8String:config.titleBarStyle ?: "default"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetXKey, @(config.trafficLightOffsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetYKey, @(config.trafficLightOffsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
     delegate.closeHandler = zigCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
@@ -7080,6 +7150,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   uint32_t styleMask,
   const char* titleBarStyle,
   bool transparent,
+  double trafficLightOffsetX,
+  double trafficLightOffsetY,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
@@ -7100,7 +7172,9 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     createNSWindowWithFrameAndStyleParams config = {
         .frame = frame,
         .styleMask = styleMask,
-        .titleBarStyle = titleBarStyle
+        .titleBarStyle = titleBarStyle,
+        .trafficLightOffsetX = trafficLightOffsetX,
+        .trafficLightOffsetY = trafficLightOffsetY
     };
 
     // Use a dispatch semaphore to wait for the window creation to complete
@@ -7148,6 +7222,10 @@ extern "C" void showWindow(NSWindow *window) {
         
         // Make the window key and bring to front
         [window makeKeyAndOrderFront:nil];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            applyTrafficLightOffset(window);
+        });
         
         // Activate the application to ensure it can receive focus
         [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    

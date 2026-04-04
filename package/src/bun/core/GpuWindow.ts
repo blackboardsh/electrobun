@@ -6,6 +6,10 @@ import { getNextWindowId } from "./windowIds";
 
 
 export type GpuWindowOptionsType = {
+	trafficLightOffset?: {
+		x: number;
+		y: number;
+	};
 	title: string;
 	frame: {
 		x: number;
@@ -54,6 +58,7 @@ export class GpuWindow {
 	title: string = "Electrobun";
 	state: "creating" | "created" = "creating";
 	transparent: boolean = false;
+	trafficLightOffset: { x: number; y: number } = { x: 0, y: 0 };
 	frame: {
 		x: number;
 		y: number;
@@ -73,6 +78,10 @@ export class GpuWindow {
 			? { ...defaultOptions.frame, ...options.frame }
 			: { ...defaultOptions.frame };
 		this.transparent = options.transparent ?? false;
+		this.trafficLightOffset = {
+			x: options.trafficLightOffset?.x ?? 0,
+			y: options.trafficLightOffset?.y ?? 0,
+		};
 
 		this.init(options);
 	}
@@ -123,6 +132,7 @@ export class GpuWindow {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			trafficLightOffset: this.trafficLightOffset,
 		}) as Pointer;
 
 		GpuWindowMap[this.id] = this;
