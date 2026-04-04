@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { join, dirname } from "path";
+import { join } from "path";
 import { dlopen, suffix, FFIType } from "bun:ffi";
 
 // NOTE: WGPUStringView is passed by value in the C API. Bun FFI does not support
@@ -291,43 +291,20 @@ const WGPU_LIB_NAMES: Record<string, string[]> = {
 };
 
 function findWgpuLibraryPath(): string | null {
-	const debug = process.env["ELECTROBUN_WGPU_DEBUG"] === "1";
-	const envPath = process.env["ELECTROBUN_WGPU_PATH"];
-	if (envPath && existsSync(envPath)) {
-		if (debug) console.log("[WGPU] using ELECTROBUN_WGPU_PATH:", envPath);
-		return envPath;
-	} else if (envPath && debug) {
-		console.warn("[WGPU] ELECTROBUN_WGPU_PATH not found:", envPath);
-	}
+	const envPath = process.env.ELECTROBUN_WGPU_PATH;
+	if (envPath && existsSync(envPath)) return envPath;
 
 	const names = WGPU_LIB_NAMES[process.platform] ?? ["libwebgpu_dawn." + suffix];
 	for (const name of names) {
 		const cwdCandidate = join(process.cwd(), name);
-		if (existsSync(cwdCandidate)) {
-			if (debug) console.log("[WGPU] found in cwd:", cwdCandidate);
-			return cwdCandidate;
-		}
+		if (existsSync(cwdCandidate)) return cwdCandidate;
 		const execDir = dirname(process.execPath);
 		const macCandidate = join(execDir, "..", "MacOS", name);
-		if (existsSync(macCandidate)) {
-			if (debug) console.log("[WGPU] found in bundle MacOS:", macCandidate);
-			return macCandidate;
-		}
+		if (existsSync(macCandidate)) return macCandidate;
 		const resCandidate = join(execDir, "..", "Resources", name);
-		if (existsSync(resCandidate)) {
-			if (debug) console.log("[WGPU] found in bundle Resources:", resCandidate);
-			return resCandidate;
-		}
+		if (existsSync(resCandidate)) return resCandidate;
 		const execCandidate = join(execDir, name);
-		if (existsSync(execCandidate)) {
-			if (debug) console.log("[WGPU] found next to exec:", execCandidate);
-			return execCandidate;
-		}
-	}
-
-	if (debug) {
-		console.warn("[WGPU] not found. platform:", process.platform, "execPath:", process.execPath, "cwd:", process.cwd());
-		console.warn("[WGPU] names:", names);
+		if (existsSync(execCandidate)) return execCandidate;
 	}
 
 	return null;
@@ -352,9 +329,7 @@ export const native = (() => {
 			symbols: lib.symbols,
 			close: lib.close,
 		};
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		console.warn("[WGPU] dlopen failed:", libPath, message);
+	} catch {
 		return {
 			available: false,
 			path: libPath,

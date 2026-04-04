@@ -1815,6 +1815,18 @@ async function buildNative() {
 			? `/I"${wgpuIncludeDir}"`
 			: "";
 
+		// Dawn native lib for zero-copy DComp bridge (D3D11On12 interop)
+		const wgpuLibDir = join(
+			process.cwd(),
+			"vendors",
+			"wgpu",
+			`win-${ARCH}`,
+			"lib",
+		);
+		const wgpuLib = existsSync(join(wgpuLibDir, "webgpu_dawn.lib"))
+			? `"${join(wgpuLibDir, "webgpu_dawn.lib")}"`
+			: "";
+
 		// Compile the main wrapper with both WebView2 and CEF support (runtime detection)
 		// Use /MT to statically link the C runtime (matches libcpmt.lib that CEF uses)
 		await $`mkdir -p src/native/win/build`;
@@ -1824,8 +1836,11 @@ async function buildNative() {
 
 		// Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
 		// Note: ASAR reading is now implemented directly in C++ (no external library needed)
+		// webgpu_dawn.lib: Dawn native API for D3D11On12 zero-copy bridge
+		// d3d12.lib: D3D12 types used by D3D11On12 interop
+		// DELAYLOAD webgpu_dawn.dll: only loaded when zero-copy bridge is used
 		await runMsvcCommand(
-			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib comctl32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
+			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib d3d12.lib kernel32.lib comctl32.lib ${wgpuLib} "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /DELAYLOAD:webgpu_dawn.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
 		);
 	} else if (OS === "linux") {
 		// Skip package checks in CI or continue anyway if packages are missing

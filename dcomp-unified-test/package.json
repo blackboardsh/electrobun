@@ -1,0 +1,25 @@
+{
+	"name": "dcomp-unified-demo",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Three.js + SolidJS + TailwindCSS + DirectComposition unified demo",
+	"scripts": {
+		"start": "vite build && electrobun dev",
+		"dev": "vite build && electrobun dev --watch",
+		"build:vite": "vite build"
+	},
+	"dependencies": {
+		"electrobun": "file:../package",
+		"cannon-es": "^0.20.0"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"autoprefixer": "^10.4.20",
+		"postcss": "^8.4.49",
+		"solid-js": "^1.9.3",
+		"tailwindcss": "^3.4.17",
+		"typescript": "^5.7.2",
+		"vite": "^6.0.3",
+		"vite-plugin-solid": "^2.11.0"
+	}
+}
