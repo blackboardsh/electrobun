@@ -2038,9 +2038,47 @@ class BunnyEarsRuntime {
 }
 
 pruneLegacyPrototypeCarrots();
-const refreshErrors = await refreshTrackedDevCarrots();
-if (refreshErrors.length > 0) {
-  console.error("[bunny-ears] dev carrot refresh failures", refreshErrors);
+
+// In dev mode, rebuild carrots from source. In staging/prod, download pre-built artifacts.
+const channel = await Updater.localInfo.channel().catch(() => "dev");
+if (channel === "dev") {
+  const refreshErrors = await refreshTrackedDevCarrots();
+  if (refreshErrors.length > 0) {
+    console.error("[bunny-ears] dev carrot refresh failures", refreshErrors);
+  }
+} else {
+  // Install foundation carrots from R2 if not already installed
+  const carrrotsBaseUrl = channel === "stable"
+    ? "https://carrots.electrobunny.ai"
+    : "https://staging-carrots.electrobunny.ai";
+
+  const foundationCarrots = [
+    { id: "bunny.git", artifact: "bunny.git-0.1.0.tar.zst" },
+    { id: "bunny.pty", artifact: "bunny.pty-0.1.0.tar.zst" },
+    { id: "bunny.search", artifact: "bunny.search-0.1.0.tar.zst" },
+    { id: "bunny.tsserver", artifact: "bunny.tsserver-0.1.0.tar.zst" },
+    { id: "bunny.biome", artifact: "bunny.biome-0.1.0.tar.zst" },
+    { id: "bunny.llama", artifact: "bunny.llama-0.1.0.tar.zst" },
+    { id: "bunny-dash", artifact: "bunny-dash-0.1.0.tar.zst" },
+  ];
+
+  for (const carrot of foundationCarrots) {
+    const existing = getInstalledCarrot(carrot.id);
+    if (existing) {
+      continue;
+    }
+
+    const url = `${carrrotsBaseUrl}/${carrot.artifact}`;
+    console.log(`[bunny-ears] Installing ${carrot.id} from ${url}...`);
+    try {
+      const prepared = await prepareArtifactCarrotInstall(url);
+      await prepared.install();
+      prepared.cleanup();
+      console.log(`[bunny-ears] Installed ${carrot.id}`);
+    } catch (err) {
+      console.error(`[bunny-ears] Failed to install ${carrot.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
 }
 
 const runtime = new BunnyEarsRuntime();
