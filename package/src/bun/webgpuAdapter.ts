@@ -811,11 +811,6 @@ function makeCommandBufferArray(cmdPtr: number) {
 	return { buffer, ptr: ptr(buffer) };
 }
 
-function makeSurfaceTexture() {
-	const buffer = new ArrayBuffer(24);
-	return { buffer, view: new DataView(buffer), ptr: ptr(buffer) };
-}
-
 function makeSurfaceCapabilities() {
 	const buffer = new ArrayBuffer(64);
 	const view = new DataView(buffer);
