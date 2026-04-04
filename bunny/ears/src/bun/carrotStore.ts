@@ -512,6 +512,16 @@ async function installDependencyTree(
     }
     visited.add(dependencyId);
 
+    // For artifact installs, dependencies should already be installed separately.
+    // Skip dependency resolution — only resolve for local source installs.
+    if (source.kind !== "local") {
+      const existing = readInstalledRecord(dependencyId);
+      if (!existing) {
+        console.warn(`[carrotStore] Dependency ${dependencyId} is not installed (required by ${manifest.id})`);
+      }
+      continue;
+    }
+
     const dependencySourceDir = resolveDependencySourcePath(source, dependencyId, specifier);
     const preparedDependency = await prepareDevCarrotInstallFromSource(dependencySourceDir);
     try {

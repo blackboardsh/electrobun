@@ -655,6 +655,10 @@ class CarrotInstance {
       case "screen-get-cursor-screen-point": {
         return Screen.getCursorScreenPoint();
       }
+      case "update-carrots": {
+        void (runtime as any).handleTrayAction("update-carrots");
+        return { ok: true };
+      }
       case "get-auth-token": {
         return { token: runtime.authToken || null };
       }
@@ -1297,6 +1301,10 @@ class BunnyEarsRuntime {
               bootLog("auth token cleared");
               return { ok: true };
             },
+            updateCarrots: () => {
+              void this.handleTrayAction("update-carrots");
+              return { ok: true };
+            },
           },
           messages: {},
         },
@@ -1646,6 +1654,7 @@ class BunnyEarsRuntime {
     const emergencyItems = [
       { type: "divider" as const },
       { type: "normal" as const, label: updateLabel, action: "check-for-updates" },
+      { type: "normal" as const, label: "Update Carrots", action: "update-carrots" },
       { type: "normal" as const, label: "Reset Local State", action: "emergency-reset" },
       { type: "normal" as const, label: "Quit Bunny Ears", action: "quit" },
     ];
@@ -1677,6 +1686,34 @@ class BunnyEarsRuntime {
     }
     if (action === "install-artifact") {
       await this.installCarrotArtifactFromDisk();
+      return;
+    }
+    if (action === "update-carrots") {
+      console.log("[bunny-ears] Updating carrots...");
+      const ch = await Updater.localInfo.channel().catch(() => "dev");
+      if (ch !== "dev") {
+        // Stop all running carrots first
+        for (const carrot of this.carrots.values()) {
+          if (carrot.status === "running") {
+            try { await carrot.stop(); } catch {}
+          }
+        }
+        this.carrots.clear();
+        await installFoundationCarrotsFromR2(ch, true);
+        // Reload carrots
+        for (const carrot of loadInstalledCarrots()) {
+          this.carrots.set(carrot.manifest.id, new CarrotInstance(carrot));
+        }
+        // Restart background carrots
+        for (const carrot of this.carrots.values()) {
+          if (carrot.carrot.manifest.mode === "background") {
+            await carrot.start();
+            carrot.sendEvent("boot");
+          }
+        }
+        this.tray?.setMenu(this.buildTrayMenu());
+        console.log("[bunny-ears] Carrots updated");
+      }
       return;
     }
     if (action === "check-for-updates") {
@@ -2101,6 +2138,40 @@ class BunnyEarsRuntime {
   }
 }
 
+const FOUNDATION_CARROTS = [
+  { id: "bunny.git", artifact: "bunny.git-0.1.0.tar.zst" },
+  { id: "bunny.pty", artifact: "bunny.pty-0.1.0.tar.zst" },
+  { id: "bunny.search", artifact: "bunny.search-0.1.0.tar.zst" },
+  { id: "bunny.tsserver", artifact: "bunny.tsserver-0.1.0.tar.zst" },
+  { id: "bunny.biome", artifact: "bunny.biome-0.1.0.tar.zst" },
+  { id: "bunny.llama", artifact: "bunny.llama-0.1.0.tar.zst" },
+  { id: "bunny-dash", artifact: "bunny-dash-0.1.0.tar.zst" },
+];
+
+async function installFoundationCarrotsFromR2(channel: string, forceReinstall: boolean) {
+  const baseUrl = channel === "stable"
+    ? "https://carrots.electrobunny.ai"
+    : "https://staging-carrots.electrobunny.ai";
+
+  for (const carrot of FOUNDATION_CARROTS) {
+    if (!forceReinstall) {
+      const existing = getInstalledCarrot(carrot.id);
+      if (existing) continue;
+    }
+
+    const url = `${baseUrl}/${carrot.artifact}`;
+    console.log(`[bunny-ears] ${forceReinstall ? "Updating" : "Installing"} ${carrot.id} from ${url}...`);
+    try {
+      const prepared = await prepareArtifactCarrotInstall(url);
+      await prepared.install();
+      prepared.cleanup();
+      console.log(`[bunny-ears] ${forceReinstall ? "Updated" : "Installed"} ${carrot.id}`);
+    } catch (err) {
+      console.error(`[bunny-ears] Failed to install ${carrot.id}:`, err instanceof Error ? err.message : err);
+    }
+  }
+}
+
 pruneLegacyPrototypeCarrots();
 
 // In dev mode, rebuild carrots from source. In staging/prod, download pre-built artifacts.
@@ -2111,38 +2182,7 @@ if (channel === "dev") {
     console.error("[bunny-ears] dev carrot refresh failures", refreshErrors);
   }
 } else {
-  // Install foundation carrots from R2 if not already installed
-  const carrrotsBaseUrl = channel === "stable"
-    ? "https://carrots.electrobunny.ai"
-    : "https://staging-carrots.electrobunny.ai";
-
-  const foundationCarrots = [
-    { id: "bunny.git", artifact: "bunny.git-0.1.0.tar.zst" },
-    { id: "bunny.pty", artifact: "bunny.pty-0.1.0.tar.zst" },
-    { id: "bunny.search", artifact: "bunny.search-0.1.0.tar.zst" },
-    { id: "bunny.tsserver", artifact: "bunny.tsserver-0.1.0.tar.zst" },
-    { id: "bunny.biome", artifact: "bunny.biome-0.1.0.tar.zst" },
-    { id: "bunny.llama", artifact: "bunny.llama-0.1.0.tar.zst" },
-    { id: "bunny-dash", artifact: "bunny-dash-0.1.0.tar.zst" },
-  ];
-
-  for (const carrot of foundationCarrots) {
-    const existing = getInstalledCarrot(carrot.id);
-    if (existing) {
-      continue;
-    }
-
-    const url = `${carrrotsBaseUrl}/${carrot.artifact}`;
-    console.log(`[bunny-ears] Installing ${carrot.id} from ${url}...`);
-    try {
-      const prepared = await prepareArtifactCarrotInstall(url);
-      await prepared.install();
-      prepared.cleanup();
-      console.log(`[bunny-ears] Installed ${carrot.id}`);
-    } catch (err) {
-      console.error(`[bunny-ears] Failed to install ${carrot.id}:`, err instanceof Error ? err.message : err);
-    }
-  }
+  await installFoundationCarrotsFromR2(channel, false);
 }
 
 const runtime = new BunnyEarsRuntime();
