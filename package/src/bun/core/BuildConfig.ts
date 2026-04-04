@@ -1,8 +1,11 @@
+import type { CustomScheme } from "../../shared/protocol";
+
 export type BuildConfigType = {
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
 	cefVersion?: string;
 	bunVersion?: string;
+	protocols?: CustomScheme[];
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;
