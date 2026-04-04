@@ -7,10 +7,11 @@ import {
 	rmSync,
 	statSync,
 	readdirSync,
+	writeFileSync,
 } from "fs";
 import { execSync } from "child_process";
 import { OS as currentOS, ARCH as currentArch } from "../../shared/platform";
-import { getPlatformPrefix, getTarballFileName, getAppFileName } from "../../shared/naming";
+import { getPlatformPrefix, getTarballFileName, getAppFileName, getNsisSetupFileName } from "../../shared/naming";
 import { quit } from "./Utils";
 
 // Update status types for granular progress tracking
@@ -111,6 +112,22 @@ function getAppDataDir(): string {
 		default:
 			// Fallback to home directory with .config
 			return join(homedir(), ".config");
+	}
+}
+
+/**
+ * Test whether the current process can write to a directory by creating
+ * and immediately removing a temp file. Returns false on access denied
+ * or any other error.
+ */
+function canWriteToDir(dir: string): boolean {
+	const probe = join(dir, `.electrobun-write-test-${Date.now()}`);
+	try {
+		writeFileSync(probe, "");
+		unlinkSync(probe);
+		return true;
+	} catch {
+		return false;
 	}
 }
 
@@ -878,14 +895,15 @@ const Updater = {
 				}
 				// Platform-specific app path calculation
 				let runningAppBundlePath: string;
-				const appDataFolder = await Updater.appDataFolder();
 				
 				if (currentOS === "macos") {
 					// On macOS, executable is at Contents/MacOS/binary inside .app bundle
 					runningAppBundlePath = resolve(dirname(process.execPath), "..", "..");
 				} else if (currentOS === "linux" || currentOS === "win") {
-					// On Linux and Windows, use fixed 'app' folder to match extractor
-					runningAppBundlePath = join(appDataFolder, "app");
+					// bin/ is where the bun exe lives; parent is the app root.
+					// Works for any install location (NSIS default, custom dir,
+					// Program Files, or legacy extractor path).
+					runningAppBundlePath = resolve(dirname(process.execPath), "..");
 				} else {
 					throw new Error(`Unsupported platform: ${currentOS}`);
 				}
@@ -914,26 +932,22 @@ const Updater = {
 							// Ignore errors - attribute may not exist
 						}
 					} else if (currentOS === "linux") {
-						// On Linux, we now have directory bundles instead of AppImage files
-						// The app is stored in {appDataFolder}/app/
-						const appBundleDir = join(appDataFolder, "app");
-						
 						// Remove existing app directory if it exists
-						if (statSync(appBundleDir, { throwIfNoEntry: false })) {
-							rmSync(appBundleDir, { recursive: true });
+						if (statSync(runningAppBundlePath, { throwIfNoEntry: false })) {
+							rmSync(runningAppBundlePath, { recursive: true });
 						}
 
 						// Move new app bundle directory to app location
-						renameSync(newAppBundlePath, appBundleDir);
+						renameSync(newAppBundlePath, runningAppBundlePath);
 
 						// Ensure launcher binary is executable
-						const launcherPath = join(appBundleDir, "bin", "launcher");
+						const launcherPath = join(runningAppBundlePath, "bin", "launcher");
 						if (statSync(launcherPath, { throwIfNoEntry: false })) {
 							execSync(`chmod +x "${launcherPath}"`);
 						}
 
 						// Also ensure other binaries are executable
-						const bunPath = join(appBundleDir, "bin", "bun");
+						const bunPath = join(runningAppBundlePath, "bin", "bun");
 						if (statSync(bunPath, { throwIfNoEntry: false })) {
 							execSync(`chmod +x "${bunPath}"`);
 						}
@@ -945,29 +959,22 @@ const Updater = {
 					}
 
 					if (currentOS === "win") {
-						// On Windows, files are locked while in use, so we need a helper script
-						// that runs after the app exits to do the replacement
-						const parentDir = dirname(runningAppBundlePath);
-						const updateScriptPath = join(parentDir, "update.bat");
-						const launcherPath = join(
-							runningAppBundlePath,
-							"bin",
-							"launcher.exe",
-						);
+						if (canWriteToDir(runningAppBundlePath)) {
+							// User-writable install dir — use update.bat + Task Scheduler
+							const parentDir = dirname(runningAppBundlePath);
+							const updateScriptPath = join(parentDir, "update.bat");
+							const launcherPath = join(
+								runningAppBundlePath,
+								"bin",
+								"launcher.exe",
+							);
 
-						// Convert paths to Windows format
-						const runningAppWin = runningAppBundlePath.replace(/\//g, "\\");
-						const newAppWin = newAppBundlePath.replace(/\//g, "\\");
-						const extractionDirWin = extractionDir.replace(/\//g, "\\");
-						const launcherPathWin = launcherPath.replace(/\//g, "\\");
+							const runningAppWin = runningAppBundlePath.replace(/\//g, "\\");
+							const newAppWin = newAppBundlePath.replace(/\//g, "\\");
+							const extractionDirWin = extractionDir.replace(/\//g, "\\");
+							const launcherPathWin = launcherPath.replace(/\//g, "\\");
 
-						// Create a batch script that will:
-						// 1. Wait for the current app to exit
-						// 2. Remove current app folder
-						// 3. Move new app to current location
-						// 4. Launch the new app
-						// 5. Clean up
-						const updateScript = `@echo off
+							const updateScript = `@echo off
 setlocal
 
 :: Wait for the app to fully exit (check if launcher.exe is still running)
@@ -1005,23 +1012,57 @@ ping -n 2 127.0.0.1 >nul
 del "%~f0"
 `;
 
-						await Bun.write(updateScriptPath, updateScript);
+							await Bun.write(updateScriptPath, updateScript);
 
-						// Use Windows Task Scheduler to run the update script independently
-						// This ensures the script runs even after the app exits
-						const scriptPathWin = updateScriptPath.replace(/\//g, "\\");
-						const taskName = `ElectrobunUpdate_${Date.now()}`;
+							const scriptPathWin = updateScriptPath.replace(/\//g, "\\");
+							const taskName = `ElectrobunUpdate_${Date.now()}`;
 
-						// Create a scheduled task that runs immediately and deletes itself
-						execSync(
-							`schtasks /create /tn "${taskName}" /tr "cmd /c \\"${scriptPathWin}\\"" /sc once /st 00:00 /f`,
-							{ stdio: "ignore" },
-						);
-						execSync(`schtasks /run /tn "${taskName}"`, { stdio: "ignore" });
-						// The task will be cleaned up by Windows after it runs, or we delete it in the batch script
+							execSync(
+								`schtasks /create /tn "${taskName}" /tr "cmd /c \\"${scriptPathWin}\\"" /sc once /st 00:00 /f`,
+								{ stdio: "ignore" },
+							);
+							execSync(`schtasks /run /tn "${taskName}"`, { stdio: "ignore" });
 
-						// Use quit() for graceful shutdown - this closes all windows and processes
-						quit();
+							quit();
+						} else {
+							// Elevated install dir (e.g. Program Files) — download and
+							// run the NSIS installer with /UPDATE /P /R which triggers
+							// UAC elevation and handles file replacement natively.
+							emitStatus("applying", "Elevated install detected, downloading installer...");
+							const platformPrefix = getPlatformPrefix(
+								localInfo.channel,
+								currentOS,
+								currentArch,
+							);
+							const nsisFileName = getNsisSetupFileName(localInfo.name, localInfo.channel);
+							const nsisUrl = `${localInfo.baseUrl.replace(/\/+$/, "")}/${platformPrefix}-${nsisFileName}`;
+							const nsisDownloadPath = join(extractionFolder, nsisFileName);
+
+							try {
+								const response = await fetch(nsisUrl);
+								if (!response.ok) {
+									throw new Error(`HTTP ${response.status} fetching ${nsisUrl}`);
+								}
+								const buffer = await response.arrayBuffer();
+								await Bun.write(nsisDownloadPath, buffer);
+
+								emitStatus("applying", "Running elevated installer...");
+								execSync(
+									`start "" "${nsisDownloadPath.replace(/\//g, "\\")}" /UPDATE /P /R`,
+									{ stdio: "ignore" },
+								);
+
+								quit();
+							} catch (err) {
+								emitStatus(
+									"error",
+									`Failed to download/run elevated installer: ${(err as Error).message}`,
+									{ errorMessage: (err as Error).message },
+								);
+								console.error("Elevated update failed:", err);
+								return;
+							}
+						}
 					}
 				} catch (error) {
 					emitStatus(

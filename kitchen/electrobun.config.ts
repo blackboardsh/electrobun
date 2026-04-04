@@ -184,6 +184,28 @@ export default {
 				// "show-composited-layer-borders": true,
 				"user-agent": "BarkusAurelius/1.0 (Macintosh; powered by bunnies)",
 			},
+			nsis: {
+				enabled: true,
+				// enabled: true,               // default: true
+				// installMode: "currentUser",  // "currentUser" | "perMachine"
+				// allowDowngrades: false,
+				// publisher: "Blackboard Inc.",
+				// homepage: "https://electrobun.dev",
+				// desktopShortcut: true,
+				// startMenuFolder: "Electrobun Kitchen Sink",
+				// appDataPaths: ["sh.blackboard.electrobun-kitchen"],
+			},
+			msi: {
+				// enabled: true,                          // default: true
+				// publisher: "Blackboard Inc.",
+				// upgradeCode: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx", // stable GUID; auto-derived if omitted
+				// installMode: "currentUser",             // "currentUser" | "perMachine"
+				// allowDowngrades: false,
+				// desktopShortcut: true,
+				// startMenuFolder: "Electrobun Kitchen Sink",
+				// additionalCandleArgs: [],
+				// additionalLightArgs: [],
+			},
 		},
 	},
 	scripts: {
