@@ -4630,7 +4630,7 @@ typedef struct {
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
-    bool isHiddenInset;
+    ChromeStyle chromeStyle;
 } WindowData;
 
 
@@ -4769,7 +4769,7 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     
     switch (msg) {
         case WM_NCCALCSIZE:
-            if (wParam == TRUE && data && data->isHiddenInset) {
+            if (wParam == TRUE && data && data->chromeStyle == ChromeStyle::HiddenInset) {
                 NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
                 RECT original = p->rgrc[0];
                 LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
@@ -8619,7 +8619,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowExStyle = WS_EX_APPWINDOW;
 
         // Handle titleBarStyle options
-        data->isHiddenInset = false;
+        data->chromeStyle = ChromeStyle::Default;
         if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
             // "hidden" = borderless window (no titlebar, no native controls)
             // This is for completely custom chrome
@@ -8630,7 +8630,7 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             // standard framed window (giving us shadow and border resizing),
             // then remove the caption bar area in WM_NCCALCSIZE.
             windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-            data->isHiddenInset = true;
+            data->chromeStyle = ChromeStyle::HiddenInset;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
 
@@ -8681,8 +8681,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
 
             // Force the window frame to recalculate so WM_NCCALCSIZE
-            // is sent again with isHiddenInset already set.
-            if (data->isHiddenInset) {
+            // is sent again with chromeStyle already set.
+            if (data->chromeStyle == ChromeStyle::HiddenInset) {
                 SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
