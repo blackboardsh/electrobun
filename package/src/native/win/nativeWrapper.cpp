@@ -4630,6 +4630,7 @@ typedef struct {
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
+    bool isHiddenInset;
 } WindowData;
 
 
@@ -4767,7 +4768,19 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
-        
+        case WM_NCCALCSIZE:
+            if (wParam == TRUE) {
+                WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+                if (data && data->isHiddenInset) {
+                    NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
+                    RECT original = p->rgrc[0];
+                    LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+                    p->rgrc[0].top = original.top;
+                    return ret;
+                }
+            }
+            break;
+
         case WM_INPUT: {
             if (g_isMovingWindow && g_targetWindow) {
                 UINT dwSize = 0;
@@ -8598,15 +8611,18 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowExStyle = WS_EX_APPWINDOW;
 
         // Handle titleBarStyle options
+        data->isHiddenInset = false;
         if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
             // "hidden" = borderless window (no titlebar, no native controls)
             // This is for completely custom chrome
             windowStyle = WS_POPUP | WS_VISIBLE;
         } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
-            // "hiddenInset" = window with border but custom titlebar area
-            // On Windows, we can't easily do the exact macOS inset style,
-            // so we provide a borderless window with shadow for similar effect
-            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+            // "hiddenInset" = frameless window with resize borders and DWM shadow.
+            // We use WS_CAPTION | WS_THICKFRAME so the system treats it as a
+            // standard framed window (giving us shadow and border resizing),
+            // then remove the caption bar area in WM_NCCALCSIZE.
+            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            data->isHiddenInset = true;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
 
@@ -8655,6 +8671,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                 }
             }
 
+
+            // Force the window frame to recalculate so WM_NCCALCSIZE
+            // is sent again with isHiddenInset already set.
+            if (data->isHiddenInset) {
+                SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
 
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
