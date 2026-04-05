@@ -1052,6 +1052,8 @@ class BunnyEarsRuntime {
   tray: Tray | null;
   dashTrayExtension: any[] = [];
   managerWindow: BrowserWindow | null = null;
+  hopWs: WebSocket | null = null;
+  channel: string = "dev";
   carrots = new Map<string, CarrotInstance>();
   activeApplicationMenuOwnerId: string | null = null;
   activeContextMenuOwnerId: string | null = null;
@@ -1118,7 +1120,9 @@ class BunnyEarsRuntime {
   farmWindow: BrowserWindow | null = null;
 
   async boot() {
+    this.channel = await Updater.localInfo.channel().catch(() => "dev");
     bootLog("runtime boot begin", {
+      channel: this.channel,
       installRoot: getInstalledCarrotsRoot(),
       carrotIds: Array.from(this.carrots.keys()),
     });
@@ -1162,6 +1166,11 @@ class BunnyEarsRuntime {
     // Check for updates on boot and every hour
     this.checkForUpdates();
     setInterval(() => this.checkForUpdates(), 60 * 60 * 1000);
+
+    // Connect to Hop for remote access
+    if (this.authToken) {
+      this.connectToHop();
+    }
 
     bootLog("runtime boot complete");
   }
@@ -1210,11 +1219,147 @@ class BunnyEarsRuntime {
     this.tray?.setMenu(this.buildTrayMenu());
   }
 
+  private connectToHop() {
+    const hopBaseUrl = this.channel === "stable"
+      ? "wss://hop.electrobunny.ai"
+      : this.channel === "dev"
+        ? "ws://localhost:8788"
+        : "wss://staging-hop.electrobunny.ai";
+
+    const machineId = this.getMachineId();
+    if (!machineId || !this.authToken) {
+      console.log("[hop] Skipping Hop connection (no machine ID or auth token)");
+      return;
+    }
+
+    const url = `${hopBaseUrl}/connect?instanceId=${encodeURIComponent(machineId)}&token=${encodeURIComponent(this.authToken)}`;
+    console.log(`[hop] Connecting to Hop at ${hopBaseUrl}...`);
+
+    try {
+      const ws = new WebSocket(url);
+
+      ws.addEventListener("open", () => {
+        console.log("[hop] Connected to Hop");
+        this.hopWs = ws;
+      });
+
+      ws.addEventListener("message", (event) => {
+        this.handleHopMessage(event.data as string);
+      });
+
+      ws.addEventListener("close", (event) => {
+        console.log(`[hop] Disconnected from Hop: ${event.code} ${event.reason}`);
+        this.hopWs = null;
+        // Reconnect after 10 seconds
+        setTimeout(() => {
+          if (this.authToken) this.connectToHop();
+        }, 10_000);
+      });
+
+      ws.addEventListener("error", (event) => {
+        console.error("[hop] Connection error");
+      });
+    } catch (err) {
+      console.error("[hop] Failed to connect:", err instanceof Error ? err.message : err);
+      // Retry after 10 seconds
+      setTimeout(() => {
+        if (this.authToken) this.connectToHop();
+      }, 10_000);
+    }
+  }
+
+  private handleHopMessage(data: string) {
+    try {
+      const message = JSON.parse(data);
+
+      if (message.type === "hop:browser-connected") {
+        console.log(`[hop] Browser connected: ${message.browserId} for ${message.carrotId}`);
+        return;
+      }
+
+      if (message.type === "hop:browser-disconnected") {
+        console.log(`[hop] Browser disconnected: ${message.browserId}`);
+        return;
+      }
+
+      if (message.type === "hop:message") {
+        const { browserId, carrotId, payload } = message;
+        const method = payload?.method;
+        const params = payload?.params;
+        const requestId = payload?.id;
+
+        if (!method || requestId === undefined) return;
+
+        // Handle runtime-level requests (carrotId = "bunny-ears" or no carrot found)
+        if (carrotId === "bunny-ears" || !this.carrots.has(carrotId)) {
+          this.handleHopRuntimeRequest(browserId, requestId, method, params);
+          return;
+        }
+
+        // Route to a specific carrot
+        const carrot = this.carrots.get(carrotId)!;
+        if (carrot.status !== "running") {
+          this.hopWs?.send(JSON.stringify({
+            browserId,
+            payload: { type: "response", id: requestId, error: `Carrot ${carrotId} is not running` },
+          }));
+          return;
+        }
+
+        carrot.invoke(method, params)
+          .then((result: unknown) => {
+            this.hopWs?.send(JSON.stringify({
+              browserId,
+              payload: { type: "response", id: requestId, result },
+            }));
+          })
+          .catch((err: Error) => {
+            this.hopWs?.send(JSON.stringify({
+              browserId,
+              payload: { type: "response", id: requestId, error: err.message },
+            }));
+          });
+        return;
+      }
+    } catch (err) {
+      console.error("[hop] Failed to handle message:", err instanceof Error ? err.message : err);
+    }
+  }
+
+  private handleHopRuntimeRequest(browserId: string, requestId: number, method: string, params: unknown) {
+    const sendResult = (result: unknown) => {
+      this.hopWs?.send(JSON.stringify({
+        browserId,
+        payload: { type: "response", id: requestId, result },
+      }));
+    };
+    const sendError = (error: string) => {
+      this.hopWs?.send(JSON.stringify({
+        browserId,
+        payload: { type: "response", id: requestId, error },
+      }));
+    };
+
+    try {
+      switch (method) {
+        case "list-carrots":
+          sendResult(this.summaries());
+          break;
+        case "update-carrots":
+          this.handleTrayAction("update-carrots").then(() => sendResult({ ok: true })).catch((e) => sendError(String(e)));
+          break;
+        default:
+          sendError(`Unknown runtime method: ${method}`);
+      }
+    } catch (err) {
+      sendError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   private getAuthTokenPath() {
     const path = require("node:path");
     const os = require("node:os");
-    // Store auth token in ~/.electrobunny/ (global, not per-channel)
-    return path.join(os.homedir(), ".electrobunny", ".auth-token");
+    return path.join(os.homedir(), ".electrobunny", this.channel, ".auth-token");
   }
 
   private loadAuthToken() {
@@ -1342,7 +1487,7 @@ class BunnyEarsRuntime {
     const fs = require("node:fs");
     const path = require("node:path");
     const home = process.env.HOME || process.env.USERPROFILE || "";
-    const idPath = home ? path.join(home, ".electrobunny", "machine-id") : "";
+    const idPath = home ? path.join(home, ".electrobunny", this.channel, "machine-id") : "";
 
     if (idPath && fs.existsSync(idPath)) {
       return fs.readFileSync(idPath, "utf8").trim();

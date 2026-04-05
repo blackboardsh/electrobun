@@ -480,7 +480,7 @@ function resolveDependencySourcePath(
   parentSource: CarrotInstallSource,
   dependencyId: string,
   specifier: string,
-) {
+): string | null {
   if (parentSource.kind !== "local") {
     throw new Error(
       `Dependency ${dependencyId} uses ${specifier}, but only local source installs currently support file/workspace carrot dependencies`,
@@ -495,8 +495,13 @@ function resolveDependencySourcePath(
     return resolveWorkspaceDependencyPath(parentSource.path, dependencyId);
   }
 
+  // "*" or other non-path specifiers mean "just ensure it's installed" — skip resolution
+  if (specifier === "*") {
+    return null;
+  }
+
   throw new Error(
-    `Unsupported carrot dependency specifier for ${dependencyId}: ${specifier}. Only file: and workspace: are supported right now.`,
+    `Unsupported carrot dependency specifier for ${dependencyId}: ${specifier}. Only file:, workspace:, and * are supported.`,
   );
 }
 
@@ -523,6 +528,14 @@ async function installDependencyTree(
     }
 
     const dependencySourceDir = resolveDependencySourcePath(source, dependencyId, specifier);
+    if (!dependencySourceDir) {
+      // Non-path specifier (e.g., "*") — just check it's installed
+      const existing = readInstalledRecord(dependencyId);
+      if (!existing) {
+        console.warn(`[carrotStore] Dependency ${dependencyId} is not installed (required by ${manifest.id})`);
+      }
+      continue;
+    }
     const preparedDependency = await prepareDevCarrotInstallFromSource(dependencySourceDir);
     try {
       if (preparedDependency.manifest.id !== dependencyId) {
