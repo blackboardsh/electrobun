@@ -4769,15 +4769,23 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     
     switch (msg) {
         case WM_NCCALCSIZE:
-            if (wParam == TRUE) {
-                WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
-                if (data && data->isHiddenInset) {
-                    NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
-                    RECT original = p->rgrc[0];
-                    LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+            if (wParam == TRUE && data && data->isHiddenInset) {
+                NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
+                RECT original = p->rgrc[0];
+                LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+                if (IsZoomed(hwnd)) {
+                    // Maximized: clip client area to monitor work area so
+                    // we still strip the caption bar without pushing content
+                    // above the visible screen.
+                    MONITORINFO mi = { sizeof(MONITORINFO) };
+                    HMONITOR hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                    if (GetMonitorInfo(hmon, &mi)) {
+                        p->rgrc[0].top = mi.rcWork.top;
+                    }
+                } else {
                     p->rgrc[0].top = original.top;
-                    return ret;
                 }
+                return ret;
             }
             break;
 
