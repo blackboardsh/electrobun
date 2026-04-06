@@ -140,6 +140,7 @@ class CarrotInstance {
   controllerWindows = new Map<string, BrowserWindow>();
   controllerWindow: BrowserWindow | null = null;
   webClients = new Map<string, { send: (data: string) => void }>();
+  hopBrowserIds = new Set<string>();
   bunnyWindow: BrowserWindow | null = null;
   bunnyPollTimeout: ReturnType<typeof setTimeout> | null = null;
   worker: Worker | null = null;
@@ -915,6 +916,20 @@ class CarrotInstance {
             }));
           } catch {}
         }
+
+        // Forward to Hop remote browsers (using electrobun RPC message format)
+        if (runtime.hopWs && this.hopBrowserIds.size > 0) {
+          for (const browserId of this.hopBrowserIds) {
+            runtime.hopWs.send(JSON.stringify({
+              browserId,
+              payload: {
+                type: "message",
+                id: eventPayload.name,
+                payload: eventPayload.payload,
+              },
+            }));
+          }
+        }
         break;
       }
       case "emit-carrot-event": {
@@ -1274,16 +1289,48 @@ class BunnyEarsRuntime {
 
       if (message.type === "hop:browser-connected") {
         console.log(`[hop] Browser connected: ${message.browserId} for ${message.carrotId}`);
+        const carrot = this.carrots.get(message.carrotId);
+        if (carrot) {
+          carrot.hopBrowserIds.add(message.browserId);
+        }
         return;
       }
 
       if (message.type === "hop:browser-disconnected") {
         console.log(`[hop] Browser disconnected: ${message.browserId}`);
+        // Remove from all carrots
+        for (const carrot of this.carrots.values()) {
+          carrot.hopBrowserIds.delete(message.browserId);
+        }
+        return;
+      }
+
+      if (message.type === "hop:file-request") {
+        this.handleHopFileRequest(message);
         return;
       }
 
       if (message.type === "hop:message") {
         const { browserId, carrotId, payload } = message;
+
+        // Handle RPC messages (fire-and-forget from view → bun)
+        if (payload?.type === "message") {
+          const messageName = payload.id;
+          const messagePayload = payload.payload;
+          const carrot = this.carrots.get(carrotId);
+          if (carrot && carrot.status === "running") {
+            // Forward as an event to the carrot worker
+            carrot.worker?.postMessage({
+              type: "request",
+              requestId: 0, // fire-and-forget, no response expected
+              method: `send:${messageName}`,
+              params: messagePayload,
+            });
+          }
+          return;
+        }
+
+        // Handle RPC requests (view → bun, expects response)
         const method = payload?.method;
         const params = payload?.params;
         const requestId = payload?.id;
@@ -1301,7 +1348,7 @@ class BunnyEarsRuntime {
         if (carrot.status !== "running") {
           this.hopWs?.send(JSON.stringify({
             browserId,
-            payload: { type: "response", id: requestId, error: `Carrot ${carrotId} is not running` },
+            payload: { type: "response", id: requestId, success: false, error: `Carrot ${carrotId} is not running` },
           }));
           return;
         }
@@ -1310,13 +1357,13 @@ class BunnyEarsRuntime {
           .then((result: unknown) => {
             this.hopWs?.send(JSON.stringify({
               browserId,
-              payload: { type: "response", id: requestId, result },
+              payload: { type: "response", id: requestId, success: true, payload: result },
             }));
           })
           .catch((err: Error) => {
             this.hopWs?.send(JSON.stringify({
               browserId,
-              payload: { type: "response", id: requestId, error: err.message },
+              payload: { type: "response", id: requestId, success: false, error: err.message },
             }));
           });
         return;
@@ -1326,17 +1373,88 @@ class BunnyEarsRuntime {
     }
   }
 
+  private handleHopFileRequest(message: { requestId: number; carrotId: string; path: string }) {
+    const { requestId, carrotId, path: filePath } = message;
+    const carrot = getInstalledCarrot(carrotId);
+
+    if (!carrot) {
+      this.hopWs?.send(JSON.stringify({
+        type: "hop:file-response",
+        requestId,
+        status: 404,
+        contentType: "text/plain",
+        body: btoa(`Carrot not found: ${carrotId}`),
+      }));
+      return;
+    }
+
+    // Resolve the file path within the carrot's current directory
+    const fs = require("node:fs");
+    const pathMod = require("node:path");
+    const normalizedPath = filePath.replace(/^\/+/, "");
+    const fullPath = pathMod.resolve(carrot.currentDir, normalizedPath);
+
+    // Security: ensure path doesn't escape the carrot dir
+    if (!fullPath.startsWith(carrot.currentDir)) {
+      this.hopWs?.send(JSON.stringify({
+        type: "hop:file-response",
+        requestId,
+        status: 403,
+        contentType: "text/plain",
+        body: btoa("Path escapes carrot directory"),
+      }));
+      return;
+    }
+
+    if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+      this.hopWs?.send(JSON.stringify({
+        type: "hop:file-response",
+        requestId,
+        status: 404,
+        contentType: "text/plain",
+        body: btoa(`File not found: ${normalizedPath}`),
+      }));
+      return;
+    }
+
+    const ext = pathMod.extname(fullPath).toLowerCase();
+    const mimeTypes: Record<string, string> = {
+      ".html": "text/html",
+      ".js": "application/javascript",
+      ".css": "text/css",
+      ".json": "application/json",
+      ".svg": "image/svg+xml",
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".gif": "image/gif",
+      ".woff": "font/woff",
+      ".woff2": "font/woff2",
+      ".ttf": "font/ttf",
+    };
+
+    const contentType = mimeTypes[ext] || "application/octet-stream";
+    const fileData = fs.readFileSync(fullPath);
+    const base64 = Buffer.from(fileData).toString("base64");
+
+    this.hopWs?.send(JSON.stringify({
+      type: "hop:file-response",
+      requestId,
+      contentType,
+      body: base64,
+    }));
+  }
+
   private handleHopRuntimeRequest(browserId: string, requestId: number, method: string, params: unknown) {
     const sendResult = (result: unknown) => {
       this.hopWs?.send(JSON.stringify({
         browserId,
-        payload: { type: "response", id: requestId, result },
+        payload: { type: "response", id: requestId, success: true, payload: result },
       }));
     };
     const sendError = (error: string) => {
       this.hopWs?.send(JSON.stringify({
         browserId,
-        payload: { type: "response", id: requestId, error },
+        payload: { type: "response", id: requestId, success: false, error },
       }));
     };
 
