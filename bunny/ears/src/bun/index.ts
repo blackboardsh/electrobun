@@ -1132,6 +1132,8 @@ class BunnyEarsRuntime {
   }
 
   authToken: string | null = null;
+  // Long-lived device token — used to authenticate to Hop and mint access tokens.
+  deviceToken: string | null = null;
   farmWindow: BrowserWindow | null = null;
 
   async boot() {
@@ -1165,6 +1167,17 @@ class BunnyEarsRuntime {
 
     // Auth + instance registration — non-blocking, doesn't gate carrots
     this.loadAuthToken();
+    this.loadDeviceToken();
+
+    // If we have a device token, refresh the access token immediately
+    if (this.deviceToken) {
+      this.refreshAccessTokenFromDevice().catch(() => {});
+      // Refresh access token every 10 minutes (access tokens live 15 min)
+      setInterval(() => {
+        this.refreshAccessTokenFromDevice().catch(() => {});
+      }, 10 * 60 * 1000);
+    }
+
     if (this.authToken) {
       // Register instance and start heartbeat in the background
       this.registerInstanceWithToken(this.authToken).catch(() => {});
@@ -1173,8 +1186,8 @@ class BunnyEarsRuntime {
           this.registerInstanceWithToken(this.authToken).catch(() => {});
         }
       }, 60_000);
-    } else {
-      // No auth — open Farm for login (non-blocking)
+    } else if (!this.deviceToken) {
+      // No auth and no device token — open Farm for login (non-blocking)
       this.openFarmForLogin().catch(() => {});
     }
 
@@ -1182,8 +1195,8 @@ class BunnyEarsRuntime {
     this.checkForUpdates();
     setInterval(() => this.checkForUpdates(), 60 * 60 * 1000);
 
-    // Connect to Hop for remote access
-    if (this.authToken) {
+    // Connect to Hop for remote access (uses device token)
+    if (this.deviceToken) {
       this.connectToHop();
     }
 
@@ -1242,12 +1255,12 @@ class BunnyEarsRuntime {
         : "wss://staging-hop.electrobunny.ai";
 
     const machineId = this.getMachineId();
-    if (!machineId || !this.authToken) {
-      console.log("[hop] Skipping Hop connection (no machine ID or auth token)");
+    if (!machineId || !this.deviceToken) {
+      console.log("[hop] Skipping Hop connection (no machine ID or device token)");
       return;
     }
 
-    const url = `${hopBaseUrl}/connect?instanceId=${encodeURIComponent(machineId)}&token=${encodeURIComponent(this.authToken)}`;
+    const url = `${hopBaseUrl}/connect?instanceId=${encodeURIComponent(machineId)}&deviceToken=${encodeURIComponent(this.deviceToken)}`;
     console.log(`[hop] Connecting to Hop at ${hopBaseUrl}...`);
 
     try {
@@ -1267,7 +1280,7 @@ class BunnyEarsRuntime {
         this.hopWs = null;
         // Reconnect after 10 seconds
         setTimeout(() => {
-          if (this.authToken) this.connectToHop();
+          if (this.deviceToken) this.connectToHop();
         }, 10_000);
       });
 
@@ -1480,6 +1493,12 @@ class BunnyEarsRuntime {
     return path.join(os.homedir(), ".electrobunny", this.channel, ".auth-token");
   }
 
+  private getDeviceTokenPath() {
+    const path = require("node:path");
+    const os = require("node:os");
+    return path.join(os.homedir(), ".electrobunny", this.channel, ".device-token");
+  }
+
   private loadAuthToken() {
     const fs = require("node:fs");
     const tokenPath = this.getAuthTokenPath();
@@ -1490,6 +1509,37 @@ class BunnyEarsRuntime {
         bootLog("loaded auth token");
       } catch {}
     }
+  }
+
+  private loadDeviceToken() {
+    const fs = require("node:fs");
+    const tokenPath = this.getDeviceTokenPath();
+    if (fs.existsSync(tokenPath)) {
+      try {
+        this.deviceToken = fs.readFileSync(tokenPath, "utf8").trim();
+        console.log("[bunny-ears] loaded device token");
+      } catch {}
+    }
+  }
+
+  private saveDeviceToken(token: string) {
+    const fs = require("node:fs");
+    const path = require("node:path");
+    const tokenPath = this.getDeviceTokenPath();
+    this.deviceToken = token;
+    try {
+      fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
+      fs.writeFileSync(tokenPath, token);
+      // Restrict permissions: rw owner only
+      try { fs.chmodSync(tokenPath, 0o600); } catch {}
+    } catch {}
+  }
+
+  private clearDeviceToken() {
+    const fs = require("node:fs");
+    const tokenPath = this.getDeviceTokenPath();
+    this.deviceToken = null;
+    try { if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath); } catch {}
   }
 
   private saveAuthToken(token: string) {
@@ -1503,6 +1553,51 @@ class BunnyEarsRuntime {
         fs.mkdirSync(path.dirname(tokenPath), { recursive: true });
         fs.writeFileSync(tokenPath, token);
       } catch {}
+    }
+  }
+
+  // Get a fresh short-lived access token by exchanging the device token.
+  // Used to populate `this.authToken` and notify dash carrots.
+  private async refreshAccessTokenFromDevice(): Promise<string | null> {
+    if (!this.deviceToken) return null;
+    const machineId = this.getMachineId();
+    if (!machineId) return null;
+
+    const apiBase = this.channel === "dev"
+      ? "http://localhost:8787"
+      : this.channel === "canary"
+        ? "https://staging-api.electrobunny.ai"
+        : "https://api.electrobunny.ai";
+
+    try {
+      const resp = await fetch(`${apiBase}/v1/auth/device-access-token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ machine_id: machineId, device_token: this.deviceToken }),
+      });
+      if (!resp.ok) {
+        console.log(`[bunny-ears] device-access-token failed: ${resp.status}`);
+        if (resp.status === 401) {
+          // Device token is invalid — clear it so user re-registers
+          this.clearDeviceToken();
+        }
+        return null;
+      }
+      const data = await resp.json() as { accessToken?: string };
+      const token = data.accessToken || null;
+      if (token) {
+        this.saveAuthToken(token);
+        // Notify all running carrots about the refreshed token
+        for (const carrot of this.carrots.values()) {
+          if (carrot.status === "running") {
+            carrot.sendEvent("auth-token-changed", { token });
+          }
+        }
+      }
+      return token;
+    } catch (err) {
+      console.log(`[bunny-ears] device-access-token error: ${err}`);
+      return null;
     }
   }
 
@@ -1530,7 +1625,7 @@ class BunnyEarsRuntime {
             },
             setAuthToken: ({ accessToken }: { accessToken: string }) => {
               this.saveAuthToken(accessToken);
-              bootLog("received auth token from Farm");
+              console.log(`[bunny-ears] Received auth token from Farm (len=${accessToken?.length || 0})`);
               // Notify all running carrots about the new token
               for (const carrot of this.carrots.values()) {
                 if (carrot.status === "running") {
@@ -1547,6 +1642,22 @@ class BunnyEarsRuntime {
               resolve();
               return { ok: true };
             },
+            // Receives the long-lived device token from Farm after registration.
+            setDeviceToken: ({ deviceToken }: { deviceToken: string }) => {
+              this.saveDeviceToken(deviceToken);
+              console.log(`[bunny-ears] Received device token from Farm (len=${deviceToken?.length || 0})`);
+              // Reconnect to Hop with the new device token
+              try { this.hopWs?.close(); } catch {}
+              this.hopWs = null;
+              this.connectToHop();
+              // Mint a fresh access token in the background
+              this.refreshAccessTokenFromDevice().catch(() => {});
+              return { ok: true };
+            },
+            // Allows Farm to read the local machine ID for device token registration.
+            getMachineId: () => {
+              return { machineId: this.getMachineId() || "" };
+            },
             clearAuthToken: () => {
               this.authToken = null;
               // Delete saved token
@@ -1555,13 +1666,18 @@ class BunnyEarsRuntime {
                 const tokenPath = this.getAuthTokenPath();
                 if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
               } catch {}
+              // Also clear the device token (logout means full sign-out)
+              this.clearDeviceToken();
+              // Disconnect from Hop
+              try { this.hopWs?.close(); } catch {}
+              this.hopWs = null;
               // Notify all running carrots
               for (const carrot of this.carrots.values()) {
                 if (carrot.status === "running") {
                   carrot.sendEvent("auth-token-cleared");
                 }
               }
-              bootLog("auth token cleared");
+              console.log("[bunny-ears] auth + device token cleared");
               return { ok: true };
             },
             updateCarrots: () => {
