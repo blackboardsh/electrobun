@@ -49,6 +49,13 @@ export type CarrotMode = "window" | "background";
 
 export type CarrotDependencyMap = Record<string, string>;
 
+export type CarrotRemoteUI = {
+  name: string;
+  // Path within the carrot's currentDir to the entry HTML file.
+  // e.g. "lens/index.html" or "remote-ui/dash/index.html"
+  path: string;
+};
+
 export type CarrotManifest = {
   id: string;
   name: string;
@@ -69,6 +76,9 @@ export type CarrotManifest = {
   worker: {
     relativePath: string;
   };
+  // Remote UIs declared by the carrot — exposed for browser loading via Hop.
+  // Map of remote UI ID → { name (label), path (within currentDir) }.
+  remoteUIs?: Record<string, CarrotRemoteUI>;
 };
 
 export type CarrotInstallSource =

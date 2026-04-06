@@ -55,6 +55,12 @@ function bootLog(message: string, details?: unknown) {
 
 type CarrotStatus = "stopped" | "starting" | "running";
 
+type CarrotRemoteUIInfo = {
+  id: string;
+  name: string;
+  path: string;
+};
+
 type CarrotInfo = {
   id: string;
   name: string;
@@ -69,6 +75,10 @@ type CarrotInfo = {
   sourceLabel: string | null;
   lastBuildError: string | null;
   logTail: string[];
+  // Remote UIs declared in the carrot manifest. Used by Farm to render
+  // "Open in browser" links pointing through Hop. Empty array for background
+  // carrots or carrots that don't expose remote UIs.
+  remoteUIs: CarrotRemoteUIInfo[];
 };
 
 type DashboardState = {
@@ -177,6 +187,11 @@ class CarrotInstance {
           ? this.carrot.install.source.location
           : this.carrot.install.source.prototypeId;
 
+    const manifestRemoteUIs = this.carrot.manifest.remoteUIs || {};
+    const remoteUIs: CarrotRemoteUIInfo[] = Object.entries(manifestRemoteUIs).map(
+      ([id, ui]) => ({ id, name: ui.name, path: ui.path }),
+    );
+
     return {
       id: this.carrot.manifest.id,
       name: this.carrot.manifest.name,
@@ -191,6 +206,7 @@ class CarrotInstance {
       sourceLabel,
       lastBuildError: this.carrot.install.lastBuildError ?? null,
       logTail: this.logs.slice(-4),
+      remoteUIs,
     };
   }
 

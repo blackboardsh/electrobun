@@ -1529,7 +1529,17 @@ const defaultConfig = {
 			mode?: "window" | "background";
 			permissions?: Record<string, unknown>;
 			dependencies?: Record<string, string>;
-			remoteUIs?: Record<string, { entrypoint: string; [key: string]: unknown }>;
+			// Map of remote UI ID → config. Two flavors:
+			//   1. { name, entrypoint, ...bunBuildOpts } — electrobun builds it via Bun.build
+			//   2. { name, path } — point at an already-built HTML file (e.g. produced by postBuild)
+			// In both cases, the manifest gets a remoteUIs block that ears reads to expose
+			// the UIs for remote loading via Hop. `name` is the human-readable label shown in Farm.
+			remoteUIs?: Record<string, {
+				name?: string;
+				entrypoint?: string;
+				path?: string;
+				[key: string]: unknown;
+			}>;
 			carrotOnly?: boolean;
 		} | undefined,
 	},
@@ -3073,29 +3083,55 @@ Categories=Utility;Application;
 				}
 			}
 
-			// Build remote UIs if configured
+			// Build remote UIs if configured.
+			// remoteUIs has two flavors:
+			//   1. entrypoint set → CLI runs Bun.build, output to remote-ui/{name}/
+			//   2. path set → already built (e.g. by postBuild), just record in manifest
+			// The resolved manifest entries are collected here and written below.
+			const resolvedRemoteUIs: Record<string, { name: string; path: string }> = {};
 			if (carrotConfig.remoteUIs) {
 				for (const remoteUIName in carrotConfig.remoteUIs) {
 					const remoteUIConfig = carrotConfig.remoteUIs[remoteUIName]!;
-					const remoteUISource = join(projectRoot, remoteUIConfig.entrypoint);
-					if (!existsSync(remoteUISource)) {
-						console.error(`Remote UI entrypoint not found: ${remoteUISource}`);
-						continue;
-					}
-					const remoteUIDestFolder = join(carrotBuildDir, "remote-ui", remoteUIName);
-					mkdirSync(remoteUIDestFolder, { recursive: true });
+					const label = remoteUIConfig.name || remoteUIName;
 
-					const { entrypoint: _entrypoint, ...remoteUIBuildOptions } = remoteUIConfig;
-					const remoteUIBuildResult = await Bun.build({
-						...remoteUIBuildOptions,
-						entrypoints: [remoteUISource],
-						outdir: remoteUIDestFolder,
-						target: "browser",
-					});
+					if (remoteUIConfig.entrypoint) {
+						const remoteUISource = join(projectRoot, remoteUIConfig.entrypoint);
+						if (!existsSync(remoteUISource)) {
+							console.error(`Remote UI entrypoint not found: ${remoteUISource}`);
+							continue;
+						}
+						const remoteUIDestFolder = join(carrotBuildDir, "remote-ui", remoteUIName);
+						mkdirSync(remoteUIDestFolder, { recursive: true });
 
-					if (!remoteUIBuildResult.success) {
-						console.error(`Failed to build remote UI: ${remoteUIName}`);
-						printBuildLogs(remoteUIBuildResult.logs);
+						const { entrypoint: _entrypoint, name: _name, path: _path, ...remoteUIBuildOptions } = remoteUIConfig;
+						const remoteUIBuildResult = await Bun.build({
+							...remoteUIBuildOptions,
+							entrypoints: [remoteUISource],
+							outdir: remoteUIDestFolder,
+							target: "browser",
+						});
+
+						if (!remoteUIBuildResult.success) {
+							console.error(`Failed to build remote UI: ${remoteUIName}`);
+							printBuildLogs(remoteUIBuildResult.logs);
+							continue;
+						}
+						// Bun.build produces a JS bundle; the entry HTML (if any) is up to the
+						// builder. We record the directory entry as index.html by convention.
+						resolvedRemoteUIs[remoteUIName] = {
+							name: label,
+							path: `remote-ui/${remoteUIName}/index.html`,
+						};
+					} else if (remoteUIConfig.path) {
+						// Pre-built path (e.g. produced by a postBuild script). Just record it.
+						resolvedRemoteUIs[remoteUIName] = {
+							name: label,
+							path: remoteUIConfig.path,
+						};
+					} else {
+						console.warn(
+							`Remote UI "${remoteUIName}" has neither entrypoint nor path; skipping.`,
+						);
 					}
 				}
 			}
@@ -3119,6 +3155,7 @@ Categories=Utility;Application;
 				),
 				worker: { relativePath: "worker.js" },
 				view: existsSync(viewsSrc) ? { relativePath: "views/index.html" } : undefined,
+				remoteUIs: Object.keys(resolvedRemoteUIs).length > 0 ? resolvedRemoteUIs : undefined,
 			};
 			writeFileSync(
 				join(carrotBuildDir, "carrot.json"),
