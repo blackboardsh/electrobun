@@ -1150,6 +1150,8 @@ class BunnyEarsRuntime {
   authToken: string | null = null;
   // Long-lived device token — used to authenticate to Hop and mint access tokens.
   deviceToken: string | null = null;
+  // ID of the device token (from the API) — used for server-side revocation.
+  deviceTokenId: string | null = null;
   farmWindow: BrowserWindow | null = null;
 
   async boot() {
@@ -1515,6 +1517,12 @@ class BunnyEarsRuntime {
     return path.join(os.homedir(), ".electrobunny", this.channel, ".device-token");
   }
 
+  private getDeviceTokenIdPath() {
+    const path = require("node:path");
+    const os = require("node:os");
+    return path.join(os.homedir(), ".electrobunny", this.channel, ".device-token-id");
+  }
+
   private loadAuthToken() {
     const fs = require("node:fs");
     const tokenPath = this.getAuthTokenPath();
@@ -1536,9 +1544,15 @@ class BunnyEarsRuntime {
         console.log("[bunny-ears] loaded device token");
       } catch {}
     }
+    const idPath = this.getDeviceTokenIdPath();
+    if (fs.existsSync(idPath)) {
+      try {
+        this.deviceTokenId = fs.readFileSync(idPath, "utf8").trim();
+      } catch {}
+    }
   }
 
-  private saveDeviceToken(token: string) {
+  private saveDeviceToken(token: string, tokenId?: string | null) {
     const fs = require("node:fs");
     const path = require("node:path");
     const tokenPath = this.getDeviceTokenPath();
@@ -1549,6 +1563,14 @@ class BunnyEarsRuntime {
       // Restrict permissions: rw owner only
       try { fs.chmodSync(tokenPath, 0o600); } catch {}
     } catch {}
+    if (tokenId) {
+      this.deviceTokenId = tokenId;
+      const idPath = this.getDeviceTokenIdPath();
+      try {
+        fs.writeFileSync(idPath, tokenId);
+        try { fs.chmodSync(idPath, 0o600); } catch {}
+      } catch {}
+    }
   }
 
   private clearDeviceToken() {
@@ -1556,6 +1578,33 @@ class BunnyEarsRuntime {
     const tokenPath = this.getDeviceTokenPath();
     this.deviceToken = null;
     try { if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath); } catch {}
+    const idPath = this.getDeviceTokenIdPath();
+    this.deviceTokenId = null;
+    try { if (fs.existsSync(idPath)) fs.unlinkSync(idPath); } catch {}
+  }
+
+  // Revoke the device token on the server. Best-effort — the local token is
+  // already cleared by the time this returns.
+  private async revokeDeviceTokenOnServer(tokenId: string, accessToken: string) {
+    const apiBase = this.channel === "dev"
+      ? "http://localhost:8787"
+      : this.channel === "canary"
+        ? "https://staging-api.electrobunny.ai"
+        : "https://api.electrobunny.ai";
+
+    try {
+      const resp = await fetch(`${apiBase}/v1/auth/device-tokens/${tokenId}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (!resp.ok) {
+        console.log(`[bunny-ears] device token revoke failed: ${resp.status}`);
+      } else {
+        console.log(`[bunny-ears] device token ${tokenId} revoked server-side`);
+      }
+    } catch (err) {
+      console.log(`[bunny-ears] device token revoke error: ${err}`);
+    }
   }
 
   private saveAuthToken(token: string) {
@@ -1594,8 +1643,23 @@ class BunnyEarsRuntime {
       if (!resp.ok) {
         console.log(`[bunny-ears] device-access-token failed: ${resp.status}`);
         if (resp.status === 401) {
-          // Device token is invalid — clear it so user re-registers
+          // Device token has been revoked or is otherwise invalid.
+          // Clear everything and notify carrots so dash logs out.
           this.clearDeviceToken();
+          this.authToken = null;
+          try {
+            const fs = require("node:fs");
+            const tokenPath = this.getAuthTokenPath();
+            if (fs.existsSync(tokenPath)) fs.unlinkSync(tokenPath);
+          } catch {}
+          try { this.hopWs?.close(); } catch {}
+          this.hopWs = null;
+          for (const carrot of this.carrots.values()) {
+            if (carrot.status === "running") {
+              carrot.sendEvent("auth-token-cleared");
+            }
+          }
+          console.log("[bunny-ears] device token revoked — signed out");
         }
         return null;
       }
@@ -1659,9 +1723,9 @@ class BunnyEarsRuntime {
               return { ok: true };
             },
             // Receives the long-lived device token from Farm after registration.
-            setDeviceToken: ({ deviceToken }: { deviceToken: string }) => {
-              this.saveDeviceToken(deviceToken);
-              console.log(`[bunny-ears] Received device token from Farm (len=${deviceToken?.length || 0})`);
+            setDeviceToken: ({ deviceToken, deviceTokenId }: { deviceToken: string; deviceTokenId?: string }) => {
+              this.saveDeviceToken(deviceToken, deviceTokenId);
+              console.log(`[bunny-ears] Received device token from Farm (len=${deviceToken?.length || 0}, id=${deviceTokenId || "none"})`);
               // Reconnect to Hop with the new device token
               try { this.hopWs?.close(); } catch {}
               this.hopWs = null;
@@ -1675,8 +1739,12 @@ class BunnyEarsRuntime {
               return { machineId: this.getMachineId() || "" };
             },
             clearAuthToken: () => {
+              // Capture values before clearing so we can revoke server-side
+              const oldAccessToken = this.authToken;
+              const oldDeviceTokenId = this.deviceTokenId;
+
               this.authToken = null;
-              // Delete saved token
+              // Delete saved access token
               try {
                 const fs = require("node:fs");
                 const tokenPath = this.getAuthTokenPath();
@@ -1694,6 +1762,10 @@ class BunnyEarsRuntime {
                 }
               }
               console.log("[bunny-ears] auth + device token cleared");
+              // Best-effort server-side revocation (fire-and-forget).
+              if (oldDeviceTokenId && oldAccessToken) {
+                this.revokeDeviceTokenOnServer(oldDeviceTokenId, oldAccessToken).catch(() => {});
+              }
               return { ok: true };
             },
             updateCarrots: () => {
@@ -1716,9 +1788,17 @@ class BunnyEarsRuntime {
       this.farmWindow.webview.on("dom-ready", () => {
         const carrots = runtime.summaries();
         const machineId = this.getMachineId();
+        const os = require("node:os");
+        const hostname = os.hostname() || "Unknown";
+        const platform = process.platform === "darwin" ? "macOS"
+          : process.platform === "win32" ? "Windows"
+          : process.platform === "linux" ? "Linux"
+          : process.platform;
         this.farmWindow?.webview.executeJavascript(`
           window.__bunnyEarsData = {
             machineId: ${JSON.stringify(machineId)},
+            hostname: ${JSON.stringify(hostname)},
+            platform: ${JSON.stringify(platform)},
             carrots: ${JSON.stringify(carrots)},
           };
           window.dispatchEvent(new CustomEvent('bunnyEarsData'));
