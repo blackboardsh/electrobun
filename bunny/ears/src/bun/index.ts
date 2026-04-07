@@ -2087,27 +2087,44 @@ class BunnyEarsRuntime {
       console.log("[bunny-ears] Updating carrots...");
       const ch = await Updater.localInfo.channel().catch(() => "dev");
       if (ch !== "dev") {
-        // Stop all running carrots first
+        // Stop all running carrots so files aren't locked during the download
         for (const carrot of this.carrots.values()) {
           if (carrot.status === "running") {
             try { await carrot.stop(); } catch {}
           }
         }
         this.carrots.clear();
-        await installFoundationCarrotsFromR2(ch, true);
-        // Reload carrots
-        for (const carrot of loadInstalledCarrots()) {
-          this.carrots.set(carrot.manifest.id, new CarrotInstance(carrot));
+
+        try {
+          await installFoundationCarrotsFromR2(ch, true);
+          console.log("[bunny-ears] Carrots updated, restarting Bunny Ears...");
+        } catch (err) {
+          console.error("[bunny-ears] Carrot update failed:", err);
+          return;
         }
-        // Restart background carrots
-        for (const carrot of this.carrots.values()) {
-          if (carrot.carrot.manifest.mode === "background") {
-            await carrot.start();
-            carrot.sendEvent("boot");
+
+        // Restart the whole process — restarting workers in-place causes
+        // segfaults due to dangling references in still-open windows.
+        // The detached shell waits for this process to exit then relaunches.
+        try {
+          if (process.platform === "darwin") {
+            const pathMod = require("node:path");
+            // process.execPath is .../Contents/MacOS/bun → app bundle is two dirs up
+            const appBundlePath = pathMod.resolve(pathMod.dirname(process.execPath), "..", "..");
+            const pid = process.pid;
+            Bun.spawn(
+              [
+                "sh",
+                "-c",
+                `while kill -0 ${pid} 2>/dev/null; do sleep 0.5; done; sleep 1; open "${appBundlePath}"`,
+              ],
+              { detached: true, stdio: ["ignore", "ignore", "ignore"] } as any,
+            );
           }
+        } catch (err) {
+          console.error("[bunny-ears] Failed to schedule restart:", err);
         }
-        this.tray?.setMenu(this.buildTrayMenu());
-        console.log("[bunny-ears] Carrots updated");
+        process.exit(0);
       }
       return;
     }
