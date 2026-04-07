@@ -262,7 +262,9 @@ export async function prepareArtifactPayloadFromPath(
       };
     }
 
-    const lowerPath = inputPath.toLowerCase();
+    // Strip query string and fragment when sniffing the file extension —
+    // URLs may include cache-busting query strings like `?t=12345`.
+    const lowerPath = inputPath.toLowerCase().split("?")[0]!.split("#")[0]!;
     if (lowerPath.endsWith(".tar.zst")) {
       const archivePath = looksLikeUrl(inputPath)
         ? await downloadArtifact(inputPath, tempRoot)
