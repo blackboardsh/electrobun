@@ -2565,13 +2565,17 @@ async function installFoundationCarrotsFromR2(channel: string, forceReinstall: b
     ? "https://carrots.electrobunny.ai"
     : "https://staging-carrots.electrobunny.ai";
 
+  // Cache-bust against Cloudflare's CDN. Without this, a stale cached artifact
+  // can be served indefinitely after a fresh CI build pushes new contents.
+  const cacheBuster = Date.now().toString();
+
   for (const carrot of FOUNDATION_CARROTS) {
     if (!forceReinstall) {
       const existing = getInstalledCarrot(carrot.id);
       if (existing) continue;
     }
 
-    const url = `${baseUrl}/${carrot.artifact}`;
+    const url = `${baseUrl}/${carrot.artifact}?t=${cacheBuster}`;
     console.log(`[bunny-ears] ${forceReinstall ? "Updating" : "Installing"} ${carrot.id} from ${url}...`);
     try {
       const prepared = await prepareArtifactCarrotInstall(url);
