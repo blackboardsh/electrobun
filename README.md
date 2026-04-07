@@ -67,6 +67,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
 - [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
 - [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
+- [whatsapp-reminder](https://github.com/FatahChan/whatsapp-reminder) - managed scheduled WhatsApp messages
 
 ### Video Demos
 
