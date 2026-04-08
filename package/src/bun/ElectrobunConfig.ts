@@ -1,3 +1,5 @@
+import type { CustomScheme } from "../shared/protocol";
+
 /**
  * Electrobun configuration type definitions
  * Used in electrobun.config.ts files
@@ -56,6 +58,12 @@ export interface ElectrobunConfig {
 		 * ```
 		 */
 		urlSchemes?: string[];
+
+		/**
+		 * Custom content protocols to register before any webview initializes.
+		 * Pair with `Protocol.handle()` in your app entry point.
+		 */
+		protocols?: CustomScheme[];
 	};
 
 	/**

@@ -30,6 +30,8 @@ static bool wgpuDebugEnabled() {
 #include <unistd.h>
 #include <signal.h>
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <mutex>
 #include "../shared/pending_resize_queue.h"
 
@@ -57,6 +59,7 @@ static bool wgpuDebugEnabled() {
 #include <cstdint>
 #include <chrono>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <atomic>
 
@@ -77,6 +80,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/protocol_config.h"
 
 using namespace electrobun;
 
@@ -104,6 +108,19 @@ static id mouseDraggedMonitor = nil;
 static id mouseUpMonitor = nil;
 
 static int g_remoteDebugPort = 9222;
+// Protocol handlers are installed during startup via setCustomProtocolHandlers()
+// before any WKWebView/CEF browser is created, so request-path reads use atomic
+// loads without introducing additional locking on every request.
+static std::atomic<ProtocolRequestHandler> g_protocolRequestHandler{nullptr};
+static std::atomic<ProtocolRequestCancelledHandler> g_protocolRequestCancelledHandler{nullptr};
+static std::atomic<uint64_t> g_nextProtocolRequestId{1};
+static std::mutex g_protocolRequestMutex;
+static std::unordered_map<uint64_t, std::vector<uint8_t>> g_protocolRequestBodies;
+static std::unordered_map<uint64_t, id<WKURLSchemeTask>> g_pendingWKProtocolTasks;
+static std::unordered_map<void*, uint64_t> g_pendingWKTaskIds;
+
+class ElectrobunSchemeHandler;
+static std::unordered_map<uint64_t, ElectrobunSchemeHandler*> g_pendingCEFProtocolHandlers;
 
 // Menu role to selector mapping
 // This maps Electrobun role strings to their corresponding Objective-C selectors.
@@ -709,6 +726,99 @@ void retainObjCObject(id objcObject) {
 }
 void releaseObjCObject(id objcObject) {
     CFRelease((__bridge CFTypeRef)objcObject);
+}
+
+static std::string escapeProtocolJSONString(NSString *value) {
+    if (!value) {
+        return "";
+    }
+
+    const char* utf8 = value ? [value UTF8String] : nullptr;
+    std::string input = utf8 ? utf8 : "";
+    std::string output;
+    output.reserve(input.size() + 16);
+
+    for (char c : input) {
+        switch (c) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default: output += c; break;
+        }
+    }
+
+    return output;
+}
+
+static std::string escapeProtocolJSONString(const std::string& input) {
+    std::string output;
+    output.reserve(input.size() + 16);
+    for (char c : input) {
+        switch (c) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default: output += c; break;
+        }
+    }
+    return output;
+}
+
+static NSData *readProtocolRequestBody(NSURLRequest *request) {
+    if (request.HTTPBody) {
+        return request.HTTPBody;
+    }
+
+    NSInputStream *bodyStream = request.HTTPBodyStream;
+    if (!bodyStream) {
+        return nil;
+    }
+
+    NSMutableData *data = [NSMutableData data];
+    [bodyStream open];
+
+    uint8_t buffer[4096];
+    NSInteger bytesRead = 0;
+    while ((bytesRead = [bodyStream read:buffer maxLength:sizeof(buffer)]) > 0) {
+        [data appendBytes:buffer length:(NSUInteger)bytesRead];
+    }
+
+    if (bytesRead < 0) {
+        [bodyStream close];
+        return nil;
+    }
+
+    [bodyStream close];
+    return data;
+}
+
+static std::string buildProtocolHeadersJSON(NSDictionary<NSString *, NSString *> *headers) {
+    std::string json = "[";
+    bool first = true;
+    for (NSString *key in headers) {
+        if (!first) {
+            json += ",";
+        }
+        first = false;
+        json += "[\"" + escapeProtocolJSONString(key) + "\",\"" + escapeProtocolJSONString(headers[key]) + "\"]";
+    }
+    json += "]";
+    return json;
+}
+
+// Caller must hold g_protocolRequestMutex.
+static void cleanupPendingProtocolTask(uint64_t requestId) {
+    auto taskIt = g_pendingWKProtocolTasks.find(requestId);
+    if (taskIt != g_pendingWKProtocolTasks.end()) {
+        releaseObjCObject(taskIt->second);
+        g_pendingWKTaskIds.erase((__bridge void *)taskIt->second);
+        g_pendingWKProtocolTasks.erase(taskIt);
+    }
+    g_protocolRequestBodies.erase(requestId);
 }
 
 /*
@@ -1912,6 +2022,7 @@ static void schedulePendingResizeDrain() {
         const char *contentPtr = NULL;
         
         NSString *urlString = url.absoluteString;
+        NSString *scheme = url.scheme.lowercaseString;
         
         if ([urlString hasPrefix:@"views://"]) {
             NSString *relativePath = normalizeViewsRelativePath(urlString);
@@ -1943,6 +2054,54 @@ static void schedulePendingResizeDrain() {
                     contentLength = data.length;
                 }
             } 
+        } else if (scheme.length > 0 && hasProtocolRegistration([scheme UTF8String])) {
+            uint64_t requestId = g_nextProtocolRequestId.fetch_add(1);
+            NSData *requestBody = readProtocolRequestBody(urlSchemeTask.request);
+            std::string headersJson = buildProtocolHeadersJSON(urlSchemeTask.request.allHTTPHeaderFields ?: @{});
+            std::string requestJson = std::string("{\"url\":\"") +
+                escapeProtocolJSONString(urlString) +
+                "\",\"method\":\"" +
+                escapeProtocolJSONString(urlSchemeTask.request.HTTPMethod ?: @"GET") +
+                "\",\"headers\":" + headersJson +
+                ",\"hasBody\":" + (requestBody.length > 0 ? "true" : "false") + "}";
+
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                retainObjCObject(urlSchemeTask);
+                g_pendingWKProtocolTasks[requestId] = urlSchemeTask;
+                g_pendingWKTaskIds[(__bridge void *)urlSchemeTask] = requestId;
+                if (requestBody.length > 0) {
+                    const uint8_t *bytes = static_cast<const uint8_t *>(requestBody.bytes);
+                    g_protocolRequestBodies[requestId] = std::vector<uint8_t>(bytes, bytes + requestBody.length);
+                }
+            }
+
+            auto handler = g_protocolRequestHandler.load();
+            if (handler) {
+                char *requestJsonCopy = strdup(requestJson.c_str());
+                handler(requestId, self.webviewId, requestJsonCopy);
+            } else {
+                NSError *error = [NSError errorWithDomain:@"ElectrobunProtocol"
+                                                     code:500
+                                                 userInfo:@{NSLocalizedDescriptionKey: @"No protocol handler configured"}];
+                id<WKURLSchemeTask> taskToFail = nil;
+                {
+                    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                    auto taskIt = g_pendingWKProtocolTasks.find(requestId);
+                    if (taskIt != g_pendingWKProtocolTasks.end()) {
+                        taskToFail = taskIt->second;
+                        g_pendingWKTaskIds.erase((__bridge void *)taskIt->second);
+                        g_pendingWKProtocolTasks.erase(taskIt);
+                    }
+                    g_protocolRequestBodies.erase(requestId);
+                }
+                id<WKURLSchemeTask> activeTask = taskToFail ? taskToFail : urlSchemeTask;
+                [activeTask didFailWithError:error];
+                if (taskToFail) {
+                    releaseObjCObject(taskToFail);
+                }
+            }
+            return;
         } else {
             NSLog(@"Unknown URL format: %@", urlString);
         }
@@ -1988,6 +2147,18 @@ static void schedulePendingResizeDrain() {
        
     }
     - (void)webView:(WKWebView *)webView stopURLSchemeTask:(id<WKURLSchemeTask>)urlSchemeTask {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto requestIt = g_pendingWKTaskIds.find((__bridge void *)urlSchemeTask);
+        if (requestIt == g_pendingWKTaskIds.end()) {
+            return;
+        }
+
+        uint64_t requestId = requestIt->second;
+        auto cancelledHandler = g_protocolRequestCancelledHandler.load();
+        if (cancelledHandler) {
+            cancelledHandler(requestId);
+        }
+        cleanupPendingProtocolTask(requestId);
     }
 @end
 
@@ -2450,6 +2621,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 assetSchemeHandler.webviewId = webviewId;
                 assetSchemeHandler.viewsRoot = viewsRootString;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+
+                for (const auto& protocolRegistration : getProtocolRegistrations()) {
+                    MyURLSchemeHandler *protocolHandler = [[MyURLSchemeHandler alloc] init];
+                    protocolHandler.webviewId = webviewId;
+                    protocolHandler.viewsRoot = viewsRootString;
+                    NSString *schemeName = [NSString stringWithUTF8String:protocolRegistration.scheme.c_str()];
+                    [configuration setURLSchemeHandler:protocolHandler forURLScheme:schemeName];
+                }
                 
                 // create WKWebView
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
@@ -4120,6 +4299,13 @@ public:
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            command_line->AppendSwitchWithValue("custom-scheme", registration.scheme);
+        });
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
 
         // macOS default flags — can be overridden via chromiumFlags in config
         static const std::vector<electrobun::DefaultFlag> defaults = {
@@ -4141,7 +4327,16 @@ public:
             CEF_SCHEME_OPTION_SECURE | // treat it like https
             CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
             CEF_SCHEME_OPTION_FETCH_ENABLED);
-            
+
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            int options = 0;
+            if (registration.privileges.standard) options |= CEF_SCHEME_OPTION_STANDARD;
+            if (registration.privileges.secure) options |= CEF_SCHEME_OPTION_SECURE;
+            if (registration.privileges.corsEnabled) options |= CEF_SCHEME_OPTION_CORS_ENABLED;
+            if (registration.privileges.bypassCSP) options |= CEF_SCHEME_OPTION_CSP_BYPASSING;
+            if (registration.privileges.supportFetchAPI) options |= CEF_SCHEME_OPTION_FETCH_ENABLED;
+            registrar->AddCustomScheme(registration.scheme, options);
+        });
     }
     
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
@@ -4153,6 +4348,11 @@ public:
     virtual void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {        
         std::vector<CefString> args;
         command_line->GetArguments(args); 
+
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
 
         // Log the CEF process_helper path
         // NSLog(@"CEF helper process path: %s", command_line->GetProgram().ToString().c_str());
@@ -4903,7 +5103,21 @@ public:
         CefRefPtr<CefRequest> request,
         CefRefPtr<CefResponse> response) override {
         
-        // Only filter main frame HTML responses
+        // Only filter main frame HTML responses from views:// — not from custom user protocols.
+        // User-defined custom protocol responses are served via ElectrobunSchemeHandler with
+        // requestId_ > 0 and should not have preload scripts injected unless explicitly requested.
+        std::string requestUrl = request->GetURL().ToString();
+        size_t schemeSep = requestUrl.find("://");
+        if (schemeSep != std::string::npos) {
+            std::string scheme = requestUrl.substr(0, schemeSep);
+            std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+            if (scheme != "views" && hasProtocolRegistration(scheme)) {
+                return nullptr;
+            }
+        }
+
         if (frame->IsMain() && 
             response->GetMimeType().ToString().find("html") != std::string::npos) {
             NSLog(@"Creating response filter for HTML content");
@@ -5504,6 +5718,7 @@ bool initializeCEF() {
     if (buildJsonPath) {
         std::string buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+        electrobun::loadProtocolConfigFromBuildJson(buildJsonContent);
     }
 
     CefSettings settings;
@@ -5600,87 +5815,155 @@ bool initializeCEF() {
 // The main scheme handler class
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
-     ElectrobunSchemeHandler(uint32_t webviewId)
-    : webviewId_(webviewId), hasResponse_(false), offset_(0) {}
+      ElectrobunSchemeHandler(uint32_t webviewId)
+    : webviewId_(webviewId), hasResponse_(false), offset_(0), requestId_(0), statusCode_(200), headerReady_(false), finished_(false), failed_(false) {}
+
+    void OnProtocolResponseStart(int statusCode, const std::string& statusText, const std::string& headersJson);
+    void OnProtocolResponseChunk(const uint8_t* chunk, size_t size);
+    void OnProtocolResponseFinish();
+    void OnProtocolResponseError(const std::string& message);
 
   bool Open(CefRefPtr<CefRequest> request,
             bool& handle_request,
             CefRefPtr<CefCallback> callback) override {
 
         std::string urlStr = request->GetURL().ToString();
+        std::string scheme;
+        size_t schemeSeparator = urlStr.find("://");
+        if (schemeSeparator != std::string::npos) {
+            scheme = urlStr.substr(0, schemeSeparator);
+            std::transform(scheme.begin(), scheme.end(), scheme.begin(), [](unsigned char c) {
+                return static_cast<char>(std::tolower(c));
+            });
+        }
         
-        // CEF calls Open from a worker thread, so we need to handle this on the main thread
-        // to avoid threading issues with Bun's JS runtime
-        __block std::string responseDataBlock;
-        __block std::string mimeTypeBlock;
-        __block bool hasResponseBlock = false;
-        
-        dispatch_sync(dispatch_get_main_queue(), ^{
-            responseData_.clear();
-            hasResponse_ = false;
-            offset_ = 0;
-            
-            // If the URL starts with "views://"
-            if (urlStr.find("views://") == 0) {
-                NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
-                // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
-                std::string relativePath = urlStr.substr(8);
-                NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
-                
-                // Check if this is the internal HTML request.
-                NSLog(@"DEBUG CEF: Comparing relativePath '%s' with 'internal/index.html'", relativePath.c_str());
-                if (relativePath == "internal/index.html") {
-                    NSLog(@"DEBUG CEF: Handling views://internal/index.html for webview %u", webviewId_);
-                    // Use stored HTML content instead of JSCallback
-                    const char* htmlContent = getWebviewHTMLContent(webviewId_);
-                    if (!htmlContent) {
-                        // Fallback to default if no content set
-                        NSLog(@"DEBUG CEF: No HTML content found for webview %u, using fallback", webviewId_);
-                        htmlContent = strdup("<html><body>No content set</body></html>");
-                    } else {
-                        NSLog(@"DEBUG CEF: Retrieved HTML content for webview %u", webviewId_);
-                    }
-                    
-                    if (htmlContent) {
-                        size_t len = strlen(htmlContent);
-                        NSLog(@"DEBUG CEF: HTML content length: %zu, content preview: %.100s", len, htmlContent);
-                        mimeTypeBlock = "text/html";
-                        responseDataBlock.assign(htmlContent, htmlContent + len);
-                        hasResponseBlock = true;
-                        free((void*)htmlContent); // Free the strdup'd memory
-                    } else {
-                        NSLog(@"DEBUG CEF: No HTML content to load");
-                    }
-                } else {
-                    NSLog(@"DEBUG CEF: Attempting to read views file: %s", urlStr.c_str());
-                    NSData *data = readViewsFile(urlStr.c_str());
-                    if (data) {   
-                        NSLog(@"DEBUG CEF: Successfully read views file, length: %lu", (unsigned long)data.length);
-                        // Determine MIME type using shared function
-                        std::string mimeType = getMimeTypeFromUrl(relativePath);
-                        const char* mimeTypePtr = strdup(mimeType.c_str());
-                        NSLog(@"DEBUG CEF: Set MIME type '%s' for file: %s", mimeType.c_str(), relativePath.c_str());
-                        // REMOVED: jsUtils.getMimeType callback (now using file extension detection)
-                        
-                        if (mimeTypePtr) {
-                            mimeTypeBlock = std::string(mimeTypePtr);
-                            free((void*)mimeTypePtr); // Free the strdup'd memory
-                        } else {
-                            mimeTypeBlock = "text/html"; // Fallback
-                        }
+        // Open runs on CEF worker threads. The views:// file helpers and
+        // protocol FFI callback are already safe to invoke directly here, so
+        // avoid dispatch_sync on the main queue and blocking the IO path.
+        std::string responseDataBlock;
+        std::string mimeTypeBlock;
+        bool hasResponseBlock = false;
 
-                        responseDataBlock.assign((const char*)data.bytes,
-                                            (const char*)data.bytes + data.length);
-                        hasResponseBlock = true;
+        responseData_.clear();
+        hasResponse_ = false;
+        offset_ = 0;
+
+        // If the URL starts with "views://"
+        if (urlStr.find("views://") == 0) {
+            NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
+            // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
+            std::string relativePath = urlStr.substr(8);
+            NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
+
+            // Check if this is the internal HTML request.
+            NSLog(@"DEBUG CEF: Comparing relativePath '%s' with 'internal/index.html'", relativePath.c_str());
+            if (relativePath == "internal/index.html") {
+                NSLog(@"DEBUG CEF: Handling views://internal/index.html for webview %u", webviewId_);
+                // Use stored HTML content instead of JSCallback
+                const char* htmlContent = getWebviewHTMLContent(webviewId_);
+                if (!htmlContent) {
+                    // Fallback to default if no content set
+                    NSLog(@"DEBUG CEF: No HTML content found for webview %u, using fallback", webviewId_);
+                    htmlContent = strdup("<html><body>No content set</body></html>");
+                } else {
+                    NSLog(@"DEBUG CEF: Retrieved HTML content for webview %u", webviewId_);
+                }
+
+                if (htmlContent) {
+                    size_t len = strlen(htmlContent);
+                    NSLog(@"DEBUG CEF: HTML content length: %zu, content preview: %.100s", len, htmlContent);
+                    mimeTypeBlock = "text/html";
+                    responseDataBlock.assign(htmlContent, htmlContent + len);
+                    hasResponseBlock = true;
+                    free((void*)htmlContent); // Free the strdup'd memory
+                } else {
+                    NSLog(@"DEBUG CEF: No HTML content to load");
+                }
+            } else {
+                NSLog(@"DEBUG CEF: Attempting to read views file: %s", urlStr.c_str());
+                NSData *data = readViewsFile(urlStr.c_str());
+                if (data) {
+                    NSLog(@"DEBUG CEF: Successfully read views file, length: %lu", (unsigned long)data.length);
+                    // Determine MIME type using shared function
+                    std::string mimeType = getMimeTypeFromUrl(relativePath);
+                    const char* mimeTypePtr = strdup(mimeType.c_str());
+                    NSLog(@"DEBUG CEF: Set MIME type '%s' for file: %s", mimeType.c_str(), relativePath.c_str());
+                    // REMOVED: jsUtils.getMimeType callback (now using file extension detection)
+
+                    if (mimeTypePtr) {
+                        mimeTypeBlock = std::string(mimeTypePtr);
+                        free((void*)mimeTypePtr); // Free the strdup'd memory
                     } else {
-                        NSLog(@"DEBUG CEF: Failed to read views file: %s", urlStr.c_str());
+                        mimeTypeBlock = "text/html"; // Fallback
                     }
+
+                    responseDataBlock.assign((const char*)data.bytes,
+                                        (const char*)data.bytes + data.length);
+                    hasResponseBlock = true;
+                } else {
+                    NSLog(@"DEBUG CEF: Failed to read views file: %s", urlStr.c_str());
                 }
             }
-            else {
-                NSLog(@"Unknown URL format: %s", urlStr.c_str());
+        }
+        else if (hasProtocolRegistration(scheme)) {
+            requestId_ = g_nextProtocolRequestId.fetch_add(1);
+            hasResponse_ = true;
+            offset_ = 0;
+
+            std::string method = request->GetMethod().ToString();
+            CefRequest::HeaderMap headerMap;
+            request->GetHeaderMap(headerMap);
+            std::string headersJson = "[";
+            bool firstHeader = true;
+            for (const auto& header : headerMap) {
+                if (!firstHeader) headersJson += ",";
+                firstHeader = false;
+                headersJson += "[\"" + escapeProtocolJSONString(header.first.ToString()) + "\",\"" + escapeProtocolJSONString(header.second.ToString()) + "\"]";
             }
-        });
+            headersJson += "]";
+
+            bool hasBody = false;
+            CefRefPtr<CefPostData> postData = request->GetPostData();
+            if (postData && postData->GetElementCount() > 0) {
+                CefPostData::ElementVector elements;
+                postData->GetElements(elements);
+                std::vector<uint8_t> body;
+                for (auto& element : elements) {
+                    if (element->GetType() == PDE_TYPE_BYTES) {
+                        size_t size = element->GetBytesCount();
+                        if (size > 0) {
+                            size_t start = body.size();
+                            body.resize(start + size);
+                            element->GetBytes(size, body.data() + start);
+                        }
+                    }
+                }
+                if (!body.empty()) {
+                    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                    g_protocolRequestBodies[requestId_] = std::move(body);
+                    hasBody = true;
+                }
+            }
+
+            std::string requestJson = std::string("{\"url\":\"") + escapeProtocolJSONString([NSString stringWithUTF8String:urlStr.c_str()]) +
+                "\",\"method\":\"" + escapeProtocolJSONString([NSString stringWithUTF8String:method.c_str()]) +
+                "\",\"headers\":" + headersJson +
+                ",\"hasBody\":" + (hasBody ? "true" : "false") + "}";
+
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers[requestId_] = this;
+            }
+
+            auto handler = g_protocolRequestHandler.load();
+            if (handler) {
+                char *requestJsonCopy = strdup(requestJson.c_str());
+                handler(requestId_, webviewId_, requestJsonCopy);
+                hasResponseBlock = true;
+            }
+        } else {
+            NSLog(@"Unknown URL format: %s", urlStr.c_str());
+        }
         
         // Copy the results back to the member variables
         mimeType_ = mimeTypeBlock;
@@ -5694,6 +5977,26 @@ public:
     void GetResponseHeaders(CefRefPtr<CefResponse> response,
                           int64_t& response_length,
                           CefString& redirectUrl) override {
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] { return headerReady_ || failed_; });
+            if (failed_) {
+                response->SetStatus(500);
+                response_length = 0;
+                return;
+            }
+
+            response->SetStatus(statusCode_);
+            response->SetStatusText(statusText_);
+            response->SetHeaderMap(headerMap_);
+            auto contentType = responseHeaders_.find("content-type");
+            if (contentType != responseHeaders_.end()) {
+                response->SetMimeType(contentType->second);
+            }
+            response_length = -1;
+            return;
+        }
+
         if (!hasResponse_) {
         response->SetStatus(404);
         response_length = 0;
@@ -5714,6 +6017,32 @@ public:
                 int& bytes_read,
                 CefRefPtr<CefResourceReadCallback> callback) override {
         bytes_read = 0;
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] {
+                return failed_ || !chunks_.empty() || finished_;
+            });
+
+            if (failed_) {
+                return false;
+            }
+
+            if (chunks_.empty()) {
+                return false;
+            }
+
+            std::vector<uint8_t>& chunk = chunks_.front();
+            size_t remaining = chunk.size() - chunkOffset_;
+            bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
+            memcpy(data_out, chunk.data() + chunkOffset_, bytes_read);
+            chunkOffset_ += bytes_read;
+            if (chunkOffset_ >= chunk.size()) {
+                chunks_.pop_front();
+                chunkOffset_ = 0;
+            }
+            return true;
+        }
+
         if (!hasResponse_ || offset_ >= responseData_.size()) {
         return false;
         }
@@ -5725,7 +6054,22 @@ public:
     }
 
     void Cancel() override {
-        // Optionally log cancellation.
+        if (requestId_ != 0) {
+            auto cancelledHandler = g_protocolRequestCancelledHandler.load();
+            if (cancelledHandler) {
+                cancelledHandler(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers.erase(requestId_);
+                g_protocolRequestBodies.erase(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                failed_ = true;
+            }
+            condition_.notify_all();
+        }
     }
 
     private:
@@ -5734,10 +6078,66 @@ public:
     std::vector<char> responseData_;
     bool hasResponse_;
     size_t offset_;
+    uint64_t requestId_;
+    int statusCode_;
+    std::string statusText_;
+    bool headerReady_;
+    bool finished_;
+    bool failed_;
+    std::string errorMessage_;
+    std::map<std::string, std::string> responseHeaders_;
+    CefResponse::HeaderMap headerMap_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::deque<std::vector<uint8_t>> chunks_;
+    size_t chunkOffset_ = 0;
 
     IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
     DISALLOW_COPY_AND_ASSIGN(ElectrobunSchemeHandler);
 };
+
+void ElectrobunSchemeHandler::OnProtocolResponseStart(int statusCode,
+                                                      const std::string& statusText,
+                                                      const std::string& headersJson) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    statusCode_ = statusCode;
+    statusText_ = statusText;
+    headerReady_ = true;
+
+    NSData *jsonData = [NSData dataWithBytes:headersJson.data() length:headersJson.size()];
+    NSArray *pairs = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    if ([pairs isKindOfClass:[NSArray class]]) {
+        for (NSArray *pair in pairs) {
+            if ([pair isKindOfClass:[NSArray class]] && pair.count == 2) {
+                std::string key = [[pair[0] description] UTF8String];
+                std::string value = [[pair[1] description] UTF8String];
+                responseHeaders_[key] = value;
+                headerMap_.insert(std::make_pair(key, value));
+            }
+        }
+    }
+
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseChunk(const uint8_t* chunk, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    chunks_.emplace_back(chunk, chunk + size);
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseFinish() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    finished_ = true;
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseError(const std::string& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    failed_ = true;
+    errorMessage_ = message;
+    condition_.notify_all();
+}
 
 
 // Global map to track browser to webview ID mapping
@@ -5827,6 +6227,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
   bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
   NSLog(@"DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s",
         partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
+
+  forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+    context->RegisterSchemeHandlerFactory(registration.scheme, "", schemeFactory);
+  });
 
   return context;
 }
@@ -8027,6 +8431,190 @@ extern "C" void setJSUtils(GetMimeType getMimeType, GetHTMLForWebviewSync getHTM
     dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_DEFAULT, 0);
     jsWorkerQueue = dispatch_queue_create("com.electrobun.jsworker", attr);    
 
+}
+
+extern "C" void setCustomProtocolConfig(const char* protocolConfigJson) {
+    std::string json = protocolConfigJson ? protocolConfigJson : "[]";
+    setProtocolConfigJson(json);
+}
+
+extern "C" void setCustomProtocolHandlers(ProtocolRequestHandler requestHandler,
+                                            ProtocolRequestCancelledHandler cancelHandler) {
+    g_protocolRequestHandler.store(requestHandler);
+    g_protocolRequestCancelledHandler.store(cancelHandler);
+}
+
+extern "C" const uint8_t* protocolGetRequestBody(uint64_t requestId, uint64_t* outSize) {
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto it = g_protocolRequestBodies.find(requestId);
+    if (it == g_protocolRequestBodies.end()) {
+        if (outSize) *outSize = 0;
+        return nullptr;
+    }
+
+    const auto& body = it->second;
+    if (outSize) {
+        *outSize = body.size();
+    }
+
+    if (body.empty()) {
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+
+    uint8_t* result = static_cast<uint8_t*>(malloc(body.size()));
+    if (!result) {
+        if (outSize) *outSize = 0;
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+    memcpy(result, body.data(), body.size());
+    g_protocolRequestBodies.erase(it);
+    return result;
+}
+
+extern "C" void freeProtocolBuffer(const uint8_t* buffer) {
+    if (buffer) {
+        free((void*)buffer);
+    }
+}
+
+static NSDictionary<NSString*, NSString*> *protocolHeadersFromJSONString(const char* headersJson) {
+    if (!headersJson || headersJson[0] == '\0') {
+        return @{};
+    }
+
+    NSData *jsonData = [NSData dataWithBytes:headersJson length:strlen(headersJson)];
+    NSArray *pairs = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:nil];
+    if (![pairs isKindOfClass:[NSArray class]]) {
+        return @{};
+    }
+
+    NSMutableDictionary<NSString*, NSString*> *headers = [NSMutableDictionary dictionary];
+    for (NSArray *pair in pairs) {
+        if ([pair isKindOfClass:[NSArray class]] && pair.count == 2) {
+            NSString *key = [pair[0] description];
+            NSString *value = [pair[1] description];
+            headers[key] = value;
+        }
+    }
+
+    return headers;
+}
+
+extern "C" void protocolStartResponse(uint64_t requestId,
+                                        int statusCode,
+                                        const char* statusText,
+                                        const char* headersJson) {
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseStart(statusCode, statusText ? statusText : "OK", headersJson ? headersJson : "[]");
+            return;
+        }
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto it = g_pendingWKProtocolTasks.find(requestId);
+        if (it == g_pendingWKProtocolTasks.end()) {
+            return;
+        }
+
+        id<WKURLSchemeTask> task = it->second;
+        NSDictionary<NSString*, NSString*> *headers = protocolHeadersFromJSONString(headersJson);
+        NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:task.request.URL
+                                                                  statusCode:statusCode
+                                                                 HTTPVersion:@"HTTP/1.1"
+                                                                headerFields:headers];
+        if (!response) {
+            NSError *error = [NSError errorWithDomain:@"ElectrobunProtocol"
+                                                 code:500
+                                             userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithUTF8String:statusText ?: "Protocol response failed"]}];
+            [task didFailWithError:error];
+            cleanupPendingProtocolTask(requestId);
+            return;
+        }
+        [task didReceiveResponse:response];
+    });
+}
+
+extern "C" void protocolWriteResponseChunk(uint64_t requestId, const uint8_t* chunk, uint64_t size) {
+    if (!chunk || size == 0) {
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseChunk(chunk, (size_t)size);
+            return;
+        }
+    }
+
+    NSData *data = [NSData dataWithBytes:chunk length:(NSUInteger)size];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto it = g_pendingWKProtocolTasks.find(requestId);
+        if (it == g_pendingWKProtocolTasks.end()) {
+            return;
+        }
+        [it->second didReceiveData:data];
+    });
+}
+
+extern "C" void protocolFinishResponse(uint64_t requestId) {
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseFinish();
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto it = g_pendingWKProtocolTasks.find(requestId);
+        if (it == g_pendingWKProtocolTasks.end()) {
+            return;
+        }
+
+        [it->second didFinish];
+        cleanupPendingProtocolTask(requestId);
+    });
+}
+
+extern "C" void protocolErrorResponse(uint64_t requestId, const char* message) {
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseError(message ? message : "Protocol request failed");
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto it = g_pendingWKProtocolTasks.find(requestId);
+        if (it == g_pendingWKProtocolTasks.end()) {
+            return;
+        }
+
+        NSString *messageText = [NSString stringWithUTF8String:message ?: "Protocol request failed"];
+        NSError *error = [NSError errorWithDomain:@"ElectrobunProtocol"
+                                             code:500
+                                         userInfo:@{NSLocalizedDescriptionKey: messageText}];
+        [it->second didFailWithError:error];
+        cleanupPendingProtocolTask(requestId);
+    });
 }
 
 // MARK: - Webview HTML Content Management (replaces JSCallback approach)

@@ -13,6 +13,7 @@ import { navigationTests } from "./navigation.test";
 import { utilsTests } from "./utils.test";
 import { screenTests } from "./screen.test";
 import { sessionTests } from "./session.test";
+import { protocolTests } from "./protocol.test";
 import { eventsTests } from "./events.test";
 import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
@@ -45,6 +46,7 @@ export const allTests: TestDefinition[] = [
   ...utilsTests,
   ...screenTests,
   ...sessionTests,
+  ...protocolTests,
   ...eventsTests,
   ...preloadTests,
   ...updaterTests,
@@ -85,6 +87,7 @@ export {
   utilsTests,
   screenTests,
   sessionTests,
+  protocolTests,
   eventsTests,
   preloadTests,
   updaterTests,

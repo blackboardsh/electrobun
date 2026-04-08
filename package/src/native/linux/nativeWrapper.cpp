@@ -17,6 +17,7 @@
 #include <memory>
 #include <pthread.h>
 #include <map>
+#include <unordered_map>
 #include <iostream>
 #include <cstring>
 #include <dlfcn.h>
@@ -37,6 +38,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <fstream>
+#include <deque>
 #include <set>
 #include <cstdarg>
 #include "dawn/webgpu.h"
@@ -59,6 +61,7 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/protocol_config.h"
 
 using namespace electrobun;
 
@@ -143,6 +146,7 @@ typedef void (*WindowBlurCallback)(uint32_t windowId);
 
 // Forward declaration for WebKit scheme handler
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
+static void handleCustomProtocolURIScheme(WebKitURISchemeRequest* request, gpointer user_data);
 
 // Forward declaration for partition context management
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
@@ -176,6 +180,24 @@ static std::mutex webviewHTMLMutex;
 // Global variables for CEF cache path isolation
 static std::string g_electrobunChannel = "";
 static std::string g_electrobunIdentifier = "";
+static ProtocolRequestHandler g_protocolRequestHandler = nullptr;
+static ProtocolRequestCancelledHandler g_protocolRequestCancelledHandler = nullptr;
+static std::atomic<uint64_t> g_nextProtocolRequestId{1};
+static std::mutex g_protocolRequestMutex;
+static std::unordered_map<uint64_t, std::vector<uint8_t>> g_protocolRequestBodies;
+static std::unordered_map<uint64_t, WebKitURISchemeRequest*> g_pendingWebKitProtocolRequests;
+
+struct PendingWebKitProtocolResponseState {
+    int statusCode = 200;
+    std::string statusText = "OK";
+    std::string headersJson = "[]";
+    std::vector<uint8_t> body;
+};
+
+static std::unordered_map<uint64_t, PendingWebKitProtocolResponseState> g_pendingWebKitResponseStates;
+
+class ViewsResourceHandler;
+static std::unordered_map<uint64_t, ViewsResourceHandler*> g_pendingCEFProtocolHandlers;
 
 // Forward declarations for HTML content management
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
@@ -204,6 +226,216 @@ GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, Zi
 GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
 void applyApplicationMenuToWindow(GtkWidget* window);
 void initializeGTK();
+void dispatchProtocolRequestSync(std::function<void()> callback);
+
+static std::string escapeProtocolJSONString(const std::string& value) {
+    std::string output;
+    output.reserve(value.size() + 16);
+
+    for (char c : value) {
+        switch (c) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default: output += c; break;
+        }
+    }
+
+    return output;
+}
+
+static std::string extractProtocolScheme(const std::string& url) {
+    size_t schemeSeparator = url.find(':');
+    if (schemeSeparator == std::string::npos) {
+        return "";
+    }
+    return normalizeProtocolScheme(url.substr(0, schemeSeparator));
+}
+
+static std::vector<std::pair<std::string, std::string>> parseProtocolHeaderPairs(const std::string& headersJson) {
+    std::vector<std::pair<std::string, std::string>> headers;
+    size_t pos = 0;
+
+    auto skipWhitespace = [&]() {
+        while (pos < headersJson.size() && std::isspace(static_cast<unsigned char>(headersJson[pos]))) {
+            pos++;
+        }
+    };
+
+    auto parseString = [&]() -> std::string {
+        if (pos >= headersJson.size() || headersJson[pos] != '"') {
+            return "";
+        }
+
+        pos++;
+        std::string result;
+        while (pos < headersJson.size()) {
+            char c = headersJson[pos++];
+            if (c == '\\' && pos < headersJson.size()) {
+                char escaped = headersJson[pos++];
+                switch (escaped) {
+                    case 'n': result += '\n'; break;
+                    case 'r': result += '\r'; break;
+                    case 't': result += '\t'; break;
+                    case '\\': result += '\\'; break;
+                    case '"': result += '"'; break;
+                    default: result += escaped; break;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                break;
+            }
+
+            result += c;
+        }
+
+        return result;
+    };
+
+    skipWhitespace();
+    if (pos >= headersJson.size() || headersJson[pos] != '[') {
+        return headers;
+    }
+
+    pos++;
+    while (pos < headersJson.size()) {
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ']') {
+            break;
+        }
+
+        if (pos >= headersJson.size() || headersJson[pos] != '[') {
+            break;
+        }
+
+        pos++;
+        skipWhitespace();
+        std::string key = parseString();
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ',') {
+            pos++;
+        }
+        skipWhitespace();
+        std::string value = parseString();
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ']') {
+            pos++;
+        }
+
+        headers.emplace_back(std::move(key), std::move(value));
+
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ',') {
+            pos++;
+        }
+    }
+
+    return headers;
+}
+
+static std::string buildProtocolHeadersJSON(const CefRequest::HeaderMap& headerMap) {
+    std::string json = "[";
+    bool firstHeader = true;
+    for (const auto& header : headerMap) {
+        if (!firstHeader) {
+            json += ",";
+        }
+        firstHeader = false;
+        json += "[\"" + escapeProtocolJSONString(header.first.ToString()) + "\",\"" +
+                escapeProtocolJSONString(header.second.ToString()) + "\"]";
+    }
+    json += "]";
+    return json;
+}
+
+static std::string buildProtocolHeadersJSON(SoupMessageHeaders* headers) {
+    if (!headers) {
+        return "[]";
+    }
+
+    std::string json = "[";
+    bool firstHeader = true;
+    struct Context {
+        std::string* json;
+        bool* firstHeader;
+    } context{&json, &firstHeader};
+
+    soup_message_headers_foreach(
+        headers,
+        [](const char* name, const char* value, gpointer user_data) {
+            auto* context = static_cast<Context*>(user_data);
+            if (!*context->firstHeader) {
+                *context->json += ",";
+            }
+            *context->firstHeader = false;
+            *context->json += "[\"" + escapeProtocolJSONString(name ? name : "") + "\",\"" +
+                              escapeProtocolJSONString(value ? value : "") + "\"]";
+        },
+        &context);
+
+    json += "]";
+    return json;
+}
+
+static std::vector<uint8_t> readProtocolRequestBody(CefRefPtr<CefPostData> postData) {
+    std::vector<uint8_t> body;
+    if (!postData || postData->GetElementCount() == 0) {
+        return body;
+    }
+
+    CefPostData::ElementVector elements;
+    postData->GetElements(elements);
+    for (auto& element : elements) {
+        if (element->GetType() != PDE_TYPE_BYTES) {
+            continue;
+        }
+
+        size_t size = element->GetBytesCount();
+        if (size == 0) {
+            continue;
+        }
+
+        size_t start = body.size();
+        body.resize(start + size);
+        element->GetBytes(size, body.data() + start);
+    }
+
+    return body;
+}
+
+static std::vector<uint8_t> readProtocolRequestBody(GInputStream* stream) {
+    std::vector<uint8_t> body;
+    if (!stream) {
+        return body;
+    }
+
+    uint8_t buffer[4096];
+    GError* error = nullptr;
+    gssize bytesRead = 0;
+    while ((bytesRead = g_input_stream_read(stream, buffer, sizeof(buffer), nullptr, &error)) > 0) {
+        body.insert(body.end(), buffer, buffer + bytesRead);
+    }
+
+    if (error) {
+        g_error_free(error);
+    }
+
+    return body;
+}
+
+static std::string buildProtocolRequestJson(const std::string& url,
+                                            const std::string& method,
+                                            const std::string& headersJson,
+                                            bool hasBody) {
+    return std::string("{\"url\":\"") + escapeProtocolJSONString(url) +
+           "\",\"method\":\"" + escapeProtocolJSONString(method) +
+           "\",\"headers\":" + headersJson +
+           ",\"hasBody\":" + (hasBody ? "true" : "false") + "}";
+}
 
 // X11 Window structure to replace GTK windows
 struct X11Window {
@@ -527,141 +759,220 @@ public:
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
-    explicit ViewsResourceHandler(uint32_t webviewId) : offset_(0), webviewId_(webviewId) {}
+    explicit ViewsResourceHandler(uint32_t webviewId)
+        : hasResponse_(false), offset_(0), webviewId_(webviewId), requestId_(0), statusCode_(200), headerReady_(false), finished_(false), failed_(false) {}
+
+    void OnProtocolResponseStart(int statusCode, const std::string& statusText, const std::string& headersJson);
+    void OnProtocolResponseChunk(const uint8_t* chunk, size_t size);
+    void OnProtocolResponseFinish();
+    void OnProtocolResponseError(const std::string& message);
     
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
-        std::string url = request->GetURL();
-        
-        // Parse the URI to get everything after views://
-        std::string fullPath = "index.html"; // default
+        handle_request = true;
+
+        std::string url = request->GetURL().ToString();
+        std::string scheme = extractProtocolScheme(url);
+        data_.clear();
+        mimeType_.clear();
+        hasResponse_ = false;
+        offset_ = 0;
+        requestId_ = 0;
+        statusCode_ = 200;
+        statusText_ = "OK";
+        headerReady_ = false;
+        finished_ = false;
+        failed_ = false;
+        errorMessage_.clear();
+        responseHeaders_.clear();
+        headerMap_.clear();
+        chunks_.clear();
+        chunkOffset_ = 0;
+
         if (url.find("views://") == 0) {
-            fullPath = url.substr(8); // Skip "views://"
-        }
-        
-        // Check if this is the internal HTML request
-        if (fullPath == "internal/index.html") {
-            // Use stored HTML content for this specific webview
-            const char* htmlContent = getWebviewHTMLContent(webviewId_);
-            if (htmlContent) {
-                data_ = std::string(htmlContent);
-                mimeType_ = "text/html";
-                free((void*)htmlContent); // Free the strdup'd memory
-                handle_request = true;
-                return true;
-            } else {
+            std::string fullPath = url.substr(8);
+            if (fullPath.empty()) {
+                fullPath = "index.html";
+            }
+
+            if (fullPath == "internal/index.html") {
+                const char* htmlContent = getWebviewHTMLContent(webviewId_);
+                if (htmlContent) {
+                    data_ = std::string(htmlContent);
+                    mimeType_ = "text/html";
+                    free((void*)htmlContent);
+                    hasResponse_ = true;
+                    return true;
+                }
+
                 data_ = "<html><body>No content set</body></html>";
                 mimeType_ = "text/html";
-                handle_request = true;
+                hasResponse_ = true;
                 return true;
             }
-        }
-        
-        // Build paths relative to current directory (bin)
-        char* cwd = g_get_current_dir();
-        gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
-        gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
 
-        // Check if ASAR archive exists
-        if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
-            // Thread-safe lazy-load ASAR archive on first use
-            std::call_once(g_asarArchiveInitFlag, [asarPath]() {
-                g_asarArchive = asar_open(asarPath);
-                if (!g_asarArchive) {
-                    printf("ERROR CEF loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
-                }
-            });
+            char* cwd = g_get_current_dir();
+            gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
+            gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
 
-            // If ASAR archive is loaded, try to read from it
-            if (g_asarArchive) {
-                // The ASAR contains the entire app directory, so prepend "views/" to the path
-                std::string asarFilePath = "views/" + fullPath;
+            if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
+                std::call_once(g_asarArchiveInitFlag, [asarPath]() {
+                    g_asarArchive = asar_open(asarPath);
+                    if (!g_asarArchive) {
+                        printf("ERROR CEF loadViewsFile: Failed to open ASAR archive at %s\n", asarPath);
+                    }
+                });
 
-                size_t fileSize = 0;
-                const uint8_t* fileData = nullptr;
-                
-                // Protect ASAR read operations with mutex
-                {
-                    std::lock_guard<std::mutex> lock(g_asarReadMutex);
-                    fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
-                    
-                    if (fileData && fileSize > 0) {
-                        // Create std::string that copies the buffer while holding the lock
-                        data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
-                        // Free the ASAR buffer before releasing the lock
-                        asar_free_buffer(fileData, fileSize);
+                if (g_asarArchive) {
+                    std::string asarFilePath = "views/" + fullPath;
+                    size_t fileSize = 0;
+                    const uint8_t* fileData = nullptr;
+
+                    {
+                        std::lock_guard<std::mutex> lock(g_asarReadMutex);
+                        fileData = asar_read_file(g_asarArchive, asarFilePath.c_str(), &fileSize);
+                        if (fileData && fileSize > 0) {
+                            data_ = std::string(reinterpret_cast<const char*>(fileData), fileSize);
+                            asar_free_buffer(fileData, fileSize);
+                        }
+                    }
+
+                    if (!data_.empty()) {
+                        std::string mimeType = "application/octet-stream";
+                        if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
+                        else if (fullPath.find(".css") != std::string::npos) mimeType = "text/css";
+                        else if (fullPath.find(".js") != std::string::npos) mimeType = "text/javascript";
+                        else if (fullPath.find(".json") != std::string::npos) mimeType = "application/json";
+                        else if (fullPath.find(".png") != std::string::npos) mimeType = "image/png";
+                        else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) mimeType = "image/jpeg";
+                        else if (fullPath.find(".svg") != std::string::npos) mimeType = "image/svg+xml";
+                        else if (fullPath.find(".woff") != std::string::npos) mimeType = "font/woff";
+                        else if (fullPath.find(".woff2") != std::string::npos) mimeType = "font/woff2";
+                        else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
+                        mimeType_ = mimeType;
+
+                        g_free(cwd);
+                        g_free(resourcesDir);
+                        g_free(asarPath);
+
+                        hasResponse_ = true;
+                        return true;
                     }
                 }
+            }
 
-                if (!data_.empty()) {
+            gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
+            gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
 
-                    // Determine MIME type
-                    std::string mimeType = "application/octet-stream";
-                    if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
-                    else if (fullPath.find(".css") != std::string::npos) mimeType = "text/css";
-                    else if (fullPath.find(".js") != std::string::npos) mimeType = "text/javascript";
-                    else if (fullPath.find(".json") != std::string::npos) mimeType = "application/json";
-                    else if (fullPath.find(".png") != std::string::npos) mimeType = "image/png";
-                    else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) mimeType = "image/jpeg";
-                    else if (fullPath.find(".svg") != std::string::npos) mimeType = "image/svg+xml";
-                    else if (fullPath.find(".woff") != std::string::npos) mimeType = "font/woff";
-                    else if (fullPath.find(".woff2") != std::string::npos) mimeType = "font/woff2";
-                    else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
-                    mimeType_ = mimeType;
+            if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+                gsize fileSize;
+                gchar* fileContent;
+                GError* error = nullptr;
+
+                if (g_file_get_contents(filePath, &fileContent, &fileSize, &error)) {
+                    data_ = std::string(fileContent, fileSize);
+                    g_free(fileContent);
+                    mimeType_ = getMimeTypeFromUrl(fullPath);
 
                     g_free(cwd);
                     g_free(resourcesDir);
                     g_free(asarPath);
+                    g_free(viewsDir);
+                    g_free(filePath);
 
-                    handle_request = true;
+                    hasResponse_ = true;
                     return true;
-                } else {
-                    // Fall through to flat file reading
                 }
-            }
-        }
 
-        // Fallback: Read from flat file system (for non-ASAR builds or missing files)
-        gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
-        gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
-
-
-        // Check if file exists and read it
-        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-            gsize fileSize;
-            gchar* fileContent;
-            GError* error = nullptr;
-
-            if (g_file_get_contents(filePath, &fileContent, &fileSize, &error)) {
-                data_ = std::string(fileContent, fileSize);
-                g_free(fileContent);
-                
-                // Determine MIME type using shared function
-                mimeType_ = getMimeTypeFromUrl(fullPath);
-                
-                
-                g_free(cwd);
-                g_free(viewsDir);
-                g_free(filePath);
-                
-                handle_request = true;
-                return true;
-            } else {
                 printf("CEF views:// failed to read file: %s\n", error ? error->message : "unknown error");
                 if (error) g_error_free(error);
+            } else {
+                printf("CEF views:// file not found: %s\n", filePath);
             }
-        } else {
-            printf("CEF views:// file not found: %s\n", filePath);
+
+            g_free(cwd);
+            g_free(resourcesDir);
+            g_free(asarPath);
+            g_free(viewsDir);
+            g_free(filePath);
+            hasResponse_ = false;
+            return false;
         }
-        
-        g_free(cwd);
-        g_free(viewsDir);
-        g_free(filePath);
-        
-        handle_request = false;
+
+        if (hasProtocolRegistration(scheme)) {
+            requestId_ = g_nextProtocolRequestId.fetch_add(1);
+            hasResponse_ = true;
+            offset_ = 0;
+
+            std::string method = request->GetMethod().ToString();
+            CefRequest::HeaderMap headerMap;
+            request->GetHeaderMap(headerMap);
+            std::string headersJson = buildProtocolHeadersJSON(headerMap);
+
+            std::vector<uint8_t> body = readProtocolRequestBody(request->GetPostData());
+            bool hasBody = !body.empty();
+            if (hasBody) {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_protocolRequestBodies[requestId_] = std::move(body);
+            }
+
+            std::string requestJson = buildProtocolRequestJson(url, method, headersJson, hasBody);
+
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers[requestId_] = this;
+            }
+
+            if (g_protocolRequestHandler) {
+                uint64_t requestId = requestId_;
+                uint32_t webviewId = webviewId_;
+                dispatchProtocolRequestSync([requestId, webviewId, requestJson]() {
+                    char* requestJsonCopy = strdup(requestJson.c_str());
+                    g_protocolRequestHandler(requestId, webviewId, requestJsonCopy);
+                });
+                return true;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers.erase(requestId_);
+                g_protocolRequestBodies.erase(requestId_);
+            }
+            requestId_ = 0;
+            hasResponse_ = false;
+            return false;
+        }
+
+        hasResponse_ = false;
         return false;
     }
     
     void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] { return headerReady_ || failed_; });
+            if (failed_) {
+                response->SetStatus(500);
+                response_length = 0;
+                return;
+            }
+
+            response->SetStatus(statusCode_);
+            response->SetStatusText(statusText_);
+            response->SetHeaderMap(headerMap_);
+            auto contentType = responseHeaders_.find("content-type");
+            if (contentType != responseHeaders_.end()) {
+                response->SetMimeType(contentType->second);
+            }
+            response_length = -1;
+            return;
+        }
+
+        if (!hasResponse_) {
+            response->SetStatus(404);
+            response_length = 0;
+            return;
+        }
+
         response->SetStatus(200);
         response->SetMimeType(mimeType_);
         response->SetStatusText("OK");
@@ -669,32 +980,126 @@ public:
     }
     
     bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
-        bool has_data = false;
         bytes_read = 0;
-        
-        if (offset_ < data_.length()) {
-            int transfer_size = std::min(bytes_to_read, static_cast<int>(data_.length() - offset_));
-            memcpy(data_out, data_.c_str() + offset_, transfer_size);
-            offset_ += transfer_size;
-            bytes_read = transfer_size;
-            has_data = true;
+
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] {
+                return failed_ || !chunks_.empty() || finished_;
+            });
+
+            if (failed_) {
+                return false;
+            }
+
+            if (chunks_.empty()) {
+                return false;
+            }
+
+            std::vector<uint8_t>& chunk = chunks_.front();
+            size_t remaining = chunk.size() - chunkOffset_;
+            bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
+            memcpy(data_out, chunk.data() + chunkOffset_, bytes_read);
+            chunkOffset_ += bytes_read;
+            if (chunkOffset_ >= chunk.size()) {
+                chunks_.pop_front();
+                chunkOffset_ = 0;
+            }
+            return true;
         }
-        
-        return has_data;
+
+        if (offset_ >= data_.length()) {
+            return false;
+        }
+
+        int transfer_size = std::min(bytes_to_read, static_cast<int>(data_.length() - offset_));
+        memcpy(data_out, data_.c_str() + offset_, transfer_size);
+        offset_ += transfer_size;
+        bytes_read = transfer_size;
+        return true;
     }
     
     void Cancel() override {
-        // Nothing to cancel
+        if (requestId_ != 0) {
+            if (g_protocolRequestCancelledHandler) {
+                g_protocolRequestCancelledHandler(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers.erase(requestId_);
+                g_protocolRequestBodies.erase(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                failed_ = true;
+            }
+            condition_.notify_all();
+        }
     }
     
 private:
     std::string data_;
     std::string mimeType_;
+    bool hasResponse_;
     size_t offset_;
     uint32_t webviewId_;
+    uint64_t requestId_;
+    int statusCode_;
+    std::string statusText_;
+    bool headerReady_;
+    bool finished_;
+    bool failed_;
+    std::string errorMessage_;
+    std::map<std::string, std::string> responseHeaders_;
+    CefResponse::HeaderMap headerMap_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::deque<std::vector<uint8_t>> chunks_;
+    size_t chunkOffset_ = 0;
     
     IMPLEMENT_REFCOUNTING(ViewsResourceHandler);
 };
+
+void ViewsResourceHandler::OnProtocolResponseStart(int statusCode,
+                                                   const std::string& statusText,
+                                                   const std::string& headersJson) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    statusCode_ = statusCode;
+    statusText_ = statusText.empty() ? "OK" : statusText;
+    headerReady_ = true;
+    headerMap_.clear();
+    responseHeaders_.clear();
+
+    for (const auto& header : parseProtocolHeaderPairs(headersJson)) {
+        std::string normalizedKey = header.first;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        responseHeaders_[normalizedKey] = header.second;
+        headerMap_.insert(std::make_pair(header.first, header.second));
+    }
+
+    condition_.notify_all();
+}
+
+void ViewsResourceHandler::OnProtocolResponseChunk(const uint8_t* chunk, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    chunks_.emplace_back(chunk, chunk + size);
+    condition_.notify_all();
+}
+
+void ViewsResourceHandler::OnProtocolResponseFinish() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    finished_ = true;
+    condition_.notify_all();
+}
+
+void ViewsResourceHandler::OnProtocolResponseError(const std::string& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    failed_ = true;
+    errorMessage_ = message;
+    condition_.notify_all();
+}
 
 // CEF views:// scheme handler factory
 class ViewsSchemeHandlerFactory : public CefSchemeHandlerFactory {
@@ -756,6 +1161,13 @@ public:
     
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
         command_line->AppendSwitchWithValue("custom-scheme", "views");
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            command_line->AppendSwitchWithValue("custom-scheme", registration.scheme);
+        });
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
 
         // Linux default flags — can be overridden via chromiumFlags in config
         // GPU acceleration disabled by default for VM compatibility;
@@ -792,6 +1204,16 @@ public:
             CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_CSP_BYPASSING |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            int options = 0;
+            if (registration.privileges.standard) options |= CEF_SCHEME_OPTION_STANDARD;
+            if (registration.privileges.secure) options |= CEF_SCHEME_OPTION_SECURE;
+            if (registration.privileges.corsEnabled) options |= CEF_SCHEME_OPTION_CORS_ENABLED;
+            if (registration.privileges.bypassCSP) options |= CEF_SCHEME_OPTION_CSP_BYPASSING;
+            if (registration.privileges.supportFetchAPI) options |= CEF_SCHEME_OPTION_FETCH_ENABLED;
+            registrar->AddCustomScheme(registration.scheme, options);
+        });
     }
     
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
@@ -802,10 +1224,21 @@ public:
         // In multi-process mode, return nullptr so render process uses the helper
         return nullptr;
     }
+
+    void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
+    }
     
     
     void OnContextInitialized() override {
-        CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
+        CefRefPtr<ViewsSchemeHandlerFactory> schemeFactory = new ViewsSchemeHandlerFactory();
+        CefRegisterSchemeHandlerFactory("views", "", schemeFactory);
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            CefRegisterSchemeHandlerFactory(registration.scheme, "", schemeFactory);
+        });
     }
     
     // Render process handler methods
@@ -1120,6 +1553,11 @@ public:
         CefRefPtr<CefFrame> frame,
         CefRefPtr<CefRequest> request,
         CefRefPtr<CefResponse> response) override {
+        std::string requestUrl = request->GetURL().ToString();
+        std::string scheme = extractProtocolScheme(requestUrl);
+        if (!scheme.empty() && scheme != "views" && hasProtocolRegistration(scheme)) {
+            return nullptr;
+        }
         
         // Only inject scripts into HTML responses in main frame
         if (frame->IsMain() && 
@@ -2041,6 +2479,7 @@ bool initializeCEF() {
     std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
     if (!buildJsonContent.empty()) {
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+        electrobun::loadProtocolConfigFromBuildJson(buildJsonContent);
     }
 
     CefSettings settings;
@@ -3611,6 +4050,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     if (!registered) {
         fprintf(stderr, "WARNING: Failed to register views:// scheme handler for partition context\n");
     }
+
+    forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+        context->RegisterSchemeHandlerFactory(registration.scheme, "", schemeFactory);
+    });
     
     return context;
 }
@@ -5149,6 +5592,174 @@ void applyApplicationMenuToX11Window(X11Window* x11win) {
     fflush(stdout);
 }
 
+static uint32_t getWebviewIdForURISchemeRequest(WebKitURISchemeRequest* request) {
+    uint32_t webviewId = 0;
+    WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+    if (!requestingWebView) {
+        return webviewId;
+    }
+
+    std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+    for (auto& [id, view] : g_webviewMap) {
+        auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+        if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
+            webviewId = id;
+            break;
+        }
+    }
+
+    return webviewId;
+}
+
+static GInputStream* createMemoryInputStreamFromBytes(const std::vector<uint8_t>& data) {
+    if (data.empty()) {
+        return g_memory_input_stream_new();
+    }
+
+    gpointer bytes = g_malloc(data.size());
+    memcpy(bytes, data.data(), data.size());
+    return g_memory_input_stream_new_from_data(bytes, data.size(), g_free);
+}
+
+static void cleanupPendingWebKitProtocolRequestLocked(uint64_t requestId) {
+    auto requestIt = g_pendingWebKitProtocolRequests.find(requestId);
+    if (requestIt != g_pendingWebKitProtocolRequests.end()) {
+        g_object_unref(requestIt->second);
+        g_pendingWebKitProtocolRequests.erase(requestIt);
+    }
+    g_pendingWebKitResponseStates.erase(requestId);
+    g_protocolRequestBodies.erase(requestId);
+}
+
+static void completePendingWebKitProtocolResponse(uint64_t requestId) {
+    WebKitURISchemeRequest* request = nullptr;
+    PendingWebKitProtocolResponseState state;
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto requestIt = g_pendingWebKitProtocolRequests.find(requestId);
+        if (requestIt == g_pendingWebKitProtocolRequests.end()) {
+            cleanupPendingWebKitProtocolRequestLocked(requestId);
+            return;
+        }
+
+        request = WEBKIT_URI_SCHEME_REQUEST(g_object_ref(requestIt->second));
+
+        auto stateIt = g_pendingWebKitResponseStates.find(requestId);
+        if (stateIt != g_pendingWebKitResponseStates.end()) {
+            state = stateIt->second;
+        }
+
+        cleanupPendingWebKitProtocolRequestLocked(requestId);
+    }
+
+    GInputStream* stream = createMemoryInputStreamFromBytes(state.body);
+
+#if WEBKIT_CHECK_VERSION(2, 36, 0)
+    WebKitURISchemeResponse* response = webkit_uri_scheme_response_new(stream, static_cast<gint64>(state.body.size()));
+    SoupMessageHeaders* responseHeaders = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
+    std::string contentType;
+    for (const auto& header : parseProtocolHeaderPairs(state.headersJson)) {
+        soup_message_headers_append(responseHeaders, header.first.c_str(), header.second.c_str());
+        std::string normalizedKey = header.first;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (normalizedKey == "content-type") {
+            contentType = header.second;
+        }
+    }
+
+    webkit_uri_scheme_response_set_status(response, state.statusCode, state.statusText.empty() ? nullptr : state.statusText.c_str());
+    if (!contentType.empty()) {
+        webkit_uri_scheme_response_set_content_type(response, contentType.c_str());
+    }
+    webkit_uri_scheme_response_set_http_headers(response, responseHeaders);
+    webkit_uri_scheme_request_finish_with_response(request, response);
+    g_object_unref(response);
+#else
+    std::string contentType = "application/octet-stream";
+    for (const auto& header : parseProtocolHeaderPairs(state.headersJson)) {
+        std::string normalizedKey = header.first;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if (normalizedKey == "content-type") {
+            contentType = header.second;
+            break;
+        }
+    }
+
+    webkit_uri_scheme_request_finish(request, stream, static_cast<gint64>(state.body.size()), contentType.c_str());
+#endif
+
+    g_object_unref(stream);
+    g_object_unref(request);
+}
+
+static void completePendingWebKitProtocolError(uint64_t requestId, const std::string& message) {
+    WebKitURISchemeRequest* request = nullptr;
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto requestIt = g_pendingWebKitProtocolRequests.find(requestId);
+        if (requestIt == g_pendingWebKitProtocolRequests.end()) {
+            cleanupPendingWebKitProtocolRequestLocked(requestId);
+            return;
+        }
+
+        request = WEBKIT_URI_SCHEME_REQUEST(g_object_ref(requestIt->second));
+        cleanupPendingWebKitProtocolRequestLocked(requestId);
+    }
+
+    GError* error = g_error_new(G_IO_ERROR, G_IO_ERROR_FAILED, "%s", message.c_str());
+    webkit_uri_scheme_request_finish_error(request, error);
+    g_error_free(error);
+    g_object_unref(request);
+}
+
+static void handleCustomProtocolURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
+    const char* uri = webkit_uri_scheme_request_get_uri(request);
+    if (!uri) {
+        return;
+    }
+
+    uint32_t webviewId = getWebviewIdForURISchemeRequest(request);
+    std::string method = webkit_uri_scheme_request_get_http_method(request) ? webkit_uri_scheme_request_get_http_method(request) : "GET";
+    std::string headersJson = buildProtocolHeadersJSON(webkit_uri_scheme_request_get_http_headers(request));
+
+    std::vector<uint8_t> body;
+#if WEBKIT_CHECK_VERSION(2, 40, 0)
+    GInputStream* bodyStream = webkit_uri_scheme_request_get_http_body(request);
+    if (bodyStream) {
+        body = readProtocolRequestBody(bodyStream);
+        g_object_unref(bodyStream);
+    }
+#endif
+
+    bool hasBody = !body.empty();
+    std::string requestJson = buildProtocolRequestJson(uri, method, headersJson, hasBody);
+    uint64_t requestId = g_nextProtocolRequestId.fetch_add(1);
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        g_pendingWebKitProtocolRequests[requestId] = WEBKIT_URI_SCHEME_REQUEST(g_object_ref(request));
+        g_pendingWebKitResponseStates[requestId] = PendingWebKitProtocolResponseState();
+        if (hasBody) {
+            g_protocolRequestBodies[requestId] = std::move(body);
+        }
+    }
+
+    if (g_protocolRequestHandler) {
+        dispatchProtocolRequestSync([requestId, webviewId, requestJson]() {
+            char* requestJsonCopy = strdup(requestJson.c_str());
+            g_protocolRequestHandler(requestId, webviewId, requestJsonCopy);
+        });
+    } else {
+        completePendingWebKitProtocolError(requestId, "No protocol handler configured");
+    }
+}
+
 // views:// URI scheme handler callback
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
     const char* uri = webkit_uri_scheme_request_get_uri(request);
@@ -5164,19 +5775,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     if (strcmp(fullPath, "internal/index.html") == 0) {
         fflush(stdout);
         
-        // Resolve the webviewId by matching the requesting WebKitWebView to g_webviewMap
-        uint32_t webviewId = 0;
-        WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
-        if (requestingWebView) {
-            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-            for (auto& [id, view] : g_webviewMap) {
-                auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
-                if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
-                    webviewId = id;
-                    break;
-                }
-            }
-        }
+        uint32_t webviewId = getWebviewIdForURISchemeRequest(request);
         
         // Use stored HTML content for this specific webview
         const char* htmlContent = getWebviewHTMLContent(webviewId);
@@ -5322,6 +5921,9 @@ void initializeGTK() {
             // Register the views:// URI scheme handler AFTER GTK is initialized
             WebKitWebContext* context = webkit_web_context_get_default();
             webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+            forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+                webkit_web_context_register_uri_scheme(context, registration.scheme.c_str(), handleCustomProtocolURIScheme, nullptr, nullptr);
+            });
         }
     }
     // Notify all waiting threads that GTK is initialized
@@ -5461,6 +6063,12 @@ dispatch_sync_main_void(Func&& func) {
     }
 }
 
+void dispatchProtocolRequestSync(std::function<void()> callback) {
+    dispatch_sync_main_void([callback = std::move(callback)]() {
+        callback();
+    });
+}
+
 // Store for partition-specific contexts (for session storage synchronization)
 static std::map<std::string, WebKitWebContext*> g_partitionContexts;
 
@@ -5589,9 +6197,12 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
             context = webkit_web_context_new_with_website_data_manager(dataManager);
             g_object_unref(dataManager);
         }
-
+        
         // Register views:// scheme handler for this partition context
         webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            webkit_web_context_register_uri_scheme(context, registration.scheme.c_str(), handleCustomProtocolURIScheme, nullptr, nullptr);
+        });
         
         g_partitionContexts[partition] = context;
     }
@@ -10888,6 +11499,145 @@ ELECTROBUN_EXPORT void setDockIconVisible(bool visible) {
 ELECTROBUN_EXPORT bool isDockIconVisible() {
     // Not supported on Linux
     return true;
+}
+
+ELECTROBUN_EXPORT void setCustomProtocolConfig(const char* protocolConfigJson) {
+    setProtocolConfigJson(protocolConfigJson ? protocolConfigJson : "[]");
+}
+
+ELECTROBUN_EXPORT void setCustomProtocolHandlers(ProtocolRequestHandler requestHandler,
+                                                 ProtocolRequestCancelledHandler cancelHandler) {
+    g_protocolRequestHandler = requestHandler;
+    g_protocolRequestCancelledHandler = cancelHandler;
+}
+
+ELECTROBUN_EXPORT const uint8_t* protocolGetRequestBody(uint64_t requestId, uint64_t* outSize) {
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto it = g_protocolRequestBodies.find(requestId);
+    if (it == g_protocolRequestBodies.end()) {
+        if (outSize) {
+            *outSize = 0;
+        }
+        return nullptr;
+    }
+
+    const auto& body = it->second;
+    if (outSize) {
+        *outSize = body.size();
+    }
+
+    if (body.empty()) {
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+
+    uint8_t* result = static_cast<uint8_t*>(malloc(body.size()));
+    if (!result) {
+        if (outSize) {
+            *outSize = 0;
+        }
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+    memcpy(result, body.data(), body.size());
+    g_protocolRequestBodies.erase(it);
+    return result;
+}
+
+ELECTROBUN_EXPORT void freeProtocolBuffer(const uint8_t* buffer) {
+    if (buffer) {
+        free((void*)buffer);
+    }
+}
+
+ELECTROBUN_EXPORT void protocolStartResponse(uint64_t requestId,
+                                             int statusCode,
+                                             const char* statusText,
+                                             const char* headersJson) {
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+    if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+        cefIt->second->OnProtocolResponseStart(statusCode, statusText ? statusText : "OK", headersJson ? headersJson : "[]");
+        return;
+    }
+
+    if (g_pendingWebKitProtocolRequests.find(requestId) == g_pendingWebKitProtocolRequests.end()) {
+        return;
+    }
+
+    auto stateIt = g_pendingWebKitResponseStates.find(requestId);
+    if (stateIt == g_pendingWebKitResponseStates.end()) {
+        return;
+    }
+
+    auto& state = stateIt->second;
+    state.statusCode = statusCode;
+    state.statusText = statusText ? statusText : "OK";
+    state.headersJson = headersJson ? headersJson : "[]";
+}
+
+ELECTROBUN_EXPORT void protocolWriteResponseChunk(uint64_t requestId, const uint8_t* chunk, uint64_t size) {
+    if (!chunk || size == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+    if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+        cefIt->second->OnProtocolResponseChunk(chunk, static_cast<size_t>(size));
+        return;
+    }
+
+    if (g_pendingWebKitProtocolRequests.find(requestId) == g_pendingWebKitProtocolRequests.end()) {
+        return;
+    }
+
+    auto stateIt = g_pendingWebKitResponseStates.find(requestId);
+    if (stateIt == g_pendingWebKitResponseStates.end()) {
+        return;
+    }
+
+    // WebKitGTK requires the complete GInputStream when
+    // webkit_uri_scheme_request_finish_with_response()/finish() is called, so
+    // we buffer chunks here and create the input stream in protocolFinishResponse.
+    auto& body = stateIt->second.body;
+    body.insert(body.end(), chunk, chunk + size);
+}
+
+ELECTROBUN_EXPORT void protocolFinishResponse(uint64_t requestId) {
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseFinish();
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    dispatch_sync_main_void([requestId]() {
+        completePendingWebKitProtocolResponse(requestId);
+    });
+}
+
+ELECTROBUN_EXPORT void protocolErrorResponse(uint64_t requestId, const char* message) {
+    std::string errorMessage = message ? message : "Protocol request failed";
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseError(errorMessage);
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    dispatch_sync_main_void([requestId, errorMessage]() {
+        completePendingWebKitProtocolError(requestId, errorMessage);
+    });
 }
 
 // Graceful shutdown function to coordinate cleanup

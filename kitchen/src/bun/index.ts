@@ -8,12 +8,122 @@ import Electrobun, {
 	Utils,
 	BuildConfig,
 	Updater,
+	Protocol,
 } from "electrobun/bun";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
 import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";
 import { mkdir, readFile, writeFile } from "fs/promises";
 import { dirname, join } from "path";
+
+const encoder = new TextEncoder();
+
+await Protocol.handle("electrobun-test", async (request) => {
+	const url = new URL(request.url);
+
+	if (url.pathname === "/index.html") {
+		return new Response(
+			'<!doctype html><html><head><title>Electrobun Protocol</title></head><body><h1>Electrobun Protocol</h1><script type="module" src="views://test-harness/index.js"></script></body></html>',
+			{ headers: { "content-type": "text/html; charset=utf-8" } },
+		);
+	}
+	if (url.pathname === "/text") {
+		return new Response("hello from electrobun protocol", {
+			headers: { "content-type": "text/plain; charset=utf-8", "x-electrobun-protocol": "ok" },
+		});
+	}
+	if (url.pathname === "/stream") {
+		return new Response(
+			new ReadableStream({
+				start(controller) {
+					controller.enqueue(encoder.encode("stream-"));
+					controller.enqueue(encoder.encode("response"));
+					controller.close();
+				},
+			}),
+			{ headers: { "content-type": "text/plain; charset=utf-8" } },
+		);
+	}
+	if (url.pathname === "/echo") {
+		return new Response(await request.text(), { headers: { "content-type": "text/plain; charset=utf-8" } });
+	}
+	if (url.pathname === "/stream-request-order") {
+		const chunks: string[] = [];
+		const reader = request.body?.getReader();
+		if (reader) {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				chunks.push(new TextDecoder().decode(value));
+			}
+		}
+		return new Response(JSON.stringify({ chunkCount: chunks.length, chunks, joined: chunks.join("") }), {
+			headers: { "content-type": "application/json; charset=utf-8" },
+		});
+	}
+	if (url.pathname === "/status/204") return new Response(null, { status: 204 });
+	if (url.pathname === "/status/201") {
+		return new Response("created", { status: 201, statusText: "Created", headers: { "content-type": "text/plain; charset=utf-8" } });
+	}
+	if (url.pathname === "/status/400") {
+		return new Response("bad request body", { status: 400, statusText: "Bad Request", headers: { "content-type": "text/plain; charset=utf-8" } });
+	}
+	if (url.pathname === "/status/500") {
+		return new Response("internal error detail", { status: 500, statusText: "Internal Server Error", headers: { "content-type": "text/plain; charset=utf-8" } });
+	}
+	if (url.pathname === "/echo-method") {
+		const body = request.method !== "HEAD" && request.method !== "GET" ? await request.text() : "";
+		return new Response(JSON.stringify({ method: request.method, body }), { headers: { "content-type": "application/json; charset=utf-8" } });
+	}
+	if (url.pathname === "/head-resource") {
+		return new Response(request.method === "HEAD" ? null : "head-resource-body", {
+			headers: { "content-type": "text/plain; charset=utf-8", "content-length": "18", "x-resource-id": "head-test" },
+		});
+	}
+	if (url.pathname === "/headers/multi") {
+		const res = new Response("ok", { headers: { "content-type": "text/plain; charset=utf-8" } });
+		res.headers.append("x-multi", "first");
+		res.headers.append("x-multi", "second");
+		return res;
+	}
+	if (url.pathname === "/headers/echo-request") {
+		const echoed: Record<string, string> = {};
+		request.headers.forEach((value, name) => { echoed[name.toLowerCase()] = value; });
+		return new Response(JSON.stringify(echoed), { headers: { "content-type": "application/json; charset=utf-8" } });
+	}
+	if (url.pathname === "/body/binary") {
+		const bytes = new Uint8Array(256);
+		for (let i = 0; i < 256; i++) bytes[i] = i;
+		return new Response(bytes.buffer, { headers: { "content-type": "application/octet-stream" } });
+	}
+	if (url.pathname === "/body/echo-binary") {
+		return new Response(await request.arrayBuffer(), { headers: { "content-type": "application/octet-stream" } });
+	}
+	if (url.pathname === "/body/urlencoded") {
+		return new Response("key=value&foo=bar", { headers: { "content-type": "application/x-www-form-urlencoded" } });
+	}
+	if (url.pathname === "/body/formdata") {
+		const boundary = "boundary123";
+		const body = `--${boundary}\r\nContent-Disposition: form-data; name="field1"\r\n\r\nhello\r\n--${boundary}\r\nContent-Disposition: form-data; name="field2"\r\n\r\nworld\r\n--${boundary}--\r\n`;
+		return new Response(body, { headers: { "content-type": `multipart/form-data; boundary=${boundary}` } });
+	}
+	if (url.pathname === "/body/slow-stream") {
+		let cancelled = false;
+		const stream = new ReadableStream({
+			async start(controller) {
+				for (let i = 0; i < 10; i++) {
+					if (cancelled) break;
+					controller.enqueue(encoder.encode(`chunk-${i} `));
+					await new Promise((resolve) => setTimeout(resolve, 200));
+				}
+				if (!cancelled) controller.close();
+			},
+			cancel() { cancelled = true; },
+		});
+		return new Response(stream, { headers: { "content-type": "text/plain; charset=utf-8" } });
+	}
+	return new Response("not found", { status: 404, headers: { "content-type": "text/plain; charset=utf-8" } });
+});
 
 console.log("\n");
 console.log("╔════════════════════════════════════════════════════════════╗");

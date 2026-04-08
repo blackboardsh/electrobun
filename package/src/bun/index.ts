@@ -44,6 +44,8 @@ import type {
 	ApplicationMenuItemConfig,
 } from "./proc/native";
 import { BuildConfig, type BuildConfigType } from "./core/BuildConfig";
+import { Protocol } from "./core/Protocol";
+import type { CustomScheme, CustomSchemePrivileges, ProtocolHandler } from "../shared/protocol";
 import { bridge, hasFFI } from "./proc/native";
 
 // Carrot boot state — populated from __bunnyCarrotBootstrap injected by Bunny Ears
@@ -189,6 +191,9 @@ export {
 	type ElectrobunEvent,
 	type ElectrobunConfig,
 	type BuildConfigType,
+	type CustomScheme,
+	type CustomSchemePrivileges,
+	type ProtocolHandler,
 	type WindowOptionsType,
 	type BrowserViewOptions,
 	type GpuWindowOptionsType,
@@ -230,6 +235,7 @@ export {
 	Session,
 	WGPUBridge,
 	BuildConfig,
+	Protocol,
 };
 
 // Default Export
@@ -248,6 +254,7 @@ const Electrobun = {
 	Session,
 	WGPUBridge,
 	BuildConfig,
+	Protocol,
 	events: electobunEventEmmitter,
 	PATHS,
 	Socket,
