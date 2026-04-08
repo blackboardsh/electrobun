@@ -1152,6 +1152,9 @@ class BunnyEarsRuntime {
   deviceToken: string | null = null;
   // ID of the device token (from the API) — used for server-side revocation.
   deviceTokenId: string | null = null;
+  // ID of this instance in the API (assigned at registration time) — used to
+  // mark the instance offline on logout.
+  instanceId: string | null = null;
   farmWindow: BrowserWindow | null = null;
 
   async boot() {
@@ -1583,6 +1586,34 @@ class BunnyEarsRuntime {
     try { if (fs.existsSync(idPath)) fs.unlinkSync(idPath); } catch {}
   }
 
+  // Mark this instance as offline on the API. Best-effort, fire-and-forget.
+  // Used on logout so the instance immediately appears offline in Farm.
+  private async markInstanceOfflineOnServer(instanceId: string, accessToken: string) {
+    const apiBase = this.channel === "dev"
+      ? "http://localhost:8787"
+      : this.channel === "canary"
+        ? "https://staging-api.electrobunny.ai"
+        : "https://api.electrobunny.ai";
+
+    try {
+      const resp = await fetch(`${apiBase}/v1/instances/${instanceId}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ status: "offline" }),
+      });
+      if (!resp.ok) {
+        console.log(`[bunny-ears] mark offline failed: ${resp.status}`);
+      } else {
+        console.log(`[bunny-ears] instance ${instanceId} marked offline`);
+      }
+    } catch (err) {
+      console.log(`[bunny-ears] mark offline error: ${err}`);
+    }
+  }
+
   // Revoke the device token on the server. Best-effort — the local token is
   // already cleared by the time this returns.
   private async revokeDeviceTokenOnServer(tokenId: string, accessToken: string) {
@@ -1645,6 +1676,8 @@ class BunnyEarsRuntime {
         if (resp.status === 401) {
           // Device token has been revoked or is otherwise invalid.
           // Clear everything and notify carrots so dash logs out.
+          const oldAccessToken = this.authToken;
+          const oldInstanceId = this.instanceId;
           this.clearDeviceToken();
           this.authToken = null;
           try {
@@ -1660,6 +1693,11 @@ class BunnyEarsRuntime {
             }
           }
           console.log("[bunny-ears] device token revoked — signed out");
+          // If we still have a (soon-to-expire) access token, use it to mark
+          // the instance offline so Farm reflects it immediately.
+          if (oldInstanceId && oldAccessToken) {
+            this.markInstanceOfflineOnServer(oldInstanceId, oldAccessToken).catch(() => {});
+          }
         }
         return null;
       }
@@ -1706,6 +1744,9 @@ class BunnyEarsRuntime {
             setAuthToken: ({ accessToken }: { accessToken: string }) => {
               this.saveAuthToken(accessToken);
               console.log(`[bunny-ears] Received auth token from Farm (len=${accessToken?.length || 0})`);
+              // Immediately re-register the instance so it shows online in Farm
+              // without waiting for the next 60s heartbeat tick.
+              this.registerInstanceWithToken(accessToken).catch(() => {});
               // Notify all running carrots about the new token
               for (const carrot of this.carrots.values()) {
                 if (carrot.status === "running") {
@@ -1739,9 +1780,10 @@ class BunnyEarsRuntime {
               return { machineId: this.getMachineId() || "" };
             },
             clearAuthToken: () => {
-              // Capture values before clearing so we can revoke server-side
+              // Capture values before clearing so we can do server-side cleanup
               const oldAccessToken = this.authToken;
               const oldDeviceTokenId = this.deviceTokenId;
+              const oldInstanceId = this.instanceId;
 
               this.authToken = null;
               // Delete saved access token
@@ -1762,9 +1804,14 @@ class BunnyEarsRuntime {
                 }
               }
               console.log("[bunny-ears] auth + device token cleared");
-              // Best-effort server-side revocation (fire-and-forget).
-              if (oldDeviceTokenId && oldAccessToken) {
-                this.revokeDeviceTokenOnServer(oldDeviceTokenId, oldAccessToken).catch(() => {});
+              // Best-effort server-side cleanup (fire-and-forget).
+              if (oldAccessToken) {
+                if (oldInstanceId) {
+                  this.markInstanceOfflineOnServer(oldInstanceId, oldAccessToken).catch(() => {});
+                }
+                if (oldDeviceTokenId) {
+                  this.revokeDeviceTokenOnServer(oldDeviceTokenId, oldAccessToken).catch(() => {});
+                }
               }
               return { ok: true };
             },
@@ -1862,8 +1909,10 @@ class BunnyEarsRuntime {
       }
 
       const data = await response.json() as any;
-      console.log(`[bunny-ears] Instance registered: ${data.instance?.name} (${data.instance?.id})`);
-      return { ok: true, instanceId: data.instance?.id };
+      const instanceId = data.instance?.id || null;
+      if (instanceId) this.instanceId = instanceId;
+      console.log(`[bunny-ears] Instance registered: ${data.instance?.name} (${instanceId})`);
+      return { ok: true, instanceId };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[bunny-ears] Instance registration failed: ${msg}`);
