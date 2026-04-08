@@ -1932,9 +1932,7 @@ ${schemesXml}
 		try {
 			await runBuild(config, buildEnvironment);
 		} catch (error) {
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
+			console.error("Build failed:", error);
 			process.exit(1);
 		}
 	} else if (commandArg === "run") {
@@ -1950,9 +1948,7 @@ ${schemesXml}
 			try {
 				await runBuild(config, "dev");
 			} catch (error) {
-				if (error instanceof Error) {
-					console.error(error.message);
-				}
+				console.error("Build failed:", error);
 				process.exit(1);
 			}
 			await runAppWithSignalHandling(config);
