@@ -4630,6 +4630,7 @@ typedef struct {
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
+    ChromeStyle chromeStyle;
 } WindowData;
 
 
@@ -4767,7 +4768,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
-        
+        case WM_NCCALCSIZE:
+            if (wParam == TRUE && data && data->chromeStyle == ChromeStyle::HiddenInset) {
+                NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
+                RECT original = p->rgrc[0];
+                LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+                if (IsZoomed(hwnd)) {
+                    // Maximized: clip client area to monitor work area so
+                    // we still strip the caption bar without pushing content
+                    // above the visible screen.
+                    MONITORINFO mi = { sizeof(MONITORINFO) };
+                    HMONITOR hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                    if (GetMonitorInfo(hmon, &mi)) {
+                        p->rgrc[0].top = mi.rcWork.top;
+                    }
+                } else {
+                    p->rgrc[0].top = original.top;
+                }
+                return ret;
+            }
+            break;
+
         case WM_INPUT: {
             if (g_isMovingWindow && g_targetWindow) {
                 UINT dwSize = 0;
@@ -8598,15 +8619,18 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowExStyle = WS_EX_APPWINDOW;
 
         // Handle titleBarStyle options
+        data->chromeStyle = ChromeStyle::Default;
         if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
             // "hidden" = borderless window (no titlebar, no native controls)
             // This is for completely custom chrome
             windowStyle = WS_POPUP | WS_VISIBLE;
         } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
-            // "hiddenInset" = window with border but custom titlebar area
-            // On Windows, we can't easily do the exact macOS inset style,
-            // so we provide a borderless window with shadow for similar effect
-            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+            // "hiddenInset" = frameless window with resize borders and DWM shadow.
+            // We use WS_CAPTION | WS_THICKFRAME so the system treats it as a
+            // standard framed window (giving us shadow and border resizing),
+            // then remove the caption bar area in WM_NCCALCSIZE.
+            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            data->chromeStyle = ChromeStyle::HiddenInset;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
 
@@ -8655,6 +8679,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                 }
             }
 
+
+            // Force the window frame to recalculate so WM_NCCALCSIZE
+            // is sent again with chromeStyle already set.
+            if (data->chromeStyle == ChromeStyle::HiddenInset) {
+                SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
 
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
