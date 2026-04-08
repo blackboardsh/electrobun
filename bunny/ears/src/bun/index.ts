@@ -1221,7 +1221,83 @@ class BunnyEarsRuntime {
       this.connectToHop();
     }
 
+    // Wake detection: when ears runs inside a VM that gets frozen (common with
+    // cloud/local VMs when not active), setInterval timers pause. When the VM
+    // resumes, we detect the resulting large clock gap and force a full
+    // re-sync: refresh the access token, re-register the instance, and
+    // reconnect to Hop (its WebSocket is almost certainly stale).
+    this.startWakeDetector();
+
+    // Periodic Hop keepalive: detect silently-dead WebSockets that didn't
+    // fire a close event (can happen with network/sleep transitions).
+    this.startHopKeepalive();
+
     bootLog("runtime boot complete");
+  }
+
+  private lastWakeCheckAt = Date.now();
+  private startWakeDetector() {
+    // Fire every 30 seconds. If >2 minutes elapsed since the last tick, the
+    // process was likely suspended (VM freeze, laptop sleep, etc.) — treat it
+    // as a wake event.
+    const INTERVAL_MS = 30_000;
+    const WAKE_THRESHOLD_MS = 2 * 60_000;
+    setInterval(() => {
+      const now = Date.now();
+      const gap = now - this.lastWakeCheckAt;
+      this.lastWakeCheckAt = now;
+      if (gap > WAKE_THRESHOLD_MS) {
+        console.log(`[bunny-ears] wake detected (gap=${Math.round(gap / 1000)}s) — resyncing`);
+        this.handleWake().catch(() => {});
+      }
+    }, INTERVAL_MS);
+  }
+
+  // Called when we detect the process was suspended and has resumed.
+  // Re-authenticates with the API and re-establishes all long-lived
+  // connections so the user doesn't need to manually intervene.
+  private async handleWake() {
+    // 1. Refresh the access token from the device token. If the refresh
+    //    succeeds, the new token is automatically saved and broadcast to
+    //    running carrots via auth-token-changed.
+    if (this.deviceToken) {
+      await this.refreshAccessTokenFromDevice().catch(() => {});
+    }
+
+    // 2. Re-register the instance so it shows online in Farm again.
+    if (this.authToken) {
+      this.registerInstanceWithToken(this.authToken).catch(() => {});
+    }
+
+    // 3. Force-reconnect the Hop WebSocket. The old socket is very likely
+    //    stale (TCP timeout during the freeze) but may not have fired close.
+    try { this.hopWs?.close(); } catch {}
+    this.hopWs = null;
+    if (this.deviceToken) {
+      this.connectToHop();
+    }
+  }
+
+  private startHopKeepalive() {
+    // Every 60 seconds, send a lightweight ping message through the Hop
+    // WebSocket. Hop's DO silently drops unknown messages so this is safe.
+    // If `.send()` throws or the socket isn't open, close + let the existing
+    // reconnect logic handle it.
+    setInterval(() => {
+      const ws = this.hopWs;
+      if (!ws) return;
+      if (ws.readyState !== 1 /* OPEN */) {
+        try { ws.close(); } catch {}
+        this.hopWs = null;
+        return;
+      }
+      try {
+        ws.send(JSON.stringify({ type: "hop:keepalive", ts: Date.now() }));
+      } catch {
+        try { ws.close(); } catch {}
+        this.hopWs = null;
+      }
+    }, 60_000);
   }
 
   private async checkForUpdates() {
