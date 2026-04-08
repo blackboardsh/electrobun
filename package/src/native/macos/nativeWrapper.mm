@@ -6986,6 +6986,14 @@ extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel)
                 [wkImpl.webView setNeedsDisplay:YES];
                 [wkImpl.webView setNeedsLayout:YES];
             }
+        } else if ([abstractView isKindOfClass:[CEFWebViewImpl class]]) {
+            CEFWebViewImpl *cefImpl = (CEFWebViewImpl *)abstractView;
+            if (cefImpl.browser && cefImpl.browser->GetHost()) {
+                // CEF zoom is logarithmic (base 1.2): 0.0 = 100%, 1.0 ≈ 120%
+                // Convert linear zoom (1.0 = 100%, 1.5 = 150%) to CEF scale
+                double cefZoomLevel = log(zoomLevel) / log(1.2);
+                cefImpl.browser->GetHost()->SetZoomLevel(cefZoomLevel);
+            }
         }
     });
 }
@@ -7002,6 +7010,22 @@ extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
                     zoomLevel = wkImpl.webView.pageZoom;
                 });
             }
+        }
+    } else if ([abstractView isKindOfClass:[CEFWebViewImpl class]]) {
+        CEFWebViewImpl *cefImpl = (CEFWebViewImpl *)abstractView;
+        if (cefImpl.browser && cefImpl.browser->GetHost()) {
+            double cefZoomLevel;
+            if ([NSThread isMainThread]) {
+                cefZoomLevel = cefImpl.browser->GetHost()->GetZoomLevel();
+            } else {
+                __block double level;
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    level = cefImpl.browser->GetHost()->GetZoomLevel();
+                });
+                cefZoomLevel = level;
+            }
+            // Convert CEF logarithmic zoom back to linear
+            zoomLevel = pow(1.2, cefZoomLevel);
         }
     }
     return zoomLevel;
