@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-const { execSync, spawn } = require('child_process');
+const { spawn } = require('child_process');
 const { existsSync, mkdirSync, unlinkSync, chmodSync, copyFileSync, createWriteStream } = require('fs');
 const { join, dirname } = require('path');
 const https = require('https');
@@ -98,7 +98,13 @@ async function ensureCliBinary() {
     await downloadFile(tarballUrl, tarballPath);
 
     // Extract using system tar (available on macOS, Linux, and Windows 10+)
-    execSync(`tar -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
+    const result = Bun.spawnSync(['tar', '-xzf', tarballPath], { 
+        cwd: cacheDir, 
+        stdio: 'pipe' 
+    });
+    if (!result.success) {
+        throw new Error(`Failed to extract tarball: ${result.stderr?.toString() || 'Unknown error'}`);
+    }
 
     // Clean up tarball
     unlinkSync(tarballPath);
