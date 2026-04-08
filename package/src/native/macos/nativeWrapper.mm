@@ -5788,45 +5788,34 @@ public:
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
   NSLog(@"DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s", webviewId, partitionIdentifier ? partitionIdentifier : "null");
-  CefRequestContextSettings settings;
-  if (!partitionIdentifier || !partitionIdentifier[0]) {
-    settings.persist_session_cookies = false;
-  } else {
-    std::string identifier(partitionIdentifier);
-    bool isPersistent = identifier.substr(0, 8) == "persist:";
 
-    if (isPersistent) {
-      std::string partitionName = identifier.substr(8);
-      NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+  std::string identifier(partitionIdentifier ? partitionIdentifier : "");
+  bool isPersistent = identifier.size() >= 8 && identifier.substr(0, 8) == "persist:";
 
-      // Build path with identifier/channel structure to match root_cache_path logic
-      std::string cachePathStr = buildPartitionPath(
-          [appSupportPath UTF8String],
-          g_electrobunIdentifier,
-          g_electrobunChannel,
-          "CEF",
-          partitionName
-      );
-      NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
-      NSFileManager *fileManager = [NSFileManager defaultManager];
-      if (![fileManager fileExistsAtPath:cachePath]) {
-        [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
-      }
-      settings.persist_session_cookies = true;
-      CefString(&settings.cache_path).FromString([cachePath UTF8String]);
-    } else {
-      settings.persist_session_cookies = false;
-    }
+  // For persistent partitions, use the global request context which already has
+  // a working profile at root_cache_path/Default with cookie persistence.
+  // CefRequestContext::CreateContext with custom cache_path fails in Chrome runtime
+  // with "Cannot create profile at path" — the global context avoids this entirely.
+  if (isPersistent) {
+    CefRefPtr<CefRequestContext> context = CefRequestContext::GetGlobalContext();
+    NSLog(@"DEBUG CEF: Using global request context for persistent partition '%s'", partitionIdentifier);
+
+    // Register scheme handler factory for views:// protocol
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
+    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
+    NSLog(@"DEBUG CEF: Registered scheme handler factory - success: %s", registered ? "yes" : "no");
+
+    return context;
   }
 
+  // Non-persistent (ephemeral) partition — create an isolated in-memory context
+  CefRequestContextSettings settings;
+  settings.persist_session_cookies = false;
   CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
 
-  // Register scheme handler factory for this request context
-  // Note: Each CefRequestContext needs its own registration - it's not global
   static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
   bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-  NSLog(@"DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s",
-        partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
+  NSLog(@"DEBUG CEF: Registered scheme handler factory for ephemeral partition - success: %s", registered ? "yes" : "no");
 
   return context;
 }
@@ -6537,6 +6526,11 @@ extern "C" void shutdownApplication() {
 
 
 
+// Forward declaration — ElectrobunWindow interface needed before initWebview
+@interface ElectrobunWindow : NSWindow
+@property (nonatomic, assign) BOOL backgroundMediaEnabled;
+@end
+
 // Global flags set by setNextWebviewFlags, consumed by initWebview
 static struct {
     bool startTransparent;
@@ -7012,9 +7006,6 @@ extern "C" NSRect createNSRectWrapper(double x, double y, double width, double h
     return NSMakeRect(x, y, width, height);
 }
 
-
-@interface ElectrobunWindow : NSWindow
-@end
 
 @implementation ElectrobunWindow
 - (BOOL)canBecomeKeyWindow { return YES; }

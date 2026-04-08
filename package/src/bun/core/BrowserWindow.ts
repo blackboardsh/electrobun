@@ -41,6 +41,8 @@ export type WindowOptionsType<T = undefined> = {
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
 	// accessing internal APIs, creating OOPIFs, or communicating with Bun
 	sandbox: boolean;
+	// CEF partition for session/cookie isolation. Use "persist:<name>" for persistent storage.
+	partition: string | null;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -62,6 +64,7 @@ const defaultOptions: WindowOptionsType = {
 	hidden: false,
 	navigationRules: null,
 	sandbox: false,
+	partition: null,
 };
 
 export const BrowserWindowMap: {
@@ -126,6 +129,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
+	partition: string | null = null;
 	frame: {
 		x: number;
 		y: number;
@@ -155,6 +159,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.hidden = options.hidden ?? false;
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
+		this.partition = options.partition || null;
 
 		this.init(options);
 	}
@@ -238,6 +243,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			windowId: this.id,
 			navigationRules: this.navigationRules,
 			sandbox: this.sandbox,
+			partition: this.partition,
 			startPassthrough: this.passthrough,
 		});
 
