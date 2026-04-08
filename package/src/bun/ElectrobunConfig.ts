@@ -56,6 +56,39 @@ export interface ElectrobunConfig {
 		 * ```
 		 */
 		urlSchemes?: string[];
+
+		/**
+		 * File type associations for the application.
+		 * Registers document types so the OS can open files with your app
+		 * (e.g., double-click in Finder, "Open With" menu, drag-to-dock).
+		 *
+		 * Platform support:
+		 * - macOS: Fully supported. Generates CFBundleDocumentTypes in Info.plist.
+		 * - Windows/Linux: Not yet supported.
+		 *
+		 * Files arrive as file:// URLs via the existing "open-url" event:
+		 * ```typescript
+		 * Electrobun.events.on("open-url", (e) => {
+		 *   if (e.data.url.startsWith("file://")) {
+		 *     console.log("Opened file:", e.data.url);
+		 *   }
+		 * });
+		 * ```
+		 */
+		fileAssociations?: Array<{
+			/** File extensions without the leading dot (e.g., ["dotlock", "json"]) */
+			ext: string[];
+			/** Human-readable name for this file type (e.g., "DotLock Document") */
+			name: string;
+			/** The app's role for this file type. @default "Viewer" */
+			role?: "Editor" | "Viewer" | "Shell" | "None";
+			/**
+			 * Path to an .icns file for this document type (macOS only).
+			 * The file is automatically copied into the app bundle's Resources folder
+			 * during the build. Only the filename (without path) is written to Info.plist.
+			 */
+			icon?: string;
+		}>;
 	};
 
 	/**
