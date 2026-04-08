@@ -40,6 +40,41 @@ const _MAX_CHUNK_SIZE = 1024 * 2;
 
 // const binExt = OS === 'win' ? '.exe' : '';
 
+
+/**
+ * Embeds a Windows icon into an EXE using rcedit.
+ *
+ * When the CLI is compiled with `bun build --compile`, dynamic `import("rcedit")`
+ * freezes __dirname to the *build-machine* path (e.g. D:\... on GitHub Actions)
+ * rather than the runtime machine's path, causing ENOENT on any developer machine.
+ * We instead locate rcedit-x64.exe at runtime relative to process.execPath (the
+ * running electrobun binary), which is always a sibling package in node_modules.
+ *
+ * Layout:
+ *   <project>/node_modules/electrobun/bin/electrobun.exe  <- process.execPath
+ *   <project>/node_modules/rcedit/bin/rcedit-x64.exe      <- resolved here
+ */
+function spawnRcedit(exePath: string, iconPath: string): void {
+	const rceditExe = process.arch === "x64" ? "rcedit-x64.exe" : "rcedit.exe";
+	const rceditPath = join(
+		dirname(process.execPath),
+		"..",
+		"..",
+		"rcedit",
+		"bin",
+		rceditExe,
+	);
+	if (!existsSync(rceditPath)) {
+		throw new Error(
+			`rcedit binary not found at ${rceditPath}. ` +
+				`Make sure 'rcedit' is installed in your project's node_modules.`,
+		);
+	}
+	execSync(`"${rceditPath}" "${exePath}" --set-icon "${iconPath}"`, {
+		stdio: "pipe",
+	});
+}
+
 // Create a tar file using system tar command (preserves file permissions unlike Bun.Archive)
 function createTar(tarPath: string, cwd: string, entries: string[]) {
 	// Use a relative path for the tar output on Windows to avoid bsdtar
@@ -2328,10 +2363,7 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon into launcher.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunCliLauncherDestination, {
-						icon: iconPath,
-					});
+					spawnRcedit(bunCliLauncherDestination, iconPath);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
 					// Clean up temp ICO file
@@ -2425,10 +2457,7 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon into bun.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunBinaryDestInBundlePath, {
-						icon: iconPath,
-					});
+					spawnRcedit(bunBinaryDestInBundlePath, iconPath);
 					console.log(`Successfully embedded icon into bun.exe`);
 
 					// Clean up temp ICO file
@@ -4610,10 +4639,7 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(outputExePath, {
-						icon: iconPath,
-					});
+					spawnRcedit(outputExePath, iconPath);
 					console.log(`Successfully embedded icon into ${setupFileName}`);
 
 					// Clean up temp ICO file
