@@ -127,6 +127,7 @@ try {
 
 // Global variables to store build tool paths
 var CMAKE_BIN = "cmake";
+var VS_CMAKE_GENERATOR = "Visual Studio 17 2022";
 
 async function vendorCmake() {
 	if (OS !== "macos") return;
@@ -237,6 +238,27 @@ async function findMsvcTools() {
 			console.log("vcvarsall.bat not found at expected location");
 			VCVARSALL_PATH = "";
 			return;
+		}
+
+		// Detect VS version to pick the correct CMake generator
+		try {
+			const vsVersionResult =
+				await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationVersion"`.quiet();
+			const versionStr = vsVersionResult.stdout.toString().trim();
+			const majorVersion = parseInt(versionStr.split(".")[0], 10);
+			const generatorMap: Record<number, string> = {
+				14: "Visual Studio 14 2015",
+				15: "Visual Studio 15 2017",
+				16: "Visual Studio 16 2019",
+				17: "Visual Studio 17 2022",
+				18: "Visual Studio 18 2026",
+			};
+			if (generatorMap[majorVersion]) {
+				VS_CMAKE_GENERATOR = generatorMap[majorVersion];
+				console.log(`✓ Detected VS generator: ${VS_CMAKE_GENERATOR}`);
+			}
+		} catch {
+			console.log("Could not detect VS version, using default CMake generator");
 		}
 
 		console.log("✓ Found MSVC tools with vcvarsall.bat");
@@ -534,7 +556,10 @@ async function copyToDist() {
 	await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
 	// Zig launcher for all platforms
 	await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
-	await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+	// Extractor is only built for macOS/Linux release builds.
+	if (OS !== "win" && CHANNEL !== "debug") {
+		await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+	}
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
 	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
@@ -1209,8 +1234,14 @@ async function vendorAsar() {
 			// Validate download
 			validateDownload(tempTarball, "zig-asar");
 
-			// Extract to architecture-specific directory
-			await $`tar -xzf "${tempTarball}" -C "${asarDir}"`;
+			// Extract to architecture-specific directory.
+			// On Windows, Git Bash's tar cannot handle absolute Windows paths in -C
+			// (it interprets "C:" as a remote hostname).  Convert to Unix-style path.
+			const tarExtractDir =
+				OS === "win"
+					? asarDir.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1")
+					: asarDir;
+			await $`tar -xzf "${tempTarball}" -C "${tarExtractDir}"`;
 
 			// Clean up temp file
 			await $`rm "${tempTarball}"`;
@@ -1520,7 +1551,7 @@ async function vendorCEF() {
 			await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
 			await $`cd vendors/cef && mkdir build`;
 			// Generate Visual Studio project with sandbox disabled
-			await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
+			await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "${VS_CMAKE_GENERATOR}" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
 			// Build the wrapper library only
 			// await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
 			// const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
@@ -2058,18 +2089,14 @@ async function buildMainJs() {
 }
 
 async function buildSelfExtractor() {
-	const zigArgs =
-		OS === "win"
-			? ["-Dtarget=x86_64-windows", "-Dcpu=baseline"]
-			: ARCH === "x64"
-				? ["-Dcpu=baseline"]
-				: [];
+	// Extractor is only used during release builds (macOS self-extracting .app,
+	// Linux self-extracting installer). It is never referenced by `electrobun dev`,
+	// and Windows uses the NSIS/WiX installer pipeline instead.
+	if (OS === "win" || CHANNEL === "debug") return;
 
-	if (CHANNEL === "debug") {
-		await $`cd src/extractor && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	const zigArgs = ARCH === "x64" ? ["-Dcpu=baseline"] : [];
+
+	await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
 }
 
 async function buildCli() {
