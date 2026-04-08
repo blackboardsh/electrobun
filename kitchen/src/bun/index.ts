@@ -78,7 +78,7 @@ const saveTestRunnerPreferences = async (
 };
 
 // Update state
-const localInfo = await Updater.getLocallocalInfo();
+const localInfo = await Updater.getLocalInfo();
 let updateState: UpdateInfo = {
 	status: "checking",
 	currentVersion: localInfo.version,
