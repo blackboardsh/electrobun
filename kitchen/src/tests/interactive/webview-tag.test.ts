@@ -91,6 +91,7 @@ export const webviewTagTests = [
           url: "views://playgrounds/draggable/index.html",
           renderer: "cef",
           frame: { width: 500, height: 450, x: 200, y: 100 },
+          styleMask: { Borderless: true },
           titleBarStyle: "hidden",
           rpc,
         });
