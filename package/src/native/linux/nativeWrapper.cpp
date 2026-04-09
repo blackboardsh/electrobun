@@ -9658,6 +9658,10 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     });
 }
 
+ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
+    // Not applicable on Linux - no-op
+}
+
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
     if (!window) return;
 

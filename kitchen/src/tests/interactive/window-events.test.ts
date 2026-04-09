@@ -246,4 +246,52 @@ defineTest({
     log("Test completed successfully");
   },
 }),
+defineTest({
+  name: "Window button position (macOS)",
+  category: "Window Events (Interactive)",
+  description: "Test repositioning macOS traffic light buttons",
+  interactive: true,
+  timeout: 120000,
+  async run({ createWindow, log, showInstructions, waitForUserVerification }) {
+    if (process.platform !== "darwin") {
+      log("Skipping test - only available on macOS");
+      return;
+    }
+
+    await showInstructions([
+      "A window with hiddenInset titlebar will open",
+      "The traffic light buttons (close/minimize/zoom) will be repositioned",
+      "Verify the buttons are moved down and to the right from their default position",
+    ]);
+
+    log("Creating test window with hiddenInset titleBarStyle");
+    const win = await createWindow({
+      url: "views://test-harness/index.html",
+      title: "Window Button Position Test",
+      renderer: "cef",
+      width: 600,
+      height: 400,
+      titleBarStyle: "hiddenInset",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    log("Setting window button position to (80, 80)");
+    win.window.setWindowButtonPosition(80, 80);
+
+    log("Window buttons repositioned - verify visually");
+    const result = await waitForUserVerification();
+
+    if (result.action === "pass") {
+      log("Test passed - window buttons successfully repositioned");
+    } else if (result.action === "fail") {
+      throw new Error("User reported window buttons not repositioned correctly");
+    } else if (result.action === "retest") {
+      log("Re-test requested");
+      return;
+    }
+
+    log("Test completed successfully");
+  },
+})
 ];
