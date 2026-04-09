@@ -74,17 +74,27 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
-// Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
+// Resolve the electrobun package directory using Node's module resolution first
+// (works with any package manager: npm, pnpm, Yarn PnP, Bun, etc.),
+// then fall back to walking node_modules for hoisted monorepo layouts.
 function resolveElectrobunDir(): string {
-	let dir = projectRoot;
-	while (dir !== dirname(dir)) {
-		const candidate = join(dir, "node_modules", "electrobun");
-		if (existsSync(join(candidate, "package.json"))) {
-			return candidate;
+	try {
+		const entryPoint = require.resolve("electrobun/package.json", {
+			paths: [projectRoot],
+		});
+		return dirname(entryPoint);
+	} catch {
+		// Fallback: walk up from projectRoot to find electrobun in node_modules
+		let dir = projectRoot;
+		while (dir !== dirname(dir)) {
+			const candidate = join(dir, "node_modules", "electrobun");
+			if (existsSync(join(candidate, "package.json"))) {
+				return candidate;
+			}
+			dir = dirname(dir);
 		}
-		dir = dirname(dir);
+		return join(projectRoot, "node_modules", "electrobun");
 	}
-	return join(projectRoot, "node_modules", "electrobun");
 }
 
 const ELECTROBUN_DEP_PATH = resolveElectrobunDir();
