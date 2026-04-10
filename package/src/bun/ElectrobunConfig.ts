@@ -420,6 +420,28 @@ export interface ElectrobunConfig {
 			 * @example "assets/icon.png"
 			 */
 			icon?: string;
+
+			/**
+			 * X11 / GTK `WM_CLASS` hint applied to every window the app
+			 * creates. gnome-shell and other freedesktop.org-compliant
+			 * panels resolve a window's icon by matching this class
+			 * against `StartupWMClass` in installed `.desktop` files --
+			 * if the class doesn't match any `.desktop`, the panel falls
+			 * back to a generic placeholder icon.
+			 *
+			 * When unset, Electrobun uses the literal
+			 * `"ElectrobunKitchenSink-dev"` (a leftover from the example
+			 * template). Apps SHOULD set this to a unique value matching
+			 * their `.desktop` file's `StartupWMClass=` line so multiple
+			 * Electrobun apps installed on the same system don't collide
+			 * on the same icon.
+			 *
+			 * Recommended value: a sanitized lowercase form of your app
+			 * name or identifier, e.g. `"my-app"` or `"com.example.myapp"`.
+			 *
+			 * @example "my-app"
+			 */
+			wmClass?: string;
 		};
 	};
 

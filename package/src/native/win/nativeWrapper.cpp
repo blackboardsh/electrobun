@@ -9419,6 +9419,15 @@ ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     });
 }
 
+// Linux-only knob, exposed as a no-op on Windows so the bun-side FFI
+// binding can be loaded unconditionally on every platform without
+// gating by `process.platform`. Windows uses the AUMID
+// (Application User Model ID) for taskbar grouping and icon resolution
+// — there's no runtime equivalent of X11's WM_CLASS to override.
+ELECTROBUN_EXPORT void setLinuxWmClass(const char *class_name) {
+    (void)class_name;
+}
+
 ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);

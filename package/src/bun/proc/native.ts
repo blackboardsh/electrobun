@@ -132,6 +132,18 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			// Linux-only: override the X11 / GTK WM_CLASS hint applied
+			// to every window. Must be called BEFORE the first window
+			// is created (the class is read inside createGTKWindow /
+			// createX11Window from a process-global, set once at app
+			// startup). Other platforms expose this symbol as a no-op
+			// so the bun-side caller doesn't need to gate by platform.
+			setLinuxWmClass: {
+				args: [
+					FFIType.cstring, // null-terminated UTF-8 class name
+				],
+				returns: FFIType.void,
+			},
 			closeWindow: {
 				args: [
 					FFIType.ptr, // window ptr

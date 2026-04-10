@@ -78,6 +78,35 @@ static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
 
+// X11 / GTK window class hint applied to every window Electrobun creates.
+//
+// Defaults to "ElectrobunKitchenSink-dev" for backward compatibility with
+// apps whose .desktop StartupWMClass already targets that literal. Apps
+// can call setLinuxWmClass() at startup (before any window is created)
+// to override the class with something app-specific so gnome-shell /
+// GNOME's icon theme lookup resolves the .desktop entry correctly via
+// WM_CLASS -> StartupWMClass.
+//
+// Why a static rather than a parameter on createGTKWindow / createX11Window:
+// the call sites are reached deep inside electrobun's window plumbing
+// from FFI (`createWindowWithFrameAndStyleFromWorker`), so threading a
+// new arg through every level would touch ten files for what is really
+// a process-global setting. The setter pattern keeps the change small.
+//
+// Thread safety: written once at app startup from the bun main thread,
+// read on the main GTK thread inside createGTKWindow / createX11Window.
+// No concurrent writes in practice; we use std::mutex anyway so a future
+// caller can update it from a worker without UB.
+static std::mutex g_wm_class_mutex;
+static std::string g_linux_wm_class = "ElectrobunKitchenSink-dev";
+
+// Read the current X11/GTK class hint. Returns a copy under the mutex so
+// callers can use the c_str() lifetime safely without holding the lock.
+static std::string getLinuxWmClassCopy() {
+    std::lock_guard<std::mutex> lock(g_wm_class_mutex);
+    return g_linux_wm_class;
+}
+
 // Self-pipe for async-signal-safe signal handling.
 // Signal handler writes to pipe, GLib IO watch reads and dispatches.
 static int g_signal_pipe[2] = {-1, -1};
@@ -115,6 +144,17 @@ using electrobun::OperationGuard;
 
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
+
+// Apps call this once at startup to override the default WM_CLASS. Empty
+// or null input is silently ignored — the default literal stays in place
+// so existing .desktop entries that match "ElectrobunKitchenSink-dev"
+// continue to work. See the block near g_linux_wm_class (above the CEF
+// includes) for the static variable + getLinuxWmClassCopy() reader.
+extern "C" ELECTROBUN_EXPORT void setLinuxWmClass(const char* class_name) {
+    if (!class_name || class_name[0] == '\0') return;
+    std::lock_guard<std::mutex> lock(g_wm_class_mutex);
+    g_linux_wm_class = class_name;
+}
 
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
@@ -6052,10 +6092,14 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // Set window title
             XStoreName(display, x11_window, title);
             
-            // Set WM_CLASS for proper taskbar icon matching
+            // Set WM_CLASS for proper taskbar icon matching. The class
+            // string is read from the global g_linux_wm_class which the
+            // app can override via setLinuxWmClass() at startup. Default
+            // is "ElectrobunKitchenSink-dev" for backward compat.
+            const std::string wm_class_str = getLinuxWmClassCopy();
             XClassHint class_hint;
-            class_hint.res_name = (char*)"ElectrobunKitchenSink-dev";
-            class_hint.res_class = (char*)"ElectrobunKitchenSink-dev";
+            class_hint.res_name = (char*)wm_class_str.c_str();
+            class_hint.res_class = (char*)wm_class_str.c_str();
             XSetClassHint(display, x11_window, &class_hint);
             
             // Set window protocols for close button
@@ -6160,8 +6204,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
        
         gtk_window_set_title(GTK_WINDOW(window), title);
         
-        // Set WM_CLASS for proper taskbar icon matching
-        gtk_window_set_wmclass(GTK_WINDOW(window), "ElectrobunKitchenSink-dev", "ElectrobunKitchenSink-dev");
+        // Set WM_CLASS for proper taskbar icon matching. Reads from the
+        // global g_linux_wm_class set via setLinuxWmClass() at startup.
+        // Default is "ElectrobunKitchenSink-dev" for backward compat.
+        const std::string gtk_wm_class_str = getLinuxWmClassCopy();
+        gtk_window_set_wmclass(GTK_WINDOW(window), gtk_wm_class_str.c_str(), gtk_wm_class_str.c_str());
         
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
