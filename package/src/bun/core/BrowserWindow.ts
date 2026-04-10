@@ -1,4 +1,4 @@
-import { ffi } from "../proc/native";
+import { ffi, native, toCString } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type Pointer } from "bun:ffi";
@@ -10,6 +10,17 @@ import { GpuWindowMap } from "./GpuWindow";
 import { WGPUView } from "./WGPUView";
 
 const buildConfig = await BuildConfig.get();
+
+// Linux-only: forward the user-configured `wmClass` from build.json
+// to the native wrapper BEFORE the first window is created. The
+// wrapper stores it in a process-global that createX11Window /
+// createGTKWindow read on every window creation. macOS / Windows
+// expose setLinuxWmClass as a no-op so we can call it unconditionally
+// without gating by `process.platform`. When wmClass is unset the
+// wrapper keeps its hardcoded "ElectrobunKitchenSink-dev" default.
+if (process.platform === "linux" && buildConfig.wmClass && native?.symbols.setLinuxWmClass) {
+	native.symbols.setLinuxWmClass(toCString(buildConfig.wmClass));
+}
 
 export type WindowOptionsType<T = undefined> = {
 	title: string;
