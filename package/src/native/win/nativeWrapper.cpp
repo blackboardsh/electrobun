@@ -6550,7 +6550,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Create WebView2 environment with custom scheme support
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
+            std::wstring additionalArgs = L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security";
+            if (!proxyUrl.empty()) {
+                int wideSize = MultiByteToWideChar(CP_UTF8, 0, proxyUrl.c_str(), -1, nullptr, 0);
+                if (wideSize > 0) {
+                    std::wstring wProxyUrl(wideSize - 1, 0);
+                    MultiByteToWideChar(CP_UTF8, 0, proxyUrl.c_str(), -1, &wProxyUrl[0], wideSize);
+                    additionalArgs += L" --proxy-server=" + wProxyUrl;
+                    additionalArgs += L" --host-resolver-rules=MAP * ~NOTFOUND , EXCLUDE 127.0.0.1";
+                }
+            }
+            options->put_AdditionalBrowserArguments(additionalArgs.c_str());
 
             // Get the interface that supports custom scheme registration
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
@@ -7100,6 +7110,22 @@ ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPass
     g_nextWebviewFlags.startPassthrough = startPassthrough;
 }
 
+// Global proxy URL set by setNextWebviewProxy, consumed by initWebview
+static struct {
+    char url[2048];
+    bool hasProxy;
+} g_nextWebviewProxy = {"", false};
+
+ELECTROBUN_EXPORT void setNextWebviewProxy(const char* proxyUrl) {
+    if (proxyUrl && strlen(proxyUrl) > 0) {
+        strncpy_s(g_nextWebviewProxy.url, sizeof(g_nextWebviewProxy.url), proxyUrl, _TRUNCATE);
+        g_nextWebviewProxy.hasProxy = true;
+    } else {
+        g_nextWebviewProxy.url[0] = '\0';
+        g_nextWebviewProxy.hasProxy = false;
+    }
+}
+
 // Clean, elegant initWebview function - Windows version matching Mac pattern
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          NSWindow *window,  // Actually HWND on Windows
@@ -7124,6 +7150,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+
+    // Read and clear proxy setting
+    std::string proxyUrl = g_nextWebviewProxy.hasProxy ? std::string(g_nextWebviewProxy.url) : "";
+    g_nextWebviewProxy = {"", false};
 
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);

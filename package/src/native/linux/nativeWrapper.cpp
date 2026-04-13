@@ -6454,6 +6454,23 @@ static struct {
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
 
+// Global proxy URL set by setNextWebviewProxy, consumed by initWebview
+static struct {
+    char url[2048];
+    bool hasProxy;
+} g_nextWebviewProxy = {"", false};
+
+ELECTROBUN_EXPORT void setNextWebviewProxy(const char* proxyUrl) {
+    if (proxyUrl && proxyUrl[0] != '\0') {
+        strncpy(g_nextWebviewProxy.url, proxyUrl, sizeof(g_nextWebviewProxy.url) - 1);
+        g_nextWebviewProxy.url[sizeof(g_nextWebviewProxy.url) - 1] = '\0';
+        g_nextWebviewProxy.hasProxy = true;
+    } else {
+        g_nextWebviewProxy.url[0] = '\0';
+        g_nextWebviewProxy.hasProxy = false;
+    }
+}
+
 AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          void* window,
                          const char* renderer,
@@ -6547,6 +6564,10 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
 
+    // Read and clear proxy setting
+    std::string proxyUrlStr = g_nextWebviewProxy.hasProxy ? std::string(g_nextWebviewProxy.url) : "";
+    g_nextWebviewProxy = {"", false};
+
     // TODO: Implement transparent handling for Linux
 
     // Null pointer checks
@@ -6566,6 +6587,17 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                               electrobunPreloadScript, customPreloadScript, sandbox,
                               startTransparent, startPassthrough);
     } else {
+        // Apply proxy settings to the GTK WebKit context before creating the view
+        if (!proxyUrlStr.empty()) {
+            WebKitWebContext* context = getContextForPartition(partitionIdentifier);
+            if (context) {
+                WebKitNetworkProxySettings* proxySettings =
+                    webkit_network_proxy_settings_new(proxyUrlStr.c_str(), nullptr);
+                webkit_web_context_set_network_proxy_settings(
+                    context, WEBKIT_NETWORK_PROXY_MODE_CUSTOM, proxySettings);
+                webkit_network_proxy_settings_free(proxySettings);
+            }
+        }
         view = initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,

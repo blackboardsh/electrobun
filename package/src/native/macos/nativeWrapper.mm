@@ -8,6 +8,7 @@
 #import <objc/runtime.h>
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
+#import <Network/Network.h>
 #import <CommonCrypto/CommonCrypto.h>
 #import <QuartzCore/QuartzCore.h>
 #import <QuartzCore/CAMetalLayer.h>
@@ -730,6 +731,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, assign) BOOL pendingStartTransparent;
     @property (nonatomic, assign) BOOL pendingStartPassthrough;
+    @property (nonatomic, strong) NSString *pendingProxyUrl;
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
     @property (atomic, assign) uint32_t resizeGeneration;
@@ -2439,7 +2441,33 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 WKWebViewConfiguration *configuration = [[WKWebViewConfiguration alloc] init];
                 
                 configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
-                
+
+                // Apply proxy configuration if set (requires macOS 14.0+)
+                if (self.pendingProxyUrl && self.pendingProxyUrl.length > 0) {
+                    if (@available(macOS 14.0, *)) {
+                        NSURL *proxyNSURL = [NSURL URLWithString:self.pendingProxyUrl];
+                        if (proxyNSURL && proxyNSURL.host) {
+                            int port = proxyNSURL.port ? proxyNSURL.port.intValue : 1080;
+                            NSString *portStr = [NSString stringWithFormat:@"%d", port];
+                            nw_endpoint_t endpoint = nw_endpoint_create_host(
+                                [proxyNSURL.host UTF8String],
+                                [portStr UTF8String]
+                            );
+                            nw_proxy_config_t proxyConfig = NULL;
+                            if ([proxyNSURL.scheme isEqualToString:@"socks5"]) {
+                                proxyConfig = nw_proxy_config_create_socksv5(endpoint);
+                            } else if ([proxyNSURL.scheme hasPrefix:@"http"]) {
+                                proxyConfig = nw_proxy_config_create_http_connect(endpoint, nil);
+                            }
+                            if (proxyConfig) {
+                                configuration.websiteDataStore.proxyConfigurations = @[proxyConfig];
+                            }
+                        }
+                    } else {
+                        NSLog(@"[Electrobun] Proxy configuration requires macOS 14.0+, ignoring.");
+                    }
+                }
+
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
                 [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
                 [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];                
@@ -6548,6 +6576,23 @@ extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough
     g_nextWebviewFlags.startPassthrough = startPassthrough;
 }
 
+// Global proxy URL set by setNextWebviewProxy, consumed by initWebview
+static struct {
+    char url[2048];
+    bool hasProxy;
+} g_nextWebviewProxy = {"", false};
+
+extern "C" void setNextWebviewProxy(const char* proxyUrl) {
+    if (proxyUrl && strlen(proxyUrl) > 0) {
+        strncpy(g_nextWebviewProxy.url, proxyUrl, sizeof(g_nextWebviewProxy.url) - 1);
+        g_nextWebviewProxy.url[sizeof(g_nextWebviewProxy.url) - 1] = '\0';
+        g_nextWebviewProxy.hasProxy = true;
+    } else {
+        g_nextWebviewProxy.url[0] = '\0';
+        g_nextWebviewProxy.hasProxy = false;
+    }
+}
+
 extern "C" AbstractView* initWebview(uint32_t webviewId,
                         NSWindow *window,
                         const char *renderer,
@@ -6571,6 +6616,13 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+
+    // Read and clear proxy setting
+    NSString *pendingProxyUrl = nil;
+    if (g_nextWebviewProxy.hasProxy) {
+        pendingProxyUrl = [NSString stringWithUTF8String:g_nextWebviewProxy.url];
+        g_nextWebviewProxy = {"", false};
+    }
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -6618,6 +6670,7 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
         // (nsView is nil at this point because view creation is async)
         impl.pendingStartTransparent = startTransparent;
         impl.pendingStartPassthrough = startPassthrough;
+        impl.pendingProxyUrl = pendingProxyUrl;
 
     });
 
