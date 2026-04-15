@@ -1,5 +1,5 @@
 import { existsSync } from "fs";
-import { join } from "path";
+import { join, dirname } from "path";
 import { dlopen, suffix, FFIType } from "bun:ffi";
 
 // NOTE: WGPUStringView is passed by value in the C API. Bun FFI does not support

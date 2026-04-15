@@ -67,8 +67,12 @@
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
 
-// Forward declaration — defined in DComp section at bottom of file
-extern DCompCompositor* g_dcompCompositor;
+// DirectComposition zero-copy bridge state (per-surface)
+// DCompBridgeState is defined later, after WGPU function pointer declarations.
+// Forward declarations for the map:
+struct DCompBridgeState;
+static std::map<void*, std::unique_ptr<DCompBridgeState>> g_dcompBridges;
+static std::mutex g_dcompBridgeMapMutex;
 
 using namespace electrobun;
 
@@ -5986,107 +5990,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
 
-                // When DComp is active, the composition controller path enables WebView2
-                // to render into the DComp visual tree. This is currently experimental —
-                // the full integration requires careful COM lifecycle management that
-                // should be done in collaboration with the Electrobun maintainer.
-                // For now, DComp provides the GPU back layer via topmost=FALSE,
-                // and WebView2 renders via its standard controller on top.
-                if (false && g_dcompCompositor && g_dcompCompositor->isInitialized()) {
-                    ComPtr<ICoreWebView2Environment3> env3;
-                    HRESULT qiResult = env->QueryInterface(IID_PPV_ARGS(&env3));
-                    if (SUCCEEDED(qiResult) && env3) {
-                        printf("[DComp] Creating WebView2 via CompositionController for DComp integration\n");
-                        HWND dcompHwnd = g_dcompCompositor->getTargetHwnd();
-                        return env3->CreateCoreWebView2CompositionController(dcompHwnd,
-                            Callback<ICoreWebView2CreateCoreWebView2CompositionControllerCompletedHandler>(
-                                [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2CompositionController* compController) -> HRESULT {
-                                    if (FAILED(result) || !compController) {
-                                        printf("[DComp] CompositionController creation failed: 0x%08lx, falling back\n", result);
-                                        // Fall through to standard path below won't work here,
-                                        // so mark creation as failed
-                                        view->setCreationFailed(true);
-                                        return result;
-                                    }
-
-                                    printf("[DComp] CompositionController created successfully\n");
-
-                                    // Get the standard controller interface from composition controller
-                                    ComPtr<ICoreWebView2CompositionController> compCtrl(compController);
-                                    ComPtr<ICoreWebView2Controller> ctrl;
-                                    compCtrl->QueryInterface(IID_PPV_ARGS(&ctrl));
-
-                                    ComPtr<ICoreWebView2> webview;
-                                    ctrl->get_CoreWebView2(&webview);
-
-                                    view->setController(ctrl);
-                                    view->setCompositionController(compCtrl);
-                                    view->setWebView(webview);
-                                    view->setContainerHwnd(container->GetHwnd());
-
-                                    // Wire the composition controller into the DComp visual tree.
-                                    // Create a dedicated DComp visual for WebView2 and set it as
-                                    // the RootVisualTarget. This makes WebView2 render into the
-                                    // DComp visual tree instead of its own child HWND.
-                                    if (g_dcompCompositor && g_dcompCompositor->isInitialized()) {
-                                        IDCompositionDevice* dcompDev = g_dcompCompositor->getDCompDevice();
-                                        if (dcompDev) {
-                                            ComPtr<IDCompositionVisual> wv2Visual;
-                                            HRESULT hr = dcompDev->CreateVisual(&wv2Visual);
-                                            if (SUCCEEDED(hr) && wv2Visual) {
-                                                // Add the WebView2 visual on top of the root visual
-                                                IDCompositionVisual* rootVis = g_dcompCompositor->getRootVisual();
-                                                if (rootVis) {
-                                                    rootVis->AddVisual(wv2Visual.Get(), TRUE, nullptr);
-                                                }
-
-                                                hr = compCtrl->put_RootVisualTarget(wv2Visual.Get());
-                                                if (SUCCEEDED(hr)) {
-                                                    printf("[DComp] WebView2 RootVisualTarget set — rendering into DComp tree\n");
-                                                } else {
-                                                    printf("[DComp] put_RootVisualTarget failed: 0x%08lx\n", hr);
-                                                }
-                                                dcompDev->Commit();
-                                            }
-                                        }
-                                    }
-
-                                    // Set up bridges and properties (same as standard path)
-                                    view->setupJavaScriptBridges();
-
-                                    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                                    ctrl->put_Bounds(bounds);
-                                    ctrl->put_IsVisible(TRUE);
-
-                                    if (transparent) {
-                                        ComPtr<ICoreWebView2Controller2> ctrl2;
-                                        if (SUCCEEDED(ctrl->QueryInterface(IID_PPV_ARGS(&ctrl2))) && ctrl2) {
-                                            COREWEBVIEW2_COLOR transparentColor = {0, 0, 0, 0};
-                                            ctrl2->put_DefaultBackgroundColor(transparentColor);
-                                        }
-                                    }
-
-                                    // Register with DComp for mouse input forwarding
-                                    if (g_dcompCompositor) {
-                                        g_dcompCompositor->setCompositionController(compCtrl.Get());
-                                    }
-
-                                    // Continue with standard webview setup...
-                                    view->setCreationComplete(true);
-                                    printf("[DComp] WebView2 composition setup complete\n");
-
-                                    // Load pending URL/HTML
-                                    if (!view->pendingUrl.empty()) {
-                                        view->loadURL(view->pendingUrl.c_str());
-                                    } else if (!view->pendingHtml.empty()) {
-                                        view->loadHTML(view->pendingHtml.c_str());
-                                    }
-
-                                    return S_OK;
-                                }).Get());
-                    }
-                }
-
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
@@ -7210,12 +7113,6 @@ static struct {
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
 
-// DComp mode: when enabled, initWebview will init DComp on the window HWND
-// BEFORE creating WebView2, so the composition controller path is used.
-static bool g_dcompModeEnabled = false;
-static int g_dcompModeWidth = 0;
-static int g_dcompModeHeight = 0;
-
 ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
@@ -7251,29 +7148,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
 
 
     HWND hwnd = reinterpret_cast<HWND>(window);
-
-    // If DComp mode is enabled, init the compositor on the top-level HWND
-    // BEFORE WebView2 creation so the composition controller path is used.
-    // MUST dispatch to main thread: SetWindowSubclass needs to be called
-    // from the UI thread to receive WM_SIZE messages for native resize.
-    if (g_dcompModeEnabled && !g_dcompCompositor) {
-        HWND topLevel = GetAncestor(hwnd, GA_ROOT);
-        if (!topLevel) topLevel = hwnd;
-        int w = g_dcompModeWidth > 0 ? g_dcompModeWidth : (int)width;
-        int h = g_dcompModeHeight > 0 ? g_dcompModeHeight : (int)height;
-
-        MainThreadDispatcher::dispatch_sync([topLevel, w, h]() {
-            g_dcompCompositor = new DCompCompositor();
-            if (g_dcompCompositor->initMinimal(topLevel, w, h)) {
-                g_dcompCompositor->enableNativeResize();
-                printf("[DComp] Pre-initialized on main thread (%dx%d) HWND=%p\n", w, h, topLevel);
-            } else {
-                delete g_dcompCompositor;
-                g_dcompCompositor = nullptr;
-                printf("[DComp] Pre-init failed\n");
-            }
-        });
-    }
 
     // Factory pattern - choose implementation based on renderer
     AbstractView* view = nullptr;
@@ -7548,6 +7422,103 @@ static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
 static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
 static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
 static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
+
+// DComp zero-copy bridge function pointers (SharedTextureMemory API)
+static WGPUProcDeviceHasFeature p_wgpuDeviceHasFeature = nullptr;
+static WGPUProcDeviceImportSharedTextureMemory p_wgpuDeviceImportSharedTextureMemory = nullptr;
+static WGPUProcSharedTextureMemoryGetProperties p_wgpuSharedTextureMemoryGetProperties = nullptr;
+static WGPUProcSharedTextureMemoryCreateTexture p_wgpuSharedTextureMemoryCreateTexture = nullptr;
+static WGPUProcSharedTextureMemoryBeginAccess p_wgpuSharedTextureMemoryBeginAccess = nullptr;
+static WGPUProcSharedTextureMemoryEndAccess p_wgpuSharedTextureMemoryEndAccess = nullptr;
+static WGPUProcSharedTextureMemoryRelease p_wgpuSharedTextureMemoryRelease = nullptr;
+static WGPUProcSharedFenceExportInfo p_wgpuSharedFenceExportInfo = nullptr;
+static WGPUProcSharedFenceRelease p_wgpuSharedFenceRelease = nullptr;
+static WGPUProcTextureDestroy p_wgpuTextureDestroy = nullptr;
+static WGPUProcTextureGetUsage p_wgpuTextureGetUsage = nullptr;
+static WGPUProcTextureAddRef p_wgpuTextureAddRef = nullptr;
+static bool g_dcompSymbolsLoaded = false;
+static HMODULE loadWgpuLibrary();  // forward declaration
+
+static bool ensureDCompSymbols() {
+    if (g_dcompSymbolsLoaded) return true;
+    HMODULE handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_DCOMP_SYM(name) \
+    p_##name = (decltype(p_##name))GetProcAddress(handle, #name); \
+    if (!p_##name) { printf("[DComp] missing symbol " #name "\n"); return false; }
+    LOAD_DCOMP_SYM(wgpuDeviceHasFeature);
+    LOAD_DCOMP_SYM(wgpuDeviceImportSharedTextureMemory);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryGetProperties);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryCreateTexture);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryBeginAccess);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryEndAccess);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryRelease);
+    LOAD_DCOMP_SYM(wgpuSharedFenceExportInfo);
+    LOAD_DCOMP_SYM(wgpuSharedFenceRelease);
+    LOAD_DCOMP_SYM(wgpuTextureDestroy);
+    LOAD_DCOMP_SYM(wgpuTextureGetUsage);
+    LOAD_DCOMP_SYM(wgpuTextureAddRef);
+    LOAD_DCOMP_SYM(wgpuTextureRelease);
+#undef LOAD_DCOMP_SYM
+    g_dcompSymbolsLoaded = true;
+    // All symbols loaded
+    return true;
+}
+
+// DirectComposition zero-copy bridge state (per-surface)
+struct DCompBridgeState {
+    DCompCompositor compositor;
+    ComPtr<ID3D12Resource> stagingDx12;
+    ComPtr<ID3D11Device5> presentDevice;
+    ComPtr<ID3D11DeviceContext4> presentContext;
+    ComPtr<ID3D11Texture2D> presentStagingTex;
+    HANDLE stagingSharedHandle = nullptr;
+    ComPtr<ID3D11On12Device> d3d11on12Device;
+    ComPtr<ID3D11Resource> syncWrappedResource;
+    bool useSharedFenceSync = false;
+    WGPUSharedTextureMemory sharedTexMem = nullptr;
+    WGPUTexture zeroCopyTexture = nullptr;
+    std::mutex frameMutex;
+    bool accessActive = false;
+    WGPUDevice wgpuDevice = nullptr;
+
+    // Fences from EndAccess must be passed to next BeginAccess (Dawn protocol)
+    std::vector<WGPUSharedFence> pendingFences;
+    std::vector<uint64_t> pendingFenceValues;
+
+    void cleanup() {
+        // Release any pending fences first
+        for (auto f : pendingFences) {
+            if (f && p_wgpuSharedFenceRelease) p_wgpuSharedFenceRelease(f);
+        }
+        pendingFences.clear();
+        pendingFenceValues.clear();
+
+        if (zeroCopyTexture) {
+            if (p_wgpuTextureDestroy) p_wgpuTextureDestroy(zeroCopyTexture);
+            // Release our internal ref (the one from SharedTextureMemoryCreateTexture)
+            if (p_wgpuTextureRelease) p_wgpuTextureRelease(zeroCopyTexture);
+            zeroCopyTexture = nullptr;
+        }
+        if (sharedTexMem) {
+            if (p_wgpuSharedTextureMemoryRelease) p_wgpuSharedTextureMemoryRelease(sharedTexMem);
+            sharedTexMem = nullptr;
+        }
+        syncWrappedResource.Reset();
+        d3d11on12Device.Reset();
+        presentStagingTex.Reset();
+        stagingDx12.Reset();
+        if (stagingSharedHandle) {
+            CloseHandle(stagingSharedHandle);
+            stagingSharedHandle = nullptr;
+        }
+        presentContext.Reset();
+        presentDevice.Reset();
+        compositor.shutdown();
+    }
+
+    ~DCompBridgeState() { cleanup(); }
+};
 
 static std::wstring getExecutableDirW() {
     wchar_t buffer[MAX_PATH];
@@ -8024,6 +7995,10 @@ ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void
     });
 }
 
+// Surface-to-HWND mapping for DComp bridge initialization
+static std::map<void*, HWND> g_surfaceToHwnd;
+static std::mutex g_surfaceToHwndMutex;
+
 ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
     if (!wgpuInstance || !abstractView || !abstractView->hwnd) {
         printf("[WGPU] createSurfaceForView: null check failed (inst=%p view=%p hwnd=%p)\n",
@@ -8045,31 +8020,467 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
     });
     printf("[WGPU] createSurfaceForView: surface=%p\n", result);
+
+    // Store surface → HWND mapping for DComp bridge initialization
+    if (result) {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        g_surfaceToHwnd[result] = hwnd;
+    }
+
     return result;
+}
+
+// Helper: Initialize DComp zero-copy bridge for a surface.
+// Returns true on success, false if DComp is unavailable or init fails.
+static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t width, uint32_t height) {
+    if (!isDCompAvailable()) return false;
+    if (!ensureDCompSymbols()) return false;
+
+    WGPUDevice device = (WGPUDevice)devicePtr;
+
+    // Look up the HWND this surface was created for
+    HWND hwnd = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        auto it = g_surfaceToHwnd.find(surface);
+        if (it != g_surfaceToHwnd.end()) hwnd = it->second;
+    }
+    if (!hwnd) {
+        printf("[DComp] No HWND mapping for surface=%p, skipping DComp bridge\n", surface);
+        return false;
+    }
+
+    // Use the view's own HWND for the DComp target — not the top-level window.
+    // Each WGPU view is a child window positioned within its parent.
+    // Targeting the child HWND ensures content renders at (0,0) of the view,
+    // which the window manager already positions correctly.
+    HWND targetHwnd = hwnd;
+
+    // Require DXGI shared handle feature for cross-device sharing
+    bool hasDXGISharedHandle = p_wgpuDeviceHasFeature(device, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle);
+    bool hasSharedFence = p_wgpuDeviceHasFeature(device, WGPUFeatureName_SharedFenceDXGISharedHandle);
+    // Feature detection done
+
+    if (!hasDXGISharedHandle) {
+        printf("[DComp] Zero-copy bridge requires SharedTextureMemoryDXGISharedHandle\n");
+        return false;
+    }
+
+    auto bridge = std::make_unique<DCompBridgeState>();
+    bridge->wgpuDevice = device;
+    bridge->useSharedFenceSync = hasSharedFence;
+
+    // Step 1: Init DComp compositor (visual tree) on main thread
+    bool compOk = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        compOk = bridge->compositor.initMinimal(targetHwnd, width, height);
+        if (compOk) {
+            bridge->compositor.enableNativeResize();
+        }
+    });
+    if (!compOk) {
+        printf("[DComp] initMinimal failed for HWND=%p\n", targetHwnd);
+        return false;
+    }
+
+    // Step 2: Get Dawn's DX12 device to find the DXGI adapter
+    auto dx12Device = dawn::native::d3d12::GetD3D12Device(device);
+    if (!dx12Device) {
+        printf("[DComp] GetD3D12Device failed\n");
+        return false;
+    }
+
+    // Step 3: Create dedicated presentation D3D11 device on Dawn's adapter
+    LUID adapterLuid = dx12Device->GetAdapterLuid();
+    ComPtr<IDXGIFactory4> dxgiFactory;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateDXGIFactory1 failed: 0x%08lx\n", hr);
+        return false;
+    }
+    ComPtr<IDXGIAdapter> adapter;
+    hr = dxgiFactory->EnumAdapterByLuid(adapterLuid, IID_PPV_ARGS(&adapter));
+    if (FAILED(hr)) {
+        printf("[DComp] EnumAdapterByLuid failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    ComPtr<ID3D11Device> baseDevice;
+    D3D_FEATURE_LEVEL featureLevel;
+    hr = D3D11CreateDevice(
+        adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr, 0, D3D11_SDK_VERSION,
+        &baseDevice, &featureLevel, nullptr);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation D3D11CreateDevice failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    hr = baseDevice.As(&bridge->presentDevice);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation device QI for ID3D11Device5 failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    ComPtr<ID3D11DeviceContext> baseCtx;
+    bridge->presentDevice->GetImmediateContext(&baseCtx);
+    hr = baseCtx.As(&bridge->presentContext);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation context QI for ID3D11DeviceContext4 failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Presentation device ready
+
+    // Step 4: Create swap chain on the presentation device
+    bool swapChainOk = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        swapChainOk = bridge->compositor.initSwapChainFromDevice(baseDevice.Get(), width, height);
+    });
+    if (!swapChainOk) {
+        printf("[DComp] initSwapChainFromDevice on presentation device failed\n");
+        return false;
+    }
+
+    // Step 5: Create DX12 staging texture with shared access
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    hr = dx12Device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_SHARED,
+        &texDesc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&bridge->stagingDx12));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateCommittedResource (staging) failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Step 6: Create DXGI shared handle
+    hr = dx12Device->CreateSharedHandle(
+        bridge->stagingDx12.Get(), nullptr,
+        GENERIC_ALL, nullptr, &bridge->stagingSharedHandle);
+    if (FAILED(hr)) {
+        printf("[DComp] CreateSharedHandle failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Step 7: Set up cross-device sync
+    if (!bridge->useSharedFenceSync) {
+        // SharedFence unavailable — using D3D11On12 Acquire/Release for sync
+        auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
+        if (d3d11on12) {
+            d3d11on12.As(&bridge->d3d11on12Device);
+            if (bridge->d3d11on12Device) {
+                D3D11_RESOURCE_FLAGS d3d11Flags = {};
+                d3d11Flags.BindFlags = 0;
+                hr = bridge->d3d11on12Device->CreateWrappedResource(
+                    bridge->stagingDx12.Get(), &d3d11Flags,
+                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
+                    IID_PPV_ARGS(&bridge->syncWrappedResource));
+                if (FAILED(hr)) {
+                    printf("[DComp] CreateWrappedResource for sync failed: 0x%08lx\n", hr);
+                    bridge->d3d11on12Device.Reset();
+                }
+            }
+        }
+    }
+
+    // Step 8: Open shared handle on presentation device for CopyResource
+    {
+        ComPtr<ID3D11Device1> dev1;
+        bridge->presentDevice.As(&dev1);
+        hr = dev1->OpenSharedResource1(
+            bridge->stagingSharedHandle, IID_PPV_ARGS(&bridge->presentStagingTex));
+    }
+    if (FAILED(hr)) {
+        printf("[DComp] OpenSharedResource1 on presentation device failed: 0x%08lx\n", hr);
+        return false;
+    }
+    // Staging texture shared to presentation device
+
+    // Step 9: Import into Dawn via SharedTextureMemory
+    WGPUSharedTextureMemoryDXGISharedHandleDescriptor dxgiDesc =
+        WGPU_SHARED_TEXTURE_MEMORY_DXGI_SHARED_HANDLE_DESCRIPTOR_INIT;
+    dxgiDesc.handle = bridge->stagingSharedHandle;
+    dxgiDesc.useKeyedMutex = false;
+
+    WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
+    memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiDesc);
+    bridge->sharedTexMem = p_wgpuDeviceImportSharedTextureMemory(device, &memDesc);
+
+    if (!bridge->sharedTexMem) {
+        printf("[DComp] wgpuDeviceImportSharedTextureMemory returned null\n");
+        return false;
+    }
+
+    // Verify properties
+    WGPUSharedTextureMemoryProperties props = {};
+    WGPUStatus propStatus = p_wgpuSharedTextureMemoryGetProperties(bridge->sharedTexMem, &props);
+    if (propStatus != WGPUStatus_Success) {
+        printf("[DComp] SharedTextureMemory properties failed (status=%d)\n", propStatus);
+        return false;
+    }
+    // SharedTextureMemory imported successfully
+
+    // Step 10: Create WGPUTexture from SharedTextureMemory
+    WGPUTextureUsage requestedUsage = (WGPUTextureUsage)(
+        WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment);
+    requestedUsage = (WGPUTextureUsage)(requestedUsage & props.usage);
+
+    WGPUTextureDescriptor wgpuTexDesc = {};
+    wgpuTexDesc.usage = requestedUsage;
+    wgpuTexDesc.dimension = WGPUTextureDimension_2D;
+    wgpuTexDesc.size = { width, height, 1 };
+    wgpuTexDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    wgpuTexDesc.mipLevelCount = 1;
+    wgpuTexDesc.sampleCount = 1;
+
+    bridge->zeroCopyTexture = p_wgpuSharedTextureMemoryCreateTexture(bridge->sharedTexMem, &wgpuTexDesc);
+    if (!bridge->zeroCopyTexture) {
+        printf("[DComp] wgpuSharedTextureMemoryCreateTexture returned null\n");
+        return false;
+    }
+
+    // Zero-copy bridge initialized
+
+    // Store the bridge
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        g_dcompBridges[surface] = std::move(bridge);
+    }
+
+    return true;
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
     if (!ensureWgpuSymbols()) return;
     runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceConfigure(surface, config); });
+
+    // Initialize or resize DComp zero-copy bridge for this surface.
+    // WGPUSurfaceConfiguration struct layout (64-bit):
+    //   nextInChain(ptr,8) + device(ptr,8) + format(u32,4) + pad(4) + usage(u64,8) +
+    //   width(u32,4) + height(u32,4) + viewFormatCount(size_t,8) + viewFormats(ptr,8) +
+    //   alphaMode(u32,4) + presentMode(u32,4)
+    // device at offset 8, width at offset 32, height at offset 36
+    void* devicePtr = *((void**)((uint8_t*)config + 8));
+    uint32_t width = *((uint32_t*)((uint8_t*)config + 32));
+    uint32_t height = *((uint32_t*)((uint8_t*)config + 36));
+
+    if (!devicePtr || width == 0 || height == 0) return;
+
+    // Check if bridge already exists
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) {
+            // Bridge already exists — don't recreate on resize.
+            // The DComp swap chain handles resize via native WM_SIZE hook,
+            // and the staging texture dimensions are checked per-frame.
+            return;
+        }
+    }
+
+    // Try to initialize DComp bridge (graceful fallback on failure)
+    initDCompBridgeForSurface(surface, devicePtr, width, height);
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
     if (!ensureWgpuSymbols()) return;
-    static int callCount = 0;
-    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
-    if (callCount < 3) {
-        // Log status field (offset 16 in WGPUSurfaceTexture struct: texture(8) + suboptimal(4) + pad(4) + status(4))
-        uint32_t status = *((uint32_t*)((uint8_t*)surfaceTexture + 16));
-        void* texture = *((void**)surfaceTexture);
-        printf("[WGPU] getCurrentTexture[%d]: texture=%p status=%u\n", callCount, texture, status);
-        callCount++;
+
+    // Check for DComp bridge
+    DCompBridgeState* bridge = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) bridge = it->second.get();
     }
+
+    if (bridge && bridge->zeroCopyTexture) {
+        std::lock_guard<std::mutex> lock(bridge->frameMutex);
+
+        // If access is still active from a previous frame (e.g. Present wasn't called),
+        // end it first to avoid "already used to access" errors.
+        if (bridge->accessActive) {
+            WGPUSharedTextureMemoryEndAccessState endState = {};
+            p_wgpuSharedTextureMemoryEndAccess(
+                bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
+            // Release any returned fences
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+            bridge->accessActive = false;
+        }
+
+        // Begin access on the shared texture
+        WGPUSharedTextureMemoryBeginAccessDescriptor beginDesc = {};
+        beginDesc.concurrentRead = false;
+        beginDesc.initialized = true;
+
+        // Only chain fences when SharedFence is supported.
+        // When using D3D11On12 sync, GPU synchronization is handled by
+        // Acquire/ReleaseWrappedResources — no need to pass fences.
+        if (bridge->useSharedFenceSync && !bridge->pendingFences.empty()) {
+            beginDesc.fenceCount = bridge->pendingFences.size();
+            beginDesc.fences = bridge->pendingFences.data();
+            beginDesc.signaledValues = bridge->pendingFenceValues.data();
+        }
+
+        WGPUStatus status = p_wgpuSharedTextureMemoryBeginAccess(
+            bridge->sharedTexMem, bridge->zeroCopyTexture, &beginDesc);
+
+        // Clear pending fences after use (release our refs)
+        for (auto f : bridge->pendingFences) {
+            if (f && p_wgpuSharedFenceRelease) p_wgpuSharedFenceRelease(f);
+        }
+        bridge->pendingFences.clear();
+        bridge->pendingFenceValues.clear();
+
+        if (status == WGPUStatus_Success) {
+            bridge->accessActive = true;
+            // Add a reference — callers release the texture after each frame
+            // (standard WGPU surface pattern), so we need an extra ref to keep it alive.
+            p_wgpuTextureAddRef(bridge->zeroCopyTexture);
+
+            // Fill the WGPUSurfaceTexture struct with our shared texture
+            // WGPUSurfaceTexture layout: nextInChain(ptr,8) + texture(ptr,8) + status(u32,4)
+            *((void**)surfaceTexture) = nullptr;                          // nextInChain = NULL
+            *((void**)((uint8_t*)surfaceTexture + 8)) = bridge->zeroCopyTexture;  // texture
+            *((uint32_t*)((uint8_t*)surfaceTexture + 16)) = WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal;  // status
+            return;
+        }
+        // Fall through to normal path on failure
+        printf("[DComp] BeginAccess failed (status=%d), falling back to HWND path\n", status);
+    }
+
+    // Normal HWND path
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
 }
 
 ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
     if (!ensureWgpuSymbols()) return 0;
-    static bool logged = false;
-    if (!logged) { printf("[WGPU] surfacePresentMainThread: first present call, surface=%p\n", surface); logged = true; }
+
+    // Check for DComp bridge
+    DCompBridgeState* bridge = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) bridge = it->second.get();
+    }
+
+    if (bridge && bridge->zeroCopyTexture && bridge->accessActive) {
+        std::lock_guard<std::mutex> lock(bridge->frameMutex);
+
+        auto* swapChain = bridge->compositor.getSwapChain();
+        if (!swapChain) return 0;
+
+        // End Dawn's access — returns shared fences for cross-device sync
+        bridge->accessActive = false;
+        WGPUSharedTextureMemoryEndAccessState endState = {};
+        WGPUStatus status = p_wgpuSharedTextureMemoryEndAccess(
+            bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
+        if (status != WGPUStatus_Success) {
+            printf("[DComp] EndAccess failed: status=%d\n", status);
+            return 0;
+        }
+
+        // Cross-device sync: wait for Dawn's GPU work to finish on the presentation device
+        if (bridge->useSharedFenceSync) {
+            // Store fences for next BeginAccess (Dawn SharedTextureMemory protocol)
+            bridge->pendingFences.clear();
+            bridge->pendingFenceValues.clear();
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                bridge->pendingFences.push_back(endState.fences[i]);  // take ownership of ref
+                bridge->pendingFenceValues.push_back(endState.signaledValues[i]);
+            }
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                WGPUSharedFenceDXGISharedHandleExportInfo dxgiExport =
+                    WGPU_SHARED_FENCE_DXGI_SHARED_HANDLE_EXPORT_INFO_INIT;
+                WGPUSharedFenceExportInfo exportInfo = WGPU_SHARED_FENCE_EXPORT_INFO_INIT;
+                exportInfo.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiExport);
+                p_wgpuSharedFenceExportInfo(endState.fences[i], &exportInfo);
+
+                if (dxgiExport.handle) {
+                    ComPtr<ID3D11Fence> d3d11Fence;
+                    HRESULT fhr = bridge->presentDevice->OpenSharedFence(
+                        dxgiExport.handle, IID_PPV_ARGS(&d3d11Fence));
+                    if (SUCCEEDED(fhr) && d3d11Fence) {
+                        bridge->presentContext->Wait(d3d11Fence.Get(), endState.signaledValues[i]);
+                    }
+                }
+            }
+        } else if (bridge->d3d11on12Device && bridge->syncWrappedResource) {
+            // Release fences (not needed for D3D11On12 sync path)
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+            // Acquire the wrapped D3D12 resource for D3D11, then release it.
+            // This inserts a GPU wait for Dawn's D3D12 work to complete.
+            ID3D11Resource* resources[] = { bridge->syncWrappedResource.Get() };
+            bridge->d3d11on12Device->AcquireWrappedResources(resources, 1);
+            bridge->d3d11on12Device->ReleaseWrappedResources(resources, 1);
+
+            // Flush + GPU event query to ensure the sync completes before
+            // the presentation device reads the shared texture.
+            ComPtr<ID3D11DeviceContext> syncCtx;
+            ComPtr<ID3D11Device> syncDev;
+            bridge->d3d11on12Device.As(&syncDev);
+            if (syncDev) {
+                syncDev->GetImmediateContext(&syncCtx);
+                if (syncCtx) {
+                    syncCtx->Flush();
+                    // Create an event query and spin-wait for GPU completion.
+                    // This ensures the shared texture data is fully written
+                    // before the presentation device copies from it.
+                    D3D11_QUERY_DESC qd = {};
+                    qd.Query = D3D11_QUERY_EVENT;
+                    ComPtr<ID3D11Query> eventQuery;
+                    if (SUCCEEDED(syncDev->CreateQuery(&qd, &eventQuery))) {
+                        syncCtx->End(eventQuery.Get());
+                        BOOL queryDone = FALSE;
+                        while (syncCtx->GetData(eventQuery.Get(), &queryDone,
+                               sizeof(queryDone), 0) == S_FALSE) {
+                            // Spin — typically completes in <1μs
+                        }
+                    }
+                }
+            }
+        } else {
+            // No sync mechanism — just release fences
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+        }
+
+        // Copy staging -> back buffer and present
+        ComPtr<ID3D11Texture2D> backBuffer;
+        HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) return 0;
+
+        bridge->presentContext->CopyResource(backBuffer.Get(), bridge->presentStagingTex.Get());
+        bridge->presentContext->Flush();
+
+        hr = swapChain->Present(0, 0);
+        if (FAILED(hr)) return 0;
+
+        bridge->compositor.getDCompDevice()->Commit();
+        return 1;  // success
+    }
+
+    // Normal HWND path
     return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
         return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
     });
@@ -11776,946 +12187,8 @@ extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPa
     // TODO: Implement using SetWindowIcon/LoadImage APIs
 }
 
-// =============================================================================
-// DirectComposition API (Phase 2+)
-//
-// These exports expose the DCompCompositor to the Bun/TypeScript FFI layer.
-// Phase 2: dcompInit + dcompRenderColor prove the compositing pipeline.
-// Phase 3: dcompInitForWGPUView connects WGPU to the composition surface.
-// Phase 4: dcompAttachWebView2 layers WebView2 into the visual tree.
-// =============================================================================
+// DComp exported API removed — zero-copy bridge is now an internal
+// implementation detail of the WGPU surface lifecycle (see
+// wgpuSurfaceConfigureMainThread, wgpuSurfaceGetCurrentTextureMainThread,
+// wgpuSurfacePresentMainThread).
 
-DCompCompositor* g_dcompCompositor = nullptr;
-
-// Initialize DirectComposition on an AbstractView's container HWND.
-// The view's container window becomes the composition target.
-extern "C" ELECTROBUN_EXPORT bool dcompInitForView(AbstractView* view, int width, int height) {
-    if (!view) {
-        printf("[DComp] dcompInitForView: null view\n");
-        return false;
-    }
-
-    // Walk up from the WGPUView's child HWND to the top-level window.
-    // CreateTargetForHwnd requires a top-level HWND, not a child window.
-    HWND targetHwnd = view->hwnd;
-    if (targetHwnd) {
-        HWND ancestor = GetAncestor(targetHwnd, GA_ROOT);
-        if (ancestor) targetHwnd = ancestor;
-        printf("[DComp] dcompInitForView: view->hwnd=%p top-level=%p\n",
-               view->hwnd, targetHwnd);
-    }
-    if (!targetHwnd || !IsWindow(targetHwnd)) {
-        printf("[DComp] dcompInitForView: invalid HWND (view->hwnd=%p resolved=%p)\n",
-               view->hwnd, targetHwnd);
-        return false;
-    }
-
-    // Tear down existing compositor if any
-    if (g_dcompCompositor) {
-        g_dcompCompositor->shutdown();
-        delete g_dcompCompositor;
-    }
-
-    g_dcompCompositor = new DCompCompositor();
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->init(targetHwnd, width, height);
-    });
-
-    if (!result) {
-        delete g_dcompCompositor;
-        g_dcompCompositor = nullptr;
-    }
-    return result;
-}
-
-// Initialize DirectComposition on a raw HWND (for standalone testing).
-extern "C" ELECTROBUN_EXPORT bool dcompInitForHwnd(void* hwnd, int width, int height) {
-    HWND targetHwnd = (HWND)hwnd;
-    if (!targetHwnd || !IsWindow(targetHwnd)) {
-        printf("[DComp] dcompInitForHwnd: invalid HWND=%p\n", hwnd);
-        return false;
-    }
-
-    if (g_dcompCompositor) {
-        g_dcompCompositor->shutdown();
-        delete g_dcompCompositor;
-    }
-
-    g_dcompCompositor = new DCompCompositor();
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->init(targetHwnd, width, height);
-    });
-
-    if (!result) {
-        delete g_dcompCompositor;
-        g_dcompCompositor = nullptr;
-    }
-    return result;
-}
-
-// Render a solid color to the DirectComposition surface.
-// RGBA values are 0.0-1.0. Alpha is premultiplied internally.
-extern "C" ELECTROBUN_EXPORT bool dcompRenderColor(float r, float g, float b, float a) {
-    if (!g_dcompCompositor) {
-        printf("[DComp] dcompRenderColor: compositor not initialized\n");
-        return false;
-    }
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->renderSolidColor(r, g, b, a);
-    });
-    return result;
-}
-
-// Resize the DirectComposition surface.
-extern "C" ELECTROBUN_EXPORT bool dcompResize(int width, int height) {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->resize(width, height);
-    });
-    return result;
-}
-
-// Check if DirectComposition is initialized.
-extern "C" ELECTROBUN_EXPORT bool dcompIsInitialized() {
-    return g_dcompCompositor && g_dcompCompositor->isInitialized();
-}
-
-// Shut down DirectComposition and release all resources.
-extern "C" ELECTROBUN_EXPORT void dcompShutdown() {
-    if (g_dcompCompositor) {
-        MainThreadDispatcher::dispatch_sync([&]() {
-            g_dcompCompositor->shutdown();
-        });
-        delete g_dcompCompositor;
-        g_dcompCompositor = nullptr;
-    }
-}
-
-// Enable DComp mode: the NEXT BrowserWindow created will use
-// CreateCoreWebView2CompositionController and wire into DComp visual tree.
-// Call this BEFORE creating the BrowserWindow.
-extern "C" ELECTROBUN_EXPORT void dcompEnableMode(int width, int height) {
-    g_dcompModeEnabled = true;
-    g_dcompModeWidth = width;
-    g_dcompModeHeight = height;
-    printf("[DComp] Mode enabled — next WebView2 will use CompositionController (%dx%d)\n", width, height);
-}
-
-// Enable native WM_SIZE resize hook (no TS round-trip, minimal jank).
-extern "C" ELECTROBUN_EXPORT void dcompEnableNativeResize() {
-    if (!g_dcompCompositor) return;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        g_dcompCompositor->enableNativeResize();
-    });
-}
-
-// =============================================================================
-// DirectComposition Phase 3: Triangle rendering + WGPU integration
-// =============================================================================
-
-// Initialize the D3D11 triangle rendering pipeline on the DComp swap chain.
-extern "C" ELECTROBUN_EXPORT bool dcompInitTrianglePipeline() {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->initTrianglePipeline();
-    });
-    return result;
-}
-
-// Render one frame of a rotating triangle to the DComp swap chain.
-extern "C" ELECTROBUN_EXPORT bool dcompRenderTriangle(float angle) {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->renderTriangle(angle);
-    });
-    return result;
-}
-
-// Map a WGPU readback buffer, copy pixels to DComp swap chain, unmap.
-// Combines readback + blit in one native call with proper Dawn callbacks.
-// wgpuInstance/wgpuBuffer: Dawn handles, bytesPerRow: readback buffer row pitch,
-// width/height: image dimensions (bytesPerRow may differ from width*4 due to alignment).
-extern "C" ELECTROBUN_EXPORT bool dcompBlitFromWGPUBuffer(
-    void* wgpuInstance, void* wgpuBuffer,
-    int bytesPerRow, int width, int height
-) {
-    if (!g_dcompCompositor || !wgpuInstance || !wgpuBuffer) return false;
-    if (!ensureWgpuSymbols()) return false;
-
-    size_t bufferSize = (size_t)bytesPerRow * height;
-
-    // Map the readback buffer with a real callback (null callback segfaults in Dawn)
-    struct MapCtx { std::atomic<bool> done{false}; };
-    MapCtx mapCtx;
-
-    WGPUBufferMapCallbackInfo mapInfo = {};
-    mapInfo.mode = WGPUCallbackMode_AllowSpontaneous;
-    mapInfo.callback = [](WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2) {
-        (void)status; (void)message; (void)userdata2;
-        if (userdata1) ((MapCtx*)userdata1)->done.store(true, std::memory_order_release);
-    };
-    mapInfo.userdata1 = &mapCtx;
-
-    WGPUFuture mapFuture = p_wgpuBufferMapAsync(
-        (WGPUBuffer)wgpuBuffer,
-        WGPUMapMode_Read,
-        0, bufferSize,
-        mapInfo
-    );
-
-    // Wait for map to complete (with timed wait — instance must have TimedWaitAny)
-    WGPUFutureWaitInfo waitInfo;
-    waitInfo.future = mapFuture;
-    waitInfo.completed = WGPU_FALSE;
-    WGPUWaitStatus waitStatus = p_wgpuInstanceWaitAny(
-        (WGPUInstance)wgpuInstance, 1, &waitInfo, 5000000000ULL);
-
-    if (waitStatus != WGPUWaitStatus_Success || !waitInfo.completed) {
-        printf("[DComp] blitFromWGPUBuffer: map wait failed (status=%d)\n", waitStatus);
-        return false;
-    }
-
-    // Get mapped range
-    void* mapped = nullptr;
-    if (p_wgpuBufferGetConstMappedRange) {
-        mapped = p_wgpuBufferGetConstMappedRange((WGPUBuffer)wgpuBuffer, 0, bufferSize);
-    }
-    if (!mapped && p_wgpuBufferGetMappedRange) {
-        mapped = p_wgpuBufferGetMappedRange((WGPUBuffer)wgpuBuffer, 0, bufferSize);
-    }
-    if (!mapped) {
-        printf("[DComp] blitFromWGPUBuffer: mapped range is null\n");
-        p_wgpuBufferUnmap((WGPUBuffer)wgpuBuffer);
-        return false;
-    }
-
-    // Blit directly to DComp swap chain — skip dispatch_sync since D3D11
-    // supports multithreaded access and this avoids cross-thread latency.
-    bool result = false;
-    if (bytesPerRow == width * 4) {
-        result = g_dcompCompositor->blitFromPixels(mapped, width, height);
-    } else {
-        // Strip row padding
-        std::vector<uint8_t> unpadded(width * height * 4);
-        const uint8_t* src = (const uint8_t*)mapped;
-        for (int y = 0; y < height; y++) {
-            memcpy(unpadded.data() + y * width * 4, src + y * bytesPerRow, width * 4);
-        }
-        result = g_dcompCompositor->blitFromPixels(unpadded.data(), width, height);
-    }
-
-    p_wgpuBufferUnmap((WGPUBuffer)wgpuBuffer);
-    return result;
-}
-
-// Enable/disable bridge mode (skip render-on-resize for WGPU bridge).
-extern "C" ELECTROBUN_EXPORT void dcompSetBridgeMode(bool enabled) {
-    if (!g_dcompCompositor) return;
-    g_dcompCompositor->setBridgeMode(enabled);
-}
-
-// Blit raw BGRA pixel data from WGPU readback to the DComp swap chain.
-// pixelData: pointer to width*height*4 bytes of BGRA pixel data.
-extern "C" ELECTROBUN_EXPORT bool dcompBlitPixels(const void* pixelData, int width, int height) {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->blitFromPixels(pixelData, width, height);
-    });
-    return result;
-}
-
-// ============================================================================
-// Zero-copy bridge: Dawn D3D11On12 → DComp swap chain (no CPU readback)
-// ============================================================================
-
-// Minimal DComp init: visual tree only, no swap chain.
-// Used when zero-copy bridge will provide the swap chain later.
-extern "C" ELECTROBUN_EXPORT bool dcompInitMinimal(void* hwnd, int width, int height) {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->initMinimal((HWND)hwnd, width, height);
-    });
-    return result;
-}
-
-// Global state for zero-copy bridge
-static ComPtr<ID3D12Resource> g_zeroCopyStagingDx12;
-static ComPtr<ID3D11Device5> g_presentDevice;       // Dedicated presentation D3D11 device (Dawn's adapter)
-static ComPtr<ID3D11DeviceContext4> g_presentContext; // Presentation device context (for Wait + CopyResource)
-static ComPtr<ID3D11Texture2D> g_presentStagingTex;  // Staging texture opened on presentation device
-static HANDLE g_stagingSharedHandle = nullptr;        // DXGI shared handle for staging texture
-static ComPtr<ID3D11On12Device> g_d3d11on12Device;    // D3D11On12 for Acquire/Release sync (fallback when no SharedFence)
-static ComPtr<ID3D11Resource> g_syncWrappedResource;  // Wrapped resource for sync-only Acquire/Release
-static bool g_useSharedFenceSync = false;              // true if Dawn supports SharedFenceDXGISharedHandle
-static WGPUSharedTextureMemory g_sharedTexMem = nullptr;
-static WGPUTexture g_zeroCopyTexture = nullptr;
-
-// Serialize BeginFrame / EndFrameAndPresent / ResizeZeroCopyBridge so that
-// resize cannot invalidate resources while a frame is in flight.
-static std::mutex g_zeroCopyBridgeMutex;
-
-// Initialize zero-copy bridge:
-// 1. Create a dedicated presentation D3D11 device on Dawn's DXGI adapter
-// 2. Create DComp swap chain on the presentation device
-// 3. Create a DX12 staging texture on Dawn's device, share via DXGI handle
-// 4. Open shared handle on presentation device for cross-device copy
-// 5. Import into Dawn as SharedTextureMemory → create WGPUTexture
-// 6. Return the WGPUTexture pointer (TypeScript renders to it)
-//
-// Per-frame flow:
-//   TS: render to zeroCopyTexture + submit
-//   C++: EndAccess → shared fence wait on presentDevice → CopyResource → Present
-extern "C" ELECTROBUN_EXPORT void* dcompInitZeroCopyBridge(void* wgpuDevice, int width, int height) {
-    if (!g_dcompCompositor || !wgpuDevice) return nullptr;
-
-    WGPUDevice device = (WGPUDevice)wgpuDevice;
-
-    // Require DXGI shared handle feature for cross-device sharing + fence sync
-    bool hasDXGISharedHandle = wgpuDeviceHasFeature(device, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle);
-    bool hasSharedFence = wgpuDeviceHasFeature(device, WGPUFeatureName_SharedFenceDXGISharedHandle);
-    printf("[DComp] Features: SharedTextureMemoryDXGISharedHandle=%d, SharedFenceDXGISharedHandle=%d\n",
-           hasDXGISharedHandle, hasSharedFence);
-
-    if (!hasDXGISharedHandle) {
-        printf("[DComp] Zero-copy bridge requires SharedTextureMemoryDXGISharedHandle\n");
-        return nullptr;
-    }
-
-    // Get Dawn's DX12 device to find the DXGI adapter
-    auto dx12Device = dawn::native::d3d12::GetD3D12Device(device);
-    if (!dx12Device) {
-        printf("[DComp] GetD3D12Device failed\n");
-        return nullptr;
-    }
-
-    // Create dedicated presentation D3D11 device on the SAME adapter as Dawn.
-    // This device owns the swap chain and does the final CopyResource → Present.
-    // Critically, it is NOT Dawn's D3D11On12 device — operations on it cannot
-    // corrupt Dawn's internal DX12 state.
-    LUID adapterLuid = dx12Device->GetAdapterLuid();
-    ComPtr<IDXGIFactory4> dxgiFactory;
-    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
-    if (FAILED(hr)) {
-        printf("[DComp] CreateDXGIFactory1 failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-    ComPtr<IDXGIAdapter> adapter;
-    hr = dxgiFactory->EnumAdapterByLuid(adapterLuid, IID_PPV_ARGS(&adapter));
-    if (FAILED(hr)) {
-        printf("[DComp] EnumAdapterByLuid failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-    printf("[DComp] Found Dawn's DXGI adapter (LUID: %08lx-%08lx)\n",
-           adapterLuid.HighPart, adapterLuid.LowPart);
-
-    ComPtr<ID3D11Device> baseDevice;
-    D3D_FEATURE_LEVEL featureLevel;
-    hr = D3D11CreateDevice(
-        adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
-        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-        nullptr, 0, D3D11_SDK_VERSION,
-        &baseDevice, &featureLevel, nullptr);
-    if (FAILED(hr)) {
-        printf("[DComp] Presentation D3D11CreateDevice failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-
-    hr = baseDevice.As(&g_presentDevice);
-    if (FAILED(hr)) {
-        printf("[DComp] Presentation device QI for ID3D11Device5 failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-
-    ComPtr<ID3D11DeviceContext> baseCtx;
-    g_presentDevice->GetImmediateContext(&baseCtx);
-    hr = baseCtx.As(&g_presentContext);
-    if (FAILED(hr)) {
-        printf("[DComp] Presentation context QI for ID3D11DeviceContext4 failed: 0x%08lx\n", hr);
-        g_presentDevice.Reset();
-        return nullptr;
-    }
-
-    printf("[DComp] Presentation device created on Dawn's adapter (feature level: 0x%x)\n", featureLevel);
-
-    // Create swap chain on the presentation device (not D3D11On12)
-    bool ok = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        ok = g_dcompCompositor->initSwapChainFromDevice(baseDevice.Get(), width, height);
-    });
-    if (!ok) {
-        printf("[DComp] initSwapChainFromDevice on presentation device failed\n");
-        g_presentContext.Reset();
-        g_presentDevice.Reset();
-        return nullptr;
-    }
-
-    // Create DX12 staging texture with shared access
-    D3D12_RESOURCE_DESC texDesc = {};
-    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.DepthOrArraySize = 1;
-    texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    hr = dx12Device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_SHARED,
-        &texDesc, D3D12_RESOURCE_STATE_COMMON,
-        nullptr, IID_PPV_ARGS(&g_zeroCopyStagingDx12));
-    if (FAILED(hr)) {
-        printf("[DComp] CreateCommittedResource (staging) failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-
-    // Create DXGI shared handle — used by both Dawn import and presentation device
-    hr = dx12Device->CreateSharedHandle(
-        g_zeroCopyStagingDx12.Get(), nullptr,
-        GENERIC_ALL, nullptr, &g_stagingSharedHandle);
-    if (FAILED(hr)) {
-        printf("[DComp] CreateSharedHandle failed: 0x%08lx\n", hr);
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    // Set up cross-device sync. Preferred: SharedFence (GPU-side wait, no D3D11On12).
-    // Fallback: D3D11On12 Acquire/Release wrapped resource (still works, just uses D3D11On12 for sync only).
-    g_useSharedFenceSync = hasSharedFence;
-    if (!g_useSharedFenceSync) {
-        printf("[DComp] SharedFence unavailable — using D3D11On12 Acquire/Release for sync\n");
-        auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
-        if (d3d11on12) {
-            d3d11on12.As(&g_d3d11on12Device);
-            if (g_d3d11on12Device) {
-                D3D11_RESOURCE_FLAGS d3d11Flags = {};
-                d3d11Flags.BindFlags = 0;
-                hr = g_d3d11on12Device->CreateWrappedResource(
-                    g_zeroCopyStagingDx12.Get(), &d3d11Flags,
-                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
-                    IID_PPV_ARGS(&g_syncWrappedResource));
-                if (FAILED(hr)) {
-                    printf("[DComp] CreateWrappedResource for sync failed: 0x%08lx\n", hr);
-                    g_d3d11on12Device.Reset();
-                }
-            }
-        }
-    }
-
-    // Open shared handle on presentation device for CopyResource
-    {
-        ComPtr<ID3D11Device1> dev1;
-        g_presentDevice.As(&dev1);
-        hr = dev1->OpenSharedResource1(
-            g_stagingSharedHandle, IID_PPV_ARGS(&g_presentStagingTex));
-    }
-    if (FAILED(hr)) {
-        printf("[DComp] OpenSharedResource1 on presentation device failed: 0x%08lx\n", hr);
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-    printf("[DComp] Staging texture shared to presentation device\n");
-
-    // Import into Dawn via SharedTextureMemory
-    WGPUSharedTextureMemoryDXGISharedHandleDescriptor dxgiDesc =
-        WGPU_SHARED_TEXTURE_MEMORY_DXGI_SHARED_HANDLE_DESCRIPTOR_INIT;
-    dxgiDesc.handle = g_stagingSharedHandle;
-    dxgiDesc.useKeyedMutex = false;
-
-    WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
-    memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiDesc);
-    g_sharedTexMem = wgpuDeviceImportSharedTextureMemory(device, &memDesc);
-
-    if (!g_sharedTexMem) {
-        printf("[DComp] wgpuDeviceImportSharedTextureMemory returned null\n");
-        g_presentStagingTex.Reset();
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    // Verify properties
-    WGPUSharedTextureMemoryProperties props = {};
-    WGPUStatus propStatus = wgpuSharedTextureMemoryGetProperties(g_sharedTexMem, &props);
-    if (propStatus != WGPUStatus_Success) {
-        printf("[DComp] SharedTextureMemory properties failed (status=%d)\n", propStatus);
-        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
-        g_sharedTexMem = nullptr;
-        g_presentStagingTex.Reset();
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-    printf("[DComp] SharedTextureMemory: format=%u, usage=0x%llx, size=%ux%u\n",
-           props.format, (unsigned long long)props.usage, props.size.width, props.size.height);
-
-    // Create WGPUTexture — request RenderAttachment + CopyDst, constrained by props
-    WGPUTextureUsage requestedUsage = (WGPUTextureUsage)(
-        WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment);
-    requestedUsage = (WGPUTextureUsage)(requestedUsage & props.usage);
-    printf("[DComp] Texture usage: 0x%llx (props allow: 0x%llx)\n",
-           (unsigned long long)requestedUsage, (unsigned long long)props.usage);
-
-    WGPUTextureDescriptor wgpuTexDesc = {};
-    wgpuTexDesc.usage = requestedUsage;
-    wgpuTexDesc.dimension = WGPUTextureDimension_2D;
-    wgpuTexDesc.size = { (uint32_t)width, (uint32_t)height, 1 };
-    wgpuTexDesc.format = WGPUTextureFormat_BGRA8Unorm;
-    wgpuTexDesc.mipLevelCount = 1;
-    wgpuTexDesc.sampleCount = 1;
-
-    g_zeroCopyTexture = wgpuSharedTextureMemoryCreateTexture(g_sharedTexMem, &wgpuTexDesc);
-    if (!g_zeroCopyTexture) {
-        printf("[DComp] wgpuSharedTextureMemoryCreateTexture returned null\n");
-        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
-        g_sharedTexMem = nullptr;
-        g_presentStagingTex.Reset();
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    g_dcompCompositor->setBridgeMode(true);
-
-    printf("[DComp] Zero-copy bridge initialized: WGPUTexture=%p, DX12=%p, PresentTex=%p\n",
-           g_zeroCopyTexture, g_zeroCopyStagingDx12.Get(), g_presentStagingTex.Get());
-
-    return g_zeroCopyTexture;
-}
-
-// Begin frame: tell Dawn it can use the shared texture.
-// Call BEFORE CopyTextureToTexture in the command encoder.
-extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyBeginFrame() {
-    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
-    if (!g_sharedTexMem || !g_zeroCopyTexture) return false;
-
-    WGPUSharedTextureMemoryBeginAccessDescriptor beginDesc = {};
-    beginDesc.concurrentRead = false;
-    beginDesc.initialized = true;
-    beginDesc.fenceCount = 0;
-    beginDesc.fences = nullptr;
-    beginDesc.signaledValues = nullptr;
-
-    WGPUStatus status = wgpuSharedTextureMemoryBeginAccess(
-        g_sharedTexMem, g_zeroCopyTexture, &beginDesc);
-    return status == WGPUStatus_Success;
-}
-
-// End frame + present: release shared texture from Dawn, wait for Dawn's GPU work
-// via shared fences, copy staging → back buffer on presentation device, present.
-// Call AFTER queueSubmit.
-extern "C" ELECTROBUN_EXPORT bool dcompZeroCopyEndFrameAndPresent() {
-    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
-    if (!g_sharedTexMem || !g_zeroCopyTexture || !g_dcompCompositor || !g_presentDevice || !g_presentStagingTex) return false;
-
-    auto* swapChain = g_dcompCompositor->getSwapChain();
-    if (!swapChain) return false;
-
-    // End Dawn's access — returns shared fences for cross-device sync
-    WGPUSharedTextureMemoryEndAccessState endState = {};
-    WGPUStatus status = wgpuSharedTextureMemoryEndAccess(
-        g_sharedTexMem, g_zeroCopyTexture, &endState);
-    if (status != WGPUStatus_Success) {
-        printf("[DComp] EndAccess failed: status=%d\n", status);
-        return false;
-    }
-
-    // Cross-device sync: wait for Dawn's GPU work to finish before copying.
-    if (g_useSharedFenceSync) {
-        // Preferred: GPU-side wait via shared fences (no D3D11On12 involvement)
-        for (size_t i = 0; i < endState.fenceCount; i++) {
-            WGPUSharedFenceDXGISharedHandleExportInfo dxgiExport =
-                WGPU_SHARED_FENCE_DXGI_SHARED_HANDLE_EXPORT_INFO_INIT;
-            WGPUSharedFenceExportInfo exportInfo = WGPU_SHARED_FENCE_EXPORT_INFO_INIT;
-            exportInfo.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiExport);
-            wgpuSharedFenceExportInfo(endState.fences[i], &exportInfo);
-
-            if (dxgiExport.handle) {
-                ComPtr<ID3D11Fence> d3d11Fence;
-                HRESULT fhr = g_presentDevice->OpenSharedFence(
-                    dxgiExport.handle, IID_PPV_ARGS(&d3d11Fence));
-                if (SUCCEEDED(fhr) && d3d11Fence) {
-                    g_presentContext->Wait(d3d11Fence.Get(), endState.signaledValues[i]);
-                }
-            }
-            wgpuSharedFenceRelease(endState.fences[i]);
-        }
-    } else if (g_d3d11on12Device && g_syncWrappedResource) {
-        // Fallback: D3D11On12 Acquire/Release acts as a GPU barrier between
-        // Dawn's DX12 command queue and the presentation device.
-        for (size_t i = 0; i < endState.fenceCount; i++) {
-            wgpuSharedFenceRelease(endState.fences[i]);
-        }
-        ID3D11Resource* resources[] = { g_syncWrappedResource.Get() };
-        g_d3d11on12Device->AcquireWrappedResources(resources, 1);
-        g_d3d11on12Device->ReleaseWrappedResources(resources, 1);
-        // Flush the D3D11On12 context to ensure the barrier is submitted
-        ComPtr<ID3D11DeviceContext> syncCtx;
-        ComPtr<ID3D11Device> syncDev;
-        g_d3d11on12Device.As(&syncDev);
-        if (syncDev) {
-            syncDev->GetImmediateContext(&syncCtx);
-            if (syncCtx) syncCtx->Flush();
-        }
-    } else {
-        // No sync available — release fences and hope for the best
-        for (size_t i = 0; i < endState.fenceCount; i++) {
-            wgpuSharedFenceRelease(endState.fences[i]);
-        }
-    }
-
-    // Copy staging → back buffer (both on presentation device)
-    ComPtr<ID3D11Texture2D> backBuffer;
-    HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
-    if (FAILED(hr)) return false;
-
-    g_presentContext->CopyResource(backBuffer.Get(), g_presentStagingTex.Get());
-    g_presentContext->Flush();
-
-    hr = swapChain->Present(0, 0);
-    if (FAILED(hr)) return false;
-
-    return SUCCEEDED(g_dcompCompositor->getDCompDevice()->Commit());
-}
-
-// Resize the zero-copy bridge: destroy Dawn texture, resize swap chain on
-// presentation device, recreate staging texture + shared handle.
-// Returns the new WGPUTexture or nullptr on failure.
-extern "C" ELECTROBUN_EXPORT void* dcompResizeZeroCopyBridge(void* wgpuDevice, int width, int height) {
-    std::lock_guard<std::mutex> lock(g_zeroCopyBridgeMutex);
-    if (!g_dcompCompositor || !wgpuDevice || width <= 0 || height <= 0) return nullptr;
-    if (!g_presentDevice || !g_presentContext) return nullptr;
-
-    WGPUDevice device = (WGPUDevice)wgpuDevice;
-
-    // Wait for presentation device to finish any in-flight Present/CopyResource.
-    // This is scoped to g_presentContext only — Dawn's device is untouched.
-    {
-        g_presentContext->ClearState();
-        g_presentContext->Flush();
-        D3D11_QUERY_DESC qd = {};
-        qd.Query = D3D11_QUERY_EVENT;
-        ComPtr<ID3D11Query> query;
-        if (SUCCEEDED(g_presentDevice->CreateQuery(&qd, &query))) {
-            g_presentContext->End(query.Get());
-            g_presentContext->Flush();
-            BOOL done = FALSE;
-            while (g_presentContext->GetData(query.Get(), &done, sizeof(done), 0) != S_OK || !done) {
-                Sleep(0);
-            }
-        }
-    }
-
-    // Destroy old Dawn texture + shared texture memory
-    if (g_zeroCopyTexture) {
-        wgpuTextureDestroy(g_zeroCopyTexture);
-        wgpuTextureRelease(g_zeroCopyTexture);
-        g_zeroCopyTexture = nullptr;
-    }
-    if (g_sharedTexMem) {
-        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
-        g_sharedTexMem = nullptr;
-    }
-
-    // Release old sync resources (must be rebuilt for new staging texture)
-    g_syncWrappedResource.Reset();
-    g_d3d11on12Device.Reset();
-
-    // Release old staging resources
-    g_presentStagingTex.Reset();
-    g_zeroCopyStagingDx12.Reset();
-    if (g_stagingSharedHandle) {
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-    }
-
-    // Resize swap chain on presentation device (safe — not D3D11On12)
-    bool swapChainOk = false;
-    ID3D11Device* presentDevRaw = g_presentDevice.Get();
-    MainThreadDispatcher::dispatch_sync([&]() {
-        swapChainOk = g_dcompCompositor->initSwapChainFromDevice(presentDevRaw, width, height);
-    });
-    if (!swapChainOk) {
-        printf("[DComp] Resize: initSwapChainFromDevice failed\n");
-        return nullptr;
-    }
-
-    // Create new DX12 staging texture
-    auto dx12Device = dawn::native::d3d12::GetD3D12Device(device);
-    if (!dx12Device) {
-        printf("[DComp] Resize: GetD3D12Device failed\n");
-        return nullptr;
-    }
-
-    D3D12_RESOURCE_DESC texDesc = {};
-    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    texDesc.Width = width;
-    texDesc.Height = height;
-    texDesc.DepthOrArraySize = 1;
-    texDesc.MipLevels = 1;
-    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
-    texDesc.SampleDesc.Count = 1;
-    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
-
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    HRESULT hr = dx12Device->CreateCommittedResource(
-        &heapProps, D3D12_HEAP_FLAG_SHARED,
-        &texDesc, D3D12_RESOURCE_STATE_COMMON,
-        nullptr, IID_PPV_ARGS(&g_zeroCopyStagingDx12));
-    if (FAILED(hr)) {
-        printf("[DComp] Resize: CreateCommittedResource failed: 0x%08lx\n", hr);
-        return nullptr;
-    }
-
-    // New DXGI shared handle
-    hr = dx12Device->CreateSharedHandle(
-        g_zeroCopyStagingDx12.Get(), nullptr, GENERIC_ALL, nullptr, &g_stagingSharedHandle);
-    if (FAILED(hr)) {
-        printf("[DComp] Resize: CreateSharedHandle failed: 0x%08lx\n", hr);
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    // Rebuild D3D11On12 sync for new staging texture
-    {
-        auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
-        if (d3d11on12) {
-            d3d11on12.As(&g_d3d11on12Device);
-            if (g_d3d11on12Device) {
-                D3D11_RESOURCE_FLAGS d3d11Flags = {};
-                d3d11Flags.BindFlags = 0;
-                HRESULT wrapHr = g_d3d11on12Device->CreateWrappedResource(
-                    g_zeroCopyStagingDx12.Get(), &d3d11Flags,
-                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
-                    IID_PPV_ARGS(&g_syncWrappedResource));
-                if (FAILED(wrapHr)) {
-                    printf("[DComp] Resize: CreateWrappedResource for sync failed: 0x%08lx\n", wrapHr);
-                    g_d3d11on12Device.Reset();
-                } else {
-                    printf("[DComp] Resize: D3D11On12 sync rebuilt\n");
-                }
-            }
-        }
-    }
-
-    // Open on presentation device (QI to ID3D11Device1 for OpenSharedResource1)
-    {
-        ComPtr<ID3D11Device1> dev1;
-        g_presentDevice.As(&dev1);
-        hr = dev1->OpenSharedResource1(
-            g_stagingSharedHandle, IID_PPV_ARGS(&g_presentStagingTex));
-    }
-    if (FAILED(hr)) {
-        printf("[DComp] Resize: OpenSharedResource1 failed: 0x%08lx\n", hr);
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    // Import into Dawn
-    WGPUSharedTextureMemoryDXGISharedHandleDescriptor dxgiDesc =
-        WGPU_SHARED_TEXTURE_MEMORY_DXGI_SHARED_HANDLE_DESCRIPTOR_INIT;
-    dxgiDesc.handle = g_stagingSharedHandle;
-    dxgiDesc.useKeyedMutex = false;
-
-    WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
-    memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiDesc);
-    g_sharedTexMem = wgpuDeviceImportSharedTextureMemory(device, &memDesc);
-
-    if (!g_sharedTexMem) {
-        printf("[DComp] Resize: import shared texture memory failed\n");
-        g_presentStagingTex.Reset();
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    WGPUSharedTextureMemoryProperties props = {};
-    wgpuSharedTextureMemoryGetProperties(g_sharedTexMem, &props);
-
-    WGPUTextureUsage requestedUsage = (WGPUTextureUsage)(
-        WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment);
-    requestedUsage = (WGPUTextureUsage)(requestedUsage & props.usage);
-
-    WGPUTextureDescriptor wgpuTexDesc = {};
-    wgpuTexDesc.usage = requestedUsage;
-    wgpuTexDesc.dimension = WGPUTextureDimension_2D;
-    wgpuTexDesc.size = { (uint32_t)width, (uint32_t)height, 1 };
-    wgpuTexDesc.format = WGPUTextureFormat_BGRA8Unorm;
-    wgpuTexDesc.mipLevelCount = 1;
-    wgpuTexDesc.sampleCount = 1;
-
-    g_zeroCopyTexture = wgpuSharedTextureMemoryCreateTexture(g_sharedTexMem, &wgpuTexDesc);
-    if (!g_zeroCopyTexture) {
-        printf("[DComp] Resize: create shared texture failed\n");
-        wgpuSharedTextureMemoryRelease(g_sharedTexMem);
-        g_sharedTexMem = nullptr;
-        g_presentStagingTex.Reset();
-        CloseHandle(g_stagingSharedHandle);
-        g_stagingSharedHandle = nullptr;
-        g_zeroCopyStagingDx12.Reset();
-        return nullptr;
-    }
-
-    printf("[DComp] Resize zero-copy bridge: %dx%d, texture=%p\n", width, height, g_zeroCopyTexture);
-    return g_zeroCopyTexture;
-}
-
-// Start a 60 FPS render loop (rotating triangle).
-extern "C" ELECTROBUN_EXPORT void dcompStartRenderLoop() {
-    if (!g_dcompCompositor) return;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        g_dcompCompositor->initTrianglePipeline();
-        g_dcompCompositor->startRenderLoop();
-    });
-}
-
-// Stop the render loop.
-extern "C" ELECTROBUN_EXPORT void dcompStopRenderLoop() {
-    if (!g_dcompCompositor) return;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        g_dcompCompositor->stopRenderLoop();
-    });
-}
-
-// Get the last frame render time in milliseconds (for benchmarking).
-extern "C" ELECTROBUN_EXPORT double dcompGetLastFrameTimeMs() {
-    if (!g_dcompCompositor) return -1.0;
-    return g_dcompCompositor->getLastFrameTimeMs();
-}
-
-// Get total frame count (for benchmarking).
-extern "C" ELECTROBUN_EXPORT uint64_t dcompGetFrameCount() {
-    if (!g_dcompCompositor) return 0;
-    return g_dcompCompositor->getFrameCount();
-}
-
-// Create a child HWND within the DComp target for WGPU surface creation
-// (Option C: WGPU renders to child HWND, DComp composites the parent).
-extern "C" ELECTROBUN_EXPORT void* dcompCreateWGPUChildHwnd(int x, int y, int w, int h) {
-    if (!g_dcompCompositor) return nullptr;
-    HWND result = NULL;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->createWGPUChildHwnd(x, y, w, h);
-    });
-    return (void*)result;
-}
-
-// =============================================================================
-// DirectComposition Phase 4: WebView2 + WGPU visual tree compositing
-// =============================================================================
-
-// Set up the layered visual tree: WGPU (back) + WebView2 (front).
-// webviewView: pointer to WebView2View (AbstractView subclass) — its composition
-//   controller surface is placed in the WebView2 visual layer.
-// wgpuSwapChain: optional pointer to a DXGI swap chain for the WGPU layer.
-//   Pass nullptr for child HWND mode (Option C) where WGPU renders to a child HWND.
-extern "C" ELECTROBUN_EXPORT bool dcompSetupLayeredTree(AbstractView* webviewView, void* wgpuSwapChainPtr) {
-    if (!g_dcompCompositor || !webviewView) {
-        printf("[DComp] dcompSetupLayeredTree: null compositor or view\n");
-        return false;
-    }
-
-    // Get the WebView2 composition controller's visual surface
-    // WebView2View stores it as compositionController
-    WebView2View* wv2 = dynamic_cast<WebView2View*>(webviewView);
-    if (!wv2) {
-        printf("[DComp] dcompSetupLayeredTree: view is not a WebView2View\n");
-        return false;
-    }
-
-    // Get the composition controller's root visual surface.
-    // Note: ICoreWebView2CompositionController provides a composition surface
-    // that can be set as content on a DComp visual via its rootVisualTarget.
-    IUnknown* webview2Surface = nullptr;
-
-    // The WebView2 composition controller itself implements IUnknown and can be
-    // used with DComp's visual content system. We pass the controller as the
-    // surface content for the WebView2 visual layer.
-    // For full integration, use ICoreWebView2Environment3::CreateCoreWebView2CompositionController
-    // which gives direct access to the composition surface.
-
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->setupLayeredVisualTree(
-            (IDXGISwapChain1*)wgpuSwapChainPtr,
-            webview2Surface  // nullptr for now — WebView2 surface attached separately
-        );
-    });
-    return result;
-}
-
-// Attach a WebView2 composition controller's root visual to the DComp tree.
-// This uses ICoreWebView2CompositionController::put_RootVisualTarget to connect
-// WebView2's visual to our DirectComposition visual.
-extern "C" ELECTROBUN_EXPORT bool dcompAttachWebView2(AbstractView* webviewView) {
-    if (!g_dcompCompositor || !webviewView) return false;
-
-    WebView2View* wv2 = dynamic_cast<WebView2View*>(webviewView);
-    if (!wv2) {
-        printf("[DComp] dcompAttachWebView2: view is not a WebView2View\n");
-        return false;
-    }
-
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        IDCompositionVisual* wv2Visual = g_dcompCompositor->getWebView2Visual();
-        if (!wv2Visual) {
-            printf("[DComp] dcompAttachWebView2: no WebView2 visual in tree\n");
-            return;
-        }
-
-        // Use ICoreWebView2CompositionController to set the DComp visual as its
-        // rendering target. This is the key integration point — WebView2 renders
-        // directly into our DComp visual tree.
-        //
-        // The composition controller exposes put_RootVisualTarget which accepts
-        // an IUnknown pointer to a DComp visual (IDCompositionVisual).
-        // This is available on ICoreWebView2CompositionController3+.
-        //
-        // For now, we set up the visual tree structure. The actual WebView2
-        // composition integration requires the host to create the WebView2
-        // environment with CreateCoreWebView2CompositionController (not the
-        // standard CreateCoreWebView2Controller) and use the composition controller's
-        // cursor/input routing APIs.
-
-        printf("[DComp] WebView2 visual layer ready for composition controller attachment\n");
-        result = true;
-    });
-    return result;
-}
-
-// Update visual positions for resize synchronization.
-extern "C" ELECTROBUN_EXPORT bool dcompUpdateVisualBounds(
-    float wgpuX, float wgpuY, float wgpuW, float wgpuH,
-    float wv2X, float wv2Y, float wv2W, float wv2H
-) {
-    if (!g_dcompCompositor) return false;
-    bool result = false;
-    MainThreadDispatcher::dispatch_sync([&]() {
-        result = g_dcompCompositor->updateVisualBounds(
-            wgpuX, wgpuY, wgpuW, wgpuH,
-            wv2X, wv2Y, wv2W, wv2H);
-    });
-    return result;
-}
