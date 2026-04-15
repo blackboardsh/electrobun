@@ -1814,6 +1814,7 @@ export const WGPUBridge = {
 	},
 };
 
+
 // Worker management. Move to a different file
 process.on("uncaughtException", (err) => {
 	console.error("Uncaught exception in worker:", err);
