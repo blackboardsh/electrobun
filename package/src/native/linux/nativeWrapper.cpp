@@ -8508,7 +8508,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 
                 while (iter != nullptr) {
                     if (!resultString.empty()) {
-                        resultString += ","; // Separate multiple files with comma (like Mac)
+                        resultString += "\x1C"; // ASCII File Separator; safe for filenames (commas are legal in paths)
                     }
                     resultString += (char*)iter->data;
                     g_free(iter->data);

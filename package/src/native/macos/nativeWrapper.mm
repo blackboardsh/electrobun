@@ -7565,14 +7565,14 @@ extern "C" const char *openFileDialog(const char *startingFolder,
                 
         result = [panel runModal]; // Run the modal dialog on the main thread        
         
-        if (result == NSModalResponseOK) {            
+        if (result == NSModalResponseOK) {
             NSArray<NSURL *> *selectedFileURLs = [panel URLs];
             NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
             for (NSURL *u in selectedFileURLs) {
                 [pathStrings addObject:u.path];
             }
-            concatenatedPaths = [pathStrings componentsJoinedByString:@","];
-        }        
+            concatenatedPaths = [pathStrings componentsJoinedByString:@"\x1C"];
+        }
     });
     
     // Return the result after the dispatch_sync completes
