@@ -1,15 +1,23 @@
 ---
 name: review-pr
-description: Review a GitHub pull request from its link, read the PR description, inspect the code locally only when useful, and judge whether the change is safe to run from a security and runtime-safety perspective. Use only after the user pastes a PR URL. Handle one PR at a time, start with a rundown and discussion, and keep all GitHub review and merge actions with the user.
+description: Review a GitHub pull request from its link, read the PR description, inspect the code locally only when useful, and judge whether the change is safe to run from a security and runtime-safety perspective. Use only after the user pastes a PR URL. Handle one PR at a time, make a clear merge/close/supersede recommendation, and keep all GitHub review and merge actions with the user.
 ---
 
 # Review PR
 
 ## Overview
 
-Use this skill when the user pastes a PR link and wants a security-first assessment before running, testing, or merging it. The goal is to understand the PR intent, inspect the diff, decide whether it is safe to run, and then help with feedback, fixes, or merge readiness.
+Use this skill when the user pastes a PR link and wants a security-first assessment before running, testing, or merging it. The goal is to understand the PR intent, inspect the diff, decide whether it is safe to run, and then help with feedback, fixes, merge readiness, or a close recommendation.
 
-This skill is discussion-first. Loading the skill does not authorize guessing which PR to inspect from local branches, refs, or open worktrees. Wait for the user to paste a PR URL, review that one PR, give a concise rundown, and discuss it with the user before taking any local git actions beyond basic repository state checks.
+This skill is discussion-first, but it should still support fast maintainer throughput. Loading the skill does not authorize guessing which PR to inspect from local branches, refs, or open worktrees. Wait for the user to paste a PR URL, review that one PR, give a concise rundown, and discuss it with the user before taking any local git actions beyond basic repository state checks.
+
+If the maintainer is clearly trying to fly through PRs, keep the discussion short and move quickly to a decisive recommendation:
+
+- `Merge`
+- `Close`
+- `Supersede with direct fix`
+
+Use `Supersede with direct fix` when the underlying issue is legitimate but the PR implementation is too broad, changes the wrong behavior, or is close but not quite right. In that case, offer to implement the narrower fix locally and draft the close comment for the maintainer.
 
 ## Workflow
 
@@ -32,6 +40,7 @@ This skill is discussion-first. Loading the skill does not authorize guessing wh
   - obvious security or runtime-risk areas to focus on
   - any missing context or questions
 - Do not assume the user wants immediate local branch inspection. Discuss first, then inspect locally if it will materially help the review.
+- If the user is clearly in rapid triage mode, keep this rundown to a few lines and then continue with local diff inspection.
 
 ### 1.5 Determine the review host before execution advice
 
@@ -124,6 +133,31 @@ Before recommending that the user run the branch, answer:
 - Does it add opaque artifacts that cannot be audited from source?
 - Does the claimed test coverage actually touch the risky path?
 
+### 6.5 Judge repo fit and maintainer action
+
+Security review is not enough. Also decide whether the PR is actually the right change for Electrobun.
+
+Ask:
+
+- Is the underlying issue legitimate for this repo?
+- Does the implementation match existing API semantics and platform expectations?
+- Does it introduce unrelated policy or UX behavior beyond the claimed fix?
+- Is the change narrower or broader than necessary?
+- Would maintaining this behavior create follow-on complexity, docs debt, or compatibility risk?
+
+Then make an explicit maintainer recommendation:
+
+- `Merge` when the issue is real, the implementation is aligned, and the risk is acceptable.
+- `Close` when the issue is not compelling, the implementation is wrong for the repo, or the change is not worth taking.
+- `Supersede with direct fix` when the idea is good but the implementation is too broad, subtly wrong, or missing the minimal repo-appropriate fix.
+
+For `Supersede with direct fix`:
+
+- say clearly that the PR is close but not mergeable as written
+- offer to implement the narrow fix locally
+- if the user wants speed, go ahead and implement the narrow fix unless blocked
+- provide a short close comment the maintainer can paste, ideally one paragraph or a one-liner
+
 ## Electrobun Hotspots
 
 For this repo, pay extra attention to:
@@ -153,7 +187,7 @@ Then structure the response as:
 - `Rundown:` short explanation of the PR intent and likely review focus
 - `Findings:` ordered by severity with exact file references and the concrete exploit or failure mode
 - `Questions:` only if unresolved assumptions affect safety
-- `Next move:` feedback, patch, or merge recommendation
+- `Next move:` explicit maintainer action: `Merge`, `Close`, or `Supersede with direct fix`, followed by the short reasoning
 
 If there are no findings, say that explicitly and note any residual risk or untested area.
 
@@ -166,8 +200,12 @@ Call out residual risk when:
 
 ## After The Review
 
-- Do not merge by default.
+- Do not leave the maintainer with an open-ended answer when a clear recommendation is possible.
+- Make the merge/close/supersede call explicitly.
 - If the user wants tweaks, make the smallest defensible changes that close the risk without changing the PR intent unnecessarily.
+- If the PR is close but not correct, prefer a narrow local fix over extended back-and-forth.
+- When superseding a PR, implement only the minimal repo-appropriate change and avoid dragging in the PR's extra behavior.
+- For close recommendations, draft the shortest useful close comment. A one-liner is acceptable when the reason is straightforward.
 - Re-diff or re-test the touched area before recommending merge.
 - Never write to the PR itself.
 - The user is the only person who reviews local changes, creates commits, pushes to GitHub, leaves GitHub review comments, or merges through the GitHub UI.
