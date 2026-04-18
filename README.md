@@ -42,8 +42,10 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
 - [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
 - [Deskdown](https://github.com/guarana-studio/deskdown) - transform any web address into a desktop app in under 20 seconds
+- [Dictate](https://github.com/siddhantparadox/dictate) - Windows dictation app with local and BYOK cloud transcription
 - [dev-3.0](https://github.com/h0x91b/dev-3.0) - helps you not get lost while managing multiple AI agents across projects
 - [DOOM](https://github.com/blackboardsh/electrobun-doom) - DOOM implemented in 2 ways: bun -> (c doom -> bundled wgpu) and (full ts port bun -> bundled wgpu)
+- [dotlock](https://github.com/tsconfigdotjson/dotlock) - macOS desktop app for managing `.env` files across your projects
 - [electrobun-pdf](https://github.com/GijungKim/electrobun-pdf) - local-first PDF & DOCX editor for opening, annotating, and exporting documents without leaving your machine
 - [electrobun-rms](https://github.com/khanhthanhdev/electrobun-rms) - fast Electrobun desktop app template with React, Tailwind CSS, and Vite
 - [golb](https://github.com/chrisdadev13/golb) - desktop AI coding workspace built with React, Vite, and Tailwind
@@ -55,6 +57,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
 - [Patchline](https://github.com/adwaithks/Patchline) - lightweight desktop Git client for reading patches and line diffs, then staging and committing changes
 - [peekachu](https://github.com/needle-tools/peekachu) - password manager for AIs; store secrets in your OS keychain and scrub output so AI assistants never see actual values
+- [PiBun](https://github.com/khairold/pibun) - desktop app for the Pi coding agent
 - [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
 - [Prometheus](https://github.com/opensourcectl/prometheus) - desktop utility toolbox for file cleanup, document manipulation, and image processing
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
