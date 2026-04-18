@@ -668,6 +668,38 @@ export const native = (() => {
 				],
 				returns: FFIType.void,
 			},
+			setCustomProtocolConfig: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setCustomProtocolHandlers: {
+				args: [FFIType.function, FFIType.function],
+				returns: FFIType.void,
+			},
+			protocolGetRequestBody: {
+				args: [FFIType.u64, FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			freeProtocolBuffer: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			protocolStartResponse: {
+				args: [FFIType.u64, FFIType.i32, FFIType.cstring, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			protocolWriteResponseChunk: {
+				args: [FFIType.u64, FFIType.ptr, FFIType.u64],
+				returns: FFIType.void,
+			},
+			protocolFinishResponse: {
+				args: [FFIType.u64],
+				returns: FFIType.void,
+			},
+			protocolErrorResponse: {
+				args: [FFIType.u64, FFIType.cstring],
+				returns: FFIType.void,
+			},
 			setWindowIcon: {
 				args: [
 					FFIType.ptr, // window pointer

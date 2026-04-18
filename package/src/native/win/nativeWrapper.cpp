@@ -24,13 +24,16 @@
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
 #include <map>
+#include <unordered_map>
 #include <algorithm>
 #include <stdint.h>
 #include <shellapi.h>
 #include <commctrl.h>
 #include <mutex>
 #include <atomic>
+#include <condition_variable>
 #include <cstdarg>
+#include <deque>
 #include <winrt/Windows.Data.Json.h>
 #include <winrt/base.h>
 #include <shobjidl.h>  // For IFileOpenDialog
@@ -63,6 +66,7 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/protocol_config.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -499,6 +503,26 @@ static const int OFFSCREEN_OFFSET = -20000;
 
 // Remote DevTools port
 static int g_remoteDebugPort = 9222;
+static ProtocolRequestHandler g_protocolRequestHandler = nullptr;
+static ProtocolRequestCancelledHandler g_protocolRequestCancelledHandler = nullptr;
+static std::atomic<uint64_t> g_nextProtocolRequestId{1};
+static std::mutex g_protocolRequestMutex;
+static std::unordered_map<uint64_t, std::vector<uint8_t>> g_protocolRequestBodies;
+static std::unordered_map<uint64_t, ComPtr<ICoreWebView2Deferral>> g_pendingWebView2Deferrals;
+static std::unordered_map<uint64_t, ComPtr<ICoreWebView2WebResourceRequestedEventArgs>> g_pendingWebView2Responses;
+static std::unordered_map<uint64_t, ComPtr<ICoreWebView2Environment>> g_pendingWebView2Environments;
+
+struct PendingWebView2ProtocolResponseState {
+    int statusCode = 200;
+    std::string statusText = "OK";
+    std::string headersJson = "[]";
+    std::vector<uint8_t> body;
+};
+
+static std::unordered_map<uint64_t, PendingWebView2ProtocolResponseState> g_pendingWebView2ResponseStates;
+
+class ElectrobunSchemeHandler;
+static std::unordered_map<uint64_t, ElectrobunSchemeHandler*> g_pendingCEFProtocolHandlers;
 
 static bool IsPortAvailable(int port) {
     WSADATA wsaData;
@@ -572,6 +596,15 @@ public:
     }
 
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
+        command_line->AppendSwitchWithValue("custom-scheme", "views");
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            command_line->AppendSwitchWithValue("custom-scheme", registration.scheme);
+        });
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
+
         // Windows default flags — can be overridden via chromiumFlags in config
         static const std::vector<electrobun::DefaultFlag> defaults = {
             {"disable-web-security", ""},
@@ -593,6 +626,23 @@ public:
             CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_CSP_BYPASSING |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            int options = 0;
+            if (registration.privileges.standard) options |= CEF_SCHEME_OPTION_STANDARD;
+            if (registration.privileges.secure) options |= CEF_SCHEME_OPTION_SECURE;
+            if (registration.privileges.corsEnabled) options |= CEF_SCHEME_OPTION_CORS_ENABLED;
+            if (registration.privileges.bypassCSP) options |= CEF_SCHEME_OPTION_CSP_BYPASSING;
+            if (registration.privileges.supportFetchAPI) options |= CEF_SCHEME_OPTION_FETCH_ENABLED;
+            registrar->AddCustomScheme(registration.scheme, options);
+        });
+    }
+
+    void OnBeforeChildProcessLaunch(CefRefPtr<CefCommandLine> command_line) override {
+        std::string protocolConfigJson = getProtocolConfigJson();
+        if (!protocolConfigJson.empty()) {
+            command_line->AppendSwitchWithValue("electrobun-custom-protocols", protocolConfigJson);
+        }
     }
 
 private:
@@ -776,67 +826,435 @@ static void EnsureDevToolsWindowClassRegistered() {
 }
 
 // Forward declarations for functions defined later in the file
+std::wstring StringToWString(const std::string& str);
+std::string WStringToString(const std::wstring& wstr);
+void dispatchProtocolRequestSync(std::function<void()> callback);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
+
+static std::string escapeProtocolJSONString(const std::string& value) {
+    std::string output;
+    output.reserve(value.size() + 16);
+
+    for (char c : value) {
+        switch (c) {
+            case '"': output += "\\\""; break;
+            case '\\': output += "\\\\"; break;
+            case '\n': output += "\\n"; break;
+            case '\r': output += "\\r"; break;
+            case '\t': output += "\\t"; break;
+            default: output += c; break;
+        }
+    }
+
+    return output;
+}
+
+static std::string extractProtocolScheme(const std::string& url) {
+    size_t schemeSeparator = url.find(':');
+    if (schemeSeparator == std::string::npos) {
+        return "";
+    }
+    return normalizeProtocolScheme(url.substr(0, schemeSeparator));
+}
+
+static std::vector<std::pair<std::string, std::string>> parseProtocolHeaderPairs(const std::string& headersJson) {
+    std::vector<std::pair<std::string, std::string>> headers;
+    size_t pos = 0;
+
+    auto skipWhitespace = [&]() {
+        while (pos < headersJson.size() && std::isspace(static_cast<unsigned char>(headersJson[pos]))) {
+            pos++;
+        }
+    };
+
+    auto parseString = [&]() -> std::string {
+        if (pos >= headersJson.size() || headersJson[pos] != '"') {
+            return "";
+        }
+
+        pos++;
+        std::string result;
+        while (pos < headersJson.size()) {
+            char c = headersJson[pos++];
+            if (c == '\\' && pos < headersJson.size()) {
+                char escaped = headersJson[pos++];
+                switch (escaped) {
+                    case 'n': result += '\n'; break;
+                    case 'r': result += '\r'; break;
+                    case 't': result += '\t'; break;
+                    case '\\': result += '\\'; break;
+                    case '"': result += '"'; break;
+                    default: result += escaped; break;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                break;
+            }
+
+            result += c;
+        }
+
+        return result;
+    };
+
+    skipWhitespace();
+    if (pos >= headersJson.size() || headersJson[pos] != '[') {
+        return headers;
+    }
+
+    pos++;
+    while (pos < headersJson.size()) {
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ']') {
+            break;
+        }
+
+        if (pos >= headersJson.size() || headersJson[pos] != '[') {
+            break;
+        }
+
+        pos++;
+        skipWhitespace();
+        std::string key = parseString();
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ',') {
+            pos++;
+        }
+        skipWhitespace();
+        std::string value = parseString();
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ']') {
+            pos++;
+        }
+
+        headers.emplace_back(std::move(key), std::move(value));
+
+        skipWhitespace();
+        if (pos < headersJson.size() && headersJson[pos] == ',') {
+            pos++;
+        }
+    }
+
+    return headers;
+}
+
+static std::string buildProtocolHeadersJSON(const CefRequest::HeaderMap& headerMap) {
+    std::string json = "[";
+    bool firstHeader = true;
+    for (const auto& header : headerMap) {
+        if (!firstHeader) {
+            json += ",";
+        }
+        firstHeader = false;
+        json += "[\"" + escapeProtocolJSONString(header.first.ToString()) + "\",\"" +
+                escapeProtocolJSONString(header.second.ToString()) + "\"]";
+    }
+    json += "]";
+    return json;
+}
+
+static std::string buildProtocolHeadersJSON(ICoreWebView2HttpRequestHeaders* headers) {
+    if (!headers) {
+        return "[]";
+    }
+
+    std::string json = "[";
+    bool firstHeader = true;
+    ComPtr<ICoreWebView2HttpHeadersCollectionIterator> iterator;
+    if (FAILED(headers->GetIterator(&iterator)) || !iterator) {
+        return "[]";
+    }
+
+    BOOL hasCurrent = FALSE;
+    if (FAILED(iterator->get_HasCurrentHeader(&hasCurrent))) {
+        return "[]";
+    }
+
+    while (hasCurrent) {
+        LPWSTR name = nullptr;
+        LPWSTR value = nullptr;
+        if (SUCCEEDED(iterator->GetCurrentHeader(&name, &value)) && name && value) {
+            if (!firstHeader) {
+                json += ",";
+            }
+            firstHeader = false;
+            json += "[\"" + escapeProtocolJSONString(WStringToString(name)) + "\",\"" +
+                    escapeProtocolJSONString(WStringToString(value)) + "\"]";
+        }
+        if (name) {
+            CoTaskMemFree(name);
+        }
+        if (value) {
+            CoTaskMemFree(value);
+        }
+
+        BOOL hasNext = FALSE;
+        if (FAILED(iterator->MoveNext(&hasNext))) {
+            break;
+        }
+        hasCurrent = hasNext;
+    }
+
+    json += "]";
+    return json;
+}
+
+static std::vector<uint8_t> readProtocolRequestBody(CefRefPtr<CefPostData> postData) {
+    std::vector<uint8_t> body;
+    if (!postData || postData->GetElementCount() == 0) {
+        return body;
+    }
+
+    CefPostData::ElementVector elements;
+    postData->GetElements(elements);
+    for (auto& element : elements) {
+        if (element->GetType() != PDE_TYPE_BYTES) {
+            continue;
+        }
+
+        size_t size = element->GetBytesCount();
+        if (size == 0) {
+            continue;
+        }
+
+        size_t start = body.size();
+        body.resize(start + size);
+        element->GetBytes(size, body.data() + start);
+    }
+
+    return body;
+}
+
+static std::vector<uint8_t> readProtocolRequestBody(IStream* stream) {
+    std::vector<uint8_t> body;
+    if (!stream) {
+        return body;
+    }
+
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+
+    uint8_t buffer[4096];
+    ULONG bytesRead = 0;
+    while (SUCCEEDED(stream->Read(buffer, sizeof(buffer), &bytesRead)) && bytesRead > 0) {
+        body.insert(body.end(), buffer, buffer + bytesRead);
+    }
+
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    return body;
+}
+
+static std::string buildProtocolRequestJson(const std::string& url,
+                                            const std::string& method,
+                                            const std::string& headersJson,
+                                            bool hasBody) {
+    return std::string("{\"url\":\"") + escapeProtocolJSONString(url) +
+           "\",\"method\":\"" + escapeProtocolJSONString(method) +
+           "\",\"headers\":" + headersJson +
+           ",\"hasBody\":" + (hasBody ? "true" : "false") + "}";
+}
 
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
     ElectrobunSchemeHandler(uint32_t webviewId)
-        : webviewId_(webviewId), offset_(0), hasResponse_(false) {}
+        : webviewId_(webviewId), hasResponse_(false), offset_(0), requestId_(0), statusCode_(200), headerReady_(false), finished_(false), failed_(false) {}
+
+    void OnProtocolResponseStart(int statusCode, const std::string& statusText, const std::string& headersJson);
+    void OnProtocolResponseChunk(const uint8_t* chunk, size_t size);
+    void OnProtocolResponseFinish();
+    void OnProtocolResponseError(const std::string& message);
 
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         handle_request = true;
 
-        std::string url = request->GetURL();
-        std::string path = url.substr(8); // Remove "views://" prefix
-        if (path.empty()) path = "index.html";
+        std::string url = request->GetURL().ToString();
+        std::string scheme = extractProtocolScheme(url);
+        std::string responseDataBlock;
+        std::string mimeTypeBlock;
+        bool hasResponseBlock = false;
 
-        std::string content;
-        // Check for internal/index.html (inline HTML content)
-        if (path == "internal/index.html") {
-            const char* htmlContent = getWebviewHTMLContent(webviewId_);
-            if (htmlContent && strlen(htmlContent) > 0) {
-                content = std::string(htmlContent);
-                free((void*)htmlContent);
-            } else {
-                content = "<html><body><h1>No content set</h1></body></html>";
+        responseData_.clear();
+        hasResponse_ = false;
+        offset_ = 0;
+        requestId_ = 0;
+        statusCode_ = 200;
+        statusText_ = "OK";
+        headerReady_ = false;
+        finished_ = false;
+        failed_ = false;
+        errorMessage_.clear();
+        responseHeaders_.clear();
+        headerMap_.clear();
+        chunks_.clear();
+        chunkOffset_ = 0;
+
+        if (url.find("views://") == 0) {
+            std::string path = url.substr(8);
+            if (path.empty()) {
+                path = "index.html";
             }
-        } else {
-            content = loadViewsFile(path);
-        }
-        mimeType_ = getMimeTypeForFile(path);
 
-        if (!content.empty()) {
-            responseData_.assign(content.begin(), content.end());
+            std::string content;
+            if (path == "internal/index.html") {
+                const char* htmlContent = getWebviewHTMLContent(webviewId_);
+                if (htmlContent && strlen(htmlContent) > 0) {
+                    content = std::string(htmlContent);
+                    free((void*)htmlContent);
+                } else {
+                    content = "<html><body><h1>No content set</h1></body></html>";
+                }
+            } else {
+                content = loadViewsFile(path);
+            }
+
+            mimeTypeBlock = getMimeTypeForFile(path);
+            if (!content.empty()) {
+                responseDataBlock.assign(content.begin(), content.end());
+                hasResponseBlock = true;
+            }
+        } else if (hasProtocolRegistration(scheme)) {
+            requestId_ = g_nextProtocolRequestId.fetch_add(1);
             hasResponse_ = true;
-        } else {
-            hasResponse_ = false;
+            offset_ = 0;
+
+            std::string method = request->GetMethod().ToString();
+            CefRequest::HeaderMap headerMap;
+            request->GetHeaderMap(headerMap);
+            std::string headersJson = buildProtocolHeadersJSON(headerMap);
+
+            std::vector<uint8_t> body = readProtocolRequestBody(request->GetPostData());
+            bool hasBody = !body.empty();
+            if (hasBody) {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_protocolRequestBodies[requestId_] = std::move(body);
+            }
+
+            std::string requestJson = buildProtocolRequestJson(url, method, headersJson, hasBody);
+
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers[requestId_] = this;
+            }
+
+            if (g_protocolRequestHandler) {
+                uint64_t requestId = requestId_;
+                uint32_t webviewId = webviewId_;
+                dispatchProtocolRequestSync([requestId, webviewId, requestJson]() {
+                    char* requestJsonCopy = strdup(requestJson.c_str());
+                    g_protocolRequestHandler(requestId, webviewId, requestJsonCopy);
+                });
+                hasResponseBlock = true;
+            } else {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers.erase(requestId_);
+                g_protocolRequestBodies.erase(requestId_);
+                requestId_ = 0;
+            }
         }
 
+        mimeType_ = mimeTypeBlock;
+        responseData_.assign(responseDataBlock.begin(), responseDataBlock.end());
+        hasResponse_ = hasResponseBlock;
         return hasResponse_;
     }
 
     void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] { return headerReady_ || failed_; });
+            if (failed_) {
+                response->SetStatus(500);
+                response_length = 0;
+                return;
+            }
+
+            response->SetStatus(statusCode_);
+            response->SetStatusText(statusText_);
+            response->SetHeaderMap(headerMap_);
+            auto contentType = responseHeaders_.find("content-type");
+            if (contentType != responseHeaders_.end()) {
+                response->SetMimeType(contentType->second);
+            }
+            response_length = -1;
+            return;
+        }
+
+        if (!hasResponse_) {
+            response->SetStatus(404);
+            response_length = 0;
+            return;
+        }
+
         response->SetStatus(200);
         response->SetMimeType(mimeType_);
         response_length = static_cast<int64_t>(responseData_.size());
+
+        CefResponse::HeaderMap headers;
+        headers.insert(std::make_pair("Access-Control-Allow-Origin", "*"));
+        response->SetHeaderMap(headers);
     }
 
     bool Read(void* data_out, int bytes_to_read, int& bytes_read, CefRefPtr<CefResourceReadCallback> callback) override {
         bytes_read = 0;
+
+        if (requestId_ != 0) {
+            std::unique_lock<std::mutex> lock(mutex_);
+            condition_.wait(lock, [&] {
+                return failed_ || !chunks_.empty() || finished_;
+            });
+
+            if (failed_) {
+                return false;
+            }
+
+            if (chunks_.empty()) {
+                return false;
+            }
+
+            std::vector<uint8_t>& chunk = chunks_.front();
+            size_t remaining = chunk.size() - chunkOffset_;
+            bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
+            memcpy(data_out, chunk.data() + chunkOffset_, bytes_read);
+            chunkOffset_ += bytes_read;
+            if (chunkOffset_ >= chunk.size()) {
+                chunks_.pop_front();
+                chunkOffset_ = 0;
+            }
+            return true;
+        }
+
         if (!hasResponse_ || offset_ >= responseData_.size()) {
             return false;
         }
+
         size_t remaining = responseData_.size() - offset_;
-        bytes_read = (bytes_to_read < static_cast<int>(remaining)) ? 
-                     bytes_to_read : static_cast<int>(remaining);
+        bytes_read = std::min(bytes_to_read, static_cast<int>(remaining));
         memcpy(data_out, responseData_.data() + offset_, bytes_read);
         offset_ += bytes_read;
         return true;
     }
 
-    void Cancel() override {}
+    void Cancel() override {
+        if (requestId_ != 0) {
+            if (g_protocolRequestCancelledHandler) {
+                g_protocolRequestCancelledHandler(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+                g_pendingCEFProtocolHandlers.erase(requestId_);
+                g_protocolRequestBodies.erase(requestId_);
+            }
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                failed_ = true;
+            }
+            condition_.notify_all();
+        }
+    }
 
 private:
     uint32_t webviewId_;
@@ -844,8 +1262,63 @@ private:
     std::vector<char> responseData_;
     bool hasResponse_;
     size_t offset_;
+    uint64_t requestId_;
+    int statusCode_;
+    std::string statusText_;
+    bool headerReady_;
+    bool finished_;
+    bool failed_;
+    std::string errorMessage_;
+    std::map<std::string, std::string> responseHeaders_;
+    CefResponse::HeaderMap headerMap_;
+    std::mutex mutex_;
+    std::condition_variable condition_;
+    std::deque<std::vector<uint8_t>> chunks_;
+    size_t chunkOffset_ = 0;
+
     IMPLEMENT_REFCOUNTING(ElectrobunSchemeHandler);
 };
+
+void ElectrobunSchemeHandler::OnProtocolResponseStart(int statusCode,
+                                                      const std::string& statusText,
+                                                      const std::string& headersJson) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    statusCode_ = statusCode;
+    statusText_ = statusText.empty() ? "OK" : statusText;
+    headerReady_ = true;
+    headerMap_.clear();
+    responseHeaders_.clear();
+
+    for (const auto& header : parseProtocolHeaderPairs(headersJson)) {
+        std::string normalizedKey = header.first;
+        std::transform(normalizedKey.begin(), normalizedKey.end(), normalizedKey.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        responseHeaders_[normalizedKey] = header.second;
+        headerMap_.insert(std::make_pair(header.first, header.second));
+    }
+
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseChunk(const uint8_t* chunk, size_t size) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    chunks_.emplace_back(chunk, chunk + size);
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseFinish() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    finished_ = true;
+    condition_.notify_all();
+}
+
+void ElectrobunSchemeHandler::OnProtocolResponseError(const std::string& message) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    failed_ = true;
+    errorMessage_ = message;
+    condition_.notify_all();
+}
 
 // CEF Scheme Handler Factory
 class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
@@ -2365,6 +2838,11 @@ CefRefPtr<CefResponseFilter> ElectrobunResourceRequestHandler::GetResourceRespon
     CefRefPtr<CefResponse> response) {
 
     std::string url = request->GetURL().ToString();
+    std::string scheme = extractProtocolScheme(url);
+    if (!scheme.empty() && scheme != "views" && hasProtocolRegistration(scheme)) {
+        return nullptr;
+    }
+
     std::string mimeType = response->GetMimeType().ToString();
     bool isMain = frame->IsMain();
     bool hasClient = client_ != nullptr;
@@ -2421,9 +2899,10 @@ public:
 
 
 // Forward declare helper functions
-void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId);
+void setupViewsSchemeHandler(ICoreWebView2* webview, ICoreWebView2Environment* environment, uint32_t webviewId);
 void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args, 
-                             const std::wstring& uri, 
+                             const std::wstring& uri,
+                             ICoreWebView2Environment* environment,
                              uint32_t webviewId);
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
@@ -2777,6 +3256,17 @@ public:
 };
 
 HWND MainThreadDispatcher::g_messageWindow = NULL;
+
+void dispatchProtocolRequestSync(std::function<void()> callback) {
+    if (g_mainThreadId == 0 || GetCurrentThreadId() == g_mainThreadId) {
+        callback();
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([callback = std::move(callback)]() {
+        callback();
+    });
+}
 
 // AbstractView base class - Windows implementation matching Mac pattern
 class AbstractView {
@@ -5826,6 +6316,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
     if (!buildJsonContent.empty()) {
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
+        electrobun::loadProtocolConfigFromBuildJson(buildJsonContent);
     }
 
     // CEF settings
@@ -5863,8 +6354,11 @@ ELECTROBUN_EXPORT bool initCEF() {
     bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
         g_cef_initialized = true;
-        // Register the views:// scheme handler factory
-        CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory());
+        CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
+        CefRegisterSchemeHandlerFactory("views", "", schemeFactory);
+        forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+            CefRegisterSchemeHandlerFactory(registration.scheme, "", schemeFactory);
+        });
         
         // We'll start the message pump timer when we create the first browser
     } else {
@@ -6047,100 +6541,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             uint32_t capturedWebviewId = view->webviewId;
                             WebviewEventHandler capturedHandler = view->webviewEventHandler;
 
-                            // Add views:// scheme support - TEST ADDITION
-                            webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
-
-                            // Set up WebResourceRequested event handler for views:// scheme
-                            webview->add_WebResourceRequested(
-                                Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-                                    [env, capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
-                                        // ::log("[WebView2] WebResourceRequested event triggered");
-                                        ComPtr<ICoreWebView2WebResourceRequest> request;
-                                        args->get_Request(&request);
-                                        
-                                        LPWSTR uri;
-                                        request->get_Uri(&uri);
-                                        
-                                        // Safe string conversion
-                                        std::string uriStr;
-                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
-                                        if (size > 0) {
-                                            uriStr.resize(size - 1);
-                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
-                                        }
-                                        
-                                        // ::log("[WebView2] Request URI converted successfully");
-                                        
-                                        if (uriStr.substr(0, 8) == "views://") {
-                                            std::string filePath = uriStr.substr(8);
-                                            std::string content;
-
-                                            // Check for internal/index.html (inline HTML content)
-                                            if (filePath == "internal/index.html") {
-                                                const char* htmlContent = getWebviewHTMLContent(capturedWebviewId);
-                                                if (htmlContent && strlen(htmlContent) > 0) {
-                                                    content = std::string(htmlContent);
-                                                    free((void*)htmlContent);
-                                                } else {
-                                                    content = "<html><body><h1>No content set</h1></body></html>";
-                                                }
-                                            } else {
-                                                content = loadViewsFile(filePath);
-                                            }
-
-                                            if (!content.empty()) {
-                                                // ::log("[WebView2] Loaded views file content, creating response");
-
-                                                // Create response (simplified)
-                                                std::string mimeType = "text/html";
-                                                bool isDocument = false;
-                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
-                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
-                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                else {
-                                                    isDocument = true; // HTML document
-                                                }
-
-                                                // For HTML documents (main frame navigation), fire navigation events manually
-                                                // since WebResourceRequested bypasses NavigationStarting/NavigationCompleted
-                                                // These events are already fired in loadURL, so we don't need to fire them here
-                                                // This block can be removed if we want to clean up
-                                                if (isDocument && capturedHandler) {
-                                                    // Events are now fired in loadURL() for consistency
-                                                    // This avoids duplicate events and ensures proper timing
-                                                }
-
-                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
-
-                                                // Create memory stream
-                                                ComPtr<IStream> contentStream;
-                                                HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, content.size());
-                                                if (hGlobal) {
-                                                    void* pData = GlobalLock(hGlobal);
-                                                    memcpy(pData, content.c_str(), content.size());
-                                                    GlobalUnlock(hGlobal);
-                                                    CreateStreamOnHGlobal(hGlobal, TRUE, &contentStream);
-                                                }
-
-                                                std::wstring headers = L"Content-Type: " + wMimeType + L"\r\nAccess-Control-Allow-Origin: *";
-
-                                                ComPtr<ICoreWebView2WebResourceResponse> response;
-                                                env->CreateWebResourceResponse(
-                                                    contentStream.Get(),
-                                                    200,
-                                                    L"OK",
-                                                    headers.c_str(),
-                                                    &response);
-
-                                                args->put_Response(response.Get());
-                                                // ::log("[WebView2] Successfully served views:// file");
-                                            }
-                                        }
-                                        
-                                        CoTaskMemFree(uri);
-                                        return S_OK;
-                                    }).Get(),
-                                nullptr);
+                            setupViewsSchemeHandler(webview.Get(), env, capturedWebviewId);
                             
                             
                             // Add preload scripts
@@ -6573,23 +6974,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             // Get the interface that supports custom scheme registration
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
             if (SUCCEEDED(options.As(&options4))) {
-                // ::log("Setting up views:// custom scheme registration");
-
-                // Set allowed origins for the custom scheme
                 const WCHAR* allowedOrigins[1] = {L"*"};
 
-                // Create custom scheme registration for "views"
-                auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
+                std::vector<std::wstring> registrationNames;
+                std::vector<ComPtr<ICoreWebView2CustomSchemeRegistration>> registrationObjects;
+                std::vector<ICoreWebView2CustomSchemeRegistration*> registrations;
+
+                registrationNames.push_back(L"views");
+                auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(registrationNames.back().c_str());
                 viewsSchemeRegistration->put_TreatAsSecure(TRUE);
-                viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
+                viewsSchemeRegistration->put_HasAuthorityComponent(TRUE);
                 viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
+                registrationObjects.push_back(viewsSchemeRegistration);
+                registrations.push_back(viewsSchemeRegistration.Get());
 
-                // Set the custom scheme registrations
-                ICoreWebView2CustomSchemeRegistration* registrations[1] = {
-                    viewsSchemeRegistration.Get()
-                };
+                forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+                    registrationNames.push_back(StringToWString(registration.scheme));
+                    auto schemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(registrationNames.back().c_str());
+                    schemeRegistration->put_TreatAsSecure(registration.privileges.secure ? TRUE : FALSE);
+                    schemeRegistration->put_HasAuthorityComponent(TRUE);
+                    schemeRegistration->SetAllowedOrigins(1, allowedOrigins);
+                    registrationObjects.push_back(schemeRegistration);
+                    registrations.push_back(schemeRegistration.Get());
+                });
 
-                HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
+                HRESULT schemeResult = options4->SetCustomSchemeRegistrations(static_cast<UINT32>(registrations.size()), registrations.data());
 
                 if (SUCCEEDED(schemeResult)) {
                     // ::log("views:// custom scheme registration set successfully");
@@ -6715,6 +7124,10 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
     bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
     printf("DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s\n",
            partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
+
+    forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+        context->RegisterSchemeHandlerFactory(registration.scheme, "", schemeFactory);
+    });
 
     return context;
 }
@@ -10939,86 +11352,302 @@ ELECTROBUN_EXPORT uint32_t getWindowStyle(
 
 } // extern "C"
 
-// New function for handling views:// scheme requests
-void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
-    
-    // Add web resource request filter for views:// scheme
+static HRESULT createWebView2MemoryStreamFromBytes(const uint8_t* data, size_t size, IStream** outStream) {
+    if (!outStream) {
+        return E_POINTER;
+    }
+
+    *outStream = nullptr;
+
+    ComPtr<IStream> stream;
+    HRESULT hr = CreateStreamOnHGlobal(NULL, TRUE, &stream);
+    if (FAILED(hr)) {
+        return hr;
+    }
+
+    if (data && size > 0) {
+        ULONG written = 0;
+        hr = stream->Write(data, static_cast<ULONG>(size), &written);
+        if (FAILED(hr) || written != size) {
+            return FAILED(hr) ? hr : E_FAIL;
+        }
+    }
+
+    LARGE_INTEGER zero = {};
+    stream->Seek(zero, STREAM_SEEK_SET, nullptr);
+    return stream.CopyTo(outStream);
+}
+
+static std::wstring buildWebView2HeaderString(const std::string& headersJson) {
+    std::wstring headers;
+    bool first = true;
+    for (const auto& header : parseProtocolHeaderPairs(headersJson)) {
+        if (!first) {
+            headers += L"\r\n";
+        }
+        first = false;
+        headers += StringToWString(header.first);
+        headers += L": ";
+        headers += StringToWString(header.second);
+    }
+    return headers;
+}
+
+static void cleanupPendingWebView2ProtocolRequestLocked(uint64_t requestId) {
+    g_pendingWebView2Deferrals.erase(requestId);
+    g_pendingWebView2Responses.erase(requestId);
+    g_pendingWebView2Environments.erase(requestId);
+    g_pendingWebView2ResponseStates.erase(requestId);
+    g_protocolRequestBodies.erase(requestId);
+}
+
+static void completePendingWebView2ProtocolResponse(uint64_t requestId) {
+    ComPtr<ICoreWebView2WebResourceRequestedEventArgs> args;
+    ComPtr<ICoreWebView2Deferral> deferral;
+    ComPtr<ICoreWebView2Environment> environment;
+    PendingWebView2ProtocolResponseState state;
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto argsIt = g_pendingWebView2Responses.find(requestId);
+        auto deferralIt = g_pendingWebView2Deferrals.find(requestId);
+        if (argsIt == g_pendingWebView2Responses.end() || deferralIt == g_pendingWebView2Deferrals.end()) {
+            cleanupPendingWebView2ProtocolRequestLocked(requestId);
+            return;
+        }
+
+        args = argsIt->second;
+        deferral = deferralIt->second;
+
+        auto environmentIt = g_pendingWebView2Environments.find(requestId);
+        if (environmentIt != g_pendingWebView2Environments.end()) {
+            environment = environmentIt->second;
+        }
+
+        auto stateIt = g_pendingWebView2ResponseStates.find(requestId);
+        if (stateIt != g_pendingWebView2ResponseStates.end()) {
+            state = stateIt->second;
+        }
+
+        cleanupPendingWebView2ProtocolRequestLocked(requestId);
+    }
+
+    if (!deferral) {
+        return;
+    }
+
+    if (!args || !environment) {
+        deferral->Complete();
+        return;
+    }
+
+    ComPtr<IStream> stream;
+    if (FAILED(createWebView2MemoryStreamFromBytes(state.body.data(), state.body.size(), &stream))) {
+        deferral->Complete();
+        return;
+    }
+
+    ComPtr<ICoreWebView2WebResourceResponse> response;
+    std::wstring statusText = StringToWString(state.statusText.empty() ? "OK" : state.statusText);
+    std::wstring headers = buildWebView2HeaderString(state.headersJson);
+    if (SUCCEEDED(environment->CreateWebResourceResponse(stream.Get(), state.statusCode, statusText.c_str(), headers.c_str(), &response)) && response) {
+        args->put_Response(response.Get());
+    }
+
+    deferral->Complete();
+}
+
+static void completePendingWebView2ProtocolError(uint64_t requestId, const std::string& message) {
+    ComPtr<ICoreWebView2WebResourceRequestedEventArgs> args;
+    ComPtr<ICoreWebView2Deferral> deferral;
+    ComPtr<ICoreWebView2Environment> environment;
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto argsIt = g_pendingWebView2Responses.find(requestId);
+        auto deferralIt = g_pendingWebView2Deferrals.find(requestId);
+        if (argsIt == g_pendingWebView2Responses.end() || deferralIt == g_pendingWebView2Deferrals.end()) {
+            cleanupPendingWebView2ProtocolRequestLocked(requestId);
+            return;
+        }
+
+        args = argsIt->second;
+        deferral = deferralIt->second;
+
+        auto environmentIt = g_pendingWebView2Environments.find(requestId);
+        if (environmentIt != g_pendingWebView2Environments.end()) {
+            environment = environmentIt->second;
+        }
+
+        cleanupPendingWebView2ProtocolRequestLocked(requestId);
+    }
+
+    if (!deferral) {
+        return;
+    }
+
+    if (!args || !environment) {
+        deferral->Complete();
+        return;
+    }
+
+    std::vector<uint8_t> body(message.begin(), message.end());
+    ComPtr<IStream> stream;
+    if (FAILED(createWebView2MemoryStreamFromBytes(body.data(), body.size(), &stream))) {
+        deferral->Complete();
+        return;
+    }
+
+    ComPtr<ICoreWebView2WebResourceResponse> response;
+    if (SUCCEEDED(environment->CreateWebResourceResponse(stream.Get(), 500, L"Internal Server Error", L"Content-Type: text/plain", &response)) && response) {
+        args->put_Response(response.Get());
+    }
+
+    deferral->Complete();
+}
+
+static void handleCustomProtocolSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
+                                              ICoreWebView2WebResourceRequest* request,
+                                              const std::string& uri,
+                                              ICoreWebView2Environment* environment,
+                                              uint32_t webviewId) {
+    if (!request) {
+        return;
+    }
+
+    ComPtr<ICoreWebView2Deferral> deferral;
+    if (FAILED(args->GetDeferral(&deferral)) || !deferral) {
+        ::log("ERROR: Failed to get WebView2 deferral for custom protocol request");
+        return;
+    }
+
+    uint64_t requestId = g_nextProtocolRequestId.fetch_add(1);
+
+    std::string method = "GET";
+    LPWSTR methodW = nullptr;
+    if (SUCCEEDED(request->get_Method(&methodW)) && methodW) {
+        method = WStringToString(methodW);
+    }
+    if (methodW) {
+        CoTaskMemFree(methodW);
+    }
+
+    std::string headersJson = "[]";
+    ComPtr<ICoreWebView2HttpRequestHeaders> headers;
+    if (SUCCEEDED(request->get_Headers(&headers)) && headers) {
+        headersJson = buildProtocolHeadersJSON(headers.Get());
+    }
+
+    std::vector<uint8_t> body;
+    ComPtr<IStream> content;
+    if (SUCCEEDED(request->get_Content(&content)) && content) {
+        body = readProtocolRequestBody(content.Get());
+    }
+
+    bool hasBody = !body.empty();
+    std::string requestJson = buildProtocolRequestJson(uri, method, headersJson, hasBody);
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        g_pendingWebView2Deferrals[requestId] = deferral;
+        g_pendingWebView2Responses[requestId] = args;
+        if (environment) {
+            g_pendingWebView2Environments[requestId] = environment;
+        }
+        g_pendingWebView2ResponseStates[requestId] = PendingWebView2ProtocolResponseState();
+        if (hasBody) {
+            g_protocolRequestBodies[requestId] = std::move(body);
+        }
+    }
+
+    if (g_protocolRequestHandler) {
+        char* requestJsonCopy = strdup(requestJson.c_str());
+        g_protocolRequestHandler(requestId, webviewId, requestJsonCopy);
+    } else {
+        completePendingWebView2ProtocolError(requestId, "No protocol handler configured");
+    }
+}
+
+void setupViewsSchemeHandler(ICoreWebView2* webview, ICoreWebView2Environment* environment, uint32_t webviewId) {
+    ComPtr<ICoreWebView2Environment> environmentRef = environment;
     EventRegistrationToken resourceToken;
     HRESULT hr = webview->add_WebResourceRequested(
         Callback<ICoreWebView2WebResourceRequestedEventHandler>(
-            [webviewId](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
+            [webviewId, environmentRef](ICoreWebView2* sender, ICoreWebView2WebResourceRequestedEventArgs* args) -> HRESULT {
                 ComPtr<ICoreWebView2WebResourceRequest> request;
-                args->get_Request(&request);
-                
-                LPWSTR uri;
-                request->get_Uri(&uri);
-                
-                std::wstring wUri(uri);
-                
-                // Convert to string for logging
-                int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
-                std::string uriStr(size - 1, 0);
-                WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, NULL, NULL);
-                
-                
-                
-                // Check if this is a views:// URL
-                if (wUri.find(L"views://") == 0) {
-                    handleViewsSchemeRequest(args, wUri, webviewId);
+                if (FAILED(args->get_Request(&request)) || !request) {
+                    return S_OK;
                 }
-                
+
+                LPWSTR uri = nullptr;
+                if (FAILED(request->get_Uri(&uri)) || !uri) {
+                    return S_OK;
+                }
+
+                std::wstring wUri(uri);
+                std::string uriStr = WStringToString(wUri);
+
+                if (wUri.rfind(L"views://", 0) == 0) {
+                    handleViewsSchemeRequest(args, wUri, environmentRef.Get(), webviewId);
+                } else {
+                    std::string scheme = extractProtocolScheme(uriStr);
+                    if (!scheme.empty() && hasProtocolRegistration(scheme)) {
+                        handleCustomProtocolSchemeRequest(args, request.Get(), uriStr, environmentRef.Get(), webviewId);
+                    }
+                }
+
                 CoTaskMemFree(uri);
                 return S_OK;
-            }).Get(), 
+            }).Get(),
         &resourceToken);
-    
+
     if (FAILED(hr)) {
         char errorMsg[256];
         sprintf_s(errorMsg, "Failed to add WebResourceRequested handler: 0x%lx", hr);
         ::log(errorMsg);
         return;
     }
-    
-    // Add filter for views:// scheme
+
     hr = webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
     if (FAILED(hr)) {
         char errorMsg[256];
         sprintf_s(errorMsg, "Failed to add resource filter for views://: 0x%lx", hr);
         ::log(errorMsg);
-    } else {
     }
+
+    forEachProtocolRegistration([&](const ProtocolRegistration& registration) {
+        std::wstring filter = StringToWString(registration.scheme + "://*");
+        HRESULT filterResult = webview->AddWebResourceRequestedFilter(filter.c_str(), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+        if (FAILED(filterResult)) {
+            char errorMsg[256];
+            sprintf_s(errorMsg, "Failed to add resource filter for %s://: 0x%lx", registration.scheme.c_str(), filterResult);
+            ::log(errorMsg);
+        }
+    });
 }
 
-// Updated function to handle views:// scheme requests
-void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args, 
-                             const std::wstring& uri, 
-                             uint32_t webviewId) {
-    
-    
-    // Convert URI to std::string for processing
-    int size = WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, NULL, 0, NULL, NULL);
-    std::string uriStr(size - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, &uriStr[0], size, NULL, NULL);
+void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
+                              const std::wstring& uri,
+                              ICoreWebView2Environment* environment,
+                              uint32_t webviewId) {
+    std::string uriStr = WStringToString(uri);
 
-    
-    // Extract the path after "views://"
     std::string path;
     if (uriStr.length() > 8) {
-        path = uriStr.substr(8); // Remove "views://" prefix
+        path = uriStr.substr(8);
     } else {
-        path = "index.html"; // Default
+        path = "index.html";
     }
-    
+
     std::string responseData;
     std::string mimeType = "text/html";
-    
+
     if (path == "internal/index.html") {
-        // Handle internal HTML content using stored content
         ::log("DEBUG Windows: Handling views://internal/index.html");
         const char* htmlContent = getWebviewHTMLContent(webviewId);
         if (htmlContent && strlen(htmlContent) > 0) {
             responseData = std::string(htmlContent);
-            free((void*)htmlContent); // Free the strdup'd memory
+            free((void*)htmlContent);
             ::log("DEBUG Windows: Retrieved HTML content from storage");
         } else {
             responseData = "<html><body><h1>No content set</h1></body></html>";
@@ -11026,77 +11655,41 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         }
         mimeType = "text/html";
     } else {
-        // Handle other file requests
         responseData = loadViewsFile(path);
         mimeType = getMimeTypeForFile(path);
-        
+
         if (responseData.empty()) {
             responseData = "<html><body><h1>404 - Views file not found</h1><p>Path: " + path + "</p></body></html>";
             mimeType = "text/html";
             ::log("Views file not found, returning 404");
         }
     }
-    
-    // sprintf_s(logMsg, "Response data length: %zu bytes, MIME type: %s", responseData.length(), mimeType.c_str());
-    // log(logMsg);
-    
-    // Create the response using the global environment
-    if (!g_environment) {
-        ::log("ERROR: No global environment available for creating response");
+
+    if (!environment) {
+        ::log("ERROR: No WebView2 environment available for creating response");
         return;
     }
-    
+
     try {
-        // Create memory stream first
         ComPtr<IStream> stream;
-        HGLOBAL hGlobal = GlobalAlloc(GMEM_MOVEABLE, responseData.length());
-        if (!hGlobal) {
-            ::log("ERROR: Failed to allocate global memory");
+        if (FAILED(createWebView2MemoryStreamFromBytes(reinterpret_cast<const uint8_t*>(responseData.data()), responseData.size(), &stream))) {
+            ::log("ERROR: Failed to create WebView2 response stream");
             return;
         }
-        
-        void* pData = GlobalLock(hGlobal);
-        if (!pData) {
-            GlobalFree(hGlobal);
-            ::log("ERROR: Failed to lock global memory");
-            return;
-        }
-        
-        memcpy(pData, responseData.c_str(), responseData.length());
-        GlobalUnlock(hGlobal);
-        
-        HRESULT streamResult = CreateStreamOnHGlobal(hGlobal, TRUE, &stream);
-        if (FAILED(streamResult)) {
-            GlobalFree(hGlobal);
-            ::log("ERROR: Failed to create stream on global");
-            return;
-        }
-        
-        // Create the response
+
         ComPtr<ICoreWebView2WebResourceResponse> response;
-        std::wstring mimeTypeW(mimeType.begin(), mimeType.end());
-        std::wstring headers = L"Content-Type: " + mimeTypeW + L"\r\nAccess-Control-Allow-Origin: *";
-        
-        HRESULT responseResult = g_environment->CreateWebResourceResponse(
-            stream.Get(),               // content stream
-            200,                       // status code
-            L"OK",                     // reason phrase
-            headers.c_str(),           // headers
-            &response);
-        
+        std::wstring headers = L"Content-Type: " + StringToWString(mimeType) + L"\r\nAccess-Control-Allow-Origin: *";
+        HRESULT responseResult = environment->CreateWebResourceResponse(stream.Get(), 200, L"OK", headers.c_str(), &response);
         if (FAILED(responseResult)) {
             ::log("ERROR: Failed to create web resource response");
             return;
         }
-        
-        // Set the response
+
         HRESULT setResult = args->put_Response(response.Get());
         if (FAILED(setResult)) {
             ::log("ERROR: Failed to set response");
             return;
         }
-        
-        
     } catch (...) {
         ::log("ERROR: Exception occurred while creating response");
     }
@@ -12155,6 +12748,144 @@ extern "C" ELECTROBUN_EXPORT void sessionClearStorageData(const char* partitionI
             }
         }
     }
+}
+
+extern "C" ELECTROBUN_EXPORT void setCustomProtocolConfig(const char* protocolConfigJson) {
+    setProtocolConfigJson(protocolConfigJson ? protocolConfigJson : "[]");
+}
+
+extern "C" ELECTROBUN_EXPORT void setCustomProtocolHandlers(ProtocolRequestHandler requestHandler,
+                                                             ProtocolRequestCancelledHandler cancelHandler) {
+    g_protocolRequestHandler = requestHandler;
+    g_protocolRequestCancelledHandler = cancelHandler;
+}
+
+extern "C" ELECTROBUN_EXPORT const uint8_t* protocolGetRequestBody(uint64_t requestId, uint64_t* outSize) {
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto it = g_protocolRequestBodies.find(requestId);
+    if (it == g_protocolRequestBodies.end()) {
+        if (outSize) {
+            *outSize = 0;
+        }
+        return nullptr;
+    }
+
+    const auto& body = it->second;
+    if (outSize) {
+        *outSize = body.size();
+    }
+
+    if (body.empty()) {
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+
+    uint8_t* result = static_cast<uint8_t*>(malloc(body.size()));
+    if (!result) {
+        if (outSize) {
+            *outSize = 0;
+        }
+        g_protocolRequestBodies.erase(it);
+        return nullptr;
+    }
+    memcpy(result, body.data(), body.size());
+    g_protocolRequestBodies.erase(it);
+    return result;
+}
+
+extern "C" ELECTROBUN_EXPORT void freeProtocolBuffer(const uint8_t* buffer) {
+    if (buffer) {
+        free((void*)buffer);
+    }
+}
+
+extern "C" ELECTROBUN_EXPORT void protocolStartResponse(uint64_t requestId,
+                                                         int statusCode,
+                                                         const char* statusText,
+                                                         const char* headersJson) {
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+    if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+        cefIt->second->OnProtocolResponseStart(statusCode, statusText ? statusText : "OK", headersJson ? headersJson : "[]");
+        return;
+    }
+
+    if (g_pendingWebView2Responses.find(requestId) == g_pendingWebView2Responses.end()) {
+        return;
+    }
+
+    auto stateIt = g_pendingWebView2ResponseStates.find(requestId);
+    if (stateIt == g_pendingWebView2ResponseStates.end()) {
+        return;
+    }
+
+    auto& state = stateIt->second;
+    state.statusCode = statusCode;
+    state.statusText = statusText ? statusText : "OK";
+    state.headersJson = headersJson ? headersJson : "[]";
+}
+
+extern "C" ELECTROBUN_EXPORT void protocolWriteResponseChunk(uint64_t requestId, const uint8_t* chunk, uint64_t size) {
+    if (!chunk || size == 0) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+    auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+    if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+        cefIt->second->OnProtocolResponseChunk(chunk, static_cast<size_t>(size));
+        return;
+    }
+
+    if (g_pendingWebView2Responses.find(requestId) == g_pendingWebView2Responses.end()) {
+        return;
+    }
+
+    auto stateIt = g_pendingWebView2ResponseStates.find(requestId);
+    if (stateIt == g_pendingWebView2ResponseStates.end()) {
+        return;
+    }
+
+    // WebView2 requires a complete IStream when put_Response is called, so we
+    // buffer chunks here and create the response stream in protocolFinishResponse.
+    auto& body = stateIt->second.body;
+    body.insert(body.end(), chunk, chunk + size);
+}
+
+extern "C" ELECTROBUN_EXPORT void protocolFinishResponse(uint64_t requestId) {
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseFinish();
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    MainThreadDispatcher::dispatch_async([requestId]() {
+        completePendingWebView2ProtocolResponse(requestId);
+    });
+}
+
+extern "C" ELECTROBUN_EXPORT void protocolErrorResponse(uint64_t requestId, const char* message) {
+    std::string errorMessage = message ? message : "Protocol request failed";
+
+    {
+        std::lock_guard<std::mutex> lock(g_protocolRequestMutex);
+        auto cefIt = g_pendingCEFProtocolHandlers.find(requestId);
+        if (cefIt != g_pendingCEFProtocolHandlers.end()) {
+            cefIt->second->OnProtocolResponseError(errorMessage);
+            g_pendingCEFProtocolHandlers.erase(cefIt);
+            g_protocolRequestBodies.erase(requestId);
+            return;
+        }
+    }
+
+    MainThreadDispatcher::dispatch_async([requestId, errorMessage]() {
+        completePendingWebView2ProtocolError(requestId, errorMessage);
+    });
 }
 
 // URL scheme handler - macOS only, stub for Windows

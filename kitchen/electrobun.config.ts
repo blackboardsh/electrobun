@@ -6,6 +6,18 @@ export default {
 		identifier: "sh.blackboard.electrobun-kitchen",
 		version: "1.17.3-beta.11",
 		urlSchemes: ["electrobun-playground"],
+		protocols: [
+			{
+				scheme: "electrobun-test",
+				privileges: {
+					standard: true,
+					secure: true,
+					corsEnabled: true,
+					supportFetchAPI: true,
+					stream: true,
+				},
+			},
+		],
 	},
 	runtime: {
 		// exitOnLastWindowClosed: false,
