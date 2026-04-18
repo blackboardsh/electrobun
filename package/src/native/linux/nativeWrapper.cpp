@@ -6380,6 +6380,30 @@ ELECTROBUN_EXPORT void showWindow(void* window) {
     }
 }
 
+void hideX11Window(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XUnmapWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+        }
+    });
+}
+
+void hideGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        gtk_widget_hide(GTK_WIDGET(window));
+    });
+}
+
+ELECTROBUN_EXPORT void hideWindow(void* window) {
+    if (isCEFAvailable()) {
+        hideX11Window(window);
+    } else {
+        hideGTKWindow(window);
+    }
+}
+
 // Cross-platform compatible function for Linux - return dummy style mask
 ELECTROBUN_EXPORT uint32_t getWindowStyle(bool borderless, bool titled, bool closable, bool miniaturizable,
                         bool resizable, bool unifiedTitleAndToolbar, bool fullScreen,
