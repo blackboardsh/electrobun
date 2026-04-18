@@ -2212,7 +2212,7 @@ async function generateTemplateEmbeddings() {
 					entry.name === "dist" ||
 					entry.name === ".next" ||
 					entry.name === ".DS_Store" ||
-					entry.name.startsWith(".") ||
+					(entry.name.startsWith(".") && entry.name !== ".gitignore") ||
 					entry.name === "package-lock.json" ||
 					entry.name === "bun.lock" ||
 					entry.name === "bun.lockb" ||
