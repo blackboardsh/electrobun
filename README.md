@@ -14,16 +14,27 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
-Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
+Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in Objc, C++, and several core parts written in <a href="https://ziglang.org/">zig</a>.
 
 Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
+
+You use it via npm.
+
+Don't miss our:
+- self-extracting bundles that use ZSTD compression for more compact distributables as small as 16MB
+- zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
+- `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
+- `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
+- Our Three.js and Babylon.js adapters that work right in Bun
+- Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
+- so much more.
 
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
-- Small self-extracting app bundles ~12MB (when using system webview, most of this is the bun runtime)
-- Even smaller app updates as small as 14KB (using bsdiff it only downloads tiny patches between versions)
+- Small self-extracting app bundles ~14MB (when using system webview, most of this is the bun runtime)
+- Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
