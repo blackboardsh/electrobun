@@ -242,6 +242,41 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window fullscreen toggle with hidden titlebar",
+    category: "BrowserWindow",
+    description: "Test macOS fullscreen mode when titleBarStyle is hidden",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      if (process.platform !== "darwin") {
+        log(`Skipping macOS-specific fullscreen behavior on ${process.platform}`);
+        return;
+      }
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Hidden Fullscreen Test",
+        renderer: "cef",
+        titleBarStyle: "hidden",
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      log("Checking initial fullscreen state");
+      expect(win.window.isFullScreen()).toBe(false);
+
+      log("Entering fullscreen with hidden titlebar");
+      win.window.setFullScreen(true);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(win.window.isFullScreen()).toBe(true);
+
+      log("Exiting fullscreen with hidden titlebar");
+      win.window.setFullScreen(false);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(win.window.isFullScreen()).toBe(false);
+    },
+  }),
+
+  defineTest({
     name: "Window alwaysOnTop",
     category: "BrowserWindow",
     description: "Test window always-on-top behavior",

@@ -7041,6 +7041,9 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                              screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
+    // Allow hidden titlebar windows to participate in native fullscreen.
+    [window setCollectionBehavior:
+        [window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
