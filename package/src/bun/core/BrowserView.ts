@@ -74,7 +74,7 @@ const randomId = Math.random().toString(36).substring(7);
 
 export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	id: number = nextWebviewId++;
-	ptr!: Pointer;
+	ptr: Pointer | null = null;
 	hostWebviewId?: number;
 	windowId!: number;
 	renderer!: "cef" | "native";
@@ -361,8 +361,10 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			unregisterHandler() {},
 		});
 		this.rpcHandler = undefined;
-		this.ptr = null as any;
-		native!.symbols.webviewRemove(ptr);
+    
+    this.rpcHandler = undefined;
+    this.ptr = null;
+    native!.symbols.webviewRemove(ptr);
 	}
 
 	static getById(id: number) {
