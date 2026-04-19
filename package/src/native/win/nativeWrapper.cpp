@@ -6711,8 +6711,8 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                 settings.persist_session_cookies = false;
             } else {
                 // Build path with identifier/channel structure (consistent with CLI and updater)
-                // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\Partitions\{partitionName}
-                std::string cachePath = buildPartitionPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
+                // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\{partitionName}
+                std::string cachePath = buildCEFPartitionPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
 
                 // Create directory if it doesn't exist
                 std::wstring wideCachePath(cachePath.begin(), cachePath.end());
