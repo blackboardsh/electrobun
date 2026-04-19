@@ -1122,8 +1122,15 @@ del "%~f0"
 			console.error("Failed to read version.json", error);
 			localInfo = { identifier: "", channel: "", version: "", hash: "", baseUrl: "", name: "" };
 			return localInfo;
-		}
-	},
-};
+			}
+		},
+		getLocallocalInfo: async () => {
+			console.error(
+				"[Electrobun] Updater.getLocallocalInfo() is deprecated. Use Updater.getLocalInfo() instead.",
+			);
+
+			return Updater.getLocalInfo();
+		},
+	};
 
 export { Updater };
