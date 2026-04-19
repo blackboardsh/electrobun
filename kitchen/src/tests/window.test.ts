@@ -532,6 +532,36 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window traffic light position API",
+    category: "BrowserWindow",
+    description: "Test macOS traffic light offset creation and runtime repositioning",
+    async run({ createWindow, log }) {
+      if (process.platform !== "darwin") {
+        log(`Skipping macOS-specific traffic light behavior on ${process.platform}`);
+        return;
+      }
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Traffic Light Position Test",
+        titleBarStyle: "hiddenInset",
+        trafficLightOffset: { x: 24, y: 18 },
+        width: 480,
+        height: 340,
+        renderer: "native",
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Window created with initial trafficLightOffset");
+
+      win.window.setWindowButtonPosition(52, 22);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Moved traffic lights via setWindowButtonPosition");
+    },
+  }),
+
+  defineTest({
     name: "Window setPosition",
     category: "BrowserWindow",
     description: "Test programmatically moving a window",

@@ -6302,7 +6302,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
+                                             double trafficLightOffsetX, double trafficLightOffsetY,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+    (void)trafficLightOffsetX;
+    (void)trafficLightOffsetY;
+
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
@@ -9720,6 +9724,13 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
             }
         }
     });
+}
+
+ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
+    (void)window;
+    (void)x;
+    (void)y;
+    // Not applicable on Linux - no-op
 }
 
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {

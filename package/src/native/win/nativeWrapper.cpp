@@ -9160,12 +9160,17 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t styleMask,
     const char* titleBarStyle,
     bool transparent,
+    double trafficLightOffsetX,
+    double trafficLightOffsetY,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
     WindowBlurHandler zigBlurHandler,
     WindowKeyHandler zigKeyHandler) {
+
+    (void)trafficLightOffsetX;
+    (void)trafficLightOffsetY;
 
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -9612,6 +9617,13 @@ ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     if (!IsWindow(hwnd)) return;
 
     SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    (void)window;
+    (void)x;
+    (void)y;
+    // Not applicable on Windows - no-op
 }
 
 ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
@@ -12235,4 +12247,3 @@ extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPa
 // implementation detail of the WGPU surface lifecycle (see
 // wgpuSurfaceConfigureMainThread, wgpuSurfaceGetCurrentTextureMainThread,
 // wgpuSurfacePresentMainThread).
-
