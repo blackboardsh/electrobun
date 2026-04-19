@@ -2590,10 +2590,12 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					}
 
 					// Use rcedit to embed the icon into launcher.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunCliLauncherDestination, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [bunCliLauncherDestination, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
 					// Clean up temp ICO file
@@ -2687,10 +2689,12 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					}
 
 					// Use rcedit to embed the icon into bun.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunBinaryDestInBundlePath, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into bun.exe`);
 
 					// Clean up temp ICO file
@@ -4872,10 +4876,12 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					}
 
 					// Use rcedit to embed the icon
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(outputExePath, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [outputExePath, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into ${setupFileName}`);
 
 					// Clean up temp ICO file
