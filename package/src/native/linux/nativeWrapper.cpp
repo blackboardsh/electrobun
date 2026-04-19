@@ -536,6 +536,10 @@ public:
         std::string fullPath = "index.html"; // default
         if (url.find("views://") == 0) {
             fullPath = url.substr(8); // Skip "views://"
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
+                fullPath.pop_back();
+            }
         }
         
         // Check if this is the internal HTML request
@@ -9863,6 +9867,10 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
         // Handle views:// protocol
         if (actualPath.substr(0, 8) == "views://") {
             std::string viewPath = actualPath.substr(8);
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!viewPath.empty() && (viewPath.back() == '/' || viewPath.back() == '\\')) {
+                viewPath.pop_back();
+            }
             
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {

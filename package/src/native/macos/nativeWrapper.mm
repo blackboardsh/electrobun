@@ -724,6 +724,10 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
     while ([relativePath hasPrefix:@"/"]) {
         relativePath = [relativePath substringFromIndex:1];
     }
+    // Strip trailing slashes - WebView may normalize URLs without folder components
+    while ([relativePath hasSuffix:@"/"] && [relativePath length] > 0) {
+        relativePath = [relativePath substringToIndex:[relativePath length] - 1];
+    }
 
     return relativePath;
 }
@@ -5732,6 +5736,10 @@ public:
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
                 // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
                 std::string relativePath = urlStr.substr(8);
+                // Strip trailing slashes - WebView may normalize URLs without folder components
+                while (!relativePath.empty() && (relativePath.back() == '/' || relativePath.back() == '\\')) {
+                    relativePath.pop_back();
+                }
                 NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 
                 // Check if this is the internal HTML request.
