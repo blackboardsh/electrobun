@@ -278,7 +278,15 @@ export interface ElectrobunConfig {
 			entitlements?: Record<string, boolean | string | string[]>;
 
 			/**
-			 * Path to .iconset folder containing app icons
+			 * Path to .iconset folder or .icon file (from Icon Composer)
+			 * containing app icons.
+			 *
+			 * - `.iconset` folders are converted to .icns via iconutil
+			 *   (requires Command Line Tools)
+			 * - `.icon` files are compiled via actool, producing Assets.car
+			 *   for Liquid Glass on macOS 26+ and a .icns fallback for older
+			 *   macOS versions (requires Xcode)
+			 *
 			 * @default "icon.iconset"
 			 */
 			icons?: string;

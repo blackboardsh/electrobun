@@ -2055,18 +2055,97 @@ ${schemesXml}
 				const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
 				if (existsSync(iconSourceFolder)) {
 					if (OS === "macos") {
-						// Use iconutil to convert .iconset folder to .icns
-						Bun.spawnSync(
-							["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
-							{
-								cwd: appBundleFolderResourcesPath,
-								stdio: ["ignore", "inherit", "inherit"],
-								env: {
-									...process.env,
-									ELECTROBUN_BUILD_ENV: buildEnvironment,
+						if (config.build.mac.icons.endsWith(".icon")) {
+							// .icon format (Icon Composer) — compile with actool
+							// Produces Assets.car (Liquid Glass on macOS 26+) and .icns fallback
+							const actoolCheck = Bun.spawnSync(
+								["xcrun", "--find", "actool"],
+								{ stdio: ["ignore", "pipe", "pipe"] },
+							);
+							if (actoolCheck.exitCode !== 0) {
+								throw new Error(
+									"Building .icon files requires Xcode (actool is not available from Command Line Tools alone). " +
+										"Install Xcode from the App Store, or set mac.icons to an .iconset folder instead.",
+								);
+							}
+
+							const iconStem = basename(config.build.mac.icons, ".icon");
+							const partialPlistPath = join(
+								buildFolder,
+								".actool-partial-info.plist",
+							);
+
+							console.log(
+								"Compiling .icon file with actool (requires Xcode)...",
+							);
+							const result = Bun.spawnSync(
+								[
+									"xcrun",
+									"actool",
+									"--compile",
+									appBundleFolderResourcesPath,
+									"--app-icon",
+									iconStem,
+									"--platform",
+									"macosx",
+									"--minimum-deployment-target",
+									"11.0",
+									"--output-partial-info-plist",
+									partialPlistPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: projectRoot,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
 								},
-							},
-						);
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`actool failed to compile ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+
+							// actool produces <stem>.icns — rename to AppIcon.icns so
+							// CFBundleIconFile ("AppIcon") resolves correctly
+							const actoolIcns = join(
+								appBundleFolderResourcesPath,
+								`${iconStem}.icns`,
+							);
+							if (existsSync(actoolIcns) && actoolIcns !== iconDestPath) {
+								renameSync(actoolIcns, iconDestPath);
+							}
+						} else {
+							// Use iconutil to convert .iconset folder to .icns
+							const result = Bun.spawnSync(
+								[
+									"iconutil",
+									"-c",
+									"icns",
+									"-o",
+									iconDestPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: appBundleFolderResourcesPath,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
+								},
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`iconutil failed to convert ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+						}
 					} else {
 						console.log(
 							`WARNING: Cannot build macOS icons on ${OS} - iconutil is only available on macOS`,
@@ -2209,7 +2288,13 @@ Categories=Utility;Application;
 			config.app.identifier,
 		);
 
+		// When using .icon format, CFBundleIconName is needed for Assets.car lookup
+		const iconName = config.build.mac?.icons?.endsWith(".icon")
+			? basename(config.build.mac.icons, ".icon")
+			: null;
+
 		InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
+
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -2224,7 +2309,7 @@ Categories=Utility;Application;
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
+    <string>AppIcon</string>${iconName ? `\n    <key>CFBundleIconName</key>\n    <string>${iconName}</string>` : ""}${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
 </dict>
 </plist>`;
 
