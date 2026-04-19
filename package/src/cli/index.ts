@@ -1522,6 +1522,26 @@ const defaultConfig = {
 		copy: undefined as Record<string, string> | undefined,
 		watch: undefined as string[] | undefined,
 		watchIgnore: undefined as string[] | undefined,
+		carrot: undefined as {
+			id: string;
+			name: string;
+			description?: string;
+			mode?: "window" | "background";
+			permissions?: Record<string, unknown>;
+			dependencies?: Record<string, string>;
+			// Map of remote UI ID → config. Two flavors:
+			//   1. { name, entrypoint, ...bunBuildOpts } — electrobun builds it via Bun.build
+			//   2. { name, path } — point at an already-built HTML file (e.g. produced by postBuild)
+			// In both cases, the manifest gets a remoteUIs block that ears reads to expose
+			// the UIs for remote loading via Hop. `name` is the human-readable label shown in Farm.
+			remoteUIs?: Record<string, {
+				name?: string;
+				entrypoint?: string;
+				path?: string;
+				[key: string]: unknown;
+			}>;
+			carrotOnly?: boolean;
+		} | undefined,
 	},
 	runtime: {} as Record<string, unknown>,
 	scripts: {
@@ -1912,9 +1932,7 @@ ${schemesXml}
 		try {
 			await runBuild(config, buildEnvironment);
 		} catch (error) {
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
+			console.error("Build failed:", error);
 			process.exit(1);
 		}
 	} else if (commandArg === "run") {
@@ -1930,9 +1948,7 @@ ${schemesXml}
 			try {
 				await runBuild(config, "dev");
 			} catch (error) {
-				if (error instanceof Error) {
-					console.error(error.message);
-				}
+				console.error("Build failed:", error);
 				process.exit(1);
 			}
 			await runAppWithSignalHandling(config);
@@ -2039,18 +2055,97 @@ ${schemesXml}
 				const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
 				if (existsSync(iconSourceFolder)) {
 					if (OS === "macos") {
-						// Use iconutil to convert .iconset folder to .icns
-						Bun.spawnSync(
-							["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
-							{
-								cwd: appBundleFolderResourcesPath,
-								stdio: ["ignore", "inherit", "inherit"],
-								env: {
-									...process.env,
-									ELECTROBUN_BUILD_ENV: buildEnvironment,
+						if (config.build.mac.icons.endsWith(".icon")) {
+							// .icon format (Icon Composer) — compile with actool
+							// Produces Assets.car (Liquid Glass on macOS 26+) and .icns fallback
+							const actoolCheck = Bun.spawnSync(
+								["xcrun", "--find", "actool"],
+								{ stdio: ["ignore", "pipe", "pipe"] },
+							);
+							if (actoolCheck.exitCode !== 0) {
+								throw new Error(
+									"Building .icon files requires Xcode (actool is not available from Command Line Tools alone). " +
+										"Install Xcode from the App Store, or set mac.icons to an .iconset folder instead.",
+								);
+							}
+
+							const iconStem = basename(config.build.mac.icons, ".icon");
+							const partialPlistPath = join(
+								buildFolder,
+								".actool-partial-info.plist",
+							);
+
+							console.log(
+								"Compiling .icon file with actool (requires Xcode)...",
+							);
+							const result = Bun.spawnSync(
+								[
+									"xcrun",
+									"actool",
+									"--compile",
+									appBundleFolderResourcesPath,
+									"--app-icon",
+									iconStem,
+									"--platform",
+									"macosx",
+									"--minimum-deployment-target",
+									"11.0",
+									"--output-partial-info-plist",
+									partialPlistPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: projectRoot,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
 								},
-							},
-						);
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`actool failed to compile ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+
+							// actool produces <stem>.icns — rename to AppIcon.icns so
+							// CFBundleIconFile ("AppIcon") resolves correctly
+							const actoolIcns = join(
+								appBundleFolderResourcesPath,
+								`${iconStem}.icns`,
+							);
+							if (existsSync(actoolIcns) && actoolIcns !== iconDestPath) {
+								renameSync(actoolIcns, iconDestPath);
+							}
+						} else {
+							// Use iconutil to convert .iconset folder to .icns
+							const result = Bun.spawnSync(
+								[
+									"iconutil",
+									"-c",
+									"icns",
+									"-o",
+									iconDestPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: appBundleFolderResourcesPath,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
+								},
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`iconutil failed to convert ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+						}
 					} else {
 						console.log(
 							`WARNING: Cannot build macOS icons on ${OS} - iconutil is only available on macOS`,
@@ -2137,21 +2232,38 @@ Categories=Utility;Application;
 			);
 		}
 
+		const isCarrotOnly = config.build.carrot?.carrotOnly === true;
+
 		// build macos bundle
 		// Use display name (with spaces) for macOS bundle folders, sanitized name for other platforms
+		let appBundleFolderPath: string;
+		let appBundleFolderContentsPath: string;
+		let appBundleMacOSPath: string;
+		let appBundleFolderResourcesPath: string;
+		let appBundleFolderFrameworksPath: string;
+		let appBundleAppCodePath: string;
 		const bundleName =
 			targetOS === "macos" ? macOSBundleDisplayName : appFileName;
-		const {
-			appBundleFolderPath,
-			appBundleFolderContentsPath,
-			appBundleMacOSPath,
-			appBundleFolderResourcesPath,
-			appBundleFolderFrameworksPath,
-		} = createAppBundle(bundleName, buildFolder, targetOS);
 
-		const appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
-
-		mkdirSync(appBundleAppCodePath, { recursive: true });
+		if (isCarrotOnly) {
+			// For carrot-only builds, create a minimal output structure for bun/view builds
+			appBundleFolderPath = join(buildFolder, "carrot-build");
+			appBundleFolderContentsPath = appBundleFolderPath;
+			appBundleMacOSPath = appBundleFolderPath;
+			appBundleFolderResourcesPath = appBundleFolderPath;
+			appBundleFolderFrameworksPath = appBundleFolderPath;
+			appBundleAppCodePath = join(appBundleFolderPath, "app");
+			mkdirSync(appBundleAppCodePath, { recursive: true });
+		} else {
+			const bundle = createAppBundle(bundleName, buildFolder, targetOS);
+			appBundleFolderPath = bundle.appBundleFolderPath;
+			appBundleFolderContentsPath = bundle.appBundleFolderContentsPath;
+			appBundleMacOSPath = bundle.appBundleMacOSPath;
+			appBundleFolderResourcesPath = bundle.appBundleFolderResourcesPath;
+			appBundleFolderFrameworksPath = bundle.appBundleFolderFrameworksPath;
+			appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
+			mkdirSync(appBundleAppCodePath, { recursive: true });
+		}
 
 		// const bundledBunPath = join(appBundleMacOSPath, 'bun');
 		// cpSync(bunPath, bundledBunPath);
@@ -2162,6 +2274,10 @@ Categories=Utility;Application;
 
 		// We likely want to let users configure this for different environments (eg: dev, canary, stable) and/or
 		// provide methods to help segment data in those folders based on channel/environment
+
+		let InfoPlistContents = "";
+
+		if (!isCarrotOnly) {
 		// Generate usage descriptions from entitlements
 		const usageDescriptions = generateUsageDescriptions(
 			config.build.mac.entitlements || {},
@@ -2172,7 +2288,13 @@ Categories=Utility;Application;
 			config.app.identifier,
 		);
 
-		const InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
+		// When using .icon format, CFBundleIconName is needed for Assets.car lookup
+		const iconName = config.build.mac?.icons?.endsWith(".icon")
+			? basename(config.build.mac.icons, ".icon")
+			: null;
+
+		InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
+
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -2187,7 +2309,7 @@ Categories=Utility;Application;
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
+    <string>AppIcon</string>${iconName ? `\n    <key>CFBundleIconName</key>\n    <string>${iconName}</string>` : ""}${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
 </dict>
 </plist>`;
 
@@ -2913,6 +3035,7 @@ Categories=Utility;Application;
 				});
 			}
 		}
+		} // end if (!isCarrotOnly)
 
 		// transpile developer's bun code
 		const bunDestFolder = join(appBundleAppCodePath, "bun");
@@ -2999,10 +3122,147 @@ Categories=Utility;Application;
 			cpSync(source, destination, { recursive: true, dereference: true });
 		}
 
-		buildIcons(appBundleFolderResourcesPath, appBundleFolderPath);
+		if (!isCarrotOnly) {
+			buildIcons(appBundleFolderResourcesPath, appBundleFolderPath);
+		}
 
-		// Run postBuild script
-		runHook("postBuild");
+		// Build carrot artifact if configured (before postBuild so the hook can add custom views)
+		let carrotBuildDir: string | null = null;
+		if (config.build.carrot) {
+			const carrotConfig = config.build.carrot;
+			carrotBuildDir = join(buildFolder, "carrot", carrotConfig.id);
+
+			if (existsSync(carrotBuildDir)) {
+				rmSync(carrotBuildDir, { recursive: true });
+			}
+			mkdirSync(carrotBuildDir, { recursive: true });
+
+			// Copy the bun bundle as worker.js
+			const bunOutputDir = join(appBundleAppCodePath, "bun");
+			// The output filename matches the entrypoint name (e.g., worker.ts → worker.js)
+			const bunEntryName = basename(config.build.bun.entrypoint).replace(/\.ts$/, ".js");
+			const workerSrc = join(bunOutputDir, bunEntryName);
+			if (existsSync(workerSrc)) {
+				cpSync(workerSrc, join(carrotBuildDir, "worker.js"));
+			}
+
+			// Copy views
+			const viewsSrc = join(appBundleAppCodePath, "views");
+			if (existsSync(viewsSrc)) {
+				const viewsDest = join(carrotBuildDir, "views");
+				cpSync(viewsSrc, viewsDest, { recursive: true });
+			}
+
+			// Copy static assets
+			for (const relSource in config.build.copy) {
+				const destRel = config.build.copy[relSource]!;
+				const builtAsset = join(appBundleAppCodePath, destRel);
+				if (existsSync(builtAsset)) {
+					const carrotDest = join(carrotBuildDir, destRel);
+					mkdirSync(dirname(carrotDest), { recursive: true });
+					cpSync(builtAsset, carrotDest, { recursive: true });
+				}
+			}
+
+			// Build remote UIs if configured.
+			// remoteUIs has two flavors:
+			//   1. entrypoint set → CLI runs Bun.build, output to remote-ui/{name}/
+			//   2. path set → already built (e.g. by postBuild), just record in manifest
+			// The resolved manifest entries are collected here and written below.
+			const resolvedRemoteUIs: Record<string, { name: string; path: string }> = {};
+			if (carrotConfig.remoteUIs) {
+				for (const remoteUIName in carrotConfig.remoteUIs) {
+					const remoteUIConfig = carrotConfig.remoteUIs[remoteUIName]!;
+					const label = remoteUIConfig.name || remoteUIName;
+
+					if (remoteUIConfig.entrypoint) {
+						const remoteUISource = join(projectRoot, remoteUIConfig.entrypoint);
+						if (!existsSync(remoteUISource)) {
+							console.error(`Remote UI entrypoint not found: ${remoteUISource}`);
+							continue;
+						}
+						const remoteUIDestFolder = join(carrotBuildDir, "remote-ui", remoteUIName);
+						mkdirSync(remoteUIDestFolder, { recursive: true });
+
+						const { entrypoint: _entrypoint, name: _name, path: _path, ...remoteUIBuildOptions } = remoteUIConfig;
+						const remoteUIBuildResult = await Bun.build({
+							...remoteUIBuildOptions,
+							entrypoints: [remoteUISource],
+							outdir: remoteUIDestFolder,
+							target: "browser",
+						});
+
+						if (!remoteUIBuildResult.success) {
+							console.error(`Failed to build remote UI: ${remoteUIName}`);
+							printBuildLogs(remoteUIBuildResult.logs);
+							continue;
+						}
+						// Bun.build produces a JS bundle; the entry HTML (if any) is up to the
+						// builder. We record the directory entry as index.html by convention.
+						resolvedRemoteUIs[remoteUIName] = {
+							name: label,
+							path: `remote-ui/${remoteUIName}/index.html`,
+						};
+					} else if (remoteUIConfig.path) {
+						// Pre-built path (e.g. produced by a postBuild script). Just record it.
+						resolvedRemoteUIs[remoteUIName] = {
+							name: label,
+							path: remoteUIConfig.path,
+						};
+					} else {
+						console.warn(
+							`Remote UI "${remoteUIName}" has neither entrypoint nor path; skipping.`,
+						);
+					}
+				}
+			}
+
+			// Write carrot.json manifest
+			const carrotManifest = {
+				id: carrotConfig.id,
+				name: carrotConfig.name,
+				version: config.app.version,
+				description: carrotConfig.description || config.app.description || "",
+				mode: carrotConfig.mode || "window",
+				permissions: carrotConfig.permissions || {},
+				dependencies: Object.fromEntries(
+					Object.entries(carrotConfig.dependencies || {}).map(([id, spec]) => [
+						id,
+						// Strip file:/workspace: specifiers for artifact manifests — just keep the carrot ID
+						typeof spec === "string" && (spec.startsWith("file:") || spec.startsWith("workspace:"))
+							? "*"
+							: spec,
+					]),
+				),
+				worker: { relativePath: "worker.js" },
+				view: existsSync(viewsSrc) ? { relativePath: "views/index.html" } : undefined,
+				remoteUIs: Object.keys(resolvedRemoteUIs).length > 0 ? resolvedRemoteUIs : undefined,
+			};
+			writeFileSync(
+				join(carrotBuildDir, "carrot.json"),
+				JSON.stringify(carrotManifest, null, 2),
+			);
+
+			console.log(`Carrot built: ${carrotConfig.id} v${config.app.version}`);
+		}
+
+		// Run postBuild script — with carrot dir available if configured
+		runHook("postBuild", carrotBuildDir ? { ELECTROBUN_CARROT_DIR: carrotBuildDir } : {});
+
+		// Compress carrot artifact for non-dev builds
+		if (config.build.carrot && carrotBuildDir && buildEnvironment !== "dev") {
+			const artifactName = `${config.build.carrot.id}-${config.app.version}.tar.zst`;
+			mkdirSync(artifactFolder, { recursive: true });
+			const artifactPath = join(artifactFolder, artifactName);
+
+			execSync(`tar -C "${carrotBuildDir}" -cf - . | zstd -o "${artifactPath}"`, { stdio: "pipe" });
+			const size = statSync(artifactPath).size;
+			console.log(`Carrot artifact: ${artifactPath} (${(size / 1024).toFixed(0)} KB)`);
+		}
+
+		if (isCarrotOnly) {
+			return;
+		}
 
 		// Pack app resources into ASAR archive if enabled
 		if (config.build.useAsar) {

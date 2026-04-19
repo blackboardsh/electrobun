@@ -225,7 +225,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	loadURL(url: string) {
 		console.log(`DEBUG: loadURL called for webview ${this.id}: ${url}`);
 		this.url = url;
-		native.symbols.loadURLInWebView(this.ptr, toCString(this.url));
+		native!.symbols.loadURLInWebView(this.ptr, toCString(this.url));
 	}
 
 	loadHTML(html: string) {
@@ -237,18 +237,18 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 		if (this.renderer === "cef") {
 			// For CEF, store HTML content in native map and use scheme handler
-			native.symbols.setWebviewHTMLContent(this.id, toCString(html));
+			native!.symbols.setWebviewHTMLContent(this.id, toCString(html));
 			this.loadURL("views://internal/index.html");
 		} else {
 			// For WKWebView, load HTML content directly
-			native.symbols.loadHTMLInWebView(this.ptr, toCString(html));
+			native!.symbols.loadHTMLInWebView(this.ptr, toCString(html));
 		}
 	}
 
 	setNavigationRules(rules: string[]) {
 		this.navigationRules = JSON.stringify(rules);
 		const rulesJson = JSON.stringify(rules);
-		native.symbols.setWebviewNavigationRules(this.ptr, toCString(rulesJson));
+		native!.symbols.setWebviewNavigationRules(this.ptr, toCString(rulesJson));
 	}
 
 	findInPage(
@@ -257,7 +257,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	) {
 		const forward = options?.forward ?? true;
 		const matchCase = options?.matchCase ?? false;
-		native.symbols.webviewFindInPage(
+		native!.symbols.webviewFindInPage(
 			this.ptr,
 			toCString(searchText),
 			forward,
@@ -266,19 +266,19 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	stopFindInPage() {
-		native.symbols.webviewStopFind(this.ptr);
+		native!.symbols.webviewStopFind(this.ptr);
 	}
 
 	openDevTools() {
-		native.symbols.webviewOpenDevTools(this.ptr);
+		native!.symbols.webviewOpenDevTools(this.ptr);
 	}
 
 	closeDevTools() {
-		native.symbols.webviewCloseDevTools(this.ptr);
+		native!.symbols.webviewCloseDevTools(this.ptr);
 	}
 
 	toggleDevTools() {
-		native.symbols.webviewToggleDevTools(this.ptr);
+		native!.symbols.webviewToggleDevTools(this.ptr);
 	}
 
 	/**
@@ -286,7 +286,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
 	 */
 	setPageZoom(zoomLevel: number) {
-		native.symbols.webviewSetPageZoom(this.ptr, zoomLevel);
+		native!.symbols.webviewSetPageZoom(this.ptr, zoomLevel);
 	}
 
 	/**
@@ -294,7 +294,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	 * @returns The current zoom level (1.0 = 100%)
 	 */
 	getPageZoom(): number {
-		return native.symbols.webviewGetPageZoom(this.ptr) as number;
+		return native!.symbols.webviewGetPageZoom(this.ptr) as number;
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
@@ -361,8 +361,10 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			unregisterHandler() {},
 		});
 		this.rpcHandler = undefined;
-		this.ptr = null;
-		native.symbols.webviewRemove(ptr);
+    
+    this.rpcHandler = undefined;
+    this.ptr = null;
+    native!.symbols.webviewRemove(ptr);
 	}
 
 	static getById(id: number) {

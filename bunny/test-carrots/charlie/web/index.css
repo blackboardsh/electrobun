@@ -1,0 +1,116 @@
+:root {
+  --bg: #fff9f2;
+  --panel: rgba(255, 255, 255, 0.88);
+  --ink: #26170f;
+  --muted: #7a5a49;
+  --accent: #ff7f2e;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  background: radial-gradient(circle at top, rgba(255, 173, 83, 0.28), transparent 38%), linear-gradient(160deg, #fffdf9 0%, var(--bg) 100%);
+  color: var(--ink);
+}
+
+.charlie-shell {
+  display: grid;
+  gap: 18px;
+  min-height: 100vh;
+  padding: 22px;
+}
+
+.count-card,
+.detail-card,
+.probe-card {
+  border-radius: 24px;
+  border: 1px solid rgba(38, 23, 15, 0.1);
+  background: var(--panel);
+  padding: 22px;
+  box-shadow: 0 18px 32px rgba(107, 50, 6, 0.08);
+}
+
+.eyebrow {
+  margin: 0;
+  color: var(--accent);
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  font-weight: 700;
+}
+
+.count-card h1 {
+  margin: 12px 0 6px;
+  font-size: 88px;
+  line-height: 0.9;
+}
+
+.subcopy,
+.label {
+  color: var(--muted);
+}
+
+.button-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+
+.probe-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.probe-results {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-top: 16px;
+}
+
+.probe-results strong {
+  display: block;
+  margin-top: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+button {
+  border: 0;
+  border-radius: 16px;
+  padding: 14px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.primary {
+  background: linear-gradient(135deg, var(--accent) 0%, #ff9f53 100%);
+  color: white;
+}
+
+button.secondary {
+  background: rgba(38, 23, 15, 0.08);
+  color: var(--ink);
+}
+
+.detail-card {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+}
+
+.detail-card strong {
+  display: block;
+  margin-top: 6px;
+}

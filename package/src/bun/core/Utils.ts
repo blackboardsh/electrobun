@@ -136,25 +136,27 @@ export const quit = () => {
 		return;
 	}
 
-	// Phase 1: Signal the native event loop to stop
-	native.symbols.stopEventLoop();
-	// Phase 2: Wait for native shutdown to complete (CefShutdown etc.)
-	// This blocks the worker thread until the main thread finishes cleanup.
-	native.symbols.waitForShutdownComplete(5000);
-	// Phase 3: Now safe to exit - CEF is fully shut down.
-	// Use _exit() via forceExit to guarantee termination. process.exit() from
-	// a Worker thread can fail to terminate when the main thread is blocked in FFI.
-	native.symbols.forceExit(0);
+	if (native) {
+		native.symbols.stopEventLoop();
+		native.symbols.waitForShutdownComplete(5000);
+		native.symbols.forceExit(0);
+	} else {
+		process.exit(0);
+	}
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
+const _originalProcessExit = process.exit;
 process.exit = ((code?: number) => {
-	if (isQuitting) {
-		// Already in quit sequence — force-terminate immediately
-		native.symbols.forceExit(code ?? 0);
-		return;
+	if (native) {
+		if (isQuitting) {
+			native.symbols.forceExit(code ?? 0);
+			return;
+		}
+		quit();
+	} else {
+		_originalProcessExit(code ?? 0);
 	}
-	quit();
 }) as typeof process.exit;
 
 export const openFileDialog = async (
@@ -358,7 +360,8 @@ function getVersionInfo(): { identifier: string; channel: string } {
 		return _versionInfo;
 	} catch (error) {
 		console.error("Failed to read version.json", error);
-		throw error;
+		_versionInfo = { identifier: "", channel: "" };
+		return _versionInfo;
 	}
 }
 
