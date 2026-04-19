@@ -17,7 +17,7 @@ async function buildPreload() {
 	const fullResult = await Bun.build({
 		entrypoints: [fullPreloadEntry],
 		target: "browser",
-		format: "iife", // IIFE format for script injection (no export statements)
+		format: "esm",
 		minify: false,
 	});
 
@@ -31,7 +31,7 @@ async function buildPreload() {
 	const sandboxedResult = await Bun.build({
 		entrypoints: [sandboxedPreloadEntry],
 		target: "browser",
-		format: "iife",
+		format: "esm",
 		minify: false,
 	});
 
@@ -40,8 +40,10 @@ async function buildPreload() {
 		throw new Error("Failed to build sandboxed preload script");
 	}
 
-	const fullPreloadJs = await fullResult.outputs[0]!.text();
-	const sandboxedPreloadJs = await sandboxedResult.outputs[0]!.text();
+	// Bun does not currently support iife output, so we wrap the ESM bundle manually
+	// to keep preload globals scoped for script injection.
+	const fullPreloadJs = `(function(){${await fullResult.outputs[0]!.text()}})();`;
+	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0]!.text()}})();`;
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
 // Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.

@@ -19,6 +19,9 @@ typedef uint32_t (*HandlePostMessage)(uint32_t webviewId, const char* message);
 typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
 typedef void (*AsyncJavascriptCompletionHandler)(const char* messageId, uint32_t webviewId, uint32_t hostWebviewId, const char* responseJSON);
 
+// Window chrome style enum, shared across platforms for titleBarStyle handling
+enum class ChromeStyle : uint32_t { Default, Hidden, HiddenInset };
+
 // Window event callbacks
 typedef void (*WindowCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);

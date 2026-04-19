@@ -199,6 +199,22 @@ export interface ElectrobunConfig {
 		watchIgnore?: string[];
 
 		/**
+		 * Carrot build configuration.
+		 * When present, the build also produces a carrot artifact alongside the standalone app.
+		 * Set `carrotOnly: true` to skip the standalone app build entirely.
+		 */
+		carrot?: {
+			id: string;
+			name: string;
+			description?: string;
+			mode?: "window" | "background";
+			carrotOnly?: boolean;
+			permissions?: Record<string, unknown>;
+			dependencies?: Record<string, string>;
+			remoteUIs?: Record<string, { entrypoint: string; [key: string]: unknown }>;
+		};
+
+		/**
 		 * macOS-specific build configuration
 		 */
 		mac?: {

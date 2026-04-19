@@ -229,6 +229,29 @@ jobs:
           rm -rf kitchen/artifacts
           rm -rf kitchen/build
 
+      - name: Build Bunny Ears
+        run: cd ../bunny/ears && bun install && bun build:${{ steps.release-type.outputs.env }}
+        working-directory: package
+        env:
+          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID || '' }}
+
+      - name: Upload Bunny Ears artifacts to R2
+        env:
+          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_EARS_BUCKET }}
+        run: bun scripts/upload-kitchen-artifacts.ts -- bunny/ears/artifacts
+
+      - name: Clean up Bunny Ears artifacts
+        shell: bash
+        run: |
+          rm -rf bunny/ears/artifacts
+          rm -rf bunny/ears/build
+
   release:
     needs: build
     runs-on: ubuntu-latest

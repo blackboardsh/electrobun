@@ -242,6 +242,41 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window fullscreen toggle with hidden titlebar",
+    category: "BrowserWindow",
+    description: "Test macOS fullscreen mode when titleBarStyle is hidden",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      if (process.platform !== "darwin") {
+        log(`Skipping macOS-specific fullscreen behavior on ${process.platform}`);
+        return;
+      }
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Hidden Fullscreen Test",
+        renderer: "cef",
+        titleBarStyle: "hidden",
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+
+      log("Checking initial fullscreen state");
+      expect(win.window.isFullScreen()).toBe(false);
+
+      log("Entering fullscreen with hidden titlebar");
+      win.window.setFullScreen(true);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(win.window.isFullScreen()).toBe(true);
+
+      log("Exiting fullscreen with hidden titlebar");
+      win.window.setFullScreen(false);
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      expect(win.window.isFullScreen()).toBe(false);
+    },
+  }),
+
+  defineTest({
     name: "Window alwaysOnTop",
     category: "BrowserWindow",
     description: "Test window always-on-top behavior",
@@ -493,6 +528,36 @@ export const windowTests = [
       expect(win.id).toBeGreaterThan(0);
       await new Promise((resolve) => setTimeout(resolve, 300));
       log("Window with inset titlebar style created successfully");
+    },
+  }),
+
+  defineTest({
+    name: "Window traffic light position API",
+    category: "BrowserWindow",
+    description: "Test macOS traffic light offset creation and runtime repositioning",
+    async run({ createWindow, log }) {
+      if (process.platform !== "darwin") {
+        log(`Skipping macOS-specific traffic light behavior on ${process.platform}`);
+        return;
+      }
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Traffic Light Position Test",
+        titleBarStyle: "hiddenInset",
+        trafficLightOffset: { x: 24, y: 18 },
+        width: 480,
+        height: 340,
+        renderer: "native",
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Window created with initial trafficLightOffset");
+
+      win.window.setWindowButtonPosition(52, 22);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Moved traffic lights via setWindowButtonPosition");
     },
   }),
 

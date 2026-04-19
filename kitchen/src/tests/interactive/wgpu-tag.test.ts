@@ -4,21 +4,28 @@ import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow } from "electrobun/bun";
 import { WgpuTagRenderer } from "../../bun/wgpuTagRenderer";
 
-export const wgpuTagTests = [
-  defineTest({
-    name: "WGPU Tag playground",
+function createWgpuTagTest(name: string, transparent: boolean) {
+  return defineTest({
+    name,
     category: "WGPU Tag (Interactive)",
-    description: "Test WGPU view positioning, transparency, passthrough, and resizing",
+    description: transparent
+      ? "Test WGPU tag in a transparent window (DComp compositing test)"
+      : "Test WGPU view positioning, transparency, passthrough, and resizing",
     interactive: true,
     timeout: 600000,
     async run({ log, showInstructions }) {
-      await showInstructions([
+      await showInstructions(transparent ? [
+        "A transparent window with a WGPU tag will open",
+        "The desktop should be visible behind the HTML content",
+        "The WGPU surface should render correctly within the page",
+        "Close the window when done to pass the test",
+      ] : [
         "A WGPU tag playground will open",
         "Use the controls to toggle transparency/passthrough and resize",
         "Close the window when done to pass the test",
       ]);
 
-      log("Opening WGPU tag playground window");
+      log(`Opening ${transparent ? "transparent " : ""}WGPU tag playground`);
 
       await new Promise<void>((resolve) => {
         let winRef: BrowserWindow<any> | null = null;
@@ -29,7 +36,6 @@ export const wgpuTagTests = [
           handlers: {
             requests: {
               closeWindow: () => {
-                // Stop renderer before closing window
                 renderer.stopAll();
                 winRef?.close();
                 return { success: true };
@@ -58,10 +64,11 @@ export const wgpuTagTests = [
         });
 
         winRef = new BrowserWindow({
-          title: "WGPU Tag Playground",
+          title: transparent ? "Transparent WGPU Tag" : "WGPU Tag Playground",
           url: "views://playgrounds/wgpu-tag/index.html",
-          renderer: "native", // Use native instead of CEF since bundling is off
+          renderer: "native",
           frame: { width: 860, height: 720, x: 120, y: 60 },
+          transparent,
           rpc,
         });
 
@@ -69,12 +76,16 @@ export const wgpuTagTests = [
         const win = winRef;
 
         win.on("close", () => {
-          // Also stop renderer here in case window is closed via X button
           renderer.stopAll();
           log("Playground closed - test complete");
           resolve();
         });
       });
     },
-  }),
+  });
+}
+
+export const wgpuTagTests = [
+  createWgpuTagTest("WGPU Tag playground", false),
+  createWgpuTagTest("Transparent WGPU Tag", true),
 ];
