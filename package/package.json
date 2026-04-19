@@ -1,6 +1,6 @@
 {
 	"name": "electrobun",
-	"version": "1.16.1-beta.0",
+	"version": "1.17.3-beta.11",
 	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
 	"license": "MIT",
 	"author": "Blackboard Technologies Inc.",
@@ -14,7 +14,8 @@
 	"exports": {
 		".": "./dist/api/bun/index.ts",
 		"./bun": "./dist/api/bun/index.ts",
-		"./view": "./dist/api/browser/index.ts"
+		"./view": "./dist/api/browser/index.ts",
+		"./carrot": "./dist/api/carrot/bun.ts"
 	},
 	"type": "module",
 	"bin": {

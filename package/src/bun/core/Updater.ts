@@ -1119,11 +1119,9 @@ del "%~f0"
 			localInfo = await Bun.file(`../${resourcesDir}/version.json`).json();
 			return localInfo;
 		} catch (error) {
-			// Handle the error
 			console.error("Failed to read version.json", error);
-
-			// Then rethrow so the app crashes
-			throw error;
+			localInfo = { identifier: "", channel: "", version: "", hash: "", baseUrl: "", name: "" };
+			return localInfo;
 		}
 	},
 };

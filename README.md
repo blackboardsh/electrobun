@@ -14,16 +14,27 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
-Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in <a href="https://ziglang.org/">zig</a>.
+Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in Objc, C++, and several core parts written in <a href="https://ziglang.org/">zig</a>.
 
 Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
+
+You use it via npm.
+
+Don't miss our:
+- self-extracting bundles that use ZSTD compression for more compact distributables as small as 16MB
+- zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
+- `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
+- `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
+- Our Three.js and Babylon.js adapters that work right in Bun
+- Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
+- so much more.
 
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
-- Small self-extracting app bundles ~12MB (when using system webview, most of this is the bun runtime)
-- Even smaller app updates as small as 14KB (using bsdiff it only downloads tiny patches between versions)
+- Small self-extracting app bundles ~14MB (when using system webview, most of this is the bun runtime)
+- Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
@@ -42,16 +53,22 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
 - [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
 - [Deskdown](https://github.com/guarana-studio/deskdown) - transform any web address into a desktop app in under 20 seconds
+- [Dictate](https://github.com/siddhantparadox/dictate) - Windows dictation app with local and BYOK cloud transcription
 - [dev-3.0](https://github.com/h0x91b/dev-3.0) - helps you not get lost while managing multiple AI agents across projects
 - [DOOM](https://github.com/blackboardsh/electrobun-doom) - DOOM implemented in 2 ways: bun -> (c doom -> bundled wgpu) and (full ts port bun -> bundled wgpu)
+- [dotlock](https://github.com/tsconfigdotjson/dotlock) - macOS desktop app for managing `.env` files across your projects
+- [electrobun-pdf](https://github.com/GijungKim/electrobun-pdf) - local-first PDF & DOCX editor for opening, annotating, and exporting documents without leaving your machine
 - [electrobun-rms](https://github.com/khanhthanhdev/electrobun-rms) - fast Electrobun desktop app template with React, Tailwind CSS, and Vite
 - [golb](https://github.com/chrisdadev13/golb) - desktop AI coding workspace built with React, Vite, and Tailwind
 - [GOG Achievements GUI](https://github.com/timendum/gog-achievements-gui) - desktop app for managing GOG achievements
 - [groov](https://github.com/laurenzcodes/groov) - desktop audio deck monitor
 - [Guerilla Glass](https://github.com/okikeSolutions/guerillaglass) - open-source cross-platform creator studio for fast Record -> Edit -> Deliver workflows
 - [Marginalia](https://github.com/lars-hoeijmans/Marginalia) - a simple note taking app
+- [MarkBun](https://github.com/xiaochong/markbun) - fast, beautiful, Typora-like markdown desktop editor
 - [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
+- [Patchline](https://github.com/adwaithks/Patchline) - lightweight desktop Git client for reading patches and line diffs, then staging and committing changes
 - [peekachu](https://github.com/needle-tools/peekachu) - password manager for AIs; store secrets in your OS keychain and scrub output so AI assistants never see actual values
+- [PiBun](https://github.com/khairold/pibun) - desktop GUI for the Pi coding agent with chat, terminal, git integration, and plugin system
 - [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
 - [Prometheus](https://github.com/opensourcectl/prometheus) - desktop utility toolbox for file cleanup, document manipulation, and image processing
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
@@ -64,6 +81,7 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
 - [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
 - [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
+- [whatsapp-reminder](https://github.com/FatahChan/whatsapp-reminder) - managed scheduled WhatsApp messages
 
 ### Video Demos
 
@@ -78,8 +96,11 @@ Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrob
 [![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=3)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
+Electrobun is one piece of a vision I'm building. I'm optimizing for focus and execution. Issues and PRs can be used to share ideas, but there should be no expectation that I will review, respond to, or merge them.
+
 Ways to get involved:
 
+- Read the [Contribution guidelines](./CONTRIBUTING.md)
 - Follow us on X for updates <a href="https://twitter.com/BlackboardTech">@BlackboardTech</a> and <a href="https://twitter.com/YoavCodes">@YoavCodes</a> or on bluesky <a href="https://bsky.app/profile/yoav.codes">@yoav.codes</a>
 - Join the conversation on <a href="https://discord.gg/ueKE4tjaCE">Discord</a>
 - Create and participate in Github issues and discussions

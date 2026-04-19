@@ -536,6 +536,10 @@ public:
         std::string fullPath = "index.html"; // default
         if (url.find("views://") == 0) {
             fullPath = url.substr(8); // Skip "views://"
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
+                fullPath.pop_back();
+            }
         }
         
         // Check if this is the internal HTML request
@@ -2645,7 +2649,7 @@ public:
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
-                
+
                 // Position webview within wrapper with offset to handle negative positions
                 // Note: /2 division appears necessary for GTK coordinate system
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
@@ -4535,25 +4539,25 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-            } else {
-                // For OOPIFs, wrap in a fixed container to enforce size constraints
-                GtkWidget* wrapper = gtk_fixed_new();
-                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
-                
-                // Make wrapper receive no events (pass through to widgets below)
-                gtk_widget_set_events(wrapper, 0);
-                gtk_widget_set_can_focus(wrapper, FALSE);
-                
-                // Add webview to wrapper at 0,0
-                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+            } else if (view->fullSize) {
+                // Full-size subsequent webview: add directly as overlay (same as first webview)
+                printf("DEBUG: Adding subsequent full-size webview (ID: %u) to overlay\n", view->webviewId);
                 fflush(stdout);
-                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
-                
+
+                // Set it to expand and fill the overlay
+                g_object_set(view->widget,
+                            "expand", TRUE,
+                            "hexpand", TRUE,
+                            "vexpand", TRUE,
+                            NULL);
+
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), view->widget);
+
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                printf("DEBUG: Subsequent full-size webview (ID: %u) realized successfully\n", view->webviewId);
                 fflush(stdout);
-                
+
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
                     view->setTransparent(true);
@@ -4563,19 +4567,47 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-                
+            } else {
+                // For OOPIFs, wrap in a fixed container to enforce size constraints
+                GtkWidget* wrapper = gtk_fixed_new();
+                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+
+                // Make wrapper receive no events (pass through to widgets below)
+                gtk_widget_set_events(wrapper, 0);
+                gtk_widget_set_can_focus(wrapper, FALSE);
+
+                // Add webview to wrapper at 0,0
+                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+                fflush(stdout);
+                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+
+                // Now that widget is anchored, realize it for rendering
+                gtk_widget_realize(view->widget);
+                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                fflush(stdout);
+
+                // Apply pending transparency/passthrough flags now that widget is realized
+                if (view->pendingStartTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (view->pendingStartPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
+
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
-                
+
                 // Make the wrapper pass-through for events outside the webview
                 gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
-                
+
                 // Position wrapper using margins (will be updated in resize)
                 gtk_widget_set_margin_start(wrapper, (int)x);
                 gtk_widget_set_margin_top(wrapper, (int)y);
-                
+
                 gtk_widget_show(wrapper);
-                
+
                 // Store wrapper reference
                 g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
             }
@@ -5582,6 +5614,18 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
+
             context = webkit_web_context_new_with_website_data_manager(dataManager);
             g_object_unref(dataManager);
         } else {
@@ -6262,7 +6306,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
+                                             double trafficLightOffsetX, double trafficLightOffsetY,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+    (void)trafficLightOffsetX;
+    (void)trafficLightOffsetY;
+
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
@@ -6337,6 +6385,30 @@ ELECTROBUN_EXPORT void showWindow(void* window) {
         showX11Window(window);
     } else {
         showGTKWindow(window);
+    }
+}
+
+void hideX11Window(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XUnmapWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+        }
+    });
+}
+
+void hideGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        gtk_widget_hide(GTK_WIDGET(window));
+    });
+}
+
+ELECTROBUN_EXPORT void hideWindow(void* window) {
+    if (isCEFAvailable()) {
+        hideX11Window(window);
+    } else {
+        hideGTKWindow(window);
     }
 }
 
@@ -9658,6 +9730,13 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     });
 }
 
+ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
+    (void)window;
+    (void)x;
+    (void)y;
+    // Not applicable on Linux - no-op
+}
+
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
     if (!window) return;
 
@@ -9788,6 +9867,10 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
         // Handle views:// protocol
         if (actualPath.substr(0, 8) == "views://") {
             std::string viewPath = actualPath.substr(8);
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!viewPath.empty() && (viewPath.back() == '/' || viewPath.back() == '\\')) {
+                viewPath.pop_back();
+            }
             
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {
@@ -10392,6 +10475,17 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
         } else {
             dataManager = webkit_website_data_manager_new_ephemeral();
         }

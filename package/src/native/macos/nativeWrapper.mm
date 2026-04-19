@@ -499,7 +499,111 @@ typedef struct {
     NSRect frame;
     uint32_t styleMask;
     const char *titleBarStyle;
+    double trafficLightOffsetX;
+    double trafficLightOffsetY;
 } createNSWindowWithFrameAndStyleParams;
+
+static const void *kTrafficLightOffsetXKey = &kTrafficLightOffsetXKey;
+static const void *kTrafficLightOffsetYKey = &kTrafficLightOffsetYKey;
+static const void *kTrafficLightAppliedOffsetXKey = &kTrafficLightAppliedOffsetXKey;
+static const void *kTrafficLightAppliedOffsetYKey = &kTrafficLightAppliedOffsetYKey;
+
+static const void *kTrafficLightTitleBarStyleKey = &kTrafficLightTitleBarStyleKey;
+
+static bool shouldManageTrafficLights(NSWindow *window) {
+    if (!window) {
+        return false;
+    }
+
+    NSString *titleBarStyle = objc_getAssociatedObject(window, kTrafficLightTitleBarStyleKey);
+    return [titleBarStyle isEqualToString:@"hiddenInset"];
+}
+
+static void applyTrafficLightOffset(NSWindow *window) {
+    if (!shouldManageTrafficLights(window)) {
+        return;
+    }
+
+    NSNumber *offsetXValue = objc_getAssociatedObject(window, kTrafficLightOffsetXKey);
+    NSNumber *offsetYValue = objc_getAssociatedObject(window, kTrafficLightOffsetYKey);
+    const double offsetX = offsetXValue ? offsetXValue.doubleValue : 0;
+    const double offsetY = offsetYValue ? offsetYValue.doubleValue : 0;
+
+    if (offsetX == 0 && offsetY == 0) {
+        return;
+    }
+
+    NSNumber *appliedOffsetXValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetXKey);
+    NSNumber *appliedOffsetYValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetYKey);
+    const double appliedOffsetX = appliedOffsetXValue ? appliedOffsetXValue.doubleValue : 0;
+    const double appliedOffsetY = appliedOffsetYValue ? appliedOffsetYValue.doubleValue : 0;
+
+    NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *minimizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
+
+    for (NSButton *button in @[closeButton, minimizeButton, zoomButton]) {
+        if (button == nil) {
+            continue;
+        }
+
+        NSPoint origin = button.frame.origin;
+        NSView *superview = button.superview;
+        origin.x = origin.x - appliedOffsetX + offsetX;
+        origin.y = origin.y + appliedOffsetY - offsetY;
+
+        if (superview != nil) {
+            CGFloat maxX = NSWidth(superview.bounds) - NSWidth(button.frame);
+            CGFloat maxY = NSHeight(superview.bounds) - NSHeight(button.frame);
+            origin.x = MAX(0, MIN(origin.x, maxX));
+            origin.y = MAX(0, MIN(origin.y, maxY));
+        }
+
+        [button setFrameOrigin:origin];
+    }
+
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(offsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(offsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
+
+static void applyTrafficLightOffsetFromDefault(NSWindow *window) {
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    applyTrafficLightOffset(window);
+}
+
+static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
+    NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *minimizeBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+
+    if (!closeBtn || !minimizeBtn || !zoomBtn) return;
+
+    NSView *titlebarView = [closeBtn superview];
+    if (!titlebarView) return;
+
+    NSView *titlebarContainerView = [titlebarView superview];
+    if (!titlebarContainerView) return;
+
+    CGFloat buttonSpacing = 20.0;
+    CGFloat buttonHeight = closeBtn.frame.size.height;
+    CGFloat requiredHeight = y + buttonHeight;
+
+    NSRect containerFrame = titlebarContainerView.frame;
+    containerFrame.size.height = requiredHeight;
+    containerFrame.origin.y = NSHeight(window.frame) - requiredHeight;
+    [titlebarContainerView setFrame:containerFrame];
+
+    NSRect titlebarFrame = titlebarView.frame;
+    titlebarFrame.size.height = requiredHeight;
+    titlebarFrame.origin.y = 0;
+    [titlebarView setFrame:titlebarFrame];
+
+    CGFloat adjustedY = requiredHeight - y - buttonHeight;
+    [closeBtn setFrameOrigin:NSMakePoint(x, adjustedY)];
+    [minimizeBtn setFrameOrigin:NSMakePoint(x + buttonSpacing, adjustedY)];
+    [zoomBtn setFrameOrigin:NSMakePoint(x + 2 * buttonSpacing, adjustedY)];
+}
 
 // Window, tray, menu, and snapshot callbacks are defined in shared/callbacks.h
 // Platform-specific aliases
@@ -625,6 +729,10 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
     NSString *relativePath = [urlString substringFromIndex:8];
     while ([relativePath hasPrefix:@"/"]) {
         relativePath = [relativePath substringFromIndex:1];
+    }
+    // Strip trailing slashes - WebView may normalize URLs without folder components
+    while ([relativePath hasSuffix:@"/"] && [relativePath length] > 0) {
+        relativePath = [relativePath substringToIndex:[relativePath length] - 1];
     }
 
     return relativePath;
@@ -901,6 +1009,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowKeyHandler keyHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
+    @property (nonatomic, assign) BOOL hasCustomButtonPosition;
+    @property (nonatomic, assign) double buttonPositionX;
+    @property (nonatomic, assign) double buttonPositionY;
 @end
 
 @interface StatusItemTarget : NSObject
@@ -5631,6 +5742,10 @@ public:
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
                 // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
                 std::string relativePath = urlStr.substr(8);
+                // Strip trailing slashes - WebView may normalize URLs without folder components
+                while (!relativePath.empty() && (relativePath.back() == '/' || relativePath.back() == '\\')) {
+                    relativePath.pop_back();
+                }
                 NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 
                 // Check if this is the internal HTML request.
@@ -6324,7 +6439,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.closeHandler(self.windowId);
         }
     }
-   - (void)windowDidResize:(NSNotification *)notification {
+    - (void)windowDidResize:(NSNotification *)notification {
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
@@ -6345,6 +6460,31 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
                                contentRect.size.width, contentRect.size.height);
+        }
+
+        if (self.hasCustomButtonPosition) {
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+        } else {
+            applyTrafficLightOffsetFromDefault(window);
+        }
+    }
+    - (void)windowWillExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
+    }
+    - (void)windowDidExitFullScreen:(NSNotification *)notification {
+        NSWindow *window = [notification object];
+        if (self.hasCustomButtonPosition) {
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:NO];
+        } else {
+            applyTrafficLightOffsetFromDefault(window);
         }
     }
     - (void)windowDidMove:(NSNotification *)notification {
@@ -7049,10 +7189,18 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                              screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
+    // Allow hidden titlebar windows to participate in native fullscreen.
+    [window setCollectionBehavior:
+        [window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
     }
+    objc_setAssociatedObject(window, kTrafficLightTitleBarStyleKey, [NSString stringWithUTF8String:config.titleBarStyle ?: "default"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetXKey, @(config.trafficLightOffsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetYKey, @(config.trafficLightOffsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
     delegate.closeHandler = zigCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
@@ -7088,6 +7236,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   uint32_t styleMask,
   const char* titleBarStyle,
   bool transparent,
+  double trafficLightOffsetX,
+  double trafficLightOffsetY,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
@@ -7108,7 +7258,9 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     createNSWindowWithFrameAndStyleParams config = {
         .frame = frame,
         .styleMask = styleMask,
-        .titleBarStyle = titleBarStyle
+        .titleBarStyle = titleBarStyle,
+        .trafficLightOffsetX = trafficLightOffsetX,
+        .trafficLightOffsetY = trafficLightOffsetY
     };
 
     // Use a dispatch semaphore to wait for the window creation to complete
@@ -7156,9 +7308,24 @@ extern "C" void showWindow(NSWindow *window) {
         
         // Make the window key and bring to front
         [window makeKeyAndOrderFront:nil];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            WindowDelegate *delegate = (WindowDelegate *)[window delegate];
+            if (delegate && delegate.hasCustomButtonPosition) {
+                applyWindowButtonPosition(window, delegate.buttonPositionX, delegate.buttonPositionY);
+            } else {
+                applyTrafficLightOffset(window);
+            }
+        });
         
         // Activate the application to ensure it can receive focus
         [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    
+    });
+}
+
+extern "C" void hideWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        [window orderOut:nil];
     });
 }
 
@@ -7267,6 +7434,21 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
         // Convert from top-left origin (what users expect) to bottom-left origin (what macOS uses)
         CGFloat adjustedY = screenHeight - y - windowHeight;
         [window setFrameOrigin:NSMakePoint(x, adjustedY)];
+    });
+}
+
+extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!window) return;
+
+        WindowDelegate *delegate = (WindowDelegate *)[window delegate];
+        if (delegate) {
+            delegate.hasCustomButtonPosition = YES;
+            delegate.buttonPositionX = x;
+            delegate.buttonPositionY = y;
+        }
+
+        applyWindowButtonPosition(window, x, y);
     });
 }
 

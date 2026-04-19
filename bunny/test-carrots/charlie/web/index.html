@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Charlie</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <main class="charlie-shell">
+      <div class="count-card">
+        <p class="eyebrow">Visible Carrot</p>
+        <h1 id="count">0</h1>
+        <p class="subcopy">Charlie keeps a tiny worker-backed counter inside Bunny Ears.</p>
+      </div>
+      <div class="button-row">
+        <button id="increment" class="primary">Increment</button>
+        <button id="notify" class="secondary">Notify</button>
+        <button id="reset" class="secondary">Reset</button>
+      </div>
+      <div class="probe-card">
+        <p class="eyebrow">Permission Probes</p>
+        <div class="probe-buttons">
+          <button id="probe-fs" class="secondary">Test Read</button>
+          <button id="probe-env" class="secondary">Test Env</button>
+          <button id="probe-spawn" class="secondary">Test Run</button>
+          <button id="probe-ffi" class="secondary">Test FFI</button>
+        </div>
+        <div class="probe-results">
+          <div>
+            <span class="label">Read</span>
+            <strong id="probe-fs-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">Env</span>
+            <strong id="probe-env-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">Run</span>
+            <strong id="probe-spawn-result">Not run</strong>
+          </div>
+          <div>
+            <span class="label">FFI</span>
+            <strong id="probe-ffi-result">Not run</strong>
+          </div>
+        </div>
+      </div>
+      <div class="detail-card">
+        <div>
+          <span class="label">Last updated</span>
+          <strong id="updated-at">Never</strong>
+        </div>
+        <div>
+          <span class="label">Permissions</span>
+          <strong id="permissions">Loading</strong>
+        </div>
+      </div>
+    </main>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>

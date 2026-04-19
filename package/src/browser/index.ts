@@ -42,6 +42,11 @@ class Electroview<T extends RPCWithTransport> {
 	}
 
 	initSocketToBun() {
+		// Skip native socket when running in a remote browser (no port/webview ID)
+		if (!RPC_SOCKET_PORT || !WEBVIEW_ID) {
+			return;
+		}
+
 		// Note: Using ws:// for localhost is intentional - all RPC messages are
 		// encrypted with per-webview AES-GCM keys, making TLS redundant
 		const socket = new WebSocket(

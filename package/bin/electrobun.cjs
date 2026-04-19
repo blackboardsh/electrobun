@@ -32,6 +32,16 @@ const platform = getPlatform();
 const arch = platform === 'win' ? 'x64' : getArch();
 const binExt = platform === 'win' ? '.exe' : '';
 
+function getTarCommand() {
+  if (platform !== 'win') {
+    return 'tar';
+  }
+
+  // Git Bash tar can treat C:\... as a remote path. Force the built-in Windows tar.
+  const systemTar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+  return existsSync(systemTar) ? `"${systemTar}"` : 'tar';
+}
+
 // Paths
 const electrobunDir = join(__dirname, '..');
 const cacheDir = join(electrobunDir, '.cache');
@@ -98,7 +108,7 @@ async function ensureCliBinary() {
     await downloadFile(tarballUrl, tarballPath);
 
     // Extract using system tar (available on macOS, Linux, and Windows 10+)
-    execSync(`tar -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
+    execSync(`${getTarCommand()} -xzf "${tarballPath}"`, { cwd: cacheDir, stdio: 'pipe' });
 
     // Clean up tarball
     unlinkSync(tarballPath);

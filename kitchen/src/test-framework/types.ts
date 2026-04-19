@@ -57,6 +57,7 @@ export interface WindowOptions {
   y?: number;
   title?: string;
   titleBarStyle?: TitleBarStyle;
+  trafficLightOffset?: { x: number; y: number };
   renderer?: 'cef' | 'native';
   hidden?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
