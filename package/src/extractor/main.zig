@@ -1020,10 +1020,85 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                 }
             }
 
-            // Write the updated desktop file to Desktop
-            const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
-            defer desktop_file.close();
-            try desktop_file.writeAll(result.items);
+            // Write the updated desktop file to Desktop (optional)
+            desktop_shortcut: {
+                const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
+                    std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
+                    break :desktop_shortcut;
+                };
+                defer desktop_file.close();
+                desktop_file.writeAll(result.items) catch |err| {
+                    std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
+                    break :desktop_shortcut;
+                };
+            }
+
+            // Also write to XDG applications directory for menu integration
+            // This ensures the app appears in the desktop environment's application menu
+            // This is optional - failure should not prevent the desktop shortcut from working
+            write_applications_dir: {
+                const xdg_data_home = getAppDataDir(allocator) catch |err| {
+                    std.debug.print("Warning: Could not get app data dir for menu integration: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(xdg_data_home);
+
+                const applications_dir = std.fs.path.join(allocator, &.{ xdg_data_home, "applications" }) catch |err| {
+                    std.debug.print("Warning: Could not build applications dir path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_dir);
+
+                // Create applications directory if it doesn't exist
+                std.fs.cwd().makeDirPath(applications_dir) catch |err| {
+                    std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
+                    // Continue anyway - createFile will fail gracefully
+                };
+
+                const applications_file_path = std.fs.path.join(allocator, &.{ applications_dir, desktop_filename }) catch |err| {
+                    std.debug.print("Warning: Could not build applications file path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_file_path);
+
+                const applications_file = std.fs.cwd().createFile(applications_file_path, .{}) catch |err| {
+                    std.debug.print("Warning: Could not create applications desktop file: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer applications_file.close();
+
+                applications_file.writeAll(result.items) catch |err| {
+                    std.debug.print("Warning: Could not write applications desktop file: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+
+                // Set permissions on the desktop file (0o644 - readable, not executable)
+                // Desktop files in ~/.local/share/applications/ don't need execute bit
+                // (execute bit is only needed for Desktop surface, not application menus)
+                const applications_file_path_z = std.fmt.allocPrintZ(allocator, "{s}", .{applications_file_path}) catch |err| {
+                    std.debug.print("Warning: Could not format applications file path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_file_path_z);
+                const chmod_result = std.c.chmod(applications_file_path_z.ptr, 0o644);
+                if (chmod_result != 0) {
+                    std.debug.print("Warning: Could not set permissions on applications desktop file\n", .{});
+                }
+
+                // Note: gio set metadata::trusted is NOT needed for application menu entries
+                // It's only for .desktop files on the Desktop surface (~/Desktop)
+
+                // Update desktop database for legacy desktop environments (Xfce, LXDE, etc.)
+                const update_db_argv = [_][]const u8{ "update-desktop-database", applications_dir };
+                _ = std.process.Child.run(.{
+                    .allocator = allocator,
+                    .argv = &update_db_argv,
+                }) catch |err| {
+                    std.debug.print("Note: Could not update desktop database: {}\n", .{err});
+                };
+
+                std.debug.print("Copied desktop shortcut to applications dir: {s}\n", .{applications_file_path});
+            };
 
             found_desktop_file = true;
             std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
