@@ -920,10 +920,12 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     const desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
     defer allocator.free(desktop_dir);
 
-    // Check if Desktop directory exists
-    std.fs.cwd().access(desktop_dir, .{}) catch {
-        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
-        return;
+    const desktop_dir_available = blk: {
+        std.fs.cwd().access(desktop_dir, .{}) catch {
+            std.debug.print("Note: Desktop directory not found at {s}; skipping Desktop shortcut creation\n", .{desktop_dir});
+            break :blk false;
+        };
+        break :blk true;
     };
 
     // On Linux, look for the launcher binary in the app directory
@@ -948,6 +950,8 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer app_dir_handle.close();
 
     var found_desktop_file = false;
+    var desktop_shortcut_created = false;
+    var applications_entry_created = false;
     var iterator = app_dir_handle.iterate();
     while (try iterator.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".desktop")) {
@@ -1021,16 +1025,19 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
             }
 
             // Write the updated desktop file to Desktop (optional)
-            desktop_shortcut: {
-                const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
-                    std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
-                    break :desktop_shortcut;
-                };
-                defer desktop_file.close();
-                desktop_file.writeAll(result.items) catch |err| {
-                    std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
-                    break :desktop_shortcut;
-                };
+            if (desktop_dir_available) {
+                desktop_shortcut: {
+                    const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
+                        std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
+                        break :desktop_shortcut;
+                    };
+                    defer desktop_file.close();
+                    desktop_file.writeAll(result.items) catch |err| {
+                        std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
+                        break :desktop_shortcut;
+                    };
+                    desktop_shortcut_created = true;
+                }
             }
 
             // Also write to XDG applications directory for menu integration
@@ -1090,18 +1097,25 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
 
                 // Update desktop database for legacy desktop environments (Xfce, LXDE, etc.)
                 const update_db_argv = [_][]const u8{ "update-desktop-database", applications_dir };
-                _ = std.process.Child.run(.{
-                    .allocator = allocator,
-                    .argv = &update_db_argv,
-                }) catch |err| {
+                var update_db_child = std.process.Child.init(&update_db_argv, allocator);
+                update_db_child.stdin_behavior = .Ignore;
+                update_db_child.stdout_behavior = .Ignore;
+                update_db_child.stderr_behavior = .Inherit;
+                _ = update_db_child.spawnAndWait() catch |err| {
                     std.debug.print("Note: Could not update desktop database: {}\n", .{err});
                 };
 
+                applications_entry_created = true;
                 std.debug.print("Copied desktop shortcut to applications dir: {s}\n", .{applications_file_path});
-            };
+            }
 
             found_desktop_file = true;
-            std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
+            if (desktop_shortcut_created) {
+                std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
+            }
+            if (!desktop_shortcut_created and !applications_entry_created) {
+                std.debug.print("Warning: Could not create Desktop shortcut or applications menu entry\n", .{});
+            }
             break;
         }
     }
@@ -1110,26 +1124,29 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         std.debug.print("Warning: No desktop file found in extracted app directory\n", .{});
     }
 
-    // Make desktop file executable (required for some desktop environments)
-    const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
-    defer allocator.free(desktop_file_path_z);
+    if (desktop_shortcut_created) {
+        // Make desktop file executable (required for some desktop environments)
+        const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
+        defer allocator.free(desktop_file_path_z);
 
-    const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
-    if (result != 0) {
-        std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+        const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
+        if (result != 0) {
+            std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+        }
+
+        // Try to mark as trusted for GNOME/Ubuntu using gio
+        const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
+        var gio_child = std.process.Child.init(&gio_argv, allocator);
+        gio_child.stdin_behavior = .Ignore;
+        gio_child.stdout_behavior = .Ignore;
+        gio_child.stderr_behavior = .Inherit;
+        _ = gio_child.spawnAndWait() catch |err| {
+            std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
+        };
+
+        std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
+        std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
     }
-
-    // Try to mark as trusted for GNOME/Ubuntu using gio
-    const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
-    _ = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &gio_argv,
-    }) catch |err| {
-        std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
-    };
-
-    std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
-    std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
 fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {
