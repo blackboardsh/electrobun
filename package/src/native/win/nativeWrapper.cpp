@@ -9289,7 +9289,42 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     return hwnd;
 }
 
-ELECTROBUN_EXPORT void showWindow(void *window) {
+static void activateVisibleWindow(HWND hwnd) {
+    if (!IsWindowVisible(hwnd)) {
+        return;
+    }
+
+    // Bring window to foreground - this is more complex on Windows
+    // due to foreground window restrictions
+    if (SetForegroundWindow(hwnd)) {
+    } else {
+        DWORD currentThreadId = GetCurrentThreadId();
+        DWORD foregroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+
+        if (currentThreadId != foregroundThreadId) {
+            if (AttachThreadInput(currentThreadId, foregroundThreadId, TRUE)) {
+                SetForegroundWindow(hwnd);
+                SetFocus(hwnd);
+                AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
+            } else {
+                FLASHWINFO fwi = {0};
+                fwi.cbSize = sizeof(FLASHWINFO);
+                fwi.hwnd = hwnd;
+                fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+                fwi.uCount = 3;
+                fwi.dwTimeout = 0;
+                FlashWindowEx(&fwi);
+            }
+        }
+    }
+
+    SetActiveWindow(hwnd);
+    SetFocus(hwnd);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+}
+
+ELECTROBUN_EXPORT void showWindow(void *window, bool activate) {
     // On Windows, window ptr is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
 
@@ -9299,50 +9334,32 @@ ELECTROBUN_EXPORT void showWindow(void *window) {
     }
     
     // Dispatch to main thread to ensure thread safety
-    MainThreadDispatcher::dispatch_sync([=]() {      
-        // Show the window if it's hidden
+    MainThreadDispatcher::dispatch_sync([=]() {
         if (!IsWindowVisible(hwnd)) {
-            ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNOACTIVATE);
+        } else if (!activate) {
+            ShowWindow(hwnd, SW_SHOWNA);
         }
-        
-        // Bring window to foreground - this is more complex on Windows
-        // due to foreground window restrictions
-        
-        // First, try the simple approach
-        if (SetForegroundWindow(hwnd)) {
+
+        if (activate) {
+            activateVisibleWindow(hwnd);
         } else {
-            // If that fails, we need to work around Windows' foreground restrictions
-            DWORD currentThreadId = GetCurrentThreadId();
-            DWORD foregroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-            
-            if (currentThreadId != foregroundThreadId) {
-                // Attach to the foreground thread's input queue temporarily
-                if (AttachThreadInput(currentThreadId, foregroundThreadId, TRUE)) {
-                    SetForegroundWindow(hwnd);
-                    SetFocus(hwnd);
-                    AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
-                } else {
-                    // Last resort - flash the window to get user attention
-                    FLASHWINFO fwi = {0};
-                    fwi.cbSize = sizeof(FLASHWINFO);
-                    fwi.hwnd = hwnd;
-                    fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
-                    fwi.uCount = 3;
-                    fwi.dwTimeout = 0;
-                    FlashWindowEx(&fwi);
-                    
-                }
-            }
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
         }
-        
-        // Ensure the window is active and focused
-        SetActiveWindow(hwnd);
-        SetFocus(hwnd);
-        
-        // Bring to top of Z-order
-        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, 
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        
+    });
+}
+
+ELECTROBUN_EXPORT void activateWindow(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in activateWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        activateVisibleWindow(hwnd);
     });
 }
 

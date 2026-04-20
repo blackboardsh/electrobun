@@ -118,6 +118,13 @@ export const native = (() => {
 			showWindow: {
 				args: [
 					FFIType.ptr, // window ptr
+					FFIType.bool, // activate
+				],
+				returns: FFIType.void,
+			},
+			activateWindow: {
+				args: [
+					FFIType.ptr, // window ptr
 				],
 				returns: FFIType.void,
 			},
@@ -845,6 +852,7 @@ const _ffiImpl = {
 			titleBarStyle: string;
 			transparent: boolean;
 			hidden?: boolean;
+			activate?: boolean;
 			trafficLightOffset?: {
 				x: number;
 				y: number;
@@ -872,6 +880,7 @@ const _ffiImpl = {
 				titleBarStyle,
 				transparent,
 				hidden = false,
+				activate = true,
 				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
@@ -918,7 +927,7 @@ const _ffiImpl = {
 
 			native_.symbols.setWindowTitle(windowPtr, toCString(title));
 			if (!hidden) {
-				native_.symbols.showWindow(windowPtr);
+				native_.symbols.showWindow(windowPtr, activate);
 			}
 
 			return windowPtr;
@@ -947,15 +956,26 @@ const _ffiImpl = {
 			// Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
 		},
 
-		focusWindow: (params: { winId: number }) => {
+		showWindow: (params: { winId: number; activate?: boolean }) => {
 			const { winId } = params;
 			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
-				throw `Can't focus window. Window no longer exists`;
+				throw `Can't show window. Window no longer exists`;
 			}
 
-			native_.symbols.showWindow(windowPtr);
+			native_.symbols.showWindow(windowPtr, params.activate ?? true);
+		},
+
+		activateWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't activate window. Window no longer exists`;
+			}
+
+			native_.symbols.activateWindow(windowPtr);
 		},
 
 		hideWindow: (params: { winId: number }) => {

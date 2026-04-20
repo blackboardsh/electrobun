@@ -48,6 +48,40 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window inactive show API",
+    category: "BrowserWindow",
+    description: "Test creating a window without activation and toggling inactive/active show paths",
+    async run({ createWindow, log }) {
+      log("Focus another app now if you want to observe initial create with activate: false");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Inactive Show Test",
+        width: 400,
+        height: 300,
+        renderer: "cef",
+        activate: false,
+      });
+
+      expect(typeof win.window.showInactive).toBe("function");
+      expect(typeof win.window.activate).toBe("function");
+      log("Window created with activate: false");
+
+      log("Focus another app now if you want to observe runtime showInactive() behavior");
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      win.window.showInactive();
+      log("showInactive() succeeded");
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      win.window.activate();
+      log("activate() succeeded");
+    },
+  }),
+
+  defineTest({
     name: "Window page zoom API",
     category: "BrowserWindow",
     description: "Test BrowserWindow setPageZoom/getPageZoom behavior",

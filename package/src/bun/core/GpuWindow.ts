@@ -10,6 +10,7 @@ export type GpuWindowOptionsType = {
 		x: number;
 		y: number;
 	};
+	activate?: boolean;
 	title: string;
 	frame: {
 		x: number;
@@ -90,6 +91,7 @@ export class GpuWindow {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		activate,
 	}: Partial<GpuWindowOptionsType>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -132,6 +134,7 @@ export class GpuWindow {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			activate: activate ?? true,
 			trafficLightOffset: this.trafficLightOffset,
 		}) as Pointer;
 
@@ -170,12 +173,23 @@ export class GpuWindow {
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 
+	activate() {
+		return ffi.request.activateWindow({ winId: this.id });
+	}
+
 	focus() {
-		return ffi.request.focusWindow({ winId: this.id });
+		console.log(
+			"[electrobun] GpuWindow.focus() is deprecated. Use window.activate() instead.",
+		);
+		return this.activate();
 	}
 
 	show() {
-		return ffi.request.focusWindow({ winId: this.id });
+		return ffi.request.showWindow({ winId: this.id, activate: true });
+	}
+
+	showInactive() {
+		return ffi.request.showWindow({ winId: this.id, activate: false });
 	}
 
 	minimize() {

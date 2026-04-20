@@ -7301,13 +7301,15 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     return window;
 }
 
-extern "C" void showWindow(NSWindow *window) {
+extern "C" void showWindow(NSWindow *window, bool activate) {
     dispatch_sync(dispatch_get_main_queue(), ^{
-        // First ensure the window is visible
-        [window orderFront:nil];
-        
-        // Make the window key and bring to front
-        [window makeKeyAndOrderFront:nil];
+        if (activate) {
+            [window orderFront:nil];
+            [window makeKeyAndOrderFront:nil];
+            [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
+        } else {
+            [window orderFrontRegardless];
+        }
 
         dispatch_async(dispatch_get_main_queue(), ^{
             WindowDelegate *delegate = (WindowDelegate *)[window delegate];
@@ -7317,9 +7319,17 @@ extern "C" void showWindow(NSWindow *window) {
                 applyTrafficLightOffset(window);
             }
         });
-        
-        // Activate the application to ensure it can receive focus
-        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    
+    });
+}
+
+extern "C" void activateWindow(NSWindow *window) {
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        if (![window isVisible]) {
+            return;
+        }
+
+        [window makeKeyAndOrderFront:nil];
+        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
     });
 }
 

@@ -60,6 +60,7 @@ export interface WindowOptions {
   trafficLightOffset?: { x: number; y: number };
   renderer?: 'cef' | 'native';
   hidden?: boolean;
+  activate?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
 }
 

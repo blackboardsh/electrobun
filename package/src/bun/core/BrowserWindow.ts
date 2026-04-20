@@ -16,6 +16,7 @@ export type WindowOptionsType<T = undefined> = {
 		x: number;
 		y: number;
 	};
+	activate?: boolean;
 	title: string;
 	frame: {
 		x: number;
@@ -174,6 +175,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		titleBarStyle,
 		transparent,
 		hidden,
+		activate,
 	}: Partial<WindowOptionsType<T>>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -217,6 +219,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
 			hidden: hidden ?? false,
+			activate: activate ?? true,
 			trafficLightOffset: this.trafficLightOffset,
 		}) as Pointer;
 
@@ -273,12 +276,23 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 
+	activate() {
+		return ffi.request.activateWindow({ winId: this.id });
+	}
+
 	focus() {
-		return ffi.request.focusWindow({ winId: this.id });
+		console.log(
+			"[electrobun] BrowserWindow.focus() is deprecated. Use window.activate() instead.",
+		);
+		return this.activate();
 	}
 
 	show() {
-		return ffi.request.focusWindow({ winId: this.id });
+		return ffi.request.showWindow({ winId: this.id, activate: true });
+	}
+
+	showInactive() {
+		return ffi.request.showWindow({ winId: this.id, activate: false });
 	}
 
 	hide() {

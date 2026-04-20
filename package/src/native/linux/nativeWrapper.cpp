@@ -5969,7 +5969,7 @@ void runEventLoop() {
 
 
 // Forward declarations
-void showWindow(void* window);
+void showWindow(void* window, bool activate);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
@@ -6369,6 +6369,36 @@ void showX11Window(void* window) {
     });
 }
 
+void showX11WindowWithoutActivating(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            autoSetWindowIcon(window);
+            XMapWindow(x11win->display, x11win->window);
+            XRaiseWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+            applyApplicationMenuToX11Window(x11win);
+        }
+    });
+}
+
+void activateX11Window(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XWindowAttributes attrs;
+            if (XGetWindowAttributes(x11win->display, x11win->window, &attrs) == 0 ||
+                attrs.map_state == IsUnmapped) {
+                return;
+            }
+
+            XRaiseWindow(x11win->display, x11win->window);
+            XSetInputFocus(x11win->display, x11win->window, RevertToParent, CurrentTime);
+            XFlush(x11win->display);
+        }
+    });
+}
+
 void showGTKWindow(void* window) {
     dispatch_sync_main_void([&]() {
         // Automatically set icon from standard location
@@ -6380,11 +6410,43 @@ void showGTKWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void showWindow(void* window) {
+void showGTKWindowWithoutActivating(void* window) {
+    dispatch_sync_main_void([&]() {
+        autoSetWindowIcon(window);
+        gtk_widget_show_all(GTK_WIDGET(window));
+    });
+}
+
+void activateGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        if (!gtk_widget_get_visible(GTK_WIDGET(window))) {
+            return;
+        }
+        gtk_window_present(GTK_WINDOW(window));
+    });
+}
+
+ELECTROBUN_EXPORT void showWindow(void* window, bool activate) {
     if (isCEFAvailable()) {
-        showX11Window(window);
+        if (activate) {
+            showX11Window(window);
+        } else {
+            showX11WindowWithoutActivating(window);
+        }
     } else {
-        showGTKWindow(window);
+        if (activate) {
+            showGTKWindow(window);
+        } else {
+            showGTKWindowWithoutActivating(window);
+        }
+    }
+}
+
+ELECTROBUN_EXPORT void activateWindow(void* window) {
+    if (isCEFAvailable()) {
+        activateX11Window(window);
+    } else {
+        activateGTKWindow(window);
     }
 }
 
