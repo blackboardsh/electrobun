@@ -1033,10 +1033,18 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                 }
             }
 
-            // Write the updated desktop file to Desktop
-            const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
-            defer desktop_file.close();
-            try desktop_file.writeAll(result.items);
+            // Write the updated desktop file to Desktop (optional)
+            desktop_shortcut: {
+                const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
+                    std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
+                    break :desktop_shortcut;
+                };
+                defer desktop_file.close();
+                desktop_file.writeAll(result.items) catch |err| {
+                    std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
+                    break :desktop_shortcut;
+                };
+            }
 
             // Also write to XDG applications directory for menu integration
             // This ensures the app appears in the desktop environment's application menu
