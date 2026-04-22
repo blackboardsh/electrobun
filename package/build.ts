@@ -1954,19 +1954,19 @@ async function buildNative() {
 					pkgConfigCflags = `-I/usr/include/gtk-3.0 -I/usr/include/webkit2gtk-4.1 -I/usr/include/glib-2.0 -I/usr/lib/${arch}-linux-gnu/glib-2.0/include -I/usr/include/pango-1.0 -I/usr/include/cairo -I/usr/include/gdk-pixbuf-2.0 -I/usr/include/atk-1.0`;
 					pkgConfigLibs = "-lgtk-3 -lwebkit2gtk-4.1 -lglib-2.0 -lgobject-2.0";
 				}
-				}
+			}
 
-				writeCompileFlagsTxt([
-					"-std=c++20",
-					"-fPIC",
-					...pkgConfigCflags.split(/\s+/).filter((f) => f),
-					`-I${cefInclude}`,
-					...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
-					...(hasAppIndicator ? [] : ["-DNO_APPINDICATOR"]),
-				]);
+			writeCompileFlagsTxt([
+				"-std=c++20",
+				"-fPIC",
+				...pkgConfigCflags.split(/\s+/).filter((f) => f),
+				`-I${cefInclude}`,
+				...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
+				...(hasAppIndicator ? [] : ["-DNO_APPINDICATOR"]),
+			]);
 
-				// Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
-				await $`mkdir -p src/native/linux/build`;
+			// Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
+			await $`mkdir -p src/native/linux/build`;
 			console.log(
 				"Compiling with flags:",
 				pkgConfigCflags ? "pkg-config flags present" : "NO FLAGS!",
