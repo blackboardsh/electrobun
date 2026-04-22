@@ -1936,24 +1936,47 @@ ${utiDecls}
 (async () => {
 	if (commandArg === "init") {
 		await (async () => {
-			const secondArg = process.argv[indexOfElectrobun + 2];
 			const availableTemplates = getTemplateNames();
+			const initArgs = process.argv.slice(indexOfElectrobun + 2);
 
 			let projectName: string;
 			let templateName: string;
+			let templateNameFromFlag: string | undefined;
+			const positionalArgs: string[] = [];
 
-			// Check if --template= flag is used
-			const templateFlag = process.argv.find((arg) =>
-				arg.startsWith("--template="),
-			);
-			if (templateFlag) {
-				// Traditional usage: electrobun init my-project --template=photo-booth
-				projectName = secondArg || "my-electrobun-app";
-				templateName = templateFlag.split("=")[1]!;
-			} else if (secondArg && availableTemplates.includes(secondArg)) {
-				// New intuitive usage: electrobun init photo-booth
-				projectName = secondArg; // Use template name as project name
-				templateName = secondArg;
+			// Support both --template=photo-booth and --template photo-booth (-t photo-booth)
+			for (let i = 0; i < initArgs.length; i++) {
+				const arg = initArgs[i];
+				if (!arg) continue;
+				if (arg.startsWith("--template=")) {
+					templateNameFromFlag = arg.slice("--template=".length);
+					continue;
+				}
+				if (arg === "--template" || arg === "-t") {
+					const nextArg = initArgs[i + 1];
+					if (nextArg && !nextArg.startsWith("-")) {
+						templateNameFromFlag = nextArg;
+						i++;
+					}
+					continue;
+				}
+				if (!arg.startsWith("-")) {
+					positionalArgs.push(arg);
+				}
+			}
+
+			if (templateNameFromFlag) {
+				// Traditional usage:
+				// - electrobun init my-project --template=photo-booth
+				// - electrobun init my-project --template photo-booth
+				projectName = positionalArgs[0] || `my-${templateNameFromFlag}-app`;
+				templateName = templateNameFromFlag;
+			} else if (positionalArgs[0] && availableTemplates.includes(positionalArgs[0])) {
+				// Intuitive usage:
+				// - electrobun init photo-booth
+				// - electrobun init photo-booth my-project
+				templateName = positionalArgs[0];
+				projectName = positionalArgs[1] || templateName;
 			} else {
 				// Interactive menu when no template specified
 				console.log("🚀 Welcome to Electrobun!");
@@ -1995,10 +2018,10 @@ ${utiDecls}
 
 				projectName = await new Promise<string>((resolve) => {
 					rl2.question(
-						`Enter project name (default: my-${templateName}-app): `,
+						`Enter project name (default: ${positionalArgs[0] || `my-${templateName}-app`}): `,
 						(answer) => {
 							rl2.close();
-							resolve(answer.trim() || `my-${templateName}-app`);
+							resolve(answer.trim() || positionalArgs[0] || `my-${templateName}-app`);
 						},
 					);
 				});
@@ -4537,7 +4560,15 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 			// Check user-configured watchIgnore globs (match against project-relative path)
 			const relativePath = fullPath.replace(projectRoot + "/", "");
-			if (ignoreGlobs.some((glob) => glob.match(relativePath))) {
+			// Bun watch may report directory changes as "src" while users configure "src/**".
+			// Try both plain and trailing-slash forms to make directory globs behave as expected.
+			const candidatePaths =
+				relativePath.endsWith("/") ? [relativePath] : [relativePath, `${relativePath}/`];
+			if (
+				ignoreGlobs.some((glob) =>
+					candidatePaths.some((candidate) => glob.match(candidate)),
+				)
+			) {
 				return true;
 			}
 			return false;

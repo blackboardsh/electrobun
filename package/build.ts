@@ -92,6 +92,13 @@ function validateDownload(filePath: string, type: string): void {
 	}
 }
 
+function writeCompileFlagsTxt(flags: string[]) {
+	const compileFlagsPath = join(process.cwd(), "src", "native", "compile_flags.txt");
+	const uniqueFlags = Array.from(new Set(flags.map((f) => f.trim()).filter(Boolean)));
+	writeFileSync(compileFlagsPath, `${uniqueFlags.join("\n")}\n`, "utf-8");
+	console.log(`Wrote clangd flags to ${compileFlagsPath}`);
+}
+
 // Pause between GitHub downloads to avoid rate limiting
 // Track if we've done a GitHub download this session
 let lastGitHubDownload = 0;
@@ -1793,6 +1800,13 @@ async function buildNative() {
 		const wgpuIncludeFlag = existsSync(wgpuIncludeDir)
 			? `-I${wgpuIncludeDir}`
 			: "";
+		writeCompileFlagsTxt([
+			"-std=c++20",
+			"-fobjc-arc",
+			"-fno-objc-msgsend-selector-stubs",
+			`-I${join(process.cwd(), "vendors", "cef")}`,
+			...(wgpuIncludeFlag ? [wgpuIncludeFlag] : []),
+		]);
 		await $`mkdir -p src/native/macos/build && xcrun --sdk macosx clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef ${wgpuIncludeFlag} -std=c++20`;
 		await $`mkdir -p src/native/build && xcrun --sdk macosx clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -framework Metal -framework MetalKit -framework UserNotifications -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
 	} else if (OS === "win") {
@@ -1814,6 +1828,13 @@ async function buildNative() {
 		const wgpuIncludeFlag = existsSync(wgpuIncludeDir)
 			? `/I"${wgpuIncludeDir}"`
 			: "";
+		writeCompileFlagsTxt([
+			"-std=c++20",
+			"-DNOMINMAX",
+			`-I${join(process.cwd(), "vendors", "webview2", "Microsoft.Web.WebView2", "build", "native", "include")}`,
+			`-I${join(process.cwd(), "vendors", "cef")}`,
+			...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
+		]);
 
 		// Dawn native lib for zero-copy DComp bridge (D3D11On12 interop)
 		const wgpuLibDir = join(
@@ -1934,6 +1955,15 @@ async function buildNative() {
 					pkgConfigLibs = "-lgtk-3 -lwebkit2gtk-4.1 -lglib-2.0 -lgobject-2.0";
 				}
 			}
+
+			writeCompileFlagsTxt([
+				"-std=c++20",
+				"-fPIC",
+				...pkgConfigCflags.split(/\s+/).filter((f) => f),
+				`-I${cefInclude}`,
+				...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
+				...(hasAppIndicator ? [] : ["-DNO_APPINDICATOR"]),
+			]);
 
 			// Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
 			await $`mkdir -p src/native/linux/build`;
