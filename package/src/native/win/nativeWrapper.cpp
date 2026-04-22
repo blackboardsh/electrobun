@@ -9376,6 +9376,14 @@ ELECTROBUN_EXPORT void hideWindow(void *window) {
     });
 }
 
+ELECTROBUN_EXPORT bool isWindowVisible(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+    return IsWindowVisible(hwnd) != FALSE;
+}
+
 ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);

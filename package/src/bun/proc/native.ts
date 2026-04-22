@@ -132,6 +132,10 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
+			isWindowVisible: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
 			closeWindow: {
 				args: [
 					FFIType.ptr, // window ptr
@@ -987,6 +991,17 @@ const _ffiImpl = {
 			}
 
 			native.symbols.hideWindow(windowPtr);
+		},
+
+		isWindowVisible: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return false;
+			}
+
+			return native_.symbols.isWindowVisible(windowPtr);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {

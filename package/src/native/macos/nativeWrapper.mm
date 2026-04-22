@@ -7339,6 +7339,14 @@ extern "C" void hideWindow(NSWindow *window) {
     });
 }
 
+extern "C" bool isWindowVisible(NSWindow *window) {
+    __block bool visible = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        visible = [window isVisible];
+    });
+    return visible;
+}
+
 extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
 
