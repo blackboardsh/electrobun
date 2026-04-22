@@ -272,27 +272,8 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
-          generate_release_notes: false
+          generate_release_notes: true
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
-          body: |
-            ## Getting Started
-
-            To build apps with Electrobun, add it as a dependency in your package.json:
-
-            ```bash
-            bun add electrobun
-            ```
-
-            The Electrobun CLI will automatically download these artifacts when you build your app. You don't need to download them directly.
-
-            See the [documentation](https://blackboard.sh/electrobun/docs/guides/quick-start/) for more information.
-
-            ---
-
-            **Artifact Reference** (downloaded automatically by the CLI):
-            - `electrobun-cli-[platform]-[arch].tar.gz` - CLI tools
-            - `electrobun-core-[platform]-[arch].tar.gz` - Core binaries
-            - `electrobun-cef-[platform]-[arch].tar.gz` - CEF binaries (optional)
 
   npm-publish:
     needs: release
