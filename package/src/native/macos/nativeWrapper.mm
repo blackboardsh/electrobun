@@ -7126,6 +7126,7 @@ extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
 }
 
 extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
+    if (!abstractView || zoomLevel <= 0.0) return;
     dispatch_async(dispatch_get_main_queue(), ^{
         if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
             WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
@@ -7133,6 +7134,16 @@ extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel)
                 wkImpl.webView.pageZoom = zoomLevel;
                 [wkImpl.webView setNeedsDisplay:YES];
                 [wkImpl.webView setNeedsLayout:YES];
+            }
+            return;
+        }
+
+        if ([abstractView isKindOfClass:[CEFWebViewImpl class]]) {
+            CEFWebViewImpl *cefImpl = (CEFWebViewImpl *)abstractView;
+            if (cefImpl.browser && cefImpl.browser->GetHost()) {
+                // CEF zoom is logarithmic in 1.2x steps; convert from web-style factor.
+                const double cefZoomLevel = log(zoomLevel) / log(1.2);
+                cefImpl.browser->GetHost()->SetZoomLevel(cefZoomLevel);
             }
         }
     });
@@ -7150,6 +7161,19 @@ extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
                     zoomLevel = wkImpl.webView.pageZoom;
                 });
             }
+        }
+    } else if ([abstractView isKindOfClass:[CEFWebViewImpl class]]) {
+        CEFWebViewImpl *cefImpl = (CEFWebViewImpl *)abstractView;
+        if (cefImpl.browser && cefImpl.browser->GetHost()) {
+            __block double cefZoomLevel = 0.0;
+            if ([NSThread isMainThread]) {
+                cefZoomLevel = cefImpl.browser->GetHost()->GetZoomLevel();
+            } else {
+                dispatch_sync(dispatch_get_main_queue(), ^{
+                    cefZoomLevel = cefImpl.browser->GetHost()->GetZoomLevel();
+                });
+            }
+            zoomLevel = pow(1.2, cefZoomLevel);
         }
     }
     return zoomLevel;
