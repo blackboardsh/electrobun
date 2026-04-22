@@ -1717,9 +1717,8 @@ public:
         
         printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
         
-        // Run the file dialog using GTK on the main thread
-        // Since this is Linux, we can use GTK dialogs directly
-        GtkWidget* dialog = nullptr;
+        // Use GtkFileChooserNative to get desktop-native pickers (KDE/portal support).
+        GtkFileChooserNative* dialog = nullptr;
         GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
         const char* buttonText = "_Open";
         
@@ -1743,13 +1742,12 @@ public:
                 break;
         }
         
-        dialog = gtk_file_chooser_dialog_new(
+        dialog = gtk_file_chooser_native_new(
             title.empty() ? "Select File" : title.ToString().c_str(),
             nullptr, // No parent window
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonText, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonText,
+            "_Cancel"
         );
         
         // Set multiple selection for OPEN_MULTIPLE mode
@@ -1799,7 +1797,7 @@ public:
         }
         
         // Show the dialog
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = gtk_native_dialog_run(GTK_NATIVE_DIALOG(dialog));
         
         std::vector<CefString> file_paths;
         if (response == GTK_RESPONSE_ACCEPT) {
@@ -1819,7 +1817,7 @@ public:
             }
         }
         
-        gtk_widget_destroy(dialog);
+        g_object_unref(dialog);
         
         // Call the callback with results
         callback->Continue(file_paths);
@@ -3104,13 +3102,12 @@ public:
         const gchar* const* acceptedMimeTypes = webkit_file_chooser_request_get_mime_types(request);
         
         // Create the file chooser dialog
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        GtkFileChooserNative* dialog = gtk_file_chooser_native_new(
             "Select File(s)",
             nullptr, // No parent window for now
             GTK_FILE_CHOOSER_ACTION_OPEN,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            "_Open", GTK_RESPONSE_ACCEPT,
-            nullptr
+            "_Open",
+            "_Cancel"
         );
         
         // Set multiple selection
@@ -3156,7 +3153,7 @@ public:
         gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
         
         // Run the dialog and handle the response
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = gtk_native_dialog_run(GTK_NATIVE_DIALOG(dialog));
         
         if (response == GTK_RESPONSE_ACCEPT) {
             GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
@@ -3183,7 +3180,7 @@ public:
             webkit_file_chooser_request_cancel(request);
         }
         
-        gtk_widget_destroy(dialog);
+        g_object_unref(dialog);
         return TRUE; // We handled the request
     }
 
@@ -8537,13 +8534,12 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
             buttonLabel = "_Open";
         }
         
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        GtkFileChooserNative* dialog = gtk_file_chooser_native_new(
             "Open File",
             nullptr, // No parent window for now
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonLabel, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonLabel,
+            "_Cancel"
         );
         
         // Set starting folder if provided
@@ -8595,7 +8591,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
         static std::string resultString; // Static to persist after function returns
         resultString.clear();
         
-        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
+        if (gtk_native_dialog_run(GTK_NATIVE_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
             if (allowsMultipleSelection != 0) {
                 GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
                 GSList* iter = fileList;
@@ -8618,7 +8614,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
             }
         }
         
-        gtk_widget_destroy(dialog);
+        g_object_unref(dialog);
         
         return resultString.empty() ? nullptr : resultString.c_str();
     });
