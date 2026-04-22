@@ -29,6 +29,17 @@ Don't miss our:
 - Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
 - so much more.
 
+### App Paths Helpers
+
+You can access app resource paths through either `PATHS` or direct named exports:
+
+```ts
+import { PATHS, RESOURCES_FOLDER, VIEWS_FOLDER } from "electrobun/bun";
+
+console.log(PATHS.RESOURCES_FOLDER, RESOURCES_FOLDER);
+console.log(PATHS.VIEWS_FOLDER, VIEWS_FOLDER);
+```
+
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
