@@ -618,6 +618,12 @@ static std::vector<std::string> g_pendingUrlOpenPaths;
 static std::mutex g_urlOpenMutex;
 static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
+// Dock menu state (macOS): NSApp's delegate returns g_dockMenu from
+// applicationDockMenu:, and clicks on menu items fire the associated
+// target which dispatches to g_dockMenuHandler with the action string.
+static NSMenu *g_dockMenu = nil;
+static id g_dockMenuTarget = nil;  // retained StatusItemTarget*
+static DockProgressView *g_dockProgressView = nil;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
 
@@ -998,6 +1004,10 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 @end
 
 @interface AppDelegate : NSObject <NSApplicationDelegate>
+@end
+
+@interface DockProgressView : NSView
+@property (nonatomic, assign) double progress;
 @end
 
 @interface WindowDelegate : NSObject <NSWindowDelegate>
@@ -6427,6 +6437,54 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
         return YES;
     }
+
+    // AppKit calls this whenever the user right-clicks / long-presses the Dock icon.
+    // We return the menu last supplied by setApplicationDockMenu, or nil if none.
+    - (NSMenu *)applicationDockMenu:(NSApplication *)sender {
+        (void)sender;
+        return g_dockMenu;
+    }
+@end
+
+@implementation DockProgressView
+    - (void)drawRect:(NSRect)dirtyRect {
+        (void)dirtyRect;
+
+        // Base: the application icon fills the tile.
+        NSImage *appIcon = [NSApp applicationIconImage];
+        if (appIcon) {
+            [appIcon drawInRect:self.bounds
+                       fromRect:NSZeroRect
+                      operation:NSCompositingOperationCopy
+                       fraction:1.0];
+        }
+
+        CGFloat width = self.bounds.size.width;
+        CGFloat barHeight = MAX(6.0, width * 0.08);
+        CGFloat margin = width * 0.08;
+        NSRect track = NSMakeRect(margin, margin, width - 2 * margin, barHeight);
+        CGFloat radius = barHeight / 2.0;
+
+        NSBezierPath *trackPath = [NSBezierPath bezierPathWithRoundedRect:track
+                                                                  xRadius:radius
+                                                                  yRadius:radius];
+        [[NSColor colorWithWhite:0.0 alpha:0.35] setFill];
+        [trackPath fill];
+
+        double p = self.progress;
+        if (p < 0.0) p = 0.0;
+        if (p > 1.0) p = 1.0;
+
+        CGFloat fillWidth = track.size.width * p;
+        if (fillWidth > 0.0) {
+            NSRect fill = NSMakeRect(track.origin.x, track.origin.y, fillWidth, barHeight);
+            NSBezierPath *fillPath = [NSBezierPath bezierPathWithRoundedRect:fill
+                                                                    xRadius:radius
+                                                                    yRadius:radius];
+            [[NSColor colorWithRed:0.20 green:0.60 blue:0.96 alpha:1.0] setFill];
+            [fillPath fill];
+        }
+    }
 @end
 
 @implementation WindowDelegate
@@ -8031,6 +8089,83 @@ extern "C" bool isDockIconVisible() {
     }
 
     return isVisible;
+}
+
+// Install (or replace) the menu shown when the user right-clicks / long-presses
+// the Dock icon. Pass an empty / null JSON string to clear the menu.
+//
+// Click routing mirrors setApplicationMenu: a retained StatusItemTarget owns
+// the handler and each NSMenuItem's target/action points at it, so when an
+// item is picked menuItemClicked: fires the JS callback with the action string.
+extern "C" void setApplicationDockMenu(const char *jsonString, ZigStatusItemHandler zigHandler) {
+    char *jsonCopy = jsonString ? strdup(jsonString) : nullptr;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (!jsonCopy || strlen(jsonCopy) == 0) {
+            g_dockMenu = nil;
+            g_dockMenuTarget = nil;
+            if (jsonCopy) free(jsonCopy);
+            return;
+        }
+        NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
+        NSError *error = nil;
+        NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
+        free(jsonCopy);
+        if (error || ![menuArray isKindOfClass:[NSArray class]]) {
+            NSLog(@"setApplicationDockMenu: failed to parse JSON: %@", error);
+            return;
+        }
+        StatusItemTarget *target = [[StatusItemTarget alloc] init];
+        target.zigHandler = zigHandler;
+        target.trayId = 0;
+        NSMenu *menu = createMenuFromConfig(menuArray, target);
+        g_dockMenu = menu;
+        g_dockMenuTarget = target;  // strong retain keeps the handler alive
+    });
+}
+
+// Set the text shown as a badge on the Dock icon. Pass null or empty to clear.
+extern "C" void setDockBadge(const char *text) {
+    NSString *label = (text && strlen(text) > 0)
+        ? [NSString stringWithUTF8String:text]
+        : nil;
+
+    void (^apply)(void) = ^{
+        [[NSApp dockTile] setBadgeLabel:label];
+    };
+
+    if ([NSThread isMainThread]) {
+        apply();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), apply);
+    }
+}
+
+// Show (or clear) a progress bar overlaid on the Dock icon.
+// progress in [0.0, 1.0] shows the bar; any negative value clears it and
+// restores the stock icon.
+extern "C" void setDockProgress(double progress) {
+    void (^apply)(void) = ^{
+        NSDockTile *tile = [NSApp dockTile];
+        if (progress < 0.0) {
+            tile.contentView = nil;
+            g_dockProgressView = nil;
+            [tile display];
+            return;
+        }
+        if (!g_dockProgressView) {
+            g_dockProgressView = [[DockProgressView alloc] initWithFrame:NSMakeRect(0, 0, 128, 128)];
+        }
+        g_dockProgressView.progress = progress;
+        tile.contentView = g_dockProgressView;
+        [g_dockProgressView setNeedsDisplay:YES];
+        [tile display];
+    };
+
+    if ([NSThread isMainThread]) {
+        apply();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), apply);
+    }
 }
 
 extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,

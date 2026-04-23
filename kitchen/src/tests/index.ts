@@ -18,6 +18,7 @@ import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
 import { sandboxTests } from "./sandbox.test";
 import { trayApiTests } from "./tray-api.test";
+import { dockApiTests } from "./dock-api.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -50,6 +51,7 @@ export const allTests: TestDefinition[] = [
   ...updaterTests,
   ...sandboxTests,
   ...trayApiTests,
+  ...dockApiTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -90,6 +92,7 @@ export {
   updaterTests,
   sandboxTests,
   trayApiTests,
+  dockApiTests,
   wgpuFfiTests,
   wgpuAdapterTests,
   babylonAdapterTests,

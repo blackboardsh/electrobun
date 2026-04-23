@@ -11046,6 +11046,21 @@ ELECTROBUN_EXPORT bool isDockIconVisible() {
     return true;
 }
 
+// Dock menu / badge / progress - macOS only, stubs for Linux.
+// Linux launcher-entry equivalents (Unity LauncherEntry) could be added later.
+ELECTROBUN_EXPORT void setApplicationDockMenu(const char* json, void (*handler)(uint32_t, const char*)) {
+    (void)json;
+    (void)handler;
+}
+
+ELECTROBUN_EXPORT void setDockBadge(const char* text) {
+    (void)text;
+}
+
+ELECTROBUN_EXPORT void setDockProgress(double progress) {
+    (void)progress;
+}
+
 // Graceful shutdown function to coordinate cleanup
 ELECTROBUN_EXPORT void shutdownNativeWrapper() {
     printf("Starting graceful shutdown of native wrapper...\n");
