@@ -566,6 +566,49 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "Window native titlebar theme option",
+    category: "BrowserWindow",
+    description: "Test creating a window with native titlebar theming options",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Native Titlebar Theme Test",
+        titleBarStyle: "default",
+        nativeTitleBar: {
+          darkMode: true,
+          captionColor: "#10203a",
+          textColor: "#e2e8f0",
+          borderColor: "#314767",
+        },
+        renderer: "cef",
+      });
+
+      expect(win.id).toBeGreaterThan(0);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      log("Window created with native titlebar theme options");
+    },
+  }),
+
+  defineTest({
+    name: "Window native titlebar theme validates colors",
+    category: "BrowserWindow",
+    description: "Test that invalid native titlebar colors are rejected before window creation",
+    async run({ log }) {
+      expect(() => new BrowserWindow({
+        title: "Invalid Native Titlebar Theme",
+        url: "views://test-harness/index.html",
+        renderer: "cef",
+        titleBarStyle: "default",
+        nativeTitleBar: {
+          captionColor: "#12345g",
+        },
+      })).toThrow();
+
+      log("Invalid native titlebar color was rejected");
+    },
+  }),
+
+  defineTest({
     name: "Window traffic light position API",
     category: "BrowserWindow",
     description: "Test macOS traffic light offset creation and runtime repositioning",

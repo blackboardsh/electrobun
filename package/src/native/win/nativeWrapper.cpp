@@ -62,8 +62,6 @@
 #define DWMWA_TEXT_COLOR 36
 #endif
 
-typedef LONG (WINAPI *RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
-
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
 #include "../shared/callbacks.h"
@@ -9179,21 +9177,14 @@ static void applyTitleBarTheme(HWND hwnd, int32_t darkMode, uint32_t captionColo
     if (!hwnd || !IsWindow(hwnd)) return;
 
     const uint32_t colorSentinel = 0xffffffff;
-    bool supportsDwmTitleBarColors = false;
-
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (ntdll) {
-        auto rtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(GetProcAddress(ntdll, "RtlGetVersion"));
-        if (rtlGetVersion) {
-            RTL_OSVERSIONINFOW versionInfo = {};
-            versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
-            if (rtlGetVersion(&versionInfo) == 0) {
-                supportsDwmTitleBarColors =
-                    versionInfo.dwMajorVersion > 10 ||
-                    (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 22000);
-            }
-        }
+    if (darkMode == -1 &&
+        captionColor == colorSentinel &&
+        textColor == colorSentinel &&
+        borderColor == colorSentinel) {
+        return;
     }
+
+    const bool supportsDwmTitleBarColors = isWindowsBuildOrGreater(22000);
 
     if (darkMode != -1) {
         BOOL enabled = darkMode ? TRUE : FALSE;

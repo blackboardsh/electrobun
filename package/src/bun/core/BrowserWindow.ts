@@ -11,13 +11,17 @@ import { WGPUView } from "./WGPUView";
 
 const buildConfig = await BuildConfig.get();
 
+export type NativeTitleBarOptions = {
+	// Windows-only. Applies to the native OS title bar and is ignored for custom
+	// titlebar styles such as "hidden" and "hiddenInset".
+	darkMode?: boolean;
+	captionColor?: `#${string}`;
+	textColor?: `#${string}`;
+	borderColor?: `#${string}`;
+};
+
 export type WindowOptionsType<T = undefined> = {
-	nativeTitleBar?: {
-		darkMode?: boolean;
-		captionColor?: `#${string}`;
-		textColor?: `#${string}`;
-		borderColor?: `#${string}`;
-	};
+	nativeTitleBar?: NativeTitleBarOptions;
 	trafficLightOffset?: {
 		x: number;
 		y: number;
@@ -134,12 +138,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	transparent: boolean = false;
 	passthrough: boolean = false;
 	hidden: boolean = false;
-	nativeTitleBar: {
-		darkMode?: boolean;
-		captionColor?: `#${string}`;
-		textColor?: `#${string}`;
-		borderColor?: `#${string}`;
-	} = {};
+	nativeTitleBar?: NativeTitleBarOptions;
 	trafficLightOffset: { x: number; y: number } = { x: 0, y: 0 };
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
@@ -171,7 +170,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.transparent = options.transparent ?? false;
 		this.passthrough = options.passthrough ?? false;
 		this.hidden = options.hidden ?? false;
-		this.nativeTitleBar = options.nativeTitleBar ?? {};
+		this.nativeTitleBar = options.nativeTitleBar;
 		this.trafficLightOffset = {
 			x: options.trafficLightOffset?.x ?? 0,
 			y: options.trafficLightOffset?.y ?? 0,

@@ -28,6 +28,31 @@
 
 using Microsoft::WRL::ComPtr;
 
+static bool getWindowsVersion(OSVERSIONINFOEXW* osInfo) {
+    if (!osInfo) return false;
+
+    typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOEXW*);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return false;
+
+    auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+    if (!fn) return false;
+
+    ZeroMemory(osInfo, sizeof(*osInfo));
+    osInfo->dwOSVersionInfoSize = sizeof(*osInfo);
+    return fn(osInfo) == 0;
+}
+
+static bool isWindowsBuildOrGreater(DWORD minimumBuild) {
+    OSVERSIONINFOEXW osInfo = {};
+    if (!getWindowsVersion(&osInfo)) {
+        return true;
+    }
+
+    return osInfo.dwMajorVersion > 10 ||
+           (osInfo.dwMajorVersion == 10 && osInfo.dwBuildNumber >= minimumBuild);
+}
+
 // Feature gate: DirectComposition requires Windows 8.1+.
 // Note: IsWindows8Point1OrGreater() requires an app manifest to report correctly.
 // Without a manifest, Windows lies about the version. We use RtlGetVersion instead
@@ -37,22 +62,12 @@ static bool isDCompAvailable() {
     if (cached >= 0) return cached == 1;
 
     // RtlGetVersion is not affected by manifests — always returns the real version.
-    typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOEXW*);
-    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
-    if (ntdll) {
-        auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
-        if (fn) {
-            OSVERSIONINFOEXW osInfo = {};
-            osInfo.dwOSVersionInfoSize = sizeof(osInfo);
-            if (fn(&osInfo) == 0) {
-                // Windows 8.1 = 6.3, Windows 10/11 = 10.0
-                bool ok = (osInfo.dwMajorVersion > 6) ||
-                          (osInfo.dwMajorVersion == 6 && osInfo.dwMinorVersion >= 3);
-                // OS version check done
-                cached = ok ? 1 : 0;
-                return ok;
-            }
-        }
+    OSVERSIONINFOEXW osInfo = {};
+    if (getWindowsVersion(&osInfo)) {
+        bool ok = (osInfo.dwMajorVersion > 6) ||
+                  (osInfo.dwMajorVersion == 6 && osInfo.dwMinorVersion >= 3);
+        cached = ok ? 1 : 0;
+        return ok;
     }
 
     // Fallback: assume available on modern Windows

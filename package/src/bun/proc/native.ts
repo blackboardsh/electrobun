@@ -70,7 +70,10 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
-import { BrowserWindow } from "../core/BrowserWindow";
+import {
+	BrowserWindow,
+	type NativeTitleBarOptions,
+} from "../core/BrowserWindow";
 import { GpuWindow } from "../core/GpuWindow";
 
 function getWindowPtr(winId: number) {
@@ -94,6 +97,29 @@ function parseWindowsColorRef(color?: `#${string}`): number {
 	const g = (rgb >> 8) & 0xff;
 	const b = rgb & 0xff;
 	return (b << 16) | (g << 8) | r;
+}
+
+function hasNativeTitleBarTheme(
+	nativeTitleBar?: NativeTitleBarOptions,
+): nativeTitleBar is NativeTitleBarOptions {
+	if (!nativeTitleBar) return false;
+	return (
+		nativeTitleBar.darkMode !== undefined ||
+		nativeTitleBar.captionColor !== undefined ||
+		nativeTitleBar.textColor !== undefined ||
+		nativeTitleBar.borderColor !== undefined
+	);
+}
+
+function shouldApplyNativeTitleBarTheme(
+	titleBarStyle: string,
+	nativeTitleBar?: NativeTitleBarOptions,
+): nativeTitleBar is NativeTitleBarOptions {
+	return (
+		process.platform === "win32" &&
+		titleBarStyle === "default" &&
+		hasNativeTitleBarTheme(nativeTitleBar)
+	);
 }
 
 export const native = (() => {
@@ -880,12 +906,7 @@ const _ffiImpl = {
 			transparent: boolean;
 			hidden?: boolean;
 			activate?: boolean;
-			nativeTitleBar?: {
-				darkMode?: boolean;
-				captionColor?: `#${string}`;
-				textColor?: `#${string}`;
-				borderColor?: `#${string}`;
-			};
+			nativeTitleBar?: NativeTitleBarOptions;
 			trafficLightOffset?: {
 				x: number;
 				y: number;
@@ -960,7 +981,7 @@ const _ffiImpl = {
 			}
 
 			native_.symbols.setWindowTitle(windowPtr, toCString(title));
-			if (nativeTitleBar) {
+			if (shouldApplyNativeTitleBarTheme(titleBarStyle, nativeTitleBar)) {
 				native_.symbols.setWindowTitleBarTheme(
 					windowPtr,
 					nativeTitleBar.darkMode === undefined
