@@ -3,6 +3,7 @@
 #include <winhttp.h>
 #include <Windows.h>
 #include <windowsx.h>  // For GET_X_LPARAM and GET_Y_LPARAM
+#include <dwmapi.h>
 #include <string>
 #include <cstring>
 #include <functional>
@@ -45,6 +46,23 @@
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
 #include <tlhelp32.h>  // For process enumeration
+
+#pragma comment(lib, "dwmapi.lib")
+
+#ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
+#define DWMWA_USE_IMMERSIVE_DARK_MODE 20
+#endif
+#ifndef DWMWA_BORDER_COLOR
+#define DWMWA_BORDER_COLOR 34
+#endif
+#ifndef DWMWA_CAPTION_COLOR
+#define DWMWA_CAPTION_COLOR 35
+#endif
+#ifndef DWMWA_TEXT_COLOR
+#define DWMWA_TEXT_COLOR 36
+#endif
+
+typedef LONG (WINAPI *RtlGetVersionPtr)(PRTL_OSVERSIONINFOW);
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
@@ -9157,6 +9175,49 @@ ELECTROBUN_EXPORT void testFFI2(void (*completionHandler)()) {
     }
 }
 
+static void applyTitleBarTheme(HWND hwnd, int32_t darkMode, uint32_t captionColor, uint32_t textColor, uint32_t borderColor) {
+    if (!hwnd || !IsWindow(hwnd)) return;
+
+    const uint32_t colorSentinel = 0xffffffff;
+    bool supportsDwmTitleBarColors = false;
+
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        auto rtlGetVersion = reinterpret_cast<RtlGetVersionPtr>(GetProcAddress(ntdll, "RtlGetVersion"));
+        if (rtlGetVersion) {
+            RTL_OSVERSIONINFOW versionInfo = {};
+            versionInfo.dwOSVersionInfoSize = sizeof(versionInfo);
+            if (rtlGetVersion(&versionInfo) == 0) {
+                supportsDwmTitleBarColors =
+                    versionInfo.dwMajorVersion > 10 ||
+                    (versionInfo.dwMajorVersion == 10 && versionInfo.dwBuildNumber >= 22000);
+            }
+        }
+    }
+
+    if (darkMode != -1) {
+        BOOL enabled = darkMode ? TRUE : FALSE;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, &enabled, sizeof(enabled));
+    }
+
+    if (supportsDwmTitleBarColors && captionColor != colorSentinel) {
+        COLORREF color = static_cast<COLORREF>(captionColor);
+        DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, &color, sizeof(color));
+    }
+
+    if (supportsDwmTitleBarColors && textColor != colorSentinel) {
+        COLORREF color = static_cast<COLORREF>(textColor);
+        DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, &color, sizeof(color));
+    }
+
+    if (supportsDwmTitleBarColors && borderColor != colorSentinel) {
+        COLORREF color = static_cast<COLORREF>(borderColor);
+        DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR, &color, sizeof(color));
+    }
+
+    RedrawWindow(hwnd, NULL, NULL, RDW_INVALIDATE | RDW_UPDATENOW | RDW_FRAME);
+}
+
 ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t windowId,
     double x, double y,
@@ -9287,6 +9348,19 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     });
 
     return hwnd;
+}
+
+ELECTROBUN_EXPORT void setWindowTitleBarTheme(void* window, int32_t darkMode, uint32_t captionColor, uint32_t textColor, uint32_t borderColor) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowTitleBarTheme");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        applyTitleBarTheme(hwnd, darkMode, captionColor, textColor, borderColor);
+    });
 }
 
 static void activateVisibleWindow(HWND hwnd) {

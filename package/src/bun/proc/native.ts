@@ -79,6 +79,23 @@ function getWindowPtr(winId: number) {
 	);
 }
 
+const WINDOWS_COLOR_SENTINEL = 0xffffffff;
+
+function parseWindowsColorRef(color?: `#${string}`): number {
+	if (!color) return WINDOWS_COLOR_SENTINEL;
+	const hex = color.slice(1);
+	if (!/^[0-9a-fA-F]{6}$/.test(hex)) {
+		throw new Error(
+			`Invalid native title bar color "${color}". Expected #RRGGBB.`,
+		);
+	}
+	const rgb = parseInt(hex, 16);
+	const r = (rgb >> 16) & 0xff;
+	const g = (rgb >> 8) & 0xff;
+	const b = rgb & 0xff;
+	return (b << 16) | (g << 8) | r;
+}
+
 export const native = (() => {
 	try {
 		// Use absolute path to native wrapper DLL to avoid working directory issues
@@ -112,6 +129,16 @@ export const native = (() => {
 				args: [
 					FFIType.ptr, // window ptr
 					FFIType.cstring, // title
+				],
+				returns: FFIType.void,
+			},
+			setWindowTitleBarTheme: {
+				args: [
+					FFIType.ptr, // window ptr
+					FFIType.i32, // dark mode: -1 unset, 0 false, 1 true
+					FFIType.u32, // caption color COLORREF or sentinel
+					FFIType.u32, // text color COLORREF or sentinel
+					FFIType.u32, // border color COLORREF or sentinel
 				],
 				returns: FFIType.void,
 			},
@@ -853,6 +880,12 @@ const _ffiImpl = {
 			transparent: boolean;
 			hidden?: boolean;
 			activate?: boolean;
+			nativeTitleBar?: {
+				darkMode?: boolean;
+				captionColor?: `#${string}`;
+				textColor?: `#${string}`;
+				borderColor?: `#${string}`;
+			};
 			trafficLightOffset?: {
 				x: number;
 				y: number;
@@ -881,6 +914,7 @@ const _ffiImpl = {
 				transparent,
 				hidden = false,
 				activate = true,
+				nativeTitleBar,
 				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
@@ -926,6 +960,19 @@ const _ffiImpl = {
 			}
 
 			native_.symbols.setWindowTitle(windowPtr, toCString(title));
+			if (nativeTitleBar) {
+				native_.symbols.setWindowTitleBarTheme(
+					windowPtr,
+					nativeTitleBar.darkMode === undefined
+						? -1
+						: nativeTitleBar.darkMode
+							? 1
+							: 0,
+					parseWindowsColorRef(nativeTitleBar.captionColor),
+					parseWindowsColorRef(nativeTitleBar.textColor),
+					parseWindowsColorRef(nativeTitleBar.borderColor),
+				);
+			}
 			if (!hidden) {
 				native_.symbols.showWindow(windowPtr, activate);
 			}
