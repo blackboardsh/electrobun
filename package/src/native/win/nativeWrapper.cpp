@@ -9327,9 +9327,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
 
-            // Show the window
-            ShowWindow(hwnd, SW_SHOW);
-            UpdateWindow(hwnd);
+            // Visibility is controlled by the higher-level bridge after it
+            // applies any window attributes such as native titlebar theming.
         } else {
             // Clean up if window creation failed
             free(data);
