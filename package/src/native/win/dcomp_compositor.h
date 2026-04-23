@@ -62,12 +62,22 @@ static bool isDCompAvailable() {
     if (cached >= 0) return cached == 1;
 
     // RtlGetVersion is not affected by manifests — always returns the real version.
-    OSVERSIONINFOEXW osInfo = {};
-    if (getWindowsVersion(&osInfo)) {
-        bool ok = (osInfo.dwMajorVersion > 6) ||
-                  (osInfo.dwMajorVersion == 6 && osInfo.dwMinorVersion >= 3);
-        cached = ok ? 1 : 0;
-        return ok;
+    typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOEXW*);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (ntdll) {
+        auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+        if (fn) {
+            OSVERSIONINFOEXW osInfo = {};
+            osInfo.dwOSVersionInfoSize = sizeof(osInfo);
+            if (fn(&osInfo) == 0) {
+                // Windows 8.1 = 6.3, Windows 10/11 = 10.0
+                bool ok = (osInfo.dwMajorVersion > 6) ||
+                          (osInfo.dwMajorVersion == 6 && osInfo.dwMinorVersion >= 3);
+                // OS version check done
+                cached = ok ? 1 : 0;
+                return ok;
+            }
+        }
     }
 
     // Fallback: assume available on modern Windows
