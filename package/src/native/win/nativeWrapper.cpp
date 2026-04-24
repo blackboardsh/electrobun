@@ -6056,7 +6056,24 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             view->setController(ctrl);
                             view->setWebView(webview);
-                            
+
+                            // Enable native Win32 non-client region support so CSS `app-region: drag`
+                            // is honored by WebView2's WndProc on Chromium's thread (which already
+                            // owns input capture), letting the OS run its modal move loop natively.
+                            // This delivers Aero Snap, drag-from-maximized, double-click-to-maximize,
+                            // Aero Shake, and the right-click/Alt+Space system menu.
+                            // Requires WebView2 Runtime >= Edge 120 (SDK 1.0.2420.47).
+                            // QueryInterface silently no-ops on older runtimes.
+                            {
+                                ComPtr<ICoreWebView2Settings> settings;
+                                if (SUCCEEDED(webview->get_Settings(&settings)) && settings) {
+                                    ComPtr<ICoreWebView2Settings9> settings9;
+                                    if (SUCCEEDED(settings.As(&settings9)) && settings9) {
+                                        settings9->put_IsNonClientRegionSupportEnabled(TRUE);
+                                    }
+                                }
+                            }
+
                             // Try to get composition controller interface if available
                             ComPtr<ICoreWebView2CompositionController> compCtrl;
                             HRESULT compResult = ctrl->QueryInterface(IID_PPV_ARGS(&compCtrl));
