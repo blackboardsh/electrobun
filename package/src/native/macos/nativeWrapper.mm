@@ -2990,6 +2990,20 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
             // WKWebView doesn't have public DevTools API, but we can use private API if available
             if ([self.webView respondsToSelector:@selector(_inspector)]) {
                 id inspector = [self.webView performSelector:@selector(_inspector)];
+                // Force the inspector into its own NSWindow before showing.
+                // Default `[inspector show]` opens it docked, which reparents
+                // the host WKWebView into a split-view container; closing the
+                // docked panel does not always restore the original parent
+                // and leaves the host view orphaned. On windows configured
+                // with `transparent: true`, the user then sees an empty/
+                // transparent window — the WebContent process is still alive
+                // and there is no NSException, but the main view is no longer
+                // displayed. Detaching first keeps the inspector in a
+                // separate window so the host's view hierarchy is never
+                // disturbed.
+                if ([inspector respondsToSelector:@selector(detach)]) {
+                    [inspector performSelector:@selector(detach)];
+                }
                 if ([inspector respondsToSelector:@selector(show)]) {
                     [inspector performSelector:@selector(show)];
                 }
