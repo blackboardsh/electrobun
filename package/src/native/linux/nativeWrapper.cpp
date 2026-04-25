@@ -9010,7 +9010,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 
                 while (iter != nullptr) {
                     if (!resultString.empty()) {
-                        resultString += ","; // Separate multiple files with comma (like Mac)
+                        resultString += "\n"; // Separate multiple files with newline
                     }
                     resultString += (char*)iter->data;
                     g_free(iter->data);

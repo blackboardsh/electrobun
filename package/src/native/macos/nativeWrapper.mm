@@ -7806,7 +7806,7 @@ extern "C" const char *openFileDialog(const char *startingFolder,
             for (NSURL *u in selectedFileURLs) {
                 [pathStrings addObject:u.path];
             }
-            concatenatedPaths = [pathStrings componentsJoinedByString:@","];
+            concatenatedPaths = [pathStrings componentsJoinedByString:@"\n"];
         }        
     });
     
