@@ -296,14 +296,21 @@ jobs:
 
   docs-deploy:
     needs: build
-    if: |
-      github.event.inputs.prerelease != 'true' &&
-      !contains(github.ref_name, '-beta') &&
-      !contains(github.event.inputs.tag, '-beta')
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
+
+      - name: Determine deploy branch
+        id: deploy-branch
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "$TAG" == *"-beta"* ]] || [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
+            echo "branch=preview" >> $GITHUB_OUTPUT
+          else
+            echo "branch=main" >> $GITHUB_OUTPUT
+          fi
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -322,14 +329,10 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/dist --project-name=electrobun-docs --branch=main
+          command: pages deploy docs/dist --project-name=electrobun-docs --branch=${{ steps.deploy-branch.outputs.branch }}
 
   npm-publish:
     needs: [release, docs-deploy]
-    if: |
-      always() &&
-      needs.release.result == 'success' &&
-      (needs.docs-deploy.result == 'success' || needs.docs-deploy.result == 'skipped')
     runs-on: ubuntu-latest
 
     steps:
