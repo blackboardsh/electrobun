@@ -16,7 +16,7 @@
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
 Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in Objc, C++, and several core parts written in <a href="https://ziglang.org/">zig</a>.
 
-Visit <a href="https://blackboard.sh/electrobun/">https://blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
+Visit <a href="https://docs.electrobunny.ai/electrobun/">https://docs.electrobunny.ai/electrobun/</a> to see api documentation, guides, and more.
 
 You use it via npm.
 

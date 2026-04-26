@@ -285,7 +285,7 @@ jobs:
 
             The Electrobun CLI will automatically download these artifacts when you build your app. You don't need to download them directly.
 
-            See the [documentation](https://blackboard.sh/electrobun/docs/guides/quick-start/) for more information.
+            See the [documentation](https://docs.electrobunny.ai/electrobun/guides/quick-start/) for more information.
 
             ---
 

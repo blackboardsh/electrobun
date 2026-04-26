@@ -2066,7 +2066,7 @@ ${utiDecls}
 			console.log(
 				"Different architecture, different APIs. Do not use Electron patterns.",
 			);
-			console.log("Docs: https://blackboard.sh/electrobun/llms.txt");
+			console.log("Docs: https://docs.electrobunny.ai/electrobun/llms.txt");
 			console.log(
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 			);

@@ -43,7 +43,7 @@ const rpc = BrowserView.defineRPC<BunnyRPC>({
 		requests: {},
 		messages: {
 			bunnyClicked: () => {
-				Utils.openExternal("https://blackboard.sh/electrobun");
+				Utils.openExternal("https://docs.electrobunny.ai/electrobun/");
 			},
 		},
 	},
