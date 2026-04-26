@@ -291,7 +291,7 @@ const WGPU_LIB_NAMES: Record<string, string[]> = {
 };
 
 function findWgpuLibraryPath(): string | null {
-	const envPath = process.env.ELECTROBUN_WGPU_PATH;
+	const envPath = process.env['ELECTROBUN_WGPU_PATH'];
 	if (envPath && existsSync(envPath)) return envPath;
 
 	const names = WGPU_LIB_NAMES[process.platform] ?? ["libwebgpu_dawn." + suffix];

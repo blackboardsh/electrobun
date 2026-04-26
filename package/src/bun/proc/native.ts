@@ -986,7 +986,7 @@ const _ffiImpl = {
 				throw `Can't hide window. Window no longer exists`;
 			}
 
-			native.symbols.hideWindow(windowPtr);
+			native_.symbols.hideWindow(windowPtr);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
