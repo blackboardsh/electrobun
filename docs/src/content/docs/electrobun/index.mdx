@@ -1,0 +1,297 @@
+---
+title: "Electrobun Documentation - Build ultra fast, tiny, cross-platform desktop apps"
+---
+{/* Hero Section */}
+  <section class="hero">
+    <div class="container">
+      <div class="hero-content">
+        <p class="hero-subtitle">
+          Everything you need to build ultra fast, tiny, cross-platform desktop applications with TypeScript.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  {/* Quick Start Section */}
+  <section class="section install-section">
+    <div class="container">
+      <h2 class="section-title">Quick Start</h2>
+      <div class="install-code">
+        <div class="code-block">
+          <span class="code-prefix">$</span>
+          <span class="code-text">bunx electrobun init</span>
+        </div>
+      </div>
+      
+```typescript
+import { BrowserWindow } from "electrobun/bun";
+
+const win = new BrowserWindow({
+  title: "My App",
+  url: "views://mainview/index.html",
+});
+```
+
+    </div>
+  </section>
+
+  {/* Electrobun Overview Section */}
+  <section class="product-showcase" id="electrobun">
+    <div class="container">
+      <div class="product-grid">        
+        <div class="product-content fade-in">
+          <h2 class="product-title">Electrobun</h2>
+          <p class="product-tagline">
+            Ultra fast and tiny desktop app framework
+          </p>
+          <p class="product-description">
+            Build cross-platform desktop applications with TypeScript that are 
+            incredibly small and blazingly fast. Electrobun combines the power 
+            of native bindings with Bun's runtime for unprecedented performance.
+          </p>
+          <div class="feature-list">
+            <div class="feature-item">
+              <span class="feature-icon">✓</span>
+              <span>Native bindings written in C++, ObjC, and Zig</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">✓</span>
+              <span>Bun as backend runtime and bundler</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">✓</span>
+              <span>System's native webview as renderer, CEF Optional</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">✓</span>
+              <span>Custom bsdiff-based update mechanism</span>
+            </div>
+            <div class="feature-item">
+              <span class="feature-icon">✓</span>
+              <span>Cross-platform: macOS, Windows, Linux</span>
+            </div>
+          </div>         
+        </div>
+        <div class="product-visual fade-in">
+          <div class="product-metrics" data-parallax="3">
+            <div class="metric-card">
+              <div class="metric-value">14MB</div>
+              <div class="metric-label">Bundle Size</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value">14KB</div>
+              <div class="metric-label">Update Size</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value">&lt;50ms</div>
+              <div class="metric-label">Startup Time</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-value">100%</div>
+              <div class="metric-label">Native Feel</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+
+
+  {/* Documentation Grid */}
+  <section class="section">
+    <div class="container">
+      <h2 class="section-title">Documentation</h2>
+      
+      <div class="showcase-grid">
+        {/* Getting Started */}
+        <div class="showcase-feature">
+          <h3>Getting Started</h3>
+          <ul>
+            <li>
+              <strong><a href="/electrobun/guides/quick-start">Quick Start</a></strong>
+              <div class="feature-description">Create your first Electrobun app in minutes</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/what-is-electrobun">What is Electrobun?</a></strong>
+              <div class="feature-description">Learn about the framework and its benefits</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/hello-world">Hello World</a></strong>
+              <div class="feature-description">Build your first app step by step</div>
+            </li>            
+            <li>
+              <strong><a href="/electrobun/guides/creating-ui">Creating UI</a></strong>
+              <div class="feature-description">Build beautiful user interfaces</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/bundling-and-distribution">Bundling & Distribution</a></strong>
+              <div class="feature-description">Package and distribute your apps</div>
+            </li>
+          </ul>
+        </div>
+
+        {/* Advanced Guides */}
+        <div class="showcase-feature">
+          <h3>Advanced Guides</h3>
+          <ul>
+            <li>
+              <strong><a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a></strong>
+              <div class="feature-description">Build for macOS, Windows, and Linux</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/compatability">Compatibility</a></strong>
+              <div class="feature-description">Platform compatibility and requirements</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/code-signing">Code Signing</a></strong>
+              <div class="feature-description">Sign and notarize your applications</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/architecture/overview">Architecture Overview</a></strong>
+              <div class="feature-description">Understand Electrobun's architecture</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/architecture/webview-tag">Webview Tag Architecture</a></strong>
+              <div class="feature-description">How webviews work in Electrobun</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/guides/updates">Updates</a></strong>
+              <div class="feature-description">Update system and binary patches</div>
+            </li>
+          </ul>
+        </div>
+
+        {/* Bun APIs */}
+        <div class="showcase-feature">
+          <h3>Bun APIs</h3>
+          <ul>
+            <li>
+              <strong><a href="/electrobun/apis/bun">Bun API</a></strong>
+              <div class="feature-description">Main process API and lifecycle management</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser-window">BrowserWindow</a></strong>
+              <div class="feature-description">Native window management and controls</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser-view">BrowserView</a></strong>
+              <div class="feature-description">Create and manage webview windows</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/webgpu">WebGPU</a></strong>
+              <div class="feature-description">Native GPU windows and WebGPU integrations</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/utils">Utils</a></strong>
+              <div class="feature-description">File system and OS utility functions</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/context-menu">Context Menu</a></strong>
+              <div class="feature-description">Native context menus</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/application-menu">Application Menu</a></strong>
+              <div class="feature-description">Native application menu bars</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/paths">Paths</a></strong>
+              <div class="feature-description">Global paths for resources and views</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/tray">Tray</a></strong>
+              <div class="feature-description">System tray implementation</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/updater">Updater</a></strong>
+              <div class="feature-description">Built-in app update mechanism</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/events">Events</a></strong>
+              <div class="feature-description">Event system and handling</div>
+            </li>
+          </ul>
+        </div>
+
+        {/* Browser APIs */}
+        <div class="showcase-feature">
+          <h3>Browser APIs</h3>
+          <ul>
+            <li>
+              <strong><a href="/electrobun/apis/browser/electroview-class">Electroview Class</a></strong>
+              <div class="feature-description">Initialize Electrobun APIs in browser</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser/electrobun-webview-tag">Webview Tag</a></strong>
+              <div class="feature-description">Custom webview HTML element</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser/draggable-regions">Draggable Regions</a></strong>
+              <div class="feature-description">Make HTML elements draggable</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser/global-properties">Global Properties</a></strong>
+              <div class="feature-description">Browser context global properties</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/browser/wgpu-tag">WGPU Tag</a></strong>
+              <div class="feature-description">Embed GPU surfaces in webviews</div>
+            </li>
+          </ul>
+        </div>
+
+        {/* CLI & Configuration */}
+        <div class="showcase-feature">
+          <h3>CLI & Configuration</h3>
+          <ul>
+            <li>
+              <strong><a href="/electrobun/apis/cli/build-configuration">Build Configuration</a></strong>
+              <div class="feature-description">Configure your Electrobun builds</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/cli/cli-args">CLI Arguments</a></strong>
+              <div class="feature-description">Command line interface reference</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/bundled-assets">Bundled Assets</a></strong>
+              <div class="feature-description">Asset management with views:// schema</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/bundling-cef">Bundling CEF</a></strong>
+              <div class="feature-description">CEF bundling across platforms</div>
+            </li>
+            <li>
+              <strong><a href="/electrobun/apis/application-icons">Application Icons</a></strong>
+              <div class="feature-description">Configure app icons for all platforms</div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  {/* Community Section */}
+  <section class="section community-section">
+    <div class="container">
+      <h2 class="section-title">Community & Support</h2>
+      <p class="community-description">
+        Join our growing community of developers building the future of desktop applications.
+      </p>
+      
+      <div class="community-links">
+        <a href="https://github.com/blackboardsh/electrobun" class="btn btn-primary">GitHub Repository</a>
+        <a href="https://discord.gg/ueKE4tjaCE" class="btn btn-secondary">Join Discord</a>
+      </div>
+      
+      <div class="final-cta">
+        <h2>Ready to Get Started?</h2>
+        <p>
+          Follow our Getting Started guide to create your first Electrobun app.
+        </p>
+        <div class="cta-buttons" style="justify-content: center;">
+          <a href="/electrobun/guides/quick-start" class="btn btn-primary btn-large">Quick Start Guide</a>
+        </div>
+      </div>
+    </div>
+  </section>
+

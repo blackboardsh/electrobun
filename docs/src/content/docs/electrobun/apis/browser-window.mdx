@@ -1,0 +1,865 @@
+---
+title: "BrowserWindow API"
+---
+import { Aside } from "@astrojs/starlight/components";
+
+
+  <blockquote>
+    <p>Create and control browser windows</p>
+  </blockquote>
+
+  
+```typescript
+// in the main process
+import { BrowserWindow } from "electrobun/bun";
+
+const win = new BrowserWindow({
+  title: "my url window",
+  frame: {
+    width: 1800,
+    height: 600,
+    x: 2000,
+    y: 2000,
+  },
+  url: "views://mainview/index.html",
+});
+```
+
+
+  <h2>Constructor Options</h2>
+
+  <h3>title</h3>
+  <p>Set the title of the window.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+  title: "my url window",
+});
+```
+
+
+  <h3>frame</h3>
+  <p>Set the window dimensions.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+   frame: {
+    width: 1800,
+    height: 600,
+    x: 2000,
+    y: 2000,
+  },
+});
+```
+
+
+  <h3>styleMask</h3>
+  <p>This controls the OSX window appearance and functionality. You can set the following:</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+  title: "my url window",
+  url: "views://mainview/index.html",
+  frame: {
+    width: 1800,
+    height: 600,
+    x: 2000,
+    y: 2000,
+  },
+  styleMask: {
+    // These are the current defaults
+    Borderless: false,
+    Titled: true,
+    Closable: true,
+    Miniaturizable: true,
+    Resizable: true,
+    UnifiedTitleAndToolbar: false,
+    FullScreen: false,
+    FullSizeContentView: false,
+    UtilityWindow: false,
+    DocModalWindow: false,
+    NonactivatingPanel: false,
+    HUDWindow: false,
+  }
+});
+```
+
+
+  <h3>titleBarStyle</h3>
+  <p>Controls the window's title bar appearance. This option works across all platforms (macOS, Windows, and Linux).</p>
+
+  <p>Available values:</p>
+  <ul>
+    <li>`"default"` - Normal title bar with native window controls (close, minimize, maximize buttons)</li>
+    <li>`"hidden"` - No title bar, no native window controls. Use this for fully custom window chrome where you implement your own title bar and window controls in HTML/CSS</li>
+    <li>`"hiddenInset"` - Transparent title bar with inset native controls. On macOS, this shows the traffic light buttons overlaid on your content. On other platforms, this behaves similarly to `hidden`</li>
+  </ul>
+
+  
+```javascript
+// Default title bar
+const win = new BrowserWindow({
+  title: "Standard Window",
+  url: "views://mainview/index.html",
+  titleBarStyle: "default",
+});
+
+// Hidden title bar for fully custom chrome
+const customWin = new BrowserWindow({
+  title: "Custom Titlebar",
+  url: "views://mainview/index.html",
+  titleBarStyle: "hidden",
+});
+
+// Hidden inset - transparent titlebar with traffic lights (macOS)
+const insetWin = new BrowserWindow({
+  title: "Inset Window",
+  url: "views://mainview/index.html",
+  titleBarStyle: "hiddenInset",
+});
+```
+
+
+  <p>When using `titleBarStyle: "hidden"` or `"hiddenInset"`, you'll typically want to create a custom title bar in your HTML. See the <a href="/electrobun/apis/browser/draggable-regions">Draggable Regions</a> documentation for making your custom title bar draggable, and use the window control methods (`close()`, `minimize()`, `maximize()`) to implement custom window buttons.</p>
+
+  <Aside type="tip">
+    <p>The `titleBarStyle` option automatically configures the underlying `styleMask` properties. When set to `"hiddenInset"`, it forces `Titled: true` and `FullSizeContentView: true`. When set to `"hidden"`, it forces `Titled: false` and `FullSizeContentView: true`.</p>
+  </Aside>
+
+  <h3>activate</h3>
+  <p>Controls whether the window should take focus when it is first shown. The default is `true`. Set `activate: false` for palette windows, tray popovers, or other UI that should open without stealing focus.</p>
+
+  
+```javascript
+const palette = new BrowserWindow({
+  title: "Command Palette",
+  url: "views://palette/index.html",
+  frame: { width: 420, height: 520, x: 200, y: 120 },
+  activate: false,
+});
+```
+
+
+  <Aside type="note">
+    <p>`activate` only affects the initial auto-show during window creation. To reveal an existing hidden window without taking focus, use `showInactive()`.</p>
+  </Aside>
+
+  <h3>trafficLightOffset</h3>
+  <p>macOS-only. Offsets the native traffic light buttons when using `titleBarStyle: "hiddenInset"`. This is ignored on Windows and Linux.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+  title: "Inset Window",
+  url: "views://mainview/index.html",
+  titleBarStyle: "hiddenInset",
+  trafficLightOffset: {
+    x: 12,
+    y: 10,
+  },
+});
+```
+
+
+  <h3>transparent</h3>
+  <p>When set to `true`, the window background becomes transparent, allowing you to create non-rectangular windows, floating widgets, or windows with rounded corners and drop shadows.</p>
+
+  
+```javascript
+const floatingWidget = new BrowserWindow({
+  title: "Floating Widget",
+  url: "views://widget/index.html",
+  frame: { width: 300, height: 200, x: 100, y: 100 },
+  titleBarStyle: "hidden",
+  transparent: true,
+});
+```
+
+
+  <p>For transparency to work correctly, your HTML/CSS must also have a transparent background:</p>
+
+  
+```css
+/* In your CSS */
+html, body {
+  background: transparent;
+}
+
+/* Create a visible floating card */
+.floating-card {
+  background: rgba(30, 30, 50, 0.95);
+  border-radius: 16px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+```
+
+
+  <Aside type="note">
+    <p>Transparent windows are typically combined with `titleBarStyle: "hidden"` to achieve floating widget effects. The `transparent` option works across all platforms and with both the native WebKit and CEF renderers.</p>
+  </Aside>
+
+  <h3>sandbox</h3>
+  <p>When set to `true`, the webview runs in sandbox mode. This disables RPC (remote procedure calls) and only allows event emission. Use sandbox mode for displaying untrusted content like remote URLs where you want to prevent malicious sites from accessing internal APIs.</p>
+
+  
+```javascript
+// Sandboxed window for untrusted content
+const externalBrowser = new BrowserWindow({
+  title: "External Browser",
+  url: "https://example.com",
+  sandbox: true,  // Disable RPC for security
+});
+
+// Events still work in sandbox mode
+externalBrowser.webview.on("dom-ready", () => {
+  console.log("Page loaded");
+});
+
+externalBrowser.webview.on("will-navigate", (event) => {
+  console.log("Navigating to:", event.data.detail);
+});
+```
+
+
+  <p><strong>Security Model:</strong></p>
+  <ul>
+    <li><strong>Events work</strong> - Navigation events (`will-navigate`, `did-navigate`, `dom-ready`, etc.) still fire normally</li>
+    <li><strong>RPC is disabled</strong> - The `rpc` option is ignored; no function calls between browser and main process</li>
+    <li><strong>No webview tags</strong> - Sandboxed webviews cannot create nested `<electrobun-webview>` elements (OOPIFs)</li>
+    <li><strong>Navigation controls work</strong> - You can still use `loadURL()`, `goBack()`, `goForward()`, etc.</li>
+  </ul>
+
+  <Aside type="tip">
+    <p>Sandbox mode uses a minimal preload script that only sets up event emission. This prevents any code in the webview from communicating with your main process beyond basic lifecycle events.</p>
+  </Aside>
+
+  <h4>When to use sandbox mode</h4>
+  <ul>
+    <li>Loading external/untrusted URLs (e.g., user-provided links, third-party content)</li>
+    <li>Building a web browser or content viewer that displays arbitrary websites</li>
+    <li>Embedding documentation or help content from external sources</li>
+    <li>Any scenario where you want the webview isolated from your application's internals</li>
+  </ul>
+
+  <h4>Using sandbox with &lt;electrobun-webview&gt; tag</h4>
+  <p>You can also create sandboxed nested webviews using the `sandbox` attribute:</p>
+
+  
+```html
+{/* In your HTML (within a trusted webview) */}
+<electrobun-webview
+  src="https://untrusted-site.com"
+  sandbox
+  style="width: 100%; height: 500px;"
+></electrobun-webview>
+```
+
+
+  <p><strong>Info:</strong> The following options are used to instantiate the default BrowserView.</p>
+
+  <h3>url</h3>
+  <p>Set the initial url for the window's default BrowserView to navigate to when it opens.</p>
+
+  
+```javascript
+// Use any url on the internet
+const win = new BrowserWindow({
+   url: "https://electrobun.dev",
+});
+
+// or use the views:// url scheme to load local
+// content that you've bundled with your app.
+
+const win = new BrowserWindow({
+   url: "views://mainview/index.html",
+});
+```
+
+
+  <h3>html</h3>
+  <p>Set an html string for the window's default BrowserView to load when it opens. Anything that would be valid in an html file including javascript and css can be used. Use this instead of setting the `url` property.</p>
+
+  
+```javascript
+const htmlString = "<html><head></head><body><h1>hello world</h1></body></html>";
+
+const win = new BrowserWindow({
+   html: htmlString,
+
+});
+```
+
+
+  <h3>partition</h3>
+  <p>Partitions allow you to separate the browser session. Things like cookies and so on. For example if you have two BrowserViews with the same partition and log into gmail in one, the other will also be logged into gmail. If you use two different partitions then you could log into a different gmail account in each BrowserView.</p>
+
+  
+```javascript
+// ephemeral partition. If you close and reopen your app
+// even if you use the same partition name it will not
+// have persisted.
+const win = new BrowserWindow({
+   partition: "partition1",
+});
+
+// To make partitions persistent just prefix it with `persist:`
+const win = new BrowserWindow({
+   partition: "persist:partition1",
+});
+```
+
+
+  <h3>preload</h3>
+  <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
+  <p>You can use either inline javascript or a url.</p>
+
+  
+```javascript
+// Use any url on the internet
+const win = new BrowserWindow({
+   preload: "https://electrobun.dev/some/remote/file.js",
+});
+
+// or use the views:// preload scheme to load local
+// content that you've bundled with your app.
+
+const win = new BrowserWindow({
+   preload: "views://somebundledview/preloadscript.js",
+});
+
+// or use inline javascript
+
+const win = new BrowserWindow({
+   preload: "document.body.innerHTML = 'Hello world'; console.log('hello console')",
+});
+```
+
+
+  <h3>rpc</h3>
+  <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
+  <p>These RPC functions are asynchronous.</p>
+
+  <p>`src/shared/types.ts`</p>
+  
+```typescript
+export type MyWebviewRPCType = {
+  // functions that execute in the main process
+  bun: RPCSchema<{
+    requests: {
+      someBunFunction: {
+        params: {
+          a: number;
+          b: number;
+        };
+        response: number;
+      };
+    };
+    messages: {
+      logToBun: {
+        msg: string;
+      };
+    };
+  }>;
+  // functions that execute in the browser context
+  webview: RPCSchema<{
+    requests: {
+      someWebviewFunction: {
+        params: {
+          a: number;
+          b: number;
+        };
+        response: number;
+      };
+    };
+    messages: {
+      logToWebview: {
+        msg: string;
+      };
+    };
+  }>;
+};
+```
+
+
+  <p>`src/bun/index.ts`</p>
+  
+```typescript
+import { BrowserWindow, BrowserView } from "electrobun/bun";
+import { type MyWebviewRPCType } from "../shared/types";
+
+// Create an RPC object for the bun handlers with the shared type
+const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
+  maxRequestTime: 5000,
+  handlers: {
+    requests: {
+      someBunFunction: ({ a, b }) => {
+        console.log(`browser asked me to do math with: ${a} and ${b}`);
+        return a + b;
+      },
+    },
+    // When the browser sends a message we can handle it
+    // in the main bun process
+    messages: {
+      "*": (messageName, payload) => {
+        console.log("global message handler", messageName, payload);
+      },
+      logToBun: ({ msg }) => {
+        console.log("Log to bun: ", msg);
+      },
+    },
+  },
+});
+
+// Pass the RPC object to the BrowserWindow, which will set it
+// on the window's default BrowserView
+const win = new BrowserWindow({
+  title: "my window",
+  url: "views://mainview/index.html",
+  frame: {
+    width: 1800,
+    height: 600,
+    x: 2000,
+    y: 2000,
+  },
+  rpc: myWebviewRPC,
+});
+
+// ... later on
+
+// Note: These RPC methods will inherit types from the shared type
+
+// Call a browser function from bun
+const answer = await win.webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
+
+// Send a message to the BrowserView from bun
+win.webview.rpc.send.logToWebview({ msg: "my message" });
+```
+
+
+  <p><strong>Info:</strong> The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
+
+  <h2>Properties</h2>
+
+  <h3>webview</h3>
+  <p>This is a getter for the window's default <a href="/electrobun/apis/browser-view">BrowserView</a>.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+   ...
+});
+
+const defaultWebview = win.webview;
+```
+
+
+  <h2>Methods</h2>
+
+  <h3>setTitle</h3>
+  <p>Change the window title:</p>
+
+  
+```javascript
+win.setTitle('new title')
+```
+
+
+  <h3>close</h3>
+  <p>Close a window.</p>
+
+  
+```javascript
+win.close();
+```
+
+
+  <h3>show / showInactive / activate / hide</h3>
+  <p>Control window visibility and focus. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+  title: "Palette",
+  url: "views://palette/index.html",
+  hidden: true,
+  activate: false,
+});
+
+// Reveal without stealing focus
+win.showInactive();
+
+// Later, explicitly bring it to the front
+win.activate();
+
+// Hide without closing
+win.hide();
+
+// Show and activate
+win.show();
+```
+
+
+  <h3>focus (deprecated)</h3>
+  <p>`focus()` is a deprecated alias for `activate()`. Existing code still works, but prefer `activate()` in new code.</p>
+
+  
+```javascript
+// Old
+win.focus();
+
+// New
+win.activate();
+```
+
+
+  <h3>minimize / unminimize / isMinimized</h3>
+  <p>Control and check the minimized state of a window.</p>
+
+  
+```javascript
+// Minimize the window
+win.minimize();
+
+// Restore from minimized state
+win.unminimize();
+
+// Check if window is minimized
+if (win.isMinimized()) {
+  console.log("Window is minimized");
+}
+```
+
+
+  <h3>maximize / unmaximize / isMaximized</h3>
+  <p>Control and check the maximized state of a window. On macOS, this uses the "zoom" functionality which fills the screen while keeping the menu bar visible.</p>
+
+  
+```javascript
+// Maximize the window
+win.maximize();
+
+// Restore from maximized state
+win.unmaximize();
+
+// Check if window is maximized
+if (win.isMaximized()) {
+  console.log("Window is maximized");
+}
+```
+
+
+  <h3>setFullScreen / isFullScreen</h3>
+  <p>Control and check the fullscreen state of a window. Fullscreen mode hides the title bar and dock/taskbar.</p>
+
+  
+```javascript
+// Enter fullscreen mode
+win.setFullScreen(true);
+
+// Exit fullscreen mode
+win.setFullScreen(false);
+
+// Check if window is in fullscreen
+if (win.isFullScreen()) {
+  console.log("Window is in fullscreen mode");
+}
+
+// Toggle fullscreen
+win.setFullScreen(!win.isFullScreen());
+```
+
+
+  <h3>setAlwaysOnTop / isAlwaysOnTop</h3>
+  <p>Control and check whether a window stays above all other windows. Useful for floating tools, overlays, or picture-in-picture style windows.</p>
+
+  
+```javascript
+// Make window always on top
+win.setAlwaysOnTop(true);
+
+// Disable always on top
+win.setAlwaysOnTop(false);
+
+// Check if window is always on top
+if (win.isAlwaysOnTop()) {
+  console.log("Window is pinned above other windows");
+}
+
+// Toggle always on top
+win.setAlwaysOnTop(!win.isAlwaysOnTop());
+```
+
+
+  <h3>setPosition(x, y)</h3>
+  <p>Move the window to a specific position on screen. Coordinates use a top-left origin (0, 0 is the top-left corner of the screen).</p>
+
+  
+```javascript
+// Move window to position (200, 150)
+win.setPosition(200, 150);
+
+// Center window on screen (approximate)
+const screenWidth = 1920;  // Get actual screen dimensions
+const screenHeight = 1080;
+const frame = win.getFrame();
+win.setPosition(
+  (screenWidth - frame.width) / 2,
+  (screenHeight - frame.height) / 2
+);
+```
+
+
+  <h3>setSize(width, height)</h3>
+  <p>Resize the window to specific dimensions. The window's top-left corner position is preserved.</p>
+
+  
+```javascript
+// Resize window to 800x600
+win.setSize(800, 600);
+
+// Make window square based on current width
+const frame = win.getFrame();
+win.setSize(frame.width, frame.width);
+```
+
+
+  <h3>setFrame(x, y, width, height)</h3>
+  <p>Set both position and size of the window in a single call. This is more efficient than calling `setPosition` and `setSize` separately when you need to change both.</p>
+
+  
+```javascript
+// Move and resize window in one call
+win.setFrame(100, 100, 1024, 768);
+
+// Restore window to a saved position/size
+const savedFrame = { x: 200, y: 150, width: 800, height: 600 };
+win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
+```
+
+
+  <h3>setWindowButtonPosition(x, y)</h3>
+  <p>macOS-only. Reposition the native traffic light buttons at runtime. This is most useful with `titleBarStyle: "hiddenInset"`. On Windows and Linux the method is available but does nothing.</p>
+
+  
+```javascript
+const win = new BrowserWindow({
+  title: "Inset Window",
+  url: "views://mainview/index.html",
+  titleBarStyle: "hiddenInset",
+});
+
+win.setWindowButtonPosition(16, 12);
+```
+
+
+  <h3>getFrame()</h3>
+  <p>Get the current position and size of the window. Returns an object with `x`, `y`, `width`, and `height` properties.</p>
+
+  
+```javascript
+// Get current window frame
+const frame = win.getFrame();
+console.log(`Position: (${frame.x}, ${frame.y})`);
+console.log(`Size: ${frame.width}x${frame.height}`);
+
+// Save and restore window frame
+const savedFrame = win.getFrame();
+// ... later
+win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
+```
+
+
+  <h3>getPosition()</h3>
+  <p>Get the current position of the window. Returns an object with `x` and `y` properties.</p>
+
+  
+```javascript
+// Get current window position
+const pos = win.getPosition();
+console.log(`Window is at (${pos.x}, ${pos.y})`);
+
+// Check if window is at origin
+const { x, y } = win.getPosition();
+if (x === 0 && y === 0) {
+  console.log("Window is at origin");
+}
+```
+
+
+  <h3>getSize()</h3>
+  <p>Get the current size of the window. Returns an object with `width` and `height` properties.</p>
+
+  
+```javascript
+// Get current window size
+const size = win.getSize();
+console.log(`Window is ${size.width}x${size.height}`);
+
+// Check aspect ratio
+const { width, height } = win.getSize();
+const aspectRatio = width / height;
+console.log(`Aspect ratio: ${aspectRatio.toFixed(2)}`);
+```
+
+
+  <h3>setVisibleOnAllWorkspaces / isVisibleOnAllWorkspaces</h3>
+  <p>Control and check whether a window is visible on all virtual desktops/workspaces. This is useful for utility windows, floating tools, or widgets that should remain accessible across all spaces.</p>
+
+  
+```javascript
+// Make window visible on all workspaces
+win.setVisibleOnAllWorkspaces(true);
+
+// Restrict to current workspace
+win.setVisibleOnAllWorkspaces(false);
+
+// Check if window is visible on all workspaces
+if (win.isVisibleOnAllWorkspaces()) {
+  console.log("Window is visible on all workspaces");
+}
+```
+
+
+  <Aside type="tip">
+    <p>This feature is fully supported on macOS (uses `NSWindowCollectionBehaviorCanJoinAllSpaces`). On Windows and Linux, the methods are available but are no-ops.</p>
+  </Aside>
+
+  <h3>setPageZoom / getPageZoom</h3>
+  <p>Control and get the page zoom level for the window's webview. A value of `1.0` represents 100% zoom.</p>
+
+  
+```javascript
+// Set zoom to 150%
+win.setPageZoom(1.5);
+
+// Get current zoom level
+const zoom = win.getPageZoom();
+console.log(`Current zoom: ${zoom * 100}%`);
+
+// Reset to default zoom
+win.setPageZoom(1.0);
+```
+
+
+  <Aside type="tip">
+    <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
+  </Aside>
+
+  <h3>on(name, handler)</h3>
+  <p>Subscribe to BrowserWindow events (see below).</p>
+
+  <h2>Events</h2>
+
+  <h3>close</h3>
+  <p>When a window closes. Per-window close handlers fire before global close handlers, ensuring your handlers run before the internal `exitOnLastWindowClosed` logic.</p>
+
+  
+```javascript
+// listen to a specific window's close event
+win.on('close', (event) => {
+  const {id} = event.data;
+
+  console.log('window closed')
+});
+
+// listen globally to window close events
+import Electrobun from 'electrobun/bun';
+
+Electrobun.events.on('close', (event) => {
+  const {id} = event.data;
+
+  if (win.id === id) {
+    console.log('my window closed');
+  } else {
+    console.log(`some other window with id ${id}` closed);
+  }
+});
+```
+
+
+  <h3>resize</h3>
+  <p>When a window's width or height changes. This events sends the x and y as part of the data because a window may be resized by dragging the top-left corner which would also reposition it.</p>
+
+  
+```javascript
+// listen to a specific window's resize event
+win.on("resize", (event) => {
+  const { id, x, y, width, height } = event.data;
+  console.log("window resized", id, x, y, width, height);
+});
+
+// listen globally to window resize events
+import Electrobun from 'electrobun/bun';
+
+Electrobun.events.on("resize", (event) => {
+  const { id, x, y, width, height } = event.data;
+  console.log("window resized", id, x, y, width, height);
+});
+```
+
+
+  <h3>move</h3>
+  <p>When a window's position changes.</p>
+
+  
+```javascript
+// listen to a specific window's move event
+win.on("move", (event) => {
+  const { id, x, y } = event.data;
+  console.log("window moved", id, x, y);
+});
+
+// listen globally to window move events
+import Electrobun from 'electrobun/bun';
+
+Electrobun.events.on("move", (event) => {
+  const { id, x, y } = event.data;
+  console.log("window moved", id, x, y);
+});
+```
+
+
+  <h3>focus</h3>
+  <p>When a window becomes the key window (receives focus). This is useful for tracking which window should receive keyboard shortcuts or other focus-dependent actions.</p>
+
+  
+```javascript
+// listen to a specific window's focus event
+win.on("focus", (event) => {
+  const { id } = event.data;
+  console.log("window focused", id);
+});
+
+// listen globally to window focus events
+import Electrobun from 'electrobun/bun';
+
+Electrobun.events.on("focus", (event) => {
+  const { id } = event.data;
+  console.log("window focused", id);
+});
+```
+
+
+  <h3>blur</h3>
+  <p>When a window loses focus (is no longer the key window).</p>
+
+  
+```javascript
+// listen to a specific window's blur event
+win.on("blur", (event) => {
+  const { id } = event.data;
+  console.log("window lost focus", id);
+});
+
+// listen globally to window blur events
+import Electrobun from 'electrobun/bun';
+
+Electrobun.events.on("blur", (event) => {
+  const { id } = event.data;
+  console.log("window lost focus", id);
+});
+```

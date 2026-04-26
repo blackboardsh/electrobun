@@ -1,0 +1,252 @@
+---
+title: "CLI Commands"
+---
+              
+              <p>The Electrobun CLI provides commands for initializing new projects and building your applications for different environments.</p>
+
+              <h2>Installation</h2>
+
+              <p>When you install Electrobun, the CLI tool is added to your `node_modules/bin` folder:</p>
+
+              
+```
+bun install electrobun
+```
+
+
+              <p>This makes the `electrobun` command available in your npm scripts or via `bunx`/`npx`.</p>
+
+              <h2>Commands</h2>
+
+              <h3>`electrobun init`</h3>
+
+              <p>Initializes a new Electrobun project with starter templates.</p>
+
+              <h4>Usage</h4>
+
+              
+```bash
+# Interactive template selection
+electrobun init
+
+# Direct template selection
+electrobun init [template-name]
+```
+
+
+              <h4>Available Templates</h4>
+
+              <ul>
+                <li>`hello-world` - Basic single-window application</li>
+                <li>`photo-booth` - Camera app with photo capture functionality</li>
+                <li>`interactive-playground` - An interactive playground of Electrobun apis</li>
+                <li>`multitab-browser` - Multi-tabbed web browser</li>
+              </ul>
+
+              <h4>Examples</h4>
+
+              
+```bash
+# Choose template interactively
+bunx electrobun init
+
+# Initialize with photo-booth template directly
+bunx electrobun init photo-booth
+
+# Initialize with multitab-browser template
+bunx electrobun init multitab-browser
+```
+
+
+              <h3>`electrobun build`</h3>
+
+              <p>Builds your Electrobun application according to the configuration in `electrobun.config.ts`.</p>
+
+              <h4>Usage</h4>
+
+              
+```
+electrobun build [options]
+```
+
+
+              <h4>Options</h4>
+
+              <table class="options-table">
+                <thead>
+                  <tr>
+                    <th>Option</th>
+                    <th>Description</th>
+                    <th>Values</th>
+                    <th>Default</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code style="text-wrap:nowrap;">--env</code></td>
+                    <td>Build environment</td>
+                    <td>`dev`, `canary`, `stable`</td>
+                    <td>`dev`</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <p>Builds always target the current host platform and architecture. To build for multiple platforms, use CI runners for each OS/architecture (see <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a>).</p>
+
+              <h4>Examples</h4>
+
+              
+```bash
+# Development build for current platform
+electrobun build
+
+# Development build with environment flag
+electrobun build --env=dev
+
+# Canary build
+electrobun build --env=canary
+
+# Stable (production) build
+electrobun build --env=stable
+```
+
+
+              <h3>`electrobun run`</h3>
+
+              <p>Launches an already-built dev bundle. This is useful when you've already run `electrobun build` and just want to relaunch the app without rebuilding.</p>
+
+              <h4>Usage</h4>
+
+              
+```
+electrobun run
+```
+
+
+              <h3>`electrobun dev`</h3>
+
+              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `electrobun build --env=dev` followed by `electrobun run`.</p>
+
+              <h4>Usage</h4>
+
+              
+```
+electrobun dev [options]
+```
+
+
+              <h4>Options</h4>
+
+              <table class="options-table">
+                <thead>
+                  <tr>
+                    <th>Option</th>
+                    <th>Description</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td><code style="text-wrap:nowrap;">--watch</code></td>
+                    <td>Watch source files for changes and automatically rebuild + relaunch</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h4>Examples</h4>
+
+              
+```bash
+# Build and launch in dev mode
+electrobun dev
+
+# Build, launch, and watch for changes
+electrobun dev --watch
+```
+
+
+              <h4>Watch Mode</h4>
+
+              <p>When using `--watch`, Electrobun automatically watches your source directories for file changes:</p>
+
+              <ul>
+                <li>The directory containing your `build.bun.entrypoint`</li>
+                <li>Directories containing each view entrypoint</li>
+                <li>Source paths from `build.copy`</li>
+                <li>Any additional paths specified in `build.watch`</li>
+              </ul>
+
+              <p>When a file change is detected, the running app is killed, a fresh build runs (including all lifecycle hooks like `postBuild`), and the app is relaunched. File watchers are paused during builds to avoid false triggers from build output.</p>
+
+              <p>Changes are debounced (300ms) so rapid saves only trigger a single rebuild. If a build fails, the error is logged and the watcher keeps running — the app will rebuild on the next file change.</p>
+
+              <p>Use `build.watchIgnore` in your config to exclude files from triggering rebuilds (e.g., generated assets). See <a href="/electrobun/apis/cli/build-configuration">Build Configuration</a> for details.</p>
+
+              <p>Press <kbd>Ctrl+C</kbd> to stop the app and exit watch mode.</p>
+
+              <h2>Build Environments</h2>
+
+              <h3>Development (`dev`)</h3>
+
+              <ul>
+                <li>Outputs logs and errors to terminal</li>
+                <li>No code signing or notarization</li>
+                <li>Creates build in `build/` folder</li>
+                <li>No artifacts generated</li>
+                <li>Fast iteration for testing</li>
+              </ul>
+
+              <h3>Canary</h3>
+
+              <ul>
+                <li>Pre-release/beta builds</li>
+                <li>Optional code signing and notarization</li>
+                <li>Generates distribution artifacts</li>
+                <li>Creates update manifests for auto-updates</li>
+                <li>Suitable for testing with limited users</li>
+              </ul>
+
+              <h3>Stable</h3>
+
+              <ul>
+                <li>Production-ready builds</li>
+                <li>Full code signing and notarization (if configured)</li>
+                <li>Optimized and compressed artifacts</li>
+                <li>Ready for distribution to end users</li>
+                <li>Generates all update files</li>
+              </ul>
+
+              <h2>Build Script Examples</h2>
+
+              <h3>Basic Setup</h3>
+
+              
+```javascript
+// package.json
+{
+  "scripts": {
+    "start": "electrobun run",
+    "dev": "electrobun dev",
+    "dev:watch": "electrobun dev --watch",
+    "build:canary": "electrobun build --env=canary",
+    "build:stable": "electrobun build --env=stable"
+  }
+}
+```
+
+
+              <h3>CI Build Scripts</h3>
+
+              <p>For multi-platform distribution, run the same build command on each platform's CI runner:</p>
+
+              
+```javascript
+// package.json
+{
+  "scripts": {
+    "build:dev": "electrobun build",
+    "build:canary": "electrobun build --env=canary",
+    "build:stable": "electrobun build --env=stable"
+  }
+}
+```
+
