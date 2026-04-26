@@ -46,7 +46,7 @@
 		"push:stable": "bun run typecheck && bun scripts/push-version.js stable",
 		"build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
 		"test": "bun install && bun build:dev && bun build:cli && cd ../tests && bun install && bun build:dev && bun start",
-		"test:unit": "bun test src/shared",
+		"test:unit": "bun test src/shared src/bun",
 		"bump-cef": "bun scripts/update-cef-version.ts"
 	},
 	"devDependencies": {
