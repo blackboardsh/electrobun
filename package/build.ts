@@ -122,7 +122,8 @@ try {
 		await copyToDist();
 	}
 } catch (err) {
-	console.log(err);
+	console.error(err);
+	process.exit(1);
 }
 
 // Global variables to store build tool paths

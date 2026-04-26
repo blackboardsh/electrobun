@@ -1057,7 +1057,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                 defer allocator.free(applications_dir);
 
                 // Create applications directory if it doesn't exist
-                std.fs.cwd().makeDirPath(applications_dir) catch |err| {
+                std.fs.cwd().makePath(applications_dir) catch |err| {
                     std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
                     // Continue anyway - createFile will fail gracefully
                 };
