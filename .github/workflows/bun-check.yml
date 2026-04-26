@@ -44,6 +44,11 @@ jobs:
         working-directory: package
         run: bun build.ts
 
+      - name: Run unit tests against new Bun
+        if: steps.check.outputs.has_update == 'true'
+        working-directory: package
+        run: bun test:unit
+
       - name: Job summary
         if: always()
         run: |
