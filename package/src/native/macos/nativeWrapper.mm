@@ -64,6 +64,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/glob_match.h"
 #include "../shared/callbacks.h"
 #include "../shared/permissions.h"
+#include "../shared/permissions_cef.h"
 #include "../shared/mime_types.h"
 #include "../shared/asar.h"
 #include "../shared/config.h"
@@ -2372,9 +2373,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         
         NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
         std::string originStd = [originString UTF8String];
-        
+
         NSLog(@"WKWebView: Media capture permission requested for %@ (type: %ld)", originString, (long)type);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if ([origin.protocol isEqualToString:@"views"]) {
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::USER_MEDIA);
         
@@ -2442,9 +2449,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         
         NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
         std::string originStd = [originString UTF8String];
-        
+
         NSLog(@"WKWebView: Geolocation permission requested for %@", originString);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if ([origin.protocol isEqualToString:@"views"]) {
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::GEOLOCATION);
         
@@ -5227,7 +5240,13 @@ public:
         
         std::string origin = requesting_origin.ToString();
         NSLog(@"CEF: Media access permission requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if (origin.find("views://") == 0) {
+            callback->Continue(requested_permissions);
+            return true;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
         
@@ -5280,12 +5299,20 @@ public:
         
         std::string origin = requesting_origin.ToString();
         NSLog(@"CEF: Permission prompt requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        // This also covers Chromium's new Loopback/Local Network Access gate triggered
+        // by the per-webview RPC websocket to ws://localhost:<port>.
+        if (origin.find("views://") == 0) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        }
+
         // Handle different permission types
         PermissionType permType = PermissionType::OTHER;
-        NSString *message = @"This page is requesting additional permissions.\n\nDo you want to allow this?";
-        NSString *title = @"Permission Request";
-        
+        NSString *message = nil;
+        NSString *title = nil;
+
         // Check for specific permission types
         if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
             requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
@@ -5300,8 +5327,16 @@ public:
             permType = PermissionType::NOTIFICATIONS;
             message = @"This page wants to show notifications.\n\nDo you want to allow this?";
             title = @"Notification Permission";
+        } else {
+            // Unrecognized permission type — name what's being requested instead of
+            // a generic "additional permissions" dialog so the user can decide.
+            std::string names = electrobun::describeCefPermissions(requested_permissions);
+            message = [NSString stringWithFormat:
+                @"This page is requesting permission for: %s.\n\nDo you want to allow this?",
+                names.c_str()];
+            title = @"Permission Request";
         }
-        
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
         

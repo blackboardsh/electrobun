@@ -361,6 +361,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "../shared/permissions_cef.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
@@ -1122,7 +1123,13 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Media access permission requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if (origin.find("views://") == 0) {
+            callback->Continue(requested_permissions);
+            return true;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
         
@@ -1173,12 +1180,20 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Permission prompt requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        // This also covers Chromium's new Loopback/Local Network Access gate triggered
+        // by the per-webview RPC websocket to ws://localhost:<port>.
+        if (origin.find("views://") == 0) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        }
+
         // Handle different permission types
         PermissionType permType = PermissionType::OTHER;
-        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string message;
         std::string title = "Permission Request";
-        
+
         // Check for specific permission types
         if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
             requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
@@ -1193,8 +1208,14 @@ public:
             permType = PermissionType::NOTIFICATIONS;
             message = "This page wants to show notifications.\n\nDo you want to allow this?";
             title = "Notification Permission";
+        } else {
+            // Unrecognized permission type — name what's being requested instead of
+            // a generic "additional permissions" dialog so the user can decide.
+            message = "This page is requesting permission for: " +
+                      electrobun::describeCefPermissions(requested_permissions) +
+                      ".\n\nDo you want to allow this?";
         }
-        
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
         
