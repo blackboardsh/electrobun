@@ -785,15 +785,6 @@ public:
             {"no-sandbox", ""},
             {"ozone-platform", "x11"},
             {"use-x11", ""},
-            // Suppress Chrome runtime auto-opening browser windows for the
-            // profile on startup (session restore / crashed-session bubble).
-            // The embedder owns window creation via CefBrowserHost::CreateBrowser;
-            // without these flags, persist:* partitions cause Chrome to restore
-            // previously-open windows in their own URL-bar chrome on next launch.
-            {"no-startup-window", ""},
-            {"disable-session-crashed-bubble", ""},
-            {"hide-crash-restore-bubble", ""},
-            {"no-first-run", ""},
         };
         electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 

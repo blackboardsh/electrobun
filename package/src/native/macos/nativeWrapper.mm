@@ -4259,13 +4259,6 @@ public:
             {"enable-fullscreen", ""},
             {"remote-allow-origins", "*"},
             {"allow-insecure-localhost", ""},
-            // Suppress Chrome runtime auto-opening browser windows for the
-            // profile on startup (session restore / crashed-session bubble).
-            // The embedder owns window creation via CefBrowserHost::CreateBrowser.
-            {"no-startup-window", ""},
-            {"disable-session-crashed-bubble", ""},
-            {"hide-crash-restore-bubble", ""},
-            {"no-first-run", ""},
         };
         electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
