@@ -108,6 +108,7 @@ using electrobun::OperationGuard;
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
@@ -3596,48 +3597,25 @@ public:
 double WebKitWebViewImpl::lastCtrlClickTime = 0;
 
 // Create a CefRequestContext for partition isolation (CEF)
-CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, uint32_t webviewId) {
-    CefRequestContextSettings settings;
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under $HOME/.cache, creating any
+// missing parent directories.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    char* home = getenv("HOME");
+    std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
+    std::string cachePath = buildCEFPartitionPath(
+        basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
+    g_mkdir_with_parents(cachePath.c_str(), 0755);
+    return cachePath;
+}
+} // namespace electrobun
 
-    if (!partitionIdentifier || !partitionIdentifier[0]) {
-        // No partition: use ephemeral settings
-        settings.persist_session_cookies = false;
-    } else {
-        std::string identifier(partitionIdentifier);
-        bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-        if (isPersistent) {
-            std::string partitionName = identifier.substr(8);
-
-            // Build cache path with identifier/channel structure (consistent with CLI and updater)
-            char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
-            std::string cachePath = buildCEFPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
-
-            // Create directory
-            g_mkdir_with_parents(cachePath.c_str(), 0755);
-
-            settings.persist_session_cookies = true;
-            CefString(&settings.cache_path).FromString(cachePath);
-        } else {
-            // Ephemeral partition
-            settings.persist_session_cookies = false;
-        }
-    }
-
-    // Create isolated context with partition-specific settings
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-    
-    // Register the views:// scheme handler factory on this context
-    // This ensures the context can load views:// URLs while maintaining partition isolation
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
+                                                               uint32_t webviewId) {
     static CefRefPtr<ViewsSchemeHandlerFactory> schemeFactory = new ViewsSchemeHandlerFactory();
-    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-    
-    if (!registered) {
-        fprintf(stderr, "WARNING: Failed to register views:// scheme handler for partition context\n");
-    }
-    
-    return context;
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // Forward declaration for X11 event processing

@@ -362,6 +362,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
 #include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
@@ -6707,62 +6708,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 }
 
 // Utility function for creating CEF request contexts with partition support
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under %LOCALAPPDATA%, creating any
+// missing parent directories. Returns "" if %LOCALAPPDATA% is unset, which
+// causes the caller to fall back to an ephemeral context.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    char* localAppData = getenv("LOCALAPPDATA");
+    if (!localAppData) {
+        printf("ERROR CEF: LOCALAPPDATA not found for partition '%s'\n", partitionName.c_str());
+        return "";
+    }
+    std::string cachePath = buildCEFPartitionPath(
+        localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
+    std::wstring wideCachePath(cachePath.begin(), cachePath.end());
+    SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
+    return cachePath;
+}
+} // namespace electrobun
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
-    printf("DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s\n",
-           webviewId, partitionIdentifier ? partitionIdentifier : "null");
-
-    CefRequestContextSettings settings;
-
-    if (!partitionIdentifier || !partitionIdentifier[0]) {
-        // No partition - use in-memory session
-        settings.persist_session_cookies = false;
-    } else {
-        std::string identifier(partitionIdentifier);
-        bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-        if (isPersistent) {
-            // Persistent partition - create cache directory
-            std::string partitionName = identifier.substr(8);
-
-            // Get %LOCALAPPDATA% path
-            char* localAppData = getenv("LOCALAPPDATA");
-            if (!localAppData) {
-                printf("ERROR CEF: LOCALAPPDATA not found, falling back to in-memory session\n");
-                settings.persist_session_cookies = false;
-            } else {
-                // Build path with identifier/channel structure (consistent with CLI and updater)
-                // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\{partitionName}
-                std::string cachePath = buildCEFPartitionPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
-
-                // Create directory if it doesn't exist
-                std::wstring wideCachePath(cachePath.begin(), cachePath.end());
-                SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
-
-                settings.persist_session_cookies = true;
-                CefString(&settings.cache_path).FromString(cachePath);
-
-                printf("DEBUG CEF: Persistent partition '%s' using cache path: %s\n",
-                       partitionName.c_str(), cachePath.c_str());
-            }
-        } else {
-            // Non-persistent partition - in-memory session
-            settings.persist_session_cookies = false;
-            printf("DEBUG CEF: In-memory partition '%s'\n", identifier.c_str());
-        }
-    }
-
-    // Create the request context
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-
-    // Register scheme handler factory for this request context
-    // Note: Each CefRequestContext needs its own registration - it's not global
-    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
-    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-    printf("DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s\n",
-           partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
-
-    return context;
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory =
+        new ElectrobunSchemeHandlerFactory();
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // Internal factory method for creating CEF instances

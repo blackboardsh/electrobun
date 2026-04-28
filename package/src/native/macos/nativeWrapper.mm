@@ -65,6 +65,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/callbacks.h"
 #include "../shared/permissions.h"
 #include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "../shared/mime_types.h"
 #include "../shared/asar.h"
 #include "../shared/config.h"
@@ -5941,50 +5942,40 @@ public:
 
 
 
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under the macOS Application Support
+// directory, ensuring the directory exists.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    if (!appSupportPath) return "";
+
+    std::string cachePathStr = buildCEFPartitionPath(
+        [appSupportPath UTF8String],
+        g_electrobunIdentifier,
+        g_electrobunChannel,
+        "CEF",
+        partitionName);
+
+    NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:cachePath]) {
+        [fileManager createDirectoryAtPath:cachePath
+               withIntermediateDirectories:YES
+                                attributes:nil
+                                     error:nil];
+    }
+    return cachePathStr;
+}
+} // namespace electrobun
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
-  NSLog(@"DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s", webviewId, partitionIdentifier ? partitionIdentifier : "null");
-  CefRequestContextSettings settings;
-  if (!partitionIdentifier || !partitionIdentifier[0]) {
-    settings.persist_session_cookies = false;
-  } else {
-    std::string identifier(partitionIdentifier);
-    bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-    if (isPersistent) {
-      std::string partitionName = identifier.substr(8);
-      NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-
-      // Build path with identifier/channel structure to match root_cache_path logic
-      std::string cachePathStr = buildCEFPartitionPath(
-          [appSupportPath UTF8String],
-          g_electrobunIdentifier,
-          g_electrobunChannel,
-          "CEF",
-          partitionName
-      );
-      NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
-      NSFileManager *fileManager = [NSFileManager defaultManager];
-      if (![fileManager fileExistsAtPath:cachePath]) {
-        [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
-      }
-      settings.persist_session_cookies = true;
-      CefString(&settings.cache_path).FromString([cachePath UTF8String]);
-    } else {
-      settings.persist_session_cookies = false;
-    }
-  }
-
-  CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-
-  // Register scheme handler factory for this request context
-  // Note: Each CefRequestContext needs its own registration - it's not global
-  static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
-  bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-  NSLog(@"DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s",
-        partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
-
-  return context;
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory =
+        new ElectrobunSchemeHandlerFactory();
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // ----------------------- CEFWebViewImpl -----------------------
@@ -6151,8 +6142,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     [self setPassthrough:YES];
                 }
 
-                if (url && url[0] != '\0') {
+                if (self.browser && url && url[0] != '\0') {
                     self.browser->GetMainFrame()->LoadURL(CefString(url));
+                } else if (!self.browser) {
+                    NSLog(@"ERROR CEF: CreateBrowserSync returned null for webview %u (partition: %s) — initial URL not loaded",
+                          webviewId, partitionIdentifier ? partitionIdentifier : "(default)");
                 }
             };
             
