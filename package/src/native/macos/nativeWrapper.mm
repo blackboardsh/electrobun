@@ -731,9 +731,25 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
     while ([relativePath hasPrefix:@"/"]) {
         relativePath = [relativePath substringFromIndex:1];
     }
+    // Strip fragment (#...) and query (?...) per RFC 3986 — they are URL
+    // metadata, not part of the resource path, and must not be passed to
+    // the filesystem.
+    NSRange fragmentRange = [relativePath rangeOfString:@"#"];
+    if (fragmentRange.location != NSNotFound) {
+        relativePath = [relativePath substringToIndex:fragmentRange.location];
+    }
+    NSRange queryRange = [relativePath rangeOfString:@"?"];
+    if (queryRange.location != NSNotFound) {
+        relativePath = [relativePath substringToIndex:queryRange.location];
+    }
     // Strip trailing slashes - WebView may normalize URLs without folder components
     while ([relativePath hasSuffix:@"/"] && [relativePath length] > 0) {
         relativePath = [relativePath substringToIndex:[relativePath length] - 1];
+    }
+    // Percent-decode per RFC 3986 so the path matches the on-disk filename.
+    NSString *decoded = [relativePath stringByRemovingPercentEncoding];
+    if (decoded) {
+        relativePath = decoded;
     }
 
     return relativePath;
@@ -5777,9 +5793,24 @@ public:
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
                 // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
                 std::string relativePath = urlStr.substr(8);
+                // Strip fragment (#...) and query (?...) per RFC 3986 — they
+                // are URL metadata, not part of the resource path.
+                size_t fragmentPos = relativePath.find('#');
+                if (fragmentPos != std::string::npos) {
+                    relativePath.resize(fragmentPos);
+                }
+                size_t queryPos = relativePath.find('?');
+                if (queryPos != std::string::npos) {
+                    relativePath.resize(queryPos);
+                }
                 // Strip trailing slashes - WebView may normalize URLs without folder components
                 while (!relativePath.empty() && (relativePath.back() == '/' || relativePath.back() == '\\')) {
                     relativePath.pop_back();
+                }
+                // Percent-decode per RFC 3986 so the path matches the on-disk filename.
+                NSString *decodedNS = [[NSString stringWithUTF8String:relativePath.c_str()] stringByRemovingPercentEncoding];
+                if (decodedNS) {
+                    relativePath = std::string([decodedNS UTF8String]);
                 }
                 NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 

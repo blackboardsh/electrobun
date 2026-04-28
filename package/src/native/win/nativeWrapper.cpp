@@ -780,6 +780,47 @@ static void EnsureDevToolsWindowClassRegistered() {
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
 
+// Percent-decode a URI path component in place per RFC 3986 (UTF-8 byte-wise;
+// invalid escapes are passed through as-is, matching browser behavior).
+static inline void percentDecodeInPlace(std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+                if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+                return -1;
+            };
+            int hi = hex(s[i + 1]);
+            int lo = hex(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    s = std::move(out);
+}
+
+// Normalize a views:// relative path per RFC 3986: strip fragment (#...) and
+// query (?...) — which are URL metadata, not part of the resource path — and
+// percent-decode the remainder so it matches the on-disk filename.
+static inline void stripViewsUrlMeta(std::string& path) {
+    size_t fragmentPos = path.find('#');
+    if (fragmentPos != std::string::npos) {
+        path.resize(fragmentPos);
+    }
+    size_t queryPos = path.find('?');
+    if (queryPos != std::string::npos) {
+        path.resize(queryPos);
+    }
+    percentDecodeInPlace(path);
+}
+
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
@@ -791,6 +832,7 @@ public:
 
         std::string url = request->GetURL();
         std::string path = url.substr(8); // Remove "views://" prefix
+        stripViewsUrlMeta(path);
         if (path.empty()) path = "index.html";
 
         std::string content;
@@ -6115,6 +6157,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
+                                            stripViewsUrlMeta(filePath);
                                             // Strip trailing slashes - WebView2 may normalize URLs without folder components
                                             while (!filePath.empty() && (filePath.back() == '/' || filePath.back() == '\\')) {
                                                 filePath.pop_back();
@@ -11103,6 +11146,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     std::string path;
     if (uriStr.length() > 8) {
         path = uriStr.substr(8); // Remove "views://" prefix
+        stripViewsUrlMeta(path);
         // Strip trailing slashes - WebView2 may normalize URLs without folder components
         while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
             path.pop_back();

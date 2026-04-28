@@ -525,6 +525,47 @@ public:
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
 };
 
+// Percent-decode a URI path component in place per RFC 3986 (UTF-8 byte-wise;
+// invalid escapes are passed through as-is, matching browser behavior).
+static inline void percentDecodeInPlace(std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            auto hex = [](char c) -> int {
+                if (c >= '0' && c <= '9') return c - '0';
+                if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+                if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+                return -1;
+            };
+            int hi = hex(s[i + 1]);
+            int lo = hex(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back(static_cast<char>((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    s = std::move(out);
+}
+
+// Normalize a views:// relative path per RFC 3986: strip fragment (#...) and
+// query (?...) — which are URL metadata, not part of the resource path — and
+// percent-decode the remainder so it matches the on-disk filename.
+static inline void stripViewsUrlMeta(std::string& path) {
+    size_t fragmentPos = path.find('#');
+    if (fragmentPos != std::string::npos) {
+        path.resize(fragmentPos);
+    }
+    size_t queryPos = path.find('?');
+    if (queryPos != std::string::npos) {
+        path.resize(queryPos);
+    }
+    percentDecodeInPlace(path);
+}
+
 // CEF views:// scheme handler implementation
 class ViewsResourceHandler : public CefResourceHandler {
 public:
@@ -537,6 +578,7 @@ public:
         std::string fullPath = "index.html"; // default
         if (url.find("views://") == 0) {
             fullPath = url.substr(8); // Skip "views://"
+            stripViewsUrlMeta(fullPath);
             // Strip trailing slashes - WebKit may normalize URLs without folder components
             while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
                 fullPath.pop_back();
@@ -5208,13 +5250,14 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     
     // Parse the full URI to get everything after views://
     // For views://webviewtag/index.html, we want "webviewtag/index.html"
-    const char* fullPath = "index.html"; // default
+    std::string fullPath = "index.html"; // default
     if (uri && strncmp(uri, "views://", 8) == 0) {
         fullPath = uri + 8; // Skip "views://"
+        stripViewsUrlMeta(fullPath);
     }
-    
+
     // Check if this is the internal HTML request
-    if (strcmp(fullPath, "internal/index.html") == 0) {
+    if (fullPath == "internal/index.html") {
         fflush(stdout);
         
         // Resolve the webviewId by matching the requesting WebKitWebView to g_webviewMap
@@ -5277,7 +5320,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         // If ASAR archive is loaded, try to read from it
         if (g_asarArchive) {
             // The ASAR contains the entire app directory, so prepend "views/" to the path
-            std::string asarFilePath = "views/" + std::string(fullPath);
+            std::string asarFilePath = "views/" + fullPath;
 
             size_t asarFileSize = 0;
             const uint8_t* fileData = nullptr;
@@ -5308,7 +5351,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     // Fallback: Read from flat file system (for non-ASAR builds or missing files)
     if (!foundFile) {
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
-        gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
+        gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
 
         fflush(stdout);
 
@@ -5345,7 +5388,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         g_object_unref(stream);
     } else {
         // Return 404 error
-        GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
+        GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath.c_str());
         webkit_uri_scheme_request_finish_error(request, responseError);
         g_error_free(responseError);
     }
