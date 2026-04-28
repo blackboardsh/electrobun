@@ -11,6 +11,7 @@
 #include <fstream>
 #include <sstream>
 #include <ctime>
+#include <cmath>
 #include <chrono>
 #include <functional>
 #include <future>
@@ -9121,12 +9122,53 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
 }
 
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
-    // pageZoom is WebKit-specific, not available on Windows
-    // TODO: implement WebView2 zoom if needed
+    if (!abstractView || zoomLevel <= 0.0) return;
+
+    MainThreadDispatcher::dispatch_sync([abstractView, zoomLevel]() {
+        if (auto* webview2Impl = dynamic_cast<WebView2View*>(abstractView)) {
+            ComPtr<ICoreWebView2Controller> controller = webview2Impl->getController();
+            if (controller) {
+                controller->put_ZoomFactor(zoomLevel);
+            }
+            return;
+        }
+
+        if (auto* cefImpl = dynamic_cast<CEFView*>(abstractView)) {
+            CefRefPtr<CefBrowser> browser = cefImpl->getBrowser();
+            if (browser && browser->GetHost()) {
+                // CEF zoom is logarithmic in 1.2x steps; convert from web-style factor.
+                const double cefZoomLevel = std::log(zoomLevel) / std::log(1.2);
+                browser->GetHost()->SetZoomLevel(cefZoomLevel);
+            }
+        }
+    });
 }
 
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
-    // pageZoom is WebKit-specific, not available on Windows
+    if (!abstractView) return 1.0;
+
+    if (auto* webview2Impl = dynamic_cast<WebView2View*>(abstractView)) {
+        double zoomFactor = 1.0;
+        MainThreadDispatcher::dispatch_sync([webview2Impl, &zoomFactor]() {
+            ComPtr<ICoreWebView2Controller> controller = webview2Impl->getController();
+            if (controller) {
+                controller->get_ZoomFactor(&zoomFactor);
+            }
+        });
+        return zoomFactor;
+    }
+
+    if (auto* cefImpl = dynamic_cast<CEFView*>(abstractView)) {
+        double cefZoomLevel = 0.0;
+        MainThreadDispatcher::dispatch_sync([cefImpl, &cefZoomLevel]() {
+            CefRefPtr<CefBrowser> browser = cefImpl->getBrowser();
+            if (browser && browser->GetHost()) {
+                cefZoomLevel = browser->GetHost()->GetZoomLevel();
+            }
+        });
+        return std::pow(1.2, cefZoomLevel);
+    }
+
     return 1.0;
 }
 

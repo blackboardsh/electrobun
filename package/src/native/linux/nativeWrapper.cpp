@@ -8124,12 +8124,42 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
 }
 
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView* abstractView, double zoomLevel) {
-    // pageZoom is WebKit-specific, not available on Linux CEF
-    // TODO: implement CEF zoom if needed
+    if (!abstractView || zoomLevel <= 0.0) return;
+
+    if (auto* webkitImpl = dynamic_cast<WebKitWebViewImpl*>(abstractView)) {
+        if (webkitImpl->webview) {
+            webkit_web_view_set_zoom_level(WEBKIT_WEB_VIEW(webkitImpl->webview), zoomLevel);
+        }
+        return;
+    }
+
+    if (auto* cefImpl = dynamic_cast<CEFWebViewImpl*>(abstractView)) {
+        if (cefImpl->browser && cefImpl->browser->GetHost()) {
+            // CEF zoom is logarithmic in 1.2x steps; convert from web-style factor.
+            const double cefZoomLevel = std::log(zoomLevel) / std::log(1.2);
+            cefImpl->browser->GetHost()->SetZoomLevel(cefZoomLevel);
+        }
+    }
 }
 
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView* abstractView) {
-    // pageZoom is WebKit-specific, not available on Linux CEF
+    if (!abstractView) return 1.0;
+
+    if (auto* webkitImpl = dynamic_cast<WebKitWebViewImpl*>(abstractView)) {
+        if (webkitImpl->webview) {
+            return webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(webkitImpl->webview));
+        }
+        return 1.0;
+    }
+
+    if (auto* cefImpl = dynamic_cast<CEFWebViewImpl*>(abstractView)) {
+        if (cefImpl->browser && cefImpl->browser->GetHost()) {
+            const double cefZoomLevel = cefImpl->browser->GetHost()->GetZoomLevel();
+            return std::pow(1.2, cefZoomLevel);
+        }
+        return 1.0;
+    }
+
     return 1.0;
 }
 
