@@ -5,7 +5,13 @@
 // (e.g. include/cef_app.h, which pulls them in transitively).
 //
 // Behavior (consistent across macOS, Linux, Windows):
-//   - partition == ""               → shared global context (default profile).
+//   - partition == ""               → fresh ephemeral CefRequestContext per call.
+//     We deliberately do NOT route the default partition to GetGlobalContext():
+//     under Chrome runtime, attaching multiple browsers to the global context in
+//     rapid succession races with Chrome's window-framework code and intermittently
+//     opens the browser in its own top-level chrome window (with URL bar) instead
+//     of honoring the embedder's SetAsChild. A per-webview ephemeral context
+//     sidesteps that race and matches the pre-consolidation Linux/Windows behavior.
 //   - partition starts with "persist:" → cached per identifier; first call creates
 //     a new CefRequestContext with a custom cache_path on disk, subsequent calls
 //     for the same identifier reuse it. Caching is required because CEF's Chrome
@@ -61,14 +67,26 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
         }
     };
 
-    // Default partition → shared global context.
+    bool isPersistent = identifier.size() >= 8 && identifier.compare(0, 8, "persist:") == 0;
+
+    // Default partition → fresh ephemeral context per webview.
+    // Avoids a Chrome-runtime race where multiple browsers attached to the
+    // global context can spawn their own top-level chrome window instead of
+    // embedding via SetAsChild. See behavior comment at top of file.
     if (identifier.empty()) {
-        CefRefPtr<CefRequestContext> ctx = CefRequestContext::GetGlobalContext();
+        CefRequestContextSettings defaultSettings;
+        defaultSettings.persist_session_cookies = false;
+        fprintf(stderr, "[partition_context] webview %u creating ephemeral context for default partition\n",
+                webviewId);
+        CefRefPtr<CefRequestContext> ctx = CefRequestContext::CreateContext(defaultSettings, nullptr);
+        if (!ctx) {
+            fprintf(stderr, "[partition_context] WARNING: CreateContext returned null for default partition "
+                            "— falling back to global context\n");
+            ctx = CefRequestContext::GetGlobalContext();
+        }
         registerScheme(ctx);
         return ctx;
     }
-
-    bool isPersistent = identifier.size() >= 8 && identifier.compare(0, 8, "persist:") == 0;
 
     // Reuse cached context for persist:* partitions only.
     if (isPersistent) {
