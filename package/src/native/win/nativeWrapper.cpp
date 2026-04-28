@@ -10108,9 +10108,9 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                 }
                 pShellItemArray->Release();
                 
-                // Join paths with comma
+                // Join paths with ASCII File Separator (commas are legal in filenames)
                 for (size_t i = 0; i < paths.size(); i++) {
-                    if (i > 0) result += ",";
+                    if (i > 0) result += "\x1C";
                     result += paths[i];
                 }
             }
