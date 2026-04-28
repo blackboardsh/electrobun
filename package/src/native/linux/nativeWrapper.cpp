@@ -86,6 +86,7 @@ static int g_sigint_count = 0;
 // Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
+static std::mutex g_cefBrowserCreationMutex;  // Serialize CreateBrowserSync calls
 
 // Map from CEF browser identifier to electrobun webviewId, used by scheme handlers
 static std::map<int, uint32_t> g_browserIdToWebviewId;
@@ -1249,6 +1250,24 @@ public:
     }
 
     // CefLifeSpanHandler methods
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      int popup_id,
+                      const CefString& target_url,
+                      const CefString& target_frame_name,
+                      CefLifeSpanHandler::WindowOpenDisposition target_disposition,
+                      bool user_gesture,
+                      const CefPopupFeatures& popupFeatures,
+                      CefWindowInfo& windowInfo,
+                      CefRefPtr<CefClient>& client,
+                      CefBrowserSettings& settings,
+                      CefRefPtr<CefDictionaryValue>& extra_info,
+                      bool* no_javascript_access) override {
+        // Prevent all popup windows - this stops CEF from creating new top-level windows
+        printf("CEF: Blocking popup window creation for URL: %s\n", target_url.ToString().c_str());
+        return true;  // Return true to cancel the popup
+    }
+    
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
         
         // Set the browser reference
@@ -3750,8 +3769,8 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
-        // Use Alloy runtime style for embedded windows (like macOS)
-        window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+        // Use Alloy runtime style for embedded windows (like macOS and Windows)
+        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
         
         // For child windows, position should be relative to parent (0,0 for fullscreen)
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
@@ -3900,13 +3919,23 @@ public:
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", isSandboxed);
 
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        // Serialize browser creation to avoid Chrome runtime race condition
+        // where rapid concurrent browser creation causes windows to spawn
+        // with their own URL bar instead of embedding properly
+        CefRefPtr<CefBrowser> browser;
+        {
+            std::lock_guard<std::mutex> creation_lock(g_cefBrowserCreationMutex);
+            browser = CefBrowserHost::CreateBrowserSync(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        }
         
-        if (!create_result) {
+        if (!browser) {
             creationFailed = true;
         } else {
-            // Add this webview to the X11 window's child list
-            x11win->childWindows.push_back(0); // Will be updated when browser is created
+            // Store the browser reference immediately
+            this->browser = browser;
+            // Add this webview to the X11 window's child list with the actual window handle
+            CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
+            x11win->childWindows.push_back(handle);
         }
     }
     
