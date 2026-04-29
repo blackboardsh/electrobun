@@ -3,5 +3,28 @@ title: "v1.13.1"
 ---
               <p><em>Released 2026-02-19.</em></p>
 
-              {/* TODO: Fill in the changes shipped in v1.13.1. */}
-              <p><em>Release notes pending.</em></p>
+              <h2>New Features</h2>
+
+              <ul>
+                <li>Bumped CEF to Chromium 145; Linux and Windows builds bumped to C++20 to match.</li>
+                <li>Bumped Bun to 1.3.9.</li>
+                <li>Webviews now start transparent and passthrough on Windows and Linux to match macOS behaviour.</li>
+                <li><code>setTransparent</code> / <code>setPassthrough</code> can be applied at webview start time for OOPIFs.</li>
+                <li>Improved app update flow on macOS.</li>
+              </ul>
+
+              <h2>Bug Fixes</h2>
+
+              <ul>
+                <li>Fix crash on Windows when closing transparent webviews under CEF.</li>
+                <li>Fix windows closing unexpectedly when removing an OOPIF on Windows.</li>
+                <li>Block AppleDouble (<code>._*</code>) files that broke code signing on some setups.</li>
+                <li>Don't resize webviews to zero.</li>
+                <li>Fix a warning on macOS.</li>
+              </ul>
+
+              <h2>Other Changes</h2>
+
+              <ul>
+                <li>Removed the deprecated <code>targets</code> argument.</li>
+              </ul>

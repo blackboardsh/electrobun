@@ -3,5 +3,41 @@ title: "v1.16.0"
 ---
               <p><em>Released 2026-03-15.</em></p>
 
-              {/* TODO: Fill in the changes shipped in v1.16.0. */}
-              <p><em>Release notes pending.</em></p>
+              <h2>New Features</h2>
+
+              <ul>
+                <li>Added macOS dock and tray visibility controls.</li>
+                <li>Added <code>setVisibleOnAllWorkspaces</code> for macOS windows, with no-op stubs on Windows and Linux for cross-platform code.</li>
+                <li>Added <code>setPageZoom</code> / <code>getPageZoom</code> APIs for WKWebView.</li>
+                <li>Added <code>executeJavascript</code> on webview tags.</li>
+                <li>Added a <code>blur</code> event to complement <code>focus</code>.</li>
+                <li>Added Wayland draggable region support on Linux.</li>
+                <li><code>chromiumFlags</code> now accepts <code>false</code> for individual flags to skip the corresponding default flag.</li>
+                <li>Added types for <code>watch</code> / <code>watchIgnore</code> config.</li>
+                <li>Notarization now supports App Store Connect API key credentials.</li>
+                <li>Native <code>.node</code> modules inside the app bundle are now signed as part of the build.</li>
+                <li>The CLI executable downloader now respects HTTP proxy environment variables.</li>
+              </ul>
+
+              <h2>Bug Fixes</h2>
+
+              <ul>
+                <li>Fix HTML rendering and inline HTML rendering on WebView2 (Windows).</li>
+                <li>Fix Windows preload script <code>views://</code> URLs not being resolved to file content.</li>
+                <li>Fix focus event not firing when <code>titleBarStyle: "hidden"</code> is used.</li>
+                <li>Fix <code>no-drag</code> regions nested inside drag regions.</li>
+                <li>Fix RPC memory leak by cleaning up <code>requestListeners</code> and <code>requestTimeouts</code> after each request completes.</li>
+                <li>Use the content view bounds for <code>fullSize</code> webview frames on macOS instead of the window frame.</li>
+                <li>Use the content rect (not the window frame) for <code>windowDidResize</code>.</li>
+                <li>Dispatch <code>evaluateJavaScriptWithNoCompletion</code> to the main queue on macOS.</li>
+                <li>Copy <code>jsonString</code> before <code>dispatch_async</code> in <code>setApplicationMenu</code> and <code>showContextMenu</code> to avoid use-after-free.</li>
+                <li>Fix version detection and package resolution in monorepos.</li>
+                <li>Improve shell path escaping in the CLI to prevent command injection.</li>
+                <li>Replace deprecated <code>rmdirSync</code> with <code>rmSync</code>.</li>
+              </ul>
+
+              <h2>Other Changes</h2>
+
+              <ul>
+                <li>Upgraded GitHub Actions to the latest versions and made them Node 24-compatible.</li>
+              </ul>

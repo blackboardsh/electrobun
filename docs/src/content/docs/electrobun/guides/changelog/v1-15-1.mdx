@@ -3,5 +3,33 @@ title: "v1.15.1"
 ---
               <p><em>Released 2026-03-05.</em></p>
 
-              {/* TODO: Fill in the changes shipped in v1.15.1. */}
-              <p><em>Release notes pending.</em></p>
+              <h2>New Features</h2>
+
+              <ul>
+                <li>Introduced first-class WebGPU support across macOS, Windows, and Linux.</li>
+                <li><strong>Standalone GPU windows.</strong> A new <code>GpuWindow</code> class lets you open a window whose contents are rendered entirely with raw WGPU from Bun — no webview, no HTML, no JavaScript bridge. You attach <code>WGPUView</code>s directly to the window and own the render loop yourself.</li>
+                <li><strong>WGPU surfaces inside webviews.</strong> Drop an <code>&lt;electrobun-wgpu&gt;</code> tag (or the <code>&lt;electrobun-webview/wgpu&gt;</code> variant) into a webview to composite a native WGPU surface alongside your HTML.</li>
+                <li>FFI bindings are generated for WebGPU so you can call into <code>wgpu</code> directly from Bun.</li>
+                <li>Added GPU keyboard and mouse input handling and got texture readback working on macOS.</li>
+                <li>Added new templates that demonstrate WGPU end-to-end: a raw <code>bunny-wgpu</code> template, a Three.js template, a Babylon.js template, and a <code>wgpu-ml</code> machine-learning template.</li>
+                <li>Improved <code>&lt;electrobun-webview/wgpu&gt;</code> tag resize performance.</li>
+                <li>The <code>tray-app</code> template now demonstrates configuring window-close behaviour.</li>
+              </ul>
+
+              <h2>Bug Fixes</h2>
+
+              <ul>
+                <li>Fix WGPU edge cases on Windows, including running with <code>bundleCEF: false</code>.</li>
+                <li>Fix WGPU templates on Windows and Linux.</li>
+                <li>Look for the DirectX shader compiler in the right place on Windows.</li>
+                <li>Fix the template keycode enum mapping on macOS.</li>
+                <li>Handle template lock files more reliably.</li>
+                <li>Fix a race in <code>electrobun --watch</code>.</li>
+              </ul>
+
+              <h2>Other Changes</h2>
+
+              <ul>
+                <li>Removed the <code>archiver</code> dependency.</li>
+                <li>The package readme is now published to npm.</li>
+              </ul>
