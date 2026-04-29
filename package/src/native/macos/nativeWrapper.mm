@@ -79,6 +79,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/cache_migration.h"
 
 using namespace electrobun;
 
@@ -5708,6 +5709,11 @@ bool initializeCEF() {
     );
     NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
     NSLog(@"[CEF] Using path: %s", cachePathStr.c_str());
+
+    // One-shot wipe if Electrobun's cache format version has been bumped
+    // since the user's last launch. See cache_migration.h.
+    electrobun::migrateCacheFolderIfNeeded(cachePathStr);
+
     CefString(&settings.root_cache_path) = [cachePath UTF8String];
 
     // Set log file path for debugging

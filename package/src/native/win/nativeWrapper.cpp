@@ -63,6 +63,7 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/cache_migration.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -5857,6 +5858,10 @@ ELECTROBUN_EXPORT bool initCEF() {
 
     // Create cache directory if it doesn't exist
     CreateDirectoryA(userDataDir.c_str(), NULL);
+
+    // One-shot wipe if Electrobun's cache format version has been bumped
+    // since the user's last launch. See cache_migration.h.
+    electrobun::migrateCacheFolderIfNeeded(userDataDir);
 
     // Initialize CEF
     CefMainArgs main_args(GetModuleHandle(NULL));

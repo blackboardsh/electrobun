@@ -59,6 +59,7 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/cache_migration.h"
 
 using namespace electrobun;
 
@@ -2115,6 +2116,11 @@ bool initializeCEF() {
         std::string basePath = std::string(home) + "/.cache";
         std::string cachePath = buildAppDataPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF");
         std::cout << "[CEF] Using path: " << cachePath << std::endl;
+
+        // One-shot wipe if Electrobun's cache format version has been bumped
+        // since the user's last launch. See cache_migration.h.
+        electrobun::migrateCacheFolderIfNeeded(cachePath);
+
         CefString(&settings.root_cache_path) = cachePath;
     }
     
