@@ -169,6 +169,14 @@ export default {
 			bundleCEF: true,
 			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
+			// X11 / GTK WM_CLASS hint applied to every window. gnome-shell
+			// resolves the app icon via WM_CLASS -> .desktop StartupWMClass,
+			// so this MUST match what your .desktop file declares. When
+			// unset the wrapper uses the literal "ElectrobunKitchenSink-dev"
+			// which was the old hardcoded default. Setting it here to the
+			// kitchen app's intended class so the example's .desktop icon
+			// resolves correctly.
+			wmClass: "electrobun-kitchen",
 			chromiumFlags: {
 				// "show-paint-rects": true,
 				// "show-composited-layer-borders": true,

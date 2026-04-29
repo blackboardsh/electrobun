@@ -7376,6 +7376,15 @@ extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     });
 }
 
+// Linux-only knob, exposed as a no-op on macOS so the bun-side FFI
+// binding can be loaded unconditionally on every platform without
+// gating by `process.platform`. macOS uses CFBundleIdentifier (set at
+// .app bundle creation time) for icon resolution — there's no runtime
+// equivalent of X11's WM_CLASS to override.
+extern "C" void setLinuxWmClass(const char *class_name) {
+    (void)class_name;
+}
+
 extern "C" void closeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window close];

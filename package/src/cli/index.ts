@@ -2339,7 +2339,15 @@ ${utiDecls}
 					console.log(`WARNING: Linux icon not found: ${iconSourcePath}`);
 				}
 
-				// Create desktop file template for Linux
+				// Create desktop file template for Linux.
+				// StartupWMClass MUST match the WM_CLASS that the native
+				// wrapper sets on the window -- both now derive from the same
+				// source: linux.wmClass ?? config.app.name. When the user
+				// overrides linux.wmClass the .desktop and the window stay
+				// in sync automatically.
+				const linuxWmClass =
+					(config.build?.linux as { wmClass?: string } | undefined)
+						?.wmClass ?? config.app.name;
 				const desktopContent = `[Desktop Entry]
 Version=1.0
 Type=Application
@@ -2348,7 +2356,7 @@ Comment=${config.app.description || `${config.app.name} application`}
 Exec=launcher
 Icon=appIcon.png
 Terminal=false
-StartupWMClass=${config.app.name}
+StartupWMClass=${linuxWmClass}
 Categories=Utility;Application;
 `;
 
@@ -3692,6 +3700,27 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			Object.keys(platformConfig.chromiumFlags).length > 0
 		) {
 			buildJsonObj["chromiumFlags"] = platformConfig.chromiumFlags;
+		}
+
+		// Linux-only: forward the X11/GTK `wmClass` hint into build.json
+		// so the bun runtime can pass it to the native wrapper via
+		// setLinuxWmClass(). The .desktop file (generated below) already
+		// uses `config.app.name` as StartupWMClass -- the WM_CLASS on the
+		// window MUST match that string for gnome-shell's icon lookup to
+		// resolve the .desktop entry. So we default to config.app.name
+		// when the user hasn't set linux.wmClass explicitly.
+		//
+		// Without this default the wrapper falls back to the hardcoded
+		// "ElectrobunKitchenSink-dev" literal and gnome-shell can't find
+		// the .desktop -- every Electrobun app on Linux shows a generic
+		// placeholder icon.
+		if (targetOS === "linux") {
+			const linuxConfig = config.build?.linux as
+				| { wmClass?: string }
+				| undefined;
+			// Explicit config wins, else derive from app.name (same value
+			// the .desktop StartupWMClass already uses at line ~2123).
+			buildJsonObj["wmClass"] = linuxConfig?.wmClass ?? config.app.name;
 		}
 
 		const buildJsonContent = JSON.stringify(buildJsonObj);
