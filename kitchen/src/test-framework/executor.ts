@@ -112,6 +112,7 @@ export class TestExecutor {
           preload: options.preload || undefined,
           renderer: options.renderer || 'cef', // Default to CEF, allow override
           hidden: options.hidden || false,
+          activate: options.activate ?? true,
           frame: {
             width: options.width || 800,
             height: options.height || 600,
@@ -120,6 +121,7 @@ export class TestExecutor {
           },
           rpc: options.rpc,
           titleBarStyle: options.titleBarStyle,
+          trafficLightOffset: options.trafficLightOffset,
           sandbox: options.sandbox || false,
         });
 

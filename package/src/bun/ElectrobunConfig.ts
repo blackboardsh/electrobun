@@ -56,6 +56,39 @@ export interface ElectrobunConfig {
 		 * ```
 		 */
 		urlSchemes?: string[];
+
+		/**
+		 * File type associations for the application.
+		 * Registers document types so the OS can open files with your app
+		 * (e.g., double-click in Finder, "Open With" menu, drag-to-dock).
+		 *
+		 * Platform support:
+		 * - macOS: Fully supported. Generates CFBundleDocumentTypes in Info.plist.
+		 * - Windows/Linux: Not yet supported.
+		 *
+		 * Files arrive as file:// URLs via the existing "open-url" event:
+		 * ```typescript
+		 * Electrobun.events.on("open-url", (e) => {
+		 *   if (e.data.url.startsWith("file://")) {
+		 *     console.log("Opened file:", e.data.url);
+		 *   }
+		 * });
+		 * ```
+		 */
+		fileAssociations?: Array<{
+			/** File extensions without the leading dot (e.g., ["dotlock", "json"]) */
+			ext: string[];
+			/** Human-readable name for this file type (e.g., "DotLock Document") */
+			name: string;
+			/** The app's role for this file type. @default "Viewer" */
+			role?: "Editor" | "Viewer" | "Shell" | "None";
+			/**
+			 * Path to an .icns file for this document type (macOS only).
+			 * The file is automatically copied into the app bundle's Resources folder
+			 * during the build. Only the filename (without path) is written to Info.plist.
+			 */
+			icon?: string;
+		}>;
 	};
 
 	/**
@@ -278,7 +311,15 @@ export interface ElectrobunConfig {
 			entitlements?: Record<string, boolean | string | string[]>;
 
 			/**
-			 * Path to .iconset folder containing app icons
+			 * Path to .iconset folder or .icon file (from Icon Composer)
+			 * containing app icons.
+			 *
+			 * - `.iconset` folders are converted to .icns via iconutil
+			 *   (requires Command Line Tools)
+			 * - `.icon` files are compiled via actool, producing Assets.car
+			 *   for Liquid Glass on macOS 26+ and a .icns fallback for older
+			 *   macOS versions (requires Xcode)
+			 *
 			 * @default "icon.iconset"
 			 */
 			icons?: string;

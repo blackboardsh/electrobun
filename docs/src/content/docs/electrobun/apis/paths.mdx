@@ -1,0 +1,22 @@
+---
+title: "Paths"
+---
+              
+              <p>Global paths exposed by Electrobun</p>
+
+              
+```
+<span style="color: rgb(245, 158, 11);">import</span> {<span style="color: rgb(16, 185, 129);">PATHS</span>} <span style="color: rgb(245, 158, 11);">from</span> <span style="color: rgb(59, 130, 246);">"electrobun/bun"</span>;
+
+<span style="color: rgb(107, 114, 128);">// in a macOS bundle this is where static bundled resources are kept.</span>
+
+<span style="color: rgb(107, 114, 128);">// Note: You shouldn't modify or write to the bundle at runtime as it will affect code signing</span>
+<span style="color: rgb(107, 114, 128);">// integrity.</span>
+<span style="color: rgb(16, 185, 129);">PATHS</span>.<span style="color: rgb(229, 231, 235);">RESOURCES_FOLDER</span>
+
+<span style="color: rgb(107, 114, 128);">// Typically you would use the views:// url scheme which maps to</span>
+<span style="color: rgb(107, 114, 128);">// RESOURCES_FOLDER + '/app/views/'</span>
+<span style="color: rgb(107, 114, 128);">// But there may be cases in bun where you want to read a file directly.</span>
+<span style="color: rgb(16, 185, 129);">PATHS</span>.<span style="color: rgb(229, 231, 235);">VIEWS_FOLDER</span>
+```
+

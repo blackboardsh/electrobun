@@ -1,0 +1,405 @@
+---
+title: "Electrobun Webview Tag"
+---
+              
+              <h2>Introduction</h2>
+
+              <p>Electrobun's custom webview tag implementation behaves similarly to an enhanced iframe, but with key differences in capabilities and isolation. It serves as a positional anchor within the DOM, communicating with a Zig backend to manage a distinct, isolated BrowserView. This separation ensures full content isolation from the host webview, enhancing both security and performance.</p>
+
+              <h2>Basic Usage</h2>
+
+              <div class="code-block">
+                
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>webview tag test</title>
+    <script src="views://webviewtag/index.js"></script>
+  </head>
+
+  <body>
+    <electrobun-webview src="https://electrobun.dev"></electrobun-webview>
+  </body>
+</html>
+```
+
+              </div>
+
+              <h2>Compatibility</h2>
+
+              <p>The Electrobun webview tag integrates seamlessly with any reactive JavaScript framework, such as React or SolidJS, allowing for dynamic interactions and updates without disrupting the isolation of the webview's contents.</p>
+
+              <p>The way the implementation currently works, the html element is just a positional anchor that reports its position and relays events to zig which manages a completely separate BrowserView and overlays it at the same coordinates within the window.</p>
+
+              <h2>How is this different to Electron's webview tag</h2>
+
+              <h3>Chrome plans to deprecate their webview tag</h3>
+
+              <p>Electron's webview tag is based on a Chrome feature/api designed for Chrome apps which has been deprecated since 2020. You can read about that on <a href="https://github.com/electron/electron/issues/34356">Electron's Github</a> and in <a href="https://developer.chrome.com/docs/apps/reference/webviewTag">Chrome's developer docs</a>. The warning declares it "remains supported for Enterprise and Education customers on ChromeOS until at least Jan 2025" which is fast approaching.</p>
+
+              <p>It's unknown what Electron will do when and if Chrome actually removes webview tag support from Chrome.</p>
+
+              <p>Unlike Electron's reliance on Chrome's now-deprecated webview tag, Electrobun introduces its own robust implementation that does not depend on Chrome's lifecycle. This independence ensures longevity and stability for applications using Electrobun's framework, even as Chrome phases out its support.</p>
+
+              <h3>Electrobun's webview tag is a separate layer</h3>
+
+              <p>Because Electrobun's webview tag implementation uses a div anchor and then positions a separate isolated BrowserView above the parent BrowserView there are some interesting edge cases where you may want to click on the parent document or do things within the parent DOM, so Electrobun provides various special methods for handling those situations. For example ways to mirror a screenshot of the webview tag's contents to the host's anchor and hide it or stream an image of the contents.</p>
+
+              <h2>Properties and Attributes</h2>
+
+              <h3>src</h3>
+              <p><strong>Type:</strong> `string`<br />
+              <strong>Description:</strong> URL of the web page to load in the webview.</p>
+
+              <h3>html</h3>
+              <p><strong>Type:</strong> `string`<br />
+              <strong>Description:</strong> HTML content to be directly loaded into the webview, useful for dynamic content generation.</p>
+
+              <h3>preload</h3>
+              <p><strong>Type:</strong> `string`<br />
+              <strong>Description:</strong> Path to a script that should be preloaded before any other scripts run in the webview.</p>
+
+              <h3>partition</h3>
+              <p><strong>Type:</strong> `string`<br />
+              <strong>Description:</strong> Sets a partition to provide separate storage for different sessions, useful in multi-user applications.</p>
+
+              <h3>sandbox</h3>
+              <p><strong>Type:</strong> `boolean`<br />
+              <strong>Description:</strong> When set to true, creates the webview in sandbox mode. Sandbox mode disables RPC communication and only allows event emission, making it suitable for loading untrusted third-party content securely.</p>
+
+              <p><strong>Security Model:</strong> In sandbox mode:</p>
+              <ul>
+                <li>Events (dom-ready, did-navigate, will-navigate, etc.) still work normally</li>
+                <li>Navigation controls (loadURL, goBack, goForward, reload) still work</li>
+                <li>RPC communication is completely disabled - no messages can be sent between the webview and your application code</li>
+                <li>The webview content cannot access any application APIs or trigger custom handlers</li>
+              </ul>
+
+              <div class="code-block">
+                
+```html
+{/* Load untrusted content safely in sandbox mode */}
+<electrobun-webview
+  src="https://untrusted-site.com"
+  sandbox
+></electrobun-webview>
+
+{/* Combine sandbox with navigation rules for maximum security */}
+<electrobun-webview
+  id="sandbox-webview"
+  src="https://example.com"
+  sandbox
+></electrobun-webview>
+
+<script>
+  // Navigation rules still work with sandboxed webviews
+  document.getElementById('sandbox-webview').setNavigationRules([
+    "^*",                        // Block everything by default
+    "*://example.com/*",         // Allow example.com
+    "*://cdn.example.com/*",     // Allow CDN
+  ]);
+
+  // Events still work in sandbox mode
+  document.getElementById('sandbox-webview').on('did-navigate', (e) => &#123;
+    console.log('Sandboxed webview navigated to:', e.detail.url);
+  &#125;);
+</script>
+```
+
+              </div>
+
+              <h3>transparent</h3>
+              <p><strong>Type:</strong> `boolean`<br />
+              <strong>Description:</strong> When set to true, makes the webview transparent, allowing underlying elements to be visible.</p>
+
+              <h3>passthroughEnabled</h3>
+              <p><strong>Type:</strong> `boolean`<br />
+              <strong>Description:</strong> Enables or disables mouse and touch events to pass through to underlying elements.</p>
+
+              <h3>hidden</h3>
+              <p><strong>Type:</strong> `boolean`<br />
+              <strong>Description:</strong> Controls the visibility of the webview.</p>
+
+              <h3>webviewId</h3>
+              <p><strong>Type:</strong> `number`<br />
+              <strong>Description:</strong> A unique identifier for the webview instance, automatically managed by the system.</p>
+
+              <h3>id</h3>
+              <p><strong>Type:</strong> `string`<br />
+              <strong>Description:</strong> The DOM ID for the webview element, automatically set to ensure uniqueness.</p>
+
+              <h2>Methods</h2>
+
+              <h3>canGoBack</h3>
+              <p><strong>Returns:</strong> `Promise<boolean>`<br />
+              <strong>Description:</strong> Determines if the webview can navigate backward.</p>
+
+              <h3>canGoForward</h3>
+              <p><strong>Returns:</strong> `Promise<boolean>`<br />
+              <strong>Description:</strong> Determines if the webview can navigate forward.</p>
+
+              <h3>on</h3>
+              <p><strong>Parameters:</strong> `event: WebviewEventTypes, listener: () => &#123;&#125;`<br />
+              <strong>Description:</strong> Attach event listeners for webview-specific events such as navigation and loading.</p>
+
+              <h3>off</h3>
+              <p><strong>Parameters:</strong> `event: WebviewEventTypes, listener: () => &#123;&#125;`<br />
+              <strong>Description:</strong> Detach event listeners for webview-specific events.</p>
+
+              <h3>syncDimensions</h3>
+              <p><strong>Parameters:</strong> `force: boolean = false`<br />
+              <strong>Description:</strong> Synchronizes the dimensions and position of the webview with its anchor element in the DOM, optionally forcing an update.</p>
+
+              <h3>goBack</h3>
+              <p><strong>Description:</strong> Navigates the webview back to the previous page.</p>
+
+              <h3>goForward</h3>
+              <p><strong>Description:</strong> Navigates the webview forward to the next page.</p>
+
+              <h3>reload</h3>
+              <p><strong>Description:</strong> Reloads the current content in the webview.</p>
+
+              <h3>loadURL</h3>
+              <p><strong>Parameters:</strong> `url: string`<br />
+              <strong>Description:</strong> Loads a given URL into the webview, similar to setting the `src` attribute.</p>
+
+              <h3>setNavigationRules</h3>
+              <p><strong>Parameters:</strong> `rules: string[]`<br />
+              <strong>Description:</strong> Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance.</p>
+              <p><strong>Rule Format:</strong></p>
+              <ul>
+                <li>Rules use glob-style wildcards where `*` matches any characters</li>
+                <li>Prefix a rule with `^` to make it a block rule</li>
+                <li>Rules without the `^` prefix are allow rules</li>
+                <li>Rules are evaluated top-to-bottom, last matching rule wins</li>
+                <li>If no rule matches, navigation is allowed by default</li>
+              </ul>
+              <div class="code-block">
+                
+```javascript
+// Block everything except specific domains
+document.querySelector('electrobun-webview').setNavigationRules([
+  "^*",                           // Block everything by default
+  "*://en.wikipedia.org/*",       // Allow Wikipedia
+  "*://upload.wikimedia.org/*",   // Allow Wikipedia images
+]);
+
+// Allow everything except specific domains
+document.querySelector('electrobun-webview').setNavigationRules([
+  "^*://malware.com/*",           // Block malware.com
+  "^http://*",                    // Block all non-HTTPS
+]);
+```
+
+              </div>
+
+              <h3>executeJavascript</h3>
+              <p><strong>Parameters:</strong> `js: string`<br />
+              <strong>Description:</strong> Execute arbitrary JavaScript in the webview. This is a fire-and-forget method that does not return a result. The JavaScript is dispatched to the webview's native process for execution.</p>
+
+              <div class="code-block">
+                
+```javascript
+// Modify content in the nested webview
+document.querySelector('electrobun-webview').executeJavascript(
+  'document.body.innerHTML = "<h1>Modified</h1>"'
+);
+
+// Run any JavaScript in the nested webview
+document.querySelector('electrobun-webview').executeJavascript(
+  'document.title = "New Title"'
+);
+```
+
+              </div>
+
+              <h3>toggleTransparent</h3>
+              <p><strong>Parameters:</strong> `value?: boolean`<br />
+              <strong>Description:</strong> Toggles the transparency state of the webview.</p>
+
+              <h3>togglePassthrough</h3>
+              <p><strong>Parameters:</strong> `value?: boolean`<br />
+              <strong>Description:</strong> Toggles the ability for mouse and touch events to pass through the webview.</p>
+
+              <h3>toggleHidden</h3>
+              <p><strong>Parameters:</strong> `value?: boolean`<br />
+              <strong>Description:</strong> Toggles the visibility of the webview.</p>
+
+              <h2>Events</h2>
+
+              <p>Use the `on` method to listen for events from the webview. Events are dispatched as CustomEvents with details in the `detail` property.</p>
+
+              <h3>dom-ready</h3>
+              <p><strong>Description:</strong> Fired when the DOM of the webview's content has finished loading.</p>
+
+              <h3>did-navigate</h3>
+              <p><strong>Description:</strong> Fired when the webview navigates to a new URL.</p>
+
+              <h3>did-navigate-in-page</h3>
+              <p><strong>Description:</strong> Fired for in-page navigations (e.g., hash changes).</p>
+
+              <h3>did-commit-navigation</h3>
+              <p><strong>Description:</strong> Fired when the webview commits to navigating to a new URL.</p>
+
+              <h3>new-window-open</h3>
+              <p><strong>Description:</strong> Fired when the webview attempts to open a new window (e.g., via `window.open()` or a link with `target="_blank"`).</p>
+
+              <h3>host-message</h3>
+              <p><strong>Description:</strong> Fired when the webview's preload script sends a message to the host using `window.__electrobunSendToHost()`. The message payload is available in `event.detail`.</p>
+
+              <div class="code-block">
+                
+```javascript
+// Listen for messages from the webview's preload script
+document.querySelector('electrobun-webview').on('host-message', (event) => &#123;
+  console.log('Received message from webview:', event.detail);
+  // event.detail contains the message object sent from the preload
+&#125;);
+```
+
+              </div>
+
+              <h2>Preload Scripts</h2>
+
+              <p>Preload scripts run in the context of the webview before any page scripts execute. They have access to special APIs for communicating with the host.</p>
+
+              <h3>window.__electrobunSendToHost(message)</h3>
+              <p><strong>Parameters:</strong> `message: any` (will be JSON serialized)<br />
+              <strong>Description:</strong> Sends a message from the webview's preload script to the host BrowserWindow. The message will be received via the `host-message` event on the webview element.</p>
+
+              <p>This enables secure communication from nested webviews back to the parent page, allowing preload scripts to forward user interactions, keyboard events, or custom data.</p>
+
+              <div class="code-block">
+                
+```html
+{/* Host page */}
+<electrobun-webview
+  id="myWebview"
+  src="https://example.com"
+  preload="
+    // Forward click events to the host
+    document.addEventListener('click', (e) => &#123;
+      window.__electrobunSendToHost(&#123;
+        type: 'click',
+        target: e.target.tagName,
+        x: e.clientX,
+        y: e.clientY
+      &#125;);
+    &#125;);
+
+    // Forward keyboard events to the host
+    document.addEventListener('keydown', (e) => &#123;
+      window.__electrobunSendToHost(&#123;
+        type: 'keydown',
+        key: e.key,
+        code: e.code,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        altKey: e.altKey,
+        metaKey: e.metaKey
+      &#125;);
+    &#125;);
+  "
+></electrobun-webview>
+
+<script>
+  document.getElementById('myWebview').on('host-message', (event) => &#123;
+    const msg = event.detail;
+    if (msg.type === 'keydown') &#123;
+      console.log('Key pressed in webview:', msg.key);
+      // Handle the keyboard event in the host context
+    &#125;
+  &#125;);
+</script>
+```
+
+              </div>
+
+              <p><strong>Note:</strong> The `__electrobunSendToHost` function is only available inside preload scripts running within an `electrobun-webview`. It is not available in regular page scripts.</p>
+
+              <h2>Security Considerations</h2>
+
+              <p>When embedding third-party content in your application, security is paramount. Electrobun provides multiple layers of protection:</p>
+
+              <h3>Sandbox Mode</h3>
+              <p>Always use `sandbox` attribute when loading untrusted content. This completely disables RPC communication, preventing the loaded content from accessing any application APIs.</p>
+
+              <div class="code-block">
+                
+```html
+{/* ALWAYS use sandbox for untrusted content */}
+<electrobun-webview
+  src="https://untrusted-third-party.com"
+  sandbox
+></electrobun-webview>
+```
+
+              </div>
+
+              <h3>Navigation Rules</h3>
+              <p>Combine sandbox mode with navigation rules to restrict where the webview can navigate. This prevents redirects to malicious sites.</p>
+
+              <div class="code-block">
+                
+```javascript
+const webview = document.querySelector('electrobun-webview');
+
+// Strict allowlist approach
+webview.setNavigationRules([
+  "^*",                              // Block everything by default
+  "*://trusted-domain.com/*",        // Allow specific trusted domains
+  "*://cdn.trusted-domain.com/*",    // Allow associated CDNs
+]);
+```
+
+              </div>
+
+              <h3>Process Isolation</h3>
+              <p>Each `electrobun-webview` runs in a completely separate browser process. This provides:</p>
+              <ul>
+                <li><strong>Memory isolation:</strong> Malicious content cannot read memory from your application</li>
+                <li><strong>Crash isolation:</strong> If the embedded content crashes, your application continues running</li>
+                <li><strong>Security boundary:</strong> Browser exploits are contained within the isolated process</li>
+              </ul>
+
+              <h3>Best Practices</h3>
+              <ul>
+                <li><strong>Always sandbox untrusted content:</strong> Use the `sandbox` attribute for any content you don't fully control</li>
+                <li><strong>Use navigation rules:</strong> Restrict navigation to prevent redirects to malicious sites</li>
+                <li><strong>Use partitions:</strong> Isolate session storage between different webviews to prevent data leakage</li>
+                <li><strong>Validate host messages:</strong> If using preload scripts with `__electrobunSendToHost`, always validate and sanitize received messages</li>
+                <li><strong>Prefer HTTPS:</strong> Block HTTP content with navigation rules to ensure encrypted connections</li>
+              </ul>
+
+              <div class="code-block">
+                
+```html
+{/* Complete secure configuration example */}
+<electrobun-webview
+  id="secure-webview"
+  src="https://third-party-widget.com"
+  sandbox
+  partition="third-party-widget"
+></electrobun-webview>
+
+<script>
+  const webview = document.getElementById('secure-webview');
+
+  // Restrict navigation
+  webview.setNavigationRules([
+    "^http://*",                         // Block all HTTP (require HTTPS)
+    "^*",                                // Block everything else by default
+    "*://third-party-widget.com/*",      // Allow the widget domain
+  ]);
+
+  // Monitor navigation for security events
+  webview.on('did-navigate', (e) => &#123;
+    console.log('Navigation:', e.detail.url);
+  &#125;);
+</script>
+```
+
+              </div>

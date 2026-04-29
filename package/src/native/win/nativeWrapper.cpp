@@ -19,6 +19,7 @@
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
 #include "dawn/webgpu.h"
+#include "dawn/native/D3D12Backend.h"
 #include <wrl.h>
 #include <WebView2.h>
 #include <WebView2EnvironmentOptions.h>
@@ -37,6 +38,8 @@
 #include <shlguid.h>   // For CLSID_FileOpenDialog
 #include <commdlg.h>   // For COMDLG_FILTERSPEC
 #include <dcomp.h>     // For DirectComposition
+#include <dxgi1_2.h>   // For DXGI 1.2 (CreateSwapChainForComposition)
+#include <d3d11.h>     // For D3D11 (DComp swap chain creation)
 #include <locale>      // For string conversion
 #include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
@@ -60,6 +63,16 @@
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+
+// DirectComposition compositor (GPU surface compositing for Windows)
+#include "dcomp_compositor.h"
+
+// DirectComposition zero-copy bridge state (per-surface)
+// DCompBridgeState is defined later, after WGPU function pointer declarations.
+// Forward declarations for the map:
+struct DCompBridgeState;
+static std::map<void*, std::unique_ptr<DCompBridgeState>> g_dcompBridges;
+static std::mutex g_dcompBridgeMapMutex;
 
 using namespace electrobun;
 
@@ -348,6 +361,8 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_task.h"
 #include "include/wrapper/cef_helpers.h"
@@ -364,6 +379,8 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "comctl32.lib")
 #pragma comment(lib, "dcomp.lib")
+#pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
@@ -1107,7 +1124,13 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Media access permission requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if (origin.find("views://") == 0) {
+            callback->Continue(requested_permissions);
+            return true;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
         
@@ -1158,12 +1181,20 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Permission prompt requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        // This also covers Chromium's new Loopback/Local Network Access gate triggered
+        // by the per-webview RPC websocket to ws://localhost:<port>.
+        if (origin.find("views://") == 0) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        }
+
         // Handle different permission types
         PermissionType permType = PermissionType::OTHER;
-        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string message;
         std::string title = "Permission Request";
-        
+
         // Check for specific permission types
         if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
             requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
@@ -1178,8 +1209,14 @@ public:
             permType = PermissionType::NOTIFICATIONS;
             message = "This page wants to show notifications.\n\nDo you want to allow this?";
             title = "Notification Permission";
+        } else {
+            // Unrecognized permission type — name what's being requested instead of
+            // a generic "additional permissions" dialog so the user can decide.
+            message = "This page is requesting permission for: " +
+                      electrobun::describeCefPermissions(requested_permissions) +
+                      ".\n\nDo you want to allow this?";
         }
-        
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
         
@@ -4630,6 +4667,7 @@ typedef struct {
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
+    ChromeStyle chromeStyle;
 } WindowData;
 
 
@@ -4767,7 +4805,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
-        
+        case WM_NCCALCSIZE:
+            if (wParam == TRUE && data && data->chromeStyle == ChromeStyle::HiddenInset) {
+                NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
+                RECT original = p->rgrc[0];
+                LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+                if (IsZoomed(hwnd)) {
+                    // Maximized: clip client area to monitor work area so
+                    // we still strip the caption bar without pushing content
+                    // above the visible screen.
+                    MONITORINFO mi = { sizeof(MONITORINFO) };
+                    HMONITOR hmon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                    if (GetMonitorInfo(hmon, &mi)) {
+                        p->rgrc[0].top = mi.rcWork.top;
+                    }
+                } else {
+                    p->rgrc[0].top = original.top;
+                }
+                return ret;
+            }
+            break;
+
         case WM_INPUT: {
             if (g_isMovingWindow && g_targetWindow) {
                 UINT dwSize = 0;
@@ -5963,15 +6021,18 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return result;
                 }
                 
-                // Create WebView2 controller - MINIMAL VERSION
+                // Create WebView2 controller
+                // When DComp is active, use CreateCoreWebView2CompositionController
+                // so WebView2 renders into a DComp visual (enabling GPU layering).
+                // Otherwise, use standard CreateCoreWebView2Controller.
                 HWND targetHwnd = container->GetHwnd();
-                
+
                 if (!IsWindow(targetHwnd)) {
                     ::log("ERROR: Target window is no longer valid");
                     view->setCreationFailed(true);
                     return S_OK;
                 }
-                
+
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
@@ -6055,6 +6116,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
                                             std::string filePath = uriStr.substr(8);
+                                            // Strip trailing slashes - WebView2 may normalize URLs without folder components
+                                            while (!filePath.empty() && (filePath.back() == '/' || filePath.back() == '\\')) {
+                                                filePath.pop_back();
+                                            }
                                             std::string content;
 
                                             // Check for internal/index.html (inline HTML content)
@@ -6653,62 +6718,31 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 }
 
 // Utility function for creating CEF request contexts with partition support
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under %LOCALAPPDATA%, creating any
+// missing parent directories. Returns "" if %LOCALAPPDATA% is unset, which
+// causes the caller to fall back to an ephemeral context.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    char* localAppData = getenv("LOCALAPPDATA");
+    if (!localAppData) {
+        printf("ERROR CEF: LOCALAPPDATA not found for partition '%s'\n", partitionName.c_str());
+        return "";
+    }
+    std::string cachePath = buildCEFPartitionPath(
+        localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
+    std::wstring wideCachePath(cachePath.begin(), cachePath.end());
+    SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
+    return cachePath;
+}
+} // namespace electrobun
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
-    printf("DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s\n",
-           webviewId, partitionIdentifier ? partitionIdentifier : "null");
-
-    CefRequestContextSettings settings;
-
-    if (!partitionIdentifier || !partitionIdentifier[0]) {
-        // No partition - use in-memory session
-        settings.persist_session_cookies = false;
-    } else {
-        std::string identifier(partitionIdentifier);
-        bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-        if (isPersistent) {
-            // Persistent partition - create cache directory
-            std::string partitionName = identifier.substr(8);
-
-            // Get %LOCALAPPDATA% path
-            char* localAppData = getenv("LOCALAPPDATA");
-            if (!localAppData) {
-                printf("ERROR CEF: LOCALAPPDATA not found, falling back to in-memory session\n");
-                settings.persist_session_cookies = false;
-            } else {
-                // Build path with identifier/channel structure (consistent with CLI and updater)
-                // Structure: %LOCALAPPDATA%\{identifier}\{channel}\CEF\Partitions\{partitionName}
-                std::string cachePath = buildPartitionPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
-
-                // Create directory if it doesn't exist
-                std::wstring wideCachePath(cachePath.begin(), cachePath.end());
-                SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
-
-                settings.persist_session_cookies = true;
-                CefString(&settings.cache_path).FromString(cachePath);
-
-                printf("DEBUG CEF: Persistent partition '%s' using cache path: %s\n",
-                       partitionName.c_str(), cachePath.c_str());
-            }
-        } else {
-            // Non-persistent partition - in-memory session
-            settings.persist_session_cookies = false;
-            printf("DEBUG CEF: In-memory partition '%s'\n", identifier.c_str());
-        }
-    }
-
-    // Create the request context
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-
-    // Register scheme handler factory for this request context
-    // Note: Each CefRequestContext needs its own registration - it's not global
-    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
-    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-    printf("DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s\n",
-           partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
-
-    return context;
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory =
+        new ElectrobunSchemeHandlerFactory();
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // Internal factory method for creating CEF instances
@@ -7386,6 +7420,7 @@ static void wgpu_log(const char* fmt, ...) {
 typedef WGPUInstance (*PFN_wgpuCreateInstance)(WGPUInstanceDescriptor const* descriptor);
 typedef WGPUFuture (*PFN_wgpuInstanceRequestAdapter)(WGPUInstance instance, WGPURequestAdapterOptions const* options, WGPURequestAdapterCallbackInfo callbackInfo);
 typedef WGPUFuture (*PFN_wgpuAdapterRequestDevice)(WGPUAdapter adapter, WGPUDeviceDescriptor const* descriptor, WGPURequestDeviceCallbackInfo callbackInfo);
+typedef WGPUBool (*PFN_wgpuAdapterHasFeature)(WGPUAdapter adapter, WGPUFeatureName feature);
 typedef WGPUQueue (*PFN_wgpuDeviceGetQueue)(WGPUDevice device);
 typedef void (*PFN_wgpuSurfaceGetCapabilities2)(WGPUSurface surface, WGPUAdapter adapter, WGPUSurfaceCapabilities* capabilities);
 typedef void (*PFN_wgpuSurfaceCapabilitiesFreeMembers2)(WGPUSurfaceCapabilities capabilities);
@@ -7411,6 +7446,7 @@ typedef void (*PFN_wgpuCommandEncoderRelease)(WGPUCommandEncoder encoder);
 static PFN_wgpuCreateInstance p_wgpuCreateInstance = nullptr;
 static PFN_wgpuInstanceRequestAdapter p_wgpuInstanceRequestAdapter = nullptr;
 static PFN_wgpuAdapterRequestDevice p_wgpuAdapterRequestDevice = nullptr;
+static PFN_wgpuAdapterHasFeature p_wgpuAdapterHasFeature = nullptr;
 static PFN_wgpuDeviceGetQueue p_wgpuDeviceGetQueue = nullptr;
 static PFN_wgpuSurfaceGetCapabilities2 p_wgpuSurfaceGetCapabilities = nullptr;
 static PFN_wgpuSurfaceCapabilitiesFreeMembers2 p_wgpuSurfaceCapabilitiesFreeMembers = nullptr;
@@ -7432,6 +7468,103 @@ static PFN_wgpuTextureViewRelease p_wgpuTextureViewRelease = nullptr;
 static PFN_wgpuTextureRelease p_wgpuTextureRelease = nullptr;
 static PFN_wgpuCommandBufferRelease p_wgpuCommandBufferRelease = nullptr;
 static PFN_wgpuCommandEncoderRelease p_wgpuCommandEncoderRelease = nullptr;
+
+// DComp zero-copy bridge function pointers (SharedTextureMemory API)
+static WGPUProcDeviceHasFeature p_wgpuDeviceHasFeature = nullptr;
+static WGPUProcDeviceImportSharedTextureMemory p_wgpuDeviceImportSharedTextureMemory = nullptr;
+static WGPUProcSharedTextureMemoryGetProperties p_wgpuSharedTextureMemoryGetProperties = nullptr;
+static WGPUProcSharedTextureMemoryCreateTexture p_wgpuSharedTextureMemoryCreateTexture = nullptr;
+static WGPUProcSharedTextureMemoryBeginAccess p_wgpuSharedTextureMemoryBeginAccess = nullptr;
+static WGPUProcSharedTextureMemoryEndAccess p_wgpuSharedTextureMemoryEndAccess = nullptr;
+static WGPUProcSharedTextureMemoryRelease p_wgpuSharedTextureMemoryRelease = nullptr;
+static WGPUProcSharedFenceExportInfo p_wgpuSharedFenceExportInfo = nullptr;
+static WGPUProcSharedFenceRelease p_wgpuSharedFenceRelease = nullptr;
+static WGPUProcTextureDestroy p_wgpuTextureDestroy = nullptr;
+static WGPUProcTextureGetUsage p_wgpuTextureGetUsage = nullptr;
+static WGPUProcTextureAddRef p_wgpuTextureAddRef = nullptr;
+static bool g_dcompSymbolsLoaded = false;
+static HMODULE loadWgpuLibrary();  // forward declaration
+
+static bool ensureDCompSymbols() {
+    if (g_dcompSymbolsLoaded) return true;
+    HMODULE handle = loadWgpuLibrary();
+    if (!handle) return false;
+#define LOAD_DCOMP_SYM(name) \
+    p_##name = (decltype(p_##name))GetProcAddress(handle, #name); \
+    if (!p_##name) { printf("[DComp] missing symbol " #name "\n"); return false; }
+    LOAD_DCOMP_SYM(wgpuDeviceHasFeature);
+    LOAD_DCOMP_SYM(wgpuDeviceImportSharedTextureMemory);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryGetProperties);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryCreateTexture);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryBeginAccess);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryEndAccess);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryRelease);
+    LOAD_DCOMP_SYM(wgpuSharedFenceExportInfo);
+    LOAD_DCOMP_SYM(wgpuSharedFenceRelease);
+    LOAD_DCOMP_SYM(wgpuTextureDestroy);
+    LOAD_DCOMP_SYM(wgpuTextureGetUsage);
+    LOAD_DCOMP_SYM(wgpuTextureAddRef);
+    LOAD_DCOMP_SYM(wgpuTextureRelease);
+#undef LOAD_DCOMP_SYM
+    g_dcompSymbolsLoaded = true;
+    // All symbols loaded
+    return true;
+}
+
+// DirectComposition zero-copy bridge state (per-surface)
+struct DCompBridgeState {
+    DCompCompositor compositor;
+    ComPtr<ID3D12Resource> stagingDx12;
+    ComPtr<ID3D11Device5> presentDevice;
+    ComPtr<ID3D11DeviceContext4> presentContext;
+    ComPtr<ID3D11Texture2D> presentStagingTex;
+    HANDLE stagingSharedHandle = nullptr;
+    ComPtr<ID3D11On12Device> d3d11on12Device;
+    ComPtr<ID3D11Resource> syncWrappedResource;
+    bool useSharedFenceSync = false;
+    WGPUSharedTextureMemory sharedTexMem = nullptr;
+    WGPUTexture zeroCopyTexture = nullptr;
+    std::mutex frameMutex;
+    bool accessActive = false;
+    WGPUDevice wgpuDevice = nullptr;
+
+    // Fences from EndAccess must be passed to next BeginAccess (Dawn protocol)
+    std::vector<WGPUSharedFence> pendingFences;
+    std::vector<uint64_t> pendingFenceValues;
+
+    void cleanup() {
+        // Release any pending fences first
+        for (auto f : pendingFences) {
+            if (f && p_wgpuSharedFenceRelease) p_wgpuSharedFenceRelease(f);
+        }
+        pendingFences.clear();
+        pendingFenceValues.clear();
+
+        if (zeroCopyTexture) {
+            if (p_wgpuTextureDestroy) p_wgpuTextureDestroy(zeroCopyTexture);
+            // Release our internal ref (the one from SharedTextureMemoryCreateTexture)
+            if (p_wgpuTextureRelease) p_wgpuTextureRelease(zeroCopyTexture);
+            zeroCopyTexture = nullptr;
+        }
+        if (sharedTexMem) {
+            if (p_wgpuSharedTextureMemoryRelease) p_wgpuSharedTextureMemoryRelease(sharedTexMem);
+            sharedTexMem = nullptr;
+        }
+        syncWrappedResource.Reset();
+        d3d11on12Device.Reset();
+        presentStagingTex.Reset();
+        stagingDx12.Reset();
+        if (stagingSharedHandle) {
+            CloseHandle(stagingSharedHandle);
+            stagingSharedHandle = nullptr;
+        }
+        presentContext.Reset();
+        presentDevice.Reset();
+        compositor.shutdown();
+    }
+
+    ~DCompBridgeState() { cleanup(); }
+};
 
 static std::wstring getExecutableDirW() {
     wchar_t buffer[MAX_PATH];
@@ -7506,6 +7639,7 @@ static bool ensureWgpuTestSymbols() {
     LOAD_TEST_SYM(wgpuCreateInstance);
     LOAD_TEST_SYM(wgpuInstanceRequestAdapter);
     LOAD_TEST_SYM(wgpuAdapterRequestDevice);
+    LOAD_TEST_SYM(wgpuAdapterHasFeature);
     LOAD_TEST_SYM(wgpuDeviceGetQueue);
     LOAD_TEST_SYM(wgpuSurfaceGetCapabilities);
     LOAD_TEST_SYM(wgpuSurfaceCapabilitiesFreeMembers);
@@ -7907,6 +8041,10 @@ ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void
     });
 }
 
+// Surface-to-HWND mapping for DComp bridge initialization
+static std::map<void*, HWND> g_surfaceToHwnd;
+static std::mutex g_surfaceToHwndMutex;
+
 ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractView* abstractView) {
     if (!wgpuInstance || !abstractView || !abstractView->hwnd) {
         printf("[WGPU] createSurfaceForView: null check failed (inst=%p view=%p hwnd=%p)\n",
@@ -7928,31 +8066,467 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         return p_wgpuInstanceCreateSurface(wgpuInstance, &surfaceDesc);
     });
     printf("[WGPU] createSurfaceForView: surface=%p\n", result);
+
+    // Store surface → HWND mapping for DComp bridge initialization
+    if (result) {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        g_surfaceToHwnd[result] = hwnd;
+    }
+
     return result;
+}
+
+// Helper: Initialize DComp zero-copy bridge for a surface.
+// Returns true on success, false if DComp is unavailable or init fails.
+static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t width, uint32_t height) {
+    if (!isDCompAvailable()) return false;
+    if (!ensureDCompSymbols()) return false;
+
+    WGPUDevice device = (WGPUDevice)devicePtr;
+
+    // Look up the HWND this surface was created for
+    HWND hwnd = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        auto it = g_surfaceToHwnd.find(surface);
+        if (it != g_surfaceToHwnd.end()) hwnd = it->second;
+    }
+    if (!hwnd) {
+        printf("[DComp] No HWND mapping for surface=%p, skipping DComp bridge\n", surface);
+        return false;
+    }
+
+    // Use the view's own HWND for the DComp target — not the top-level window.
+    // Each WGPU view is a child window positioned within its parent.
+    // Targeting the child HWND ensures content renders at (0,0) of the view,
+    // which the window manager already positions correctly.
+    HWND targetHwnd = hwnd;
+
+    // Require DXGI shared handle feature for cross-device sharing
+    bool hasDXGISharedHandle = p_wgpuDeviceHasFeature(device, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle);
+    bool hasSharedFence = p_wgpuDeviceHasFeature(device, WGPUFeatureName_SharedFenceDXGISharedHandle);
+    // Feature detection done
+
+    if (!hasDXGISharedHandle) {
+        printf("[DComp] Zero-copy bridge requires SharedTextureMemoryDXGISharedHandle\n");
+        return false;
+    }
+
+    auto bridge = std::make_unique<DCompBridgeState>();
+    bridge->wgpuDevice = device;
+    bridge->useSharedFenceSync = hasSharedFence;
+
+    // Step 1: Init DComp compositor (visual tree) on main thread
+    bool compOk = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        compOk = bridge->compositor.initMinimal(targetHwnd, width, height);
+        if (compOk) {
+            bridge->compositor.enableNativeResize();
+        }
+    });
+    if (!compOk) {
+        printf("[DComp] initMinimal failed for HWND=%p\n", targetHwnd);
+        return false;
+    }
+
+    // Step 2: Get Dawn's DX12 device to find the DXGI adapter
+    auto dx12Device = dawn::native::d3d12::GetD3D12Device(device);
+    if (!dx12Device) {
+        printf("[DComp] GetD3D12Device failed\n");
+        return false;
+    }
+
+    // Step 3: Create dedicated presentation D3D11 device on Dawn's adapter
+    LUID adapterLuid = dx12Device->GetAdapterLuid();
+    ComPtr<IDXGIFactory4> dxgiFactory;
+    HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&dxgiFactory));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateDXGIFactory1 failed: 0x%08lx\n", hr);
+        return false;
+    }
+    ComPtr<IDXGIAdapter> adapter;
+    hr = dxgiFactory->EnumAdapterByLuid(adapterLuid, IID_PPV_ARGS(&adapter));
+    if (FAILED(hr)) {
+        printf("[DComp] EnumAdapterByLuid failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    ComPtr<ID3D11Device> baseDevice;
+    D3D_FEATURE_LEVEL featureLevel;
+    hr = D3D11CreateDevice(
+        adapter.Get(), D3D_DRIVER_TYPE_UNKNOWN, nullptr,
+        D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        nullptr, 0, D3D11_SDK_VERSION,
+        &baseDevice, &featureLevel, nullptr);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation D3D11CreateDevice failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    hr = baseDevice.As(&bridge->presentDevice);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation device QI for ID3D11Device5 failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    ComPtr<ID3D11DeviceContext> baseCtx;
+    bridge->presentDevice->GetImmediateContext(&baseCtx);
+    hr = baseCtx.As(&bridge->presentContext);
+    if (FAILED(hr)) {
+        printf("[DComp] Presentation context QI for ID3D11DeviceContext4 failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Presentation device ready
+
+    // Step 4: Create swap chain on the presentation device
+    bool swapChainOk = false;
+    MainThreadDispatcher::dispatch_sync([&]() {
+        swapChainOk = bridge->compositor.initSwapChainFromDevice(baseDevice.Get(), width, height);
+    });
+    if (!swapChainOk) {
+        printf("[DComp] initSwapChainFromDevice on presentation device failed\n");
+        return false;
+    }
+
+    // Step 5: Create DX12 staging texture with shared access
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width = width;
+    texDesc.Height = height;
+    texDesc.DepthOrArraySize = 1;
+    texDesc.MipLevels = 1;
+    texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    texDesc.SampleDesc.Count = 1;
+    texDesc.Flags = D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS | D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
+
+    D3D12_HEAP_PROPERTIES heapProps = {};
+    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    hr = dx12Device->CreateCommittedResource(
+        &heapProps, D3D12_HEAP_FLAG_SHARED,
+        &texDesc, D3D12_RESOURCE_STATE_COMMON,
+        nullptr, IID_PPV_ARGS(&bridge->stagingDx12));
+    if (FAILED(hr)) {
+        printf("[DComp] CreateCommittedResource (staging) failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Step 6: Create DXGI shared handle
+    hr = dx12Device->CreateSharedHandle(
+        bridge->stagingDx12.Get(), nullptr,
+        GENERIC_ALL, nullptr, &bridge->stagingSharedHandle);
+    if (FAILED(hr)) {
+        printf("[DComp] CreateSharedHandle failed: 0x%08lx\n", hr);
+        return false;
+    }
+
+    // Step 7: Set up cross-device sync
+    if (!bridge->useSharedFenceSync) {
+        // SharedFence unavailable — using D3D11On12 Acquire/Release for sync
+        auto d3d11on12 = dawn::native::d3d12::GetOrCreateD3D11On12Device(device);
+        if (d3d11on12) {
+            d3d11on12.As(&bridge->d3d11on12Device);
+            if (bridge->d3d11on12Device) {
+                D3D11_RESOURCE_FLAGS d3d11Flags = {};
+                d3d11Flags.BindFlags = 0;
+                hr = bridge->d3d11on12Device->CreateWrappedResource(
+                    bridge->stagingDx12.Get(), &d3d11Flags,
+                    D3D12_RESOURCE_STATE_COMMON, D3D12_RESOURCE_STATE_COMMON,
+                    IID_PPV_ARGS(&bridge->syncWrappedResource));
+                if (FAILED(hr)) {
+                    printf("[DComp] CreateWrappedResource for sync failed: 0x%08lx\n", hr);
+                    bridge->d3d11on12Device.Reset();
+                }
+            }
+        }
+    }
+
+    // Step 8: Open shared handle on presentation device for CopyResource
+    {
+        ComPtr<ID3D11Device1> dev1;
+        bridge->presentDevice.As(&dev1);
+        hr = dev1->OpenSharedResource1(
+            bridge->stagingSharedHandle, IID_PPV_ARGS(&bridge->presentStagingTex));
+    }
+    if (FAILED(hr)) {
+        printf("[DComp] OpenSharedResource1 on presentation device failed: 0x%08lx\n", hr);
+        return false;
+    }
+    // Staging texture shared to presentation device
+
+    // Step 9: Import into Dawn via SharedTextureMemory
+    WGPUSharedTextureMemoryDXGISharedHandleDescriptor dxgiDesc =
+        WGPU_SHARED_TEXTURE_MEMORY_DXGI_SHARED_HANDLE_DESCRIPTOR_INIT;
+    dxgiDesc.handle = bridge->stagingSharedHandle;
+    dxgiDesc.useKeyedMutex = false;
+
+    WGPUSharedTextureMemoryDescriptor memDesc = WGPU_SHARED_TEXTURE_MEMORY_DESCRIPTOR_INIT;
+    memDesc.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiDesc);
+    bridge->sharedTexMem = p_wgpuDeviceImportSharedTextureMemory(device, &memDesc);
+
+    if (!bridge->sharedTexMem) {
+        printf("[DComp] wgpuDeviceImportSharedTextureMemory returned null\n");
+        return false;
+    }
+
+    // Verify properties
+    WGPUSharedTextureMemoryProperties props = {};
+    WGPUStatus propStatus = p_wgpuSharedTextureMemoryGetProperties(bridge->sharedTexMem, &props);
+    if (propStatus != WGPUStatus_Success) {
+        printf("[DComp] SharedTextureMemory properties failed (status=%d)\n", propStatus);
+        return false;
+    }
+    // SharedTextureMemory imported successfully
+
+    // Step 10: Create WGPUTexture from SharedTextureMemory
+    WGPUTextureUsage requestedUsage = (WGPUTextureUsage)(
+        WGPUTextureUsage_CopyDst | WGPUTextureUsage_RenderAttachment);
+    requestedUsage = (WGPUTextureUsage)(requestedUsage & props.usage);
+
+    WGPUTextureDescriptor wgpuTexDesc = {};
+    wgpuTexDesc.usage = requestedUsage;
+    wgpuTexDesc.dimension = WGPUTextureDimension_2D;
+    wgpuTexDesc.size = { width, height, 1 };
+    wgpuTexDesc.format = WGPUTextureFormat_BGRA8Unorm;
+    wgpuTexDesc.mipLevelCount = 1;
+    wgpuTexDesc.sampleCount = 1;
+
+    bridge->zeroCopyTexture = p_wgpuSharedTextureMemoryCreateTexture(bridge->sharedTexMem, &wgpuTexDesc);
+    if (!bridge->zeroCopyTexture) {
+        printf("[DComp] wgpuSharedTextureMemoryCreateTexture returned null\n");
+        return false;
+    }
+
+    // Zero-copy bridge initialized
+
+    // Store the bridge
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        g_dcompBridges[surface] = std::move(bridge);
+    }
+
+    return true;
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* config) {
     if (!ensureWgpuSymbols()) return;
     runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceConfigure(surface, config); });
+
+    // Initialize or resize DComp zero-copy bridge for this surface.
+    // WGPUSurfaceConfiguration struct layout (64-bit):
+    //   nextInChain(ptr,8) + device(ptr,8) + format(u32,4) + pad(4) + usage(u64,8) +
+    //   width(u32,4) + height(u32,4) + viewFormatCount(size_t,8) + viewFormats(ptr,8) +
+    //   alphaMode(u32,4) + presentMode(u32,4)
+    // device at offset 8, width at offset 32, height at offset 36
+    void* devicePtr = *((void**)((uint8_t*)config + 8));
+    uint32_t width = *((uint32_t*)((uint8_t*)config + 32));
+    uint32_t height = *((uint32_t*)((uint8_t*)config + 36));
+
+    if (!devicePtr || width == 0 || height == 0) return;
+
+    // Check if bridge already exists
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) {
+            // Bridge already exists — don't recreate on resize.
+            // The DComp swap chain handles resize via native WM_SIZE hook,
+            // and the staging texture dimensions are checked per-frame.
+            return;
+        }
+    }
+
+    // Try to initialize DComp bridge (graceful fallback on failure)
+    initDCompBridgeForSurface(surface, devicePtr, width, height);
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
     if (!ensureWgpuSymbols()) return;
-    static int callCount = 0;
-    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
-    if (callCount < 3) {
-        // Log status field (offset 16 in WGPUSurfaceTexture struct: texture(8) + suboptimal(4) + pad(4) + status(4))
-        uint32_t status = *((uint32_t*)((uint8_t*)surfaceTexture + 16));
-        void* texture = *((void**)surfaceTexture);
-        printf("[WGPU] getCurrentTexture[%d]: texture=%p status=%u\n", callCount, texture, status);
-        callCount++;
+
+    // Check for DComp bridge
+    DCompBridgeState* bridge = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) bridge = it->second.get();
     }
+
+    if (bridge && bridge->zeroCopyTexture) {
+        std::lock_guard<std::mutex> lock(bridge->frameMutex);
+
+        // If access is still active from a previous frame (e.g. Present wasn't called),
+        // end it first to avoid "already used to access" errors.
+        if (bridge->accessActive) {
+            WGPUSharedTextureMemoryEndAccessState endState = {};
+            p_wgpuSharedTextureMemoryEndAccess(
+                bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
+            // Release any returned fences
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+            bridge->accessActive = false;
+        }
+
+        // Begin access on the shared texture
+        WGPUSharedTextureMemoryBeginAccessDescriptor beginDesc = {};
+        beginDesc.concurrentRead = false;
+        beginDesc.initialized = true;
+
+        // Only chain fences when SharedFence is supported.
+        // When using D3D11On12 sync, GPU synchronization is handled by
+        // Acquire/ReleaseWrappedResources — no need to pass fences.
+        if (bridge->useSharedFenceSync && !bridge->pendingFences.empty()) {
+            beginDesc.fenceCount = bridge->pendingFences.size();
+            beginDesc.fences = bridge->pendingFences.data();
+            beginDesc.signaledValues = bridge->pendingFenceValues.data();
+        }
+
+        WGPUStatus status = p_wgpuSharedTextureMemoryBeginAccess(
+            bridge->sharedTexMem, bridge->zeroCopyTexture, &beginDesc);
+
+        // Clear pending fences after use (release our refs)
+        for (auto f : bridge->pendingFences) {
+            if (f && p_wgpuSharedFenceRelease) p_wgpuSharedFenceRelease(f);
+        }
+        bridge->pendingFences.clear();
+        bridge->pendingFenceValues.clear();
+
+        if (status == WGPUStatus_Success) {
+            bridge->accessActive = true;
+            // Add a reference — callers release the texture after each frame
+            // (standard WGPU surface pattern), so we need an extra ref to keep it alive.
+            p_wgpuTextureAddRef(bridge->zeroCopyTexture);
+
+            // Fill the WGPUSurfaceTexture struct with our shared texture
+            // WGPUSurfaceTexture layout: nextInChain(ptr,8) + texture(ptr,8) + status(u32,4)
+            *((void**)surfaceTexture) = nullptr;                          // nextInChain = NULL
+            *((void**)((uint8_t*)surfaceTexture + 8)) = bridge->zeroCopyTexture;  // texture
+            *((uint32_t*)((uint8_t*)surfaceTexture + 16)) = WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal;  // status
+            return;
+        }
+        // Fall through to normal path on failure
+        printf("[DComp] BeginAccess failed (status=%d), falling back to HWND path\n", status);
+    }
+
+    // Normal HWND path
+    runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
 }
 
 ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
     if (!ensureWgpuSymbols()) return 0;
-    static bool logged = false;
-    if (!logged) { printf("[WGPU] surfacePresentMainThread: first present call, surface=%p\n", surface); logged = true; }
+
+    // Check for DComp bridge
+    DCompBridgeState* bridge = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) bridge = it->second.get();
+    }
+
+    if (bridge && bridge->zeroCopyTexture && bridge->accessActive) {
+        std::lock_guard<std::mutex> lock(bridge->frameMutex);
+
+        auto* swapChain = bridge->compositor.getSwapChain();
+        if (!swapChain) return 0;
+
+        // End Dawn's access — returns shared fences for cross-device sync
+        bridge->accessActive = false;
+        WGPUSharedTextureMemoryEndAccessState endState = {};
+        WGPUStatus status = p_wgpuSharedTextureMemoryEndAccess(
+            bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
+        if (status != WGPUStatus_Success) {
+            printf("[DComp] EndAccess failed: status=%d\n", status);
+            return 0;
+        }
+
+        // Cross-device sync: wait for Dawn's GPU work to finish on the presentation device
+        if (bridge->useSharedFenceSync) {
+            // Store fences for next BeginAccess (Dawn SharedTextureMemory protocol)
+            bridge->pendingFences.clear();
+            bridge->pendingFenceValues.clear();
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                bridge->pendingFences.push_back(endState.fences[i]);  // take ownership of ref
+                bridge->pendingFenceValues.push_back(endState.signaledValues[i]);
+            }
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                WGPUSharedFenceDXGISharedHandleExportInfo dxgiExport =
+                    WGPU_SHARED_FENCE_DXGI_SHARED_HANDLE_EXPORT_INFO_INIT;
+                WGPUSharedFenceExportInfo exportInfo = WGPU_SHARED_FENCE_EXPORT_INFO_INIT;
+                exportInfo.nextInChain = reinterpret_cast<WGPUChainedStruct*>(&dxgiExport);
+                p_wgpuSharedFenceExportInfo(endState.fences[i], &exportInfo);
+
+                if (dxgiExport.handle) {
+                    ComPtr<ID3D11Fence> d3d11Fence;
+                    HRESULT fhr = bridge->presentDevice->OpenSharedFence(
+                        dxgiExport.handle, IID_PPV_ARGS(&d3d11Fence));
+                    if (SUCCEEDED(fhr) && d3d11Fence) {
+                        bridge->presentContext->Wait(d3d11Fence.Get(), endState.signaledValues[i]);
+                    }
+                }
+            }
+        } else if (bridge->d3d11on12Device && bridge->syncWrappedResource) {
+            // Release fences (not needed for D3D11On12 sync path)
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+            // Acquire the wrapped D3D12 resource for D3D11, then release it.
+            // This inserts a GPU wait for Dawn's D3D12 work to complete.
+            ID3D11Resource* resources[] = { bridge->syncWrappedResource.Get() };
+            bridge->d3d11on12Device->AcquireWrappedResources(resources, 1);
+            bridge->d3d11on12Device->ReleaseWrappedResources(resources, 1);
+
+            // Flush + GPU event query to ensure the sync completes before
+            // the presentation device reads the shared texture.
+            ComPtr<ID3D11DeviceContext> syncCtx;
+            ComPtr<ID3D11Device> syncDev;
+            bridge->d3d11on12Device.As(&syncDev);
+            if (syncDev) {
+                syncDev->GetImmediateContext(&syncCtx);
+                if (syncCtx) {
+                    syncCtx->Flush();
+                    // Create an event query and spin-wait for GPU completion.
+                    // This ensures the shared texture data is fully written
+                    // before the presentation device copies from it.
+                    D3D11_QUERY_DESC qd = {};
+                    qd.Query = D3D11_QUERY_EVENT;
+                    ComPtr<ID3D11Query> eventQuery;
+                    if (SUCCEEDED(syncDev->CreateQuery(&qd, &eventQuery))) {
+                        syncCtx->End(eventQuery.Get());
+                        BOOL queryDone = FALSE;
+                        while (syncCtx->GetData(eventQuery.Get(), &queryDone,
+                               sizeof(queryDone), 0) == S_FALSE) {
+                            // Spin — typically completes in <1μs
+                        }
+                    }
+                }
+            }
+        } else {
+            // No sync mechanism — just release fences
+            for (size_t i = 0; i < endState.fenceCount; i++) {
+                if (endState.fences[i] && p_wgpuSharedFenceRelease)
+                    p_wgpuSharedFenceRelease(endState.fences[i]);
+            }
+        }
+
+        // Copy staging -> back buffer and present
+        ComPtr<ID3D11Texture2D> backBuffer;
+        HRESULT hr = swapChain->GetBuffer(0, IID_PPV_ARGS(&backBuffer));
+        if (FAILED(hr)) return 0;
+
+        bridge->presentContext->CopyResource(backBuffer.Get(), bridge->presentStagingTex.Get());
+        bridge->presentContext->Flush();
+
+        hr = swapChain->Present(0, 0);
+        if (FAILED(hr)) return 0;
+
+        bridge->compositor.getDCompDevice()->Commit();
+        return 1;  // success
+    }
+
+    // Normal HWND path
     return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
         return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
     });
@@ -8311,9 +8885,30 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
             SetEvent(ctx->event);
         };
         deviceInfo.userdata1 = &deviceCtx;
+        // Request shared texture memory features for zero-copy DComp bridge
+        WGPUFeatureName zeroCopyFeatures[2];
+        size_t zeroCopyFeatureCount = 0;
+
+        if (p_wgpuAdapterHasFeature) {
+            if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle)) {
+                zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryDXGISharedHandle;
+                printf("[WGPU] Adapter supports SharedTextureMemoryDXGISharedHandle\n");
+            }
+            if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryD3D12Resource)) {
+                zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryD3D12Resource;
+                printf("[WGPU] Adapter supports SharedTextureMemoryD3D12Resource\n");
+            }
+        }
+        if (zeroCopyFeatureCount == 0) {
+            printf("[WGPU] Adapter does not support any SharedTextureMemory features\n");
+        }
+
         WGPUDeviceDescriptor deviceDesc = {};
         deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
         deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
+        deviceDesc.requiredFeatureCount = zeroCopyFeatureCount;
+        deviceDesc.requiredFeatures = zeroCopyFeatures;
+
         p_wgpuAdapterRequestDevice(adapter, &deviceDesc, deviceInfo);
         WaitForSingleObject(deviceEvent, INFINITE);
         CloseHandle(deviceEvent);
@@ -8590,12 +9185,17 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     uint32_t styleMask,
     const char* titleBarStyle,
     bool transparent,
+    double trafficLightOffsetX,
+    double trafficLightOffsetY,
     WindowCloseHandler zigCloseHandler,
     WindowMoveHandler zigMoveHandler,
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
     WindowBlurHandler zigBlurHandler,
     WindowKeyHandler zigKeyHandler) {
+
+    (void)trafficLightOffsetX;
+    (void)trafficLightOffsetY;
 
     // Everything GUI-related needs to be dispatched to main thread
     HWND hwnd = MainThreadDispatcher::dispatch_sync([=]() -> HWND {
@@ -8628,15 +9228,18 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         DWORD windowExStyle = WS_EX_APPWINDOW;
 
         // Handle titleBarStyle options
+        data->chromeStyle = ChromeStyle::Default;
         if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
             // "hidden" = borderless window (no titlebar, no native controls)
             // This is for completely custom chrome
             windowStyle = WS_POPUP | WS_VISIBLE;
         } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
-            // "hiddenInset" = window with border but custom titlebar area
-            // On Windows, we can't easily do the exact macOS inset style,
-            // so we provide a borderless window with shadow for similar effect
-            windowStyle = WS_POPUP | WS_VISIBLE | WS_THICKFRAME;
+            // "hiddenInset" = frameless window with resize borders and DWM shadow.
+            // We use WS_CAPTION | WS_THICKFRAME so the system treats it as a
+            // standard framed window (giving us shadow and border resizing),
+            // then remove the caption bar area in WM_NCCALCSIZE.
+            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            data->chromeStyle = ChromeStyle::HiddenInset;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
 
@@ -8686,6 +9289,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             }
 
 
+            // Force the window frame to recalculate so WM_NCCALCSIZE
+            // is sent again with chromeStyle already set.
+            if (data->chromeStyle == ChromeStyle::HiddenInset) {
+                SetWindowPos(hwnd, NULL, 0, 0, 0, 0,
+                    SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+
             // Show the window
             ShowWindow(hwnd, SW_SHOW);
             UpdateWindow(hwnd);
@@ -8700,7 +9310,42 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     return hwnd;
 }
 
-ELECTROBUN_EXPORT void showWindow(void *window) {
+static void activateVisibleWindow(HWND hwnd) {
+    if (!IsWindowVisible(hwnd)) {
+        return;
+    }
+
+    // Bring window to foreground - this is more complex on Windows
+    // due to foreground window restrictions
+    if (SetForegroundWindow(hwnd)) {
+    } else {
+        DWORD currentThreadId = GetCurrentThreadId();
+        DWORD foregroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
+
+        if (currentThreadId != foregroundThreadId) {
+            if (AttachThreadInput(currentThreadId, foregroundThreadId, TRUE)) {
+                SetForegroundWindow(hwnd);
+                SetFocus(hwnd);
+                AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
+            } else {
+                FLASHWINFO fwi = {0};
+                fwi.cbSize = sizeof(FLASHWINFO);
+                fwi.hwnd = hwnd;
+                fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
+                fwi.uCount = 3;
+                fwi.dwTimeout = 0;
+                FlashWindowEx(&fwi);
+            }
+        }
+    }
+
+    SetActiveWindow(hwnd);
+    SetFocus(hwnd);
+    SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+}
+
+ELECTROBUN_EXPORT void showWindow(void *window, bool activate) {
     // On Windows, window ptr is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
 
@@ -8710,50 +9355,45 @@ ELECTROBUN_EXPORT void showWindow(void *window) {
     }
     
     // Dispatch to main thread to ensure thread safety
-    MainThreadDispatcher::dispatch_sync([=]() {      
-        // Show the window if it's hidden
+    MainThreadDispatcher::dispatch_sync([=]() {
         if (!IsWindowVisible(hwnd)) {
-            ShowWindow(hwnd, SW_SHOW);
+            ShowWindow(hwnd, activate ? SW_SHOW : SW_SHOWNOACTIVATE);
+        } else if (!activate) {
+            ShowWindow(hwnd, SW_SHOWNA);
         }
-        
-        // Bring window to foreground - this is more complex on Windows
-        // due to foreground window restrictions
-        
-        // First, try the simple approach
-        if (SetForegroundWindow(hwnd)) {
+
+        if (activate) {
+            activateVisibleWindow(hwnd);
         } else {
-            // If that fails, we need to work around Windows' foreground restrictions
-            DWORD currentThreadId = GetCurrentThreadId();
-            DWORD foregroundThreadId = GetWindowThreadProcessId(GetForegroundWindow(), NULL);
-            
-            if (currentThreadId != foregroundThreadId) {
-                // Attach to the foreground thread's input queue temporarily
-                if (AttachThreadInput(currentThreadId, foregroundThreadId, TRUE)) {
-                    SetForegroundWindow(hwnd);
-                    SetFocus(hwnd);
-                    AttachThreadInput(currentThreadId, foregroundThreadId, FALSE);
-                } else {
-                    // Last resort - flash the window to get user attention
-                    FLASHWINFO fwi = {0};
-                    fwi.cbSize = sizeof(FLASHWINFO);
-                    fwi.hwnd = hwnd;
-                    fwi.dwFlags = FLASHW_ALL | FLASHW_TIMERNOFG;
-                    fwi.uCount = 3;
-                    fwi.dwTimeout = 0;
-                    FlashWindowEx(&fwi);
-                    
-                }
-            }
+            SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW | SWP_NOACTIVATE);
         }
-        
-        // Ensure the window is active and focused
-        SetActiveWindow(hwnd);
-        SetFocus(hwnd);
-        
-        // Bring to top of Z-order
-        SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0, 
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
-        
+    });
+}
+
+ELECTROBUN_EXPORT void activateWindow(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in activateWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        activateVisibleWindow(hwnd);
+    });
+}
+
+ELECTROBUN_EXPORT void hideWindow(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in hideWindow");
+        return;
+    }
+
+    MainThreadDispatcher::dispatch_sync([=]() {
+        ShowWindow(hwnd, SW_HIDE);
     });
 }
 
@@ -9019,6 +9659,13 @@ ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     if (!IsWindow(hwnd)) return;
 
     SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    (void)window;
+    (void)x;
+    (void)y;
+    // Not applicable on Windows - no-op
 }
 
 ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
@@ -10456,6 +11103,10 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     std::string path;
     if (uriStr.length() > 8) {
         path = uriStr.substr(8); // Remove "views://" prefix
+        // Strip trailing slashes - WebView2 may normalize URLs without folder components
+        while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
+            path.pop_back();
+        }
     } else {
         path = "index.html"; // Default
     }
@@ -11637,3 +12288,8 @@ extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPa
     // Not yet implemented on Windows
     // TODO: Implement using SetWindowIcon/LoadImage APIs
 }
+
+// DComp exported API removed — zero-copy bridge is now an internal
+// implementation detail of the WGPU surface lifecycle (see
+// wgpuSurfaceConfigureMainThread, wgpuSurfaceGetCurrentTextureMainThread,
+// wgpuSurfacePresentMainThread).

@@ -1,0 +1,240 @@
+---
+title: "Events"
+---
+import { Aside } from "@astrojs/starlight/components";
+
+              
+              <p>Event system in the main bun process</p>
+
+              <h2>Event Propagation</h2>
+
+              <h3>Global Events</h3>
+
+              <p>Most events can be listened to directly on the thing firing them or globally.</p>
+
+              <p>For most events, global event handlers fire first. Then handlers are fired in the sequence that they were registered in.</p>
+
+              <p><strong>Exception:</strong> For window `close` events, per-window handlers fire before global handlers. This ensures that your window close handlers always run before the internal `exitOnLastWindowClosed` logic.</p>
+
+              
+```javascript
+// listen to global event
+Electrobun.events.on("will-navigate", (e) => {
+    // handle
+});
+
+// listen to event on object
+win.webview.on('will-navigate', (e) => {
+    // handle
+})
+```
+
+
+              <h3>Event.response</h3>
+
+              <p>You can set a response on some events. Typically these are events initiated from zig which freeze the zig process while waiting for a reply from bun. An example of this is the BrowserView `will-navigate` where objc requires a synchronous response. By freezing the zig process and waiting for bun we allow bun to remain async while the events propagate.</p>
+
+              
+```javascript
+Electrobun.events.on("will-navigate", (e) => {
+  console.log(
+    "example global will-navigate handler",
+    e.data.url,
+    e.data.webviewId
+  );
+  e.response = { allow: true };
+});
+```
+
+
+              <p>As the event propagates through different handlers you can both read and write from the e.response value.</p>
+
+              <h3>Event.responseWasSet</h3>
+
+              <p>A property that indicates the response has been set to something which can be useful when an event propagates through multiple handlers instead of trying to infer from the response value whether it was set or not.</p>
+
+              <h3>Event.clearResponse</h3>
+
+              <p>If a previous handler has set the e.response to something and you want to clear it, you can simply call `e.clearResponse()`</p>
+
+              <h3>Event.data</h3>
+
+              <p>Each event will set different event data</p>
+
+              <h2>Application Events</h2>
+
+              <h3>open-url</h3>
+
+              <p>Fired on macOS when the application is opened via a custom URL scheme or an associated file. File opens arrive as `file://` URLs through this same event.</p>
+
+              <p><strong>Event data:</strong></p>
+              <ul>
+                <li>`url` - The full URL that was used to open the app (e.g., `myapp://some/path?query=value` or `file:///Users/me/Documents/example.dotlock`)</li>
+              </ul>
+
+              
+```javascript
+// Listen for URL scheme and file opens
+Electrobun.events.on("open-url", (e) => {
+  console.log("App opened with URL:", e.data.url);
+
+  const url = new URL(e.data.url);
+
+  if (url.protocol === "file:") {
+    console.log("Opened file:", url.pathname);
+    return;
+  }
+
+  // Handle deep links
+  console.log("Protocol:", url.protocol); // "myapp:"
+  console.log("Host:", url.host);         // might be empty for simple URLs
+  console.log("Pathname:", url.pathname); // "/some/path"
+  console.log("Search:", url.searchParams.get("query")); // "value"
+});
+```
+
+
+              <p><strong>Platform support:</strong></p>
+              <ul>
+                <li>macOS: Fully supported. App must be in `/Applications` folder for URL scheme registration to work reliably.</li>
+                <li>Windows: Not yet supported</li>
+                <li>Linux: Not yet supported</li>
+              </ul>
+
+              <p><strong>Setup:</strong> To register deep links or file associations for your app, add `urlSchemes` and/or `fileAssociations` to your `electrobun.config.ts`. See the <a href="/electrobun/apis/cli/build-configuration">Build Configuration</a> docs for details.</p>
+
+              <h3>before-quit</h3>
+
+              <p>Fired before the application quits. This event fires regardless of what triggered the quit — whether from `Utils.quit()`, `process.exit()`, `exitOnLastWindowClosed`, or the updater.</p>
+
+              <p>You can cancel the quit by setting `` event.response = {`{ allow: false }`} ``.</p>
+
+              
+```javascript
+// Listen for quit and do cleanup
+Electrobun.events.on("before-quit", (e) => {
+  console.log("App is about to quit, saving state...");
+  saveAppState();
+});
+
+// Prevent quit (e.g. unsaved changes)
+Electrobun.events.on("before-quit", (e) => {
+  if (hasUnsavedChanges()) {
+    e.response = { allow: false };
+  }
+});
+```
+
+
+              <p><strong>Event data:</strong> None</p>
+
+              <p><strong>Event response:</strong></p>
+              <ul>
+                <li>`allow` - Set to `false` to cancel the quit. If not set or set to `true`, the application will proceed to quit.</li>
+              </ul>
+
+              <h2>Shutdown Lifecycle</h2>
+
+              <p>Electrobun provides a unified shutdown flow that ensures your app's `before-quit` handler fires regardless of how the quit was triggered.</p>
+
+              <h3>Quit Triggers</h3>
+
+              <p>All of the following quit paths go through the same lifecycle:</p>
+
+              <ul>
+                <li><strong>Programmatic:</strong> Calling `Utils.quit()` from your app code</li>
+                <li><strong>process.exit():</strong> Electrobun intercepts `process.exit()` and routes it through the quit lifecycle</li>
+                <li><strong>exitOnLastWindowClosed:</strong> When the last window closes and this option is enabled</li>
+                <li><strong>System-initiated:</strong> macOS dock icon → Quit, Cmd+Q, Windows taskbar close, etc.</li>
+                <li><strong>Signals:</strong> Ctrl+C (SIGINT) and SIGTERM from the terminal or process managers</li>
+                <li><strong>Updater:</strong> When the updater needs to restart the app</li>
+              </ul>
+
+              <h3>Shutdown Sequence</h3>
+
+              <p>When any quit trigger fires, the following sequence occurs:</p>
+
+              <ol>
+                <li>The `before-quit` event fires on the bun worker thread</li>
+                <li>Your handlers run — you can do cleanup (save state, close connections, flush logs) or cancel the quit by setting `` event.response = {`{ allow: false }`} ``</li>
+                <li>If the quit is not cancelled, the native event loop stops (CEF shuts down, windows close)</li>
+                <li>The process exits cleanly</li>
+              </ol>
+
+              <Aside type="tip">
+                <p><strong>Linux note:</strong> On Linux, system-initiated quit paths (Ctrl+C, window manager close, taskbar quit) do not currently fire `before-quit`. Programmatic quit via `Utils.quit()` and `process.exit()` works correctly on all platforms.</p>
+              </Aside>
+
+              <h3>Ctrl+C Behavior (Dev Mode)</h3>
+
+              <p>In dev mode (`bun dev`), Ctrl+C triggers a graceful shutdown:</p>
+
+              <ul>
+                <li><strong>First Ctrl+C:</strong> Fires `before-quit`, gives your app time to clean up. The terminal stays busy (no prompt) until shutdown completes.</li>
+                <li><strong>Second Ctrl+C:</strong> Force-kills the entire process tree immediately, including any CEF helper processes.</li>
+                <li><strong>Safety timeout:</strong> If the app hangs during shutdown for more than 10 seconds, it is automatically force-killed.</li>
+              </ul>
+
+              <h3>Comparison with Node.js / Bun Exit Events</h3>
+
+              <p>Bun (and Node.js) provide built-in process exit events. Here's how they compare to Electrobun's `before-quit`:</p>
+
+              <table>
+                <thead>
+                  <tr>
+                    <th>Event</th>
+                    <th>Async</th>
+                    <th>Can Cancel</th>
+                    <th>Fires on quit</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>`Electrobun.events.on("before-quit")`</td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Yes</td>
+                    <td>Recommended for app cleanup</td>
+                  </tr>
+                  <tr>
+                    <td>`process.on("exit")`</td>
+                    <td>No (sync only)</td>
+                    <td>No</td>
+                    <td>Yes</td>
+                    <td>Runs after before-quit. No async work (no `await`, no timers, no I/O).</td>
+                  </tr>
+                  <tr>
+                    <td>`process.on("beforeExit")`</td>
+                    <td>Yes</td>
+                    <td>No</td>
+                    <td>No</td>
+                    <td>Does not fire when `process.exit()` is called explicitly, which is how Electrobun terminates.</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <Aside type="tip">
+                <p><strong>Recommendation:</strong> Use Electrobun's `before-quit` event for all shutdown cleanup. It fires for every quit path, supports async operations, and can cancel the quit. The native `process.on("exit")` can be used as a last-resort sync hook, but `process.on("beforeExit")` will not fire in Electrobun apps.</p>
+              </Aside>
+
+              <h3>Example: Complete Shutdown Handling</h3>
+
+              
+```javascript
+import Electrobun from "electrobun/bun";
+
+// Main cleanup handler — fires for all quit triggers
+Electrobun.events.on("before-quit", async (e) => {
+  console.log("Saving application state...");
+  await saveAppState();
+  await closeDatabase();
+  console.log("Cleanup complete, quitting.");
+});
+
+// Optional: sync-only last-resort hook (no async, no I/O)
+process.on("exit", (code) => {
+  console.log("Process exiting with code:", code);
+});
+```
+

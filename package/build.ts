@@ -122,7 +122,8 @@ try {
 		await copyToDist();
 	}
 } catch (err) {
-	console.log(err);
+	console.error(err);
+	process.exit(1);
 }
 
 // Global variables to store build tool paths
@@ -1412,9 +1413,9 @@ async function vendorCEF() {
 			console.log("CEF wrapper library built successfully");
 
 			// build helper
-			await $`clang++ -mmacosx-version-min=10.13 -std=c++20 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
+			await $`xcrun --sdk macosx clang++ -mmacosx-version-min=10.13 -std=c++20 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
 			// link
-			await $`clang++ -mmacosx-version-min=10.13 -std=c++20 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
+			await $`xcrun --sdk macosx clang++ -mmacosx-version-min=10.13 -std=c++20 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
 			// fix internal path
 			// Note: Can use `otool -L src/native/build/process_helper` to check the value
 			await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;
@@ -1795,6 +1796,8 @@ async function buildNative() {
 			: "";
 		await $`mkdir -p src/native/macos/build && clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef ${wgpuIncludeFlag} -std=c++20`;
 		await $`mkdir -p src/native/build && clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -framework Metal -framework MetalKit -framework UserNotifications -framework Network -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
+		await $`mkdir -p src/native/macos/build && xcrun --sdk macosx clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o -fobjc-arc -fno-objc-msgsend-selector-stubs -I./vendors/cef ${wgpuIncludeFlag} -std=c++20`;
+		await $`mkdir -p src/native/build && xcrun --sdk macosx clang++ -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -framework Metal -framework MetalKit -framework UserNotifications -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
 	} else if (OS === "win") {
 		const webview2Include = `./vendors/webview2/Microsoft.Web.WebView2/build/native/include`;
 		// Always use x64 for Windows since we only build x64 Windows binaries
@@ -1815,6 +1818,18 @@ async function buildNative() {
 			? `/I"${wgpuIncludeDir}"`
 			: "";
 
+		// Dawn native lib for zero-copy DComp bridge (D3D11On12 interop)
+		const wgpuLibDir = join(
+			process.cwd(),
+			"vendors",
+			"wgpu",
+			`win-${ARCH}`,
+			"lib",
+		);
+		const wgpuLib = existsSync(join(wgpuLibDir, "webgpu_dawn.lib"))
+			? `"${join(wgpuLibDir, "webgpu_dawn.lib")}"`
+			: "";
+
 		// Compile the main wrapper with both WebView2 and CEF support (runtime detection)
 		// Use /MT to statically link the C runtime (matches libcpmt.lib that CEF uses)
 		await $`mkdir -p src/native/win/build`;
@@ -1824,8 +1839,11 @@ async function buildNative() {
 
 		// Link with both WebView2 and CEF libraries using DelayLoad for CEF (similar to macOS weak linking)
 		// Note: ASAR reading is now implemented directly in C++ (no external library needed)
+		// webgpu_dawn.lib: Dawn native API for D3D11On12 zero-copy bridge
+		// d3d12.lib: D3D12 types used by D3D11On12 interop
+		// DELAYLOAD webgpu_dawn.dll: only loaded when zero-copy bridge is used
 		await runMsvcCommand(
-			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib kernel32.lib comctl32.lib "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
+			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib d3d12.lib kernel32.lib comctl32.lib ${wgpuLib} "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /DELAYLOAD:webgpu_dawn.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
 		);
 	} else if (OS === "linux") {
 		// Skip package checks in CI or continue anyway if packages are missing
@@ -2076,7 +2094,9 @@ async function buildCli() {
 	// await $`bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun`;
 
 	const compileTarget =
-		process.platform === "win32" ? "--target=bun-windows-x64-baseline" : "";
+		process.platform === "win32"
+			? ["--target=bun-windows-x64-baseline"]
+			: [];
 
 	// Use vendored Bun for building CLI to ensure consistency with CI and proper code signing
 	await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache ${PATH.bun.RUNTIME} build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
@@ -2197,7 +2217,7 @@ async function generateTemplateEmbeddings() {
 					entry.name === "dist" ||
 					entry.name === ".next" ||
 					entry.name === ".DS_Store" ||
-					entry.name.startsWith(".") ||
+					(entry.name.startsWith(".") && entry.name !== ".gitignore") ||
 					entry.name === "package-lock.json" ||
 					entry.name === "bun.lock" ||
 					entry.name === "bun.lockb" ||

@@ -179,7 +179,7 @@ const Updater = {
 	// todo: allow switching channels, by default will check the current channel
 	checkForUpdate: async () => {
 		emitStatus("checking", "Checking for updates...");
-		const localInfo = await Updater.getLocallocalInfo();
+		const localInfo = await Updater.getLocalInfo();
 
 		if (localInfo.channel === "dev") {
 			emitStatus("no-update", "Dev channel - updates disabled", {
@@ -283,7 +283,7 @@ const Updater = {
 		await Updater.channelBucketUrl(); // Ensure localInfo is loaded
 		const appFileName = localInfo.name;
 
-		let currentHash = (await Updater.getLocallocalInfo()).hash;
+		let currentHash = (await Updater.getLocalInfo()).hash;
 		let latestHash = (await Updater.checkForUpdate()).hash;
 
 		const extractionFolder = join(appDataFolder, "self-extraction");
@@ -1074,14 +1074,14 @@ del "%~f0"
 	},
 
 	channelBucketUrl: async () => {
-		await Updater.getLocallocalInfo();
+		await Updater.getLocalInfo();
 		// With flat prefix-based naming, channelBucketUrl is just the baseUrl
 		// Users can also use Updater.localInfo.baseUrl() directly
 		return localInfo.baseUrl;
 	},
 
 	appDataFolder: async () => {
-		await Updater.getLocallocalInfo();
+		await Updater.getLocalInfo();
 		// Use identifier + channel for the app data folder
 		// e.g., ~/Library/Application Support/sh.blackboard.myapp/canary/
 		const appDataFolder = join(
@@ -1096,20 +1096,20 @@ del "%~f0"
 	// TODO: consider moving this from "Updater.localInfo" to "BuildVars"
 	localInfo: {
 		version: async () => {
-			return (await Updater.getLocallocalInfo()).version;
+			return (await Updater.getLocalInfo()).version;
 		},
 		hash: async () => {
-			return (await Updater.getLocallocalInfo()).hash;
+			return (await Updater.getLocalInfo()).hash;
 		},
 		channel: async () => {
-			return (await Updater.getLocallocalInfo()).channel;
+			return (await Updater.getLocalInfo()).channel;
 		},
 		baseUrl: async () => {
-			return (await Updater.getLocallocalInfo()).baseUrl;
+			return (await Updater.getLocalInfo()).baseUrl;
 		},
 	},
 
-	getLocallocalInfo: async () => {
+	getLocalInfo: async () => {
 		if (localInfo) {
 			return localInfo;
 		}
@@ -1122,8 +1122,15 @@ del "%~f0"
 			console.error("Failed to read version.json", error);
 			localInfo = { identifier: "", channel: "", version: "", hash: "", baseUrl: "", name: "" };
 			return localInfo;
-		}
-	},
-};
+			}
+		},
+		getLocallocalInfo: async () => {
+			console.error(
+				"[Electrobun] Updater.getLocallocalInfo() is deprecated. Use Updater.getLocalInfo() instead.",
+			);
+
+			return Updater.getLocalInfo();
+		},
+	};
 
 export { Updater };

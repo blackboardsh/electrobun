@@ -1,0 +1,84 @@
+---
+title: "Quick Start"
+---
+  
+  <p>Welcome to Electrobun! This guide will help you create your first ultra-fast, tiny desktop application with TypeScript.</p>
+
+  <h2>Prerequisites</h2>
+  
+  <p>Before getting started, make sure you have:</p>
+  <ul>
+    <li><a href="https://bun.sh" target="_blank">Bun</a> installed on your system</li>
+    <li>A text editor or IDE (Blackboard's own <a href="/colab/">co(lab)</a> recommended)</li>
+    <li>Basic knowledge of TypeScript/JavaScript</li>
+  </ul>
+
+  <h2>Getting Started</h2>
+  
+  <p>Create a new Electrobun project with a single command:</p>
+  
+  
+```
+bunx electrobun init
+```
+
+
+  <p>It'll ask you which template project you want to get started with.</p>
+
+  <p>This creates a new directory with the basic project structure:</p>
+
+  
+```
+my-app/
+├── src/
+│   ├── bun/
+│   │   └── index.ts        # Bun entry point (main process)
+│   └── mainview/
+│       ├── index.html      # UI template
+│       ├── index.css       # Styles
+│       └── index.ts        # Frontend logic
+├── package.json            # Project dependencies
+├── tsconfig.json
+└── electrobun.config.ts    # Build configuration
+```
+
+
+  <h2>Running Your App</h2>
+
+  <p>Navigate to your project directory and start development:</p>
+
+  
+```
+cd my-app
+bun install
+bun start
+```
+
+
+  <p>This will use the Electrobun cli:</p>
+  <ul>
+    <li>Create a quick start project on your machine</li>
+    <li>Use the Electrobun cli to do a dev build of your app</li>
+    <li>Open your app in dev mode</li>    
+  </ul>
+
+  <h2>Next Steps</h2>
+
+  <p>Now that you have a basic app running, explore these topics:</p>
+  
+  <ul>
+    <li><a href="/electrobun/guides/hello-world">Hello World</a> - Create a hello world from scratch.</li>
+    <li><a href="/electrobun/guides/creating-ui">Creating UI</a> - Build beautiful interfaces with web technologies</li>
+    <li><a href="/electrobun/apis/bun">Bun API</a> - Learn about the main process APIs</li>
+    <li><a href="/electrobun/apis/browser-view">BrowserView</a> - Manage multiple webviews</li>
+    <li><a href="/electrobun/guides/bundling-and-distribution">Bundling & Distribution</a> - Package your app for distribution</li>
+  </ul>
+
+  <h2>Need Help?</h2>
+
+  <p>If you run into any issues:</p>
+  <ul>
+    <li>Check the <a href="https://github.com/blackboardsh/electrobun" target="_blank">GitHub repository</a></li>
+    <li>Join our <a href="https://discord.gg/ueKE4tjaCE" target="_blank">Discord community</a></li>
+    <li>Read through the other documentation guides</li>
+  </ul>

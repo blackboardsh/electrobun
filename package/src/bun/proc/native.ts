@@ -97,6 +97,8 @@ export const native = (() => {
 					FFIType.u32, // styleMask
 					FFIType.cstring, // titleBarStyle
 					FFIType.bool, // transparent
+					FFIType.f64, // trafficLightOffsetX
+					FFIType.f64, // trafficLightOffsetY
 					FFIType.function, // closeHandler
 					FFIType.function, // moveHandler
 					FFIType.function, // resizeHandler
@@ -116,7 +118,18 @@ export const native = (() => {
 			showWindow: {
 				args: [
 					FFIType.ptr, // window ptr
+					FFIType.bool, // activate
 				],
+				returns: FFIType.void,
+			},
+			activateWindow: {
+				args: [
+					FFIType.ptr, // window ptr
+				],
+				returns: FFIType.void,
+			},
+			hideWindow: {
+				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
 			closeWindow: {
@@ -173,14 +186,18 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.bool,
 			},
-			setWindowPosition: {
-				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-				returns: FFIType.void,
-			},
-			setWindowSize: {
-				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-				returns: FFIType.void,
-			},
+				setWindowPosition: {
+					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+					returns: FFIType.void,
+				},
+				setWindowButtonPosition: {
+					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+					returns: FFIType.void,
+				},
+				setWindowSize: {
+					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+					returns: FFIType.void,
+				},
 			setWindowFrame: {
 				args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
@@ -842,6 +859,11 @@ const _ffiImpl = {
 			titleBarStyle: string;
 			transparent: boolean;
 			hidden?: boolean;
+			activate?: boolean;
+			trafficLightOffset?: {
+				x: number;
+				y: number;
+			};
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -865,6 +887,8 @@ const _ffiImpl = {
 				titleBarStyle,
 				transparent,
 				hidden = false,
+				activate = true,
+				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
 			const styleMask = native_.symbols.getWindowStyle(
@@ -893,6 +917,8 @@ const _ffiImpl = {
 				// style
 				toCString(titleBarStyle),
 				transparent,
+				trafficLightOffset.x,
+				trafficLightOffset.y,
 				// callbacks
 				windowCloseCallback,
 				windowMoveCallback,
@@ -908,7 +934,7 @@ const _ffiImpl = {
 
 			native_.symbols.setWindowTitle(windowPtr, toCString(title));
 			if (!hidden) {
-				native_.symbols.showWindow(windowPtr);
+				native_.symbols.showWindow(windowPtr, activate);
 			}
 
 			return windowPtr;
@@ -937,15 +963,37 @@ const _ffiImpl = {
 			// Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
 		},
 
-		focusWindow: (params: { winId: number }) => {
+		showWindow: (params: { winId: number; activate?: boolean }) => {
 			const { winId } = params;
 			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
-				throw `Can't focus window. Window no longer exists`;
+				throw `Can't show window. Window no longer exists`;
 			}
 
-			native_.symbols.showWindow(windowPtr);
+			native_.symbols.showWindow(windowPtr, params.activate ?? true);
+		},
+
+		activateWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't activate window. Window no longer exists`;
+			}
+
+			native_.symbols.activateWindow(windowPtr);
+		},
+
+		hideWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't hide window. Window no longer exists`;
+			}
+
+			native_.symbols.hideWindow(windowPtr);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
@@ -1086,21 +1134,32 @@ const _ffiImpl = {
 			return native_.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
 		},
 
-		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
-			const { winId, x, y } = params;
-			const windowPtr = getWindowPtr(winId);
+			setWindowPosition: (params: { winId: number; x: number; y: number }) => {
+				const { winId, x, y } = params;
+				const windowPtr = getWindowPtr(winId);
 
-			if (!windowPtr) {
-				throw `Can't set window position. Window no longer exists`;
-			}
+				if (!windowPtr) {
+					throw `Can't set window position. Window no longer exists`;
+				}
 
-			native_.symbols.setWindowPosition(windowPtr, x, y);
-		},
+				native_.symbols.setWindowPosition(windowPtr, x, y);
+			},
 
-		setWindowSize: (params: {
-			winId: number;
-			width: number;
-			height: number;
+			setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
+				const { winId, x, y } = params;
+				const windowPtr = getWindowPtr(winId);
+
+				if (!windowPtr) {
+					throw `Can't set window button position. Window no longer exists`;
+				}
+
+				native_.symbols.setWindowButtonPosition(windowPtr, x, y);
+			},
+
+			setWindowSize: (params: {
+				winId: number;
+				width: number;
+				height: number;
 		}) => {
 			const { winId, width, height } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1824,6 +1883,7 @@ export const WGPUBridge = {
 		return native_.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
 	},
 };
+
 
 // Worker management. Move to a different file
 process.on("uncaughtException", (err) => {

@@ -29,7 +29,7 @@ export const eventsTests = [
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       log("Triggering navigation");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -134,7 +134,7 @@ export const eventsTests = [
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       log("Attempting navigation (should be blocked)");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 500));
 

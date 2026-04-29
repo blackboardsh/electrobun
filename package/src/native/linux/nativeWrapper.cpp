@@ -86,6 +86,7 @@ static int g_sigint_count = 0;
 // Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
+static std::mutex g_cefBrowserCreationMutex;  // Serialize CreateBrowserSync calls
 
 // Map from CEF browser identifier to electrobun webviewId, used by scheme handlers
 static std::map<int, uint32_t> g_browserIdToWebviewId;
@@ -107,6 +108,8 @@ using electrobun::OperationGuard;
 #include "include/cef_response_filter.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
+#include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "include/cef_download_handler.h"
 #include "include/wrapper/cef_helpers.h"
 
@@ -536,6 +539,10 @@ public:
         std::string fullPath = "index.html"; // default
         if (url.find("views://") == 0) {
             fullPath = url.substr(8); // Skip "views://"
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
+                fullPath.pop_back();
+            }
         }
         
         // Check if this is the internal HTML request
@@ -1234,6 +1241,24 @@ public:
     }
 
     // CefLifeSpanHandler methods
+    bool OnBeforePopup(CefRefPtr<CefBrowser> browser,
+                      CefRefPtr<CefFrame> frame,
+                      int popup_id,
+                      const CefString& target_url,
+                      const CefString& target_frame_name,
+                      CefLifeSpanHandler::WindowOpenDisposition target_disposition,
+                      bool user_gesture,
+                      const CefPopupFeatures& popupFeatures,
+                      CefWindowInfo& windowInfo,
+                      CefRefPtr<CefClient>& client,
+                      CefBrowserSettings& settings,
+                      CefRefPtr<CefDictionaryValue>& extra_info,
+                      bool* no_javascript_access) override {
+        // Prevent all popup windows - this stops CEF from creating new top-level windows
+        printf("CEF: Blocking popup window creation for URL: %s\n", target_url.ToString().c_str());
+        return true;  // Return true to cancel the popup
+    }
+    
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
         
         // Set the browser reference
@@ -1542,7 +1567,13 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Media access permission requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if (origin.find("views://") == 0) {
+            callback->Continue(requested_permissions);
+            return true;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
         
@@ -1613,12 +1644,20 @@ public:
         
         std::string origin = requesting_origin.ToString();
         printf("CEF: Permission prompt requested for %s (permissions: %u)\n", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        // This also covers Chromium's new Loopback/Local Network Access gate triggered
+        // by the per-webview RPC websocket to ws://localhost:<port>.
+        if (origin.find("views://") == 0) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        }
+
         // Handle different permission types
         PermissionType permType = PermissionType::OTHER;
-        std::string message = "This page is requesting additional permissions.\n\nDo you want to allow this?";
+        std::string message;
         std::string title = "Permission Request";
-        
+
         // Check for specific permission types
         if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
             requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
@@ -1633,8 +1672,14 @@ public:
             permType = PermissionType::NOTIFICATIONS;
             message = "This page wants to show notifications.\n\nDo you want to allow this?";
             title = "Notification Permission";
+        } else {
+            // Unrecognized permission type — name what's being requested instead of
+            // a generic "additional permissions" dialog so the user can decide.
+            message = "This page is requesting permission for: " +
+                      electrobun::describeCefPermissions(requested_permissions) +
+                      ".\n\nDo you want to allow this?";
         }
-        
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
         
@@ -2645,7 +2690,7 @@ public:
                 gtk_widget_set_size_request(wrapper, frame.width, frame.height);
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
-                
+
                 // Position webview within wrapper with offset to handle negative positions
                 // Note: /2 division appears necessary for GTK coordinate system
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
@@ -3571,48 +3616,25 @@ public:
 double WebKitWebViewImpl::lastCtrlClickTime = 0;
 
 // Create a CefRequestContext for partition isolation (CEF)
-CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier, uint32_t webviewId) {
-    CefRequestContextSettings settings;
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under $HOME/.cache, creating any
+// missing parent directories.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    char* home = getenv("HOME");
+    std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
+    std::string cachePath = buildCEFPartitionPath(
+        basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
+    g_mkdir_with_parents(cachePath.c_str(), 0755);
+    return cachePath;
+}
+} // namespace electrobun
 
-    if (!partitionIdentifier || !partitionIdentifier[0]) {
-        // No partition: use ephemeral settings
-        settings.persist_session_cookies = false;
-    } else {
-        std::string identifier(partitionIdentifier);
-        bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-        if (isPersistent) {
-            std::string partitionName = identifier.substr(8);
-
-            // Build cache path with identifier/channel structure (consistent with CLI and updater)
-            char* home = getenv("HOME");
-            std::string basePath = home ? std::string(home) + "/.cache" : "/tmp";
-            std::string cachePath = buildPartitionPath(basePath, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName);
-
-            // Create directory
-            g_mkdir_with_parents(cachePath.c_str(), 0755);
-
-            settings.persist_session_cookies = true;
-            CefString(&settings.cache_path).FromString(cachePath);
-        } else {
-            // Ephemeral partition
-            settings.persist_session_cookies = false;
-        }
-    }
-
-    // Create isolated context with partition-specific settings
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-    
-    // Register the views:// scheme handler factory on this context
-    // This ensures the context can load views:// URLs while maintaining partition isolation
+CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
+                                                               uint32_t webviewId) {
     static CefRefPtr<ViewsSchemeHandlerFactory> schemeFactory = new ViewsSchemeHandlerFactory();
-    bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-    
-    if (!registered) {
-        fprintf(stderr, "WARNING: Failed to register views:// scheme handler for partition context\n");
-    }
-    
-    return context;
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // Forward declaration for X11 event processing
@@ -3738,8 +3760,8 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
-        // Use Alloy runtime style for embedded windows (like macOS)
-        window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+        // Use Alloy runtime style for embedded windows (like macOS and Windows)
+        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
         
         // For child windows, position should be relative to parent (0,0 for fullscreen)
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
@@ -3888,13 +3910,23 @@ public:
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", isSandboxed);
 
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        // Serialize browser creation to avoid Chrome runtime race condition
+        // where rapid concurrent browser creation causes windows to spawn
+        // with their own URL bar instead of embedding properly
+        CefRefPtr<CefBrowser> browser;
+        {
+            std::lock_guard<std::mutex> creation_lock(g_cefBrowserCreationMutex);
+            browser = CefBrowserHost::CreateBrowserSync(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        }
         
-        if (!create_result) {
+        if (!browser) {
             creationFailed = true;
         } else {
-            // Add this webview to the X11 window's child list
-            x11win->childWindows.push_back(0); // Will be updated when browser is created
+            // Store the browser reference immediately
+            this->browser = browser;
+            // Add this webview to the X11 window's child list with the actual window handle
+            CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
+            x11win->childWindows.push_back(handle);
         }
     }
     
@@ -4535,25 +4567,25 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-            } else {
-                // For OOPIFs, wrap in a fixed container to enforce size constraints
-                GtkWidget* wrapper = gtk_fixed_new();
-                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
-                
-                // Make wrapper receive no events (pass through to widgets below)
-                gtk_widget_set_events(wrapper, 0);
-                gtk_widget_set_can_focus(wrapper, FALSE);
-                
-                // Add webview to wrapper at 0,0
-                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+            } else if (view->fullSize) {
+                // Full-size subsequent webview: add directly as overlay (same as first webview)
+                printf("DEBUG: Adding subsequent full-size webview (ID: %u) to overlay\n", view->webviewId);
                 fflush(stdout);
-                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
-                
+
+                // Set it to expand and fill the overlay
+                g_object_set(view->widget,
+                            "expand", TRUE,
+                            "hexpand", TRUE,
+                            "vexpand", TRUE,
+                            NULL);
+
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), view->widget);
+
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                printf("DEBUG: Subsequent full-size webview (ID: %u) realized successfully\n", view->webviewId);
                 fflush(stdout);
-                
+
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
                     view->setTransparent(true);
@@ -4563,19 +4595,47 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-                
+            } else {
+                // For OOPIFs, wrap in a fixed container to enforce size constraints
+                GtkWidget* wrapper = gtk_fixed_new();
+                gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+
+                // Make wrapper receive no events (pass through to widgets below)
+                gtk_widget_set_events(wrapper, 0);
+                gtk_widget_set_can_focus(wrapper, FALSE);
+
+                // Add webview to wrapper at 0,0
+                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
+                fflush(stdout);
+                gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+
+                // Now that widget is anchored, realize it for rendering
+                gtk_widget_realize(view->widget);
+                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
+                fflush(stdout);
+
+                // Apply pending transparency/passthrough flags now that widget is realized
+                if (view->pendingStartTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (view->pendingStartPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
+
                 // Add wrapper as overlay layer
                 gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
-                
+
                 // Make the wrapper pass-through for events outside the webview
                 gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
-                
+
                 // Position wrapper using margins (will be updated in resize)
                 gtk_widget_set_margin_start(wrapper, (int)x);
                 gtk_widget_set_margin_top(wrapper, (int)y);
-                
+
                 gtk_widget_show(wrapper);
-                
+
                 // Store wrapper reference
                 g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
             }
@@ -5582,6 +5642,18 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
+
             context = webkit_web_context_new_with_website_data_manager(dataManager);
             g_object_unref(dataManager);
         } else {
@@ -5925,7 +5997,7 @@ void runEventLoop() {
 
 
 // Forward declarations
-void showWindow(void* window);
+void showWindow(void* window, bool activate);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
@@ -6262,7 +6334,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 // Mac-compatible function for Linux
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
+                                             double trafficLightOffsetX, double trafficLightOffsetY,
                                              WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+    (void)trafficLightOffsetX;
+    (void)trafficLightOffsetY;
+
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
         return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
@@ -6321,6 +6397,36 @@ void showX11Window(void* window) {
     });
 }
 
+void showX11WindowWithoutActivating(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            autoSetWindowIcon(window);
+            XMapWindow(x11win->display, x11win->window);
+            XRaiseWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+            applyApplicationMenuToX11Window(x11win);
+        }
+    });
+}
+
+void activateX11Window(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XWindowAttributes attrs;
+            if (XGetWindowAttributes(x11win->display, x11win->window, &attrs) == 0 ||
+                attrs.map_state == IsUnmapped) {
+                return;
+            }
+
+            XRaiseWindow(x11win->display, x11win->window);
+            XSetInputFocus(x11win->display, x11win->window, RevertToParent, CurrentTime);
+            XFlush(x11win->display);
+        }
+    });
+}
+
 void showGTKWindow(void* window) {
     dispatch_sync_main_void([&]() {
         // Automatically set icon from standard location
@@ -6332,11 +6438,67 @@ void showGTKWindow(void* window) {
     });
 }
 
-ELECTROBUN_EXPORT void showWindow(void* window) {
+void showGTKWindowWithoutActivating(void* window) {
+    dispatch_sync_main_void([&]() {
+        autoSetWindowIcon(window);
+        gtk_widget_show_all(GTK_WIDGET(window));
+    });
+}
+
+void activateGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        if (!gtk_widget_get_visible(GTK_WIDGET(window))) {
+            return;
+        }
+        gtk_window_present(GTK_WINDOW(window));
+    });
+}
+
+ELECTROBUN_EXPORT void showWindow(void* window, bool activate) {
     if (isCEFAvailable()) {
-        showX11Window(window);
+        if (activate) {
+            showX11Window(window);
+        } else {
+            showX11WindowWithoutActivating(window);
+        }
     } else {
-        showGTKWindow(window);
+        if (activate) {
+            showGTKWindow(window);
+        } else {
+            showGTKWindowWithoutActivating(window);
+        }
+    }
+}
+
+ELECTROBUN_EXPORT void activateWindow(void* window) {
+    if (isCEFAvailable()) {
+        activateX11Window(window);
+    } else {
+        activateGTKWindow(window);
+    }
+}
+
+void hideX11Window(void* window) {
+    dispatch_sync_main_void([&]() {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (x11win && x11win->display && x11win->window) {
+            XUnmapWindow(x11win->display, x11win->window);
+            XFlush(x11win->display);
+        }
+    });
+}
+
+void hideGTKWindow(void* window) {
+    dispatch_sync_main_void([&]() {
+        gtk_widget_hide(GTK_WIDGET(window));
+    });
+}
+
+ELECTROBUN_EXPORT void hideWindow(void* window) {
+    if (isCEFAvailable()) {
+        hideX11Window(window);
+    } else {
+        hideGTKWindow(window);
     }
 }
 
@@ -9690,6 +9852,13 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     });
 }
 
+ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
+    (void)window;
+    (void)x;
+    (void)y;
+    // Not applicable on Linux - no-op
+}
+
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
     if (!window) return;
 
@@ -9820,6 +9989,10 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
         // Handle views:// protocol
         if (actualPath.substr(0, 8) == "views://") {
             std::string viewPath = actualPath.substr(8);
+            // Strip trailing slashes - WebKit may normalize URLs without folder components
+            while (!viewPath.empty() && (viewPath.back() == '/' || viewPath.back() == '\\')) {
+                viewPath.pop_back();
+            }
             
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {
@@ -10424,6 +10597,17 @@ static WebKitWebsiteDataManager* getDataManagerForPartition(const char* partitio
                 "base-cache-directory", cachePath.c_str(),
                 NULL
             );
+
+            // Enable persistent cookie storage (SQLite-backed)
+            WebKitCookieManager* cookieManager = webkit_website_data_manager_get_cookie_manager(dataManager);
+            if (cookieManager) {
+                std::string cookiePath = dataPath + "/cookies.sqlite";
+                webkit_cookie_manager_set_persistent_storage(
+                    cookieManager,
+                    cookiePath.c_str(),
+                    WEBKIT_COOKIE_PERSISTENT_STORAGE_SQLITE
+                );
+            }
         } else {
             dataManager = webkit_website_data_manager_new_ephemeral();
         }

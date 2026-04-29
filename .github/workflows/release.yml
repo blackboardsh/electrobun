@@ -285,7 +285,7 @@ jobs:
 
             The Electrobun CLI will automatically download these artifacts when you build your app. You don't need to download them directly.
 
-            See the [documentation](https://blackboard.sh/electrobun/docs/guides/quick-start/) for more information.
+            See the [documentation](https://docs.electrobunny.ai/electrobun/guides/quick-start/) for more information.
 
             ---
 
@@ -294,8 +294,45 @@ jobs:
             - `electrobun-core-[platform]-[arch].tar.gz` - Core binaries
             - `electrobun-cef-[platform]-[arch].tar.gz` - CEF binaries (optional)
 
+  docs-deploy:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Determine deploy branch
+        id: deploy-branch
+        shell: bash
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          if [[ "$TAG" == *"-beta"* ]] || [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
+            echo "branch=preview" >> $GITHUB_OUTPUT
+          else
+            echo "branch=main" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.8
+
+      - name: Install docs dependencies
+        run: bun install
+        working-directory: docs
+
+      - name: Build docs
+        run: bun run build
+        working-directory: docs
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy docs/dist --project-name=electrobun-docs --branch=${{ steps.deploy-branch.outputs.branch }}
+
   npm-publish:
-    needs: release
+    needs: [release, docs-deploy]
     runs-on: ubuntu-latest
 
     steps:

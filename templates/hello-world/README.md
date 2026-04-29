@@ -42,7 +42,7 @@ src/
 
 Ready to build something more complex? Check out:
 
-- **[Documentation](https://docs.electrobun.dev)** - Learn about all Electrobun features
+- **[Documentation](https://docs.electrobunny.ai/electrobun/)** - Learn about all Electrobun features
 - **[Examples](https://github.com/blackboardsh/electrobun/tree/main/playground)** - See advanced features like RPC, menus, and system tray
 - **[GitHub](https://github.com/blackboardsh/electrobun)** - Star the repo and join the community
 

@@ -1,0 +1,97 @@
+---
+title: "Cross-Platform Development"
+---
+              
+              <p>Electrobun enables you to build desktop applications that run on macOS, Windows, and Linux from a single codebase. This guide covers platform-specific considerations and best practices for cross-platform development.</p>
+
+              <h2>Platform-Specific Issues</h2>
+
+              <h3>Window Management</h3>
+              <p>Some window options like frameless windows work differently on different OSes.</p>
+
+              <h3>Webview Behavior</h3>
+
+              <p>Webview hiding and passthrough behavior varies between platforms:</p>
+
+              <ul>
+                <li><strong>macOS</strong>: Webviews can be set to hidden and passthrough separately. These are independent settings.</li>
+                <li><strong>Windows &amp; Linux</strong>: Setting a webview to hidden using also automatically enables passthrough behavior. There is no separate passthrough setting - clicks will pass through hidden webviews to underlying content.</li>
+              </ul>
+
+              
+```
+<span style="color: #6b7280">// Hide a webview (behavior differs by platform)</span>
+<span style="color: #f59e0b">webviewSetHidden</span>(<span style="color: #10b981">webviewId</span>, <span style="color: #3b82f6">true</span>);
+
+<span style="color: #6b7280">// On macOS: webview is hidden but still intercepts clicks (unless passthrough is also enabled)</span>
+<span style="color: #6b7280">// On Windows/Linux: webview is hidden AND clicks pass through automatically</span>
+
+<span style="color: #6b7280">// Enable click passthrough (macOS only - no effect on Windows/Linux)</span>
+<span style="color: #f59e0b">webviewSetPassthrough</span>(<span style="color: #10b981">webviewId</span>, <span style="color: #3b82f6">true</span>);
+```
+
+
+              <h3>Linux</h3>
+              <p>By default on Linux we use GTK windows and GTKWebkit webviews. This is as close to a "system" webview on Linux that's managed/updated by the OS. Some distros don't have this installed by default so you will need to ask your end users to install those dependencies.</p>
+
+              <p>In addition GTK and GTKWebkit have severe limitations and are unable to handle Electrobun's more advanced webview layering and masking functionality.</p>
+
+              <p>So we strongly recommend bundling CEF (just set bundleCEF to true in your electrobun.config.ts file) for your app's linux distribution. And make sure you open `new BrowserWindow()`s and `<electrobun-webview>`s with `renderer="cef"` which uses pure x11 windows.</p>
+
+              <h2>Building for Multiple Platforms</h2>
+
+              <p>Electrobun builds for the current host platform. To produce builds for all platforms, use a CI service like GitHub Actions with a runner for each OS/architecture. GitHub Actions provides free CI runners for open-source projects covering all supported platforms.</p>
+
+              
+```
+<span style="color: #6b7280"># On each CI runner, just run:</span>
+<span style="color: #f59e0b">electrobun</span> build --env=stable
+```
+
+
+              <p>Electrobun's <a href="https://github.com/blackboardsh/electrobun">GitHub repository</a> includes a release workflow that builds natively on each platform using a build matrix. This is the recommended approach — each platform build runs on its native OS, avoiding cross-compilation complexity and ensuring platform-specific tools (code signing, icon utilities, etc.) work correctly.</p>
+
+              <h3>Architecture Considerations</h3>
+
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>Platform</th>
+                    <th>Architectures</th>
+                    <th>Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>macOS</td>
+                    <td>x64, ARM64</td>
+                    <td>Universal binaries supported</td>
+                  </tr>
+                  <tr>
+                    <td>Windows</td>
+                    <td>x64</td>
+                    <td>ARM64 runs via emulation</td>
+                  </tr>
+                  <tr>
+                    <td>Linux</td>
+                    <td>x64, ARM64</td>
+                    <td>Native support for both</td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <h2>Windows Console Output</h2>
+
+              <p>On Windows, Electrobun builds your app as a GUI application (Windows subsystem) so that no console window appears when end users launch it. Dev builds automatically attach to the parent console so you can see `console.log` output and debug information in your terminal.</p>
+
+              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>stable</strong> build (for example to debug an issue that only reproduces in a production build), set the `ELECTROBUN_CONSOLE` environment variable:</p>
+
+              
+```
+<span style="color: #6b7280"># Launch a canary/stable build with console output visible</span>
+<span style="color: #f59e0b">set</span> ELECTROBUN_CONSOLE=1
+<span style="color: #f59e0b">.\MyApp.exe</span>
+```
+
+
+              <p>When `ELECTROBUN_CONSOLE=1` is set, the launcher will attach to the parent console and inherit standard output/error streams, just like a dev build. This has no effect on macOS or Linux where console output is always available.</p>

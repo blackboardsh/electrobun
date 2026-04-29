@@ -1,0 +1,82 @@
+---
+title: "<electrobun-wgpu>"
+---
+  <p>`<electrobun-wgpu>` embeds a native WGPU-backed surface inside a webview layout. It behaves like a DOM element but renders via a real GPU surface layered above the host view, with optional masking and passthrough for punch‑through UI.</p>
+
+  <h2>When To Use It</h2>
+
+  <ul>
+    <li>Compositing high-performance GPU content with a web UI (editors, game tools, IDEs).</li>
+    <li>Running Bun-side WGPU rendering while keeping HTML/CSS for layout.</li>
+    <li>Mixing native GPU surfaces with webview content without a single WebGL canvas.</li>
+  </ul>
+
+  <p>If your rendering is simple and you don’t need Bun‑side control or native surface layering, a standard `<canvas>` inside the webview is still the simplest option.</p>
+
+  <h2>Basic Usage</h2>
+
+  
+```javascript
+// In your webview HTML
+<electrobun-wgpu id="gpu"></electrobun-wgpu>
+
+// In Bun (RPC handler), create a WGPU surface for the view ID
+// and render via WGPU.native or webgpu.createContext(...)
+```
+
+
+  <h2>API</h2>
+
+  
+```javascript
+const wgpu = document.querySelector("electrobun-wgpu");
+
+// Properties
+console.log(wgpu.wgpuViewId);
+console.log(wgpu.transparent, wgpu.passthroughEnabled, wgpu.hidden);
+
+// Methods
+wgpu.toggleTransparent(true);
+wgpu.togglePassthrough(true);
+wgpu.toggleHidden(false);
+wgpu.syncDimensions(true);
+
+// Masks
+wgpu.addMaskSelector("#hud");
+wgpu.removeMaskSelector("#hud");
+
+// Events
+wgpu.on("ready", (evt) => {
+  console.log("WGPU view ready", evt.detail);
+});
+```
+
+
+  <p>The `wgpuViewId` is the native view identifier. Pass it to your Bun process to create a surface for that view.</p>
+
+  <h2>Lifecycle + Resize</h2>
+
+  <p>WebGPU surfaces must be reconfigured on size changes. When your WGPU view or window resizes, update the surface config and re-create any size-dependent resources.</p>
+
+  
+```javascript
+// Bun-side render loop example
+const ctx = webgpu.createContext(win);
+let size = win.getSize();
+
+function resizeIfNeeded() {
+  const next = win.getSize();
+  if (next.width !== size.width || next.height !== size.height) {
+    size = next;
+    ctx.configure({
+      device,
+      format: webgpu.navigator.getPreferredCanvasFormat(),
+      alphaMode: "premultiplied",
+      size: [size.width, size.height],
+    });
+  }
+}
+```
+
+
+  <p>Call `syncDimensions()` after any DOM layout changes so the native view tracks the element bounds.</p>

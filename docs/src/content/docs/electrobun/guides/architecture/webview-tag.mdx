@@ -1,0 +1,90 @@
+---
+title: "Webview Tag Architecture"
+---
+import { Aside } from "@astrojs/starlight/components";
+
+              
+              <h2>Overview</h2>
+
+              <p>The `<electrobun-webview>` tag is Electrobun's implementation of an Out-Of-Process IFrame (OOPIF), providing a secure, isolated, and performant way to embed web content within your application. Unlike traditional iframes or Electron's deprecated `<webview>` tag, Electrobun's approach offers full process isolation while maintaining seamless DOM integration.</p>
+
+              <Aside type="tip">
+                <strong>Info:</strong> For a deep dive into the technical implementation and philosophy behind Electrobun's OOPIF approach, check out our blog post: <a href="/blog/building-a-better-oopif">Building a Better OOPIF</a>
+              </Aside>
+
+              <h2>Why Not Regular IFrames?</h2>
+
+              <p>Standard iframes come with significant limitations for desktop applications:</p>
+              <ul>
+                <li><strong>Security restrictions</strong>: Modern browsers prevent iframes from loading cross-domain content</li>
+                <li><strong>Limited control</strong>: Cannot fully customize behavior or bypass same-origin policies</li>
+                <li><strong>Performance constraints</strong>: Share the same process as the parent page</li>
+                <li><strong>Feature limitations</strong>: Restricted access to native APIs and advanced browser features</li>
+              </ul>
+
+              <h2>The OOPIF Advantage</h2>
+
+              <p>An Out-Of-Process IFrame (OOPIF) solves these limitations by:</p>
+              <ul>
+                <li><strong>Process isolation</strong>: Each webview runs in its own isolated process</li>
+                <li><strong>Security boundary</strong>: Complete separation between host and embedded content</li>
+                <li><strong>Performance</strong>: Independent resource allocation and crash protection</li>
+                <li><strong>Flexibility</strong>: Full control over content loading and permissions</li>
+              </ul>
+
+              <h2>How It Works</h2>
+
+              <p>The `<electrobun-webview>` tag functions as a layer positioned above the main window, synchronized with the DOM element's position and size. This architecture provides:</p>
+
+              <ol>
+                <li><strong>DOM Integration</strong>: The webview behaves like any other DOM element - you can style, animate, and position it using CSS</li>
+                <li><strong>Process Separation</strong>: Content runs in a completely isolated process, preventing cross-contamination</li>
+                <li><strong>Transparent Layering</strong>: Support for transparency and layering effects without breaking the host design</li>
+                <li><strong>Native Performance</strong>: Direct rendering without the overhead of iframe restrictions</li>
+              </ol>
+
+              <h2>Key Features</h2>
+
+              <h3>Full Isolation</h3>
+              <p>Each `<electrobun-webview>` runs in its own process, ensuring:</p>
+              <ul>
+                <li>Crash protection (one webview crash doesn't affect others)</li>
+                <li>Memory isolation</li>
+                <li>Security boundaries between different content sources</li>
+              </ul>
+
+              <h3>Seamless Communication</h3>
+              <p>Fast inter-process communication (IPC) between:</p>
+              <ul>
+                <li>The Bun main process</li>
+                <li>The host webview</li>
+                <li>Individual OOPIF webviews</li>
+              </ul>
+
+              <h3>Not Deprecated</h3>
+              <p>Unlike Electron's `<webview>` tag (which relies on Chromium's deprecated implementation scheduled for removal in January 2025), Electrobun's implementation is built from the ground up and will continue to be supported and improved.</p>
+
+              <h2>Usage Example</h2>
+
+              
+```
+<span style="color: #f59e0b"><electrobun-webview</span> 
+  <span style="color: #3b82f6">src</span>=<span style="color: #10b981">"https://electrobun.dev"</span>
+  <span style="color: #3b82f6">style</span>=<span style="color: #10b981">"width: 100%; height: 500px;"</span><span style="color: #f59e0b">></span>
+<span style="color: #f59e0b"></electrobun-webview></span>
+```
+
+
+              <p>The webview integrates seamlessly with your application's DOM while maintaining complete process isolation for security and performance.</p>
+
+              <h2>Architecture Benefits</h2>
+
+              <ul>
+                <li><strong>Security</strong>: Complete process isolation prevents cross-site scripting and other attacks</li>
+                <li><strong>Reliability</strong>: Crash isolation ensures one failing webview doesn't bring down your app</li>
+                <li><strong>Performance</strong>: Independent resource allocation and rendering</li>
+                <li><strong>Flexibility</strong>: Full control over content without iframe limitations</li>
+                <li><strong>Future-proof</strong>: Not dependent on deprecated Chromium features</li>
+              </ul>
+
+              <p>For more technical details and the evolution of this implementation, read our <a href="/blog/building-a-better-oopif">Building a Better OOPIF</a> blog post.</p>

@@ -1,0 +1,95 @@
+---
+title: "Code Signing"
+---
+              
+              <h2>Mac</h2>
+              <p>Apple often ships machines with expired certificates which is a huge pain. You can easily end up in a loop of generating certificates in the developer portal, installing them, and seeing the certificate is not trusted.</p>
+
+              <p>You can avoid a lot of headaches by installing the full Xcode via the app store. Open XCode, click the app menu and the Settings. Go to the Accounts tab and add your developer account. Click "Manage Certificates". Then click the + sign and add a "Developer ID Application" certificate. If you open Keychain Access you should be able to see it if you search the Login keychain for "Developer ID Application". You can also log into the Apple Developer portal and look at your certificates and you'll see it there as well.</p>
+
+              <p>Now in the developer portal go to Identifiers and click the plus sign to add one for your app. Make sure "App Attest" is checked so Electrobun's CLI can code sign and notarize your app. You may need other services if you need them.</p>
+
+              <p>Now in another tab outside the Apple developer portal log into your apple account <a href="https://account.apple.com/sign-in">https://account.apple.com/sign-in</a>. Go to "App Specific Passwords" and Create one for your Electrobun usage, this will be your `ELECTROBUN_APPLEIDPASS` that the Electrobun CLI will use to notarize your apps.</p>
+
+              <p>Now we need to get some values that you will add to your .zshrc file. Here is the mapping of those values and where to find them</p>
+
+              
+```bash
+ELECTROBUN_DEVELOPER_ID: In Apple Dev Portal open the certificate you created. The certificate name (probably your company name). eg: "My Corp Inc."
+
+ELECTROBUN_TEAMID: In the Apple Dev Portal open the App Identifier you created for your app. Under "App ID Prefix" you'll see something like "BGU899NB8T (Team ID)" it's the "BGU899NB8T" part.
+
+ELECTROBUN_APPLEID: This is your apple id email address, likely your personal apple id email address
+
+ELECTROBUN_APPLEIDPASS: This is the app specific password you created for Electrobun code signing
+```
+
+
+              <p>Now open your .zshrc file and add the following lines so that they're in your env</p>
+
+              
+```bash
+export ELECTROBUN_DEVELOPER_ID="ELECTROBUN_DEVELOPER_ID: My Corp Inc. (BGU899NB8T)"
+export ELECTROBUN_TEAMID="BGU899NB8T"
+export ELECTROBUN_APPLEID="myemail@email.com"
+export ELECTROBUN_APPLEIDPASS="your-app-specific-password"
+```
+
+
+              <p>Now in your electrobun.config file make sure Build.mac.codesign and build.mac.notarize are set to true. eg:</p>
+
+              
+```javascript
+{
+    "build": {
+        "mac": {
+            "codesign": true,
+            "notarize": true,
+        }
+    }
+}
+```
+
+
+              <p>Restart your terminal. You can confirm your env is setup correctly by entering the following and hitting enter to see if it outputs the value in your .zshrc file. You may need to restart or add it to a different file if it doesn't.</p>
+              
+              
+```bash
+echo $ELECTROBUN_TEAMID
+```
+
+
+              <p>The next time you build your app the Electrobun CLI will sign and notarize your app, then compress it into the self extractor and sign and notarize the self extractor for you.</p>
+
+              <h3>App Store Connect API Key (alternative)</h3>
+
+              <p>Instead of using an Apple ID and app-specific password, you can authenticate using an App Store Connect API key. This is often preferred for CI/CD environments and avoids issues with two-factor authentication.</p>
+
+              <p>Create an API key in <a href="https://appstoreconnect.apple.com/access/integrations/api">App Store Connect &gt; Users and Access &gt; Integrations &gt; App Store Connect API</a>. Download the `.p8` key file and note your Issuer ID and Key ID.</p>
+
+              <p>Add the following environment variables:</p>
+
+              
+```bash
+export ELECTROBUN_APPLEAPIKEYPATH="/path/to/AuthKey_XXXXXXXXXX.p8"
+export ELECTROBUN_APPLEAPIKEY="XXXXXXXXXX"
+export ELECTROBUN_APPLEAPIISSUER="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+```
+
+
+              <p>When these variables are set, Electrobun will use the API key for notarization instead of the Apple ID credentials. You still need `ELECTROBUN_DEVELOPER_ID` and `ELECTROBUN_TEAMID` for code signing.</p>
+
+              <h2>Unsigned Apps</h2>
+              <p>If you distribute an unsigned app (with `codesign: false`), users who download it from the internet will see a "damaged and can't be opened" error when trying to launch it. This happens because macOS adds a quarantine attribute to downloaded files, and Gatekeeper blocks unsigned quarantined apps.</p>
+
+              <p>To run an unsigned app that was downloaded from the internet, users need to remove the quarantine attribute:</p>
+
+              
+```bash
+xattr -cr /Applications/YourApp.app
+```
+
+
+              <p>After running this command, the app should open normally. Note that this is only necessary for apps downloaded from the internet - apps built and run locally don't have the quarantine attribute.</p>
+
+              <p>For production apps intended for end users, it's strongly recommended to enable code signing and notarization for the best user experience.</p>

@@ -169,10 +169,10 @@ export const navigationTests = [
         log(`did-navigate fired for: ${url}`);
       });
 
-      log("Setting navigation rules: block all except example.com");
+      log("Setting navigation rules: block all except blackboard.sh");
       win.webview.setNavigationRules([
         "^*", // Block all
-        "*://example.com/*", // Allow only example.com  
+        "*://blackboard.sh/*", // Allow only blackboard.sh
         "views://*", // Allow views protocol for current page
       ]);
 
@@ -302,7 +302,7 @@ export const navigationTests = [
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       log("Attempting navigation (will be blocked by event handler)");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
       expect(willNavigateFired).toBe(true);

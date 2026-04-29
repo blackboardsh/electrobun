@@ -1462,6 +1462,13 @@ const _commandDefaults = {
 	},
 };
 
+type FileAssociation = {
+	ext: string[];
+	name: string;
+	role?: "Editor" | "Viewer" | "Shell" | "None";
+	icon?: string;
+};
+
 // Default values merged with user's electrobun.config.ts
 // For the user-facing type, see ElectrobunConfig in src/bun/ElectrobunConfig.ts
 const defaultConfig = {
@@ -1471,6 +1478,7 @@ const defaultConfig = {
 		version: "0.1.0",
 		description: "" as string | undefined,
 		urlSchemes: undefined as string[] | undefined,
+		fileAssociations: undefined as FileAssociation[] | undefined,
 	},
 	build: {
 		buildFolder: "build",
@@ -1779,6 +1787,151 @@ ${schemesXml}
     </array>`;
 }
 
+// Generates CFBundleDocumentTypes and UTExportedTypeDeclarations for file associations.
+// Each association gets a UTI derived from the app identifier (e.g., com.example.app.myext).
+// LSItemContentTypes in CFBundleDocumentTypes references these UTIs so Launch Services
+// properly associates files with the app on modern macOS.
+function generateDocumentTypes(
+	fileAssociations: FileAssociation[] | undefined,
+	projectRoot: string,
+	appIdentifier: string,
+): string {
+	if (!fileAssociations || fileAssociations.length === 0) {
+		return "";
+	}
+
+	const validAssociations = fileAssociations.filter((assoc) => {
+		if (!assoc.ext || assoc.ext.length === 0) {
+			console.log(
+				`WARNING: fileAssociations entry "${assoc.name || "(unnamed)"}" has no extensions — skipping`,
+			);
+			return false;
+		}
+		if (!assoc.name) {
+			console.log(
+				`WARNING: fileAssociations entry with extensions [${assoc.ext.join(", ")}] has no name — skipping`,
+			);
+			return false;
+		}
+		return true;
+	});
+
+	if (validAssociations.length === 0) {
+		return "";
+	}
+
+	// Clean extensions and warn about leading dots
+	const cleaned = validAssociations.map((assoc) => ({
+		...assoc,
+		ext: assoc.ext.map((ext) => {
+			const clean = ext.replace(/^\./, "");
+			if (clean !== ext) {
+				console.log(
+					`WARNING: fileAssociations ext "${ext}" has a leading dot — stripping to "${clean}"`,
+				);
+			}
+			return clean;
+		}),
+	}));
+
+	// Generate CFBundleDocumentTypes with LSItemContentTypes
+	const docTypes = cleaned
+		.map((assoc) => {
+			const role = assoc.role || "Viewer";
+			// Resolve icon: only reference if file exists to avoid dangling plist entries
+			let iconName = "";
+			if (assoc.icon) {
+				const iconSourcePath = join(projectRoot, assoc.icon);
+				if (existsSync(iconSourcePath)) {
+					iconName = basename(assoc.icon).replace(/\.icns$/i, "");
+				} else {
+					console.log(
+						`WARNING: Document type icon not found: ${iconSourcePath} — skipping icon reference`,
+					);
+				}
+			}
+			const iconLine = iconName
+				? `            <key>CFBundleTypeIconFile</key>\n            <string>${escapeXml(iconName)}</string>\n`
+				: "";
+			// One UTI per extension, all listed under LSItemContentTypes
+			const utiXml = assoc.ext
+				.map(
+					(ext) =>
+						`                <string>${escapeXml(appIdentifier)}.${escapeXml(ext)}</string>`,
+				)
+				.join("\n");
+			const extsXml = assoc.ext
+				.map(
+					(ext) =>
+						`                <string>${escapeXml(ext)}</string>`,
+				)
+				.join("\n");
+
+			return `        <dict>
+            <key>CFBundleTypeName</key>
+            <string>${escapeXml(assoc.name)}</string>
+            <key>CFBundleTypeRole</key>
+            <string>${escapeXml(role)}</string>
+${iconLine}            <key>LSItemContentTypes</key>
+            <array>
+${utiXml}
+            </array>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+${extsXml}
+            </array>
+        </dict>`;
+		})
+		.join("\n");
+
+	// Generate UTExportedTypeDeclarations — one per extension
+	const utiDecls = cleaned
+		.flatMap((assoc) => {
+			let iconName = "";
+			if (assoc.icon) {
+				const iconSourcePath = join(projectRoot, assoc.icon);
+				if (existsSync(iconSourcePath)) {
+					iconName = basename(assoc.icon).replace(/\.icns$/i, "");
+				}
+			}
+			const iconLine = iconName
+				? `            <key>UTTypeIconFiles</key>
+            <array>
+                <string>${escapeXml(iconName)}</string>
+            </array>\n`
+				: "";
+			return assoc.ext.map(
+				(ext) => `        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>${escapeXml(appIdentifier)}.${escapeXml(ext)}</string>
+            <key>UTTypeDescription</key>
+            <string>${escapeXml(assoc.name)}</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>public.data</string>
+            </array>
+${iconLine}            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>${escapeXml(ext)}</string>
+                </array>
+            </dict>
+        </dict>`,
+			);
+		})
+		.join("\n");
+
+	return `    <key>CFBundleDocumentTypes</key>
+    <array>
+${docTypes}
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+${utiDecls}
+    </array>`;
+}
+
 // Execute command handling
 (async () => {
 	if (commandArg === "init") {
@@ -1913,7 +2066,7 @@ ${schemesXml}
 			console.log(
 				"Different architecture, different APIs. Do not use Electron patterns.",
 			);
-			console.log("Docs: https://blackboard.sh/electrobun/llms.txt");
+			console.log("Docs: https://docs.electrobunny.ai/electrobun/llms.txt");
 			console.log(
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 			);
@@ -1932,9 +2085,7 @@ ${schemesXml}
 		try {
 			await runBuild(config, buildEnvironment);
 		} catch (error) {
-			if (error instanceof Error) {
-				console.error(error.message);
-			}
+			console.error("Build failed:", error);
 			process.exit(1);
 		}
 	} else if (commandArg === "run") {
@@ -1950,9 +2101,7 @@ ${schemesXml}
 			try {
 				await runBuild(config, "dev");
 			} catch (error) {
-				if (error instanceof Error) {
-					console.error(error.message);
-				}
+				console.error("Build failed:", error);
 				process.exit(1);
 			}
 			await runAppWithSignalHandling(config);
@@ -2059,18 +2208,97 @@ ${schemesXml}
 				const iconDestPath = join(appBundleFolderResourcesPath, "AppIcon.icns");
 				if (existsSync(iconSourceFolder)) {
 					if (OS === "macos") {
-						// Use iconutil to convert .iconset folder to .icns
-						Bun.spawnSync(
-							["iconutil", "-c", "icns", "-o", iconDestPath, iconSourceFolder],
-							{
-								cwd: appBundleFolderResourcesPath,
-								stdio: ["ignore", "inherit", "inherit"],
-								env: {
-									...process.env,
-									ELECTROBUN_BUILD_ENV: buildEnvironment,
+						if (config.build.mac.icons.endsWith(".icon")) {
+							// .icon format (Icon Composer) — compile with actool
+							// Produces Assets.car (Liquid Glass on macOS 26+) and .icns fallback
+							const actoolCheck = Bun.spawnSync(
+								["xcrun", "--find", "actool"],
+								{ stdio: ["ignore", "pipe", "pipe"] },
+							);
+							if (actoolCheck.exitCode !== 0) {
+								throw new Error(
+									"Building .icon files requires Xcode (actool is not available from Command Line Tools alone). " +
+										"Install Xcode from the App Store, or set mac.icons to an .iconset folder instead.",
+								);
+							}
+
+							const iconStem = basename(config.build.mac.icons, ".icon");
+							const partialPlistPath = join(
+								buildFolder,
+								".actool-partial-info.plist",
+							);
+
+							console.log(
+								"Compiling .icon file with actool (requires Xcode)...",
+							);
+							const result = Bun.spawnSync(
+								[
+									"xcrun",
+									"actool",
+									"--compile",
+									appBundleFolderResourcesPath,
+									"--app-icon",
+									iconStem,
+									"--platform",
+									"macosx",
+									"--minimum-deployment-target",
+									"11.0",
+									"--output-partial-info-plist",
+									partialPlistPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: projectRoot,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
 								},
-							},
-						);
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`actool failed to compile ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+
+							// actool produces <stem>.icns — rename to AppIcon.icns so
+							// CFBundleIconFile ("AppIcon") resolves correctly
+							const actoolIcns = join(
+								appBundleFolderResourcesPath,
+								`${iconStem}.icns`,
+							);
+							if (existsSync(actoolIcns) && actoolIcns !== iconDestPath) {
+								renameSync(actoolIcns, iconDestPath);
+							}
+						} else {
+							// Use iconutil to convert .iconset folder to .icns
+							const result = Bun.spawnSync(
+								[
+									"iconutil",
+									"-c",
+									"icns",
+									"-o",
+									iconDestPath,
+									iconSourceFolder,
+								],
+								{
+									cwd: appBundleFolderResourcesPath,
+									stdio: ["ignore", "inherit", "inherit"],
+									env: {
+										...process.env,
+										ELECTROBUN_BUILD_ENV: buildEnvironment,
+									},
+								},
+							);
+
+							if (result.exitCode !== 0) {
+								throw new Error(
+									`iconutil failed to convert ${config.build.mac.icons} (exit code ${result.exitCode})`,
+								);
+							}
+						}
 					} else {
 						console.log(
 							`WARNING: Cannot build macOS icons on ${OS} - iconutil is only available on macOS`,
@@ -2135,6 +2363,26 @@ Categories=Utility;Application;
 				if (existsSync(iconPath)) {
 					const targetIconPath = join(appBundleFolderResourcesPath, "app.ico");
 					cpSync(iconPath, targetIconPath, { dereference: true });
+				}
+			}
+
+			// Copy document type icon files to the app bundle Resources folder
+			if (targetOS === "macos" && config.app.fileAssociations) {
+				for (const assoc of config.app.fileAssociations) {
+					if (assoc.icon) {
+						const iconSourcePath = join(projectRoot, assoc.icon);
+						if (existsSync(iconSourcePath)) {
+							const iconFileName = basename(iconSourcePath);
+							const iconDestPath = join(
+								appBundleFolderResourcesPath,
+								iconFileName,
+							);
+							cpSync(iconSourcePath, iconDestPath, {
+								dereference: true,
+							});
+						}
+						// Missing icon warning is handled by generateDocumentTypes
+					}
 				}
 			}
 		};
@@ -2212,8 +2460,20 @@ Categories=Utility;Application;
 			config.app.urlSchemes,
 			config.app.identifier,
 		);
+		// Generate document type associations
+		const documentTypes = generateDocumentTypes(
+			config.app.fileAssociations,
+			projectRoot,
+			config.app.identifier,
+		);
+
+		// When using .icon format, CFBundleIconName is needed for Assets.car lookup
+		const iconName = config.build.mac?.icons?.endsWith(".icon")
+			? basename(config.build.mac.icons, ".icon")
+			: null;
 
 		InfoPlistContents = `<?xml version="1.0" encoding="UTF-8"?>
+
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
@@ -2228,7 +2488,9 @@ Categories=Utility;Application;
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleIconFile</key>
-    <string>AppIcon</string>${usageDescriptions ? "\n" + usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}
+    <string>AppIcon</string>${iconName ? `\n    <key>CFBundleIconName</key>\n <string>${iconName}</string>` : ""}${usageDescriptions ? "\n" +
+usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
+"\n" + documentTypes : ""}
 </dict>
 </plist>`;
 
@@ -2328,10 +2590,12 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon into launcher.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunCliLauncherDestination, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [bunCliLauncherDestination, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
 					// Clean up temp ICO file
@@ -2425,10 +2689,12 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon into bun.exe
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(bunBinaryDestInBundlePath, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into bun.exe`);
 
 					// Clean up temp ICO file
@@ -4610,10 +4876,12 @@ Categories=Utility;Application;
 					}
 
 					// Use rcedit to embed the icon
-					const rcedit = (await import("rcedit")).default;
-					await rcedit(outputExePath, {
-						icon: iconPath,
-					});
+										const { execFileSync } = await import("child_process");
+					const rceditPkgPath = require.resolve("rcedit/package.json");
+					const rceditDir = dirname(rceditPkgPath);
+					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					execFileSync(rceditExe, [outputExePath, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into ${setupFileName}`);
 
 					// Clean up temp ICO file

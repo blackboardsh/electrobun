@@ -1915,4 +1915,36 @@ fn fs_main(
 			await waitForUserVerification();
 		},
 	}),
+	defineTest({
+		name: "Transparent window WGPU cube",
+		category: "WGPUView (Interactive)",
+		description: "Render a rotating cube in a transparent window (DComp compositing test)",
+		interactive: true,
+		timeout: 120000,
+		async run({ log, showInstructions }) {
+			await showInstructions([
+				"A transparent GPU window will open",
+				"You should see a rotating cube with the desktop visible behind it",
+				"Close the window when done",
+			]);
+
+			log("Opening transparent WGPUView cube window");
+
+			await new Promise<void>((resolve) => {
+				const win = new GpuWindow({
+					title: "Transparent WGPU Cube",
+					frame: { width: 500, height: 400, x: 240, y: 160 },
+					titleBarStyle: "hiddenInset",
+					transparent: true,
+				});
+
+				win.setAlwaysOnTop(true);
+
+				WGPUBridge.runTest(win.wgpuViewId);
+				log("Transparent WGPU cube started");
+
+				win.on("close", () => resolve());
+			});
+		},
+	}),
 ];

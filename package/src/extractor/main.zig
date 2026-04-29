@@ -22,8 +22,6 @@ const AppMetadata = struct {
 const ProgressIndicator = struct {
     child_process: ?std.process.Child,
     allocator: std.mem.Allocator,
-    spinner_thread: ?std.Thread = null,
-    should_stop: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
     app_name: []const u8 = "",
 
     fn init(allocator: std.mem.Allocator, metadata: AppMetadata) ProgressIndicator {
@@ -36,36 +34,18 @@ const ProgressIndicator = struct {
         // Try to start a progress dialog
         self.startProgressDialog(metadata) catch {
             // Fallback to console output
-            std.debug.print("Installing {s}...\n", .{metadata.name});
+            std.debug.print("\nInstalling {s}...\n", .{metadata.name});
         };
 
         return self;
     }
 
-    fn spinnerThread(self: *ProgressIndicator) void {
-        const spinner_chars = [_]u8{ '|', '/', '-', '\\' };
-        var frame: usize = 0;
 
-        // Print initial message once
-        std.debug.print("Installing {s}... ", .{self.app_name});
-
-        while (!self.should_stop.load(.acquire)) {
-            // Print spinner character and backspace over it
-            std.debug.print("{c}\x08", .{spinner_chars[frame]});
-            frame = (frame + 1) % spinner_chars.len;
-            std.time.sleep(100 * std.time.ns_per_ms);
-        }
-
-        // Print final state
-        std.debug.print("Done!\n", .{});
-    }
 
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
-        // On Windows, start a spinner thread in the console
+        // On Windows, use simple console output (no spinner thread to avoid deadlock)
         if (builtin.os.tag == .windows) {
-            // Start spinner thread
-            self.spinner_thread = try std.Thread.spawn(.{}, spinnerThread, .{self});
-            return;
+            return error.NoProgressDialog; // Fallback to simple print
         }
 
         if (builtin.os.tag != .linux) return;
@@ -114,12 +94,6 @@ const ProgressIndicator = struct {
     }
 
     fn deinit(self: *ProgressIndicator) void {
-        // Stop spinner thread if running
-        if (self.spinner_thread) |thread| {
-            self.should_stop.store(true, .release);
-            thread.join();
-        }
-
         if (self.child_process) |*child| {
             // Close stdin to signal completion for zenity
             if (child.stdin) |stdin| {
@@ -397,22 +371,34 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     var decompressed_data = std.ArrayList(u8).init(allocator);
     defer decompressed_data.deinit();
 
-    // Decompress in chunks
+    // Decompress in chunks with progress dots
+    std.debug.print("Decompressing", .{});
     var buffer: [4096]u8 = undefined;
+    var bytes_processed: usize = 0;
+    const dot_interval = 10 * 1024 * 1024; // Print dot every 10MB
+    
     while (true) {
         const read_size = try decompressor.reader().read(&buffer);
         if (read_size == 0) break;
         try decompressed_data.appendSlice(buffer[0..read_size]);
+        
+        bytes_processed += read_size;
+        if (bytes_processed >= dot_interval) {
+            std.debug.print(".", .{});
+            bytes_processed = 0;
+        }
     }
+    std.debug.print(" Done!\n", .{});
 
     // For Linux: Save the compressed archive to self-extraction directory (for future updates)
     // This is similar to what macOS does to enable the Updater API to apply patches
     // We'll save tar files after extraction to avoid them being deleted
 
     // Extract tar archive to self-extraction directory first
-    std.debug.print("Extracting application files...\n", .{});
+    std.debug.print("Extracting files", .{});
 
     try extractTar(allocator, decompressed_data.items, self_extraction_dir);
+    std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
@@ -580,6 +566,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         }
     }
 
+    std.debug.print(" Done!\n", .{});
     std.debug.print("Installation completed successfully!\n", .{});
     return true;
 }
@@ -933,10 +920,12 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     const desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
     defer allocator.free(desktop_dir);
 
-    // Check if Desktop directory exists
-    std.fs.cwd().access(desktop_dir, .{}) catch {
-        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
-        return;
+    const desktop_dir_available = blk: {
+        std.fs.cwd().access(desktop_dir, .{}) catch {
+            std.debug.print("Note: Desktop directory not found at {s}; skipping Desktop shortcut creation\n", .{desktop_dir});
+            break :blk false;
+        };
+        break :blk true;
     };
 
     // On Linux, look for the launcher binary in the app directory
@@ -961,6 +950,8 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer app_dir_handle.close();
 
     var found_desktop_file = false;
+    var desktop_shortcut_created = false;
+    var applications_entry_created = false;
     var iterator = app_dir_handle.iterate();
     while (try iterator.next()) |entry| {
         if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".desktop")) {
@@ -1033,13 +1024,98 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                 }
             }
 
-            // Write the updated desktop file to Desktop
-            const desktop_file = try std.fs.cwd().createFile(desktop_file_path, .{});
-            defer desktop_file.close();
-            try desktop_file.writeAll(result.items);
+            // Write the updated desktop file to Desktop (optional)
+            if (desktop_dir_available) {
+                desktop_shortcut: {
+                    const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
+                        std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
+                        break :desktop_shortcut;
+                    };
+                    defer desktop_file.close();
+                    desktop_file.writeAll(result.items) catch |err| {
+                        std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
+                        break :desktop_shortcut;
+                    };
+                    desktop_shortcut_created = true;
+                }
+            }
+
+            // Also write to XDG applications directory for menu integration
+            // This ensures the app appears in the desktop environment's application menu
+            // This is optional - failure should not prevent the desktop shortcut from working
+            write_applications_dir: {
+                const xdg_data_home = getAppDataDir(allocator) catch |err| {
+                    std.debug.print("Warning: Could not get app data dir for menu integration: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(xdg_data_home);
+
+                const applications_dir = std.fs.path.join(allocator, &.{ xdg_data_home, "applications" }) catch |err| {
+                    std.debug.print("Warning: Could not build applications dir path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_dir);
+
+                // Create applications directory if it doesn't exist
+                std.fs.cwd().makePath(applications_dir) catch |err| {
+                    std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
+                    // Continue anyway - createFile will fail gracefully
+                };
+
+                const applications_file_path = std.fs.path.join(allocator, &.{ applications_dir, desktop_filename }) catch |err| {
+                    std.debug.print("Warning: Could not build applications file path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_file_path);
+
+                const applications_file = std.fs.cwd().createFile(applications_file_path, .{}) catch |err| {
+                    std.debug.print("Warning: Could not create applications desktop file: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer applications_file.close();
+
+                applications_file.writeAll(result.items) catch |err| {
+                    std.debug.print("Warning: Could not write applications desktop file: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+
+                // Set permissions on the desktop file (0o644 - readable, not executable)
+                // Desktop files in ~/.local/share/applications/ don't need execute bit
+                // (execute bit is only needed for Desktop surface, not application menus)
+                const applications_file_path_z = std.fmt.allocPrintZ(allocator, "{s}", .{applications_file_path}) catch |err| {
+                    std.debug.print("Warning: Could not format applications file path: {}\n", .{err});
+                    break :write_applications_dir;
+                };
+                defer allocator.free(applications_file_path_z);
+                const chmod_result = std.c.chmod(applications_file_path_z.ptr, 0o644);
+                if (chmod_result != 0) {
+                    std.debug.print("Warning: Could not set permissions on applications desktop file\n", .{});
+                }
+
+                // Note: gio set metadata::trusted is NOT needed for application menu entries
+                // It's only for .desktop files on the Desktop surface (~/Desktop)
+
+                // Update desktop database for legacy desktop environments (Xfce, LXDE, etc.)
+                const update_db_argv = [_][]const u8{ "update-desktop-database", applications_dir };
+                var update_db_child = std.process.Child.init(&update_db_argv, allocator);
+                update_db_child.stdin_behavior = .Ignore;
+                update_db_child.stdout_behavior = .Ignore;
+                update_db_child.stderr_behavior = .Inherit;
+                _ = update_db_child.spawnAndWait() catch |err| {
+                    std.debug.print("Note: Could not update desktop database: {}\n", .{err});
+                };
+
+                applications_entry_created = true;
+                std.debug.print("Copied desktop shortcut to applications dir: {s}\n", .{applications_file_path});
+            }
 
             found_desktop_file = true;
-            std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
+            if (desktop_shortcut_created) {
+                std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
+            }
+            if (!desktop_shortcut_created and !applications_entry_created) {
+                std.debug.print("Warning: Could not create Desktop shortcut or applications menu entry\n", .{});
+            }
             break;
         }
     }
@@ -1048,26 +1124,29 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         std.debug.print("Warning: No desktop file found in extracted app directory\n", .{});
     }
 
-    // Make desktop file executable (required for some desktop environments)
-    const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
-    defer allocator.free(desktop_file_path_z);
+    if (desktop_shortcut_created) {
+        // Make desktop file executable (required for some desktop environments)
+        const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
+        defer allocator.free(desktop_file_path_z);
 
-    const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
-    if (result != 0) {
-        std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+        const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
+        if (result != 0) {
+            std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+        }
+
+        // Try to mark as trusted for GNOME/Ubuntu using gio
+        const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
+        var gio_child = std.process.Child.init(&gio_argv, allocator);
+        gio_child.stdin_behavior = .Ignore;
+        gio_child.stdout_behavior = .Ignore;
+        gio_child.stderr_behavior = .Inherit;
+        _ = gio_child.spawnAndWait() catch |err| {
+            std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
+        };
+
+        std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
+        std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
     }
-
-    // Try to mark as trusted for GNOME/Ubuntu using gio
-    const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
-    _ = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = &gio_argv,
-    }) catch |err| {
-        std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
-    };
-
-    std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
-    std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
 }
 
 fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {

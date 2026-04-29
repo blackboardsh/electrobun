@@ -6,6 +6,11 @@ import { getNextWindowId } from "./windowIds";
 
 
 export type GpuWindowOptionsType = {
+	trafficLightOffset?: {
+		x: number;
+		y: number;
+	};
+	activate?: boolean;
 	title: string;
 	frame: {
 		x: number;
@@ -54,6 +59,7 @@ export class GpuWindow {
 	title: string = "Electrobun";
 	state: "creating" | "created" = "creating";
 	transparent: boolean = false;
+	trafficLightOffset: { x: number; y: number } = { x: 0, y: 0 };
 	frame: {
 		x: number;
 		y: number;
@@ -73,6 +79,10 @@ export class GpuWindow {
 			? { ...defaultOptions.frame, ...options.frame }
 			: { ...defaultOptions.frame };
 		this.transparent = options.transparent ?? false;
+		this.trafficLightOffset = {
+			x: options.trafficLightOffset?.x ?? 0,
+			y: options.trafficLightOffset?.y ?? 0,
+		};
 
 		this.init(options);
 	}
@@ -81,6 +91,7 @@ export class GpuWindow {
 		styleMask,
 		titleBarStyle,
 		transparent,
+		activate,
 	}: Partial<GpuWindowOptionsType>) {
 		this.ptr = ffi.request.createWindow({
 			id: this.id,
@@ -123,6 +134,8 @@ export class GpuWindow {
 			},
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
+			activate: activate ?? true,
+			trafficLightOffset: this.trafficLightOffset,
 		}) as Pointer;
 
 		GpuWindowMap[this.id] = this;
@@ -160,12 +173,23 @@ export class GpuWindow {
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 
+	activate() {
+		return ffi.request.activateWindow({ winId: this.id });
+	}
+
 	focus() {
-		return ffi.request.focusWindow({ winId: this.id });
+		console.log(
+			"[electrobun] GpuWindow.focus() is deprecated. Use window.activate() instead.",
+		);
+		return this.activate();
 	}
 
 	show() {
-		return ffi.request.focusWindow({ winId: this.id });
+		return ffi.request.showWindow({ winId: this.id, activate: true });
+	}
+
+	showInactive() {
+		return ffi.request.showWindow({ winId: this.id, activate: false });
 	}
 
 	minimize() {
@@ -212,6 +236,10 @@ export class GpuWindow {
 		this.frame.x = x;
 		this.frame.y = y;
 		return ffi.request.setWindowPosition({ winId: this.id, x, y });
+	}
+
+	setWindowButtonPosition(x: number, y: number) {
+		return ffi.request.setWindowButtonPosition({ winId: this.id, x, y });
 	}
 
 	setSize(width: number, height: number) {

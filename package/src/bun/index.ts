@@ -229,6 +229,7 @@ export {
 	Screen,
 	Session,
 	WGPUBridge,
+
 	BuildConfig,
 };
 
@@ -247,6 +248,7 @@ const Electrobun = {
 	Screen,
 	Session,
 	WGPUBridge,
+
 	BuildConfig,
 	events: electobunEventEmmitter,
 	PATHS,
