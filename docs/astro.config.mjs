@@ -37,7 +37,22 @@ export default defineConfig({
                 { label: "Architecture Overview", link: "/electrobun/guides/architecture/overview/" },
                 { label: "Webview Tag Architecture", link: "/electrobun/guides/architecture/webview-tag/" },
                 { label: "Updates", link: "/electrobun/guides/updates/" },
-                { label: "Migrating from 0.x to v1", link: "/electrobun/guides/migrating-to-v1/" },
+                {
+                  label: "Changelog",
+                  collapsed: true,
+                  items: [
+                    { label: "All releases", link: "/electrobun/guides/changelog/" },
+                    { label: "Unreleased", link: "/electrobun/guides/changelog/unreleased/" },
+                    { label: "v1.16.0", link: "/electrobun/guides/changelog/v1-16-0/" },
+                    { label: "v1.15.1", link: "/electrobun/guides/changelog/v1-15-1/" },
+                    { label: "v1.14.4", link: "/electrobun/guides/changelog/v1-14-4/" },
+                    { label: "v1.14.3", link: "/electrobun/guides/changelog/v1-14-3/" },
+                    { label: "v1.13.1", link: "/electrobun/guides/changelog/v1-13-1/" },
+                    { label: "v1.12.3", link: "/electrobun/guides/changelog/v1-12-3/" },
+                    { label: "v1.12.1", link: "/electrobun/guides/changelog/v1-12-1/" },
+                    { label: "v1.0.0 — Migrating from 0.x", link: "/electrobun/guides/changelog/v1-0-0/" },
+                  ],
+                },
               ],
             },
             {

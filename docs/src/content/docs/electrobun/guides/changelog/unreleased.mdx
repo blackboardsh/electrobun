@@ -1,0 +1,16 @@
+---
+title: "Unreleased"
+---
+              <p>Notes for the next stable release.</p>
+
+              <h2>Migration Notes</h2>
+
+              <h3>End users will be logged out of any sites once after upgrading</h3>
+
+              <p>This release bumps the internal CEF cache format version. On first launch after an end user receives an app update built with this Electrobun version, the CEF cache folder is wiped automatically. Users will be logged out of any sites they were logged into via your app and any client-side site data (cookies, localStorage, IndexedDB) is reset.</p>
+
+              <p>The wipe is silent (no dialog), runs once per cache-format bump, and only affects the CEF cache folder. WebView2 storage and your own app data are untouched.</p>
+
+              <p>This was necessary to recover cleanly from a CEF major-version jump that previously surfaced "Profile error occurred" dialogs on launch when an existing CEF cache from an older version was reused.</p>
+
+              <p>Future Electrobun releases only repeat this behavior when a similar incompatibility appears — routine CEF version bumps don't trigger another wipe.</p>
