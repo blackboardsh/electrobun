@@ -36,12 +36,28 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	private _eventListeners: Record<string, Array<(event: CustomEvent) => void>> =
 		{};
 
+	static get observedAttributes() {
+		return ["src", "html"];
+	}
+
 	constructor() {
 		super();
 	}
 
 	connectedCallback() {
 		requestAnimationFrame(() => this.initWebview());
+	}
+
+	attributeChangedCallback(
+		name: string,
+		oldValue: string | null,
+		newValue: string | null,
+	) {
+		if (oldValue === newValue) return;
+		if (newValue === null) return;
+		if (this.webviewId === null) return;
+		if (name === "src") this.loadURL(newValue);
+		else if (name === "html") this.loadHTML(newValue);
 	}
 
 	disconnectedCallback() {
@@ -332,7 +348,6 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	set src(value: string | null) {
 		if (value) {
 			this.setAttribute("src", value);
-			if (this.webviewId !== null) this.loadURL(value);
 		} else {
 			this.removeAttribute("src");
 		}
@@ -344,7 +359,6 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	set html(value: string | null) {
 		if (value) {
 			this.setAttribute("html", value);
-			if (this.webviewId !== null) this.loadHTML(value);
 		} else {
 			this.removeAttribute("html");
 		}
