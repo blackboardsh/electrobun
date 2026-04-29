@@ -12258,6 +12258,22 @@ extern "C" ELECTROBUN_EXPORT bool isDockIconVisible() {
     return true;
 }
 
+// Dock menu / badge / progress - macOS only, stubs for Windows.
+// Windows has taskbar equivalents (ITaskbarList3::SetProgressValue,
+// overlay icon) that could be wired up in a follow-up.
+extern "C" ELECTROBUN_EXPORT void setApplicationDockMenu(const char* json, void (*handler)(uint32_t, const char*)) {
+    (void)json;
+    (void)handler;
+}
+
+extern "C" ELECTROBUN_EXPORT void setDockBadge(const char* text) {
+    (void)text;
+}
+
+extern "C" ELECTROBUN_EXPORT void setDockProgress(double progress) {
+    (void)progress;
+}
+
 // Window icon - Linux only, no-op for Windows
 extern "C" ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
     // Not yet implemented on Windows
