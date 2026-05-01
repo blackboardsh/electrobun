@@ -254,6 +254,13 @@ export const native = (() => {
 				],
 				returns: FFIType.void,
 			},
+			// Pre-set proxy URL for the next initWebview call (workaround for FFI param count limits)
+			setNextWebviewProxy: {
+				args: [
+					FFIType.cstring, // proxyUrl (e.g. "socks5://127.0.0.1:1090" or empty string)
+				],
+				returns: FFIType.void,
+			},
 
 			// webviewtag
 			webviewCanGoBack: {
@@ -1237,6 +1244,7 @@ const _ffiImpl = {
 			sandbox: boolean;
 			startTransparent: boolean;
 			startPassthrough: boolean;
+			proxy: string | null;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -1256,6 +1264,7 @@ const _ffiImpl = {
 				sandbox,
 				startTransparent,
 				startPassthrough,
+				proxy,
 			} = params;
 
 			const parentWindow = BrowserWindow.getById(windowId);
@@ -1310,6 +1319,8 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 
 			// Pre-set flags before initWebview (workaround for FFI param count limits)
 			native_.symbols.setNextWebviewFlags(startTransparent, startPassthrough);
+			// Pre-set proxy before initWebview (workaround for FFI param count limits)
+			native_.symbols.setNextWebviewProxy(toCString(proxy || ""));
 			const webviewPtr = native_.symbols.initWebview(
 				id,
 				windowPtr,
