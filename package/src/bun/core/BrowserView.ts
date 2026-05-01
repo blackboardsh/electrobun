@@ -223,17 +223,12 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	loadURL(url: string) {
-		console.log(`DEBUG: loadURL called for webview ${this.id}: ${url}`);
 		this.url = url;
 		native!.symbols.loadURLInWebView(this.ptr, toCString(this.url));
 	}
 
 	loadHTML(html: string) {
 		this.html = html;
-		console.log(
-			`DEBUG: Setting HTML content for webview ${this.id}:`,
-			html.substring(0, 50) + "...",
-		);
 
 		if (this.renderer === "cef") {
 			// For CEF, store HTML content in native map and use scheme handler

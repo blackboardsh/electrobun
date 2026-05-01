@@ -87,7 +87,6 @@ static int g_sigint_count = 0;
 // Additional race condition protection
 static std::atomic<int> g_activeOperations{0};
 static std::mutex g_cefBrowserMutex;
-static std::mutex g_cefBrowserCreationMutex;  // Serialize CreateBrowserSync calls
 
 // Map from CEF browser identifier to electrobun webviewId, used by scheme handlers
 static std::map<int, uint32_t> g_browserIdToWebviewId;
@@ -773,12 +772,8 @@ public:
             {"disable-gpu", ""},
             {"disable-gpu-compositing", ""},
             {"disable-gpu-sandbox", ""},
-            {"enable-software-rasterizer", ""},
-            {"force-software-rasterizer", ""},
-            {"disable-accelerated-2d-canvas", ""},
             {"disable-accelerated-video-decode", ""},
             {"disable-accelerated-video-encode", ""},
-            {"disable-gpu-memory-buffer-video-frames", ""},
             {"disable-dev-shm-usage", ""},
             {"disable-extensions", ""},
             {"disable-plugins", ""},
@@ -1047,14 +1042,9 @@ public:
             isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
         }
 
-        printf("[CEF OnBeforeBrowse] url=%s user_gesture=%d is_redirect=%d display=%p seat=%p pointer=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d webviewId=%u\n",
-               url.c_str(), user_gesture, is_redirect, display, seat, pointer, modifiers, isCtrlHeld, webview_event_handler_ != nullptr, webview_id_);
-
         if (isCtrlHeld && !is_redirect && webview_event_handler_) {
             // Debounce: ignore ctrl+click navigations within 500ms
             double now = g_get_monotonic_time() / 1000000.0;
-            printf("[CEF OnBeforeBrowse] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
-                   now, lastCtrlClickTime, now - lastCtrlClickTime);
 
             if (now - lastCtrlClickTime >= 0.5) {
                 lastCtrlClickTime = now;
@@ -1071,12 +1061,9 @@ public:
 
                 std::string eventData = "{\"url\":\"" + escapedUrl +
                                        "\",\"isCmdClick\":true,\"modifierFlags\":0}";
-                printf("[CEF OnBeforeBrowse] Firing new-window-open: %s\n", eventData.c_str());
                 // Use strdup to create persistent copies for the FFI callback
                 webview_event_handler_(webview_id_, strdup("new-window-open"), strdup(eventData.c_str()));
                 return true;  // Cancel navigation
-            } else {
-                printf("[CEF OnBeforeBrowse] Debounced - too soon after last ctrl+click\n");
             }
         }
 
@@ -1256,7 +1243,6 @@ public:
                       CefRefPtr<CefDictionaryValue>& extra_info,
                       bool* no_javascript_access) override {
         // Prevent all popup windows - this stops CEF from creating new top-level windows
-        printf("CEF: Blocking popup window creation for URL: %s\n", target_url.ToString().c_str());
         return true;  // Return true to cancel the popup
     }
     
@@ -2236,13 +2222,9 @@ public:
 
             if (electrobun::globMatch(pattern, url)) {
                 allowed = !isBlockRule; // Last match wins
-                fprintf(stderr, "DEBUG: Navigation rule '%s' matched URL '%s', allowed=%d\n", 
-                       rule.c_str(), url.c_str(), allowed);
             }
         }
 
-        fprintf(stderr, "DEBUG: Final navigation decision for URL '%s': allowed=%d\n", 
-               url.c_str(), allowed);
         return allowed;
     }
     
@@ -2765,14 +2747,9 @@ public:
     }
     
     void setTransparent(bool transparent) override {
-        printf("DEBUG: WebKit setTransparent called: transparent=%s\n", transparent ? "true" : "false");
-        
         // Use the same approach as setHidden: simple GTK widget opacity
         if (webview) {
             gtk_widget_set_opacity(webview, transparent ? 0.0 : 1.0);
-            printf("DEBUG: WebKit set widget opacity to %s\n", transparent ? "0.0" : "1.0");
-        } else {
-            printf("DEBUG: WebKit webview is null\n");
         }
     }
     
@@ -2910,14 +2887,9 @@ public:
                 isCtrlHeld = (modifiers & GDK_CONTROL_MASK) != 0;
             }
 
-            printf("[GTKWebKit onDecidePolicy] url=%s display=%p seat=%p pointer=%p modifiers=0x%X isCtrlHeld=%d hasHandler=%d\n",
-                   uri ? uri : "(null)", display, seat, pointer, modifiers, isCtrlHeld, impl->eventHandler != nullptr);
-
             if (isCtrlHeld && impl->eventHandler) {
                 // Debounce: ignore ctrl+click navigations within 500ms
                 double now = g_get_monotonic_time() / 1000000.0;
-                printf("[GTKWebKit onDecidePolicy] Ctrl held! now=%.3f lastTime=%.3f diff=%.3f\n",
-                       now, lastCtrlClickTime, now - lastCtrlClickTime);
 
                 if (now - lastCtrlClickTime >= 0.5) {
                     lastCtrlClickTime = now;
@@ -2935,14 +2907,11 @@ public:
 
                     std::string eventData = "{\"url\":\"" + escapedUrl +
                                            "\",\"isCmdClick\":true,\"modifierFlags\":0}";
-                    printf("[GTKWebKit onDecidePolicy] Firing new-window-open: %s\n", eventData.c_str());
                     // Use strdup to create persistent copies for the FFI callback
                     impl->eventHandler(impl->webviewId, strdup("new-window-open"), strdup(eventData.c_str()));
 
                     webkit_policy_decision_ignore(decision);
                     return TRUE;
-                } else {
-                    printf("[GTKWebKit onDecidePolicy] Debounced - too soon after last ctrl+click\n");
                 }
             }
 
@@ -2953,11 +2922,7 @@ public:
                 std::lock_guard<std::mutex> lock(g_webviewMapMutex);
                 auto it = g_webviewMap.find(impl->webviewId);
                 if (it != g_webviewMap.end() && it->second != nullptr) {
-                    fprintf(stderr, "DEBUG: Found webview %u in map, checking navigation rules for URL: %s\n", 
-                           impl->webviewId, url.c_str());
                     shouldAllow = it->second->shouldAllowNavigationToURL(url);
-                } else {
-                    fprintf(stderr, "DEBUG: Webview %u NOT found in map!\n", impl->webviewId);
                 }
             }
 
@@ -3742,7 +3707,6 @@ public:
     }
     
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
-        
         // NO GTK widget needed - CEF will be a direct child of the X11 window
         this->widget = nullptr;
         
@@ -3766,8 +3730,9 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
-        // Use Alloy runtime style for embedded windows (like macOS and Windows)
-        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+        // Linux embedding is more reliable with Chrome style when using an
+        // external X11 parent. Alloy is still used automatically for OSR.
+        window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
         
         // For child windows, position should be relative to parent (0,0 for fullscreen)
         CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
@@ -3775,11 +3740,12 @@ public:
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
-        // Validate parent window before creating browser
+        // Ensure X11 is synced before creating browser
         Display* display = gdk_x11_get_default_xdisplay();
-        XWindowAttributes parent_attrs;
-        bool parent_valid = XGetWindowAttributes(display, x11win->window, &parent_attrs) != 0;
-        
+        if (display) {
+            XSync(display, False);
+        }
+
         // For transparent windows, use windowless/OSR mode like macOS and Windows
         if (x11win->transparent) {
             // Use windowless (off-screen) rendering for transparency
@@ -3911,28 +3877,25 @@ public:
         // Create the browser with partition-specific request context
         std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(partition.c_str(), webviewId);
+        if (!requestContext) {
+            printf("CEF: ERROR - CreateRequestContextForPartition returned null\n");
+            creationFailed = true;
+            return;
+        }
 
         // Pass sandbox flag to renderer process via extra_info
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", isSandboxed);
 
-        // Serialize browser creation to avoid Chrome runtime race condition
-        // where rapid concurrent browser creation causes windows to spawn
-        // with their own URL bar instead of embedding properly
-        CefRefPtr<CefBrowser> browser;
-        {
-            std::lock_guard<std::mutex> creation_lock(g_cefBrowserCreationMutex);
-            browser = CefBrowserHost::CreateBrowserSync(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
-        }
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
         
-        if (!browser) {
+        if (!create_result) {
+            printf("CEF: CreateBrowser returned false\n");
             creationFailed = true;
         } else {
-            // Store the browser reference immediately
-            this->browser = browser;
-            // Add this webview to the X11 window's child list with the actual window handle
-            CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
-            x11win->childWindows.push_back(handle);
+            // Add this webview to the X11 window's child list.
+            // The actual handle is available asynchronously in OnAfterCreated.
+            x11win->childWindows.push_back(0);
         }
     }
     
@@ -3943,7 +3906,6 @@ public:
         // So we need to be careful about browser access
         CefRefPtr<CefBrowser> browserRef = browser;  // Atomic read
         if (!browserRef) {
-            printf("CEF: Cannot sync - no browser\n");
             return;
         }
         
@@ -4219,7 +4181,6 @@ public:
         }
         
         if (!browserRef) {
-            printf("CEF: evaluateJavaScriptWithNoCompletion called but browser is NULL\n");
             return;
         }
         
@@ -4555,14 +4516,10 @@ public:
             // Add webview to overlay container
             if (abstractViews.size() == 1) {
                 // First webview becomes the base layer (determines overlay size)
-                printf("DEBUG: Adding first webview (ID: %u) to container\n", view->webviewId);
-                fflush(stdout);
                 gtk_container_add(GTK_CONTAINER(overlay), view->widget);
                 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: First webview (ID: %u) realized successfully\n", view->webviewId);
-                fflush(stdout);
                 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -4575,9 +4532,6 @@ public:
                 }
             } else if (view->fullSize) {
                 // Full-size subsequent webview: add directly as overlay (same as first webview)
-                printf("DEBUG: Adding subsequent full-size webview (ID: %u) to overlay\n", view->webviewId);
-                fflush(stdout);
-
                 // Set it to expand and fill the overlay
                 g_object_set(view->widget,
                             "expand", TRUE,
@@ -4589,8 +4543,6 @@ public:
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: Subsequent full-size webview (ID: %u) realized successfully\n", view->webviewId);
-                fflush(stdout);
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -4611,14 +4563,10 @@ public:
                 gtk_widget_set_can_focus(wrapper, FALSE);
 
                 // Add webview to wrapper at 0,0
-                printf("DEBUG: Adding subsequent webview (ID: %u) to wrapper\n", view->webviewId);
-                fflush(stdout);
                 gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
-                printf("DEBUG: Subsequent webview (ID: %u) realized successfully\n", view->webviewId);
-                fflush(stdout);
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -4721,18 +4669,11 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 
 // Window delete event callback - handles X button clicks
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
-    printf("DEBUG: Window delete event triggered\n");
     ContainerView* container = static_cast<ContainerView*>(user_data);
     if (container) {
-        printf("DEBUG: Container found for window ID: %u\n", container->windowId);
         if (container->closeCallback) {
-            printf("DEBUG: Calling close callback for window ID: %u\n", container->windowId);
             container->closeCallback(container->windowId);
-        } else {
-            printf("DEBUG: No close callback set for window ID: %u\n", container->windowId);
         }
-    } else {
-        printf("DEBUG: No container found in delete event handler\n");
     }
     
     // Hide the window immediately to give user feedback
@@ -4742,7 +4683,6 @@ static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer
     // This allows the callback to complete before destroying the window
     g_idle_add_full(G_PRIORITY_HIGH, [](gpointer data) -> gboolean {
         GtkWidget* window = GTK_WIDGET(data);
-        printf("DEBUG: Destroying window from idle callback\n");
         gtk_widget_destroy(window);
         return G_SOURCE_REMOVE;
     }, widget, nullptr);
@@ -5862,9 +5802,7 @@ gboolean process_x11_events(gpointer data) {
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(x11win->display, "WM_DELETE_WINDOW", False)) {
-                        printf("DEBUG: X11 WM_DELETE_WINDOW received for window ID: %u\n", x11win->windowId);
                         if (x11win->closeCallback) {
-                            printf("DEBUG: Calling close callback for X11 window ID: %u\n", x11win->windowId);
                             x11win->closeCallback(x11win->windowId);
                         }
                         
@@ -5943,7 +5881,6 @@ gboolean process_x11_events(gpointer data) {
         if (winIt != g_x11_windows.end()) {
             auto x11win = winIt->second;
             if (x11win && x11win->display && x11win->window) {
-                printf("DEBUG: Destroying X11 window ID: %u\n", windowId);
                 XDestroyWindow(x11win->display, x11win->window);
                 XFlush(x11win->display);
                 
@@ -6259,7 +6196,6 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
             if (container && container->windowId > 0) {
-                printf("DEBUG: Window destroyed, cleaning up container for window ID: %u\n", container->windowId);
                 std::lock_guard<std::mutex> lock(g_containersMutex);
                 g_containers.erase(container->windowId);
             }
@@ -6556,15 +6492,7 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             );
             
             if (webview->creationFailed) {
-                printf("CEF webview creation failed, falling back to WebKit\n");
-                fflush(stdout);
-                webview = nullptr;
-                
-            }
-
-            
-            if (!webview || webview->creationFailed) {
-                printf("ERROR: Webview creation failed\n");
+                printf("CEF webview creation failed\n");
                 fflush(stdout);
                 return nullptr;
             }
@@ -7925,8 +7853,6 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView* abstractView) {
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
     if (abstractView) {
-        printf("DEBUG: webviewRemove called for abstractView=%p\n", abstractView);
-        
         // Get the webview ID before scheduling async removal
         uint32_t webviewId = abstractView->webviewId;
         
@@ -7937,9 +7863,7 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
             auto it = g_webviewMap.find(webviewId);
             if (it != g_webviewMap.end()) {
                 viewPtr = it->second;
-                printf("DEBUG: Found shared_ptr for webview %u\n", webviewId);
             } else {
-                printf("DEBUG: WARNING - No shared_ptr found for webview %u\n", webviewId);
                 return;
             }
         }
@@ -7954,18 +7878,14 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
         
         g_idle_add([](gpointer user_data) -> gboolean {
             RemoveData* data = static_cast<RemoveData*>(user_data);
-            printf("DEBUG: webviewRemove g_idle_add callback started\n");
             
             if (data && data->view) {
                 data->view->remove();
             }
             
-            printf("DEBUG: webviewRemove g_idle_add callback completed\n");
             delete data;
             return G_SOURCE_REMOVE; // Only run once
         }, data);
-        
-        printf("DEBUG: webviewRemove g_idle_add scheduled\n");
     }
 }
 
@@ -9212,7 +9132,6 @@ void* createNSRectWrapper(double x, double y, double width, double height) {
 void cleanupWebviewsForWindow(uint32_t windowId) {
     // Check if we're shutting down to avoid cleanup races
     if (g_shuttingDown.load()) {
-        printf("DEBUG: Skipping webview cleanup for window %u - shutting down\n", windowId);
         return;
     }
     
@@ -9223,7 +9142,6 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
     {
         std::lock_guard<std::mutex> cleanup_lock(s_cleanupMutex);
         if (s_cleaningWindows.count(windowId) > 0) {
-            printf("DEBUG: Already cleaning window %u, skipping\n", windowId);
             return;
         }
         s_cleaningWindows.insert(windowId);
@@ -9267,7 +9185,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
     
     // Check if we're shutting down
     if (g_shuttingDown.load()) {
-        printf("DEBUG: Skipping window close %p - shutting down\n", window);
         return;
     }
     
@@ -9278,7 +9195,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
     {
         std::lock_guard<std::mutex> close_lock(s_closeWindowMutex);
         if (s_closingWindows.count(window) > 0) {
-            printf("DEBUG: Already closing window %p, skipping\n", window);
             return;
         }
         s_closingWindows.insert(window);
@@ -9288,7 +9204,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
         // Check if it's a GTK window first
         if (GTK_IS_WIDGET(window)) {
             GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
-            printf("DEBUG: closeWindow called for GTK window\n");
             
             // Find the container for this window to get the windowId and callback.
             // Hold a shared_ptr so the ContainerView stays alive through gtk_widget_destroy
@@ -9310,14 +9225,12 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
             
             // Call the close callback before destroying the widget.
             if (closeCallback && windowId > 0) {
-                printf("DEBUG: Calling close callback for GTK window ID: %u\n", windowId);
                 closeCallback(windowId);
             }
             
             // gtk_widget_destroy fires the "destroy" signal synchronously.
             // containerRef keeps the ContainerView alive so the signal handler's
             // raw ContainerView* user_data is valid for the duration of the call.
-            printf("DEBUG: Destroying GTK window\n");
             gtk_widget_destroy(gtkWindow);
         } else {
             // It's an X11 window
@@ -9337,11 +9250,7 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 }
             }
             
-            if (!window_valid) {
-                printf("DEBUG: X11 window %p already closed or invalid\n", window);
-            } else {
-                printf("DEBUG: closeWindow called for X11 window ID: %u\n", windowId);
-                
+            if (window_valid) {
                 // Store callback and window info before any cleanup
                 auto callback = x11win->closeCallback;
                 auto display = x11win->display;
@@ -9349,7 +9258,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 
                 // Call the close callback BEFORE removing from maps.
                 if (callback) {
-                    printf("DEBUG: Calling close callback for X11 window ID: %u\n", windowId);
                     callback(windowId);
                 }
                 
@@ -9367,7 +9275,6 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                     g_x11_windows.erase(windowId);
                 }
                 
-                printf("DEBUG: Destroying X11 window\n");
                 XDestroyWindow(display, x11_window);
                 XFlush(display);
 

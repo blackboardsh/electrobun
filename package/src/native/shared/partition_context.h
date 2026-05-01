@@ -76,8 +76,6 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
     if (identifier.empty()) {
         CefRequestContextSettings defaultSettings;
         defaultSettings.persist_session_cookies = false;
-        fprintf(stderr, "[partition_context] webview %u creating ephemeral context for default partition\n",
-                webviewId);
         CefRefPtr<CefRequestContext> ctx = CefRequestContext::CreateContext(defaultSettings, nullptr);
         if (!ctx) {
             fprintf(stderr, "[partition_context] WARNING: CreateContext returned null for default partition "
@@ -94,8 +92,6 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
         auto& map = partitionContextMap_();
         auto it = map.find(identifier);
         if (it != map.end()) {
-            fprintf(stderr, "[partition_context] webview %u reusing cached context for '%s'\n",
-                    webviewId, identifier.c_str());
             return it->second;
         }
     }
@@ -107,8 +103,6 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
         if (!cachePathStr.empty()) {
             settings.persist_session_cookies = true;
             CefString(&settings.cache_path).FromString(cachePathStr);
-            fprintf(stderr, "[partition_context] webview %u creating persistent context for '%s' at %s\n",
-                    webviewId, identifier.c_str(), cachePathStr.c_str());
         } else {
             fprintf(stderr, "[partition_context] webview %u: failed to build cache path for '%s', "
                             "falling back to ephemeral\n",
@@ -117,8 +111,6 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
         }
     } else {
         settings.persist_session_cookies = false;
-        fprintf(stderr, "[partition_context] webview %u creating ephemeral context for '%s'\n",
-                webviewId, identifier.c_str());
     }
 
     CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);

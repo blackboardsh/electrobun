@@ -13,7 +13,6 @@
 #include <set>
 #include <fstream>
 #include <sstream>
-#include <iostream>
 
 // Forward-declare CEF types so this header can be included without
 // pulling in the full CEF headers (the call sites already include them).
@@ -170,12 +169,8 @@ inline void applyChromiumFlags(const ChromiumFlagConfig& config,
                                CefRefPtr<CefCommandLine> command_line) {
     for (const auto& flag : config.flags) {
         if (flag.hasValue) {
-            std::cout << "[CEF] Applying user chromium flag: "
-                      << flag.name << "=" << flag.value << std::endl;
             command_line->AppendSwitchWithValue(flag.name, flag.value);
         } else {
-            std::cout << "[CEF] Applying user chromium flag: "
-                      << flag.name << std::endl;
             command_line->AppendSwitch(flag.name);
         }
     }
