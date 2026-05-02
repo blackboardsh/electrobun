@@ -9,7 +9,7 @@ function createWgpuTagTest(name: string, transparent: boolean) {
     name,
     category: "WGPU Tag (Interactive)",
     description: transparent
-      ? "Test WGPU tag in a transparent window (DComp compositing test)"
+      ? "Test WGPU tag rendering in a transparent window"
       : "Test WGPU view positioning, transparency, passthrough, and resizing",
     interactive: true,
     timeout: 600000,
@@ -18,6 +18,9 @@ function createWgpuTagTest(name: string, transparent: boolean) {
         "A transparent window with a WGPU tag will open",
         "The desktop should be visible behind the HTML content",
         "The WGPU surface should render correctly within the page",
+        ...(process.platform === "linux" ? [
+          "Linux note: passthrough/mask interaction for WGPU tags inside transparent windows is not supported; verify rendering and resize only",
+        ] : []),
         "Close the window when done to pass the test",
       ] : [
         "A WGPU tag playground will open",

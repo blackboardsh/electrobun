@@ -34,6 +34,8 @@ title: "Electrobun Webview Tag"
 
               <p>The way the implementation currently works, the html element is just a positional anchor that reports its position and relays events to zig which manages a completely separate BrowserView and overlays it at the same coordinates within the window.</p>
 
+              <p>On Linux, passthrough and mask punch-through behavior for overlaid webview tags is not supported inside transparent `BrowserWindow`s. Transparent CEF windows are rendered offscreen into the parent X11 window, so native overlay children cannot reliably hit-test through themselves into the host DOM. Use a non-transparent window for masked/passthrough overlays on Linux.</p>
+
               <h2>How is this different to Electron's webview tag</h2>
 
               <h3>Chrome plans to deprecate their webview tag</h3>
