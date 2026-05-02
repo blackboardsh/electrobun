@@ -10,6 +10,7 @@
 #include <X11/Xlib.h>
 #include <X11/extensions/shape.h>
 #include <X11/Xatom.h>
+#include <X11/cursorfont.h>
 #include <X11/keysymdef.h>
 #include <X11/XF86keysym.h>
 #include <string>
@@ -3436,9 +3437,181 @@ public:
     Display* xDisplay = nullptr;
     Window parentXWindow = 0;
     Window xWindow = 0;
+    Window inputXWindow = 0;
+    Cursor inputCursor = 0;
 
     WGPUViewImpl(uint32_t webviewId)
         : AbstractView(webviewId) {}
+
+    bool createX11Child(Display* display, Window parentWindow, double x, double y, double width, double height, const char* context) {
+        if (!display || !parentWindow) {
+            fprintf(stderr, "ERROR: Failed to create X11-backed WGPUView (%s): invalid parent\n", context);
+            return false;
+        }
+
+        int screen = DefaultScreen(display);
+        Visual* visual = DefaultVisual(display, screen);
+        int depth = DefaultDepth(display, screen);
+
+        XSetWindowAttributes attrs = {};
+        attrs.border_pixel = 0;
+        attrs.background_pixel = 0;
+        attrs.colormap = DefaultColormap(display, screen);
+        attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
+
+        xDisplay = display;
+        parentXWindow = parentWindow;
+        xWindow = XCreateWindow(
+            display,
+            parentWindow,
+            (int)x,
+            (int)y,
+            std::max(1, (int)width),
+            std::max(1, (int)height),
+            0,
+            depth,
+            InputOutput,
+            visual,
+            CWBorderPixel | CWBackPixel | CWColormap | CWEventMask,
+            &attrs
+        );
+
+        if (!xWindow) {
+            fprintf(stderr, "ERROR: XCreateWindow failed for WGPUView (%s)\n", context);
+            xDisplay = nullptr;
+            parentXWindow = 0;
+            return false;
+        }
+
+        return true;
+    }
+
+    bool createX11InputChild(Display* display, Window parentWindow, double x, double y, double width, double height, const char* context) {
+        if (!display || !parentWindow) {
+            fprintf(stderr, "ERROR: Failed to create X11 input layer for WGPUView (%s): invalid parent\n", context);
+            return false;
+        }
+
+        XSetWindowAttributes attrs = {};
+        attrs.event_mask = ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                           EnterWindowMask | LeaveWindowMask | FocusChangeMask |
+                           StructureNotifyMask;
+
+        unsigned long attrMask = CWEventMask;
+        inputCursor = XCreateFontCursor(display, XC_left_ptr);
+        if (inputCursor) {
+            attrs.cursor = inputCursor;
+            attrMask |= CWCursor;
+        }
+
+        inputXWindow = XCreateWindow(
+            display,
+            parentWindow,
+            (int)x,
+            (int)y,
+            std::max(1, (int)width),
+            std::max(1, (int)height),
+            0,
+            0,
+            InputOnly,
+            (Visual*)CopyFromParent,
+            attrMask,
+            &attrs
+        );
+
+        if (!inputXWindow) {
+            fprintf(stderr, "ERROR: XCreateWindow failed for WGPUView input layer (%s)\n", context);
+            if (inputCursor) {
+                XFreeCursor(display, inputCursor);
+                inputCursor = 0;
+            }
+            return false;
+        }
+
+        return true;
+    }
+
+    bool resolveX11DrawingSurface(Display*& display, Window& window) {
+        display = nullptr;
+        window = 0;
+
+        if (xDisplay && xWindow) {
+            display = xDisplay;
+            window = xWindow;
+            return true;
+        }
+
+        if (viewWidget) {
+            GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
+            if (gdkWindow) {
+                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+                window = GDK_WINDOW_XID(gdkWindow);
+                return display && window;
+            }
+        }
+
+        return false;
+    }
+
+    void setInputShape(Display* display, Window window, const std::vector<MaskRect>& masks) {
+        if (!display || !window) {
+            return;
+        }
+
+        if (isMousePassthroughEnabled) {
+            XRectangle emptyRect = {0, 0, 0, 0};
+            XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &emptyRect, 1, ShapeSet, YXBanded);
+            return;
+        }
+
+        XRectangle baseRect = {
+            0,
+            0,
+            static_cast<unsigned short>(std::max(1, visualBounds.width)),
+            static_cast<unsigned short>(std::max(1, visualBounds.height)),
+        };
+        XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &baseRect, 1, ShapeSet, YXBanded);
+
+        for (const auto& mask : masks) {
+            XRectangle rect = {
+                static_cast<short>(mask.x),
+                static_cast<short>(mask.y),
+                static_cast<unsigned short>(mask.width),
+                static_cast<unsigned short>(mask.height),
+            };
+            XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &rect, 1, ShapeSubtract, YXBanded);
+        }
+    }
+
+    void clearInputShape(Display* display, Window window) {
+        if (!display || !window) {
+            return;
+        }
+
+        XRectangle emptyRect = {0, 0, 0, 0};
+        XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &emptyRect, 1, ShapeSet, YXBanded);
+    }
+
+    void applyCurrentInputShape() {
+        Display* display = nullptr;
+        Window drawingWindow = 0;
+        if (!resolveX11DrawingSurface(display, drawingWindow)) {
+            return;
+        }
+
+        if (inputXWindow) {
+            clearInputShape(display, drawingWindow);
+            XRaiseWindow(display, inputXWindow);
+        }
+
+        std::vector<MaskRect> masks;
+        if (!maskJSON.empty() && maskJSON != "[]") {
+            masks = parseMaskJson(maskJSON);
+        }
+
+        setInputShape(display, inputXWindow ? inputXWindow : drawingWindow, masks);
+        XFlush(display);
+    }
 
     void loadURL(const char* urlString) override {}
     void loadHTML(const char* htmlString) override {}
@@ -3460,6 +3633,19 @@ public:
                 std::max(1, frame.width),
                 std::max(1, frame.height)
             );
+            if (inputXWindow) {
+                XMoveResizeWindow(
+                    xDisplay,
+                    inputXWindow,
+                    frame.x,
+                    frame.y,
+                    std::max(1, frame.width),
+                    std::max(1, frame.height)
+                );
+                XRaiseWindow(xDisplay, inputXWindow);
+            } else {
+                XRaiseWindow(xDisplay, xWindow);
+            }
             XFlush(xDisplay);
             visualBounds = frame;
         } else if (viewWidget) {
@@ -3499,22 +3685,13 @@ public:
 
         Display* display = nullptr;
         Window window = 0;
-        if (xDisplay && xWindow) {
-            display = xDisplay;
-            window = xWindow;
-        } else if (viewWidget) {
-            GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
-            if (gdkWindow) {
-                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
-                window = GDK_WINDOW_XID(gdkWindow);
-            }
-        }
-        if (!display || !window) {
+        if (!resolveX11DrawingSurface(display, window)) {
             return;
         }
 
         std::vector<MaskRect> masks = parseMaskJson(maskJSON);
         if (masks.empty()) {
+            applyCurrentInputShape();
             return;
         }
 
@@ -3535,29 +3712,21 @@ public:
             };
             XShapeCombineRectangles(display, window, ShapeBounding, 0, 0, &rect, 1, ShapeSubtract, YXBanded);
         }
+        applyCurrentInputShape();
         XFlush(display);
     }
 
     void removeMasks() override {
         Display* display = nullptr;
         Window window = 0;
-        if (xDisplay && xWindow) {
-            display = xDisplay;
-            window = xWindow;
-        } else if (viewWidget) {
-            GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
-            if (gdkWindow) {
-                display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
-                window = GDK_WINDOW_XID(gdkWindow);
-            }
-        }
-        if (!display || !window) {
+        if (!resolveX11DrawingSurface(display, window)) {
             return;
         }
 
         XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
-        XFlush(display);
         maskJSON.clear();
+        applyCurrentInputShape();
+        XFlush(display);
     }
 
     void toggleMirrorMode(bool enable) override {
@@ -3573,9 +3742,15 @@ public:
     void setHidden(bool hidden) override {
         if (xDisplay && xWindow) {
             if (hidden) {
+                if (inputXWindow) {
+                    XUnmapWindow(xDisplay, inputXWindow);
+                }
                 XUnmapWindow(xDisplay, xWindow);
             } else {
                 XMapRaised(xDisplay, xWindow);
+                if (inputXWindow) {
+                    XMapRaised(xDisplay, inputXWindow);
+                }
             }
             XFlush(xDisplay);
         } else if (viewWidget) {
@@ -3594,38 +3769,7 @@ public:
     void setPassthrough(bool enable) override {
         AbstractView::setPassthrough(enable);
         if (xDisplay && xWindow) {
-            if (enable) {
-                XShapeCombineRectangles(
-                    xDisplay,
-                    xWindow,
-                    ShapeInput,
-                    0,
-                    0,
-                    nullptr,
-                    0,
-                    ShapeSet,
-                    Unsorted
-                );
-            } else {
-                XRectangle rect = {
-                    0,
-                    0,
-                    static_cast<unsigned short>(std::max(1, visualBounds.width)),
-                    static_cast<unsigned short>(std::max(1, visualBounds.height)),
-                };
-                XShapeCombineRectangles(
-                    xDisplay,
-                    xWindow,
-                    ShapeInput,
-                    0,
-                    0,
-                    &rect,
-                    1,
-                    ShapeSet,
-                    Unsorted
-                );
-            }
-            XFlush(xDisplay);
+            applyCurrentInputShape();
         } else if (viewWidget) {
             gtk_widget_set_sensitive(viewWidget, enable ? FALSE : TRUE);
         }
@@ -3640,7 +3784,15 @@ public:
     void remove() override {
         if (xDisplay && xWindow) {
             stopWgpuTestForWindow(xWindow);
+            if (inputXWindow) {
+                x11DestroyWindowSafe(xDisplay, inputXWindow);
+                inputXWindow = 0;
+            }
             x11DestroyWindowSafe(xDisplay, xWindow);
+            if (inputCursor) {
+                XFreeCursor(xDisplay, inputCursor);
+                inputCursor = 0;
+            }
             xWindow = 0;
             xDisplay = nullptr;
             parentXWindow = 0;
@@ -6122,7 +6274,6 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         
         
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-        g_object_set_data(G_OBJECT(window), "electrobun-transparent-window", GINT_TO_POINTER(transparent ? 1 : 0));
        
         gtk_window_set_title(GTK_WINDOW(window), title);
         
@@ -6699,33 +6850,15 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 return;
             }
 
-            int screen = DefaultScreen(x11win->display);
-            Visual* visual = DefaultVisual(x11win->display, screen);
-            int depth = DefaultDepth(x11win->display, screen);
-
-            XSetWindowAttributes attrs = {};
-            attrs.border_pixel = 0;
-            attrs.background_pixel = 0;
-            attrs.colormap = DefaultColormap(x11win->display, screen);
-            attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
-            view->xDisplay = x11win->display;
-            view->parentXWindow = x11win->window;
-            view->xWindow = XCreateWindow(
+            if (!view->createX11Child(
                 x11win->display,
                 x11win->window,
-                (int)x,
-                (int)y,
-                std::max(1, (int)width),
-                std::max(1, (int)height),
-                0,
-                depth,
-                InputOutput,
-                visual,
-                CWBorderPixel | CWBackPixel | CWColormap | CWEventMask,
-                &attrs
-            );
-            if (!view->xWindow) {
-                fprintf(stderr, "ERROR: XCreateWindow failed for WGPUView\n");
+                x,
+                y,
+                width,
+                height,
+                "CEF"
+            )) {
                 view->creationFailed = true;
                 return;
             }
@@ -6754,87 +6887,67 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             return;
         }
 
-        bool parentTransparent = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(windowWidget), "electrobun-transparent-window")) != 0;
-        if (parentTransparent) {
-            // GTK transparent toplevels use an RGBA visual. Dawn/Vulkan expects the
-            // WGPU surface window to support opaque alpha, so give it a default-visual
-            // X11 child just like the CEF transparent path.
-            if (!gtk_widget_get_realized(windowWidget)) {
-                gtk_widget_realize(windowWidget);
-            }
-
-            GdkWindow* parentGdkWindow = gtk_widget_get_window(windowWidget);
-            if (!parentGdkWindow) {
-                fprintf(stderr, "ERROR: Failed to get GTK parent window for transparent WGPUView\n");
-                view->creationFailed = true;
-                return;
-            }
-
-            Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
-            Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
-            if (!display || !parentXWindow) {
-                fprintf(stderr, "ERROR: Failed to resolve X11 parent for transparent GTK WGPUView\n");
-                view->creationFailed = true;
-                return;
-            }
-
-            int screen = DefaultScreen(display);
-            Visual* visual = DefaultVisual(display, screen);
-            int depth = DefaultDepth(display, screen);
-
-            XSetWindowAttributes attrs = {};
-            attrs.border_pixel = 0;
-            attrs.background_pixel = 0;
-            attrs.colormap = DefaultColormap(display, screen);
-            attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
-
-            view->xDisplay = display;
-            view->parentXWindow = parentXWindow;
-            view->xWindow = XCreateWindow(
-                display,
-                parentXWindow,
-                (int)x,
-                (int)y,
-                std::max(1, (int)width),
-                std::max(1, (int)height),
-                0,
-                depth,
-                InputOutput,
-                visual,
-                CWBorderPixel | CWBackPixel | CWColormap | CWEventMask,
-                &attrs
-            );
-
-            if (!view->xWindow) {
-                fprintf(stderr, "ERROR: XCreateWindow failed for transparent GTK WGPUView\n");
-                view->creationFailed = true;
-                view->xDisplay = nullptr;
-                view->parentXWindow = 0;
-                return;
-            }
-
-            container->abstractViews.insert(container->abstractViews.begin(), view);
-            XMapRaised(display, view->xWindow);
-            view->resize(frame, "");
-
-            if (startTransparent) {
-                view->setTransparent(true);
-                view->pendingStartTransparent = false;
-            }
-            if (startPassthrough) {
-                view->setPassthrough(true);
-                view->pendingStartPassthrough = false;
-            }
-            XFlush(display);
-            return;
+        // GTK transparent toplevels use an RGBA visual, while Dawn/Vulkan expects
+        // the WGPU surface window to support opaque alpha. Use a default-visual
+        // X11 child for every GTK WGPU view so transparent and non-transparent
+        // Linux renderers share the same masking/passthrough behavior.
+        if (!gtk_widget_get_realized(windowWidget)) {
+            gtk_widget_realize(windowWidget);
         }
 
+        GdkWindow* parentGdkWindow = gtk_widget_get_window(windowWidget);
+        if (parentGdkWindow) {
+            Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
+            Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
+
+            if (view->createX11Child(display, parentXWindow, x, y, width, height, "GTK")) {
+                if (!view->createX11InputChild(display, parentXWindow, x, y, width, height, "GTK")) {
+                    fprintf(stderr, "WARNING: WGPUView will use drawing-window input for GTK\n");
+                }
+                container->abstractViews.insert(container->abstractViews.begin(), view);
+                XMapRaised(display, view->xWindow);
+                if (view->inputXWindow) {
+                    XMapRaised(display, view->inputXWindow);
+                }
+                view->resize(frame, "");
+
+                if (startTransparent) {
+                    view->setTransparent(true);
+                    view->pendingStartTransparent = false;
+                }
+                if (startPassthrough) {
+                    view->setPassthrough(true);
+                    view->pendingStartPassthrough = false;
+                }
+                XFlush(display);
+                return;
+            }
+        }
+
+        if (parentGdkWindow) {
+            fprintf(stderr, "WARNING: Falling back to GtkDrawingArea-backed WGPUView\n");
+        } else {
+            fprintf(stderr, "WARNING: Failed to get GTK parent window for WGPUView; falling back to GtkDrawingArea\n");
+        }
+
+        view->xDisplay = nullptr;
+        view->parentXWindow = 0;
+        view->xWindow = 0;
         view->viewWidget = gtk_drawing_area_new();
         view->widget = view->viewWidget;
 
         gtk_widget_set_size_request(view->viewWidget, (int)width, (int)height);
         container->addWebview(view, x, y);
         view->resize(frame, "");
+
+        if (startTransparent) {
+            view->setTransparent(true);
+            view->pendingStartTransparent = false;
+        }
+        if (startPassthrough) {
+            view->setPassthrough(true);
+            view->pendingStartPassthrough = false;
+        }
     });
 
     if (view->creationFailed) {
