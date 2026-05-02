@@ -7230,6 +7230,14 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
+        // With hiddenInset + FullSizeContentView, macOS still treats the
+        // title-bar strip (~28px under the traffic lights) as a drag region
+        // and clicks on host-app buttons positioned there start a window move
+        // before the webview ever sees the event. Disable OS-level
+        // background/title-bar drag and let the preload's
+        // electrobun-webkit-app-region-drag class drive window moves
+        // explicitly. setFrameOrigin: (used by startWindowMove) still works.
+        [window setMovable:NO];
     }
     objc_setAssociatedObject(window, kTrafficLightTitleBarStyleKey, [NSString stringWithUTF8String:config.titleBarStyle ?: "default"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(window, kTrafficLightOffsetXKey, @(config.trafficLightOffsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
