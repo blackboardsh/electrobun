@@ -28,6 +28,31 @@
 
 using Microsoft::WRL::ComPtr;
 
+static bool getWindowsVersion(OSVERSIONINFOEXW* osInfo) {
+    if (!osInfo) return false;
+
+    typedef LONG (WINAPI *RtlGetVersionPtr)(OSVERSIONINFOEXW*);
+    HMODULE ntdll = GetModuleHandleW(L"ntdll.dll");
+    if (!ntdll) return false;
+
+    auto fn = (RtlGetVersionPtr)GetProcAddress(ntdll, "RtlGetVersion");
+    if (!fn) return false;
+
+    ZeroMemory(osInfo, sizeof(*osInfo));
+    osInfo->dwOSVersionInfoSize = sizeof(*osInfo);
+    return fn(osInfo) == 0;
+}
+
+static bool isWindowsBuildOrGreater(DWORD minimumBuild) {
+    OSVERSIONINFOEXW osInfo = {};
+    if (!getWindowsVersion(&osInfo)) {
+        return true;
+    }
+
+    return osInfo.dwMajorVersion > 10 ||
+           (osInfo.dwMajorVersion == 10 && osInfo.dwBuildNumber >= minimumBuild);
+}
+
 // Feature gate: DirectComposition requires Windows 8.1+.
 // Note: IsWindows8Point1OrGreater() requires an app manifest to report correctly.
 // Without a manifest, Windows lies about the version. We use RtlGetVersion instead

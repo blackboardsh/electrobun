@@ -6317,6 +6317,15 @@ ELECTROBUN_EXPORT void setWindowTitle(void* window, const char* title) {
     }
 }
 
+ELECTROBUN_EXPORT void setWindowTitleBarTheme(void* window, int32_t darkMode, uint32_t captionColor, uint32_t textColor, uint32_t borderColor) {
+    (void)window;
+    (void)darkMode;
+    (void)captionColor;
+    (void)textColor;
+    (void)borderColor;
+    // Windows-only API. Linux titlebar theming is managed by the window manager.
+}
+
 void showX11Window(void* window) {
     dispatch_sync_main_void([&]() {
         X11Window* x11win = static_cast<X11Window*>(window);

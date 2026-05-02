@@ -7382,6 +7382,15 @@ extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     });
 }
 
+extern "C" void setWindowTitleBarTheme(NSWindow *window, int32_t darkMode, uint32_t captionColor, uint32_t textColor, uint32_t borderColor) {
+    (void)window;
+    (void)darkMode;
+    (void)captionColor;
+    (void)textColor;
+    (void)borderColor;
+    // Windows-only API. macOS keeps native titlebar styling under AppKit control.
+}
+
 extern "C" void closeWindow(NSWindow *window) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         [window close];
