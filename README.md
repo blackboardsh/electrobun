@@ -173,3 +173,4 @@ All commands are run from the `/package` directory:
 | Windows 11+ | Official |
 | Ubuntu 22.04+ | Official |
 | Other Linux distros (gtk3, webkit2gtk-4.1) | Community |
+| Raspberry Pi | Unofficial fork: [kortexa-ai/electrobun (linux-wpe)](https://github.com/kortexa-ai/electrobun/tree/kortexa/linux-wpe) — follow the author [@francip](https://x.com/francip/status/2050149256053539059?s=20) |
