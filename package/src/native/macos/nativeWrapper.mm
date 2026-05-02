@@ -2574,6 +2574,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 
                 [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
                 [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
+                [configuration.preferences setValue:@YES forKey:@"_gamepadAccessEnabled"];
                 [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];                
                 
                 // Add scheme handler
