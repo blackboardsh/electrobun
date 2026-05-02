@@ -6122,6 +6122,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         
         
         GtkWidget* window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
+        g_object_set_data(G_OBJECT(window), "electrobun-transparent-window", GINT_TO_POINTER(transparent ? 1 : 0));
        
         gtk_window_set_title(GTK_WINDOW(window), title);
         
@@ -6750,6 +6751,81 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
         if (!container) {
             fprintf(stderr, "ERROR: Failed to create container for WGPUView\n");
             view->creationFailed = true;
+            return;
+        }
+
+        bool parentTransparent = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(windowWidget), "electrobun-transparent-window")) != 0;
+        if (parentTransparent) {
+            // GTK transparent toplevels use an RGBA visual. Dawn/Vulkan expects the
+            // WGPU surface window to support opaque alpha, so give it a default-visual
+            // X11 child just like the CEF transparent path.
+            if (!gtk_widget_get_realized(windowWidget)) {
+                gtk_widget_realize(windowWidget);
+            }
+
+            GdkWindow* parentGdkWindow = gtk_widget_get_window(windowWidget);
+            if (!parentGdkWindow) {
+                fprintf(stderr, "ERROR: Failed to get GTK parent window for transparent WGPUView\n");
+                view->creationFailed = true;
+                return;
+            }
+
+            Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
+            Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
+            if (!display || !parentXWindow) {
+                fprintf(stderr, "ERROR: Failed to resolve X11 parent for transparent GTK WGPUView\n");
+                view->creationFailed = true;
+                return;
+            }
+
+            int screen = DefaultScreen(display);
+            Visual* visual = DefaultVisual(display, screen);
+            int depth = DefaultDepth(display, screen);
+
+            XSetWindowAttributes attrs = {};
+            attrs.border_pixel = 0;
+            attrs.background_pixel = 0;
+            attrs.colormap = DefaultColormap(display, screen);
+            attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
+
+            view->xDisplay = display;
+            view->parentXWindow = parentXWindow;
+            view->xWindow = XCreateWindow(
+                display,
+                parentXWindow,
+                (int)x,
+                (int)y,
+                std::max(1, (int)width),
+                std::max(1, (int)height),
+                0,
+                depth,
+                InputOutput,
+                visual,
+                CWBorderPixel | CWBackPixel | CWColormap | CWEventMask,
+                &attrs
+            );
+
+            if (!view->xWindow) {
+                fprintf(stderr, "ERROR: XCreateWindow failed for transparent GTK WGPUView\n");
+                view->creationFailed = true;
+                view->xDisplay = nullptr;
+                view->parentXWindow = 0;
+                return;
+            }
+
+            container->abstractViews.insert(container->abstractViews.begin(), view);
+            XMapRaised(display, view->xWindow);
+            view->resize(frame, "");
+
+            if (startTransparent) {
+                view->setTransparent(true);
+                view->pendingStartTransparent = false;
+            }
+            if (startPassthrough) {
+                view->setPassthrough(true);
+                view->pendingStartPassthrough = false;
+            }
+            XFlush(display);
             return;
         }
 
