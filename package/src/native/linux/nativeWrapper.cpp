@@ -6699,9 +6699,14 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 return;
             }
 
+            int screen = DefaultScreen(x11win->display);
+            Visual* visual = DefaultVisual(x11win->display, screen);
+            int depth = DefaultDepth(x11win->display, screen);
+
             XSetWindowAttributes attrs = {};
             attrs.border_pixel = 0;
             attrs.background_pixel = 0;
+            attrs.colormap = DefaultColormap(x11win->display, screen);
             attrs.event_mask = StructureNotifyMask | ExposureMask | ButtonPressMask | FocusChangeMask;
             view->xDisplay = x11win->display;
             view->parentXWindow = x11win->window;
@@ -6713,10 +6718,10 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 std::max(1, (int)width),
                 std::max(1, (int)height),
                 0,
-                CopyFromParent,
+                depth,
                 InputOutput,
-                CopyFromParent,
-                CWBorderPixel | CWBackPixel | CWEventMask,
+                visual,
+                CWBorderPixel | CWBackPixel | CWColormap | CWEventMask,
                 &attrs
             );
             if (!view->xWindow) {
@@ -7027,6 +7032,7 @@ struct GPUTestState {
     float angle = 0.0f;
     uint32_t lastWidth = 0;
     uint32_t lastHeight = 0;
+    bool surfaceConfigured = false;
     bool running = false;
     WGPUViewImpl* view = nullptr;
 };
@@ -7095,6 +7101,7 @@ void stopWgpuTestForWindow(Window window) {
 
 static void gpuTestConfigureSurface(GPUTestState* state) {
     if (!state || !state->surface || !state->device || !state->display || !state->window) return;
+    state->surfaceConfigured = false;
 
     WGPUSurfaceCapabilities caps = {};
     p_wgpuSurfaceGetCapabilities(state->surface, state->adapter, &caps);
@@ -7103,6 +7110,12 @@ static void gpuTestConfigureSurface(GPUTestState* state) {
     }
     if (caps.alphaModeCount > 0 && caps.alphaModes) {
         state->alphaMode = caps.alphaModes[0];
+        for (size_t i = 0; i < caps.alphaModeCount; i++) {
+            if (caps.alphaModes[i] == WGPUCompositeAlphaMode_Opaque) {
+                state->alphaMode = WGPUCompositeAlphaMode_Opaque;
+                break;
+            }
+        }
     }
     p_wgpuSurfaceCapabilitiesFreeMembers(caps);
 
@@ -7124,6 +7137,7 @@ static void gpuTestConfigureSurface(GPUTestState* state) {
     config.presentMode = WGPUPresentMode_Fifo;
     config.alphaMode = state->alphaMode;
     p_wgpuSurfaceConfigure(state->surface, &config);
+    state->surfaceConfigured = true;
 }
 
 static void gpuTestSetupPipeline(GPUTestState* state) {
@@ -7240,6 +7254,10 @@ static void gpuTestRenderFrame(GPUTestState* state) {
     if (width != state->lastWidth || height != state->lastHeight) {
         gpuTestConfigureSurface(state);
     }
+    if (!state->surfaceConfigured) {
+        gpuTestConfigureSurface(state);
+        if (!state->surfaceConfigured) return;
+    }
 
     state->angle += 0.02f;
     float verts[sizeof(kCubeVertices) / sizeof(float)];
@@ -7250,6 +7268,8 @@ static void gpuTestRenderFrame(GPUTestState* state) {
     p_wgpuSurfaceGetCurrentTexture(state->surface, &surfaceTexture);
     if (surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal &&
         surfaceTexture.status != WGPUSurfaceGetCurrentTextureStatus_SuccessSuboptimal) {
+        state->surfaceConfigured = false;
+        gpuTestConfigureSurface(state);
         return;
     }
     if (!surfaceTexture.texture) return;
@@ -7339,22 +7359,25 @@ static void gpuTestRequestDeviceCallback(WGPURequestDeviceStatus status, WGPUDev
     if (!state || status != WGPURequestDeviceStatus_Success || !device) {
         return;
     }
-    state->device = device;
-    if (p_wgpuDeviceSetLabel) {
-        WGPUStringView label = {"Electrobun WGPU Device", WGPU_STRLEN};
-        p_wgpuDeviceSetLabel(device, label);
-    }
-    state->queue = p_wgpuDeviceGetQueue(device);
+    // Match the public WGPU bridge path: surface lifecycle calls must stay on the GTK/X11 main thread.
+    dispatch_sync_main_void([state, device]() {
+        state->device = device;
+        if (p_wgpuDeviceSetLabel) {
+            WGPUStringView label = {"Electrobun WGPU Device", WGPU_STRLEN};
+            p_wgpuDeviceSetLabel(device, label);
+        }
+        state->queue = p_wgpuDeviceGetQueue(device);
 
-    gpuTestConfigureSurface(state);
-    gpuTestSetupPipeline(state);
-    if (state->timerId) {
-        g_source_remove(state->timerId);
-        state->timerId = 0;
-    }
-    state->running = true;
-    state->timerId = g_timeout_add(16, gpuTestTimerProc, state);
-    gpuTestRenderFrame(state);
+        gpuTestConfigureSurface(state);
+        gpuTestSetupPipeline(state);
+        if (state->timerId) {
+            g_source_remove(state->timerId);
+            state->timerId = 0;
+        }
+        state->running = true;
+        state->timerId = g_timeout_add(16, gpuTestTimerProc, state);
+        gpuTestRenderFrame(state);
+    });
 }
 
 static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
