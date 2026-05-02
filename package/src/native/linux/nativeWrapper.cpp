@@ -516,12 +516,7 @@ public:
         }
         data_out_written = copy_size;
         
-        // Return RESPONSE_FILTER_NEED_MORE_DATA if we have more data to process
-        if (data_in_size > 0 || !buffer_.empty()) {
-            return RESPONSE_FILTER_NEED_MORE_DATA;
-        }
-        
-        return RESPONSE_FILTER_DONE;
+        return buffer_.empty() ? RESPONSE_FILTER_DONE : RESPONSE_FILTER_NEED_MORE_DATA;
     }
     
     IMPLEMENT_REFCOUNTING(ElectrobunResponseFilter);
