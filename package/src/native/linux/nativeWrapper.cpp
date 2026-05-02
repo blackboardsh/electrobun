@@ -106,6 +106,7 @@ using electrobun::OperationGuard;
 #include "include/cef_request_handler.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_keyboard_handler.h"
+#include "include/cef_display_handler.h"
 #include "include/cef_response_filter.h"
 #include "include/cef_permission_handler.h"
 #include "include/cef_dialog_handler.h"
@@ -849,6 +850,7 @@ class ElectrobunClient : public CefClient,
                         public CefRequestHandler,
                         public CefContextMenuHandler,
                         public CefKeyboardHandler,
+                        public CefDisplayHandler,
                         public CefResourceRequestHandler,
                         public CefLifeSpanHandler,
                         public CefPermissionHandler,
@@ -879,6 +881,7 @@ private:
     Display* display_;
     bool osr_enabled_;
     int osr_width_, osr_height_;
+    Cursor osr_cursor_;
     
     // Parent window handle for proper CEF window parenting
     Window parent_window_handle_;
@@ -905,6 +908,7 @@ public:
         , osr_enabled_(false)
         , osr_width_(0)
         , osr_height_(0)
+        , osr_cursor_(0)
         , parent_window_handle_(0) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
@@ -1001,6 +1005,10 @@ public:
         return this;
     }
 
+    virtual CefRefPtr<CefDisplayHandler> GetDisplayHandler() override {
+        return this;
+    }
+
     virtual CefRefPtr<CefLifeSpanHandler> GetLifeSpanHandler() override {
         return this;
     }
@@ -1019,6 +1027,95 @@ public:
 
     virtual CefRefPtr<CefRenderHandler> GetRenderHandler() override {
         return this;
+    }
+
+    bool OnCursorChange(CefRefPtr<CefBrowser> browser,
+                        CefCursorHandle cursor,
+                        cef_cursor_type_t type,
+                        const CefCursorInfo& custom_cursor_info) override {
+        (void)browser;
+        (void)cursor;
+        (void)custom_cursor_info;
+
+        if (!osr_enabled_) {
+            return false;
+        }
+
+        Display* display = display_ ? display_ : gdk_x11_get_default_xdisplay();
+        Window window = x11_window_ ? x11_window_ : parent_window_handle_;
+        if (!display || !window) {
+            return false;
+        }
+
+        unsigned int cursorShape = XC_left_ptr;
+        switch (type) {
+            case CT_IBEAM:
+            case CT_VERTICALTEXT:
+                cursorShape = XC_xterm;
+                break;
+            case CT_HAND:
+                cursorShape = XC_hand2;
+                break;
+            case CT_CROSS:
+                cursorShape = XC_crosshair;
+                break;
+            case CT_WAIT:
+            case CT_PROGRESS:
+                cursorShape = XC_watch;
+                break;
+            case CT_HELP:
+                cursorShape = XC_question_arrow;
+                break;
+            case CT_MOVE:
+            case CT_GRAB:
+            case CT_GRABBING:
+                cursorShape = XC_fleur;
+                break;
+            case CT_EASTRESIZE:
+            case CT_WESTRESIZE:
+            case CT_EASTWESTRESIZE:
+            case CT_COLUMNRESIZE:
+                cursorShape = XC_sb_h_double_arrow;
+                break;
+            case CT_NORTHRESIZE:
+            case CT_SOUTHRESIZE:
+            case CT_NORTHSOUTHRESIZE:
+            case CT_ROWRESIZE:
+                cursorShape = XC_sb_v_double_arrow;
+                break;
+            case CT_NORTHEASTRESIZE:
+            case CT_SOUTHWESTRESIZE:
+            case CT_NORTHEASTSOUTHWESTRESIZE:
+                cursorShape = XC_top_right_corner;
+                break;
+            case CT_NORTHWESTRESIZE:
+            case CT_SOUTHEASTRESIZE:
+            case CT_NORTHWESTSOUTHEASTRESIZE:
+                cursorShape = XC_top_left_corner;
+                break;
+            case CT_NOTALLOWED:
+            case CT_NODROP:
+            case CT_DND_NONE:
+                cursorShape = XC_X_cursor;
+                break;
+            default:
+                cursorShape = XC_left_ptr;
+                break;
+        }
+
+        Cursor nextCursor = XCreateFontCursor(display, cursorShape);
+        if (!nextCursor) {
+            return false;
+        }
+
+        XDefineCursor(display, window, nextCursor);
+        XFlush(display);
+
+        if (osr_cursor_) {
+            XFreeCursor(display, osr_cursor_);
+        }
+        osr_cursor_ = nextCursor;
+        return true;
     }
 
     // Static debounce timestamp for ctrl+click handling
@@ -2039,6 +2136,56 @@ static CefRefPtr<ElectrobunClient> getOSRClientForWindow(uint32_t windowId) {
     return it != g_osrClientsByWindowId.end() ? it->second : nullptr;
 }
 
+static int cefEventModifiersFromXState(unsigned int state) {
+    int modifiers = EVENTFLAG_NONE;
+    if (state & ShiftMask) modifiers |= EVENTFLAG_SHIFT_DOWN;
+    if (state & ControlMask) modifiers |= EVENTFLAG_CONTROL_DOWN;
+    if (state & Mod1Mask) modifiers |= EVENTFLAG_ALT_DOWN;
+    if (state & Button1Mask) modifiers |= EVENTFLAG_LEFT_MOUSE_BUTTON;
+    if (state & Button2Mask) modifiers |= EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+    if (state & Button3Mask) modifiers |= EVENTFLAG_RIGHT_MOUSE_BUTTON;
+    return modifiers;
+}
+
+static int cefButtonModifier(unsigned int button) {
+    if (button == Button1) return EVENTFLAG_LEFT_MOUSE_BUTTON;
+    if (button == Button2) return EVENTFLAG_MIDDLE_MOUSE_BUTTON;
+    if (button == Button3) return EVENTFLAG_RIGHT_MOUSE_BUTTON;
+    return EVENTFLAG_NONE;
+}
+
+struct OSRClickState {
+    Window window = 0;
+    unsigned int button = 0;
+    Time time = 0;
+    int x = 0;
+    int y = 0;
+    int clickCount = 0;
+};
+
+static std::map<Window, OSRClickState> g_osrClickStates;
+
+static int osrClickCountForEvent(Window window, const XButtonEvent& buttonEvent, bool pressed) {
+    auto& state = g_osrClickStates[window];
+    if (!pressed) {
+        return std::max(1, state.clickCount);
+    }
+
+    const Time doubleClickMs = 500;
+    bool sameButton = state.window == window && state.button == buttonEvent.button;
+    bool closeInTime = state.time != 0 && buttonEvent.time >= state.time && (buttonEvent.time - state.time) <= doubleClickMs;
+    bool closeInSpace = std::abs(buttonEvent.x - state.x) <= 4 && std::abs(buttonEvent.y - state.y) <= 4;
+
+    int clickCount = (sameButton && closeInTime && closeInSpace) ? std::min(state.clickCount + 1, 3) : 1;
+    state.window = window;
+    state.button = buttonEvent.button;
+    state.time = buttonEvent.time;
+    state.x = buttonEvent.x;
+    state.y = buttonEvent.y;
+    state.clickCount = clickCount;
+    return clickCount;
+}
+
 static void forwardX11EventToOSRClient(const XEvent& event, Display* display, Window window, CefRefPtr<ElectrobunClient> client) {
     if (!client) return;
 
@@ -2057,7 +2204,7 @@ static void forwardX11EventToOSRClient(const XEvent& event, Display* display, Wi
             CefMouseEvent mouse_event;
             mouse_event.x = event.xbutton.x;
             mouse_event.y = event.xbutton.y;
-            mouse_event.modifiers = 0;
+            mouse_event.modifiers = cefEventModifiersFromXState(event.xbutton.state);
 
             if (event.xbutton.button == Button4 || event.xbutton.button == Button5) {
                 if (event.type == ButtonPress) {
@@ -2071,14 +2218,19 @@ static void forwardX11EventToOSRClient(const XEvent& event, Display* display, Wi
             if (event.xbutton.button == Button3) button_type = MBT_RIGHT;
             else if (event.xbutton.button == Button2) button_type = MBT_MIDDLE;
 
-            host->SendMouseClickEvent(mouse_event, button_type, event.type == ButtonRelease, 1);
+            bool mouseUp = event.type == ButtonRelease;
+            if (!mouseUp) {
+                mouse_event.modifiers |= cefButtonModifier(event.xbutton.button);
+            }
+            int clickCount = osrClickCountForEvent(window, event.xbutton, !mouseUp);
+            host->SendMouseClickEvent(mouse_event, button_type, mouseUp, clickCount);
             break;
         }
         case MotionNotify: {
             CefMouseEvent mouse_event;
             mouse_event.x = event.xmotion.x;
             mouse_event.y = event.xmotion.y;
-            mouse_event.modifiers = 0;
+            mouse_event.modifiers = cefEventModifiersFromXState(event.xmotion.state);
             host->SendMouseMoveEvent(mouse_event, false);
             break;
         }
@@ -6862,13 +7014,30 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 view->creationFailed = true;
                 return;
             }
+            if (!view->createX11InputChild(
+                x11win->display,
+                x11win->window,
+                x,
+                y,
+                width,
+                height,
+                "CEF"
+            )) {
+                fprintf(stderr, "WARNING: WGPUView will use drawing-window input for CEF\n");
+            }
 
             {
                 std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
                 g_x11_child_window_to_parent_id[view->xWindow] = x11win->windowId;
+                if (view->inputXWindow) {
+                    g_x11_child_window_to_parent_id[view->inputXWindow] = x11win->windowId;
+                }
             }
 
             XMapRaised(x11win->display, view->xWindow);
+            if (view->inputXWindow) {
+                XMapRaised(x11win->display, view->inputXWindow);
+            }
             view->resize(frame, "");
 
             if (startPassthrough) {
@@ -7007,6 +7176,9 @@ ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView* abstractView) {
     if (view && view->xWindow) {
         std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
         g_x11_child_window_to_parent_id.erase(view->xWindow);
+        if (view->inputXWindow) {
+            g_x11_child_window_to_parent_id.erase(view->inputXWindow);
+        }
     }
     dispatch_sync_main_void([&]() {
         abstractView->remove();
