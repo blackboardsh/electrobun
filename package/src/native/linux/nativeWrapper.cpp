@@ -6444,6 +6444,23 @@ ELECTROBUN_EXPORT void hideWindow(void* window) {
     }
 }
 
+ELECTROBUN_EXPORT bool isWindowVisible(void* window) {
+    if (!window) return false;
+
+    if (isCEFAvailable()) {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win || !x11win->display || !x11win->window) return false;
+
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(x11win->display, x11win->window, &attrs) == 0) {
+            return false;
+        }
+        return attrs.map_state == IsViewable;
+    }
+
+    return gtk_widget_get_visible(GTK_WIDGET(window));
+}
+
 // Cross-platform compatible function for Linux - return dummy style mask
 ELECTROBUN_EXPORT uint32_t getWindowStyle(bool borderless, bool titled, bool closable, bool miniaturizable,
                         bool resizable, bool unifiedTitleAndToolbar, bool fullScreen,
