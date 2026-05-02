@@ -357,10 +357,15 @@ export const windowTests = [
   }), 
  
   defineTest({
-    name: "Window visibleOnAllWorkspaces",
+    name: "Window visibleOnAllWorkspaces (macOS)",
     category: "BrowserWindow",
-    description: "Test window visible on all workspaces behavior",
+    description: "Test macOS Spaces visible-on-all-workspaces behavior",
     async run({ createWindow, log }) {
+      if (process.platform !== "darwin") {
+        log(`Skipping macOS-specific visibleOnAllWorkspaces behavior on ${process.platform}`);
+        return;
+      }
+
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Visible On All Workspaces Test",
