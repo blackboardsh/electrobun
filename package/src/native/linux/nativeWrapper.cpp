@@ -958,9 +958,15 @@ public:
         x11_window_ = x11_window;
         display_ = display;
         osr_enabled_ = true;
-        osr_width_ = width;
-        osr_height_ = height;
+        osr_width_ = std::max(1, width);
+        osr_height_ = std::max(1, height);
         printf("CEF: OSR enabled for window %lu, size %dx%d\n", x11_window, width, height);
+    }
+
+    void UpdateOSRSize(int width, int height) {
+        if (!osr_enabled_) return;
+        osr_width_ = std::max(1, width);
+        osr_height_ = std::max(1, height);
     }
     
     void SendMouseEvent(const CefMouseEvent& event, bool mouse_down, int click_count) {
@@ -2012,6 +2018,84 @@ private:
 
 // Initialize static debounce timestamp for ctrl+click handling
 double ElectrobunClient::lastCtrlClickTime = 0;
+
+static std::mutex g_osrClientsMutex;
+static std::map<uint32_t, CefRefPtr<ElectrobunClient>> g_osrClientsByWindowId;
+
+static void registerOSRClientForWindow(uint32_t windowId, CefRefPtr<ElectrobunClient> client) {
+    if (!windowId) return;
+    std::lock_guard<std::mutex> lock(g_osrClientsMutex);
+    if (client) {
+        g_osrClientsByWindowId[windowId] = client;
+    } else {
+        g_osrClientsByWindowId.erase(windowId);
+    }
+}
+
+static CefRefPtr<ElectrobunClient> getOSRClientForWindow(uint32_t windowId) {
+    std::lock_guard<std::mutex> lock(g_osrClientsMutex);
+    auto it = g_osrClientsByWindowId.find(windowId);
+    return it != g_osrClientsByWindowId.end() ? it->second : nullptr;
+}
+
+static void forwardX11EventToOSRClient(const XEvent& event, Display* display, Window window, CefRefPtr<ElectrobunClient> client) {
+    if (!client) return;
+
+    CefRefPtr<CefBrowser> browser;
+    {
+        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+        browser = client->GetBrowser();
+    }
+    if (!browser) return;
+
+    auto host = browser->GetHost();
+
+    switch (event.type) {
+        case ButtonPress:
+        case ButtonRelease: {
+            CefMouseEvent mouse_event;
+            mouse_event.x = event.xbutton.x;
+            mouse_event.y = event.xbutton.y;
+            mouse_event.modifiers = 0;
+
+            if (event.xbutton.button == Button4 || event.xbutton.button == Button5) {
+                if (event.type == ButtonPress) {
+                    int deltaY = event.xbutton.button == Button4 ? 120 : -120;
+                    host->SendMouseWheelEvent(mouse_event, 0, deltaY);
+                }
+                break;
+            }
+
+            cef_mouse_button_type_t button_type = MBT_LEFT;
+            if (event.xbutton.button == Button3) button_type = MBT_RIGHT;
+            else if (event.xbutton.button == Button2) button_type = MBT_MIDDLE;
+
+            host->SendMouseClickEvent(mouse_event, button_type, event.type == ButtonRelease, 1);
+            break;
+        }
+        case MotionNotify: {
+            CefMouseEvent mouse_event;
+            mouse_event.x = event.xmotion.x;
+            mouse_event.y = event.xmotion.y;
+            mouse_event.modifiers = 0;
+            host->SendMouseMoveEvent(mouse_event, false);
+            break;
+        }
+        case FocusIn:
+        case FocusOut:
+            host->SetFocus(event.type == FocusIn);
+            break;
+        case EnterNotify:
+            host->SetFocus(true);
+            if (display && window) {
+                XSetInputFocus(display, window, RevertToParent, CurrentTime);
+            }
+            break;
+        case Expose:
+            host->Invalidate(PET_VIEW);
+            break;
+    }
+}
 
 // Initialize CEF for Linux
 bool initializeCEF() {
@@ -3650,6 +3734,7 @@ public:
     // X11 event handling for OSR windows is now handled via processX11EventsForOSR
     Window osr_x11_window_ = 0;
     Display* osr_display_ = nullptr;
+    uint32_t osr_window_id_ = 0;
     
     CEFWebViewImpl(uint32_t webviewId,
                    GtkWidget* window,
@@ -3698,6 +3783,10 @@ public:
             eventData->active = false;  // Stop the timer
             delete eventData;
             osr_event_data_ = nullptr;
+        }
+        if (osr_window_id_) {
+            registerOSRClientForWindow(osr_window_id_, nullptr);
+            osr_window_id_ = 0;
         }
     }
     
@@ -3807,6 +3896,9 @@ public:
             
             // For transparent OSR windows, setup event handling
             if (this->parentTransparent && x11win && x11win->transparent) {
+                this->osr_window_id_ = x11win->windowId;
+                registerOSRClientForWindow(x11win->windowId, this->client);
+
                 // Create a data structure to pass to the timer callback
                 auto* eventData = new OSREventData{x11win->windowId, this->client, true};
                 
@@ -4235,13 +4327,20 @@ public:
             if (adjustedFrame.width < 0) adjustedFrame.width = 0;
             if (adjustedFrame.height < 0) adjustedFrame.height = 0;
             
-            // Notify CEF that the browser was resized
-            browser->GetHost()->WasResized();
-            
-            // Sync CEF browser window position using adjusted frame coordinates
-            syncCEFPositionWithFrame(adjustedFrame);
-            
-            visualBounds = adjustedFrame;
+            if (parentTransparent && client) {
+                client->UpdateOSRSize(adjustedFrame.width, adjustedFrame.height);
+                browser->GetHost()->WasResized();
+                browser->GetHost()->Invalidate(PET_VIEW);
+                visualBounds = adjustedFrame;
+            } else {
+                // Notify CEF that the browser was resized
+                browser->GetHost()->WasResized();
+
+                // Sync CEF browser window position using adjusted frame coordinates
+                syncCEFPositionWithFrame(adjustedFrame);
+
+                visualBounds = adjustedFrame;
+            }
         }
         maskJSON = masksJson ? masksJson : "";
         
@@ -4872,119 +4971,12 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
     Display* display = x11win->display;
     Window window = x11win->window;
     
-    // Process ALL pending X11 events to avoid missing any
     XEvent event;
-    int events_processed = 0;
-    
-    // Sync to ensure we get all events
-    XSync(display, False);
-    
-    while (XPending(display) > 0) {
-        XNextEvent(display, &event);
-        events_processed++;
-        
-        if (event.xany.window != window) continue;
-        
-        switch (event.type) {
-            case ButtonPress:
-            case ButtonRelease: {
-                CefMouseEvent mouse_event;
-                mouse_event.x = event.xbutton.x;
-                mouse_event.y = event.xbutton.y;
-                mouse_event.modifiers = 0; // TODO: Convert X11 modifiers
-                
-                // Forward to CEF with proper protection
-                if (client) {
-                    CefRefPtr<CefBrowser> browser;
-                    {
-                        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-                        browser = client->GetBrowser();
-                    }
-                    
-                    if (browser) {
-                        auto host = browser->GetHost();
-                    
-                    // Determine mouse button type
-                    cef_mouse_button_type_t button_type = MBT_LEFT;
-                    if (event.xbutton.button == Button1) button_type = MBT_LEFT;
-                    else if (event.xbutton.button == Button3) button_type = MBT_RIGHT;
-                    else if (event.xbutton.button == Button2) button_type = MBT_MIDDLE;
-                    
-                    bool mouse_up = (event.type == ButtonRelease);
-                    
-                    // Send the mouse click event
-                    host->SendMouseClickEvent(mouse_event, button_type, mouse_up, 1);
-                    
-                    // Debug: only log button presses for now
-                    if (event.type == ButtonPress) {
-                        printf("CEF OSR: Click at (%d, %d)\n", event.xbutton.x, event.xbutton.y);
-                    }
-                    }
-                }
-                break;
-            }
-            case MotionNotify: {
-                CefMouseEvent mouse_event;
-                mouse_event.x = event.xmotion.x;
-                mouse_event.y = event.xmotion.y;
-                mouse_event.modifiers = 0;
-                
-                // Forward to CEF with proper protection
-                if (client) {
-                    CefRefPtr<CefBrowser> browser;
-                    {
-                        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-                        browser = client->GetBrowser();
-                    }
-                    
-                    if (browser) {
-                        auto host = browser->GetHost();
-                        host->SendMouseMoveEvent(mouse_event, false);
-                    }
-                }
-                break;
-            }
-            case FocusIn:
-            case FocusOut: {
-                // Handle focus events for OSR windows
-                if (client) {
-                    CefRefPtr<CefBrowser> browser;
-                    {
-                        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-                        browser = client->GetBrowser();
-                    }
-                    
-                    if (browser) {
-                        auto host = browser->GetHost();
-                        host->SetFocus(event.type == FocusIn);
-                    }
-                }
-                break;
-            }
-            case EnterNotify: {
-                // Focus window on mouse enter for better responsiveness
-                if (client) {
-                    CefRefPtr<CefBrowser> browser;
-                    {
-                        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-                        browser = client->GetBrowser();
-                    }
-                    
-                    if (browser) {
-                        auto host = browser->GetHost();
-                        host->SetFocus(true);
-                        
-                        // Also ensure the X11 window has focus
-                        XSetInputFocus(display, window, RevertToParent, CurrentTime);
-                    }
-                }
-                break;
-            }
-            case LeaveNotify: {
-                // Optional: Could unfocus on leave, but keeping focus is usually better
-                break;
-            }
-        }
+    long eventMask = ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
+                     FocusChangeMask | EnterWindowMask | LeaveWindowMask |
+                     ExposureMask;
+    while (XCheckWindowEvent(display, window, eventMask, &event)) {
+        forwardX11EventToOSRClient(event, display, window, client);
     }
     
     XFlush(display);
@@ -5792,6 +5784,13 @@ gboolean process_x11_events(gpointer data) {
             // CEF child windows should NEVER be in g_x11_window_to_id, but if they are, ignore them
             if (event.xany.window != x11win->window) {
                 continue;
+            }
+
+            if (x11win->transparent) {
+                CefRefPtr<ElectrobunClient> osrClient = getOSRClientForWindow(windowId);
+                if (osrClient) {
+                    forwardX11EventToOSRClient(event, x11win->display, x11win->window, osrClient);
+                }
             }
             
             switch (event.type) {
