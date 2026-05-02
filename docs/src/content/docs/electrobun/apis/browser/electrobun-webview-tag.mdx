@@ -48,6 +48,54 @@ title: "Electrobun Webview Tag"
 
               <p>Because Electrobun's webview tag implementation uses a div anchor and then positions a separate isolated BrowserView above the parent BrowserView there are some interesting edge cases where you may want to click on the parent document or do things within the parent DOM, so Electrobun provides various special methods for handling those situations. For example ways to mirror a screenshot of the webview tag's contents to the host's anchor and hide it or stream an image of the contents.</p>
 
+              <h2>Mask Selectors</h2>
+
+              <p>Because the embedded webview is a separate native layer painted on top of the host page, normal DOM stacking (`z-index`, absolute positioning, fixed headers, dropdown menus, modals) cannot draw over it — the OOPIF always wins. Mask selectors solve this. You give the webview tag a list of CSS selectors that match elements in the host page, and Electrobun cuts holes in the embedded webview wherever those elements land, every frame. The host page paints through the holes, and clicks/scrolls in those regions hit the host element instead of the embedded content.</p>
+
+              <p>This is what makes interactive host-page UI on top of an OOPIF possible: tooltips, autocomplete popovers, context menus, sidebars that overlap the webview, drag handles, custom title bars — anything that needs to visually and interactively sit above the embedded content.</p>
+
+              <p>Selectors are re-evaluated on every layout sync (`document.querySelectorAll` per selector), so as your overlay elements move, resize, mount, or unmount, the holes follow them automatically. There is no need to manually notify the webview when an overlay's geometry changes.</p>
+
+              <p>You can declare selectors statically with the `masks` attribute (comma-separated), or add and remove them imperatively at runtime:</p>
+
+              <div class="code-block">
+                
+```html
+{/* Declarative: comma-separated CSS selectors */}
+<electrobun-webview
+  src="https://electrobun.dev"
+  masks=".host-tooltip, #app-sidebar, .dropdown-menu"
+></electrobun-webview>
+
+{/* Host-page overlay elements that will punch through the webview */}
+<div class="host-tooltip">I render and receive clicks on top of the OOPIF</div>
+<div id="app-sidebar">...</div>
+```
+
+              </div>
+
+              <div class="code-block">
+                
+```javascript
+const webview = document.querySelector('electrobun-webview');
+
+// Add a selector at runtime — any matching element starts overlaying immediately
+webview.addMaskSelector('.context-menu');
+
+// Remove it when the overlay is no longer needed
+webview.removeMaskSelector('.context-menu');
+```
+
+              </div>
+
+              <p><strong>Notes:</strong></p>
+              <ul>
+                <li>A selector can match zero, one, or many elements — every match becomes its own hole.</li>
+                <li>Holes use each matched element's bounding rect, so transforms, rounded corners, and partial transparency on the overlay itself are not reflected in the cutout shape.</li>
+                <li>Invalid selectors are silently ignored rather than throwing.</li>
+                <li>The set of active selectors is exposed as the `maskSelectors` property if you need to inspect or iterate it.</li>
+              </ul>
+
               <h2>Properties and Attributes</h2>
 
               <h3>src</h3>
@@ -118,6 +166,14 @@ title: "Electrobun Webview Tag"
               <h3>passthroughEnabled</h3>
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> Enables or disables mouse and touch events to pass through to underlying elements.</p>
+
+              <h3>masks</h3>
+              <p><strong>Type:</strong> `string` (comma-separated CSS selectors)<br />
+              <strong>Description:</strong> Initial set of host-page CSS selectors to mask out of the embedded webview. Matching elements punch interactive holes through the OOPIF so host-page UI can render and receive input on top of it. See <a href="#mask-selectors">Mask Selectors</a> for the full explanation.</p>
+
+              <h3>maskSelectors</h3>
+              <p><strong>Type:</strong> `Set<string>`<br />
+              <strong>Description:</strong> Runtime set of active mask selectors. Populated from the `masks` attribute on init and mutated by `addMaskSelector` / `removeMaskSelector`. Read it to inspect what is currently masked; prefer the methods over mutating the set directly so a sync is triggered.</p>
 
               <h3>hidden</h3>
               <p><strong>Type:</strong> `boolean`<br />
@@ -227,6 +283,14 @@ document.querySelector('electrobun-webview').executeJavascript(
               <h3>toggleHidden</h3>
               <p><strong>Parameters:</strong> `value?: boolean`<br />
               <strong>Description:</strong> Toggles the visibility of the webview.</p>
+
+              <h3>addMaskSelector</h3>
+              <p><strong>Parameters:</strong> `selector: string`<br />
+              <strong>Description:</strong> Adds a CSS selector to the active mask set and forces an immediate sync so any matching host-page elements start punching through the embedded webview right away. Safe to call repeatedly with the same selector — the underlying set deduplicates. See <a href="#mask-selectors">Mask Selectors</a>.</p>
+
+              <h3>removeMaskSelector</h3>
+              <p><strong>Parameters:</strong> `selector: string`<br />
+              <strong>Description:</strong> Removes a previously added selector from the active mask set and forces an immediate sync. The selector string must match exactly what was passed to `addMaskSelector` (or what came from the `masks` attribute). No-op if the selector is not in the set.</p>
 
               <h2>Events</h2>
 
