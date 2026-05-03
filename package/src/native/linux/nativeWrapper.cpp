@@ -1368,11 +1368,17 @@ public:
             CefRefPtr<CefBrowser> browser;
             gint64 start_time;
             int trigger_count;
+            Window parent_window;
+            int last_parent_width;
+            int last_parent_height;
         };
-        
+
         auto* interval_data = new LayoutIntervalData{
-            browser, 
+            browser,
             g_get_monotonic_time(), // microseconds since arbitrary point
+            0,
+            parent_window_handle_,
+            0,
             0
         };
         
@@ -1392,8 +1398,27 @@ public:
                 if (cefWindow && cefWindow != 0x1) {
                     
                     
-                    // Get window dimensions for mouse event coordinates
                     Display* display = gdk_x11_get_default_xdisplay();
+
+                    // Check if parent window was resized by WM (e.g. tiling WM)
+                    // and sync CEF browser window to match
+                    if (lid->parent_window) {
+                        XWindowAttributes parent_attrs;
+                        if (XGetWindowAttributes(display, lid->parent_window, &parent_attrs) != 0) {
+                            if (parent_attrs.width != lid->last_parent_width ||
+                                parent_attrs.height != lid->last_parent_height) {
+                                lid->last_parent_width = parent_attrs.width;
+                                lid->last_parent_height = parent_attrs.height;
+                                // Resize CEF window to match parent
+                                XMoveResizeWindow(display, (Window)cefWindow,
+                                    0, 0, parent_attrs.width, parent_attrs.height);
+                                XFlush(display);
+                                lid->browser->GetHost()->WasResized();
+                            }
+                        }
+                    }
+
+                    // Get window dimensions for mouse event coordinates
                     XWindowAttributes attrs;
                     if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) != 0) {
                         // Send mouse move event to trigger layout recalculation
@@ -1401,7 +1426,7 @@ public:
                         moveEvent.x = attrs.width / 2;
                         moveEvent.y = attrs.height / 2;
                         lid->browser->GetHost()->SendMouseMoveEvent(moveEvent, false);
-                        
+
                         // Send minimal scroll event
                         CefMouseEvent scrollEvent;
                         scrollEvent.x = attrs.width / 2;
