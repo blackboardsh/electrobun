@@ -151,6 +151,7 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 
 // Forward declaration for partition context management
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier);
+static void releaseContextForPartition(const std::string& partition);
 
 
 // Webview and tray callback types are defined in shared/callbacks.h
@@ -2558,6 +2559,7 @@ public:
     std::string electrobunPreloadScript;
     std::string customPreloadScript;
     std::string partition;
+    bool partitionContextReleased = false;
     
     // Navigation state tracking
     bool lastNavigationWasBlocked = false;
@@ -2737,11 +2739,22 @@ public:
     }
     
     ~WebKitWebViewImpl() {
+        releasePartitionContextIfNeeded();
+
         // Don't destroy widgets here - they should be destroyed in remove()
         // Just clean up the manager
         if (manager) {
             g_object_unref(manager);
         }
+    }
+
+    void releasePartitionContextIfNeeded() {
+        if (partitionContextReleased) {
+            return;
+        }
+
+        partitionContextReleased = true;
+        releaseContextForPartition(partition);
     }
     
     void loadURL(const char* urlString) override {
@@ -2817,6 +2830,8 @@ public:
                 return G_SOURCE_REMOVE;
             }, widget_to_destroy);
         }
+
+        releasePartitionContextIfNeeded();
         
     }
     
@@ -5760,6 +5775,12 @@ dispatch_sync_main_void(Func&& func) {
 
 // Store for partition-specific contexts (for session storage synchronization)
 static std::map<std::string, WebKitWebContext*> g_partitionContexts;
+// Non-persistent WebKit partitions should share while live, then reset after the last webview closes.
+static std::map<std::string, size_t> g_ephemeralPartitionContextRefCounts;
+
+static bool isPersistentWebKitPartition(const std::string& partition) {
+    return partition.compare(0, 8, "persist:") == 0;
+}
 
 // Helper function to automatically set window icon from standard location
 static void autoSetWindowIcon(void* window) {
@@ -5847,9 +5868,13 @@ static void setX11WindowIcon(X11Window* x11win, GdkPixbuf* pixbuf) {
 // Get or create a WebKit context for a partition
 static WebKitWebContext* getContextForPartition(const char* partitionIdentifier) {
     std::string partition = partitionIdentifier ? partitionIdentifier : "";
+    bool isEphemeralPartition = !partition.empty() && !isPersistentWebKitPartition(partition);
 
     auto it = g_partitionContexts.find(partition);
     if (it != g_partitionContexts.end()) {
+        if (isEphemeralPartition) {
+            g_ephemeralPartitionContextRefCounts[partition]++;
+        }
         return it->second;
     }
 
@@ -5858,11 +5883,8 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
     if (partition.empty()) {
         // Default: use default context
         context = webkit_web_context_get_default();
-        g_object_ref(context); // Keep consistent reference counting
     } else {
-        bool isPersistent = partition.substr(0, 8) == "persist:";
-
-        if (isPersistent) {
+        if (isPersistentWebKitPartition(partition)) {
             std::string partitionName = partition.substr(8);
 
             // Build paths with identifier/channel structure (consistent with CLI and updater)
@@ -5903,9 +5925,39 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
         webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
         
         g_partitionContexts[partition] = context;
+        if (isEphemeralPartition) {
+            g_ephemeralPartitionContextRefCounts[partition] = 1;
+        }
     }
 
     return context;
+}
+
+static void releaseContextForPartition(const std::string& partition) {
+    if (partition.empty() || isPersistentWebKitPartition(partition)) {
+        return;
+    }
+
+    auto refIt = g_ephemeralPartitionContextRefCounts.find(partition);
+    if (refIt == g_ephemeralPartitionContextRefCounts.end()) {
+        return;
+    }
+
+    if (refIt->second > 1) {
+        refIt->second--;
+        return;
+    }
+
+    g_ephemeralPartitionContextRefCounts.erase(refIt);
+
+    auto contextIt = g_partitionContexts.find(partition);
+    if (contextIt != g_partitionContexts.end()) {
+        WebKitWebContext* context = contextIt->second;
+        g_partitionContexts.erase(contextIt);
+        if (context) {
+            g_object_unref(context);
+        }
+    }
 }
 
 extern "C" {
@@ -9543,6 +9595,15 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
                 g_pendingResizeQueue.remove(webview.get());
             }
         }
+
+        dispatch_sync_main_void([container]() {
+            for (auto& webview : container->abstractViews) {
+                if (auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(webview.get())) {
+                    webKitView->releasePartitionContextIfNeeded();
+                }
+            }
+        });
+
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
         for (auto& webview : container->abstractViews) {
             if (webview) {
