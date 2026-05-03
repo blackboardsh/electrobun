@@ -15,7 +15,7 @@ export const windowEventTests = [
         "A test window will open",
         "1. Drag the window to detect move event",
         "2. Resize the window by dragging edges/corners",
-        "Test passes when both events are detected",
+        "After both events are detected, close the window to pass the test",
       ]);
 
       log("Opening test window for move and resize event detection");
@@ -23,6 +23,7 @@ export const windowEventTests = [
       await new Promise<void>((resolve, reject) => {
         let moveDetected = false;
         let resizeDetected = false;
+        let completionLogged = false;
         let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
@@ -80,11 +81,9 @@ export const windowEventTests = [
         });
 
         function checkComplete() {
-          if (moveDetected && resizeDetected) {
-            log("Both events detected - closing in 2 seconds");
-            setTimeout(() => {
-              win.close();
-            }, 2000);
+          if (moveDetected && resizeDetected && !completionLogged) {
+            completionLogged = true;
+            log("Both events detected - close the window when done");
           }
         }
 
@@ -114,7 +113,7 @@ export const windowEventTests = [
       "A test window will open",
       "1. Focus another window to detect blur event",
       "2. Focus the test window to detect focus event",
-      "Test passes when both events are detected",
+      "After both events are detected, close the window to pass the test",
     ]);
 
     log("Opening test window for blur and focus event detection");
@@ -122,6 +121,7 @@ export const windowEventTests = [
     await new Promise<void>((resolve, reject) => {
       let blurDetected = false;
       let focusDetected = false;
+      let completionLogged = false;
       let winRef: BrowserWindow<any> | null = null;
 
       const rpc = BrowserView.defineRPC<any>({
@@ -148,6 +148,13 @@ export const windowEventTests = [
       winRef.setAlwaysOnTop(true);
       const win = winRef;
 
+      function checkComplete() {
+        if (blurDetected && focusDetected && !completionLogged) {
+          completionLogged = true;
+          log("Both events detected - close the window when done");
+        }
+      }
+
       win.on("blur", () => {
         if (!blurDetected) {
           blurDetected = true;
@@ -159,11 +166,7 @@ export const windowEventTests = [
               focusDetected = true;
               log(`Focus event detected`);
               win.webview.rpc?.send.updateStatus({ blurDetected, focusDetected });
-
-              log("Both events detected - closing in 2 seconds");
-              setTimeout(() => {
-                win.close();
-              }, 2000);
+              checkComplete();
             }
           });
         }
