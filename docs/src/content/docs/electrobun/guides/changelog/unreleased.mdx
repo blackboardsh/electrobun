@@ -3,6 +3,17 @@ title: "Unreleased"
 ---
               <p>Notes for the next stable release.</p>
 
+## Highlights
+
+              <ul>
+                <li><strong>Better docs site</strong> at <a href="https://docs.electrobunny.ai">docs.electrobunny.ai</a>. Docs now live in the git repo as Markdown, built with <a href="https://starlight.astro.build/">Astro Starlight</a>.</li>
+                <li><strong>CEF partition migration</strong> with a clean cache reset, and CEF bumped from 145 to 147.</li>
+                <li><strong>WGPU and transparent-window perf wins on Windows</strong> via the new DirectComposition compositor (~48 FPS → ~1729 FPS on the bridged path).</li>
+                <li><strong>20 PRs merged from the community.</strong> Thank you to everyone who pitched in.</li>
+                <li><strong>Stabilized lots of things</strong> — frameless windows on Windows, Linux WebKitGTK, BrowserView lifetimes, build tooling, error reporting.</li>
+                <li><strong>New unofficial Raspberry Pi fork</strong> <a href="https://github.com/kortexa-ai/electrobun/tree/kortexa/linux-wpe">kortexa-ai/electrobun (linux-wpe)</a> — follow <a href="https://x.com/francip/status/2050149256053539059?s=20">@francip</a> who's leading the effort. If you want Electrobun on Pis across the world, go help out.</li>
+              </ul>
+
 ## Migration Notes
 
 ### End users will be logged out of any sites once after upgrading
@@ -11,7 +22,7 @@ title: "Unreleased"
 
               <p>The wipe is silent (no dialog), runs once per cache-format bump, and only affects the CEF cache folder. WebView2 storage and your own app data are untouched.</p>
 
-              <p>This was necessary to recover cleanly from a CEF major-version jump that previously surfaced "Profile error occurred" dialogs on launch when an existing CEF cache from an older version was reused.</p>
+              <p>This was necessary to recover cleanly from the CEF bump from 145 to 147, which previously surfaced "Profile error occurred" dialogs on launch when an existing CEF cache from an older version was reused.</p>
 
               <p>Future Electrobun releases only repeat this behavior when a similar incompatibility appears — routine CEF version bumps don't trigger another wipe.</p>
 
@@ -23,7 +34,7 @@ title: "Unreleased"
                 <li><strong>Native <code>.icon</code> support for macOS Liquid Glass.</strong> When <code>mac.icons</code> points to a <code>.icon</code> file from Icon Composer, the build pipeline runs <code>actool</code> to produce <code>Assets.car</code> for Liquid Glass on macOS 26+, with an <code>.icns</code> fallback for older versions. Existing <code>.iconset</code> → <code>iconutil</code> builds are unchanged. Both icon tools now check exit codes so broken icon builds fail fast instead of producing icon-less apps.</li>
                 <li><strong><code>BrowserWindow.hide()</code>.</strong> First-class hide API on <code>BrowserWindow</code> with native bindings on all three platforms — no more offscreen-positioning hacks.</li>
                 <li><strong>Linux desktop integration.</strong> Apps now drop a <code>.desktop</code> file into the XDG applications directory so they appear in the system app menu and launcher.</li>
-                <li>Bumped Bun to 1.3.11 and bumped CEF, with improved handling of the new CEF permissions model.</li>
+                <li>Bumped Bun to 1.3.11 and CEF from 145 to 147, with improved handling of the new CEF permissions model.</li>
                 <li>Display full error messages when <code>electrobun build</code> or <code>electrobun dev</code> fails, instead of swallowing the underlying output.</li>
                 <li>Renamed <code>Updater.localInfo.getLocallocalInfo()</code> to <code>getLocalInfo()</code> (the documented name). The old name is kept as a deprecation alias.</li>
                 <li>Exported the <code>RESOURCES_FOLDER</code> constant from <code>Electrobun.PATHS</code>.</li>
