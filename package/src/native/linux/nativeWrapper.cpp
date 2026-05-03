@@ -2560,6 +2560,8 @@ public:
     std::string customPreloadScript;
     std::string partition;
     bool partitionContextReleased = false;
+    bool isTransparent = false;
+    bool isHidden = false;
     
     // Navigation state tracking
     bool lastNavigationWasBlocked = false;
@@ -2755,6 +2757,27 @@ public:
 
         partitionContextReleased = true;
         releaseContextForPartition(partition);
+    }
+
+    void applyVisibilityState() {
+        if (!webview) {
+            return;
+        }
+
+        GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
+        bool shouldShow = !isTransparent && !isHidden;
+
+        if (shouldShow) {
+            if (wrapper) {
+                gtk_widget_show(wrapper);
+            }
+            gtk_widget_show(webview);
+        } else {
+            gtk_widget_hide(webview);
+            if (wrapper) {
+                gtk_widget_hide(wrapper);
+            }
+        }
     }
     
     void loadURL(const char* urlString) override {
@@ -2984,20 +3007,13 @@ public:
     }
     
     void setHidden(bool hidden) override {
-        if (webview) {
-            if (hidden) {
-                gtk_widget_hide(webview);
-            } else {
-                gtk_widget_show(webview);
-            }
-        }
+        isHidden = hidden;
+        applyVisibilityState();
     }
     
     void setTransparent(bool transparent) override {
-        // Use the same approach as setHidden: simple GTK widget opacity
-        if (webview) {
-            gtk_widget_set_opacity(webview, transparent ? 0.0 : 1.0);
-        }
+        isTransparent = transparent;
+        applyVisibilityState();
     }
     
     void setPassthrough(bool enable) override {
@@ -4977,6 +4993,7 @@ public:
 
                 // Add webview to wrapper at 0,0
                 gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
+                g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
@@ -5002,12 +5019,13 @@ public:
                 gtk_widget_set_margin_top(wrapper, (int)y);
 
                 gtk_widget_show(wrapper);
-
-                // Store wrapper reference
-                g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
             }
             
-            gtk_widget_show(view->widget);
+            if (auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(view.get())) {
+                webKitView->applyVisibilityState();
+            } else {
+                gtk_widget_show(view->widget);
+            }
         }
     }
     
