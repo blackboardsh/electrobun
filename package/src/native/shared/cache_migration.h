@@ -54,7 +54,10 @@ namespace electrobun {
 //   - Any other situation where stale state would degrade the user experience
 //     in a way Chromium's own forward-migration can't handle.
 // Bumping invalidates cookies/logins/site data for all users on first launch.
-constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 1;
+//   v2: partitions moved from <root>/<name> to <root>/partitions/<name> to
+//       avoid case-insensitive collisions with Chromium's auto-created
+//       <root>/Default profile folder.
+constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 2;
 
 inline const char* cacheSentinelFilename() {
     return ".electrobun_cef_cache_version";
