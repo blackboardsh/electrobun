@@ -3937,24 +3937,23 @@ public:
     // Override passthrough implementation for CEF
     void setPassthrough(bool enable) override {
         AbstractView::setPassthrough(enable); // Call base implementation to set the flag
-        
+
         if (!browser) {
             return;
         }
-        
+
         HWND browserHwnd = browser->GetHost()->GetWindowHandle();
         if (!browserHwnd) {
             return;
         }
-        
-        LONG exStyle = GetWindowLong(browserHwnd, GWL_EXSTYLE);
-        if (enable) {
-            // Make the window transparent to mouse clicks
-            SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
-        } else {
-            // Remove mouse transparency
-            SetWindowLong(browserHwnd, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
-        }
+
+        // Why: WS_EX_TRANSPARENT only suppresses hit-testing for layered
+        // top-level windows. The CEF browser HWND is a non-layered child of
+        // the container, so the OS ignores that bit and clicks still land on
+        // the browser. Disabling the HWND instead causes the OS to skip its
+        // entire subtree during input dispatch, so clicks fall up to the
+        // container — which matches the WGPUView passthrough behavior.
+        EnableWindow(browserHwnd, enable ? FALSE : TRUE);
     }
     
     // Override hidden implementation for CEF
