@@ -3,7 +3,7 @@ title: "What is Electrobun?"
 ---
   
   <p>Electrobun is a desktop application framework that lets you build ultra fast, tiny, and cross-platform applications using TypeScript. It combines the best of native performance with web development simplicity.</p>
-  <h2>The Problem</h2>
+## The Problem
   
   <p>Traditional desktop app frameworks force you to choose between developer experience and app performance:</p>
   
@@ -12,7 +12,7 @@ title: "What is Electrobun?"
     <li><strong>Native development:</strong> Great performance but complex setup, platform-specific code, and limited web technology integration</li>
     <li><strong>Tauri:</strong> Better than Electron but still large updates and you have to learn Rust</li>
   </ul>
-  <h2>The Solution</h2>
+## The Solution
   <p>Electrobun provides a third option that doesn't compromise:</p>
   <ul>
     <li><strong>Ultra-small bundles:</strong> ~14MB compressed (90%+ smaller than Electron)</li>
@@ -23,7 +23,7 @@ title: "What is Electrobun?"
     <li><strong>Native performance:</strong> Zig bindings with Bun runtime for maximum speed</li>
     <li><strong>Optional CEF:</strong> bundle CEF (Chromium) when cross-platform consistency matters most.</li>
   </ul>
-  <h2>Performance Comparison</h2>
+## Performance Comparison
   <table class="comparison-table">
     <thead>
       <tr>
@@ -60,29 +60,29 @@ title: "What is Electrobun?"
       </tr>
     </tbody>
   </table>
-  <h2>Technical Architecture</h2>
+## Technical Architecture
   <p>Electrobun achieves its performance through a carefully designed architecture:</p>
-  <h3>Zig, and Native Bindings</h3>
+### Zig, and Native Bindings
   <p>Native functionality like window management, system trays, and app menus writtin in C++ and Objc</p>
-  <h3>Bun Runtime</h3>
+### Bun Runtime
   <p>The main process runs on Bun, providing lightning-fast Typescript execution and built-in bundling without the overhead of Node.js and V8.</p>
-  <h3>System WebView</h3>
+### System WebView
   <p>Instead of distributing Chromium, By default Electrobun uses your system's native WebView (WebKit on macOS, Edge WebView2 on Windows, WebKitGTK on Linux).</p>
-  <h3>Custom Update System</h3>
+### Custom Update System
   <p>Binary diff updates using a SIMD optimized BSDIFF implementation written in zig to allow for incredibly small update patches - often just kilobytes instead of megabytes.</p>
-  <h3>ZSTD self-extracting distributables</h3>
+### ZSTD self-extracting distributables
   <p>The Electrobun cli bundles your app, then compresses it with state of the art compression making initial downloads as small as possible.</p>
-  <h3>Custom OOPIF Implementation</h3>
+### Custom OOPIF Implementation
   <p>Use OOPIFs (super iframes) in your html for secure, isolated, webviews across browser engines and platforms.</p>
-  <h2>Key Benefits</h2>
-  <h3>🚀 Faster Development</h3>
+## Key Benefits
+### 🚀 Faster Development
   <ul>
     <li>Fast build times - Electrobun cli uses pre-built binaries for your target platform</li>
     <li>Use any web framework (React, SolidJS, Vue, Svelte, etc.)</li>
     <li>TypeScript throughout - no context switching</li>
     <li>Built-in bundling and optimization</li>
   </ul>
-  <h3>📦 Better Distribution</h3>
+### 📦 Better Distribution
   <ul>
     <li>14MB bundles vs 150MB+ with Electron</li>
     <li>Kilobyte updates instead of megabyte downloads</li>
@@ -90,21 +90,21 @@ title: "What is Electrobun?"
     <li>Cross-platform builds from any OS</li>
     <li>Built-in ZSTD self-extractor</li>
   </ul>
-  <h3>⚡ Superior Performance</h3>
+### ⚡ Superior Performance
   <ul>
     <li>Sub-50ms startup times</li>
     <li>Minimal memory footprint</li>
     <li>Native-feeling UI responsiveness</li>
     <li>Battery-efficient operation</li>
   </ul>
-  <h3>🔐 Security First</h3>
+### 🔐 Security First
   <ul>
     <li>Process isolation by default</li>
     <li>Secure, encrypted, and typed RPC between processes</li>
     <li>custom views:// schema for loading bundled assets in webviews</li>
     <li>Minimal attack surface</li>
   </ul>
-  <h2>When to Use Electrobun</h2>
+## When to Use Electrobun
   <p>Electrobun is perfect for:</p>
   <ul>
     <li><strong>Startup MVPs:</strong> Ship fast, iterate quickly with small updates</li>
@@ -114,5 +114,5 @@ title: "What is Electrobun?"
     <li><strong>Bandwidth-conscious apps:</strong> Frequent updates without user friction</li>
     <li><strong>Multi-tab web browsers</strong>Build multi-tab experiences and mix CEF and Webkit webviews</li>
   </ul>
-  <h2>Getting Started</h2>
+## Getting Started
   <p>Ready to build your first Electrobun app? Follow our <a href="/electrobun/guides/hello-world">Hello World guide</a> to create a new project in minutes.</p>

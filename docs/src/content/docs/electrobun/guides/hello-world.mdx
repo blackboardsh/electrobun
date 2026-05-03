@@ -10,17 +10,17 @@ import { Aside } from "@astrojs/starlight/components";
   <Aside type="tip">
     <strong>Info:</strong> This guide assumes you have bun installed globally, if you're using node.js or another package manager then you may need to adjust the terminal commands and package.json scripts accordingly.
   </Aside>
-  <h2>Step 0: Init templates</h2>
+## Step 0: Init templates
   
   <p>This guide will walk you through building a hello world from scratch.</p>
   <p>If you'd prefer to be up and running in seconds we offer starter templates including a `hello-world`, `photo-booth`, and multi-tabbed `web-browser`. If you have bun installed and want to get started in a few clicks.</p>
   <p>Just run <strong>`bunx electrobun init`</strong> and choose the starter template you want to explore.</p>
-  <h2>Step 1: Initialize your project folder</h2>
+## Step 1: Initialize your project folder
   <p>Create a new folder for your project. Let's call it `/electrobun-test`.</p>
   <p>In your `electrobun-test` folder run `bun init .` You'll be prompted to enter a package name, let's use `my-app` and an entrypoint which we don't need so just hit enter.</p>
-  <h2>Step 2: Install Electrobun as a dependency</h2>
+## Step 2: Install Electrobun as a dependency
   <p>Let's install electrobun. Just run: `bun install electrobun` to add it as a dependency.</p>
-  <h2>Step 3: Add package.json scripts to build and run your app</h2>
+## Step 3: Add package.json scripts to build and run your app
   <p>Open your `package.json` in a code editor and add a build:dev script and a start script so that your `package.json` looks like this:</p>
   
 ```javascript
@@ -49,7 +49,7 @@ import { Aside } from "@astrojs/starlight/components";
       <li>Added two npm scripts that will use the electrobun cli that should now be in your node_modules/.bin folder.</li>
     </ul>
   </Aside>
-  <h2>Step 4: Hello World</h2>
+## Step 4: Hello World
   <p>We now have electrobun installed and a way to build and run our hello world app, let's add some code.</p>
   <p>Create a file in `src/bun/index.ts` with the following contents:</p>
   
@@ -61,7 +61,7 @@ const win = new BrowserWindow({
 });
 ```
 
-  <h2>Step 5: Configure Electrobun</h2>
+## Step 5: Configure Electrobun
   <p>One last thing, we need to a way to let the Electrobun cli know where our bun entrypoint file is and how to build it. We do that by creating an `` electrobun.config.ts `` file in the root of the project.</p>
   
 ```javascript
@@ -79,6 +79,6 @@ export default {
 };
 ```
 
-  <h2>Step 6: Run your app</h2>
+## Step 6: Run your app
   <p>With this we can now go back to our terminal and run `bun start` and you should see a window pop up and load the site.</p>
   <p>To stop running the app just hit `cmd+c`</p>

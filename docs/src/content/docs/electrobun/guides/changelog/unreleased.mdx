@@ -3,9 +3,9 @@ title: "Unreleased"
 ---
               <p>Notes for the next stable release.</p>
 
-              <h2>Migration Notes</h2>
+## Migration Notes
 
-              <h3>End users will be logged out of any sites once after upgrading</h3>
+### End users will be logged out of any sites once after upgrading
 
               <p>This release bumps the internal CEF cache format version. On first launch after an end user receives an app update built with this Electrobun version, the CEF cache folder is wiped automatically. Users will be logged out of any sites they were logged into via your app and any client-side site data (cookies, localStorage, IndexedDB) is reset.</p>
 
@@ -15,7 +15,7 @@ title: "Unreleased"
 
               <p>Future Electrobun releases only repeat this behavior when a similar incompatibility appears — routine CEF version bumps don't trigger another wipe.</p>
 
-              <h2>New Features</h2>
+## New Features
 
               <ul>
                 <li><strong>DirectComposition for transparent windows on Windows.</strong> Transparent windows now go through a DirectComposition compositor, bringing them to parity with the existing DComp path used by non-transparent windows. WGPU surfaces and WebView2 share a single window through a layered visual tree, including a zero-copy WGPU→DComp swap-chain bridge that brought the bridged path from ~48 FPS to ~1729 FPS in benchmarks. A native <code>WM_SIZE</code> resize hook keeps resizes flash- and jank-free, and a Windows 8.1+ feature gate falls back cleanly on older systems.</li>
@@ -30,7 +30,7 @@ title: "Unreleased"
                 <li>Moved Electrobun docs back into the main repo with a dedicated docs deploy workflow.</li>
               </ul>
 
-              <h2>Bug Fixes</h2>
+## Bug Fixes
 
               <ul>
                 <li>Fix <code>hiddenInset</code> frameless window on Windows — preserve resize borders and DWM shadow, and stop clipping content when maximized.</li>

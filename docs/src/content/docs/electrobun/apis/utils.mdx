@@ -12,7 +12,7 @@ import {Utils} from "electrobun/bun";
 ```
 
 
-              <h2>moveToTrash</h2>
+## moveToTrash
 
               <p>Move a file or folder on your system to the Trash (recycle bin).</p>
 
@@ -27,7 +27,7 @@ Utils.moveToTrash(absolutePath)
 ```
 
 
-              <h2>showItemInFolder</h2>
+## showItemInFolder
 
               <p>Open the file manager (Finder on macOS, Explorer on Windows, etc.) and select the specified file or folder.</p>
 
@@ -37,11 +37,11 @@ Utils.showItemInFolder(absolutePath)
 ```
 
 
-              <h2>openExternal</h2>
+## openExternal
 
               <p>Open a URL in the default browser or appropriate application. Works with `http://`, `https://`, `mailto:`, custom URL schemes, and more.</p>
 
-              <h3>Parameters</h3>
+### Parameters
 
               <table>
                 <thead>
@@ -60,11 +60,11 @@ Utils.showItemInFolder(absolutePath)
                 </tbody>
               </table>
 
-              <h3>Returns</h3>
+### Returns
 
               <p>`boolean` - Returns `true` if the URL was opened successfully, `false` otherwise.</p>
 
-              <h3>Examples</h3>
+### Examples
 
               
 ```javascript
@@ -82,11 +82,11 @@ Utils.openExternal("file:///Users/me/Documents/report.pdf");
 ```
 
 
-              <h2>openPath</h2>
+## openPath
 
               <p>Open a file or folder with its default application. For files, this opens them with the associated application (e.g., `.pdf` opens with the default PDF reader). For folders, this opens them in the file manager.</p>
 
-              <h3>Parameters</h3>
+### Parameters
 
               <table>
                 <thead>
@@ -105,11 +105,11 @@ Utils.openExternal("file:///Users/me/Documents/report.pdf");
                 </tbody>
               </table>
 
-              <h3>Returns</h3>
+### Returns
 
               <p>`boolean` - Returns `true` if the path was opened successfully, `false` otherwise.</p>
 
-              <h3>Examples</h3>
+### Examples
 
               
 ```javascript
@@ -136,11 +136,11 @@ Utils.openPath("/Users/me/notes.txt");
                 <p>Use `openExternal()` for web URLs and email links. Use `openPath()` for local files and folders.</p>
               </Aside>
 
-              <h2>showNotification</h2>
+## showNotification
 
               <p>Display a native desktop notification. Works on macOS, Windows, and Linux.</p>
 
-              <h3>Options</h3>
+### Options
 
               <table>
                 <thead>
@@ -179,7 +179,7 @@ Utils.openPath("/Users/me/notes.txt");
                 </tbody>
               </table>
 
-              <h3>Example: Simple Notification</h3>
+### Example: Simple Notification
 
               
 ```javascript
@@ -189,7 +189,7 @@ Utils.showNotification({
 ```
 
 
-              <h3>Example: Notification with Body</h3>
+### Example: Notification with Body
 
               
 ```javascript
@@ -200,7 +200,7 @@ Utils.showNotification({
 ```
 
 
-              <h3>Example: Full Notification</h3>
+### Example: Full Notification
 
               
 ```javascript
@@ -213,7 +213,7 @@ Utils.showNotification({
 ```
 
 
-              <h3>Example: Silent Notification</h3>
+### Example: Silent Notification
 
               
 ```javascript
@@ -225,7 +225,7 @@ Utils.showNotification({
 ```
 
 
-              <h3>Platform Notes</h3>
+### Platform Notes
 
               <ul>
                 <li><strong>macOS:</strong> Uses NSUserNotificationCenter. Notifications appear in Notification Center.</li>
@@ -233,7 +233,7 @@ Utils.showNotification({
                 <li><strong>Linux:</strong> Uses `notify-send` command. Requires `libnotify-bin` to be installed (included by default on most desktop distributions).</li>
               </ul>
 
-              <h2>openFileDialog</h2>
+## openFileDialog
 
               <p>Open a file dialogue to let the user specify a file or folder and return the path to your app. Typically you would have an event handler in the browser context like clicking an "open" button, this would trigger an rpc call to bun, which would call `` openFileDialog() `` and then optionally pass the response back to the browser context via rpc after the user has made their selection</p>
 
@@ -257,11 +257,11 @@ setTimeout(async () => {
 ```
 
 
-              <h2>showMessageBox</h2>
+## showMessageBox
 
               <p>Display a native message box dialog with custom buttons and get the user's response. Similar to Electron's `dialog.showMessageBox()`.</p>
 
-              <h3>Options</h3>
+### Options
 
               <table>
                 <thead>
@@ -318,11 +318,11 @@ setTimeout(async () => {
                 </tbody>
               </table>
 
-              <h3>Return Value</h3>
+### Return Value
 
               <p>Returns a `Promise<&#123; response: number &#125;>` where `response` is the 0-based index of the clicked button.</p>
 
-              <h3>Example: Confirmation Dialog</h3>
+### Example: Confirmation Dialog
 
               
 ```javascript
@@ -346,7 +346,7 @@ if (response === 0) {
 ```
 
 
-              <h3>Example: Error Dialog</h3>
+### Example: Error Dialog
 
               
 ```javascript
@@ -360,7 +360,7 @@ await Utils.showMessageBox({
 ```
 
 
-              <h3>Example: Multi-choice Dialog</h3>
+### Example: Multi-choice Dialog
 
               
 ```javascript
@@ -382,11 +382,11 @@ switch (response) {
 ```
 
 
-              <h2>Dock Icon Visibility (macOS)</h2>
+## Dock Icon Visibility (macOS)
 
               <p>Control whether your app's icon appears in the macOS Dock. This is useful for menu bar apps, background utilities, or apps that should only show a system tray icon.</p>
 
-              <h3>setDockIconVisible</h3>
+### setDockIconVisible
 
               <p>Show or hide the app's Dock icon.</p>
 
@@ -400,7 +400,7 @@ Utils.setDockIconVisible(true);
 ```
 
 
-              <h3>isDockIconVisible</h3>
+### isDockIconVisible
 
               <p>Check whether the app's Dock icon is currently visible.</p>
 
@@ -418,7 +418,7 @@ if (Utils.isDockIconVisible()) {
                 <p>When the Dock icon is hidden, the app uses `NSApplicationActivationPolicyAccessory`. When visible, it uses `NSApplicationActivationPolicyRegular`. This feature is macOS-only.</p>
               </Aside>
 
-              <h3>Example: Tray-only App</h3>
+### Example: Tray-only App
 
               
 ```javascript
@@ -438,7 +438,7 @@ const tray = new Tray({
 ```
 
 
-              <h2>quit</h2>
+## quit
 
               <p>Gracefully quit the application. This fires a `before-quit` event (which can cancel the quit), then performs native cleanup (including CEF shutdown) and terminates the process.</p>
 
@@ -459,11 +459,11 @@ Electrobun.events.on("before-quit", (e) => {
 
               <p>See <a href="/electrobun/apis/events#shutdown-lifecycle">Events — Shutdown Lifecycle</a> for the full list of quit triggers, shutdown sequence, and how `before-quit` compares to bun's native `process.on("exit")`.</p>
 
-              <h2>Clipboard API</h2>
+## Clipboard API
 
               <p>Read and write to the system clipboard. Similar to Electron's clipboard module.</p>
 
-              <h3>clipboardReadText</h3>
+### clipboardReadText
 
               <p>Read text from the system clipboard.</p>
 
@@ -476,7 +476,7 @@ if (text) {
 ```
 
 
-              <h3>clipboardWriteText</h3>
+### clipboardWriteText
 
               <p>Write text to the system clipboard.</p>
 
@@ -486,7 +486,7 @@ Utils.clipboardWriteText("Hello from Electrobun!");
 ```
 
 
-              <h3>clipboardReadImage</h3>
+### clipboardReadImage
 
               <p>Read image from the clipboard as PNG data. Returns a `Uint8Array` containing PNG bytes, or `null` if no image is available.</p>
 
@@ -501,7 +501,7 @@ if (pngData) {
 ```
 
 
-              <h3>clipboardWriteImage</h3>
+### clipboardWriteImage
 
               <p>Write PNG image data to the clipboard.</p>
 
@@ -513,7 +513,7 @@ Utils.clipboardWriteImage(new Uint8Array(pngData));
 ```
 
 
-              <h3>clipboardClear</h3>
+### clipboardClear
 
               <p>Clear the clipboard contents.</p>
 
@@ -523,7 +523,7 @@ Utils.clipboardClear();
 ```
 
 
-              <h3>clipboardAvailableFormats</h3>
+### clipboardAvailableFormats
 
               <p>Get the available formats in the clipboard. Returns an array of format names.</p>
 
@@ -535,7 +535,7 @@ console.log("Clipboard contains:", formats);
 ```
 
 
-              <h3>Example: Copy and Paste Text</h3>
+### Example: Copy and Paste Text
 
               
 ```javascript
@@ -548,7 +548,7 @@ console.log(text); // "Hello World"
 ```
 
 
-              <h3>Example: Check Clipboard Contents</h3>
+### Example: Check Clipboard Contents
 
               
 ```javascript
@@ -566,7 +566,7 @@ if (formats.includes("image")) {
 ```
 
 
-              <h2>Paths</h2>
+## Paths
 
               <p>Cross-platform access to common OS directories and app-scoped directories. All properties are synchronous getters.</p>
 
@@ -580,7 +580,7 @@ console.log(Utils.paths.userData);  // App-specific data directory
 ```
 
 
-              <h3>OS Directories</h3>
+### OS Directories
 
               
 ```javascript
@@ -646,7 +646,7 @@ Utils.paths.videos
 ```
 
 
-              <h3>App-Scoped Directories</h3>
+### App-Scoped Directories
 
               <p>These paths are scoped to your application using the `identifier` and `channel` from your app's `version.json`. The values are lazy-loaded on first access.</p>
 
@@ -663,7 +663,7 @@ Utils.paths.userLogs   // ~/Library/Logs/com.mycompany.myapp/canary
 ```
 
 
-              <h3>Example: Store App Data</h3>
+### Example: Store App Data
 
               
 ```javascript
@@ -683,7 +683,7 @@ const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 ```
 
 
-              <h3>Example: Save Downloads to User's Downloads Folder</h3>
+### Example: Save Downloads to User's Downloads Folder
 
               
 ```javascript
@@ -699,7 +699,7 @@ await Bun.write(savePath, pdfData);
                 <p><strong>Linux XDG Support:</strong> On Linux, user directories (`documents`, `downloads`, etc.) are resolved by reading `~/.config/user-dirs.dirs`. If the file is not present, standard fallbacks like `~/Documents` are used.</p>
               </Aside>
 
-              <h2>GlobalShortcut</h2>
+## GlobalShortcut
 
               <p>Register global keyboard shortcuts that work even when your app doesn't have focus. Similar to Electron's globalShortcut module.</p>
 
@@ -709,7 +709,7 @@ import { GlobalShortcut } from "electrobun/bun";
 ```
 
 
-              <h3>register</h3>
+### register
 
               <p>Register a global keyboard shortcut with a callback function.</p>
 
@@ -750,7 +750,7 @@ if (!success) {
 ```
 
 
-              <h3>unregister</h3>
+### unregister
 
               <p>Unregister a previously registered global shortcut.</p>
 
@@ -760,7 +760,7 @@ GlobalShortcut.unregister("CommandOrControl+Shift+Space");
 ```
 
 
-              <h3>unregisterAll</h3>
+### unregisterAll
 
               <p>Unregister all global shortcuts registered by your app.</p>
 
@@ -770,7 +770,7 @@ GlobalShortcut.unregisterAll();
 ```
 
 
-              <h3>isRegistered</h3>
+### isRegistered
 
               <p>Check if a shortcut is currently registered.</p>
 
@@ -782,7 +782,7 @@ if (GlobalShortcut.isRegistered("CommandOrControl+Shift+Space")) {
 ```
 
 
-              <h3>Accelerator Syntax</h3>
+### Accelerator Syntax
 
               <p>Accelerators are strings that describe keyboard shortcuts. They consist of modifier keys and a regular key, separated by `+`.</p>
 
@@ -806,7 +806,7 @@ if (GlobalShortcut.isRegistered("CommandOrControl+Shift+Space")) {
                 <li>Symbols: `-`, `=`, `[`, `]`, `\`, `;`, `'`, `,`, `.`, `/`, `` \` ``</li>
               </ul>
 
-              <h3>Example: Toggle App Visibility</h3>
+### Example: Toggle App Visibility
 
               
 ```javascript
@@ -827,7 +827,7 @@ GlobalShortcut.register("CommandOrControl+Shift+H", () => {
 ```
 
 
-              <h3>Platform Notes</h3>
+### Platform Notes
 
               <ul>
                 <li><strong>macOS:</strong> Uses `NSEvent addGlobalMonitorForEventsMatchingMask`. Shortcuts are observed but cannot block the event from reaching other apps.</li>
@@ -839,7 +839,7 @@ GlobalShortcut.register("CommandOrControl+Shift+H", () => {
                 <p><strong>Note:</strong> Some shortcuts may already be reserved by the operating system or other applications. If registration fails, try a different key combination.</p>
               </Aside>
 
-              <h2>Screen</h2>
+## Screen
 
               <p>The Screen module provides information about connected displays and the cursor position. This is useful for positioning windows, detecting multi-monitor setups, and getting screen dimensions.</p>
 
@@ -849,7 +849,7 @@ import { Screen } from "electrobun/bun";
 ```
 
 
-              <h3>Types</h3>
+### Types
 
               
 ```typescript
@@ -875,7 +875,7 @@ interface Point {
 ```
 
 
-              <h3>Screen.getPrimaryDisplay()</h3>
+### Screen.getPrimaryDisplay()
 
               <p>Returns the primary display information.</p>
 
@@ -888,7 +888,7 @@ console.log(`Work area: ${primary.workArea.width}x${primary.workArea.height}`);
 ```
 
 
-              <h3>Screen.getAllDisplays()</h3>
+### Screen.getAllDisplays()
 
               <p>Returns an array of all connected displays.</p>
 
@@ -906,7 +906,7 @@ displays.forEach((display, index) => {
 ```
 
 
-              <h3>Screen.getCursorScreenPoint()</h3>
+### Screen.getCursorScreenPoint()
 
               <p>Returns the current cursor position in screen coordinates.</p>
 
@@ -917,7 +917,7 @@ console.log(`Cursor at: (${cursor.x}, ${cursor.y})`);
 ```
 
 
-              <h3>Example: Center Window on Primary Display</h3>
+### Example: Center Window on Primary Display
 
               
 ```javascript
@@ -944,7 +944,7 @@ const win = new BrowserWindow({
 ```
 
 
-              <h3>Example: Open Window on Display with Cursor</h3>
+### Example: Open Window on Display with Cursor
 
               
 ```javascript
@@ -966,7 +966,7 @@ console.log(`Opening window on display: ${targetDisplay.id}`);
 ```
 
 
-              <h3>Platform Notes</h3>
+### Platform Notes
 
               <ul>
                 <li><strong>macOS:</strong> Uses `NSScreen` and `CGMainDisplayID`. Coordinates are converted from bottom-left origin to top-left origin for consistency.</li>
@@ -974,7 +974,7 @@ console.log(`Opening window on display: ${targetDisplay.id}`);
                 <li><strong>Linux:</strong> Uses GDK `gdk_display_get_n_monitors` and related APIs.</li>
               </ul>
 
-              <h2>Session</h2>
+## Session
 
               <p>The Session module provides cookie and storage management for webview partitions. Each partition has isolated storage, allowing you to manage cookies and clear data independently.</p>
 
@@ -984,7 +984,7 @@ import { Session } from "electrobun/bun";
 ```
 
 
-              <h3>Types</h3>
+### Types
 
               
 ```typescript
@@ -1019,7 +1019,7 @@ type StorageType =
 ```
 
 
-              <h3>Session.fromPartition(partition)</h3>
+### Session.fromPartition(partition)
 
               <p>Get or create a session for a specific partition. Partitions starting with `persist:` are stored on disk, others are ephemeral.</p>
 
@@ -1033,7 +1033,7 @@ const tempSession = Session.fromPartition("temp");
 ```
 
 
-              <h3>Session.defaultSession</h3>
+### Session.defaultSession
 
               <p>Get the default session (equivalent to `persist:default` partition).</p>
 
@@ -1044,7 +1044,7 @@ console.log(session.partition); // "persist:default"
 ```
 
 
-              <h3>session.cookies.get(filter?)</h3>
+### session.cookies.get(filter?)
 
               <p>Get cookies matching the optional filter criteria. Returns an array of Cookie objects.</p>
 
@@ -1067,7 +1067,7 @@ const urlCookies = session.cookies.get({ url: "https://api.example.com" });
 ```
 
 
-              <h3>session.cookies.set(cookie)</h3>
+### session.cookies.set(cookie)
 
               <p>Set a cookie. Returns `true` if successful.</p>
 
@@ -1097,7 +1097,7 @@ session.cookies.set({
 ```
 
 
-              <h3>session.cookies.remove(url, name)</h3>
+### session.cookies.remove(url, name)
 
               <p>Remove a specific cookie by URL and name. Returns `true` if successful.</p>
 
@@ -1110,7 +1110,7 @@ session.cookies.remove("https://myapp.com", "user_id");
 ```
 
 
-              <h3>session.cookies.clear()</h3>
+### session.cookies.clear()
 
               <p>Clear all cookies for this session.</p>
 
@@ -1123,7 +1123,7 @@ session.cookies.clear();
 ```
 
 
-              <h3>session.clearStorageData(types?)</h3>
+### session.clearStorageData(types?)
 
               <p>Clear storage data for this session. You can specify which types to clear, or use `'all'` to clear everything.</p>
 
@@ -1142,7 +1142,7 @@ session.clearStorageData(['cache']);
 ```
 
 
-              <h3>Example: User Logout</h3>
+### Example: User Logout
 
               
 ```javascript
@@ -1163,7 +1163,7 @@ function logout() {
 ```
 
 
-              <h3>Example: Multi-account Support</h3>
+### Example: Multi-account Support
 
               
 ```javascript
@@ -1187,7 +1187,7 @@ function createAccountWindow(accountId: string) {
 ```
 
 
-              <h3>Platform Notes</h3>
+### Platform Notes
 
               <ul>
                 <li><strong>macOS:</strong> Uses `WKHTTPCookieStore` for WebKit and CEF's cookie manager.</li>

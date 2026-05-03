@@ -16,9 +16,9 @@ const electrobun = new Electroview({ ...options })
 ```
 
 
-              <h2>Constructor Options</h2>
+## Constructor Options
 
-              <h3>rpc</h3>
+### rpc
 
               <p>This is the browser side of creating typed RPC between the main bun process and a given BrowserView's context.</p>
 
@@ -104,15 +104,15 @@ electroview.rpc.send.logToBun({ msg: "hi from browser" });
 ```
 
 
-              <h2>Static Methods</h2>
+## Static Methods
 
-              <h3>defineRPC</h3>
+### defineRPC
 
               <p>Pass `Electroview.defineRPC` the shared rpc type to generate the typed rpc and message functions you can call from the browser and to set up types for the browser handlers for functions handled in the browser.</p>
 
-              <h2>Methods</h2>
+## Methods
 
-              <h3>Browser to Browser RPC</h3>
+### Browser to Browser RPC
 
               <p>Electrobun doesn't provide browser to browser RPC out of the box as we favour isolation between browser contexts for greater security.</p>
 

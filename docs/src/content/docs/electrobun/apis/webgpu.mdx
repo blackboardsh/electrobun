@@ -3,7 +3,7 @@ title: "WebGPU"
 ---
   <p>Electrobun can bundle a native WebGPU implementation (Dawn) and expose it to your Bun process. This lets you render with GPU-backed windows, run compute workloads, and integrate WebGPU-first libraries without a browser webview.</p>
 
-  <h2>Enable Bundling</h2>
+## Enable Bundling
 
   <p>Enable WebGPU per platform in `electrobun.config.ts`:</p>
 
@@ -24,7 +24,7 @@ export const config: ElectrobunConfig = {
 
   <p>When enabled, Electrobun bundles the Dawn dynamic library alongside your app so it is available at runtime.</p>
 
-  <h2>Create A GPU Window</h2>
+## Create A GPU Window
 
   <p>WebGPU rendering runs inside a `GpuWindow` (which owns a native WGPU-backed view). You can then create a WebGPU context from that window:</p>
 
@@ -53,7 +53,7 @@ ctx.configure({
 ```
 
 
-  <h2>GpuWindow Controls</h2>
+## GpuWindow Controls
 
   <p>`GpuWindow` follows the same newer visibility and activation model as `BrowserWindow`.</p>
 
@@ -93,13 +93,13 @@ win.setWindowButtonPosition(16, 12);
 ```
 
 
-  <h2>&lt;electrobun-wgpu&gt; (GPU Views Inside Web UIs)</h2>
+## &lt;electrobun-wgpu&gt; (GPU Views Inside Web UIs)
 
   <p>You can embed native GPU surfaces inside a webview layout using the `<electrobun-wgpu>` custom element. This is documented separately on the WGPU Tag page.</p>
 
   <p><a href="/electrobun/apis/browser/electrobun-wgpu-tag">Read the &lt;electrobun-wgpu&gt; Tag docs →</a></p>
 
-  <h2>Raw FFI Access</h2>
+## Raw FFI Access
 
   <p>If you want direct access to Dawn's C API, use the raw FFI bindings:</p>
 
@@ -118,11 +118,11 @@ const instance = WGPU.native.symbols.wgpuCreateInstance(0);
 
   <p>The raw FFI layer mirrors the Dawn C API and is useful for low-level control, custom bindings, or compute workloads.</p>
 
-  <h2>Compute + Readback</h2>
+## Compute + Readback
 
   <p>Electrobun's WebGPU adapter also supports compute workloads from Bun. You can create compute pipelines, dispatch workgroups, and read results back into Bun-managed memory. This is how the `wgpu-mlp` template performs GPU inference while keeping a WebView UI.</p>
 
-  <h3>Readback Example</h3>
+### Readback Example
 
   <p>For readback, write GPU output into a buffer with `MAP_READ`, then `mapAsync` and copy the data into a Bun-managed ArrayBuffer.</p>
 
@@ -136,7 +136,7 @@ readbackBuffer.unmap();
 ```
 
 
-  <h2>Bundling + Runtime Resolution</h2>
+## Bundling + Runtime Resolution
 
   <p>When `bundleWGPU` is enabled, Electrobun packages the Dawn dynamic library with your app. At runtime, the loader searches:</p>
   <ul>
@@ -147,7 +147,7 @@ readbackBuffer.unmap();
 
   <p>If `WGPU.native.available` is `false`, confirm the library is bundled for that platform and check that the loader path is valid.</p>
 
-  <h2>Examples + Templates</h2>
+## Examples + Templates
 
   <p>Reference implementations you can copy from:</p>
   <ul>
@@ -158,7 +158,7 @@ readbackBuffer.unmap();
     <li>`electrobun-doom`: real game rendering via WGPU + `GpuWindow`.</li>
   </ul>
 
-  <h2>Three.js Integration</h2>
+## Three.js Integration
 
   <p>Electrobun re-exports `three` for convenience. Use the WebGPU renderer with a simple canvas shim that proxies to the GPU window:</p>
 
@@ -211,7 +211,7 @@ renderer.setAnimationLoop(() => {
 ```
 
 
-  <h2>Babylon.js Integration</h2>
+## Babylon.js Integration
 
   <p>Electrobun also re-exports `@babylonjs/core`. Use `WebGPUEngine` with the same canvas shim approach:</p>
 

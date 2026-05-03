@@ -3,9 +3,9 @@ title: "v1.0.0 — Migrating from 0.x to v1"
 ---
               <p>Electrobun v1 included breaking changes to artifact naming and configuration. This page covers what changed and how to migrate apps that were on 0.x.</p>
 
-              <h2>Migration Notes</h2>
+## Migration Notes
 
-              <h3>1. Config: <code>bucketUrl</code> renamed to <code>baseUrl</code></h3>
+### 1. Config: `bucketUrl` renamed to `baseUrl`
 
               <p>The <code>release.bucketUrl</code> configuration option was renamed to <code>release.baseUrl</code> to better reflect that it supports any HTTP host, not just S3-style buckets.</p>
 
@@ -33,7 +33,7 @@ export default {
 };
 ```
 
-              <h3>2. Artifact Naming: Folder-based to Prefix-based (Flat Structure)</h3>
+### 2. Artifact Naming: Folder-based to Prefix-based (Flat Structure)
 
               <p>Artifact URLs changed from a folder-based structure to a flat prefix-based structure. This enables hosting on GitHub Releases and other platforms that don't support folders.</p>
 
@@ -55,11 +55,11 @@ https://example.com/releases/canary-macos-arm64-abc123.patch
 
               <p>The local <code>artifacts/</code> folder is now flat with prefixed filenames instead of containing platform subfolders.</p>
 
-              <h3>Migration Steps</h3>
+### Migration Steps
 
               <p>If you had an app already deployed with the old folder-based structure, the upgrade path was:</p>
 
-              <h4>Step 1: Build a Transitional Release</h4>
+#### Step 1: Build a Transitional Release
 
               <p>Before upgrading to v1, build and release one final version using your current Electrobun version (pre-v1). This ensures all your users update to a version that can still read the old URL structure.</p>
 
@@ -69,7 +69,7 @@ bun run build --env=canary  # or stable
 # Deploy artifacts to your bucket with the OLD folder structure
 ```
 
-              <h4>Step 2: Upgrade Electrobun</h4>
+#### Step 2: Upgrade Electrobun
 
               <p>Update your Electrobun dependency to v1:</p>
 
@@ -77,7 +77,7 @@ bun run build --env=canary  # or stable
 bun add electrobun@latest
 ```
 
-              <h4>Step 3: Update Your Config</h4>
+#### Step 3: Update Your Config
 
               <p>Rename <code>bucketUrl</code> to <code>baseUrl</code> in your <code>electrobun.config.ts</code>:</p>
 
@@ -87,7 +87,7 @@ release: {
 },
 ```
 
-              <h4>Step 4: Switch Your Bucket to Flat Structure</h4>
+#### Step 4: Switch Your Bucket to Flat Structure
 
               <p>Once you're confident that most users have updated to the transitional release from Step 1, you can switch your bucket/hosting to use the new flat structure:</p>
 
@@ -103,14 +103,14 @@ bun run build --env=canary
 # Deploy the flat-named artifacts from artifacts/ folder
 ```
 
-              <h4>Step 5: Release Updates</h4>
+#### Step 5: Release Updates
 
               <p>From now on, all releases use the new flat structure. Users who updated in Step 1 will seamlessly transition to fetching updates from the new URLs.</p>
 
-              <h3>Why This Change?</h3>
+### Why This Change?
 
               <p>The folder-based structure worked well with S3 and R2 buckets, but GitHub Releases and many other hosting platforms don't support folder hierarchies. The flat prefix-based naming works everywhere while maintaining clear organization through the prefix.</p>
 
-              <h3>API Changes</h3>
+### API Changes
 
               <p>If you're using the Updater API directly, note that <code>Updater.localInfo.bucketUrl()</code> was renamed to <code>Updater.localInfo.baseUrl()</code>.</p>

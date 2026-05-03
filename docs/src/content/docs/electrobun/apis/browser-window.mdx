@@ -26,9 +26,9 @@ const win = new BrowserWindow({
 ```
 
 
-  <h2>Constructor Options</h2>
+## Constructor Options
 
-  <h3>title</h3>
+### title
   <p>Set the title of the window.</p>
 
   
@@ -39,7 +39,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>frame</h3>
+### frame
   <p>Set the window dimensions.</p>
 
   
@@ -55,7 +55,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>styleMask</h3>
+### styleMask
   <p>This controls the OSX window appearance and functionality. You can set the following:</p>
 
   
@@ -88,7 +88,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>titleBarStyle</h3>
+### titleBarStyle
   <p>Controls the window's title bar appearance. This option works across all platforms (macOS, Windows, and Linux).</p>
 
   <p>Available values:</p>
@@ -129,7 +129,7 @@ const insetWin = new BrowserWindow({
     <p>The `titleBarStyle` option automatically configures the underlying `styleMask` properties. When set to `"hiddenInset"`, it forces `Titled: true` and `FullSizeContentView: true`. When set to `"hidden"`, it forces `Titled: false` and `FullSizeContentView: true`.</p>
   </Aside>
 
-  <h3>activate</h3>
+### activate
   <p>Controls whether the window should take focus when it is first shown. The default is `true`. Set `activate: false` for palette windows, tray popovers, or other UI that should open without stealing focus.</p>
 
   
@@ -147,7 +147,7 @@ const palette = new BrowserWindow({
     <p>`activate` only affects the initial auto-show during window creation. To reveal an existing hidden window without taking focus, use `showInactive()`.</p>
   </Aside>
 
-  <h3>trafficLightOffset</h3>
+### trafficLightOffset
   <p>macOS-only. Offsets the native traffic light buttons when using `titleBarStyle: "hiddenInset"`. This is ignored on Windows and Linux.</p>
 
   
@@ -164,7 +164,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>transparent</h3>
+### transparent
   <p>When set to `true`, the window background becomes transparent, allowing you to create non-rectangular windows, floating widgets, or windows with rounded corners and drop shadows.</p>
 
   
@@ -202,7 +202,7 @@ html, body {
     <p>Transparent windows are typically combined with `titleBarStyle: "hidden"` to achieve floating widget effects. The `transparent` option works across all platforms and with both the native WebKit and CEF renderers.</p>
   </Aside>
 
-  <h3>sandbox</h3>
+### sandbox
   <p>When set to `true`, the webview runs in sandbox mode. This disables RPC (remote procedure calls) and only allows event emission. Use sandbox mode for displaying untrusted content like remote URLs where you want to prevent malicious sites from accessing internal APIs.</p>
 
   
@@ -237,7 +237,7 @@ externalBrowser.webview.on("will-navigate", (event) => {
     <p>Sandbox mode uses a minimal preload script that only sets up event emission. This prevents any code in the webview from communicating with your main process beyond basic lifecycle events.</p>
   </Aside>
 
-  <h4>When to use sandbox mode</h4>
+#### When to use sandbox mode
   <ul>
     <li>Loading external/untrusted URLs (e.g., user-provided links, third-party content)</li>
     <li>Building a web browser or content viewer that displays arbitrary websites</li>
@@ -245,7 +245,7 @@ externalBrowser.webview.on("will-navigate", (event) => {
     <li>Any scenario where you want the webview isolated from your application's internals</li>
   </ul>
 
-  <h4>Using sandbox with &lt;electrobun-webview&gt; tag</h4>
+#### Using sandbox with &lt;electrobun-webview&gt; tag
   <p>You can also create sandboxed nested webviews using the `sandbox` attribute:</p>
 
   
@@ -261,7 +261,7 @@ externalBrowser.webview.on("will-navigate", (event) => {
 
   <p><strong>Info:</strong> The following options are used to instantiate the default BrowserView.</p>
 
-  <h3>url</h3>
+### url
   <p>Set the initial url for the window's default BrowserView to navigate to when it opens.</p>
 
   
@@ -280,7 +280,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>html</h3>
+### html
   <p>Set an html string for the window's default BrowserView to load when it opens. Anything that would be valid in an html file including javascript and css can be used. Use this instead of setting the `url` property.</p>
 
   
@@ -294,7 +294,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>partition</h3>
+### partition
   <p>Partitions allow you to separate the browser session. Things like cookies and so on. For example if you have two BrowserViews with the same partition and log into gmail in one, the other will also be logged into gmail. If you use two different partitions then you could log into a different gmail account in each BrowserView.</p>
 
   
@@ -313,7 +313,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>preload</h3>
+### preload
   <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
   <p>You can use either inline javascript or a url.</p>
 
@@ -339,7 +339,7 @@ const win = new BrowserWindow({
 ```
 
 
-  <h3>rpc</h3>
+### rpc
   <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
   <p>These RPC functions are asynchronous.</p>
 
@@ -442,9 +442,9 @@ win.webview.rpc.send.logToWebview({ msg: "my message" });
 
   <p><strong>Info:</strong> The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
 
-  <h2>Properties</h2>
+## Properties
 
-  <h3>webview</h3>
+### webview
   <p>This is a getter for the window's default <a href="/electrobun/apis/browser-view">BrowserView</a>.</p>
 
   
@@ -457,9 +457,9 @@ const defaultWebview = win.webview;
 ```
 
 
-  <h2>Methods</h2>
+## Methods
 
-  <h3>setTitle</h3>
+### setTitle
   <p>Change the window title:</p>
 
   
@@ -468,7 +468,7 @@ win.setTitle('new title')
 ```
 
 
-  <h3>close</h3>
+### close
   <p>Close a window.</p>
 
   
@@ -477,7 +477,7 @@ win.close();
 ```
 
 
-  <h3>show / showInactive / activate / hide</h3>
+### show / showInactive / activate / hide
   <p>Control window visibility and focus. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it.</p>
 
   
@@ -503,7 +503,7 @@ win.show();
 ```
 
 
-  <h3>focus (deprecated)</h3>
+### focus (deprecated)
   <p>`focus()` is a deprecated alias for `activate()`. Existing code still works, but prefer `activate()` in new code.</p>
 
   
@@ -516,7 +516,7 @@ win.activate();
 ```
 
 
-  <h3>minimize / unminimize / isMinimized</h3>
+### minimize / unminimize / isMinimized
   <p>Control and check the minimized state of a window.</p>
 
   
@@ -534,7 +534,7 @@ if (win.isMinimized()) {
 ```
 
 
-  <h3>maximize / unmaximize / isMaximized</h3>
+### maximize / unmaximize / isMaximized
   <p>Control and check the maximized state of a window. On macOS, this uses the "zoom" functionality which fills the screen while keeping the menu bar visible.</p>
 
   
@@ -552,7 +552,7 @@ if (win.isMaximized()) {
 ```
 
 
-  <h3>setFullScreen / isFullScreen</h3>
+### setFullScreen / isFullScreen
   <p>Control and check the fullscreen state of a window. Fullscreen mode hides the title bar and dock/taskbar.</p>
 
   
@@ -573,7 +573,7 @@ win.setFullScreen(!win.isFullScreen());
 ```
 
 
-  <h3>setAlwaysOnTop / isAlwaysOnTop</h3>
+### setAlwaysOnTop / isAlwaysOnTop
   <p>Control and check whether a window stays above all other windows. Useful for floating tools, overlays, or picture-in-picture style windows.</p>
 
   
@@ -594,7 +594,7 @@ win.setAlwaysOnTop(!win.isAlwaysOnTop());
 ```
 
 
-  <h3>setPosition(x, y)</h3>
+### setPosition(x, y)
   <p>Move the window to a specific position on screen. Coordinates use a top-left origin (0, 0 is the top-left corner of the screen).</p>
 
   
@@ -613,7 +613,7 @@ win.setPosition(
 ```
 
 
-  <h3>setSize(width, height)</h3>
+### setSize(width, height)
   <p>Resize the window to specific dimensions. The window's top-left corner position is preserved.</p>
 
   
@@ -627,7 +627,7 @@ win.setSize(frame.width, frame.width);
 ```
 
 
-  <h3>setFrame(x, y, width, height)</h3>
+### setFrame(x, y, width, height)
   <p>Set both position and size of the window in a single call. This is more efficient than calling `setPosition` and `setSize` separately when you need to change both.</p>
 
   
@@ -641,7 +641,7 @@ win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
 ```
 
 
-  <h3>setWindowButtonPosition(x, y)</h3>
+### setWindowButtonPosition(x, y)
   <p>macOS-only. Reposition the native traffic light buttons at runtime. This is most useful with `titleBarStyle: "hiddenInset"`. On Windows and Linux the method is available but does nothing.</p>
 
   
@@ -656,7 +656,7 @@ win.setWindowButtonPosition(16, 12);
 ```
 
 
-  <h3>getFrame()</h3>
+### getFrame()
   <p>Get the current position and size of the window. Returns an object with `x`, `y`, `width`, and `height` properties.</p>
 
   
@@ -673,7 +673,7 @@ win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
 ```
 
 
-  <h3>getPosition()</h3>
+### getPosition()
   <p>Get the current position of the window. Returns an object with `x` and `y` properties.</p>
 
   
@@ -690,7 +690,7 @@ if (x === 0 && y === 0) {
 ```
 
 
-  <h3>getSize()</h3>
+### getSize()
   <p>Get the current size of the window. Returns an object with `width` and `height` properties.</p>
 
   
@@ -706,7 +706,7 @@ console.log(`Aspect ratio: ${aspectRatio.toFixed(2)}`);
 ```
 
 
-  <h3>setVisibleOnAllWorkspaces / isVisibleOnAllWorkspaces</h3>
+### setVisibleOnAllWorkspaces / isVisibleOnAllWorkspaces
   <p>Control and check whether a window is visible on all virtual desktops/workspaces. This is useful for utility windows, floating tools, or widgets that should remain accessible across all spaces.</p>
 
   
@@ -728,7 +728,7 @@ if (win.isVisibleOnAllWorkspaces()) {
     <p>This feature is fully supported on macOS (uses `NSWindowCollectionBehaviorCanJoinAllSpaces`). On Windows and Linux, the methods are available but are no-ops.</p>
   </Aside>
 
-  <h3>setPageZoom / getPageZoom</h3>
+### setPageZoom / getPageZoom
   <p>Control and get the page zoom level for the window's webview. A value of `1.0` represents 100% zoom.</p>
 
   
@@ -749,12 +749,12 @@ win.setPageZoom(1.0);
     <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
   </Aside>
 
-  <h3>on(name, handler)</h3>
+### on(name, handler)
   <p>Subscribe to BrowserWindow events (see below).</p>
 
-  <h2>Events</h2>
+## Events
 
-  <h3>close</h3>
+### close
   <p>When a window closes. Per-window close handlers fire before global close handlers, ensuring your handlers run before the internal `exitOnLastWindowClosed` logic.</p>
 
   
@@ -781,7 +781,7 @@ Electrobun.events.on('close', (event) => {
 ```
 
 
-  <h3>resize</h3>
+### resize
   <p>When a window's width or height changes. This events sends the x and y as part of the data because a window may be resized by dragging the top-left corner which would also reposition it.</p>
 
   
@@ -802,7 +802,7 @@ Electrobun.events.on("resize", (event) => {
 ```
 
 
-  <h3>move</h3>
+### move
   <p>When a window's position changes.</p>
 
   
@@ -823,7 +823,7 @@ Electrobun.events.on("move", (event) => {
 ```
 
 
-  <h3>focus</h3>
+### focus
   <p>When a window becomes the key window (receives focus). This is useful for tracking which window should receive keyboard shortcuts or other focus-dependent actions.</p>
 
   
@@ -844,7 +844,7 @@ Electrobun.events.on("focus", (event) => {
 ```
 
 
-  <h3>blur</h3>
+### blur
   <p>When a window loses focus (is no longer the key window).</p>
 
   

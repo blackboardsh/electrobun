@@ -16,7 +16,7 @@ const config = await Electrobun.BuildConfig.get();
 ```
 
 
-              <h2>Overview</h2>
+## Overview
 
               <p>The `BuildConfig` API gives your Bun process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:</p>
 
@@ -27,15 +27,15 @@ const config = await Electrobun.BuildConfig.get();
                 <li>Debugging and logging build information</li>
               </ul>
 
-              <h2>BuildConfig.get()</h2>
+## BuildConfig.get()
 
               <p>Asynchronously loads and returns the build configuration. The result is cached after the first call.</p>
 
-              <h3>Returns</h3>
+### Returns
 
               <p>`Promise<BuildConfigType>`</p>
 
-              <h3>BuildConfigType</h3>
+### BuildConfigType
 
               <table>
                 <thead>
@@ -74,7 +74,7 @@ const config = await Electrobun.BuildConfig.get();
                 </tbody>
               </table>
 
-              <h3>Example</h3>
+### Example
 
               
 ```javascript
@@ -95,15 +95,15 @@ if (config.availableRenderers.includes('cef')) {
 ```
 
 
-              <h2>BuildConfig.getCached()</h2>
+## BuildConfig.getCached()
 
               <p>Synchronously returns the cached build configuration, or `null` if it hasn't been loaded yet.</p>
 
-              <h3>Returns</h3>
+### Returns
 
               <p>`BuildConfigType | null`</p>
 
-              <h3>Example</h3>
+### Example
 
               
 ```javascript
@@ -124,7 +124,7 @@ if (cached) {
                 <p><strong>Note:</strong> `getCached()` returns `null` if `get()` hasn't been called yet. In most cases, you should use `get()` which handles loading automatically.</p>
               </Aside>
 
-              <h2>How It Works</h2>
+## How It Works
 
               <p>When you build your Electrobun app, the CLI reads your `electrobun.config.ts` and generates a `build.json` file in the app's Resources folder. This file contains the runtime-relevant build settings.</p>
 
@@ -136,7 +136,7 @@ if (cached) {
                 <li><strong>runtime</strong> - The entire `runtime` section from your `electrobun.config.ts`, including `exitOnLastWindowClosed` and any custom keys</li>
               </ul>
 
-              <h2>Relationship with BrowserWindow/BrowserView</h2>
+## Relationship with BrowserWindow/BrowserView
 
               <p>The `defaultRenderer` setting affects the default behavior of `BrowserWindow` and `BrowserView`:</p>
 
@@ -159,7 +159,7 @@ const window2 = new BrowserWindow({
 
               <p>See the <a href="/electrobun/apis/cli/build-configuration">Build Configuration</a> documentation for how to configure these settings.</p>
 
-              <h2>Complete Example</h2>
+## Complete Example
 
               
 ```javascript

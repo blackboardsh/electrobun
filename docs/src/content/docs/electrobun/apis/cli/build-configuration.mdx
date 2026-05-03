@@ -6,11 +6,11 @@ import { Aside } from "@astrojs/starlight/components";
               
               <p>This guide covers all configuration options available in `electrobun.config` for building and distributing your Electrobun applications.</p>
 
-              <h2>Configuration File</h2>
+## Configuration File
 
               <p>Electrobun uses `electrobun.config.ts` in your project root to control how your application is built and packaged. The config file uses TypeScript with ESM syntax, providing type safety and modern JavaScript features.</p>
 
-              <h3>Basic Structure</h3>
+### Basic Structure
 
               
 ```javascript
@@ -35,13 +35,13 @@ export default {
 ```
 
 
-              <h2>Bun Bundler Options</h2>
+## Bun Bundler Options
 
               <p>Both `build.bun` and each entry in `build.views` accept all <a href="https://bun.sh/docs/bundler" target="_blank">Bun.build()</a> options as pass-through properties. The only required field is `entrypoint` — everything else is optional.</p>
 
               <p>Electrobun controls `entrypoints` (derived from your `entrypoint`), `outdir`, and `target` (`"bun"` for the bun process, `"browser"` for views) automatically. All other Bun bundler options are passed through directly.</p>
 
-              <h3>Available Options</h3>
+### Available Options
 
               <p>Some commonly used options include:</p>
 
@@ -129,7 +129,7 @@ export default {
 
               <p>For the full list of options, see the <a href="https://bun.sh/docs/bundler" target="_blank">Bun Bundler documentation</a>.</p>
 
-              <h3>Example: Using Plugins</h3>
+### Example: Using Plugins
 
               
 ```javascript
@@ -159,7 +159,7 @@ export default {
 ```
 
 
-              <h3>Example: Minification and Source Maps</h3>
+### Example: Minification and Source Maps
 
               
 ```javascript
@@ -192,7 +192,7 @@ export default {
                 <p><strong>Note:</strong> Since `electrobun.config.ts` is a real TypeScript module, you can dynamically construct plugins and configuration. Plugins are JavaScript objects, so they work natively — no serialization required.</p>
               </Aside>
 
-              <h2>URL Schemes (Deep Linking)</h2>
+## URL Schemes (Deep Linking)
 
               <p>Electrobun supports registering custom URL schemes for your application, enabling deep linking. When users click a link like `myapp://some/path`, your app will open and receive the URL.</p>
 
@@ -203,7 +203,7 @@ export default {
                 <li>Linux: Not yet supported</li>
               </ul>
 
-              <h3>Configuration</h3>
+### Configuration
 
               <p>Add URL schemes to the `app` section of your config:</p>
 
@@ -221,7 +221,7 @@ const config: ElectrobunConfig = {
 ```
 
 
-              <h3>Handling URL Opens</h3>
+### Handling URL Opens
 
               <p>Listen for the `open-url` event in your Bun process to handle incoming URLs:</p>
 
@@ -245,7 +245,7 @@ Electrobun.events.on("open-url", (e) => {
 ```
 
 
-              <h3>How It Works on macOS</h3>
+### How It Works on macOS
 
               <p>When you build your app with URL schemes configured, Electrobun automatically adds the `CFBundleURLTypes` entry to your app's `Info.plist`. The operating system registers these URL schemes when your app is placed in the `/Applications` folder.</p>
 
@@ -257,7 +257,7 @@ Electrobun.events.on("open-url", (e) => {
                 <li>Notarization is recommended for production apps to ensure a smooth user experience</li>
               </ul>
 
-              <h2>File Associations</h2>
+## File Associations
 
               <p>Electrobun can register document types so the operating system can open files with your app from Finder, “Open With”, or drag-to-dock style workflows.</p>
 
@@ -268,7 +268,7 @@ Electrobun.events.on("open-url", (e) => {
                 <li>Linux: Not yet supported</li>
               </ul>
 
-              <h3>Configuration</h3>
+### Configuration
 
               
 ```javascript
@@ -297,7 +297,7 @@ const config: ElectrobunConfig = {
                 <li>As with URL schemes, macOS registration works reliably when the app is installed in `/Applications` or `~/Applications`</li>
               </ul>
 
-              <h3>Handling opened files</h3>
+### Handling opened files
 
               <p>Associated files are delivered through the existing `open-url` event as `file://` URLs:</p>
 
@@ -315,7 +315,7 @@ Electrobun.events.on("open-url", (e) => {
 ```
 
 
-              <h3>Dynamic Configuration</h3>
+### Dynamic Configuration
 
               <p>TypeScript config files support dynamic configuration with full type safety:</p>
 
@@ -346,11 +346,11 @@ export default {
 ```
 
 
-              <h2>ASAR Packaging</h2>
+## ASAR Packaging
 
               <p>Electrobun supports packaging your application resources into an ASAR archive. ASAR (Atom Shell Archive) is an archive format that combines multiple files into a single file, providing faster file access and improved security for production builds.</p>
 
-              <h3>Configuration Options</h3>
+### Configuration Options
 
               
 ```javascript
@@ -364,12 +364,12 @@ const config: ElectrobunConfig = {
 ```
 
 
-              <h4>useAsar</h4>
+#### useAsar
               <p><strong>Type:</strong> `boolean`</p>
               <p><strong>Default:</strong> `false`</p>
               <p>Enables ASAR packaging for your application resources. When enabled, the entire `app/` directory is packed into a single `app.asar` file.</p>
 
-              <h4>asarUnpack</h4>
+#### asarUnpack
               <p><strong>Type:</strong> `string[]`</p>
               <p><strong>Default:</strong> `["*.node", "*.dll", "*.dylib", "*.so"]`</p>
               <p>Glob patterns for files and folders that should be excluded from the ASAR archive. These files will remain unpacked in the `app.asar.unpacked` directory alongside the archive.</p>
@@ -382,7 +382,7 @@ const config: ElectrobunConfig = {
                 <li>Large binary files that don't benefit from archiving</li>
               </ul>
 
-              <h3>Example with ASAR Configuration</h3>
+### Example with ASAR Configuration
 
               
 ```javascript
@@ -411,7 +411,7 @@ export default {
 ```
 
 
-              <h3>Benefits of ASAR Packaging</h3>
+### Benefits of ASAR Packaging
 
               <ul>
                 <li><strong>Performance:</strong> Faster file access and reduced I/O operations</li>
@@ -420,21 +420,21 @@ export default {
                 <li><strong>Integrity:</strong> Single archive is easier to verify and protect</li>
               </ul>
 
-              <h2>Watch Configuration</h2>
+## Watch Configuration
 
               <p>When using `electrobun dev --watch`, the CLI automatically watches directories derived from your entrypoints and copy sources. You can extend or refine this behavior with the `watch` and `watchIgnore` options.</p>
 
-              <h3>watch</h3>
+### watch
               <p><strong>Type:</strong> `string[]`</p>
               <p><strong>Default:</strong> `undefined`</p>
               <p>Additional file or directory paths to watch for changes. Paths are relative to the project root. This is useful when you have files that affect your build but aren't listed as entrypoints or copy sources — for example, source files compiled by a `postBuild` hook.</p>
 
-              <h3>watchIgnore</h3>
+### watchIgnore
               <p><strong>Type:</strong> `string[]`</p>
               <p><strong>Default:</strong> `undefined`</p>
               <p>Glob patterns for files that should <strong>not</strong> trigger a rebuild when changed. Patterns are matched against project-relative paths. The `build/`, `artifacts/`, and `node_modules/` directories are always ignored automatically.</p>
 
-              <h3>Example</h3>
+### Example
 
               
 ```javascript
@@ -470,20 +470,20 @@ export default {
 ```
 
 
-              <h2>Renderer Configuration</h2>
+## Renderer Configuration
 
               <p>Electrobun supports multiple webview renderers. By default, it uses the system's native webview (WKWebKit on macOS, WebView2 on Windows, GTK WebKit on Linux). You can also bundle CEF (Chromium Embedded Framework) for a consistent cross-platform experience.</p>
 
-              <h3>Platform-specific Renderer Options</h3>
+### Platform-specific Renderer Options
 
               <p>Each platform (mac, linux, win) supports the following renderer options:</p>
 
-              <h4>bundleCEF</h4>
+#### bundleCEF
               <p><strong>Type:</strong> `boolean`</p>
               <p><strong>Default:</strong> `false`</p>
               <p>When `true`, CEF (Chromium Embedded Framework) is bundled with your application. This adds approximately 100MB+ to your app bundle but provides a consistent Chromium-based rendering experience across all platforms.</p>
 
-              <h4>defaultRenderer</h4>
+#### defaultRenderer
               <p><strong>Type:</strong> `'native' | 'cef'`</p>
               <p><strong>Default:</strong> `'native'`</p>
               <p>Sets the default renderer for all `BrowserWindow` and `BrowserView` instances when no explicit `renderer` option is specified. This allows you to bundle CEF and use it by default without having to specify `renderer: 'cef'` on every window/view.</p>
@@ -492,7 +492,7 @@ export default {
                 <p><strong>Note:</strong> Setting `defaultRenderer: 'cef'` only affects the default. You can still override it per-window or per-view by explicitly passing `renderer: 'native'` or `renderer: 'cef'` in the options.</p>
               </Aside>
 
-              <h3>Example: CEF as Default Renderer</h3>
+### Example: CEF as Default Renderer
 
               
 ```javascript
@@ -535,11 +535,11 @@ const settingsWindow = new BrowserWindow({
 ```
 
 
-              <h3>Accessing Build Configuration at Runtime</h3>
+### Accessing Build Configuration at Runtime
 
               <p>You can access the build configuration at runtime using the `BuildConfig` API. This is useful for knowing which renderers are available and what the default is. See the <a href="/electrobun/apis/build-config">BuildConfig API</a> documentation for details.</p>
 
-              <h3>Full example from the Electrobun Playground app</h3>
+### Full example from the Electrobun Playground app
 
               
 ```javascript
@@ -604,18 +604,18 @@ export default {
 ```
 
 
-              <h2>Custom Bun Version</h2>
+## Custom Bun Version
 
               <p>Each Electrobun release ships with a specific tested Bun version. You can override this with the `bunVersion` option in your build configuration to use a different version from <a href="https://github.com/oven-sh/bun/releases" target="_blank" rel="noopener">Bun's GitHub releases</a>.</p>
 
-              <h3>Why Override the Bun Version</h3>
+### Why Override the Bun Version
 
               <ul>
                 <li><strong>Use a newer version:</strong> If a newer Bun release includes a performance improvement, bug fix, or API you need, you can adopt it immediately without waiting for Electrobun to update its default.</li>
                 <li><strong>Pin an older version:</strong> If a newer Bun release introduces a regression that affects your app, you can pin to the version that works while you wait for a fix.</li>
               </ul>
 
-              <h3>Configuration</h3>
+### Configuration
 
               <p>Set the `bunVersion` field in the `build` section of your `electrobun.config.ts`. The value is a semver version string matching a <a href="https://github.com/oven-sh/bun/releases" target="_blank" rel="noopener">Bun release tag</a>:</p>
 
@@ -640,13 +640,13 @@ export default {
 ```
 
 
-              <h3>How It Works</h3>
+### How It Works
 
               <p>When `bunVersion` is set, the Electrobun CLI downloads the specified Bun binary from GitHub releases and caches it locally. The cached binary is stored in `node_modules/.electrobun-cache/bun-override/` so it survives both dist rebuilds and `bun install` (which replaces `node_modules/electrobun`).</p>
 
               <p>Unlike the CEF version override, no compilation or restructuring is needed &mdash; Bun is a single standalone binary with no external dependencies.</p>
 
-              <h3>Caching</h3>
+### Caching
 
               <p>The downloaded Bun binary is cached per platform and version. If you change `bunVersion`, the CLI detects the mismatch and re-downloads automatically. Removing the override restores the default Bun version shipped with your Electrobun release.</p>
 
@@ -654,7 +654,7 @@ export default {
                 <p><strong>See also:</strong> For overriding the CEF (Chromium) version, see <a href="/electrobun/apis/bundling-cef">Bundling CEF &mdash; Custom CEF Versions</a>.</p>
               </Aside>
 
-              <h2>Chromium Flags</h2>
+## Chromium Flags
 
               <p>You can pass custom Chromium command-line flags to CEF during initialization. This is useful for enabling debugging features, overriding browser behavior, or setting values like a custom user agent.</p>
 
@@ -665,7 +665,7 @@ export default {
                 <li>`false` &mdash; skip a default flag that Electrobun normally sets (e.g., `"disable-gpu": false` removes the built-in `--disable-gpu` flag)</li>
               </ul>
 
-              <h3>chromiumFlags</h3>
+### chromiumFlags
               <p><strong>Type:</strong> `Record<string, string | boolean>`</p>
               <p><strong>Default:</strong> `undefined` (no custom flags)</p>
 
@@ -707,7 +707,7 @@ const config: ElectrobunConfig = {
 ```
 
 
-              <h3>How It Works</h3>
+### How It Works
 
               <p>Flags defined in `chromiumFlags` are written into `Resources/build.json` during the build. At runtime, the native wrapper reads them and applies them to CEF's command line via `AppendSwitch` / `AppendSwitchWithValue`.</p>
 
@@ -724,7 +724,7 @@ const config: ElectrobunConfig = {
                 <p><strong>Note:</strong> Chromium flags are powerful and can change browser behavior in unexpected ways. Only use flags you understand. Electrobun does not validate flag names or values — they are passed directly to CEF.</p>
               </Aside>
 
-              <h3>Common Flags</h3>
+### Common Flags
 
               <table class="docs-table">
                 <thead>
@@ -755,11 +755,11 @@ const config: ElectrobunConfig = {
 
               <p>For a full list of Chromium command-line flags, see the <a href="https://peter.sh/experiments/chromium-command-line-switches/" target="_blank" rel="noopener">Chromium Command Line Switches</a> reference.</p>
 
-              <h2>Runtime Configuration</h2>
+## Runtime Configuration
 
               <p>The `runtime` section defines settings that affect your application's behaviour at runtime. These values are copied into `build.json` during the build and are accessible via the <a href="/electrobun/apis/build-config">BuildConfig API</a>.</p>
 
-              <h3>exitOnLastWindowClosed</h3>
+### exitOnLastWindowClosed
               <p><strong>Type:</strong> `boolean`</p>
               <p><strong>Default:</strong> `true`</p>
               <p>When `true`, the application automatically quits when the last `BrowserWindow` is closed. This is the most common expected behaviour for desktop applications.</p>
@@ -786,7 +786,7 @@ export default {
 ```
 
 
-              <h3>Custom Runtime Values</h3>
+### Custom Runtime Values
 
               <p>You can add arbitrary keys to the `runtime` section. The entire object is copied into `build.json` and available at runtime via `BuildConfig`:</p>
 
@@ -809,11 +809,11 @@ console.log(config.runtime?.myCustomSetting); // "hello"
 ```
 
 
-              <h2>Build Lifecycle Hooks</h2>
+## Build Lifecycle Hooks
 
               <p>Electrobun provides lifecycle hooks that let you run custom scripts at various stages of the build process. These hooks are configured in the `scripts` section of your `electrobun.config.ts`.</p>
 
-              <h3>Available Hooks</h3>
+### Available Hooks
 
               <p>Hooks are executed in the following order during a build:</p>
 
@@ -849,7 +849,7 @@ console.log(config.runtime?.myCustomSetting); // "hello"
                 </tbody>
               </table>
 
-              <h3>Configuration</h3>
+### Configuration
 
               <p>Specify hooks as paths to TypeScript or JavaScript files that will be executed with Bun:</p>
 
@@ -867,7 +867,7 @@ const config: ElectrobunConfig = {
 ```
 
 
-              <h3>Environment Variables</h3>
+### Environment Variables
 
               <p>All hook scripts receive the following environment variables:</p>
 
@@ -920,7 +920,7 @@ const config: ElectrobunConfig = {
                 <li>`ELECTROBUN_WRAPPER_BUNDLE_PATH` - Path to the self-extracting wrapper bundle</li>
               </ul>
 
-              <h3>Example: Adding files for Liquid Glass (macOS)</h3>
+### Example: Adding files for Liquid Glass (macOS)
 
               <p>The `postWrap` hook is ideal for adding files to the self-extracting wrapper before it's code signed. This is useful for macOS features like Liquid Glass that require specific files in the app bundle:</p>
 
@@ -955,7 +955,7 @@ console.log("postWrap hook completed");
 ```
 
 
-              <h3>Example: Build validation with preBuild</h3>
+### Example: Build validation with preBuild
 
               
 ```typescript
@@ -994,7 +994,7 @@ console.log("preBuild validation passed");
 ```
 
 
-              <h3>Example: Post-package notifications</h3>
+### Example: Post-package notifications
 
               
 ```typescript

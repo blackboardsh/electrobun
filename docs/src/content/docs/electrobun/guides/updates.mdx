@@ -1,7 +1,7 @@
 ---
 title: "Updates"
 ---
-              <h2>Introduction</h2>
+## Introduction
 
               <p>We've implemented a batteries included update mechanism. All you need is to bring your own static file host like AWS S3, Cloudflare R2, or GitHub Releases.</p>
 
@@ -11,11 +11,11 @@ title: "Updates"
                 <li>A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB</li>
               </ul>
 
-              <h2>Hosting on GitHub Releases</h2>
+## Hosting on GitHub Releases
 
               <p>GitHub Releases is a convenient option for hosting your update artifacts, especially for open source projects. Electrobun uses a flat, prefix-based naming scheme (e.g., `stable-macos-arm64-update.json`) that works with hosts that don't support folder structures.</p>
 
-              <h3>Configuration</h3>
+### Configuration
 
               <p>Set your `baseUrl` in `electrobun.config` to point to your GitHub Releases:</p>
 
@@ -31,7 +31,7 @@ export default {
 ```
 
 
-              <h3>Example GitHub Action</h3>
+### Example GitHub Action
 
               <p>Here's an example workflow that builds and publishes releases when you push a tag:</p>
 
@@ -96,9 +96,9 @@ jobs:
 
               <p>The `generate_release_notes: true` option uses GitHub's automatic release notes feature, which lists merged PRs and contributors since the last release.</p>
 
-              <h2>Limitations</h2>
+## Limitations
 
-              <h3>Single Patch File</h3>
+### Single Patch File
 
               <p>Electrobun only generates a single patch file per build - from the immediately previous version to the current version. This means:</p>
 
@@ -109,7 +109,7 @@ jobs:
 
               <p>This is a practical tradeoff that keeps the build process simple while still providing delta updates for users who update regularly.</p>
 
-              <h3>Canary Builds on GitHub Releases</h3>
+### Canary Builds on GitHub Releases
 
               <p>GitHub's `/releases/latest/download` URL only resolves to non-prerelease builds. This means:</p>
 

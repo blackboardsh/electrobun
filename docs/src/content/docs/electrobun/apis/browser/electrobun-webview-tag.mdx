@@ -2,11 +2,11 @@
 title: "Electrobun Webview Tag"
 ---
               
-              <h2>Introduction</h2>
+## Introduction
 
               <p>Electrobun's custom webview tag implementation behaves similarly to an enhanced iframe, but with key differences in capabilities and isolation. It serves as a positional anchor within the DOM, communicating with a Zig backend to manage a distinct, isolated BrowserView. This separation ensures full content isolation from the host webview, enhancing both security and performance.</p>
 
-              <h2>Basic Usage</h2>
+## Basic Usage
 
               <div class="code-block">
                 
@@ -28,7 +28,7 @@ title: "Electrobun Webview Tag"
 
               </div>
 
-              <h2>Compatibility</h2>
+## Compatibility
 
               <p>The Electrobun webview tag integrates seamlessly with any reactive JavaScript framework, such as React or SolidJS, allowing for dynamic interactions and updates without disrupting the isolation of the webview's contents.</p>
 
@@ -38,9 +38,10 @@ title: "Electrobun Webview Tag"
 
               <p>On Windows, passthrough and mask punch-through behavior is not supported on WebView2-backed webviews. WebView2 renders through an Intermediate D3D Window that bypasses the Windows compositor in a way that makes `SetWindowRgn`-based hole-cutting and `WS_EX_TRANSPARENT`-based hit-test passthrough ineffective. Enable `bundleCEF: true` so the webview tag is backed by CEF, which exposes a browser HWND that respects these APIs and supports both masks and passthrough on Windows.</p>
 
-              <h2>How is this different to Electron's webview tag</h2>
+## How is this different to Electron's webview tag
 
-              <h3>Chrome plans to deprecate their webview tag</h3>
+
+### Chrome plans to deprecate their webview tag
 
               <p>Electron's webview tag is based on a Chrome feature/api designed for Chrome apps which has been deprecated since 2020. You can read about that on <a href="https://github.com/electron/electron/issues/34356">Electron's Github</a> and in <a href="https://developer.chrome.com/docs/apps/reference/webviewTag">Chrome's developer docs</a>. The warning declares it "remains supported for Enterprise and Education customers on ChromeOS until at least Jan 2025" which is fast approaching.</p>
 
@@ -48,11 +49,11 @@ title: "Electrobun Webview Tag"
 
               <p>Unlike Electron's reliance on Chrome's now-deprecated webview tag, Electrobun introduces its own robust implementation that does not depend on Chrome's lifecycle. This independence ensures longevity and stability for applications using Electrobun's framework, even as Chrome phases out its support.</p>
 
-              <h3>Electrobun's webview tag is a separate layer</h3>
+### Electrobun's webview tag is a separate layer
 
               <p>Because Electrobun's webview tag implementation uses a div anchor and then positions a separate isolated BrowserView above the parent BrowserView there are some interesting edge cases where you may want to click on the parent document or do things within the parent DOM, so Electrobun provides various special methods for handling those situations. For example ways to mirror a screenshot of the webview tag's contents to the host's anchor and hide it or stream an image of the contents.</p>
 
-              <h2>Mask Selectors</h2>
+## Mask Selectors
 
               <p>Because the embedded webview is a separate native layer painted on top of the host page, normal DOM stacking (`z-index`, absolute positioning, fixed headers, dropdown menus, modals) cannot draw over it — the OOPIF always wins. Mask selectors solve this. You give the webview tag a list of CSS selectors that match elements in the host page, and Electrobun cuts holes in the embedded webview wherever those elements land, every frame. The host page paints through the holes, and clicks/scrolls in those regions hit the host element instead of the embedded content.</p>
 
@@ -100,25 +101,25 @@ webview.removeMaskSelector('.context-menu');
                 <li>The set of active selectors is exposed as the `maskSelectors` property if you need to inspect or iterate it.</li>
               </ul>
 
-              <h2>Properties and Attributes</h2>
+## Properties and Attributes
 
-              <h3>src</h3>
+### src
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> URL of the web page to load in the webview.</p>
 
-              <h3>html</h3>
+### html
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> HTML content to be directly loaded into the webview, useful for dynamic content generation.</p>
 
-              <h3>preload</h3>
+### preload
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> Path to a script that should be preloaded before any other scripts run in the webview.</p>
 
-              <h3>partition</h3>
+### partition
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> Sets a partition to provide separate storage for different sessions, useful in multi-user applications.</p>
 
-              <h3>sandbox</h3>
+### sandbox
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> When set to true, creates the webview in sandbox mode. Sandbox mode disables RPC communication and only allows event emission, making it suitable for loading untrusted third-party content securely.</p>
 
@@ -163,70 +164,70 @@ webview.removeMaskSelector('.context-menu');
 
               </div>
 
-              <h3>transparent</h3>
+### transparent
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> When set to true, makes the webview transparent, allowing underlying elements to be visible.</p>
 
-              <h3>passthroughEnabled</h3>
+### passthroughEnabled
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> Enables or disables mouse and touch events to pass through to underlying elements.</p>
 
-              <h3>masks</h3>
+### masks
               <p><strong>Type:</strong> `string` (comma-separated CSS selectors)<br />
               <strong>Description:</strong> Initial set of host-page CSS selectors to mask out of the embedded webview. Matching elements punch interactive holes through the OOPIF so host-page UI can render and receive input on top of it. See <a href="#mask-selectors">Mask Selectors</a> for the full explanation.</p>
 
-              <h3>maskSelectors</h3>
+### maskSelectors
               <p><strong>Type:</strong> `Set<string>`<br />
               <strong>Description:</strong> Runtime set of active mask selectors. Populated from the `masks` attribute on init and mutated by `addMaskSelector` / `removeMaskSelector`. Read it to inspect what is currently masked; prefer the methods over mutating the set directly so a sync is triggered.</p>
 
-              <h3>hidden</h3>
+### hidden
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> Controls the visibility of the webview.</p>
 
-              <h3>webviewId</h3>
+### webviewId
               <p><strong>Type:</strong> `number`<br />
               <strong>Description:</strong> A unique identifier for the webview instance, automatically managed by the system.</p>
 
-              <h3>id</h3>
+### id
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> The DOM ID for the webview element, automatically set to ensure uniqueness.</p>
 
-              <h2>Methods</h2>
+## Methods
 
-              <h3>canGoBack</h3>
+### canGoBack
               <p><strong>Returns:</strong> `Promise<boolean>`<br />
               <strong>Description:</strong> Determines if the webview can navigate backward.</p>
 
-              <h3>canGoForward</h3>
+### canGoForward
               <p><strong>Returns:</strong> `Promise<boolean>`<br />
               <strong>Description:</strong> Determines if the webview can navigate forward.</p>
 
-              <h3>on</h3>
+### on
               <p><strong>Parameters:</strong> `event: WebviewEventTypes, listener: () => &#123;&#125;`<br />
               <strong>Description:</strong> Attach event listeners for webview-specific events such as navigation and loading.</p>
 
-              <h3>off</h3>
+### off
               <p><strong>Parameters:</strong> `event: WebviewEventTypes, listener: () => &#123;&#125;`<br />
               <strong>Description:</strong> Detach event listeners for webview-specific events.</p>
 
-              <h3>syncDimensions</h3>
+### syncDimensions
               <p><strong>Parameters:</strong> `force: boolean = false`<br />
               <strong>Description:</strong> Synchronizes the dimensions and position of the webview with its anchor element in the DOM, optionally forcing an update.</p>
 
-              <h3>goBack</h3>
+### goBack
               <p><strong>Description:</strong> Navigates the webview back to the previous page.</p>
 
-              <h3>goForward</h3>
+### goForward
               <p><strong>Description:</strong> Navigates the webview forward to the next page.</p>
 
-              <h3>reload</h3>
+### reload
               <p><strong>Description:</strong> Reloads the current content in the webview.</p>
 
-              <h3>loadURL</h3>
+### loadURL
               <p><strong>Parameters:</strong> `url: string`<br />
               <strong>Description:</strong> Loads a given URL into the webview, similar to setting the `src` attribute.</p>
 
-              <h3>setNavigationRules</h3>
+### setNavigationRules
               <p><strong>Parameters:</strong> `rules: string[]`<br />
               <strong>Description:</strong> Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance.</p>
               <p><strong>Rule Format:</strong></p>
@@ -256,7 +257,7 @@ document.querySelector('electrobun-webview').setNavigationRules([
 
               </div>
 
-              <h3>executeJavascript</h3>
+### executeJavascript
               <p><strong>Parameters:</strong> `js: string`<br />
               <strong>Description:</strong> Execute arbitrary JavaScript in the webview. This is a fire-and-forget method that does not return a result. The JavaScript is dispatched to the webview's native process for execution.</p>
 
@@ -276,46 +277,46 @@ document.querySelector('electrobun-webview').executeJavascript(
 
               </div>
 
-              <h3>toggleTransparent</h3>
+### toggleTransparent
               <p><strong>Parameters:</strong> `value?: boolean`<br />
               <strong>Description:</strong> Toggles the transparency state of the webview.</p>
 
-              <h3>togglePassthrough</h3>
+### togglePassthrough
               <p><strong>Parameters:</strong> `value?: boolean`<br />
               <strong>Description:</strong> Toggles the ability for mouse and touch events to pass through the webview.</p>
 
-              <h3>toggleHidden</h3>
+### toggleHidden
               <p><strong>Parameters:</strong> `value?: boolean`<br />
               <strong>Description:</strong> Toggles the visibility of the webview.</p>
 
-              <h3>addMaskSelector</h3>
+### addMaskSelector
               <p><strong>Parameters:</strong> `selector: string`<br />
               <strong>Description:</strong> Adds a CSS selector to the active mask set and forces an immediate sync so any matching host-page elements start punching through the embedded webview right away. Safe to call repeatedly with the same selector — the underlying set deduplicates. See <a href="#mask-selectors">Mask Selectors</a>.</p>
 
-              <h3>removeMaskSelector</h3>
+### removeMaskSelector
               <p><strong>Parameters:</strong> `selector: string`<br />
               <strong>Description:</strong> Removes a previously added selector from the active mask set and forces an immediate sync. The selector string must match exactly what was passed to `addMaskSelector` (or what came from the `masks` attribute). No-op if the selector is not in the set.</p>
 
-              <h2>Events</h2>
+## Events
 
               <p>Use the `on` method to listen for events from the webview. Events are dispatched as CustomEvents with details in the `detail` property.</p>
 
-              <h3>dom-ready</h3>
+### dom-ready
               <p><strong>Description:</strong> Fired when the DOM of the webview's content has finished loading.</p>
 
-              <h3>did-navigate</h3>
+### did-navigate
               <p><strong>Description:</strong> Fired when the webview navigates to a new URL.</p>
 
-              <h3>did-navigate-in-page</h3>
+### did-navigate-in-page
               <p><strong>Description:</strong> Fired for in-page navigations (e.g., hash changes).</p>
 
-              <h3>did-commit-navigation</h3>
+### did-commit-navigation
               <p><strong>Description:</strong> Fired when the webview commits to navigating to a new URL.</p>
 
-              <h3>new-window-open</h3>
+### new-window-open
               <p><strong>Description:</strong> Fired when the webview attempts to open a new window (e.g., via `window.open()` or a link with `target="_blank"`).</p>
 
-              <h3>host-message</h3>
+### host-message
               <p><strong>Description:</strong> Fired when the webview's preload script sends a message to the host using `window.__electrobunSendToHost()`. The message payload is available in `event.detail`.</p>
 
               <div class="code-block">
@@ -330,11 +331,11 @@ document.querySelector('electrobun-webview').on('host-message', (event) => &#123
 
               </div>
 
-              <h2>Preload Scripts</h2>
+## Preload Scripts
 
               <p>Preload scripts run in the context of the webview before any page scripts execute. They have access to special APIs for communicating with the host.</p>
 
-              <h3>window.__electrobunSendToHost(message)</h3>
+### window.__electrobunSendToHost(message)
               <p><strong>Parameters:</strong> `message: any` (will be JSON serialized)<br />
               <strong>Description:</strong> Sends a message from the webview's preload script to the host BrowserWindow. The message will be received via the `host-message` event on the webview element.</p>
 
@@ -388,11 +389,11 @@ document.querySelector('electrobun-webview').on('host-message', (event) => &#123
 
               <p><strong>Note:</strong> The `__electrobunSendToHost` function is only available inside preload scripts running within an `electrobun-webview`. It is not available in regular page scripts.</p>
 
-              <h2>Security Considerations</h2>
+## Security Considerations
 
               <p>When embedding third-party content in your application, security is paramount. Electrobun provides multiple layers of protection:</p>
 
-              <h3>Sandbox Mode</h3>
+### Sandbox Mode
               <p>Always use `sandbox` attribute when loading untrusted content. This completely disables RPC communication, preventing the loaded content from accessing any application APIs.</p>
 
               <div class="code-block">
@@ -407,7 +408,7 @@ document.querySelector('electrobun-webview').on('host-message', (event) => &#123
 
               </div>
 
-              <h3>Navigation Rules</h3>
+### Navigation Rules
               <p>Combine sandbox mode with navigation rules to restrict where the webview can navigate. This prevents redirects to malicious sites.</p>
 
               <div class="code-block">
@@ -425,7 +426,7 @@ webview.setNavigationRules([
 
               </div>
 
-              <h3>Process Isolation</h3>
+### Process Isolation
               <p>Each `electrobun-webview` runs in a completely separate browser process. This provides:</p>
               <ul>
                 <li><strong>Memory isolation:</strong> Malicious content cannot read memory from your application</li>
@@ -433,7 +434,7 @@ webview.setNavigationRules([
                 <li><strong>Security boundary:</strong> Browser exploits are contained within the isolated process</li>
               </ul>
 
-              <h3>Best Practices</h3>
+### Best Practices
               <ul>
                 <li><strong>Always sandbox untrusted content:</strong> Use the `sandbox` attribute for any content you don't fully control</li>
                 <li><strong>Use navigation rules:</strong> Restrict navigation to prevent redirects to malicious sites</li>

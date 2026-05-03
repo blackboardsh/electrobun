@@ -101,7 +101,7 @@ export default {
 
   <p>Visit the <a href="/electrobun/apis/updater">Updater API docs</a> to learn how to make your app check for and install updates.</p>
 
-  <h2>Build Lifecycle Hooks</h2>
+## Build Lifecycle Hooks
 
   <p>Electrobun provides lifecycle hooks that let you run custom scripts at various stages of the build process. This is useful for tasks like:</p>
 
@@ -116,7 +116,7 @@ export default {
 
   <p>See the <a href="/electrobun/apis/cli/build-configuration#build-lifecycle-hooks">Build Configuration docs</a> for detailed information about each hook and example scripts.</p>
 
-  <h2>Artifacts Folder Structure</h2>
+## Artifacts Folder Structure
 
   <p>When you build your app, Electrobun creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
 
@@ -141,7 +141,7 @@ artifacts/
 
   <p>This flat structure works with any host, including GitHub Releases which don't support folders.</p>
 
-  <h3>Artifact Naming Conventions</h3>
+### Artifact Naming Conventions
 
   <p>App names are <strong>sanitized</strong> by removing spaces. For example, an app named "My Cool App" becomes "MyCoolApp" in all artifact filenames.</p>
 
@@ -149,7 +149,7 @@ artifacts/
 
   <p>Windows and Linux installers are distributed as archives (`.zip` and `.tar.gz` respectively). The archive filenames are sanitized (no spaces), but the installer files inside the archives preserve spaces for a user-friendly experience.</p>
 
-  <h3>macOS Artifacts</h3>
+### macOS Artifacts
 
   
 ```
@@ -165,7 +165,7 @@ stable-macos-arm64-MyCoolApp.app.tar.zst
 ```
 
 
-  <h3>Windows Artifacts</h3>
+### Windows Artifacts
 
   
 ```
@@ -181,7 +181,7 @@ stable-win-x64-MyCoolApp.tar.zst
 ```
 
 
-  <h3>Linux Artifacts</h3>
+### Linux Artifacts
 
   
 ```
@@ -197,7 +197,7 @@ stable-linux-x64-MyCoolApp.tar.zst
 ```
 
 
-  <h3>Constructing Download URLs</h3>
+### Constructing Download URLs
 
   <p>Since artifacts are already prefixed, the download URL is simply `{'{baseUrl}/{artifact-filename}'}`:</p>
 
@@ -222,7 +222,7 @@ https://releases.example.com/myapp/canary-linux-arm64-MyCoolAppSetup-canary.tar.
 ```
 
 
-  <h3>Platform Reference</h3>
+### Platform Reference
 
   <table class="docs-table">
     <thead>
@@ -255,6 +255,6 @@ https://releases.example.com/myapp/canary-linux-arm64-MyCoolAppSetup-canary.tar.
     </tbody>
   </table>
 
-  <h3>Patch Files</h3>
+### Patch Files
 
   <p>Patch files are named with the platform prefix and a hash representing the source version (e.g., `canary-macos-arm64-a1b2c3d4.patch`). When replacing the contents of your static file host, keep old patch files so users on older versions can step through incremental updates to reach the latest build.</p>

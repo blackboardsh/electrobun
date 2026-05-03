@@ -4,7 +4,7 @@ title: "CLI Commands"
               
               <p>The Electrobun CLI provides commands for initializing new projects and building your applications for different environments.</p>
 
-              <h2>Installation</h2>
+## Installation
 
               <p>When you install Electrobun, the CLI tool is added to your `node_modules/bin` folder:</p>
 
@@ -16,13 +16,13 @@ bun install electrobun
 
               <p>This makes the `electrobun` command available in your npm scripts or via `bunx`/`npx`.</p>
 
-              <h2>Commands</h2>
+## Commands
 
-              <h3>`electrobun init`</h3>
+### `electrobun init`
 
               <p>Initializes a new Electrobun project with starter templates.</p>
 
-              <h4>Usage</h4>
+#### Usage
 
               
 ```bash
@@ -34,7 +34,7 @@ electrobun init [template-name]
 ```
 
 
-              <h4>Available Templates</h4>
+#### Available Templates
 
               <ul>
                 <li>`hello-world` - Basic single-window application</li>
@@ -43,7 +43,7 @@ electrobun init [template-name]
                 <li>`multitab-browser` - Multi-tabbed web browser</li>
               </ul>
 
-              <h4>Examples</h4>
+#### Examples
 
               
 ```bash
@@ -58,11 +58,11 @@ bunx electrobun init multitab-browser
 ```
 
 
-              <h3>`electrobun build`</h3>
+### `electrobun build`
 
               <p>Builds your Electrobun application according to the configuration in `electrobun.config.ts`.</p>
 
-              <h4>Usage</h4>
+#### Usage
 
               
 ```
@@ -70,7 +70,7 @@ electrobun build [options]
 ```
 
 
-              <h4>Options</h4>
+#### Options
 
               <table class="options-table">
                 <thead>
@@ -93,7 +93,7 @@ electrobun build [options]
 
               <p>Builds always target the current host platform and architecture. To build for multiple platforms, use CI runners for each OS/architecture (see <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a>).</p>
 
-              <h4>Examples</h4>
+#### Examples
 
               
 ```bash
@@ -111,11 +111,11 @@ electrobun build --env=stable
 ```
 
 
-              <h3>`electrobun run`</h3>
+### `electrobun run`
 
               <p>Launches an already-built dev bundle. This is useful when you've already run `electrobun build` and just want to relaunch the app without rebuilding.</p>
 
-              <h4>Usage</h4>
+#### Usage
 
               
 ```
@@ -123,11 +123,11 @@ electrobun run
 ```
 
 
-              <h3>`electrobun dev`</h3>
+### `electrobun dev`
 
               <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `electrobun build --env=dev` followed by `electrobun run`.</p>
 
-              <h4>Usage</h4>
+#### Usage
 
               
 ```
@@ -135,7 +135,7 @@ electrobun dev [options]
 ```
 
 
-              <h4>Options</h4>
+#### Options
 
               <table class="options-table">
                 <thead>
@@ -152,7 +152,7 @@ electrobun dev [options]
                 </tbody>
               </table>
 
-              <h4>Examples</h4>
+#### Examples
 
               
 ```bash
@@ -164,7 +164,7 @@ electrobun dev --watch
 ```
 
 
-              <h4>Watch Mode</h4>
+#### Watch Mode
 
               <p>When using `--watch`, Electrobun automatically watches your source directories for file changes:</p>
 
@@ -183,9 +183,9 @@ electrobun dev --watch
 
               <p>Press <kbd>Ctrl+C</kbd> to stop the app and exit watch mode.</p>
 
-              <h2>Build Environments</h2>
+## Build Environments
 
-              <h3>Development (`dev`)</h3>
+### Development (`dev`)
 
               <ul>
                 <li>Outputs logs and errors to terminal</li>
@@ -195,7 +195,7 @@ electrobun dev --watch
                 <li>Fast iteration for testing</li>
               </ul>
 
-              <h3>Canary</h3>
+### Canary
 
               <ul>
                 <li>Pre-release/beta builds</li>
@@ -205,7 +205,7 @@ electrobun dev --watch
                 <li>Suitable for testing with limited users</li>
               </ul>
 
-              <h3>Stable</h3>
+### Stable
 
               <ul>
                 <li>Production-ready builds</li>
@@ -215,9 +215,9 @@ electrobun dev --watch
                 <li>Generates all update files</li>
               </ul>
 
-              <h2>Build Script Examples</h2>
+## Build Script Examples
 
-              <h3>Basic Setup</h3>
+### Basic Setup
 
               
 ```javascript
@@ -234,7 +234,7 @@ electrobun dev --watch
 ```
 
 
-              <h3>CI Build Scripts</h3>
+### CI Build Scripts
 
               <p>For multi-platform distribution, run the same build command on each platform's CI runner:</p>
 

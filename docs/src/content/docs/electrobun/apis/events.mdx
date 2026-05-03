@@ -6,9 +6,9 @@ import { Aside } from "@astrojs/starlight/components";
               
               <p>Event system in the main bun process</p>
 
-              <h2>Event Propagation</h2>
+## Event Propagation
 
-              <h3>Global Events</h3>
+### Global Events
 
               <p>Most events can be listened to directly on the thing firing them or globally.</p>
 
@@ -30,7 +30,7 @@ win.webview.on('will-navigate', (e) => {
 ```
 
 
-              <h3>Event.response</h3>
+### Event.response
 
               <p>You can set a response on some events. Typically these are events initiated from zig which freeze the zig process while waiting for a reply from bun. An example of this is the BrowserView `will-navigate` where objc requires a synchronous response. By freezing the zig process and waiting for bun we allow bun to remain async while the events propagate.</p>
 
@@ -49,21 +49,21 @@ Electrobun.events.on("will-navigate", (e) => {
 
               <p>As the event propagates through different handlers you can both read and write from the e.response value.</p>
 
-              <h3>Event.responseWasSet</h3>
+### Event.responseWasSet
 
               <p>A property that indicates the response has been set to something which can be useful when an event propagates through multiple handlers instead of trying to infer from the response value whether it was set or not.</p>
 
-              <h3>Event.clearResponse</h3>
+### Event.clearResponse
 
               <p>If a previous handler has set the e.response to something and you want to clear it, you can simply call `e.clearResponse()`</p>
 
-              <h3>Event.data</h3>
+### Event.data
 
               <p>Each event will set different event data</p>
 
-              <h2>Application Events</h2>
+## Application Events
 
-              <h3>open-url</h3>
+### open-url
 
               <p>Fired on macOS when the application is opened via a custom URL scheme or an associated file. File opens arrive as `file://` URLs through this same event.</p>
 
@@ -103,7 +103,7 @@ Electrobun.events.on("open-url", (e) => {
 
               <p><strong>Setup:</strong> To register deep links or file associations for your app, add `urlSchemes` and/or `fileAssociations` to your `electrobun.config.ts`. See the <a href="/electrobun/apis/cli/build-configuration">Build Configuration</a> docs for details.</p>
 
-              <h3>before-quit</h3>
+### before-quit
 
               <p>Fired before the application quits. This event fires regardless of what triggered the quit — whether from `Utils.quit()`, `process.exit()`, `exitOnLastWindowClosed`, or the updater.</p>
 
@@ -133,11 +133,11 @@ Electrobun.events.on("before-quit", (e) => {
                 <li>`allow` - Set to `false` to cancel the quit. If not set or set to `true`, the application will proceed to quit.</li>
               </ul>
 
-              <h2>Shutdown Lifecycle</h2>
+## Shutdown Lifecycle
 
               <p>Electrobun provides a unified shutdown flow that ensures your app's `before-quit` handler fires regardless of how the quit was triggered.</p>
 
-              <h3>Quit Triggers</h3>
+### Quit Triggers
 
               <p>All of the following quit paths go through the same lifecycle:</p>
 
@@ -150,7 +150,7 @@ Electrobun.events.on("before-quit", (e) => {
                 <li><strong>Updater:</strong> When the updater needs to restart the app</li>
               </ul>
 
-              <h3>Shutdown Sequence</h3>
+### Shutdown Sequence
 
               <p>When any quit trigger fires, the following sequence occurs:</p>
 
@@ -165,7 +165,7 @@ Electrobun.events.on("before-quit", (e) => {
                 <p><strong>Linux note:</strong> On Linux, system-initiated quit paths (Ctrl+C, window manager close, taskbar quit) do not currently fire `before-quit`. Programmatic quit via `Utils.quit()` and `process.exit()` works correctly on all platforms.</p>
               </Aside>
 
-              <h3>Ctrl+C Behavior (Dev Mode)</h3>
+### Ctrl+C Behavior (Dev Mode)
 
               <p>In dev mode (`bun dev`), Ctrl+C triggers a graceful shutdown:</p>
 
@@ -175,7 +175,7 @@ Electrobun.events.on("before-quit", (e) => {
                 <li><strong>Safety timeout:</strong> If the app hangs during shutdown for more than 10 seconds, it is automatically force-killed.</li>
               </ul>
 
-              <h3>Comparison with Node.js / Bun Exit Events</h3>
+### Comparison with Node.js / Bun Exit Events
 
               <p>Bun (and Node.js) provide built-in process exit events. Here's how they compare to Electrobun's `before-quit`:</p>
 
@@ -218,7 +218,7 @@ Electrobun.events.on("before-quit", (e) => {
                 <p><strong>Recommendation:</strong> Use Electrobun's `before-quit` event for all shutdown cleanup. It fires for every quit path, supports async operations, and can cancel the quit. The native `process.on("exit")` can be used as a last-resort sync hook, but `process.on("beforeExit")` will not fire in Electrobun apps.</p>
               </Aside>
 
-              <h3>Example: Complete Shutdown Handling</h3>
+### Example: Complete Shutdown Handling
 
               
 ```javascript

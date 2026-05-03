@@ -4,12 +4,12 @@ title: "Cross-Platform Development"
               
               <p>Electrobun enables you to build desktop applications that run on macOS, Windows, and Linux from a single codebase. This guide covers platform-specific considerations and best practices for cross-platform development.</p>
 
-              <h2>Platform-Specific Issues</h2>
+## Platform-Specific Issues
 
-              <h3>Window Management</h3>
+### Window Management
               <p>Some window options like frameless windows work differently on different OSes.</p>
 
-              <h3>Webview Behavior</h3>
+### Webview Behavior
 
               <p>Webview hiding and passthrough behavior varies between platforms:</p>
 
@@ -31,14 +31,14 @@ title: "Cross-Platform Development"
 ```
 
 
-              <h3>Linux</h3>
+### Linux
               <p>By default on Linux we use GTK windows and GTKWebkit webviews. This is as close to a "system" webview on Linux that's managed/updated by the OS. Some distros don't have this installed by default so you will need to ask your end users to install those dependencies.</p>
 
               <p>In addition GTK and GTKWebkit have severe limitations and are unable to handle Electrobun's more advanced webview layering and masking functionality.</p>
 
               <p>So we strongly recommend bundling CEF (just set bundleCEF to true in your electrobun.config.ts file) for your app's linux distribution. And make sure you open `new BrowserWindow()`s and `<electrobun-webview>`s with `renderer="cef"` which uses pure x11 windows.</p>
 
-              <h2>Building for Multiple Platforms</h2>
+## Building for Multiple Platforms
 
               <p>Electrobun builds for the current host platform. To produce builds for all platforms, use a CI service like GitHub Actions with a runner for each OS/architecture. GitHub Actions provides free CI runners for open-source projects covering all supported platforms.</p>
 
@@ -51,7 +51,7 @@ title: "Cross-Platform Development"
 
               <p>Electrobun's <a href="https://github.com/blackboardsh/electrobun">GitHub repository</a> includes a release workflow that builds natively on each platform using a build matrix. This is the recommended approach — each platform build runs on its native OS, avoiding cross-compilation complexity and ensuring platform-specific tools (code signing, icon utilities, etc.) work correctly.</p>
 
-              <h3>Architecture Considerations</h3>
+### Architecture Considerations
 
               <table class="docs-table">
                 <thead>
@@ -80,7 +80,7 @@ title: "Cross-Platform Development"
                 </tbody>
               </table>
 
-              <h2>Windows Console Output</h2>
+## Windows Console Output
 
               <p>On Windows, Electrobun builds your app as a GUI application (Windows subsystem) so that no console window appears when end users launch it. Dev builds automatically attach to the parent console so you can see `console.log` output and debug information in your terminal.</p>
 

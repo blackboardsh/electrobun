@@ -6,7 +6,7 @@ import { Aside } from "@astrojs/starlight/components";
               
               <p>Electrobun supports bundling CEF with your application for cross-platform consistency and advanced features. While the default system webview provides smaller bundle sizes, CEF ensures near-identical rendering and behavior across all platforms.</p>
 
-              <h2>Configuration</h2>
+## Configuration
 
               <p>To bundle CEF with your application, configure the `build` property in your `electrobun.config.ts` file:</p>
 
@@ -32,24 +32,24 @@ export const config: ElectrobunConfig = {
 ```
 
 
-              <h2>Platform Considerations</h2>
+## Platform Considerations
 
-              <h3>Windows</h3>
+### Windows
               <p>On Windows the system renderer is Webview2, which is essentially the inner renderer of Edge, which is Chromium based. So on Windows when using the system webview you get a Chromium-based renderer that the system manages updates for which is great for bundle size and security. But there may be differences between the version of Webview2 on the user's system vs. what Electrobun's binaries are built against, and there may be a difference in Chromium version between a given user's system and Chromium api's you need and so bundling CEF may be still be beneficial to pin the version of Chromium you distribute by including it in the bundle.</p>
 
-              <h3>Linux</h3>
+### Linux
               <Aside type="caution">
                 <p><strong>Bundling CEF is strongly recommended on Linux</strong> as the default GTKWebKit renderer doesn't support Electrobun's advanced layer compositing features. This means features like the `<electrobun-webview>` tag and complex window layering may not work correctly without CEF.</p>
               </Aside>
 
-              <h3>Bundle Size Impact</h3>
+### Bundle Size Impact
               <p>When bundling CEF, your application's initial self-extracting bundle will increase to approximately <strong>100MB</strong> compared to ~14MB with system webviews. However, incremental updates remain small (as little as 14KB) thanks to Electrobun's differential update system.</p>
 
-              <h2>Using CEF Renderer</h2>
+## Using CEF Renderer
 
               <p>When CEF is bundled, you need to specify `renderer="cef"` when creating windows or webviews:</p>
 
-              <h3>BrowserWindow API</h3>
+### BrowserWindow API
 
               
 ```javascript
@@ -74,7 +74,7 @@ const systemWindow = new BrowserWindow({
 ```
 
 
-              <h3>Electrobun Webview Tag</h3>
+### Electrobun Webview Tag
 
               
 ```javascript
@@ -95,9 +95,9 @@ const systemWindow = new BrowserWindow({
 ```
 
 
-              <h2>Mixed Renderer Support</h2>
+## Mixed Renderer Support
 
-              <h3>macOS and Windows</h3>
+### macOS and Windows
               <p>On macOS and Windows, when CEF is bundled, you can <strong>mix and match renderers</strong> within the same application:</p>
               <ul>
                 <li>Some windows can use the system webview for smaller memory footprint</li>
@@ -105,7 +105,7 @@ const systemWindow = new BrowserWindow({
                 <li>Individual `<electrobun-webview>` tags can specify their preferred renderer</li>
               </ul>
 
-              <h3>Linux Limitation</h3>
+### Linux Limitation
               <Aside type="caution">
                 <p><strong>On Linux, renderer mixing is not supported.</strong> The build process creates two separate Electrobun binaries:</p>
                 <ul>
@@ -115,7 +115,7 @@ const systemWindow = new BrowserWindow({
                 <p>This means all your webviews on Linux must use the same renderer - either all CEF or all system webview. You cannot mix them within a single application instance.</p>
               </Aside>
 
-              <h2>When to Bundle CEF</h2>
+## When to Bundle CEF
 
               <p>Consider bundling CEF when you need:</p>
 
@@ -136,7 +136,7 @@ const systemWindow = new BrowserWindow({
                 <li><strong>Faster initial download</strong> for users</li>
               </ul>
 
-              <h2>Example: Platform-Specific Configuration</h2>
+## Example: Platform-Specific Configuration
 
               <p>You can selectively bundle CEF for specific platforms:</p>
 
@@ -163,11 +163,11 @@ export const config: ElectrobunConfig = {
 
               <p>This configuration provides the best balance between bundle size and functionality for each platform.</p>
 
-              <h2>Custom CEF Versions</h2>
+## Custom CEF Versions
 
               <p>Each Electrobun release ships with a specific tested CEF version. You can override this with the `cefVersion` option in your build configuration to use a different version from the <a href="https://cef-builds.spotifycdn.com/" target="_blank" rel="noopener">Spotify CEF builds</a> CDN.</p>
 
-              <h3>Why Override the CEF Version</h3>
+### Why Override the CEF Version
 
               <p>There are two main reasons you might want to use a different CEF version:</p>
 
@@ -176,7 +176,7 @@ export const config: ElectrobunConfig = {
                 <li><strong>Use a newer version:</strong> If a newer CEF release includes a security fix or a Chromium feature you need, you don't have to wait for Electrobun to fully test and adopt it. You can point to the newer version immediately and unblock your own release.</li>
               </ul>
 
-              <h3>Configuration</h3>
+### Configuration
 
               <p>Set the `cefVersion` field in the `build` section of your `electrobun.config.ts`. The value must match the version string format used by <a href="https://cef-builds.spotifycdn.com/" target="_blank" rel="noopener">cef-builds.spotifycdn.com</a>:</p>
 
@@ -209,13 +209,13 @@ export default {
 
               <p>The format is `CEF_VERSION+chromium-CHROMIUM_VERSION`. You can find the exact version strings on the <a href="https://cef-builds.spotifycdn.com/" target="_blank" rel="noopener">Spotify CEF builds</a> page &mdash; look for the "minimal" distribution for your target platforms.</p>
 
-              <h3>How It Works</h3>
+### How It Works
 
               <p>When `cefVersion` is set, the Electrobun CLI downloads the CEF minimal distribution directly from Spotify's CDN and extracts the runtime files (shared libraries, resource packs, locales) into your local dependency cache. No compilation or build tools are required on your machine.</p>
 
               <p>Electrobun's helper process (`process_helper`) ships pre-built with each Electrobun release and communicates with CEF through its stable C API. This means the helper binary works with different CEF versions without recompilation, as long as the C API is compatible.</p>
 
-              <h3>Compatibility</h3>
+### Compatibility
 
               <Aside type="caution">
                 <p><strong>CEF versions must have a compatible C API with the Electrobun release you're using.</strong> CEF's C API is designed for ABI stability within the same major version line. Across major versions, breaking changes are possible and may cause runtime crashes or unexpected behavior.</p>
@@ -231,7 +231,7 @@ export default {
 
               <p>To see which CEF version your Electrobun release was built and tested against, check the `CEF_VERSION` constant in <a href="https://github.com/blackboardsh/electrobun/blob/main/package/build.ts" target="_blank" rel="noopener">package/build.ts</a> for your release tag.</p>
 
-              <h3>Caching</h3>
+### Caching
 
               <p>The downloaded CEF files are cached locally per platform and version. If you change `cefVersion`, the CLI detects the mismatch and re-downloads automatically. Removing the override restores the default CEF version shipped with your Electrobun release.</p>
 

@@ -2,7 +2,7 @@
 title: "Code Signing"
 ---
               
-              <h2>Mac</h2>
+## Mac
               <p>Apple often ships machines with expired certificates which is a huge pain. You can easily end up in a loop of generating certificates in the developer portal, installing them, and seeing the certificate is not trusted.</p>
 
               <p>You can avoid a lot of headaches by installing the full Xcode via the app store. Open XCode, click the app menu and the Settings. Go to the Accounts tab and add your developer account. Click "Manage Certificates". Then click the + sign and add a "Developer ID Application" certificate. If you open Keychain Access you should be able to see it if you search the Login keychain for "Developer ID Application". You can also log into the Apple Developer portal and look at your certificates and you'll see it there as well.</p>
@@ -61,7 +61,7 @@ echo $ELECTROBUN_TEAMID
 
               <p>The next time you build your app the Electrobun CLI will sign and notarize your app, then compress it into the self extractor and sign and notarize the self extractor for you.</p>
 
-              <h3>App Store Connect API Key (alternative)</h3>
+### App Store Connect API Key (alternative)
 
               <p>Instead of using an Apple ID and app-specific password, you can authenticate using an App Store Connect API key. This is often preferred for CI/CD environments and avoids issues with two-factor authentication.</p>
 
@@ -79,7 +79,7 @@ export ELECTROBUN_APPLEAPIISSUER="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
               <p>When these variables are set, Electrobun will use the API key for notarization instead of the Apple ID credentials. You still need `ELECTROBUN_DEVELOPER_ID` and `ELECTROBUN_TEAMID` for code signing.</p>
 
-              <h2>Unsigned Apps</h2>
+## Unsigned Apps
               <p>If you distribute an unsigned app (with `codesign: false`), users who download it from the internet will see a "damaged and can't be opened" error when trying to launch it. This happens because macOS adds a quarantine attribute to downloaded files, and Gatekeeper blocks unsigned quarantined apps.</p>
 
               <p>To run an unsigned app that was downloaded from the internet, users need to remove the quarantine attribute:</p>

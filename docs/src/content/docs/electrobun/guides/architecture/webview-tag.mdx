@@ -4,7 +4,7 @@ title: "Webview Tag Architecture"
 import { Aside } from "@astrojs/starlight/components";
 
               
-              <h2>Overview</h2>
+## Overview
 
               <p>The `<electrobun-webview>` tag is Electrobun's implementation of an Out-Of-Process IFrame (OOPIF), providing a secure, isolated, and performant way to embed web content within your application. Unlike traditional iframes or Electron's deprecated `<webview>` tag, Electrobun's approach offers full process isolation while maintaining seamless DOM integration.</p>
 
@@ -12,7 +12,7 @@ import { Aside } from "@astrojs/starlight/components";
                 <strong>Info:</strong> For a deep dive into the technical implementation and philosophy behind Electrobun's OOPIF approach, check out our blog post: <a href="https://blackboard.sh/blog/building-a-better-oopif">Building a Better OOPIF</a>
               </Aside>
 
-              <h2>Why Not Regular IFrames?</h2>
+## Why Not Regular IFrames?
 
               <p>Standard iframes come with significant limitations for desktop applications:</p>
               <ul>
@@ -22,7 +22,7 @@ import { Aside } from "@astrojs/starlight/components";
                 <li><strong>Feature limitations</strong>: Restricted access to native APIs and advanced browser features</li>
               </ul>
 
-              <h2>The OOPIF Advantage</h2>
+## The OOPIF Advantage
 
               <p>An Out-Of-Process IFrame (OOPIF) solves these limitations by:</p>
               <ul>
@@ -32,7 +32,7 @@ import { Aside } from "@astrojs/starlight/components";
                 <li><strong>Flexibility</strong>: Full control over content loading and permissions</li>
               </ul>
 
-              <h2>How It Works</h2>
+## How It Works
 
               <p>The `<electrobun-webview>` tag functions as a layer positioned above the main window, synchronized with the DOM element's position and size. This architecture provides:</p>
 
@@ -43,9 +43,9 @@ import { Aside } from "@astrojs/starlight/components";
                 <li><strong>Native Performance</strong>: Direct rendering without the overhead of iframe restrictions</li>
               </ol>
 
-              <h2>Key Features</h2>
+## Key Features
 
-              <h3>Full Isolation</h3>
+### Full Isolation
               <p>Each `<electrobun-webview>` runs in its own process, ensuring:</p>
               <ul>
                 <li>Crash protection (one webview crash doesn't affect others)</li>
@@ -53,7 +53,7 @@ import { Aside } from "@astrojs/starlight/components";
                 <li>Security boundaries between different content sources</li>
               </ul>
 
-              <h3>Seamless Communication</h3>
+### Seamless Communication
               <p>Fast inter-process communication (IPC) between:</p>
               <ul>
                 <li>The Bun main process</li>
@@ -61,10 +61,10 @@ import { Aside } from "@astrojs/starlight/components";
                 <li>Individual OOPIF webviews</li>
               </ul>
 
-              <h3>Not Deprecated</h3>
+### Not Deprecated
               <p>Unlike Electron's `<webview>` tag (which relies on Chromium's deprecated implementation scheduled for removal in January 2025), Electrobun's implementation is built from the ground up and will continue to be supported and improved.</p>
 
-              <h2>Usage Example</h2>
+## Usage Example
 
               
 ```
@@ -77,7 +77,7 @@ import { Aside } from "@astrojs/starlight/components";
 
               <p>The webview integrates seamlessly with your application's DOM while maintaining complete process isolation for security and performance.</p>
 
-              <h2>Architecture Benefits</h2>
+## Architecture Benefits
 
               <ul>
                 <li><strong>Security</strong>: Complete process isolation prevents cross-site scripting and other attacks</li>
