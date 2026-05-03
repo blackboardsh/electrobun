@@ -36,6 +36,8 @@ title: "Electrobun Webview Tag"
 
               <p>On Linux, passthrough and mask punch-through behavior for overlaid webview tags is not supported inside transparent `BrowserWindow`s. Transparent CEF windows are rendered offscreen into the parent X11 window, so native overlay children cannot reliably hit-test through themselves into the host DOM. Use a non-transparent window for masked/passthrough overlays on Linux.</p>
 
+              <p>On Windows, passthrough and mask punch-through behavior is not supported on WebView2-backed webviews. WebView2 renders through an Intermediate D3D Window that bypasses the Windows compositor in a way that makes `SetWindowRgn`-based hole-cutting and `WS_EX_TRANSPARENT`-based hit-test passthrough ineffective. Enable `bundleCEF: true` so the webview tag is backed by CEF, which exposes a browser HWND that respects these APIs and supports both masks and passthrough on Windows.</p>
+
               <h2>How is this different to Electron's webview tag</h2>
 
               <h3>Chrome plans to deprecate their webview tag</h3>
