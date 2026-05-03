@@ -2928,12 +2928,11 @@ public:
         if (webview) {
             // Resizing webview
             
-            // Set webview size
-            gtk_widget_set_size_request(webview, frame.width, frame.height);
-            
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
             if (wrapper) {
+                gtk_widget_set_size_request(webview, frame.width, frame.height);
+
                 // TODO: this only sort of works, the webview ends up half height
                 // and other overlay stuff is just janky and gross
                 // so people should probably use CEF if they want OOPIFs on linux
@@ -2955,6 +2954,8 @@ public:
                
                 // OOPIF positioned with coordinate adjustment
             } else {
+                gtk_widget_set_size_request(webview, -1, -1);
+
                 // For host webview, position directly with margins (can't be negative)
                 gtk_widget_set_margin_start(webview, MAX(0, frame.x));
                 gtk_widget_set_margin_top(webview, MAX(0, frame.y));
@@ -4917,6 +4918,8 @@ public:
 
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
+        gtk_widget_set_hexpand(overlay, TRUE);
+        gtk_widget_set_vexpand(overlay, TRUE);
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
         gtk_widget_show(overlay);
@@ -4926,6 +4929,8 @@ public:
         : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
+        gtk_widget_set_hexpand(overlay, TRUE);
+        gtk_widget_set_vexpand(overlay, TRUE);
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
         gtk_widget_show(overlay);
@@ -4945,6 +4950,12 @@ public:
             // Add webview to overlay container
             if (abstractViews.size() == 1) {
                 // First webview becomes the base layer (determines overlay size)
+                g_object_set(view->widget,
+                            "expand", TRUE,
+                            "hexpand", TRUE,
+                            "vexpand", TRUE,
+                            NULL);
+
                 gtk_container_add(GTK_CONTAINER(overlay), view->widget);
                 
                 // Now that widget is anchored, realize it for rendering
@@ -5063,11 +5074,6 @@ public:
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
             // The JavaScript ResizeObserver will handle repositioning them
-        }
-        
-        // Ensure the overlay spans the entire window for proper layering
-        if (overlay) {
-            gtk_widget_set_size_request(overlay, width, height);
         }
     }
 };
