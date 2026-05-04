@@ -2034,13 +2034,13 @@ async function buildLauncher() {
 		if (ARCH === "arm64") {
 			zigArgs = ["-Dtarget=aarch64-linux"];
 		} else {
-			zigArgs = ["-Dtarget=x86_64-linux"];
+			zigArgs = ["-Dtarget=x86_64-linux", "-Dcpu=baseline"];
 		}
 	} else if (OS === "macos") {
 		if (ARCH === "arm64") {
 			zigArgs = ["-Dtarget=aarch64-macos"];
 		} else {
-			zigArgs = ["-Dtarget=x86_64-macos"];
+			zigArgs = ["-Dtarget=x86_64-macos", "-Dcpu=baseline"];
 		}
 	}
 
