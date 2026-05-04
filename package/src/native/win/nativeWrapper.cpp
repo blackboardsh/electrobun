@@ -9229,7 +9229,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             // We use WS_CAPTION | WS_THICKFRAME so the system treats it as a
             // standard framed window (giving us shadow and border resizing),
             // then remove the caption bar area in WM_NCCALCSIZE.
-            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS
+                        | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_SYSMENU;
             data->chromeStyle = ChromeStyle::HiddenInset;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
