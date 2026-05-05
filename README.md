@@ -29,6 +29,17 @@ Don't miss our:
 - Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
 - so much more.
 
+### Webview TypeScript Types
+
+If you want explicit typing for custom elements in renderer code, import the type directly:
+
+```ts
+import type { WebviewTagElement } from "electrobun/webview";
+
+const webview = document.querySelector("electrobun-webview") as WebviewTagElement;
+webview.toggleHidden(false);
+```
+
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
