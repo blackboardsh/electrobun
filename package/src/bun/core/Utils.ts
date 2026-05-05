@@ -187,7 +187,7 @@ export const openFileDialog = async (
 		allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
 	});
 
-	const filePaths = result.split(",");
+	const filePaths = result.split("\x1C");
 	return filePaths;
 };
 
