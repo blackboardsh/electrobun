@@ -121,6 +121,17 @@ using electrobun::OperationGuard;
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
 
+// Check if we're running under the X11 GDK backend. GTK may also select
+// Wayland, so every GDK/X11 interop path must verify this before using Xlib.
+static bool isX11Backend() {
+#ifdef GDK_WINDOWING_X11
+    GdkDisplay* display = gdk_display_get_default();
+    return display != nullptr && GDK_IS_X11_DISPLAY(display);
+#else
+    return false;
+#endif
+}
+
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
     // Only log severe errors, ignore common ones like BadWindow for destroyed widgets
@@ -3727,10 +3738,12 @@ public:
 
         if (viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
-            if (gdkWindow) {
+            if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
                 display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
                 window = GDK_WINDOW_XID(gdkWindow);
                 return display && window;
+#endif
             }
         }
 
@@ -5643,15 +5656,19 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
-            // Force X11 backend on Wayland systems
-            setenv("GDK_BACKEND", "x11", 1);
+            // Don't force X11 — let GTK auto-detect the backend (X11 or Wayland).
+            // X11-specific code paths are guarded with GDK_IS_X11_DISPLAY() checks.
             
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
             
-            // Install X11 error handler for debugging
-            XSetErrorHandler(x11_error_handler);
+            // Install X11 error handler only when GTK selected the X11 backend.
+#ifdef GDK_WINDOWING_X11
+            if (isX11Backend()) {
+                XSetErrorHandler(x11_error_handler);
+            }
+#endif
             
             g_gtkInitialized = true;
             
@@ -6298,7 +6315,7 @@ void runGTKEventLoop() {
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
 
-    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
+    // Note: GDK backend auto-detected (Wayland or X11). X11-specific features guarded at runtime.
 
     gtk_main();
     g_shutdownComplete.store(true);
@@ -6493,7 +6510,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
-    
+   
    
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -7132,16 +7149,16 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             return;
         }
 
-        // GTK transparent toplevels use an RGBA visual, while Dawn/Vulkan expects
-        // the WGPU surface window to support opaque alpha. Use a default-visual
-        // X11 child for every GTK WGPU view so transparent and non-transparent
-        // Linux renderers share the same masking/passthrough behavior.
+        // On X11, GTK transparent toplevels use an RGBA visual while Dawn/Vulkan
+        // expects the WGPU surface window to support opaque alpha. Use a
+        // default-visual X11 child there; Wayland falls back to GtkDrawingArea.
         if (!gtk_widget_get_realized(windowWidget)) {
             gtk_widget_realize(windowWidget);
         }
 
         GdkWindow* parentGdkWindow = gtk_widget_get_window(windowWidget);
-        if (parentGdkWindow) {
+        if (parentGdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
             Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
             Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
 
@@ -7167,6 +7184,7 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 XFlush(display);
                 return;
             }
+#endif
         }
 
         if (parentGdkWindow) {
@@ -7274,8 +7292,10 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
     }
     if (view->viewWidget) {
         GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
-        if (gdkWindow) {
+        if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
             return reinterpret_cast<void*>(static_cast<uintptr_t>(GDK_WINDOW_XID(gdkWindow)));
+#endif
         }
     }
     return nullptr;
@@ -7848,8 +7868,11 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         } else if (view->viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
             if (!gdkWindow) return nullptr;
+            if (!isX11Backend()) return nullptr;
+#ifdef GDK_WINDOWING_X11
             display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
             window = GDK_WINDOW_XID(gdkWindow);
+#endif
         }
 
         if (!display || !window) return nullptr;
@@ -8128,9 +8151,11 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
             window = view->xWindow;
         } else if (view->viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
-            if (gdkWindow) {
+            if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
                 display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
                 window = GDK_WINDOW_XID(gdkWindow);
+#endif
             }
         }
 
@@ -10574,6 +10599,11 @@ ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback
     printf("GlobalShortcut: Setting callback (callback=%p)\n", callback);
     g_globalShortcutCallback = callback;
 
+    if (callback && !isX11Backend()) {
+        printf("GlobalShortcut: X11 backend unavailable; global shortcuts are disabled on Wayland\n");
+        return;
+    }
+
     // Start the event loop thread if not running
     if (!g_shortcutThreadRunning && callback) {
         printf("GlobalShortcut: Starting event loop thread\n");
@@ -10596,6 +10626,10 @@ ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback
 // Register a global keyboard shortcut
 ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
     printf("GlobalShortcut: registerGlobalShortcut called for '%s'\n", accelerator ? accelerator : "(null)");
+    if (!isX11Backend()) {
+        printf("GlobalShortcut: X11 backend unavailable; skipping shortcut registration on Wayland\n");
+        return false;
+    }
     
     if (!accelerator) {
         fprintf(stderr, "ERROR: Cannot register shortcut - accelerator is null\n");
@@ -10664,6 +10698,7 @@ ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
 
 // Unregister a global keyboard shortcut
 ELECTROBUN_EXPORT bool unregisterGlobalShortcut(const char* accelerator) {
+    if (!isX11Backend()) return false;
     if (!accelerator || !g_shortcutDisplay) return false;
 
     std::string accelStr(accelerator);
@@ -10696,6 +10731,10 @@ ELECTROBUN_EXPORT bool unregisterGlobalShortcut(const char* accelerator) {
 
 // Unregister all global keyboard shortcuts
 ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
+    if (!isX11Backend()) {
+        g_globalShortcuts.clear();
+        return;
+    }
     if (!g_shortcutDisplay) return;
 
     Window root = DefaultRootWindow(g_shortcutDisplay);
