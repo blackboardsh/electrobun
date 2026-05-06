@@ -121,10 +121,17 @@ using electrobun::OperationGuard;
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
 
+// Defined later in this file — isX11Backend() needs it before the full
+// declaration site. In C++, static members can be used after a prior
+// declaration in the same translation unit.
+static bool g_gtkInitialized;
+
 // Check if we're running under the X11 GDK backend. GTK may also select
 // Wayland, so every GDK/X11 interop path must verify this before using Xlib.
+// Returns false if GTK hasn't been initialized yet (backend unknown).
 static bool isX11Backend() {
 #ifdef GDK_WINDOWING_X11
+    if (!g_gtkInitialized) return false;
     GdkDisplay* display = gdk_display_get_default();
     return display != nullptr && GDK_IS_X11_DISPLAY(display);
 #else
@@ -5267,7 +5274,6 @@ static std::mutex g_containersMutex;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static std::mutex g_traysMutex;
 #endif
-static bool g_gtkInitialized = false;
 static std::mutex g_gtkInitMutex;
 static std::condition_variable g_gtkInitCondition;
 
@@ -5663,9 +5669,12 @@ void initializeGTK() {
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
             
-            // Install X11 error handler only when GTK selected the X11 backend.
+            // Install X11 error handler when X11 is in use (either as GDK
+            // backend or via CEF's own Xlib usage). Without this handler,
+            // asynchronous X11 errors hit the default Xlib handler which
+            // terminates the process.
 #ifdef GDK_WINDOWING_X11
-            if (isX11Backend()) {
+            if (isX11Backend() || isCEFAvailable()) {
                 XSetErrorHandler(x11_error_handler);
             }
 #endif
@@ -7868,7 +7877,10 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         } else if (view->viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
             if (!gdkWindow) return nullptr;
-            if (!isX11Backend()) return nullptr;
+            if (!isX11Backend()) {
+                fprintf(stderr, "wgpuCreateSurfaceForView: WGPU surface creation requires X11; not available on this backend\n");
+                return nullptr;
+            }
 #ifdef GDK_WINDOWING_X11
             display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
             window = GDK_WINDOW_XID(gdkWindow);
