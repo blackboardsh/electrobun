@@ -63,6 +63,7 @@ Don't miss our:
 - [GOG Achievements GUI](https://github.com/timendum/gog-achievements-gui) - desktop app for managing GOG achievements
 - [groov](https://github.com/laurenzcodes/groov) - desktop audio deck monitor
 - [Guerilla Glass](https://github.com/okikeSolutions/guerillaglass) - open-source cross-platform creator studio for fast Record -> Edit -> Deliver workflows
+- [Inferay](https://github.com/raymondreaming/inferay) - desktop AI coding workspace for running and coordinating coding agents
 - [Marginalia](https://github.com/lars-hoeijmans/Marginalia) - a simple note taking app
 - [MarkBun](https://github.com/xiaochong/markbun) - fast, beautiful, Typora-like markdown desktop editor
 - [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
