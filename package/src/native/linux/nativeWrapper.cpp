@@ -2658,18 +2658,12 @@ public:
         // Set size
         gtk_widget_set_size_request(webview, (int)width, (int)height);
         
-        // Check if parent window is transparent and apply transparency to webview
-        GtkWidget* toplevel = gtk_widget_get_toplevel(window);
-        if (GTK_IS_WINDOW(toplevel)) {
-            // Check if window has RGBA visual (transparent)
-            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(toplevel));
-            GdkVisual* visual = gtk_widget_get_visual(toplevel);
-            if (visual && gdk_screen_get_rgba_visual(screen) == visual) {
-                // Window is transparent, make webview transparent too
-                GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
-                webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
-                printf("GTK WebKit: Applied transparent background to webview\n");
-            }
+        // Only apply transparent background when explicitly requested.
+        // On Wayland, GDK may default to RGBA visuals even for opaque windows,
+        // so checking the visual is unreliable — use the explicit flag instead.
+        if (isTransparent) {
+            GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
+            webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
         }
         
         // Add preload scripts
