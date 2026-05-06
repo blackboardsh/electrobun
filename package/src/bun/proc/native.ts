@@ -186,18 +186,18 @@ export const native = (() => {
 				args: [FFIType.ptr],
 				returns: FFIType.bool,
 			},
-				setWindowPosition: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
-				setWindowButtonPosition: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
-				setWindowSize: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
+			setWindowPosition: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowButtonPosition: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowSize: {
+				args: [FFIType.ptr, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
 			setWindowFrame: {
 				args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
@@ -227,6 +227,7 @@ export const native = (() => {
 					FFIType.cstring, // electrobunPreloadScript
 					FFIType.cstring, // customPreloadScript
 					FFIType.cstring, // viewsRoot
+					FFIType.cstring, // userAgent (optional)
 					FFIType.bool, // transparent
 					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
 				],
@@ -1127,32 +1128,32 @@ const _ffiImpl = {
 			return native_.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
 		},
 
-			setWindowPosition: (params: { winId: number; x: number; y: number }) => {
-				const { winId, x, y } = params;
-				const windowPtr = getWindowPtr(winId);
+		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = getWindowPtr(winId);
 
-				if (!windowPtr) {
-					throw `Can't set window position. Window no longer exists`;
-				}
+			if (!windowPtr) {
+				throw `Can't set window position. Window no longer exists`;
+			}
 
-				native_.symbols.setWindowPosition(windowPtr, x, y);
-			},
+			native_.symbols.setWindowPosition(windowPtr, x, y);
+		},
 
-			setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
-				const { winId, x, y } = params;
-				const windowPtr = getWindowPtr(winId);
+		setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = getWindowPtr(winId);
 
-				if (!windowPtr) {
-					throw `Can't set window button position. Window no longer exists`;
-				}
+			if (!windowPtr) {
+				throw `Can't set window button position. Window no longer exists`;
+			}
 
-				native_.symbols.setWindowButtonPosition(windowPtr, x, y);
-			},
+			native_.symbols.setWindowButtonPosition(windowPtr, x, y);
+		},
 
-			setWindowSize: (params: {
-				winId: number;
-				width: number;
-				height: number;
+		setWindowSize: (params: {
+			winId: number;
+			width: number;
+			height: number;
 		}) => {
 			const { winId, width, height } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1237,6 +1238,7 @@ const _ffiImpl = {
 			sandbox: boolean;
 			startTransparent: boolean;
 			startPassthrough: boolean;
+			userAgent?: string | null;
 		}): FFIType.ptr => {
 			const {
 				id,
@@ -1256,6 +1258,7 @@ const _ffiImpl = {
 				sandbox,
 				startTransparent,
 				startPassthrough,
+				userAgent,
 			} = params;
 
 			const parentWindow = BrowserWindow.getById(windowId);
@@ -1329,6 +1332,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(electrobunPreload),
 				toCString(customPreload || ""),
 				toCString(viewsRoot || ""),
+				toCString(userAgent || ""),
 				transparent,
 				sandbox, // When true, bunBridge and internalBridge are not set up in native code
 			);
@@ -2000,12 +2004,12 @@ const windowBlurCallback = new JSCallback(
 		const event = handler({
 			id,
 		});
-		
+
 		// global event
-        electrobunEventEmitter.emitEvent(event);
-        electrobunEventEmitter.emitEvent(event, id);
-  },
-  {
+		electrobunEventEmitter.emitEvent(event);
+		electrobunEventEmitter.emitEvent(event, id);
+	},
+	{
 		args: ["u32"],
 		returns: "void",
 		threadsafe: true,
@@ -2453,8 +2457,8 @@ const webviewEventHandler = (id: number, eventName: string, detail: string) => {
 	const mappedName = eventMap[eventName];
 	const handler = mappedName
 		? (electrobunEventEmitter.events.webview as Record<string, unknown>)[
-				mappedName
-			]
+		mappedName
+		]
 		: undefined;
 
 	if (!handler) {
@@ -2760,6 +2764,7 @@ type WebviewTagInitParams = {
 	sandbox: boolean;
 	transparent: boolean;
 	passthrough: boolean;
+	userAgent?: string | null;
 };
 
 type WgpuTagInitParams = {
@@ -2785,6 +2790,7 @@ export const internalRpcHandlers = {
 				sandbox,
 				transparent,
 				passthrough,
+				userAgent,
 			} = params;
 
 			const url = !params.url && !html ? "https://electrobun.dev" : params.url;
@@ -2803,6 +2809,7 @@ export const internalRpcHandlers = {
 				sandbox,
 				startTransparent: transparent,
 				startPassthrough: passthrough,
+				userAgent: userAgent ?? null,
 			});
 
 			return webviewForTag.id;
@@ -3177,40 +3184,40 @@ export const internalRpcHandlers = {
 export type MenuItemConfig =
 	| { type: "divider" | "separator" }
 	| {
-			type: "normal";
-			label: string;
-			tooltip?: string;
-			action?: string;
-			data?: any;
-			submenu?: Array<MenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-	  };
+		type: "normal";
+		label: string;
+		tooltip?: string;
+		action?: string;
+		data?: any;
+		submenu?: Array<MenuItemConfig>;
+		enabled?: boolean;
+		checked?: boolean;
+		hidden?: boolean;
+	};
 
 export type ApplicationMenuItemConfig =
 	| { type: "divider" | "separator" }
 	| {
-			type?: "normal";
-			label: string;
-			tooltip?: string;
-			action?: string;
-			data?: any;
-			submenu?: Array<ApplicationMenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-			accelerator?: string;
-	  }
+		type?: "normal";
+		label: string;
+		tooltip?: string;
+		action?: string;
+		data?: any;
+		submenu?: Array<ApplicationMenuItemConfig>;
+		enabled?: boolean;
+		checked?: boolean;
+		hidden?: boolean;
+		accelerator?: string;
+	}
 	| {
-			type?: "normal";
-			label?: string;
-			tooltip?: string;
-			role?: string;
-			data?: any;
-			submenu?: Array<ApplicationMenuItemConfig>;
-			enabled?: boolean;
-			checked?: boolean;
-			hidden?: boolean;
-			accelerator?: string;
-	  };
+		type?: "normal";
+		label?: string;
+		tooltip?: string;
+		role?: string;
+		data?: any;
+		submenu?: Array<ApplicationMenuItemConfig>;
+		enabled?: boolean;
+		checked?: boolean;
+		hidden?: boolean;
+		accelerator?: string;
+	};

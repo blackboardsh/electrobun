@@ -32,6 +32,7 @@ interface WebviewTagElement extends HTMLElement {
 	html: string | null;
 	preload: string | null;
 	renderer: "cef" | "native";
+	userAgent?: string | null;
 
 	// Mask management
 	addMaskSelector(selector: string): void;

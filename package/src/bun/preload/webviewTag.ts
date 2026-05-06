@@ -85,6 +85,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			| "native"
 			| "cef";
 		const masks = this.getAttribute("masks");
+		const userAgent = this.getAttribute("user-agent") || this.getAttribute("userAgent");
 		// Sandbox attribute: when present, the child webview is sandboxed (no RPC, events only)
 		const sandbox = this.hasAttribute("sandbox");
 		this.sandboxed = sandbox;
@@ -119,6 +120,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 				sandbox,
 				transparent,
 				passthrough,
+				userAgent,
 			})) as number;
 
 			this.webviewId = webviewId;
