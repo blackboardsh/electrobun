@@ -125,6 +125,11 @@ using electrobun::OperationGuard;
 // declaration site. In C++, static members can be used after a prior
 // declaration in the same translation unit.
 static std::atomic<bool> g_gtkInitialized{false};
+// Intentionally permissive until GTK selects the real backend. Some legacy
+// startup paths register X11 callbacks before gtk_init(); treating that phase
+// as X11-compatible preserves the old behavior, and the X11 thread fails
+// gracefully if no display exists. Once GTK is initialized this cache is set to
+// the actual GDK backend and Wayland guards become authoritative.
 static std::atomic<bool> g_isX11Backend{true};
 
 // Check if we're running under the X11 GDK backend. GTK may also select
@@ -133,6 +138,7 @@ static std::atomic<bool> g_isX11Backend{true};
 // register callbacks before gtk_init() are not permanently disabled.
 static bool isX11Backend() {
 #ifdef GDK_WINDOWING_X11
+    if (!g_gtkInitialized.load(std::memory_order_acquire)) return true;
     return g_isX11Backend.load(std::memory_order_acquire);
 #else
     return false;
@@ -2661,7 +2667,7 @@ public:
         // Only apply transparent background when explicitly requested.
         // On Wayland, GDK may default to RGBA visuals even for opaque windows,
         // so checking the visual is unreliable — use the explicit flag instead.
-        if (isTransparent) {
+        if (pendingStartTransparent) {
             GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
             webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
         }
@@ -10692,6 +10698,8 @@ static void shortcutEventLoop() {
 ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
     printf("GlobalShortcut: Setting callback (callback=%p)\n", callback);
     g_globalShortcutCallback = callback;
+
+    waitForGTKInit();
 
     if (callback && !isX11Backend()) {
         printf("GlobalShortcut: X11 backend unavailable; global shortcuts are disabled on Wayland\n");
