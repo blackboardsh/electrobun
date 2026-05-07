@@ -4685,6 +4685,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			appHandle = await runApp(config, {
 				onExit: () => {
 					appHandle = null;
+					if (!shuttingDown) {
+						cleanup();
+						process.exit(0);
+					}
 				},
 			});
 		} catch (error) {
