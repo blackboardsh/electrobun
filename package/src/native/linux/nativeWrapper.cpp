@@ -2710,6 +2710,9 @@ public:
         // Enable context menu (right-click menu)
         g_signal_connect(webview, "context-menu", G_CALLBACK(onContextMenu), this);
         
+        // Required for scroll events to fire on GTK3/Wayland
+        gtk_widget_add_events(webview, GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK);
+
         // Debug scroll events
         g_signal_connect(webview, "scroll-event", G_CALLBACK(onScrollEvent), this);
         
@@ -3270,8 +3273,6 @@ public:
     }
     
     static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
-        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
     
@@ -4974,6 +4975,16 @@ public:
                 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
                 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -4997,6 +5008,16 @@ public:
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -5022,6 +5043,16 @@ public:
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -5092,23 +5123,52 @@ public:
     }
 };
 
+// Debounce state for configure events
+static guint g_configureTimerId = 0;
+static int g_pendingX = 0, g_pendingY = 0, g_pendingW = 0, g_pendingH = 0;
+static ContainerView* g_pendingContainer = nullptr;
+
+static gboolean onConfigureTimer(gpointer data) {
+    ContainerView* container = g_pendingContainer ? g_pendingContainer : static_cast<ContainerView*>(data);
+    if (container) {
+        container->resizeAutoSizingViews(g_pendingW, g_pendingH);
+        
+        if (container->moveCallback) {
+            container->moveCallback(container->windowId, g_pendingX, g_pendingY);
+        }
+        
+        if (container->resizeCallback) {
+            container->resizeCallback(container->windowId, g_pendingX, g_pendingY, g_pendingW, g_pendingH);
+        }
+    }
+    g_configureTimerId = 0;
+    g_pendingContainer = nullptr;
+    return G_SOURCE_REMOVE;
+}
+
 // Window configure callback for move and resize events
 static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
-    if (container) {
-        // Handle resize events
-        container->resizeAutoSizingViews(event->width, event->height);
-        
-        // Handle move events - call the move callback with position
-        if (container->moveCallback) {
-            container->moveCallback(container->windowId, event->x, event->y);
-        }
-        
-        // Handle resize events - call the resize callback with position and size
-        if (container->resizeCallback) {
-            container->resizeCallback(container->windowId, event->x, event->y, event->width, event->height);
-        }
+    if (!container) return FALSE;
+    
+    // Always resize views immediately for responsive UI, but debounce FFI callbacks
+    container->resizeAutoSizingViews(event->width, event->height);
+    
+    // Store latest dimensions
+    g_pendingX = event->x;
+    g_pendingY = event->y;
+    g_pendingW = event->width;
+    g_pendingH = event->height;
+    g_pendingContainer = container;
+    
+    // Remove existing timer if pending
+    if (g_configureTimerId > 0) {
+        g_source_remove(g_configureTimerId);
     }
+    
+    // Schedule callback after 50ms of no further events
+    g_configureTimerId = g_timeout_add(50, onConfigureTimer, container);
+    
     return FALSE; // Let other handlers process this event too
 }
 
@@ -5121,7 +5181,22 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 // Window delete event callback - handles X button clicks
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
+    
+    // Close WebKit inspectors before destroying the window.
+    // The inspector keeps its own GTK window alive which prevents
+    // gtk_main_quit() from actually stopping the event loop.
     if (container) {
+        for (auto& view : container->abstractViews) {
+            if (auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(view.get())) {
+                if (webKitView->widget) {
+                    WebKitWebInspector* inspector = webkit_web_view_get_inspector(WEBKIT_WEB_VIEW(webKitView->widget));
+                    if (inspector) {
+                        webkit_web_inspector_close(inspector);
+                    }
+                }
+            }
+        }
+        
         if (container->closeCallback) {
             container->closeCallback(container->windowId);
         }
@@ -5634,7 +5709,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         // Determine MIME type using shared function
         std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
         const char* mimeType = mimeTypeStr.c_str();
-
         // Create response
         GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
         webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
