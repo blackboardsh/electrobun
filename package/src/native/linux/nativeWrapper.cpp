@@ -124,16 +124,16 @@ using electrobun::OperationGuard;
 // Defined later in this file — isX11Backend() needs it before the full
 // declaration site. In C++, static members can be used after a prior
 // declaration in the same translation unit.
-static bool g_gtkInitialized;
+static std::atomic<bool> g_gtkInitialized{false};
+static std::atomic<bool> g_isX11Backend{true};
 
 // Check if we're running under the X11 GDK backend. GTK may also select
 // Wayland, so every GDK/X11 interop path must verify this before using Xlib.
-// Returns false if GTK hasn't been initialized yet (backend unknown).
+// Defaults to true before GTK initialization so X11-only startup paths that
+// register callbacks before gtk_init() are not permanently disabled.
 static bool isX11Backend() {
 #ifdef GDK_WINDOWING_X11
-    if (!g_gtkInitialized) return false;
-    GdkDisplay* display = gdk_display_get_default();
-    return display != nullptr && GDK_IS_X11_DISPLAY(display);
+    return g_isX11Backend.load(std::memory_order_acquire);
 #else
     return false;
 #endif
@@ -4927,6 +4927,11 @@ public:
     WindowFocusCallback focusCallback;
     WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
+    guint configureTimerId = 0;
+    int pendingConfigureX = 0;
+    int pendingConfigureY = 0;
+    int pendingConfigureW = 0;
+    int pendingConfigureH = 0;
   
     ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
@@ -4938,6 +4943,17 @@ public:
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
         gtk_widget_show(overlay);
+    }
+
+    ~ContainerView() {
+        cancelConfigureTimer();
+    }
+    
+    void cancelConfigureTimer() {
+        if (configureTimerId > 0) {
+            g_source_remove(configureTimerId);
+            configureTimerId = 0;
+        }
     }
     
     ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
@@ -5123,26 +5139,20 @@ public:
     }
 };
 
-// Debounce state for configure events
-static guint g_configureTimerId = 0;
-static int g_pendingX = 0, g_pendingY = 0, g_pendingW = 0, g_pendingH = 0;
-static ContainerView* g_pendingContainer = nullptr;
-
 static gboolean onConfigureTimer(gpointer data) {
-    ContainerView* container = g_pendingContainer ? g_pendingContainer : static_cast<ContainerView*>(data);
+    ContainerView* container = static_cast<ContainerView*>(data);
     if (container) {
-        container->resizeAutoSizingViews(g_pendingW, g_pendingH);
+        container->configureTimerId = 0;
+        container->resizeAutoSizingViews(container->pendingConfigureW, container->pendingConfigureH);
         
         if (container->moveCallback) {
-            container->moveCallback(container->windowId, g_pendingX, g_pendingY);
+            container->moveCallback(container->windowId, container->pendingConfigureX, container->pendingConfigureY);
         }
         
         if (container->resizeCallback) {
-            container->resizeCallback(container->windowId, g_pendingX, g_pendingY, g_pendingW, g_pendingH);
+            container->resizeCallback(container->windowId, container->pendingConfigureX, container->pendingConfigureY, container->pendingConfigureW, container->pendingConfigureH);
         }
     }
-    g_configureTimerId = 0;
-    g_pendingContainer = nullptr;
     return G_SOURCE_REMOVE;
 }
 
@@ -5155,19 +5165,16 @@ static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, g
     container->resizeAutoSizingViews(event->width, event->height);
     
     // Store latest dimensions
-    g_pendingX = event->x;
-    g_pendingY = event->y;
-    g_pendingW = event->width;
-    g_pendingH = event->height;
-    g_pendingContainer = container;
+    container->pendingConfigureX = event->x;
+    container->pendingConfigureY = event->y;
+    container->pendingConfigureW = event->width;
+    container->pendingConfigureH = event->height;
     
     // Remove existing timer if pending
-    if (g_configureTimerId > 0) {
-        g_source_remove(g_configureTimerId);
-    }
+    container->cancelConfigureTimer();
     
     // Schedule callback after 50ms of no further events
-    g_configureTimerId = g_timeout_add(50, onConfigureTimer, container);
+    container->configureTimerId = g_timeout_add(50, onConfigureTimer, container);
     
     return FALSE; // Let other handlers process this event too
 }
@@ -5729,13 +5736,19 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
-        if (!g_gtkInitialized) {
+        if (!g_gtkInitialized.load(std::memory_order_acquire)) {
             // Don't force X11 — let GTK auto-detect the backend (X11 or Wayland).
             // X11-specific code paths are guarded with GDK_IS_X11_DISPLAY() checks.
             
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
+
+#ifdef GDK_WINDOWING_X11
+            GdkDisplay* display = gdk_display_get_default();
+            g_isX11Backend.store(display != nullptr && GDK_IS_X11_DISPLAY(display), std::memory_order_release);
+#endif
+            g_gtkInitialized.store(true, std::memory_order_release);
             
             // Install X11 error handler when X11 is in use (either as GDK
             // backend or via CEF's own Xlib usage). Without this handler,
@@ -5746,8 +5759,6 @@ void initializeGTK() {
                 XSetErrorHandler(x11_error_handler);
             }
 #endif
-            
-            g_gtkInitialized = true;
             
             // Register the views:// URI scheme handler AFTER GTK is initialized
             WebKitWebContext* context = webkit_web_context_get_default();
@@ -5761,7 +5772,7 @@ void initializeGTK() {
 // Helper function to wait for GTK initialization
 void waitForGTKInit() {
     std::unique_lock<std::mutex> lock(g_gtkInitMutex);
-    g_gtkInitCondition.wait(lock, []{ return g_gtkInitialized; });
+    g_gtkInitCondition.wait(lock, []{ return g_gtkInitialized.load(std::memory_order_acquire); });
 }
 
 // Helper function to dispatch to main thread synchronously
@@ -6664,6 +6675,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
             if (container && container->windowId > 0) {
+                container->cancelConfigureTimer();
                 std::lock_guard<std::mutex> lock(g_containersMutex);
                 g_containers.erase(container->windowId);
             }
@@ -9718,6 +9730,8 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
     }
     
     if (container) {
+        container->cancelConfigureTimer();
+
         // Clean up all webviews in this container
         for (auto& webview : container->abstractViews) {
             if (webview) {
