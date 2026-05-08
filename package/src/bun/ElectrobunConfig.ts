@@ -435,6 +435,22 @@ export interface ElectrobunConfig {
 		 */
 		exitOnLastWindowClosed?: boolean;
 
+		/**
+		 * Transport used for trusted WebView <-> Bun RPC.
+		 *
+		 * - `auto` / `websocket`: start Electrobun's localhost WebSocket RPC
+		 *   server for high-throughput RPC, with native postMessage as fallback.
+		 * - `postMessage`: do not start the localhost TCP RPC server. RPC uses
+		 *   the native bridge fallback only.
+		 *
+		 * `postMessage` avoids occupying a localhost TCP port in packaged apps,
+		 * but it is intended for small structured messages rather than large
+		 * binary payloads.
+		 *
+		 * @default "auto"
+		 */
+		rpcTransport?: "auto" | "websocket" | "postMessage";
+
 		[key: string]: unknown;
 	};
 

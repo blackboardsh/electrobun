@@ -10,7 +10,7 @@ import {
 import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
 import {
-	rpcPort,
+	ensureRPCServer,
 	sendMessageToWebviewViaSocket,
 	removeSocketForWebview,
 } from "./Socket";
@@ -54,6 +54,7 @@ export type BrowserViewOptions<T = undefined> = {
 
 const hash = await Updater.localInfo.hash();
 const buildConfig = await BuildConfig.get();
+const { rpcPort } = ensureRPCServer(buildConfig.runtime?.rpcTransport);
 
 const defaultOptions: Partial<BrowserViewOptions> = {
 	url: null,
