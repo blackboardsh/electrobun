@@ -7,6 +7,15 @@ export type BuildConfigType = {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;
 	};
+	/**
+	 * X11 / GTK `WM_CLASS` hint applied to every window on Linux. Set
+	 * by the CLI from `electrobun.config.ts` `build.linux.wmClass`. The
+	 * bun side reads this on first window creation and forwards it to
+	 * the native wrapper via `setLinuxWmClass()`. Has no effect on
+	 * macOS or Windows targets — those platforms use other mechanisms
+	 * (CFBundleIdentifier on macOS, AUMID on Windows).
+	 */
+	wmClass?: string;
 };
 
 let buildConfig: BuildConfigType | null = null;
