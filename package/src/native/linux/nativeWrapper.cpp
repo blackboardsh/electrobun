@@ -7010,6 +7010,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
                          const char* viewsRoot,
+                         const char* userAgent,
                          bool transparent,
                          bool sandbox) {
     // Read and clear pre-set flags

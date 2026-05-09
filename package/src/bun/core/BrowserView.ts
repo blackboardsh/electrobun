@@ -49,6 +49,8 @@ export type BrowserViewOptions<T = undefined> = {
 	startTransparent: boolean;
 	// Set passthrough on the AbstractView at creation (before first paint)
 	startPassthrough: boolean;
+	// Optional custom user agent for this webview
+	userAgent?: string | null;
 	// renderer:
 };
 
@@ -105,6 +107,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
+	userAgent: string | null;
 	startPassthrough: boolean = false;
 	isRemoved: boolean = false;
 
@@ -135,6 +138,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
+		this.userAgent = options.userAgent ?? null;
 
 		BrowserViewMap[this.id] = this;
 		this.ptr = this.init() as Pointer;
@@ -176,6 +180,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			sandbox: this.sandbox,
 			startTransparent: this.startTransparent,
 			startPassthrough: this.startPassthrough,
+			userAgent: this.userAgent ?? null,
 			// transparent is looked up from parent window in native.ts
 		});
 	}
@@ -351,15 +356,15 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		delete BrowserViewMap[this.id];
 		removeSocketForWebview(this.id);
 		this.rpc?.setTransport({
-			send() {},
-			registerHandler() {},
-			unregisterHandler() {},
+			send() { },
+			registerHandler() { },
+			unregisterHandler() { },
 		});
 		this.rpcHandler = undefined;
-    
-    this.rpcHandler = undefined;
-    this.ptr = null;
-    native!.symbols.webviewRemove(ptr);
+
+		this.rpcHandler = undefined;
+		this.ptr = null;
+		native!.symbols.webviewRemove(ptr);
 	}
 
 	static getById(id: number) {

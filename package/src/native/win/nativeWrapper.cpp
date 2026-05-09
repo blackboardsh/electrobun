@@ -5936,6 +5936,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript,
+                                                 const char *userAgent,
                                                  bool transparent,
                                                  bool sandbox) {
     // Check if WebView2 runtime is available
@@ -5957,6 +5958,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     std::string electrobunScript = electrobunPreloadScript ? std::string(electrobunPreloadScript) : "";
     std::string customScript = customPreloadScript ? std::string(customPreloadScript) : "";
     std::string partitionStr = partitionIdentifier ? std::string(partitionIdentifier) : "";
+    std::string userAgentStr = userAgent ? std::string(userAgent) : "";
 
     auto view = std::make_shared<WebView2View>(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
     view->hwnd = hwnd;
@@ -5969,7 +5971,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->customScript = customScript;
 
     // Create WebView2 on main thread
-    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
+    MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, userAgentStr, transparent]() {
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -6016,7 +6018,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         HWND parentHwnd = hwnd;
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
-            [view, container, x, y, width, height, transparent](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+            [view, container, x, y, width, height, transparent, userAgentStr](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -6039,7 +6041,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                 return env->CreateCoreWebView2Controller(targetHwnd,
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
-                        [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                        [view, container, x, y, width, height, env, transparent, userAgentStr](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -6056,6 +6058,40 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             view->setController(ctrl);
                             view->setWebView(webview);
+
+                            // If a userAgent was provided, use DevTools Protocol to set it
+                            // and disable User-Agent Client Hints entirely
+                            if (!userAgentStr.empty()) {
+                                // Escape the user agent string for JSON
+                                std::string escapedUA;
+                                for (char c : userAgentStr) {
+                                    switch (c) {
+                                        case '"': escapedUA += "\\\""; break;
+                                        case '\\': escapedUA += "\\\\"; break;
+                                        default: escapedUA += c; break;
+                                    }
+                                }
+
+                                // Build the JSON parameters for Emulation.setUserAgentOverride
+                                // Setting userAgentMetadata to an empty object with empty fields
+                                // prevents Client Hints headers from being sent
+                                std::string jsonParams = "{\"userAgent\":\"" + escapedUA + "\"}";
+
+                                std::wstring wJsonParams(jsonParams.begin(), jsonParams.end());
+
+                                webview->CallDevToolsProtocolMethod(
+                                    L"Emulation.setUserAgentOverride",
+                                    wJsonParams.c_str(),
+                                    Callback<ICoreWebView2CallDevToolsProtocolMethodCompletedHandler>(
+                                        [](HRESULT errorCode, LPCWSTR returnObjectAsJson) -> HRESULT {
+                                            if (FAILED(errorCode)) {
+                                                char err[256];
+                                                sprintf_s(err, "ERROR: Emulation.setUserAgentOverride failed: 0x%08X", errorCode);
+                                                ::log(err);
+                                            }
+                                            return S_OK;
+                                        }).Get());
+                            }
                             
                             // Try to get composition controller interface if available
                             ComPtr<ICoreWebView2CompositionController> compCtrl;
@@ -6754,6 +6790,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HandlePostMessage internalBridgeHandler,
                                        const char *electrobunPreloadScript,
                                        const char *customPreloadScript,
+                                       const char *userAgent,
                                        bool transparent,
                                        bool sandbox) {
     
@@ -7155,6 +7192,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          const char *electrobunPreloadScript,
                          const char *customPreloadScript,
                          const char *viewsRoot,
+                         const char *userAgent,
                          bool transparent,
                          bool sandbox) {
 
@@ -7176,13 +7214,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+                                    electrobunPreloadScript, customPreloadScript, userAgent, transparent, sandbox);
         view = cefView.get();
     } else {
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                              electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+                                              electrobunPreloadScript, customPreloadScript, userAgent, transparent, sandbox);
         view = webview2View.get();
     }
 
