@@ -68,6 +68,7 @@
         <button onclick="document.querySelector('electrobun-webview').goBack()">Go Back</button>
         <button onclick="document.querySelector('electrobun-webview').goForward()">Go Forward</button>
         <button onclick="document.querySelector('electrobun-webview').reload()">Reload</button>
+        <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'views://playgrounds/webviewtag/find-test.html')">Find Test Page</button>
         <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://eggbun.sh')">eggbun.sh</button>
         <button onclick="document.querySelector('electrobun-webview').setAttribute('src', 'https://github.com/blackboardsh/electrobun')">GitHub</button>
         <button onclick="checkNavState()">Check Nav State</button>
@@ -103,7 +104,7 @@
     <div style="position: relative; margin-top: 15px;">
         <div class="element-to-mask" style="top: 20px; left: 450px; width: 150px; height: 100px; background: rgba(0,0,0,0.8);">Mask Overlay 1</div>
         <div class="element-to-mask" style="top: 20px; left: 300px; width: 140px; height: 100px; background: rgba(0,128,0,0.8);">Mask Overlay 2</div>
-        <electrobun-webview style="width: 600px; height: 350px;" src="https://electrobun.dev" renderer="cef"></electrobun-webview>
+        <electrobun-webview style="width: 600px; height: 350px;" src="views://playgrounds/webviewtag/find-test.html" renderer="cef"></electrobun-webview>
     </div>
 
     <div style="margin-top: 15px;">

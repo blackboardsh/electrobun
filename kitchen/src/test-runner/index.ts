@@ -530,7 +530,14 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 }
 
 // Build Config UI
-function updateBuildConfigUI(config: { defaultRenderer: string; availableRenderers: string[]; cefVersion?: string; bunVersion?: string }) {
+function updateBuildConfigUI(config: {
+  defaultRenderer: string;
+  availableRenderers: string[];
+  mainProcess?: 'bun' | 'zig';
+  cefVersion?: string;
+  bunVersion?: string;
+  zigVersion?: string;
+}) {
   const defaultRendererEl = document.getElementById('default-renderer');
   const availableRenderersEl = document.getElementById('available-renderers');
 
@@ -549,13 +556,25 @@ function updateBuildConfigUI(config: { defaultRenderer: string; availableRendere
       chromiumVersionEl.textContent = chromiumMatch ? chromiumMatch[1]! : config.cefVersion;
     } else {
       const chromeMatch = navigator.userAgent.match(/Chrome\/(\S+)/);
-      chromiumVersionEl.textContent = chromeMatch ? chromeMatch[1]! : 'N/A';
+      chromiumVersionEl.textContent = chromeMatch
+        ? chromeMatch[1]!
+        : 'N/A (system webview)';
     }
   }
 
-  const bunVersionEl = document.getElementById('bun-version');
-  if (bunVersionEl) {
-    bunVersionEl.textContent = config.bunVersion || 'N/A';
+  const hostRuntimeVersionEl = document.getElementById('host-runtime-version');
+  if (hostRuntimeVersionEl) {
+    if (config.mainProcess === 'zig' && config.zigVersion) {
+      hostRuntimeVersionEl.textContent = `Zig ${config.zigVersion}`;
+    } else if (config.bunVersion) {
+      hostRuntimeVersionEl.textContent = `Bun ${config.bunVersion}`;
+    } else if (config.zigVersion) {
+      hostRuntimeVersionEl.textContent = `Zig ${config.zigVersion}`;
+    } else if (config.mainProcess) {
+      hostRuntimeVersionEl.textContent = config.mainProcess;
+    } else {
+      hostRuntimeVersionEl.textContent = 'N/A';
+    }
   }
 
   const userAgentEl = document.getElementById('user-agent-value');

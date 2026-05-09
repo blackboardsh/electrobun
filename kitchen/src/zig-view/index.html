@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <title>Electrobun Zig Demo</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f3efe4;
+        --panel: rgba(255, 252, 245, 0.88);
+        --ink: #1d2a23;
+        --accent: #0c7c59;
+        --muted: #5c6b63;
+        --edge: rgba(29, 42, 35, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family:
+          "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+        color: var(--ink);
+        background:
+          radial-gradient(circle at top left, rgba(12, 124, 89, 0.16), transparent 38%),
+          radial-gradient(circle at bottom right, rgba(242, 152, 74, 0.18), transparent 32%),
+          linear-gradient(160deg, #ece6d7 0%, var(--bg) 48%, #e8f2ec 100%);
+        display: grid;
+        place-items: center;
+        padding: 32px;
+      }
+
+      main {
+        width: min(760px, 100%);
+        border: 1px solid var(--edge);
+        border-radius: 28px;
+        padding: 36px;
+        background: var(--panel);
+        backdrop-filter: blur(16px);
+        box-shadow: 0 24px 70px rgba(25, 38, 31, 0.12);
+      }
+
+      .eyebrow {
+        margin: 0 0 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        font-size: 12px;
+        color: var(--accent);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(38px, 6vw, 72px);
+        line-height: 0.95;
+      }
+
+      p {
+        max-width: 56ch;
+        color: var(--muted);
+        font-size: 18px;
+        line-height: 1.6;
+      }
+
+      .note {
+        margin-top: 28px;
+        padding: 18px 20px;
+        border-radius: 18px;
+        background: rgba(12, 124, 89, 0.08);
+        border: 1px solid rgba(12, 124, 89, 0.16);
+        color: var(--ink);
+      }
+
+      code {
+        font-family: "SF Mono", "Cascadia Code", monospace;
+        font-size: 0.92em;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <p class="eyebrow">Electrobun Zig Main</p>
+      <h1>Kitchen running without Bun in the main process.</h1>
+      <p>
+        This first pass proves the bundle can launch a Zig main binary against
+        <code>libElectrobunCore</code>, create a native window, and host a real
+        Electrobun webview.
+      </p>
+      <div class="note">
+        The Bun test-runner and RPC stack are still separate work. This view is
+        the bootstrap point for the native-main path.
+      </div>
+    </main>
+  </body>
+</html>

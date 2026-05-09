@@ -3334,6 +3334,51 @@ static void runOnMainThreadSyncVoid(void (^block)(void)) {
     });
 }
 
+static bool runOnMainThreadSyncBool(bool (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        return block();
+    }
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = block();
+    });
+    return result;
+}
+
+static void runOnMainThreadAsyncVoid(void (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        block();
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        block();
+    });
+}
+
+static bool waitForMainThreadAsyncCompletion(int64_t timeoutNanoseconds, void (^startOperation)(dispatch_semaphore_t completionSemaphore)) {
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
+
+    if ([NSThread isMainThread]) {
+        startOperation(completionSemaphore);
+
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)timeoutNanoseconds / (double)NSEC_PER_SEC];
+        while (dispatch_semaphore_wait(completionSemaphore, DISPATCH_TIME_NOW) != 0) {
+            if ([deadline timeIntervalSinceNow] <= 0) {
+                return false;
+            }
+            @autoreleasepool {
+                [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+            }
+        }
+        return true;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        startOperation(completionSemaphore);
+    });
+    return dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, timeoutNanoseconds)) == 0;
+}
+
 extern "C" void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
     if (!ensureWgpuSymbols()) return nullptr;
     return runOnMainThreadSyncPtr(^{
@@ -3789,14 +3834,17 @@ struct GPUTestState {
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
+    WGPURenderPipeline pipelineA = nullptr;
+    WGPURenderPipeline pipelineB = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
     WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
     CAMetalLayer* layer = nil;
+    NSView* nsView = nil;
     dispatch_source_t timer = nullptr;
     float angle = 0.0f;
     CGSize lastDrawable = {0, 0};
+    bool useAlt = false;
     bool running = false;
 };
 
@@ -3823,6 +3871,10 @@ static const float kCubeVertices[] = {
     -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
 };
 
+static constexpr size_t kCubeFloatCount = sizeof(kCubeVertices) / sizeof(float);
+static constexpr size_t kCubeVertexCount = kCubeFloatCount / 3;
+static constexpr size_t kGpuTestStrideFloats = 7;
+
 static void buildRotatedVertices(float angle, float* out, size_t count) {
     const float sinY = sinf(angle);
     const float cosY = cosf(angle);
@@ -3841,6 +3893,54 @@ static void buildRotatedVertices(float angle, float* out, size_t count) {
         out[i] = x1 * proj;
         out[i + 1] = y1 * proj;
         out[i + 2] = 0.0f;
+    }
+}
+
+static float clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void getMouseState(GPUTestState* state, float* outX, float* outY, float* outDown) {
+    if (outX) *outX = 0.5f;
+    if (outY) *outY = 0.5f;
+    if (outDown) *outDown = 0.0f;
+    if (!state || !state->nsView) return;
+
+    NSWindow* window = state->nsView.window;
+    if (!window) return;
+
+    NSPoint windowPoint = [window mouseLocationOutsideOfEventStream];
+    NSPoint localPoint = [state->nsView convertPoint:windowPoint fromView:nil];
+    const CGFloat width = MAX(state->lastDrawable.width, 1.0);
+    const CGFloat height = MAX(state->lastDrawable.height, 1.0);
+
+    if (outX) *outX = clamp01f((float)(localPoint.x / width));
+    if (outY) *outY = clamp01f((float)(localPoint.y / height));
+    if (outDown) *outDown = ([NSEvent pressedMouseButtons] & 1) ? 1.0f : 0.0f;
+}
+
+static void buildInterleavedVertices(
+    float angle,
+    float mouseX,
+    float mouseY,
+    float mouseDown,
+    float timeValue,
+    float* out
+) {
+    float positions[kCubeFloatCount];
+    buildRotatedVertices(angle, positions, kCubeFloatCount);
+    for (size_t vertexIndex = 0; vertexIndex < kCubeVertexCount; vertexIndex++) {
+        const size_t positionIndex = vertexIndex * 3;
+        const size_t outputIndex = vertexIndex * kGpuTestStrideFloats;
+        out[outputIndex] = positions[positionIndex];
+        out[outputIndex + 1] = positions[positionIndex + 1];
+        out[outputIndex + 2] = positions[positionIndex + 2];
+        out[outputIndex + 3] = mouseX;
+        out[outputIndex + 4] = mouseY;
+        out[outputIndex + 5] = mouseDown;
+        out[outputIndex + 6] = timeValue;
     }
 }
 
@@ -3870,26 +3970,8 @@ static void configureSurface(GPUTestState* state) {
     p_wgpuSurfaceConfigure(state->surface, &config);
 }
 
-static void setupPipeline(GPUTestState* state) {
-    if (!state->device) return;
-    const char* shaderSrc = R"WGSL(
-struct VSOut {
-  @builtin(position) position : vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
-  var out: VSOut;
-  out.position = vec4<f32>(position, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
-}
-)WGSL";
-
+static WGPURenderPipeline createTestPipeline(GPUTestState* state, const char* shaderSrc) {
+    if (!state->device) return nullptr;
     WGPUShaderSourceWGSL wgsl = {};
     wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgsl.code.data = shaderSrc;
@@ -3901,20 +3983,24 @@ fn fs_main() -> @location(0) vec4<f32> {
     WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
     if (!shader) {
         NSLog(@"WGPU test: failed to create shader module");
+        return nullptr;
     }
 
     WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
     WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
 
-    WGPUVertexAttribute attr = {};
-    attr.format = WGPUVertexFormat_Float32x3;
-    attr.offset = 0;
-    attr.shaderLocation = 0;
+    WGPUVertexAttribute attrs[2] = {};
+    attrs[0].format = WGPUVertexFormat_Float32x3;
+    attrs[0].offset = 0;
+    attrs[0].shaderLocation = 0;
+    attrs[1].format = WGPUVertexFormat_Float32x4;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[1].shaderLocation = 1;
 
     WGPUVertexBufferLayout vbuf = {};
-    vbuf.arrayStride = sizeof(float) * 3;
-    vbuf.attributeCount = 1;
-    vbuf.attributes = &attr;
+    vbuf.arrayStride = sizeof(float) * kGpuTestStrideFloats;
+    vbuf.attributeCount = 2;
+    vbuf.attributes = attrs;
     vbuf.stepMode = WGPUVertexStepMode_Vertex;
 
     WGPUVertexState vstate = {};
@@ -3951,26 +4037,88 @@ fn fs_main() -> @location(0) vec4<f32> {
     rpDesc.multisample = ms;
     rpDesc.fragment = &fstate;
 
-    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
-    if (!state->pipeline) {
+    WGPURenderPipeline pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!pipeline) {
         NSLog(@"WGPU test: failed to create render pipeline");
     }
+    return pipeline;
+}
+
+static void setupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrcA = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    const char* shaderSrcB = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+  @location(0) local_pos : vec3<f32>,
+  @location(1) mouse_state : vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  out.local_pos = position;
+  out.mouse_state = mouse_state;
+  return out;
+}
+
+@fragment
+fn fs_main(
+  @location(0) local_pos: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> @location(0) vec4<f32> {
+  let cursor = vec2<f32>(mouse_state.x * 2.0 - 1.0, (1.0 - mouse_state.y) * 2.0 - 1.0);
+  let dist = distance(local_pos.xy, cursor);
+  let wave = 0.5 + 0.5 * sin(mouse_state.w * 3.0 - dist * 14.0);
+  let pulse = select(wave, 1.0 - wave, mouse_state.z > 0.5);
+  let base = vec3<f32>(0.25 + cursor.x * 0.35, 0.35 + cursor.y * 0.25, 0.75);
+  let highlight = vec3<f32>(1.0, 0.45, 0.15);
+  let color = max(mix(base, highlight, pulse), vec3<f32>(0.05));
+  let alpha = 0.7 + 0.3 * pulse;
+  return vec4<f32>(color, alpha);
+}
+)WGSL";
+
+    state->pipelineA = createTestPipeline(state, shaderSrcA);
+    state->pipelineB = createTestPipeline(state, shaderSrcB);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.size = kCubeVertexCount * kGpuTestStrideFloats * sizeof(float);
     bufDesc.mappedAtCreation = false;
     state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
 
-    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    float initialVerts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(0.0f, 0.5f, 0.5f, 0.0f, 0.0f, initialVerts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
 }
 
 static void renderFrame(GPUTestState* state) {
     if (!state->device || !state->surface || !state->queue) return;
     if (!state->layer) return;
-    if (!state->pipeline) return;
+    WGPURenderPipeline pipeline = state->useAlt && state->pipelineB ? state->pipelineB : state->pipelineA;
+    if (!pipeline) return;
 
     CGSize drawable = state->layer.drawableSize;
     if (drawable.width <= 1 || drawable.height <= 1) return;
@@ -3979,8 +4127,12 @@ static void renderFrame(GPUTestState* state) {
     }
 
     state->angle += 0.02f;
-    float verts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    float mouseX = 0.5f;
+    float mouseY = 0.5f;
+    float mouseDown = 0.0f;
+    getMouseState(state, &mouseX, &mouseY, &mouseDown);
+    float verts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(state->angle, mouseX, mouseY, mouseDown, state->angle * 1.5f, verts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     static bool loggedDrawable = false;
@@ -4017,9 +4169,15 @@ static void renderFrame(GPUTestState* state) {
 
     WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
     WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
-    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
-    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(
+        pass,
+        0,
+        state->vertexBuffer,
+        0,
+        kCubeVertexCount * kGpuTestStrideFloats * sizeof(float)
+    );
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)kCubeVertexCount, 1, 0, 0);
     p_wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
@@ -4116,6 +4274,8 @@ extern "C" void wgpuRunGPUTest(AbstractView* abstractView) {
         }
         CAMetalLayer* layer = (CAMetalLayer*)nsView.layer;
         g_gpuTest.layer = layer;
+        g_gpuTest.nsView = nsView;
+        g_gpuTest.useAlt = false;
         if (!g_gpuTest.instance) {
             g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
         }
@@ -4140,6 +4300,17 @@ extern "C" void wgpuRunGPUTest(AbstractView* abstractView) {
         cbInfo.callback = requestAdapterCallback;
         cbInfo.userdata1 = &g_gpuTest;
         p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+extern "C" void wgpuToggleGPUTestShader(AbstractView* abstractView) {
+    if (!abstractView) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView* nsView = [abstractView nsView];
+        if (!nsView) return;
+        if (g_gpuTest.nsView == nsView) {
+            g_gpuTest.useAlt = !g_gpuTest.useAlt;
+        }
     });
 }
 
@@ -5612,6 +5783,11 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
     @property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
     @property (nonatomic, strong) CEFOSRView *osrView;  // For transparent/OSR mode
     @property (nonatomic, assign) BOOL isOSRMode;
+    @property (nonatomic, copy) NSString *pendingURLString;
+    @property (nonatomic, copy) NSString *pendingHTMLString;
+    @property (nonatomic, copy) NSString *lastFindSearchText;
+    @property (nonatomic, assign) BOOL lastFindMatchCase;
+    @property (nonatomic, assign) BOOL hasActiveFindSession;
 
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
@@ -5688,12 +5864,24 @@ bool initializeCEF() {
         CefString(&settings.framework_dir_path) = [frameworkPath UTF8String];
     }
 
-    // This prevents multiple apps from sharing the same helper.
-    NSString* helperPath =
-        [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"bun Helper.app/Contents/MacOS/bun Helper"];
-    if (helperPath) {
+    // Match the helper name to the actual host executable ("bun" vs "main")
+    // instead of assuming Bun. Zig mode launches a different host binary.
+    NSString* executablePath = [[[NSProcessInfo processInfo] arguments] firstObject];
+    NSString* executableName = [[executablePath lastPathComponent] stringByDeletingPathExtension];
+    NSString* helperPath = nil;
+    if (bundlePath && executableName.length > 0) {
+        NSString* helperRelativePath = [NSString stringWithFormat:
+            @"Contents/Frameworks/%@ Helper.app/Contents/MacOS/%@ Helper",
+            executableName,
+            executableName
+        ];
+        helperPath = [bundlePath stringByAppendingPathComponent:helperRelativePath];
+    }
+    if (helperPath && [[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
         CefString(&settings.browser_subprocess_path) = [helperPath UTF8String];
         NSLog(@"[CEF] Using helper at: %@", helperPath);
+    } else {
+        NSLog(@"[CEF] Helper not found for executable '%@' at %@", executableName, helperPath);
     }
     
     // Add cache path to prevent warnings and potential issues
@@ -6148,8 +6336,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     [self setPassthrough:YES];
                 }
 
-                if (self.browser && url && url[0] != '\0') {
-                    self.browser->GetMainFrame()->LoadURL(CefString(url));
+                if (self.browser) {
+                    if (self.pendingHTMLString.length > 0) {
+                        NSString *htmlString = self.pendingHTMLString;
+                        self.pendingHTMLString = nil;
+                        [self loadHTML:[htmlString UTF8String]];
+                    } else if (self.pendingURLString.length > 0) {
+                        NSString *pendingUrl = self.pendingURLString;
+                        self.pendingURLString = nil;
+                        [self loadURL:[pendingUrl UTF8String]];
+                    } else if (url && url[0] != '\0') {
+                        self.browser->GetMainFrame()->LoadURL(CefString(url));
+                    }
                 } else if (!self.browser) {
                     NSLog(@"ERROR CEF: CreateBrowserSync returned null for webview %u (partition: %s) — initial URL not loaded",
                           webviewId, partitionIdentifier ? partitionIdentifier : "(default)");
@@ -6210,16 +6408,24 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 
     - (void)loadURL:(const char *)urlString {
-        if (!self.browser)
+        if (!self.browser) {
+            self.pendingHTMLString = nil;
+            self.pendingURLString = urlString ? [NSString stringWithUTF8String:urlString] : @"";
+            NSLog(@"DEBUG CEF: Browser not ready for webview %u, queueing URL load: %s", self.webviewId, urlString ?: "");
             return;
+        }
 
         CefString cefUrl = urlString ? urlString : "";
         self.browser->GetMainFrame()->LoadURL(cefUrl);
     }
 
     - (void)loadHTML:(const char *)htmlString {
-        if (!self.browser)
+        if (!self.browser) {
+            self.pendingURLString = nil;
+            self.pendingHTMLString = htmlString ? [NSString stringWithUTF8String:htmlString] : @"";
+            NSLog(@"DEBUG CEF: Browser not ready for webview %u, queueing HTML load", self.webviewId);
             return;
+        }
 
         NSLog(@"DEBUG CEF: Loading HTML content directly: %.50s...", htmlString);
         // Store HTML content in the global map for the scheme handler
@@ -6368,18 +6574,32 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (!host) return;
 
         if (!searchText || strlen(searchText) == 0) {
-            // Stop find and clear highlights
             host->StopFinding(true);
+            self.lastFindSearchText = nil;
+            self.lastFindMatchCase = NO;
+            self.hasActiveFindSession = NO;
             return;
         }
 
-        // CEF Find flags
-        bool findNext = false; // Will be set based on direction changes
+        NSString *searchTextString = [NSString stringWithUTF8String:searchText];
+        BOOL sameSearch =
+            self.hasActiveFindSession &&
+            self.lastFindSearchText != nil &&
+            [self.lastFindSearchText isEqualToString:searchTextString] &&
+            self.lastFindMatchCase == matchCase;
+
+        if (!sameSearch) {
+            host->StopFinding(true);
+        }
+
+        bool findNext = sameSearch ? true : false;
         bool forwardDirection = forward ? true : false;
         bool caseSensitive = matchCase ? true : false;
 
-        // Use CEF's native find functionality
         host->Find(CefString(searchText), forwardDirection, caseSensitive, findNext);
+        self.lastFindSearchText = searchTextString;
+        self.lastFindMatchCase = matchCase;
+        self.hasActiveFindSession = YES;
     }
 
     - (void)stopFindInPage {
@@ -6387,8 +6607,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
         CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
         if (host) {
-            host->StopFinding(true); // true = clear selection
+            host->StopFinding(true);
         }
+        self.lastFindSearchText = nil;
+        self.lastFindMatchCase = NO;
+        self.hasActiveFindSession = NO;
     }
 
     - (void)openDevTools {
@@ -6777,31 +7000,32 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
 
     __block AbstractView *impl = nil;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    impl = (__bridge AbstractView *)runOnMainThreadSyncPtr(^{
         Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];
 
-        impl = [[ImplClass alloc] initWithWebviewId:webviewId
-                                        window:window
-                                        url:strdup(url)
-                                        frame:frame
-                                        autoResize:autoResize
-                                        partitionIdentifier:strdup(partitionIdentifier)
-                                        navigationCallback:navigationCallback
-                                        webviewEventHandler:webviewEventHandler
-                                        eventBridgeHandler:eventBridgeHandler
-                                        bunBridgeHandler:bunBridgeHandler
-                                        internalBridgeHandler:internalBridgeHandler
-                                        electrobunPreloadScript:strdup(electrobunPreloadScript)
-                                        customPreloadScript:strdup(customPreloadScript)
-                                        viewsRoot:strdup(viewsRoot)
-                                        transparent:transparent
-                                        sandbox:sandbox];
+        AbstractView *created = [[ImplClass alloc] initWithWebviewId:webviewId
+                                                              window:window
+                                                                 url:strdup(url)
+                                                               frame:frame
+                                                          autoResize:autoResize
+                                                 partitionIdentifier:strdup(partitionIdentifier)
+                                                navigationCallback:navigationCallback
+                                                webviewEventHandler:webviewEventHandler
+                                                  eventBridgeHandler:eventBridgeHandler
+                                                    bunBridgeHandler:bunBridgeHandler
+                                               internalBridgeHandler:internalBridgeHandler
+                                            electrobunPreloadScript:strdup(electrobunPreloadScript)
+                                               customPreloadScript:strdup(customPreloadScript)
+                                                           viewsRoot:strdup(viewsRoot)
+                                                        transparent:transparent
+                                                            sandbox:sandbox];
 
         // Store initial state flags — applied later in each impl's deferred creation block
         // (nsView is nil at this point because view creation is async)
-        impl.pendingStartTransparent = startTransparent;
-        impl.pendingStartPassthrough = startPassthrough;
+        created.pendingStartTransparent = startTransparent;
+        created.pendingStartPassthrough = startPassthrough;
 
+        return (__bridge void *)created;
     });
 
     return impl;
@@ -6825,13 +7049,14 @@ extern "C" AbstractView* initWGPUView(uint32_t webviewId,
 
     __block AbstractView *impl = nil;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        impl = [[WGPUViewImpl alloc] initWithWebviewId:webviewId
-                                                window:window
-                                                 frame:frame
-                                            autoResize:autoResize];
-        impl.pendingStartTransparent = startTransparent;
-        impl.pendingStartPassthrough = startPassthrough;
+    impl = (__bridge AbstractView *)runOnMainThreadSyncPtr(^{
+        AbstractView *created = [[WGPUViewImpl alloc] initWithWebviewId:webviewId
+                                                                 window:window
+                                                                  frame:frame
+                                                             autoResize:autoResize];
+        created.pendingStartTransparent = startTransparent;
+        created.pendingStartPassthrough = startPassthrough;
+        return (__bridge void *)created;
     });
 
     return impl;
@@ -6897,7 +7122,7 @@ extern "C" void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView goBack];
     });
 }
@@ -6915,28 +7140,36 @@ extern "C" void wgpuViewSetFrame(AbstractView *abstractView, double x, double y,
 
 extern "C" void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
     if (!abstractView) return;
-    [abstractView setTransparent:transparent];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setTransparent:transparent];
+    });
 }
 
 extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
     if (!abstractView) return;
-    [abstractView setPassthrough:enablePassthrough];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setPassthrough:enablePassthrough];
+    });
 }
 
 extern "C" void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden) {
     if (!abstractView) return;
-    [abstractView setHidden:hidden];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setHidden:hidden];
+    });
 }
 
 extern "C" void wgpuViewRemove(AbstractView *abstractView) {
     if (!abstractView) return;
-    [abstractView remove];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView remove];
+    });
 }
 
 extern "C" void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
     if (!abstractView) return nullptr;
     __block void* result = nullptr;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (!abstractView.nsView) return;
         CALayer *layer = abstractView.nsView.layer;
         if ([layer isKindOfClass:[CAMetalLayer class]]) {
@@ -6958,7 +7191,7 @@ extern "C" void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView goForward];
     });
 }
@@ -6975,7 +7208,7 @@ extern "C" void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView reload];
     });
 }
@@ -7107,61 +7340,62 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 }
 
 extern "C" void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setTransparent:transparent];    
     });
 }
 
 extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setPassthrough:enablePassthrough];    
     });
 }
 
 extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setHidden:hidden];
     });
 }
 
 extern "C" void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setNavigationRulesFromJSON:rulesJson];
     });
 }
 
 extern "C" void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView findInPage:searchText forward:forward matchCase:matchCase];
+    NSString *searchTextCopy = searchText ? [NSString stringWithUTF8String:searchText] : nil;
+    runOnMainThreadAsyncVoid(^{
+        [abstractView findInPage:searchTextCopy ? searchTextCopy.UTF8String : "" forward:forward matchCase:matchCase];
     });
 }
 
 extern "C" void webviewStopFind(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView stopFindInPage];
     });
 }
 
 extern "C" void webviewOpenDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView openDevTools];
     });
 }
 
 extern "C" void webviewCloseDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView closeDevTools];
     });
 }
 
 extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView toggleDevTools];
     });
 }
 
 extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
             WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
             if (wkImpl.webView) {
@@ -7178,13 +7412,9 @@ extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
     if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
         WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
         if (wkImpl.webView) {
-            if ([NSThread isMainThread]) {
+            runOnMainThreadSyncVoid(^{
                 zoomLevel = wkImpl.webView.pageZoom;
-            } else {
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    zoomLevel = wkImpl.webView.pageZoom;
-                });
-            }
+            });
         }
     }
     return zoomLevel;
@@ -7300,7 +7530,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
 
     // Use a dispatch semaphore to wait for the window creation to complete
     __block NSWindow* window = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         window = createNSWindowWithFrameAndStyle(
             windowId,
             config,
@@ -7337,7 +7567,7 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
 }
 
 extern "C" void showWindow(NSWindow *window, bool activate) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (activate) {
             [window orderFront:nil];
             [window makeKeyAndOrderFront:nil];
@@ -7346,7 +7576,7 @@ extern "C" void showWindow(NSWindow *window, bool activate) {
             [window orderFrontRegardless];
         }
 
-        dispatch_async(dispatch_get_main_queue(), ^{
+        runOnMainThreadAsyncVoid(^{
             WindowDelegate *delegate = (WindowDelegate *)[window delegate];
             if (delegate && delegate.hasCustomButtonPosition) {
                 applyWindowButtonPosition(window, delegate.buttonPositionX, delegate.buttonPositionY);
@@ -7358,7 +7588,7 @@ extern "C" void showWindow(NSWindow *window, bool activate) {
 }
 
 extern "C" void activateWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (![window isVisible]) {
             return;
         }
@@ -7369,7 +7599,7 @@ extern "C" void activateWindow(NSWindow *window) {
 }
 
 extern "C" void hideWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window orderOut:nil];
     });
 }
@@ -7377,39 +7607,37 @@ extern "C" void hideWindow(NSWindow *window) {
 extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window setTitle:titleString];
     });
 }
 
 extern "C" void closeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window close];
     });
 }
 
 extern "C" void minimizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window miniaturize:nil];
     });
 }
 
 extern "C" void restoreWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window deminiaturize:nil];
     });
 }
 
 extern "C" bool isWindowMinimized(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window isMiniaturized];
+    return runOnMainThreadSyncBool(^{
+        return [window isMiniaturized];
     });
-    return result;
 }
 
 extern "C" void maximizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         // Only zoom if not already zoomed
         if (![window isZoomed]) {
             [window zoom:nil];
@@ -7418,7 +7646,7 @@ extern "C" void maximizeWindow(NSWindow *window) {
 }
 
 extern "C" void unmaximizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         // Only unzoom if currently zoomed
         if ([window isZoomed]) {
             [window zoom:nil];
@@ -7427,15 +7655,13 @@ extern "C" void unmaximizeWindow(NSWindow *window) {
 }
 
 extern "C" bool isWindowMaximized(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window isZoomed];
+    return runOnMainThreadSyncBool(^{
+        return [window isZoomed];
     });
-    return result;
 }
 
 extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         if (fullScreen != isCurrentlyFullScreen) {
             [window toggleFullScreen:nil];
@@ -7444,15 +7670,13 @@ extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
 }
 
 extern "C" bool isWindowFullScreen(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+    return runOnMainThreadSyncBool(^{
+        return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
     });
-    return result;
 }
 
 extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (alwaysOnTop) {
             [window setLevel:NSFloatingWindowLevel];
         } else {
@@ -7462,15 +7686,13 @@ extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
 }
 
 extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window level] >= NSFloatingWindowLevel;
+    return runOnMainThreadSyncBool(^{
+        return [window level] >= NSFloatingWindowLevel;
     });
-    return result;
 }
 
 extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         // macOS uses bottom-left origin, so we need to convert from top-left
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7483,7 +7705,7 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
 }
 
 extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
 
         WindowDelegate *delegate = (WindowDelegate *)[window delegate];
@@ -7498,7 +7720,7 @@ extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
 }
 
 extern "C" void setWindowSize(NSWindow *window, double width, double height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         NSRect frame = window.frame;
         // Keep the top-left corner fixed when resizing
@@ -7512,7 +7734,7 @@ extern "C" void setWindowSize(NSWindow *window, double width, double height) {
 }
 
 extern "C" void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         // macOS uses bottom-left origin, convert from top-left
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7526,7 +7748,7 @@ extern "C" void setWindowFrame(NSWindow *window, double x, double y, double widt
 extern "C" void getWindowFrame(NSWindow *window, double *outX, double *outY, double *outWidth, double *outHeight) {
     __block NSRect frame = NSZeroRect;
     __block CGFloat screenHeight = 0;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (!window) return;
         frame = window.frame;
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7774,22 +7996,16 @@ extern "C" const char *openFileDialog(const char *startingFolder,
                                       BOOL canChooseFiles,
                                       BOOL canChooseDirectories,
                                       BOOL allowsMultipleSelection) {
-
-
-    __block NSOpenPanel *panel;
-    __block NSInteger result = NSModalResponseCancel;
-    __block NSString *concatenatedPaths = nil;
-    
-    dispatch_sync(dispatch_get_main_queue(), ^{        
-        panel = [NSOpenPanel openPanel];        
-        [panel setCanChooseFiles:canChooseFiles];        
-        [panel setCanChooseDirectories:canChooseDirectories];        
-        [panel setAllowsMultipleSelection:allowsMultipleSelection];        
+    return (const char *)runOnMainThreadSyncPtr(^{
+        NSOpenPanel *panel = [NSOpenPanel openPanel];
+        [panel setCanChooseFiles:canChooseFiles];
+        [panel setCanChooseDirectories:canChooseDirectories];
+        [panel setAllowsMultipleSelection:allowsMultipleSelection];
 
         NSString *startFolder = [NSString stringWithUTF8String:startingFolder ?: ""];
-        [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];        
-        
-        if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {            
+        [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];
+
+        if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {
             NSString *allowedTypesStr = [NSString stringWithUTF8String:allowedFileTypes];
             NSArray *fileTypesArray = [allowedTypesStr componentsSeparatedByString:@","];
             #pragma clang diagnostic push
@@ -7797,21 +8013,20 @@ extern "C" const char *openFileDialog(const char *startingFolder,
             [panel setAllowedFileTypes:fileTypesArray];
             #pragma clang diagnostic pop
         }
-                
-        result = [panel runModal]; // Run the modal dialog on the main thread        
-        
-        if (result == NSModalResponseOK) {            
-            NSArray<NSURL *> *selectedFileURLs = [panel URLs];
-            NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
-            for (NSURL *u in selectedFileURLs) {
-                [pathStrings addObject:u.path];
-            }
-            concatenatedPaths = [pathStrings componentsJoinedByString:@","];
-        }        
+
+        NSModalResponse response = [panel runModal];
+        if (response != NSModalResponseOK) {
+            return (void *)NULL;
+        }
+
+        NSArray<NSURL *> *selectedFileURLs = [panel URLs];
+        NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
+        for (NSURL *u in selectedFileURLs) {
+            [pathStrings addObject:u.path];
+        }
+        NSString *concatenatedPaths = [pathStrings componentsJoinedByString:@","];
+        return concatenatedPaths ? strdup([concatenatedPaths UTF8String]) : (void *)NULL;
     });
-    
-    // Return the result after the dispatch_sync completes
-    return (concatenatedPaths) ? strdup([concatenatedPaths UTF8String]) : NULL;
 }
 
 // showMessageBox - Display a native message box dialog with custom buttons
@@ -7825,9 +8040,7 @@ extern "C" int showMessageBox(const char *type,
                               const char *buttons,
                               int defaultId,
                               int cancelId) {
-    __block int result = -1;
-
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    return (int)(intptr_t)runOnMainThreadSyncPtr(^{
         NSAlert *alert = [[NSAlert alloc] init];
 
         // Set the message and informative text
@@ -7871,10 +8084,8 @@ extern "C" int showMessageBox(const char *type,
 
         // Convert NSModalResponse to button index (0-based)
         // NSAlertFirstButtonReturn = 1000, NSAlertSecondButtonReturn = 1001, etc.
-        result = (int)(response - NSAlertFirstButtonReturn);
+        return (void *)(intptr_t)(response - NSAlertFirstButtonReturn);
     });
-
-    return result;
 }
 
 // ============================================================================
@@ -7886,7 +8097,7 @@ extern "C" int showMessageBox(const char *type,
 extern "C" const char* clipboardReadText() {
     __block const char* result = NULL;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
         if (text) {
@@ -7901,7 +8112,7 @@ extern "C" const char* clipboardReadText() {
 extern "C" void clipboardWriteText(const char *text) {
     if (!text) return;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
         [pasteboard setString:[NSString stringWithUTF8String:text] forType:NSPasteboardTypeString];
@@ -7914,7 +8125,7 @@ extern "C" const uint8_t* clipboardReadImage(size_t *outSize) {
     __block const uint8_t* result = NULL;
     __block size_t size = 0;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
         // Try to read image data (supports PNG, TIFF, etc.)
@@ -7956,7 +8167,7 @@ extern "C" const uint8_t* clipboardReadImage(size_t *outSize) {
 extern "C" void clipboardWriteImage(const uint8_t *pngData, size_t size) {
     if (!pngData || size == 0) return;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
 
@@ -7967,7 +8178,7 @@ extern "C" void clipboardWriteImage(const uint8_t *pngData, size_t size) {
 
 // clipboardClear - Clear the clipboard
 extern "C" void clipboardClear() {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
     });
@@ -7978,7 +8189,7 @@ extern "C" void clipboardClear() {
 extern "C" const char* clipboardAvailableFormats() {
     __block const char* result = NULL;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         NSMutableArray *formats = [NSMutableArray array];
 
@@ -8034,7 +8245,7 @@ extern "C" void setAppReopenHandler(AppReopenHandler handler) {
 }
 
 extern "C" void setDockIconVisible(bool visible) {
-    void (^applyVisibility)(void) = ^{
+    runOnMainThreadAsyncVoid(^{
         NSApplication *app = [NSApplication sharedApplication];
         if (visible) {
             [app setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -8042,28 +8253,16 @@ extern "C" void setDockIconVisible(bool visible) {
         } else {
             [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         }
-    };
-
-    if ([NSThread isMainThread]) {
-        applyVisibility();
-    } else {
-        dispatch_async(dispatch_get_main_queue(), applyVisibility);
-    }
+    });
 }
 
 extern "C" bool isDockIconVisible() {
     __block bool isVisible = true;
 
-    void (^readVisibility)(void) = ^{
+    runOnMainThreadSyncVoid(^{
         NSApplication *app = [NSApplication sharedApplication];
         isVisible = [app activationPolicy] == NSApplicationActivationPolicyRegular;
-    };
-
-    if ([NSThread isMainThread]) {
-        readVisibility();
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), readVisibility);
-    }
+    });
 
     return isVisible;
 }
@@ -8073,7 +8272,7 @@ extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const ch
     
     __block NSStatusItem* trayPtr;
     
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage ?: ""];    
         NSString *titleString = [NSString stringWithUTF8String:title ?: ""];    
         NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
@@ -8109,14 +8308,19 @@ extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const ch
 
 extern "C" void setTrayTitle(NSStatusItem *statusItem, const char *title) {
     if (statusItem) {
-        statusItem.button.title = [NSString stringWithUTF8String:title ?: ""];
+        NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
+        runOnMainThreadAsyncVoid(^{
+            statusItem.button.title = titleString;
+        });
     }
 }
 
 extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
     if (statusItem) {
         NSString *imgPath = [NSString stringWithUTF8String:image ?: ""];
-        statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:imgPath];
+        runOnMainThreadAsyncVoid(^{
+            statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:imgPath];
+        });
     }
 }
 
@@ -8124,7 +8328,7 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (statusItem) {
             StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
             NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
@@ -8151,7 +8355,7 @@ extern "C" void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
 
 extern "C" void removeTray(NSStatusItem *statusItem) {
     if (statusItem) {
-        dispatch_async(dispatch_get_main_queue(), ^{
+        runOnMainThreadAsyncVoid(^{
             [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
         });
     }
@@ -8164,7 +8368,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
 
     __block NSString *json = nil;
 
-    void (^readBounds)(void) = ^{
+    runOnMainThreadSyncVoid(^{
         NSStatusBarButton *button = statusItem.button;
         if (!button || !button.window) {
             json = @"{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
@@ -8178,13 +8382,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
             frameOnScreen.origin.y,
             frameOnScreen.size.width,
             frameOnScreen.size.height];
-    };
-
-    if ([NSThread isMainThread]) {
-        readBounds();
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), readBounds);
-    }
+    });
 
     return strdup([json UTF8String]);
 }
@@ -8192,7 +8390,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
@@ -8213,7 +8411,7 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
@@ -8692,9 +8890,7 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
     NSString *filterStr = filterJson ? [NSString stringWithUTF8String:filterJson] : @"{}";
 
     __block char* result = strdup("[]");
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             NSData *filterData = [filterStr dataUsingEncoding:NSUTF8StringEncoding];
             NSError *parseError = nil;
@@ -8706,7 +8902,6 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
             NSString *filterUrl = filter[@"url"];
             NSString *filterDomain = filter[@"domain"];
 
-            // Get the data store for this partition
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
 
@@ -8756,8 +8951,6 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     return result;
 }
 
@@ -8819,9 +9012,7 @@ extern "C" bool sessionSetCookie(const char* partitionIdentifier, const char* co
     }
 
     __block bool success = false;
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
@@ -8832,8 +9023,6 @@ extern "C" bool sessionSetCookie(const char* partitionIdentifier, const char* co
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     return success;
 }
 
@@ -8852,9 +9041,7 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
     }
 
     __block bool found = false;
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
@@ -8862,7 +9049,6 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
             [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
                 for (NSHTTPCookie *cookie in cookies) {
                     if ([cookie.name isEqualToString:name]) {
-                        // Check if domain matches
                         NSString *host = nsUrl.host;
                         NSString *cookieDomain = cookie.domain;
                         BOOL domainMatches = NO;
@@ -8886,8 +9072,6 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
         }
     });
 
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-
     return found;
 }
 
@@ -8895,9 +9079,7 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
 extern "C" void sessionClearCookies(const char* partitionIdentifier) {
     NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
 
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
@@ -8909,8 +9091,6 @@ extern "C" void sessionClearCookies(const char* partitionIdentifier) {
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
 }
 
 // Clear all storage data for a partition (WKWebView)
@@ -8919,9 +9099,7 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
     NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
     NSString *typesStr = storageTypesJson ? [NSString stringWithUTF8String:storageTypesJson] : @"";
 
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(10 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
@@ -8948,7 +9126,6 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
                     }
                 }
             } else {
-                // Clear all
                 dataTypes = [NSMutableSet setWithSet:[WKWebsiteDataStore allWebsiteDataTypes]];
             }
 
@@ -8964,8 +9141,6 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 }
 
 // Window icon - Linux only, no-op for macOS (macOS uses app bundle icon)
@@ -8974,7 +9149,7 @@ extern "C" void setWindowIcon(void* window, const char* iconPath) {
 }
 
 extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSWindowCollectionBehavior behavior = [window collectionBehavior];
         if (visible) {
             behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
@@ -8987,7 +9162,7 @@ extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) 
 
 extern "C" bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
     __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         result = ([window collectionBehavior] & NSWindowCollectionBehaviorCanJoinAllSpaces) != 0;
     });
     return result;

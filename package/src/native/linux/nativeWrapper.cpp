@@ -205,6 +205,7 @@ using MenuJsonValue = MenuItemJson;
 class ContainerView;
 class CEFWebViewImpl;
 std::string getExecutableDir();
+std::string getExecutableBaseName();
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
@@ -369,6 +370,23 @@ std::string getExecutableDir() {
         }
     }
     return "."; // fallback to current directory
+}
+
+std::string getExecutableBaseName() {
+    char path[1024];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        std::string exePath(path);
+        size_t lastSlash = exePath.find_last_of('/');
+        std::string fileName = lastSlash != std::string::npos
+            ? exePath.substr(lastSlash + 1)
+            : exePath;
+        if (!fileName.empty()) {
+            return fileName;
+        }
+    }
+    return "bun";
 }
 
 static std::mutex g_x11ErrorTrapMutex;
@@ -2325,8 +2343,9 @@ bool initializeCEF() {
     CefString(&settings.resources_dir_path) = execDir;
     CefString(&settings.locales_dir_path) = execDir + "/locales";
     
-    // Set browser subprocess path to the main helper binary
-    CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
+    // Match the helper name to the actual host executable ("bun" vs "main").
+    CefString(&settings.browser_subprocess_path) =
+        execDir + "/" + getExecutableBaseName() + " Helper";
     
     // Set cache path with identifier/channel structure (consistent with CLI and updater)
     // Use ~/.cache/identifier/channel/CEF
@@ -4847,7 +4866,6 @@ public:
             return;
         }
 
-        // Use CEF's native find functionality
         host->Find(CefString(searchText), forward, matchCase, false);
     }
 
@@ -4856,7 +4874,7 @@ public:
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (host) {
-            host->StopFinding(true); // true = clear selection
+            host->StopFinding(true);
         }
     }
 
@@ -5795,6 +5813,27 @@ dispatch_sync_main_void(Func&& func) {
     if (data->exception) {
         std::rethrow_exception(data->exception);
     }
+}
+
+template<typename Func>
+void dispatch_async_main_void(Func&& func) {
+    if (g_main_context_is_owner(g_main_context_default())) {
+        func();
+        return;
+    }
+
+    using FuncType = typename std::decay<Func>::type;
+    struct DispatchData {
+        FuncType func;
+        explicit DispatchData(Func&& f) : func(std::forward<Func>(f)) {}
+    };
+
+    auto data = new DispatchData(std::forward<Func>(func));
+    g_idle_add([](gpointer user_data) -> gboolean {
+        std::unique_ptr<DispatchData> dispatch_data(static_cast<DispatchData*>(user_data));
+        dispatch_data->func();
+        return G_SOURCE_REMOVE;
+    }, data);
 }
 
 // Store for partition-specific contexts (for session storage synchronization)
@@ -7458,7 +7497,8 @@ struct GPUTestState {
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
+    WGPURenderPipeline pipelineA = nullptr;
+    WGPURenderPipeline pipelineB = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
@@ -7469,6 +7509,7 @@ struct GPUTestState {
     uint32_t lastWidth = 0;
     uint32_t lastHeight = 0;
     bool surfaceConfigured = false;
+    bool useAlt = false;
     bool running = false;
     WGPUViewImpl* view = nullptr;
 };
@@ -7490,6 +7531,10 @@ static const float kCubeVertices[] = {
     -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
 };
 
+static constexpr size_t kCubeFloatCount = sizeof(kCubeVertices) / sizeof(float);
+static constexpr size_t kCubeVertexCount = kCubeFloatCount / 3;
+static constexpr size_t kGpuTestStrideFloats = 7;
+
 static void buildRotatedVertices(float angle, float* out, size_t count) {
     const float sinY = sinf(angle);
     const float cosY = cosf(angle);
@@ -7508,6 +7553,59 @@ static void buildRotatedVertices(float angle, float* out, size_t count) {
         out[i] = x1 * proj;
         out[i + 1] = y1 * proj;
         out[i + 2] = 0.0f;
+    }
+}
+
+static float clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void gpuTestGetMouseState(GPUTestState* state, float* outX, float* outY, float* outDown) {
+    if (outX) *outX = 0.5f;
+    if (outY) *outY = 0.5f;
+    if (outDown) *outDown = 0.0f;
+    if (!state || !state->display || !state->window) return;
+
+    Window root = 0;
+    Window child = 0;
+    int rootX = 0;
+    int rootY = 0;
+    int winX = 0;
+    int winY = 0;
+    unsigned int mask = 0;
+    if (!XQueryPointer(state->display, state->window, &root, &child, &rootX, &rootY, &winX, &winY, &mask)) {
+        return;
+    }
+
+    const uint32_t width = std::max(1u, state->lastWidth);
+    const uint32_t height = std::max(1u, state->lastHeight);
+    if (outX) *outX = clamp01f((float)winX / (float)width);
+    if (outY) *outY = clamp01f((float)winY / (float)height);
+    if (outDown) *outDown = (mask & Button1Mask) ? 1.0f : 0.0f;
+}
+
+static void buildInterleavedVertices(
+    float angle,
+    float mouseX,
+    float mouseY,
+    float mouseDown,
+    float timeValue,
+    float* out
+) {
+    float positions[kCubeFloatCount];
+    buildRotatedVertices(angle, positions, kCubeFloatCount);
+    for (size_t vertexIndex = 0; vertexIndex < kCubeVertexCount; vertexIndex++) {
+        const size_t positionIndex = vertexIndex * 3;
+        const size_t outputIndex = vertexIndex * kGpuTestStrideFloats;
+        out[outputIndex] = positions[positionIndex];
+        out[outputIndex + 1] = positions[positionIndex + 1];
+        out[outputIndex + 2] = positions[positionIndex + 2];
+        out[outputIndex + 3] = mouseX;
+        out[outputIndex + 4] = mouseY;
+        out[outputIndex + 5] = mouseDown;
+        out[outputIndex + 6] = timeValue;
     }
 }
 
@@ -7576,27 +7674,8 @@ static void gpuTestConfigureSurface(GPUTestState* state) {
     state->surfaceConfigured = true;
 }
 
-static void gpuTestSetupPipeline(GPUTestState* state) {
-    if (!state || !state->device) return;
-
-    const char* shaderSrc = R"WGSL(
-struct VSOut {
-  @builtin(position) position : vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
-  var out: VSOut;
-  out.position = vec4<f32>(position, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
-}
-)WGSL";
-
+static WGPURenderPipeline gpuTestCreatePipeline(GPUTestState* state, const char* shaderSrc) {
+    if (!state || !state->device) return nullptr;
     WGPUShaderSourceWGSL wgsl = {};
     wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgsl.code.data = shaderSrc;
@@ -7607,21 +7686,24 @@ fn fs_main() -> @location(0) vec4<f32> {
     WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
     if (!shader) {
         wgpu_log("failed to create shader module");
-        return;
+        return nullptr;
     }
 
     WGPUStringView vsEntry = {"vs_main", WGPU_STRLEN};
     WGPUStringView fsEntry = {"fs_main", WGPU_STRLEN};
 
-    WGPUVertexAttribute attr = {};
-    attr.format = WGPUVertexFormat_Float32x3;
-    attr.offset = 0;
-    attr.shaderLocation = 0;
+    WGPUVertexAttribute attrs[2] = {};
+    attrs[0].format = WGPUVertexFormat_Float32x3;
+    attrs[0].offset = 0;
+    attrs[0].shaderLocation = 0;
+    attrs[1].format = WGPUVertexFormat_Float32x4;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[1].shaderLocation = 1;
 
     WGPUVertexBufferLayout vbuf = {};
-    vbuf.arrayStride = sizeof(float) * 3;
-    vbuf.attributeCount = 1;
-    vbuf.attributes = &attr;
+    vbuf.arrayStride = sizeof(float) * kGpuTestStrideFloats;
+    vbuf.attributeCount = 2;
+    vbuf.attributes = attrs;
     vbuf.stepMode = WGPUVertexStepMode_Vertex;
 
     WGPUVertexState vstate = {};
@@ -7657,15 +7739,77 @@ fn fs_main() -> @location(0) vec4<f32> {
     rpDesc.multisample = ms;
     rpDesc.fragment = &fstate;
 
-    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
-    if (!state->pipeline) {
+    WGPURenderPipeline pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!pipeline) {
         wgpu_log("failed to create render pipeline");
-        return;
+        return nullptr;
     }
+    return pipeline;
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state || !state->device) return;
+
+    const char* shaderSrcA = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    const char* shaderSrcB = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+  @location(0) local_pos : vec3<f32>,
+  @location(1) mouse_state : vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  out.local_pos = position;
+  out.mouse_state = mouse_state;
+  return out;
+}
+
+@fragment
+fn fs_main(
+  @location(0) local_pos: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> @location(0) vec4<f32> {
+  let cursor = vec2<f32>(mouse_state.x * 2.0 - 1.0, (1.0 - mouse_state.y) * 2.0 - 1.0);
+  let dist = distance(local_pos.xy, cursor);
+  let wave = 0.5 + 0.5 * sin(mouse_state.w * 3.0 - dist * 14.0);
+  let pulse = select(wave, 1.0 - wave, mouse_state.z > 0.5);
+  let base = vec3<f32>(0.25 + cursor.x * 0.35, 0.35 + cursor.y * 0.25, 0.75);
+  let highlight = vec3<f32>(1.0, 0.45, 0.15);
+  let color = max(mix(base, highlight, pulse), vec3<f32>(0.05));
+  let alpha = 0.7 + 0.3 * pulse;
+  return vec4<f32>(color, alpha);
+}
+)WGSL";
+
+    state->pipelineA = gpuTestCreatePipeline(state, shaderSrcA);
+    state->pipelineB = gpuTestCreatePipeline(state, shaderSrcB);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.size = kCubeVertexCount * kGpuTestStrideFloats * sizeof(float);
     bufDesc.mappedAtCreation = false;
     state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
     if (!state->vertexBuffer) {
@@ -7673,13 +7817,15 @@ fn fs_main() -> @location(0) vec4<f32> {
         return;
     }
 
-    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    float initialVerts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(0.0f, 0.5f, 0.5f, 0.0f, 0.0f, initialVerts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
 }
 
 static void gpuTestRenderFrame(GPUTestState* state) {
-    if (!state || !state->device || !state->surface || !state->queue || !state->pipeline) return;
+    if (!state || !state->device || !state->surface || !state->queue) return;
+    WGPURenderPipeline pipeline = state->useAlt && state->pipelineB ? state->pipelineB : state->pipelineA;
+    if (!pipeline) return;
 
     uint32_t width = 1;
     uint32_t height = 1;
@@ -7696,8 +7842,12 @@ static void gpuTestRenderFrame(GPUTestState* state) {
     }
 
     state->angle += 0.02f;
-    float verts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    float mouseX = 0.5f;
+    float mouseY = 0.5f;
+    float mouseDown = 0.0f;
+    gpuTestGetMouseState(state, &mouseX, &mouseY, &mouseDown);
+    float verts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(state->angle, mouseX, mouseY, mouseDown, state->angle * 1.5f, verts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     WGPUSurfaceTexture surfaceTexture = {};
@@ -7725,9 +7875,15 @@ static void gpuTestRenderFrame(GPUTestState* state) {
 
     WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
     WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
-    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
-    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(
+        pass,
+        0,
+        state->vertexBuffer,
+        0,
+        kCubeVertexCount * kGpuTestStrideFloats * sizeof(float)
+    );
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)kCubeVertexCount, 1, 0, 0);
     p_wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
@@ -7822,6 +7978,10 @@ static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
 
 static void runOnMainThreadSyncVoid(std::function<void()> fn) {
     dispatch_sync_main_void([&]() { fn(); });
+}
+
+static void runOnMainThreadAsyncVoid(std::function<void()> fn) {
+    dispatch_async_main_void([fn = std::move(fn)]() { fn(); });
 }
 
 ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
@@ -8144,6 +8304,7 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         g_gpuTest.display = display;
         g_gpuTest.window = window;
         g_gpuTest.view = view;
+        g_gpuTest.useAlt = false;
 
         if (!g_gpuTest.instance) {
             g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
@@ -8173,6 +8334,19 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         cbInfo.callback = gpuTestRequestAdapterCallback;
         cbInfo.userdata1 = &g_gpuTest;
         p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuToggleGPUTestShader(void* abstractView) {
+    if (!abstractView) return;
+    if (!ensureWgpuTestSymbols()) return;
+
+    runOnMainThreadSyncVoid([abstractView]() {
+        WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>((AbstractView*)abstractView);
+        if (!view || !g_gpuTest.view) return;
+        if (g_gpuTest.view == view) {
+            g_gpuTest.useAlt = !g_gpuTest.useAlt;
+        }
     });
 }
 
@@ -9480,11 +9654,9 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     g_shuttingDown.store(true);
     printf("[stopEventLoop] Initiating clean event loop exit\n");
 
-    // gtk_main_quit should be called from the GTK thread
-    g_idle_add([](gpointer) -> gboolean {
+    runOnMainThreadAsyncVoid([]() {
         gtk_main_quit();
-        return G_SOURCE_REMOVE;
-    }, nullptr);
+    });
 }
 
 ELECTROBUN_EXPORT void killApp() {

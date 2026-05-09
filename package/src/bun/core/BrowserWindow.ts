@@ -5,11 +5,10 @@ import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
 import { quit } from "./Utils";
 import { type RPCWithTransport } from "../../shared/rpc.js";
-import { getNextWindowId } from "./windowIds";
 import { GpuWindowMap } from "./GpuWindow";
 import { WGPUView } from "./WGPUView";
 
-const buildConfig = await BuildConfig.get();
+const buildConfig = BuildConfig.getSync();
 
 export type WindowOptionsType<T = undefined> = {
 	trafficLightOffset?: {
@@ -116,8 +115,7 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 });
 
 export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
-	id: number = getNextWindowId();
-	ptr!: Pointer;
+	id = 0;
 	title: string = "Electrobun";
 	state: "creating" | "created" = "creating";
 	url: string | null = null;
@@ -145,6 +143,10 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	};
 	// todo (yoav): make this an array of ids or something
 	webviewId!: number;
+
+	get ptr(): Pointer | null {
+		return ffi.request.getWindowPointer({ winId: this.id }) as Pointer | null;
+	}
 
 	constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
 		this.title = options.title || "New Window";
@@ -177,8 +179,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		hidden,
 		activate,
 	}: Partial<WindowOptionsType<T>>) {
-		this.ptr = ffi.request.createWindow({
-			id: this.id,
+		const windowId = ffi.request.createWindow({
 			title: this.title,
 			url: this.url || "",
 			frame: {
@@ -221,7 +222,13 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			hidden: hidden ?? false,
 			activate: activate ?? true,
 			trafficLightOffset: this.trafficLightOffset,
-		}) as Pointer;
+		});
+
+		if (!windowId) {
+			throw "Failed to create window";
+		}
+
+		this.id = windowId as number;
 
 		BrowserWindowMap[this.id] = this;
 

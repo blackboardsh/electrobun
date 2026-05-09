@@ -3,7 +3,7 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
 import { WGPUView } from "../core/WGPUView";
-import { Tray } from "../core/Tray";
+import { rpcPort } from "../core/Socket";
 import {
 	preloadScript,
 	preloadScriptSandboxed,
@@ -71,13 +71,478 @@ import {
 	type Pointer,
 } from "bun:ffi";
 import { BrowserWindow } from "../core/BrowserWindow";
-import { GpuWindow } from "../core/GpuWindow";
 
 function getWindowPtr(winId: number) {
-	return (
-		BrowserWindow.getById(winId)?.ptr ?? GpuWindow.getById(winId)?.ptr ?? null
-	);
+	return core?.symbols.getWindowPointer(winId) || null;
 }
+
+function getCoreLastError(): string | null {
+	const error = core?.symbols.electrobun_core_last_error();
+	if (!error) {
+		return null;
+	}
+
+	const message = error.toString();
+	return message.length > 0 ? message : null;
+}
+
+let webviewRuntimeConfigured = false;
+
+function ensureWebviewRuntimeConfigured() {
+	if (webviewRuntimeConfigured) {
+		return;
+	}
+
+	const configured = core?.symbols.configureWebviewRuntime(
+		rpcPort,
+		toCString(preloadScript),
+		toCString(preloadScriptSandboxed),
+	);
+
+	if (!configured) {
+		throw getCoreLastError() || "Failed to configure webview runtime";
+	}
+
+	webviewRuntimeConfigured = true;
+}
+
+const core = (() => {
+	try {
+		const corePath = join(
+			process.cwd(),
+			process.platform === "win32"
+				? "ElectrobunCore.dll"
+				: `libElectrobunCore.${suffix}`,
+		);
+		return dlopen(corePath, {
+			electrobun_core_last_error: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getWindowStyle: {
+				args: [
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+				],
+				returns: FFIType.u32,
+			},
+			createWindow: {
+				args: [
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.u32,
+					FFIType.cstring,
+					FFIType.bool,
+					FFIType.cstring,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+				],
+				returns: FFIType.u32,
+			},
+			getWindowPointer: {
+				args: [FFIType.u32],
+				returns: FFIType.ptr,
+			},
+			setWindowTitle: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			minimizeWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			restoreWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			isWindowMinimized: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			maximizeWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			unmaximizeWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			isWindowMaximized: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			showWindow: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			activateWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			hideWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			closeWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			setWindowFullScreen: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowFullScreen: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			setWindowAlwaysOnTop: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowAlwaysOnTop: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			setWindowVisibleOnAllWorkspaces: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			isWindowVisibleOnAllWorkspaces: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			setWindowPosition: {
+				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowButtonPosition: {
+				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowSize: {
+				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowFrame: {
+				args: [FFIType.u32, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			getWindowFrame: {
+				args: [FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
+			configureWebviewRuntime: {
+				args: [
+					FFIType.u32,
+					FFIType.cstring,
+					FFIType.cstring,
+				],
+				returns: FFIType.bool,
+			},
+			createWebview: {
+				args: [
+					FFIType.u32,
+					FFIType.u32,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.bool,
+					FFIType.cstring,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.function,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.bool,
+					FFIType.bool,
+					FFIType.bool,
+				],
+				returns: FFIType.u32,
+			},
+			getWebviewPointer: {
+				args: [FFIType.u32],
+				returns: FFIType.ptr,
+			},
+			resizeWebview: {
+				args: [
+					FFIType.u32,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.cstring,
+				],
+				returns: FFIType.void,
+			},
+			loadURLInWebView: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			loadHTMLInWebView: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			updatePreloadScriptToWebView: {
+				args: [FFIType.u32, FFIType.cstring, FFIType.cstring, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewCanGoBack: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			webviewCanGoForward: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			webviewGoBack: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewGoForward: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewReload: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewRemove: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			setWebviewHTMLContent: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			webviewSetTransparent: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewSetPassthrough: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewSetHidden: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
+			setWebviewNavigationRules: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			webviewFindInPage: {
+				args: [FFIType.u32, FFIType.cstring, FFIType.bool, FFIType.bool],
+				returns: FFIType.void,
+			},
+			webviewStopFind: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			evaluateJavaScriptWithNoCompletion: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			dispatchHostWebviewEvent: {
+				args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			sendInternalMessageToWebview: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			webviewOpenDevTools: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewCloseDevTools: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewToggleDevTools: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			webviewSetPageZoom: {
+				args: [FFIType.u32, FFIType.f64],
+				returns: FFIType.void,
+			},
+			webviewGetPageZoom: {
+				args: [FFIType.u32],
+				returns: FFIType.f64,
+			},
+			createTray: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.bool,
+					FFIType.u32,
+					FFIType.u32,
+					FFIType.function,
+				],
+				returns: FFIType.u32,
+			},
+			showTray: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
+			hideTray: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			setTrayTitle: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setTrayImage: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setTrayMenu: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.void,
+			},
+			removeTray: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			getTrayBounds: {
+				args: [FFIType.u32],
+				returns: FFIType.cstring,
+			},
+			setApplicationMenu: {
+				args: [FFIType.cstring, FFIType.function],
+				returns: FFIType.void,
+			},
+			showContextMenu: {
+				args: [FFIType.cstring, FFIType.function],
+				returns: FFIType.void,
+			},
+			moveToTrash: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			showItemInFolder: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			openExternal: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			openPath: {
+				args: [FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			showNotification: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.bool,
+				],
+				returns: FFIType.void,
+			},
+			getAllDisplays: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getPrimaryDisplay: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getCursorScreenPoint: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			getMouseButtons: {
+				args: [],
+				returns: FFIType.u64,
+			},
+			openFileDialog: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.int,
+					FFIType.int,
+					FFIType.int,
+				],
+				returns: FFIType.cstring,
+			},
+			showMessageBox: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.int,
+					FFIType.int,
+				],
+				returns: FFIType.int,
+			},
+			clipboardReadText: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			clipboardWriteText: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			clipboardReadImage: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			clipboardWriteImage: {
+				args: [FFIType.ptr, FFIType.u64],
+				returns: FFIType.void,
+			},
+			clipboardClear: {
+				args: [],
+				returns: FFIType.void,
+			},
+			clipboardAvailableFormats: {
+				args: [],
+				returns: FFIType.cstring,
+			},
+			setDockIconVisible: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			isDockIconVisible: {
+				args: [],
+				returns: FFIType.bool,
+			},
+		});
+	} catch {
+		return null;
+	}
+})();
 
 export const native = (() => {
 	try {
@@ -85,127 +550,6 @@ export const native = (() => {
 		// On Windows shortcuts, the working directory may not be set correctly
 		const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
 		return dlopen(nativeWrapperPath, {
-			// window
-			createWindowWithFrameAndStyleFromWorker: {
-				// Pass each parameter individually
-				args: [
-					FFIType.u32, // windowId
-					FFIType.f64,
-					FFIType.f64, // x, y
-					FFIType.f64,
-					FFIType.f64, // width, height
-					FFIType.u32, // styleMask
-					FFIType.cstring, // titleBarStyle
-					FFIType.bool, // transparent
-					FFIType.f64, // trafficLightOffsetX
-					FFIType.f64, // trafficLightOffsetY
-					FFIType.function, // closeHandler
-					FFIType.function, // moveHandler
-					FFIType.function, // resizeHandler
-					FFIType.function, // focusHandler
-					FFIType.function, // blurHandler
-					FFIType.function, // keyHandler
-				],
-				returns: FFIType.ptr,
-			},
-			setWindowTitle: {
-				args: [
-					FFIType.ptr, // window ptr
-					FFIType.cstring, // title
-				],
-				returns: FFIType.void,
-			},
-			showWindow: {
-				args: [
-					FFIType.ptr, // window ptr
-					FFIType.bool, // activate
-				],
-				returns: FFIType.void,
-			},
-			activateWindow: {
-				args: [
-					FFIType.ptr, // window ptr
-				],
-				returns: FFIType.void,
-			},
-			hideWindow: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			closeWindow: {
-				args: [
-					FFIType.ptr, // window ptr
-				],
-				returns: FFIType.void,
-			},
-			minimizeWindow: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			restoreWindow: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			isWindowMinimized: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
-			},
-			maximizeWindow: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			unmaximizeWindow: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			isWindowMaximized: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
-			},
-			setWindowFullScreen: {
-				args: [FFIType.ptr, FFIType.bool],
-				returns: FFIType.void,
-			},
-			isWindowFullScreen: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
-			},
-			setWindowAlwaysOnTop: {
-				args: [FFIType.ptr, FFIType.bool],
-				returns: FFIType.void,
-			},
-			isWindowAlwaysOnTop: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
-			},
-			setWindowVisibleOnAllWorkspaces: {
-				args: [FFIType.ptr, FFIType.bool],
-				returns: FFIType.void,
-			},
-			isWindowVisibleOnAllWorkspaces: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
-			},
-				setWindowPosition: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
-				setWindowButtonPosition: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
-				setWindowSize: {
-					args: [FFIType.ptr, FFIType.f64, FFIType.f64],
-					returns: FFIType.void,
-				},
-			setWindowFrame: {
-				args: [FFIType.ptr, FFIType.f64, FFIType.f64, FFIType.f64, FFIType.f64],
-				returns: FFIType.void,
-			},
-			getWindowFrame: {
-				args: [FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
-				returns: FFIType.void,
-			},
 			// webview
 			initWebview: {
 				args: [
@@ -463,73 +807,6 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
 			},
-			// Tray
-			createTray: {
-				args: [
-					FFIType.u32, // id
-					FFIType.cstring, // title
-					FFIType.cstring, // pathToImage
-					FFIType.bool, // isTemplate
-					FFIType.u32, // width
-					FFIType.u32, //height
-					FFIType.function, // trayItemHandler
-				],
-				returns: FFIType.ptr,
-			},
-			setTrayTitle: {
-				args: [FFIType.ptr, FFIType.cstring],
-				returns: FFIType.void,
-			},
-			setTrayImage: {
-				args: [FFIType.ptr, FFIType.cstring],
-				returns: FFIType.void,
-			},
-			setTrayMenu: {
-				args: [FFIType.ptr, FFIType.cstring],
-				returns: FFIType.void,
-			},
-			removeTray: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-			getTrayBounds: {
-				args: [FFIType.ptr],
-				returns: FFIType.cstring,
-			},
-			setApplicationMenu: {
-				args: [FFIType.cstring, FFIType.function],
-				returns: FFIType.void,
-			},
-			showContextMenu: {
-				args: [FFIType.cstring, FFIType.function],
-				returns: FFIType.void,
-			},
-			moveToTrash: {
-				args: [FFIType.cstring],
-				returns: FFIType.bool,
-			},
-			showItemInFolder: {
-				args: [FFIType.cstring],
-				returns: FFIType.void,
-			},
-			openExternal: {
-				args: [FFIType.cstring],
-				returns: FFIType.bool,
-			},
-			openPath: {
-				args: [FFIType.cstring],
-				returns: FFIType.bool,
-			},
-			showNotification: {
-				args: [
-					FFIType.cstring, // title
-					FFIType.cstring, // body
-					FFIType.cstring, // subtitle
-					FFIType.bool, // silent
-				],
-				returns: FFIType.void,
-			},
-
 			// Global keyboard shortcuts
 			setGlobalShortcutCallback: {
 				args: [FFIType.function],
@@ -550,73 +827,6 @@ export const native = (() => {
 			isGlobalShortcutRegistered: {
 				args: [FFIType.cstring],
 				returns: FFIType.bool,
-			},
-
-			// Screen API
-			getAllDisplays: {
-				args: [],
-				returns: FFIType.cstring,
-			},
-			getPrimaryDisplay: {
-				args: [],
-				returns: FFIType.cstring,
-			},
-			getCursorScreenPoint: {
-				args: [],
-				returns: FFIType.cstring,
-			},
-			getMouseButtons: {
-				args: [],
-				returns: FFIType.u64,
-			},
-
-			openFileDialog: {
-				args: [
-					FFIType.cstring,
-					FFIType.cstring,
-					FFIType.int,
-					FFIType.int,
-					FFIType.int,
-				],
-				returns: FFIType.cstring,
-			},
-			showMessageBox: {
-				args: [
-					FFIType.cstring, // type
-					FFIType.cstring, // title
-					FFIType.cstring, // message
-					FFIType.cstring, // detail
-					FFIType.cstring, // buttons (comma-separated)
-					FFIType.int, // defaultId
-					FFIType.int, // cancelId
-				],
-				returns: FFIType.int,
-			},
-
-			// Clipboard API
-			clipboardReadText: {
-				args: [],
-				returns: FFIType.cstring,
-			},
-			clipboardWriteText: {
-				args: [FFIType.cstring],
-				returns: FFIType.void,
-			},
-			clipboardReadImage: {
-				args: [FFIType.ptr], // pointer to size_t for output size
-				returns: FFIType.ptr, // pointer to PNG data
-			},
-			clipboardWriteImage: {
-				args: [FFIType.ptr, FFIType.u64], // PNG data pointer, size
-				returns: FFIType.void,
-			},
-			clipboardClear: {
-				args: [],
-				returns: FFIType.void,
-			},
-			clipboardAvailableFormats: {
-				args: [],
-				returns: FFIType.cstring,
 			},
 
 			// Session/Cookie API
@@ -650,33 +860,7 @@ export const native = (() => {
 				args: [FFIType.function],
 				returns: FFIType.void,
 			},
-			setDockIconVisible: {
-				args: [FFIType.bool],
-				returns: FFIType.void,
-			},
-			isDockIconVisible: {
-				args: [],
-				returns: FFIType.bool,
-			},
 
-			// Window style utilities
-			getWindowStyle: {
-				args: [
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-					FFIType.bool,
-				],
-				returns: FFIType.u32,
-			},
 			// JSCallback utils for native code to use
 			setJSUtils: {
 				args: [
@@ -727,7 +911,7 @@ export const native = (() => {
 	}
 })();
 
-export const hasFFI = native !== null;
+export const hasFFI = native !== null && core !== null;
 
 // PostMessage bridge for carrot workers (inter-carrot communication, host events).
 // Created when __bunnyCarrotBootstrap exists, regardless of FFI availability.
@@ -821,12 +1005,12 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 // a zig bug I ran into last year. So check number of args in a signature when alignment issues occur.
 
 // Non-null accessor for use inside _ffiImpl — these methods are only called when hasFFI is true.
+const core_ = core!;
 const native_ = native!;
 
 const _ffiImpl = {
 	request: {
 		createWindow: (params: {
-			id: number;
 			url: string | null;
 			title: string;
 			frame: {
@@ -857,9 +1041,8 @@ const _ffiImpl = {
 				x: number;
 				y: number;
 			};
-		}): FFIType.ptr => {
+		}): number => {
 			const {
-				id,
 				url: _url,
 				title,
 				frame: { x, y, width, height },
@@ -884,7 +1067,7 @@ const _ffiImpl = {
 				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
-			const styleMask = native_.symbols.getWindowStyle(
+			const styleMask = core_.symbols.getWindowStyle(
 				Borderless,
 				Titled,
 				Closable,
@@ -899,8 +1082,7 @@ const _ffiImpl = {
 				HUDWindow,
 			);
 
-			const windowPtr = native_.symbols.createWindowWithFrameAndStyleFromWorker(
-				id,
+			const windowId = core_.symbols.createWindow(
 				// frame
 				x,
 				y,
@@ -910,6 +1092,9 @@ const _ffiImpl = {
 				// style
 				toCString(titleBarStyle),
 				transparent,
+				toCString(title),
+				hidden,
+				activate,
 				trafficLightOffset.x,
 				trafficLightOffset.y,
 				// callbacks
@@ -921,26 +1106,24 @@ const _ffiImpl = {
 				windowKeyCallback,
 			);
 
-			if (!windowPtr) {
-				throw "Failed to create window";
+			if (!windowId) {
+				throw getCoreLastError() || "Failed to create window";
 			}
 
-			native_.symbols.setWindowTitle(windowPtr, toCString(title));
-			if (!hidden) {
-				native_.symbols.showWindow(windowPtr, activate);
-			}
-
-			return windowPtr;
+			return windowId;
+		},
+		getWindowPointer: (params: { winId: number }): Pointer | null => {
+			return getWindowPtr(params.winId);
 		},
 		setTitle: (params: { winId: number; title: string }) => {
 			const { winId, title } = params;
 			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
-				throw `Can't add webview to window. window no longer exists`;
+				throw `Can't set window title. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowTitle(windowPtr, toCString(title));
+			core_.symbols.setWindowTitle(winId, toCString(title));
 		},
 
 		closeWindow: (params: { winId: number }) => {
@@ -952,7 +1135,7 @@ const _ffiImpl = {
 				return;
 			}
 
-			native_.symbols.closeWindow(windowPtr);
+			core_.symbols.closeWindow(winId);
 			// Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
 		},
 
@@ -964,7 +1147,7 @@ const _ffiImpl = {
 				throw `Can't show window. Window no longer exists`;
 			}
 
-			native_.symbols.showWindow(windowPtr, params.activate ?? true);
+			core_.symbols.showWindow(winId, params.activate ?? true);
 		},
 
 		activateWindow: (params: { winId: number }) => {
@@ -975,7 +1158,7 @@ const _ffiImpl = {
 				throw `Can't activate window. Window no longer exists`;
 			}
 
-			native_.symbols.activateWindow(windowPtr);
+			core_.symbols.activateWindow(winId);
 		},
 
 		hideWindow: (params: { winId: number }) => {
@@ -986,7 +1169,7 @@ const _ffiImpl = {
 				throw `Can't hide window. Window no longer exists`;
 			}
 
-			native_.symbols.hideWindow(windowPtr);
+			core_.symbols.hideWindow(winId);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
@@ -997,7 +1180,7 @@ const _ffiImpl = {
 				throw `Can't minimize window. Window no longer exists`;
 			}
 
-			native_.symbols.minimizeWindow(windowPtr);
+			core_.symbols.minimizeWindow(winId);
 		},
 
 		restoreWindow: (params: { winId: number }) => {
@@ -1008,7 +1191,7 @@ const _ffiImpl = {
 				throw `Can't restore window. Window no longer exists`;
 			}
 
-			native_.symbols.restoreWindow(windowPtr);
+			core_.symbols.restoreWindow(winId);
 		},
 
 		isWindowMinimized: (params: { winId: number }): boolean => {
@@ -1019,7 +1202,7 @@ const _ffiImpl = {
 				return false;
 			}
 
-			return native_.symbols.isWindowMinimized(windowPtr);
+			return core_.symbols.isWindowMinimized(winId);
 		},
 
 		maximizeWindow: (params: { winId: number }) => {
@@ -1030,7 +1213,7 @@ const _ffiImpl = {
 				throw `Can't maximize window. Window no longer exists`;
 			}
 
-			native_.symbols.maximizeWindow(windowPtr);
+			core_.symbols.maximizeWindow(winId);
 		},
 
 		unmaximizeWindow: (params: { winId: number }) => {
@@ -1041,7 +1224,7 @@ const _ffiImpl = {
 				throw `Can't unmaximize window. Window no longer exists`;
 			}
 
-			native_.symbols.unmaximizeWindow(windowPtr);
+			core_.symbols.unmaximizeWindow(winId);
 		},
 
 		isWindowMaximized: (params: { winId: number }): boolean => {
@@ -1052,7 +1235,7 @@ const _ffiImpl = {
 				return false;
 			}
 
-			return native_.symbols.isWindowMaximized(windowPtr);
+			return core_.symbols.isWindowMaximized(winId);
 		},
 
 		setWindowFullScreen: (params: { winId: number; fullScreen: boolean }) => {
@@ -1063,7 +1246,7 @@ const _ffiImpl = {
 				throw `Can't set fullscreen. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowFullScreen(windowPtr, fullScreen);
+			core_.symbols.setWindowFullScreen(winId, fullScreen);
 		},
 
 		isWindowFullScreen: (params: { winId: number }): boolean => {
@@ -1074,7 +1257,7 @@ const _ffiImpl = {
 				return false;
 			}
 
-			return native_.symbols.isWindowFullScreen(windowPtr);
+			return core_.symbols.isWindowFullScreen(winId);
 		},
 
 		setWindowAlwaysOnTop: (params: { winId: number; alwaysOnTop: boolean }) => {
@@ -1085,7 +1268,7 @@ const _ffiImpl = {
 				throw `Can't set always on top. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowAlwaysOnTop(windowPtr, alwaysOnTop);
+			core_.symbols.setWindowAlwaysOnTop(winId, alwaysOnTop);
 		},
 
 		isWindowAlwaysOnTop: (params: { winId: number }): boolean => {
@@ -1096,7 +1279,7 @@ const _ffiImpl = {
 				return false;
 			}
 
-			return native_.symbols.isWindowAlwaysOnTop(windowPtr);
+			return core_.symbols.isWindowAlwaysOnTop(winId);
 		},
 
 		setWindowVisibleOnAllWorkspaces: (params: {
@@ -1104,55 +1287,55 @@ const _ffiImpl = {
 			visibleOnAllWorkspaces: boolean;
 		}) => {
 			const { winId, visibleOnAllWorkspaces } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				throw `Can't set visible on all workspaces. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowVisibleOnAllWorkspaces(
-				windowPtr,
+			core_.symbols.setWindowVisibleOnAllWorkspaces(
+				winId,
 				visibleOnAllWorkspaces,
 			);
 		},
 
 		isWindowVisibleOnAllWorkspaces: (params: { winId: number }): boolean => {
 			const { winId } = params;
-			const windowPtr = BrowserWindow.getById(winId)?.ptr;
+			const windowPtr = getWindowPtr(winId);
 
 			if (!windowPtr) {
 				return false;
 			}
 
-			return native_.symbols.isWindowVisibleOnAllWorkspaces(windowPtr);
+			return core_.symbols.isWindowVisibleOnAllWorkspaces(winId);
 		},
 
-			setWindowPosition: (params: { winId: number; x: number; y: number }) => {
-				const { winId, x, y } = params;
-				const windowPtr = getWindowPtr(winId);
+		setWindowPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = getWindowPtr(winId);
 
-				if (!windowPtr) {
-					throw `Can't set window position. Window no longer exists`;
-				}
+			if (!windowPtr) {
+				throw `Can't set window position. Window no longer exists`;
+			}
 
-				native_.symbols.setWindowPosition(windowPtr, x, y);
-			},
+			core_.symbols.setWindowPosition(winId, x, y);
+		},
 
-			setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
-				const { winId, x, y } = params;
-				const windowPtr = getWindowPtr(winId);
+		setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
+			const { winId, x, y } = params;
+			const windowPtr = getWindowPtr(winId);
 
-				if (!windowPtr) {
-					throw `Can't set window button position. Window no longer exists`;
-				}
+			if (!windowPtr) {
+				throw `Can't set window button position. Window no longer exists`;
+			}
 
-				native_.symbols.setWindowButtonPosition(windowPtr, x, y);
-			},
+			core_.symbols.setWindowButtonPosition(winId, x, y);
+		},
 
-			setWindowSize: (params: {
-				winId: number;
-				width: number;
-				height: number;
+		setWindowSize: (params: {
+			winId: number;
+			width: number;
+			height: number;
 		}) => {
 			const { winId, width, height } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1161,7 +1344,7 @@ const _ffiImpl = {
 				throw `Can't set window size. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowSize(windowPtr, width, height);
+			core_.symbols.setWindowSize(winId, width, height);
 		},
 
 		setWindowFrame: (params: {
@@ -1178,7 +1361,7 @@ const _ffiImpl = {
 				throw `Can't set window frame. Window no longer exists`;
 			}
 
-			native_.symbols.setWindowFrame(windowPtr, x, y, width, height);
+			core_.symbols.setWindowFrame(winId, x, y, width, height);
 		},
 
 		getWindowFrame: (params: {
@@ -1197,8 +1380,8 @@ const _ffiImpl = {
 			const widthBuf = new Float64Array(1);
 			const heightBuf = new Float64Array(1);
 
-			native_.symbols.getWindowFrame(
-				windowPtr,
+			core_.symbols.getWindowFrame(
+				winId,
 				ptr(xBuf),
 				ptr(yBuf),
 				ptr(widthBuf),
@@ -1212,17 +1395,12 @@ const _ffiImpl = {
 				height: heightBuf[0]!,
 			};
 		},
-
 		createWebview: (params: {
-			id: number;
 			windowId: number;
-			renderer: "cef" | "native";
-			rpcPort: number;
-			secretKey: string;
 			hostWebviewId: number | null;
-			pipePrefix: string;
+			renderer: "cef" | "native";
+			secretKey: string;
 			url: string | null;
-			html: string | null;
 			partition: string | null;
 			preload: string | null;
 			viewsRoot: string | null;
@@ -1237,17 +1415,13 @@ const _ffiImpl = {
 			sandbox: boolean;
 			startTransparent: boolean;
 			startPassthrough: boolean;
-		}): FFIType.ptr => {
+		}): number => {
 			const {
-				id,
 				windowId,
+				hostWebviewId,
 				renderer,
-				rpcPort,
 				secretKey,
-				// hostWebviewId: number | null;
-				// pipePrefix: string;
 				url,
-				// html: string | null;
 				partition,
 				preload,
 				viewsRoot,
@@ -1257,62 +1431,11 @@ const _ffiImpl = {
 				startTransparent,
 				startPassthrough,
 			} = params;
+			ensureWebviewRuntimeConfigured();
 
-			const parentWindow = BrowserWindow.getById(windowId);
-			const windowPtr = parentWindow?.ptr;
-			// Get transparent flag from parent window
-			const transparent = parentWindow?.transparent ?? false;
-
-			if (!windowPtr) {
-				throw `Can't add webview to window. window no longer exists`;
-			}
-
-			// Dynamic setup per-webview (variables that change for each webview)
-			// EventBridge is available for ALL webviews (including sandboxed) for event emission
-			// InternalBridge and BunBridge are only available for trusted (non-sandboxed) webviews
-			let dynamicPreload: string;
-			let selectedPreloadScript: string;
-
-			if (sandbox) {
-				// Sandboxed webview: minimal preload with only event emission capability
-				// Note: We set up internalBridge for event emission fallback (until native code
-				// adds dedicated eventBridge handler). The security is enforced because:
-				// 1. Sandboxed preload has NO RPC code - it can only emit events
-				// 2. No bunBridge is set up - no user RPC communication
-				// 3. No secretKey/rpcPort - no encrypted socket RPC
-				// 4. No webview tag support - can't create OOPIFs
-				// Note: Check existing value first to preserve bridges already set by CEF's OnContextCreated
-				dynamicPreload = `
-window.__electrobunWebviewId = ${id};
-window.__electrobunWindowId = ${windowId};
-window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
-window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
-`;
-				selectedPreloadScript = preloadScriptSandboxed;
-			} else {
-				// Trusted webview: all bridges, full preload
-				// Note: Check existing value first to preserve bridges already set by CEF's OnContextCreated
-				dynamicPreload = `
-window.__electrobunWebviewId = ${id};
-window.__electrobunWindowId = ${windowId};
-window.__electrobunRpcSocketPort = ${rpcPort};
-window.__electrobunSecretKeyBytes = [${secretKey}];
-window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
-window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
-window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
-`;
-				selectedPreloadScript = preloadScript;
-			}
-
-			const electrobunPreload = dynamicPreload + selectedPreloadScript;
-
-			const customPreload = preload;
-
-			// Pre-set flags before initWebview (workaround for FFI param count limits)
-			native_.symbols.setNextWebviewFlags(startTransparent, startPassthrough);
-			const webviewPtr = native_.symbols.initWebview(
-				id,
-				windowPtr,
+			const webviewId = core_.symbols.createWebview(
+				windowId,
+				hostWebviewId || 0,
 				toCString(renderer),
 				toCString(url || ""),
 				x,
@@ -1323,21 +1446,101 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				toCString(partition || "persist:default"),
 				webviewDecideNavigation,
 				webviewEventJSCallback,
-				eventBridgeHandler, // Event-only bridge (always active, for dom-ready, navigation, etc.)
-				bunBridgePostmessageHandler, // User RPC bridge (disabled in sandbox mode)
-				internalBridgeHandler, // Internal RPC bridge (disabled in sandbox mode)
-				toCString(electrobunPreload),
-				toCString(customPreload || ""),
+				eventBridgeHandler,
+				bunBridgePostmessageHandler,
+				internalBridgeHandler,
+				toCString(secretKey),
+				toCString(preload || ""),
 				toCString(viewsRoot || ""),
-				transparent,
 				sandbox, // When true, bunBridge and internalBridge are not set up in native code
+				startTransparent,
+				startPassthrough,
 			);
 
-			if (!webviewPtr) {
-				throw "Failed to create webview";
+			if (!webviewId) {
+				throw getCoreLastError() || "Failed to create webview";
 			}
 
-			return webviewPtr;
+			return webviewId;
+		},
+		getWebviewPointer: (params: { id: number }): Pointer | null => {
+			return core_.symbols.getWebviewPointer(params.id) || null;
+		},
+		resizeWebview: (params: {
+			id: number;
+			frame: { x: number; y: number; width: number; height: number };
+			masks?: string;
+		}) => {
+			const { id, frame: { x, y, width, height }, masks = "[]" } = params;
+			core_.symbols.resizeWebview(id, x, y, width, height, toCString(masks));
+		},
+		loadURLInWebView: (params: { id: number; url: string }) => {
+			core_.symbols.loadURLInWebView(params.id, toCString(params.url));
+		},
+		loadHTMLInWebView: (params: { id: number; html: string }) => {
+			core_.symbols.loadHTMLInWebView(params.id, toCString(params.html));
+		},
+		updatePreloadScriptToWebView: (params: {
+			id: number;
+			scriptIdentifier: string;
+			script: string;
+			allFrames: boolean;
+		}) => {
+			core_.symbols.updatePreloadScriptToWebView(
+				params.id,
+				toCString(params.scriptIdentifier),
+				toCString(params.script),
+				params.allFrames,
+			);
+		},
+		webviewCanGoBack: (params: { id: number }) => {
+			return core_.symbols.webviewCanGoBack(params.id);
+		},
+		webviewCanGoForward: (params: { id: number }) => {
+			return core_.symbols.webviewCanGoForward(params.id);
+		},
+		webviewGoBack: (params: { id: number }) => {
+			core_.symbols.webviewGoBack(params.id);
+		},
+		webviewGoForward: (params: { id: number }) => {
+			core_.symbols.webviewGoForward(params.id);
+		},
+		webviewReload: (params: { id: number }) => {
+			core_.symbols.webviewReload(params.id);
+		},
+		webviewRemove: (params: { id: number }) => {
+			core_.symbols.webviewRemove(params.id);
+		},
+		setWebviewHTMLContent: (params: { id: number; html: string }) => {
+			core_.symbols.setWebviewHTMLContent(params.id, toCString(params.html));
+		},
+		webviewSetTransparent: (params: { id: number; transparent: boolean }) => {
+			core_.symbols.webviewSetTransparent(params.id, params.transparent);
+		},
+		webviewSetPassthrough: (params: { id: number; passthrough: boolean }) => {
+			core_.symbols.webviewSetPassthrough(params.id, params.passthrough);
+		},
+		webviewSetHidden: (params: { id: number; hidden: boolean }) => {
+			core_.symbols.webviewSetHidden(params.id, params.hidden);
+		},
+		setWebviewNavigationRules: (params: { id: number; rulesJson: string }) => {
+			core_.symbols.setWebviewNavigationRules(params.id, toCString(params.rulesJson));
+		},
+		webviewFindInPage: (params: {
+			id: number;
+			searchText: string;
+			forward: boolean;
+			matchCase: boolean;
+		}) => {
+			core_.symbols.webviewFindInPage(
+				params.id,
+				toCString(params.searchText),
+				params.forward,
+				params.matchCase,
+			);
+		},
+		webviewStopFind: (params: { id: number }) => {
+			core_.symbols.webviewStopFind(params.id);
 		},
 
 		createWGPUView: (params: {
@@ -1477,31 +1680,37 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			id: number;
 			js: string;
 		}) => {
-			const { id, js } = params;
-			const webview = BrowserView.getById(id);
-
-			if (!webview?.ptr) {
-				return;
-			}
-
-			native_.symbols.evaluateJavaScriptWithNoCompletion(
-				webview.ptr,
-				toCString(js),
+			core_.symbols.evaluateJavaScriptWithNoCompletion(
+				params.id,
+				toCString(params.js),
 			);
+		},
+		webviewOpenDevTools: (params: { id: number }) => {
+			core_.symbols.webviewOpenDevTools(params.id);
+		},
+		webviewCloseDevTools: (params: { id: number }) => {
+			core_.symbols.webviewCloseDevTools(params.id);
+		},
+		webviewToggleDevTools: (params: { id: number }) => {
+			core_.symbols.webviewToggleDevTools(params.id);
+		},
+		webviewSetPageZoom: (params: { id: number; zoomLevel: number }) => {
+			core_.symbols.webviewSetPageZoom(params.id, params.zoomLevel);
+		},
+		webviewGetPageZoom: (params: { id: number }): number => {
+			return core_.symbols.webviewGetPageZoom(params.id);
 		},
 
 		createTray: (params: {
-			id: number;
 			title: string;
 			image: string;
 			template: boolean;
 			width: number;
 			height: number;
-		}): FFIType.ptr => {
-			const { id, title, image, template, width, height } = params;
+		}): number => {
+			const { title, image, template, width, height } = params;
 
-			const trayPtr = native_.symbols.createTray(
-				id,
+			const trayId = core_.symbols.createTray(
 				toCString(title),
 				toCString(image),
 				template,
@@ -1510,27 +1719,25 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				trayItemHandler,
 			);
 
-			if (!trayPtr) {
+			if (!trayId) {
 				throw "Failed to create tray";
 			}
 
-			return trayPtr;
+			return trayId;
+		},
+		showTray: (params: { id: number }): boolean => {
+			return core_.symbols.showTray(params.id);
+		},
+		hideTray: (params: { id: number }): void => {
+			core_.symbols.hideTray(params.id);
 		},
 		setTrayTitle: (params: { id: number; title: string }): void => {
 			const { id, title } = params;
-
-			const tray = Tray.getById(id);
-			if (!tray) return;
-
-			native_.symbols.setTrayTitle(tray.ptr, toCString(title));
+			core_.symbols.setTrayTitle(id, toCString(title));
 		},
 		setTrayImage: (params: { id: number; image: string }): void => {
 			const { id, image } = params;
-
-			const tray = Tray.getById(id);
-			if (!tray) return;
-
-			native_.symbols.setTrayImage(tray.ptr, toCString(image));
+			core_.symbols.setTrayImage(id, toCString(image));
 		},
 		setTrayMenu: (params: {
 			id: number;
@@ -1538,31 +1745,14 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			menuConfig: string;
 		}): void => {
 			const { id, menuConfig } = params;
-
-			const tray = Tray.getById(id);
-			if (!tray) return;
-
-			native_.symbols.setTrayMenu(tray.ptr, toCString(menuConfig));
+			core_.symbols.setTrayMenu(id, toCString(menuConfig));
 		},
 
 		removeTray: (params: { id: number }): void => {
-			const { id } = params;
-			const tray = Tray.getById(id);
-
-			if (!tray) {
-				throw `Can't remove tray. Tray no longer exists`;
-			}
-
-			native_.symbols.removeTray(tray.ptr);
-			// The Tray class will handle removing from TrayMap
+			core_.symbols.removeTray(params.id);
 		},
 		getTrayBounds: (params: { id: number }): Rectangle => {
-			const tray = Tray.getById(params.id);
-			if (!tray?.ptr) {
-				return { x: 0, y: 0, width: 0, height: 0 };
-			}
-
-			const jsonStr = native_.symbols.getTrayBounds(tray.ptr);
+			const jsonStr = core_.symbols.getTrayBounds(params.id);
 			if (!jsonStr) {
 				return { x: 0, y: 0, width: 0, height: 0 };
 			}
@@ -1576,7 +1766,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		setApplicationMenu: (params: { menuConfig: string }): void => {
 			const { menuConfig } = params;
 
-			native_.symbols.setApplicationMenu(
+			core_.symbols.setApplicationMenu(
 				toCString(menuConfig),
 				applicationMenuHandler,
 			);
@@ -1584,25 +1774,25 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		showContextMenu: (params: { menuConfig: string }): void => {
 			const { menuConfig } = params;
 
-			native_.symbols.showContextMenu(toCString(menuConfig), contextMenuHandler);
+			core_.symbols.showContextMenu(toCString(menuConfig), contextMenuHandler);
 		},
 		moveToTrash: (params: { path: string }): boolean => {
 			const { path } = params;
 
-			return native_.symbols.moveToTrash(toCString(path));
+			return core_.symbols.moveToTrash(toCString(path));
 		},
 		showItemInFolder: (params: { path: string }): void => {
 			const { path } = params;
 
-			native_.symbols.showItemInFolder(toCString(path));
+			core_.symbols.showItemInFolder(toCString(path));
 		},
 		openExternal: (params: { url: string }): boolean => {
 			const { url } = params;
-			return native_.symbols.openExternal(toCString(url));
+			return core_.symbols.openExternal(toCString(url));
 		},
 		openPath: (params: { path: string }): boolean => {
 			const { path } = params;
-			return native_.symbols.openPath(toCString(path));
+			return core_.symbols.openPath(toCString(path));
 		},
 		showNotification: (params: {
 			title: string;
@@ -1611,7 +1801,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			silent?: boolean;
 		}): void => {
 			const { title, body = "", subtitle = "", silent = false } = params;
-			native_.symbols.showNotification(
+			core_.symbols.showNotification(
 				toCString(title),
 				toCString(body),
 				toCString(subtitle),
@@ -1619,10 +1809,10 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			);
 		},
 		setDockIconVisible: (params: { visible: boolean }): void => {
-			native_.symbols.setDockIconVisible(params.visible);
+			core_.symbols.setDockIconVisible(params.visible);
 		},
 		isDockIconVisible: (): boolean => {
-			return native_.symbols.isDockIconVisible();
+			return core_.symbols.isDockIconVisible();
 		},
 		openFileDialog: (params: {
 			startingFolder: string;
@@ -1638,7 +1828,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 				canChooseDirectory,
 				allowsMultipleSelection,
 			} = params;
-			const filePath = native_.symbols.openFileDialog(
+			const filePath = core_.symbols.openFileDialog(
 				toCString(startingFolder),
 				toCString(allowedFileTypes),
 				canChooseFiles ? 1 : 0,
@@ -1668,7 +1858,7 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 			} = params;
 			// Convert buttons array to comma-separated string
 			const buttonsStr = buttons.join(",");
-			return native_.symbols.showMessageBox(
+			return core_.symbols.showMessageBox(
 				toCString(type),
 				toCString(title),
 				toCString(message),
@@ -1681,17 +1871,17 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 
 		// Clipboard API
 		clipboardReadText: (): string | null => {
-			const result = native_.symbols.clipboardReadText();
+			const result = core_.symbols.clipboardReadText();
 			if (!result) return null;
 			return result.toString();
 		},
 		clipboardWriteText: (params: { text: string }): void => {
-			native_.symbols.clipboardWriteText(toCString(params.text));
+			core_.symbols.clipboardWriteText(toCString(params.text));
 		},
 		clipboardReadImage: (): Uint8Array | null => {
 			// Allocate a buffer for the size output
 			const sizeBuffer = new BigUint64Array(1);
-			const dataPtr = native_.symbols.clipboardReadImage(ptr(sizeBuffer));
+			const dataPtr = core_.symbols.clipboardReadImage(ptr(sizeBuffer));
 
 			if (!dataPtr) return null;
 
@@ -1711,13 +1901,13 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		},
 		clipboardWriteImage: (params: { pngData: Uint8Array }): void => {
 			const { pngData } = params;
-			native_.symbols.clipboardWriteImage(ptr(pngData), BigInt(pngData.length));
+			core_.symbols.clipboardWriteImage(ptr(pngData), BigInt(pngData.length));
 		},
 		clipboardClear: (): void => {
-			native_.symbols.clipboardClear();
+			core_.symbols.clipboardClear();
 		},
 		clipboardAvailableFormats: (): string[] => {
-			const result = native_.symbols.clipboardAvailableFormats();
+			const result = core_.symbols.clipboardAvailableFormats();
 			if (!result) return [];
 			const formatsStr = result.toString();
 			if (!formatsStr) return [];
@@ -2088,7 +2278,7 @@ if (native) {
 	const appReopenCallback = new JSCallback(
 		() => {
 			if (process.platform === "darwin") {
-				native_.symbols.setDockIconVisible(true);
+				core_.symbols.setDockIconVisible(true);
 			}
 			const handler = electrobunEventEmitter.events.app.reopen;
 			const event = handler({});
@@ -2178,7 +2368,7 @@ export const Screen = {
 	 * @returns Display object for the primary monitor
 	 */
 	getPrimaryDisplay: (): Display => {
-		const jsonStr = native ? native_.symbols.getPrimaryDisplay() : null;
+		const jsonStr = hasFFI ? core_.symbols.getPrimaryDisplay() : null;
 		if (!jsonStr) {
 			return {
 				id: 0,
@@ -2206,7 +2396,7 @@ export const Screen = {
 	 * @returns Array of Display objects
 	 */
 	getAllDisplays: (): Display[] => {
-		const jsonStr = native ? native_.symbols.getAllDisplays() : null;
+		const jsonStr = hasFFI ? core_.symbols.getAllDisplays() : null;
 		if (!jsonStr) {
 			return [];
 		}
@@ -2222,7 +2412,7 @@ export const Screen = {
 	 * @returns Point with x and y coordinates
 	 */
 	getCursorScreenPoint: (): Point => {
-		const jsonStr = native ? native_.symbols.getCursorScreenPoint() : null;
+		const jsonStr = hasFFI ? core_.symbols.getCursorScreenPoint() : null;
 		if (!jsonStr) {
 			return { x: 0, y: 0 };
 		}
@@ -2238,7 +2428,7 @@ export const Screen = {
 	 */
 	getMouseButtons: (): bigint => {
 		try {
-			return native ? native_.symbols.getMouseButtons() : BigInt(0);
+			return hasFFI ? core_.symbols.getMouseButtons() : BigInt(0);
 		} catch {
 			return 0n;
 		}
@@ -2403,35 +2593,11 @@ const webviewDecideNavigation = new JSCallback(
 );
 
 const webviewEventHandler = (id: number, eventName: string, detail: string) => {
-	const webview = BrowserView.getById(id);
-	if (!webview) {
-		console.error("[webviewEventHandler] No webview found for id:", id);
-		return;
-	}
-
-	if (webview.hostWebviewId) {
-		const hostWebview = BrowserView.getById(webview.hostWebviewId);
-
-		if (!hostWebview) {
-			console.error("[webviewEventHandler] No webview found for id:", id);
-			return;
-		}
-
-		// This is a webviewtag so we should send the event into the parent as well
-		// NOTE: for new-window-open and host-message the detail is a json string that needs to be parsed
-		let js;
-		if (eventName === "new-window-open" || eventName === "host-message") {
-			// detail is already a JSON string that will be parsed as a JS object
-			js = `document.querySelector('#electrobun-webview-${id}').emit(${JSON.stringify(eventName)}, ${detail});`;
-		} else {
-			js = `document.querySelector('#electrobun-webview-${id}').emit(${JSON.stringify(eventName)}, ${JSON.stringify(detail)});`;
-		}
-
-		native_.symbols.evaluateJavaScriptWithNoCompletion(
-			hostWebview.ptr,
-			toCString(js),
-		);
-	}
+	core_.symbols.dispatchHostWebviewEvent(
+		id,
+		toCString(eventName),
+		toCString(detail),
+	);
 
 	const eventMap: Record<string, string> = {
 		"will-navigate": "willNavigate",
@@ -2620,8 +2786,6 @@ const internalBridgeHandler = new JSCallback(
 					)[msgJson.id];
 					handler?.(msgJson.payload);
 				} else if (msgJson.type === "request") {
-					const hostWebview = BrowserView.getById(msgJson.hostWebviewId);
-					// const targetWebview = BrowserView.getById(msgJson.params.params.hostWebviewId);
 					const handler = (
 						internalRpcHandlers.request as Record<
 							string,
@@ -2637,15 +2801,10 @@ const internalBridgeHandler = new JSCallback(
 						success: true,
 						payload,
 					};
-
-					if (!hostWebview) {
-						console.log(
-							"--->>> internal request in bun: NO HOST WEBVIEW FOUND",
-						);
-						return;
-					}
-
-					hostWebview.sendInternalMessageViaExecute(resultObj);
+					core_.symbols.sendInternalMessageToWebview(
+						msgJson.hostWebviewId,
+						toCString(JSON.stringify(resultObj)),
+					);
 				}
 			});
 		} catch (err) {
@@ -2826,24 +2985,10 @@ export const internalRpcHandlers = {
 			return viewForTag.id;
 		},
 		webviewTagCanGoBack: (params: { id: number }) => {
-			const { id } = params;
-			const webviewPtr = BrowserView.getById(id)?.ptr;
-			if (!webviewPtr) {
-				console.error("no webview ptr");
-				return false;
-			}
-
-			return native_.symbols.webviewCanGoBack(webviewPtr);
+			return core_.symbols.webviewCanGoBack(params.id);
 		},
 		webviewTagCanGoForward: (params: { id: number }) => {
-			const { id } = params;
-			const webviewPtr = BrowserView.getById(id)?.ptr;
-			if (!webviewPtr) {
-				console.error("no webview ptr");
-				return false;
-			}
-
-			return native_.symbols.webviewCanGoForward(webviewPtr);
+			return core_.symbols.webviewCanGoForward(params.id);
 		},
 	},
 	message: {
@@ -2852,25 +2997,14 @@ export const internalRpcHandlers = {
 			frame: { x: number; y: number; width: number; height: number };
 			masks: string;
 		}) => {
-			const browserView = BrowserView.getById(params.id);
-			const webviewPtr = browserView?.ptr;
-
-			if (!webviewPtr) {
-				console.log(
-					"[Bun] ERROR: webviewTagResize - no webview ptr found for id:",
-					params.id,
-				);
-				return;
-			}
-
 			const { x, y, width, height } = params.frame;
-			native_.symbols.resizeWebview(
-				webviewPtr,
+			core_.symbols.resizeWebview(
+				params.id,
 				x,
 				y,
 				width,
 				height,
-				toCString(params.masks),
+				toCString(params.masks ?? "[]"),
 			);
 		},
 		wgpuTagResize: (params: {
@@ -2898,80 +3032,46 @@ export const internalRpcHandlers = {
 		},
 		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
 			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagUpdateSrc: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
+			if (webview) {
+				webview.url = params.url;
 			}
-			native_.symbols.loadURLInWebView(webview.ptr, toCString(params.url));
+			core_.symbols.loadURLInWebView(params.id, toCString(params.url));
 		},
 		webviewTagUpdateHtml: (params: { id: number; html: string }) => {
 			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagUpdateHtml: BrowserView not found or has no ptr for id ${params.id}`,
-				);
+			if (!webview) {
+				console.error(`webviewTagUpdateHtml: BrowserView not found for id ${params.id}`);
 				return;
 			}
-
-			// Store HTML content in native map for scheme handlers
-			native_.symbols.setWebviewHTMLContent(webview.id, toCString(params.html));
 
 			webview.loadHTML(params.html);
 			webview.html = params.html;
 		},
 		webviewTagUpdatePreload: (params: { id: number; preload: string }) => {
 			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagUpdatePreload: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
+			if (webview) {
+				webview.preload = params.preload;
 			}
-			native_.symbols.updatePreloadScriptToWebView(
-				webview.ptr,
+			core_.symbols.updatePreloadScriptToWebView(
+				params.id,
 				toCString("electrobun_custom_preload_script"),
 				toCString(params.preload),
 				true,
 			);
 		},
 		webviewTagGoBack: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagGoBack: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewGoBack(webview.ptr);
+			core_.symbols.webviewGoBack(params.id);
 		},
 		webviewTagGoForward: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagGoForward: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewGoForward(webview.ptr);
+			core_.symbols.webviewGoForward(params.id);
 		},
 		webviewTagReload: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagReload: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewReload(webview.ptr);
+			core_.symbols.webviewReload(params.id);
 		},
 		webviewTagRemove: (params: { id: number }) => {
 			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagRemove: BrowserView not found or has no ptr for id ${params.id}`,
-				);
+			if (!webview) {
+				console.error(`webviewTagRemove: BrowserView not found for id ${params.id}`);
 				return;
 			}
 			webview.remove();
@@ -2988,14 +3088,7 @@ export const internalRpcHandlers = {
 			id: number;
 			transparent: boolean;
 		}) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagSetTransparent: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewSetTransparent(webview.ptr, params.transparent);
+			core_.symbols.webviewSetTransparent(params.id, params.transparent);
 		},
 		wgpuTagSetTransparent: (params: {
 			id: number;
@@ -3014,17 +3107,7 @@ export const internalRpcHandlers = {
 			id: number;
 			enablePassthrough: boolean;
 		}) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagSetPassthrough: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewSetPassthrough(
-				webview.ptr,
-				params.enablePassthrough,
-			);
+			core_.symbols.webviewSetPassthrough(params.id, params.enablePassthrough);
 		},
 		wgpuTagSetPassthrough: (params: { id: number; passthrough: boolean }) => {
 			const view = WGPUView.getById(params.id);
@@ -3037,14 +3120,7 @@ export const internalRpcHandlers = {
 			native_.symbols.wgpuViewSetPassthrough(view.ptr, params.passthrough);
 		},
 		webviewTagSetHidden: (params: { id: number; hidden: boolean }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagSetHidden: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewSetHidden(webview.ptr, params.hidden);
+			core_.symbols.webviewSetHidden(params.id, params.hidden);
 		},
 		wgpuTagSetHidden: (params: { id: number; hidden: boolean }) => {
 			const view = WGPUView.getById(params.id);
@@ -3081,18 +3157,12 @@ export const internalRpcHandlers = {
 			native_.symbols.wgpuRunGPUTest(view.ptr);
 		},
 		webviewTagSetNavigationRules: (params: { id: number; rules: string[] }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagSetNavigationRules: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
 			const rulesJson = JSON.stringify(params.rules);
-			native_.symbols.setWebviewNavigationRules(
-				webview.ptr,
-				toCString(rulesJson),
-			);
+			const webview = BrowserView.getById(params.id);
+			if (webview) {
+				webview.navigationRules = rulesJson;
+			}
+			core_.symbols.setWebviewNavigationRules(params.id, toCString(rulesJson));
 		},
 		webviewTagFindInPage: (params: {
 			id: number;
@@ -3100,70 +3170,28 @@ export const internalRpcHandlers = {
 			forward: boolean;
 			matchCase: boolean;
 		}) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagFindInPage: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewFindInPage(
-				webview.ptr,
+			core_.symbols.webviewFindInPage(
+				params.id,
 				toCString(params.searchText),
 				params.forward,
 				params.matchCase,
 			);
 		},
 		webviewTagStopFind: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagStopFind: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewStopFind(webview.ptr);
+			core_.symbols.webviewStopFind(params.id);
 		},
 		webviewTagOpenDevTools: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagOpenDevTools: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewOpenDevTools(webview.ptr);
+			core_.symbols.webviewOpenDevTools(params.id);
 		},
 		webviewTagCloseDevTools: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagCloseDevTools: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewCloseDevTools(webview.ptr);
+			core_.symbols.webviewCloseDevTools(params.id);
 		},
 		webviewTagToggleDevTools: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagToggleDevTools: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.webviewToggleDevTools(webview.ptr);
+			core_.symbols.webviewToggleDevTools(params.id);
 		},
 		webviewTagExecuteJavascript: (params: { id: number; js: string }) => {
-			const webview = BrowserView.getById(params.id);
-			if (!webview || !webview.ptr) {
-				console.error(
-					`webviewTagExecuteJavascript: BrowserView not found or has no ptr for id ${params.id}`,
-				);
-				return;
-			}
-			native_.symbols.evaluateJavaScriptWithNoCompletion(
-				webview.ptr,
+			core_.symbols.evaluateJavaScriptWithNoCompletion(
+				params.id,
 				toCString(params.js),
 			);
 		},

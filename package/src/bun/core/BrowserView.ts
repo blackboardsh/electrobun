@@ -1,5 +1,4 @@
-import { native, toCString, ffi } from "../proc/native";
-import * as fs from "fs";
+import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import {
 	type ElectrobunRPCSchema,
@@ -7,10 +6,8 @@ import {
 	type RPCWithTransport,
 	defineElectrobunRPC,
 } from "../../shared/rpc.js";
-import { Updater } from "./Updater";
 import { BuildConfig } from "./BuildConfig";
 import {
-	rpcPort,
 	sendMessageToWebviewViaSocket,
 	removeSocketForWebview,
 } from "./Socket";
@@ -20,7 +17,6 @@ import { type Pointer } from "bun:ffi";
 const BrowserViewMap: {
 	[id: number]: BrowserView<any>;
 } = {};
-let nextWebviewId = 1;
 
 export type BrowserViewOptions<T = undefined> = {
 	url: string | null;
@@ -38,7 +34,6 @@ export type BrowserViewOptions<T = undefined> = {
 	rpc: T;
 	hostWebviewId: number;
 	autoResize: boolean;
-
 	windowId: number;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
@@ -52,8 +47,7 @@ export type BrowserViewOptions<T = undefined> = {
 	// renderer:
 };
 
-const hash = await Updater.localInfo.hash();
-const buildConfig = await BuildConfig.get();
+const buildConfig = BuildConfig.getSync();
 
 const defaultOptions: Partial<BrowserViewOptions> = {
 	url: null,
@@ -68,13 +62,8 @@ const defaultOptions: Partial<BrowserViewOptions> = {
 		height: 600,
 	},
 };
-// Note: we use the build's hash to separate from different apps and different builds
-// but we also want a randomId to separate different instances of the same app
-const randomId = Math.random().toString(36).substring(7);
-
 export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
-	id: number = nextWebviewId++;
-	ptr: Pointer | null = null;
+	id = 0;
 	hostWebviewId?: number;
 	windowId!: number;
 	renderer!: "cef" | "native";
@@ -95,9 +84,6 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		width: 800,
 		height: 600,
 	};
-	pipePrefix!: string;
-	inStream!: fs.WriteStream;
-	outStream!: ReadableStream<Uint8Array>;
 	secretKey!: Uint8Array;
 	rpc?: T;
 	rpcHandler?: (msg: unknown) => void;
@@ -107,6 +93,13 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
 	isRemoved: boolean = false;
+
+	get ptr(): Pointer | null {
+		if (this.isRemoved) {
+			return null;
+		}
+		return ffi.request.getWebviewPointer({ id: this.id }) as Pointer | null;
+	}
 
 	constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
 		// const rpc = options.rpc;
@@ -124,9 +117,6 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.rpc = options.rpc;
 		this.secretKey = new Uint8Array(randomBytes(32));
 		this.partition = options.partition || null;
-		// todo (yoav): since collisions can crash the app add a function that checks if the
-		// file exists first
-		this.pipePrefix = `/private/tmp/electrobun_ipc_pipe_${hash}_${randomId}_${this.id}`;
 		this.hostWebviewId = options.hostWebviewId;
 		this.windowId = options.windowId ?? 0;
 		this.autoResize = options.autoResize === false ? false : true;
@@ -136,8 +126,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
 
+		this.id = this.init() as number;
 		BrowserViewMap[this.id] = this;
-		this.ptr = this.init() as Pointer;
 
 		// If HTML content was provided, load it after webview creation.
 		if (this.html) {
@@ -148,21 +138,17 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	init() {
-		this.createStreams();
+		this.initializeRpcTransport();
 
 		return ffi.request.createWebview({
-			id: this.id,
 			windowId: this.windowId,
+			hostWebviewId: this.hostWebviewId ?? null,
 			renderer: this.renderer,
-			rpcPort: rpcPort,
 			// todo: consider sending secretKey as base64
 			secretKey: this.secretKey.toString(),
-			hostWebviewId: this.hostWebviewId || null,
-			pipePrefix: this.pipePrefix,
 			partition: this.partition,
 			// Only pass URL if no HTML content is provided to avoid conflicts
 			url: this.html ? null : this.url,
-			html: this.html,
 			preload: this.preload,
 			viewsRoot: this.viewsRoot,
 			frame: {
@@ -180,7 +166,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		});
 	}
 
-	createStreams() {
+	initializeRpcTransport() {
 		if (!this.rpc) {
 			// eslint-disable-next-line @typescript-eslint/no-explicit-any
 			this.rpc = BrowserView.defineRPC({
@@ -224,7 +210,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 	loadURL(url: string) {
 		this.url = url;
-		native!.symbols.loadURLInWebView(this.ptr, toCString(this.url));
+		ffi.request.loadURLInWebView({ id: this.id, url: this.url });
 	}
 
 	loadHTML(html: string) {
@@ -232,18 +218,18 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 		if (this.renderer === "cef") {
 			// For CEF, store HTML content in native map and use scheme handler
-			native!.symbols.setWebviewHTMLContent(this.id, toCString(html));
+			ffi.request.setWebviewHTMLContent({ id: this.id, html });
 			this.loadURL("views://internal/index.html");
 		} else {
 			// For WKWebView, load HTML content directly
-			native!.symbols.loadHTMLInWebView(this.ptr, toCString(html));
+			ffi.request.loadHTMLInWebView({ id: this.id, html });
 		}
 	}
 
 	setNavigationRules(rules: string[]) {
 		this.navigationRules = JSON.stringify(rules);
 		const rulesJson = JSON.stringify(rules);
-		native!.symbols.setWebviewNavigationRules(this.ptr, toCString(rulesJson));
+		ffi.request.setWebviewNavigationRules({ id: this.id, rulesJson });
 	}
 
 	findInPage(
@@ -252,28 +238,28 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	) {
 		const forward = options?.forward ?? true;
 		const matchCase = options?.matchCase ?? false;
-		native!.symbols.webviewFindInPage(
-			this.ptr,
-			toCString(searchText),
+		ffi.request.webviewFindInPage({
+			id: this.id,
+			searchText,
 			forward,
 			matchCase,
-		);
+		});
 	}
 
 	stopFindInPage() {
-		native!.symbols.webviewStopFind(this.ptr);
+		ffi.request.webviewStopFind({ id: this.id });
 	}
 
 	openDevTools() {
-		native!.symbols.webviewOpenDevTools(this.ptr);
+		ffi.request.webviewOpenDevTools({ id: this.id });
 	}
 
 	closeDevTools() {
-		native!.symbols.webviewCloseDevTools(this.ptr);
+		ffi.request.webviewCloseDevTools({ id: this.id });
 	}
 
 	toggleDevTools() {
-		native!.symbols.webviewToggleDevTools(this.ptr);
+		ffi.request.webviewToggleDevTools({ id: this.id });
 	}
 
 	/**
@@ -281,7 +267,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
 	 */
 	setPageZoom(zoomLevel: number) {
-		native!.symbols.webviewSetPageZoom(this.ptr, zoomLevel);
+		ffi.request.webviewSetPageZoom({ id: this.id, zoomLevel });
 	}
 
 	/**
@@ -289,7 +275,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	 * @returns The current zoom level (1.0 = 100%)
 	 */
 	getPageZoom(): number {
-		return native!.symbols.webviewGetPageZoom(this.ptr) as number;
+		return ffi.request.webviewGetPageZoom({ id: this.id }) as number;
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
@@ -345,7 +331,6 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		if (!this.ptr || this.isRemoved) {
 			return;
 		}
-		const ptr = this.ptr;
 		this.isRemoved = true;
 		// Drop JS-side references first so late callbacks cannot target a stale view.
 		delete BrowserViewMap[this.id];
@@ -356,10 +341,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			unregisterHandler() {},
 		});
 		this.rpcHandler = undefined;
-    
-    this.rpcHandler = undefined;
-    this.ptr = null;
-    native!.symbols.webviewRemove(ptr);
+		ffi.request.webviewRemove({ id: this.id });
 	}
 
 	static getById(id: number) {

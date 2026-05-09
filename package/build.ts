@@ -489,6 +489,7 @@ async function build() {
 
 	await Promise.all([
 		buildSelfExtractor(),
+		buildCore(),
 		buildLauncher(),
 		buildCli(),
 		buildMainJs(),
@@ -528,6 +529,9 @@ async function copyApiFiles() {
 		await $`cp -R src/browser dist/api/`;
 		await $`cp -R src/shared dist/api/`;
 	}
+
+	await $`mkdir -p dist/zig-sdk`;
+	await $`cp src/zig-sdk/electrobun.zig dist/zig-sdk/electrobun.zig`;
 }
 
 async function copyToDist() {
@@ -536,6 +540,13 @@ async function copyToDist() {
 	// Zig launcher for all platforms
 	await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
 	await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+	const coreLibName =
+		OS === "win"
+			? "ElectrobunCore.dll"
+			: OS === "macos"
+				? "libElectrobunCore.dylib"
+				: "libElectrobunCore.so";
+	await $`cp ${join("src", "core", "zig-out", "lib", coreLibName)} ${join("dist", coreLibName)}`;
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
 	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
@@ -2051,6 +2062,34 @@ async function buildLauncher() {
 	}
 }
 
+async function buildCore() {
+	console.log(`Building ElectrobunCore for ${OS} ${ARCH}...`);
+
+	let zigArgs: string[] = [];
+
+	if (OS === "win") {
+		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+	} else if (OS === "linux") {
+		if (ARCH === "arm64") {
+			zigArgs = ["-Dtarget=aarch64-linux"];
+		} else {
+			zigArgs = ["-Dtarget=x86_64-linux"];
+		}
+	} else if (OS === "macos") {
+		if (ARCH === "arm64") {
+			zigArgs = ["-Dtarget=aarch64-macos"];
+		} else {
+			zigArgs = ["-Dtarget=x86_64-macos"];
+		}
+	}
+
+	if (CHANNEL === "debug") {
+		await $`cd src/core && ../../vendors/zig/zig build ${zigArgs}`;
+	} else if (CHANNEL === "release") {
+		await $`cd src/core && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+	}
+}
+
 async function buildMainJs() {
 	const bunModule = await import("bun");
 	const result = await bunModule.build({
@@ -2151,6 +2190,7 @@ async function buildPreload() {
 	// (Bun removed iife format support in 1.3.10, so we build as esm and wrap manually)
 	const fullPreloadJs = `(function(){${await fullResult.outputs[0].text()}})();`;
 	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0].text()}})();`;
+	const distDir = join(process.cwd(), "dist");
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
 // Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
@@ -2163,6 +2203,9 @@ export const preloadScriptSandboxed = ${JSON.stringify(sandboxedPreloadJs)};
 `;
 
 	writeFileSync(outputPath, outputContent);
+	mkdirSync(distDir, { recursive: true });
+	writeFileSync(join(distDir, "preload-full.js"), fullPreloadJs);
+	writeFileSync(join(distDir, "preload-sandboxed.js"), sandboxedPreloadJs);
 	console.log("Preload scripts compiled successfully (full + sandboxed)");
 }
 

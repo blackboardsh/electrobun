@@ -1,3 +1,5 @@
+import { readFileSync } from "fs";
+
 export type BuildConfigType = {
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
@@ -10,6 +12,13 @@ export type BuildConfigType = {
 };
 
 let buildConfig: BuildConfigType | null = null;
+
+function fallbackBuildConfig(): BuildConfigType {
+	return {
+		defaultRenderer: "native",
+		availableRenderers: ["native"],
+	};
+}
 
 const BuildConfig = {
 	/**
@@ -26,10 +35,28 @@ const BuildConfig = {
 			return buildConfig!;
 		} catch (error) {
 			// Fallback for dev mode or missing file
-			buildConfig = {
-				defaultRenderer: "native",
-				availableRenderers: ["native"],
-			};
+			buildConfig = fallbackBuildConfig();
+			return buildConfig;
+		}
+	},
+
+	/**
+	 * Get the build configuration synchronously.
+	 * Useful for modules that cannot use top-level await.
+	 */
+	getSync: (): BuildConfigType => {
+		if (buildConfig) {
+			return buildConfig;
+		}
+
+		try {
+			const resourcesDir = "Resources";
+			buildConfig = JSON.parse(
+				readFileSync(`../${resourcesDir}/build.json`, "utf8"),
+			) as BuildConfigType;
+			return buildConfig;
+		} catch (error) {
+			buildConfig = fallbackBuildConfig();
 			return buildConfig;
 		}
 	},

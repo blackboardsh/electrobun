@@ -5,8 +5,12 @@ import { tmpdir } from "os";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
 const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directory
-const libPath = join(pathToMacOS, `libNativeWrapper.${suffix}`);
-const absoluteLibPath = resolve(libPath);
+const coreLibFileName =
+	process.platform === "win32"
+		? "ElectrobunCore.dll"
+		: `libElectrobunCore.${suffix}`;
+const coreLibPath = join(pathToMacOS, coreLibFileName);
+const absoluteCoreLibPath = resolve(coreLibPath);
 
 // Wrap main logic in a function to avoid top-level return
 function main() {
@@ -83,36 +87,36 @@ function main() {
 				`.${process.env["LD_LIBRARY_PATH"] ? ":" + process.env["LD_LIBRARY_PATH"] : ""}`;
 		}
 
-		lib = dlopen(libPath, {
-			startEventLoop: {
-				args: ["cstring", "cstring", "cstring"],
-				returns: "void",
+		lib = dlopen(coreLibPath, {
+			electrobun_core_run_main_thread: {
+				args: ["cstring", "cstring", "cstring", "i32"],
+				returns: "i32",
 			},
-			forceExit: {
-				args: ["i32"],
-				returns: "void",
+			electrobun_core_last_error: {
+				args: [],
+				returns: "cstring",
 			},
 		});
 	} catch (error) {
 		console.error(
-			`[LAUNCHER] Failed to load library: ${(error as Error).message}`,
+			`[LAUNCHER] Failed to load ElectrobunCore: ${(error as Error).message}`,
 		);
 
 		// Try with absolute path as fallback
 		try {
-			lib = dlopen(absoluteLibPath, {
-				startEventLoop: {
-					args: ["cstring", "cstring", "cstring"],
-					returns: "void",
+			lib = dlopen(absoluteCoreLibPath, {
+				electrobun_core_run_main_thread: {
+					args: ["cstring", "cstring", "cstring", "i32"],
+					returns: "i32",
 				},
-				forceExit: {
-					args: ["i32"],
-					returns: "void",
+				electrobun_core_last_error: {
+					args: [],
+					returns: "cstring",
 				},
 			});
 		} catch (absError) {
 			console.error(
-				`[LAUNCHER] Library loading failed. Try running: ldd ${libPath}`,
+				`[LAUNCHER] Core library loading failed. Try running: ldd ${coreLibPath}`,
 			);
 			throw error;
 		}
@@ -134,19 +138,13 @@ function main() {
 		console.log(`[LAUNCHER] Loading app code from ASAR: ${asarPath}`);
 
 		// Load ASAR functions via FFI
-		// On Windows, use libNativeWrapper.dll which has built-in C++ ASAR reader
-		// On macOS/Linux, use standalone libasar library
+		// Use standalone libasar in the bundle on every platform.
 		let asarLibPath: string;
 		let asarLib: any;
 
 		if (process.platform === "win32") {
-			// Windows: Use native wrapper's built-in ASAR reader (no external DLL needed)
-			asarLibPath = libPath;
-			console.log(
-				`[LAUNCHER] Using native wrapper's ASAR reader: ${asarLibPath}`,
-			);
+			asarLibPath = join(pathToMacOS, "libasar.dll");
 		} else {
-			// macOS/Linux: Use standalone libasar library
 			asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
 		}
 
@@ -243,21 +241,20 @@ ${fileData.toString("utf8")}
 		// preload: [''];
 	});
 
-	// Pass identifier, name, and channel as C strings using Buffer encoding
-	// Bun FFI requires explicit encoding for cstring parameters
-	lib.symbols.startEventLoop(
+	const runStatus = lib.symbols.electrobun_core_run_main_thread(
 		ptr(new Uint8Array(Buffer.from(identifier + "\0", "utf8"))),
 		ptr(new Uint8Array(Buffer.from(name + "\0", "utf8"))),
 		ptr(new Uint8Array(Buffer.from(channel + "\0", "utf8"))),
+		0,
 	);
 
-	// Safety net: if startEventLoop returns (event loop stopped),
-	// ensure the process exits even if the worker is still running.
-	// Must use _exit() (via forceExit) instead of process.exit() because
-	// CefShutdown() may leave threads still tearing down. Regular exit()
-	// runs atexit handlers that try to pthread_join those threads, causing
-	// a crash (SIGTRAP in CEF's CFThreadLoop TSD cleanup).
-	lib.symbols.forceExit(0);
+	if (runStatus !== 0) {
+		const coreError = lib.symbols.electrobun_core_last_error();
+		console.error(
+			`[LAUNCHER] ElectrobunCore failed: ${coreError ? coreError.toString() : "Unknown error"}`,
+		);
+		process.exit(runStatus);
+	}
 }
 
 // Call the main function
