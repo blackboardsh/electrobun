@@ -57,6 +57,12 @@ export interface WindowOptions {
   y?: number;
   title?: string;
   titleBarStyle?: TitleBarStyle;
+  nativeTitleBar?: {
+    darkMode?: boolean;
+    captionColor?: `#${string}`;
+    textColor?: `#${string}`;
+    borderColor?: `#${string}`;
+  };
   trafficLightOffset?: { x: number; y: number };
   renderer?: 'cef' | 'native';
   hidden?: boolean;

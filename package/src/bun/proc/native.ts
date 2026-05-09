@@ -70,12 +70,55 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
-import { BrowserWindow } from "../core/BrowserWindow";
+import {
+	BrowserWindow,
+	type NativeTitleBarOptions,
+} from "../core/BrowserWindow";
 import { GpuWindow } from "../core/GpuWindow";
 
 function getWindowPtr(winId: number) {
 	return (
 		BrowserWindow.getById(winId)?.ptr ?? GpuWindow.getById(winId)?.ptr ?? null
+	);
+}
+
+const WINDOWS_COLOR_SENTINEL = 0xffffffff;
+
+function parseWindowsColorRef(color?: `#${string}`): number {
+	if (!color) return WINDOWS_COLOR_SENTINEL;
+	const hex = color.slice(1);
+	if (!/^[0-9a-fA-F]{6}$/.test(hex)) {
+		throw new Error(
+			`Invalid native title bar color "${color}". Expected #RRGGBB.`,
+		);
+	}
+	const rgb = parseInt(hex, 16);
+	const r = (rgb >> 16) & 0xff;
+	const g = (rgb >> 8) & 0xff;
+	const b = rgb & 0xff;
+	return (b << 16) | (g << 8) | r;
+}
+
+function hasNativeTitleBarTheme(
+	nativeTitleBar?: NativeTitleBarOptions,
+): nativeTitleBar is NativeTitleBarOptions {
+	if (!nativeTitleBar) return false;
+	return (
+		nativeTitleBar.darkMode !== undefined ||
+		nativeTitleBar.captionColor !== undefined ||
+		nativeTitleBar.textColor !== undefined ||
+		nativeTitleBar.borderColor !== undefined
+	);
+}
+
+function shouldApplyNativeTitleBarTheme(
+	titleBarStyle: string,
+	nativeTitleBar?: NativeTitleBarOptions,
+): nativeTitleBar is NativeTitleBarOptions {
+	return (
+		process.platform === "win32" &&
+		titleBarStyle === "default" &&
+		hasNativeTitleBarTheme(nativeTitleBar)
 	);
 }
 
@@ -112,6 +155,16 @@ export const native = (() => {
 				args: [
 					FFIType.ptr, // window ptr
 					FFIType.cstring, // title
+				],
+				returns: FFIType.void,
+			},
+			setWindowTitleBarTheme: {
+				args: [
+					FFIType.ptr, // window ptr
+					FFIType.i32, // dark mode: -1 unset, 0 false, 1 true
+					FFIType.u32, // caption color COLORREF or sentinel
+					FFIType.u32, // text color COLORREF or sentinel
+					FFIType.u32, // border color COLORREF or sentinel
 				],
 				returns: FFIType.void,
 			},
@@ -853,6 +906,7 @@ const _ffiImpl = {
 			transparent: boolean;
 			hidden?: boolean;
 			activate?: boolean;
+			nativeTitleBar?: NativeTitleBarOptions;
 			trafficLightOffset?: {
 				x: number;
 				y: number;
@@ -881,6 +935,7 @@ const _ffiImpl = {
 				transparent,
 				hidden = false,
 				activate = true,
+				nativeTitleBar,
 				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
@@ -926,6 +981,19 @@ const _ffiImpl = {
 			}
 
 			native_.symbols.setWindowTitle(windowPtr, toCString(title));
+			if (shouldApplyNativeTitleBarTheme(titleBarStyle, nativeTitleBar)) {
+				native_.symbols.setWindowTitleBarTheme(
+					windowPtr,
+					nativeTitleBar.darkMode === undefined
+						? -1
+						: nativeTitleBar.darkMode
+							? 1
+							: 0,
+					parseWindowsColorRef(nativeTitleBar.captionColor),
+					parseWindowsColorRef(nativeTitleBar.textColor),
+					parseWindowsColorRef(nativeTitleBar.borderColor),
+				);
+			}
 			if (!hidden) {
 				native_.symbols.showWindow(windowPtr, activate);
 			}
