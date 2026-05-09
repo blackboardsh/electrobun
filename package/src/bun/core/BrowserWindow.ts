@@ -46,6 +46,11 @@ export type WindowOptionsType<T = undefined> = {
 	// Use for untrusted content (remote URLs) to prevent malicious sites from
 	// accessing internal APIs, creating OOPIFs, or communicating with Bun
 	sandbox: boolean;
+	// Proxy URL to route all webview traffic through (e.g. "socks5://127.0.0.1:1090").
+	// macOS 14+ uses WKWebView proxyConfigurations (native, no CEF required).
+	// Windows uses WebView2 AdditionalBrowserArguments.
+	// Linux uses WebKitNetworkProxySettings.
+	proxy: string | null;
 };
 
 const defaultOptions: WindowOptionsType = {
@@ -67,6 +72,7 @@ const defaultOptions: WindowOptionsType = {
 	hidden: false,
 	navigationRules: null,
 	sandbox: false,
+	proxy: null,
 };
 
 export const BrowserWindowMap: {
@@ -132,6 +138,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
+	// Proxy URL for routing webview traffic (see WindowOptionsType.proxy)
+	proxy: string | null = null;
 	frame: {
 		x: number;
 		y: number;
@@ -165,6 +173,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		};
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
+		this.proxy = options.proxy ?? null;
 
 		this.init(options);
 	}
@@ -252,6 +261,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			navigationRules: this.navigationRules,
 			sandbox: this.sandbox,
 			startPassthrough: this.passthrough,
+			proxy: this.proxy,
 		});
 
 		this.webviewId = webview.id;

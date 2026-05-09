@@ -49,6 +49,11 @@ export type BrowserViewOptions<T = undefined> = {
 	startTransparent: boolean;
 	// Set passthrough on the AbstractView at creation (before first paint)
 	startPassthrough: boolean;
+	// Proxy URL to route all webview traffic through (e.g. "socks5://127.0.0.1:1090").
+	// macOS 14+ uses WKWebView proxyConfigurations (native, no CEF required).
+	// Windows uses WebView2 AdditionalBrowserArguments.
+	// Linux uses WebKitNetworkProxySettings.
+	proxy: string | null;
 	// renderer:
 };
 
@@ -106,6 +111,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	// Proxy URL for routing webview traffic (see BrowserViewOptions.proxy)
+	proxy: string | null = null;
 	isRemoved: boolean = false;
 
 	constructor(options: Partial<BrowserViewOptions<T>> = defaultOptions) {
@@ -135,6 +142,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
+		this.proxy = options.proxy ?? null;
 
 		BrowserViewMap[this.id] = this;
 		this.ptr = this.init() as Pointer;
@@ -176,6 +184,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			sandbox: this.sandbox,
 			startTransparent: this.startTransparent,
 			startPassthrough: this.startPassthrough,
+			proxy: this.proxy,
 			// transparent is looked up from parent window in native.ts
 		});
 	}
