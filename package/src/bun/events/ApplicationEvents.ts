@@ -14,6 +14,11 @@ export default {
 			"context-menu-clicked",
 			data,
 		),
+	applicationDockMenuClicked: (data: MenuClickedData) =>
+		new ElectrobunEvent<MenuClickedData, { allow: boolean }>(
+			"application-dock-menu-clicked",
+			data,
+		),
 	openUrl: (data: OpenUrlData) =>
 		new ElectrobunEvent<OpenUrlData, void>("open-url", data),
 	reopen: (data: {}) => new ElectrobunEvent<{}, void>("reopen", data),

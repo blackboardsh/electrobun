@@ -658,6 +658,18 @@ export const native = (() => {
 				args: [],
 				returns: FFIType.bool,
 			},
+			setApplicationDockMenu: {
+				args: [FFIType.cstring, FFIType.function],
+				returns: FFIType.void,
+			},
+			setDockBadge: {
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			},
+			setDockProgress: {
+				args: [FFIType.f64],
+				returns: FFIType.void,
+			},
 
 			// Window style utilities
 			getWindowStyle: {
@@ -1623,6 +1635,18 @@ window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.me
 		},
 		isDockIconVisible: (): boolean => {
 			return native_.symbols.isDockIconVisible();
+		},
+		setApplicationDockMenu: (params: { menuConfig: string }): void => {
+			native_.symbols.setApplicationDockMenu(
+				toCString(params.menuConfig),
+				dockMenuHandler,
+			);
+		},
+		setDockBadge: (params: { text: string }): void => {
+			native_.symbols.setDockBadge(toCString(params.text));
+		},
+		setDockProgress: (params: { progress: number }): void => {
+			native_.symbols.setDockProgress(params.progress);
 		},
 		openFileDialog: (params: {
 			startingFolder: string;
@@ -2719,6 +2743,26 @@ const contextMenuHandler = new JSCallback(
 		const event = electrobunEventEmitter.events.app.contextMenuClicked({
 			action: actualAction,
 			data, // Always include data property (undefined if no data)
+		});
+
+		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: [FFIType.u32, FFIType.cstring],
+		returns: FFIType.void,
+		threadsafe: true,
+	},
+);
+
+const dockMenuHandler = new JSCallback(
+	(_id, action) => {
+		const actionString = new CString(action).toString();
+
+		const { action: actualAction, data } = deserializeMenuAction(actionString);
+
+		const event = electrobunEventEmitter.events.app.applicationDockMenuClicked({
+			action: actualAction,
+			data,
 		});
 
 		electrobunEventEmitter.emitEvent(event);

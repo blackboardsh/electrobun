@@ -6,6 +6,7 @@ import { WGPUView, type WGPUViewOptions } from "./core/WGPUView";
 import { Tray, type TrayOptions } from "./core/Tray";
 import * as ApplicationMenu from "./core/ApplicationMenu";
 import * as ContextMenu from "./core/ContextMenu";
+import * as Dock from "./core/Dock";
 import {
 	Updater,
 	type UpdateStatusType,
@@ -219,6 +220,7 @@ export {
 	Utils,
 	ApplicationMenu,
 	ContextMenu,
+	Dock,
 	PATHS,
 	Socket,
 	WGPU,
@@ -244,6 +246,7 @@ const Electrobun = {
 	Utils,
 	ApplicationMenu,
 	ContextMenu,
+	Dock,
 	GlobalShortcut,
 	Screen,
 	Session,
