@@ -386,7 +386,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	/**
-	 * Set the page zoom level for the window's webview (WebKit only).
+	 * Set the page zoom level for the window's webview (best-effort across engines).
 	 * @param zoomLevel - The zoom level (1.0 = 100%, 1.5 = 150%, etc.)
 	 */
 	setPageZoom(zoomLevel: number) {
