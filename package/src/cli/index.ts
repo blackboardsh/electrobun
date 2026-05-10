@@ -2775,12 +2775,12 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
-		cpSync(targetPaths.PRELOAD_FULL_JS, join(appBundleMacOSPath, "preload-full.js"), {
+		cpSync(targetPaths.PRELOAD_FULL_JS, join(appBundleFolderResourcesPath, "preload-full.js"), {
 			dereference: true,
 		});
 		cpSync(
 			targetPaths.PRELOAD_SANDBOXED_JS,
-			join(appBundleMacOSPath, "preload-sandboxed.js"),
+			join(appBundleFolderResourcesPath, "preload-sandboxed.js"),
 			{
 				dereference: true,
 			},

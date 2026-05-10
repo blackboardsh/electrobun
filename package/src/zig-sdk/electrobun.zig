@@ -916,9 +916,9 @@ pub const Core = struct {
     }
 
     pub fn configureWebviewRuntimeFromExecutableDir(self: *Core, bundle_paths: *const BundlePaths, rpc_port: u32) !void {
-        const full_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.exe_dir, "preload-full.js" });
+        const full_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.resources_dir, "preload-full.js" });
         defer self.allocator.free(full_path);
-        const sandboxed_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.exe_dir, "preload-sandboxed.js" });
+        const sandboxed_path = try std.fs.path.join(self.allocator, &.{ bundle_paths.resources_dir, "preload-sandboxed.js" });
         defer self.allocator.free(sandboxed_path);
 
         const full_preload = try readFileZ(self.allocator, full_path);
