@@ -70,7 +70,6 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
-import { BrowserWindow } from "../core/BrowserWindow";
 
 function getWindowPtr(winId: number) {
 	return core?.symbols.getWindowPointer(winId) || null;

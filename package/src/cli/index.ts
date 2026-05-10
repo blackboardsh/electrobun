@@ -257,12 +257,8 @@ pub fn build(b: *std.Build) void {
 	});
 
 	if (result.exitCode !== 0) {
-		const stdout = result.stdout
-			? new TextDecoder().decode(result.stdout as Uint8Array)
-			: "";
-		const stderr = result.stderr
-			? new TextDecoder().decode(result.stderr as Uint8Array)
-			: "";
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
 		if (stdout.trim()) {
 			console.error(stdout);
 		}
@@ -2220,8 +2216,10 @@ ${utiDecls}
 		// Get environment
 		const envArg =
 			process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
-		const buildEnvironment = ["dev", "canary", "stable"].includes(envArg)
-			? envArg
+		const buildEnvironment: "dev" | "canary" | "stable" = ["dev", "canary", "stable"].includes(
+			envArg,
+		)
+			? (envArg as "dev" | "canary" | "stable")
 			: "dev";
 
 		try {
@@ -2252,7 +2250,7 @@ ${utiDecls}
 
 	async function runBuild(
 		config: Awaited<ReturnType<typeof getConfig>>,
-		buildEnvironment: string,
+		buildEnvironment: "dev" | "canary" | "stable",
 	) {
 		// Determine current platform as default target
 		const currentTarget = { os: OS, arch: ARCH };
@@ -3935,10 +3933,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
 
-			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
-			if (targetOS !== "linux" || buildEnvironment !== "dev") {
-				rmSync(appBundleFolderPath, { recursive: true });
-			}
+			// This branch only runs for non-dev release packaging, so the temp app bundle
+			// can always be removed after the tarball is produced.
+			rmSync(appBundleFolderPath, { recursive: true });
 
 			// generate bsdiff
 			// https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
@@ -5268,6 +5265,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		// Sign CEF helper apps (they're in the main Frameworks directory, not inside CEF framework)
+		const mainProcess = config.build.mainProcess ?? "bun";
 		const cefHelperApps = getCEFHelperNames(mainProcess).map(
 			(helperName) => `${helperName}.app`,
 		);
