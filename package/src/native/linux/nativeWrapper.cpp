@@ -349,6 +349,8 @@ static std::atomic<bool> g_checkedForCEF{false};
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 static std::mutex g_webviewMapMutex;
+static std::map<uint32_t, std::string> g_webviewViewsRoot;
+static std::mutex g_webviewViewsRootMutex;
 
 // Global map to store preload scripts by browser ID (for multi-process CEF)
 static std::map<int, std::string> g_preloadScripts;
@@ -579,6 +581,56 @@ public:
             }
         }
         
+        // Check if this webview has a custom viewsRoot
+        std::string viewsRootPath;
+        {
+            std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+            auto it = g_webviewViewsRoot.find(webviewId_);
+            if (it != g_webviewViewsRoot.end()) {
+                viewsRootPath = it->second;
+            }
+        }
+        
+        // If viewsRoot is set, try to read from that directory first
+        if (!viewsRootPath.empty()) {
+            gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath.c_str(), nullptr);
+            
+            if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+                GError* error = nullptr;
+                gchar* fileContents = nullptr;
+                gsize fileSize = 0;
+                
+                if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+                    data_ = std::string(fileContents, fileSize);
+                    g_free(fileContents);
+                    
+                    // Determine MIME type
+                    std::string mimeType = "application/octet-stream";
+                    if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
+                    else if (fullPath.find(".css") != std::string::npos) mimeType = "text/css";
+                    else if (fullPath.find(".js") != std::string::npos) mimeType = "text/javascript";
+                    else if (fullPath.find(".json") != std::string::npos) mimeType = "application/json";
+                    else if (fullPath.find(".png") != std::string::npos) mimeType = "image/png";
+                    else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) mimeType = "image/jpeg";
+                    else if (fullPath.find(".svg") != std::string::npos) mimeType = "image/svg+xml";
+                    else if (fullPath.find(".woff") != std::string::npos) mimeType = "font/woff";
+                    else if (fullPath.find(".woff2") != std::string::npos) mimeType = "font/woff2";
+                    else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
+                    mimeType_ = mimeType;
+                    
+                    g_free(filePath);
+                    handle_request = true;
+                    return true;
+                }
+                
+                if (error) {
+                    g_error_free(error);
+                }
+            }
+            
+            g_free(filePath);
+        }
+
         // Build paths relative to current directory (bin)
         char* cwd = g_get_current_dir();
         gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
@@ -2422,6 +2474,9 @@ public:
 
     // Navigation rules for URL filtering
     std::vector<std::string> navigationRules;
+    
+    // Root directory for views:// protocol resolution
+    std::string viewsRoot;
 
     AbstractView(uint32_t webviewId) : webviewId(webviewId) {}
     virtual ~AbstractView() {}
@@ -5553,17 +5608,62 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         }
     }
     
+    // Check if this webview has a custom viewsRoot
+    std::string viewsRootPath;
+    {
+        // First get the webviewId for the requesting WebKitWebView
+        uint32_t webviewId = 0;
+        WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+        if (requestingWebView) {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& [id, view] : g_webviewMap) {
+                auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+                if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
+                    webviewId = id;
+                    break;
+                }
+            }
+        }
+        
+        // Now check if this webview has a custom viewsRoot
+        if (webviewId > 0) {
+            std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+            auto it = g_webviewViewsRoot.find(webviewId);
+            if (it != g_webviewViewsRoot.end()) {
+                viewsRootPath = it->second;
+            }
+        }
+    }
+    
+    gchar* fileContents = nullptr;
+    gsize fileSize = 0;
+    bool foundFile = false;
+    
+    // If viewsRoot is set, try to read from that directory first
+    if (!viewsRootPath.empty()) {
+        gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath, nullptr);
+        
+        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+            GError* error = nullptr;
+            if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+                foundFile = true;
+            } else {
+                if (error) {
+                    g_error_free(error);
+                }
+            }
+        }
+        
+        g_free(filePath);
+    }
+    
     // Build paths relative to current directory (bin)
     char* cwd = g_get_current_dir();
     gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
     gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
 
-    gchar* fileContents = nullptr;
-    gsize fileSize = 0;
-    bool foundFile = false;
-
-    // Check if ASAR archive exists
-    if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
+    // Check if ASAR archive exists (only if file not found in viewsRoot)
+    if (!foundFile && g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
         // Thread-safe lazy-load ASAR archive on first use
         std::call_once(g_asarArchiveInitFlag, [asarPath]() {
             g_asarArchive = asar_open(asarPath);
@@ -6887,6 +6987,7 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
+                         const char* viewsRoot,
                          bool sandbox,
                          bool startTransparent,
                          bool startPassthrough) {
@@ -6912,6 +7013,16 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            
+            // Store the viewsRoot for views:// protocol resolution
+            if (viewsRoot && strlen(viewsRoot) > 0) {
+                webview->viewsRoot = std::string(viewsRoot);
+                // Also store in the separate map for access by handlers
+                {
+                    std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+                    g_webviewViewsRoot[webviewId] = std::string(viewsRoot);
+                }
+            }
         
             // For CEF, we need to manually trigger position sync since there's no container       
             CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
@@ -6978,6 +7089,7 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
+                         const char* viewsRoot,
                          bool sandbox,
                          bool startTransparent,
                          bool startPassthrough) {
@@ -6998,6 +7110,16 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            
+            // Store the viewsRoot for views:// protocol resolution
+            if (viewsRoot && strlen(viewsRoot) > 0) {
+                webview->viewsRoot = std::string(viewsRoot);
+                // Also store in the separate map for access by handlers
+                {
+                    std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+                    g_webviewViewsRoot[webviewId] = std::string(viewsRoot);
+                }
+            }
             
             // Store the webview in global map to keep it alive and for navigation rules
             {
@@ -7072,13 +7194,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         view = initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                               partitionIdentifier, navigationCallback, webviewEventHandler,
                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                              electrobunPreloadScript, customPreloadScript, sandbox,
+                              electrobunPreloadScript, customPreloadScript, viewsRoot, sandbox,
                               startTransparent, startPassthrough);
     } else {
         view = initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, sandbox,
+                                    electrobunPreloadScript, customPreloadScript, viewsRoot, sandbox,
                                     startTransparent, startPassthrough);
     }
 
