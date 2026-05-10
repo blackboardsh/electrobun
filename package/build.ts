@@ -2043,9 +2043,9 @@ async function buildLauncher() {
 		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
 	} else if (OS === "linux") {
 		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-linux"];
+			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
 		} else {
-			zigArgs = ["-Dtarget=x86_64-linux"];
+			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
 		}
 	} else if (OS === "macos") {
 		if (ARCH === "arm64") {
@@ -2071,9 +2071,9 @@ async function buildCore() {
 		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
 	} else if (OS === "linux") {
 		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-linux"];
+			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
 		} else {
-			zigArgs = ["-Dtarget=x86_64-linux"];
+			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
 		}
 	} else if (OS === "macos") {
 		if (ARCH === "arm64") {
