@@ -7632,7 +7632,7 @@ extern "C" void restoreWindow(NSWindow *window) {
 
 extern "C" bool isWindowMinimized(NSWindow *window) {
     return runOnMainThreadSyncBool(^{
-        return [window isMiniaturized];
+        return [window isMiniaturized] ? true : false;
     });
 }
 
@@ -7656,7 +7656,7 @@ extern "C" void unmaximizeWindow(NSWindow *window) {
 
 extern "C" bool isWindowMaximized(NSWindow *window) {
     return runOnMainThreadSyncBool(^{
-        return [window isZoomed];
+        return [window isZoomed] ? true : false;
     });
 }
 
