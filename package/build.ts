@@ -577,7 +577,8 @@ async function copyToDist() {
 			: OS === "macos"
 				? "libElectrobunCore.dylib"
 				: "libElectrobunCore.so";
-	await $`cp ${join("src", "core", "zig-out", "lib", coreLibName)} ${join("dist", coreLibName)}`;
+	const coreLibSourceDir = OS === "win" ? "bin" : "lib";
+	await $`cp ${join("src", "core", "zig-out", coreLibSourceDir, coreLibName)} ${join("dist", coreLibName)}`;
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
 	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
