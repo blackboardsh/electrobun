@@ -276,6 +276,30 @@ function getWindowsCmakeGenerator() {
 	return VCVARSALL_PATH ? "NMake Makefiles" : "Visual Studio 17 2022";
 }
 
+function getWindowsCefWrapperLibPath() {
+	const candidates = [
+		join(
+			process.cwd(),
+			"vendors",
+			"cef",
+			"build",
+			"libcef_dll_wrapper",
+			"Release",
+			"libcef_dll_wrapper.lib",
+		),
+		join(
+			process.cwd(),
+			"vendors",
+			"cef",
+			"build",
+			"libcef_dll_wrapper",
+			"libcef_dll_wrapper.lib",
+		),
+	];
+
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
+
 async function installWindowsDeps() {
 	const scriptPath = join(process.cwd(), "scripts", "install-windows-deps.ps1");
 	if (!existsSync(scriptPath)) {
@@ -1523,17 +1547,7 @@ async function vendorCEF() {
 
 		// Build CEF wrapper library for Windows
 		if (
-			!existsSync(
-				join(
-					process.cwd(),
-					"vendors",
-					"cef",
-					"build",
-					"libcef_dll_wrapper",
-					"Release",
-					"libcef_dll_wrapper.lib",
-				),
-			)
+			!existsSync(getWindowsCefWrapperLibPath())
 		) {
 			// Clean and create build directory
 			await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
@@ -1566,7 +1580,7 @@ async function vendorCEF() {
 
 			const cefInclude = `./vendors/cef`;
 			const cefLib = `./vendors/cef/Release/libcef.lib`;
-			const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
+			const cefWrapperLib = getWindowsCefWrapperLibPath();
 
 			// Compile the Windows helper process
 			await runMsvcCommand(
@@ -1830,7 +1844,7 @@ async function buildNative() {
 		const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
 		const cefInclude = `./vendors/cef`;
 		const cefLib = `./vendors/cef/Release/libcef.lib`;
-		const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
+		const cefWrapperLib = getWindowsCefWrapperLibPath();
 
 		const wgpuIncludeDir = join(
 			process.cwd(),
