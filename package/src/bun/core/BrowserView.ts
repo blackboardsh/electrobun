@@ -8,6 +8,7 @@ import {
 } from "../../shared/rpc.js";
 import { BuildConfig } from "./BuildConfig";
 import {
+	configureRpcTransport,
 	sendMessageToWebviewViaSocket,
 	removeSocketForWebview,
 } from "./Socket";
@@ -138,6 +139,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	init() {
+		configureRpcTransport(buildConfig.runtime?.rpcTransport);
 		this.initializeRpcTransport();
 
 		return ffi.request.createWebview({

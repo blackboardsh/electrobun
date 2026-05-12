@@ -7,6 +7,7 @@ export type BuildConfigType = {
 	bunVersion?: string;
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
+		rpcTransport?: "auto" | "websocket" | "postMessage";
 		[key: string]: unknown;
 	};
 };

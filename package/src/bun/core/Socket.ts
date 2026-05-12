@@ -2,6 +2,8 @@ import type { Server, ServerWebSocket } from "bun";
 import { BrowserView } from "./BrowserView";
 import { createCipheriv, createDecipheriv, randomBytes } from "crypto";
 
+export type RpcTransport = "auto" | "websocket" | "postMessage";
+
 function base64ToUint8Array(base64: string) {
 	{
 		return new Uint8Array(
@@ -55,6 +57,29 @@ export const removeSocketForWebview = (webviewId: number) => {
 	delete socketMap[webviewId];
 };
 
+const validRpcTransports: RpcTransport[] = ["auto", "websocket", "postMessage"];
+
+const normalizeRpcTransport = (transport: unknown): RpcTransport => {
+	if (Bun.env["ELECTROBUN_DISABLE_RPC_SOCKET"] === "1") {
+		return "postMessage";
+	}
+
+	const envTransport = Bun.env["ELECTROBUN_RPC_TRANSPORT"];
+	if (validRpcTransports.includes(envTransport as RpcTransport)) {
+		return envTransport as RpcTransport;
+	}
+
+	if (validRpcTransports.includes(transport as RpcTransport)) {
+		return transport as RpcTransport;
+	}
+
+	return "auto";
+};
+
+export let rpcServer: Server<unknown> | null = null;
+export let rpcPort = 0;
+export let rpcTransport: RpcTransport = normalizeRpcTransport(undefined);
+
 const startRPCServer = () => {
 	const startPort = 50000;
 	const endPort = 65535;
@@ -65,6 +90,7 @@ const startRPCServer = () => {
 	while (port <= endPort) {
 		try {
 			server = Bun.serve<{ webviewId: number }>({
+				hostname: "127.0.0.1",
 				port,
 				fetch(req: Request, server: Server<{ webviewId: number }>) {
 					const url = new URL(req.url);
@@ -166,7 +192,34 @@ const startRPCServer = () => {
 	return { rpcServer: server, rpcPort: port };
 };
 
-export const { rpcServer, rpcPort } = startRPCServer();
+export const configureRpcTransport = (transport?: unknown) => {
+	const nextTransport = normalizeRpcTransport(transport);
+	const previousTransport = rpcTransport;
+	rpcTransport = nextTransport;
+
+	if (nextTransport === "postMessage") {
+		if (rpcServer) {
+			rpcServer.stop(true);
+			rpcServer = null;
+		}
+
+		if (rpcPort !== 0 || previousTransport !== "postMessage") {
+			console.log("Electrobun RPC socket disabled; using postMessage bridge.");
+		}
+
+		rpcPort = 0;
+		return { rpcServer, rpcPort, rpcTransport };
+	}
+
+	if (!rpcServer) {
+		const serverState = startRPCServer();
+		rpcServer = serverState.rpcServer;
+		rpcPort = serverState.rpcPort;
+		console.log("Electrobun RPC socket server started at", rpcServer?.url.origin);
+	}
+
+	return { rpcServer, rpcPort, rpcTransport };
+};
 
 // Will return true if message was sent over websocket
 // false if it was not (caller should fallback to postMessage/evaluateJS rpc)
@@ -201,5 +254,3 @@ export const sendMessageToWebviewViaSocket = (
 
 	return false;
 };
-
-console.log("Server started at", rpcServer?.url.origin);
