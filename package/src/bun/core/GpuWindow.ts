@@ -2,7 +2,6 @@ import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { type Pointer } from "bun:ffi";
 import { WGPUView } from "./WGPUView";
-import { getNextWindowId } from "./windowIds";
 
 
 export type GpuWindowOptionsType = {
@@ -54,8 +53,7 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 });
 
 export class GpuWindow {
-	id: number = getNextWindowId();
-	ptr!: Pointer;
+	id = 0;
 	title: string = "Electrobun";
 	state: "creating" | "created" = "creating";
 	transparent: boolean = false;
@@ -72,6 +70,10 @@ export class GpuWindow {
 		height: 600,
 	};
 	wgpuViewId!: number;
+
+	get ptr(): Pointer | null {
+		return ffi.request.getWindowPointer({ winId: this.id }) as Pointer | null;
+	}
 
 	constructor(options: Partial<GpuWindowOptionsType> = defaultOptions) {
 		this.title = options.title || "New Window";
@@ -93,8 +95,7 @@ export class GpuWindow {
 		transparent,
 		activate,
 	}: Partial<GpuWindowOptionsType>) {
-		this.ptr = ffi.request.createWindow({
-			id: this.id,
+		const windowId = ffi.request.createWindow({
 			title: this.title,
 			url: "",
 			frame: {
@@ -136,7 +137,13 @@ export class GpuWindow {
 			transparent: transparent ?? false,
 			activate: activate ?? true,
 			trafficLightOffset: this.trafficLightOffset,
-		}) as Pointer;
+		});
+
+		if (!windowId) {
+			throw "Failed to create window";
+		}
+
+		this.id = windowId as number;
 
 		GpuWindowMap[this.id] = this;
 

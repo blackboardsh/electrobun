@@ -111,6 +111,9 @@ function getPlatformPaths(
 		BUN_BINARY: join(platformDistDir, "bun") + binExt,
 		LAUNCHER_DEV: join(platformDistDir, "electrobun") + binExt,
 		LAUNCHER_RELEASE: join(platformDistDir, "launcher") + binExt,
+		CORE_MACOS: join(platformDistDir, "libElectrobunCore.dylib"),
+		CORE_WIN: join(platformDistDir, "ElectrobunCore.dll"),
+		CORE_LINUX: join(platformDistDir, "libElectrobunCore.so"),
 		NATIVE_WRAPPER_MACOS: join(platformDistDir, "libNativeWrapper.dylib"),
 		NATIVE_WRAPPER_WIN: join(platformDistDir, "libNativeWrapper.dll"),
 		NATIVE_WRAPPER_LINUX: join(platformDistDir, "libNativeWrapper.so"),
@@ -134,12 +137,143 @@ function getPlatformPaths(
 		// These work with existing package.json and development workflow
 		MAIN_JS: join(sharedDistDir, "main.js"),
 		API_DIR: join(sharedDistDir, "api"),
+		PRELOAD_FULL_JS: join(sharedDistDir, "preload-full.js"),
+		PRELOAD_SANDBOXED_JS: join(sharedDistDir, "preload-sandboxed.js"),
 	};
 }
 
 // Default PATHS for host platform (backward compatibility)
 // @ts-expect-error - reserved for future use
 const _PATHS = getPlatformPaths(OS, ARCH);
+
+function getVendoredZigBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"zig",
+		OS === "win" ? "zig.exe" : "zig",
+	);
+}
+
+function getZigTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): string {
+	if (targetOS === "win") {
+		return "x86_64-windows";
+	}
+	if (targetOS === "linux") {
+		return targetArch === "arm64" ? "aarch64-linux" : "x86_64-linux";
+	}
+	return targetArch === "arm64" ? "aarch64-macos" : "x86_64-macos";
+}
+
+function getCEFHelperBaseName(mainProcess: "bun" | "zig"): string {
+	return mainProcess === "zig" ? "main" : "bun";
+}
+
+function getCEFHelperNames(mainProcess: "bun" | "zig"): string[] {
+	const baseName = getCEFHelperBaseName(mainProcess);
+	return [
+		`${baseName} Helper`,
+		`${baseName} Helper (Alerts)`,
+		`${baseName} Helper (GPU)`,
+		`${baseName} Helper (Plugin)`,
+		`${baseName} Helper (Renderer)`,
+	];
+}
+
+async function buildZigMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const zigBinary = getVendoredZigBinaryPath();
+	if (!existsSync(zigBinary)) {
+		throw new Error(
+			`Vendored Zig compiler not found at ${zigBinary}. Rebuild electrobun/package so vendors/zig is available.`,
+		);
+	}
+
+	const zigSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "zig-sdk", "electrobun.zig");
+	if (!existsSync(zigSdkPath)) {
+		throw new Error(`Electrobun Zig SDK not found at ${zigSdkPath}`);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-zig-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const relativeZigSdkPath = path.relative(tempBuildDir, zigSdkPath) || ".";
+	const relativeEntrypointPath = path.relative(tempBuildDir, options.entrypoint) || ".";
+	const zigOutBin = join(tempBuildDir, "zig-out", "bin", "main" + binExt);
+	const buildScriptPath = join(tempBuildDir, "build.zig");
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	const buildScript = `const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const electrobun = b.createModule(.{
+        .root_source_file = b.path(${JSON.stringify(relativeZigSdkPath)}),
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "main",
+        .root_source_file = b.path(${JSON.stringify(relativeEntrypointPath)}),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("electrobun", electrobun);
+    exe.linkLibC();
+    b.installArtifact(exe);
+}
+`;
+	writeFileSync(buildScriptPath, buildScript, "utf8");
+
+	const zigArgs = [
+		"build",
+		`-Dtarget=${getZigTarget(options.targetOS, options.targetArch)}`,
+	];
+
+	if (options.targetOS === "win") {
+		zigArgs.push("-Dcpu=baseline");
+	}
+
+	if (options.buildEnvironment !== "dev") {
+		zigArgs.push("-Doptimize=ReleaseSmall");
+	}
+
+	const result = Bun.spawnSync([zigBinary, ...zigArgs], {
+		cwd: tempBuildDir,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: zig main process compilation failed");
+	}
+
+	if (!existsSync(zigOutBin)) {
+		throw new Error(`Zig main process binary was not produced at ${zigOutBin}`);
+	}
+
+	return zigOutBin;
+}
 
 async function ensureCoreDependencies(
 	targetOS?: "macos" | "win" | "linux",
@@ -1483,6 +1617,7 @@ const defaultConfig = {
 	build: {
 		buildFolder: "build",
 		artifactFolder: "artifacts",
+		mainProcess: "bun" as "bun" | "zig",
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
@@ -1523,6 +1658,9 @@ const defaultConfig = {
 		},
 		bun: {
 			entrypoint: "src/bun/index.ts",
+		},
+		zig: {
+			entrypoint: "src/zig/main.zig",
 		},
 		views: undefined as
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
@@ -2078,8 +2216,10 @@ ${utiDecls}
 		// Get environment
 		const envArg =
 			process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
-		const buildEnvironment = ["dev", "canary", "stable"].includes(envArg)
-			? envArg
+		const buildEnvironment: "dev" | "canary" | "stable" = ["dev", "canary", "stable"].includes(
+			envArg,
+		)
+			? (envArg as "dev" | "canary" | "stable")
 			: "dev";
 
 		try {
@@ -2110,7 +2250,7 @@ ${utiDecls}
 
 	async function runBuild(
 		config: Awaited<ReturnType<typeof getConfig>>,
-		buildEnvironment: string,
+		buildEnvironment: "dev" | "canary" | "stable",
 	) {
 		// Determine current platform as default target
 		const currentTarget = { os: OS, arch: ARCH };
@@ -2395,17 +2535,31 @@ Categories=Utility;Application;
 			rmSync(buildFolder, { recursive: true });
 		}
 		mkdirSync(buildFolder, { recursive: true });
-		// bundle bun to build/bun
+
+		const mainProcess = config.build.mainProcess ?? "bun";
 		const bunConfig = config.build.bun;
 		const bunSource = join(projectRoot, bunConfig.entrypoint);
+		const zigConfig = config.build.zig;
+		const zigSource = join(projectRoot, zigConfig.entrypoint);
 
-		if (!existsSync(bunSource)) {
+		if (mainProcess === "bun") {
+			if (!existsSync(bunSource)) {
+				throw new Error(
+					`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`,
+				);
+			}
+		} else if (!existsSync(zigSource)) {
 			throw new Error(
-				`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`,
+				`failed to compile ${zigSource} because it doesn't exist.\n You need a config.build.zig.entrypoint source file to build.`,
 			);
 		}
 
 		const isCarrotOnly = config.build.carrot?.carrotOnly === true;
+		if (config.build.carrot && mainProcess === "zig") {
+			throw new Error(
+				`build.carrot is not supported with build.mainProcess = "zig" yet.`,
+			);
+		}
 
 		// build macos bundle
 		// Use display name (with spaces) for macOS bundle folders, sanitized name for other platforms
@@ -2436,6 +2590,17 @@ Categories=Utility;Application;
 			appBundleFolderFrameworksPath = bundle.appBundleFolderFrameworksPath;
 			appBundleAppCodePath = join(appBundleFolderResourcesPath, "app");
 			mkdirSync(appBundleAppCodePath, { recursive: true });
+		}
+
+		let zigMainBinarySourcePath: string | null = null;
+		if (mainProcess === "zig") {
+			zigMainBinarySourcePath = await buildZigMainExecutable({
+				entrypoint: zigSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
 		}
 
 		// const bundledBunPath = join(appBundleMacOSPath, 'bun');
@@ -2610,105 +2775,121 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
-		cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, "main.js"), {
+		cpSync(targetPaths.PRELOAD_FULL_JS, join(appBundleFolderResourcesPath, "preload-full.js"), {
 			dereference: true,
 		});
-
-		// Bun runtime binary
-		// todo (yoav): this only works for the current architecture
-		const bunBinarySourcePath = await ensureBunBinary(
-			currentTarget.os,
-			currentTarget.arch,
-			config.build.bunVersion,
-			config.build.bunnyBun,
+		cpSync(
+			targetPaths.PRELOAD_SANDBOXED_JS,
+			join(appBundleFolderResourcesPath, "preload-sandboxed.js"),
+			{
+				dereference: true,
+			},
 		);
-		// Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
-		// in node_modules, so we have to dereference here to get the actual binary in the bundle.
-		const bunBinaryDestInBundlePath =
-			join(appBundleMacOSPath, "bun") + targetBinExt;
-		const destFolder2 = dirname(bunBinaryDestInBundlePath);
-		if (!existsSync(destFolder2)) {
-			// console.info('creating folder: ', destFolder);
-			mkdirSync(destFolder2, { recursive: true });
-		}
-		cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, {
-			dereference: true,
-		});
 
-		// Copy ICU data file if it exists (Linux/Windows external ICU builds)
-		// ICU version varies per platform WebKit build, so detect the filename dynamically
-		const bunDir = dirname(bunBinarySourcePath);
-		const icuDataFileName = readdirSync(bunDir).find((f) => /^icudt\d+l\.dat$/.test(f));
-		const icuDataSource = icuDataFileName ? join(bunDir, icuDataFileName) : "";
-		if (icuDataFileName && existsSync(icuDataSource) && targetOS !== "macos") {
-			const icuDataDest = join(appBundleMacOSPath, icuDataFileName);
+		if (mainProcess === "bun") {
+			cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, "main.js"), {
+				dereference: true,
+			});
 
-			const locales = config.build?.locales;
-			if (locales && locales !== "*" && Array.isArray(locales) && locales.length > 0) {
-				// Trim ICU data to specified locales using icupkg
-				try {
-					await trimICUData(icuDataSource, icuDataDest, locales);
-					const originalSize = statSync(icuDataSource).size;
-					const trimmedSize = statSync(icuDataDest).size;
-					console.log(
-						`Trimmed ICU data: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(trimmedSize / 1024 / 1024).toFixed(1)}MB (locales: ${locales.join(", ")})`,
-					);
-				} catch (error) {
-					console.warn(`Warning: Failed to trim ICU data, copying full file: ${error}`);
-					cpSync(icuDataSource, icuDataDest);
-				}
-			} else {
-				cpSync(icuDataSource, icuDataDest);
-				console.log(`Copied ICU data file: ${icuDataFileName}`);
+			// Bun runtime binary
+			// todo (yoav): this only works for the current architecture
+			const bunBinarySourcePath = await ensureBunBinary(
+				currentTarget.os,
+				currentTarget.arch,
+				config.build.bunVersion,
+				config.build.bunnyBun,
+			);
+			// Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
+			// in node_modules, so we have to dereference here to get the actual binary in the bundle.
+			const bunBinaryDestInBundlePath =
+				join(appBundleMacOSPath, "bun") + targetBinExt;
+			const destFolder2 = dirname(bunBinaryDestInBundlePath);
+			if (!existsSync(destFolder2)) {
+				mkdirSync(destFolder2, { recursive: true });
 			}
-		}
+			cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, {
+				dereference: true,
+			});
 
-		// Embed icon into bun.exe on Windows
-		if (targetOS === "win" && config.build.win?.icon) {
-			const iconSourcePath =
-				config.build.win.icon.startsWith("/") ||
-				config.build.win.icon.match(/^[a-zA-Z]:/)
-					? config.build.win.icon
-					: join(projectRoot, config.build.win.icon);
+			// Copy ICU data file if it exists (Linux/Windows external ICU builds)
+			// ICU version varies per platform WebKit build, so detect the filename dynamically
+			const bunDir = dirname(bunBinarySourcePath);
+			const icuDataFileName = readdirSync(bunDir).find((f) => /^icudt\d+l\.dat$/.test(f));
+			const icuDataSource = icuDataFileName ? join(bunDir, icuDataFileName) : "";
+			if (icuDataFileName && existsSync(icuDataSource) && targetOS !== "macos") {
+				const icuDataDest = join(appBundleMacOSPath, icuDataFileName);
 
-			if (existsSync(iconSourcePath)) {
-				console.log(`Embedding icon into bun.exe: ${iconSourcePath}`);
-				try {
-					let iconPath = iconSourcePath;
-
-					// Convert PNG to ICO if needed
-					if (iconSourcePath.toLowerCase().endsWith(".png")) {
-						const pngToIco = (await import("png-to-ico")).default;
-						const tempIcoPath = join(buildFolder, "temp-bun-icon.ico");
-						const icoBuffer = await pngToIco(iconSourcePath);
-						writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
-						iconPath = tempIcoPath;
+				const locales = config.build?.locales;
+				if (locales && locales !== "*" && Array.isArray(locales) && locales.length > 0) {
+					try {
+						await trimICUData(icuDataSource, icuDataDest, locales);
+						const originalSize = statSync(icuDataSource).size;
+						const trimmedSize = statSync(icuDataDest).size;
 						console.log(
-							`Converted PNG to ICO format for bun.exe: ${tempIcoPath}`,
+							`Trimmed ICU data: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(trimmedSize / 1024 / 1024).toFixed(1)}MB (locales: ${locales.join(", ")})`,
 						);
+					} catch (error) {
+						console.warn(`Warning: Failed to trim ICU data, copying full file: ${error}`);
+						cpSync(icuDataSource, icuDataDest);
 					}
-
-					// Use rcedit to embed the icon into bun.exe
-										const { execFileSync } = await import("child_process");
-					const rceditPkgPath = require.resolve("rcedit/package.json");
-					const rceditDir = dirname(rceditPkgPath);
-					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
-					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
-					execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
-					console.log(`Successfully embedded icon into bun.exe`);
-
-					// Clean up temp ICO file
-					if (iconPath !== iconSourcePath && existsSync(iconPath)) {
-						unlinkSync(iconPath);
-					}
-				} catch (error) {
-					console.warn(`Warning: Failed to embed icon into bun.exe: ${error}`);
+				} else {
+					cpSync(icuDataSource, icuDataDest);
+					console.log(`Copied ICU data file: ${icuDataFileName}`);
 				}
 			}
+
+			// Embed icon into bun.exe on Windows
+			if (targetOS === "win" && config.build.win?.icon) {
+				const iconSourcePath =
+					config.build.win.icon.startsWith("/") ||
+					config.build.win.icon.match(/^[a-zA-Z]:/)
+						? config.build.win.icon
+						: join(projectRoot, config.build.win.icon);
+
+				if (existsSync(iconSourcePath)) {
+					console.log(`Embedding icon into bun.exe: ${iconSourcePath}`);
+					try {
+						let iconPath = iconSourcePath;
+
+						if (iconSourcePath.toLowerCase().endsWith(".png")) {
+							const pngToIco = (await import("png-to-ico")).default;
+							const tempIcoPath = join(buildFolder, "temp-bun-icon.ico");
+							const icoBuffer = await pngToIco(iconSourcePath);
+							writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
+							iconPath = tempIcoPath;
+							console.log(
+								`Converted PNG to ICO format for bun.exe: ${tempIcoPath}`,
+							);
+						}
+
+						const { execFileSync } = await import("child_process");
+						const rceditPkgPath = require.resolve("rcedit/package.json");
+						const rceditDir = dirname(rceditPkgPath);
+						const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+						const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+						execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
+						console.log(`Successfully embedded icon into bun.exe`);
+
+						if (iconPath !== iconSourcePath && existsSync(iconPath)) {
+							unlinkSync(iconPath);
+						}
+					} catch (error) {
+						console.warn(`Warning: Failed to embed icon into bun.exe: ${error}`);
+					}
+				}
+			}
+		} else if (zigMainBinarySourcePath) {
+			cpSync(zigMainBinarySourcePath, join(appBundleMacOSPath, "main") + targetBinExt, {
+				dereference: true,
+			});
 		}
 
 		// copy native wrapper dynamic library
 		if (targetOS === "macos") {
+			cpSync(targetPaths.CORE_MACOS, join(appBundleMacOSPath, "libElectrobunCore.dylib"), {
+				dereference: true,
+			});
+
 			const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_MACOS;
 			const nativeWrapperMacosDestination = join(
 				appBundleMacOSPath,
@@ -2718,6 +2899,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				dereference: true,
 			});
 		} else if (targetOS === "win") {
+			cpSync(targetPaths.CORE_WIN, join(appBundleMacOSPath, "ElectrobunCore.dll"), {
+				dereference: true,
+			});
+
 			const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_WIN;
 			const nativeWrapperMacosDestination = join(
 				appBundleMacOSPath,
@@ -2737,6 +2922,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		} else if (targetOS === "linux") {
 			// Choose the appropriate native wrapper based on bundleCEF setting
 			const useCEF = config.build.linux?.bundleCEF;
+			cpSync(targetPaths.CORE_LINUX, join(appBundleMacOSPath, "libElectrobunCore.so"), {
+				dereference: true,
+			});
 			const nativeWrapperLinuxSource = useCEF
 				? targetPaths.NATIVE_WRAPPER_LINUX_CEF
 				: targetPaths.NATIVE_WRAPPER_LINUX;
@@ -2822,13 +3010,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				});
 
 				// cef helpers
-				const cefHelperNames = [
-					"bun Helper",
-					"bun Helper (Alerts)",
-					"bun Helper (GPU)",
-					"bun Helper (Plugin)",
-					"bun Helper (Renderer)",
-				];
+				const cefHelperNames = getCEFHelperNames(mainProcess);
 
 				const helperSourcePath = targetPaths.CEF_HELPER_MACOS;
 				cefHelperNames.forEach((helperName) => {
@@ -2909,13 +3091,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				}
 
 				// Copy CEF helper processes with different names
-				const cefHelperNames = [
-					"bun Helper",
-					"bun Helper (Alerts)",
-					"bun Helper (GPU)",
-					"bun Helper (Plugin)",
-					"bun Helper (Renderer)",
-				];
+				const cefHelperNames = getCEFHelperNames(mainProcess);
 
 				const helperSourcePath = targetPaths.CEF_HELPER_WIN;
 				if (existsSync(helperSourcePath)) {
@@ -3047,13 +3223,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					});
 
 					// Copy CEF helper processes with different names
-					const cefHelperNames = [
-						"bun Helper",
-						"bun Helper (Alerts)",
-						"bun Helper (GPU)",
-						"bun Helper (Plugin)",
-						"bun Helper (Renderer)",
-					];
+					const cefHelperNames = getCEFHelperNames(mainProcess);
 
 					const helperSourcePath = targetPaths.CEF_HELPER_LINUX;
 					if (existsSync(helperSourcePath)) {
@@ -3222,22 +3392,22 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 		} // end if (!isCarrotOnly)
 
-		// transpile developer's bun code
-		const bunDestFolder = join(appBundleAppCodePath, "bun");
-		// Build bun-javascript ts files
-		const { entrypoint: _bunEntrypoint, ...bunBuildOptions } = bunConfig;
-		const buildResult = await Bun.build({
-			...bunBuildOptions,
-			entrypoints: [bunSource],
-			outdir: bunDestFolder,
-			// minify: true, // todo (yoav): add minify in canary and prod builds
-			target: "bun",
-		});
+		if (mainProcess === "bun") {
+			// transpile developer's bun code
+			const bunDestFolder = join(appBundleAppCodePath, "bun");
+			const { entrypoint: _bunEntrypoint, ...bunBuildOptions } = bunConfig;
+			const buildResult = await Bun.build({
+				...bunBuildOptions,
+				entrypoints: [bunSource],
+				outdir: bunDestFolder,
+				target: "bun",
+			});
 
-		if (!buildResult.success) {
-			console.error("failed to build", bunSource);
-			printBuildLogs(buildResult.logs);
-			throw new Error("Build failed: bun build failed");
+			if (!buildResult.success) {
+				console.error("failed to build", bunSource);
+				printBuildLogs(buildResult.logs);
+				throw new Error("Build failed: bun build failed");
+			}
 		}
 
 		// transpile developer's view code
@@ -3676,13 +3846,16 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		const bundlesCEF = platformConfig?.bundleCEF ?? false;
 
 		const buildJsonObj: Record<string, unknown> = {
+			mainProcess,
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			runtime: config.runtime ?? {},
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
 				: {}),
-			bunVersion: config.build?.bunVersion ?? BUN_VERSION,
+			...(mainProcess === "bun"
+				? { bunVersion: config.build?.bunVersion ?? BUN_VERSION }
+				: {}),
 			...(config.build?.bunnyBun ? { bunnyBun: config.build.bunnyBun } : {}),
 		};
 
@@ -3760,10 +3933,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
 
-			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
-			if (targetOS !== "linux" || buildEnvironment !== "dev") {
-				rmSync(appBundleFolderPath, { recursive: true });
-			}
+			// This branch only runs for non-dev release packaging, so the temp app bundle
+			// can always be removed after the tarball is produced.
+			rmSync(appBundleFolderPath, { recursive: true });
 
 			// generate bsdiff
 			// https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
@@ -4443,8 +4615,13 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		const watchDirs = new Set<string>();
 
 		// Bun entrypoint directory
-		if (config.build.bun?.entrypoint) {
+		if (config.build.mainProcess !== "zig" && config.build.bun?.entrypoint) {
 			watchDirs.add(join(projectRoot, dirname(config.build.bun.entrypoint)));
+		}
+
+		// Zig entrypoint directory
+		if (config.build.mainProcess === "zig" && config.build.zig?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.zig.entrypoint)));
 		}
 
 		// View entrypoint directories
@@ -4787,6 +4964,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					...defaultConfig.build.bun,
 					...(loadedConfig?.build?.bun || {}),
 				},
+				zig: {
+					...defaultConfig.build.zig,
+					...(loadedConfig?.build?.zig || {}),
+				},
 			},
 			runtime: {
 				...defaultConfig.runtime,
@@ -5084,13 +5265,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		// Sign CEF helper apps (they're in the main Frameworks directory, not inside CEF framework)
-		const cefHelperApps = [
-			"bun Helper.app",
-			"bun Helper (GPU).app",
-			"bun Helper (Plugin).app",
-			"bun Helper (Alerts).app",
-			"bun Helper (Renderer).app",
-		];
+		const mainProcess = config.build.mainProcess ?? "bun";
+		const cefHelperApps = getCEFHelperNames(mainProcess).map(
+			(helperName) => `${helperName}.app`,
+		);
 
 		for (const helperApp of cefHelperApps) {
 			const helperPath = join(frameworksPath, helperApp);

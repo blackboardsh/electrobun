@@ -269,6 +269,37 @@ async function runMsvcCommand(command: string) {
 	}
 }
 
+function getWindowsCmakeGenerator() {
+	// Prefer a toolchain-driven generator over the Visual Studio IDE generator.
+	// On CI we may have MSVC Build Tools + vcvarsall without a full VS instance
+	// that CMake can discover for `-G "Visual Studio 17 2022"`.
+	return VCVARSALL_PATH ? "NMake Makefiles" : "Visual Studio 17 2022";
+}
+
+function getWindowsCefWrapperLibPath() {
+	const candidates = [
+		join(
+			process.cwd(),
+			"vendors",
+			"cef",
+			"build",
+			"libcef_dll_wrapper",
+			"Release",
+			"libcef_dll_wrapper.lib",
+		),
+		join(
+			process.cwd(),
+			"vendors",
+			"cef",
+			"build",
+			"libcef_dll_wrapper",
+			"libcef_dll_wrapper.lib",
+		),
+	];
+
+	return candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
+}
+
 async function installWindowsDeps() {
 	const scriptPath = join(process.cwd(), "scripts", "install-windows-deps.ps1");
 	if (!existsSync(scriptPath)) {
@@ -489,6 +520,7 @@ async function build() {
 
 	await Promise.all([
 		buildSelfExtractor(),
+		buildCore(),
 		buildLauncher(),
 		buildCli(),
 		buildMainJs(),
@@ -528,6 +560,9 @@ async function copyApiFiles() {
 		await $`cp -R src/browser dist/api/`;
 		await $`cp -R src/shared dist/api/`;
 	}
+
+	await $`mkdir -p dist/zig-sdk`;
+	await $`cp src/zig-sdk/electrobun.zig dist/zig-sdk/electrobun.zig`;
 }
 
 async function copyToDist() {
@@ -536,6 +571,14 @@ async function copyToDist() {
 	// Zig launcher for all platforms
 	await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
 	await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+	const coreLibName =
+		OS === "win"
+			? "ElectrobunCore.dll"
+			: OS === "macos"
+				? "libElectrobunCore.dylib"
+				: "libElectrobunCore.so";
+	const coreLibSourceDir = OS === "win" ? "bin" : "lib";
+	await $`cp ${join("src", "core", "zig-out", coreLibSourceDir, coreLibName)} ${join("dist", coreLibName)}`;
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
 	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
@@ -1505,28 +1548,27 @@ async function vendorCEF() {
 
 		// Build CEF wrapper library for Windows
 		if (
-			!existsSync(
-				join(
-					process.cwd(),
-					"vendors",
-					"cef",
-					"build",
-					"libcef_dll_wrapper",
-					"Release",
-					"libcef_dll_wrapper.lib",
-				),
-			)
+			!existsSync(getWindowsCefWrapperLibPath())
 		) {
 			// Clean and create build directory
 			await $`cd vendors/cef && powershell -command "if (Test-Path build) { Remove-Item -Recurse -Force build }"`;
 			await $`cd vendors/cef && mkdir build`;
-			// Generate Visual Studio project with sandbox disabled
-			await $`cd vendors/cef/build && "${CMAKE_BIN}" -G "Visual Studio 17 2022" -A x64 -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`;
-			// Build the wrapper library only
-			// await $`cd vendors/cef/build && msbuild cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-			// const msbuildPath = await $`"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\\**\\Bin\\MSBuild.exe | head -n 1`.text();
-			// await $`cd vendors/cef/build && "${msbuildPath.trim()}" cef.sln /p:Configuration=Release /p:Platform=x64 /target:libcef_dll_wrapper`;
-			await $`cd vendors/cef/build && "${CMAKE_BIN}" --build . --config Release --target libcef_dll_wrapper`;
+			const cmakeGenerator = getWindowsCmakeGenerator();
+			const generatorArgs =
+				cmakeGenerator === "Visual Studio 17 2022"
+					? `-G "${cmakeGenerator}" -A x64`
+					: `-G "${cmakeGenerator}"`;
+
+			// Generate the CEF wrapper project with sandbox disabled.
+			// When vcvarsall is available, prefer an MSVC toolchain generator that
+			// does not require a full Visual Studio IDE instance to be discoverable.
+			await runMsvcCommand(
+				`cd vendors\\cef\\build && "${CMAKE_BIN}" ${generatorArgs} -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`,
+			);
+			// Build the wrapper library only.
+			await runMsvcCommand(
+				`cd vendors\\cef\\build && "${CMAKE_BIN}" --build . --target libcef_dll_wrapper`,
+			);
 		}
 
 		// Build process_helper binary for Windows
@@ -1539,7 +1581,7 @@ async function vendorCEF() {
 
 			const cefInclude = `./vendors/cef`;
 			const cefLib = `./vendors/cef/Release/libcef.lib`;
-			const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
+			const cefWrapperLib = getWindowsCefWrapperLibPath();
 
 			// Compile the Windows helper process
 			await runMsvcCommand(
@@ -1803,7 +1845,7 @@ async function buildNative() {
 		const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
 		const cefInclude = `./vendors/cef`;
 		const cefLib = `./vendors/cef/Release/libcef.lib`;
-		const cefWrapperLib = `./vendors/cef/build/libcef_dll_wrapper/Release/libcef_dll_wrapper.lib`;
+		const cefWrapperLib = getWindowsCefWrapperLibPath();
 
 		const wgpuIncludeDir = join(
 			process.cwd(),
@@ -2032,9 +2074,9 @@ async function buildLauncher() {
 		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
 	} else if (OS === "linux") {
 		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-linux"];
+			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
 		} else {
-			zigArgs = ["-Dtarget=x86_64-linux"];
+			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
 		}
 	} else if (OS === "macos") {
 		if (ARCH === "arm64") {
@@ -2048,6 +2090,34 @@ async function buildLauncher() {
 		await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
 	} else if (CHANNEL === "release") {
 		await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+	}
+}
+
+async function buildCore() {
+	console.log(`Building ElectrobunCore for ${OS} ${ARCH}...`);
+
+	let zigArgs: string[] = [];
+
+	if (OS === "win") {
+		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+	} else if (OS === "linux") {
+		if (ARCH === "arm64") {
+			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
+		} else {
+			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
+		}
+	} else if (OS === "macos") {
+		if (ARCH === "arm64") {
+			zigArgs = ["-Dtarget=aarch64-macos"];
+		} else {
+			zigArgs = ["-Dtarget=x86_64-macos"];
+		}
+	}
+
+	if (CHANNEL === "debug") {
+		await $`cd src/core && ../../vendors/zig/zig build ${zigArgs}`;
+	} else if (CHANNEL === "release") {
+		await $`cd src/core && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
 	}
 }
 
@@ -2151,6 +2221,7 @@ async function buildPreload() {
 	// (Bun removed iife format support in 1.3.10, so we build as esm and wrap manually)
 	const fullPreloadJs = `(function(){${await fullResult.outputs[0].text()}})();`;
 	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0].text()}})();`;
+	const distDir = join(process.cwd(), "dist");
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
 // Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
@@ -2163,6 +2234,9 @@ export const preloadScriptSandboxed = ${JSON.stringify(sandboxedPreloadJs)};
 `;
 
 	writeFileSync(outputPath, outputContent);
+	mkdirSync(distDir, { recursive: true });
+	writeFileSync(join(distDir, "preload-full.js"), fullPreloadJs);
+	writeFileSync(join(distDir, "preload-sandboxed.js"), sandboxedPreloadJs);
 	console.log("Preload scripts compiled successfully (full + sandboxed)");
 }
 

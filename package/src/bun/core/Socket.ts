@@ -76,9 +76,9 @@ const normalizeRpcTransport = (transport: unknown): RpcTransport => {
 	return "auto";
 };
 
-let currentRpcTransport: RpcTransport = normalizeRpcTransport(undefined);
 export let rpcServer: Server<unknown> | null = null;
 export let rpcPort = 0;
+export let rpcTransport: RpcTransport = normalizeRpcTransport(undefined);
 
 const startRPCServer = () => {
 	const startPort = 50000;
@@ -192,24 +192,33 @@ const startRPCServer = () => {
 	return { rpcServer: server, rpcPort: port };
 };
 
-export const ensureRPCServer = (transport?: unknown) => {
-	currentRpcTransport = normalizeRpcTransport(transport);
+export const configureRpcTransport = (transport?: unknown) => {
+	const nextTransport = normalizeRpcTransport(transport);
+	const previousTransport = rpcTransport;
+	rpcTransport = nextTransport;
 
-	if (currentRpcTransport === "postMessage") {
-		rpcServer = null;
+	if (nextTransport === "postMessage") {
+		if (rpcServer) {
+			rpcServer.stop(true);
+			rpcServer = null;
+		}
+
+		if (rpcPort !== 0 || previousTransport !== "postMessage") {
+			console.log("Electrobun RPC socket disabled; using postMessage bridge.");
+		}
+
 		rpcPort = 0;
-		console.log("Electrobun RPC socket disabled; using postMessage bridge.");
-		return { rpcServer, rpcPort };
+		return { rpcServer, rpcPort, rpcTransport };
 	}
 
 	if (!rpcServer) {
 		const serverState = startRPCServer();
 		rpcServer = serverState.rpcServer;
 		rpcPort = serverState.rpcPort;
-		console.log("Server started at", rpcServer?.url.origin);
+		console.log("Electrobun RPC socket server started at", rpcServer?.url.origin);
 	}
 
-	return { rpcServer, rpcPort };
+	return { rpcServer, rpcPort, rpcTransport };
 };
 
 // Will return true if message was sent over websocket

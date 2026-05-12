@@ -103,6 +103,33 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     return false;
 }
 
+const MainProcess = enum {
+    bun,
+    zig,
+};
+
+fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
+    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .bun;
+    defer allocator.free(build_path);
+
+    const file = std.fs.openFileAbsolute(build_path, .{}) catch return .bun;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return .bun;
+    defer allocator.free(content);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .bun;
+    defer parsed.deinit();
+
+    if (parsed.value.object.get("mainProcess")) |main_process_value| {
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
+            return .zig;
+        }
+    }
+
+    return .bun;
+}
+
 // SIGALRM handler - safety net timeout for hung shutdowns
 fn alarmHandler(_: c_int) callconv(.C) void {
     // Timeout expired - app hung during shutdown. Kill entire process group.
@@ -153,26 +180,33 @@ pub fn main() !void {
         _ = c.signal(c.SIGALRM, alarmHandler);
     }
 
-    // Platform-specific paths
-    var argv: []const []const u8 = undefined;
-    var resources_path: []u8 = undefined;
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
+    const main_process = detectMainProcess(arena_alloc, exe_dir);
 
-    switch (builtin.os.tag) {
-        .macos => {
-            // macOS: launcher is in MacOS/, resources in Resources/
-            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-            argv = &[_][]const u8{ "./bun", resources_path };
+    // Platform-specific paths
+    var argv: []const []const u8 = undefined;
+    var resources_path: []u8 = undefined;
+
+    switch (main_process) {
+        .bun => switch (builtin.os.tag) {
+            .macos => {
+                resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
+                argv = &[_][]const u8{ "./bun", resources_path };
+            },
+            .linux, .windows => {
+                resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
+                const bun_name = if (builtin.os.tag == .windows) "bun.exe" else "bun";
+                argv = &[_][]const u8{ try std.fs.path.join(arena_alloc, &.{ exe_dir, bun_name }), resources_path };
+            },
+            else => @panic("Unsupported platform"),
         },
-        .linux, .windows => {
-            // Linux/Windows: launcher is in bin/, resources in Resources/
-            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-            const bun_name = if (builtin.os.tag == .windows) "bun.exe" else "bun";
-            argv = &[_][]const u8{ try std.fs.path.join(arena_alloc, &.{ exe_dir, bun_name }), resources_path };
+        .zig => {
+            const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
+            const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
+            argv = &[_][]const u8{main_binary_path};
         },
-        else => @panic("Unsupported platform"),
     }
 
     // Create an instance of ChildProcess

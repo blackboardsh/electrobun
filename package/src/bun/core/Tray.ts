@@ -2,14 +2,12 @@ import { ffi, type MenuItemConfig, type Rectangle } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
-import { type Pointer } from "bun:ffi";
 
 type NonDividerMenuItem = Exclude<
 	MenuItemConfig,
 	{ type: "divider" | "separator" }
 >;
 
-let nextTrayId = 1;
 const TrayMap: { [id: number]: Tray } = {};
 
 export type TrayOptions = {
@@ -21,9 +19,8 @@ export type TrayOptions = {
 };
 
 export class Tray {
-	id: number = nextTrayId++;
-	ptr: Pointer | null = null;
-	visible = true;
+	id = 0;
+	visible = false;
 	title = "";
 	image = "";
 	template = true;
@@ -44,36 +41,35 @@ export class Tray {
 		this.width = width;
 		this.height = height;
 
-		this.createNativeTray();
-
-		TrayMap[this.id] = this;
+		if (this.createNativeTray()) {
+			TrayMap[this.id] = this;
+		}
 	}
 
-	private createNativeTray() {
+	private createNativeTray(): boolean {
 		try {
-			this.ptr = ffi.request.createTray({
-				id: this.id,
+			const trayId = ffi.request.createTray({
 				title: this.title,
 				image: this.resolveImagePath(this.image),
 				template: this.template,
 				width: this.width,
 				height: this.height,
-			}) as Pointer;
+			}) as number;
+
+			if (!trayId) {
+				throw new Error("Tray creation returned an invalid id");
+			}
+
+			this.id = trayId;
 			this.visible = true;
+			return true;
 		} catch (error) {
 			console.warn("Tray creation failed:", error);
 			console.warn(
 				"System tray functionality may not be available on this platform",
 			);
-			this.ptr = null;
 			this.visible = false;
-		}
-
-		if (this.ptr && this.menu) {
-			ffi.request.setTrayMenu({
-				id: this.id,
-				menuConfig: JSON.stringify(menuConfigWithDefaults(this.menu)),
-			});
+			return false;
 		}
 	}
 
@@ -88,13 +84,13 @@ export class Tray {
 
 	setTitle(title: string) {
 		this.title = title;
-		if (!this.ptr) return;
+		if (!this.id) return;
 		ffi.request.setTrayTitle({ id: this.id, title });
 	}
 
 	setImage(imgPath: string) {
 		this.image = imgPath;
-		if (!this.ptr) return;
+		if (!this.id) return;
 		ffi.request.setTrayImage({
 			id: this.id,
 			image: this.resolveImagePath(imgPath),
@@ -103,7 +99,7 @@ export class Tray {
 
 	setMenu(menu: Array<MenuItemConfig>) {
 		this.menu = menu;
-		if (!this.ptr) return;
+		if (!this.id) return;
 		const menuWithDefaults = menuConfigWithDefaults(menu);
 		ffi.request.setTrayMenu({
 			id: this.id,
@@ -122,15 +118,19 @@ export class Tray {
 		}
 
 		if (!visible) {
-			if (this.ptr) {
-				ffi.request.removeTray({ id: this.id });
-				this.ptr = null;
-			}
+			if (this.id) ffi.request.hideTray({ id: this.id });
 			this.visible = false;
 			return;
 		}
 
-		this.createNativeTray();
+		if (!this.id) {
+			if (this.createNativeTray()) {
+				TrayMap[this.id] = this;
+			}
+			return;
+		}
+
+		this.visible = ffi.request.showTray({ id: this.id }) as boolean;
 	}
 
 	getBounds(): Rectangle {
@@ -139,12 +139,13 @@ export class Tray {
 
 	remove() {
 		console.log("Tray.remove() called for id:", this.id);
-		if (this.ptr) {
-			ffi.request.removeTray({ id: this.id });
-			this.ptr = null;
+		const trayId = this.id;
+		if (trayId) {
+			ffi.request.removeTray({ id: trayId });
 		}
 		this.visible = false;
-		delete TrayMap[this.id];
+		delete TrayMap[trayId];
+		this.id = 0;
 		console.log("Tray removed from TrayMap");
 	}
 
