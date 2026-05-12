@@ -87,8 +87,23 @@ function resolveElectrobunDir(): string {
 	return join(projectRoot, "node_modules", "electrobun");
 }
 
+// Walk up from projectRoot to find rcedit in node_modules (supports hoisted monorepo layouts)
+function resolveRceditDir(): string {
+	let dir = projectRoot;
+	while (dir !== dirname(dir)) {
+		const candidate = join(dir, "node_modules", "rcedit");
+		if (existsSync(join(candidate, "package.json"))) {
+			return candidate;
+		}
+		dir = dirname(dir);
+	}
+	return join(projectRoot, "node_modules", "rcedit");
+}
+
 const ELECTROBUN_DEP_PATH = resolveElectrobunDir();
 const ELECTROBUN_CACHE_PATH = join(dirname(ELECTROBUN_DEP_PATH), ".electrobun-cache");
+
+const RCEDIT_DEP_PATH = resolveRceditDir();
 
 // When debugging electrobun with the example app use the builds (dev or release) right from the source folder
 // For developers using electrobun cli via npm use the release versions in /dist
@@ -2730,7 +2745,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		// Embed icon into launcher.exe on Windows
-		if (targetOS === "win" && config.build.win?.icon) {
+		if (targetOS === "win" && config.build.win?.icon && RCEDIT_DEP_PATH) {
 			const iconSourcePath =
 				config.build.win.icon.startsWith("/") ||
 				config.build.win.icon.match(/^[a-zA-Z]:/)
@@ -2756,10 +2771,8 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 
 					// Use rcedit to embed the icon into launcher.exe
 										const { execFileSync } = await import("child_process");
-					const rceditPkgPath = require.resolve("rcedit/package.json");
-					const rceditDir = dirname(rceditPkgPath);
-					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
-					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					const rceditX64 = join(RCEDIT_DEP_PATH, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(RCEDIT_DEP_PATH, "bin", "rcedit.exe");
 					execFileSync(rceditExe, [bunCliLauncherDestination, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
@@ -2839,7 +2852,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 
 			// Embed icon into bun.exe on Windows
-			if (targetOS === "win" && config.build.win?.icon) {
+			if (targetOS === "win" && config.build.win?.icon && RCEDIT_DEP_PATH) {
 				const iconSourcePath =
 					config.build.win.icon.startsWith("/") ||
 					config.build.win.icon.match(/^[a-zA-Z]:/)
@@ -2863,10 +2876,8 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 						}
 
 						const { execFileSync } = await import("child_process");
-						const rceditPkgPath = require.resolve("rcedit/package.json");
-						const rceditDir = dirname(rceditPkgPath);
-						const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
-						const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+						const rceditX64 = join(RCEDIT_DEP_PATH, "bin", "rcedit-x64.exe");
+						const rceditExe = existsSync(rceditX64) ? rceditX64 : join(RCEDIT_DEP_PATH, "bin", "rcedit.exe");
 						execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
 						console.log(`Successfully embedded icon into bun.exe`);
 
@@ -5034,7 +5045,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		writeFileSync(outputExePath, new Uint8Array(extractorExe));
 
 		// Embed icon into the wrapper EXE if provided
-		if (config.build.win?.icon) {
+		if (config.build.win?.icon && RCEDIT_DEP_PATH) {
 			const iconSourcePath =
 				config.build.win.icon.startsWith("/") ||
 				config.build.win.icon.match(/^[a-zA-Z]:/)
@@ -5058,10 +5069,8 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 
 					// Use rcedit to embed the icon
 										const { execFileSync } = await import("child_process");
-					const rceditPkgPath = require.resolve("rcedit/package.json");
-					const rceditDir = dirname(rceditPkgPath);
-					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
-					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+					const rceditX64 = join(RCEDIT_DEP_PATH, "bin", "rcedit-x64.exe");
+					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(RCEDIT_DEP_PATH, "bin", "rcedit.exe");
 					execFileSync(rceditExe, [outputExePath, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into ${setupFileName}`);
 
