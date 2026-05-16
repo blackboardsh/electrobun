@@ -17,12 +17,18 @@ const WindowBlurHandler = *const fn (u32) callconv(.C) void;
 const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
 const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
 const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
-const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
+const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
 const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
 const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.C) void;
 const QuitRequestedHandler = *const fn () callconv(.C) void;
 const URLOpenHandler = *const fn ([*:0]const u8) callconv(.C) void;
 const AppReopenHandler = *const fn () callconv(.C) void;
+const Aes256Gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
+const WebviewSecretKey = [Aes256Gcm.key_length]u8;
+const websocket_magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+const websocket_payload_limit: usize = 1024 * 1024 * 500;
+const websocket_port_range_start: u16 = 50000;
+const websocket_port_range_end: u16 = 65535;
 
 const TrayState = struct {
     title: [:0]u8,
@@ -47,9 +53,17 @@ const WindowState = struct {
     key_handler: ?WindowKeyHandler,
 };
 
+const PendingHostMessage = struct {
+    webview_id: u32,
+    message: [:0]u8,
+};
+
 const WebviewState = struct {
     ptr: WebviewPtr,
     host_webview_id: ?u32,
+    secret_key: WebviewSecretKey,
+    socket_handle: ?std.posix.socket_t,
+    transport_ready: bool,
 };
 
 const WgpuViewState = struct {
@@ -61,6 +75,11 @@ const WebviewRuntimeState = struct {
     preload_script: ?[:0]u8 = null,
     preload_script_sandboxed: ?[:0]u8 = null,
     configured: bool = false,
+};
+
+const HostTransportState = struct {
+    started: bool = false,
+    port: u32 = 0,
 };
 
 const NativeWrapperState = struct {
@@ -84,7 +103,11 @@ var webview_registry = std.AutoHashMap(u32, WebviewState).init(allocator);
 var webview_registry_mutex: std.Thread.Mutex = .{};
 var wgpu_view_registry = std.AutoHashMap(u32, WgpuViewState).init(allocator);
 var wgpu_view_registry_mutex: std.Thread.Mutex = .{};
+var pending_host_messages = std.ArrayList(PendingHostMessage).init(allocator);
+var pending_host_messages_mutex: std.Thread.Mutex = .{};
 var webview_runtime_state = WebviewRuntimeState{};
+var host_transport_state = HostTransportState{};
+var host_transport_mutex: std.Thread.Mutex = .{};
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
 
@@ -143,6 +166,46 @@ export fn electrobun_core_last_error() [*:0]const u8 {
     return "";
 }
 
+fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
+    const owned_message = dupeZ(message) catch return;
+
+    pending_host_messages_mutex.lock();
+    defer pending_host_messages_mutex.unlock();
+
+    pending_host_messages.append(.{
+        .webview_id = webview_id,
+        .message = owned_message,
+    }) catch {
+        allocator.free(owned_message);
+    };
+}
+
+fn hostBridgeQueueTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+    enqueuePendingHostMessage(webview_id, message);
+}
+
+export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
+    clearLastError();
+
+    pending_host_messages_mutex.lock();
+    defer pending_host_messages_mutex.unlock();
+
+    if (pending_host_messages.items.len == 0) {
+        return null;
+    }
+
+    const entry = pending_host_messages.orderedRemove(0);
+    out_webview_id.* = entry.webview_id;
+    return entry.message.ptr;
+}
+
+export fn freeCoreString(value: ?[*:0]u8) void {
+    if (value) |ptr_value| {
+        const slice = std.mem.sliceTo(ptr_value, 0);
+        allocator.free(@constCast(slice));
+    }
+}
+
 fn ensureWebviewRuntimeConfigured() bool {
     if (!webview_runtime_state.configured) {
         setLastError("Webview runtime is not configured", .{});
@@ -155,6 +218,520 @@ fn ensureWebviewRuntimeConfigured() bool {
     }
 
     return true;
+}
+
+fn parseWebviewSecretKey(secret_key: [*:0]const u8) ?WebviewSecretKey {
+    const input = std.mem.trim(u8, std.mem.span(secret_key), " \t\r\n");
+    var parsed: WebviewSecretKey = [_]u8{0} ** Aes256Gcm.key_length;
+    var iterator = std.mem.splitScalar(u8, input, ',');
+    var index: usize = 0;
+
+    while (iterator.next()) |part| {
+        const trimmed = std.mem.trim(u8, part, " \t\r\n");
+        if (trimmed.len == 0) {
+            continue;
+        }
+        if (index >= parsed.len) {
+            setLastError("Webview secret key must contain exactly {d} bytes", .{Aes256Gcm.key_length});
+            return null;
+        }
+        parsed[index] = std.fmt.parseInt(u8, trimmed, 10) catch |err| {
+            setLastError("Failed to parse webview secret key byte: {s}", .{@errorName(err)});
+            return null;
+        };
+        index += 1;
+    }
+
+    if (index != parsed.len) {
+        setLastError("Webview secret key must contain exactly {d} bytes", .{Aes256Gcm.key_length});
+        return null;
+    }
+
+    return parsed;
+}
+
+fn closeSocketHandle(handle: std.posix.socket_t) void {
+    var stream = std.net.Stream{ .handle = handle };
+    stream.close();
+}
+
+fn clearWebviewSocketHandleIfCurrent(webview_id: u32, handle: std.posix.socket_t) void {
+    webview_registry_mutex.lock();
+    defer webview_registry_mutex.unlock();
+
+    const state = webview_registry.getPtr(webview_id) orelse return;
+    if (state.socket_handle != null and state.socket_handle.? == handle) {
+        state.socket_handle = null;
+        state.transport_ready = false;
+    }
+}
+
+fn closeAndClearWebviewSocketHandle(webview_id: u32) void {
+    var handle_to_close: ?std.posix.socket_t = null;
+
+    webview_registry_mutex.lock();
+    if (webview_registry.getPtr(webview_id)) |state| {
+        handle_to_close = state.socket_handle;
+        state.socket_handle = null;
+        state.transport_ready = false;
+    }
+    webview_registry_mutex.unlock();
+
+    if (handle_to_close) |handle| {
+        closeSocketHandle(handle);
+    }
+}
+
+fn attachWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
+    var handle_to_close: ?std.posix.socket_t = null;
+
+    webview_registry_mutex.lock();
+    const state = webview_registry.getPtr(webview_id) orelse {
+        webview_registry_mutex.unlock();
+        return false;
+    };
+    if (state.socket_handle) |previous_handle| {
+        if (previous_handle != handle) {
+            handle_to_close = previous_handle;
+        }
+    }
+    state.socket_handle = handle;
+    state.transport_ready = false;
+    webview_registry_mutex.unlock();
+
+    if (handle_to_close) |previous_handle| {
+        closeSocketHandle(previous_handle);
+    }
+
+    return true;
+}
+
+const WebviewTransportContext = struct {
+    secret_key: WebviewSecretKey,
+    socket_handle: ?std.posix.socket_t,
+    transport_ready: bool,
+};
+
+fn lookupWebviewTransportContext(webview_id: u32) ?WebviewTransportContext {
+    const state = lookupWebviewState(webview_id) orelse return null;
+    return .{
+        .secret_key = state.secret_key,
+        .socket_handle = state.socket_handle,
+        .transport_ready = state.transport_ready,
+    };
+}
+
+fn markWebviewTransportReady(webview_id: u32, handle: std.posix.socket_t) void {
+    webview_registry_mutex.lock();
+    defer webview_registry_mutex.unlock();
+
+    const state = webview_registry.getPtr(webview_id) orelse return;
+    if (state.socket_handle != null and state.socket_handle.? == handle) {
+        state.transport_ready = true;
+    }
+}
+
+fn decodeBase64Alloc(input: []const u8) ![]u8 {
+    const decoded_len = try std.base64.standard.Decoder.calcSizeForSlice(input);
+    const decoded = try allocator.alloc(u8, decoded_len);
+    errdefer allocator.free(decoded);
+    try std.base64.standard.Decoder.decode(decoded, input);
+    return decoded;
+}
+
+fn encodeBase64Alloc(input: []const u8) ![]u8 {
+    const encoded_len = std.base64.standard.Encoder.calcSize(input.len);
+    const encoded = try allocator.alloc(u8, encoded_len);
+    _ = std.base64.standard.Encoder.encode(encoded, input);
+    return encoded;
+}
+
+fn parseRequestHeaderValue(headers: []const u8, header_name: []const u8) ?[]const u8 {
+    var lines = std.mem.splitSequence(u8, headers, "\r\n");
+    _ = lines.next();
+
+    while (lines.next()) |line| {
+        if (line.len == 0) {
+            break;
+        }
+        const separator_index = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = line[0..separator_index];
+        if (!std.ascii.eqlIgnoreCase(name, header_name)) {
+            continue;
+        }
+        return std.mem.trim(u8, line[separator_index + 1 ..], " \t");
+    }
+
+    return null;
+}
+
+fn parseWebviewIdFromTarget(target: []const u8) ?u32 {
+    const query_index = std.mem.indexOfScalar(u8, target, '?') orelse return null;
+    const path = target[0..query_index];
+    if (!std.mem.eql(u8, path, "/socket")) {
+        return null;
+    }
+
+    const query = target[query_index + 1 ..];
+    var pairs = std.mem.splitScalar(u8, query, '&');
+    while (pairs.next()) |pair| {
+        const separator_index = std.mem.indexOfScalar(u8, pair, '=') orelse continue;
+        const name = pair[0..separator_index];
+        if (!std.mem.eql(u8, name, "webviewId")) {
+            continue;
+        }
+        const value = pair[separator_index + 1 ..];
+        return std.fmt.parseInt(u32, value, 10) catch null;
+    }
+
+    return null;
+}
+
+fn writeSimpleHttpResponse(stream: std.net.Stream, status: []const u8, body: []const u8) !void {
+    try stream.writer().print(
+        "HTTP/1.1 {s}\r\nContent-Type: text/plain\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
+        .{ status, body.len, body },
+    );
+}
+
+fn writeWebSocketHandshake(stream: std.net.Stream, websocket_key: []const u8) !void {
+    var sha1 = std.crypto.hash.Sha1.init(.{});
+    sha1.update(websocket_key);
+    sha1.update(websocket_magic);
+
+    var digest: [std.crypto.hash.Sha1.digest_length]u8 = undefined;
+    sha1.final(&digest);
+
+    var accept_buffer: [std.base64.standard.Encoder.calcSize(digest.len)]u8 = undefined;
+    const accept_value = std.base64.standard.Encoder.encode(&accept_buffer, &digest);
+
+    try stream.writer().print(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n",
+        .{accept_value},
+    );
+}
+
+const PendingStreamReader = struct {
+    stream: std.net.Stream,
+    pending: []const u8,
+    index: usize = 0,
+
+    fn readExact(self: *PendingStreamReader, dest: []u8) !void {
+        var written: usize = 0;
+
+        if (self.index < self.pending.len) {
+            const available = self.pending.len - self.index;
+            const to_copy = @min(dest.len, available);
+            @memcpy(dest[0..to_copy], self.pending[self.index .. self.index + to_copy]);
+            self.index += to_copy;
+            written += to_copy;
+        }
+
+        if (written == dest.len) {
+            return;
+        }
+
+        try self.stream.reader().readNoEof(dest[written..]);
+    }
+};
+
+const WebSocketFrame = struct {
+    opcode: u8,
+    payload: []u8,
+};
+
+fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
+    var header: [2]u8 = undefined;
+    reader.readExact(&header) catch |err| switch (err) {
+        error.EndOfStream => return error.ConnectionClosed,
+        else => return err,
+    };
+
+    const fin = (header[0] & 0x80) != 0;
+    const opcode = header[0] & 0x0F;
+    const masked = (header[1] & 0x80) != 0;
+    var payload_len: usize = header[1] & 0x7F;
+
+    if (!fin) {
+        return error.UnsupportedWebSocketFrame;
+    }
+    if (!masked) {
+        return error.InvalidWebSocketFrame;
+    }
+
+    if (payload_len == 126) {
+        var extended: [2]u8 = undefined;
+        try reader.readExact(&extended);
+        payload_len = (@as(usize, extended[0]) << 8) | @as(usize, extended[1]);
+    } else if (payload_len == 127) {
+        var extended: [8]u8 = undefined;
+        try reader.readExact(&extended);
+        var parsed_len: u64 = 0;
+        for (extended) |byte| {
+            parsed_len = (parsed_len << 8) | @as(u64, byte);
+        }
+        payload_len = std.math.cast(usize, parsed_len) orelse return error.WebSocketFrameTooLarge;
+    }
+
+    if (payload_len > websocket_payload_limit) {
+        return error.WebSocketFrameTooLarge;
+    }
+
+    var mask: [4]u8 = undefined;
+    try reader.readExact(&mask);
+
+    const payload = try allocator.alloc(u8, payload_len);
+    errdefer allocator.free(payload);
+    try reader.readExact(payload);
+
+    for (payload, 0..) |*byte, index| {
+        byte.* ^= mask[index % mask.len];
+    }
+
+    return .{
+        .opcode = opcode,
+        .payload = payload,
+    };
+}
+
+fn writeWebSocketFrame(stream: std.net.Stream, opcode: u8, payload: []const u8) !void {
+    var header: [10]u8 = undefined;
+    var header_len: usize = 0;
+
+    header[header_len] = 0x80 | (opcode & 0x0F);
+    header_len += 1;
+
+    if (payload.len <= 125) {
+        header[header_len] = @intCast(payload.len);
+        header_len += 1;
+    } else if (payload.len <= std.math.maxInt(u16)) {
+        header[header_len] = 126;
+        header_len += 1;
+        header[header_len] = @intCast((payload.len >> 8) & 0xFF);
+        header[header_len + 1] = @intCast(payload.len & 0xFF);
+        header_len += 2;
+    } else {
+        header[header_len] = 127;
+        header_len += 1;
+        var shift: u6 = 56;
+        while (true) {
+            header[header_len] = @intCast((@as(u64, @intCast(payload.len)) >> shift) & 0xFF);
+            header_len += 1;
+            if (shift == 0) {
+                break;
+            }
+            shift -= 8;
+        }
+    }
+
+    try stream.writer().writeAll(header[0..header_len]);
+    if (payload.len > 0) {
+        try stream.writer().writeAll(payload);
+    }
+}
+
+fn encryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecretKey) ![]u8 {
+    var nonce: [Aes256Gcm.nonce_length]u8 = undefined;
+    std.crypto.random.bytes(&nonce);
+
+    const ciphertext = try allocator.alloc(u8, message_json.len);
+    defer allocator.free(ciphertext);
+
+    var tag: [Aes256Gcm.tag_length]u8 = undefined;
+    Aes256Gcm.encrypt(ciphertext, &tag, message_json, "", nonce, secret_key);
+
+    const encrypted_data_b64 = try encodeBase64Alloc(ciphertext);
+    defer allocator.free(encrypted_data_b64);
+    const nonce_b64 = try encodeBase64Alloc(&nonce);
+    defer allocator.free(nonce_b64);
+    const tag_b64 = try encodeBase64Alloc(&tag);
+    defer allocator.free(tag_b64);
+
+    return try std.json.stringifyAlloc(allocator, .{
+        .encryptedData = encrypted_data_b64,
+        .iv = nonce_b64,
+        .tag = tag_b64,
+    }, .{});
+}
+
+fn decryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecretKey) ![]u8 {
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, message_json, .{});
+    defer parsed.deinit();
+
+    if (parsed.value != .object) {
+        return error.InvalidTransportPacket;
+    }
+
+    const encrypted_data_value = parsed.value.object.get("encryptedData") orelse return error.InvalidTransportPacket;
+    const iv_value = parsed.value.object.get("iv") orelse return error.InvalidTransportPacket;
+    const tag_value = parsed.value.object.get("tag") orelse return error.InvalidTransportPacket;
+
+    if (encrypted_data_value != .string or iv_value != .string or tag_value != .string) {
+        return error.InvalidTransportPacket;
+    }
+
+    const encrypted_data = try decodeBase64Alloc(encrypted_data_value.string);
+    defer allocator.free(encrypted_data);
+    const nonce_bytes = try decodeBase64Alloc(iv_value.string);
+    defer allocator.free(nonce_bytes);
+    const tag_bytes = try decodeBase64Alloc(tag_value.string);
+    defer allocator.free(tag_bytes);
+
+    if (nonce_bytes.len != Aes256Gcm.nonce_length or tag_bytes.len != Aes256Gcm.tag_length) {
+        return error.InvalidTransportPacket;
+    }
+
+    var nonce: [Aes256Gcm.nonce_length]u8 = undefined;
+    @memcpy(nonce[0..], nonce_bytes);
+
+    var tag: [Aes256Gcm.tag_length]u8 = undefined;
+    @memcpy(tag[0..], tag_bytes);
+
+    const plaintext = try allocator.alloc(u8, encrypted_data.len);
+    errdefer allocator.free(plaintext);
+    try Aes256Gcm.decrypt(plaintext, encrypted_data, tag, "", nonce, secret_key);
+    return plaintext;
+}
+
+fn dispatchHostTransportMessage(webview_id: u32, encrypted_packet: []const u8) void {
+    const context = lookupWebviewTransportContext(webview_id) orelse return;
+
+    const plaintext = decryptHostTransportPacket(encrypted_packet, context.secret_key) catch return;
+    defer allocator.free(plaintext);
+
+    if (context.socket_handle) |socket_handle| {
+        markWebviewTransportReady(webview_id, socket_handle);
+    }
+
+    const message_z = allocator.dupeZ(u8, plaintext) catch return;
+    defer allocator.free(message_z);
+
+    enqueuePendingHostMessage(webview_id, message_z.ptr);
+}
+
+fn handleHostTransportConnection(connection: std.net.Server.Connection) void {
+    var stream = connection.stream;
+    defer stream.close();
+
+    var read_buffer: [16 * 1024]u8 = undefined;
+    var server = std.http.Server.init(connection, &read_buffer);
+    const request = server.receiveHead() catch return;
+
+    const request_headers = server.read_buffer[0..request.head_end];
+    const websocket_key = parseRequestHeaderValue(request_headers, "Sec-WebSocket-Key") orelse {
+        writeSimpleHttpResponse(stream, "400 Bad Request", "Missing Sec-WebSocket-Key") catch {};
+        return;
+    };
+    const webview_id = parseWebviewIdFromTarget(request.head.target) orelse {
+        writeSimpleHttpResponse(stream, "400 Bad Request", "Missing webviewId") catch {};
+        return;
+    };
+
+    if (lookupWebviewState(webview_id) == null) {
+        writeSimpleHttpResponse(stream, "404 Not Found", "Unknown webviewId") catch {};
+        return;
+    }
+
+    writeWebSocketHandshake(stream, websocket_key) catch return;
+
+    if (!attachWebviewSocketHandle(webview_id, stream.handle)) {
+        return;
+    }
+
+    var reader = PendingStreamReader{
+        .stream = stream,
+        .pending = server.read_buffer[request.head_end..server.read_buffer_len],
+    };
+
+    while (true) {
+        const frame = readWebSocketFrame(&reader) catch |err| switch (err) {
+            error.ConnectionClosed => break,
+            else => break,
+        };
+        defer allocator.free(frame.payload);
+
+        switch (frame.opcode) {
+            0x1 => dispatchHostTransportMessage(webview_id, frame.payload),
+            0x8 => {
+                writeWebSocketFrame(stream, 0x8, "") catch {};
+                break;
+            },
+            0x9 => writeWebSocketFrame(stream, 0xA, frame.payload) catch break,
+            else => {},
+        }
+    }
+
+    clearWebviewSocketHandleIfCurrent(webview_id, stream.handle);
+}
+
+fn hostTransportAcceptLoop(server: std.net.Server) void {
+    var listener = server;
+    while (true) {
+        const connection = listener.accept() catch break;
+        const thread = std.Thread.spawn(.{}, handleHostTransportConnection, .{connection}) catch {
+            connection.stream.close();
+            continue;
+        };
+        thread.detach();
+    }
+
+    host_transport_mutex.lock();
+    host_transport_state.started = false;
+    host_transport_state.port = 0;
+    host_transport_mutex.unlock();
+}
+
+fn startHostTransportServer(requested_port: u32) bool {
+    host_transport_mutex.lock();
+    defer host_transport_mutex.unlock();
+
+    if (host_transport_state.started) {
+        webview_runtime_state.rpc_port = host_transport_state.port;
+        return true;
+    }
+
+    var current_port: u16 = if (requested_port == 0)
+        websocket_port_range_start
+    else
+        std.math.cast(u16, requested_port) orelse {
+            setLastError("Requested websocket port is out of range: {d}", .{requested_port});
+            return false;
+        };
+    const port_limit: u16 = if (requested_port == 0)
+        websocket_port_range_end
+    else
+        current_port;
+
+    while (current_port <= port_limit) : (current_port += 1) {
+        const address = std.net.Address.parseIp("127.0.0.1", current_port) catch |err| {
+            setLastError("Failed to parse websocket listen address: {s}", .{@errorName(err)});
+            return false;
+        };
+
+        const server = std.net.Address.listen(address, .{ .reuse_address = true }) catch |err| switch (err) {
+            error.AddressInUse => continue,
+            else => {
+                setLastError("Failed to start websocket server: {s}", .{@errorName(err)});
+                return false;
+            },
+        };
+
+        const actual_port = server.listen_address.getPort();
+        const thread = std.Thread.spawn(.{}, hostTransportAcceptLoop, .{server}) catch |err| {
+            server.stream.close();
+            setLastError("Failed to spawn websocket server thread: {s}", .{@errorName(err)});
+            return false;
+        };
+        thread.detach();
+
+        host_transport_state.started = true;
+        host_transport_state.port = actual_port;
+        webview_runtime_state.rpc_port = actual_port;
+        return true;
+    }
+
+    setLastError("Unable to find an available websocket port", .{});
+    return false;
 }
 
 fn buildElectrobunPreload(
@@ -189,16 +766,19 @@ fn buildElectrobunPreload(
         allocator,
         \\window.__electrobunWebviewId = {d};
         \\window.__electrobunWindowId = {d};
+        \\window.__electrobunHostSocketPort = {d};
         \\window.__electrobunRpcSocketPort = {d};
         \\window.__electrobunSecretKeyBytes = [{s}];
         \\window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
         \\window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
+        \\window.__electrobunHostBridge = window.__electrobunHostBridge || window.__electrobunBunBridge || window.webkit?.messageHandlers?.hostBridge || window.webkit?.messageHandlers?.bunBridge || window.hostBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.hostBridge || window.chrome?.webview?.hostObjects?.bunBridge;
         \\window.__electrobunBunBridge = window.__electrobunBunBridge || window.webkit?.messageHandlers?.bunBridge || window.bunBridge || window.chrome?.webview?.hostObjects?.bunBridge;
         \\{s}
     ,
         .{
             webview_id,
             window_id,
+            webview_runtime_state.rpc_port,
             webview_runtime_state.rpc_port,
             std.mem.span(secret_key),
             preload_script,
@@ -226,6 +806,10 @@ export fn configureWebviewRuntime(
         &webview_runtime_state.preload_script_sandboxed,
         preload_script_sandboxed,
     )) {
+        return false;
+    }
+
+    if (!startHostTransportServer(rpc_port)) {
         return false;
     }
 
@@ -470,7 +1054,7 @@ fn buildHostWebviewEventJavascript(
 
 fn buildInternalMessageJavascript(message_json: [*:0]const u8) ?[:0]u8 {
     return allocateOwnedJavascriptString(
-        "window.__electrobun.receiveInternalMessageFromBun({s});",
+        "window.__electrobun.receiveInternalMessageFromHost({s});",
         .{std.mem.span(message_json)},
     );
 }
@@ -906,7 +1490,7 @@ export fn createWebview(
     navigation_callback: ?DecideNavigationHandler,
     webview_event_handler: ?WebviewEventHandler,
     event_bridge_handler: ?WebviewPostMessageHandler,
-    bun_bridge_handler: ?WebviewPostMessageHandler,
+    _host_bridge_handler: ?WebviewPostMessageHandler,
     internal_bridge_handler: ?WebviewPostMessageHandler,
     secret_key: [*:0]const u8,
     custom_preload_script: [*:0]const u8,
@@ -916,6 +1500,7 @@ export fn createWebview(
     start_passthrough: bool,
 ) u32 {
     clearLastError();
+    _ = _host_bridge_handler;
 
     const SetNextWebviewFlagsFn = *const fn (bool, bool) callconv(.C) void;
     const InitWebviewFn = *const fn (
@@ -951,6 +1536,7 @@ export fn createWebview(
     };
     const set_next_webview_flags = lookupNativeSymbol(SetNextWebviewFlagsFn, "setNextWebviewFlags") orelse return 0;
     const init_webview = lookupNativeSymbol(InitWebviewFn, "initWebview") orelse return 0;
+    const parsed_secret_key = parseWebviewSecretKey(secret_key) orelse return 0;
 
     webview_registry_mutex.lock();
     const start_id = next_webview_id;
@@ -976,6 +1562,9 @@ export fn createWebview(
     webview_registry.put(webview_id, .{
         .ptr = null,
         .host_webview_id = if (host_webview_id == 0) null else host_webview_id,
+        .secret_key = parsed_secret_key,
+        .socket_handle = null,
+        .transport_ready = false,
     }) catch |err| {
         webview_registry_mutex.unlock();
         setLastError("Failed to store webview state: {s}", .{@errorName(err)});
@@ -1012,7 +1601,7 @@ export fn createWebview(
         navigation_callback,
         webview_event_handler,
         event_bridge_handler,
-        bun_bridge_handler,
+        hostBridgeQueueTrampoline,
         internal_bridge_handler,
         electrobun_preload_script.ptr,
         custom_preload_script,
@@ -1142,6 +1731,10 @@ export fn webviewRemove(webview_id: u32) void {
     webview_registry_mutex.unlock();
 
     const webview = if (removed) |entry| entry.value.ptr else null;
+    const socket_handle = if (removed) |entry| entry.value.socket_handle else null;
+    if (socket_handle) |handle| {
+        closeSocketHandle(handle);
+    }
     if (webview == null) {
         return;
     }
@@ -1236,6 +1829,35 @@ export fn dispatchHostWebviewEvent(
     defer allocator.free(js);
 
     evaluateJavaScriptWithNoCompletion(host_webview_id, js.ptr);
+    return true;
+}
+
+export fn clearWebviewHostTransport(webview_id: u32) void {
+    clearLastError();
+    closeAndClearWebviewSocketHandle(webview_id);
+}
+
+export fn sendHostMessageToWebviewViaTransport(webview_id: u32, message_json: [*:0]const u8) bool {
+    clearLastError();
+
+    const context = lookupWebviewTransportContext(webview_id) orelse return false;
+    if (!context.transport_ready) {
+        return false;
+    }
+    const socket_handle = context.socket_handle orelse return false;
+
+    const encrypted_packet = encryptHostTransportPacket(std.mem.span(message_json), context.secret_key) catch |err| {
+        setLastError("Failed to encrypt host transport packet: {s}", .{@errorName(err)});
+        return false;
+    };
+    defer allocator.free(encrypted_packet);
+
+    const stream = std.net.Stream{ .handle = socket_handle };
+    writeWebSocketFrame(stream, 0x1, encrypted_packet) catch {
+        clearWebviewSocketHandleIfCurrent(webview_id, socket_handle);
+        return false;
+    };
+
     return true;
 }
 

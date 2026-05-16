@@ -10,6 +10,8 @@ const trackedCategories = new Set(["BrowserWindow", "Tray", "Utils", "Screen"]);
 
 const bunTestBlockPattern =
 	/defineTest\s*\(\s*\{[\s\S]*?name:\s*"([^"]+)"[\s\S]*?category:\s*"([^"]+)"[\s\S]*?\}\s*\)/g;
+const helperTestFactoryPattern =
+	/function\s+([A-Za-z0-9_]+)\s*\(\s*([A-Za-z0-9_]+)[^)]*\)\s*\{[\s\S]*?defineTest\s*\(\s*\{[\s\S]*?(?:name\s*,|name:\s*\2\b)/g;
 const zigMirrorPattern = /\.mirrors_bun_test_name\s*=\s*"([^"]+)"/g;
 
 for await (const relativePath of new Bun.Glob("src/tests/**/*.ts").scan({
@@ -24,6 +26,14 @@ for await (const relativePath of new Bun.Glob("src/tests/**/*.ts").scan({
 		bunTestNames.add(name);
 		if (trackedCategories.has(category)) {
 			trackedBunTests.push({ name, category });
+		}
+	}
+
+	for (const match of source.matchAll(helperTestFactoryPattern)) {
+		const [_, helperName] = match;
+		const helperInvocationPattern = new RegExp(`${helperName}\\s*\\(\\s*"([^"]+)"`, "g");
+		for (const helperInvocationMatch of source.matchAll(helperInvocationPattern)) {
+			bunTestNames.add(helperInvocationMatch[1]);
 		}
 	}
 }

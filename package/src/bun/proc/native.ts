@@ -3,7 +3,6 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import { BrowserView } from "../core/BrowserView";
 import { WGPUView } from "../core/WGPUView";
-import { rpcPort } from "../core/Socket";
 import {
 	preloadScript,
 	preloadScriptSandboxed,
@@ -12,7 +11,6 @@ import {
 // Menu data reference system to avoid serialization overhead
 const menuDataRegistry = new Map<string, any>();
 let menuDataCounter = 0;
-
 function storeMenuData(data: any): string {
 	const id = `menuData_${++menuDataCounter}`;
 	menuDataRegistry.set(id, data);
@@ -93,7 +91,7 @@ function ensureWebviewRuntimeConfigured() {
 	}
 
 	const configured = core?.symbols.configureWebviewRuntime(
-		rpcPort,
+		0,
 		toCString(preloadScript),
 		toCString(preloadScriptSandboxed),
 	);
@@ -367,6 +365,22 @@ const core = (() => {
 				args: [FFIType.u32, FFIType.cstring],
 				returns: FFIType.void,
 			},
+			sendHostMessageToWebviewViaTransport: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.bool,
+			},
+			popNextQueuedHostMessage: {
+				args: [FFIType.ptr],
+				returns: FFIType.ptr,
+			},
+			freeCoreString: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			clearWebviewHostTransport: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
 			dispatchHostWebviewEvent: {
 				args: [FFIType.u32, FFIType.cstring, FFIType.cstring],
 				returns: FFIType.bool,
@@ -565,13 +579,13 @@ export const native = (() => {
 					FFIType.function, // decideNavigation: *const fn (u32, [*:0]const u8) callconv(.C) bool,
 					FFIType.function, // webviewEventHandler: *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void,
 					FFIType.function, // eventBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (events only, always active)
-					FFIType.function, // bunBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (user RPC, disabled in sandbox)
+					FFIType.function, // hostBridgePostmessageHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (user RPC, disabled in sandbox)
 					FFIType.function, // internalBridgeHandler: *const fn (u32, [*:0]const u8) callconv(.C) void (internal RPC, disabled in sandbox)
 					FFIType.cstring, // electrobunPreloadScript
 					FFIType.cstring, // customPreloadScript
 					FFIType.cstring, // viewsRoot
 					FFIType.bool, // transparent
-					FFIType.bool, // sandbox - when true, bunBridge and internalBridge are not set up
+					FFIType.bool, // sandbox - when true, hostBridge and internalBridge are not set up
 				],
 				returns: FFIType.ptr,
 			},
@@ -1006,6 +1020,45 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 // Non-null accessor for use inside _ffiImpl — these methods are only called when hasFFI is true.
 const core_ = core!;
 const native_ = native!;
+
+const drainQueuedHostMessages = () => {
+	if (!core) {
+		return;
+	}
+
+	for (;;) {
+		const webviewIdBuf = new Uint32Array(1);
+		const messagePtr = core_.symbols.popNextQueuedHostMessage(
+			ptr(webviewIdBuf),
+		) as Pointer | null;
+
+		if (!messagePtr) {
+			return;
+		}
+
+		try {
+			const rawMessage = new CString(messagePtr).toString();
+			if (!rawMessage) {
+				continue;
+			}
+
+			const webview = BrowserView.getById(webviewIdBuf[0]!);
+			if (!webview) {
+				continue;
+			}
+
+			webview.rpcHandler?.(JSON.parse(rawMessage));
+		} catch (err) {
+			console.error("error draining queued host message:", err);
+		} finally {
+			core_.symbols.freeCoreString(messagePtr);
+		}
+	}
+};
+
+if (core) {
+	setInterval(drainQueuedHostMessages, 4);
+}
 
 const _ffiImpl = {
 	request: {
@@ -1446,12 +1499,12 @@ const _ffiImpl = {
 				webviewDecideNavigation,
 				webviewEventJSCallback,
 				eventBridgeHandler,
-				bunBridgePostmessageHandler,
+				hostBridgePostmessageHandler,
 				internalBridgeHandler,
 				toCString(secretKey),
 				toCString(preload || ""),
 				toCString(viewsRoot || ""),
-				sandbox, // When true, bunBridge and internalBridge are not set up in native code
+				sandbox, // When true, hostBridge and internalBridge are not set up in native code
 				startTransparent,
 				startPassthrough,
 			);
@@ -1683,6 +1736,18 @@ const _ffiImpl = {
 				params.id,
 				toCString(params.js),
 			);
+		},
+		sendHostMessageToWebviewViaTransport: (params: {
+			id: number;
+			messageJson: string;
+		}): boolean => {
+			return core_.symbols.sendHostMessageToWebviewViaTransport(
+				params.id,
+				toCString(params.messageJson),
+			);
+		},
+		clearWebviewHostTransport: (params: { id: number }) => {
+			core_.symbols.clearWebviewHostTransport(params.id);
 		},
 		webviewOpenDevTools: (params: { id: number }) => {
 			core_.symbols.webviewOpenDevTools(params.id);
@@ -2690,7 +2755,7 @@ const webviewEventJSCallback = new JSCallback(
 	},
 );
 
-const bunBridgePostmessageHandler = new JSCallback(
+const hostBridgePostmessageHandler = new JSCallback(
 	(id, msg) => {
 		try {
 			const msgStr = new CString(msg);
@@ -2705,11 +2770,13 @@ const bunBridgePostmessageHandler = new JSCallback(
 			const msgJson = JSON.parse(rawMessage);
 
 			const webview = BrowserView.getById(id);
-			if (!webview) return;
+			if (!webview) {
+				return;
+			}
 
 			webview.rpcHandler?.(msgJson);
 		} catch (err) {
-			console.error("error sending message to bun: ", err);
+			console.error("error sending message to host: ", err);
 		}
 	},
 	{

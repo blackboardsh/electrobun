@@ -413,7 +413,7 @@ typedef double CGFloat;
 
 // Function pointer type definitions are in shared/callbacks.h
 // Platform-specific aliases
-typedef BOOL (*HandlePostMessageWin)(uint32_t webviewId, const char* message);
+typedef void (*HandlePostMessageWin)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
@@ -3132,7 +3132,7 @@ public:
         webview->AddHostObjectToScript(L"eventBridge", &eventBridgeVariant);
         VariantClear(&eventBridgeVariant);
 
-        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
         if (!isSandboxed) {
             // Create COM objects for the bridge handlers
             bunBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("bunBridge", bunBridgeCallbackHandler, webviewId));
@@ -3150,6 +3150,7 @@ public:
             internalBridgeVariant.pdispVal = static_cast<IDispatch*>(internalBridgeHandler.Get());
 
             // Add the bridge objects to hostObjects
+            webview->AddHostObjectToScript(L"hostBridge", &bunBridgeVariant);
             webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
             webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
 

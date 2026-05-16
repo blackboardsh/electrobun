@@ -890,11 +890,12 @@ public:
         // Get the global object
         CefRefPtr<CefV8Value> global = context->GetGlobal();
         
-        // Create bunBridge object with postMessage method
+        // Create hostBridge/bunBridge object with postMessage method
         CefRefPtr<CefV8Value> bunBridge = CefV8Value::CreateObject(nullptr, nullptr);
         CefRefPtr<CefV8Handler> bunHandler = new V8MessageHandler(browser, "BunBridgeMessage");
         CefRefPtr<CefV8Value> bunPostMessage = CefV8Value::CreateFunction("postMessage", bunHandler);
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        global->SetValue("hostBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
         global->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
         
         // Create internalBridge object with postMessage method
@@ -2745,9 +2746,12 @@ public:
             webkit_user_content_manager_register_script_message_handler(manager, "eventBridge");
         }
 
-        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
         if (!isSandboxed) {
             if (bunBridgeHandler) {
+                g_signal_connect(manager, "script-message-received::hostBridge",
+                               G_CALLBACK(onBunBridgeMessage), this);
+                webkit_user_content_manager_register_script_message_handler(manager, "hostBridge");
                 g_signal_connect(manager, "script-message-received::bunBridge",
                                G_CALLBACK(onBunBridgeMessage), this);
                 webkit_user_content_manager_register_script_message_handler(manager, "bunBridge");

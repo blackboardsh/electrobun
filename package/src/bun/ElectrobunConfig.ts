@@ -13,6 +13,28 @@ type BunBuildOptions = Omit<
 	"entrypoints" | "outdir" | "target"
 >;
 
+type CarrotFileActivatorConfig = {
+	baseName?: string;
+	nodeType?: "file" | "dir" | "any";
+	slate: {
+		type: string;
+		name?: string;
+		icon?: string;
+		config?: Record<string, unknown>;
+	};
+};
+
+type CarrotContributionsConfig = {
+	fileActivators?: CarrotFileActivatorConfig[];
+};
+
+type CarrotUIDefinition = {
+	name?: string;
+	entrypoint?: string;
+	path?: string;
+	[key: string]: unknown;
+};
+
 export interface ElectrobunConfig {
 	/**
 	 * Application metadata configuration
@@ -264,7 +286,9 @@ export interface ElectrobunConfig {
 			carrotOnly?: boolean;
 			permissions?: Record<string, unknown>;
 			dependencies?: Record<string, string>;
-			remoteUIs?: Record<string, { entrypoint: string; [key: string]: unknown }>;
+			remoteUIs?: Record<string, CarrotUIDefinition>;
+			slateUIs?: Record<string, CarrotUIDefinition>;
+			contributions?: CarrotContributionsConfig;
 		};
 
 		/**

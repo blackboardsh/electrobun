@@ -6,6 +6,7 @@ declare global {
 		__electrobunWebviewId: number;
 		__electrobunWindowId: number;
 		__electrobunRpcSocketPort: number;
+		__electrobunHostSocketPort?: number;
 		__electrobunSecretKeyBytes: number[];
 		// Event-only bridge (all webviews, including sandboxed)
 		__electrobunEventBridge?: {
@@ -16,6 +17,9 @@ declare global {
 			postMessage: (message: string) => void;
 		};
 		// User RPC bridge (trusted webviews only)
+		__electrobunHostBridge?: {
+			postMessage: (message: string) => void;
+		};
 		__electrobunBunBridge?: {
 			postMessage: (message: string) => void;
 		};
@@ -28,7 +32,10 @@ declare global {
 			tag: string,
 		) => Promise<string>;
 		__electrobunSendToHost: (message: unknown) => void;
+		__electrobunPendingHostMessages?: unknown[];
 		__electrobun: {
+			receiveMessageFromHost: (msg: unknown) => void;
+			receiveInternalMessageFromHost: (msg: unknown) => void;
 			receiveMessageFromBun: (msg: unknown) => void;
 			receiveInternalMessageFromBun: (msg: unknown) => void;
 		};

@@ -177,23 +177,23 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.rpc!.setTransport(this.createTransport());
 	}
 
-	sendMessageToWebviewViaExecute(jsonMessage: unknown) {
+	sendHostMessageToWebviewViaExecute(jsonMessage: unknown) {
 		const stringifiedMessage =
 			typeof jsonMessage === "string"
 				? jsonMessage
 				: JSON.stringify(jsonMessage);
 		// todo (yoav): make this a shared const with the browser api
-		const wrappedMessage = `window.__electrobun.receiveMessageFromBun(${stringifiedMessage})`;
+		const wrappedMessage = `window.__electrobun.receiveMessageFromHost(${stringifiedMessage})`;
 		this.executeJavascript(wrappedMessage);
 	}
 
-	sendInternalMessageViaExecute(jsonMessage: unknown) {
+	sendInternalHostMessageViaExecute(jsonMessage: unknown) {
 		const stringifiedMessage =
 			typeof jsonMessage === "string"
 				? jsonMessage
 				: JSON.stringify(jsonMessage);
 		// todo (yoav): make this a shared const with the browser api
-		const wrappedMessage = `window.__electrobun.receiveInternalMessageFromBun(${stringifiedMessage})`;
+		const wrappedMessage = `window.__electrobun.receiveInternalMessageFromHost(${stringifiedMessage})`;
 		this.executeJavascript(wrappedMessage);
 	}
 
@@ -312,9 +312,9 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 				if (!sentOverSocket) {
 					try {
 						const messageString = JSON.stringify(message);
-						that.sendMessageToWebviewViaExecute(messageString);
+						that.sendHostMessageToWebviewViaExecute(messageString);
 					} catch (error) {
-						console.error("bun: failed to serialize message to webview", error);
+						console.error("host: failed to serialize message to webview", error);
 					}
 				}
 			},

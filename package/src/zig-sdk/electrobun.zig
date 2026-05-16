@@ -9,7 +9,7 @@ pub const WindowBlurHandler = *const fn (u32) callconv(.C) void;
 pub const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
 pub const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
 pub const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
-pub const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
+pub const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
 pub const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
 pub const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.C) void;
 pub const QuitRequestedHandler = *const fn () callconv(.C) void;
@@ -99,6 +99,7 @@ pub const WebviewCallbacks = struct {
     decide_navigation: ?DecideNavigationHandler = null,
     event: ?WebviewEventHandler = null,
     event_bridge: ?WebviewPostMessageHandler = null,
+    host_bridge: ?WebviewPostMessageHandler = null,
     bun_bridge: ?WebviewPostMessageHandler = null,
     internal_bridge: ?WebviewPostMessageHandler = null,
 };
@@ -600,6 +601,7 @@ pub const Core = struct {
     const WebviewFindInPageFn = *const fn (u32, [*:0]const u8, bool, bool) callconv(.C) void;
     const WebviewStopFindFn = *const fn (u32) callconv(.C) void;
     const SendInternalMessageToWebviewFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
+    const SendHostMessageToWebviewViaTransportFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
     const WebviewOpenDevToolsFn = *const fn (u32) callconv(.C) void;
     const WebviewCloseDevToolsFn = *const fn (u32) callconv(.C) void;
     const WebviewToggleDevToolsFn = *const fn (u32) callconv(.C) void;
@@ -710,6 +712,7 @@ pub const Core = struct {
         webview_find_in_page: WebviewFindInPageFn,
         webview_stop_find: WebviewStopFindFn,
         send_internal_message_to_webview: SendInternalMessageToWebviewFn,
+        send_host_message_to_webview_via_transport: SendHostMessageToWebviewViaTransportFn,
         webview_open_devtools: WebviewOpenDevToolsFn,
         webview_close_devtools: WebviewCloseDevToolsFn,
         webview_toggle_devtools: WebviewToggleDevToolsFn,
@@ -838,6 +841,7 @@ pub const Core = struct {
                 .webview_find_in_page = lib.lookup(WebviewFindInPageFn, "webviewFindInPage") orelse return error.MissingCoreSymbol,
                 .webview_stop_find = lib.lookup(WebviewStopFindFn, "webviewStopFind") orelse return error.MissingCoreSymbol,
                 .send_internal_message_to_webview = lib.lookup(SendInternalMessageToWebviewFn, "sendInternalMessageToWebview") orelse return error.MissingCoreSymbol,
+                .send_host_message_to_webview_via_transport = lib.lookup(SendHostMessageToWebviewViaTransportFn, "sendHostMessageToWebviewViaTransport") orelse return error.MissingCoreSymbol,
                 .webview_open_devtools = lib.lookup(WebviewOpenDevToolsFn, "webviewOpenDevTools") orelse return error.MissingCoreSymbol,
                 .webview_close_devtools = lib.lookup(WebviewCloseDevToolsFn, "webviewCloseDevTools") orelse return error.MissingCoreSymbol,
                 .webview_toggle_devtools = lib.lookup(WebviewToggleDevToolsFn, "webviewToggleDevTools") orelse return error.MissingCoreSymbol,
@@ -1150,7 +1154,7 @@ pub const Core = struct {
             options.callbacks.decide_navigation,
             options.callbacks.event,
             options.callbacks.event_bridge,
-            options.callbacks.bun_bridge,
+            options.callbacks.host_bridge orelse options.callbacks.bun_bridge,
             options.callbacks.internal_bridge,
             secret_key_z.ptr,
             preload_z.ptr,
@@ -1399,18 +1403,28 @@ pub const Core = struct {
         try self.ensureLastCallSucceeded();
     }
 
-    pub fn sendMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
+    pub fn sendHostMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
         const message_json = try std.json.stringifyAlloc(self.allocator, message, .{});
         defer self.allocator.free(message_json);
+        const message_json_z = try self.dupeZ(message_json);
+        defer self.allocator.free(message_json_z);
+
+        if (self.symbols.send_host_message_to_webview_via_transport(webview_id, message_json_z.ptr)) {
+            return;
+        }
 
         const js = try std.fmt.allocPrint(
             self.allocator,
-            "window.__electrobun.receiveMessageFromBun({s});",
+            "window.__electrobun.receiveMessageFromHost({s});",
             .{message_json},
         );
         defer self.allocator.free(js);
 
         try self.evaluateJavaScriptWithNoCompletion(webview_id, js);
+    }
+
+    pub fn sendMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
+        try self.sendHostMessageToWebview(webview_id, message);
     }
 
     pub fn sendInternalMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {

@@ -1686,6 +1686,24 @@ const defaultConfig = {
 				path?: string;
 				[key: string]: unknown;
 			}>;
+			slateUIs?: Record<string, {
+				name?: string;
+				entrypoint?: string;
+				path?: string;
+				[key: string]: unknown;
+			}>;
+			contributions?: {
+				fileActivators?: Array<{
+					baseName?: string;
+					nodeType?: "file" | "dir" | "any";
+					slate: {
+						type: string;
+						name?: string;
+						icon?: string;
+						config?: Record<string, unknown>;
+					};
+				}>;
+			};
 			carrotOnly?: boolean;
 		} | undefined,
 	},
@@ -2532,7 +2550,7 @@ Categories=Utility;Application;
 
 		// refresh build folder
 		if (existsSync(buildFolder)) {
-			rmSync(buildFolder, { recursive: true });
+			rmSync(buildFolder, { recursive: true, force: true });
 		}
 		mkdirSync(buildFolder, { recursive: true });
 
@@ -3572,6 +3590,55 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				}
 			}
 
+			// Build slate UIs if configured.
+			// slateUIs mirrors remoteUIs, but points at an ESM module entry file instead of an HTML page.
+			const resolvedSlateUIs: Record<string, { name: string; path: string }> = {};
+			if (carrotConfig.slateUIs) {
+				for (const slateUIName in carrotConfig.slateUIs) {
+					const slateUIConfig = carrotConfig.slateUIs[slateUIName]!;
+					const label = slateUIConfig.name || slateUIName;
+
+					if (slateUIConfig.entrypoint) {
+						const slateUISource = join(projectRoot, slateUIConfig.entrypoint);
+						if (!existsSync(slateUISource)) {
+							console.error(`Slate UI entrypoint not found: ${slateUISource}`);
+							continue;
+						}
+						const slateUIDestFolder = join(carrotBuildDir, "slate-ui", slateUIName);
+						mkdirSync(slateUIDestFolder, { recursive: true });
+
+						const { entrypoint: _entrypoint, name: _name, path: _path, ...slateUIBuildOptions } = slateUIConfig;
+						const slateUIBuildResult = await Bun.build({
+							...slateUIBuildOptions,
+							entrypoints: [slateUISource],
+							outdir: slateUIDestFolder,
+							target: "browser",
+							format: "esm",
+						});
+
+						if (!slateUIBuildResult.success) {
+							console.error(`Failed to build slate UI: ${slateUIName}`);
+							printBuildLogs(slateUIBuildResult.logs);
+							continue;
+						}
+
+						resolvedSlateUIs[slateUIName] = {
+							name: label,
+							path: `slate-ui/${slateUIName}/index.js`,
+						};
+					} else if (slateUIConfig.path) {
+						resolvedSlateUIs[slateUIName] = {
+							name: label,
+							path: slateUIConfig.path,
+						};
+					} else {
+						console.warn(
+							`Slate UI "${slateUIName}" has neither entrypoint nor path; skipping.`,
+						);
+					}
+				}
+			}
+
 			// Write carrot.json manifest
 			const carrotManifest = {
 				id: carrotConfig.id,
@@ -3589,9 +3656,15 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 							: spec,
 					]),
 				),
+				contributions:
+					carrotConfig.contributions &&
+					Object.keys(carrotConfig.contributions).length > 0
+						? carrotConfig.contributions
+						: undefined,
 				worker: { relativePath: "worker.js" },
 				view: existsSync(viewsSrc) ? { relativePath: "views/index.html" } : undefined,
 				remoteUIs: Object.keys(resolvedRemoteUIs).length > 0 ? resolvedRemoteUIs : undefined,
+				slateUIs: Object.keys(resolvedSlateUIs).length > 0 ? resolvedSlateUIs : undefined,
 			};
 			writeFileSync(
 				join(carrotBuildDir, "carrot.json"),
@@ -4703,17 +4776,37 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		);
 
 		function shouldIgnore(fullPath: string): boolean {
+			const resolvedFullPath = path.resolve(fullPath);
+			const pathSegments = resolvedFullPath.split(path.sep).filter(Boolean);
+			const genericIgnoredSegments = new Set([
+				"node_modules",
+				path.basename(buildDir),
+				path.basename(artifactDir),
+				".electrobun-cache",
+			]);
+			if (pathSegments.some((segment) => genericIgnoredSegments.has(segment))) {
+				return true;
+			}
 			// Check built-in ignore dirs
 			if (
 				ignoreDirs.some(
-					(ignored) =>
-						fullPath.startsWith(ignored + "/") || fullPath === ignored,
+					(ignored) => {
+						const relativeToIgnored = path.relative(ignored, resolvedFullPath);
+						return (
+							relativeToIgnored === "" ||
+							(!relativeToIgnored.startsWith("..") &&
+								!path.isAbsolute(relativeToIgnored))
+						);
+					},
 				)
 			) {
 				return true;
 			}
 			// Check user-configured watchIgnore globs (match against project-relative path)
-			const relativePath = fullPath.replace(projectRoot + "/", "");
+			const relativePath = path
+				.relative(projectRoot, resolvedFullPath)
+				.split(path.sep)
+				.join("/");
 			if (ignoreGlobs.some((glob) => glob.match(relativePath))) {
 				return true;
 			}

@@ -848,7 +848,7 @@ fn sendRpcMessage(webview_id: u32, message_id: []const u8, payload: anytype) voi
         .payload = payload,
     };
 
-    appState().core.sendMessageToWebview(webview_id, packet) catch |err| {
+    appState().core.sendHostMessageToWebview(webview_id, packet) catch |err| {
         std.debug.print("[kitchen zig] failed to send RPC message '{s}': {s}\n", .{ message_id, @errorName(err) });
     };
 }
@@ -861,7 +861,7 @@ fn sendRpcResponseSuccess(webview_id: u32, request_id: u64, payload: anytype) vo
         .payload = payload,
     };
 
-    appState().core.sendMessageToWebview(webview_id, packet) catch |err| {
+    appState().core.sendHostMessageToWebview(webview_id, packet) catch |err| {
         std.debug.print("[kitchen zig] failed to send RPC response #{d}: {s}\n", .{ request_id, @errorName(err) });
     };
 }
@@ -874,7 +874,7 @@ fn sendRpcResponseError(webview_id: u32, request_id: u64, error_message: []const
         .@"error" = error_message,
     };
 
-    appState().core.sendMessageToWebview(webview_id, packet) catch |err| {
+    appState().core.sendHostMessageToWebview(webview_id, packet) catch |err| {
         std.debug.print("[kitchen zig] failed to send RPC error #{d}: {s}\n", .{ request_id, @errorName(err) });
     };
 }
@@ -1813,7 +1813,7 @@ fn createChildWebviewFromInternalBridge(host_webview_id: u32, params_object: *co
             .decide_navigation = electrobun.allowAllNavigation,
             .event = electrobun.noopWebviewEvent,
             .event_bridge = electrobun.noopWebviewPostMessage,
-            .bun_bridge = electrobun.noopWebviewPostMessage,
+            .host_bridge = electrobun.noopWebviewPostMessage,
             .internal_bridge = electrobun.noopWebviewPostMessage,
         },
         .secret_key = default_secret_key,
@@ -2200,7 +2200,7 @@ fn openInteractivePlaygroundWindow(
             .decide_navigation = electrobun.allowAllNavigation,
             .event = observedWebviewEvent,
             .event_bridge = observedWebviewBridge,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = playgroundInternalBridge,
         },
         .sandbox = false,
@@ -2233,7 +2233,7 @@ fn createWindowWithTestHarness(
             .decide_navigation = electrobun.allowAllNavigation,
             .event = electrobun.noopWebviewEvent,
             .event_bridge = electrobun.noopWebviewPostMessage,
-            .bun_bridge = electrobun.noopWebviewPostMessage,
+            .host_bridge = electrobun.noopWebviewPostMessage,
             .internal_bridge = electrobun.noopWebviewPostMessage,
         },
     );
@@ -2244,7 +2244,7 @@ fn observedHarnessWebviewCallbacks() electrobun.WebviewCallbacks {
         .decide_navigation = electrobun.allowAllNavigation,
         .event = observedWebviewEvent,
         .event_bridge = observedWebviewBridge,
-        .bun_bridge = electrobun.noopWebviewPostMessage,
+        .host_bridge = electrobun.noopWebviewPostMessage,
         .internal_bridge = observedWebviewBridge,
     };
 }
@@ -2420,7 +2420,7 @@ fn runWindowFullscreenToggleHiddenTitlebarTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = electrobun.noopWebviewEvent,
             .event_bridge = electrobun.noopWebviewPostMessage,
-            .bun_bridge = electrobun.noopWebviewPostMessage,
+            .host_bridge = electrobun.noopWebviewPostMessage,
             .internal_bridge = electrobun.noopWebviewPostMessage,
         },
     );
@@ -2811,7 +2811,7 @@ fn runWebviewCreateTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = electrobun.noopWebviewEvent,
             .event_bridge = electrobun.noopWebviewPostMessage,
-            .bun_bridge = electrobun.noopWebviewPostMessage,
+            .host_bridge = electrobun.noopWebviewPostMessage,
             .internal_bridge = electrobun.noopWebviewPostMessage,
         },
         .sandbox = true,
@@ -2872,7 +2872,7 @@ fn runWebviewTagPlaygroundIntegrationTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = observedWebviewEvent,
             .event_bridge = observedWebviewBridge,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = playgroundInternalBridge,
         },
         .sandbox = false,
@@ -2916,7 +2916,7 @@ fn runWgpuTagPlaygroundIntegrationTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = observedWebviewEvent,
             .event_bridge = observedWebviewBridge,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = playgroundInternalBridge,
         },
         .sandbox = false,
@@ -2970,7 +2970,7 @@ fn runWebviewTagPlaygroundInteractiveTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = observedWebviewEvent,
             .event_bridge = observedWebviewBridge,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = playgroundInternalBridge,
         },
         .sandbox = false,
@@ -3014,7 +3014,7 @@ fn runWgpuTagPlaygroundInteractiveTest(state: *AppState) !void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = observedWebviewEvent,
             .event_bridge = observedWebviewBridge,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = playgroundInternalBridge,
         },
         .sandbox = false,
@@ -4220,7 +4220,7 @@ fn testRunnerWebviewEvent(webview_id: u32, event_name: [*:0]const u8, _: [*:0]co
     }
 }
 
-fn testRunnerBunBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) u32 {
+fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) u32 {
     const state = appState();
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
@@ -4312,7 +4312,7 @@ fn createUi(context: *CreateUiContext) void {
             .decide_navigation = electrobun.allowAllNavigation,
             .event = testRunnerWebviewEvent,
             .event_bridge = electrobun.noopWebviewPostMessage,
-            .bun_bridge = testRunnerBunBridge,
+            .host_bridge = testRunnerHostBridge,
             .internal_bridge = electrobun.noopWebviewPostMessage,
         },
         .sandbox = false,

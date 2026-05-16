@@ -105,6 +105,20 @@ export const Carrots = {
 		return bridge.requestHost<Array<{
 			id: string; name: string; description: string; version: string;
 			mode: string; permissions: string[]; status: string; devMode: boolean;
+			remoteUIs?: Array<{ id: string; name: string; path: string }>;
+			slateUIs?: Array<{ id: string; name: string; path: string }>;
+			contributions?: {
+				fileActivators?: Array<{
+					baseName?: string;
+					nodeType?: "file" | "dir" | "any";
+					slate: {
+						type: string;
+						name?: string;
+						icon?: string;
+						config?: Record<string, unknown>;
+					};
+				}>;
+			};
 		}>>("list-carrots");
 	},
 	async start(carrotId: string) {
@@ -166,6 +180,27 @@ export const app = {
 		if (_carrotContext) {
 			_carrotContext.authToken = token;
 		}
+	},
+	async setDeviceToken(token: string, tokenId?: string): Promise<void> {
+		if (!bridge) return;
+		await bridge.requestHost("set-device-token", { token, tokenId });
+	},
+	async getMachineInfo(): Promise<{ machineId: string; hostname: string; platform: string }> {
+		if (!bridge) {
+			return { machineId: "", hostname: "", platform: "" };
+		}
+		return bridge.requestHost<{ machineId: string; hostname: string; platform: string }>(
+			"get-machine-info",
+		);
+	},
+	async updateCarrots(): Promise<void> {
+		if (!bridge) return;
+		await bridge.requestHost("update-carrots");
+	},
+	async getWebBridgePort(): Promise<number | null> {
+		if (!bridge) return null;
+		const result = await bridge.requestHost<{ port: number | null }>("get-web-bridge-port");
+		return typeof result?.port === "number" ? result.port : null;
 	},
 	get channel() {
 		return _carrotContext?.channel ?? "";

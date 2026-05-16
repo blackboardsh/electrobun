@@ -7,10 +7,12 @@
 // - window.__electrobunWebviewId
 // - window.__electrobunWindowId
 // - window.__electrobunRpcSocketPort
+// - window.__electrobunHostSocketPort (optional alias)
 // - window.__electrobunSecretKeyBytes
 // - window.__electrobunEventBridge (event emission - all webviews)
 // - window.__electrobunInternalBridge (internal RPC - trusted only)
-// - window.__electrobunBunBridge (user RPC - trusted only)
+// - window.__electrobunHostBridge (user RPC - trusted only)
+// - window.__electrobunBunBridge (legacy alias)
 
 import "./globals.d.ts";
 import { initEncryption } from "./encryption";
@@ -37,19 +39,27 @@ const internalMessageHandler = (msg: unknown) => {
 	handleResponse(msg as { type: string; id: string; success: boolean; payload: unknown });
 };
 
+const defaultUserMessageHandler = (msg: unknown) => {
+	// Buffer user RPC packets that arrive before the page-specific Electroview
+	// instance installs the real handler.
+	if (!window.__electrobunPendingHostMessages) {
+		window.__electrobunPendingHostMessages = [];
+	}
+	window.__electrobunPendingHostMessages.push(msg);
+};
+
 if (!window.__electrobun) {
 	window.__electrobun = {
+		receiveInternalMessageFromHost: internalMessageHandler,
+		receiveMessageFromHost: defaultUserMessageHandler,
 		receiveInternalMessageFromBun: internalMessageHandler,
-		receiveMessageFromBun: (msg: unknown) => {
-			// Default handler for user RPC - will be overridden if user creates Electroview
-			console.log("receiveMessageFromBun (no handler):", msg);
-		},
+		receiveMessageFromBun: defaultUserMessageHandler,
 	};
 } else {
+	window.__electrobun.receiveInternalMessageFromHost = internalMessageHandler;
+	window.__electrobun.receiveMessageFromHost = defaultUserMessageHandler;
 	window.__electrobun.receiveInternalMessageFromBun = internalMessageHandler;
-	window.__electrobun.receiveMessageFromBun = (msg: unknown) => {
-		console.log("receiveMessageFromBun (no handler):", msg);
-	};
+	window.__electrobun.receiveMessageFromBun = defaultUserMessageHandler;
 }
 
 // Allow preload scripts to send custom messages to the host webview

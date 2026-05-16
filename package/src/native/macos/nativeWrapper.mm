@@ -373,7 +373,7 @@ private:
 // Type definitions
 // Core callback types are defined in shared/callbacks.h
 // Platform-specific aliases for Objective-C compatibility
-typedef BOOL (*HandlePostMessageObjC)(uint32_t webviewId, const char* message);
+typedef void (*HandlePostMessageObjC)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
 static dispatch_queue_t jsWorkerQueue = NULL;
@@ -2630,12 +2630,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                                                                                 name:[NSString stringWithUTF8String:"eventBridge"]];
                 objc_setAssociatedObject(self.webView, "eventBridgeHandler", eventHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-                // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+                // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
                 if (!sandbox) {
-                    // bunBridge - user RPC bridge
+                    // hostBridge/bunBridge - user RPC bridge
                     MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
                     bunHandler.zigCallback = bunBridgeHandler;
                     bunHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
+                                                                                    name:[NSString stringWithUTF8String:"hostBridge"]];
                     [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
                                                                                     name:[NSString stringWithUTF8String:"bunBridge"]];
                     objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2805,6 +2807,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
             // these handlers, preventing WKWebView deallocation
             WKUserContentController *ucc = webViewToClean.configuration.userContentController;
             @try { [ucc removeScriptMessageHandlerForName:@"eventBridge"]; } @catch (NSException *e) {}
+            @try { [ucc removeScriptMessageHandlerForName:@"hostBridge"]; } @catch (NSException *e) {}
             @try { [ucc removeScriptMessageHandlerForName:@"bunBridge"]; } @catch (NSException *e) {}
             @try { [ucc removeScriptMessageHandlerForName:@"internalBridge"]; } @catch (NSException *e) {}
             // Remove all user scripts as well
