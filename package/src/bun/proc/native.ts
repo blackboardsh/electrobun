@@ -1,4 +1,4 @@
-import { join } from "path";
+import { dirname, join } from "path";
 import { createReadStream } from "node:fs";
 import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
@@ -70,6 +70,30 @@ import {
 	type Pointer,
 } from "bun:ffi";
 
+function getElectrobunLibraryPathCandidates(fileName: string) {
+	const candidates = new Set<string>();
+	candidates.add(join(process.cwd(), fileName));
+	if (process.argv0) {
+		candidates.add(join(dirname(process.argv0), fileName));
+	}
+	return Array.from(candidates);
+}
+
+function tryDlopenCandidates<T extends Record<string, { args: FFIType[]; returns: FFIType }>>(
+	fileName: string,
+	symbols: T,
+) {
+	let lastError: unknown = null;
+	for (const candidatePath of getElectrobunLibraryPathCandidates(fileName)) {
+		try {
+			return dlopen(candidatePath, symbols);
+		} catch (error) {
+			lastError = error;
+		}
+	}
+	throw lastError ?? new Error(`Failed to load ${fileName}`);
+}
+
 function getWindowPtr(winId: number) {
 	return core?.symbols.getWindowPointer(winId) || null;
 }
@@ -106,13 +130,11 @@ function ensureWebviewRuntimeConfigured() {
 
 const core = (() => {
 	try {
-		const corePath = join(
-			process.cwd(),
+		const coreFileName =
 			process.platform === "win32"
 				? "ElectrobunCore.dll"
-				: `libElectrobunCore.${suffix}`,
-		);
-		return dlopen(corePath, {
+				: `libElectrobunCore.${suffix}`;
+		return tryDlopenCandidates(coreFileName, {
 			electrobun_core_last_error: {
 				args: [],
 				returns: FFIType.cstring,
@@ -625,10 +647,8 @@ const core = (() => {
 
 export const native = (() => {
 	try {
-		// Use absolute path to native wrapper DLL to avoid working directory issues
-		// On Windows shortcuts, the working directory may not be set correctly
-		const nativeWrapperPath = join(process.cwd(), `libNativeWrapper.${suffix}`);
-		return dlopen(nativeWrapperPath, {
+		const nativeWrapperFileName = `libNativeWrapper.${suffix}`;
+		return tryDlopenCandidates(nativeWrapperFileName, {
 			// webview
 			initWebview: {
 				args: [
@@ -1072,7 +1092,14 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 	return new Proxy(ffiRequest, {
 		get(target, method: string) {
 			if (typeof method !== "string") return target[method];
-			return (params?: unknown) => bridge!.requestHost(method, params);
+			return (params?: unknown) => {
+				if (!bridge) {
+					throw new Error(
+						`Electrobun FFI is unavailable and no host bridge exists for request ${method}`,
+					);
+				}
+				return bridge.requestHost(method, params);
+			};
 		},
 	});
 }
