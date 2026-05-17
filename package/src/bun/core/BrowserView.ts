@@ -352,6 +352,61 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		return BrowserViewMap[id];
 	}
 
+	// Core can create webviews before Bun has constructed a JS wrapper for them.
+	// Use this in native/runtime paths that need to ensure a wrapper exists.
+	static ensureWrapped<T extends RPCWithTransport = RPCWithTransport>(
+		id: number,
+		options: Partial<BrowserViewOptions<T>> = {},
+	) {
+		return (
+			(BrowserViewMap[id] as BrowserView<T> | undefined) ??
+			BrowserView.adoptExisting(id, options)
+		);
+	}
+
+	static adoptExisting<T extends RPCWithTransport = RPCWithTransport>(
+		id: number,
+		options: Partial<BrowserViewOptions<T>> = {},
+	) {
+		const existing = BrowserViewMap[id] as BrowserView<T> | undefined;
+		if (existing) {
+			return existing;
+		}
+
+		const ptr = ffi.request.getWebviewPointer({ id }) as Pointer | null;
+		if (!ptr) {
+			return undefined;
+		}
+
+		const view = Object.create(BrowserView.prototype) as BrowserView<T>;
+		view.id = id;
+		view.hostWebviewId = options.hostWebviewId;
+		view.windowId = options.windowId ?? 0;
+		view.renderer = options.renderer ?? defaultOptions.renderer ?? "native";
+		view.url = options.url ?? defaultOptions.url ?? null;
+		view.html = options.html ?? defaultOptions.html ?? null;
+		view.preload = options.preload ?? defaultOptions.preload ?? null;
+		view.viewsRoot = options.viewsRoot ?? defaultOptions.viewsRoot ?? null;
+		view.partition = options.partition ?? null;
+		view.frame = {
+			x: options.frame?.x ?? defaultOptions.frame!.x,
+			y: options.frame?.y ?? defaultOptions.frame!.y,
+			width: options.frame?.width ?? defaultOptions.frame!.width,
+			height: options.frame?.height ?? defaultOptions.frame!.height,
+		};
+		view.secretKey = new Uint8Array(0);
+		view.rpc = options.rpc;
+		view.rpcHandler = undefined;
+		view.autoResize = options.autoResize === false ? false : true;
+		view.navigationRules = options.navigationRules ?? null;
+		view.sandbox = options.sandbox ?? false;
+		view.startTransparent = options.startTransparent ?? false;
+		view.startPassthrough = options.startPassthrough ?? false;
+		view.isRemoved = false;
+		BrowserViewMap[id] = view as BrowserView<any>;
+		return view;
+	}
+
 	static getAll() {
 		return Object.values(BrowserViewMap);
 	}

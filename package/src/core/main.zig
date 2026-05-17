@@ -1363,7 +1363,10 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
     defer allocator.free(preload_z);
 
     const rules_json = if (navigation_rules_value) |value|
-        std.json.stringifyAlloc(allocator, value, .{}) catch return null
+        if (value == .null)
+            null
+        else
+            std.json.stringifyAlloc(allocator, value, .{}) catch return null
     else
         null;
     defer if (rules_json) |allocated| allocator.free(allocated);

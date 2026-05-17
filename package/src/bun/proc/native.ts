@@ -1108,7 +1108,9 @@ const drainQueuedHostMessages = () => {
 				continue;
 			}
 
-			const webview = BrowserView.getById(queuedHostMessageWebviewIdBuf[0]!);
+			const webview = BrowserView.ensureWrapped(
+				queuedHostMessageWebviewIdBuf[0]!,
+			);
 			if (!webview) {
 				continue;
 			}
@@ -2352,7 +2354,7 @@ const getMimeType = new JSCallback(
 
 const getHTMLForWebviewSync = new JSCallback(
 	(webviewId) => {
-		const webview = BrowserView.getById(webviewId);
+		const webview = BrowserView.ensureWrapped(webviewId);
 
 		return toCString(webview?.html || "");
 	},
@@ -2701,6 +2703,8 @@ const webviewDecideNavigation = new JSCallback(
 );
 
 const webviewEventHandler = (id: number, eventName: string, detail: string) => {
+	BrowserView.ensureWrapped(id);
+
 	core_.symbols.dispatchHostWebviewEvent(
 		id,
 		toCString(eventName),
@@ -2813,7 +2817,7 @@ const hostBridgePostmessageHandler = new JSCallback(
 			}
 			const msgJson = JSON.parse(rawMessage);
 
-			const webview = BrowserView.getById(id);
+			const webview = BrowserView.ensureWrapped(id);
 			if (!webview) {
 				return;
 			}
@@ -3141,14 +3145,14 @@ export const internalRpcHandlers = {
 			);
 		},
 		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
-			const webview = BrowserView.getById(params.id);
+			const webview = BrowserView.ensureWrapped(params.id);
 			if (webview) {
 				webview.url = params.url;
 			}
 			core_.symbols.loadURLInWebView(params.id, toCString(params.url));
 		},
 		webviewTagUpdateHtml: (params: { id: number; html: string }) => {
-			const webview = BrowserView.getById(params.id);
+			const webview = BrowserView.ensureWrapped(params.id);
 			if (!webview) {
 				console.error(`webviewTagUpdateHtml: BrowserView not found for id ${params.id}`);
 				return;
@@ -3158,7 +3162,7 @@ export const internalRpcHandlers = {
 			webview.html = params.html;
 		},
 		webviewTagUpdatePreload: (params: { id: number; preload: string }) => {
-			const webview = BrowserView.getById(params.id);
+			const webview = BrowserView.ensureWrapped(params.id);
 			if (webview) {
 				webview.preload = params.preload;
 			}
@@ -3179,7 +3183,7 @@ export const internalRpcHandlers = {
 			core_.symbols.webviewReload(params.id);
 		},
 		webviewTagRemove: (params: { id: number }) => {
-			const webview = BrowserView.getById(params.id);
+			const webview = BrowserView.ensureWrapped(params.id);
 			if (!webview) {
 				console.error(`webviewTagRemove: BrowserView not found for id ${params.id}`);
 				return;
@@ -3268,7 +3272,7 @@ export const internalRpcHandlers = {
 		},
 		webviewTagSetNavigationRules: (params: { id: number; rules: string[] }) => {
 			const rulesJson = JSON.stringify(params.rules);
-			const webview = BrowserView.getById(params.id);
+			const webview = BrowserView.ensureWrapped(params.id);
 			if (webview) {
 				webview.navigationRules = rulesJson;
 			}

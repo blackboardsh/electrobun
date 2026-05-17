@@ -68,6 +68,29 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		if (this._sync) this._sync.stop();
 	}
 
+	private getInitialNavigationRules(): string[] | null {
+		const rawRules = this.getAttribute("navigation-rules");
+		if (rawRules === null) {
+			return null;
+		}
+
+		const trimmed = rawRules.trim();
+		if (!trimmed) {
+			return [];
+		}
+
+		try {
+			const parsed = JSON.parse(trimmed);
+			if (!Array.isArray(parsed) || !parsed.every((rule) => typeof rule === "string")) {
+				throw new Error("navigation-rules must be a JSON string array");
+			}
+			return parsed;
+		} catch (error) {
+			console.error("Invalid navigation-rules attribute:", error);
+			return [];
+		}
+	}
+
 	async initWebview() {
 		const rect = this.getBoundingClientRect();
 		const initialRect = {
@@ -85,6 +108,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			| "native"
 			| "cef";
 		const masks = this.getAttribute("masks");
+		const navigationRules = this.getInitialNavigationRules();
 		// Sandbox attribute: when present, the child webview is sandboxed (no RPC, events only)
 		const sandbox = this.hasAttribute("sandbox");
 		this.sandboxed = sandbox;
@@ -101,7 +125,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		}
 
 		try {
-			const webviewId = (await request("webviewTagInit", {
+			const webviewInitParams = {
 				hostWebviewId: window.__electrobunWebviewId,
 				windowId: window.__electrobunWindowId,
 				renderer,
@@ -115,11 +139,16 @@ export class ElectrobunWebviewTag extends HTMLElement {
 					x: rect.x,
 					y: rect.y,
 				},
-				navigationRules: null,
 				sandbox,
 				transparent,
 				passthrough,
-			})) as number;
+				...(navigationRules === null ? {} : { navigationRules }),
+			};
+
+			const webviewId = (await request(
+				"webviewTagInit",
+				webviewInitParams,
+			)) as number;
 
 			this.webviewId = webviewId;
 			this.id = `electrobun-webview-${webviewId}`;
