@@ -1170,6 +1170,21 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
                     } else if ([role isEqualToString:@"selectAll"]) {
                         menuItem.keyEquivalent = @"a";
                         menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"hide"]) {
+                        menuItem.keyEquivalent = @"h";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"hideOthers"]) {
+                        menuItem.keyEquivalent = @"h";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+                    } else if ([role isEqualToString:@"quit"]) {
+                        menuItem.keyEquivalent = @"q";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"minimize"]) {
+                        menuItem.keyEquivalent = @"m";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
+                    } else if ([role isEqualToString:@"close"]) {
+                        menuItem.keyEquivalent = @"w";
+                        menuItem.keyEquivalentModifierMask = NSEventModifierFlagCommand;
                     }
                 }
             } else {
