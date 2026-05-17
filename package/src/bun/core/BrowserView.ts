@@ -328,7 +328,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	};
 
 	remove() {
-		if (!this.ptr || this.isRemoved) {
+		if (this.isRemoved) {
 			return;
 		}
 		this.isRemoved = true;
@@ -341,7 +341,11 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			unregisterHandler() {},
 		});
 		this.rpcHandler = undefined;
-		ffi.request.webviewRemove({ id: this.id });
+		try {
+			ffi.request.webviewRemove({ id: this.id });
+		} catch (error) {
+			console.error(`Error removing webview ${this.id}:`, error);
+		}
 	}
 
 	static getById(id: number) {

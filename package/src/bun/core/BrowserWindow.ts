@@ -3,12 +3,13 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
-import { quit } from "./Utils";
 import { type RPCWithTransport } from "../../shared/rpc.js";
-import { GpuWindowMap } from "./GpuWindow";
 import { WGPUView } from "./WGPUView";
 
 const buildConfig = BuildConfig.getSync();
+ffi.request.setExitOnLastWindowClosed({
+	enabled: buildConfig.runtime?.exitOnLastWindowClosed ?? true,
+});
 
 export type WindowOptionsType<T = undefined> = {
 	trafficLightOffset?: {
@@ -72,7 +73,7 @@ export const BrowserWindowMap: {
 	[id: number]: BrowserWindow<RPCWithTransport>;
 } = {};
 
-// Clean up the window map when a window closes and optionally quit the app
+// Clean up JS wrapper state when a window closes. Native child cleanup is core-owned.
 electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 	const windowId = event.data.id;
 	delete BrowserWindowMap[windowId];
@@ -88,30 +89,12 @@ electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 	const wgpuViews = WGPUView.getAll().filter(v => v.windowId === windowId);
 	for (const view of wgpuViews) {
 		try {
-			// If ptr is null, the view was already cleaned up by the renderer or native cleanup
-			if (view.ptr === null) {
-				// Already cleaned up, skip
-			} else {
-				// Programmatic close path - remove the view
-				view.remove();
-			}
+			view.remove();
 		} catch (e) {
 			console.error(`Error cleaning up WGPU view ${view.id}:`, e);
-			// If remove() failed, at least mark it as cleaned up
-			view.ptr = null as any;
 		}
 	}
 
-	const exitOnLastWindowClosed =
-		buildConfig.runtime?.exitOnLastWindowClosed ?? true;
-
-	if (
-		exitOnLastWindowClosed &&
-		Object.keys(BrowserWindowMap).length === 0 &&
-		Object.keys(GpuWindowMap).length === 0
-	) {
-		quit();
-	}
 });
 
 export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {

@@ -6,8 +6,6 @@ const WGPUViewMap: {
 	[id: number]: WGPUView;
 } = {};
 
-let nextWGPUViewId = 1;
-
 export type WGPUViewOptions = {
 	frame: {
 		x: number;
@@ -34,8 +32,7 @@ const defaultOptions: Partial<WGPUViewOptions> = {
 };
 
 export class WGPUView {
-	id: number = nextWGPUViewId++;
-	ptr!: Pointer;
+	id: number = 0;
 	windowId!: number;
 	autoResize: boolean = true;
 	frame: {
@@ -51,6 +48,14 @@ export class WGPUView {
 	};
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	isRemoved: boolean = false;
+
+	get ptr(): Pointer | null {
+		if (this.isRemoved) {
+			return null;
+		}
+		return ffi.request.getWGPUViewPointer({ id: this.id }) as Pointer | null;
+	}
 
 	constructor(options: Partial<WGPUViewOptions> = defaultOptions) {
 		this.frame = {
@@ -64,13 +69,12 @@ export class WGPUView {
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
 
+		this.id = this.init() as number;
 		WGPUViewMap[this.id] = this;
-		this.ptr = this.init() as Pointer;
 	}
 
 	init() {
 		return ffi.request.createWGPUView({
-			id: this.id,
 			windowId: this.windowId,
 			frame: {
 				width: this.frame.width,
@@ -107,20 +111,18 @@ export class WGPUView {
 	}
 
 	remove() {
-		// Check if already removed
-		if (this.ptr === null) {
+		if (this.isRemoved) {
 			return;
 		}
-		
+
+		this.isRemoved = true;
+		delete WGPUViewMap[this.id];
+
 		try {
 			ffi.request.wgpuViewRemove({ id: this.id });
 		} catch (e) {
 			console.error(`Error removing WGPU view ${this.id}:`, e);
 		}
-		
-		delete WGPUViewMap[this.id];
-		// Clear the pointer to prevent any accidental access
-		this.ptr = null as any;
 	}
 
 	getNativeHandle() {
@@ -129,6 +131,34 @@ export class WGPUView {
 
 	static getById(id: number) {
 		return WGPUViewMap[id];
+	}
+
+	static adoptExisting(id: number, options: Partial<WGPUViewOptions> = {}) {
+		const existing = WGPUViewMap[id];
+		if (existing) {
+			return existing;
+		}
+
+		const ptr = ffi.request.getWGPUViewPointer({ id }) as Pointer | null;
+		if (!ptr) {
+			return undefined;
+		}
+
+		const view = Object.create(WGPUView.prototype) as WGPUView;
+		view.id = id;
+		view.windowId = options.windowId ?? 0;
+		view.autoResize = options.autoResize === false ? false : true;
+		view.frame = {
+			x: options.frame?.x ?? defaultOptions.frame!.x,
+			y: options.frame?.y ?? defaultOptions.frame!.y,
+			width: options.frame?.width ?? defaultOptions.frame!.width,
+			height: options.frame?.height ?? defaultOptions.frame!.height,
+		};
+		view.startTransparent = options.startTransparent ?? false;
+		view.startPassthrough = options.startPassthrough ?? false;
+		view.isRemoved = false;
+		WGPUViewMap[id] = view;
+		return view;
 	}
 
 	static getAll() {

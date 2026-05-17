@@ -653,7 +653,11 @@ export class WgpuTagRenderer {
 		if (!WGPUNative.available) {
 			throw new Error("WGPU native library not available");
 		}
-		const view = WGPUView.getById(viewId);
+		const view = WGPUView.getById(viewId) ?? WGPUView.adoptExisting(viewId, {
+			windowId: win.id,
+			autoResize: false,
+			frame: rect,
+		});
 		if (!view?.ptr) {
 			throw new Error(`WGPUView not found for id ${viewId}`);
 		}
@@ -793,12 +797,6 @@ export class WgpuTagRenderer {
 		
 		// Remove from states immediately to prevent any further access
 		this.states.delete(viewId);
-		
-		// Mark the associated WGPU view as stopped to prevent double cleanup
-		const wgpuView = WGPUView.getById(viewId);
-		if (wgpuView) {
-			wgpuView.ptr = null as any;
-		}
 		
 		// Don't manually release WGPU resources - let the native view cleanup handle them
 		// Manually calling wgpuDeviceRelease/wgpuSurfaceRelease after view destruction causes crashes

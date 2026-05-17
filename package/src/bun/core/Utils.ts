@@ -137,9 +137,7 @@ export const quit = () => {
 	}
 
 	if (native) {
-		native.symbols.stopEventLoop();
-		native.symbols.waitForShutdownComplete(5000);
-		native.symbols.forceExit(0);
+		ffi.request.quitGracefully({ code: 0, timeoutMs: 5000 });
 	} else {
 		process.exit(0);
 	}
@@ -150,7 +148,7 @@ const _originalProcessExit = process.exit;
 process.exit = ((code?: number) => {
 	if (native) {
 		if (isQuitting) {
-			native.symbols.forceExit(code ?? 0);
+			ffi.request.quitGracefully({ code: code ?? 0, timeoutMs: 0 });
 			return;
 		}
 		quit();

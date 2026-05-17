@@ -2,6 +2,7 @@ import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { type Pointer } from "bun:ffi";
 import { WGPUView } from "./WGPUView";
+import { BuildConfig } from "./BuildConfig";
 
 
 export type GpuWindowOptionsType = {
@@ -34,11 +35,16 @@ const defaultOptions: GpuWindowOptionsType = {
 	transparent: false,
 };
 
+const buildConfig = BuildConfig.getSync();
+ffi.request.setExitOnLastWindowClosed({
+	enabled: buildConfig.runtime?.exitOnLastWindowClosed ?? true,
+});
+
 export const GpuWindowMap: {
 	[id: number]: GpuWindow;
 } = {};
 
-// Clean up the window map when a window closes and optionally quit the app
+// Clean up JS wrapper state when a window closes. Native child cleanup is core-owned.
 electrobunEventEmitter.on("close", (event: { data: { id: number } }) => {
 	const windowId = event.data.id;
 	delete GpuWindowMap[windowId];

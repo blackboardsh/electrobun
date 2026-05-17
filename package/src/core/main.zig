@@ -53,6 +53,11 @@ const WindowState = struct {
     key_handler: ?WindowKeyHandler,
 };
 
+const WebviewRendererKind = enum {
+    native,
+    cef,
+};
+
 const PendingHostMessage = struct {
     webview_id: u32,
     message: [:0]u8,
@@ -60,7 +65,9 @@ const PendingHostMessage = struct {
 
 const WebviewState = struct {
     ptr: WebviewPtr,
+    window_id: u32,
     host_webview_id: ?u32,
+    renderer: WebviewRendererKind,
     secret_key: WebviewSecretKey,
     socket_handle: ?std.posix.socket_t,
     transport_ready: bool,
@@ -68,6 +75,7 @@ const WebviewState = struct {
 
 const WgpuViewState = struct {
     ptr: WgpuViewPtr,
+    window_id: u32,
 };
 
 const WebviewRuntimeState = struct {
@@ -80,6 +88,19 @@ const WebviewRuntimeState = struct {
 const HostTransportState = struct {
     started: bool = false,
     port: u32 = 0,
+};
+
+const DefaultWebviewCallbacks = struct {
+    navigation_callback: ?DecideNavigationHandler = null,
+    webview_event_handler: ?WebviewEventHandler = null,
+    event_bridge_handler: ?WebviewPostMessageHandler = null,
+};
+
+const HostMessageWakeupState = struct {
+    initialized: bool = false,
+    read_fd: c_int = -1,
+    write_fd: c_int = -1,
+    signaled: bool = false,
 };
 
 const NativeWrapperState = struct {
@@ -108,6 +129,11 @@ var pending_host_messages_mutex: std.Thread.Mutex = .{};
 var webview_runtime_state = WebviewRuntimeState{};
 var host_transport_state = HostTransportState{};
 var host_transport_mutex: std.Thread.Mutex = .{};
+var default_webview_callbacks = DefaultWebviewCallbacks{};
+var managed_quit_requested_handler: ?QuitRequestedHandler = null;
+var exit_on_last_window_closed: bool = true;
+var host_message_wakeup_state = HostMessageWakeupState{};
+var host_message_wakeup_mutex: std.Thread.Mutex = .{};
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
 
@@ -166,6 +192,67 @@ export fn electrobun_core_last_error() [*:0]const u8 {
     return "";
 }
 
+fn parseWebviewRenderer(renderer: [*:0]const u8) WebviewRendererKind {
+    if (std.mem.eql(u8, std.mem.span(renderer), "cef")) {
+        return .cef;
+    }
+    return .native;
+}
+
+fn rememberDefaultWebviewCallbacks(
+    navigation_callback: ?DecideNavigationHandler,
+    webview_event_handler: ?WebviewEventHandler,
+    event_bridge_handler: ?WebviewPostMessageHandler,
+) void {
+    if (navigation_callback) |handler| {
+        default_webview_callbacks.navigation_callback = handler;
+    }
+    if (webview_event_handler) |handler| {
+        default_webview_callbacks.webview_event_handler = handler;
+    }
+    if (event_bridge_handler) |handler| {
+        default_webview_callbacks.event_bridge_handler = handler;
+    }
+}
+
+fn ensureHostMessageWakeupInitialized() bool {
+    if (builtin.os.tag == .windows) {
+        return false;
+    }
+
+    host_message_wakeup_mutex.lock();
+    defer host_message_wakeup_mutex.unlock();
+
+    if (host_message_wakeup_state.initialized) {
+        return true;
+    }
+
+    const fds = std.posix.pipe() catch return false;
+    host_message_wakeup_state.read_fd = @intCast(fds[0]);
+    host_message_wakeup_state.write_fd = @intCast(fds[1]);
+    host_message_wakeup_state.initialized = true;
+    host_message_wakeup_state.signaled = false;
+    return true;
+}
+
+fn signalHostMessageWakeup() void {
+    if (!ensureHostMessageWakeupInitialized()) {
+        return;
+    }
+
+    host_message_wakeup_mutex.lock();
+    defer host_message_wakeup_mutex.unlock();
+
+    if (host_message_wakeup_state.signaled) {
+        return;
+    }
+
+    const byte: [1]u8 = .{1};
+    const write_fd: std.posix.fd_t = @intCast(host_message_wakeup_state.write_fd);
+    _ = std.posix.write(write_fd, &byte) catch return;
+    host_message_wakeup_state.signaled = true;
+}
+
 fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
     const owned_message = dupeZ(message) catch return;
 
@@ -177,7 +264,10 @@ fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
         .message = owned_message,
     }) catch {
         allocator.free(owned_message);
+        return;
     };
+
+    signalHostMessageWakeup();
 }
 
 fn hostBridgeQueueTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
@@ -195,6 +285,11 @@ export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
     }
 
     const entry = pending_host_messages.orderedRemove(0);
+    if (pending_host_messages.items.len == 0) {
+        host_message_wakeup_mutex.lock();
+        host_message_wakeup_state.signaled = false;
+        host_message_wakeup_mutex.unlock();
+    }
     out_webview_id.* = entry.webview_id;
     return entry.message.ptr;
 }
@@ -204,6 +299,14 @@ export fn freeCoreString(value: ?[*:0]u8) void {
         const slice = std.mem.sliceTo(ptr_value, 0);
         allocator.free(@constCast(slice));
     }
+}
+
+export fn getHostMessageWakeupReadFD() c_int {
+    clearLastError();
+    if (!ensureHostMessageWakeupInitialized()) {
+        return -1;
+    }
+    return host_message_wakeup_state.read_fd;
 }
 
 fn ensureWebviewRuntimeConfigured() bool {
@@ -1010,6 +1113,50 @@ fn requireWgpuViewPtr(wgpu_view_id: u32) WgpuViewPtr {
     return wgpu_view_ptr;
 }
 
+fn hasOpenWindows() bool {
+    window_registry_mutex.lock();
+    defer window_registry_mutex.unlock();
+    return window_registry.count() > 0;
+}
+
+fn collectWebviewIdsForWindow(window_id: u32, list: *std.ArrayList(u32)) void {
+    webview_registry_mutex.lock();
+    defer webview_registry_mutex.unlock();
+
+    var iterator = webview_registry.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.value_ptr.window_id == window_id) {
+            list.append(entry.key_ptr.*) catch return;
+        }
+    }
+}
+
+fn collectWgpuViewIdsForWindow(window_id: u32, list: *std.ArrayList(u32)) void {
+    wgpu_view_registry_mutex.lock();
+    defer wgpu_view_registry_mutex.unlock();
+
+    var iterator = wgpu_view_registry.iterator();
+    while (iterator.next()) |entry| {
+        if (entry.value_ptr.window_id == window_id) {
+            list.append(entry.key_ptr.*) catch return;
+        }
+    }
+}
+
+fn loadManagedHTMLForWebview(webview_id: u32, html: [*:0]const u8) void {
+    const state = lookupWebviewState(webview_id) orelse return;
+
+    if (state.renderer == .cef) {
+        const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
+        const set_webview_html_content = lookupNativeSymbol(SetWebviewHTMLContentFn, "setWebviewHTMLContent") orelse return;
+        set_webview_html_content(webview_id, html);
+        loadURLInWebView(webview_id, "views://internal/index.html");
+        return;
+    }
+
+    loadHTMLInWebView(webview_id, html);
+}
+
 fn allocateOwnedJavascriptString(
     comptime fmt: []const u8,
     args: anytype,
@@ -1059,8 +1206,534 @@ fn buildInternalMessageJavascript(message_json: [*:0]const u8) ?[:0]u8 {
     );
 }
 
+fn jsonString(value: std.json.Value) ?[]const u8 {
+    return switch (value) {
+        .string => |string_value| string_value,
+        .number_string => |string_value| string_value,
+        else => null,
+    };
+}
+
+fn jsonBool(value: std.json.Value) ?bool {
+    return switch (value) {
+        .bool => |bool_value| bool_value,
+        else => null,
+    };
+}
+
+fn jsonU32(value: std.json.Value) ?u32 {
+    return switch (value) {
+        .integer => |integer_value| blk: {
+            if (integer_value < 0 or integer_value > std.math.maxInt(u32)) break :blk null;
+            break :blk @intCast(integer_value);
+        },
+        .float => |float_value| blk: {
+            if (!std.math.isFinite(float_value)) break :blk null;
+            if (@floor(float_value) != float_value) break :blk null;
+            if (float_value < 0 or float_value > std.math.maxInt(u32)) break :blk null;
+            break :blk @intFromFloat(float_value);
+        },
+        .number_string => |string_value| std.fmt.parseInt(u32, string_value, 10) catch null,
+        else => null,
+    };
+}
+
+fn jsonF64(value: std.json.Value) ?f64 {
+    return switch (value) {
+        .integer => |integer_value| @floatFromInt(integer_value),
+        .float => |float_value| float_value,
+        .number_string => |string_value| std.fmt.parseFloat(f64, string_value) catch null,
+        else => null,
+    };
+}
+
+fn duplicateSentinelString(value: []const u8) ?[:0]u8 {
+    return allocator.dupeZ(u8, value) catch null;
+}
+
+const InternalRect = struct {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+};
+
+fn parseInternalRect(value: std.json.Value) ?InternalRect {
+    if (value != .object) {
+        return null;
+    }
+
+    const object = value.object;
+    const x = jsonF64(object.get("x") orelse return null) orelse return null;
+    const y = jsonF64(object.get("y") orelse return null) orelse return null;
+    const width = jsonF64(object.get("width") orelse return null) orelse return null;
+    const height = jsonF64(object.get("height") orelse return null) orelse return null;
+    return .{ .x = x, .y = y, .width = width, .height = height };
+}
+
+fn sendInternalBridgeResponse(
+    host_webview_id: u32,
+    request_id: []const u8,
+    success: bool,
+    payload: anytype,
+) void {
+    const encoded_id = std.json.stringifyAlloc(allocator, request_id, .{}) catch return;
+    defer allocator.free(encoded_id);
+
+    const payload_json = std.json.stringifyAlloc(allocator, payload, .{}) catch return;
+    defer allocator.free(payload_json);
+
+    const response_json = std.fmt.allocPrintZ(
+        allocator,
+        "{{\"type\":\"response\",\"id\":{s},\"success\":{s},\"payload\":{s}}}",
+        .{ encoded_id, if (success) "true" else "false", payload_json },
+    ) catch return;
+    defer allocator.free(response_json);
+
+    _ = sendInternalMessageToWebview(host_webview_id, response_json.ptr);
+}
+
+fn dispatchStoredWebviewEvent(payload: std.json.Value) void {
+    if (payload != .object) {
+        return;
+    }
+
+    const handler = default_webview_callbacks.webview_event_handler orelse return;
+    const payload_object = payload.object;
+    const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+    const event_name = jsonString(payload_object.get("eventName") orelse return) orelse return;
+    const detail = jsonString(payload_object.get("detail") orelse return) orelse return;
+
+    const event_name_z = allocator.dupeZ(u8, event_name) catch return;
+    defer allocator.free(event_name_z);
+    const detail_z = allocator.dupeZ(u8, detail) catch return;
+    defer allocator.free(detail_z);
+
+    handler(webview_id, event_name_z.ptr, detail_z.ptr);
+}
+
+fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
+    if (params != .object) {
+        return null;
+    }
+
+    const callbacks = default_webview_callbacks;
+    if (callbacks.webview_event_handler == null or callbacks.event_bridge_handler == null) {
+        return null;
+    }
+
+    const params_object = params.object;
+    const host_webview_id = jsonU32(params_object.get("hostWebviewId") orelse return null) orelse return null;
+    const window_id = jsonU32(params_object.get("windowId") orelse return null) orelse return null;
+    const renderer = jsonString(params_object.get("renderer") orelse return null) orelse return null;
+    const partition = jsonString(params_object.get("partition") orelse return null) orelse "persist:default";
+    const frame = parseInternalRect(params_object.get("frame") orelse return null) orelse return null;
+    const sandbox = jsonBool(params_object.get("sandbox") orelse .{ .bool = false }) orelse false;
+    const transparent = jsonBool(params_object.get("transparent") orelse .{ .bool = false }) orelse false;
+    const passthrough = jsonBool(params_object.get("passthrough") orelse .{ .bool = false }) orelse false;
+    const url_value = params_object.get("url");
+    const html_value = params_object.get("html");
+    const preload_value = params_object.get("preload");
+    const navigation_rules_value = params_object.get("navigationRules");
+
+    var secret_key: WebviewSecretKey = undefined;
+    std.crypto.random.bytes(&secret_key);
+
+    var secret_key_buffer = std.ArrayList(u8).init(allocator);
+    defer secret_key_buffer.deinit();
+    for (secret_key, 0..) |byte, index| {
+        if (index > 0) {
+            secret_key_buffer.append(',') catch return null;
+        }
+        secret_key_buffer.writer().print("{d}", .{byte}) catch return null;
+    }
+    secret_key_buffer.append(0) catch return null;
+    const secret_key_z = secret_key_buffer.toOwnedSliceSentinel(0) catch return null;
+    defer allocator.free(secret_key_z);
+
+    const url = if (url_value) |value| jsonString(value) orelse "" else "";
+    const preload = if (preload_value) |value| jsonString(value) orelse "" else "";
+    const renderer_z = duplicateSentinelString(renderer) orelse return null;
+    defer allocator.free(renderer_z);
+    const partition_z = duplicateSentinelString(partition) orelse return null;
+    defer allocator.free(partition_z);
+    const url_z = duplicateSentinelString(if (html_value != null and html_value.? != .null) "" else url) orelse return null;
+    defer allocator.free(url_z);
+    const preload_z = duplicateSentinelString(preload) orelse return null;
+    defer allocator.free(preload_z);
+
+    const rules_json = if (navigation_rules_value) |value|
+        std.json.stringifyAlloc(allocator, value, .{}) catch return null
+    else
+        null;
+    defer if (rules_json) |allocated| allocator.free(allocated);
+
+    const webview_id = createWebview(
+        window_id,
+        host_webview_id,
+        renderer_z.ptr,
+        url_z.ptr,
+        frame.x,
+        frame.y,
+        frame.width,
+        frame.height,
+        false,
+        partition_z.ptr,
+        callbacks.navigation_callback,
+        callbacks.webview_event_handler,
+        callbacks.event_bridge_handler,
+        null,
+        null,
+        secret_key_z.ptr,
+        preload_z.ptr,
+        "",
+        sandbox,
+        transparent,
+        passthrough,
+    );
+
+    if (webview_id == 0) {
+        return null;
+    }
+
+    if (html_value) |value| {
+        const html = jsonString(value) orelse "";
+        if (html.len > 0) {
+            const html_z = duplicateSentinelString(html) orelse return webview_id;
+            defer allocator.free(html_z);
+            loadManagedHTMLForWebview(webview_id, html_z.ptr);
+        }
+    }
+
+    if (rules_json) |allocated| {
+        const rules_json_z = duplicateSentinelString(allocated) orelse return webview_id;
+        defer allocator.free(rules_json_z);
+        setWebviewNavigationRules(webview_id, rules_json_z.ptr);
+    }
+
+    return webview_id;
+}
+
+fn createManagedWgpuViewFromInternalRequest(params: std.json.Value) ?u32 {
+    if (params != .object) {
+        return null;
+    }
+
+    const params_object = params.object;
+    const window_id = jsonU32(params_object.get("windowId") orelse return null) orelse return null;
+    const frame = parseInternalRect(params_object.get("frame") orelse return null) orelse return null;
+    const transparent = jsonBool(params_object.get("transparent") orelse .{ .bool = false }) orelse false;
+    const passthrough = jsonBool(params_object.get("passthrough") orelse .{ .bool = false }) orelse false;
+
+    const wgpu_view_id = createWGPUView(
+        window_id,
+        frame.x,
+        frame.y,
+        frame.width,
+        frame.height,
+        false,
+        transparent,
+        passthrough,
+    );
+    if (wgpu_view_id == 0) {
+        return null;
+    }
+    return wgpu_view_id;
+}
+
+fn handleInternalRequest(request_object: std.json.ObjectMap) void {
+    const method = jsonString(request_object.get("method") orelse return) orelse return;
+    const request_id = jsonString(request_object.get("id") orelse return) orelse return;
+    const host_webview_id = jsonU32(request_object.get("hostWebviewId") orelse return) orelse return;
+    const params = request_object.get("params") orelse .null;
+
+    if (std.mem.eql(u8, method, "webviewTagInit")) {
+        const webview_id = createManagedWebviewFromInternalRequest(params) orelse {
+            sendInternalBridgeResponse(host_webview_id, request_id, false, "Failed to create webview tag");
+            return;
+        };
+        sendInternalBridgeResponse(host_webview_id, request_id, true, webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "wgpuTagInit")) {
+        const wgpu_view_id = createManagedWgpuViewFromInternalRequest(params) orelse {
+            sendInternalBridgeResponse(host_webview_id, request_id, false, "Failed to create WGPU view");
+            return;
+        };
+        sendInternalBridgeResponse(host_webview_id, request_id, true, wgpu_view_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "webviewTagCanGoBack")) {
+        if (params != .object) return;
+        const webview_id = jsonU32(params.object.get("id") orelse return) orelse return;
+        sendInternalBridgeResponse(host_webview_id, request_id, true, webviewCanGoBack(webview_id));
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "webviewTagCanGoForward")) {
+        if (params != .object) return;
+        const webview_id = jsonU32(params.object.get("id") orelse return) orelse return;
+        sendInternalBridgeResponse(host_webview_id, request_id, true, webviewCanGoForward(webview_id));
+        return;
+    }
+
+    sendInternalBridgeResponse(host_webview_id, request_id, false, "Unknown internal request");
+}
+
+fn handleInternalMessage(message_id: []const u8, payload: std.json.Value) void {
+    if (std.mem.eql(u8, message_id, "webviewEvent")) {
+        dispatchStoredWebviewEvent(payload);
+        return;
+    }
+
+    if (payload != .object) {
+        return;
+    }
+
+    const payload_object = payload.object;
+
+    if (std.mem.eql(u8, message_id, "webviewTagResize")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const frame = parseInternalRect(payload_object.get("frame") orelse return) orelse return;
+        const masks = if (payload_object.get("masks")) |value| jsonString(value) orelse "[]" else "[]";
+        const masks_z = duplicateSentinelString(masks) orelse return;
+        defer allocator.free(masks_z);
+        resizeWebview(webview_id, frame.x, frame.y, frame.width, frame.height, masks_z.ptr);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagResize")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const frame = parseInternalRect(payload_object.get("frame") orelse return) orelse return;
+        const masks = if (payload_object.get("masks")) |value| jsonString(value) orelse "[]" else "[]";
+        const masks_z = duplicateSentinelString(masks) orelse return;
+        defer allocator.free(masks_z);
+        resizeWGPUView(wgpu_view_id, frame.x, frame.y, frame.width, frame.height, masks_z.ptr);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagUpdateSrc")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const url = jsonString(payload_object.get("url") orelse return) orelse return;
+        const url_z = duplicateSentinelString(url) orelse return;
+        defer allocator.free(url_z);
+        loadURLInWebView(webview_id, url_z.ptr);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagUpdateHtml")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const html = jsonString(payload_object.get("html") orelse return) orelse return;
+        const html_z = duplicateSentinelString(html) orelse return;
+        defer allocator.free(html_z);
+        loadManagedHTMLForWebview(webview_id, html_z.ptr);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagUpdatePreload")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const preload = jsonString(payload_object.get("preload") orelse return) orelse return;
+        const preload_z = duplicateSentinelString(preload) orelse return;
+        defer allocator.free(preload_z);
+        updatePreloadScriptToWebView(webview_id, "electrobun_custom_preload_script", preload_z.ptr, true);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagGoBack")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewGoBack(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagGoForward")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewGoForward(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagReload")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewReload(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagRemove")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewRemove(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "startWindowMove")) {
+        const window_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        beginWindowMove(window_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "stopWindowMove")) {
+        endWindowMove();
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagSetTransparent")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const transparent = jsonBool(payload_object.get("transparent") orelse return) orelse return;
+        webviewSetTransparent(webview_id, transparent);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagSetTransparent")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const transparent = jsonBool(payload_object.get("transparent") orelse return) orelse return;
+        setWGPUViewTransparent(wgpu_view_id, transparent);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagSetPassthrough")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const passthrough = jsonBool(payload_object.get("enablePassthrough") orelse return) orelse return;
+        webviewSetPassthrough(webview_id, passthrough);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagSetPassthrough")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const passthrough = jsonBool(payload_object.get("passthrough") orelse return) orelse return;
+        setWGPUViewPassthrough(wgpu_view_id, passthrough);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagSetHidden")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const hidden = jsonBool(payload_object.get("hidden") orelse return) orelse return;
+        webviewSetHidden(webview_id, hidden);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagSetHidden")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const hidden = jsonBool(payload_object.get("hidden") orelse return) orelse return;
+        setWGPUViewHidden(wgpu_view_id, hidden);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagRemove")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        removeWGPUView(wgpu_view_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "wgpuTagRunTest")) {
+        const wgpu_view_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        runWGPUViewTest(wgpu_view_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagSetNavigationRules")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const rules_value = payload_object.get("rules") orelse return;
+        const rules_json = std.json.stringifyAlloc(allocator, rules_value, .{}) catch return;
+        defer allocator.free(rules_json);
+        const rules_json_z = duplicateSentinelString(rules_json) orelse return;
+        defer allocator.free(rules_json_z);
+        setWebviewNavigationRules(webview_id, rules_json_z.ptr);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagFindInPage")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const search_text = jsonString(payload_object.get("searchText") orelse return) orelse return;
+        const forward = jsonBool(payload_object.get("forward") orelse return) orelse return;
+        const match_case = jsonBool(payload_object.get("matchCase") orelse return) orelse return;
+        const search_text_z = duplicateSentinelString(search_text) orelse return;
+        defer allocator.free(search_text_z);
+        webviewFindInPage(webview_id, search_text_z.ptr, forward, match_case);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagStopFind")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewStopFind(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagOpenDevTools")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewOpenDevTools(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagCloseDevTools")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewCloseDevTools(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagToggleDevTools")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        webviewToggleDevTools(webview_id);
+        return;
+    }
+
+    if (std.mem.eql(u8, message_id, "webviewTagExecuteJavascript")) {
+        const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+        const js = jsonString(payload_object.get("js") orelse return) orelse return;
+        const js_z = duplicateSentinelString(js) orelse return;
+        defer allocator.free(js_z);
+        evaluateJavaScriptWithNoCompletion(webview_id, js_z.ptr);
+        return;
+    }
+}
+
+fn handleInternalBridgePacket(packet: std.json.Value) void {
+    if (packet != .object) {
+        return;
+    }
+
+    const object = packet.object;
+    const packet_type = jsonString(object.get("type") orelse return) orelse return;
+
+    if (std.mem.eql(u8, packet_type, "request")) {
+        handleInternalRequest(object);
+        return;
+    }
+
+    if (std.mem.eql(u8, packet_type, "message")) {
+        const message_id = jsonString(object.get("id") orelse return) orelse return;
+        const payload = object.get("payload") orelse .null;
+        handleInternalMessage(message_id, payload);
+    }
+}
+
+fn processInternalBridgeBatch(message_json: []const u8) void {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, message_json, .{}) catch return;
+    defer parsed.deinit();
+
+    if (parsed.value == .array) {
+        for (parsed.value.array.items) |item| {
+            const item_json = jsonString(item) orelse continue;
+            var nested = std.json.parseFromSlice(std.json.Value, allocator, item_json, .{}) catch continue;
+            defer nested.deinit();
+            handleInternalBridgePacket(nested.value);
+        }
+        return;
+    }
+
+    handleInternalBridgePacket(parsed.value);
+}
+
+fn internalBridgeCoreTrampoline(_webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+    _ = _webview_id;
+    processInternalBridgeBatch(std.mem.span(message));
+}
+
 fn windowCloseTrampoline(window_id: u32) callconv(.C) void {
     var close_handler: ?WindowCloseHandler = null;
+    var child_webview_ids = std.ArrayList(u32).init(allocator);
+    defer child_webview_ids.deinit();
+    var child_wgpu_view_ids = std.ArrayList(u32).init(allocator);
+    defer child_wgpu_view_ids.deinit();
 
     window_registry_mutex.lock();
     if (window_registry.fetchRemove(window_id)) |removed| {
@@ -1068,8 +1741,24 @@ fn windowCloseTrampoline(window_id: u32) callconv(.C) void {
     }
     window_registry_mutex.unlock();
 
+    collectWebviewIdsForWindow(window_id, &child_webview_ids);
+    for (child_webview_ids.items) |webview_id| {
+        webviewRemove(webview_id);
+    }
+
+    collectWgpuViewIdsForWindow(window_id, &child_wgpu_view_ids);
+    for (child_wgpu_view_ids.items) |wgpu_view_id| {
+        removeWGPUView(wgpu_view_id);
+    }
+
     if (close_handler) |handler| {
         handler(window_id);
+    }
+
+    if (exit_on_last_window_closed and !hasOpenWindows()) {
+        if (managed_quit_requested_handler) |handler| {
+            handler();
+        }
     }
 }
 
@@ -1105,6 +1794,12 @@ fn windowKeyTrampoline(window_id: u32, key_code: u32, modifiers: u32, is_down: u
     const state = lookupWindowState(window_id) orelse return;
     if (state.key_handler) |handler| {
         handler(window_id, key_code, modifiers, is_down, is_repeat);
+    }
+}
+
+fn managedQuitRequestedTrampoline() callconv(.C) void {
+    if (managed_quit_requested_handler) |handler| {
+        handler();
     }
 }
 
@@ -1476,6 +2171,21 @@ export fn getWindowFrame(
     get_window_frame(window, x, y, width, height);
 }
 
+export fn beginWindowMove(window_id: u32) void {
+    clearLastError();
+    const StartWindowMoveFn = *const fn (WindowPtr) callconv(.C) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const start_window_move = lookupNativeSymbol(StartWindowMoveFn, "startWindowMove") orelse return;
+    start_window_move(window);
+}
+
+export fn endWindowMove() void {
+    clearLastError();
+    const StopWindowMoveFn = *const fn () callconv(.C) void;
+    const stop_window_move = lookupNativeSymbol(StopWindowMoveFn, "stopWindowMove") orelse return;
+    stop_window_move();
+}
+
 export fn createWebview(
     window_id: u32,
     host_webview_id: u32,
@@ -1491,7 +2201,7 @@ export fn createWebview(
     webview_event_handler: ?WebviewEventHandler,
     event_bridge_handler: ?WebviewPostMessageHandler,
     _host_bridge_handler: ?WebviewPostMessageHandler,
-    internal_bridge_handler: ?WebviewPostMessageHandler,
+    _internal_bridge_handler: ?WebviewPostMessageHandler,
     secret_key: [*:0]const u8,
     custom_preload_script: [*:0]const u8,
     views_root: [*:0]const u8,
@@ -1501,6 +2211,12 @@ export fn createWebview(
 ) u32 {
     clearLastError();
     _ = _host_bridge_handler;
+    _ = _internal_bridge_handler;
+    rememberDefaultWebviewCallbacks(
+        navigation_callback,
+        webview_event_handler,
+        event_bridge_handler,
+    );
 
     const SetNextWebviewFlagsFn = *const fn (bool, bool) callconv(.C) void;
     const InitWebviewFn = *const fn (
@@ -1561,7 +2277,9 @@ export fn createWebview(
 
     webview_registry.put(webview_id, .{
         .ptr = null,
+        .window_id = window_id,
         .host_webview_id = if (host_webview_id == 0) null else host_webview_id,
+        .renderer = parseWebviewRenderer(renderer),
         .secret_key = parsed_secret_key,
         .socket_handle = null,
         .transport_ready = false,
@@ -1602,7 +2320,7 @@ export fn createWebview(
         webview_event_handler,
         event_bridge_handler,
         hostBridgeQueueTrampoline,
-        internal_bridge_handler,
+        internalBridgeCoreTrampoline,
         electrobun_preload_script.ptr,
         custom_preload_script,
         views_root,
@@ -1959,7 +2677,10 @@ export fn createWGPUView(
         next_wgpu_view_id = 1;
     }
 
-    wgpu_view_registry.put(wgpu_view_id, .{ .ptr = null }) catch |err| {
+    wgpu_view_registry.put(wgpu_view_id, .{
+        .ptr = null,
+        .window_id = window_id,
+    }) catch |err| {
         wgpu_view_registry_mutex.unlock();
         setLastError("Failed to store WGPUView state: {s}", .{@errorName(err)});
         return 0;
@@ -2541,12 +3262,37 @@ export fn setAppReopenHandler(handler: ?AppReopenHandler) void {
 
 export fn setQuitRequestedHandler(handler: ?QuitRequestedHandler) void {
     clearLastError();
+    managed_quit_requested_handler = handler;
     const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.C) void;
     const set_quit_requested_handler = lookupNativeSymbol(
         SetQuitRequestedHandlerFn,
         "setQuitRequestedHandler",
     ) orelse return;
-    set_quit_requested_handler(handler);
+    set_quit_requested_handler(if (handler != null) managedQuitRequestedTrampoline else null);
+}
+
+export fn setExitOnLastWindowClosed(enabled: bool) void {
+    clearLastError();
+    exit_on_last_window_closed = enabled;
+}
+
+export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
+    clearLastError();
+
+    const StopEventLoopFn = *const fn () callconv(.C) void;
+    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.C) void;
+
+    if (lookupNativeSymbol(StopEventLoopFn, "stopEventLoop")) |stop_event_loop| {
+        stop_event_loop();
+    }
+
+    if (lookupNativeSymbol(WaitForShutdownCompleteFn, "waitForShutdownComplete")) |wait_for_shutdown_complete| {
+        wait_for_shutdown_complete(timeout_ms);
+    }
+
+    if (ensureNativeWrapperLoaded()) {
+        native_wrapper_state.force_exit(code);
+    }
 }
 
 export fn stopEventLoop() void {
