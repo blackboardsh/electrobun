@@ -48,14 +48,13 @@ When you run `bun run dev` (without HMR):
 │       └── index.css       # Tailwind CSS
 ├── electrobun.config.ts    # Electrobun configuration
 ├── vite.config.ts          # Vite configuration
-├── tailwind.config.js      # Tailwind configuration
 └── package.json
 ```
 
 ## Customizing
 
 - **React components**: Edit files in `src/mainview/`
-- **Tailwind theme**: Edit `tailwind.config.js`
+- **Tailwind styles**: Edit `src/mainview/index.css`
 - **Vite settings**: Edit `vite.config.ts`
 - **Window settings**: Edit `src/bun/index.ts`
 - **App metadata**: Edit `electrobun.config.ts`
