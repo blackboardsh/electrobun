@@ -707,13 +707,15 @@ WKWebsiteDataStore* createDataStoreForPartition(const char* partitionIdentifier)
         NSUUID *uuid = UUIDFromString(identifier);
         if (uuid) {
             // dataStoreForIdentifier is only available on macOS 14.0+
-            if (@available(macOS 14.0, *)) {
-                return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
-            } else {
-                // Fallback to default data store on older macOS versions
-                NSLog(@"[Session] Partition-specific data stores require macOS 14.0+, using default store");
-                return [WKWebsiteDataStore defaultDataStore];
+            if ([WKWebsiteDataStore respondsToSelector:@selector(dataStoreForIdentifier:)]) {
+                if (@available(macOS 14.0, *)) {
+                    return [WKWebsiteDataStore dataStoreForIdentifier:uuid];
+                }
             }
+            
+            // Fallback to default data store on older macOS versions
+            NSLog(@"[Session] Partition-specific data stores require macOS 14.0+, using default store");
+            return [WKWebsiteDataStore defaultDataStore];
         } else {
             NSLog(@"Invalid UUID for identifier: %@", identifier);
             return [WKWebsiteDataStore defaultDataStore];
