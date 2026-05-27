@@ -2,10 +2,11 @@
 title: "Paths"
 ---
 
+# Paths
+
 Global paths exposed by Electrobun
 
-```
-
+```ts
 import {PATHS} from "electrobun/bun";
 
 // in a macOS bundle this is where static bundled resources are kept.
@@ -20,4 +21,3 @@ PATHS.RESOURCES_FOLDER
 PATHS.VIEWS_FOLDER
 
 ```
-

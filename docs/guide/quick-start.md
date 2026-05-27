@@ -2,9 +2,12 @@
 title: "Quick Start"
 ---
 
+# Quick Start
+
 Welcome to Electrobun! This guide will help you create your first ultra-fast, tiny desktop application with TypeScript.
 
 ## Prerequisites
+
 Before getting started, make sure you have:
 
 - [Bun](https://bun.sh) installed on your system
@@ -14,18 +17,17 @@ Before getting started, make sure you have:
 - Basic knowledge of TypeScript/JavaScript
 
 ## Getting Started
+
 Create a new Electrobun project with a single command:
 
-```
-
+```bash
 bunx electrobun init
 
 ```
 
 It'll ask you which template project you want to get started with.This creates a new directory with the basic project structure:
 
-```
-
+```text
 my-app/
 ├── src/
 │   ├── bun/
@@ -41,10 +43,10 @@ my-app/
 ```
 
 ## Running Your App
+
 Navigate to your project directory and start development:
 
-```
-
+```bash
 cd my-app
 bun install
 bun start
@@ -60,6 +62,7 @@ This will use the Electrobun cli:
 - Open your app in dev mode
 
 ## Next Steps
+
 Now that you have a basic app running, explore these topics:
 
 - [Hello World](/guide/hello-world) - Create a hello world from scratch.
@@ -73,6 +76,7 @@ Now that you have a basic app running, explore these topics:
 - [Bundling & Distribution](/guide/bundling-and-distribution) - Package your app for distribution
 
 ## Need Help?
+
 If you run into any issues:
 
 - Check the [GitHub repository](https://github.com/blackboardsh/electrobun)

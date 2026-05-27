@@ -2,11 +2,11 @@
 title: "Electroview Class"
 ---
 
+# Electroview Class
+
 ::: tip
 Instantiate Electrobun APIs in the browser.
 :::
-
-
 
 ```ts
 const electrobun = new Electroview({ ...options })
@@ -16,6 +16,7 @@ const electrobun = new Electroview({ ...options })
 ## Constructor Options
 
 ### rpc
+
 This is the browser side of creating typed RPC between the main bun process and a given BrowserView's context.
 
 ```ts
@@ -59,7 +60,6 @@ msg: string;
 
 ```
 
-
 ```typescript
 // /src/myview/index.ts
 const rpc = Electroview.defineRPC<MyWebviewRPCType>({
@@ -98,9 +98,11 @@ electroview.rpc.send.logToBun({ msg: "hi from browser" });
 ## Static Methods
 
 ### defineRPC
+
 Pass `Electroview.defineRPC` the shared rpc type to generate the typed rpc and message functions you can call from the browser and to set up types for the browser handlers for functions handled in the browser.
 
 ## Methods
 
 ### Browser to Browser RPC
+
 Electrobun doesn't provide browser to browser RPC out of the box as we favour isolation between browser contexts for greater security.There's nothing stopping you from creating bun to browser rpc for two different BrowserViews and passing messages between them via bun. You can also establish any number of other web-based mechanisms to communicated between browser contexts from localstorage to webRTC or via a server.

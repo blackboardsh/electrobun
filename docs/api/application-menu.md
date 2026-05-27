@@ -2,6 +2,8 @@
 title: "Application Menu"
 ---
 
+# Application Menu
+
 Create and control an application menu. In MacOS this is the menu in the top-left with File, Edit, and so on.
 
 ```ts
@@ -43,10 +45,10 @@ Electrobun.events.on("application-menu-clicked", (e) => {
 ```
 
 ### setApplicationMenu
+
 This function takes an array of menu items. Here are some example menu items:
 
 ### Menu dividers
-
 
 ```ts
 // menu dividers
@@ -57,6 +59,7 @@ This function takes an array of menu items. Here are some example menu items:
 ```
 
 ### Default Roles
+
 Menu items can specify a role instead of an action. Use menu item roles to access built-in OS functionality and enable their corresponding keyboard shortcuts.If you want to enable keyboard shortcuts like `` cmd+q `` to quit your application, `` cmd+c `` and `` cmd+v `` for copy and paste then you need to specify menu items with the corresponding roles.
 
 ```ts
@@ -82,8 +85,7 @@ Menu items can specify a role instead of an action. Use menu item roles to acces
 
 List of supported roles
 
-```
-
+```ts
   quit: "Quit",
   hide: "Hide",
   hideOthers: "Hide Others",
@@ -111,6 +113,7 @@ List of supported roles
 ```
 
 ### Custom Menu Items
+
 Instead of a role you can specify and action, you can then listen for that action in the 'application-menu-clicked' event.
 
 ```ts
@@ -122,21 +125,27 @@ Instead of a role you can specify and action, you can then listen for that actio
 ## Optionaly properties
 
 ### enabled
+
 Set to false to show the menu item as disabled
 
 ### checked
+
 Set to true to show a checkbox next to the menu item.
 
 ### hidden
+
 Set to true to hide
 
 ### tooltip
+
 Will show this tooltip when hovering over the menu item
 
 ### submenu
+
 The top-level menu corresponds to the menu items you see when the app is focused, eg: File, Edit, View, etc. You can add actions to those if you want and treat them like buttons, but you can also add nested submenus.
 
 ### accelerator
+
 Set a custom keyboard shortcut for the menu item. This is useful when you want a custom action to have a keyboard shortcut that isn't covered by the built-in roles.
 
 ```ts

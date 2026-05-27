@@ -2,9 +2,12 @@
 title: "What is Electrobun?"
 ---
 
+# What is Electrobun?
+
 Electrobun is a desktop application framework that lets you build ultra fast, tiny, and cross-platform applications using TypeScript. It combines the best of native performance with web development simplicity.
 
 ## The Problem
+
 Traditional desktop app frameworks force you to choose between developer experience and app performance:
 
 - **Electron:** Great DX but huge bundle sizes (150MB+), slow startup times (2-5s), and massive update downloads
@@ -14,6 +17,7 @@ Traditional desktop app frameworks force you to choose between developer experie
 - **Tauri:** Better than Electron but still large updates and you have to learn Rust
 
 ## The Solution
+
 Electrobun provides a third option that doesn't compromise:
 
 - **Ultra-small bundles:** ~14MB compressed (90%+ smaller than Electron)
@@ -31,6 +35,7 @@ Electrobun provides a third option that doesn't compromise:
 - **Optional CEF:** bundle CEF (Chromium) when cross-platform consistency matters most.
 
 ## Performance Comparison
+
   <table class="comparison-table">
     <thead>
       <tr>
@@ -69,24 +74,31 @@ Electrobun provides a third option that doesn't compromise:
   </table>
 
 ## Technical Architecture
+
 Electrobun achieves its performance through a carefully designed architecture:
 
 ### Zig, and Native Bindings
+
 Native functionality like window management, system trays, and app menus writtin in C++ and Objc
 
 ### Bun Runtime
+
 The main process runs on Bun, providing lightning-fast Typescript execution and built-in bundling without the overhead of Node.js and V8.
 
 ### System WebView
+
 Instead of distributing Chromium, By default Electrobun uses your system's native WebView (WebKit on macOS, Edge WebView2 on Windows, WebKitGTK on Linux).
 
 ### Custom Update System
+
 Binary diff updates using a SIMD optimized BSDIFF implementation written in zig to allow for incredibly small update patches - often just kilobytes instead of megabytes.
 
 ### ZSTD self-extracting distributables
+
 The Electrobun cli bundles your app, then compresses it with state of the art compression making initial downloads as small as possible.
 
 ### Custom OOPIF Implementation
+
 Use OOPIFs (super iframes) in your html for secure, isolated, webviews across browser engines and platforms.
 
 ## Key Benefits
@@ -134,6 +146,7 @@ Use OOPIFs (super iframes) in your html for secure, isolated, webviews across br
 - Minimal attack surface
 
 ## When to Use Electrobun
+
 Electrobun is perfect for:
 
 - **Startup MVPs:** Ship fast, iterate quickly with small updates
@@ -149,4 +162,5 @@ Electrobun is perfect for:
 - **Multi-tab web browsers**Build multi-tab experiences and mix CEF and Webkit webviews
 
 ## Getting Started
+
 Ready to build your first Electrobun app? Follow our [Hello World guide](/guide/hello-world) to create a new project in minutes.

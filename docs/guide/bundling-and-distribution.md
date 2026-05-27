@@ -2,6 +2,8 @@
 title: "Bundling & Distribution"
 ---
 
+# Bundling & Distribution
+
 ::: tip
 Continuing on from the [Creating UI](/guide/creating-ui) guide.
 :::
@@ -88,6 +90,7 @@ entrypoint: "src/main-ui/index.ts",
 You can make your app available by uploading the contents of the `artifacts` folder to your release host (S3, R2, GitHub Releases, etc.).The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. The Electrobun CLI builds for the current machine's platform and automatically downloads the core/CEF files during bundling.To produce artifacts for all platforms, run the same build command on CI runners for each OS/architecture. See the [Cross-Platform Development](/guide/cross-platform-development) guide for details.Once you've uploaded artifacts to your host, the next time you run a non-dev build (like `bun run build:canary`) the Electrobun CLI will download the current version of your app using `release.baseUrl` and generate a patch file using our optimized BSDIFF implementation. That patch file gets added to your artifacts folder.It's recommended to keep older patch files in your storage. Users on older versions can download successive patches, each as small as 14KB. If patching can't get the user to the latest version, Electrobun's Updater falls back to downloading the full latest build.Visit the [Updater API docs](/api/updater) to learn how to make your app check for and install updates.
 
 ## Build Lifecycle Hooks
+
 Electrobun provides lifecycle hooks that let you run custom scripts at various stages of the build process. This is useful for tasks like:
 
 - Validating your environment before building
@@ -100,10 +103,10 @@ Electrobun provides lifecycle hooks that let you run custom scripts at various s
 Available hooks (in execution order): `preBuild`, `postBuild`, `postWrap`, `postPackage`See the [Build Configuration docs](/api/build-configuration#build-lifecycle-hooks) for detailed information about each hook and example scripts.
 
 ## Artifacts Folder Structure
+
 When you build your app, Electrobun creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:
 
-```
-
+```text
 artifacts/
 ├── canary-macos-arm64-update.json
 ├── canary-macos-arm64-MyCoolApp-canary.dmg
@@ -124,14 +127,12 @@ artifacts/
 This flat structure works with any host, including GitHub Releases which don't support folders.
 
 ### Artifact Naming Conventions
+
 App names are **sanitized** by removing spaces. For example, an app named "My Cool App" becomes "MyCoolApp" in all artifact filenames.For **stable** builds, channel suffixes are omitted. For other channels (canary, beta, etc.), the channel is appended.Windows and Linux installers are distributed as archives (`.zip` and `.tar.gz` respectively). The archive filenames are sanitized (no spaces), but the installer files inside the archives preserve spaces for a user-friendly experience.
 
 ### macOS Artifacts
 
-  
-
-```
-
+```text
 # Canary:
 canary-macos-arm64-update.json                    # Version metadata for the Updater API
 canary-macos-arm64-MyCoolApp-canary.dmg           # Installer DMG for first-time installs
@@ -146,10 +147,7 @@ stable-macos-arm64-MyCoolApp.app.tar.zst
 
 ### Windows Artifacts
 
-  
-
-```
-
+```text
 # Canary:
 canary-win-x64-update.json                       # Version metadata
 canary-win-x64-MyCoolApp-Setup-canary.zip        # Zip containing the Setup .exe installer
@@ -164,10 +162,7 @@ stable-win-x64-MyCoolApp.tar.zst
 
 ### Linux Artifacts
 
-  
-
-```
-
+```text
 # Canary:
 canary-linux-x64-update.json                        # Version metadata
 canary-linux-x64-MyCoolAppSetup-canary.tar.gz       # tar.gz containing the self-extracting setup
@@ -181,10 +176,10 @@ stable-linux-x64-MyCoolApp.tar.zst
 ```
 
 ### Constructing Download URLs
+
 Since artifacts are already prefixed, the download URL is simply `{'{baseUrl}/{artifact-filename}'}`:
 
-```
-
+```text
 # Examples (assuming baseUrl is "https://releases.example.com/myapp"):
 
 # macOS ARM (Apple Silicon)
@@ -238,4 +233,5 @@ https://releases.example.com/myapp/canary-linux-arm64-MyCoolAppSetup-canary.tar.
   </table>
 
 ### Patch Files
+
 Patch files are named with the platform prefix and a hash representing the source version (e.g., `canary-macos-arm64-a1b2c3d4.patch`). When replacing the contents of your static file host, keep old patch files so users on older versions can step through incremental updates to reach the latest build.

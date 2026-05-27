@@ -2,6 +2,8 @@
 title: "Compatibility"
 ---
 
+# Compatibility
+
 ## Dependencies and Versions
 
 <table class="docs-table">
@@ -42,6 +44,7 @@ title: "Compatibility"
 - **Linux**: Development support available
 
 ### Target Platforms
+
 Apps built with Electrobun can be distributed to:
 <table class="docs-table">
 <thead>
@@ -93,6 +96,7 @@ Apps built with Electrobun can be distributed to:
 </table>
 
 ### Webview Engines
+
 Electrobun supports both system webviews and bundled engines:
 <table class="docs-table">
 <thead>

@@ -2,6 +2,8 @@
 title: "BuildConfig"
 ---
 
+# BuildConfig
+
 Access build-time configuration at runtime. This API provides information about how the application was built, including renderer settings.
 
 ```ts
@@ -11,6 +13,7 @@ const config = await Electrobun.BuildConfig.get();
 ```
 
 ## Overview
+
 The `BuildConfig` API gives your Bun process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:
 
 - Knowing which renderers are available in the current build
@@ -22,9 +25,11 @@ The `BuildConfig` API gives your Bun process access to configuration values that
 - Debugging and logging build information
 
 ## BuildConfig.get()
+
 Asynchronously loads and returns the build configuration. The result is cached after the first call.
 
 ### Returns
+
 `Promise<BuildConfigType>`
 
 ### BuildConfigType
@@ -68,7 +73,6 @@ Asynchronously loads and returns the build configuration. The result is cached a
 
 ### Example
 
-
 ```ts
 const config = await BuildConfig.get();
 
@@ -86,13 +90,14 @@ if (config.availableRenderers.includes('cef')) {
 ```
 
 ## BuildConfig.getCached()
+
 Synchronously returns the cached build configuration, or `null` if it hasn't been loaded yet.
 
 ### Returns
+
 `BuildConfigType | null`
 
 ### Example
-
 
 ```ts
 // First, load the config (usually done at app startup)
@@ -110,8 +115,8 @@ if (cached) {
 **Note:** `getCached()` returns `null` if `get()` hasn't been called yet. In most cases, you should use `get()` which handles loading automatically.
 :::
 
-
 ## How It Works
+
 When you build your Electrobun app, the CLI reads your `electrobun.config.ts` and generates a `build.json` file in the app's Resources folder. This file contains the runtime-relevant build settings.The `BuildConfig` API reads this file and caches the result. The configuration includes:
 
 - **defaultRenderer** - From the platform-specific `defaultRenderer` setting in your config
@@ -121,6 +126,7 @@ When you build your Electrobun app, the CLI reads your `electrobun.config.ts` an
 - **runtime** - The entire `runtime` section from your `electrobun.config.ts`, including `exitOnLastWindowClosed` and any custom keys
 
 ## Relationship with BrowserWindow/BrowserView
+
 The `defaultRenderer` setting affects the default behavior of `BrowserWindow` and `BrowserView`:
 
 ```ts
@@ -142,7 +148,6 @@ const window2 = new BrowserWindow({
 See the [Build Configuration](/api/build-configuration) documentation for how to configure these settings.
 
 ## Complete Example
-
 
 ```ts
 // Load and log build configuration at startup
@@ -168,4 +173,3 @@ if (buildConfig.availableRenderers.includes('cef')) {
 }
 
 ```
-

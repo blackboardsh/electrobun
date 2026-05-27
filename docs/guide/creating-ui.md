@@ -2,6 +2,8 @@
 title: "Creating UI"
 ---
 
+# Creating UI
+
 ::: tip
 Continuing on from the [Hello World](/guide/hello-world) guide we're going to add some UI.
 :::
@@ -137,4 +139,3 @@ Your app now shows an Edit menu when focused, and because we used roles for the 
 ::: tip
 **Congratulations!** You just built a simple web browser in Electrobun!
 :::
-

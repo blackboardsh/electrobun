@@ -2,7 +2,10 @@
 title: "Updates"
 ---
 
+# Updates
+
 ## Introduction
+
 We've implemented a batteries included update mechanism. All you need is to bring your own static file host like AWS S3, Cloudflare R2, or GitHub Releases.
 
 - [Update API](/api/updater) to check for, download, and update your apps.
@@ -12,9 +15,11 @@ We've implemented a batteries included update mechanism. All you need is to brin
 - A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB
 
 ## Hosting on GitHub Releases
+
 GitHub Releases is a convenient option for hosting your update artifacts, especially for open source projects. Electrobun uses a flat, prefix-based naming scheme (e.g., `stable-macos-arm64-update.json`) that works with hosts that don't support folder structures.
 
 ### Configuration
+
 Set your `baseUrl` in `electrobun.config` to point to your GitHub Releases:
 
 ```ts
@@ -29,6 +34,7 @@ export default {
 ```
 
 ### Example GitHub Action
+
 Here's an example workflow that builds and publishes releases when you push a tag:
 
 ```yaml
@@ -94,6 +100,7 @@ The `generate_release_notes: true` option uses GitHub's automatic release notes 
 ## Limitations
 
 ### Single Patch File
+
 Electrobun only generates a single patch file per build - from the immediately previous version to the current version. This means:
 
 - Users updating from the previous version get a small delta patch (often just a few KB)
@@ -102,6 +109,7 @@ Electrobun only generates a single patch file per build - from the immediately p
 This is a practical tradeoff that keeps the build process simple while still providing delta updates for users who update regularly.
 
 ### Canary Builds on GitHub Releases
+
 GitHub's `/releases/latest/download` URL only resolves to non-prerelease builds. This means:
 
 - **Stable builds**: Auto-updates work correctly via `/releases/latest/download`

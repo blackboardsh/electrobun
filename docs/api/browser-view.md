@@ -2,15 +2,15 @@
 title: "BrowserView API"
 ---
 
+# BrowserView API
+
   <blockquote>
 Create and control browser views (sometimes referred to as webviews).
   </blockquote>
+
 ::: tip
 Instead of creating BrowserViews directly from the bun process, you would use the [BrowserWindow](/api/browser-window) class which automatically creates a default BrowserView that fills the window, and then use [Webvew Tags](/api/browser-webview-tag) within your html to create nested BrowserViews from the browser context.
 :::
-
-
-  
 
 ```typescript
 // Most use cases: Access webview created by BrowserWindow or WebviewTag
@@ -37,14 +37,14 @@ const webview = new BrowserView({
 
 ```
 
-::: note
+::: info
 While you can create a BrowserView directly in bun it will only render when you add it to a window.
 :::
-
 
 ## Constructor Options
 
 ### frame
+
 Set the Webview's dimensions relative to the window. The default webview created via `new BrowserWindow()` will be stretched to cover the window's dimensions automatically.
 
 ```ts
@@ -60,6 +60,7 @@ const webview = new BrowserView({
 ```
 
 ### url
+
 Set the initial url for the window's default BrowserView to navigate to when it opens.
 
 ```ts
@@ -78,6 +79,7 @@ const webview = new BrowserView({
 ```
 
 ### html
+
 Set an html string for the window's default BrowserView to load when it opens. Anything that would be valid in an html file including javascript and css can be used.
 Use this instead of setting the `url` property.
 
@@ -92,6 +94,7 @@ const webview = new BrowserView({
 ```
 
 ### partition
+
 Partitions allow you to separate the browser session. Things like cookies and so on. For example if you have two BrowserViews with the same partition and log into gmail in one, the other will also be logged into gmail. If you use two different partitions then you could log into a different gmail account in each BrowserView.
 
 ```ts
@@ -110,6 +113,7 @@ const webview = new BrowserView({
 ```
 
 ### preload
+
 Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.
 You can use either inline javascript or a url.
 
@@ -135,6 +139,7 @@ const webview = new BrowserView({
 ```
 
 ### rpc
+
 The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.
 These RPC functions are asynchronous.`src/shared/types.ts`
 
@@ -233,8 +238,8 @@ webview.rpc.send.logToWebview({ msg: "my message" });
 The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the [Browser API](/api/browser-view).
 :::
 
-
 ### sandbox
+
 When set to `true`, the BrowserView runs in sandbox mode. This is a security feature that disables RPC (remote procedure calls) and only allows event emission. Use sandbox mode for untrusted content like remote URLs.
 
 ```ts
@@ -260,6 +265,7 @@ See the [BrowserWindow sandbox documentation](/api/browser-window) for a complet
 ## Static Methods
 
 ### BrowserView.getAll
+
 Get a list of references to all BrowserViews. This includes the default Browserviews created via `new BrowserWindow`, Browserviews created as nested OOPIFs via [WebviewTags](/api/browser-webview-tag), and BrowserViews that you create manually via `new BrowserView()` for advanced use cases.
 
 ```typescript
@@ -268,6 +274,7 @@ const webviews = BrowserView.getAll();
 ```
 
 ### BrowserView.getById
+
 Get a specific BrowserView by id. This includes the default Browserviews created via `new BrowserWindow`, Browserviews created as nested OOPIFs via [WebviewTags](/api/browser-webview-tag), and BrowserViews that you create manually via `new BrowserView()` for advanced use cases.
 
 ```typescript
@@ -287,6 +294,7 @@ const webview = BrowserView.getById(win.webview.id);
 ```
 
 ### BrowserView.defineRPC
+
 Whenever you create a BrowserWindow with async RPC you'll use this static method to create an RPC instance.`src/shared/types.ts`
 
 ```typescript
@@ -360,6 +368,7 @@ console.log("Log to bun: ", msg);
 ## Methods
 
 ### executeJavascript
+
 Execute arbitrary JavaScript in the webview. Unlike a `preload` script that you would typically set as a [BrowserWindow](/api/browser-window) configuration option, `executeJavascript()` can be called at any time. This is a fire-and-forget method &mdash; it does not return a result.
 
 ```typescript
@@ -375,8 +384,8 @@ webview.executeJavascript('document.title = "New Title"');
 For executing JavaScript and getting a result back, use `rpc.request.evaluateJavascriptWithResponse()` instead (requires RPC to be configured).
 :::
 
-
 ### setPageZoom / getPageZoom
+
 Control and get the page zoom level for the webview. A value of `1.0` represents 100% zoom.
 
 ```typescript
@@ -396,8 +405,8 @@ webview.setPageZoom(1.0);
 Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.
 :::
 
-
 ### loadURL
+
 Load a url into the webview. This will navigate the webview and trigger navigation events.
 
 ```typescript
@@ -410,6 +419,7 @@ webview.loadURL("views://mainview/somepage.html");
 ```
 
 ### loadHTML
+
 Load html directly into the webview. This will completely replace any content that was previously loaded and trigger navigation events.
 
 ```typescript
@@ -421,6 +431,7 @@ webview.loadHTML(htmlString);
 ```
 
 ### setNavigationRules
+
 Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Bun process is needed.**Rule Format:**
 
 - Rules use glob-style wildcards where `*` matches any characters
@@ -464,8 +475,8 @@ webview.setNavigationRules([]);
 Navigation rules are evaluated entirely in native code without calling back to the Bun process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.
 :::
 
-
 ### findInPage
+
 Search for text in the webview content. Highlights all matches and scrolls to the first (or next) match.
 
 ```typescript
@@ -490,8 +501,8 @@ webview.findInPage("query", {
 Call `findInPage` repeatedly with the same search text to navigate through matches. Use `stopFindInPage()` to clear the search highlighting.
 :::
 
-
 ### stopFindInPage
+
 Clear the find-in-page search highlighting and results.
 
 ```typescript
@@ -501,6 +512,7 @@ webview.stopFindInPage();
 ```
 
 ### openDevTools
+
 Open the DevTools window for this webview.
 
 ```typescript
@@ -510,6 +522,7 @@ webview.openDevTools();
 ```
 
 ### closeDevTools
+
 Close (or hide) the DevTools window for this webview.
 
 ```typescript
@@ -519,6 +532,7 @@ webview.closeDevTools();
 ```
 
 ### toggleDevTools
+
 Toggle the DevTools window for this webview.
 
 ```typescript
@@ -531,19 +545,22 @@ webview.toggleDevTools();
 DevTools behavior varies by renderer and platform. On macOS with CEF, Electrobun uses remote DevTools and opens a separate window per webview (including OOPIFs). Closing the window hides it so it can be re-opened safely.
 :::
 
-
 ### on(name, handler)
+
 Subscribe to BrowserView events (see below).
 
 ## Properties
 
 ### id
+
 This is the webview's id.
 
 ### hostWebviewId
+
 This is only used for BrowserViews created using the [WebviewTag](/api/browser-webview-tag) as a nested OOPIF. It's the id of the parent BrowserView.
 
 ### rpc
+
 Once you've configured async rpc for a webview (typically via new BrowserWindow and Webview.defineRPC()) you'll use the rpc property to access the generated typed request and message methods.
 
 ```typescript
@@ -558,6 +575,7 @@ webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 
 ### rpc.request.evaluateJavascriptWithResponse
+
 Electrobun includes a built-in RPC method that is automatically available on any webview with RPC configured. This allows you to execute arbitrary JavaScript in the webview and get a result back, without needing to define a custom RPC handler.
 
 ```typescript
@@ -582,10 +600,10 @@ const data = await webview.rpc.request.evaluateJavascriptWithResponse({
 This built-in method is useful for quick one-off JavaScript execution. For frequently used operations, consider defining typed RPC handlers instead for better type safety and maintainability.
 :::
 
-
 ## Events
 
 ### will-navigate
+
 Fired when a webview is about to navigate. The event includes an `allowed` property indicating whether the navigation was permitted by the navigation rules (set via `setNavigationRules()`).
 
 ```ts
@@ -622,8 +640,8 @@ webview.on("will-navigate", (e) => {
 Navigation decisions are made synchronously in native code based on the rules set via `setNavigationRules()`. The `will-navigate` event is informational - by the time it fires, the allow/block decision has already been made. To control navigation, use `setNavigationRules()` to update the rules.
 :::
 
-
 ### did-navigate
+
 After a webview navigates.
 
 ```ts
@@ -634,6 +652,7 @@ event.data = {
 ```
 
 ### did-navigate-in-page
+
 After an in-page navigation.
 
 ```ts
@@ -644,6 +663,7 @@ event.data = {
 ```
 
 ### did-commit-navigation
+
 The webview has started to receive content for the main frame after a navigation.
 
 ```ts
@@ -654,9 +674,11 @@ event.data = {
 ```
 
 ### dom-ready
+
 The dom ready event is fired from the browser context.
 
 ### new-window-open
+
 The browser context is attempting to open a new window. For example a popup or a user right clicked and selected &quot;open in new window&quot;.
 
 ```ts
@@ -698,6 +720,7 @@ webview.on("new-window-open", (event) => {
 ```
 
 ### download-started
+
 Fired when a file download begins in the webview.
 
 ```ts
@@ -719,6 +742,7 @@ webview.on("download-started", (event) => {
 ```
 
 ### download-progress
+
 Fired periodically during a file download to report progress.
 
 ```ts
@@ -738,6 +762,7 @@ webview.on("download-progress", (event) => {
 ```
 
 ### download-completed
+
 Fired when a file download completes successfully.
 
 ```ts
@@ -759,6 +784,7 @@ webview.on("download-completed", (event) => {
 ```
 
 ### download-failed
+
 Fired when a file download fails or is canceled.
 
 ```ts
@@ -779,4 +805,3 @@ webview.on("download-failed", (event) => {
 });
 
 ```
-

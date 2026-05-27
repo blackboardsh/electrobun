@@ -2,6 +2,8 @@
 title: "&lt;electrobun-wgpu&gt;"
 ---
 
+# &lt;electrobun-wgpu&gt;
+
 `<electrobun-wgpu>` embeds a native WGPU-backed surface inside a webview layout. It behaves like a DOM element but renders via a real GPU surface layered above the host view, with optional masking and passthrough for punch‑through UI.
 
 ## When To Use It
@@ -14,11 +16,10 @@ title: "&lt;electrobun-wgpu&gt;"
 If your rendering is simple and you don’t need Bun‑side control or native surface layering, a standard `<canvas>` inside the webview is still the simplest option.
 
 ## Platform Notes
+
 On Linux, `passthrough` and mask punch-through behavior for `<electrobun-wgpu>` is not supported inside transparent `BrowserWindow`s. Transparent CEF windows use offscreen rendering painted into the parent X11 window, while `<electrobun-wgpu>` is a separate native child window. The WGPU surface can render and resize correctly, but X11 cannot reliably hit-test through that child surface into the offscreen-rendered host DOM.For punch-through UI on Linux, use a non-transparent window, keep the interactive HTML outside the WGPU surface, or render the GPU content into a normal in-webview canvas when that composition model is required.
 
 ## Basic Usage
-
-  
 
 ```ts
 // In your webview HTML
@@ -30,8 +31,6 @@ On Linux, `passthrough` and mask punch-through behavior for `<electrobun-wgpu>` 
 ```
 
 ## API
-
-  
 
 ```ts
 const wgpu = document.querySelector("electrobun-wgpu");
@@ -60,6 +59,7 @@ wgpu.on("ready", (evt) => {
 The `wgpuViewId` is the native view identifier. Pass it to your Bun process to create a surface for that view.
 
 ## Lifecycle + Resize
+
 WebGPU surfaces must be reconfigured on size changes. When your WGPU view or window resizes, update the surface config and re-create any size-dependent resources.
 
 ```ts

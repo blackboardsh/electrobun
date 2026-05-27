@@ -2,13 +2,15 @@
 title: "CLI Commands"
 ---
 
+# CLI Commands
+
 The Electrobun CLI provides commands for initializing new projects and building your applications for different environments.
 
 ## Installation
+
 When you install Electrobun, the CLI tool is added to your `node_modules/bin` folder:
 
-```
-
+```bash
 bun install electrobun
 
 ```
@@ -18,10 +20,10 @@ This makes the `electrobun` command available in your npm scripts or via `bunx`/
 ## Commands
 
 ### `electrobun init`
+
 Initializes a new Electrobun project with starter templates.
 
 #### Usage
-
 
 ```bash
 
@@ -45,7 +47,6 @@ electrobun init [template-name]
 
 #### Examples
 
-
 ```bash
 
 # Choose template interactively
@@ -60,13 +61,12 @@ bunx electrobun init multitab-browser
 ```
 
 ### `electrobun build`
+
 Builds your Electrobun application according to the configuration in `electrobun.config.ts`.
 
 #### Usage
 
-
-```
-
+```text
 electrobun build [options]
 
 ```
@@ -95,7 +95,6 @@ Builds always target the current host platform and architecture. To build for mu
 
 #### Examples
 
-
 ```bash
 
 # Development build for current platform
@@ -113,25 +112,23 @@ electrobun build --env=stable
 ```
 
 ### `electrobun run`
+
 Launches an already-built dev bundle. This is useful when you've already run `electrobun build` and just want to relaunch the app without rebuilding.
 
 #### Usage
 
-
-```
-
+```text
 electrobun run
 
 ```
 
 ### `electrobun dev`
+
 Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `electrobun build --env=dev` followed by `electrobun run`.
 
 #### Usage
 
-
-```
-
+```text
 electrobun dev [options]
 
 ```
@@ -155,7 +152,6 @@ electrobun dev [options]
 
 #### Examples
 
-
 ```bash
 
 # Build and launch in dev mode
@@ -167,6 +163,7 @@ electrobun dev --watch
 ```
 
 #### Watch Mode
+
 When using `--watch`, Electrobun automatically watches your source directories for file changes:
 
 - The directory containing your `build.bun.entrypoint`
@@ -220,7 +217,6 @@ When a file change is detected, the running app is killed, a fresh build runs (i
 
 ### Basic Setup
 
-
 ```ts
 // package.json
 {
@@ -236,6 +232,7 @@ When a file change is detected, the running app is killed, a fresh build runs (i
 ```
 
 ### CI Build Scripts
+
 For multi-platform distribution, run the same build command on each platform's CI runner:
 
 ```ts
@@ -249,4 +246,3 @@ For multi-platform distribution, run the same build command on each platform's C
 }
 
 ```
-

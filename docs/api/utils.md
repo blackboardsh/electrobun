@@ -2,20 +2,21 @@
 title: "Utils"
 ---
 
+# Utils
+
 Various utilities for Electrobun apps.
 
 ```ts
-
+import { Utils } from "electrobun/bun";
 ```
 
 ## moveToTrash
+
 Move a file or folder on your system to the Trash (recycle bin).
-::: caution
+::: warning
 On MacOS when you move something to trash from the finder you can open the trash can and see a "restore" button that will put the files/folders back where they were deleted from
 When using moveToTrash in Electrobun it moves it to the trash can but does not enable the "restore" button. To restore you will need to manually drag the files and folders back to their originating folder
 :::
-
-
 
 ```ts
 Utils.moveToTrash(absolutePath)
@@ -23,6 +24,7 @@ Utils.moveToTrash(absolutePath)
 ```
 
 ## showItemInFolder
+
 Open the file manager (Finder on macOS, Explorer on Windows, etc.) and select the specified file or folder.
 
 ```ts
@@ -31,6 +33,7 @@ Utils.showItemInFolder(absolutePath)
 ```
 
 ## openExternal
+
 Open a URL in the default browser or appropriate application. Works with `http://`, `https://`, `mailto:`, custom URL schemes, and more.
 
 ### Parameters
@@ -53,10 +56,10 @@ Open a URL in the default browser or appropriate application. Works with `http:/
 </table>
 
 ### Returns
+
 `boolean` - Returns `true` if the URL was opened successfully, `false` otherwise.
 
 ### Examples
-
 
 ```ts
 // Open a website in the default browser
@@ -74,6 +77,7 @@ Utils.openExternal("file:///Users/me/Documents/report.pdf");
 ```
 
 ## openPath
+
 Open a file or folder with its default application. For files, this opens them with the associated application (e.g., `.pdf` opens with the default PDF reader). For folders, this opens them in the file manager.
 
 ### Parameters
@@ -96,10 +100,10 @@ Open a file or folder with its default application. For files, this opens them w
 </table>
 
 ### Returns
+
 `boolean` - Returns `true` if the path was opened successfully, `false` otherwise.
 
 ### Examples
-
 
 ```ts
 // Open a PDF with the default PDF reader
@@ -125,8 +129,8 @@ Utils.openPath("/Users/me/notes.txt");
 Use `openExternal()` for web URLs and email links. Use `openPath()` for local files and folders.
 :::
 
-
 ## showNotification
+
 Display a native desktop notification. Works on macOS, Windows, and Linux.
 
 ### Options
@@ -170,7 +174,6 @@ Display a native desktop notification. Works on macOS, Windows, and Linux.
 
 ### Example: Simple Notification
 
-
 ```ts
 Utils.showNotification({
     title: "Download Complete"
@@ -179,7 +182,6 @@ Utils.showNotification({
 ```
 
 ### Example: Notification with Body
-
 
 ```ts
 Utils.showNotification({
@@ -190,7 +192,6 @@ Utils.showNotification({
 ```
 
 ### Example: Full Notification
-
 
 ```ts
 Utils.showNotification({
@@ -203,7 +204,6 @@ Utils.showNotification({
 ```
 
 ### Example: Silent Notification
-
 
 ```ts
 Utils.showNotification({
@@ -223,6 +223,7 @@ Utils.showNotification({
 - **Linux:** Uses `notify-send` command. Requires `libnotify-bin` to be installed (included by default on most desktop distributions).
 
 ## openFileDialog
+
 Open a file dialogue to let the user specify a file or folder and return the path to your app. Typically you would have an event handler in the browser context like clicking an "open" button, this would trigger an rpc call to bun, which would call `` openFileDialog() `` and then optionally pass the response back to the browser context via rpc after the user has made their selection
 
 ```ts
@@ -245,6 +246,7 @@ allowsMultipleSelection: true,
 ```
 
 ## showMessageBox
+
 Display a native message box dialog with custom buttons and get the user's response. Similar to Electron's `dialog.showMessageBox()`.
 
 ### Options
@@ -305,10 +307,10 @@ Display a native message box dialog with custom buttons and get the user's respo
 </table>
 
 ### Return Value
+
 Returns a `Promise<&#123; response: number &#125;>` where `response` is the 0-based index of the clicked button.
 
 ### Example: Confirmation Dialog
-
 
 ```ts
 const { response } = await Utils.showMessageBox({
@@ -333,7 +335,6 @@ if (response === 0) {
 
 ### Example: Error Dialog
 
-
 ```ts
 await Utils.showMessageBox({
     type: "error",
@@ -346,7 +347,6 @@ await Utils.showMessageBox({
 ```
 
 ### Example: Multi-choice Dialog
-
 
 ```ts
 const { response } = await Utils.showMessageBox({
@@ -368,9 +368,11 @@ switch (response) {
 ```
 
 ## Dock Icon Visibility (macOS)
+
 Control whether your app's icon appears in the macOS Dock. This is useful for menu bar apps, background utilities, or apps that should only show a system tray icon.
 
 ### setDockIconVisible
+
 Show or hide the app's Dock icon.
 
 ```ts
@@ -383,6 +385,7 @@ Utils.setDockIconVisible(true);
 ```
 
 ### isDockIconVisible
+
 Check whether the app's Dock icon is currently visible.
 
 ```ts
@@ -398,9 +401,7 @@ if (Utils.isDockIconVisible()) {
 When the Dock icon is hidden, the app uses `NSApplicationActivationPolicyAccessory`. When visible, it uses `NSApplicationActivationPolicyRegular`. This feature is macOS-only.
 :::
 
-
 ### Example: Tray-only App
-
 
 ```ts
 // Hide from dock - this is a tray-only app
@@ -418,6 +419,7 @@ const tray = new Tray({
 ```
 
 ## quit
+
 Gracefully quit the application. This fires a `before-quit` event (which can cancel the quit), then performs native cleanup (including CEF shutdown) and terminates the process.You don't need to call `quit()` directly for most quit scenarios — Electrobun automatically routes system-initiated quits (dock icon, Cmd+Q, Ctrl+C, SIGTERM, window close) through the same lifecycle. Calling `process.exit()` is also intercepted and routed through `quit()`.
 
 ```ts
@@ -435,9 +437,11 @@ Electrobun.events.on("before-quit", (e) => {
 See [Events — Shutdown Lifecycle](/api/events#shutdown-lifecycle) for the full list of quit triggers, shutdown sequence, and how `before-quit` compares to bun's native `process.on("exit")`.
 
 ## Clipboard API
+
 Read and write to the system clipboard. Similar to Electron's clipboard module.
 
 ### clipboardReadText
+
 Read text from the system clipboard.
 
 ```ts
@@ -449,6 +453,7 @@ if (text) {
 ```
 
 ### clipboardWriteText
+
 Write text to the system clipboard.
 
 ```ts
@@ -457,6 +462,7 @@ Utils.clipboardWriteText("Hello from Electrobun!");
 ```
 
 ### clipboardReadImage
+
 Read image from the clipboard as PNG data. Returns a `Uint8Array` containing PNG bytes, or `null` if no image is available.
 
 ```ts
@@ -470,6 +476,7 @@ if (pngData) {
 ```
 
 ### clipboardWriteImage
+
 Write PNG image data to the clipboard.
 
 ```ts
@@ -480,6 +487,7 @@ Utils.clipboardWriteImage(new Uint8Array(pngData));
 ```
 
 ### clipboardClear
+
 Clear the clipboard contents.
 
 ```ts
@@ -488,6 +496,7 @@ Utils.clipboardClear();
 ```
 
 ### clipboardAvailableFormats
+
 Get the available formats in the clipboard. Returns an array of format names.
 
 ```ts
@@ -498,7 +507,6 @@ console.log("Clipboard contains:", formats);
 ```
 
 ### Example: Copy and Paste Text
-
 
 ```ts
 // Copy text to clipboard
@@ -511,7 +519,6 @@ console.log(text); // "Hello World"
 ```
 
 ### Example: Check Clipboard Contents
-
 
 ```ts
 const formats = Utils.clipboardAvailableFormats();
@@ -529,6 +536,7 @@ if (formats.includes("image")) {
 ```
 
 ## Paths
+
 Cross-platform access to common OS directories and app-scoped directories. All properties are synchronous getters.
 
 ```ts
@@ -539,7 +547,6 @@ console.log(Utils.paths.userData);  // App-specific data directory
 ```
 
 ### OS Directories
-
 
 ```ts
 Utils.paths.home
@@ -605,6 +612,7 @@ Utils.paths.videos
 ```
 
 ### App-Scoped Directories
+
 These paths are scoped to your application using the `identifier` and `channel` from your app's `version.json`. The values are lazy-loaded on first access.
 
 ```ts
@@ -621,7 +629,6 @@ Utils.paths.userLogs   // ~/Library/Logs/com.mycompany.myapp/canary
 
 ### Example: Store App Data
 
-
 ```ts
 // Ensure the directory exists
 mkdirSync(Utils.paths.userData, { recursive: true });
@@ -637,7 +644,6 @@ const settings = JSON.parse(readFileSync(settingsPath, "utf-8"));
 
 ### Example: Save Downloads to User's Downloads Folder
 
-
 ```ts
 const savePath = join(Utils.paths.downloads, "report.pdf");
 await Bun.write(savePath, pdfData);
@@ -648,8 +654,8 @@ await Bun.write(savePath, pdfData);
 **Linux XDG Support:** On Linux, user directories (`documents`, `downloads`, etc.) are resolved by reading `~/.config/user-dirs.dirs`. If the file is not present, standard fallbacks like `~/Documents` are used.
 :::
 
-
 ## GlobalShortcut
+
 Register global keyboard shortcuts that work even when your app doesn't have focus. Similar to Electron's globalShortcut module.
 
 ```ts
@@ -657,6 +663,7 @@ Register global keyboard shortcuts that work even when your app doesn't have foc
 ```
 
 ### register
+
 Register a global keyboard shortcut with a callback function.
 <table>
 <thead>
@@ -694,6 +701,7 @@ if (!success) {
 ```
 
 ### unregister
+
 Unregister a previously registered global shortcut.
 
 ```ts
@@ -702,6 +710,7 @@ GlobalShortcut.unregister("CommandOrControl+Shift+Space");
 ```
 
 ### unregisterAll
+
 Unregister all global shortcuts registered by your app.
 
 ```ts
@@ -710,6 +719,7 @@ GlobalShortcut.unregisterAll();
 ```
 
 ### isRegistered
+
 Check if a shortcut is currently registered.
 
 ```ts
@@ -720,6 +730,7 @@ if (GlobalShortcut.isRegistered("CommandOrControl+Shift+Space")) {
 ```
 
 ### Accelerator Syntax
+
 Accelerators are strings that describe keyboard shortcuts. They consist of modifier keys and a regular key, separated by `+`.**Modifiers:**
 
 - `Command` / `Cmd` - Command key (macOS)
@@ -749,7 +760,6 @@ Accelerators are strings that describe keyboard shortcuts. They consist of modif
 
 ### Example: Toggle App Visibility
 
-
 ```ts
 // Register a shortcut to show/hide the main window
 GlobalShortcut.register("CommandOrControl+Shift+H", () => {
@@ -773,12 +783,12 @@ win.show();
 - **Windows:** Uses `RegisterHotKey`. Provides exclusive access to the shortcut.
 
 - **Linux:** Uses X11 `XGrabKey`. Provides exclusive access to the shortcut. Requires X11 display server.
-::: caution
+::: warning
 **Note:** Some shortcuts may already be reserved by the operating system or other applications. If registration fails, try a different key combination.
 :::
 
-
 ## Screen
+
 The Screen module provides information about connected displays and the cursor position. This is useful for positioning windows, detecting multi-monitor setups, and getting screen dimensions.
 
 ```ts
@@ -786,7 +796,6 @@ The Screen module provides information about connected displays and the cursor p
 ```
 
 ### Types
-
 
 ```typescript
 interface Rectangle {
@@ -812,6 +821,7 @@ interface Point {
 ```
 
 ### Screen.getPrimaryDisplay()
+
 Returns the primary display information.
 
 ```ts
@@ -823,6 +833,7 @@ console.log(`Work area: ${primary.workArea.width}x${primary.workArea.height}`);
 ```
 
 ### Screen.getAllDisplays()
+
 Returns an array of all connected displays.
 
 ```ts
@@ -839,6 +850,7 @@ displays.forEach((display, index) => {
 ```
 
 ### Screen.getCursorScreenPoint()
+
 Returns the current cursor position in screen coordinates.
 
 ```ts
@@ -848,7 +860,6 @@ console.log(`Cursor at: (${cursor.x}, ${cursor.y})`);
 ```
 
 ### Example: Center Window on Primary Display
-
 
 ```ts
 const primary = Screen.getPrimaryDisplay();
@@ -873,7 +884,6 @@ const win = new BrowserWindow({
 ```
 
 ### Example: Open Window on Display with Cursor
-
 
 ```ts
 function getDisplayAtCursor() {
@@ -901,6 +911,7 @@ console.log(`Opening window on display: ${targetDisplay.id}`);
 - **Linux:** Uses GDK `gdk_display_get_n_monitors` and related APIs.
 
 ## Session
+
 The Session module provides cookie and storage management for webview partitions. Each partition has isolated storage, allowing you to manage cookies and clear data independently.
 
 ```ts
@@ -908,7 +919,6 @@ The Session module provides cookie and storage management for webview partitions
 ```
 
 ### Types
-
 
 ```typescript
 interface Cookie {
@@ -943,6 +953,7 @@ type StorageType =
 ```
 
 ### Session.fromPartition(partition)
+
 Get or create a session for a specific partition. Partitions starting with `persist:` are stored on disk, others are ephemeral.
 
 ```ts
@@ -955,6 +966,7 @@ const tempSession = Session.fromPartition("temp");
 ```
 
 ### Session.defaultSession
+
 Get the default session (equivalent to `persist:default` partition).
 
 ```ts
@@ -964,6 +976,7 @@ console.log(session.partition); // "persist:default"
 ```
 
 ### session.cookies.get(filter?)
+
 Get cookies matching the optional filter criteria. Returns an array of Cookie objects.
 
 ```ts
@@ -985,6 +998,7 @@ const urlCookies = session.cookies.get({ url: "https://api.example.com" });
 ```
 
 ### session.cookies.set(cookie)
+
 Set a cookie. Returns `true` if successful.
 
 ```ts
@@ -1013,6 +1027,7 @@ session.cookies.set({
 ```
 
 ### session.cookies.remove(url, name)
+
 Remove a specific cookie by URL and name. Returns `true` if successful.
 
 ```ts
@@ -1024,6 +1039,7 @@ session.cookies.remove("https://myapp.com", "user_id");
 ```
 
 ### session.cookies.clear()
+
 Clear all cookies for this session.
 
 ```ts
@@ -1035,6 +1051,7 @@ session.cookies.clear();
 ```
 
 ### session.clearStorageData(types?)
+
 Clear storage data for this session. You can specify which types to clear, or use `'all'` to clear everything.
 
 ```ts
@@ -1053,7 +1070,6 @@ session.clearStorageData(['cache']);
 
 ### Example: User Logout
 
-
 ```ts
 function logout() {
   const session = Session.fromPartition("persist:user");
@@ -1071,7 +1087,6 @@ function logout() {
 ```
 
 ### Example: Multi-account Support
-
 
 ```ts
 // Create a webview with its own session
@@ -1102,4 +1117,3 @@ function createAccountWindow(accountId: string) {
 ::: tip
 **Partition Naming:** Use `persist:` prefix for persistent storage (e.g., `persist:myapp`). Sessions without this prefix are ephemeral and cleared when the app closes.
 :::
-

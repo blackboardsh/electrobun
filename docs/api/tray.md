@@ -2,6 +2,8 @@
 title: "Tray"
 ---
 
+# Tray
+
 Create and manage system tray icon and menu.
 
 ```ts
@@ -79,23 +81,29 @@ tray.on("tray-clicked", (e) => {
 ## Constructor Options
 
 ### title
+
 This is the text that will appear in your system tray
 
 ### image
-This is an optional url to an image to load. You can use the `views&#58;//` schema to access local bundled images.
+
+This is an optional url to an image to load. You can use the `views://` schema to access local bundled images.
 
 ### template
+
 You can use a full-color image like a png but that image will just be shown as is. On MacOS you can create a template image and set the `template` property to true. A template image uses opacity to define a black and white image that adapts to your systems light/dark mode.
 
 ### width and height
+
 Set the dimensions of the image used in the system tray
 
 ## Methods
 
 ### setMenu
+
 Call setMenu whenever you want to show the menu. Typically you would listen for the `tray-clicked` event, then show the menu and listen for the `tray-item-clicked`. Your app could also listen for keyboard shortcuts or show the system tray menu in response to something else.A common pattern is to create a function that dynamically generates the menu from some kind of state to implement things like checkbox toggles.
 
 ### setTitle
+
 Update the text displayed in the system tray.
 
 ```ts
@@ -104,6 +112,7 @@ tray.setTitle("New Status");
 ```
 
 ### setImage
+
 Update the tray icon image. Accepts a `views://` URL or an absolute file path.
 
 ```ts
@@ -112,6 +121,7 @@ tray.setImage("views://assets/new-icon-32-template.png");
 ```
 
 ### setVisible
+
 Show or hide the tray icon. When hidden, the tray is removed from the system tray. When shown again, it is recreated.
 
 ```ts
@@ -124,6 +134,7 @@ tray.setVisible(true);
 ```
 
 ### getBounds
+
 Get the bounding rectangle of the tray icon. Returns an object with `x`, `y`, `width`, and `height` properties.
 
 ```ts
@@ -133,6 +144,7 @@ console.log(`Tray icon at (${bounds.x}, ${bounds.y}) size ${bounds.width}x${boun
 ```
 
 ### remove
+
 Permanently remove the tray icon from the system tray.
 
 ```ts
@@ -141,11 +153,13 @@ tray.remove();
 ```
 
 ### Menu Items
+
 See [Application Menu](/api/application-menu) for more info on available properties for menu items.
 
 ## Events
 
 ### tray-clicked
+
 Fired when the system tray icon is clicked, or when a menu item is clicked. The event data includes an `action` property &mdash; it will be an empty string when the tray icon itself is clicked, or the action name of the menu item that was clicked.
 
 ```ts
@@ -162,4 +176,3 @@ tray.on("tray-clicked", (e) => {
 });
 
 ```
-

@@ -2,14 +2,17 @@
 title: "Webview Tag Architecture"
 ---
 
+# Webview Tag Architecture
+
 ## Overview
+
 The `<electrobun-webview>` tag is Electrobun's implementation of an Out-Of-Process IFrame (OOPIF), providing a secure, isolated, and performant way to embed web content within your application. Unlike traditional iframes or Electron's deprecated `<webview>` tag, Electrobun's approach offers full process isolation while maintaining seamless DOM integration.
 ::: tip
 **Info:** For a deep dive into the technical implementation and philosophy behind Electrobun's OOPIF approach, check out our blog post: [Building a Better OOPIF](https://blackboard.sh/blog/building-a-better-oopif)
 :::
 
-
 ## Why Not Regular IFrames?
+
 Standard iframes come with significant limitations for desktop applications:
 
 - **Security restrictions**: Modern browsers prevent iframes from loading cross-domain content
@@ -21,6 +24,7 @@ Standard iframes come with significant limitations for desktop applications:
 - **Feature limitations**: Restricted access to native APIs and advanced browser features
 
 ## The OOPIF Advantage
+
 An Out-Of-Process IFrame (OOPIF) solves these limitations by:
 
 - **Process isolation**: Each webview runs in its own isolated process
@@ -32,6 +36,7 @@ An Out-Of-Process IFrame (OOPIF) solves these limitations by:
 - **Flexibility**: Full control over content loading and permissions
 
 ## How It Works
+
 The `<electrobun-webview>` tag functions as a layer positioned above the main window, synchronized with the DOM element's position and size. This architecture provides:
 
 - **DOM Integration**: The webview behaves like any other DOM element - you can style, animate, and position it using CSS
@@ -45,6 +50,7 @@ The `<electrobun-webview>` tag functions as a layer positioned above the main wi
 ## Key Features
 
 ### Full Isolation
+
 Each `<electrobun-webview>` runs in its own process, ensuring:
 
 - Crash protection (one webview crash doesn't affect others)
@@ -54,6 +60,7 @@ Each `<electrobun-webview>` runs in its own process, ensuring:
 - Security boundaries between different content sources
 
 ### Seamless Communication
+
 Fast inter-process communication (IPC) between:
 
 - The Bun main process
@@ -63,13 +70,12 @@ Fast inter-process communication (IPC) between:
 - Individual OOPIF webviews
 
 ### Not Deprecated
+
 Unlike Electron's `<webview>` tag (which relies on Chromium's deprecated implementation scheduled for removal in January 2025), Electrobun's implementation is built from the ground up and will continue to be supported and improved.
 
 ## Usage Example
 
-
-```
-
+```html
 <electrobun-webview 
   src="https://electrobun.dev"
   style="width: 100%; height: 500px;">

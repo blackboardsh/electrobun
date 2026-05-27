@@ -2,6 +2,8 @@
 title: "Draggable Regions"
 ---
 
+# Draggable Regions
+
 ::: tip
 Configure an html element to function as a draggable region allowing you to move the native application window by clicking and dragging on the element.
 :::
@@ -10,7 +12,6 @@ When building desktop apps with Electrobun a common pattern is to create a frame
 
 ### Step 1: Instantiate the Electroview class
 
-
 ```ts
 // /src/mainview/index.ts
 const electrobun = new Electroview();
@@ -18,6 +19,7 @@ const electrobun = new Electroview();
 ```
 
 ### Step 2: Add the draggable region css class
+
 Instantiating `Electroview()` will configure any element with the `electrobun-webkit-app-region-drag` css class as a draggable area.
 
 ```html
@@ -39,6 +41,7 @@ Instantiating `Electroview()` will configure any element with the `electrobun-we
 ```
 
 ### Step 3: Exclude interactive elements with no-drag
+
 When you have interactive elements (like buttons) inside a draggable region, you need to exclude them from the drag behavior. Use the `electrobun-webkit-app-region-no-drag` css class to make elements non-draggable.
 
 ```html
@@ -50,6 +53,7 @@ When you have interactive elements (like buttons) inside a draggable region, you
 ```
 
 ## Complete Custom Titlebar Example
+
 Here's a complete example of implementing a custom titlebar with window controls when using `titleBarStyle: "hidden"`:**Bun process (src/bun/index.ts):**
 
 ```typescript
@@ -154,4 +158,3 @@ document.getElementById("maximizeBtn")?.addEventListener("click", () => {
 ::: tip
 See the [BrowserWindow API](/api/browser-window) documentation for more details on `titleBarStyle` and `transparent` window options.
 :::
-

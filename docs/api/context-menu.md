@@ -2,6 +2,8 @@
 title: "Context Menu"
 ---
 
+# Context Menu
+
 Show a context menuTypically you'd wire up a rightclick event with preventDefault in the browser context, rpc to bun, then create a native context menu from the bun context. But you can also create and show a context menu entirely from bun which will show at the mouse cursor's position globally positioned on screen even outside of your application window. Even if you have no windows open and another app is focused.
 
 ```ts
@@ -52,6 +54,7 @@ Electrobun.events.on("context-menu-clicked", (e) => {
 ## Menu Item Properties
 
 ### accelerator
+
 You can set a custom keyboard shortcut hint for context menu items using the `` accelerator `` property. This displays the shortcut next to the menu item label.
 
 ```ts

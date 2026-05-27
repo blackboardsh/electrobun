@@ -2,11 +2,11 @@
 title: "BrowserWindow API"
 ---
 
+# BrowserWindow API
+
   <blockquote>
 Create and control browser windows
   </blockquote>
-
-  
 
 ```typescript
 // in the main process
@@ -26,6 +26,7 @@ const win = new BrowserWindow({
 ## Constructor Options
 
 ### title
+
 Set the title of the window.
 
 ```ts
@@ -36,6 +37,7 @@ const win = new BrowserWindow({
 ```
 
 ### frame
+
 Set the window dimensions.
 
 ```ts
@@ -51,6 +53,7 @@ const win = new BrowserWindow({
 ```
 
 ### styleMask
+
 This controls the OSX window appearance and functionality. You can set the following:
 
 ```ts
@@ -83,6 +86,7 @@ const win = new BrowserWindow({
 ```
 
 ### titleBarStyle
+
 Controls the window's title bar appearance. This option works across all platforms (macOS, Windows, and Linux).Available values:
 
 - `"default"` - Normal title bar with native window controls (close, minimize, maximize buttons)
@@ -120,8 +124,8 @@ When using `titleBarStyle: "hidden"` or `"hiddenInset"`, you'll typically want t
 The `titleBarStyle` option automatically configures the underlying `styleMask` properties. When set to `"hiddenInset"`, it forces `Titled: true` and `FullSizeContentView: true`. When set to `"hidden"`, it forces `Titled: false` and `FullSizeContentView: true`.
 :::
 
-
 ### activate
+
 Controls whether the window should take focus when it is first shown. The default is `true`. Set `activate: false` for palette windows, tray popovers, or other UI that should open without stealing focus.
 
 ```ts
@@ -134,12 +138,12 @@ const palette = new BrowserWindow({
 
 ```
 
-::: note
+::: tip
 `activate` only affects the initial auto-show during window creation. To reveal an existing hidden window without taking focus, use `showInactive()`.
 :::
 
-
 ### trafficLightOffset
+
 macOS-only. Offsets the native traffic light buttons when using `titleBarStyle: "hiddenInset"`. This is ignored on Windows and Linux.
 
 ```ts
@@ -156,6 +160,7 @@ const win = new BrowserWindow({
 ```
 
 ### transparent
+
 When set to `true`, the window background becomes transparent, allowing you to create non-rectangular windows, floating widgets, or windows with rounded corners and drop shadows.
 
 ```ts
@@ -187,12 +192,12 @@ html, body {
 
 ```
 
-::: note
+::: tip
 Transparent windows are typically combined with `titleBarStyle: "hidden"` to achieve floating widget effects. The `transparent` option works across all platforms and with both the native WebKit and CEF renderers.
 :::
 
-
 ### sandbox
+
 When set to `true`, the webview runs in sandbox mode. This disables RPC (remote procedure calls) and only allows event emission. Use sandbox mode for displaying untrusted content like remote URLs where you want to prevent malicious sites from accessing internal APIs.
 
 ```ts
@@ -227,7 +232,6 @@ externalBrowser.webview.on("will-navigate", (event) => {
 Sandbox mode uses a minimal preload script that only sets up event emission. This prevents any code in the webview from communicating with your main process beyond basic lifecycle events.
 :::
 
-
 #### When to use sandbox mode
 
 - Loading external/untrusted URLs (e.g., user-provided links, third-party content)
@@ -239,6 +243,7 @@ Sandbox mode uses a minimal preload script that only sets up event emission. Thi
 - Any scenario where you want the webview isolated from your application's internals
 
 #### Using sandbox with &lt;electrobun-webview&gt; tag
+
 You can also create sandboxed nested webviews using the `sandbox` attribute:
 
 ```html
@@ -253,6 +258,7 @@ You can also create sandboxed nested webviews using the `sandbox` attribute:
 **Info:** The following options are used to instantiate the default BrowserView.
 
 ### url
+
 Set the initial url for the window's default BrowserView to navigate to when it opens.
 
 ```ts
@@ -271,6 +277,7 @@ const win = new BrowserWindow({
 ```
 
 ### html
+
 Set an html string for the window's default BrowserView to load when it opens. Anything that would be valid in an html file including javascript and css can be used. Use this instead of setting the `url` property.
 
 ```ts
@@ -284,6 +291,7 @@ const win = new BrowserWindow({
 ```
 
 ### partition
+
 Partitions allow you to separate the browser session. Things like cookies and so on. For example if you have two BrowserViews with the same partition and log into gmail in one, the other will also be logged into gmail. If you use two different partitions then you could log into a different gmail account in each BrowserView.
 
 ```ts
@@ -302,6 +310,7 @@ const win = new BrowserWindow({
 ```
 
 ### preload
+
 Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.
 You can use either inline javascript or a url.
 
@@ -327,6 +336,7 @@ const win = new BrowserWindow({
 ```
 
 ### rpc
+
 The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.
 These RPC functions are asynchronous.`src/shared/types.ts`
 
@@ -427,6 +437,7 @@ win.webview.rpc.send.logToWebview({ msg: "my message" });
 ## Properties
 
 ### webview
+
 This is a getter for the window's default [BrowserView](/api/browser-view).
 
 ```ts
@@ -441,6 +452,7 @@ const defaultWebview = win.webview;
 ## Methods
 
 ### setTitle
+
 Change the window title:
 
 ```ts
@@ -449,6 +461,7 @@ win.setTitle('new title')
 ```
 
 ### close
+
 Close a window.
 
 ```ts
@@ -457,6 +470,7 @@ win.close();
 ```
 
 ### show / showInactive / activate / hide
+
 Control window visibility and focus. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it.
 
 ```ts
@@ -482,6 +496,7 @@ win.show();
 ```
 
 ### focus (deprecated)
+
 `focus()` is a deprecated alias for `activate()`. Existing code still works, but prefer `activate()` in new code.
 
 ```ts
@@ -494,6 +509,7 @@ win.activate();
 ```
 
 ### minimize / unminimize / isMinimized
+
 Control and check the minimized state of a window.
 
 ```ts
@@ -511,6 +527,7 @@ if (win.isMinimized()) {
 ```
 
 ### maximize / unmaximize / isMaximized
+
 Control and check the maximized state of a window. On macOS, this uses the "zoom" functionality which fills the screen while keeping the menu bar visible.
 
 ```ts
@@ -528,6 +545,7 @@ if (win.isMaximized()) {
 ```
 
 ### setFullScreen / isFullScreen
+
 Control and check the fullscreen state of a window. Fullscreen mode hides the title bar and dock/taskbar.
 
 ```ts
@@ -548,6 +566,7 @@ win.setFullScreen(!win.isFullScreen());
 ```
 
 ### setAlwaysOnTop / isAlwaysOnTop
+
 Control and check whether a window stays above all other windows. Useful for floating tools, overlays, or picture-in-picture style windows.
 
 ```ts
@@ -568,6 +587,7 @@ win.setAlwaysOnTop(!win.isAlwaysOnTop());
 ```
 
 ### setPosition(x, y)
+
 Move the window to a specific position on screen. Coordinates use a top-left origin (0, 0 is the top-left corner of the screen).
 
 ```ts
@@ -586,6 +606,7 @@ win.setPosition(
 ```
 
 ### setSize(width, height)
+
 Resize the window to specific dimensions. The window's top-left corner position is preserved.
 
 ```ts
@@ -599,6 +620,7 @@ win.setSize(frame.width, frame.width);
 ```
 
 ### setFrame(x, y, width, height)
+
 Set both position and size of the window in a single call. This is more efficient than calling `setPosition` and `setSize` separately when you need to change both.
 
 ```ts
@@ -612,6 +634,7 @@ win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
 ```
 
 ### setWindowButtonPosition(x, y)
+
 macOS-only. Reposition the native traffic light buttons at runtime. This is most useful with `titleBarStyle: "hiddenInset"`. On Windows and Linux the method is available but does nothing.
 
 ```ts
@@ -626,6 +649,7 @@ win.setWindowButtonPosition(16, 12);
 ```
 
 ### getFrame()
+
 Get the current position and size of the window. Returns an object with `x`, `y`, `width`, and `height` properties.
 
 ```ts
@@ -642,6 +666,7 @@ win.setFrame(savedFrame.x, savedFrame.y, savedFrame.width, savedFrame.height);
 ```
 
 ### getPosition()
+
 Get the current position of the window. Returns an object with `x` and `y` properties.
 
 ```ts
@@ -658,6 +683,7 @@ if (x === 0 && y === 0) {
 ```
 
 ### getSize()
+
 Get the current size of the window. Returns an object with `width` and `height` properties.
 
 ```ts
@@ -673,6 +699,7 @@ console.log(`Aspect ratio: ${aspectRatio.toFixed(2)}`);
 ```
 
 ### setVisibleOnAllWorkspaces / isVisibleOnAllWorkspaces
+
 Control and check whether a window is visible on all virtual desktops/workspaces. This is useful for utility windows, floating tools, or widgets that should remain accessible across all spaces.
 
 ```ts
@@ -693,8 +720,8 @@ if (win.isVisibleOnAllWorkspaces()) {
 This feature is fully supported on macOS (uses `NSWindowCollectionBehaviorCanJoinAllSpaces`). On Windows and Linux, the methods are available but are no-ops.
 :::
 
-
 ### setPageZoom / getPageZoom
+
 Control and get the page zoom level for the window's webview. A value of `1.0` represents 100% zoom.
 
 ```ts
@@ -714,13 +741,14 @@ win.setPageZoom(1.0);
 Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.
 :::
 
-
 ### on(name, handler)
+
 Subscribe to BrowserWindow events (see below).
 
 ## Events
 
 ### close
+
 When a window closes. Per-window close handlers fire before global close handlers, ensuring your handlers run before the internal `exitOnLastWindowClosed` logic.
 
 ```ts
@@ -745,6 +773,7 @@ Electrobun.events.on('close', (event) => {
 ```
 
 ### resize
+
 When a window's width or height changes. This events sends the x and y as part of the data because a window may be resized by dragging the top-left corner which would also reposition it.
 
 ```ts
@@ -763,6 +792,7 @@ Electrobun.events.on("resize", (event) => {
 ```
 
 ### move
+
 When a window's position changes.
 
 ```ts
@@ -781,6 +811,7 @@ Electrobun.events.on("move", (event) => {
 ```
 
 ### focus
+
 When a window becomes the key window (receives focus). This is useful for tracking which window should receive keyboard shortcuts or other focus-dependent actions.
 
 ```ts
@@ -799,6 +830,7 @@ Electrobun.events.on("focus", (event) => {
 ```
 
 ### blur
+
 When a window loses focus (is no longer the key window).
 
 ```ts
