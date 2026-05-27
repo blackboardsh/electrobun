@@ -1,0 +1,122 @@
+---
+title: "Compatibility"
+---
+
+## Dependencies and Versions
+
+<table class="docs-table">
+<thead>
+<tr>
+<th>Dependency</th>
+<th>Version</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bun</td>
+<td>1.3.0</td>
+<td></td>
+</tr>
+<tr>
+<td>Zig</td>
+<td>0.13.0</td>
+<td></td>
+</tr>
+<tr>
+<td>CEF</td>
+<td>125.0.22</td>
+<td>optionally bundled</td>
+</tr>
+</tbody>
+</table>
+
+## Platform Support
+
+### Development Platform
+
+- **macOS**: Required for building Electrobun apps (Intel and Apple Silicon supported)
+
+- **Windows**: Development support available
+
+- **Linux**: Development support available
+
+### Target Platforms
+Apps built with Electrobun can be distributed to:
+<table class="docs-table">
+<thead>
+<tr>
+<th>Platform</th>
+<th>Architecture</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS</td>
+<td>ARM64 (Apple Silicon)</td>
+<td>✅ Stable</td>
+<td>Full support with system WebKit</td>
+</tr>
+<tr>
+<td>macOS</td>
+<td>x64 (Intel)</td>
+<td>✅ Stable</td>
+<td>Full support with system WebKit</td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>x64</td>
+<td>✅ Stable</td>
+<td>WebView2 (Edge) or bundled CEF</td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>ARM64</td>
+<td>✅ Via Emulation</td>
+<td>Runs x64 binary through Windows emulation</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>x64</td>
+<td>✅ Stable</td>
+<td>WebKitGTK or bundled CEF</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>ARM64</td>
+<td>✅ Stable</td>
+<td>WebKitGTK or bundled CEF</td>
+</tr>
+</tbody>
+</table>
+
+### Webview Engines
+Electrobun supports both system webviews and bundled engines:
+<table class="docs-table">
+<thead>
+<tr>
+<th>Platform</th>
+<th>System Webview</th>
+<th>Bundled Option</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>macOS</td>
+<td>WebKit (WKWebView)</td>
+<td>CEF (Chromium) - Optional</td>
+</tr>
+<tr>
+<td>Windows</td>
+<td>WebView2 (Edge)</td>
+<td>CEF (Chromium) - Optional</td>
+</tr>
+<tr>
+<td>Linux</td>
+<td>WebKitGTK</td>
+<td>CEF (Chromium) - Optional</td>
+</tr>
+</tbody>
+</table>

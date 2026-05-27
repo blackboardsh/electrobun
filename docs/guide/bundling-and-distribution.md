@@ -1,0 +1,241 @@
+---
+title: "Bundling & Distribution"
+---
+
+::: tip
+Continuing on from the [Creating UI](/guide/creating-ui) guide.
+:::
+
+Let's add two more scripts to `package.json` to get our app ready for distribution: `build:canary` and `build:stable`.
+
+```json
+{
+  "name": "my-app",
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "electrobun": "^0.0.1"
+  },
+  "scripts": {
+    "start": "electrobun run",
+    "dev": "electrobun dev",
+    "dev:watch": "electrobun dev --watch",
+    "build:dev": "bun install && electrobun build",
+    "build:canary": "electrobun build --env=canary",
+    "build:stable": "electrobun build --env=stable"
+  }
+}
+
+```
+
+In your terminal you can now run:
+
+```bash
+bun run build:canary
+
+# or
+
+bun run build:stable
+
+```
+
+Both of these non-dev builds will:
+
+- Build an optimized app bundle
+
+- Tar and compress it using state-of-the-art ZSTD compression
+
+- Generate a self-extracting app bundle
+
+- Create an `artifacts` folder for distribution
+::: tip
+All you need to distribute your app is a static file host like S3 or Google Cloud Storage. There's no need to run a server beyond that.
+:::
+
+Assuming you've set up a Google Cloud Storage bucket with a subfolder for this application, add it to `electrobun.config.ts`:
+
+```typescript
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.my.app",
+    version: "0.0.1",
+  },
+  build: {
+    bun: {
+      entrypoint: "src/bun/index.ts",
+    },
+    views: {
+      "main-ui": {
+entrypoint: "src/main-ui/index.ts",
+      },
+    },
+    copy: {
+      "src/main-ui/index.html": "views/main-ui/index.html",
+    },
+  },
+  release: {
+    baseUrl: "https://storage.googleapis.com/mybucketname/myapp/",
+  },
+};
+
+```
+
+You can make your app available by uploading the contents of the `artifacts` folder to your release host (S3, R2, GitHub Releases, etc.).The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. The Electrobun CLI builds for the current machine's platform and automatically downloads the core/CEF files during bundling.To produce artifacts for all platforms, run the same build command on CI runners for each OS/architecture. See the [Cross-Platform Development](/guide/cross-platform-development) guide for details.Once you've uploaded artifacts to your host, the next time you run a non-dev build (like `bun run build:canary`) the Electrobun CLI will download the current version of your app using `release.baseUrl` and generate a patch file using our optimized BSDIFF implementation. That patch file gets added to your artifacts folder.It's recommended to keep older patch files in your storage. Users on older versions can download successive patches, each as small as 14KB. If patching can't get the user to the latest version, Electrobun's Updater falls back to downloading the full latest build.Visit the [Updater API docs](/api/updater) to learn how to make your app check for and install updates.
+
+## Build Lifecycle Hooks
+Electrobun provides lifecycle hooks that let you run custom scripts at various stages of the build process. This is useful for tasks like:
+
+- Validating your environment before building
+
+- Transforming compiled code
+
+- Adding custom files to the app bundle or wrapper
+
+- Sending notifications when builds complete
+Available hooks (in execution order): `preBuild`, `postBuild`, `postWrap`, `postPackage`See the [Build Configuration docs](/api/build-configuration#build-lifecycle-hooks) for detailed information about each hook and example scripts.
+
+## Artifacts Folder Structure
+When you build your app, Electrobun creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:
+
+```
+
+artifacts/
+├── canary-macos-arm64-update.json
+├── canary-macos-arm64-MyCoolApp-canary.dmg
+├── canary-macos-arm64-MyCoolApp-canary.app.tar.zst
+├── canary-macos-arm64-a1b2c3d4.patch
+├── canary-win-x64-update.json
+├── canary-win-x64-MyCoolApp-Setup-canary.zip
+├── canary-win-x64-MyCoolApp-canary.tar.zst
+├── canary-win-x64-a1b2c3d4.patch
+├── canary-linux-x64-update.json
+├── canary-linux-x64-MyCoolAppSetup-canary.tar.gz
+├── canary-linux-x64-MyCoolApp-canary.tar.zst
+├── canary-linux-x64-a1b2c3d4.patch
+└── ...
+
+```
+
+This flat structure works with any host, including GitHub Releases which don't support folders.
+
+### Artifact Naming Conventions
+App names are **sanitized** by removing spaces. For example, an app named "My Cool App" becomes "MyCoolApp" in all artifact filenames.For **stable** builds, channel suffixes are omitted. For other channels (canary, beta, etc.), the channel is appended.Windows and Linux installers are distributed as archives (`.zip` and `.tar.gz` respectively). The archive filenames are sanitized (no spaces), but the installer files inside the archives preserve spaces for a user-friendly experience.
+
+### macOS Artifacts
+
+  
+
+```
+
+# Canary:
+canary-macos-arm64-update.json                    # Version metadata for the Updater API
+canary-macos-arm64-MyCoolApp-canary.dmg           # Installer DMG for first-time installs
+canary-macos-arm64-MyCoolApp-canary.app.tar.zst   # Compressed app bundle for updates
+canary-macos-arm64-a1b2c3d4.patch                 # Incremental patch from previous version
+
+# Stable (no channel suffix):
+stable-macos-arm64-MyCoolApp.dmg
+stable-macos-arm64-MyCoolApp.app.tar.zst
+
+```
+
+### Windows Artifacts
+
+  
+
+```
+
+# Canary:
+canary-win-x64-update.json                       # Version metadata
+canary-win-x64-MyCoolApp-Setup-canary.zip        # Zip containing the Setup .exe installer
+canary-win-x64-MyCoolApp-canary.tar.zst          # Compressed app for updates
+canary-win-x64-a1b2c3d4.patch                    # Incremental patch
+
+# Stable:
+stable-win-x64-MyCoolApp-Setup.zip
+stable-win-x64-MyCoolApp.tar.zst
+
+```
+
+### Linux Artifacts
+
+  
+
+```
+
+# Canary:
+canary-linux-x64-update.json                        # Version metadata
+canary-linux-x64-MyCoolAppSetup-canary.tar.gz       # tar.gz containing the self-extracting setup
+canary-linux-x64-MyCoolApp-canary.tar.zst           # Compressed app for updates
+canary-linux-x64-a1b2c3d4.patch                     # Incremental patch
+
+# Stable:
+stable-linux-x64-MyCoolAppSetup.tar.gz
+stable-linux-x64-MyCoolApp.tar.zst
+
+```
+
+### Constructing Download URLs
+Since artifacts are already prefixed, the download URL is simply `{'{baseUrl}/{artifact-filename}'}`:
+
+```
+
+# Examples (assuming baseUrl is "https://releases.example.com/myapp"):
+
+# macOS ARM (Apple Silicon)
+https://releases.example.com/myapp/canary-macos-arm64-MyCoolApp-canary.dmg
+
+# macOS Intel
+https://releases.example.com/myapp/canary-macos-x64-MyCoolApp-canary.dmg
+
+# Windows
+https://releases.example.com/myapp/canary-win-x64-MyCoolApp-Setup-canary.zip
+
+# Linux x64
+https://releases.example.com/myapp/canary-linux-x64-MyCoolAppSetup-canary.tar.gz
+
+# Linux ARM
+https://releases.example.com/myapp/canary-linux-arm64-MyCoolAppSetup-canary.tar.gz
+
+```
+
+### Platform Reference
+
+  <table class="docs-table">
+    <thead>
+      <tr>
+<th>Platform</th>
+<th>OS Value</th>
+<th>Arch Values</th>
+<th>Installer Format</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+<td>macOS</td>
+<td>`macos`</td>
+<td>`arm64`, `x64`</td>
+<td>`.dmg`</td>
+      </tr>
+      <tr>
+<td>Windows</td>
+<td>`win`</td>
+<td>`x64`</td>
+<td>`.zip` (contains `-Setup.exe`)</td>
+      </tr>
+      <tr>
+<td>Linux</td>
+<td>`linux`</td>
+<td>`x64`, `arm64`</td>
+<td>`.tar.gz` (contains self-extracting setup)</td>
+      </tr>
+    </tbody>
+  </table>
+
+### Patch Files
+Patch files are named with the platform prefix and a hash representing the source version (e.g., `canary-macos-arm64-a1b2c3d4.patch`). When replacing the contents of your static file host, keep old patch files so users on older versions can step through incremental updates to reach the latest build.
