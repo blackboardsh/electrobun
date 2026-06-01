@@ -15,6 +15,7 @@ const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C) voi
 const WindowFocusHandler = *const fn (u32) callconv(.C) void;
 const WindowBlurHandler = *const fn (u32) callconv(.C) void;
 const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
+const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
 const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
 const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
 const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -46,6 +47,7 @@ const WindowState = struct {
     ptr: WindowPtr,
     transparent: bool,
     close_handler: ?WindowCloseHandler,
+    should_close_handler: ?WindowShouldCloseHandler,
     move_handler: ?WindowMoveHandler,
     resize_handler: ?WindowResizeHandler,
     focus_handler: ?WindowFocusHandler,
@@ -1800,6 +1802,13 @@ fn windowKeyTrampoline(window_id: u32, key_code: u32, modifiers: u32, is_down: u
     }
 }
 
+fn windowShouldCloseTrampoline(window_id: u32) callconv(.C) void {
+    const state = lookupWindowState(window_id) orelse return;
+    if (state.should_close_handler) |handler| {
+        handler(window_id);
+    }
+}
+
 fn managedQuitRequestedTrampoline() callconv(.C) void {
     if (managed_quit_requested_handler) |handler| {
         handler();
@@ -1888,6 +1897,7 @@ export fn createWindow(
     focus_handler: ?WindowFocusHandler,
     blur_handler: ?WindowBlurHandler,
     key_handler: ?WindowKeyHandler,
+    should_close_handler: ?WindowShouldCloseHandler,
 ) u32 {
     clearLastError();
 
@@ -1908,6 +1918,7 @@ export fn createWindow(
         ?WindowFocusHandler,
         ?WindowBlurHandler,
         ?WindowKeyHandler,
+        ?WindowShouldCloseHandler,
     ) callconv(.C) WindowPtr;
     const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.C) void;
     const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
@@ -1944,6 +1955,7 @@ export fn createWindow(
         .ptr = null,
         .transparent = transparent,
         .close_handler = close_handler,
+        .should_close_handler = should_close_handler,
         .move_handler = move_handler,
         .resize_handler = resize_handler,
         .focus_handler = focus_handler,
@@ -1973,6 +1985,7 @@ export fn createWindow(
         windowFocusTrampoline,
         windowBlurTrampoline,
         windowKeyTrampoline,
+        if (should_close_handler != null) windowShouldCloseTrampoline else null,
     );
 
     if (window_ptr == null) {

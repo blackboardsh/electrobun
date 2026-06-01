@@ -154,6 +154,7 @@ const core = (() => {
 					FFIType.function,
 					FFIType.function,
 					FFIType.function,
+					FFIType.function,
 				],
 				returns: FFIType.u32,
 			},
@@ -1247,6 +1248,7 @@ const _ffiImpl = {
 				windowFocusCallback,
 				windowBlurCallback,
 				windowKeyCallback,
+				windowShouldCloseCallback,
 			);
 
 			if (!windowId) {
@@ -2226,6 +2228,26 @@ const windowCloseCallback = new JSCallback(
 		// before the global handler (e.g. exitOnLastWindowClosed)
 		electrobunEventEmitter.emitEvent(event, id);
 		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+// Handlers must be synchronous. To do async work (e.g. show a save dialog),
+// set event.response = { allow: false } immediately, then call win.close() once done.
+const windowShouldCloseCallback = new JSCallback(
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.willClose;
+		const event = handler({ id });
+		electrobunEventEmitter.emitEvent(event, id);
+		electrobunEventEmitter.emitEvent(event);
+		// [window close] bypasses windowShouldClose: so this won't loop.
+		if (event.response?.allow !== false) {
+			core_.symbols.closeWindow(id as number);
+		}
 	},
 	{
 		args: ["u32"],
