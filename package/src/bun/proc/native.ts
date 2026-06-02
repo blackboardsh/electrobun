@@ -283,6 +283,10 @@ const core = (() => {
 				],
 				returns: FFIType.u32,
 			},
+			setWebviewSpellCheck: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.void,
+			},
 			getWebviewPointer: {
 				args: [FFIType.u32],
 				returns: FFIType.ptr,
@@ -1558,6 +1562,7 @@ const _ffiImpl = {
 			sandbox: boolean;
 			startTransparent: boolean;
 			startPassthrough: boolean;
+			spellCheck: boolean;
 		}): number => {
 			const {
 				windowId,
@@ -1573,6 +1578,7 @@ const _ffiImpl = {
 				sandbox,
 				startTransparent,
 				startPassthrough,
+				spellCheck,
 			} = params;
 			ensureWebviewRuntimeConfigured();
 
@@ -1602,6 +1608,10 @@ const _ffiImpl = {
 
 			if (!webviewId) {
 				throw getCoreLastError() || "Failed to create webview";
+			}
+
+			if (spellCheck) {
+				core_.symbols.setWebviewSpellCheck(webviewId, true);
 			}
 
 			return webviewId;
