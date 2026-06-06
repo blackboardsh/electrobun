@@ -2,6 +2,78 @@
 import Electrobun, { Electroview } from "electrobun/view";
 import type { RPCSchema } from "electrobun";
 
+export type StressMessageStats = {
+  count: number;
+  expectedCount: number;
+  missing: number[];
+  duplicates: number[];
+};
+
+export type StressRequestSummary = {
+  total: number;
+  received: number;
+  errorCount: number;
+  mismatchCount: number;
+  errors: Array<{ id: number; error: string }>;
+  mismatches: Array<{ id: number; value: unknown }>;
+};
+
+export type HostSocketStressState = {
+  hasSocket: boolean;
+  readyState: number | null;
+  bufferedAmount: number | null;
+  canSend: boolean;
+  hasEncrypt: boolean;
+  hasHostBridge: boolean;
+};
+
+export type SocketSendSummary = {
+  socketSendCalls: number;
+  encryptCalls: number;
+  wrapErrors: string[];
+  state: HostSocketStressState;
+};
+
+const webviewStressMessageIds = new Set<number>();
+const webviewDuplicateStressMessageIds = new Set<number>();
+const transportProbe = {
+  socketSendCalls: 0,
+  encryptCalls: 0,
+  wrapErrors: [] as string[],
+  wrappedSocket: false,
+  wrappedEncrypt: false,
+};
+
+function recordWebviewStressMessage(id: number) {
+  if (webviewStressMessageIds.has(id)) {
+    webviewDuplicateStressMessageIds.add(id);
+  }
+  webviewStressMessageIds.add(id);
+}
+
+function getWebviewStressMessageStats(expectedCount: number): StressMessageStats {
+  const missing: number[] = [];
+  for (let id = 0; id < expectedCount; id++) {
+    if (!webviewStressMessageIds.has(id)) {
+      missing.push(id);
+    }
+  }
+
+  return {
+    count: webviewStressMessageIds.size,
+    expectedCount,
+    missing,
+    duplicates: Array.from(webviewDuplicateStressMessageIds).sort((a, b) => a - b),
+  };
+}
+
+function resetWebviewStressMessageCollector() {
+  webviewStressMessageIds.clear();
+  webviewDuplicateStressMessageIds.clear();
+}
+
+let electrobun: any;
+
 // Generic test harness RPC schema
 export type TestHarnessRPC = {
   bun: RPCSchema<{
@@ -29,6 +101,10 @@ export type TestHarnessRPC = {
     };
     messages: {
       ping: { timestamp: number };
+      stressMessageToBun: { id: number; payload?: string };
+      stressWebviewMessageSummary: StressMessageStats;
+      stressWebviewRequestSummary: StressRequestSummary;
+      stressSocketSendSummary: SocketSendSummary;
     };
   }>;
   webview: RPCSchema<{
@@ -53,9 +129,37 @@ export type TestHarnessRPC = {
         params: { html: string };
         response: void;
       };
+      resetStressMessageCollector: {
+        params: {};
+        response: void;
+      };
+      getStressMessageStats: {
+        params: { expectedCount: number };
+        response: StressMessageStats;
+      };
+      getHostSocketStressState: {
+        params: {};
+        response: HostSocketStressState;
+      };
+      enableHostSocketForStress: {
+        params: {};
+        response: HostSocketStressState;
+      };
     };
     messages: {
       pong: { timestamp: number };
+      stressMessageToWebview: { id: number; payload?: string };
+      finishStressMessageToWebview: { expectedCount: number };
+      startStressFromBun: { messageCount: number; requestCount: number };
+      startTransportTransitionStressFromBun: {
+        messageCount: number;
+        requestCount: number;
+        enableSocketAt: number;
+      };
+      startTimedSocketStressFromBun: {
+        messageCount: number;
+        intervalMs: number;
+      };
     };
   }>;
 };
@@ -74,16 +178,192 @@ const rpc = Electroview.defineRPC<TestHarnessRPC>({
       setBodyContent: ({ html }) => {
         document.body.innerHTML = html;
       },
+      resetStressMessageCollector: () => {
+        resetWebviewStressMessageCollector();
+      },
+      getStressMessageStats: ({ expectedCount }) => {
+        return getWebviewStressMessageStats(expectedCount);
+      },
+      getHostSocketStressState: () => {
+        return getHostSocketStressState();
+      },
+      enableHostSocketForStress: () => {
+        electrobun.hostSocketCanSend = true;
+        return getHostSocketStressState();
+      },
     },
     messages: {
       pong: ({ timestamp }) => {
         console.log(`Received pong at ${timestamp}`);
       },
+      stressMessageToWebview: ({ id }) => {
+        recordWebviewStressMessage(id);
+      },
+      finishStressMessageToWebview: ({ expectedCount }) => {
+        electrobun.rpc.send.stressWebviewMessageSummary(
+          getWebviewStressMessageStats(expectedCount),
+        );
+      },
+      startStressFromBun: ({ messageCount, requestCount }) => {
+        resetWebviewStressMessageCollector();
+        runRpcStress({
+          messageCount: getStressInteger(messageCount, 0),
+          requestCount: getStressInteger(requestCount, 0),
+        });
+      },
+      startTransportTransitionStressFromBun: ({
+        messageCount,
+        requestCount,
+        enableSocketAt,
+      }) => {
+        resetWebviewStressMessageCollector();
+        runRpcStress({
+          messageCount: getStressInteger(messageCount, 0),
+          requestCount: getStressInteger(requestCount, 0),
+          enableSocketAt: getStressInteger(enableSocketAt, 0),
+        });
+      },
+      startTimedSocketStressFromBun: ({ messageCount, intervalMs }) => {
+        resetWebviewStressMessageCollector();
+        resetTransportProbe();
+        installTransportProbe();
+        runRpcStress({
+          messageCount: getStressInteger(messageCount, 0),
+          requestCount: 0,
+          enableSocketAt: 0,
+          intervalMs: getStressInteger(intervalMs, 0),
+          sendSocketSummary: true,
+        });
+      },
     },
   },
 });
 
-const electrobun = new Electrobun.Electroview({ rpc });
+electrobun = new Electrobun.Electroview({ rpc });
+
+function getStressInteger(value: unknown, fallback: number) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : fallback;
+}
+
+function getHostSocketStressState(): HostSocketStressState {
+  return {
+    hasSocket: Boolean(electrobun.hostSocket),
+    readyState:
+      typeof electrobun.hostSocket?.readyState === "number"
+        ? electrobun.hostSocket.readyState
+        : null,
+    bufferedAmount:
+      typeof electrobun.hostSocket?.bufferedAmount === "number"
+        ? electrobun.hostSocket.bufferedAmount
+        : null,
+    canSend: Boolean(electrobun.hostSocketCanSend),
+    hasEncrypt: typeof window.__electrobun_encrypt === "function",
+    hasHostBridge: Boolean(window.__electrobunHostBridge),
+  };
+}
+
+function resetTransportProbe() {
+  transportProbe.socketSendCalls = 0;
+  transportProbe.encryptCalls = 0;
+  transportProbe.wrapErrors = [];
+}
+
+function installTransportProbe() {
+  if (!transportProbe.wrappedSocket && electrobun.hostSocket) {
+    try {
+      const socket = electrobun.hostSocket as WebSocket & { __stressOriginalSend?: WebSocket["send"] };
+      socket.__stressOriginalSend = socket.send.bind(socket);
+      socket.send = ((data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
+        transportProbe.socketSendCalls += 1;
+        return socket.__stressOriginalSend!(data);
+      }) as WebSocket["send"];
+      transportProbe.wrappedSocket = true;
+    } catch (error) {
+      transportProbe.wrapErrors.push(`socket.send: ${String(error)}`);
+    }
+  }
+
+  if (!transportProbe.wrappedEncrypt && typeof window.__electrobun_encrypt === "function") {
+    try {
+      const originalEncrypt = window.__electrobun_encrypt;
+      window.__electrobun_encrypt = async (message: string) => {
+        transportProbe.encryptCalls += 1;
+        return originalEncrypt(message);
+      };
+      transportProbe.wrappedEncrypt = true;
+    } catch (error) {
+      transportProbe.wrapErrors.push(`encrypt: ${String(error)}`);
+    }
+  }
+}
+
+function getTransportProbeSummary(): SocketSendSummary {
+  return {
+    socketSendCalls: transportProbe.socketSendCalls,
+    encryptCalls: transportProbe.encryptCalls,
+    wrapErrors: transportProbe.wrapErrors.slice(),
+    state: getHostSocketStressState(),
+  };
+}
+
+function runRpcStress(config: {
+  messageCount: number;
+  requestCount: number;
+  enableSocketAt?: number;
+  intervalMs?: number;
+  sendSocketSummary?: boolean;
+}) {
+  setTimeout(async () => {
+    for (let id = 0; id < config.messageCount; id++) {
+      if (id === config.enableSocketAt) {
+        electrobun.hostSocketCanSend = true;
+      }
+
+      (electrobun.rpc as any).send.stressMessageToBun({
+        id,
+        payload: `webview-to-bun-${id}`,
+      });
+
+      if (config.intervalMs && config.intervalMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, config.intervalMs));
+      }
+    }
+
+    const results = await Promise.all(
+      Array.from({ length: config.requestCount }, (_, id) =>
+        (electrobun.rpc as any).request.echo({ value: id })
+          .then((value: unknown) => ({ id, value }))
+          .catch((error: Error) => ({
+            id,
+            error: String(error?.message || error),
+          })),
+      ),
+    );
+    const errors = results.filter(
+      (result): result is { id: number; error: string } => "error" in result,
+    );
+    const mismatches = results.filter(
+      (result): result is { id: number; value: unknown } =>
+        !("error" in result) && result.value !== result.id,
+    );
+
+    electrobun.rpc.send.stressWebviewRequestSummary({
+      total: config.requestCount,
+      received: results.length,
+      errorCount: errors.length,
+      mismatchCount: mismatches.length,
+      errors: errors.slice(0, 10),
+      mismatches: mismatches.slice(0, 10),
+    });
+
+    if (config.sendSocketSummary) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      electrobun.hostSocketCanSend = false;
+      electrobun.rpc.send.stressSocketSendSummary(getTransportProbeSummary());
+    }
+  }, 250);
+}
 
 // Expose for debugging
 (window as any).electrobun = electrobun;
