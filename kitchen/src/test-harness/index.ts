@@ -20,6 +20,8 @@ export type StressRequestSummary = {
 
 export type HostSocketStressState = {
   hasSocket: boolean;
+  hostSocketPort: number | null;
+  socketUrl: string | null;
   readyState: number | null;
   bufferedAmount: number | null;
   canSend: boolean;
@@ -217,6 +219,7 @@ const rpc = Electroview.defineRPC<TestHarnessRPC>({
         enableSocketAt,
       }) => {
         resetWebviewStressMessageCollector();
+        electrobun.hostSocketCanSend = false;
         runRpcStress({
           messageCount: getStressInteger(messageCount, 0),
           requestCount: getStressInteger(requestCount, 0),
@@ -249,6 +252,16 @@ function getStressInteger(value: unknown, fallback: number) {
 function getHostSocketStressState(): HostSocketStressState {
   return {
     hasSocket: Boolean(electrobun.hostSocket),
+    hostSocketPort:
+      typeof window.__electrobunHostSocketPort === "number"
+        ? window.__electrobunHostSocketPort
+        : typeof window.__electrobunRpcSocketPort === "number"
+          ? window.__electrobunRpcSocketPort
+          : null,
+    socketUrl:
+      typeof electrobun.hostSocket?.url === "string"
+        ? electrobun.hostSocket.url
+        : null,
     readyState:
       typeof electrobun.hostSocket?.readyState === "number"
         ? electrobun.hostSocket.readyState

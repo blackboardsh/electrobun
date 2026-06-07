@@ -353,9 +353,8 @@ fn parseWebviewSecretKey(secret_key: [*:0]const u8) ?WebviewSecretKey {
     return parsed;
 }
 
-fn closeSocketHandle(handle: std.posix.socket_t) void {
-    var stream = std.net.Stream{ .handle = handle };
-    stream.close();
+fn shutdownSocketHandle(handle: std.posix.socket_t) void {
+    std.posix.shutdown(handle, .both) catch {};
 }
 
 fn clearWebviewSocketHandleIfCurrent(webview_id: u32, handle: std.posix.socket_t) void {
@@ -381,7 +380,7 @@ fn closeAndClearWebviewSocketHandle(webview_id: u32) void {
     webview_registry_mutex.unlock();
 
     if (handle_to_close) |handle| {
-        closeSocketHandle(handle);
+        shutdownSocketHandle(handle);
     }
 }
 
@@ -403,7 +402,7 @@ fn attachWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
     webview_registry_mutex.unlock();
 
     if (handle_to_close) |previous_handle| {
-        closeSocketHandle(previous_handle);
+        shutdownSocketHandle(previous_handle);
     }
 
     return true;
@@ -2454,7 +2453,7 @@ export fn webviewRemove(webview_id: u32) void {
     const webview = if (removed) |entry| entry.value.ptr else null;
     const socket_handle = if (removed) |entry| entry.value.socket_handle else null;
     if (socket_handle) |handle| {
-        closeSocketHandle(handle);
+        shutdownSocketHandle(handle);
     }
     if (webview == null) {
         return;

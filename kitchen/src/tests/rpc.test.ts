@@ -508,6 +508,8 @@ export const rpcTests = [
       await sleep(1000);
       const socketState = await waitForHostSocketOpen(webviewRpc);
       log(`Host socket open before transition: ${JSON.stringify(socketState)}`);
+      expect(socketState.socketUrl, "transition socket URL").toContain("ws://127.0.0.1:");
+      expect(socketState.canSend, "transition socket send-ready").toBe(true);
 
       bunStressMessages.reset();
       log(
@@ -567,6 +569,8 @@ export const rpcTests = [
       await sleep(1000);
       const socketState = await waitForHostSocketOpen(webviewRpc);
       log(`Host socket open before steady socket test: ${JSON.stringify(socketState)}`);
+      expect(socketState.socketUrl, "steady socket URL").toContain("ws://127.0.0.1:");
+      expect(socketState.canSend, "steady socket send-ready").toBe(true);
 
       bunStressMessages.reset();
       log(`Starting ${messageCount} webview -> bun websocket messages at ${intervalMs}ms intervals`);

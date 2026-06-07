@@ -65,16 +65,16 @@ class Electroview<T extends RPCWithTransport> {
 			return;
 		}
 
-		// Note: Using ws:// for localhost is intentional - all RPC messages are
+		// Note: Using ws:// for loopback is intentional - all RPC messages are
 		// encrypted with per-webview AES-GCM keys, making TLS redundant
 		const socket = new WebSocket(
-			`ws://localhost:${HOST_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`,
+			`ws://127.0.0.1:${HOST_SOCKET_PORT}/socket?webviewId=${WEBVIEW_ID}`,
 		);
 
 		this.hostSocket = socket;
 
 		socket.addEventListener("open", () => {
-			// this.hostSocket?.send("Hello from webview " + WEBVIEW_ID);
+			this.hostSocketCanSend = true;
 		});
 
 		socket.addEventListener("message", async (event) => {
