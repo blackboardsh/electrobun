@@ -109,17 +109,18 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
   }
 }
 
-async function waitForHostSocketOpen(webviewRpc: any, timeoutMs = 10000) {
-  const deadline = Date.now() + timeoutMs;
-  let lastState: HostSocketStressState | undefined;
+async function waitForHostSocketOpen(webviewRpc: any, timeoutMs = 10000): Promise<HostSocketStressState> {
+	const deadline = Date.now() + timeoutMs;
+	let lastState: HostSocketStressState | undefined;
 
-  while (Date.now() < deadline) {
-    lastState = await webviewRpc.request.getHostSocketStressState({});
-    if (lastState.readyState === 1) {
-      return lastState;
-    }
-    await sleep(100);
-  }
+	while (Date.now() < deadline) {
+		const currentState = await webviewRpc.request.getHostSocketStressState({}) as HostSocketStressState;
+		lastState = currentState;
+		if (currentState.readyState === 1) {
+			return currentState;
+		}
+		await sleep(100);
+	}
 
   throw new Error(`Timed out waiting for webview host socket to open: ${JSON.stringify(lastState)}`);
 }
