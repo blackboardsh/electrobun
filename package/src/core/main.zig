@@ -98,8 +98,8 @@ const DefaultWebviewCallbacks = struct {
 
 const HostMessageWakeupState = struct {
     initialized: bool = false,
-    read_fd: c_int = -1,
-    write_fd: c_int = -1,
+    read_fd: ?std.posix.fd_t = null,
+    write_fd: ?std.posix.fd_t = null,
     signaled: bool = false,
 };
 
@@ -228,8 +228,8 @@ fn ensureHostMessageWakeupInitialized() bool {
     }
 
     const fds = std.posix.pipe() catch return false;
-    host_message_wakeup_state.read_fd = @intCast(fds[0]);
-    host_message_wakeup_state.write_fd = @intCast(fds[1]);
+    host_message_wakeup_state.read_fd = fds[0];
+    host_message_wakeup_state.write_fd = fds[1];
     host_message_wakeup_state.initialized = true;
     host_message_wakeup_state.signaled = false;
     return true;
@@ -248,7 +248,7 @@ fn signalHostMessageWakeup() void {
     }
 
     const byte: [1]u8 = .{1};
-    const write_fd: std.posix.fd_t = @intCast(host_message_wakeup_state.write_fd);
+    const write_fd = host_message_wakeup_state.write_fd orelse return;
     _ = std.posix.write(write_fd, &byte) catch return;
     host_message_wakeup_state.signaled = true;
 }
@@ -306,7 +306,10 @@ export fn getHostMessageWakeupReadFD() c_int {
     if (!ensureHostMessageWakeupInitialized()) {
         return -1;
     }
-    return host_message_wakeup_state.read_fd;
+    if (builtin.os.tag == .windows) {
+        return -1;
+    }
+    return @intCast(host_message_wakeup_state.read_fd orelse return -1);
 }
 
 fn ensureWebviewRuntimeConfigured() bool {
