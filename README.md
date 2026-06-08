@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/blackboardsh-electrobun-badge.png)](https://mseep.ai/app/blackboardsh-electrobun)
+
 <p align="center">
   <a href="https://electrobun.dev"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
 </p>
