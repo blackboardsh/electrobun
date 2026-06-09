@@ -29,6 +29,7 @@ typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, doubl
 typedef void (*WindowFocusHandler)(uint32_t windowId);
 typedef void (*WindowBlurHandler)(uint32_t windowId);
 typedef void (*WindowKeyHandler)(uint32_t windowId, uint32_t keyCode, uint32_t modifiers, uint32_t isDown, uint32_t isRepeat);
+typedef void (*WindowShouldCloseHandler)(uint32_t windowId);
 
 // Tray and menu callbacks
 typedef void (*StatusItemHandler)(uint32_t trayId, const char* action);

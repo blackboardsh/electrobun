@@ -7,6 +7,7 @@ pub const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C)
 pub const WindowFocusHandler = *const fn (u32) callconv(.C) void;
 pub const WindowBlurHandler = *const fn (u32) callconv(.C) void;
 pub const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
+pub const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
 pub const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
 pub const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
 pub const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -76,6 +77,7 @@ pub const WindowStyle = struct {
 
 pub const WindowCallbacks = struct {
     close: ?WindowCloseHandler = null,
+    should_close: ?WindowShouldCloseHandler = null,
     move: ?WindowMoveHandler = null,
     resize: ?WindowResizeHandler = null,
     focus: ?WindowFocusHandler = null,
@@ -558,7 +560,7 @@ pub const Core = struct {
     const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.C) c_int;
     const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
     const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.C) u32;
-    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler) callconv(.C) u32;
+    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.C) u32;
     const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool) callconv(.C) u32;
     const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.C) u32;
     const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -992,6 +994,7 @@ pub const Core = struct {
             options.callbacks.focus,
             options.callbacks.blur,
             options.callbacks.key,
+            options.callbacks.should_close,
         );
 
         if (window_id == 0) {
