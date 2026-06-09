@@ -6,6 +6,7 @@
 
 #import <WebKit/WebKit.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
@@ -847,6 +848,7 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, assign) BOOL pendingStartTransparent;
     @property (nonatomic, assign) BOOL pendingStartPassthrough;
+    @property (nonatomic, assign) BOOL pendingSpellCheck;
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
     @property (atomic, assign) uint32_t resizeGeneration;
@@ -944,6 +946,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) uint32_t webviewId;
     @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSString *> *downloadPaths;
     @property (nonatomic, strong) NSMutableSet<WKDownload *> *observedDownloads;
+    @property (nonatomic, assign) BOOL spellCheckEnabled;
 @end
 
 @interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
@@ -2164,6 +2167,12 @@ static void schedulePendingResizeDrain() {
         if (urlString.length > 0) {
             self.zigEventHandler(self.webviewId, strdup("did-navigate"), strdup(urlString.UTF8String));
         }
+        if (self.spellCheckEnabled) {
+            SEL spellSel = NSSelectorFromString(@"_setContinuousSpellCheckingEnabledForTesting:");
+            if ([webView respondsToSelector:spellSel]) {
+                ((void (*)(id, SEL, BOOL))objc_msgSend)(webView, spellSel, YES);
+            }
+        }
     }
     - (void)webView:(WKWebView *)webView didCommitNavigation:(WKNavigation *)navigation {
         NSString *urlString = webView.URL.absoluteString ?: @"";
@@ -2572,17 +2581,17 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 
                 configuration.websiteDataStore = createDataStoreForPartition(partitionIdentifier);
                 
-                [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];        
-                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];                                
-                [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];                
-                
+                [configuration.preferences setValue:@YES forKey:@"developerExtrasEnabled"];
+                [configuration.preferences setValue:@YES forKey:@"elementFullscreenEnabled"];
+                [configuration.preferences setValue:@YES forKey:@"allowsPictureInPictureMediaPlayback"];
+
                 // Add scheme handler
                 MyURLSchemeHandler *assetSchemeHandler = [[MyURLSchemeHandler alloc] init];
-                // TODO: Consider storing views handler globally and not on each AbstractView                
+                // TODO: Consider storing views handler globally and not on each AbstractView
                 assetSchemeHandler.webviewId = webviewId;
                 assetSchemeHandler.viewsRoot = viewsRootString;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
-                
+
                 // create WKWebView
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
 
@@ -2608,9 +2617,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
                 // delegates
                 MyNavigationDelegate *navigationDelegate = [[MyNavigationDelegate alloc] init];
-                navigationDelegate.zigCallback = navigationCallback;                
+                navigationDelegate.zigCallback = navigationCallback;
                 navigationDelegate.zigEventHandler = webviewEventHandler;
                 navigationDelegate.webviewId = webviewId;
+                navigationDelegate.spellCheckEnabled = self.pendingSpellCheck;
                 self.webView.navigationDelegate = navigationDelegate;
                 objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -6955,6 +6965,25 @@ static struct {
 extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
+extern "C" void setWebviewSpellCheckForPtr(void* viewPtr, bool enabled) {
+    if (!viewPtr) return;
+    WKWebViewImpl* view = (__bridge WKWebViewImpl*)viewPtr;
+    if (![view isKindOfClass:[WKWebViewImpl class]]) return;
+    // Set the flag immediately so the deferred init block picks it up if webView isn't ready yet.
+    view.pendingSpellCheck = (BOOL)enabled;
+    BOOL enabledObjC = (BOOL)enabled;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        SEL spellSel = NSSelectorFromString(@"_setContinuousSpellCheckingEnabledForTesting:");
+        if (view.webView && [view.webView respondsToSelector:spellSel]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(view.webView, spellSel, enabledObjC);
+        }
+        id navDelegate = objc_getAssociatedObject(view.webView, "NavigationDelegate");
+        if ([navDelegate isKindOfClass:[MyNavigationDelegate class]]) {
+            ((MyNavigationDelegate*)navDelegate).spellCheckEnabled = enabledObjC;
+        }
+    });
 }
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,

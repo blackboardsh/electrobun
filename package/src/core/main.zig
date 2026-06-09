@@ -1333,6 +1333,7 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
     const sandbox = jsonBool(params_object.get("sandbox") orelse .{ .bool = false }) orelse false;
     const transparent = jsonBool(params_object.get("transparent") orelse .{ .bool = false }) orelse false;
     const passthrough = jsonBool(params_object.get("passthrough") orelse .{ .bool = false }) orelse false;
+    const spell_check = jsonBool(params_object.get("spellCheck") orelse .{ .bool = false }) orelse false;
     const url_value = params_object.get("url");
     const html_value = params_object.get("html");
     const preload_value = params_object.get("preload");
@@ -1399,6 +1400,10 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
 
     if (webview_id == 0) {
         return null;
+    }
+
+    if (spell_check) {
+        setWebviewSpellCheck(webview_id, true);
     }
 
     if (html_value) |value| {
@@ -2356,6 +2361,13 @@ export fn createWebview(
 export fn getWebviewPointer(webview_id: u32) WebviewPtr {
     clearLastError();
     return lookupWebviewPtr(webview_id);
+}
+
+export fn setWebviewSpellCheck(webview_id: u32, enabled: bool) void {
+    const webview_ptr = lookupWebviewPtr(webview_id) orelse return;
+    const SetWebviewSpellCheckForPtrFn = *const fn (WebviewPtr, bool) callconv(.C) void;
+    const set_spell_check = lookupNativeSymbol(SetWebviewSpellCheckForPtrFn, "setWebviewSpellCheckForPtr") orelse return;
+    set_spell_check(webview_ptr, enabled);
 }
 
 export fn resizeWebview(
