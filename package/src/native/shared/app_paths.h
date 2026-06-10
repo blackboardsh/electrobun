@@ -71,15 +71,17 @@ inline std::string buildPartitionPath(
 /**
  * Build a CEF partition-specific path under the renderer root.
  *
- * Partitions live in a `partitions/` subdirectory of the renderer cache root
- * rather than directly under it. The renderer root itself is CefSettings.cache_path,
+ * Partitions live in a `partition_<name>` directory immediately under the renderer cache root
+ * rather than nested deeper. The renderer root itself is CefSettings.cache_path,
  * which Chromium populates with auto-created profile directories such as
  * `Default`, `System Profile`, etc. On case-insensitive filesystems (Windows
  * NTFS, macOS APFS in default config) a partition literally named `default`
  * would collide with that auto-created `Default` folder; CEF then refuses to
  * bind a CefRequestContext to the colliding path and CreateBrowserSync
- * silently returns null. Nesting under `partitions/` keeps user partitions
- * cleanly separated from Chromium's own profile state.
+ * silently returns null. Using the `partition_` prefix keeps user partitions
+ * cleanly separated from Chromium's own profile state, while satisfying CEF's
+ * upstream requirement (CEF issue #3930) that partition cache paths be an
+ * immediate child of the root cache path.
  *
  * @param basePath The base application support/data path
  * @param identifier The app identifier
@@ -87,7 +89,7 @@ inline std::string buildPartitionPath(
  * @param renderer The renderer type (typically "CEF")
  * @param partitionName The partition name
  * @param pathSeparator The path separator to use
- * @return The full path: basePath/identifier/channel/renderer/partitions/partitionName
+ * @return The full path: basePath/identifier/channel/renderer/partition_partitionName
  */
 inline std::string buildCEFPartitionPath(
     const std::string& basePath,
@@ -99,8 +101,7 @@ inline std::string buildCEFPartitionPath(
 ) {
     std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
     base += pathSeparator;
-    base += "partitions";
-    base += pathSeparator;
+    base += "partition_";
     base += partitionName;
     return base;
 }
