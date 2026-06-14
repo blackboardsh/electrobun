@@ -80,6 +80,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
+#include "../shared/views_url.h"
 
 using namespace electrobun;
 
@@ -729,16 +730,8 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
         return nil;
     }
 
-    NSString *relativePath = [urlString substringFromIndex:8];
-    while ([relativePath hasPrefix:@"/"]) {
-        relativePath = [relativePath substringFromIndex:1];
-    }
-    // Strip trailing slashes - WebView may normalize URLs without folder components
-    while ([relativePath hasSuffix:@"/"] && [relativePath length] > 0) {
-        relativePath = [relativePath substringToIndex:[relativePath length] - 1];
-    }
-
-    return relativePath;
+    std::string relativePath = electrobun::normalizeViewsRelativePath(std::string([urlString UTF8String]));
+    return [NSString stringWithUTF8String:relativePath.c_str()];
 }
 
 NSData* readViewsFile(const char* viewsUrl) {
@@ -5973,12 +5966,8 @@ public:
             // If the URL starts with "views://"
             if (urlStr.find("views://") == 0) {
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
-                // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
-                std::string relativePath = urlStr.substr(8);
-                // Strip trailing slashes - WebView may normalize URLs without folder components
-                while (!relativePath.empty() && (relativePath.back() == '/' || relativePath.back() == '\\')) {
-                    relativePath.pop_back();
-                }
+                NSString *normalizedPath = normalizeViewsRelativePath([NSString stringWithUTF8String:urlStr.c_str()]);
+                std::string relativePath = normalizedPath ? std::string([normalizedPath UTF8String]) : std::string();
                 NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 
                 // Check if this is the internal HTML request.

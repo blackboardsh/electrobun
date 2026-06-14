@@ -58,6 +58,7 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/views_url.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
@@ -554,14 +555,7 @@ public:
         std::string url = request->GetURL();
         
         // Parse the URI to get everything after views://
-        std::string fullPath = "index.html"; // default
-        if (url.find("views://") == 0) {
-            fullPath = url.substr(8); // Skip "views://"
-            // Strip trailing slashes - WebKit may normalize URLs without folder components
-            while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
-                fullPath.pop_back();
-            }
-        }
+        std::string fullPath = normalizeViewsRelativePath(url);
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
@@ -5568,10 +5562,8 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     
     // Parse the full URI to get everything after views://
     // For views://webviewtag/index.html, we want "webviewtag/index.html"
-    const char* fullPath = "index.html"; // default
-    if (uri && strncmp(uri, "views://", 8) == 0) {
-        fullPath = uri + 8; // Skip "views://"
-    }
+    std::string fullPathString = normalizeViewsRelativePath(uri ? std::string(uri) : std::string());
+    const char* fullPath = fullPathString.c_str();
     
     // Check if this is the internal HTML request
     if (strcmp(fullPath, "internal/index.html") == 0) {
@@ -10630,11 +10622,7 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
         
         // Handle views:// protocol
         if (actualPath.substr(0, 8) == "views://") {
-            std::string viewPath = actualPath.substr(8);
-            // Strip trailing slashes - WebKit may normalize URLs without folder components
-            while (!viewPath.empty() && (viewPath.back() == '/' || viewPath.back() == '\\')) {
-                viewPath.pop_back();
-            }
+            std::string viewPath = normalizeViewsRelativePath(actualPath);
             
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {

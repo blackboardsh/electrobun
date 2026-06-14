@@ -403,7 +403,12 @@ if (autoRunTestName) {
 			console.error(`Failed to find test "${autoRunTestName}"`);
 			return;
 		}
-		await executor.runTest(test);
+		const result = await executor.runTest(test);
+		const exitCode = result.status === "failed" ? 1 : 0;
+		console.log(`\nAuto-run test complete. Exiting with code ${exitCode}...`);
+		setTimeout(() => {
+			Utils.quit();
+		}, 500);
 	}, 2000);
 }
 

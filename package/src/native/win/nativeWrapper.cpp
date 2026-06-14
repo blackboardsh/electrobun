@@ -64,6 +64,7 @@
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
+#include "../shared/views_url.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -792,8 +793,7 @@ public:
         handle_request = true;
 
         std::string url = request->GetURL();
-        std::string path = url.substr(8); // Remove "views://" prefix
-        if (path.empty()) path = "index.html";
+        std::string path = normalizeViewsRelativePath(url);
 
         std::string content;
         // Check for internal/index.html (inline HTML content)
@@ -3369,8 +3369,7 @@ public:
 
         // Check if this is a views:// URL for a script file
         if (strncmp(jsString, "views://", 8) == 0) {
-            // Remove "views://" prefix and load the file
-            scriptContent = loadViewsFile(std::string(jsString + 8));
+            scriptContent = loadViewsFile(normalizeViewsRelativePath(jsString));
             if (scriptContent.empty()) {
                 std::cout << "[WebView2] Could not read preload script from: " << jsString << std::endl;
                 return;
@@ -3724,7 +3723,7 @@ public:
         // Check if this is a views:// URL for a script file
         if (strncmp(jsString, "views://", 8) == 0) {
             // Read the script file using existing WebView2 logic
-            std::string scriptContent = loadViewsFile(std::string(jsString + 8)); // Remove "views://" prefix
+            std::string scriptContent = loadViewsFile(normalizeViewsRelativePath(jsString));
             if (!scriptContent.empty()) {
                 if (browser) {
                     browser->GetMainFrame()->ExecuteJavaScript(scriptContent.c_str(), browser->GetMainFrame()->GetURL(), 0);
@@ -6156,11 +6155,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         // ::log("[WebView2] Request URI converted successfully");
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
-                                            std::string filePath = uriStr.substr(8);
-                                            // Strip trailing slashes - WebView2 may normalize URLs without folder components
-                                            while (!filePath.empty() && (filePath.back() == '/' || filePath.back() == '\\')) {
-                                                filePath.pop_back();
-                                            }
+                                            std::string filePath = normalizeViewsRelativePath(uriStr);
                                             std::string content;
 
                                             // Check for internal/index.html (inline HTML content)
@@ -6242,7 +6237,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 }
                                 // Resolve views:// URLs to file content (matching macOS behavior)
                                 if (view->customScript.substr(0, 8) == "views://") {
-                                    std::string fileContent = loadViewsFile(view->customScript.substr(8));
+                                    std::string fileContent = loadViewsFile(normalizeViewsRelativePath(view->customScript));
                                     if (!fileContent.empty()) {
                                         combinedScript += fileContent;
                                     } else {
@@ -11241,11 +11236,7 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
     // Extract the path after "views://"
     std::string path;
     if (uriStr.length() > 8) {
-        path = uriStr.substr(8); // Remove "views://" prefix
-        // Strip trailing slashes - WebView2 may normalize URLs without folder components
-        while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
-            path.pop_back();
-        }
+        path = normalizeViewsRelativePath(uriStr);
     } else {
         path = "index.html"; // Default
     }

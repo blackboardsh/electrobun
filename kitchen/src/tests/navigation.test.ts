@@ -1,6 +1,51 @@
 // Navigation Tests - Tests for BrowserView navigation and events
 
 import { defineTest, expect } from "../test-framework/types";
+import { createTestHarnessRPC } from "./rpc.test";
+
+async function assertViewsUrlWithSuffixLoads(
+  url: string,
+  expectedSearch: string,
+  expectedHash: string,
+  createWindow: any,
+  log: (message: string) => void,
+) {
+  const rpc = createTestHarnessRPC();
+  let domReadyFired = false;
+
+  const win = await createWindow({
+    url,
+    rpc,
+    renderer: "cef",
+    title: "Views URL Suffix Test",
+  });
+
+  win.webview.on("dom-ready", () => {
+    domReadyFired = true;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  const h1 = await win.webview.rpc?.request.getElementText({
+    selector: "h1",
+  });
+  const locationInfo = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+    script: `return {
+      href: window.location.href,
+      search: window.location.search,
+      hash: window.location.hash,
+      title: document.title
+    }`,
+  });
+
+  expect(h1).toBe("Test Harness");
+  expect(locationInfo?.search).toBe(expectedSearch);
+  expect(locationInfo?.hash).toBe(expectedHash);
+  expect(locationInfo?.title).toBe("Test Harness");
+  log(
+    `Loaded CEF views URL suffix; dom-ready=${domReadyFired}, href=${locationInfo?.href}`,
+  );
+}
 
 export const navigationTests = [
   defineTest({
@@ -35,6 +80,38 @@ export const navigationTests = [
 
       expect(willNavigateFired).toBe(true);
       log("loadURL successfully triggered navigation");
+    },
+  }),
+
+  defineTest({
+    name: "views:// URL with query strips file lookup suffix",
+    category: "Navigation",
+    description: "Test views:// file lookup ignores everything to the right of a query marker",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      await assertViewsUrlWithSuffixLoads(
+        "views://test-harness/index.html?env=dev&dashWindowId=main",
+        "?env=dev&dashWindowId=main",
+        "",
+        createWindow,
+        log,
+      );
+    },
+  }),
+
+  defineTest({
+    name: "views:// URL with hash strips file lookup suffix",
+    category: "Navigation",
+    description: "Test views:// file lookup ignores everything to the right of a hash marker when no query is present",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      await assertViewsUrlWithSuffixLoads(
+        "views://test-harness/index.html#section",
+        "",
+        "#section",
+        createWindow,
+        log,
+      );
     },
   }),
 

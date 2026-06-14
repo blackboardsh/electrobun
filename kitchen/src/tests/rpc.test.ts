@@ -133,7 +133,7 @@ type StressHandlers = {
   socketSendSummary?: StressValueCollector<SocketSendSummary>;
 };
 
-function createTestHarnessRPC(
+export function createTestHarnessRPC(
   maxRequestTime = 10000,
   stressHandlers: StressHandlers = {},
 ) {
