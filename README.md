@@ -6,10 +6,8 @@
 
 <div align="center">
   Get started with a template <br />
-  <code><strong>npx electrobun init</strong></code>   
+  <code><strong>npx electrobun init</strong></code>
 </div>
-
-
 
 ## What is Electrobun?
 
@@ -21,6 +19,7 @@ Visit <a href="https://docs.electrobunny.ai/electrobun/">https://docs.electrobun
 You use it via npm.
 
 Don't miss our:
+
 - self-extracting bundles that use ZSTD compression for more compact distributables as small as 16MB
 - zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
 - `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
@@ -38,6 +37,8 @@ Don't miss our:
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
+
+- [Tv](https://github.com/fiqryq/tv) - A minimal IPTV streaming desktop app built with Electrobun, React, Tailwind CSS, and Effect.
 - [24agents](https://github.com/jhsu/24agents) - Hyperprompter
 - [act-track-ai](https://github.com/IrdanGu/act-track-ai) - personal desktop productivity tracker
 - [Agents Council](https://github.com/MrLesk/agents-council) - agent-to-agent MCP communication tool for feedback requests
@@ -98,6 +99,7 @@ Don't miss our:
 [![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=3)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
+
 Electrobun is one piece of a vision I'm building. I'm optimizing for focus and execution. Issues and PRs can be used to share ideas, but there should be no expectation that I will review, respond to, or merge them.
 
 Ways to get involved:
@@ -109,6 +111,7 @@ Ways to get involved:
 - Let me know what you're building with Electrobun
 
 ## Development Setup
+
 Building apps with Electrobun is as easy as updating your package.json dependencies with `npm add electrobun` or try one of our templates via `npx electrobun init`.
 
 **This section is for building Electrobun from source locally in order to contribute fixes to it.**
@@ -116,14 +119,17 @@ Building apps with Electrobun is as easy as updating your package.json dependenc
 ### Prerequisites
 
 **macOS:**
+
 - Xcode command line tools
 - cmake (install via homebrew: `brew install cmake`)
 
 **Windows:**
+
 - Visual Studio Build Tools or Visual Studio with C++ development tools
 - cmake
 
 **Linux:**
+
 - build-essential package
 - cmake
 - webkit2gtk and GTK development packages
