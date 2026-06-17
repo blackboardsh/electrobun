@@ -6408,18 +6408,35 @@ void runCEFEventLoop() {
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === CEF EVENT LOOP STARTED ===\n");
     fflush(stdout);
-        
-    // Set up a timer to periodically call CefDoMessageLoopWork()
-    // This integrates CEF message loop with GTK main loop
-    g_timeout_add(10, cef_timer_callback, nullptr); // 10ms interval
-        
-    
+
     // Set up X11 event processing
     g_timeout_add(10, process_x11_events, nullptr); // Process X11 events every 10ms
 
     sleep(1); // Give time for output to flush
-    gtk_main();
-    
+
+    // Initialize CEF eagerly so CefRunMessageLoop() below has a loop to run. CEF
+    // was previously initialized lazily on first webview creation; calling
+    // CefRunMessageLoop() before CefInitialize() returns immediately and the
+    // process exits. Eager init is safe — CEF needs no browser to initialize and
+    // the lazy call sites are guarded by g_cefInitialized so they become no-ops.
+    if (!g_cefInitialized.load()) {
+        initializeCEF();
+    }
+
+    // Drive the loop with CEF's own CefRunMessageLoop() rather than a raw
+    // gtk_main(). On Linux CEF installs its MessagePumpGlib work source and the
+    // Ozone X11 event source on the default GMainContext. Their prepare() returns
+    // a 0ms timeout unless MessagePumpGlib::Run has set up its RunState; a vanilla
+    // g_main_loop_run (gtk_main) iterates those sources WITHOUT that state, so
+    // prepare keeps reporting "work ready, timeout 0", the loop never blocks in
+    // poll(), and one CPU core pins at 100% continuously (even idle/hidden/blank
+    // page). CefRunMessageLoop runs MessagePumpGlib::Run, which blocks correctly
+    // when idle while still servicing the default context, so GTK dialogs/tray
+    // and the X11 timer above keep working. The old 10ms cef_timer_callback that
+    // manually called CefDoMessageLoopWork() is no longer needed and is removed.
+    // Torn down via CefQuitMessageLoop() in stopEventLoop().
+    CefRunMessageLoop();
+
     // Cleanup CEF on shutdown
 
     if (g_cefInitialized) {
@@ -9772,8 +9789,15 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     g_shuttingDown.store(true);
     printf("[stopEventLoop] Initiating clean event loop exit\n");
 
+    // Quit on the main loop thread. In CEF mode the loop is CefRunMessageLoop()
+    // (MessagePumpGlib), so it must be torn down with CefQuitMessageLoop();
+    // gtk_main_quit() would no-op there and shutdown would hang.
     runOnMainThreadAsyncVoid([]() {
-        gtk_main_quit();
+        if (isCEFAvailable()) {
+            CefQuitMessageLoop();
+        } else {
+            gtk_main_quit();
+        }
     });
 }
 
