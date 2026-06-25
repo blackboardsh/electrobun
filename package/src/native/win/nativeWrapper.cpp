@@ -419,6 +419,22 @@ typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 
+// Handle of this DLL itself, captured in DllMain. Window classes whose
+// WndProc lives in this module must be registered AND created with this same
+// HINSTANCE -- mixing it with GetModuleHandle(NULL) (the host bun.exe) keys the
+// class to the wrong module and CreateWindowExW/A then fails with
+// ERROR_CANNOT_FIND_WND_CLASS (1407), producing the "Custom class failed,
+// falling back to STATIC class" log. See issue #458.
+static HINSTANCE g_hInstanceDll = NULL;
+
+BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved) {
+    (void)lpvReserved;
+    if (fdwReason == DLL_PROCESS_ATTACH) {
+        g_hInstanceDll = hinstDLL;
+    }
+    return TRUE;
+}
+
 // Global map to store container views by window handle
 static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
 static GetMimeType g_getMimeType = nullptr;
@@ -4236,6 +4252,15 @@ private:
             CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
             container = (ContainerView*)cs->lpCreateParams;
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)container);
+            // Bind the real HWND now. The constructor has not yet returned from
+            // CreateWindowExA, so container->m_hwnd is still NULL during the
+            // synchronous WM_NCCREATE/WM_CREATE messages. Without this, the
+            // default case of HandleMessage calls DefWindowProc(NULL, ...) for
+            // WM_NCCREATE, which fails to return TRUE -- CreateWindowExA then
+            // returns NULL and the code falls back to the STATIC class. (#458)
+            if (container) {
+                container->m_hwnd = hwnd;
+            }
         } else {
             container = (ContainerView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
         }
@@ -4456,12 +4481,18 @@ public:
         if (!classRegistered) {
             WNDCLASSA wc = {0};
             wc.lpfnWndProc = ContainerWndProc;
-            wc.hInstance = GetModuleHandle(NULL);
+            // Register with this DLL's own instance -- ContainerWndProc lives in
+            // this module, not in the host bun.exe (GetModuleHandle(NULL)). The
+            // same handle must be passed to CreateWindowExA below or the class
+            // lookup fails with ERROR_CANNOT_FIND_WND_CLASS (1407). See issue #458.
+            wc.hInstance = g_hInstanceDll;
             wc.lpszClassName = "ContainerViewClass";
             wc.hbrBackground = NULL; // Transparent background
             wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-            wc.style = CS_HREDRAW | CS_VREDRAW;
-            
+            // CS_GLOBALCLASS makes the class resolvable from any HINSTANCE in the
+            // process -- a belt-and-suspenders guard against handle drift.
+            wc.style = CS_HREDRAW | CS_VREDRAW | CS_GLOBALCLASS;
+
             if (!RegisterClassA(&wc)) {
                 DWORD error = GetLastError();
                 if (error != ERROR_CLASS_ALREADY_EXISTS) {
@@ -4471,11 +4502,14 @@ public:
                     // Fall back to STATIC class
                     goto use_static_class;
                 }
+                // ERROR_CLASS_ALREADY_EXISTS: a prior call (e.g. dev hot-reload)
+                // already registered it. Treat as success.
             }
             classRegistered = true;
         }
-        
-        // Try creating with our custom class first
+
+        // Try creating with our custom class first. hInstance MUST match the one
+        // used in RegisterClassA above (g_hInstanceDll).
         m_hwnd = CreateWindowExA(
             0,
             "ContainerViewClass",
@@ -4484,24 +4518,31 @@ public:
             0, 0, width, height,
             parentWindow,
             NULL,
-            GetModuleHandle(NULL),
+            g_hInstanceDll,
             this   // Pass this pointer for message handling
         );
-        
+
         if (!m_hwnd) {
-            ::log("Custom class failed, falling back to STATIC class");
-            
+            // Scoped so the goto label below does not cross these initializations.
+            {
+                // Capture the error BEFORE any other Win32 call resets it.
+                DWORD createError = GetLastError();
+                char failMsg[256];
+                sprintf_s(failMsg, "Custom class failed (err=%lu), falling back to STATIC class", createError);
+                ::log(failMsg);
+            }
+
             use_static_class:
             // Fallback to STATIC class
             m_hwnd = CreateWindowExA(
                 0,
                 "STATIC",
-                "",  // No title text  
+                "",  // No title text
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
                 0, 0, width, height,
                 parentWindow,
                 NULL,
-                GetModuleHandle(NULL),
+                g_hInstanceDll,
                 NULL
             );
             
