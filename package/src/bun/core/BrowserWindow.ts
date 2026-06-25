@@ -40,6 +40,8 @@ export type WindowOptionsType<T = undefined> = {
 	transparent: boolean;
 	// passthrough: when true, mouse events pass through transparent regions
 	passthrough: boolean;
+	minWidth?: number;
+	minHeight?: number;
 	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
@@ -124,6 +126,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		width: 800,
 		height: 600,
 	};
+	minWidth: number = 0;
+	minHeight: number = 0;
 	// todo (yoav): make this an array of ids or something
 	webviewId!: number;
 
@@ -150,6 +154,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		};
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
+		this.minWidth = options.minWidth ?? 0;
+		this.minHeight = options.minHeight ?? 0;
 
 		this.init(options);
 	}
@@ -161,6 +167,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		transparent,
 		hidden,
 		activate,
+		minWidth,
+		minHeight,
 	}: Partial<WindowOptionsType<T>>) {
 		const windowId = ffi.request.createWindow({
 			title: this.title,
@@ -205,6 +213,8 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			hidden: hidden ?? false,
 			activate: activate ?? true,
 			trafficLightOffset: this.trafficLightOffset,
+			minWidth: minWidth ?? 0,
+			minHeight: minHeight ?? 0,
 		});
 
 		if (!windowId) {
@@ -348,14 +358,18 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	}
 
 	setSize(width: number, height: number) {
-		this.frame.width = width;
-		this.frame.height = height;
-		return ffi.request.setWindowSize({ winId: this.id, width, height });
+		const w = this.minWidth > 0 ? Math.max(width, this.minWidth) : width;
+		const h = this.minHeight > 0 ? Math.max(height, this.minHeight) : height;
+		this.frame.width = w;
+		this.frame.height = h;
+		return ffi.request.setWindowSize({ winId: this.id, width: w, height: h });
 	}
 
 	setFrame(x: number, y: number, width: number, height: number) {
-		this.frame = { x, y, width, height };
-		return ffi.request.setWindowFrame({ winId: this.id, x, y, width, height });
+		const w = this.minWidth > 0 ? Math.max(width, this.minWidth) : width;
+		const h = this.minHeight > 0 ? Math.max(height, this.minHeight) : height;
+		this.frame = { x, y, width: w, height: h };
+		return ffi.request.setWindowFrame({ winId: this.id, x, y, width: w, height: h });
 	}
 
 	getFrame(): { x: number; y: number; width: number; height: number } {
@@ -373,6 +387,23 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	getSize(): { width: number; height: number } {
 		const frame = this.getFrame();
 		return { width: frame.width, height: frame.height };
+	}
+
+	/**
+	 * Set the minimum content size of the window.
+	 * Pass 0 to remove a constraint.
+	 */
+	setMinimumSize(width: number, height: number) {
+		this.minWidth = width;
+		this.minHeight = height;
+		return ffi.request.setWindowMinSize({ winId: this.id, minWidth: width, minHeight: height });
+	}
+
+	/**
+	 * Get the current minimum content size.
+	 */
+	getMinimumSize(): { width: number; height: number } {
+		return { width: this.minWidth, height: this.minHeight };
 	}
 
 	/**
