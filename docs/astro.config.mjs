@@ -3,7 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
-  site: "https://docs.electrobunny.ai",
+  site: "https://framework.blackboard.sh",
   integrations: [
     starlight({
       title: "Electrobun Docs",

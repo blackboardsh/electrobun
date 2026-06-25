@@ -11,19 +11,40 @@ on:
         options:
           - staging
           - production
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
 
 jobs:
   deploy:
+    if: >-
+      ${{
+        github.event_name == 'workflow_dispatch' ||
+        (
+          startsWith(github.ref, 'refs/tags/v') &&
+          !contains(github.ref_name, '-beta') &&
+          !contains(github.ref_name, '-alpha') &&
+          !contains(github.ref_name, '-rc')
+        )
+      }}
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Checkout electrobun
+        uses: actions/checkout@v6
 
       - name: Resolve Cloudflare Pages branch
         id: deploy-branch
         shell: bash
+        env:
+          DEPLOY_ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
         run: |
-          if [[ "${{ github.event.inputs.environment }}" == "production" ]]; then
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "branch=main" >> $GITHUB_OUTPUT
+          elif [[ "${DEPLOY_ENVIRONMENT}" == "production" ]]; then
             echo "branch=main" >> $GITHUB_OUTPUT
           else
             echo "branch=preview" >> $GITHUB_OUTPUT
