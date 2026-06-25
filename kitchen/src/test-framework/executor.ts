@@ -123,6 +123,8 @@ export class TestExecutor {
           titleBarStyle: options.titleBarStyle,
           trafficLightOffset: options.trafficLightOffset,
           sandbox: options.sandbox || false,
+          minWidth: options.minWidth,
+          minHeight: options.minHeight,
         });
 
         // Wait a bit for window to be created
