@@ -4682,6 +4682,8 @@ typedef struct {
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
     ChromeStyle chromeStyle;
+    double minWidth = 0;
+    double minHeight = 0;
 } WindowData;
 
 
@@ -4953,12 +4955,26 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             break;
 
+        case WM_GETMINMAXINFO: {
+            if (data && (data->minWidth > 0 || data->minHeight > 0)) {
+                MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+                RECT rc = {0, 0, (LONG)data->minWidth, (LONG)data->minHeight};
+                AdjustWindowRectEx(&rc, GetWindowLong(hwnd, GWL_STYLE),
+                                  FALSE, GetWindowLong(hwnd, GWL_EXSTYLE));
+                if (data->minWidth > 0)
+                    mmi->ptMinTrackSize.x = max(mmi->ptMinTrackSize.x, (LONG)(rc.right - rc.left));
+                if (data->minHeight > 0)
+                    mmi->ptMinTrackSize.y = max(mmi->ptMinTrackSize.y, (LONG)(rc.bottom - rc.top));
+            }
+            break;
+        }
+
         case WM_CLOSE:
             if (data && data->closeHandler) {
                 data->closeHandler(data->windowId);
             }
             break;
-            
+
         case WM_MOVE:
             if (data && data->moveHandler) {
                 int x = LOWORD(lParam);
@@ -9326,7 +9342,9 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
     WindowBlurHandler zigBlurHandler,
-    WindowKeyHandler zigKeyHandler) {
+    WindowKeyHandler zigKeyHandler,
+    double minWidth,
+    double minHeight) {
 
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
@@ -9356,6 +9374,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         data->focusHandler = zigFocusHandler;
         data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
+        data->minWidth = minWidth;
+        data->minHeight = minHeight;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
@@ -9807,6 +9827,15 @@ ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double heig
     if (!IsWindow(hwnd)) return;
 
     SetWindowPos(hwnd, NULL, 0, 0, (int)width, (int)height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void setWindowMinSize(NSWindow *window, double minWidth, double minHeight) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+    WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+    if (!data) return;
+    data->minWidth = minWidth;
+    data->minHeight = minHeight;
 }
 
 ELECTROBUN_EXPORT void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
