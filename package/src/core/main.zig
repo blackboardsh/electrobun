@@ -51,6 +51,8 @@ const WindowState = struct {
     focus_handler: ?WindowFocusHandler,
     blur_handler: ?WindowBlurHandler,
     key_handler: ?WindowKeyHandler,
+    min_width: f64 = 0,
+    min_height: f64 = 0,
 };
 
 const WebviewRendererKind = enum {
@@ -1890,6 +1892,8 @@ export fn createWindow(
     focus_handler: ?WindowFocusHandler,
     blur_handler: ?WindowBlurHandler,
     key_handler: ?WindowKeyHandler,
+    min_width: f64,
+    min_height: f64,
 ) u32 {
     clearLastError();
 
@@ -1910,6 +1914,8 @@ export fn createWindow(
         ?WindowFocusHandler,
         ?WindowBlurHandler,
         ?WindowKeyHandler,
+        f64,
+        f64,
     ) callconv(.C) WindowPtr;
     const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.C) void;
     const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
@@ -1951,6 +1957,8 @@ export fn createWindow(
         .focus_handler = focus_handler,
         .blur_handler = blur_handler,
         .key_handler = key_handler,
+        .min_width = min_width,
+        .min_height = min_height,
     }) catch |err| {
         window_registry_mutex.unlock();
         setLastError("Failed to store window state: {s}", .{@errorName(err)});
@@ -1975,6 +1983,8 @@ export fn createWindow(
         windowFocusTrampoline,
         windowBlurTrampoline,
         windowKeyTrampoline,
+        min_width,
+        min_height,
     );
 
     if (window_ptr == null) {
@@ -1992,7 +2002,16 @@ export fn createWindow(
         return 0;
     };
     state.ptr = window_ptr;
+    state.min_width = min_width;
+    state.min_height = min_height;
     window_registry_mutex.unlock();
+
+    if (min_width > 0 or min_height > 0) {
+        const SetWindowMinSizeFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
+        if (lookupNativeSymbol(SetWindowMinSizeFn, "setWindowMinSize")) |set_min_size| {
+            set_min_size(window_ptr, min_width, min_height);
+        }
+    }
 
     set_window_title(window_ptr, title);
     if (!hidden) {
@@ -2047,6 +2066,35 @@ export fn unmaximizeWindow(window_id: u32) void {
     const window = requireWindowPtr(window_id) orelse return;
     const unmaximize_window = lookupNativeSymbol(UnmaximizeWindowFn, "unmaximizeWindow") orelse return;
     unmaximize_window(window);
+}
+
+export fn setWindowMinSize(window_id: u32, min_width: f64, min_height: f64) void {
+    clearLastError();
+    const SetWindowMinSizeFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const set_window_min_size = lookupNativeSymbol(SetWindowMinSizeFn, "setWindowMinSize") orelse return;
+
+    window_registry_mutex.lock();
+    if (window_registry.getPtr(window_id)) |state| {
+        state.min_width = min_width;
+        state.min_height = min_height;
+    }
+    window_registry_mutex.unlock();
+
+    set_window_min_size(window, min_width, min_height);
+}
+
+export fn getWindowMinSize(window_id: u32, out_width: *f64, out_height: *f64) void {
+    clearLastError();
+    window_registry_mutex.lock();
+    defer window_registry_mutex.unlock();
+    if (window_registry.getPtr(window_id)) |state| {
+        out_width.* = state.min_width;
+        out_height.* = state.min_height;
+    } else {
+        out_width.* = 0;
+        out_height.* = 0;
+    }
 }
 
 export fn isWindowMaximized(window_id: u32) bool {
