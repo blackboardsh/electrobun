@@ -176,6 +176,8 @@ const core = (() => {
 					FFIType.function,
 					FFIType.function,
 					FFIType.function,
+					FFIType.f64,
+					FFIType.f64,
 				],
 				returns: FFIType.u32,
 			},
@@ -261,6 +263,14 @@ const core = (() => {
 			},
 			setWindowSize: {
 				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			setWindowMinSize: {
+				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			getWindowMinSize: {
+				args: [FFIType.u32, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
 			setWindowFrame: {
@@ -1211,6 +1221,8 @@ const _ffiImpl = {
 				x: number;
 				y: number;
 			};
+			minWidth?: number;
+			minHeight?: number;
 		}): number => {
 			const {
 				url: _url,
@@ -1235,6 +1247,8 @@ const _ffiImpl = {
 				hidden = false,
 				activate = true,
 				trafficLightOffset = { x: 0, y: 0 },
+				minWidth = 0,
+				minHeight = 0,
 			} = params;
 
 			const styleMask = core_.symbols.getWindowStyle(
@@ -1274,6 +1288,8 @@ const _ffiImpl = {
 				windowFocusCallback,
 				windowBlurCallback,
 				windowKeyCallback,
+				minWidth,
+				minHeight,
 			);
 
 			if (!windowId) {
@@ -1500,6 +1516,42 @@ const _ffiImpl = {
 			}
 
 			core_.symbols.setWindowButtonPosition(winId, x, y);
+		},
+
+		setWindowMinSize: (params: {
+			winId: number;
+			minWidth: number;
+			minHeight: number;
+		}) => {
+			const { winId, minWidth, minHeight } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				throw `Can't set minimum window size. Window no longer exists`;
+			}
+
+			core_.symbols.setWindowMinSize(winId, minWidth, minHeight);
+		},
+
+		getWindowMinSize: (params: {
+			winId: number;
+		}): { width: number; height: number } => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return { width: 0, height: 0 };
+			}
+
+			const widthBuf = new Float64Array(1);
+			const heightBuf = new Float64Array(1);
+
+			core_.symbols.getWindowMinSize(winId, ptr(widthBuf), ptr(heightBuf));
+
+			return {
+				width: widthBuf[0]!,
+				height: heightBuf[0]!,
+			};
 		},
 
 		setWindowSize: (params: {
