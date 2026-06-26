@@ -7500,7 +7500,9 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowResizeHandler zigResizeHandler,
   WindowFocusHandler zigFocusHandler,
   WindowBlurHandler zigBlurHandler,
-  WindowKeyHandler zigKeyHandler
+  WindowKeyHandler zigKeyHandler,
+  double minWidth,
+  double minHeight
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -7552,6 +7554,14 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
             [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
             [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
+
+        // Apply minimum content size if specified
+        if (minWidth > 0 || minHeight > 0) {
+            [window setContentMinSize:NSMakeSize(
+                minWidth > 0 ? (CGFloat)minWidth : 0,
+                minHeight > 0 ? (CGFloat)minHeight : 0
+            )];
         }
     });
 
@@ -7722,6 +7732,16 @@ extern "C" void setWindowSize(NSWindow *window, double width, double height) {
         // Adjust y to keep top-left corner fixed (macOS uses bottom-left origin)
         frame.origin.y += (oldHeight - height);
         [window setFrame:frame display:YES animate:NO];
+    });
+}
+
+extern "C" void setWindowMinSize(NSWindow *window, double minWidth, double minHeight) {
+    runOnMainThreadAsyncVoid(^{
+        if (!window) return;
+        [window setContentMinSize:NSMakeSize(
+            minWidth > 0 ? (CGFloat)minWidth : 0,
+            minHeight > 0 ? (CGFloat)minHeight : 0
+        )];
     });
 }
 
