@@ -26,6 +26,7 @@ import {
 } from "../shared/rpc.js";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
+import { RESOURCES_FOLDER, VIEWS_FOLDER } from "./core/Paths";
 import * as Socket from "./core/Socket";
 import WGPU from "./webGPU";
 import webgpu from "./webgpuAdapter";
@@ -255,6 +256,8 @@ export {
 	ApplicationMenu,
 	ContextMenu,
 	PATHS,
+	RESOURCES_FOLDER,
+	VIEWS_FOLDER,
 	Socket,
 	WGPU,
 	webgpu,
@@ -287,6 +290,8 @@ const Electrobun = {
 	BuildConfig,
 	events: electobunEventEmmitter,
 	PATHS,
+	RESOURCES_FOLDER,
+	VIEWS_FOLDER,
 	Socket,
 	WGPU,
 	webgpu,
