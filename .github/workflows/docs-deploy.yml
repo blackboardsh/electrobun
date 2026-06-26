@@ -63,8 +63,11 @@ jobs:
         working-directory: docs
 
       - name: Deploy to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy docs/dist --project-name=electrobun-docs --branch=${{ steps.deploy-branch.outputs.branch }}
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_BRANCH: ${{ steps.deploy-branch.outputs.branch }}
+        run: |
+          npx --yes wrangler@4 pages deploy docs/dist \
+            --project-name=framework-docs \
+            --branch="${PAGES_BRANCH}"
