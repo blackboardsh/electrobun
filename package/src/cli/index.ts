@@ -4902,6 +4902,15 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 						appHandle = null;
 					},
 				});
+
+				if (appHandle) {
+					appHandle.exited.then((code) => {
+						if (!isBuilding && !shuttingDown) {
+							cleanup();
+							process.exit(code);
+						}
+					}).catch(() => {});
+				}
 			} catch (error) {
 				console.error("[electrobun dev --watch] Build failed:", error);
 				console.log("[electrobun dev --watch] Waiting for file changes...");
@@ -4957,6 +4966,15 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					appHandle = null;
 				},
 			});
+
+			if (appHandle) {
+				appHandle.exited.then((code) => {
+					if (!shuttingDown) {
+						cleanup();
+						process.exit(code);
+					}
+				}).catch(() => {});
+			}
 		} catch (error) {
 			console.error("[electrobun dev --watch] Initial build failed:", error);
 			console.log("[electrobun dev --watch] Waiting for file changes...");
