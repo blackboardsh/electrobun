@@ -998,6 +998,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface WindowDelegate : NSObject <NSWindowDelegate>
     @property (nonatomic, assign) WindowCloseHandler closeHandler;
+    @property (nonatomic, assign) WindowShouldCloseHandler shouldCloseHandler;
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
@@ -6681,7 +6682,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 @implementation WindowDelegate
     - (BOOL)windowShouldClose:(NSWindow *)sender {
-    return YES;
+        if (self.shouldCloseHandler) {
+            self.shouldCloseHandler(self.windowId);
+            return NO;
+        }
+        return YES;
     }
     - (void)windowWillClose:(NSNotification *)notification {
         NSWindow *window = [notification object];
@@ -7433,7 +7438,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowResizeHandler zigResizeHandler,
                                                      WindowFocusHandler zigFocusHandler,
                                                      WindowBlurHandler zigBlurHandler,
-                                                     WindowKeyHandler zigKeyHandler) {
+                                                     WindowKeyHandler zigKeyHandler,
+                                                     WindowShouldCloseHandler zigShouldCloseHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -7460,6 +7466,7 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
     delegate.closeHandler = zigCloseHandler;
+    delegate.shouldCloseHandler = zigShouldCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
@@ -7500,7 +7507,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowResizeHandler zigResizeHandler,
   WindowFocusHandler zigFocusHandler,
   WindowBlurHandler zigBlurHandler,
-  WindowKeyHandler zigKeyHandler
+  WindowKeyHandler zigKeyHandler,
+  WindowShouldCloseHandler zigShouldCloseHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -7531,7 +7539,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigResizeHandler,
             zigFocusHandler,
             zigBlurHandler,
-            zigKeyHandler
+            zigKeyHandler,
+            zigShouldCloseHandler
         );
 
         // Handle transparent window background
