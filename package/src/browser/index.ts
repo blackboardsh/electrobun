@@ -21,6 +21,8 @@ const HOST_SOCKET_PORT =
 class Electroview<T extends RPCWithTransport> {
 	hostSocket?: WebSocket;
 	hostSocketCanSend = false;
+	pendingHostSocketMessages: string[] = [];
+	flushingHostSocketMessages = false;
 	// user's custom rpc browser <-> bun
 	rpc?: T;
 	rpcHandler?: (msg: unknown) => void;
@@ -75,6 +77,7 @@ class Electroview<T extends RPCWithTransport> {
 
 		socket.addEventListener("open", () => {
 			this.hostSocketCanSend = true;
+			void this.flushPendingHostSocketMessages();
 		});
 
 		socket.addEventListener("message", async (event) => {
@@ -108,6 +111,7 @@ class Electroview<T extends RPCWithTransport> {
 
 		socket.addEventListener("close", (_event) => {
 			this.hostSocketCanSend = false;
+			this.pendingHostSocketMessages = [];
 			// console.log("Socket closed:", event);
 		});
 	}
@@ -130,29 +134,71 @@ class Electroview<T extends RPCWithTransport> {
 	}
 
 	async sendMessageToHost(msg: string) {
-		if (
-			this.hostSocketCanSend &&
-			this.hostSocket?.readyState === WebSocket.OPEN
-		) {
-			try {
-				const { encryptedData, iv, tag } =
-					await window.__electrobun_encrypt(msg);
-
-				const encryptedPacket = {
-					encryptedData: encryptedData,
-					iv: iv,
-					tag: tag,
-				};
-				const encryptedPacketString = JSON.stringify(encryptedPacket);
-				this.hostSocket.send(encryptedPacketString);
+		if (this.canSendToHostSocket()) {
+			if (await this.sendMessageToHostSocket(msg)) {
 				return;
-			} catch (error) {
-				console.error("Error sending message to host via socket:", error);
 			}
+		}
+
+		if (this.hostSocket?.readyState === WebSocket.CONNECTING) {
+			this.pendingHostSocketMessages.push(msg);
+			return;
 		}
 
 		// if socket's are unavailable, fallback to postMessage
 		window.__electrobunHostBridge?.postMessage(msg);
+	}
+
+	canSendToHostSocket() {
+		return (
+			this.hostSocketCanSend &&
+			this.hostSocket?.readyState === WebSocket.OPEN
+		);
+	}
+
+	async sendMessageToHostSocket(msg: string) {
+		if (!this.canSendToHostSocket()) {
+			return false;
+		}
+
+		try {
+			const { encryptedData, iv, tag } =
+				await window.__electrobun_encrypt(msg);
+
+			const encryptedPacket = {
+				encryptedData: encryptedData,
+				iv: iv,
+				tag: tag,
+			};
+			const encryptedPacketString = JSON.stringify(encryptedPacket);
+			this.hostSocket!.send(encryptedPacketString);
+			return true;
+		} catch (error) {
+			console.error("Error sending message to host via socket:", error);
+			return false;
+		}
+	}
+
+	async flushPendingHostSocketMessages() {
+		if (this.flushingHostSocketMessages) {
+			return;
+		}
+
+		this.flushingHostSocketMessages = true;
+		try {
+			while (
+				this.pendingHostSocketMessages.length > 0 &&
+				this.canSendToHostSocket()
+			) {
+				const message = this.pendingHostSocketMessages[0]!;
+				if (!(await this.sendMessageToHostSocket(message))) {
+					return;
+				}
+				this.pendingHostSocketMessages.shift();
+			}
+		} finally {
+			this.flushingHostSocketMessages = false;
+		}
 	}
 
 	receiveMessageFromHost(msg: unknown) {

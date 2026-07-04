@@ -545,7 +545,13 @@ const WebSocketFrame = struct {
     payload: []u8,
 };
 
-fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
+const WebSocketFrameFragment = struct {
+    fin: bool,
+    opcode: u8,
+    payload: []u8,
+};
+
+fn readWebSocketFrameFragment(reader: *PendingStreamReader) !WebSocketFrameFragment {
     var header: [2]u8 = undefined;
     reader.readExact(&header) catch |err| switch (err) {
         error.EndOfStream => return error.ConnectionClosed,
@@ -557,10 +563,10 @@ fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
     const masked = (header[1] & 0x80) != 0;
     var payload_len: usize = header[1] & 0x7F;
 
-    if (!fin) {
-        return error.UnsupportedWebSocketFrame;
-    }
     if (!masked) {
+        return error.InvalidWebSocketFrame;
+    }
+    if (!fin and opcode >= 0x8) {
         return error.InvalidWebSocketFrame;
     }
 
@@ -594,8 +600,61 @@ fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
     }
 
     return .{
+        .fin = fin,
         .opcode = opcode,
         .payload = payload,
+    };
+}
+
+fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
+    const first = try readWebSocketFrameFragment(reader);
+
+    if (first.fin or first.opcode >= 0x8) {
+        return .{
+            .opcode = first.opcode,
+            .payload = first.payload,
+        };
+    }
+
+    if (first.opcode == 0x0) {
+        allocator.free(first.payload);
+        return error.InvalidWebSocketFrame;
+    }
+
+    // Chromium may fragment large client sends; reassemble continuation frames before dispatch.
+    var payload = std.ArrayList(u8).init(allocator);
+    errdefer payload.deinit();
+
+    payload.appendSlice(first.payload) catch |err| {
+        allocator.free(first.payload);
+        return err;
+    };
+    allocator.free(first.payload);
+
+    while (true) {
+        const next = try readWebSocketFrameFragment(reader);
+        defer allocator.free(next.payload);
+
+        if (next.opcode >= 0x8) {
+            continue;
+        }
+        if (next.opcode != 0x0) {
+            return error.InvalidWebSocketFrame;
+        }
+        if (payload.items.len + next.payload.len > websocket_payload_limit) {
+            return error.WebSocketFrameTooLarge;
+        }
+
+        try payload.appendSlice(next.payload);
+
+        if (next.fin) {
+            break;
+        }
+    }
+
+    return .{
+        .opcode = first.opcode,
+        .payload = try payload.toOwnedSlice(),
     };
 }
 
