@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Zig WGPU</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app">
+			<section class="stage">
+				<header class="topbar">
+					<div>
+						<h1>Zig WGPU</h1>
+						<p id="status">Waiting for surface</p>
+					</div>
+					<button id="mode-button" type="button">Toggle</button>
+				</header>
+				<div class="surface-shell">
+					<div class="hud">
+						<strong id="frame-stat">--</strong>
+						<span>frames</span>
+					</div>
+					<electrobun-wgpu id="gpu-surface"></electrobun-wgpu>
+				</div>
+			</section>
+			<aside class="controls">
+				<label>
+					<span>Motion</span>
+					<input id="motion" type="range" min="1" max="8" step="1" value="4" />
+				</label>
+				<label>
+					<span>Shader</span>
+					<select id="shader-mode">
+						<option value="0">Mandelbrot</option>
+						<option value="1">Julia</option>
+					</select>
+				</label>
+				<div class="stats">
+					<div>
+						<span>Surface</span>
+						<strong id="surface-stat">--</strong>
+					</div>
+					<div>
+						<span>GPU view</span>
+						<strong id="view-stat">--</strong>
+					</div>
+				</div>
+			</aside>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>
