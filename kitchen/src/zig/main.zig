@@ -775,9 +775,32 @@ const AllTestsJob = struct {
 };
 
 var g_state: ?*AppState = null;
+var host_queue_running = std.atomic.Value(bool).init(false);
 
 fn appState() *AppState {
     return g_state orelse @panic("electrobun kitchen zig state not initialized");
+}
+
+fn drainHostMessageQueue() void {
+    while (host_queue_running.load(.acquire)) {
+        const state = g_state orelse {
+            std.time.sleep(10 * std.time.ns_per_ms);
+            continue;
+        };
+
+        var drained_any = false;
+        while (host_queue_running.load(.acquire)) {
+            var webview_id: u32 = 0;
+            const message = state.core.popNextQueuedHostMessage(&webview_id) orelse break;
+            testRunnerHostBridge(webview_id, message);
+            state.core.freeCoreString(message);
+            drained_any = true;
+        }
+
+        if (!drained_any) {
+            std.time.sleep(10 * std.time.ns_per_ms);
+        }
+    }
 }
 
 fn configureRuntimeBuildConfig(state: *AppState) !void {
@@ -1323,44 +1346,43 @@ fn observedWebviewEvent(_: u32, event_name: [*:0]const u8, detail: [*:0]const u8
     recordObservedWebviewEvent(std.mem.span(event_name), std.mem.span(detail));
 }
 
-fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.C) u32 {
+fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.C) void {
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
-        return 0;
+        return;
     }
 
     var parsed = std.json.parseFromSlice(std.json.Value, std.heap.page_allocator, message_slice, .{}) catch {
-        return 0;
+        return;
     };
     defer parsed.deinit();
 
     if (parsed.value != .object) {
-        return 0;
+        return;
     }
 
-    const id_value = parsed.value.object.get("id") orelse return 0;
-    const type_value = parsed.value.object.get("type") orelse return 0;
+    const id_value = parsed.value.object.get("id") orelse return;
+    const type_value = parsed.value.object.get("type") orelse return;
     if (id_value != .string or type_value != .string) {
-        return 0;
+        return;
     }
 
     if (!std.mem.eql(u8, id_value.string, "webviewEvent") or !std.mem.eql(u8, type_value.string, "message")) {
-        return 0;
+        return;
     }
 
-    const payload_value = parsed.value.object.get("payload") orelse return 0;
+    const payload_value = parsed.value.object.get("payload") orelse return;
     if (payload_value != .object) {
-        return 0;
+        return;
     }
 
-    const event_name_value = payload_value.object.get("eventName") orelse return 0;
-    const detail_value = payload_value.object.get("detail") orelse return 0;
+    const event_name_value = payload_value.object.get("eventName") orelse return;
+    const detail_value = payload_value.object.get("detail") orelse return;
     if (event_name_value != .string or detail_value != .string) {
-        return 0;
+        return;
     }
 
     recordObservedWebviewEvent(event_name_value.string, detail_value.string);
-    return 0;
 }
 
 fn childWebviewRenderer(webview_id: u32) electrobun.Renderer {
@@ -2058,37 +2080,37 @@ fn handleInternalBridgeMessage(message_id: []const u8, params_object: *const std
     }
 }
 
-fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callconv(.C) u32 {
+fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callconv(.C) void {
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
-        return 0;
+        return;
     }
 
     var parsed = std.json.parseFromSlice(std.json.Value, appState().allocator, message_slice, .{}) catch |err| {
         std.debug.print("[kitchen zig] failed to parse internal bridge packet: {s}\n", .{@errorName(err)});
-        return 0;
+        return;
     };
     defer parsed.deinit();
 
     if (parsed.value == .object) {
-        const id_value = parsed.value.object.get("id") orelse return 0;
-        const type_value = parsed.value.object.get("type") orelse return 0;
+        const id_value = parsed.value.object.get("id") orelse return;
+        const type_value = parsed.value.object.get("type") orelse return;
         if (id_value == .string and type_value == .string and
             std.mem.eql(u8, id_value.string, "webviewEvent") and
             std.mem.eql(u8, type_value.string, "message"))
         {
-            const payload_value = parsed.value.object.get("payload") orelse return 0;
+            const payload_value = parsed.value.object.get("payload") orelse return;
             if (payload_value == .object) {
-                const event_name = getJsonStringField(&payload_value.object, "eventName") orelse return 0;
-                const detail = getJsonStringField(&payload_value.object, "detail") orelse return 0;
+                const event_name = getJsonStringField(&payload_value.object, "eventName") orelse return;
+                const detail = getJsonStringField(&payload_value.object, "detail") orelse return;
                 recordObservedWebviewEvent(event_name, detail);
             }
-            return 0;
+            return;
         }
     }
 
     if (parsed.value != .array) {
-        return 0;
+        return;
     }
 
     for (parsed.value.array.items) |item| {
@@ -2121,7 +2143,6 @@ fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callco
         }
     }
 
-    return 0;
 }
 
 fn createWindowWithHarnessCustom(
@@ -4220,37 +4241,37 @@ fn testRunnerWebviewEvent(webview_id: u32, event_name: [*:0]const u8, _: [*:0]co
     }
 }
 
-fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) u32 {
+fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
     const state = appState();
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
-        return 0;
+        return;
     }
 
     var parsed = std.json.parseFromSlice(std.json.Value, state.allocator, message_slice, .{}) catch |err| {
         std.debug.print("[kitchen zig] failed to parse RPC packet: {s}\n", .{@errorName(err)});
-        return 0;
+        return;
     };
     defer parsed.deinit();
 
     if (parsed.value != .object) {
-        return 0;
+        return;
     }
 
-    const packet_type_value = parsed.value.object.get("type") orelse return 0;
+    const packet_type_value = parsed.value.object.get("type") orelse return;
     if (packet_type_value != .string) {
-        return 0;
+        return;
     }
 
     if (std.mem.eql(u8, packet_type_value.string, "request")) {
         const request_id_value = parsed.value.object.get("id") orelse {
-            return 0;
+            return;
         };
         const method_value = parsed.value.object.get("method") orelse {
-            return 0;
+            return;
         };
         if (request_id_value != .integer or method_value != .string) {
-            return 0;
+            return;
         }
 
         const params = parsed.value.object.get("params");
@@ -4260,20 +4281,18 @@ fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) u3
             method_value.string,
             params,
         );
-        return 0;
+        return;
     }
 
     if (std.mem.eql(u8, packet_type_value.string, "message")) {
-        const message_id_value = parsed.value.object.get("id") orelse return 0;
+        const message_id_value = parsed.value.object.get("id") orelse return;
         if (message_id_value != .string) {
-            return 0;
+            return;
         }
         const payload = parsed.value.object.get("payload");
         handleRpcMessage(message_id_value.string, payload);
-        return 0;
+        return;
     }
-
-    return 0;
 }
 
 fn createUi(context: *CreateUiContext) void {
@@ -4379,6 +4398,13 @@ pub fn main() !void {
 
     const ui_thread = try std.Thread.spawn(.{}, createUi, .{&context});
     ui_thread.detach();
+
+    host_queue_running.store(true, .release);
+    const host_queue_thread = try std.Thread.spawn(.{}, drainHostMessageQueue, .{});
+    defer {
+        host_queue_running.store(false, .release);
+        host_queue_thread.join();
+    }
 
     try core.runMainThread(app_info);
 }

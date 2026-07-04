@@ -2,7 +2,7 @@ import type { ElectrobunConfig } from "electrobun";
 
 // const mainProcess = "zig" as const; // Flip to "zig" or "bun" to exercise the native-main demo.
 const mainProcess = "bun" as const;
-const bundleCEF = true;
+const bundleCEF = false;
 
 export default {
 	app: {
@@ -15,7 +15,7 @@ export default {
 		// exitOnLastWindowClosed: false,
 	},
 	build: {
-		mainProcess,
+		mainProcess: "zig",
 		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
 		// bunVersion: "1.3.7",

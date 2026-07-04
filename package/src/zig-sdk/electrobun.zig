@@ -602,6 +602,8 @@ pub const Core = struct {
     const WebviewStopFindFn = *const fn (u32) callconv(.C) void;
     const SendInternalMessageToWebviewFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
     const SendHostMessageToWebviewViaTransportFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
+    const PopNextQueuedHostMessageFn = *const fn (*u32) callconv(.C) ?[*:0]u8;
+    const FreeCoreStringFn = *const fn (?[*:0]u8) callconv(.C) void;
     const WebviewOpenDevToolsFn = *const fn (u32) callconv(.C) void;
     const WebviewCloseDevToolsFn = *const fn (u32) callconv(.C) void;
     const WebviewToggleDevToolsFn = *const fn (u32) callconv(.C) void;
@@ -713,6 +715,8 @@ pub const Core = struct {
         webview_stop_find: WebviewStopFindFn,
         send_internal_message_to_webview: SendInternalMessageToWebviewFn,
         send_host_message_to_webview_via_transport: SendHostMessageToWebviewViaTransportFn,
+        pop_next_queued_host_message: PopNextQueuedHostMessageFn,
+        free_core_string: FreeCoreStringFn,
         webview_open_devtools: WebviewOpenDevToolsFn,
         webview_close_devtools: WebviewCloseDevToolsFn,
         webview_toggle_devtools: WebviewToggleDevToolsFn,
@@ -842,6 +846,8 @@ pub const Core = struct {
                 .webview_stop_find = lib.lookup(WebviewStopFindFn, "webviewStopFind") orelse return error.MissingCoreSymbol,
                 .send_internal_message_to_webview = lib.lookup(SendInternalMessageToWebviewFn, "sendInternalMessageToWebview") orelse return error.MissingCoreSymbol,
                 .send_host_message_to_webview_via_transport = lib.lookup(SendHostMessageToWebviewViaTransportFn, "sendHostMessageToWebviewViaTransport") orelse return error.MissingCoreSymbol,
+                .pop_next_queued_host_message = lib.lookup(PopNextQueuedHostMessageFn, "popNextQueuedHostMessage") orelse return error.MissingCoreSymbol,
+                .free_core_string = lib.lookup(FreeCoreStringFn, "freeCoreString") orelse return error.MissingCoreSymbol,
                 .webview_open_devtools = lib.lookup(WebviewOpenDevToolsFn, "webviewOpenDevTools") orelse return error.MissingCoreSymbol,
                 .webview_close_devtools = lib.lookup(WebviewCloseDevToolsFn, "webviewCloseDevTools") orelse return error.MissingCoreSymbol,
                 .webview_toggle_devtools = lib.lookup(WebviewToggleDevToolsFn, "webviewToggleDevTools") orelse return error.MissingCoreSymbol,
@@ -1427,6 +1433,14 @@ pub const Core = struct {
         try self.sendHostMessageToWebview(webview_id, message);
     }
 
+    pub fn popNextQueuedHostMessage(self: *Core, out_webview_id: *u32) ?[*:0]u8 {
+        return self.symbols.pop_next_queued_host_message(out_webview_id);
+    }
+
+    pub fn freeCoreString(self: *Core, value: ?[*:0]u8) void {
+        self.symbols.free_core_string(value);
+    }
+
     pub fn sendInternalMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
         const message_json = try std.json.stringifyAlloc(self.allocator, message, .{});
         defer self.allocator.free(message_json);
@@ -1988,6 +2002,4 @@ pub fn allowAllNavigation(_: u32, _: [*:0]const u8) callconv(.C) u32 {
 
 pub fn noopWebviewEvent(_: u32, _: [*:0]const u8, _: [*:0]const u8) callconv(.C) void {}
 
-pub fn noopWebviewPostMessage(_: u32, _: [*:0]const u8) callconv(.C) u32 {
-    return 0;
-}
+pub fn noopWebviewPostMessage(_: u32, _: [*:0]const u8) callconv(.C) void {}

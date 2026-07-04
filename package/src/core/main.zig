@@ -2275,7 +2275,7 @@ export fn createWebview(
 ) u32 {
     clearLastError();
     _ = _host_bridge_handler;
-    _ = _internal_bridge_handler;
+    const internal_bridge_handler = _internal_bridge_handler orelse internalBridgeCoreTrampoline;
     rememberDefaultWebviewCallbacks(
         navigation_callback,
         webview_event_handler,
@@ -2384,7 +2384,7 @@ export fn createWebview(
         webview_event_handler,
         event_bridge_handler,
         hostBridgeQueueTrampoline,
-        internalBridgeCoreTrampoline,
+        internal_bridge_handler,
         electrobun_preload_script.ptr,
         custom_preload_script,
         views_root,
