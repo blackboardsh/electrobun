@@ -2164,58 +2164,77 @@ async function buildNative() {
 async function buildLauncher() {
 	console.log(`Building launcher for ${OS} ${ARCH}...`);
 
-	let zigArgs: string[] = [];
+	// We use `zig build-exe` directly instead of `zig build` (which would
+	// compile the build runner and then invoke the build.zig script).
+	//
+	// Why: `zig build` compiles its own build-runner executable that links
+	// against the system macOS SDK (libSystem) via -syslibroot. On macOS 26.x,
+	// vendored Zig 0.13.0's LLD linker cannot resolve standard libc symbols
+	// (_free, _fork, _clock_gettime, __availability_version_check, etc.) from
+	// the SDK's TBD v4 text-format stubs, causing 18+ "undefined symbol" linker
+	// errors. This is a linker/SDK compatibility issue — the Zig source code
+	// itself is perfectly valid.
+	//
+	// `zig build-exe` sidesteps this entirely by using Zig's bundled libc stubs
+	// rather than relying on the system SDK, which avoids the TBD parsing
+	// problem. The output (launcher binary) is identical — same target, same
+	// optimize flags, same libc linkage.
+	//
+	// `zig-out/bin/<name>` mirrors the directory layout that `zig build`
+	// produces, so downstream copy steps in copyToDist() continue to work.
+
+	let targetFlag: string;
+	let cpuFlag: string[] = [];
 
 	if (OS === "win") {
 		// Windows always x64 for now
-		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+		targetFlag = "x86_64-windows";
+		cpuFlag = ["-mcpu", "baseline"];
 	} else if (OS === "linux") {
-		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
-		} else {
-			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
-		}
-	} else if (OS === "macos") {
-		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-macos"];
-		} else {
-			zigArgs = ["-Dtarget=x86_64-macos"];
-		}
+		targetFlag = ARCH === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
+	} else {
+		targetFlag = ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos";
 	}
 
-	if (CHANNEL === "debug") {
-		await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	const optimizeFlag = CHANNEL === "release" ? ["-O", "ReleaseSmall"] : [];
+	const launcherBin = `zig-out/bin/launcher${binExt}`;
+
+	await $`mkdir -p src/launcher/zig-out/bin`;
+	await $`cd src/launcher && ../../vendors/zig/zig build-exe -target ${targetFlag} ${cpuFlag} ${optimizeFlag} -lc -femit-bin=${launcherBin} main.zig`;
 }
 
 async function buildCore() {
 	console.log(`Building ElectrobunCore for ${OS} ${ARCH}...`);
 
-	let zigArgs: string[] = [];
+	// Same rationale as buildLauncher: `zig build-lib` avoids the build-runner
+	// linker issue on macOS 26.x while producing an identical .dylib/.dll/.so.
+	// -dynamic produces a shared library (matching the original build.zig's
+	// b.addSharedLibrary behavior).
+	// Output goes to zig-out/lib/ (Linux and macOS) or zig-out/bin (Windows),
+	// matching the directory layout that copyToDist() expects.
+
+	let targetFlag: string;
+	let cpuFlag: string[] = [];
 
 	if (OS === "win") {
-		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+		targetFlag = "x86_64-windows";
+		cpuFlag = ["-mcpu", "baseline"];
 	} else if (OS === "linux") {
-		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
-		} else {
-			zigArgs = ["-Dtarget=x86_64-linux-gnu"];
-		}
-	} else if (OS === "macos") {
-		if (ARCH === "arm64") {
-			zigArgs = ["-Dtarget=aarch64-macos"];
-		} else {
-			zigArgs = ["-Dtarget=x86_64-macos"];
-		}
+		targetFlag = ARCH === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
+	} else {
+		targetFlag = ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos";
 	}
 
-	if (CHANNEL === "debug") {
-		await $`cd src/core && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/core && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	const optimizeFlag = CHANNEL === "release" ? ["-O", "ReleaseSmall"] : [];
+	const coreLibName = OS === "win"
+		? "ElectrobunCore.dll"
+		: OS === "macos"
+			? "libElectrobunCore.dylib"
+			: "libElectrobunCore.so";
+	const coreOutDir = OS === "win" ? "zig-out/bin" : "zig-out/lib";
+
+	await $`mkdir -p src/core/${coreOutDir}`;
+	await $`cd src/core && ../../vendors/zig/zig build-lib -target ${targetFlag} ${cpuFlag} ${optimizeFlag} -dynamic -lc -femit-bin=${coreOutDir}/${coreLibName} main.zig`;
 }
 
 async function buildMainJs() {
@@ -2241,18 +2260,32 @@ async function buildMainJs() {
 }
 
 async function buildSelfExtractor() {
-	const zigArgs =
-		OS === "win"
-			? ["-Dtarget=x86_64-windows", "-Dcpu=baseline"]
-			: ARCH === "x64"
-				? ["-Dcpu=baseline"]
-				: [];
+	console.log(`Building self-extractor for ${OS} ${ARCH}...`);
 
-	if (CHANNEL === "debug") {
-		await $`cd src/extractor && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+	// Same rationale as buildLauncher: `zig build-exe` avoids the build-runner
+	// linker issue on macOS 26.x while producing an identical extractor binary.
+	// -femit-bin=zig-out/bin/extractor mirrors the output path that the
+	// old `zig build` invocation produced.
+
+	let targetFlag: string;
+	let cpuFlag: string[] = [];
+
+	if (OS === "win") {
+		targetFlag = "x86_64-windows";
+		cpuFlag = ["-mcpu", "baseline"];
+	} else if (OS === "linux") {
+		targetFlag = ARCH === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
+		if (ARCH === "x64") cpuFlag = ["-mcpu", "baseline"];
+	} else {
+		targetFlag = ARCH === "arm64" ? "aarch64-macos" : "x86_64-macos";
+		if (ARCH === "x64") cpuFlag = ["-mcpu", "baseline"];
 	}
+
+	const optimizeFlag = CHANNEL === "release" ? ["-O", "ReleaseSmall"] : [];
+	const extractorBin = `zig-out/bin/extractor${binExt}`;
+
+	await $`mkdir -p src/extractor/zig-out/bin`;
+	await $`cd src/extractor && ../../vendors/zig/zig build-exe -target ${targetFlag} ${cpuFlag} ${optimizeFlag} -lc -femit-bin=${extractorBin} main.zig`;
 }
 
 async function buildCli() {

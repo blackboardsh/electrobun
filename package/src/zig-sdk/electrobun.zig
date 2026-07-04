@@ -93,6 +93,8 @@ pub const WindowOptions = struct {
     activate: bool = true,
     traffic_light_offset: TrafficLightOffset = .{},
     callbacks: WindowCallbacks = .{},
+    min_width: f64 = 0,
+    min_height: f64 = 0,
 };
 
 pub const WebviewCallbacks = struct {
@@ -558,7 +560,7 @@ pub const Core = struct {
     const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.C) c_int;
     const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
     const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.C) u32;
-    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler) callconv(.C) u32;
+    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, f64, f64) callconv(.C) u32;
     const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool) callconv(.C) u32;
     const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.C) u32;
     const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -582,6 +584,8 @@ pub const Core = struct {
     const SetWindowSizeFn = *const fn (u32, f64, f64) callconv(.C) void;
     const SetWindowFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
     const GetWindowFrameFn = *const fn (u32, *f64, *f64, *f64, *f64) callconv(.C) void;
+    const SetWindowMinSizeFn = *const fn (u32, f64, f64) callconv(.C) void;
+    const GetWindowMinSizeFn = *const fn (u32, *f64, *f64) callconv(.C) void;
     const CloseWindowFn = *const fn (u32) callconv(.C) void;
     const ResizeWebviewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
     const LoadURLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -695,6 +699,8 @@ pub const Core = struct {
         set_window_size: SetWindowSizeFn,
         set_window_frame: SetWindowFrameFn,
         get_window_frame: GetWindowFrameFn,
+        set_window_min_size: SetWindowMinSizeFn,
+        get_window_min_size: GetWindowMinSizeFn,
         close_window: CloseWindowFn,
         resize_webview: ResizeWebviewFn,
         load_url_in_webview: LoadURLInWebViewFn,
@@ -826,6 +832,8 @@ pub const Core = struct {
                 .set_window_size = lib.lookup(SetWindowSizeFn, "setWindowSize") orelse return error.MissingCoreSymbol,
                 .set_window_frame = lib.lookup(SetWindowFrameFn, "setWindowFrame") orelse return error.MissingCoreSymbol,
                 .get_window_frame = lib.lookup(GetWindowFrameFn, "getWindowFrame") orelse return error.MissingCoreSymbol,
+                .set_window_min_size = lib.lookup(SetWindowMinSizeFn, "setWindowMinSize") orelse return error.MissingCoreSymbol,
+                .get_window_min_size = lib.lookup(GetWindowMinSizeFn, "getWindowMinSize") orelse return error.MissingCoreSymbol,
                 .close_window = lib.lookup(CloseWindowFn, "closeWindow") orelse return error.MissingCoreSymbol,
                 .resize_webview = lib.lookup(ResizeWebviewFn, "resizeWebview") orelse return error.MissingCoreSymbol,
                 .load_url_in_webview = lib.lookup(LoadURLInWebViewFn, "loadURLInWebView") orelse return error.MissingCoreSymbol,
@@ -998,6 +1006,8 @@ pub const Core = struct {
             options.callbacks.focus,
             options.callbacks.blur,
             options.callbacks.key,
+            options.min_width,
+            options.min_height,
         );
 
         if (window_id == 0) {
@@ -1097,6 +1107,19 @@ pub const Core = struct {
     pub fn setWindowSize(self: *Core, window_id: u32, width: f64, height: f64) !void {
         self.symbols.set_window_size(window_id, width, height);
         try self.ensureLastCallSucceeded();
+    }
+
+    pub fn setWindowMinSize(self: *Core, window_id: u32, min_width: f64, min_height: f64) !void {
+        self.symbols.set_window_min_size(window_id, min_width, min_height);
+        try self.ensureLastCallSucceeded();
+    }
+
+    pub fn getWindowMinSize(self: *Core, window_id: u32) !struct { width: f64, height: f64 } {
+        var width: f64 = 0;
+        var height: f64 = 0;
+        self.symbols.get_window_min_size(window_id, &width, &height);
+        try self.ensureLastCallSucceeded();
+        return .{ .width = width, .height = height };
     }
 
     pub fn setWindowFrame(self: *Core, window_id: u32, frame: Rect) !void {

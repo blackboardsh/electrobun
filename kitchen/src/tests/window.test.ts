@@ -805,4 +805,74 @@ export const windowTests = [
       log("Window size retrieved successfully");
     },
   }),
+
+  defineTest({
+    name: "Window minWidth/minHeight constructor options",
+    category: "BrowserWindow",
+    description: "Test that minWidth/minHeight options are stored",
+    async run({ createWindow, log }) {
+        const win = await createWindow({
+            url: "views://test-harness/index.html",
+            title: "Min Size Test",
+            width: 800,
+            height: 600,
+            minWidth: 640,
+            minHeight: 400,
+            renderer: 'cef',
+        });
+
+        expect(win.window.minWidth).toBe(640);
+        expect(win.window.minHeight).toBe(400);
+        log(`minWidth: ${win.window.minWidth}, minHeight: ${win.window.minHeight}`);
+    },
+  }),
+
+  defineTest({
+    name: "Window setMinimumSize / getMinimumSize",
+    category: "BrowserWindow",
+    description: "Test runtime get/set minimum size",
+    async run({ createWindow, log }) {
+        const win = await createWindow({
+            url: "views://test-harness/index.html",
+            title: "SetMinSize Test",
+            width: 800,
+            height: 600,
+            renderer: 'cef',
+        });
+
+        win.window.setMinimumSize(500, 300);
+        const minSize = win.window.getMinimumSize();
+        expect(minSize.width).toBe(500);
+        expect(minSize.height).toBe(300);
+        log(`Minimum size set to ${minSize.width}x${minSize.height}`);
+    },
+  }),
+
+  defineTest({
+    name: "Window setSize respects minimum size",
+    category: "BrowserWindow",
+    description: "Test that setSize clamps to minWidth/minHeight",
+    async run({ createWindow, log }) {
+        const win = await createWindow({
+            url: "views://test-harness/index.html",
+            title: "Clamp Test",
+            width: 800,
+            height: 600,
+            minWidth: 300,
+            minHeight: 200,
+            renderer: 'cef',
+        });
+
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        log("Trying to setSize to 100x100 (below minimum)");
+        win.window.setSize(100, 100);
+        await new Promise((resolve) => setTimeout(resolve, 300));
+
+        const frame = win.window.getFrame();
+        log(`Actual frame: ${frame.width}x${frame.height}`);
+        expect(frame.width).toBeGreaterThanOrEqual(300);
+        expect(frame.height).toBeGreaterThanOrEqual(200);
+    },
+  }),
 ];

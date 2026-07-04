@@ -62,6 +62,8 @@ export interface WindowOptions {
   hidden?: boolean;
   activate?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
+  minWidth?: number;
+  minHeight?: number;
 }
 
 export interface TestWindow {

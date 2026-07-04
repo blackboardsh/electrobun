@@ -229,6 +229,8 @@ struct X11Window {
     std::vector<Window> childWindows;  // For managing webviews
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
+    double minWidth = 0;
+    double minHeight = 0;
 
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
@@ -6453,7 +6455,7 @@ void showWindow(void* window, bool activate);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
-                   const char* titleBarStyle = nullptr, bool transparent = false) {
+                   const char* titleBarStyle = nullptr, bool transparent = false, double minWidth = 0, double minHeight = 0) {
     
     void* result = dispatch_sync_main([&]() -> void* {
         
@@ -6602,6 +6604,19 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->blurCallback = blurCallback;
             x11win->keyCallback = keyCallback;
             x11win->transparent = transparent;
+            x11win->minWidth = minWidth;
+            x11win->minHeight = minHeight;
+
+            // Apply minimum window size if specified
+            if (minWidth > 0 || minHeight > 0) {
+                XSizeHints minHints;
+                memset(&minHints, 0, sizeof(minHints));
+                minHints.flags = PMinSize;
+                minHints.min_width = (minWidth > 0) ? (int)minWidth : 0;
+                minHints.min_height = (minHeight > 0) ? (int)minHeight : 0;
+                XSetWMNormalHints(display, x11_window, &minHints);
+                XFlush(display);
+            }
 
             // Store in global maps
             {
@@ -6627,7 +6642,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
-                   const char* titleBarStyle = nullptr, bool transparent = false) {
+                   const char* titleBarStyle = nullptr, bool transparent = false, double minWidth = 0, double minHeight = 0) {
     
    
     
@@ -6683,7 +6698,18 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
                 printf("GTK WARNING: Transparency not supported (no RGBA visual or compositor)\n");
             }
         }
-        
+
+        // Apply minimum window size if specified
+        if (minWidth > 0 || minHeight > 0) {
+            GdkGeometry hints = {};
+            hints.min_width = (minWidth > 0) ? (gint)minWidth : -1;
+            hints.min_height = (minHeight > 0) ? (gint)minHeight : -1;
+            hints.flags = GDK_HINT_MIN_SIZE;
+            gtk_window_set_geometry_hints(
+                GTK_WINDOW(window), NULL, &hints, hints.flags
+            );
+        }
+
         // Create container with callbacks
         auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
       
@@ -6786,16 +6812,17 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              double trafficLightOffsetX, double trafficLightOffsetY,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
+                                             double minWidth, double minHeight) {
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
 
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent, minWidth, minHeight);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent, minWidth, minHeight);
     }
 
 }
@@ -10506,6 +10533,39 @@ ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) 
             X11Window* x11win = static_cast<X11Window*>(window);
             if (x11win && x11win->display && x11win->window) {
                 XResizeWindow(x11win->display, x11win->window, (unsigned int)width, (unsigned int)height);
+                XFlush(x11win->display);
+            }
+        }
+    });
+}
+
+ELECTROBUN_EXPORT void setWindowMinSize(void* window, double minWidth, double minHeight) {
+    if (!window) return;
+
+    dispatch_sync_main_void([=]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (GTK_IS_WINDOW(gtkWindow)) {
+                GdkGeometry hints = {};
+                hints.min_width = (minWidth > 0) ? (gint)minWidth : -1;
+                hints.min_height = (minHeight > 0) ? (gint)minHeight : -1;
+                hints.flags = GDK_HINT_MIN_SIZE;
+                gtk_window_set_geometry_hints(
+                    GTK_WINDOW(gtkWindow), NULL, &hints, hints.flags
+                );
+            }
+        } else {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (x11win && x11win->display && x11win->window) {
+                x11win->minWidth = minWidth;
+                x11win->minHeight = minHeight;
+
+                XSizeHints hints;
+                memset(&hints, 0, sizeof(hints));
+                hints.flags = PMinSize;
+                hints.min_width = (minWidth > 0) ? (int)minWidth : 0;
+                hints.min_height = (minHeight > 0) ? (int)minHeight : 0;
+                XSetWMNormalHints(x11win->display, x11win->window, &hints);
                 XFlush(x11win->display);
             }
         }
