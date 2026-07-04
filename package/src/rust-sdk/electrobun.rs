@@ -451,6 +451,99 @@ pub struct BundlePaths {
     pub resources_dir: PathBuf,
 }
 
+pub struct WgpuAdapterDevice {
+    pub adapter: *mut c_void,
+    pub device: *mut c_void,
+}
+
+pub struct WgpuNative {
+    _lib: dynlib::DynamicLibrary,
+    create_instance: unsafe extern "C" fn(*const c_void) -> *mut c_void,
+    device_get_queue: unsafe extern "C" fn(*mut c_void) -> *mut c_void,
+}
+
+unsafe impl Send for WgpuNative {}
+unsafe impl Sync for WgpuNative {}
+
+impl WgpuNative {
+    pub fn load() -> Result<Self, String> {
+        let bundle_paths = resolve_bundle_paths()?;
+        let lib_path = bundle_paths.exe_dir.join(wgpu_library_name());
+        let lib = dynlib::DynamicLibrary::open(&lib_path)?;
+
+        Ok(Self {
+            create_instance: lib.symbol("wgpuCreateInstance")?,
+            device_get_queue: lib.symbol("wgpuDeviceGetQueue")?,
+            _lib: lib,
+        })
+    }
+
+    pub fn symbol<T: Copy>(&self, name: &str) -> Result<T, String> {
+        self._lib.symbol(name)
+    }
+
+    pub fn create_instance(&self) -> Result<*mut c_void, String> {
+        let instance = unsafe { (self.create_instance)(std::ptr::null()) };
+        if instance.is_null() {
+            Err("failed to create WGPU instance".to_string())
+        } else {
+            Ok(instance)
+        }
+    }
+
+    pub fn device_get_queue(&self, device: *mut c_void) -> Result<*mut c_void, String> {
+        let queue = unsafe { (self.device_get_queue)(device) };
+        if queue.is_null() {
+            Err("failed to get WGPU queue".to_string())
+        } else {
+            Ok(queue)
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct WgpuContext {
+    pub view_ptr: *mut c_void,
+    pub instance_ptr: *mut c_void,
+    pub surface_ptr: *mut c_void,
+    pub adapter_ptr: *mut c_void,
+    pub device_ptr: *mut c_void,
+}
+
+impl WgpuContext {
+    pub fn create_for_view(
+        core: &Core,
+        native: &WgpuNative,
+        view_ptr: *mut c_void,
+    ) -> Result<Self, String> {
+        let instance_ptr = native.create_instance()?;
+        let surface_ptr = core.wgpu_create_surface_for_view(instance_ptr, view_ptr)?;
+        let adapter_device =
+            core.wgpu_create_adapter_device_main_thread(instance_ptr, surface_ptr)?;
+
+        Ok(Self {
+            view_ptr,
+            instance_ptr,
+            surface_ptr,
+            adapter_ptr: adapter_device.adapter,
+            device_ptr: adapter_device.device,
+        })
+    }
+
+    pub fn create_for_wgpu_view(
+        core: &Core,
+        native: &WgpuNative,
+        wgpu_view_id: u32,
+    ) -> Result<Self, String> {
+        let view_ptr = core.get_wgpu_view_pointer(wgpu_view_id)?;
+        Self::create_for_view(core, native, view_ptr)
+    }
+
+    pub fn get_queue(&self, native: &WgpuNative) -> Result<*mut c_void, String> {
+        native.device_get_queue(self.device_ptr)
+    }
+}
+
 pub fn resolve_bundle_paths() -> Result<BundlePaths, String> {
     let exe_path = std::env::current_exe()
         .map_err(|err| format!("failed to resolve executable path: {err}"))?;
@@ -656,6 +749,12 @@ type SetQuitRequestedHandlerFn = unsafe extern "C" fn(Option<QuitRequestedHandle
 type StopEventLoopFn = unsafe extern "C" fn();
 type WaitForShutdownCompleteFn = unsafe extern "C" fn(c_int);
 type ForceExitFn = unsafe extern "C" fn(c_int);
+type WgpuCreateSurfaceForViewFn = unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void;
+type WgpuCreateAdapterDeviceMainThreadFn =
+    unsafe extern "C" fn(*mut c_void, *mut c_void, *mut c_void);
+type WgpuSurfaceConfigureMainThreadFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+type WgpuSurfaceGetCurrentTextureMainThreadFn = unsafe extern "C" fn(*mut c_void, *mut c_void);
+type WgpuSurfacePresentMainThreadFn = unsafe extern "C" fn(*mut c_void) -> c_int;
 
 struct Symbols {
     last_error: LastErrorFn,
@@ -763,6 +862,11 @@ struct Symbols {
     stop_event_loop: StopEventLoopFn,
     wait_for_shutdown_complete: WaitForShutdownCompleteFn,
     force_exit: ForceExitFn,
+    wgpu_create_surface_for_view: WgpuCreateSurfaceForViewFn,
+    wgpu_create_adapter_device_main_thread: WgpuCreateAdapterDeviceMainThreadFn,
+    wgpu_surface_configure_main_thread: WgpuSurfaceConfigureMainThreadFn,
+    wgpu_surface_get_current_texture_main_thread: WgpuSurfaceGetCurrentTextureMainThreadFn,
+    wgpu_surface_present_main_thread: WgpuSurfacePresentMainThreadFn,
 }
 
 pub struct Core {
@@ -887,6 +991,13 @@ impl Core {
             stop_event_loop: lib.symbol("stopEventLoop")?,
             wait_for_shutdown_complete: lib.symbol("waitForShutdownComplete")?,
             force_exit: lib.symbol("forceExit")?,
+            wgpu_create_surface_for_view: lib.symbol("wgpuCreateSurfaceForView")?,
+            wgpu_create_adapter_device_main_thread: lib
+                .symbol("wgpuCreateAdapterDeviceMainThread")?,
+            wgpu_surface_configure_main_thread: lib.symbol("wgpuSurfaceConfigureMainThread")?,
+            wgpu_surface_get_current_texture_main_thread: lib
+                .symbol("wgpuSurfaceGetCurrentTextureMainThread")?,
+            wgpu_surface_present_main_thread: lib.symbol("wgpuSurfacePresentMainThread")?,
         };
 
         Ok(Self { _lib: lib, symbols })
@@ -1924,6 +2035,69 @@ impl Core {
         std::process::exit(code);
     }
 
+    pub fn wgpu_create_surface_for_view(
+        &self,
+        instance: *mut c_void,
+        view: *mut c_void,
+    ) -> Result<*mut c_void, String> {
+        let surface = unsafe { (self.symbols.wgpu_create_surface_for_view)(instance, view) };
+        if surface.is_null() {
+            Err(self.last_error())
+        } else {
+            Ok(surface)
+        }
+    }
+
+    pub fn wgpu_create_adapter_device_main_thread(
+        &self,
+        instance: *mut c_void,
+        surface: *mut c_void,
+    ) -> Result<WgpuAdapterDevice, String> {
+        let mut adapter_device = [0_usize; 2];
+        unsafe {
+            (self.symbols.wgpu_create_adapter_device_main_thread)(
+                instance,
+                surface,
+                adapter_device.as_mut_ptr() as *mut c_void,
+            );
+        }
+        let adapter = adapter_device[0] as *mut c_void;
+        let device = adapter_device[1] as *mut c_void;
+        if device.is_null() {
+            Err(self.last_error())
+        } else {
+            Ok(WgpuAdapterDevice { adapter, device })
+        }
+    }
+
+    pub fn wgpu_surface_configure_main_thread(
+        &self,
+        surface: *mut c_void,
+        config: *mut c_void,
+    ) -> Result<(), String> {
+        unsafe {
+            (self.symbols.wgpu_surface_configure_main_thread)(surface, config);
+        }
+        self.ensure_last_call_succeeded()
+    }
+
+    pub fn wgpu_surface_get_current_texture_main_thread(
+        &self,
+        surface: *mut c_void,
+        surface_texture: *mut c_void,
+    ) -> Result<(), String> {
+        unsafe {
+            (self.symbols.wgpu_surface_get_current_texture_main_thread)(surface, surface_texture);
+        }
+        self.ensure_last_call_succeeded()
+    }
+
+    pub fn wgpu_surface_present_main_thread(&self, surface: *mut c_void) -> Result<c_int, String> {
+        let status = unsafe { (self.symbols.wgpu_surface_present_main_thread)(surface) };
+        self.ensure_last_call_succeeded()?;
+        Ok(status)
+    }
+
     pub fn run_main_thread(&self, app_info: &AppInfo) -> Result<(), String> {
         let identifier = to_c_string(&app_info.identifier, "app identifier")?;
         let name = to_c_string(&app_info.name, "app name")?;
@@ -1962,6 +2136,16 @@ fn core_library_name() -> &'static str {
         "libElectrobunCore.dylib"
     } else {
         "libElectrobunCore.so"
+    }
+}
+
+fn wgpu_library_name() -> &'static str {
+    if cfg!(windows) {
+        "webgpu_dawn.dll"
+    } else if cfg!(target_os = "macos") {
+        "libwebgpu_dawn.dylib"
+    } else {
+        "libwebgpu_dawn.so"
     }
 }
 

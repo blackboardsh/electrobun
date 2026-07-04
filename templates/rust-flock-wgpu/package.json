@@ -1,0 +1,19 @@
+{
+	"name": "electrobun-rust-flock-wgpu",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "An Electrobun app with a Rust main process running a native WGPU flocking simulation",
+	"scripts": {
+		"start": "electrobun dev",
+		"dev": "electrobun dev",
+		"watch": "electrobun dev --watch",
+		"build": "electrobun build"
+	},
+	"dependencies": {
+		"electrobun": "../../package"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

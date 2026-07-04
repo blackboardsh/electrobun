@@ -4803,6 +4803,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				console.log(
 					"\n[electrobun dev] Shutting down gracefully... (press Ctrl+C again to force quit)",
 				);
+				handle.kill();
 			} else {
 				console.log("\n[electrobun dev] Force quitting...");
 				try {
@@ -4824,13 +4825,18 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		const watchDirs = new Set<string>();
 
 		// Bun entrypoint directory
-		if (config.build.mainProcess !== "zig" && config.build.bun?.entrypoint) {
+		if (config.build.mainProcess === "bun" && config.build.bun?.entrypoint) {
 			watchDirs.add(join(projectRoot, dirname(config.build.bun.entrypoint)));
 		}
 
 		// Zig entrypoint directory
 		if (config.build.mainProcess === "zig" && config.build.zig?.entrypoint) {
 			watchDirs.add(join(projectRoot, dirname(config.build.zig.entrypoint)));
+		}
+
+		// Rust entrypoint directory
+		if (config.build.mainProcess === "rust" && config.build.rust?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.rust.entrypoint)));
 		}
 
 		// View entrypoint directories
