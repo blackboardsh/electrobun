@@ -28,6 +28,7 @@
 	"scripts": {
 		"start": "bun src/bun/index.ts",
 		"check-zig-version": "vendors/zig/zig version",
+		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "bun build.ts",
 		"build:release": "bun build.ts --release",
 		"dev": "bun install && bun build:dev && cd ../kitchen && bun install && bun dev",

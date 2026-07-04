@@ -21,6 +21,7 @@ import {
 	DEFAULT_CEF_VERSION_STRING,
 } from "./src/shared/cef-version";
 import { BUN_VERSION } from "./src/shared/bun-version";
+import { RUST_VERSION } from "./src/shared/rust-version";
 
 console.log("building...", platform(), arch());
 
@@ -50,6 +51,8 @@ const isWindows = platform() === "win32";
 const binExt = OS === "win" ? ".exe" : "";
 const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === "win" ? "zig.exe" : "zig";
+const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
+const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
@@ -63,6 +66,10 @@ const PATH = {
 	zig: {
 		BIN: join(process.cwd(), "vendors", "zig", zigBinary),
 	},
+	rust: {
+		BIN: join(process.cwd(), "vendors", "rust", "bin", rustBinary),
+		CARGO: join(process.cwd(), "vendors", "rust", "bin", cargoBinary),
+	},
 };
 
 // Minimum expected file sizes for downloaded archives (in bytes)
@@ -74,6 +81,7 @@ const MIN_DOWNLOAD_SIZES: Record<string, number> = {
 	"zig-zstd": 100 * 1024, // zig-zstd tarball should be > 100KB
 	wgpu: 1 * 1024 * 1024, // Dawn (WGPU) tarball should be > 1MB
 	cef: 50 * 1024 * 1024, // CEF tarball should be > 50MB
+	rust: 100 * 1024 * 1024, // Rust toolchain tarball should be > 100MB
 };
 
 function validateDownload(filePath: string, type: string): void {
@@ -498,6 +506,7 @@ async function setup() {
 	await vendorAsar(); // GitHub
 	await vendorWGPU(); // GitHub
 	await vendorZig(); // ziglang.org (not GitHub)
+	await vendorRust(); // static.rust-lang.org (not GitHub)
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -563,6 +572,8 @@ async function copyApiFiles() {
 
 	await $`mkdir -p dist/zig-sdk`;
 	await $`cp src/zig-sdk/electrobun.zig dist/zig-sdk/electrobun.zig`;
+	await $`mkdir -p dist/rust-sdk`;
+	await $`cp src/rust-sdk/electrobun.rs dist/rust-sdk/electrobun.rs`;
 }
 
 async function copyToDist() {
@@ -956,6 +967,92 @@ async function vendorZig() {
 	} else if (OS === "linux") {
 		const zigArch = ARCH === "arm64" ? "aarch64" : "x86_64";
 		await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
+	}
+}
+
+function getRustHostTriple(): string {
+	if (OS === "macos") {
+		return ARCH === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
+	}
+	if (OS === "linux") {
+		return ARCH === "arm64"
+			? "aarch64-unknown-linux-gnu"
+			: "x86_64-unknown-linux-gnu";
+	}
+	if (OS === "win") {
+		// Keep Windows aligned with the current Electrobun target policy.
+		return "x86_64-pc-windows-msvc";
+	}
+	throw new Error(`Unsupported platform: ${OS}`);
+}
+
+async function verifyVendoredRust() {
+	const versionResult = await $`${PATH.rust.BIN} --version`.quiet();
+	const versionOutput = versionResult.stdout.toString().trim();
+	if (!versionOutput.startsWith(`rustc ${RUST_VERSION}`)) {
+		throw new Error(
+			`Vendored Rust version mismatch: expected rustc ${RUST_VERSION}, got "${versionOutput}"`,
+		);
+	}
+}
+
+async function vendorRust() {
+	const rustDir = join(process.cwd(), "vendors", "rust");
+	const rustVersionFile = join(rustDir, ".rust-version");
+
+	if (existsSync(PATH.rust.BIN)) {
+		if (existsSync(rustVersionFile)) {
+			const vendoredVersion = readFileSync(rustVersionFile, "utf-8").trim();
+			if (vendoredVersion === RUST_VERSION) {
+				await verifyVendoredRust();
+				return;
+			}
+			console.log(
+				`Rust version mismatch: vendored "${vendoredVersion}" vs expected "${RUST_VERSION}"`,
+			);
+		} else {
+			try {
+				await verifyVendoredRust();
+				writeFileSync(rustVersionFile, RUST_VERSION);
+				return;
+			} catch {
+				console.log("Rust vendor directory found without a valid version stamp.");
+			}
+		}
+
+		console.log("Cleaning stale Rust toolchain and re-vendoring...");
+		await $`rm -rf ${rustDir}`;
+	}
+
+	const rustTriple = getRustHostTriple();
+	const rustFolder = `rust-${RUST_VERSION}-${rustTriple}`;
+	const tempTarball = join("vendors", `rust-${RUST_VERSION}-${rustTriple}.tar.xz`);
+	const tempExtractDir = join("vendors", `rust-extract-${Date.now()}`);
+	const rustUrl = `https://static.rust-lang.org/dist/${rustFolder}.tar.xz`;
+
+	try {
+		await $`mkdir -p vendors ${tempExtractDir}`;
+		console.log(`Downloading Rust ${RUST_VERSION} for ${rustTriple}...`);
+		await $`curl -L "${rustUrl}" -o "${tempTarball}"`;
+		validateDownload(tempTarball, "rust");
+
+		await $`tar -xJf "${tempTarball}" -C "${tempExtractDir}"`;
+		const extractedDir = join(tempExtractDir, rustFolder);
+		const installScript = join(extractedDir, "install.sh");
+		if (!existsSync(installScript)) {
+			throw new Error(`Rust installer not found at ${installScript}`);
+		}
+
+		await $`sh "${installScript}" --prefix="${rustDir}" --disable-ldconfig`;
+		await verifyVendoredRust();
+		writeFileSync(rustVersionFile, RUST_VERSION);
+		console.log("✓ Rust toolchain vendored successfully");
+	} catch (error) {
+		console.error("Failed to vendor Rust:", error);
+		throw new Error("Could not vendor Rust toolchain.");
+	} finally {
+		await $`rm -f "${tempTarball}"`.catch(() => {});
+		await $`rm -rf "${tempExtractDir}"`.catch(() => {});
 	}
 }
 

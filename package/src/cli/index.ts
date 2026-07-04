@@ -20,6 +20,7 @@ import * as readline from "readline";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
+import { RUST_VERSION } from "../shared/rust-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import {
 	getAppFileName,
@@ -73,6 +74,8 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 	arg.includes("electrobun"),
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
+
+type MainProcess = "bun" | "zig" | "rust";
 
 // Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
 function resolveElectrobunDir(): string {
@@ -168,11 +171,40 @@ function getZigTarget(
 	return targetArch === "arm64" ? "aarch64-macos" : "x86_64-macos";
 }
 
-function getCEFHelperBaseName(mainProcess: "bun" | "zig"): string {
-	return mainProcess === "zig" ? "main" : "bun";
+function getRustTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): string {
+	if (targetOS === "win") {
+		return targetArch === "arm64"
+			? "aarch64-pc-windows-msvc"
+			: "x86_64-pc-windows-msvc";
+	}
+	if (targetOS === "linux") {
+		return targetArch === "arm64"
+			? "aarch64-unknown-linux-gnu"
+			: "x86_64-unknown-linux-gnu";
+	}
+	return targetArch === "arm64"
+		? "aarch64-apple-darwin"
+		: "x86_64-apple-darwin";
 }
 
-function getCEFHelperNames(mainProcess: "bun" | "zig"): string[] {
+function getVendoredRustBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"rust",
+		"bin",
+		OS === "win" ? "rustc.exe" : "rustc",
+	);
+}
+
+function getCEFHelperBaseName(mainProcess: MainProcess): string {
+	return mainProcess === "bun" ? "bun" : "main";
+}
+
+function getCEFHelperNames(mainProcess: MainProcess): string[] {
 	const baseName = getCEFHelperBaseName(mainProcess);
 	return [
 		`${baseName} Helper`,
@@ -273,6 +305,92 @@ pub fn build(b: *std.Build) void {
 	}
 
 	return zigOutBin;
+}
+
+async function buildRustMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const rustBinary = getVendoredRustBinaryPath();
+	if (!existsSync(rustBinary)) {
+		throw new Error(
+			`Vendored Rust compiler not found at ${rustBinary}. Rebuild electrobun/package so vendors/rust is available.`,
+		);
+	}
+
+	const rustSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "rust-sdk", "electrobun.rs");
+	if (!existsSync(rustSdkPath)) {
+		throw new Error(`Electrobun Rust SDK not found at ${rustSdkPath}`);
+	}
+
+	const targetTriple = getRustTarget(options.targetOS, options.targetArch);
+	const hostTriple = getRustTarget(OS, ARCH);
+	if (targetTriple !== hostTriple) {
+		throw new Error(
+			`Rust main process cross-compilation is not supported yet. Vendored rustc is ${hostTriple}, but the build target is ${targetTriple}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-rust-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const rustOutBin = join(tempBuildDir, "main" + binExt);
+	const wrapperPath = join(tempBuildDir, "main.rs");
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	const wrapperSource = `#[path = ${JSON.stringify(rustSdkPath)}]
+pub mod electrobun;
+
+#[path = ${JSON.stringify(options.entrypoint)}]
+mod user_main;
+
+fn main() {
+    user_main::main();
+}
+`;
+	writeFileSync(wrapperPath, wrapperSource, "utf8");
+
+	const rustArgs = [
+		"--edition=2021",
+		wrapperPath,
+		"--target",
+		targetTriple,
+		"-o",
+		rustOutBin,
+	];
+
+	if (options.buildEnvironment !== "dev") {
+		rustArgs.push("-C", "opt-level=z", "-C", "strip=symbols");
+	}
+
+	const result = Bun.spawnSync([rustBinary, ...rustArgs], {
+		cwd: tempBuildDir,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: rust main process compilation failed");
+	}
+
+	if (!existsSync(rustOutBin)) {
+		throw new Error(`Rust main process binary was not produced at ${rustOutBin}`);
+	}
+
+	return rustOutBin;
 }
 
 async function ensureCoreDependencies(
@@ -1617,7 +1735,7 @@ const defaultConfig = {
 	build: {
 		buildFolder: "build",
 		artifactFolder: "artifacts",
-		mainProcess: "bun" as "bun" | "zig",
+		mainProcess: "bun" as MainProcess,
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
@@ -1661,6 +1779,9 @@ const defaultConfig = {
 		},
 		zig: {
 			entrypoint: "src/zig/main.zig",
+		},
+		rust: {
+			entrypoint: "src/rust/main.rs",
 		},
 		views: undefined as
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
@@ -2559,6 +2680,8 @@ Categories=Utility;Application;
 		const bunSource = join(projectRoot, bunConfig.entrypoint);
 		const zigConfig = config.build.zig;
 		const zigSource = join(projectRoot, zigConfig.entrypoint);
+		const rustConfig = config.build.rust;
+		const rustSource = join(projectRoot, rustConfig.entrypoint);
 
 		if (mainProcess === "bun") {
 			if (!existsSync(bunSource)) {
@@ -2566,16 +2689,20 @@ Categories=Utility;Application;
 					`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`,
 				);
 			}
-		} else if (!existsSync(zigSource)) {
+		} else if (mainProcess === "zig" && !existsSync(zigSource)) {
 			throw new Error(
 				`failed to compile ${zigSource} because it doesn't exist.\n You need a config.build.zig.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "rust" && !existsSync(rustSource)) {
+			throw new Error(
+				`failed to compile ${rustSource} because it doesn't exist.\n You need a config.build.rust.entrypoint source file to build.`,
 			);
 		}
 
 		const isCarrotOnly = config.build.carrot?.carrotOnly === true;
-		if (config.build.carrot && mainProcess === "zig") {
+		if (config.build.carrot && mainProcess !== "bun") {
 			throw new Error(
-				`build.carrot is not supported with build.mainProcess = "zig" yet.`,
+				`build.carrot is not supported with build.mainProcess = "${mainProcess}" yet.`,
 			);
 		}
 
@@ -2610,10 +2737,18 @@ Categories=Utility;Application;
 			mkdirSync(appBundleAppCodePath, { recursive: true });
 		}
 
-		let zigMainBinarySourcePath: string | null = null;
+		let nativeMainBinarySourcePath: string | null = null;
 		if (mainProcess === "zig") {
-			zigMainBinarySourcePath = await buildZigMainExecutable({
+			nativeMainBinarySourcePath = await buildZigMainExecutable({
 				entrypoint: zigSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "rust") {
+			nativeMainBinarySourcePath = await buildRustMainExecutable({
+				entrypoint: rustSource,
 				buildFolder,
 				targetOS,
 				targetArch: targetARCH,
@@ -2896,8 +3031,8 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					}
 				}
 			}
-		} else if (zigMainBinarySourcePath) {
-			cpSync(zigMainBinarySourcePath, join(appBundleMacOSPath, "main") + targetBinExt, {
+		} else if (nativeMainBinarySourcePath) {
+			cpSync(nativeMainBinarySourcePath, join(appBundleMacOSPath, "main") + targetBinExt, {
 				dereference: true,
 			});
 		}
@@ -3929,6 +4064,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			...(mainProcess === "bun"
 				? { bunVersion: config.build?.bunVersion ?? BUN_VERSION }
 				: {}),
+			...(mainProcess === "rust" ? { rustVersion: RUST_VERSION } : {}),
 			...(config.build?.bunnyBun ? { bunnyBun: config.build.bunnyBun } : {}),
 		};
 
@@ -5060,6 +5196,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				zig: {
 					...defaultConfig.build.zig,
 					...(loadedConfig?.build?.zig || {}),
+				},
+				rust: {
+					...defaultConfig.build.rust,
+					...(loadedConfig?.build?.rust || {}),
 				},
 			},
 			runtime: {

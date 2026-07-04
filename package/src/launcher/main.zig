@@ -106,6 +106,7 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
 const MainProcess = enum {
     bun,
     zig,
+    rust,
 };
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
@@ -124,6 +125,9 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     if (parsed.value.object.get("mainProcess")) |main_process_value| {
         if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
             return .zig;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "rust")) {
+            return .rust;
         }
     }
 
@@ -202,7 +206,7 @@ pub fn main() !void {
             },
             else => @panic("Unsupported platform"),
         },
-        .zig => {
+        .zig, .rust => {
             const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
             argv = &[_][]const u8{main_binary_path};

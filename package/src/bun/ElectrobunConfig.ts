@@ -138,9 +138,10 @@ export interface ElectrobunConfig {
 		 * Main process implementation to build and package.
 		 * - "bun": bundle and run the Bun main process entrypoint
 		 * - "zig": compile and run the Zig main process entrypoint
+		 * - "rust": compile and run the Rust main process entrypoint
 		 * @default "bun"
 		 */
-		mainProcess?: "bun" | "zig";
+		mainProcess?: "bun" | "zig" | "rust";
 
 		/**
 		 * Bun process build configuration.
@@ -163,6 +164,18 @@ export interface ElectrobunConfig {
 			/**
 			 * Entry point for the main Zig process
 			 * @default "src/zig/main.zig"
+			 */
+			entrypoint?: string;
+		};
+
+		/**
+		 * Rust main process build configuration.
+		 * Used when `build.mainProcess` is set to `"rust"`.
+		 */
+		rust?: {
+			/**
+			 * Entry point for the main Rust process
+			 * @default "src/rust/main.rs"
 			 */
 			entrypoint?: string;
 		};

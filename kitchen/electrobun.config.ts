@@ -1,8 +1,7 @@
 import type { ElectrobunConfig } from "electrobun";
 
-// const mainProcess = "zig" as const; // Flip to "zig" or "bun" to exercise the native-main demo.
-const mainProcess = "bun" as const;
-const bundleCEF = false;
+const mainProcess = "rust" as const; // Flip to "bun", "zig", or "rust" to exercise main-process backends.
+const bundleCEF = true;
 
 export default {
 	app: {
@@ -15,7 +14,7 @@ export default {
 		// exitOnLastWindowClosed: false,
 	},
 	build: {
-		mainProcess: "zig",
+		mainProcess,
 		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
 		// bunVersion: "1.3.7",
@@ -24,6 +23,9 @@ export default {
 		},
 		zig: {
 			entrypoint: "src/zig/main.zig",
+		},
+		rust: {
+			entrypoint: "src/rust/main.rs",
 		},
 		views: {
 			"test-runner": {
