@@ -22,6 +22,7 @@ import {
 } from "./src/shared/cef-version";
 import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
+import { GO_VERSION } from "./src/shared/go-version";
 
 console.log("building...", platform(), arch());
 
@@ -53,6 +54,7 @@ const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
+const goBinary = OS === "win" ? "go.exe" : "go";
 
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
@@ -70,6 +72,9 @@ const PATH = {
 		BIN: join(process.cwd(), "vendors", "rust", "bin", rustBinary),
 		CARGO: join(process.cwd(), "vendors", "rust", "bin", cargoBinary),
 	},
+	go: {
+		BIN: join(process.cwd(), "vendors", "go", "bin", goBinary),
+	},
 };
 
 // Minimum expected file sizes for downloaded archives (in bytes)
@@ -82,6 +87,7 @@ const MIN_DOWNLOAD_SIZES: Record<string, number> = {
 	wgpu: 1 * 1024 * 1024, // Dawn (WGPU) tarball should be > 1MB
 	cef: 50 * 1024 * 1024, // CEF tarball should be > 50MB
 	rust: 100 * 1024 * 1024, // Rust toolchain tarball should be > 100MB
+	go: 50 * 1024 * 1024, // Go toolchain archive should be > 50MB
 };
 
 function validateDownload(filePath: string, type: string): void {
@@ -507,6 +513,7 @@ async function setup() {
 	await vendorWGPU(); // GitHub
 	await vendorZig(); // ziglang.org (not GitHub)
 	await vendorRust(); // static.rust-lang.org (not GitHub)
+	await vendorGo(); // go.dev (not GitHub)
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -574,6 +581,8 @@ async function copyApiFiles() {
 	await $`cp src/zig-sdk/electrobun.zig dist/zig-sdk/electrobun.zig`;
 	await $`mkdir -p dist/rust-sdk`;
 	await $`cp src/rust-sdk/electrobun.rs dist/rust-sdk/electrobun.rs`;
+	await $`mkdir -p dist/go-sdk`;
+	await $`cp -R src/go-sdk/. dist/go-sdk/`;
 }
 
 async function copyToDist() {
@@ -1053,6 +1062,79 @@ async function vendorRust() {
 	} finally {
 		await $`rm -f "${tempTarball}"`.catch(() => {});
 		await $`rm -rf "${tempExtractDir}"`.catch(() => {});
+	}
+}
+
+function getGoHostTuple(): { goOS: string; goArch: string } {
+	const goOS = OS === "macos" ? "darwin" : OS === "win" ? "windows" : "linux";
+	const goArch = ARCH === "arm64" ? "arm64" : "amd64";
+	return { goOS, goArch };
+}
+
+async function verifyVendoredGo() {
+	const versionResult = await $`${PATH.go.BIN} version`.quiet();
+	const versionOutput = versionResult.stdout.toString().trim();
+	if (!versionOutput.startsWith(`go version go${GO_VERSION} `)) {
+		throw new Error(
+			`Vendored Go version mismatch: expected go${GO_VERSION}, got "${versionOutput}"`,
+		);
+	}
+}
+
+async function vendorGo() {
+	const goDir = join(process.cwd(), "vendors", "go");
+	const goVersionFile = join(goDir, ".go-version");
+
+	if (existsSync(PATH.go.BIN)) {
+		if (existsSync(goVersionFile)) {
+			const vendoredVersion = readFileSync(goVersionFile, "utf-8").trim();
+			if (vendoredVersion === GO_VERSION) {
+				await verifyVendoredGo();
+				return;
+			}
+			console.log(
+				`Go version mismatch: vendored "${vendoredVersion}" vs expected "${GO_VERSION}"`,
+			);
+		} else {
+			try {
+				await verifyVendoredGo();
+				writeFileSync(goVersionFile, GO_VERSION);
+				return;
+			} catch {
+				console.log("Go vendor directory found without a valid version stamp.");
+			}
+		}
+
+		console.log("Cleaning stale Go toolchain and re-vendoring...");
+		await $`rm -rf ${goDir}`;
+	}
+
+	const { goOS, goArch } = getGoHostTuple();
+	const archiveExt = OS === "win" ? "zip" : "tar.gz";
+	const archiveName = `go${GO_VERSION}.${goOS}-${goArch}.${archiveExt}`;
+	const tempArchive = join("vendors", archiveName);
+	const goUrl = `https://go.dev/dl/${archiveName}`;
+
+	try {
+		await $`mkdir -p vendors`;
+		console.log(`Downloading Go ${GO_VERSION} for ${goOS}-${goArch}...`);
+		await $`curl -L "${goUrl}" -o "${tempArchive}"`;
+		validateDownload(tempArchive, "go");
+
+		if (OS === "win") {
+			await $`powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path "${tempArchive}" -DestinationPath vendors -Force`;
+		} else {
+			await $`tar -xzf "${tempArchive}" -C vendors`;
+		}
+
+		await verifyVendoredGo();
+		writeFileSync(goVersionFile, GO_VERSION);
+		console.log("✓ Go toolchain vendored successfully");
+	} catch (error) {
+		console.error("Failed to vendor Go:", error);
+		throw new Error("Could not vendor Go toolchain.");
+	} finally {
+		await $`rm -f "${tempArchive}"`.catch(() => {});
 	}
 }
 

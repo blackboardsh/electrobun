@@ -1,0 +1,19 @@
+{
+	"name": "electrobun-go-maze-wgpu",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "An Electrobun app with a Go main process generating and solving mazes on a native WGPU surface",
+	"scripts": {
+		"start": "electrobun dev",
+		"dev": "electrobun dev",
+		"watch": "electrobun dev --watch",
+		"build": "electrobun build"
+	},
+	"dependencies": {
+		"electrobun": "../../package"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

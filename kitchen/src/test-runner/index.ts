@@ -533,11 +533,12 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 function updateBuildConfigUI(config: {
   defaultRenderer: string;
   availableRenderers: string[];
-  mainProcess?: 'bun' | 'zig' | 'rust';
+  mainProcess?: 'bun' | 'zig' | 'rust' | 'go';
   cefVersion?: string;
   bunVersion?: string;
   zigVersion?: string;
   rustVersion?: string;
+  goVersion?: string;
 }) {
   const defaultRendererEl = document.getElementById('default-renderer');
   const availableRenderersEl = document.getElementById('available-renderers');
@@ -569,12 +570,16 @@ function updateBuildConfigUI(config: {
       hostRuntimeVersionEl.textContent = `Zig ${config.zigVersion}`;
     } else if (config.mainProcess === 'rust' && config.rustVersion) {
       hostRuntimeVersionEl.textContent = `Rust ${config.rustVersion}`;
+    } else if (config.mainProcess === 'go' && config.goVersion) {
+      hostRuntimeVersionEl.textContent = `Go ${config.goVersion}`;
     } else if (config.bunVersion) {
       hostRuntimeVersionEl.textContent = `Bun ${config.bunVersion}`;
     } else if (config.zigVersion) {
       hostRuntimeVersionEl.textContent = `Zig ${config.zigVersion}`;
     } else if (config.rustVersion) {
       hostRuntimeVersionEl.textContent = `Rust ${config.rustVersion}`;
+    } else if (config.goVersion) {
+      hostRuntimeVersionEl.textContent = `Go ${config.goVersion}`;
     } else if (config.mainProcess) {
       hostRuntimeVersionEl.textContent = config.mainProcess;
     } else {

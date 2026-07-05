@@ -21,6 +21,7 @@ import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
 import { RUST_VERSION } from "../shared/rust-version";
+import { GO_VERSION } from "../shared/go-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import {
 	getAppFileName,
@@ -75,7 +76,7 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
-type MainProcess = "bun" | "zig" | "rust";
+type MainProcess = "bun" | "zig" | "rust" | "go";
 
 // Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
 function resolveElectrobunDir(): string {
@@ -197,6 +198,27 @@ function getVendoredRustBinaryPath(): string {
 		"rust",
 		"bin",
 		OS === "win" ? "rustc.exe" : "rustc",
+	);
+}
+
+function getGoTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): { goOS: string; goArch: string } {
+	return {
+		goOS:
+			targetOS === "macos" ? "darwin" : targetOS === "win" ? "windows" : "linux",
+		goArch: targetArch === "arm64" ? "arm64" : "amd64",
+	};
+}
+
+function getVendoredGoBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"go",
+		"bin",
+		OS === "win" ? "go.exe" : "go",
 	);
 }
 
@@ -391,6 +413,93 @@ fn main() {
 	}
 
 	return rustOutBin;
+}
+
+async function buildGoMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const goBinary = getVendoredGoBinaryPath();
+	if (!existsSync(goBinary)) {
+		throw new Error(
+			`Vendored Go compiler not found at ${goBinary}. Rebuild electrobun/package so vendors/go is available.`,
+		);
+	}
+
+	const goSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "go-sdk");
+	if (!existsSync(goSdkPath)) {
+		throw new Error(`Electrobun Go SDK not found at ${goSdkPath}`);
+	}
+
+	const target = getGoTarget(options.targetOS, options.targetArch);
+	const host = getGoTarget(OS, ARCH);
+	if (target.goOS !== host.goOS || target.goArch !== host.goArch) {
+		throw new Error(
+			`Go main process cross-compilation is not supported yet. Vendored Go is ${host.goOS}-${host.goArch}, but the build target is ${target.goOS}-${target.goArch}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-go-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const goOutBin = join(tempBuildDir, "main" + binExt);
+	const goPath = join(tempBuildDir, "gopath");
+	const goSrcPath = join(goPath, "src");
+	const sdkDestPath = join(goSrcPath, "electrobun");
+	const appDestPath = join(goSrcPath, "electrobun-app");
+	const entrypointDir = statSync(options.entrypoint).isDirectory()
+		? options.entrypoint
+		: dirname(options.entrypoint);
+
+	rmSync(tempBuildDir, { recursive: true, force: true });
+	mkdirSync(goSrcPath, { recursive: true });
+	cpSync(goSdkPath, sdkDestPath, { recursive: true, dereference: true });
+	cpSync(entrypointDir, appDestPath, { recursive: true, dereference: true });
+
+	const goArgs = ["build", "-o", goOutBin];
+	if (options.buildEnvironment !== "dev") {
+		goArgs.push("-ldflags=-s -w");
+	}
+	goArgs.push("electrobun-app");
+
+	const result = Bun.spawnSync([goBinary, ...goArgs], {
+		cwd: tempBuildDir,
+		env: {
+			...process.env,
+			CGO_ENABLED: "1",
+			GO111MODULE: "off",
+			GOARCH: target.goArch,
+			GOOS: target.goOS,
+			GOPATH: goPath,
+			GOROOT: join(ELECTROBUN_DEP_PATH, "vendors", "go"),
+			GOTOOLCHAIN: "local",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: go main process compilation failed");
+	}
+
+	if (!existsSync(goOutBin)) {
+		throw new Error(`Go main process binary was not produced at ${goOutBin}`);
+	}
+
+	return goOutBin;
 }
 
 async function ensureCoreDependencies(
@@ -1783,6 +1892,9 @@ const defaultConfig = {
 		rust: {
 			entrypoint: "src/rust/main.rs",
 		},
+		go: {
+			entrypoint: "src/go/main.go",
+		},
 		views: undefined as
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
 			| undefined,
@@ -2682,6 +2794,8 @@ Categories=Utility;Application;
 		const zigSource = join(projectRoot, zigConfig.entrypoint);
 		const rustConfig = config.build.rust;
 		const rustSource = join(projectRoot, rustConfig.entrypoint);
+		const goConfig = config.build.go;
+		const goSource = join(projectRoot, goConfig.entrypoint);
 
 		if (mainProcess === "bun") {
 			if (!existsSync(bunSource)) {
@@ -2696,6 +2810,10 @@ Categories=Utility;Application;
 		} else if (mainProcess === "rust" && !existsSync(rustSource)) {
 			throw new Error(
 				`failed to compile ${rustSource} because it doesn't exist.\n You need a config.build.rust.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "go" && !existsSync(goSource)) {
+			throw new Error(
+				`failed to compile ${goSource} because it doesn't exist.\n You need a config.build.go.entrypoint source file to build.`,
 			);
 		}
 
@@ -2749,6 +2867,14 @@ Categories=Utility;Application;
 		} else if (mainProcess === "rust") {
 			nativeMainBinarySourcePath = await buildRustMainExecutable({
 				entrypoint: rustSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "go") {
+			nativeMainBinarySourcePath = await buildGoMainExecutable({
+				entrypoint: goSource,
 				buildFolder,
 				targetOS,
 				targetArch: targetARCH,
@@ -4065,6 +4191,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				? { bunVersion: config.build?.bunVersion ?? BUN_VERSION }
 				: {}),
 			...(mainProcess === "rust" ? { rustVersion: RUST_VERSION } : {}),
+			...(mainProcess === "go" ? { goVersion: GO_VERSION } : {}),
 			...(config.build?.bunnyBun ? { bunnyBun: config.build.bunnyBun } : {}),
 		};
 
@@ -4839,6 +4966,11 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			watchDirs.add(join(projectRoot, dirname(config.build.rust.entrypoint)));
 		}
 
+		// Go entrypoint directory
+		if (config.build.mainProcess === "go" && config.build.go?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.go.entrypoint)));
+		}
+
 		// View entrypoint directories
 		if (config.build.views) {
 			for (const viewConfig of Object.values(config.build.views)) {
@@ -5206,6 +5338,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				rust: {
 					...defaultConfig.build.rust,
 					...(loadedConfig?.build?.rust || {}),
+				},
+				go: {
+					...defaultConfig.build.go,
+					...(loadedConfig?.build?.go || {}),
 				},
 			},
 			runtime: {

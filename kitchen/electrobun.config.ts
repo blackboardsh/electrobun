@@ -1,6 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
-const mainProcess = "rust" as const; // Flip to "bun", "zig", or "rust" to exercise main-process backends.
+const mainProcess = "go" as const; // Flip to "bun", "zig", "rust", or "go" to exercise main-process backends.
 const bundleCEF = true;
 
 export default {
@@ -26,6 +26,9 @@ export default {
 		},
 		rust: {
 			entrypoint: "src/rust/main.rs",
+		},
+		go: {
+			entrypoint: "src/go/main.go",
 		},
 		views: {
 			"test-runner": {
