@@ -2,7 +2,7 @@
 
 import { $ } from "bun";
 import { platform, arch } from "os";
-import { join, dirname, relative, basename } from "path";
+import { join, dirname, relative, basename, resolve } from "path";
 import {
 	existsSync,
 	readdirSync,
@@ -55,6 +55,8 @@ const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 const goBinary = OS === "win" ? "go.exe" : "go";
+const cottontailBinary = OS === "win" ? "cottontail.exe" : "cottontail";
+const dashCliBinary = OS === "win" ? "dash.exe" : "dash";
 
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
@@ -74,6 +76,14 @@ const PATH = {
 	},
 	go: {
 		BIN: join(process.cwd(), "vendors", "go", "bin", goBinary),
+	},
+	cottontail: {
+		BIN: join(process.cwd(), "vendors", "cottontail", cottontailBinary),
+		DIST: join(process.cwd(), "dist", cottontailBinary),
+	},
+	dashCli: {
+		BIN: join(process.cwd(), "vendors", "dash-cli", dashCliBinary),
+		DIST: join(process.cwd(), "dist", dashCliBinary),
 	},
 };
 
@@ -514,6 +524,8 @@ async function setup() {
 	await vendorZig(); // ziglang.org (not GitHub)
 	await vendorRust(); // static.rust-lang.org (not GitHub)
 	await vendorGo(); // go.dev (not GitHub)
+	await vendorCottontail(); // local Cottontail checkout or DASH_COTTONTAIL
+	await vendorDashCli(); // local Dash CLI checkout or DASH_CLI_BINARY
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -683,9 +695,21 @@ async function copyToDist() {
 	// Electrobun cli and npm launcher
 	await $`cp src/npmbin/index.js dist/npmbin.js`;
 	await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
+	if (existsSync(PATH.cottontail.BIN)) {
+		await $`cp ${PATH.cottontail.BIN} ${PATH.cottontail.DIST}`;
+	}
+	if (existsSync(PATH.dashCli.BIN)) {
+		await $`cp ${PATH.dashCli.BIN} ${PATH.dashCli.DIST}`;
+	}
 	// Also copy to bin/ so the npm bin shim (bin/electrobun.cjs) can find it
 	// during local dev (kitchen uses "electrobun": "file:../package")
 	await $`mkdir -p bin && cp src/cli/build/electrobun${binExt} bin/electrobun${binExt}`;
+	if (existsSync(PATH.cottontail.BIN)) {
+		await $`cp ${PATH.cottontail.BIN} bin/${cottontailBinary}`;
+	}
+	if (existsSync(PATH.dashCli.BIN)) {
+		await $`cp ${PATH.dashCli.BIN} bin/${dashCliBinary}`;
+	}
 	// Electrobun's Typescript bun and browser apis
 	await copyApiFiles();
 	// Native code and frameworks
@@ -1136,6 +1160,170 @@ async function vendorGo() {
 	} finally {
 		await $`rm -f "${tempArchive}"`.catch(() => {});
 	}
+}
+
+function defaultDashCliRoot() {
+	return resolve(process.cwd(), "..", "..", "dash-cloud", "dash-cli");
+}
+
+function defaultCottontailRoot() {
+	return resolve(process.cwd(), "..", "..", "cottontail");
+}
+
+function resolveCottontailRoot() {
+	return resolve(
+		process.env["DASH_COTTONTAIL_ROOT"] ||
+			process.env["COTTONTAIL_ROOT"] ||
+			defaultCottontailRoot(),
+	);
+}
+
+async function buildCottontailFromSource(cottontailRoot: string) {
+	const zigPath = join(cottontailRoot, "vendors", "zig", zigBinary);
+	const quickjsHeaderPath = join(
+		cottontailRoot,
+		"vendors",
+		"quickjs",
+		"quickjs.h",
+	);
+	const quickjsSourcePath = join(
+		cottontailRoot,
+		"vendors",
+		"quickjs",
+		"quickjs-amalgam.c",
+	);
+
+	if (
+		!existsSync(zigPath) ||
+		!existsSync(quickjsHeaderPath) ||
+		!existsSync(quickjsSourcePath)
+	) {
+		const dashCliRoot = resolve(
+			process.env["DASH_CLI_ROOT"] || defaultDashCliRoot(),
+		);
+		const setupScript = join(dashCliRoot, "scripts", "setup.sh");
+
+		if (OS !== "win" && existsSync(setupScript)) {
+			console.log(
+				`Setting up Cottontail dependencies via Dash CLI from ${cottontailRoot}...`,
+			);
+			await $`env DASH_COTTONTAIL_ROOT=${cottontailRoot} bash ${setupScript}`;
+			return;
+		}
+
+		throw new Error(
+			`Cottontail dependencies are missing in ${cottontailRoot}. Run its setup first or set DASH_COTTONTAIL to a prebuilt binary.`,
+		);
+	}
+
+	console.log(`Building Cottontail from ${cottontailRoot}...`);
+	await $`cd ${cottontailRoot} && ${zigPath} build`;
+}
+
+async function vendorCottontail() {
+	const cottontailDir = join(process.cwd(), "vendors", "cottontail");
+	await $`mkdir -p ${cottontailDir}`;
+
+	const envBinary =
+		process.env["DASH_COTTONTAIL"] || process.env["COTTONTAIL_BINARY"];
+	if (envBinary) {
+		if (!existsSync(envBinary)) {
+			throw new Error(`Cottontail binary does not exist: ${envBinary}`);
+		}
+		await $`cp ${envBinary} ${PATH.cottontail.BIN}`;
+		if (OS !== "win") {
+			await $`chmod +x ${PATH.cottontail.BIN}`;
+		}
+		console.log(
+			`✓ Cottontail vendored from DASH_COTTONTAIL: ${PATH.cottontail.BIN}`,
+		);
+		return;
+	}
+
+	const cottontailRoot = resolveCottontailRoot();
+	const buildZig = join(cottontailRoot, "build.zig");
+	const sourceBinary = join(cottontailRoot, "zig-out", "bin", cottontailBinary);
+
+	if (existsSync(buildZig)) {
+		if (OS === "win") {
+			throw new Error(
+				"Vendoring Cottontail from source on Windows is not implemented yet. Set DASH_COTTONTAIL to a prebuilt cottontail.exe.",
+			);
+		}
+
+		await buildCottontailFromSource(cottontailRoot);
+
+		if (!existsSync(sourceBinary)) {
+			throw new Error(`Cottontail build did not produce ${sourceBinary}`);
+		}
+
+		await $`cp ${sourceBinary} ${PATH.cottontail.BIN}`;
+		await $`chmod +x ${PATH.cottontail.BIN}`;
+		console.log(`✓ Cottontail vendored at ${PATH.cottontail.BIN}`);
+		return;
+	}
+
+	if (existsSync(PATH.cottontail.BIN)) {
+		console.log(`✓ Using existing vendored Cottontail at ${PATH.cottontail.BIN}`);
+		return;
+	}
+
+	throw new Error(
+		`Cottontail checkout not found at ${cottontailRoot}. Set DASH_COTTONTAIL to a prebuilt binary or DASH_COTTONTAIL_ROOT to a Cottontail checkout.`,
+	);
+}
+
+async function vendorDashCli() {
+	const dashCliDir = join(process.cwd(), "vendors", "dash-cli");
+	await $`mkdir -p ${dashCliDir}`;
+
+	const envBinary = process.env["DASH_CLI_BINARY"];
+	if (envBinary) {
+		if (!existsSync(envBinary)) {
+			throw new Error(`DASH_CLI_BINARY does not exist: ${envBinary}`);
+		}
+		await $`cp ${envBinary} ${PATH.dashCli.BIN}`;
+		if (OS !== "win") {
+			await $`chmod +x ${PATH.dashCli.BIN}`;
+		}
+		console.log(`✓ Dash CLI vendored from DASH_CLI_BINARY: ${PATH.dashCli.BIN}`);
+		return;
+	}
+
+	const dashCliRoot = resolve(
+		process.env["DASH_CLI_ROOT"] || defaultDashCliRoot(),
+	);
+	const buildScript = join(dashCliRoot, "scripts", "build.sh");
+	const sourceBinary = join(dashCliRoot, "zig-out", "bin", dashCliBinary);
+
+	if (existsSync(buildScript)) {
+		if (OS === "win") {
+			throw new Error(
+				"Vendoring Dash CLI from source on Windows is not implemented yet. Set DASH_CLI_BINARY to a prebuilt dash.exe.",
+			);
+		}
+
+		console.log(`Building Dash CLI from ${dashCliRoot}...`);
+		await $`env DASH_COTTONTAIL_ROOT=${resolveCottontailRoot()} bash ${buildScript}`;
+
+		if (!existsSync(sourceBinary)) {
+			throw new Error(`Dash CLI build did not produce ${sourceBinary}`);
+		}
+
+		await $`cp ${sourceBinary} ${PATH.dashCli.BIN}`;
+		await $`chmod +x ${PATH.dashCli.BIN}`;
+		console.log(`✓ Dash CLI vendored at ${PATH.dashCli.BIN}`);
+		return;
+	}
+
+	if (existsSync(PATH.dashCli.BIN)) {
+		console.log(`✓ Using existing vendored Dash CLI at ${PATH.dashCli.BIN}`);
+		return;
+	}
+
+	throw new Error(
+		`Dash CLI build script not found at ${buildScript}. Set DASH_CLI_BINARY to a prebuilt dash binary or DASH_CLI_ROOT to a dash-cli checkout.`,
+	);
 }
 
 async function vendorBsdiff() {

@@ -13,6 +13,10 @@ dist
 .cache
 /package/bin/electrobun
 /package/bin/electrobun.exe
+/package/bin/dash
+/package/bin/dash.exe
+/package/bin/cottontail
+/package/bin/cottontail.exe
 electrobun-cef*
 electrobun-core*
 electrobun-cli*
