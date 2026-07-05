@@ -67,7 +67,7 @@ impl FlockConfig {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 struct Agent {
     x: f32,
     y: f32,
@@ -78,18 +78,25 @@ struct Agent {
 
 struct Simulation {
     agents: Vec<Agent>,
+    updated: Vec<Agent>,
     grid: Vec<i32>,
     next: Vec<i32>,
     rng: Lcg,
+    worker_count: usize,
 }
 
 impl Simulation {
     fn new(count: usize, width: u32, height: u32) -> Self {
         let mut sim = Self {
             agents: Vec::with_capacity(MAX_AGENTS),
+            updated: Vec::with_capacity(MAX_AGENTS),
             grid: Vec::new(),
             next: Vec::new(),
             rng: Lcg::new(0x9e37_79b9_7f4a_7c15),
+            worker_count: thread::available_parallelism()
+                .map(|count| count.get())
+                .unwrap_or(1)
+                .clamp(1, 8),
         };
         sim.set_count(count, width, height);
         sim
@@ -103,6 +110,7 @@ impl Simulation {
         }
         self.agents.truncate(count);
         self.next.resize(count, -1);
+        self.updated.resize(count, Agent::default());
     }
 
     fn random_agent(&mut self, width: u32, height: u32) -> Agent {
@@ -140,123 +148,191 @@ impl Simulation {
         let sep_radius = 22.0_f32;
         let sep_radius2 = sep_radius * sep_radius;
         let dt = 1.0 / 60.0;
-        let mut updated = self.agents.clone();
+        let agent_count = self.agents.len();
+        let agents = self.agents.as_slice();
+        let grid = self.grid.as_slice();
+        let next = self.next.as_slice();
+        let thread_count = self.worker_count.min((agent_count / 700).max(1));
 
-        for i in 0..self.agents.len() {
-            let a = self.agents[i];
-            let cx = ((a.x / cell_size).floor() as isize).clamp(0, grid_w as isize - 1);
-            let cy = ((a.y / cell_size).floor() as isize).clamp(0, grid_h as isize - 1);
-            let mut count = 0.0_f32;
-            let mut avg_vx = 0.0_f32;
-            let mut avg_vy = 0.0_f32;
-            let mut center_x = 0.0_f32;
-            let mut center_y = 0.0_f32;
-            let mut sep_x = 0.0_f32;
-            let mut sep_y = 0.0_f32;
-
-            for oy in -1..=1 {
-                for ox in -1..=1 {
-                    let nx = cx + ox;
-                    let ny = cy + oy;
-                    if nx < 0 || ny < 0 || nx >= grid_w as isize || ny >= grid_h as isize {
-                        continue;
-                    }
-                    let mut cursor = self.grid[ny as usize * grid_w + nx as usize];
-                    while cursor >= 0 {
-                        let j = cursor as usize;
-                        if j != i {
-                            let b = self.agents[j];
-                            let dx = b.x - a.x;
-                            let dy = b.y - a.y;
-                            let d2 = dx * dx + dy * dy;
-                            if d2 > 0.001 && d2 < radius2 {
-                                count += 1.0;
-                                avg_vx += b.vx;
-                                avg_vy += b.vy;
-                                center_x += b.x;
-                                center_y += b.y;
-                                if d2 < sep_radius2 {
-                                    let inv = 1.0 / d2.max(4.0);
-                                    sep_x -= dx * inv;
-                                    sep_y -= dy * inv;
-                                }
-                            }
+        if thread_count <= 1 {
+            for (i, slot) in self.updated.iter_mut().enumerate() {
+                *slot = Self::update_agent(
+                    i,
+                    agents,
+                    grid,
+                    next,
+                    grid_w,
+                    grid_h,
+                    width,
+                    height,
+                    cell_size,
+                    radius2,
+                    sep_radius2,
+                    dt,
+                    config,
+                    mouse,
+                );
+            }
+        } else {
+            let chunk_size = (agent_count + thread_count - 1) / thread_count;
+            thread::scope(|scope| {
+                for (chunk_index, chunk) in self.updated.chunks_mut(chunk_size).enumerate() {
+                    let start = chunk_index * chunk_size;
+                    scope.spawn(move || {
+                        for (offset, slot) in chunk.iter_mut().enumerate() {
+                            *slot = Self::update_agent(
+                                start + offset,
+                                agents,
+                                grid,
+                                next,
+                                grid_w,
+                                grid_h,
+                                width,
+                                height,
+                                cell_size,
+                                radius2,
+                                sep_radius2,
+                                dt,
+                                config,
+                                mouse,
+                            );
                         }
-                        cursor = self.next[j];
-                    }
+                    });
                 }
-            }
-
-            let mut ax = 0.0_f32;
-            let mut ay = 0.0_f32;
-            if count > 0.0 {
-                let inv_count = 1.0 / count;
-                avg_vx *= inv_count;
-                avg_vy *= inv_count;
-                center_x *= inv_count;
-                center_y *= inv_count;
-                ax += (avg_vx - a.vx) * 0.55;
-                ay += (avg_vy - a.vy) * 0.55;
-                ax += (center_x - a.x) * 0.018 * config.cohesion;
-                ay += (center_y - a.y) * 0.018 * config.cohesion;
-                ax += sep_x * 1650.0 * config.separation;
-                ay += sep_y * 1650.0 * config.separation;
-            }
-
-            if let Some((mx, my)) = mouse {
-                let dx = a.x - mx;
-                let dy = a.y - my;
-                let d2 = dx * dx + dy * dy;
-                let repel_radius = 76.0 + config.repel * 18.0;
-                if d2 > 0.001 && d2 < repel_radius * repel_radius {
-                    let d = d2.sqrt();
-                    let falloff = (1.0 - d / repel_radius).max(0.0);
-                    let force = falloff * falloff * (900.0 + config.repel * 260.0);
-                    ax += dx / d * force;
-                    ay += dy / d * force;
-                }
-            }
-
-            let mut vx = a.vx + ax * dt;
-            let mut vy = a.vy + ay * dt;
-            let speed = (vx * vx + vy * vy).sqrt().max(0.001);
-            let target = config.speed;
-            let max_speed = target * 1.85;
-            let min_speed = target * 0.35;
-            let clamped = speed.clamp(min_speed, max_speed);
-            vx = vx / speed * clamped;
-            vy = vy / speed * clamped;
-
-            let mut x = a.x + vx * dt;
-            let mut y = a.y + vy * dt;
-            if x < -8.0 {
-                x += width + 16.0;
-            } else if x > width + 8.0 {
-                x -= width + 16.0;
-            }
-            if y < -8.0 {
-                y += height + 16.0;
-            } else if y > height + 8.0 {
-                y -= height + 16.0;
-            }
-
-            updated[i] = Agent {
-                x,
-                y,
-                vx,
-                vy,
-                tone: a.tone,
-            };
+            });
         }
 
-        self.agents.copy_from_slice(&updated);
+        std::mem::swap(&mut self.agents, &mut self.updated);
+    }
+
+    fn update_agent(
+        i: usize,
+        agents: &[Agent],
+        grid: &[i32],
+        next: &[i32],
+        grid_w: usize,
+        grid_h: usize,
+        width: f32,
+        height: f32,
+        cell_size: f32,
+        radius2: f32,
+        sep_radius2: f32,
+        dt: f32,
+        config: FlockConfig,
+        mouse: Option<(f32, f32)>,
+    ) -> Agent {
+        let a = agents[i];
+        let cx = ((a.x / cell_size).floor() as isize).clamp(0, grid_w as isize - 1);
+        let cy = ((a.y / cell_size).floor() as isize).clamp(0, grid_h as isize - 1);
+        let mut count = 0.0_f32;
+        let mut avg_vx = 0.0_f32;
+        let mut avg_vy = 0.0_f32;
+        let mut center_x = 0.0_f32;
+        let mut center_y = 0.0_f32;
+        let mut sep_x = 0.0_f32;
+        let mut sep_y = 0.0_f32;
+
+        for oy in -1..=1 {
+            for ox in -1..=1 {
+                let nx = cx + ox;
+                let ny = cy + oy;
+                if nx < 0 || ny < 0 || nx >= grid_w as isize || ny >= grid_h as isize {
+                    continue;
+                }
+                let mut cursor = grid[ny as usize * grid_w + nx as usize];
+                while cursor >= 0 {
+                    let j = cursor as usize;
+                    if j != i {
+                        let b = agents[j];
+                        let dx = b.x - a.x;
+                        let dy = b.y - a.y;
+                        let d2 = dx * dx + dy * dy;
+                        if d2 > 0.001 && d2 < radius2 {
+                            count += 1.0;
+                            avg_vx += b.vx;
+                            avg_vy += b.vy;
+                            center_x += b.x;
+                            center_y += b.y;
+                            if d2 < sep_radius2 {
+                                let inv = 1.0 / d2.max(4.0);
+                                sep_x -= dx * inv;
+                                sep_y -= dy * inv;
+                            }
+                        }
+                    }
+                    cursor = next[j];
+                }
+            }
+        }
+
+        let mut ax = 0.0_f32;
+        let mut ay = 0.0_f32;
+        if count > 0.0 {
+            let inv_count = 1.0 / count;
+            avg_vx *= inv_count;
+            avg_vy *= inv_count;
+            center_x *= inv_count;
+            center_y *= inv_count;
+            ax += (avg_vx - a.vx) * 0.55;
+            ay += (avg_vy - a.vy) * 0.55;
+            ax += (center_x - a.x) * 0.018 * config.cohesion;
+            ay += (center_y - a.y) * 0.018 * config.cohesion;
+            ax += sep_x * 1650.0 * config.separation;
+            ay += sep_y * 1650.0 * config.separation;
+        }
+
+        if let Some((mx, my)) = mouse {
+            let dx = a.x - mx;
+            let dy = a.y - my;
+            let d2 = dx * dx + dy * dy;
+            let repel_radius = 76.0 + config.repel * 18.0;
+            if d2 > 0.001 && d2 < repel_radius * repel_radius {
+                let d = d2.sqrt();
+                let falloff = (1.0 - d / repel_radius).max(0.0);
+                let force = falloff * falloff * (900.0 + config.repel * 260.0);
+                ax += dx / d * force;
+                ay += dy / d * force;
+            }
+        }
+
+        let mut vx = a.vx + ax * dt;
+        let mut vy = a.vy + ay * dt;
+        let speed = (vx * vx + vy * vy).sqrt().max(0.001);
+        let target = config.speed;
+        let max_speed = target * 1.85;
+        let min_speed = target * 0.35;
+        let clamped = speed.clamp(min_speed, max_speed);
+        vx = vx / speed * clamped;
+        vy = vy / speed * clamped;
+
+        let mut x = a.x + vx * dt;
+        let mut y = a.y + vy * dt;
+        if x < -8.0 {
+            x += width + 16.0;
+        } else if x > width + 8.0 {
+            x -= width + 16.0;
+        }
+        if y < -8.0 {
+            y += height + 16.0;
+        } else if y > height + 8.0 {
+            y -= height + 16.0;
+        }
+
+        Agent {
+            x,
+            y,
+            vx,
+            vy,
+            tone: a.tone,
+        }
     }
 
     fn write_vertices(&self, config: FlockConfig, mouse: Option<(f32, f32)>, out: &mut Vec<f32>) {
-        out.clear();
         let width = config.width.max(1) as f32;
         let height = config.height.max(1) as f32;
-        for agent in &self.agents {
+        let floats_per_agent = VERTICES_PER_AGENT * FLOATS_PER_VERTEX;
+        out.resize(self.agents.len() * floats_per_agent, 0.0);
+        for (i, agent) in self.agents.iter().enumerate() {
             let speed = (agent.vx * agent.vx + agent.vy * agent.vy)
                 .sqrt()
                 .max(0.001);
@@ -286,16 +362,23 @@ impl Simulation {
             let r = 0.20 + influence * 0.78 + agent.tone * 0.08;
             let g = 0.62 + agent.tone * 0.30;
             let b = 0.76 + (1.0 - influence) * 0.18;
-            push_vertex(out, nose, width, height, [r, g, b, 1.0]);
-            push_vertex(
-                out,
+            let base = i * floats_per_agent;
+            write_vertex(
+                &mut out[base..base + FLOATS_PER_VERTEX],
+                nose,
+                width,
+                height,
+                [r, g, b, 1.0],
+            );
+            write_vertex(
+                &mut out[base + FLOATS_PER_VERTEX..base + FLOATS_PER_VERTEX * 2],
                 left,
                 width,
                 height,
                 [0.08 + r * 0.45, g * 0.82, b, 1.0],
             );
-            push_vertex(
-                out,
+            write_vertex(
+                &mut out[base + FLOATS_PER_VERTEX * 2..base + FLOATS_PER_VERTEX * 3],
                 right,
                 width,
                 height,
@@ -305,10 +388,13 @@ impl Simulation {
     }
 }
 
-fn push_vertex(out: &mut Vec<f32>, point: (f32, f32), width: f32, height: f32, color: [f32; 4]) {
-    out.push(point.0 / width * 2.0 - 1.0);
-    out.push(1.0 - point.1 / height * 2.0);
-    out.extend_from_slice(&color);
+fn write_vertex(out: &mut [f32], point: (f32, f32), width: f32, height: f32, color: [f32; 4]) {
+    out[0] = point.0 / width * 2.0 - 1.0;
+    out[1] = 1.0 - point.1 / height * 2.0;
+    out[2] = color[0];
+    out[3] = color[1];
+    out[4] = color[2];
+    out[5] = color[3];
 }
 
 struct Lcg {

@@ -387,7 +387,9 @@ fn main() {
 		rustOutBin,
 	];
 
-	if (options.buildEnvironment !== "dev") {
+	if (options.buildEnvironment === "dev") {
+		rustArgs.push("-C", "opt-level=2", "-C", "debuginfo=0");
+	} else {
 		rustArgs.push("-C", "opt-level=z", "-C", "strip=symbols");
 	}
 

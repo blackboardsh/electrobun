@@ -1,6 +1,6 @@
 # Rust Flock WGPU
 
-A native Rust main-process template for Electrobun. Rust owns the flocking simulation, samples the native cursor position, and renders directly into an `<electrobun-wgpu>` surface.
+A native Rust main-process template for Electrobun. Rust owns the threaded flocking simulation, samples the native cursor position, and renders directly into an `<electrobun-wgpu>` surface.
 
 ```bash
 bun install
