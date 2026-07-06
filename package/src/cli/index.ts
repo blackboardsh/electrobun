@@ -723,7 +723,7 @@ async function ensureCoreDependencies(
 /**
  * Returns the effective CEF directory path. When a custom cefVersion is set,
  * CEF files are stored in node_modules/.electrobun-cache/ which survives
- * both dist rebuilds and bun install (which replaces node_modules/electrobun).
+ * both dist rebuilds and package reinstalls.
  * When using the default version, returns the standard dist-{platform}/cef/ path.
  */
 function getEffectiveCEFDir(
@@ -739,7 +739,7 @@ function getEffectiveCEFDir(
 
 /**
  * Returns the effective WGPU directory path. WGPU files are stored in
- * node_modules/.electrobun-cache/ to survive dist rebuilds and bun install.
+ * node_modules/.electrobun-cache/ to survive dist rebuilds and package reinstalls.
  */
 function getEffectiveWGPUDir(
 	platformOS: "macos" | "win" | "linux",
@@ -886,7 +886,7 @@ async function ensureBunBinary(
 /**
  * Downloads a specific Bun version from GitHub releases for a custom version
  * override. The binary is cached in node_modules/.electrobun-cache/bun-override/
- * so it survives dist rebuilds and bun install.
+ * so it survives dist rebuilds and package reinstalls.
  */
 async function downloadCustomBun(
 	bunVersion: string,
@@ -1669,7 +1669,7 @@ async function downloadAndExtractCustomCEF(
 	console.log(`Using custom CEF version: ${cefVersion}`);
 	console.log(`Downloading from: ${cefUrl}`);
 
-	// Store custom CEF in .electrobun-cache so it survives dist rebuilds and bun install
+	// Store custom CEF in .electrobun-cache so it survives dist rebuilds and package reinstalls.
 	const cefDir = getEffectiveCEFDir(platformOS, platformArch, cefVersion);
 	console.log(`Caching custom CEF to ${cefDir}`);
 	mkdirSync(cefDir, { recursive: true });
@@ -2445,8 +2445,8 @@ ${utiDecls}
 			console.log("");
 			console.log("📦 Next steps:");
 			console.log(`   cd ${projectName}`);
-			console.log("   bun install");
-			console.log("   bun start");
+			console.log("   npm install");
+			console.log("   npm start");
 			console.log("");
 			console.log("🎉 Happy building with Electrobun!");
 			console.log("");

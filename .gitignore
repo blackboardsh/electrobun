@@ -8,6 +8,7 @@ build
 /package/src/extractor/.zig-cache
 /package/src/launcher/.zig-cache
 .zig-cache
+.cottontail-tmp
 .colab.json
 dist
 .cache
@@ -17,6 +18,7 @@ dist
 /package/bin/dash.exe
 /package/bin/cottontail
 /package/bin/cottontail.exe
+/package/bin/vendors
 electrobun-cef*
 electrobun-core*
 electrobun-cli*

@@ -1,8 +1,8 @@
-// Run this script via terminal or command line with bun build.ts
+// Run this script via terminal or command line with dash build.ts
 
 import { $ } from "bun";
 import { platform, arch } from "os";
-import { join, dirname, relative, basename, resolve } from "path";
+import { join, relative, basename, resolve } from "path";
 import {
 	existsSync,
 	readdirSync,
@@ -533,14 +533,10 @@ async function setup() {
 
 async function build() {
 	await createDistFolder();
-	await BunInstall();
+	await installPackageDependencies();
 
 	// await buildAsar(); // Now using vendored binaries from zig-asar releases
 	await buildNative(); // zig depends on this for linking symbols
-
-	// Generate template embeddings before building CLI
-	console.log("Generating template embeddings...");
-	await generateTemplateEmbeddings();
 
 	// Build preload script (compiles TypeScript to JS for webview injection)
 	console.log("Building preload script...");
@@ -550,7 +546,6 @@ async function build() {
 		buildSelfExtractor(),
 		buildCore(),
 		buildLauncher(),
-		buildCli(),
 		buildMainJs(),
 	]);
 }
@@ -692,18 +687,15 @@ async function copyToDist() {
 		}
 		console.log(`launcher${binExt} copied successfully to ${launcherPath}`);
 	}
-	// Electrobun cli and npm launcher
+	// Electrobun npm launcher
 	await $`cp src/npmbin/index.js dist/npmbin.js`;
-	await $`cp src/cli/build/electrobun${binExt} dist/electrobun${binExt}`;
 	if (existsSync(PATH.cottontail.BIN)) {
 		await $`cp ${PATH.cottontail.BIN} ${PATH.cottontail.DIST}`;
 	}
 	if (existsSync(PATH.dashCli.BIN)) {
 		await $`cp ${PATH.dashCli.BIN} ${PATH.dashCli.DIST}`;
 	}
-	// Also copy to bin/ so the npm bin shim (bin/electrobun.cjs) can find it
-	// during local dev (kitchen uses "electrobun": "file:../package")
-	await $`mkdir -p bin && cp src/cli/build/electrobun${binExt} bin/electrobun${binExt}`;
+	await $`mkdir -p bin`;
 	if (existsSync(PATH.cottontail.BIN)) {
 		await $`cp ${PATH.cottontail.BIN} bin/${cottontailBinary}`;
 	}
@@ -717,7 +709,7 @@ async function copyToDist() {
 		await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
 		// Copy CEF to cef/ subdirectory for consistent organization
 		await $`mkdir -p dist/cef`;
-		await $`cp -R vendors/cef/Release/Chromium\ Embedded\ Framework.framework dist/cef/Chromium\ Embedded\ Framework.framework`;
+		await $`cp -R "vendors/cef/Release/Chromium Embedded Framework.framework" "dist/cef/Chromium Embedded Framework.framework"`;
 		// CEF's helper process binary
 		await $`cp -R src/native/build/process_helper dist/process_helper`;
 	} else if (OS === "win") {
@@ -892,9 +884,8 @@ async function createDistFolder() {
 	}
 }
 
-async function BunInstall() {
-	// Use vendored Bun for consistency with CI
-	await $`${PATH.bun.RUNTIME} install`;
+async function installPackageDependencies() {
+	await $`npm install`;
 }
 
 async function vendorBun() {
@@ -2489,8 +2480,7 @@ async function buildCore() {
 }
 
 async function buildMainJs() {
-	const bunModule = await import("bun");
-	const result = await bunModule.build({
+	const result = await Bun.build({
 		entrypoints: [join("src", "launcher", "main.ts")],
 		outdir: join("dist"),
 		external: [],
@@ -2525,18 +2515,6 @@ async function buildSelfExtractor() {
 	}
 }
 
-async function buildCli() {
-	// await $`bun build src/cli/index.ts --compile --outfile src/cli/build/electrobun`;
-
-	const compileTarget =
-		process.platform === "win32"
-			? ["--target=bun-windows-x64-baseline"]
-			: [];
-
-	// Use vendored Bun for building CLI to ensure consistency with CI and proper code signing
-	await $`BUN_INSTALL_CACHE_DIR=/tmp/bun-cache ${PATH.bun.RUNTIME} build src/cli/index.ts --compile ${compileTarget} --outfile src/cli/build/electrobun`;
-}
-
 async function buildPreload() {
 	// The preload scripts (drag regions, internal RPC, encryption, webview tags) are written
 	// in TypeScript for maintainability. We pre-compile them here because:
@@ -2554,11 +2532,9 @@ async function buildPreload() {
 	// Ensure output directory exists
 	mkdirSync(outputDir, { recursive: true });
 
-	const bunModule = await import("bun");
-
 	// Build full preload (trusted webviews)
 	const fullPreloadEntry = join(preloadDir, "index.ts");
-	const fullResult = await bunModule.build({
+	const fullResult = await Bun.build({
 		entrypoints: [fullPreloadEntry],
 		target: "browser",
 		format: "esm",
@@ -2572,7 +2548,7 @@ async function buildPreload() {
 
 	// Build sandboxed preload (untrusted webviews)
 	const sandboxedPreloadEntry = join(preloadDir, "index-sandboxed.ts");
-	const sandboxedResult = await bunModule.build({
+	const sandboxedResult = await Bun.build({
 		entrypoints: [sandboxedPreloadEntry],
 		target: "browser",
 		format: "esm",
@@ -2591,7 +2567,7 @@ async function buildPreload() {
 	const distDir = join(process.cwd(), "dist");
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
-// Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
+// Run "dash build.ts" or "dash run build:dev" from the package folder to regenerate.
 
 // Full preload for trusted webviews (RPC, encryption, drag regions, webview tags)
 export const preloadScript = ${JSON.stringify(fullPreloadJs)};
@@ -2605,146 +2581,4 @@ export const preloadScriptSandboxed = ${JSON.stringify(sandboxedPreloadJs)};
 	writeFileSync(join(distDir, "preload-full.js"), fullPreloadJs);
 	writeFileSync(join(distDir, "preload-sandboxed.js"), sandboxedPreloadJs);
 	console.log("Preload scripts compiled successfully (full + sandboxed)");
-}
-
-async function generateTemplateEmbeddings() {
-	const TEMPLATES_DIR = join(process.cwd(), "..", "templates");
-	const OUTPUT_FILE = join(process.cwd(), "src/cli/templates/embedded.ts");
-
-	const electrobunPackageJson = JSON.parse(
-		readFileSync(join(process.cwd(), "package.json"), "utf-8"),
-	);
-	const electrobunVersion = electrobunPackageJson.version;
-
-	if (!existsSync(TEMPLATES_DIR)) {
-		console.log("No templates directory found, skipping template generation");
-		return;
-	}
-
-	const templates: Record<
-		string,
-		{ name: string; files: Record<string, string> }
-	> = {};
-
-	// Read all template directories
-	const templateNames = readdirSync(TEMPLATES_DIR, { withFileTypes: true })
-		.filter((dirent) => dirent.isDirectory())
-		.map((dirent) => dirent.name);
-
-	if (templateNames.length === 0) {
-		console.log("No templates found in templates/ directory");
-		return;
-	}
-
-	for (const templateName of templateNames) {
-		const templateDir = join(TEMPLATES_DIR, templateName);
-		const files: Record<string, string> = {};
-
-		// Recursively read all files in the template directory
-		function readDirectory(dir: string, basePath: string = "") {
-			const entries = readdirSync(dir, { withFileTypes: true });
-
-			for (const entry of entries) {
-				const fullPath = join(dir, entry.name);
-				const relativePath = join(basePath, entry.name).replace(/\\/g, "/");
-
-				// Skip common directories and files that shouldn't be in templates
-				if (
-					entry.name === "node_modules" ||
-					entry.name === ".git" ||
-					entry.name === "build" ||
-					entry.name === "dist" ||
-					entry.name === ".next" ||
-					entry.name === ".DS_Store" ||
-					(entry.name.startsWith(".") && entry.name !== ".gitignore") ||
-					entry.name === "package-lock.json" ||
-					entry.name === "bun.lock" ||
-					entry.name === "bun.lockb" ||
-					entry.name === "yarn.lock"
-				) {
-					continue;
-				}
-
-				if (entry.isDirectory()) {
-					readDirectory(fullPath, relativePath);
-				} else {
-					try {
-						const ext = entry.name.split(".").pop()?.toLowerCase();
-						const binaryExtensions = new Set([
-							"png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
-							"woff", "woff2", "ttf", "eot", "otf",
-							"zip", "tar", "gz", "br", "zst",
-							"wasm", "pdf",
-						]);
-						if (ext && binaryExtensions.has(ext)) {
-							const content = readFileSync(fullPath);
-							files[relativePath] = "base64:" + content.toString("base64");
-						} else {
-							const content = readFileSync(fullPath, "utf-8");
-							files[relativePath] = content;
-						}
-					} catch (error) {
-						console.warn(`Warning: Could not read ${fullPath}:`, error);
-					}
-				}
-			}
-		}
-
-		readDirectory(templateDir);
-
-		// Pin the electrobun dependency version in template package.json
-		if (files["package.json"]) {
-			const pkgJson = JSON.parse(files["package.json"]);
-			const electrobunDep = pkgJson.dependencies?.electrobun;
-			if (
-				typeof electrobunDep === "string" &&
-				(electrobunDep === "latest" || electrobunDep.startsWith("file:"))
-			) {
-				pkgJson.dependencies.electrobun = electrobunVersion;
-			}
-			files["package.json"] = JSON.stringify(pkgJson, null, "\t") + "\n";
-		}
-
-		templates[templateName] = {
-			name: templateName,
-			files,
-		};
-	}
-
-	// Generate TypeScript file using JSON.stringify for proper escaping
-	const output = `// Auto-generated file. Do not edit directly.
-// Generated from templates/ directory
-
-export interface Template {
-  name: string;
-  files: Record<string, string>;
-}
-
-export const templates: Record<string, Template> = ${JSON.stringify(templates, null, 2)};
-
-export function getTemplateNames(): string[] {
-  return Object.keys(templates);
-}
-
-export function getTemplate(name: string): Template | undefined {
-  return templates[name];
-}
-`;
-
-	// Ensure the output directory exists
-	const outputDir = dirname(OUTPUT_FILE);
-	if (!existsSync(outputDir)) {
-		mkdirSync(outputDir, { recursive: true });
-	}
-
-	// Write the output file
-	writeFileSync(OUTPUT_FILE, output);
-
-	const totalFiles = Object.values(templates).reduce(
-		(acc, t) => acc + Object.keys(t.files).length,
-		0,
-	);
-	console.log(
-		`Generated ${totalFiles} template files for ${templateNames.length} templates: ${templateNames.join(", ")}`,
-	);
 }
