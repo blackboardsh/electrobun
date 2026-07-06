@@ -574,6 +574,7 @@ async function copyApiFiles() {
 	// Copy TypeScript APIs while preserving source-relative imports.
 	await $`mkdir -p dist/api/sdks`;
 	await $`cp -R src/sdks/bun dist/api/sdks/`;
+	await $`cp -R src/sdks/cottontail dist/api/sdks/`;
 	await $`cp -R src/browser dist/api/`;
 	await $`cp -R src/shared dist/api/`;
 	await $`cp -R src/config dist/api/`;
@@ -898,12 +899,18 @@ async function copyExecutableToBin(source: string, filename: string) {
 	try {
 		await $`cp ${source} ${tempDestination}`;
 		await $`chmod +x ${tempDestination}`;
+		await signExecutableIfNeeded(tempDestination);
 		renameSync(tempDestination, destination);
 	} finally {
 		if (existsSync(tempDestination)) {
 			unlinkSync(tempDestination);
 		}
 	}
+}
+
+async function signExecutableIfNeeded(path: string) {
+	if (OS !== "macos") return;
+	await $`codesign --force --sign - ${path}`;
 }
 
 async function installPackageDependencies() {
@@ -1247,6 +1254,7 @@ async function vendorCottontail() {
 		if (OS !== "win") {
 			await $`chmod +x ${PATH.cottontail.BIN}`;
 		}
+		await signExecutableIfNeeded(PATH.cottontail.BIN);
 		console.log(
 			`✓ Cottontail vendored from DASH_COTTONTAIL: ${PATH.cottontail.BIN}`,
 		);
@@ -1272,6 +1280,7 @@ async function vendorCottontail() {
 
 		await $`cp ${sourceBinary} ${PATH.cottontail.BIN}`;
 		await $`chmod +x ${PATH.cottontail.BIN}`;
+		await signExecutableIfNeeded(PATH.cottontail.BIN);
 		console.log(`✓ Cottontail vendored at ${PATH.cottontail.BIN}`);
 		return;
 	}

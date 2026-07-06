@@ -1,6 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
-const mainProcess = "zig" as const; // Flip to "bun", "zig", "rust", or "go" to exercise main-process backends.
+const mainProcess = "cottontail" as const; // Flip to "bun", "zig", "rust", "go", or "cottontail" to exercise main-process backends.
 const bundleCEF = true;
 
 export default {
@@ -29,6 +29,9 @@ export default {
 		},
 		go: {
 			entrypoint: "src/go/main.go",
+		},
+		cottontail: {
+			entrypoint: "src/cottontail/main.ts",
 		},
 		views: {
 			"test-runner": {
