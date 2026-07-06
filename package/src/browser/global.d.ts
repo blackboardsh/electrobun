@@ -23,6 +23,7 @@ declare global {
     __electrobunWindowId: number;
     __electrobunRpcSocketPort: number;
     __electrobunHostSocketPort?: number;
+    __electrobunPlaintextHostSocket?: boolean;
     __electrobun?: ElectrobunBridge;
     __electrobunPendingHostMessages?: unknown[];
     __electrobun_encrypt: (msg: string) => Promise<ElectrobunEncryptResult>;

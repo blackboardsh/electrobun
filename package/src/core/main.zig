@@ -63,6 +63,13 @@ const PendingHostMessage = struct {
     message: [:0]u8,
 };
 
+const PendingHostTransportSend = struct {
+    webview_id: u32,
+    socket_handle: std.posix.socket_t,
+    opcode: u8,
+    payload: []u8,
+};
+
 const WebviewState = struct {
     ptr: WebviewPtr,
     window_id: u32,
@@ -71,6 +78,7 @@ const WebviewState = struct {
     secret_key: WebviewSecretKey,
     socket_handle: ?std.posix.socket_t,
     transport_ready: bool,
+    plaintext_transport: bool,
 };
 
 const WgpuViewState = struct {
@@ -103,6 +111,21 @@ const HostMessageWakeupState = struct {
     signaled: bool = false,
 };
 
+const HostTransportDebugState = struct {
+    connections: u64 = 0,
+    frames_read: u64 = 0,
+    frames_dispatched: u64 = 0,
+    decrypt_ok: u64 = 0,
+    decrypt_errors: u64 = 0,
+    enqueued: u64 = 0,
+    wakeup_signals: u64 = 0,
+    wakeup_write_errors: u64 = 0,
+    socket_write_queued: u64 = 0,
+    socket_write_frames: u64 = 0,
+    socket_write_errors: u64 = 0,
+    socket_write_stale: u64 = 0,
+};
+
 const NativeWrapperState = struct {
     lib: std.DynLib,
     path: []u8,
@@ -126,9 +149,16 @@ var wgpu_view_registry = std.AutoHashMap(u32, WgpuViewState).init(allocator);
 var wgpu_view_registry_mutex: std.Thread.Mutex = .{};
 var pending_host_messages = std.ArrayList(PendingHostMessage).init(allocator);
 var pending_host_messages_mutex: std.Thread.Mutex = .{};
+var pending_host_transport_sends = std.ArrayList(PendingHostTransportSend).init(allocator);
+var pending_host_transport_sends_mutex: std.Thread.Mutex = .{};
+var pending_host_transport_sends_condition: std.Thread.Condition = .{};
+var pending_host_transport_send_worker_started = false;
+var host_transport_socket_write_mutex: std.Thread.Mutex = .{};
 var webview_runtime_state = WebviewRuntimeState{};
 var host_transport_state = HostTransportState{};
 var host_transport_mutex: std.Thread.Mutex = .{};
+var host_transport_debug_state = HostTransportDebugState{};
+var host_transport_debug_mutex: std.Thread.Mutex = .{};
 var default_webview_callbacks = DefaultWebviewCallbacks{};
 var managed_quit_requested_handler: ?QuitRequestedHandler = null;
 var exit_on_last_window_closed: bool = true;
@@ -136,6 +166,44 @@ var host_message_wakeup_state = HostMessageWakeupState{};
 var host_message_wakeup_mutex: std.Thread.Mutex = .{};
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
+
+fn setNonblocking(fd: std.posix.fd_t) void {
+    if (builtin.os.tag == .windows) return;
+
+    const flags_bits: u32 = @intCast(std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return);
+    var flags: std.posix.O = @as(std.posix.O, @bitCast(flags_bits));
+    flags.NONBLOCK = true;
+    _ = std.posix.fcntl(fd, std.posix.F.SETFL, @as(u32, @bitCast(flags))) catch {};
+}
+
+fn drainHostMessageWakeupLocked() void {
+    if (builtin.os.tag == .windows) {
+        host_message_wakeup_state.signaled = false;
+        return;
+    }
+
+    const read_fd = host_message_wakeup_state.read_fd orelse {
+        host_message_wakeup_state.signaled = false;
+        return;
+    };
+    var buffer: [64]u8 = undefined;
+    while (true) {
+        const read_count = std.posix.read(read_fd, &buffer) catch |err| switch (err) {
+            error.WouldBlock => break,
+            else => break,
+        };
+        if (read_count == 0 or read_count < buffer.len) {
+            break;
+        }
+    }
+    host_message_wakeup_state.signaled = false;
+}
+
+fn incrementHostTransportDebug(comptime field: []const u8) void {
+    host_transport_debug_mutex.lock();
+    defer host_transport_debug_mutex.unlock();
+    @field(host_transport_debug_state, field) += 1;
+}
 
 fn clearLastError() void {
     if (last_error) |message| {
@@ -228,6 +296,8 @@ fn ensureHostMessageWakeupInitialized() bool {
     }
 
     const fds = std.posix.pipe() catch return false;
+    setNonblocking(fds[0]);
+    setNonblocking(fds[1]);
     host_message_wakeup_state.read_fd = fds[0];
     host_message_wakeup_state.write_fd = fds[1];
     host_message_wakeup_state.initialized = true;
@@ -249,7 +319,11 @@ fn signalHostMessageWakeup() void {
 
     const byte: [1]u8 = .{1};
     const write_fd = host_message_wakeup_state.write_fd orelse return;
-    _ = std.posix.write(write_fd, &byte) catch return;
+    _ = std.posix.write(write_fd, &byte) catch {
+        incrementHostTransportDebug("wakeup_write_errors");
+        return;
+    };
+    incrementHostTransportDebug("wakeup_signals");
     host_message_wakeup_state.signaled = true;
 }
 
@@ -266,6 +340,7 @@ fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
         allocator.free(owned_message);
         return;
     };
+    incrementHostTransportDebug("enqueued");
 
     signalHostMessageWakeup();
 }
@@ -287,7 +362,7 @@ export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
     const entry = pending_host_messages.orderedRemove(0);
     if (pending_host_messages.items.len == 0) {
         host_message_wakeup_mutex.lock();
-        host_message_wakeup_state.signaled = false;
+        drainHostMessageWakeupLocked();
         host_message_wakeup_mutex.unlock();
     }
     out_webview_id.* = entry.webview_id;
@@ -299,6 +374,56 @@ export fn freeCoreString(value: ?[*:0]u8) void {
         const slice = std.mem.sliceTo(ptr_value, 0);
         allocator.free(@constCast(slice));
     }
+}
+
+export fn getHostTransportDebugJSON() ?[*:0]u8 {
+    clearLastError();
+
+    host_transport_debug_mutex.lock();
+    const debug = host_transport_debug_state;
+    host_transport_debug_mutex.unlock();
+
+    pending_host_messages_mutex.lock();
+    const pending_count = pending_host_messages.items.len;
+    pending_host_messages_mutex.unlock();
+
+    pending_host_transport_sends_mutex.lock();
+    const pending_socket_write_count = pending_host_transport_sends.items.len;
+    const socket_write_worker_started = pending_host_transport_send_worker_started;
+    pending_host_transport_sends_mutex.unlock();
+
+    host_message_wakeup_mutex.lock();
+    const wakeup_initialized = host_message_wakeup_state.initialized;
+    const wakeup_signaled = host_message_wakeup_state.signaled;
+    host_message_wakeup_mutex.unlock();
+
+    const json = std.json.stringifyAlloc(allocator, .{
+        .connections = debug.connections,
+        .framesRead = debug.frames_read,
+        .framesDispatched = debug.frames_dispatched,
+        .decryptOk = debug.decrypt_ok,
+        .decryptErrors = debug.decrypt_errors,
+        .enqueued = debug.enqueued,
+        .pendingHostMessages = pending_count,
+        .wakeupInitialized = wakeup_initialized,
+        .wakeupSignaled = wakeup_signaled,
+        .wakeupSignals = debug.wakeup_signals,
+        .wakeupWriteErrors = debug.wakeup_write_errors,
+        .socketWriteQueued = debug.socket_write_queued,
+        .pendingSocketWrites = pending_socket_write_count,
+        .socketWriteWorkerStarted = socket_write_worker_started,
+        .socketWriteFrames = debug.socket_write_frames,
+        .socketWriteErrors = debug.socket_write_errors,
+        .socketWriteStale = debug.socket_write_stale,
+    }, .{}) catch |err| {
+        setLastError("Failed to build host transport debug JSON: {s}", .{@errorName(err)});
+        return null;
+    };
+    defer allocator.free(json);
+    return allocator.dupeZ(u8, json) catch |err| {
+        setLastError("Failed to allocate host transport debug JSON: {s}", .{@errorName(err)});
+        return null;
+    };
 }
 
 export fn getHostMessageWakeupReadFD() c_int {
@@ -415,6 +540,7 @@ const WebviewTransportContext = struct {
     secret_key: WebviewSecretKey,
     socket_handle: ?std.posix.socket_t,
     transport_ready: bool,
+    plaintext_transport: bool,
 };
 
 fn lookupWebviewTransportContext(webview_id: u32) ?WebviewTransportContext {
@@ -423,6 +549,7 @@ fn lookupWebviewTransportContext(webview_id: u32) ?WebviewTransportContext {
         .secret_key = state.secret_key,
         .socket_handle = state.socket_handle,
         .transport_ready = state.transport_ready,
+        .plaintext_transport = state.plaintext_transport,
     };
 }
 
@@ -434,6 +561,14 @@ fn markWebviewTransportReady(webview_id: u32, handle: std.posix.socket_t) void {
     if (state.socket_handle != null and state.socket_handle.? == handle) {
         state.transport_ready = true;
     }
+}
+
+fn isCurrentWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
+    webview_registry_mutex.lock();
+    defer webview_registry_mutex.unlock();
+
+    const state = webview_registry.getPtr(webview_id) orelse return false;
+    return state.socket_handle != null and state.socket_handle.? == handle;
 }
 
 fn decodeBase64Alloc(input: []const u8) ![]u8 {
@@ -694,6 +829,79 @@ fn writeWebSocketFrame(stream: std.net.Stream, opcode: u8, payload: []const u8) 
     }
 }
 
+fn writeWebSocketFrameSerialized(stream: std.net.Stream, opcode: u8, payload: []const u8) !void {
+    host_transport_socket_write_mutex.lock();
+    defer host_transport_socket_write_mutex.unlock();
+    try writeWebSocketFrame(stream, opcode, payload);
+}
+
+fn hostTransportSendWorker() void {
+    while (true) {
+        pending_host_transport_sends_mutex.lock();
+        while (pending_host_transport_sends.items.len == 0) {
+            pending_host_transport_sends_condition.wait(&pending_host_transport_sends_mutex);
+        }
+        const entry = pending_host_transport_sends.orderedRemove(0);
+        pending_host_transport_sends_mutex.unlock();
+
+        defer allocator.free(entry.payload);
+
+        if (!isCurrentWebviewSocketHandle(entry.webview_id, entry.socket_handle)) {
+            incrementHostTransportDebug("socket_write_stale");
+            continue;
+        }
+
+        const stream = std.net.Stream{ .handle = entry.socket_handle };
+        writeWebSocketFrameSerialized(stream, entry.opcode, entry.payload) catch {
+            incrementHostTransportDebug("socket_write_errors");
+            clearWebviewSocketHandleIfCurrent(entry.webview_id, entry.socket_handle);
+            continue;
+        };
+        incrementHostTransportDebug("socket_write_frames");
+    }
+}
+
+fn ensureHostTransportSendWorkerStarted() bool {
+    pending_host_transport_sends_mutex.lock();
+    defer pending_host_transport_sends_mutex.unlock();
+
+    if (pending_host_transport_send_worker_started) {
+        return true;
+    }
+
+    const thread = std.Thread.spawn(.{}, hostTransportSendWorker, .{}) catch |err| {
+        setLastError("Failed to start host transport send worker: {s}", .{@errorName(err)});
+        return false;
+    };
+    thread.detach();
+    pending_host_transport_send_worker_started = true;
+    return true;
+}
+
+fn enqueueHostTransportSend(webview_id: u32, socket_handle: std.posix.socket_t, opcode: u8, payload: []u8) bool {
+    if (!ensureHostTransportSendWorkerStarted()) {
+        allocator.free(payload);
+        return false;
+    }
+
+    pending_host_transport_sends_mutex.lock();
+    defer pending_host_transport_sends_mutex.unlock();
+
+    pending_host_transport_sends.append(.{
+        .webview_id = webview_id,
+        .socket_handle = socket_handle,
+        .opcode = opcode,
+        .payload = payload,
+    }) catch |err| {
+        allocator.free(payload);
+        setLastError("Failed to queue host transport send: {s}", .{@errorName(err)});
+        return false;
+    };
+    incrementHostTransportDebug("socket_write_queued");
+    pending_host_transport_sends_condition.signal();
+    return true;
+}
+
 fn encryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecretKey) ![]u8 {
     var nonce: [Aes256Gcm.nonce_length]u8 = undefined;
     std.crypto.random.bytes(&nonce);
@@ -757,12 +965,20 @@ fn decryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecre
     return plaintext;
 }
 
-fn dispatchHostTransportMessage(webview_id: u32, encrypted_packet: []const u8) void {
-    const context = lookupWebviewTransportContext(webview_id) orelse return;
+fn isPlaintextHostTransportPacket(message_json: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, message_json, .{}) catch return false;
+    defer parsed.deinit();
 
-    const plaintext = decryptHostTransportPacket(encrypted_packet, context.secret_key) catch return;
-    defer allocator.free(plaintext);
+    if (parsed.value != .object) return false;
+    const type_value = parsed.value.object.get("type") orelse return false;
+    if (type_value != .string) return false;
 
+    return std.mem.eql(u8, type_value.string, "message") or
+        std.mem.eql(u8, type_value.string, "request") or
+        std.mem.eql(u8, type_value.string, "response");
+}
+
+fn enqueueHostTransportPlaintext(webview_id: u32, context: WebviewTransportContext, plaintext: []const u8) void {
     if (context.socket_handle) |socket_handle| {
         markWebviewTransportReady(webview_id, socket_handle);
     }
@@ -773,7 +989,25 @@ fn dispatchHostTransportMessage(webview_id: u32, encrypted_packet: []const u8) v
     enqueuePendingHostMessage(webview_id, message_z.ptr);
 }
 
+fn dispatchHostTransportMessage(webview_id: u32, encrypted_packet: []const u8) void {
+    incrementHostTransportDebug("frames_dispatched");
+    const context = lookupWebviewTransportContext(webview_id) orelse return;
+
+    const plaintext = decryptHostTransportPacket(encrypted_packet, context.secret_key) catch {
+        if (context.plaintext_transport and isPlaintextHostTransportPacket(encrypted_packet)) {
+            enqueueHostTransportPlaintext(webview_id, context, encrypted_packet);
+            return;
+        }
+        incrementHostTransportDebug("decrypt_errors");
+        return;
+    };
+    incrementHostTransportDebug("decrypt_ok");
+    defer allocator.free(plaintext);
+    enqueueHostTransportPlaintext(webview_id, context, plaintext);
+}
+
 fn handleHostTransportConnection(connection: std.net.Server.Connection) void {
+    incrementHostTransportDebug("connections");
     var stream = connection.stream;
     defer stream.close();
 
@@ -812,15 +1046,16 @@ fn handleHostTransportConnection(connection: std.net.Server.Connection) void {
             error.ConnectionClosed => break,
             else => break,
         };
+        incrementHostTransportDebug("frames_read");
         defer allocator.free(frame.payload);
 
         switch (frame.opcode) {
             0x1 => dispatchHostTransportMessage(webview_id, frame.payload),
             0x8 => {
-                writeWebSocketFrame(stream, 0x8, "") catch {};
+                writeWebSocketFrameSerialized(stream, 0x8, "") catch {};
                 break;
             },
-            0x9 => writeWebSocketFrame(stream, 0xA, frame.payload) catch break,
+            0x9 => writeWebSocketFrameSerialized(stream, 0xA, frame.payload) catch break,
             else => {},
         }
     }
@@ -1884,6 +2119,13 @@ export fn electrobun_core_run_main_thread(
     return 0;
 }
 
+export fn runNativeEventLoopTick(timeout_ms: c_int) void {
+    clearLastError();
+    const RunNativeEventLoopTickFn = *const fn (c_int) callconv(.C) void;
+    const run_native_event_loop_tick = lookupNativeSymbol(RunNativeEventLoopTickFn, "runNativeEventLoopTick") orelse return;
+    run_native_event_loop_tick(timeout_ms);
+}
+
 export fn getWindowStyle(
     borderless: bool,
     titled: bool,
@@ -2347,6 +2589,7 @@ export fn createWebview(
         .secret_key = parsed_secret_key,
         .socket_handle = null,
         .transport_ready = false,
+        .plaintext_transport = false,
     }) catch |err| {
         webview_registry_mutex.unlock();
         setLastError("Failed to store webview state: {s}", .{@errorName(err)});
@@ -2619,6 +2862,18 @@ export fn clearWebviewHostTransport(webview_id: u32) void {
     closeAndClearWebviewSocketHandle(webview_id);
 }
 
+export fn setWebviewPlaintextHostTransport(webview_id: u32, enabled: bool) void {
+    clearLastError();
+    webview_registry_mutex.lock();
+    defer webview_registry_mutex.unlock();
+
+    const state = webview_registry.getPtr(webview_id) orelse {
+        setLastError("Webview {d} not found", .{webview_id});
+        return;
+    };
+    state.plaintext_transport = enabled;
+}
+
 export fn sendHostMessageToWebviewViaTransport(webview_id: u32, message_json: [*:0]const u8) bool {
     clearLastError();
 
@@ -2628,19 +2883,20 @@ export fn sendHostMessageToWebviewViaTransport(webview_id: u32, message_json: [*
     }
     const socket_handle = context.socket_handle orelse return false;
 
+    if (context.plaintext_transport) {
+        const plaintext_packet = allocator.dupe(u8, std.mem.span(message_json)) catch |err| {
+            setLastError("Failed to allocate host transport packet: {s}", .{@errorName(err)});
+            return false;
+        };
+        return enqueueHostTransportSend(webview_id, socket_handle, 0x1, plaintext_packet);
+    }
+
     const encrypted_packet = encryptHostTransportPacket(std.mem.span(message_json), context.secret_key) catch |err| {
         setLastError("Failed to encrypt host transport packet: {s}", .{@errorName(err)});
         return false;
     };
-    defer allocator.free(encrypted_packet);
 
-    const stream = std.net.Stream{ .handle = socket_handle };
-    writeWebSocketFrame(stream, 0x1, encrypted_packet) catch {
-        clearWebviewSocketHandleIfCurrent(webview_id, socket_handle);
-        return false;
-    };
-
-    return true;
+    return enqueueHostTransportSend(webview_id, socket_handle, 0x1, encrypted_packet);
 }
 
 export fn sendInternalMessageToWebview(webview_id: u32, message_json: [*:0]const u8) bool {

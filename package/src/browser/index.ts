@@ -23,6 +23,8 @@ class Electroview<T extends RPCWithTransport> {
 	hostSocketCanSend = false;
 	pendingHostSocketMessages: string[] = [];
 	flushingHostSocketMessages = false;
+	hostSocketSendQueue: string[] = [];
+	flushingHostSocketSendQueue = false;
 	// user's custom rpc browser <-> bun
 	rpc?: T;
 	rpcHandler?: (msg: unknown) => void;
@@ -84,16 +86,22 @@ class Electroview<T extends RPCWithTransport> {
 			const message = event.data;
 			if (typeof message === "string") {
 				try {
-					const encryptedPacket = JSON.parse(message);
-
-					const decrypted = await window.__electrobun_decrypt(
-						encryptedPacket.encryptedData,
-						encryptedPacket.iv,
-						encryptedPacket.tag,
-					);
-
+					const packet = JSON.parse(message);
 					this.hostSocketCanSend = true;
-					this.rpcHandler?.(JSON.parse(decrypted));
+					if (
+						typeof packet?.encryptedData === "string" &&
+						typeof packet?.iv === "string" &&
+						typeof packet?.tag === "string"
+					) {
+						const decrypted = await window.__electrobun_decrypt(
+							packet.encryptedData,
+							packet.iv,
+							packet.tag,
+						);
+						this.rpcHandler?.(JSON.parse(decrypted));
+					} else {
+						this.rpcHandler?.(packet);
+					}
 				} catch (err) {
 					console.error("Error parsing bun message:", err);
 				}
@@ -135,9 +143,9 @@ class Electroview<T extends RPCWithTransport> {
 
 	async sendMessageToHost(msg: string) {
 		if (this.canSendToHostSocket()) {
-			if (await this.sendMessageToHostSocket(msg)) {
-				return;
-			}
+			this.hostSocketSendQueue.push(msg);
+			void this.flushHostSocketSendQueue();
+			return;
 		}
 
 		if (this.hostSocket?.readyState === WebSocket.CONNECTING) {
@@ -162,6 +170,11 @@ class Electroview<T extends RPCWithTransport> {
 		}
 
 		try {
+			if (window.__electrobunPlaintextHostSocket) {
+				this.hostSocket!.send(msg);
+				return true;
+			}
+			await new Promise((resolve) => setTimeout(resolve, 0));
 			const { encryptedData, iv, tag } =
 				await window.__electrobun_encrypt(msg);
 
@@ -179,6 +192,28 @@ class Electroview<T extends RPCWithTransport> {
 		}
 	}
 
+	async flushHostSocketSendQueue() {
+		if (this.flushingHostSocketSendQueue) {
+			return;
+		}
+
+		this.flushingHostSocketSendQueue = true;
+		try {
+			while (
+				this.hostSocketSendQueue.length > 0 &&
+				this.canSendToHostSocket()
+			) {
+				const message = this.hostSocketSendQueue[0]!;
+				this.hostSocketSendQueue.shift();
+				if (!(await this.sendMessageToHostSocket(message))) {
+					window.__electrobunHostBridge?.postMessage(message);
+				}
+			}
+		} finally {
+			this.flushingHostSocketSendQueue = false;
+		}
+	}
+
 	async flushPendingHostSocketMessages() {
 		if (this.flushingHostSocketMessages) {
 			return;
@@ -186,16 +221,11 @@ class Electroview<T extends RPCWithTransport> {
 
 		this.flushingHostSocketMessages = true;
 		try {
-			while (
-				this.pendingHostSocketMessages.length > 0 &&
-				this.canSendToHostSocket()
-			) {
-				const message = this.pendingHostSocketMessages[0]!;
-				if (!(await this.sendMessageToHostSocket(message))) {
-					return;
-				}
-				this.pendingHostSocketMessages.shift();
+			while (this.pendingHostSocketMessages.length > 0) {
+				const message = this.pendingHostSocketMessages.shift()!;
+				this.hostSocketSendQueue.push(message);
 			}
+			await this.flushHostSocketSendQueue();
 		} finally {
 			this.flushingHostSocketMessages = false;
 		}

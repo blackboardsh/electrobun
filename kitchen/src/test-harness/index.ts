@@ -27,11 +27,18 @@ export type HostSocketStressState = {
   canSend: boolean;
   hasEncrypt: boolean;
   hasHostBridge: boolean;
+  sendQueueLength: number | null;
+  pendingQueueLength: number | null;
+  flushingSendQueue: boolean;
+  flushingPendingQueue: boolean;
 };
 
 export type SocketSendSummary = {
   socketSendCalls: number;
   encryptCalls: number;
+  encryptResolvedCalls: number;
+  lastEncryptStarted: string | null;
+  lastEncryptResolved: string | null;
   wrapErrors: string[];
   state: HostSocketStressState;
 };
@@ -41,10 +48,64 @@ const webviewDuplicateStressMessageIds = new Set<number>();
 const transportProbe = {
   socketSendCalls: 0,
   encryptCalls: 0,
+  encryptResolvedCalls: 0,
+  lastEncryptStarted: null as string | null,
+  lastEncryptResolved: null as string | null,
   wrapErrors: [] as string[],
   wrappedSocket: false,
   wrappedEncrypt: false,
 };
+
+function startStressFromHostControl({
+  messageCount,
+  requestCount,
+}: {
+  messageCount: number;
+  requestCount: number;
+}) {
+  resetWebviewStressMessageCollector();
+  runRpcStress({
+    messageCount: getStressInteger(messageCount, 0),
+    requestCount: getStressInteger(requestCount, 0),
+  });
+}
+
+function startTransportTransitionStressFromHostControl({
+  messageCount,
+  requestCount,
+  enableSocketAt,
+}: {
+  messageCount: number;
+  requestCount: number;
+  enableSocketAt: number;
+}) {
+  resetWebviewStressMessageCollector();
+  electrobun.hostSocketCanSend = false;
+  runRpcStress({
+    messageCount: getStressInteger(messageCount, 0),
+    requestCount: getStressInteger(requestCount, 0),
+    enableSocketAt: getStressInteger(enableSocketAt, 0),
+  });
+}
+
+function startTimedSocketStressFromHostControl({
+  messageCount,
+  intervalMs,
+}: {
+  messageCount: number;
+  intervalMs: number;
+}) {
+  resetWebviewStressMessageCollector();
+  resetTransportProbe();
+  installTransportProbe();
+  runRpcStress({
+    messageCount: getStressInteger(messageCount, 0),
+    requestCount: 0,
+    enableSocketAt: 0,
+    intervalMs: getStressInteger(intervalMs, 0),
+    sendSocketSummary: true,
+  });
+}
 
 function recordWebviewStressMessage(id: number) {
   if (webviewStressMessageIds.has(id)) {
@@ -207,36 +268,21 @@ const rpc = Electroview.defineRPC<TestHarnessRPC>({
         );
       },
       startStressFromBun: ({ messageCount, requestCount }) => {
-        resetWebviewStressMessageCollector();
-        runRpcStress({
-          messageCount: getStressInteger(messageCount, 0),
-          requestCount: getStressInteger(requestCount, 0),
-        });
+        startStressFromHostControl({ messageCount, requestCount });
       },
       startTransportTransitionStressFromBun: ({
         messageCount,
         requestCount,
         enableSocketAt,
       }) => {
-        resetWebviewStressMessageCollector();
-        electrobun.hostSocketCanSend = false;
-        runRpcStress({
-          messageCount: getStressInteger(messageCount, 0),
-          requestCount: getStressInteger(requestCount, 0),
-          enableSocketAt: getStressInteger(enableSocketAt, 0),
+        startTransportTransitionStressFromHostControl({
+          messageCount,
+          requestCount,
+          enableSocketAt,
         });
       },
       startTimedSocketStressFromBun: ({ messageCount, intervalMs }) => {
-        resetWebviewStressMessageCollector();
-        resetTransportProbe();
-        installTransportProbe();
-        runRpcStress({
-          messageCount: getStressInteger(messageCount, 0),
-          requestCount: 0,
-          enableSocketAt: 0,
-          intervalMs: getStressInteger(intervalMs, 0),
-          sendSocketSummary: true,
-        });
+        startTimedSocketStressFromHostControl({ messageCount, intervalMs });
       },
     },
   },
@@ -273,36 +319,38 @@ function getHostSocketStressState(): HostSocketStressState {
     canSend: Boolean(electrobun.hostSocketCanSend),
     hasEncrypt: typeof window.__electrobun_encrypt === "function",
     hasHostBridge: Boolean(window.__electrobunHostBridge),
+    sendQueueLength: Array.isArray(electrobun.hostSocketSendQueue)
+      ? electrobun.hostSocketSendQueue.length
+      : null,
+    pendingQueueLength: Array.isArray(electrobun.pendingHostSocketMessages)
+      ? electrobun.pendingHostSocketMessages.length
+      : null,
+    flushingSendQueue: Boolean(electrobun.flushingHostSocketSendQueue),
+    flushingPendingQueue: Boolean(electrobun.flushingHostSocketMessages),
   };
 }
 
 function resetTransportProbe() {
   transportProbe.socketSendCalls = 0;
   transportProbe.encryptCalls = 0;
+  transportProbe.encryptResolvedCalls = 0;
+  transportProbe.lastEncryptStarted = null;
+  transportProbe.lastEncryptResolved = null;
   transportProbe.wrapErrors = [];
 }
 
 function installTransportProbe() {
-  if (!transportProbe.wrappedSocket && electrobun.hostSocket) {
-    try {
-      const socket = electrobun.hostSocket as WebSocket & { __stressOriginalSend?: WebSocket["send"] };
-      socket.__stressOriginalSend = socket.send.bind(socket);
-      socket.send = ((data: string | ArrayBufferLike | Blob | ArrayBufferView) => {
-        transportProbe.socketSendCalls += 1;
-        return socket.__stressOriginalSend!(data);
-      }) as WebSocket["send"];
-      transportProbe.wrappedSocket = true;
-    } catch (error) {
-      transportProbe.wrapErrors.push(`socket.send: ${String(error)}`);
-    }
-  }
-
   if (!transportProbe.wrappedEncrypt && typeof window.__electrobun_encrypt === "function") {
     try {
       const originalEncrypt = window.__electrobun_encrypt;
       window.__electrobun_encrypt = async (message: string) => {
         transportProbe.encryptCalls += 1;
-        return originalEncrypt(message);
+        transportProbe.lastEncryptStarted = message.slice(0, 160);
+        const result = await originalEncrypt(message);
+        transportProbe.encryptResolvedCalls += 1;
+        transportProbe.lastEncryptResolved = message.slice(0, 160);
+        transportProbe.socketSendCalls += 1;
+        return result;
       };
       transportProbe.wrappedEncrypt = true;
     } catch (error) {
@@ -315,6 +363,9 @@ function getTransportProbeSummary(): SocketSendSummary {
   return {
     socketSendCalls: transportProbe.socketSendCalls,
     encryptCalls: transportProbe.encryptCalls,
+    encryptResolvedCalls: transportProbe.encryptResolvedCalls,
+    lastEncryptStarted: transportProbe.lastEncryptStarted,
+    lastEncryptResolved: transportProbe.lastEncryptResolved,
     wrapErrors: transportProbe.wrapErrors.slice(),
     state: getHostSocketStressState(),
   };
@@ -380,6 +431,12 @@ function runRpcStress(config: {
 
 // Expose for debugging
 (window as any).electrobun = electrobun;
+(window as any).__electrobunKitchenStress = {
+  startStressFromHostControl,
+  startTransportTransitionStressFromHostControl,
+  startTimedSocketStressFromHostControl,
+  getTransportProbeSummary,
+};
 (window as any).testHarnessReady = true;
 
 console.log("Test harness initialized");

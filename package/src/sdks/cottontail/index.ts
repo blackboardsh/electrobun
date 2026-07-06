@@ -1,6 +1,30 @@
+import webgpu from "./webgpuAdapter";
+import * as babylon from "@babylonjs/core";
+import * as three from "three";
+export {
+	createRPC,
+	defineElectrobunRPC,
+	type ElectrobunRPCSchema,
+	type RPCSchema,
+} from "../../shared/rpc.js";
+import {
+	CString,
+	drainTimerShim,
+	GpuWindow,
+	installTimerShim,
+	JSCallback,
+	ptr,
+	toArrayBuffer,
+	WGPU,
+	WGPUBridge,
+	WGPUView,
+	type Pointer,
+} from "./wgpuRuntime";
+
 type CottontailHost = {
 	nanotime?(): number | bigint;
 	sleep?(ms: number): void;
+	drainJobs?(): void;
 	cwd(): string;
 	env(name?: string): string | Record<string, string> | undefined;
 	readFile(path: string): string;
@@ -86,6 +110,9 @@ type ElectrobunRuntimeHost = {
 	popNextQueuedHostMessage(): { webviewId: number; message: string } | null;
 	popNextNativeEvent(): string | null;
 	coreCall(signature: string, symbol: string, ...args: any[]): any;
+	nativeCall(library: "core" | "wgpu", symbol: string, returnType: "void" | "ptr" | "u32" | "u64" | "bool", ...args: any[]): any;
+	memoryAddress(value: ArrayBuffer | ArrayBufferView | number | bigint): number;
+	memoryView(ptr: number | bigint, offset: number | bigint, length: number | bigint): ArrayBuffer;
 	getWindowFrame(windowId: number): string | null;
 	resizeView(symbol: string, viewId: number, x: number, y: number, width: number, height: number, masksJSON: string): void;
 	createWGPUView(options: {
@@ -158,7 +185,15 @@ function requireElectrobun(): ElectrobunRuntimeHost {
 
 export const host = requireCottontail();
 const runtimeNative = requireElectrobun();
+installTimerShim();
+const rawHostDrainJobs = host.drainJobs?.bind(host);
+host.drainJobs = () => {
+	rawHostDrainJobs?.();
+	drainTimerShim();
+	rawHostDrainJobs?.();
+};
 const rawCoreCall = runtimeNative.coreCall.bind(runtimeNative);
+const rawCreateWebview = runtimeNative.createWebview.bind(runtimeNative);
 const rawGetWindowFrame = runtimeNative.getWindowFrame.bind(runtimeNative);
 const rawResizeView = runtimeNative.resizeView.bind(runtimeNative);
 const rawCreateWGPUView = runtimeNative.createWGPUView.bind(runtimeNative);
@@ -186,6 +221,17 @@ function ensureRect(rect: Partial<Rect> | undefined, fallback: Rect): Rect {
 
 export const native = Object.assign(runtimeNative, {
 	coreCall,
+	createWebview(options: Parameters<ElectrobunRuntimeHost["createWebview"]>[0]): number {
+		const plaintextSocketPreload = "window.__electrobunPlaintextHostSocket = true;";
+		const webviewId = rawCreateWebview({
+			...options,
+			preload: options.preload
+				? `${options.preload}\n${plaintextSocketPreload}`
+				: plaintextSocketPreload,
+		});
+		coreCall("u32_bool", "setWebviewPlaintextHostTransport", webviewId, true);
+		return webviewId;
+	},
 
 	setWindowTitle(windowId: number, title: string): void {
 		coreCall("u32_string", "setWindowTitle", windowId, title);
@@ -359,6 +405,9 @@ export const native = Object.assign(runtimeNative, {
 	setTrayTitle(trayId: number, title: string): void {
 		coreCall("u32_string", "setTrayTitle", trayId, title);
 	},
+	setTrayMenuJSON(trayId: number, menuJSON: string): void {
+		coreCall("u32_string", "setTrayMenu", trayId, menuJSON);
+	},
 	removeTray(trayId: number): void {
 		coreCall("u32", "removeTray", trayId);
 	},
@@ -386,6 +435,13 @@ export const native = Object.assign(runtimeNative, {
 	},
 	getCursorScreenPoint(): Point {
 		return parseJSON(coreCall("string_ret", "getCursorScreenPoint"), { x: 0, y: 0 });
+	},
+	getMouseButtons(): bigint {
+		try {
+			return BigInt(runtimeNative.nativeCall("core", "getMouseButtons", "u64"));
+		} catch {
+			return 0n;
+		}
 	},
 
 	moveToTrash(path: string): boolean {
@@ -465,11 +521,22 @@ export function env(name: string): string | undefined {
 
 export function sleep(ms: number): void {
 	if (ms <= 0) return;
+	const deadline = nowNanoseconds() + ms * 1_000_000;
+	try {
+		while (nowNanoseconds() < deadline) {
+			const remainingMs = Math.max(
+				1,
+				Math.ceil((deadline - nowNanoseconds()) / 1_000_000),
+			);
+			coreCall("int", "runNativeEventLoopTick", Math.min(remainingMs, 10));
+			host.drainJobs?.();
+		}
+		return;
+	} catch {}
 	if (host.sleep) {
 		host.sleep(ms);
 		return;
 	}
-	const deadline = nowNanoseconds() + ms * 1_000_000;
 	while (nowNanoseconds() < deadline) {}
 }
 
@@ -607,6 +674,125 @@ export function resolvePaths(appIdentifier = "dev.electrobun.cottontail"): Paths
 	};
 }
 
+type LocalUpdateInfo = {
+	version: string;
+	hash: string;
+	baseUrl: string;
+	channel: string;
+	name: string;
+	identifier: string;
+};
+
+type UpdateStatusEntry = {
+	status: string;
+	message: string;
+	timestamp: number;
+	details?: Record<string, unknown>;
+};
+
+let cachedLocalInfo: LocalUpdateInfo | null = null;
+const updateStatusHistory: UpdateStatusEntry[] = [];
+let updateStatusCallback: ((entry: UpdateStatusEntry) => void) | null = null;
+
+function readJSONFile<T>(filePath: string): T | null {
+	try {
+		if (!host.existsSync(filePath)) return null;
+		return JSON.parse(host.readFile(filePath)) as T;
+	} catch {
+		return null;
+	}
+}
+
+function loadLocalUpdateInfo(): LocalUpdateInfo {
+	if (cachedLocalInfo) return cachedLocalInfo;
+
+	const versionCandidates = [
+		pathJoin(host.cwd(), "..", "Resources", "version.json"),
+		pathJoin(host.cwd(), "Resources", "version.json"),
+		pathJoin(host.cwd(), "version.json"),
+	];
+	const versionFile = versionCandidates.map((candidate) => readJSONFile<Partial<LocalUpdateInfo>>(candidate)).find(Boolean) ?? {};
+	const identifier = env("COTTONTAIL_ELECTROBUN_IDENTIFIER") || env("ELECTROBUN_APP_IDENTIFIER") || versionFile.identifier || "dev.electrobun.cottontail";
+	const channel = env("COTTONTAIL_ELECTROBUN_CHANNEL") || env("ELECTROBUN_BUILD_ENV") || versionFile.channel || "dev";
+
+	cachedLocalInfo = {
+		version: env("ELECTROBUN_APP_VERSION") || versionFile.version || "0.0.0-dev",
+		hash: versionFile.hash || "dev",
+		baseUrl: versionFile.baseUrl || "",
+		channel,
+		name: env("COTTONTAIL_ELECTROBUN_NAME") || env("ELECTROBUN_APP_NAME") || versionFile.name || "Cottontail",
+		identifier,
+	};
+	return cachedLocalInfo;
+}
+
+function emitUpdateStatus(status: string, message: string, details?: Record<string, unknown>): void {
+	const entry = { status, message, timestamp: Date.now(), ...(details ? { details } : {}) };
+	updateStatusHistory.push(entry);
+	updateStatusCallback?.(entry);
+}
+
+export const Updater = {
+	updateInfo() {
+		const localInfo = loadLocalUpdateInfo();
+		return {
+			version: localInfo.version,
+			hash: localInfo.hash,
+			updateAvailable: false,
+			updateReady: false,
+			error: "",
+		};
+	},
+	getStatusHistory() {
+		return [...updateStatusHistory];
+	},
+	clearStatusHistory() {
+		updateStatusHistory.length = 0;
+	},
+	onStatusChange(callback: ((entry: UpdateStatusEntry) => void) | null) {
+		updateStatusCallback = callback;
+	},
+	async checkForUpdate() {
+		const localInfo = loadLocalUpdateInfo();
+		emitUpdateStatus("checking", "Checking for updates...");
+		emitUpdateStatus("no-update", "Cottontail dev updater does not apply remote updates", { currentHash: localInfo.hash });
+		return {
+			version: localInfo.version,
+			hash: localInfo.hash,
+			updateAvailable: false,
+			updateReady: false,
+			error: localInfo.channel === "dev" ? "" : "Cottontail update downloads are not implemented yet",
+		};
+	},
+	async channelBucketUrl() {
+		return loadLocalUpdateInfo().baseUrl;
+	},
+	async appDataFolder() {
+		const localInfo = loadLocalUpdateInfo();
+		return pathJoin(resolvePaths(localInfo.identifier).appData, localInfo.identifier, localInfo.channel);
+	},
+	localInfo: {
+		async version() {
+			return loadLocalUpdateInfo().version;
+		},
+		async hash() {
+			return loadLocalUpdateInfo().hash;
+		},
+		async channel() {
+			return loadLocalUpdateInfo().channel;
+		},
+		async baseUrl() {
+			return loadLocalUpdateInfo().baseUrl;
+		},
+	},
+	async getLocalInfo() {
+		return loadLocalUpdateInfo();
+	},
+	async getLocallocalInfo() {
+		return loadLocalUpdateInfo();
+	},
+};
+
 class BunFile {
 	readonly path: string;
 
@@ -651,3 +837,40 @@ class BunFile {
 export const Bun = (globalThis.Bun ??= {});
 Bun.File ??= BunFile;
 Bun.file ??= (path: string) => new BunFile(path);
+
+export {
+	babylon,
+	CString,
+	GpuWindow,
+	JSCallback,
+	ptr,
+	three,
+	toArrayBuffer,
+	webgpu,
+	WGPU,
+	WGPUBridge,
+	WGPUView,
+	type Pointer,
+};
+
+export {
+	createCanvasShim,
+	decodePngRGBA,
+	GPUAdapter,
+	GPUBindGroup,
+	GPUBindGroupLayout,
+	GPUBuffer,
+	GPUCanvasContext,
+	GPUCommandBuffer,
+	GPUCommandEncoder,
+	GPUComputePipeline,
+	GPUDevice,
+	GPUPipelineLayout,
+	GPUQueue,
+	GPURenderPassEncoder,
+	GPURenderPipeline,
+	GPUSampler,
+	GPUShaderModule,
+	GPUTexture,
+	GPUTextureView,
+} from "./webgpuAdapter";

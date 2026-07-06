@@ -3330,6 +3330,19 @@ static void runOnMainThreadSyncVoid(void (^block)(void)) {
     });
 }
 
+extern "C" void runNativeEventLoopTick(int timeoutMs) {
+    int clampedTimeoutMs = timeoutMs;
+    if (clampedTimeoutMs < 0) clampedTimeoutMs = 0;
+    if (clampedTimeoutMs > 50) clampedTimeoutMs = 50;
+
+    runOnMainThreadSyncVoid(^{
+        @autoreleasepool {
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)clampedTimeoutMs / 1000.0];
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:deadline];
+        }
+    });
+}
+
 static bool runOnMainThreadSyncBool(bool (^block)(void)) {
     if ([NSThread isMainThread]) {
         return block();
@@ -6087,6 +6100,17 @@ public:
 static std::map<int, uint32_t> browserToWebviewMap;
 static std::mutex browserMapMutex;
 
+static void removeBrowserMappingsForWebview(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(browserMapMutex);
+    for (auto it = browserToWebviewMap.begin(); it != browserToWebviewMap.end();) {
+        if (it->second == webviewId) {
+            it = browserToWebviewMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
 // The factory class that creates scheme handlers
 class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
@@ -6443,6 +6467,8 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
     - (void)remove {
         
+        removeBrowserMappingsForWebview(self.webviewId);
+
         // Stop loading, close the browser, remove from superview, etc.
         if (self.browser) {
             NSLog(@"CEFWebViewImpl remove: closing CEF browser for webview %u", self.webviewId);

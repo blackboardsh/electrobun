@@ -105,6 +105,7 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
 
 const MainProcess = enum {
     bun,
+    cottontail,
     zig,
     rust,
     go,
@@ -124,6 +125,9 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     defer parsed.deinit();
 
     if (parsed.value.object.get("mainProcess")) |main_process_value| {
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "cottontail")) {
+            return .cottontail;
+        }
         if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
             return .zig;
         }
@@ -136,6 +140,27 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     }
 
     return .bun;
+}
+
+fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: anytype) !void {
+    try env_map.put("COTTONTAIL_ELECTROBUN_DIST", exe_dir);
+
+    const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return;
+    const file = std.fs.openFileAbsolute(version_path, .{}) catch return;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return;
+
+    if (parsed.value.object.get("name")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_NAME", value.string);
+    }
+    if (parsed.value.object.get("identifier")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_IDENTIFIER", value.string);
+    }
+    if (parsed.value.object.get("channel")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_CHANNEL", value.string);
+    }
 }
 
 // SIGALRM handler - safety net timeout for hung shutdowns
@@ -215,6 +240,15 @@ pub fn main() !void {
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
             argv = &[_][]const u8{main_binary_path};
         },
+        .cottontail => {
+            const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "app", "main.js" });
+            const cottontail_name = if (builtin.os.tag == .windows) "cottontail.exe" else "cottontail";
+            const cottontail_path = switch (builtin.os.tag) {
+                .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, cottontail_name }),
+                else => @panic("Unsupported platform"),
+            };
+            argv = &[_][]const u8{ cottontail_path, "electrobun", main_script };
+        },
     }
 
     // Create an instance of ChildProcess
@@ -263,16 +297,25 @@ pub fn main() !void {
 
         // Set ICU_DATA for external ICU data file (Linux)
         try env_map.put("ICU_DATA", exe_dir);
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
 
         child_process.env_map = &env_map;
     } else if (builtin.os.tag == .windows) {
         // On Windows, get environment and set ICU_DATA for external ICU data
         var env_map = try std.process.getEnvMap(arena_alloc);
         try env_map.put("ICU_DATA", exe_dir);
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
         child_process.env_map = &env_map;
     } else {
         // On macOS, get environment and inherit it (uses system ICU)
         var env_map = try std.process.getEnvMap(arena_alloc);
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
         child_process.env_map = &env_map;
     }
 
