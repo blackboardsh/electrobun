@@ -44,6 +44,8 @@ export type BrowserViewOptions<T = undefined> = {
 	startTransparent: boolean;
 	// Set passthrough on the AbstractView at creation (before first paint)
 	startPassthrough: boolean;
+	// Enable macOS system spell checker for contenteditable elements (WKWebView only)
+	spellCheck?: boolean;
 	// renderer:
 };
 
@@ -92,6 +94,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	spellCheck: boolean = false;
 	isRemoved: boolean = false;
 
 	get ptr(): Pointer | null {
@@ -125,6 +128,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
+		this.spellCheck = options.spellCheck ?? false;
 
 		this.id = this.init() as number;
 		BrowserViewMap[this.id] = this;
@@ -162,6 +166,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			sandbox: this.sandbox,
 			startTransparent: this.startTransparent,
 			startPassthrough: this.startPassthrough,
+			spellCheck: this.spellCheck,
 			// transparent is looked up from parent window in native.ts
 		});
 	}
@@ -402,6 +407,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		view.sandbox = options.sandbox ?? false;
 		view.startTransparent = options.startTransparent ?? false;
 		view.startPassthrough = options.startPassthrough ?? false;
+		view.spellCheck = options.spellCheck ?? false;
 		view.isRemoved = false;
 		BrowserViewMap[id] = view as BrowserView<any>;
 		return view;
