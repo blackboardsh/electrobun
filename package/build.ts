@@ -697,10 +697,10 @@ async function copyToDist() {
 	}
 	await $`mkdir -p bin`;
 	if (existsSync(PATH.cottontail.BIN)) {
-		await $`cp ${PATH.cottontail.BIN} bin/${cottontailBinary}`;
+		await copyExecutableToBin(PATH.cottontail.BIN, cottontailBinary);
 	}
 	if (existsSync(PATH.dashCli.BIN)) {
-		await $`cp ${PATH.dashCli.BIN} bin/${dashCliBinary}`;
+		await copyExecutableToBin(PATH.dashCli.BIN, dashCliBinary);
 	}
 	// Electrobun's Typescript bun and browser apis
 	await copyApiFiles();
@@ -709,7 +709,7 @@ async function copyToDist() {
 		await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
 		// Copy CEF to cef/ subdirectory for consistent organization
 		await $`mkdir -p dist/cef`;
-		await $`cp -R "vendors/cef/Release/Chromium Embedded Framework.framework" "dist/cef/Chromium Embedded Framework.framework"`;
+		await $`cp -cR "vendors/cef/Release/Chromium Embedded Framework.framework" "dist/cef/Chromium Embedded Framework.framework"`;
 		// CEF's helper process binary
 		await $`cp -R src/native/build/process_helper dist/process_helper`;
 	} else if (OS === "win") {
@@ -836,6 +836,10 @@ async function createPlatformDistFolder() {
 	if (OS === "win") {
 		// On Windows use PowerShell to copy all files
 		await $`powershell -command "Copy-Item -Path 'dist\\*' -Destination '${platformDistDir}\\' -Recurse -Force"`;
+	} else if (OS === "macos") {
+		await $`rm -rf ${platformDistDir}`;
+		await $`mkdir -p ${platformDistDir}`;
+		await $`cp -cR dist/. ${platformDistDir}/`;
 	} else {
 		// On Unix systems - use rsync with delete to ensure clean copy
 		// The --delete flag removes files in destination that don't exist in source
@@ -875,12 +879,35 @@ function getArch() {
 }
 
 async function createDistFolder() {
-	await $`rm -r dist`.catch(() => {});
+	await $`rm -rf dist`;
 	await $`mkdir -p dist/api`;
 	await $`mkdir -p dist/api/bun`;
 	await $`mkdir -p dist/api/browser`;
 	if (OS === "win" || OS === "linux") {
 		await $`mkdir -p dist/cef`;
+	}
+}
+
+async function copyExecutableToBin(source: string, filename: string) {
+	const destination = join("bin", filename);
+
+	if (OS === "win") {
+		await $`cp ${source} ${destination}`;
+		return;
+	}
+
+	const tempDestination = `${destination}.tmp-${Date.now()}-${Math.floor(
+		Math.random() * 1_000_000,
+	)}`;
+
+	try {
+		await $`cp ${source} ${tempDestination}`;
+		await $`chmod +x ${tempDestination}`;
+		renameSync(tempDestination, destination);
+	} finally {
+		if (existsSync(tempDestination)) {
+			unlinkSync(tempDestination);
+		}
 	}
 }
 
