@@ -5,7 +5,7 @@ import {
 	type ElectrobunRPCConfig,
 	type RPCWithTransport,
 	defineElectrobunRPC,
-} from "../../shared/rpc.js";
+} from "../../../shared/rpc.js";
 import { BuildConfig } from "./BuildConfig";
 import {
 	sendMessageToWebviewViaSocket,

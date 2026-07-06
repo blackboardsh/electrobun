@@ -3,7 +3,7 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { BrowserView } from "./BrowserView";
 import { type Pointer } from "bun:ffi";
 import { BuildConfig } from "./BuildConfig";
-import { type RPCWithTransport } from "../../shared/rpc.js";
+import { type RPCWithTransport } from "../../../shared/rpc.js";
 import { WGPUView } from "./WGPUView";
 
 const buildConfig = BuildConfig.getSync();

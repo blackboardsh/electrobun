@@ -3,7 +3,7 @@ import { electrobunEventEmitter } from "../events/eventEmitter";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
-import { OS } from "../../shared/platform";
+import { OS } from "../../../shared/platform";
 
 export const moveToTrash = (path: string) => {
 	return ffi.request.moveToTrash({ path });

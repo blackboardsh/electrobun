@@ -1833,7 +1833,7 @@ type FileAssociation = {
 };
 
 // Default values merged with user's electrobun.config.ts
-// For the user-facing type, see ElectrobunConfig in src/bun/ElectrobunConfig.ts
+// For the user-facing type, see ElectrobunConfig in src/config/ElectrobunConfig.ts
 const defaultConfig = {
 	app: {
 		name: "MyApp",

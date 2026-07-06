@@ -7,7 +7,7 @@ import { WGPUView } from "../core/WGPUView";
 import {
 	preloadScript,
 	preloadScriptSandboxed,
-} from "../preload/.generated/compiled";
+} from "../../../preload/.generated/compiled";
 
 // Menu data reference system to avoid serialization overhead
 const menuDataRegistry = new Map<string, any>();

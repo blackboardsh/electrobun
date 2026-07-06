@@ -571,25 +571,20 @@ async function buildForNpm() {
 }
 
 async function copyApiFiles() {
-	// Copy TypeScript APIs (src/bun, src/browser, and src/shared to dist/api/)
-	if (OS === "win") {
-		// on windows the folder gets copied "into" the destination folder
-		await $`cp -R src/bun/ dist/api`;
-		await $`cp -R src/browser/ dist/api`;
-		await $`cp -R src/shared/ dist/api`;
-	} else {
-		// on unix cp is more like a rename
-		await $`cp -R src/bun dist/api/`;
-		await $`cp -R src/browser dist/api/`;
-		await $`cp -R src/shared dist/api/`;
-	}
+	// Copy TypeScript APIs while preserving source-relative imports.
+	await $`mkdir -p dist/api/sdks`;
+	await $`cp -R src/sdks/bun dist/api/sdks/`;
+	await $`cp -R src/browser dist/api/`;
+	await $`cp -R src/shared dist/api/`;
+	await $`cp -R src/config dist/api/`;
+	await $`cp -R src/preload dist/api/`;
 
 	await $`mkdir -p dist/zig-sdk`;
-	await $`cp src/zig-sdk/electrobun.zig dist/zig-sdk/electrobun.zig`;
+	await $`cp src/sdks/zig/electrobun.zig dist/zig-sdk/electrobun.zig`;
 	await $`mkdir -p dist/rust-sdk`;
-	await $`cp src/rust-sdk/electrobun.rs dist/rust-sdk/electrobun.rs`;
+	await $`cp src/sdks/rust/electrobun.rs dist/rust-sdk/electrobun.rs`;
 	await $`mkdir -p dist/go-sdk`;
-	await $`cp -R src/go-sdk/. dist/go-sdk/`;
+	await $`cp -R src/sdks/go/. dist/go-sdk/`;
 }
 
 async function copyToDist() {
@@ -881,7 +876,7 @@ function getArch() {
 async function createDistFolder() {
 	await $`rm -rf dist`;
 	await $`mkdir -p dist/api`;
-	await $`mkdir -p dist/api/bun`;
+	await $`mkdir -p dist/api/sdks`;
 	await $`mkdir -p dist/api/browser`;
 	if (OS === "win" || OS === "linux") {
 		await $`mkdir -p dist/cef`;
@@ -1571,7 +1566,7 @@ async function vendorWGPU() {
 		writeFileSync(wgpuVersionFile, WGPU_VERSION);
 
 		// Regenerate Bun FFI bindings when WGPU version changes
-		if (!existsSync(join(process.cwd(), "src", "bun", "webGPU.ts"))) {
+		if (!existsSync(join(process.cwd(), "src", "sdks", "bun", "webGPU.ts"))) {
 			await $`node scripts/gen-webgpu-ffi.mjs`;
 		} else if (currentVersion !== WGPU_VERSION) {
 			await $`node scripts/gen-webgpu-ffi.mjs`;
@@ -2552,7 +2547,7 @@ async function buildPreload() {
 	// Two variants are compiled:
 	// - preloadScript: Full preload for trusted webviews (RPC, encryption, webview tags)
 	// - preloadScriptSandboxed: Minimal preload for sandboxed/untrusted webviews (events only)
-	const preloadDir = join(process.cwd(), "src", "bun", "preload");
+	const preloadDir = join(process.cwd(), "src", "preload");
 	const outputDir = join(preloadDir, ".generated");
 	const outputPath = join(outputDir, "compiled.ts");
 

@@ -12,8 +12,8 @@
 		"typescript"
 	],
 	"exports": {
-		".": "./dist/api/bun/index.ts",
-		"./bun": "./dist/api/bun/index.ts",
+		".": "./dist/api/sdks/bun/index.ts",
+		"./bun": "./dist/api/sdks/bun/index.ts",
 		"./view": "./dist/api/browser/index.ts"
 	},
 	"type": "module",

@@ -1,6 +1,6 @@
 export default {
 	scripts: {
-		start: "./vendors/bun/bun src/bun/index.ts",
+		start: "./vendors/bun/bun src/sdks/bun/index.ts",
 		"check-zig-version": "vendors/zig/zig version",
 		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "./vendors/dash-cli/dash build.ts",
@@ -20,7 +20,7 @@ export default {
 		"push:stable": "./vendors/dash-cli/dash typecheck && bun scripts/push-version.js stable",
 		"build:push:artifacts": "bun scripts/build-and-upload-artifacts.js",
 		test: "npm install && ./vendors/dash-cli/dash build:dev && cd ../tests && npm install && bun build:dev && bun start",
-		"test:unit": "bun test src/shared src/bun",
+		"test:unit": "bun test src/shared src/sdks/bun",
 		"bump-cef": "bun scripts/update-cef-version.ts",
 	},
 };

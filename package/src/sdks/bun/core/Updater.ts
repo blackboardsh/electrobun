@@ -9,8 +9,8 @@ import {
 	readdirSync,
 } from "fs";
 import { execSync } from "child_process";
-import { OS as currentOS, ARCH as currentArch } from "../../shared/platform";
-import { getPlatformPrefix, getTarballFileName } from "../../shared/naming";
+import { OS as currentOS, ARCH as currentArch } from "../../../shared/platform";
+import { getPlatformPrefix, getTarballFileName } from "../../../shared/naming";
 import { quit } from "./Utils";
 
 // Update status types for granular progress tracking

@@ -23,7 +23,7 @@ import {
 	type ElectrobunRPCSchema,
 	createRPC,
 	defineElectrobunRPC,
-} from "../shared/rpc.js";
+} from "../../shared/rpc.js";
 import type ElectrobunEvent from "./events/event";
 import * as PATHS from "./core/Paths";
 import * as Socket from "./core/Socket";
@@ -31,7 +31,7 @@ import WGPU from "./webGPU";
 import webgpu from "./webgpuAdapter";
 import * as three from "three";
 import * as babylon from "@babylonjs/core";
-import type { ElectrobunConfig } from "./ElectrobunConfig";
+import type { ElectrobunConfig } from "../../config/ElectrobunConfig";
 import { GlobalShortcut, Screen, Session, WGPUBridge } from "./proc/native";
 import type {
 	Display,

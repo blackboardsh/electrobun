@@ -3,15 +3,16 @@
  * Used in electrobun.config.ts files
  */
 
-/**
- * Bun.build() options that can be passed through to the bundler.
- * Excludes options that are controlled by Electrobun (entrypoints, outdir, target).
- * See https://bun.sh/docs/bundler for full documentation.
- */
-type BunBuildOptions = Omit<
-	Parameters<typeof Bun.build>[0],
-	"entrypoints" | "outdir" | "target"
->;
+type BundlerOptions = {
+	external?: string[];
+	define?: Record<string, string>;
+	loader?: Record<string, string>;
+	minify?: boolean;
+	sourcemap?: boolean | "inline" | "external" | "linked";
+	splitting?: boolean;
+	plugins?: unknown[];
+	[key: string]: unknown;
+};
 
 type CarrotFileActivatorConfig = {
 	baseName?: string;
@@ -146,8 +147,8 @@ export interface ElectrobunConfig {
 
 		/**
 		 * Bun process build configuration.
-		 * Accepts all Bun.build() options (plugins, sourcemap, minify, define, etc.)
-		 * in addition to the entrypoint. See https://bun.sh/docs/bundler
+		 * Accepts bundler options (plugins, sourcemap, minify, define, etc.)
+		 * in addition to the entrypoint.
 		 */
 		bun?: {
 			/**
@@ -155,7 +156,7 @@ export interface ElectrobunConfig {
 			 * @default "src/bun/index.ts"
 			 */
 			entrypoint?: string;
-		} & BunBuildOptions;
+		} & BundlerOptions;
 
 		/**
 		 * Zig main process build configuration.
@@ -195,8 +196,8 @@ export interface ElectrobunConfig {
 
 		/**
 		 * Browser view build configurations.
-		 * Each view accepts all Bun.build() options (plugins, sourcemap, minify, define, etc.)
-		 * in addition to the entrypoint. See https://bun.sh/docs/bundler
+		 * Each view accepts bundler options (plugins, sourcemap, minify, define, etc.)
+		 * in addition to the entrypoint.
 		 */
 		views?: {
 			[viewName: string]: {
@@ -204,7 +205,7 @@ export interface ElectrobunConfig {
 				 * Entry point for this view's TypeScript code
 				 */
 				entrypoint: string;
-			} & BunBuildOptions;
+			} & BundlerOptions;
 		};
 
 		/**

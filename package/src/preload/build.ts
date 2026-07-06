@@ -1,6 +1,6 @@
 // Standalone build script for the preload.
 // Normally this is run as part of "bun build.ts", but you can run this directly:
-//   bun src/bun/preload/build.ts
+//   bun src/preload/build.ts
 
 import { join, dirname } from "path";
 import { writeFileSync, mkdirSync } from "fs";
