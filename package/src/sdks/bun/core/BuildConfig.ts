@@ -1,6 +1,7 @@
 import { readFileSync } from "fs";
 
 export type BuildConfigType = {
+	mainProcess?: "bun" | "zig" | "rust" | "go" | "cottontail";
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
 	cefVersion?: string;

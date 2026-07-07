@@ -296,7 +296,7 @@ testRunnerWindow.webview.on("dom-ready", () => {
 	testRunnerWindow!.webview.rpc?.send.buildConfig({
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
-		mainProcess: "bun",
+		mainProcess: buildConfig.mainProcess ?? "bun",
 		cefVersion: buildConfig.cefVersion,
 		bunVersion: buildConfig.bunVersion,
 	});
