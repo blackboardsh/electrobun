@@ -241,13 +241,13 @@ pub fn main() !void {
             argv = &[_][]const u8{main_binary_path};
         },
         .cottontail => {
-            const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "app", "main.js" });
+            const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
             const cottontail_name = if (builtin.os.tag == .windows) "cottontail.exe" else "cottontail";
             const cottontail_path = switch (builtin.os.tag) {
                 .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, cottontail_name }),
                 else => @panic("Unsupported platform"),
             };
-            argv = &[_][]const u8{ cottontail_path, "electrobun", main_script };
+            argv = &[_][]const u8{ cottontail_path, main_script };
         },
     }
 

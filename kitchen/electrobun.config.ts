@@ -31,7 +31,7 @@ export default {
 			entrypoint: "src/go/main.go",
 		},
 		cottontail: {
-			entrypoint: "src/cottontail/main.ts",
+			entrypoint: "src/bun/index.ts",
 		},
 		views: {
 			"test-runner": {

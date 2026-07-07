@@ -150,6 +150,7 @@ var wgpu_view_registry_mutex: std.Thread.Mutex = .{};
 var pending_host_messages = std.ArrayList(PendingHostMessage).init(allocator);
 var pending_host_messages_mutex: std.Thread.Mutex = .{};
 var pending_host_transport_sends = std.ArrayList(PendingHostTransportSend).init(allocator);
+var pending_host_transport_sends_head: usize = 0;
 var pending_host_transport_sends_mutex: std.Thread.Mutex = .{};
 var pending_host_transport_sends_condition: std.Thread.Condition = .{};
 var pending_host_transport_send_worker_started = false;
@@ -388,7 +389,7 @@ export fn getHostTransportDebugJSON() ?[*:0]u8 {
     pending_host_messages_mutex.unlock();
 
     pending_host_transport_sends_mutex.lock();
-    const pending_socket_write_count = pending_host_transport_sends.items.len;
+    const pending_socket_write_count = pending_host_transport_sends.items.len - pending_host_transport_sends_head;
     const socket_write_worker_started = pending_host_transport_send_worker_started;
     pending_host_transport_sends_mutex.unlock();
 
@@ -835,13 +836,42 @@ fn writeWebSocketFrameSerialized(stream: std.net.Stream, opcode: u8, payload: []
     try writeWebSocketFrame(stream, opcode, payload);
 }
 
+fn compactPendingHostTransportSendsLocked() void {
+    if (pending_host_transport_sends_head == 0) {
+        return;
+    }
+
+    const len = pending_host_transport_sends.items.len;
+    if (pending_host_transport_sends_head >= len) {
+        pending_host_transport_sends.clearRetainingCapacity();
+        pending_host_transport_sends_head = 0;
+        return;
+    }
+
+    if (pending_host_transport_sends_head < 1024 and pending_host_transport_sends_head * 2 < len) {
+        return;
+    }
+
+    const remaining = len - pending_host_transport_sends_head;
+    std.mem.copyForwards(
+        PendingHostTransportSend,
+        pending_host_transport_sends.items[0..remaining],
+        pending_host_transport_sends.items[pending_host_transport_sends_head..len],
+    );
+    pending_host_transport_sends.shrinkRetainingCapacity(remaining);
+    pending_host_transport_sends_head = 0;
+}
+
 fn hostTransportSendWorker() void {
     while (true) {
         pending_host_transport_sends_mutex.lock();
-        while (pending_host_transport_sends.items.len == 0) {
+        while (pending_host_transport_sends_head >= pending_host_transport_sends.items.len) {
+            compactPendingHostTransportSendsLocked();
             pending_host_transport_sends_condition.wait(&pending_host_transport_sends_mutex);
         }
-        const entry = pending_host_transport_sends.orderedRemove(0);
+        const entry = pending_host_transport_sends.items[pending_host_transport_sends_head];
+        pending_host_transport_sends_head += 1;
+        compactPendingHostTransportSendsLocked();
         pending_host_transport_sends_mutex.unlock();
 
         defer allocator.free(entry.payload);

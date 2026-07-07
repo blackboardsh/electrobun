@@ -14,7 +14,6 @@
 	"exports": {
 		".": "./dist/api/sdks/bun/index.ts",
 		"./bun": "./dist/api/sdks/bun/index.ts",
-		"./cottontail": "./dist/api/sdks/cottontail/index.ts",
 		"./view": "./dist/api/browser/index.ts"
 	},
 	"type": "module",

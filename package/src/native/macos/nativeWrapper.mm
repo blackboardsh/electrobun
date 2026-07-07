@@ -7376,8 +7376,12 @@ extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
 }
 
 extern "C" void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
+    char *rulesJsonCopy = rulesJson ? strdup(rulesJson) : nullptr;
     runOnMainThreadAsyncVoid(^{
-        [abstractView setNavigationRulesFromJSON:rulesJson];
+        [abstractView setNavigationRulesFromJSON:rulesJsonCopy];
+        if (rulesJsonCopy) {
+            free(rulesJsonCopy);
+        }
     });
 }
 

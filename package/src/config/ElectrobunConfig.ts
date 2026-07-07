@@ -202,7 +202,7 @@ export interface ElectrobunConfig {
 		cottontail?: {
 			/**
 			 * Entry point for the main Cottontail process
-			 * @default "src/cottontail/main.ts"
+			 * @default "src/bun/index.ts"
 			 */
 			entrypoint?: string;
 		} & BundlerOptions;

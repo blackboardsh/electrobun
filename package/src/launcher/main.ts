@@ -1,7 +1,8 @@
 import { join, dirname, resolve } from "path";
 import { dlopen, suffix, ptr, toArrayBuffer } from "bun:ffi";
-import { existsSync, writeFileSync } from "fs";
+import { existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
+import { spawn } from "child_process";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
 const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directory
@@ -29,7 +30,7 @@ function main() {
 		);
 
 		if (existsSync(versionJsonPath)) {
-			const versionInfo = require(versionJsonPath);
+			const versionInfo = JSON.parse(readFileSync(versionJsonPath, "utf8"));
 			if (versionInfo.identifier) {
 				identifier = versionInfo.identifier;
 			}
@@ -68,7 +69,6 @@ function main() {
 			);
 
 			// Try to re-exec ourselves with LD_PRELOAD set
-			const { spawn } = require("child_process");
 			const env = { ...process.env, LD_PRELOAD: existingCefLibs.join(":") };
 			const child = spawn(process.argv[0], process.argv.slice(1), {
 				env,
@@ -206,7 +206,11 @@ function main() {
 const __tempFilePath = "${appEntrypointPath}";
 setTimeout(() => {
     try {
-        require("fs").unlinkSync(__tempFilePath);
+        if (globalThis.cottontail?.unlinkSync) {
+            globalThis.cottontail.unlinkSync(__tempFilePath);
+        } else if (typeof require === "function") {
+            require("fs").unlinkSync(__tempFilePath);
+        }
         console.log("[LAUNCHER] Deleted temp file:", __tempFilePath);
     } catch (error) {
         console.warn("[LAUNCHER] Failed to delete temp file:", error.message);

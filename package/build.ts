@@ -574,7 +574,6 @@ async function copyApiFiles() {
 	// Copy TypeScript APIs while preserving source-relative imports.
 	await $`mkdir -p dist/api/sdks`;
 	await $`cp -R src/sdks/bun dist/api/sdks/`;
-	await $`cp -R src/sdks/cottontail dist/api/sdks/`;
 	await $`cp -R src/browser dist/api/`;
 	await $`cp -R src/shared dist/api/`;
 	await $`cp -R src/config dist/api/`;
@@ -1237,7 +1236,7 @@ async function buildCottontailFromSource(cottontailRoot: string) {
 	}
 
 	console.log(`Building Cottontail from ${cottontailRoot}...`);
-	await $`cd ${cottontailRoot} && ${zigPath} build`;
+	await $`cd ${cottontailRoot} && ${zigPath} build -Doptimize=ReleaseFast`;
 }
 
 async function vendorCottontail() {
