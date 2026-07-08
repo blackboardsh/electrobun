@@ -1121,6 +1121,8 @@ const drainQueuedHostMessages = () => {
 	}
 
 	for (;;) {
+		let rawMessage = "";
+		let webviewId = 0;
 		const messagePtr = core_.symbols.popNextQueuedHostMessage(
 			ptr(queuedHostMessageWebviewIdBuf),
 		) as Pointer | null;
@@ -1130,31 +1132,57 @@ const drainQueuedHostMessages = () => {
 		}
 
 		try {
-			const rawMessage = new CString(messagePtr).toString();
+			webviewId = queuedHostMessageWebviewIdBuf[0]!;
+			rawMessage = new CString(messagePtr).toString();
 			if (!rawMessage) {
 				continue;
 			}
 
-			const webview = BrowserView.ensureWrapped(
-				queuedHostMessageWebviewIdBuf[0]!,
-			);
+			const webview = BrowserView.ensureWrapped(webviewId);
 			if (!webview) {
 				continue;
 			}
 
 			webview.rpcHandler?.(JSON.parse(rawMessage));
 		} catch (err) {
-			console.error("error draining queued host message:", err);
+			console.error("error draining queued host message:", {
+				webviewId,
+				messagePreview: rawMessage.slice(0, 500),
+				error:
+					err instanceof Error
+						? { name: err.name, message: err.message, stack: err.stack }
+						: err,
+			});
 		} finally {
 			core_.symbols.freeCoreString(messagePtr);
 		}
 	}
 };
 
+let hostMessagePollingStarted = false;
+const startHostMessagePolling = (error?: unknown) => {
+	if (hostMessagePollingStarted) {
+		return;
+	}
+	hostMessagePollingStarted = true;
+	const code =
+		error && typeof error === "object" && "code" in error
+			? String((error as { code?: unknown }).code)
+			: "";
+	if (error && code !== "EAGAIN") {
+		console.error("host message wakeup stream failed, falling back to polling:", error);
+	}
+	setInterval(drainQueuedHostMessages, 16);
+	drainQueuedHostMessages();
+};
+
 if (core) {
 	const wakeupReadFd = core_.symbols.getHostMessageWakeupReadFD();
+	const isRealBunRuntime = typeof process.versions?.bun === "string";
 
-	if (typeof wakeupReadFd === "number" && wakeupReadFd >= 0) {
+	if (isRealBunRuntime) {
+		startHostMessagePolling();
+	} else if (typeof wakeupReadFd === "number" && wakeupReadFd >= 0) {
 		try {
 			const wakeupStream = createReadStream("/dev/null", {
 				fd: wakeupReadFd,
@@ -1164,15 +1192,14 @@ if (core) {
 				drainQueuedHostMessages();
 			});
 			wakeupStream.on("error", (error) => {
-				console.error("host message wakeup stream failed, falling back to polling:", error);
-				setInterval(drainQueuedHostMessages, 16);
+				wakeupStream.destroy();
+				startHostMessagePolling(error);
 			});
 		} catch (error) {
-			console.error("failed to start host message wakeup stream, falling back to polling:", error);
-			setInterval(drainQueuedHostMessages, 16);
+			startHostMessagePolling(error);
 		}
 	} else {
-		setInterval(drainQueuedHostMessages, 16);
+		startHostMessagePolling();
 	}
 
 	drainQueuedHostMessages();
