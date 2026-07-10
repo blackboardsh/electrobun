@@ -527,7 +527,9 @@ func startSingleTest(webviewID uint32, requestID uint64, respond bool, test goTe
 	go func() {
 		resultJSON := executeSingleTestAndBroadcast(webviewID, test)
 		if respond {
+			fmt.Fprintf(os.Stderr, "[kitchen go] sending runTest response #%d\n", requestID)
 			sendRPCResponseSuccess(webviewID, requestID, resultJSON)
+			fmt.Fprintf(os.Stderr, "[kitchen go] sent runTest response #%d\n", requestID)
 		}
 	}()
 }

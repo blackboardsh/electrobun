@@ -2472,9 +2472,9 @@ fn run_utils_paths_temp_matches_test() -> Result<(), String> {
     let paths = resolved_paths()?;
     let temp = std::env::temp_dir()
         .to_string_lossy()
-        .trim_end_matches('/')
+        .trim_end_matches(['/', '\\'])
         .to_string();
-    let resolved = paths.temp.trim_end_matches('/').to_string();
+    let resolved = paths.temp.trim_end_matches(['/', '\\']).to_string();
     if resolved != temp {
         return Err(format!("paths.temp mismatch: {} != {}", paths.temp, temp));
     }

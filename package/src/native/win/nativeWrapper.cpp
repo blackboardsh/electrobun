@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <cmath>
 #include <windows.h>
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
@@ -497,6 +498,8 @@ static BOOL g_isMovingWindow = FALSE;
 static HWND g_targetWindow = NULL;
 static POINT g_initialCursorPos = {};
 static POINT g_initialWindowPos = {};
+static std::map<HWND, bool> g_visibleOnAllWorkspaces;
+static std::mutex g_visibleOnAllWorkspacesMutex;
 
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
@@ -3028,6 +3031,21 @@ public:
     }
 };
 
+static std::map<uint32_t, std::shared_ptr<AbstractView>> g_retainedAbstractViews;
+static std::mutex g_retainedAbstractViewsMutex;
+
+static void retainAbstractView(std::shared_ptr<AbstractView> view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    g_retainedAbstractViews[view->webviewId] = view;
+}
+
+static void releaseRetainedAbstractView(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    g_retainedAbstractViews.erase(webviewId);
+}
+
 // Pending resize queue (cross-thread)
 static PendingResizeQueue g_pendingResizeQueue;
 static std::atomic<bool> g_pendingResizeScheduled{false};
@@ -3073,6 +3091,7 @@ private:
     HandlePostMessage internalBridgeCallbackHandler;
     bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
+    double pageZoomFactor = 1.0;
 
 public:
     std::string pendingUrl;
@@ -3109,6 +3128,27 @@ public:
 
     ComPtr<ICoreWebView2> getWebView() const {
         return webview;
+    }
+
+    void setPageZoom(double zoomFactor) {
+        pageZoomFactor = zoomFactor;
+        applyPageZoom();
+    }
+
+    void applyPageZoom() {
+        if (controller) {
+            controller->put_ZoomFactor(pageZoomFactor);
+        }
+    }
+
+    double getPageZoom() {
+        if (controller) {
+            double zoomFactor = pageZoomFactor;
+            if (SUCCEEDED(controller->get_ZoomFactor(&zoomFactor))) {
+                pageZoomFactor = zoomFactor;
+            }
+        }
+        return pageZoomFactor;
     }
 
     void setCreationComplete(bool complete) {
@@ -3243,6 +3283,14 @@ public:
     }
     
     void remove() override {
+        for (auto it = g_webview2Views.begin(); it != g_webview2Views.end();) {
+            if (it->second == this) {
+                it = g_webview2Views.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
         if (controller) {
             controller->Close();
             controller = nullptr;
@@ -4577,11 +4625,13 @@ public:
         // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
+            uint32_t viewId = view->webviewId;
             view->remove();
             {
                 std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-                g_abstractViews.erase(view->webviewId);
+                g_abstractViews.erase(viewId);
             }
+            releaseRetainedAbstractView(viewId);
         }
         if (m_hwnd) {
             DestroyWindow(m_hwnd);
@@ -5032,6 +5082,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_applicationMenu = NULL;
             }
             g_appMenuTarget.reset();
+            {
+                std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+                g_visibleOnAllWorkspaces.erase(hwnd);
+            }
             
             // Clean up container view
             g_containerViews.erase(hwnd);
@@ -6012,6 +6066,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Failed to initialize COM, HRESULT: 0x%08X", comResult);
             ::log(errorMsg);
+            view->setCreationFailed(true);
             return;
         }
         
@@ -6019,6 +6074,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         auto container = GetOrCreateContainer(hwnd);
         if (!container) {
             ::log("ERROR: Failed to create container");
+            view->setCreationFailed(true);
             return;
         }
         
@@ -6030,6 +6086,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Verify the container window is valid
         if (!IsWindow(containerHwnd)) {
             ::log("ERROR: Container window handle is invalid");
+            view->setCreationFailed(true);
             return;
         }
         
@@ -6114,6 +6171,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
+                            view->applyPageZoom();
 
                             // Set transparent background if requested
                             if (transparent) {
@@ -6730,6 +6788,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 char errorMsg[256];
                 sprintf_s(errorMsg, "ERROR: CreateCoreWebView2EnvironmentWithOptions failed with HRESULT: 0x%08X", hr);
                 ::log(errorMsg);
+                view->setCreationFailed(true);
             } else {
                 // ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions succeeded");
             }
@@ -7215,6 +7274,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
                                               electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+        retainAbstractView(webview2View);
         view = webview2View.get();
     }
 
@@ -7374,6 +7434,7 @@ ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
         std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
         g_abstractViews.erase(viewId);
     }
+    releaseRetainedAbstractView(viewId);
 }
 
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
@@ -9098,7 +9159,14 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
 
+    uint32_t viewId = abstractView->webviewId;
+    g_pendingResizeQueue.remove(abstractView);
     abstractView->remove();
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews.erase(viewId);
+    }
+    releaseRetainedAbstractView(viewId);
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
@@ -9122,6 +9190,11 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
     if (!abstractView || !script) {
         ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
+        return;
+    }
+
+    if (abstractView->hasCreationFailed()) {
+        ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
         return;
     }
 
@@ -9278,13 +9351,40 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
 }
 
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
-    // pageZoom is WebKit-specific, not available on Windows
-    // TODO: implement WebView2 zoom if needed
+    if (!abstractView) return;
+
+    MainThreadDispatcher::dispatch_sync([abstractView, zoomLevel]() {
+        if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
+            webview2->setPageZoom(zoomLevel);
+            return;
+        }
+
+        if (auto cefView = dynamic_cast<CEFView*>(abstractView)) {
+            if (auto browser = cefView->getBrowser()) {
+                double cefZoomLevel = std::log(zoomLevel) / std::log(1.2);
+                browser->GetHost()->SetZoomLevel(cefZoomLevel);
+            }
+        }
+    });
 }
 
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
-    // pageZoom is WebKit-specific, not available on Windows
-    return 1.0;
+    if (!abstractView) return 1.0;
+
+    return MainThreadDispatcher::dispatch_sync([abstractView]() -> double {
+        if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
+            return webview2->getPageZoom();
+        }
+
+        if (auto cefView = dynamic_cast<CEFView*>(abstractView)) {
+            if (auto browser = cefView->getBrowser()) {
+                double cefZoomLevel = browser->GetHost()->GetZoomLevel();
+                return std::pow(1.2, cefZoomLevel);
+            }
+        }
+
+        return 1.0;
+    });
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
@@ -9780,12 +9880,25 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
-    // Not applicable on Windows - no-op
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowVisibleOnAllWorkspaces");
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+    g_visibleOnAllWorkspaces[hwnd] = visible;
 }
 
 ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
-    // Not applicable on Windows
-    return false;
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+    auto it = g_visibleOnAllWorkspaces.find(hwnd);
+    return it != g_visibleOnAllWorkspaces.end() && it->second;
 }
 
 ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
@@ -10404,11 +10517,21 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
 // Clipboard API
 // ============================================================================
 
+static bool openClipboardWithRetry(HWND owner = nullptr) {
+    for (int attempt = 0; attempt < 50; attempt++) {
+        if (OpenClipboard(owner)) {
+            return true;
+        }
+        Sleep(10);
+    }
+    return false;
+}
+
 // clipboardReadText - Read text from the system clipboard
 // Returns: UTF-8 string (caller must free) or NULL if no text available
 ELECTROBUN_EXPORT const char* clipboardReadText() {
     return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return nullptr;
         }
 
@@ -10438,7 +10561,7 @@ ELECTROBUN_EXPORT void clipboardWriteText(const char* text) {
     if (!text) return;
 
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return;
         }
 
@@ -10466,7 +10589,7 @@ ELECTROBUN_EXPORT const uint8_t* clipboardReadImage(size_t* outSize) {
     return MainThreadDispatcher::dispatch_sync([=]() -> const uint8_t* {
         if (outSize) *outSize = 0;
 
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return nullptr;
         }
 
@@ -10499,7 +10622,7 @@ ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) 
     if (!pngData || size == 0) return;
 
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return;
         }
 
@@ -10525,7 +10648,7 @@ ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) 
 // clipboardClear - Clear the clipboard
 ELECTROBUN_EXPORT void clipboardClear() {
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (OpenClipboard(nullptr)) {
+        if (openClipboardWithRetry()) {
             EmptyClipboard();
             CloseClipboard();
         }
@@ -10536,34 +10659,51 @@ ELECTROBUN_EXPORT void clipboardClear() {
 // Returns: comma-separated list of formats (caller must free)
 ELECTROBUN_EXPORT const char* clipboardAvailableFormats() {
     return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return strdup("");
         }
 
-        std::vector<std::string> formats;
-
-        // Check for text
-        if (IsClipboardFormatAvailable(CF_UNICODETEXT) || IsClipboardFormatAvailable(CF_TEXT)) {
-            formats.push_back("text");
-        }
-
-        // Check for image
-        if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_BITMAP)) {
-            formats.push_back("image");
-        }
-
-        // Check for files
-        if (IsClipboardFormatAvailable(CF_HDROP)) {
-            formats.push_back("files");
-        }
-
-        // Check for HTML
+        bool hasText = false;
+        bool hasImage = false;
+        bool hasFiles = false;
+        bool hasHtml = false;
         UINT htmlFormat = RegisterClipboardFormatA("HTML Format");
-        if (IsClipboardFormatAvailable(htmlFormat)) {
-            formats.push_back("html");
+
+        UINT format = 0;
+        while ((format = EnumClipboardFormats(format)) != 0) {
+            switch (format) {
+                case CF_UNICODETEXT:
+                case CF_TEXT:
+                case CF_OEMTEXT:
+                    hasText = true;
+                    break;
+                case CF_DIB:
+                case CF_DIBV5:
+                case CF_BITMAP:
+                    hasImage = true;
+                    break;
+                case CF_HDROP:
+                    hasFiles = true;
+                    break;
+                default:
+                    if (format == htmlFormat) {
+                        hasHtml = true;
+                    }
+                    break;
+            }
+        }
+
+        if (!hasText && (GetClipboardData(CF_UNICODETEXT) || GetClipboardData(CF_TEXT))) {
+            hasText = true;
         }
 
         CloseClipboard();
+
+        std::vector<std::string> formats;
+        if (hasText) formats.push_back("text");
+        if (hasImage) formats.push_back("image");
+        if (hasFiles) formats.push_back("files");
+        if (hasHtml) formats.push_back("html");
 
         // Join formats with comma
         std::string result;
@@ -11523,6 +11663,7 @@ static HWND g_hotkeyWindow = NULL;
 static std::thread g_hotkeyThread;
 static bool g_hotkeyThreadRunning = false;
 static std::mutex g_hotkeyMutex;  // Protect access to g_globalShortcuts and g_hotkeyIdToAccelerator
+static std::mutex g_hotkeyThreadMutex;
 
 // Helper to parse virtual key code from key string
 static UINT getVirtualKeyCode(const std::string& key) {
@@ -11661,14 +11802,24 @@ static void hotkeyMessageLoop() {
     g_hotkeyWindow = NULL;
 }
 
+static void ensureHotkeyThreadRunning() {
+    std::lock_guard<std::mutex> lock(g_hotkeyThreadMutex);
+    if (g_hotkeyThreadRunning) {
+        return;
+    }
+
+    g_hotkeyThreadRunning = true;
+    g_hotkeyThread = std::thread(hotkeyMessageLoop);
+    g_hotkeyThread.detach();
+}
+
 // Set the callback for global shortcut events
 extern "C" ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
     g_globalShortcutCallback = callback;
 
     // Start the hotkey message loop thread if not running
-    if (!g_hotkeyThreadRunning && callback) {
-        g_hotkeyThreadRunning = true;
-        g_hotkeyThread = std::thread(hotkeyMessageLoop);
+    if (callback) {
+        ensureHotkeyThreadRunning();
         // Wait for window to be created
         while (!g_hotkeyWindow && g_hotkeyThreadRunning) {
             Sleep(10);
@@ -11682,6 +11833,8 @@ extern "C" ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator
         ::log("ERROR: Cannot register shortcut - invalid accelerator");
         return FALSE;
     }
+
+    ensureHotkeyThreadRunning();
 
     // Wait for hotkey window to be ready (with timeout)
     int waitCount = 0;
@@ -11776,9 +11929,22 @@ extern "C" ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerat
 
 // Unregister all global keyboard shortcuts
 extern "C" ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
-    if (g_hotkeyWindow) {
-        PostMessage(g_hotkeyWindow, WM_UNREGISTER_ALL_HOTKEYS, 0, 0);
+    std::vector<int> hotkeyIds;
+    {
+        std::lock_guard<std::mutex> lock(g_hotkeyMutex);
+        for (const auto& pair : g_globalShortcuts) {
+            hotkeyIds.push_back(pair.second);
+        }
+        g_globalShortcuts.clear();
+        g_hotkeyIdToAccelerator.clear();
     }
+
+    if (g_hotkeyWindow) {
+        for (int hotkeyId : hotkeyIds) {
+            PostMessage(g_hotkeyWindow, WM_UNREGISTER_HOTKEY, hotkeyId, 0);
+        }
+    }
+    ::log("GlobalShortcut: Unregistered all shortcuts");
 }
 
 // Check if a shortcut is registered

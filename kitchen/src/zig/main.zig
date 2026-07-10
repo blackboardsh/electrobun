@@ -2346,7 +2346,7 @@ fn runWindowPageZoomTest(state: *AppState) !void {
     sleepMs(medium_wait_ms);
 
     const zoom = state.core.getWebviewPageZoom(created.webview_id);
-    if (builtin.os.tag == .macos) {
+    if (builtin.os.tag == .macos or builtin.os.tag == .windows) {
         if (!approxEq(zoom, target_zoom, 0.02)) {
             return error.UnexpectedWindowZoom;
         }
@@ -2854,7 +2854,7 @@ fn runWebviewPageZoomTest(state: *AppState) !void {
     sleepMs(medium_wait_ms);
 
     const zoom = state.core.getWebviewPageZoom(created.webview_id);
-    if (builtin.os.tag == .macos) {
+    if (builtin.os.tag == .macos or builtin.os.tag == .windows) {
         if (!approxEq(zoom, target_zoom, 0.02)) {
             return error.UnexpectedWebviewZoom;
         }

@@ -12,6 +12,7 @@ import {
 	mkdirSync,
 	statSync,
 	unlinkSync,
+	cpSync,
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
@@ -114,6 +115,20 @@ function validateDownload(filePath: string, type: string): void {
 				`Please try again in a minute.`,
 		);
 	}
+}
+
+function outputMissingOrOlder(outputPath: string, inputPaths: string[]): boolean {
+	if (!existsSync(outputPath)) {
+		return true;
+	}
+
+	const outputMtime = statSync(outputPath).mtimeMs;
+	return inputPaths.some((inputPath) => {
+		if (!existsSync(inputPath)) {
+			return false;
+		}
+		return statSync(inputPath).mtimeMs > outputMtime;
+	});
 }
 
 // Pause between GitHub downloads to avoid rate limiting
@@ -572,19 +587,25 @@ async function buildForNpm() {
 
 async function copyApiFiles() {
 	// Copy TypeScript APIs while preserving source-relative imports.
-	await $`mkdir -p dist/api/sdks`;
-	await $`cp -R src/sdks/bun dist/api/sdks/`;
-	await $`cp -R src/browser dist/api/`;
-	await $`cp -R src/shared dist/api/`;
-	await $`cp -R src/config dist/api/`;
-	await $`cp -R src/preload dist/api/`;
+	// Use Node's copy implementation here so directory-root semantics stay the
+	// same across Windows and Unix shells.
+	mkdirSync("dist/api/sdks", { recursive: true });
+	cpSync("src/sdks/bun", "dist/api/sdks/bun", { recursive: true, force: true });
+	cpSync("src/browser", "dist/api/browser", { recursive: true, force: true });
+	cpSync("src/shared", "dist/api/shared", { recursive: true, force: true });
+	cpSync("src/config", "dist/api/config", { recursive: true, force: true });
+	cpSync("src/preload", "dist/api/preload", { recursive: true, force: true });
 
-	await $`mkdir -p dist/zig-sdk`;
-	await $`cp src/sdks/zig/electrobun.zig dist/zig-sdk/electrobun.zig`;
-	await $`mkdir -p dist/rust-sdk`;
-	await $`cp src/sdks/rust/electrobun.rs dist/rust-sdk/electrobun.rs`;
-	await $`mkdir -p dist/go-sdk`;
-	await $`cp -R src/sdks/go/. dist/go-sdk/`;
+	mkdirSync("dist/zig-sdk", { recursive: true });
+	cpSync("src/sdks/zig/electrobun.zig", "dist/zig-sdk/electrobun.zig", {
+		force: true,
+	});
+	mkdirSync("dist/rust-sdk", { recursive: true });
+	cpSync("src/sdks/rust/electrobun.rs", "dist/rust-sdk/electrobun.rs", {
+		force: true,
+	});
+	mkdirSync("dist/go-sdk", { recursive: true });
+	cpSync("src/sdks/go", "dist/go-sdk", { recursive: true, force: true });
 }
 
 async function copyToDist() {
@@ -1095,7 +1116,26 @@ async function vendorRust() {
 			throw new Error(`Rust installer not found at ${installScript}`);
 		}
 
-		await $`sh "${installScript}" --prefix="${rustDir}" --disable-ldconfig`;
+		if (OS === "win") {
+			mkdirSync(rustDir, { recursive: true });
+			const componentsFile = join(extractedDir, "components");
+			const components = readFileSync(componentsFile, "utf-8")
+				.split(/\r?\n/)
+				.map((line) => line.trim())
+				.filter(Boolean);
+			for (const component of components) {
+				const componentDir = join(extractedDir, component);
+				for (const entry of readdirSync(componentDir, { withFileTypes: true })) {
+					if (entry.name === "manifest.in") continue;
+					cpSync(join(componentDir, entry.name), join(rustDir, entry.name), {
+						recursive: true,
+						force: true,
+					});
+				}
+			}
+		} else {
+			await $`sh "${installScript}" --prefix="${rustDir}" --disable-ldconfig`;
+		}
 		await verifyVendoredRust();
 		writeFileSync(rustVersionFile, RUST_VERSION);
 		console.log("✓ Rust toolchain vendored successfully");
@@ -1960,11 +2000,21 @@ async function vendorCEF() {
 		}
 
 		// Build process_helper binary for Windows
-		if (
-			!existsSync(
-				join(process.cwd(), "src", "native", "build", "process_helper.exe"),
-			)
-		) {
+		const processHelperPath = join(
+			process.cwd(),
+			"src",
+			"native",
+			"build",
+			"process_helper.exe",
+		);
+		const processHelperSourcePath = join(
+			process.cwd(),
+			"src",
+			"native",
+			"win",
+			"cef_process_helper_win.cpp",
+		);
+		if (outputMissingOrOlder(processHelperPath, [processHelperSourcePath])) {
 			await $`mkdir -p src/native/build`;
 
 			const cefInclude = `./vendors/cef`;

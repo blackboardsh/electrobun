@@ -5,7 +5,12 @@ package electrobun
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 extern void electrobunWindowCloseHandler(uint32_t);
 extern void electrobunWindowMoveHandler(uint32_t, double, double);
@@ -56,9 +61,22 @@ static void eb_url_open(const char* url) { electrobunURLOpenHandler(url); }
 static void eb_app_reopen(void) { electrobunAppReopenHandler(); }
 static void eb_quit_requested(void) { electrobunQuitRequestedHandler(); }
 
+#ifdef _WIN32
+static void* eb_dlopen(const char* path) { return (void*)LoadLibraryA(path); }
+static void* eb_dlsym(void* handle, const char* name) { return (void*)GetProcAddress((HMODULE)handle, name); }
+static const char* eb_dlerror(void) {
+	static char message[512];
+	DWORD err = GetLastError();
+	if (err == 0) return "unknown dynamic loader error";
+	DWORD written = FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, err, 0, message, sizeof(message), NULL);
+	if (written == 0) return "unknown dynamic loader error";
+	return message;
+}
+#else
 static void* eb_dlopen(const char* path) { return dlopen(path, RTLD_NOW | RTLD_LOCAL); }
 static void* eb_dlsym(void* handle, const char* name) { return dlsym(handle, name); }
 static const char* eb_dlerror(void) { return dlerror(); }
+#endif
 
 typedef const char* (*eb_last_error_fn)(void);
 static const char* eb_call_last_error(void* fn) { return ((eb_last_error_fn)fn)(); }
@@ -1218,7 +1236,10 @@ func (c *Core) SendHostMessageToWebviewJSON(webviewID uint32, messageJSON string
 	defer freeMessage()
 	ok := C.eb_call_send_host_message(c.symbol("sendHostMessageToWebviewViaTransport"), C.uint32_t(webviewID), message)
 	if !bool(ok) {
-		return errors.New(c.LastError())
+		return c.EvaluateJavaScriptWithNoCompletion(
+			webviewID,
+			fmt.Sprintf("window.__electrobun.receiveMessageFromHost(%s);", messageJSON),
+		)
 	}
 	return nil
 }
@@ -1303,7 +1324,6 @@ func (c *Core) GetPrimaryDisplay() (Display, error) {
 		return Display{}, errors.New(c.LastError())
 	}
 	jsonValue := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	return ParseDisplayJSON(jsonValue), nil
 }
 
@@ -1313,7 +1333,6 @@ func (c *Core) GetAllDisplays() ([]Display, error) {
 		return nil, errors.New(c.LastError())
 	}
 	jsonValue := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	var displays []Display
 	if err := json.Unmarshal([]byte(jsonValue), &displays); err != nil {
 		return nil, err
@@ -1327,7 +1346,6 @@ func (c *Core) GetCursorScreenPoint() (Point, error) {
 		return Point{}, errors.New(c.LastError())
 	}
 	jsonValue := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	var point Point
 	if err := json.Unmarshal([]byte(jsonValue), &point); err != nil {
 		return Point{}, err
@@ -1398,7 +1416,6 @@ func (c *Core) ClipboardReadText() (string, bool, error) {
 		return "", false, nil
 	}
 	text := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	return text, true, nil
 }
 
@@ -1423,7 +1440,6 @@ func (c *Core) ClipboardAvailableFormatsCSV() (string, error) {
 		return "", nil
 	}
 	formats := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	return formats, nil
 }
 
@@ -1472,7 +1488,6 @@ func (c *Core) OpenFileDialog(options OpenFileDialogOptions) (string, error) {
 		return "", nil
 	}
 	value := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	return value, nil
 }
 
@@ -1563,7 +1578,6 @@ func (c *Core) SessionGetCookies(partition, filterJSON string) (string, error) {
 		return "[]", nil
 	}
 	value := C.GoString(ptr)
-	C.eb_call_free_core_string(c.symbol("freeCoreString"), ptr)
 	return value, nil
 }
 

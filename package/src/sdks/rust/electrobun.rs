@@ -1716,9 +1716,6 @@ impl Core {
             return Err(self.last_error());
         }
         let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(parse_display_json(&json))
     }
 
@@ -1728,9 +1725,6 @@ impl Core {
             return Err(self.last_error());
         }
         let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(parse_display_array_json(&json))
     }
 
@@ -1740,9 +1734,6 @@ impl Core {
             return Err(self.last_error());
         }
         let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(parse_point_json(&json))
     }
 
@@ -1790,9 +1781,6 @@ impl Core {
             return Ok(None);
         }
         let text = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(Some(text))
     }
 
@@ -1817,9 +1805,6 @@ impl Core {
             return Ok(String::new());
         }
         let formats = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(formats)
     }
 
@@ -1867,9 +1852,6 @@ impl Core {
             return Ok(String::new());
         }
         let value = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(value)
     }
 
@@ -1940,9 +1922,6 @@ impl Core {
             return Ok("[]".to_string());
         }
         let json = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
-        unsafe {
-            (self.symbols.free_core_string)(ptr);
-        }
         Ok(json)
     }
 

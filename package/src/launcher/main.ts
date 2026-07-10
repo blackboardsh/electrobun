@@ -70,7 +70,7 @@ function main() {
 
 			// Try to re-exec ourselves with LD_PRELOAD set
 			const env = { ...process.env, LD_PRELOAD: existingCefLibs.join(":") };
-			const child = spawn(process.argv[0], process.argv.slice(1), {
+			const child = spawn(process.argv[0]!, process.argv.slice(1), {
 				env,
 				stdio: "inherit",
 			});
@@ -143,7 +143,10 @@ function main() {
 		let asarLib: any;
 
 		if (process.platform === "win32") {
-			asarLibPath = join(pathToMacOS, "libasar.dll");
+			const nativeWrapperAsarLibPath = join(pathToMacOS, "libNativeWrapper.dll");
+			asarLibPath = existsSync(nativeWrapperAsarLibPath)
+				? nativeWrapperAsarLibPath
+				: join(pathToMacOS, "libasar.dll");
 		} else {
 			asarLibPath = join(pathToMacOS, `libasar.${suffix}`);
 		}

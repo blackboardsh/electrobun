@@ -1131,14 +1131,20 @@ fn startHostTransportServer(requested_port: u32) bool {
     else
         current_port;
 
-    while (current_port <= port_limit) : (current_port += 1) {
+    while (true) {
         const address = std.net.Address.parseIp("127.0.0.1", current_port) catch |err| {
             setLastError("Failed to parse websocket listen address: {s}", .{@errorName(err)});
             return false;
         };
 
         const server = std.net.Address.listen(address, .{ .reuse_address = true }) catch |err| switch (err) {
-            error.AddressInUse => continue,
+            error.AddressInUse => {
+                if (current_port == port_limit) {
+                    break;
+                }
+                current_port += 1;
+                continue;
+            },
             else => {
                 setLastError("Failed to start websocket server: {s}", .{@errorName(err)});
                 return false;
@@ -2906,6 +2912,10 @@ export fn setWebviewPlaintextHostTransport(webview_id: u32, enabled: bool) void 
 
 export fn sendHostMessageToWebviewViaTransport(webview_id: u32, message_json: [*:0]const u8) bool {
     clearLastError();
+
+    if (builtin.os.tag == .windows) {
+        return false;
+    }
 
     const context = lookupWebviewTransportContext(webview_id) orelse return false;
     if (!context.transport_ready) {

@@ -481,6 +481,9 @@ async function buildGoMainExecutable(options: {
 			GOPATH: goPath,
 			GOROOT: join(ELECTROBUN_DEP_PATH, "vendors", "go"),
 			GOTOOLCHAIN: "local",
+			...(options.targetOS === "win"
+				? { CC: `${getVendoredZigBinaryPath()} cc` }
+				: {}),
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
