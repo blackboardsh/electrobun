@@ -508,6 +508,10 @@ const core = (() => {
 				args: [FFIType.u32, FFIType.cstring],
 				returns: FFIType.void,
 			},
+			setTrayLength: {
+				args: [FFIType.u32, FFIType.f64],
+				returns: FFIType.void,
+			},
 			setTrayImage: {
 				args: [FFIType.u32, FFIType.cstring],
 				returns: FFIType.void,
@@ -1898,6 +1902,9 @@ const _ffiImpl = {
 		setTrayTitle: (params: { id: number; title: string }): void => {
 			const { id, title } = params;
 			core_.symbols.setTrayTitle(id, toCString(title));
+		},
+		setTrayLength: (params: { id: number; length: number }): void => {
+			core_.symbols.setTrayLength(params.id, params.length);
 		},
 		setTrayImage: (params: { id: number; image: string }): void => {
 			const { id, image } = params;

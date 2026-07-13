@@ -15,6 +15,8 @@ const tray = new Tray({
   template: true,
   width: 32,
   height: 32,
+  // macOS only: fixed status item width, or "square"
+  length: "square",
 });
 
 // map action names to clicked state
@@ -96,6 +98,10 @@ tray.on("tray-clicked", (e) => {
 ### width and height
 
               <p>Set the dimensions of the image used in the system tray</p>
+
+### length
+
+              <p>On macOS, set the status item width in points or use <code>"square"</code> for the system square width. Omit it to keep variable system sizing.</p>
 
 ## Methods
 

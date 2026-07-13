@@ -8337,6 +8337,14 @@ extern "C" void setTrayTitle(NSStatusItem *statusItem, const char *title) {
     }
 }
 
+extern "C" void setTrayLength(NSStatusItem *statusItem, double length) {
+    if (statusItem) {
+        runOnMainThreadSyncVoid(^{
+            statusItem.length = length;
+        });
+    }
+}
+
 extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
     if (statusItem) {
         NSString *imgPath = [NSString stringWithUTF8String:image ?: ""];

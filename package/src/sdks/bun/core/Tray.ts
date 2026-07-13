@@ -2,6 +2,7 @@ import { ffi, type MenuItemConfig, type Rectangle } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { VIEWS_FOLDER } from "./Paths";
 import { join } from "path";
+import { resolveTrayLength } from "./TrayLength";
 
 type NonDividerMenuItem = Exclude<
 	MenuItemConfig,
@@ -16,6 +17,8 @@ export type TrayOptions = {
 	template?: boolean;
 	width?: number;
 	height?: number;
+	/** macOS status item width in points, or the system square width. */
+	length?: number | "square";
 };
 
 export class Tray {
@@ -26,6 +29,7 @@ export class Tray {
 	template = true;
 	width = 16;
 	height = 16;
+	length: number | undefined;
 	menu: Array<MenuItemConfig> | null = null;
 
 	constructor({
@@ -34,12 +38,14 @@ export class Tray {
 		template = true,
 		width = 16,
 		height = 16,
+		length,
 	}: TrayOptions = {}) {
 		this.title = title;
 		this.image = image;
 		this.template = template;
 		this.width = width;
 		this.height = height;
+		this.length = resolveTrayLength(length);
 
 		if (this.createNativeTray()) {
 			TrayMap[this.id] = this;
@@ -61,6 +67,9 @@ export class Tray {
 			}
 
 			this.id = trayId;
+			if (this.length !== undefined) {
+				ffi.request.setTrayLength({ id: trayId, length: this.length });
+			}
 			this.visible = true;
 			return true;
 		} catch (error) {

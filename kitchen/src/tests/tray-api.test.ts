@@ -16,6 +16,7 @@ export const trayApiTests = [
         template: true,
         width: 32,
         height: 32,
+        length: process.platform === "darwin" ? 18 : undefined,
       });
 
       try {
@@ -30,6 +31,9 @@ export const trayApiTests = [
         expect(typeof bounds.y).toBe("number");
         expect(typeof bounds.width).toBe("number");
         expect(typeof bounds.height).toBe("number");
+        if (process.platform === "darwin") {
+          expect(bounds.width).toBe(18);
+        }
         log(
           `Tray bounds returned: x=${bounds.x}, y=${bounds.y}, width=${bounds.width}, height=${bounds.height}`,
         );
