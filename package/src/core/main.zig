@@ -1514,16 +1514,16 @@ fn buildHostWebviewEventJavascript(
     const encoded_event_name = quoteJavascriptString(event_name) orelse return null;
     defer allocator.free(encoded_event_name);
 
+    const encoded_detail = quoteJavascriptString(detail) orelse return null;
+    defer allocator.free(encoded_detail);
+
     const event_name_slice = std.mem.span(event_name);
     if (std.mem.eql(u8, event_name_slice, "new-window-open") or std.mem.eql(u8, event_name_slice, "host-message")) {
         return allocateOwnedJavascriptString(
-            "document.querySelector('#electrobun-webview-{d}').emit({s}, {s});",
-            .{ webview_id, encoded_event_name, std.mem.span(detail) },
+            "document.querySelector('#electrobun-webview-{d}').emit({s}, (() => {{ try {{ return JSON.parse({s}); }} catch {{ return {s}; }} }})());",
+            .{ webview_id, encoded_event_name, encoded_detail, encoded_detail },
         );
     }
-
-    const encoded_detail = quoteJavascriptString(detail) orelse return null;
-    defer allocator.free(encoded_detail);
 
     return allocateOwnedJavascriptString(
         "document.querySelector('#electrobun-webview-{d}').emit({s}, {s});",
@@ -3732,4 +3732,24 @@ export fn wgpuSurfacePresentMainThread(surface_ptr: ?*anyopaque) i32 {
         "wgpuSurfacePresentMainThread",
     ) orelse return -1;
     return wgpu_surface_present_main_thread(surface_ptr);
+}
+
+test "host webview JSON events encode detail as data" {
+    const js = buildHostWebviewEventJavascript(
+        7,
+        "host-message",
+        "null); globalThis.pwned = \"yes\"; //",
+    ) orelse return error.OutOfMemory;
+    defer allocator.free(js);
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        js,
+        "JSON.parse(\"null); globalThis.pwned = \\\"yes\\\"; //\")",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        js,
+        "catch { return \"null); globalThis.pwned = \\\"yes\\\"; //\"; }",
+    ) != null);
 }

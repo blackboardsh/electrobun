@@ -69,6 +69,7 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
+import { parseWebviewEventBridgeMessage } from "./eventBridge";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -2900,17 +2901,10 @@ const eventBridgeHandler = new JSCallback(
 		try {
 			const message = new CString(msg as unknown as Pointer);
 			const rawMessage = message.toString().trim();
-			if (!rawMessage || (rawMessage[0] !== "{" && rawMessage[0] !== "[")) {
-				return;
+			const event = parseWebviewEventBridgeMessage(_id, rawMessage);
+			if (event) {
+				webviewEventHandler(event.id, event.eventName, event.detail);
 			}
-			const jsonMessage = JSON.parse(rawMessage);
-
-			// Only handle webviewEvent messages - no RPC
-			if (jsonMessage.id === "webviewEvent") {
-				const { payload } = jsonMessage;
-				webviewEventHandler(payload.id, payload.eventName, payload.detail);
-			}
-			// Silently ignore any other message types - sandboxed webviews shouldn't send them
 		} catch (err) {
 			console.error("error in eventBridgeHandler: ", err);
 		}
