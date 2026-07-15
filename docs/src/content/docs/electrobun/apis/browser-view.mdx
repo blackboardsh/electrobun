@@ -383,6 +383,22 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
 
 ## Methods
 
+### setFrame
+  <p>Update the BrowserView's position and dimensions relative to its window. All frame values must be finite numbers. Negative width or height values are rejected.</p>
+
+```typescript
+const view = new BrowserView({
+  url: "https://example.com",
+  frame: { x: 0, y: 0, width: 800, height: 600 },
+});
+
+view.setFrame({ x: 240, y: 0, width: 1040, height: 720 });
+```
+
+  <Aside type="note">
+    <p>Calling <code>setFrame()</code> does not change <code>autoResize</code>. When <code>autoResize</code> is enabled, a later parent-window resize can replace the explicit frame.</p>
+  </Aside>
+
 ### executeJavascript
   <p>Execute arbitrary JavaScript in the webview. Unlike a `preload` script that you would typically set as a <a href="/electrobun/apis/browser-window">BrowserWindow</a> configuration option, `executeJavascript()` can be called at any time. This is a fire-and-forget method &mdash; it does not return a result.</p>
 
@@ -813,4 +829,3 @@ webview.on("download-failed", (event) => {
   console.log("Error:", event.detail.error);
 });
 ```
-

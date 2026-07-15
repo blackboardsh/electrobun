@@ -1,6 +1,10 @@
 import electobunEventEmmitter from "./events/eventEmitter";
 import { BrowserWindow, type WindowOptionsType } from "./core/BrowserWindow";
-import { BrowserView, type BrowserViewOptions } from "./core/BrowserView";
+import {
+	BrowserView,
+	type BrowserViewFrame,
+	type BrowserViewOptions,
+} from "./core/BrowserView";
 import { GpuWindow, type GpuWindowOptionsType } from "./core/GpuWindow";
 import { WGPUView, type WGPUViewOptions } from "./core/WGPUView";
 import { Tray, type TrayOptions } from "./core/Tray";
@@ -225,6 +229,7 @@ export {
 	type ElectrobunConfig,
 	type BuildConfigType,
 	type WindowOptionsType,
+	type BrowserViewFrame,
 	type BrowserViewOptions,
 	type GpuWindowOptionsType,
 	type WGPUViewOptions,
