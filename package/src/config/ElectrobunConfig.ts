@@ -324,7 +324,6 @@ export interface ElectrobunConfig {
 			description?: string;
 			mode?: "window" | "background";
 			carrotOnly?: boolean;
-			permissions?: Record<string, unknown>;
 			dependencies?: Record<string, string>;
 			remoteUIs?: Record<string, CarrotUIDefinition>;
 			slateUIs?: Record<string, CarrotUIDefinition>;

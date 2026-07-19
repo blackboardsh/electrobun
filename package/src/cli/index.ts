@@ -1911,7 +1911,6 @@ const defaultConfig = {
 			name: string;
 			description?: string;
 			mode?: "window" | "background";
-			permissions?: Record<string, unknown>;
 			dependencies?: Record<string, string>;
 			// Map of remote UI ID → config. Two flavors:
 			//   1. { name, entrypoint, ...bunBuildOpts } — electrobun builds it via Bun.build
@@ -3912,7 +3911,6 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				version: config.app.version,
 				description: carrotConfig.description || config.app.description || "",
 				mode: carrotConfig.mode || "window",
-				permissions: carrotConfig.permissions || {},
 				dependencies: Object.fromEntries(
 					Object.entries(carrotConfig.dependencies || {}).map(([id, spec]) => [
 						id,

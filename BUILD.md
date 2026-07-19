@@ -5,7 +5,7 @@ This document describes Electrobun's build system and cross-platform compilation
 ## Overview
 
 Electrobun uses a custom build system (`build.ts`) that handles:
-- Vendoring dependencies (Bun, Zig, CEF, WebView2)
+- Vendoring dependencies (Dash CLI, Cottontail, Bun, Zig, CEF, WebView2)
 - Building native wrappers for each platform
 - Creating distribution packages
 
@@ -77,9 +77,29 @@ bun build.ts --release
 bun build.ts --ci
 ```
 
+## Dash CLI and Cottontail
+
+`package/runtime-artifacts.lock.json` pins the complete Dash CLI and Cottontail
+preview manifests used by Electrobun builds. A normal build downloads the Dash
+archive, verifies its checksum and release metadata, and installs both Dash and
+the matching Cottontail payload contained in that archive.
+
+After publishing compatible Cottontail and Dash preview releases, update both
+pins together:
+
+```bash
+cd electrobun/package
+bun scripts/update-runtime-artifacts.ts
+```
+
+For local runtime development, `DASH_CLI_ROOT` can point at a Dash checkout
+with an existing `zig-out/bin` build, while `DASH_USE_LOCAL_COTTONTAIL=1`
+selects the adjacent Cottontail checkout. `DASH_CLI_BINARY` and
+`COTTONTAIL_BINARY` remain available for CI and one-off binary overrides.
+
 ## Architecture Support
 
-- **macOS**: ARM64 (Apple Silicon), x64 (Intel) 
+- **macOS**: ARM64 (Apple Silicon)
 - **Windows**: x64 only (ARM Windows users run via automatic emulation)
 - **Linux**: x64, ARM64
 

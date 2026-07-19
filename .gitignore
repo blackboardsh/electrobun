@@ -18,6 +18,8 @@ dist
 /package/bin/dash.exe
 /package/bin/cottontail
 /package/bin/cottontail.exe
+/package/bin/runtime_modules
+/package/bin/.runtime-platform
 /package/bin/vendors
 electrobun-cef*
 electrobun-core*

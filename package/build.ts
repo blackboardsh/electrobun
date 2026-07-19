@@ -1,6 +1,7 @@
 // Run this script via terminal or command line with dash build.ts
 
 import { $ } from "bun";
+import { createHash } from "crypto";
 import { platform, arch } from "os";
 import { join, relative, basename, resolve } from "path";
 import {
@@ -10,9 +11,11 @@ import {
 	readFileSync,
 	writeFileSync,
 	mkdirSync,
+	chmodSync,
 	statSync,
 	unlinkSync,
 	cpSync,
+	rmSync,
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
@@ -58,6 +61,40 @@ const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 const goBinary = OS === "win" ? "go.exe" : "go";
 const cottontailBinary = OS === "win" ? "cottontail.exe" : "cottontail";
 const dashCliBinary = OS === "win" ? "dash.exe" : "dash";
+
+type RuntimeArtifact = {
+	url: string;
+	sha256: string;
+	size: number;
+};
+
+type RuntimeRelease = {
+	schema: number;
+	channel: string;
+	name: string;
+	version: string;
+	revision: string;
+	publishedAt: string;
+	platforms: Record<string, { archive: RuntimeArtifact }>;
+};
+
+type RuntimeArtifactsLock = {
+	schema: number;
+	sources: {
+		cottontail: string;
+		dashCli: string;
+	};
+	cottontail: RuntimeRelease;
+	dashCli: RuntimeRelease;
+};
+
+const RUNTIME_ARTIFACTS_LOCK_PATH = join(
+	process.cwd(),
+	"runtime-artifacts.lock.json",
+);
+const RUNTIME_ARTIFACTS = JSON.parse(
+	readFileSync(RUNTIME_ARTIFACTS_LOCK_PATH, "utf8"),
+) as RuntimeArtifactsLock;
 
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
@@ -539,8 +576,8 @@ async function setup() {
 	await vendorZig(); // ziglang.org (not GitHub)
 	await vendorRust(); // static.rust-lang.org (not GitHub)
 	await vendorGo(); // go.dev (not GitHub)
-	await vendorCottontail(); // local Cottontail checkout or DASH_COTTONTAIL
-	await vendorDashCli(); // local Dash CLI checkout or DASH_CLI_BINARY
+	await vendorDashCli(); // pinned release or explicit local override
+	await vendorCottontail(); // normally supplied by the pinned Dash release
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -712,12 +749,16 @@ async function copyToDist() {
 		await $`cp ${PATH.dashCli.BIN} ${PATH.dashCli.DIST}`;
 	}
 	await $`mkdir -p bin`;
+	rmSync(join("bin", OS === "win" ? "electrobun.exe" : "electrobun"), {
+		force: true,
+	});
 	if (existsSync(PATH.cottontail.BIN)) {
 		await copyExecutableToBin(PATH.cottontail.BIN, cottontailBinary);
 	}
 	if (existsSync(PATH.dashCli.BIN)) {
 		await copyExecutableToBin(PATH.dashCli.BIN, dashCliBinary);
 	}
+	writeFileSync(join("bin", ".runtime-platform"), `${runtimePlatformKey()}\n`);
 	// Electrobun's Typescript bun and browser apis
 	await copyApiFiles();
 	// Native code and frameworks
@@ -725,9 +766,21 @@ async function copyToDist() {
 		await $`cp -R src/native/build/libNativeWrapper.dylib dist/libNativeWrapper.dylib`;
 		// Copy CEF to cef/ subdirectory for consistent organization
 		await $`mkdir -p dist/cef`;
-		await $`cp -cR "vendors/cef/Release/Chromium Embedded Framework.framework" "dist/cef/Chromium Embedded Framework.framework"`;
+		cpSync(
+			join(
+				"vendors",
+				"cef",
+				"Release",
+				"Chromium Embedded Framework.framework",
+			),
+			join("dist", "cef", "Chromium Embedded Framework.framework"),
+			{ recursive: true, force: true, preserveTimestamps: true },
+		);
 		// CEF's helper process binary
-		await $`cp -R src/native/build/process_helper dist/process_helper`;
+		cpSync(
+			join("src", "native", "build", "process_helper"),
+			join("dist", "process_helper"),
+		);
 	} else if (OS === "win") {
 		await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
 		// native system webview library - always use x64 for Windows
@@ -837,8 +890,28 @@ async function copyToDist() {
 		console.log("[done]Copying CEF files for Linux...");
 	}
 
+	normalizeDistExecutableModes("dist");
 	// Create platform-specific dist folder and copy all files
 	await createPlatformDistFolder();
+}
+
+function normalizeDistExecutableModes(directory: string) {
+	if (OS === "win") return;
+	for (const filename of [
+		bunBin,
+		cottontailBinary,
+		dashCliBinary,
+		"launcher",
+		"extractor",
+		"bsdiff",
+		"bspatch",
+		"zig-asar",
+		"zig-zstd",
+		"process_helper",
+	]) {
+		const path = join(directory, filename);
+		if (existsSync(path)) chmodSync(path, 0o755);
+	}
 }
 
 async function createPlatformDistFolder() {
@@ -853,15 +926,19 @@ async function createPlatformDistFolder() {
 		// On Windows use PowerShell to copy all files
 		await $`powershell -command "Copy-Item -Path 'dist\\*' -Destination '${platformDistDir}\\' -Recurse -Force"`;
 	} else if (OS === "macos") {
-		await $`rm -rf ${platformDistDir}`;
-		await $`mkdir -p ${platformDistDir}`;
-		await $`cp -cR dist/. ${platformDistDir}/`;
+		rmSync(platformDistDir, { recursive: true, force: true });
+		cpSync("dist", platformDistDir, {
+			recursive: true,
+			force: true,
+			preserveTimestamps: true,
+		});
 	} else {
 		// On Unix systems - use rsync with delete to ensure clean copy
 		// The --delete flag removes files in destination that don't exist in source
 		// This handles read-only files that might prevent overwriting
 		await $`rsync -a --delete dist/ ${platformDistDir}/`;
 	}
+	normalizeDistExecutableModes(platformDistDir);
 
 	// NOTE: We no longer remove adhoc signatures from binaries
 	// These signatures are actually required for the binaries to run on macOS
@@ -1229,6 +1306,11 @@ function defaultCottontailRoot() {
 	return resolve(process.cwd(), "..", "..", "cottontail");
 }
 
+function environmentFlagEnabled(name: string) {
+	const value = process.env[name]?.trim().toLowerCase();
+	return value === "1" || value === "true" || value === "yes";
+}
+
 function resolveCottontailRoot() {
 	return resolve(
 		process.env["DASH_COTTONTAIL_ROOT"] ||
@@ -1237,65 +1319,141 @@ function resolveCottontailRoot() {
 	);
 }
 
-async function buildCottontailFromSource(cottontailRoot: string) {
-	const zigPath = join(cottontailRoot, "vendors", "zig", zigBinary);
-	const quickjsHeaderPath = join(
-		cottontailRoot,
-		"vendors",
-		"quickjs",
-		"quickjs.h",
-	);
-	const quickjsSourcePath = join(
-		cottontailRoot,
-		"vendors",
-		"quickjs",
-		"quickjs-amalgam.c",
-	);
+function runtimePlatformKey() {
+	if (OS === "win") return "windows-x64";
+	if (OS === "macos" && ARCH === "arm64") return "macos-arm64";
+	if (OS === "linux") return `linux-${ARCH}`;
+	throw new Error(`No Dash/Cottontail release is published for ${OS}-${ARCH}`);
+}
 
-	if (
-		!existsSync(zigPath) ||
-		!existsSync(quickjsHeaderPath) ||
-		!existsSync(quickjsSourcePath)
-	) {
-		const dashCliRoot = resolve(
-			process.env["DASH_CLI_ROOT"] || defaultDashCliRoot(),
+function readReleaseMetadata(path: string) {
+	return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function metadataMatches(
+	path: string,
+	release: RuntimeRelease,
+	platformKey: string,
+) {
+	if (!existsSync(path)) return false;
+	try {
+		const metadata = readReleaseMetadata(path);
+		return (
+			metadata.name === release.name &&
+			metadata.version === release.version &&
+			metadata.revision === release.revision &&
+			metadata.platform === platformKey
 		);
-		const setupScript = join(dashCliRoot, "scripts", "setup.sh");
+	} catch {
+		return false;
+	}
+}
 
-		if (OS !== "win" && existsSync(setupScript)) {
-			console.log(
-				`Setting up Cottontail dependencies via Dash CLI from ${cottontailRoot}...`,
-			);
-			await $`env DASH_COTTONTAIL_ROOT=${cottontailRoot} bash ${setupScript}`;
-			return;
-		}
-
+function assertReleaseMetadata(
+	path: string,
+	release: RuntimeRelease,
+	platformKey: string,
+) {
+	if (!metadataMatches(path, release, platformKey)) {
 		throw new Error(
-			`Cottontail dependencies are missing in ${cottontailRoot}. Run its setup first or set DASH_COTTONTAIL to a prebuilt binary.`,
+			`Downloaded ${release.name} metadata does not match the pinned ${release.version}@${release.revision} ${platformKey} release`,
 		);
 	}
+	return readReleaseMetadata(path);
+}
 
-	console.log(`Building Cottontail from ${cottontailRoot}...`);
-	await $`cd ${cottontailRoot} && ${zigPath} build -Doptimize=ReleaseFast`;
+async function downloadRuntimeRelease(
+	release: RuntimeRelease,
+	platformKey: string,
+) {
+	const artifact = release.platforms[platformKey]?.archive;
+	if (!artifact) {
+		throw new Error(`${release.name} ${release.version} has no ${platformKey} artifact`);
+	}
+
+	const tempRoot = join(
+		process.cwd(),
+		"vendors",
+		`.${release.name}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
+	);
+	const archivePath = join(tempRoot, "release.tar.gz");
+	const extractRoot = join(tempRoot, "extract");
+	mkdirSync(extractRoot, { recursive: true });
+
+	console.log(
+		`Downloading ${release.name} ${release.version} (${platformKey})...`,
+	);
+	// Use the system downloader for large binary payloads. This build script is
+	// intentionally runnable under Cottontail, whose fetch compatibility layer
+	// is not the right byte transport for release archives yet.
+	await $`curl -fsSL --retry 3 ${artifact.url} -o ${archivePath}`;
+	const bytes = readFileSync(archivePath);
+	const actualSha256 = createHash("sha256").update(bytes).digest("hex");
+	if (actualSha256 !== artifact.sha256) {
+		throw new Error(
+			`${release.name} checksum mismatch: expected ${artifact.sha256}, got ${actualSha256}`,
+		);
+	}
+	if (bytes.byteLength !== artifact.size) {
+		throw new Error(
+			`${release.name} size mismatch: expected ${artifact.size}, got ${bytes.byteLength}`,
+		);
+	}
+	await $`tar -xzf ${archivePath} -C ${extractRoot}`;
+
+	const entries = readdirSync(extractRoot, { withFileTypes: true }).filter(
+		(entry) => entry.isDirectory(),
+	);
+	if (entries.length !== 1) {
+		throw new Error(`${release.name} archive did not contain one package root`);
+	}
+
+	return {
+		packageRoot: join(extractRoot, entries[0]!.name),
+		cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
+	};
+}
+
+async function installCottontailPayload(
+	packageRoot: string,
+	release: RuntimeRelease,
+	platformKey: string,
+) {
+	const metadataPath = join(packageRoot, "cottontail-release.json");
+	assertReleaseMetadata(metadataPath, release, platformKey);
+	const sourceBinary = join(packageRoot, "bin", cottontailBinary);
+	if (!existsSync(sourceBinary)) {
+		throw new Error("Cottontail release is missing its executable");
+	}
+
+	const destination = join(process.cwd(), "vendors", "cottontail");
+	rmSync(destination, { recursive: true, force: true });
+	mkdirSync(destination, { recursive: true });
+	cpSync(sourceBinary, PATH.cottontail.BIN);
+	cpSync(metadataPath, join(destination, "cottontail-release.json"));
+	if (OS !== "win") await $`chmod +x ${PATH.cottontail.BIN}`;
+	await signExecutableIfNeeded(PATH.cottontail.BIN);
+}
+
+async function installLocalCottontail(binary: string) {
+	const destination = join(process.cwd(), "vendors", "cottontail");
+	rmSync(destination, { recursive: true, force: true });
+	mkdirSync(destination, { recursive: true });
+	cpSync(binary, PATH.cottontail.BIN);
+	if (OS !== "win") await $`chmod +x ${PATH.cottontail.BIN}`;
+	await signExecutableIfNeeded(PATH.cottontail.BIN);
 }
 
 async function vendorCottontail() {
-	const cottontailDir = join(process.cwd(), "vendors", "cottontail");
-	await $`mkdir -p ${cottontailDir}`;
-
 	const envBinary =
 		process.env["DASH_COTTONTAIL"] || process.env["COTTONTAIL_BINARY"];
 	if (envBinary) {
 		if (!existsSync(envBinary)) {
 			throw new Error(`Cottontail binary does not exist: ${envBinary}`);
 		}
-		await $`cp ${envBinary} ${PATH.cottontail.BIN}`;
-		if (OS !== "win") {
-			await $`chmod +x ${PATH.cottontail.BIN}`;
-		}
-		await signExecutableIfNeeded(PATH.cottontail.BIN);
+		await installLocalCottontail(envBinary);
 		console.log(
-			`✓ Cottontail vendored from DASH_COTTONTAIL: ${PATH.cottontail.BIN}`,
+			`✓ Cottontail vendored from binary override: ${PATH.cottontail.BIN}`,
 		);
 		return;
 	}
@@ -1303,47 +1461,67 @@ async function vendorCottontail() {
 	const cottontailRoot = resolveCottontailRoot();
 	const buildZig = join(cottontailRoot, "build.zig");
 	const sourceBinary = join(cottontailRoot, "zig-out", "bin", cottontailBinary);
+	const useLocalCottontail = environmentFlagEnabled(
+		"DASH_USE_LOCAL_COTTONTAIL",
+	);
+	if (useLocalCottontail && (!existsSync(buildZig) || !existsSync(sourceBinary))) {
+		throw new Error(
+			`DASH_USE_LOCAL_COTTONTAIL is set, but no built Cottontail was found at ${sourceBinary}`,
+		);
+	}
 
-	if (existsSync(buildZig)) {
-		if (OS === "win") {
-			throw new Error(
-				"Vendoring Cottontail from source on Windows is not implemented yet. Set DASH_COTTONTAIL to a prebuilt cottontail.exe.",
-			);
-		}
-
-		await buildCottontailFromSource(cottontailRoot);
-
-		if (!existsSync(sourceBinary)) {
-			throw new Error(`Cottontail build did not produce ${sourceBinary}`);
-		}
-
-		await $`cp ${sourceBinary} ${PATH.cottontail.BIN}`;
-		await $`chmod +x ${PATH.cottontail.BIN}`;
-		await signExecutableIfNeeded(PATH.cottontail.BIN);
-		console.log(`✓ Cottontail vendored at ${PATH.cottontail.BIN}`);
+	if (
+		(useLocalCottontail ||
+			process.env["DASH_COTTONTAIL_ROOT"] ||
+			process.env["COTTONTAIL_ROOT"]) &&
+		existsSync(buildZig) &&
+		existsSync(sourceBinary)
+	) {
+		await installLocalCottontail(sourceBinary);
+		console.log(`✓ Cottontail vendored from existing build at ${PATH.cottontail.BIN}`);
 		return;
 	}
 
-	if (existsSync(PATH.cottontail.BIN)) {
+	const platformKey = runtimePlatformKey();
+	const metadataPath = join(
+		process.cwd(),
+		"vendors",
+		"cottontail",
+		"cottontail-release.json",
+	);
+	if (
+		existsSync(PATH.cottontail.BIN) &&
+		metadataMatches(metadataPath, RUNTIME_ARTIFACTS.cottontail, platformKey)
+	) {
 		console.log(`✓ Using existing vendored Cottontail at ${PATH.cottontail.BIN}`);
 		return;
 	}
 
-	throw new Error(
-		`Cottontail checkout not found at ${cottontailRoot}. Set DASH_COTTONTAIL to a prebuilt binary or DASH_COTTONTAIL_ROOT to a Cottontail checkout.`,
+	const downloaded = await downloadRuntimeRelease(
+		RUNTIME_ARTIFACTS.cottontail,
+		platformKey,
 	);
+	try {
+		await installCottontailPayload(
+			downloaded.packageRoot,
+			RUNTIME_ARTIFACTS.cottontail,
+			platformKey,
+		);
+	} finally {
+		downloaded.cleanup();
+	}
+	console.log(`✓ Cottontail ${RUNTIME_ARTIFACTS.cottontail.version} vendored`);
 }
 
 async function vendorDashCli() {
-	const dashCliDir = join(process.cwd(), "vendors", "dash-cli");
-	await $`mkdir -p ${dashCliDir}`;
-
 	const envBinary = process.env["DASH_CLI_BINARY"];
 	if (envBinary) {
 		if (!existsSync(envBinary)) {
 			throw new Error(`DASH_CLI_BINARY does not exist: ${envBinary}`);
 		}
-		await $`cp ${envBinary} ${PATH.dashCli.BIN}`;
+		rmSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true, force: true });
+		mkdirSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true });
+		cpSync(envBinary, PATH.dashCli.BIN);
 		if (OS !== "win") {
 			await $`chmod +x ${PATH.dashCli.BIN}`;
 		}
@@ -1351,40 +1529,87 @@ async function vendorDashCli() {
 		return;
 	}
 
-	const dashCliRoot = resolve(
-		process.env["DASH_CLI_ROOT"] || defaultDashCliRoot(),
-	);
+	const dashCliRoot = resolve(process.env["DASH_CLI_ROOT"] || defaultDashCliRoot());
 	const buildScript = join(dashCliRoot, "scripts", "build.sh");
 	const sourceBinary = join(dashCliRoot, "zig-out", "bin", dashCliBinary);
 
-	if (existsSync(buildScript)) {
-		if (OS === "win") {
-			throw new Error(
-				"Vendoring Dash CLI from source on Windows is not implemented yet. Set DASH_CLI_BINARY to a prebuilt dash.exe.",
-			);
-		}
-
-		console.log(`Building Dash CLI from ${dashCliRoot}...`);
-		await $`env DASH_COTTONTAIL_ROOT=${resolveCottontailRoot()} bash ${buildScript}`;
-
-		if (!existsSync(sourceBinary)) {
-			throw new Error(`Dash CLI build did not produce ${sourceBinary}`);
-		}
-
-		await $`cp ${sourceBinary} ${PATH.dashCli.BIN}`;
-		await $`chmod +x ${PATH.dashCli.BIN}`;
-		console.log(`✓ Dash CLI vendored at ${PATH.dashCli.BIN}`);
+	if (
+		process.env["DASH_CLI_ROOT"] &&
+		existsSync(buildScript) &&
+		existsSync(sourceBinary)
+	) {
+		rmSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true, force: true });
+		mkdirSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true });
+		cpSync(sourceBinary, PATH.dashCli.BIN);
+		if (OS !== "win") await $`chmod +x ${PATH.dashCli.BIN}`;
+		await signExecutableIfNeeded(PATH.dashCli.BIN);
+		console.log(`✓ Dash CLI vendored from existing build at ${PATH.dashCli.BIN}`);
 		return;
 	}
 
-	if (existsSync(PATH.dashCli.BIN)) {
+	const platformKey = runtimePlatformKey();
+	const dashMetadataPath = join(
+		process.cwd(),
+		"vendors",
+		"dash-cli",
+		"dash-cli-release.json",
+	);
+	const cottontailMetadataPath = join(
+		process.cwd(),
+		"vendors",
+		"cottontail",
+		"cottontail-release.json",
+	);
+	if (
+		existsSync(PATH.dashCli.BIN) &&
+		metadataMatches(dashMetadataPath, RUNTIME_ARTIFACTS.dashCli, platformKey) &&
+		metadataMatches(
+			cottontailMetadataPath,
+			RUNTIME_ARTIFACTS.cottontail,
+			platformKey,
+		)
+	) {
 		console.log(`✓ Using existing vendored Dash CLI at ${PATH.dashCli.BIN}`);
 		return;
 	}
 
-	throw new Error(
-		`Dash CLI build script not found at ${buildScript}. Set DASH_CLI_BINARY to a prebuilt dash binary or DASH_CLI_ROOT to a dash-cli checkout.`,
+	const downloaded = await downloadRuntimeRelease(
+		RUNTIME_ARTIFACTS.dashCli,
+		platformKey,
 	);
+	try {
+		const metadataPath = join(downloaded.packageRoot, "dash-cli-release.json");
+		const metadata = assertReleaseMetadata(
+			metadataPath,
+			RUNTIME_ARTIFACTS.dashCli,
+			platformKey,
+		);
+		if (
+			metadata.cottontail?.version !== RUNTIME_ARTIFACTS.cottontail.version ||
+			metadata.cottontail?.revision !== RUNTIME_ARTIFACTS.cottontail.revision
+		) {
+			throw new Error(
+				"Dash CLI was not built with the Cottontail release pinned by Electrobun",
+			);
+		}
+
+		const destination = join(process.cwd(), "vendors", "dash-cli");
+		rmSync(destination, { recursive: true, force: true });
+		mkdirSync(destination, { recursive: true });
+		cpSync(join(downloaded.packageRoot, "bin", dashCliBinary), PATH.dashCli.BIN);
+		cpSync(metadataPath, join(destination, "dash-cli-release.json"));
+		if (OS !== "win") await $`chmod +x ${PATH.dashCli.BIN}`;
+		await signExecutableIfNeeded(PATH.dashCli.BIN);
+
+		await installCottontailPayload(
+			downloaded.packageRoot,
+			RUNTIME_ARTIFACTS.cottontail,
+			platformKey,
+		);
+	} finally {
+		downloaded.cleanup();
+	}
+	console.log(`✓ Dash CLI ${RUNTIME_ARTIFACTS.dashCli.version} vendored`);
 }
 
 async function vendorBsdiff() {

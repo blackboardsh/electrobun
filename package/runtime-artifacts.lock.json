@@ -1,0 +1,87 @@
+{
+  "schema": 1,
+  "sources": {
+    "cottontail": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/latest.json",
+    "dashCli": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/latest.json"
+  },
+  "cottontail": {
+    "schema": 2,
+    "channel": "preview",
+    "name": "cottontail",
+    "version": "0.1.1-beta.1",
+    "revision": "c48d9c2a5e2626f7875677db04bc5ac08f2f2611",
+    "publishedAt": "2026-07-19T15:50:13.441Z",
+    "platforms": {
+      "macos-arm64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/c48d9c2a5e2626f7875677db04bc5ac08f2f2611/macos-arm64/cottontail.tar.gz",
+          "sha256": "acf450bae9b448036817e9bbb0511c9a2df145e64bc4bcb68614495356a3a048",
+          "size": 28929060
+        }
+      },
+      "linux-x64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/c48d9c2a5e2626f7875677db04bc5ac08f2f2611/linux-x64/cottontail.tar.gz",
+          "sha256": "e97417cce7cec5d530a46be81654eda81404b3e27658c8c74a14d19a0c6f5151",
+          "size": 22552923
+        }
+      },
+      "linux-arm64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/c48d9c2a5e2626f7875677db04bc5ac08f2f2611/linux-arm64/cottontail.tar.gz",
+          "sha256": "0ff200ce3109d827fa5d99de064229f17e2637ee92692df728232d19b0796509",
+          "size": 21289175
+        }
+      },
+      "windows-x64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/c48d9c2a5e2626f7875677db04bc5ac08f2f2611/windows-x64/cottontail.tar.gz",
+          "sha256": "fb5c0f0854c21dc79d56612af93071852e321441c8d903f433970ed82102a67a",
+          "size": 20332108
+        }
+      }
+    }
+  },
+  "dashCli": {
+    "schema": 2,
+    "channel": "preview",
+    "name": "dash-cli",
+    "version": "0.1.0-beta.1",
+    "revision": "afe1a8f664cb17ae7d62fe71d0cd5a35c289b280",
+    "cottontail": {
+      "version": "0.1.1-beta.1",
+      "revision": "c48d9c2a5e2626f7875677db04bc5ac08f2f2611"
+    },
+    "publishedAt": "2026-07-19T16:09:51.282Z",
+    "platforms": {
+      "macos-arm64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/afe1a8f664cb17ae7d62fe71d0cd5a35c289b280/c160a7033afc6c0c76512de43c6ef8a31926f5a955a6aab59eb72c22fdf9dc72/dash-cli-v0.1.0-beta.1-macos-arm64.tar.gz",
+          "sha256": "c160a7033afc6c0c76512de43c6ef8a31926f5a955a6aab59eb72c22fdf9dc72",
+          "size": 28157698
+        }
+      },
+      "linux-x64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/afe1a8f664cb17ae7d62fe71d0cd5a35c289b280/55bd0795b8079559a94bdddb7ad5ce00d953c7c59b05b6bd159df68f828672e0/dash-cli-v0.1.0-beta.1-linux-x64.tar.gz",
+          "sha256": "55bd0795b8079559a94bdddb7ad5ce00d953c7c59b05b6bd159df68f828672e0",
+          "size": 21782864
+        }
+      },
+      "linux-arm64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/afe1a8f664cb17ae7d62fe71d0cd5a35c289b280/3b7cc68e8934444e8b1d43ea2030986a776d0cda0fdbe3f01d2c26a9ec88a72b/dash-cli-v0.1.0-beta.1-linux-arm64.tar.gz",
+          "sha256": "3b7cc68e8934444e8b1d43ea2030986a776d0cda0fdbe3f01d2c26a9ec88a72b",
+          "size": 20521198
+        }
+      },
+      "windows-x64": {
+        "archive": {
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/afe1a8f664cb17ae7d62fe71d0cd5a35c289b280/1c1cfcf25ea27e4cb3103ec836d646412194f89a30b8a273673b546a6298a5a6/dash-cli-v0.1.0-beta.1-windows-x64.tar.gz",
+          "sha256": "1c1cfcf25ea27e4cb3103ec836d646412194f89a30b8a273673b546a6298a5a6",
+          "size": 19599191
+        }
+      }
+    }
+  }
+}

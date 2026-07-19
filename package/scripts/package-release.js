@@ -39,84 +39,6 @@ try {
 	process.exit(1);
 }
 
-// Generate template embeddings before building CLI
-console.log("Generating template embeddings...");
-const templatesDir = path.join(__dirname, "..", "..", "templates");
-const outputFile = path.join(
-	__dirname,
-	"..",
-	"src",
-	"cli",
-	"templates",
-	"embedded.ts",
-);
-
-// Ensure the templates directory exists for embedded.ts
-const templatesOutputDir = path.dirname(outputFile);
-if (!fs.existsSync(templatesOutputDir)) {
-	fs.mkdirSync(templatesOutputDir, { recursive: true });
-}
-
-// Verify that embedded.ts was created by build.ts, or create a minimal one
-if (!fs.existsSync(outputFile)) {
-	console.log("embedded.ts not found after build, creating minimal version...");
-	fs.writeFileSync(
-		outputFile,
-		`// Auto-generated template embeddings
-export const templates: Record<string, { name: string; files: Record<string, string> }> = {};
-
-export function getTemplate(name: string) {
-    return templates[name];
-}
-
-export function getTemplateNames(): string[] {
-    return Object.keys(templates);
-}
-`,
-	);
-} else {
-	// If templates exist, run the generation through build.ts
-	console.log("Templates found, generating embeddings...");
-	// This is already done by the build.ts --release command above
-}
-
-// Build CLI binary
-console.log("Building CLI binary...");
-if (!fs.existsSync("bin")) {
-	fs.mkdirSync("bin", { recursive: true });
-}
-
-// Use baseline target for Windows to ensure compatibility with ARM64 emulation
-const compileTarget =
-	platform === "win32" ? "--target=bun-windows-x64-baseline" : "";
-const vendoredBun = path.join(
-	"vendors",
-	"bun",
-	platform === "win32" ? "bun.exe" : "bun",
-);
-
-// Workaround for Windows 2025 runner cross-drive issues with Bun cache
-if (platform === "win32" && process.env.GITHUB_ACTIONS) {
-	// Set Bun cache to same drive as workspace
-	const workspaceDrive = process.cwd().substring(0, 2);
-	const bunCacheDir = `${workspaceDrive}\\temp\\bun-cache`;
-	console.log(`Setting BUN_INSTALL_CACHE_DIR to: ${bunCacheDir}`);
-
-	// Ensure cache directory exists
-	fs.mkdirSync(bunCacheDir, { recursive: true });
-
-	// Set environment variable directly in the command for Windows
-	execSync(
-		`set "BUN_INSTALL_CACHE_DIR=${bunCacheDir}" && "${vendoredBun}" build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`,
-		{ stdio: "inherit", shell: true },
-	);
-} else {
-	execSync(
-		`"${vendoredBun}" build src/cli/index.ts --compile ${compileTarget} --outfile bin/electrobun`,
-		{ stdio: "inherit" },
-	);
-}
-
 // Create separate tarballs for CLI, core binaries, and CEF
 const distPath = path.join(__dirname, "..", "dist");
 const cliOutputFile = path.join(
@@ -157,7 +79,8 @@ function createTarGz(tarGzPath, cwd, entries) {
 async function createTarballs() {
 	// Validate that we have platform-specific binaries, not just npm files
 	const expectedBinaries = [
-		platform === "win32" ? "electrobun.exe" : "electrobun",
+		platform === "win32" ? "dash.exe" : "dash",
+		platform === "win32" ? "cottontail.exe" : "cottontail",
 		platform === "win32" ? "bun.exe" : "bun",
 	];
 
@@ -183,18 +106,15 @@ async function createTarballs() {
 
 	// 1. Create CLI-only tarball
 	const binPath = path.join(__dirname, "..", "bin");
-	const cliSrc = path.join(
-		binPath,
-		"electrobun" + (platform === "win32" ? ".exe" : ""),
-	);
+	const dashName = "dash" + (platform === "win32" ? ".exe" : "");
+	const cottontailName = "cottontail" + (platform === "win32" ? ".exe" : "");
+	const cliSrc = path.join(binPath, dashName);
 
 	if (fs.existsSync(cliSrc)) {
 		console.log(`Creating CLI tarball: ${cliOutputFile}`);
 
 		// Create CLI tarball directly from bin directory (system tar preserves permissions)
-		createTarGz(cliOutputFile, binPath, [
-			"electrobun" + (platform === "win32" ? ".exe" : ""),
-		]);
+		createTarGz(cliOutputFile, binPath, [dashName, cottontailName]);
 
 		const cliStats = fs.statSync(cliOutputFile);
 		const cliSizeMB = (cliStats.size / 1024 / 1024).toFixed(2);
@@ -204,7 +124,12 @@ async function createTarballs() {
 	// 2. Create core binaries tarball (exclude CEF and CLI)
 	const coreFiles = fs
 		.readdirSync(distPath)
-		.filter((file) => file !== "cef" && !file.startsWith("electrobun"));
+		.filter(
+			(file) =>
+				file !== "cef" &&
+				file !== dashName &&
+				file !== cottontailName,
+		);
 
 	if (coreFiles.length > 0) {
 		console.log(`Creating core binaries tarball: ${coreOutputFile}`);

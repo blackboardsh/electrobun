@@ -23,10 +23,6 @@ jobs:
             platform: darwin
             arch: arm64
             platform_name: darwin
-          - os: macos-15-intel
-            platform: darwin
-            arch: x64
-            platform_name: darwin
           - os: ubuntu-24.04
             platform: linux
             arch: x64

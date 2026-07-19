@@ -48,7 +48,7 @@ import { bridge, hasFFI } from "./proc/native";
 
 // Carrot boot state — populated from __bunnyCarrotBootstrap injected by Bunny Ears
 let _carrotManifest: Record<string, unknown> | null = null;
-let _carrotContext: { currentDir?: string; statePath?: string; logsPath?: string; permissions?: string[]; grantedPermissions?: Record<string, unknown>; authToken?: string | null; channel?: string } | null = null;
+let _carrotContext: { currentDir?: string; statePath?: string; logsPath?: string; authToken?: string | null; channel?: string } | null = null;
 
 const _bootstrap = (globalThis as any).__bunnyCarrotBootstrap as { manifest?: any; context?: any } | undefined;
 if (_bootstrap) {
@@ -104,7 +104,7 @@ export const Carrots = {
 		if (!bridge) throw new Error("Carrots.list() is only available when running as a carrot inside Bunny Ears");
 		return bridge.requestHost<Array<{
 			id: string; name: string; description: string; version: string;
-			mode: string; permissions: string[]; status: string; devMode: boolean;
+			mode: string; status: string; devMode: boolean;
 			remoteUIs?: Array<{ id: string; name: string; path: string }>;
 			slateUIs?: Array<{ id: string; name: string; path: string }>;
 			contributions?: {
@@ -147,12 +147,6 @@ export const app = {
 	},
 	get manifest() {
 		return _carrotManifest;
-	},
-	get permissions() {
-		return _carrotContext?.permissions ?? [];
-	},
-	get grantedPermissions() {
-		return _carrotContext?.grantedPermissions ?? {};
 	},
 	get currentDir() {
 		return _carrotContext?.currentDir ?? "";
