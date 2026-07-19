@@ -5,7 +5,7 @@ export default {
 		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "./vendors/dash-cli/dash build.ts",
 		"build:release": "./vendors/dash-cli/dash build.ts --release",
-		dev: "./vendors/dash-cli/dash build.ts && cd ../kitchen && ../package/bin/dash electrobun dev",
+		dev: "./vendors/dash-cli/dash build.ts && cd ../kitchen && npm install && ../package/bin/dash electrobun dev",
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && ./vendors/dash-cli/dash dev",
 		"dev:canary": "npm install && ./vendors/dash-cli/dash build:release && cd ../kitchen && npm install && ../package/bin/dash electrobun build --env=canary",
 		"dev:stable": "npm install && ./vendors/dash-cli/dash build:release && cd ../kitchen && npm install && ../package/bin/dash electrobun build --env=stable",

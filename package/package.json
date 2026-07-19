@@ -25,6 +25,9 @@
 		"type": "git",
 		"url": "git+https://github.com/blackboardsh/electrobun.git"
 	},
+	"scripts": {
+		"dash:vendor": "bun scripts/vendor-dash-cli.ts"
+	},
 	"devDependencies": {
 		"typescript": "^5.9.3"
 	},

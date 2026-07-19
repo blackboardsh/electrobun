@@ -1,6 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
-const mainProcess = "cottontail" as const; // Flip to "bun", "zig", "rust", "go", or "cottontail" to exercise main-process backends.
+const mainProcess = "bun" as const; // Flip to "bun", "zig", "rust", "go", or "cottontail" to exercise main-process backends.
 const bundleCEF = true;
 
 export default {
