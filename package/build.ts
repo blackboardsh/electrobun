@@ -1,8 +1,9 @@
 // Run this script via terminal or command line with dash build.ts
 
 import { $ } from "bun";
+import { spawnSync } from "child_process";
 import { createHash } from "crypto";
-import { platform, arch } from "os";
+import { platform, arch, tmpdir } from "os";
 import { join, relative, basename, resolve } from "path";
 import {
 	existsSync,
@@ -16,6 +17,7 @@ import {
 	unlinkSync,
 	cpSync,
 	rmSync,
+	mkdtempSync,
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
@@ -275,33 +277,110 @@ async function vendorCmake() {
 // Global variable to store vcvarsall path
 var VCVARSALL_PATH = "";
 
+function formatExitStatus(status: number | null) {
+	const value = status ?? 1;
+	return OS === "win"
+		? `0x${(value >>> 0).toString(16).padStart(8, "0").toUpperCase()}`
+		: String(value);
+}
+
+function runCaptured(command: string, args: string[]) {
+	const result = spawnSync(command, args, {
+		encoding: "utf8",
+		stdio: "pipe",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			[
+				`${[command, ...args].map((value) => JSON.stringify(value)).join(" ")} failed with ${result.signal ? `signal ${result.signal}` : `exit status ${formatExitStatus(result.status)}`}`,
+				`cwd: ${process.cwd()}`,
+				String(result.stderr || "").trim(),
+				String(result.stdout || "").trim(),
+			]
+				.filter(Boolean)
+				.join("\n"),
+		);
+	}
+	return String(result.stdout || "");
+}
+
+function runInherited(command: string, args: string[], cwd = process.cwd()) {
+	const result = spawnSync(command, args, {
+		cwd,
+		stdio: "inherit",
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0) {
+		throw new Error(
+			`${[command, ...args].map((value) => JSON.stringify(value)).join(" ")} failed with ${result.signal ? `signal ${result.signal}` : `exit status ${formatExitStatus(result.status)}`}\n` +
+				`cwd: ${cwd}`,
+		);
+	}
+}
+
+async function runZigBuild(projectDir: string, zigArgs: string[]) {
+	const optimizeArgs = CHANNEL === "release" ? ["-Doptimize=ReleaseSmall"] : [];
+	if (OS === "win") {
+		runInherited(
+			PATH.zig.BIN,
+			["build", ...optimizeArgs, ...zigArgs],
+			join(process.cwd(), "src", projectDir),
+		);
+		return;
+	}
+
+	const projectPath = join("src", projectDir);
+	if (CHANNEL === "release") {
+		await $`cd ${projectPath} && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+	} else {
+		await $`cd ${projectPath} && ../../vendors/zig/zig build ${zigArgs}`;
+	}
+}
+
+function findWindowsExecutable(name: string) {
+	try {
+		return runCaptured("where.exe", [name]).split(/\r?\n/, 1)[0]?.trim() || "";
+	} catch {
+		return "";
+	}
+}
+
+function findVisualStudioInstallation() {
+	const vswherePath = join(
+		process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
+		"Microsoft Visual Studio",
+		"Installer",
+		"vswhere.exe",
+	);
+	const command = existsSync(vswherePath) ? vswherePath : "vswhere.exe";
+	const result = spawnSync(
+		command,
+		[
+			"-latest",
+			"-products",
+			"*",
+			"-requires",
+			"Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+			"-property",
+			"installationPath",
+		],
+		{ encoding: "utf8", stdio: "pipe" },
+	);
+	if (result.error || result.status !== 0) return "";
+	return String(result.stdout || "").trim();
+}
+
 async function findMsvcTools() {
 	if (OS !== "win") return;
 
 	try {
-		const vswherePath = join(
-			process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-			"Microsoft Visual Studio",
-			"Installer",
-			"vswhere.exe",
-		);
-		if (!existsSync(vswherePath)) {
-			console.log("vswhere not found, using default tool names");
-			return;
-		}
-
-		// Find Visual Studio installation path
-		const vsInstallResult =
-			await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
-		if (
-			vsInstallResult.exitCode !== 0 ||
-			!vsInstallResult.stdout.toString().trim()
-		) {
+		const vsInstallPath = findVisualStudioInstallation();
+		if (!vsInstallPath) {
 			console.log("Could not find Visual Studio installation path");
 			return;
 		}
 
-		const vsInstallPath = vsInstallResult.stdout.toString().trim();
 		VCVARSALL_PATH = join(
 			vsInstallPath,
 			"VC",
@@ -324,24 +403,43 @@ async function findMsvcTools() {
 
 // Helper function to run MSVC commands with environment set up
 async function runMsvcCommand(command: string) {
-	if (!VCVARSALL_PATH) {
-		// Fallback to running command directly
-		return await $`${command}`;
-	}
-
-	// Create a temporary batch file to run the command with proper environment
-	const tempBat = join(process.cwd(), "temp_build_cmd.bat");
-	const batContent = `@echo off\ncall "${VCVARSALL_PATH}" x64 >nul\n${command}`;
+	const comSpec =
+		process.env["ComSpec"] ??
+		join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe");
+	// Keep commands containing quoted paths inside the batch file. Passing such
+	// commands through cmd.exe's argv quoting breaks checkouts whose path has spaces.
+	const commandCwd = process.cwd();
+	const tempDir = mkdtempSync(join(tmpdir(), "electrobun-msvc-"));
+	const tempBat = join(tempDir, "build.cmd");
+	const batContent = [
+		"@echo off",
+		VCVARSALL_PATH ? `call "${VCVARSALL_PATH}" x64 >nul` : null,
+		`cd /D "${commandCwd}"`,
+		command,
+	]
+		.filter(Boolean)
+		.join("\n");
 
 	writeFileSync(tempBat, batContent);
 
 	try {
-		const result = await $`cmd /c "${tempBat}"`;
-		await $`rm "${tempBat}"`.catch(() => {});
-		return result;
-	} catch (error) {
-		await $`rm "${tempBat}"`.catch(() => {});
-		throw error;
+		runInherited(comSpec, ["/D", "/S", "/C", ".\\build.cmd"], tempDir);
+	} finally {
+		// Windows can retain the child process' working-directory handle for a
+		// short interval after cmd.exe exits. Retry so that transient FileBusy
+		// errors do not turn an otherwise successful native build into a failure.
+		let cleanupError: unknown;
+		for (let attempt = 0; attempt < 10; attempt += 1) {
+			try {
+				rmSync(tempDir, { recursive: true, force: true });
+				cleanupError = undefined;
+				break;
+			} catch (error) {
+				cleanupError = error;
+				await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+			}
+		}
+		if (cleanupError) throw cleanupError;
 	}
 }
 
@@ -419,38 +517,15 @@ async function checkDependencies() {
 		// Find MSVC compiler tools
 		await findMsvcTools();
 
-		// Check for cmake
-		try {
-			await $`where cmake`.quiet();
-			CMAKE_BIN = "cmake";
-		} catch {
+		// Check for cmake without relying on shell parsing.
+		const cmakePath = findWindowsExecutable("cmake");
+		if (cmakePath) {
+			CMAKE_BIN = cmakePath;
+		} else {
 			missingDeps.push("cmake");
 		}
 
-		// Check for Visual Studio (use vswhere if available)
-		let vsFound = false;
-		try {
-			const vswherePath = join(
-				process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-				"Microsoft Visual Studio",
-				"Installer",
-				"vswhere.exe",
-			);
-			if (existsSync(vswherePath)) {
-				// Use PowerShell wrapper to ensure output is captured correctly on Windows
-				const out =
-					await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
-				if (out.exitCode === 0 && out.stdout.toString().trim()) vsFound = true;
-			} else {
-				const out =
-					await $`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.quiet();
-				if (out.exitCode === 0 && out.stdout.toString().trim()) vsFound = true;
-			}
-		} catch {
-			vsFound = false;
-		}
-
-		if (!vsFound) missingDeps.push("visual-studio");
+		if (!findVisualStudioInstallation()) missingDeps.push("visual-studio");
 
 		if (missingDeps.length > 0) {
 			// In CI we should not attempt interactive installs
@@ -467,34 +542,15 @@ async function checkDependencies() {
 
 				// Re-check cmake
 				const newMissing: string[] = [];
-				try {
-					await $`where cmake`.quiet();
-					CMAKE_BIN = "cmake";
-				} catch {
+				const installedCmakePath = findWindowsExecutable("cmake");
+				if (installedCmakePath) {
+					CMAKE_BIN = installedCmakePath;
+				} else {
 					newMissing.push("cmake");
 				}
 
 				// Re-check Visual Studio
-				try {
-					const vswherePath = join(
-						process.env["ProgramFiles(x86)"] || "C:\\Program Files (x86)",
-						"Microsoft Visual Studio",
-						"Installer",
-						"vswhere.exe",
-					);
-					let out;
-					if (existsSync(vswherePath)) {
-						// Use PowerShell wrapper to ensure output is captured correctly on Windows
-						out =
-							await $`powershell -command "& '${vswherePath}' -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath"`.quiet();
-					} else {
-						out =
-							await $`vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`.quiet();
-					}
-					if (!(out && out.exitCode === 0 && out.stdout.toString().trim())) {
-						newMissing.push("visual-studio");
-					}
-				} catch {
+				if (!findVisualStudioInstallation()) {
 					newMissing.push("visual-studio");
 				}
 
@@ -645,12 +701,27 @@ async function copyApiFiles() {
 	cpSync("src/sdks/go", "dist/go-sdk", { recursive: true, force: true });
 }
 
+function copyMatchingFiles(
+	sourceDir: string,
+	destinationDir: string,
+	matches: (filename: string) => boolean,
+) {
+	if (!existsSync(sourceDir)) return;
+	mkdirSync(destinationDir, { recursive: true });
+	for (const filename of readdirSync(sourceDir)) {
+		const source = join(sourceDir, filename);
+		if (matches(filename) && statSync(source).isFile()) {
+			cpSync(source, join(destinationDir, filename), { force: true });
+		}
+	}
+}
+
 async function copyToDist() {
 	// Bun runtime
-	await $`cp ${PATH.bun.RUNTIME} ${PATH.bun.DIST}`;
+	cpSync(PATH.bun.RUNTIME, PATH.bun.DIST, { force: true });
 	// Zig launcher for all platforms
-	await $`cp src/launcher/zig-out/bin/launcher${binExt} dist/launcher${binExt}`;
-	await $`cp src/extractor/zig-out/bin/extractor${binExt} dist/extractor${binExt}`;
+	cpSync(`src/launcher/zig-out/bin/launcher${binExt}`, `dist/launcher${binExt}`, { force: true });
+	cpSync(`src/extractor/zig-out/bin/extractor${binExt}`, `dist/extractor${binExt}`, { force: true });
 	const coreLibName =
 		OS === "win"
 			? "ElectrobunCore.dll"
@@ -658,12 +729,12 @@ async function copyToDist() {
 				? "libElectrobunCore.dylib"
 				: "libElectrobunCore.so";
 	const coreLibSourceDir = OS === "win" ? "bin" : "lib";
-	await $`cp ${join("src", "core", "zig-out", coreLibSourceDir, coreLibName)} ${join("dist", coreLibName)}`;
+	cpSync(join("src", "core", "zig-out", coreLibSourceDir, coreLibName), join("dist", coreLibName), { force: true });
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
-	await $`cp vendors/zig-bsdiff/bsdiff${binExt} dist/bsdiff${binExt}`;
-	await $`cp vendors/zig-bsdiff/bspatch${binExt} dist/bspatch${binExt}`;
+	cpSync(`vendors/zig-bsdiff/bsdiff${binExt}`, `dist/bsdiff${binExt}`, { force: true });
+	cpSync(`vendors/zig-bsdiff/bspatch${binExt}`, `dist/bspatch${binExt}`, { force: true });
 	// Copy zig-zstd from vendored zig-zstd
-	await $`cp vendors/zig-zstd/zig-zstd${binExt} dist/zig-zstd${binExt}`;
+	cpSync(`vendors/zig-zstd/zig-zstd${binExt}`, `dist/zig-zstd${binExt}`, { force: true });
 
 	// Copy zig-asar CLI and library from vendored zig-asar
 	const libExt = OS === "win" ? ".dll" : OS === "macos" ? ".dylib" : ".so";
@@ -688,7 +759,7 @@ async function copyToDist() {
 		if (!wgpuLib) {
 			throw new Error(`WGPU shared library not found in ${wgpuSourceDir}`);
 		}
-		await $`cp ${wgpuLib} dist/${basename(wgpuLib)}`;
+		cpSync(wgpuLib, join("dist", basename(wgpuLib)), { force: true });
 		console.log("✓ Copied WGPU shared library to dist");
 
 		// On Windows, Dawn needs d3dcompiler_47.dll for D3D shader compilation.
@@ -701,7 +772,7 @@ async function copyToDist() {
 			];
 			const d3dCompiler = d3dCompilerCandidates.find((p) => existsSync(p));
 			if (d3dCompiler) {
-				await $`cp ${d3dCompiler} dist/d3dcompiler_47.dll`;
+				cpSync(d3dCompiler, join("dist", "d3dcompiler_47.dll"), { force: true });
 				console.log("✓ Copied d3dcompiler_47.dll to dist");
 			}
 		}
@@ -710,15 +781,17 @@ async function copyToDist() {
 	if (OS === "win") {
 		// On Windows, copy both x64 and arm64 versions
 		// Note: DLL is needed by launcher to extract bun/index.js from ASAR
-		await $`mkdir -p dist/zig-asar/x64 dist/zig-asar/arm64`;
+		mkdirSync(join("dist", "zig-asar", "x64"), { recursive: true });
+		mkdirSync(join("dist", "zig-asar", "arm64"), { recursive: true });
 
 		// Copy x64 version
-		await $`cp vendors/zig-asar/x64/zig-asar.exe dist/zig-asar/x64/zig-asar.exe`;
-		await $`cp vendors/zig-asar/x64/libasar.dll dist/zig-asar/x64/libasar.dll`;
+		cpSync("vendors/zig-asar/x64/zig-asar.exe", "dist/zig-asar/x64/zig-asar.exe", { force: true });
+		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/zig-asar/x64/libasar.dll", { force: true });
+		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/libasar.dll", { force: true });
 
 		// Copy arm64 version
-		await $`cp vendors/zig-asar/arm64/zig-asar.exe dist/zig-asar/arm64/zig-asar.exe`;
-		await $`cp vendors/zig-asar/arm64/libasar.dll dist/zig-asar/arm64/libasar.dll`;
+		cpSync("vendors/zig-asar/arm64/zig-asar.exe", "dist/zig-asar/arm64/zig-asar.exe", { force: true });
+		cpSync("vendors/zig-asar/arm64/libasar.dll", "dist/zig-asar/arm64/libasar.dll", { force: true });
 
 		console.log("✓ Copied both x64 and arm64 zig-asar to dist");
 	} else {
@@ -741,14 +814,14 @@ async function copyToDist() {
 		console.log(`launcher${binExt} copied successfully to ${launcherPath}`);
 	}
 	// Electrobun npm launcher
-	await $`cp src/npmbin/index.js dist/npmbin.js`;
+	cpSync("src/npmbin/index.js", "dist/npmbin.js", { force: true });
 	if (existsSync(PATH.cottontail.BIN)) {
-		await $`cp ${PATH.cottontail.BIN} ${PATH.cottontail.DIST}`;
+		cpSync(PATH.cottontail.BIN, PATH.cottontail.DIST, { force: true });
 	}
 	if (existsSync(PATH.dashCli.BIN)) {
-		await $`cp ${PATH.dashCli.BIN} ${PATH.dashCli.DIST}`;
+		cpSync(PATH.dashCli.BIN, PATH.dashCli.DIST, { force: true });
 	}
-	await $`mkdir -p bin`;
+	mkdirSync("bin", { recursive: true });
 	rmSync(join("bin", OS === "win" ? "electrobun.exe" : "electrobun"), {
 		force: true,
 	});
@@ -782,39 +855,37 @@ async function copyToDist() {
 			join("dist", "process_helper"),
 		);
 	} else if (OS === "win") {
-		await $`cp src/native/win/build/libNativeWrapper.dll dist/libNativeWrapper.dll`;
+		cpSync("src/native/win/build/libNativeWrapper.dll", "dist/libNativeWrapper.dll", { force: true });
 		// native system webview library - always use x64 for Windows
 		const webview2Arch = "x64";
-		await $`cp vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2Loader.dll dist/WebView2Loader.dll`;
+		cpSync(
+			join("vendors", "webview2", "Microsoft.Web.WebView2", "build", "native", webview2Arch, "WebView2Loader.dll"),
+			join("dist", "WebView2Loader.dll"),
+			{ force: true },
+		);
 		// CEF binaries for Windows - copy ALL CEF files to cef/ subdirectory for consistent organization
-		await $`powershell -command "New-Item -ItemType Directory -Path 'dist/cef' -Force | Out-Null"`;
-		// Copy main CEF DLLs to cef/ subdirectory
-		await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dll') { Copy-Item 'vendors/cef/Release/*.dll' 'dist/cef/' -Force }"`;
+		const cefDistDir = join("dist", "cef");
+		const cefReleaseDir = join("vendors", "cef", "Release");
+		const cefResourcesDir = join("vendors", "cef", "Resources");
+		mkdirSync(cefDistDir, { recursive: true });
+		copyMatchingFiles(cefReleaseDir, cefDistDir, (filename) =>
+			/[.](?:dll|pak|dat|bin|json)$/i.test(filename),
+		);
 
-		// Copy all available resource files to cef/ subdirectory from both Release and Resources directories
 		console.log("Copying CEF resource files...");
-
-		// Copy .pak files from Resources directory
-		await $`powershell -command "if (Test-Path 'vendors/cef/Resources/*.pak') { Write-Host 'Found .pak files in Resources, copying...'; Copy-Item 'vendors/cef/Resources/*.pak' 'dist/cef/' -Force } else { Write-Host 'No .pak files found in vendors/cef/Resources/' }"`;
-
-		// Copy resource files from Release directory
-		await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.pak') { Write-Host 'Found .pak files in Release, copying...'; Copy-Item 'vendors/cef/Release/*.pak' 'dist/cef/' -Force }"`;
-		await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.dat') { Copy-Item 'vendors/cef/Release/*.dat' 'dist/cef/' -Force }"`;
-		await $`powershell -command "if (Test-Path 'vendors/cef/Release/*.bin') { Copy-Item 'vendors/cef/Release/*.bin' 'dist/cef/' -Force }"`;
-
-		// Copy icudtl.dat directly to cef/ root (same folder as DLLs) - this is required for CEF initialization
-		await $`powershell -command "if (Test-Path 'vendors/cef/Resources/icudtl.dat') { Copy-Item 'vendors/cef/Resources/icudtl.dat' 'dist/cef/' -Force }"`.catch(
-			() => {},
+		copyMatchingFiles(cefResourcesDir, cefDistDir, (filename) =>
+			/[.](?:pak|dat)$/i.test(filename),
 		);
-
-		// CEF locales to cef/Resources/locales subdirectory
-		await $`powershell -command "if (-not (Test-Path 'dist/cef/Resources')) { New-Item -ItemType Directory -Path 'dist/cef/Resources' -Force | Out-Null }"`;
-		await $`powershell -command "if (Test-Path 'vendors/cef/Resources/locales') { Copy-Item 'vendors/cef/Resources/locales' 'dist/cef/Resources/' -Recurse -Force }"`.catch(
-			() => {},
-		);
+		const cefLocalesDir = join(cefResourcesDir, "locales");
+		if (existsSync(cefLocalesDir)) {
+			cpSync(cefLocalesDir, join(cefDistDir, "Resources", "locales"), {
+				recursive: true,
+				force: true,
+			});
+		}
 
 		// Copy CEF helper process
-		await $`cp src/native/build/process_helper.exe dist/process_helper.exe`;
+		cpSync("src/native/build/process_helper.exe", "dist/process_helper.exe", { force: true });
 	} else if (OS === "linux") {
 		// Copy both GTK-only and CEF native wrappers for flexible deployment
 		if (
@@ -919,12 +990,16 @@ async function createPlatformDistFolder() {
 	const platformDistDir = `dist-${OS}-${ARCH}`;
 	console.log(`Creating platform-specific dist folder: ${platformDistDir}`);
 
-	await $`mkdir -p ${platformDistDir}`;
+	mkdirSync(platformDistDir, { recursive: true });
 
 	// Copy all files from dist/ to platform-specific folder
 	if (OS === "win") {
-		// On Windows use PowerShell to copy all files
-		await $`powershell -command "Copy-Item -Path 'dist\\*' -Destination '${platformDistDir}\\' -Recurse -Force"`;
+		rmSync(platformDistDir, { recursive: true, force: true });
+		cpSync("dist", platformDistDir, {
+			recursive: true,
+			force: true,
+			preserveTimestamps: true,
+		});
 	} else if (OS === "macos") {
 		rmSync(platformDistDir, { recursive: true, force: true });
 		cpSync("dist", platformDistDir, {
@@ -985,7 +1060,7 @@ async function copyExecutableToBin(source: string, filename: string) {
 	const destination = join("bin", filename);
 
 	if (OS === "win") {
-		await $`cp ${source} ${destination}`;
+		cpSync(source, destination, { force: true });
 		return;
 	}
 
@@ -1011,6 +1086,13 @@ async function signExecutableIfNeeded(path: string) {
 }
 
 async function installPackageDependencies() {
+	if (OS === "win") {
+		const comSpec =
+			process.env["ComSpec"] ??
+			join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe");
+		runInherited(comSpec, ["/D", "/S", "/C", "npm.cmd", "install"]);
+		return;
+	}
 	await $`npm install`;
 }
 
@@ -1137,8 +1219,7 @@ function getRustHostTriple(): string {
 }
 
 async function verifyVendoredRust() {
-	const versionResult = await $`${PATH.rust.BIN} --version`.quiet();
-	const versionOutput = versionResult.stdout.toString().trim();
+	const versionOutput = runCaptured(PATH.rust.BIN, ["--version"]).trim();
 	if (!versionOutput.startsWith(`rustc ${RUST_VERSION}`)) {
 		throw new Error(
 			`Vendored Rust version mismatch: expected rustc ${RUST_VERSION}, got "${versionOutput}"`,
@@ -1232,8 +1313,7 @@ function getGoHostTuple(): { goOS: string; goArch: string } {
 }
 
 async function verifyVendoredGo() {
-	const versionResult = await $`${PATH.go.BIN} version`.quiet();
-	const versionOutput = versionResult.stdout.toString().trim();
+	const versionOutput = runCaptured(PATH.go.BIN, ["version"]).trim();
 	if (!versionOutput.startsWith(`go version go${GO_VERSION} `)) {
 		throw new Error(
 			`Vendored Go version mismatch: expected go${GO_VERSION}, got "${versionOutput}"`,
@@ -1309,6 +1389,16 @@ function defaultCottontailRoot() {
 function environmentFlagEnabled(name: string) {
 	const value = process.env[name]?.trim().toLowerCase();
 	return value === "1" || value === "true" || value === "yes";
+}
+
+function hasConfiguredCottontailOverride() {
+	return Boolean(
+		process.env["DASH_COTTONTAIL"] ||
+			process.env["COTTONTAIL_BINARY"] ||
+			process.env["DASH_COTTONTAIL_ROOT"] ||
+			process.env["COTTONTAIL_ROOT"] ||
+			environmentFlagEnabled("DASH_USE_LOCAL_COTTONTAIL"),
+	);
 }
 
 function resolveCottontailRoot() {
@@ -1563,11 +1653,12 @@ async function vendorDashCli() {
 	if (
 		existsSync(PATH.dashCli.BIN) &&
 		metadataMatches(dashMetadataPath, RUNTIME_ARTIFACTS.dashCli, platformKey) &&
-		metadataMatches(
-			cottontailMetadataPath,
-			RUNTIME_ARTIFACTS.cottontail,
-			platformKey,
-		)
+		(hasConfiguredCottontailOverride() ||
+			metadataMatches(
+				cottontailMetadataPath,
+				RUNTIME_ARTIFACTS.cottontail,
+				platformKey,
+			))
 	) {
 		console.log(`✓ Using existing vendored Dash CLI at ${PATH.dashCli.BIN}`);
 		return;
@@ -2749,11 +2840,7 @@ async function buildLauncher() {
 		}
 	}
 
-	if (CHANNEL === "debug") {
-		await $`cd src/launcher && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/launcher && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	await runZigBuild("launcher", zigArgs);
 }
 
 async function buildCore() {
@@ -2777,11 +2864,7 @@ async function buildCore() {
 		}
 	}
 
-	if (CHANNEL === "debug") {
-		await $`cd src/core && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/core && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	await runZigBuild("core", zigArgs);
 }
 
 async function buildMainJs() {
@@ -2813,11 +2896,7 @@ async function buildSelfExtractor() {
 				? ["-Dcpu=baseline"]
 				: [];
 
-	if (CHANNEL === "debug") {
-		await $`cd src/extractor && ../../vendors/zig/zig build ${zigArgs}`;
-	} else if (CHANNEL === "release") {
-		await $`cd src/extractor && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
-	}
+	await runZigBuild("extractor", zigArgs);
 }
 
 async function buildPreload() {
