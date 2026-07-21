@@ -5757,6 +5757,18 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
+            // Xlib is driven from multiple threads: ElectrobunClient::OnPaint
+            // (CEF UI thread) does XCreateImage/XPutImage/XFlush on the OSR
+            // buffer using the SAME Display* that process_x11_events (the
+            // main/GTK thread) drains events from. Without XInitThreads()
+            // those concurrent Xlib calls corrupt Xlib's internal request
+            // buffer during a window move/resize event storm, and the
+            // corruption later surfaces as a SIGSEGV/SIGABRT in an unrelated
+            // thread (typically the JS engine's GC) — see the linked issues.
+            // XInitThreads() must run before gtk_init() and any XOpenDisplay(),
+            // so it is the very first call here.
+            XInitThreads();
+
             // Force X11 backend on Wayland systems
             setenv("GDK_BACKEND", "x11", 1);
             
@@ -6320,35 +6332,49 @@ gboolean process_x11_events(gpointer data) {
                     }
                     break;
                     
-                case ConfigureNotify:
+                case ConfigureNotify: {
                     // Only process ConfigureNotify events for the actual main window, not CEF child windows
                     if (event.xconfigure.window != x11win->window) {
                         break;
                     }
-                    
-                    if (event.xconfigure.width != x11win->width || event.xconfigure.height != x11win->height ||
-                        event.xconfigure.x != x11win->x || event.xconfigure.y != x11win->y) {
-                        
-                        
-                        x11win->x = event.xconfigure.x;
-                        x11win->y = event.xconfigure.y;
-                        x11win->width = event.xconfigure.width;
-                        x11win->height = event.xconfigure.height;
-                        
-                        // Call move callback when position changes
-                        if (x11win->moveCallback) {
-                            x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
-                        }
-                        
+
+                    // A drag (resize from a corner, or moving the window between
+                    // monitors) emits a STORM of ConfigureNotify events. Firing
+                    // the JS move/resize callbacks and a CEF WasResized()/OSR
+                    // re-render for every one floods the JS side and the OSR
+                    // paint pipeline. Coalesce the whole pending burst down to
+                    // the LATEST geometry first.
+                    XEvent latest = event;
+                    XEvent peek;
+                    while (XCheckTypedWindowEvent(x11win->display, x11win->window, ConfigureNotify, &peek)) {
+                        latest = peek;
+                    }
+
+                    bool moved   = (latest.xconfigure.x != x11win->x) || (latest.xconfigure.y != x11win->y);
+                    bool resized = (latest.xconfigure.width != x11win->width) || (latest.xconfigure.height != x11win->height);
+
+                    x11win->x = latest.xconfigure.x;
+                    x11win->y = latest.xconfigure.y;
+                    x11win->width = latest.xconfigure.width;
+                    x11win->height = latest.xconfigure.height;
+
+                    // Fire the move callback only when the position changed.
+                    if (moved && x11win->moveCallback) {
+                        x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
+                    }
+
+                    // Fire the resize callback + OSR re-layout only when the
+                    // SIZE actually changed. A pure move (same w/h) must not
+                    // trigger a CEF WasResized()/OnPaint storm.
+                    if (resized) {
                         if (x11win->resizeCallback) {
-                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y, 
+                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y,
                                                     x11win->width, x11win->height);
                         }
-                        
-                        // Auto-resize webviews in this window
                         resizeAutoSizingWebviewsInWindow(x11win->windowId, x11win->width, x11win->height);
                     }
                     break;
+                }
                     
                 case Expose:
                     // Handle expose events if needed
