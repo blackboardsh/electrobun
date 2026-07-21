@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Odin Particles</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app">
+			<section class="stage">
+				<header class="topbar">
+					<div>
+						<h1>Odin Particles</h1>
+						<p id="status">Waiting for surface</p>
+					</div>
+					<div class="actions">
+						<button id="pause-button" type="button">Pause</button>
+						<button id="reset-button" type="button" class="secondary">Reset</button>
+					</div>
+				</header>
+				<div class="surface-shell">
+					<div class="hud">
+						<strong id="alive-stat">--</strong>
+						<span>particles</span>
+					</div>
+					<electrobun-wgpu id="gpu-surface"></electrobun-wgpu>
+				</div>
+			</section>
+			<aside class="controls">
+				<label>
+					<span>Emitter</span>
+					<select id="emitter-mode">
+						<option value="0">Fountain</option>
+						<option value="1">Fireworks</option>
+						<option value="2">Vortex</option>
+					</select>
+				</label>
+				<label>
+					<span>Particles <strong id="count-label">20,000</strong></span>
+					<input id="count" type="range" min="2000" max="50000" step="1000" value="20000" />
+				</label>
+				<label>
+					<span>Gravity</span>
+					<input id="gravity" type="range" min="0" max="100" step="1" value="50" />
+				</label>
+				<label>
+					<span>Force</span>
+					<input id="force" type="range" min="0" max="100" step="1" value="50" />
+				</label>
+				<div class="stats">
+					<div>
+						<span>Frames</span>
+						<strong id="frame-stat">--</strong>
+					</div>
+					<div>
+						<span>Surface</span>
+						<strong id="surface-stat">--</strong>
+					</div>
+					<div>
+						<span>GPU view</span>
+						<strong id="view-stat">--</strong>
+					</div>
+				</div>
+			</aside>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>

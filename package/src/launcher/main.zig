@@ -109,6 +109,7 @@ const MainProcess = enum {
     zig,
     rust,
     go,
+    odin,
 };
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
@@ -136,6 +137,9 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
         }
         if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "go")) {
             return .go;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "odin")) {
+            return .odin;
         }
     }
 
@@ -235,7 +239,7 @@ pub fn main() !void {
             },
             else => @panic("Unsupported platform"),
         },
-        .zig, .rust, .go => {
+        .zig, .rust, .go, .odin => {
             const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
             argv = &[_][]const u8{main_binary_path};

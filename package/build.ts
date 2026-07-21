@@ -29,6 +29,7 @@ import {
 import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
+import { ODIN_VERSION } from "./src/shared/odin-version";
 
 console.log("building...", platform(), arch());
 
@@ -61,6 +62,7 @@ const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 const goBinary = OS === "win" ? "go.exe" : "go";
+const odinBinary = OS === "win" ? "odin.exe" : "odin";
 const cottontailBinary = OS === "win" ? "cottontail.exe" : "cottontail";
 const dashCliBinary = OS === "win" ? "dash.exe" : "dash";
 
@@ -117,6 +119,9 @@ const PATH = {
 	go: {
 		BIN: join(process.cwd(), "vendors", "go", "bin", goBinary),
 	},
+	odin: {
+		BIN: join(process.cwd(), "vendors", "odin", odinBinary),
+	},
 	cottontail: {
 		BIN: join(process.cwd(), "vendors", "cottontail", cottontailBinary),
 		DIST: join(process.cwd(), "dist", cottontailBinary),
@@ -138,6 +143,7 @@ const MIN_DOWNLOAD_SIZES: Record<string, number> = {
 	cef: 50 * 1024 * 1024, // CEF tarball should be > 50MB
 	rust: 100 * 1024 * 1024, // Rust toolchain tarball should be > 100MB
 	go: 50 * 1024 * 1024, // Go toolchain archive should be > 50MB
+	odin: 30 * 1024 * 1024, // Odin toolchain archive should be > 30MB
 };
 
 function validateDownload(filePath: string, type: string): void {
@@ -632,6 +638,7 @@ async function setup() {
 	await vendorZig(); // ziglang.org (not GitHub)
 	await vendorRust(); // static.rust-lang.org (not GitHub)
 	await vendorGo(); // go.dev (not GitHub)
+	await vendorOdin(); // GitHub
 	await vendorDashCli(); // pinned release or explicit local override
 	await vendorCottontail(); // normally supplied by the pinned Dash release
 	await vendorCEF(); // Spotify CDN (not GitHub)
@@ -699,6 +706,14 @@ async function copyApiFiles() {
 	});
 	mkdirSync("dist/go-sdk", { recursive: true });
 	cpSync("src/sdks/go", "dist/go-sdk", { recursive: true, force: true });
+
+	// Odin SDK is a package directory; the CLI exposes its parent as an Odin
+	// collection so user code can `import "electrobun_sdk:electrobun"`.
+	mkdirSync("dist/odin-sdk", { recursive: true });
+	cpSync("src/sdks/odin", "dist/odin-sdk/electrobun", {
+		recursive: true,
+		force: true,
+	});
 }
 
 function copyMatchingFiles(
@@ -1375,6 +1390,118 @@ async function vendorGo() {
 		throw new Error("Could not vendor Go toolchain.");
 	} finally {
 		await $`rm -f "${tempArchive}"`.catch(() => {});
+	}
+}
+
+function getOdinReleaseAssetName(): string {
+	// Official prebuilt releases: https://github.com/odin-lang/Odin/releases
+	// Coverage as of dev-2026-07a: macos-amd64/arm64, linux-amd64/arm64, windows-amd64.
+	// There is NO windows-arm64 prebuilt; Windows builds are x64-only (matching
+	// Electrobun's current Windows target policy).
+	if (OS === "macos") {
+		const odinArch = ARCH === "arm64" ? "arm64" : "amd64";
+		return `odin-macos-${odinArch}-${ODIN_VERSION}.tar.gz`;
+	}
+	if (OS === "linux") {
+		const odinArch = ARCH === "arm64" ? "arm64" : "amd64";
+		return `odin-linux-${odinArch}-${ODIN_VERSION}.tar.gz`;
+	}
+	if (OS === "win") {
+		if (ARCH === "arm64") {
+			throw new Error(
+				"Odin does not publish windows-arm64 prebuilt toolchains. Odin main processes are only supported on x64 Windows.",
+			);
+		}
+		return `odin-windows-amd64-${ODIN_VERSION}.zip`;
+	}
+	throw new Error(`Unsupported platform for Odin toolchain: ${OS}`);
+}
+
+async function verifyVendoredOdin() {
+	const versionOutput = runCaptured(PATH.odin.BIN, ["version"]).trim();
+	// Release binaries self-report the month build (e.g. "dev-2026-07-nightly:819fdc7")
+	// rather than the release tag ("dev-2026-07a"), so match on the month prefix.
+	// The exact pinned tag is tracked via the .odin-version stamp file.
+	const expectedPrefix = ODIN_VERSION.replace(/[a-z]$/, "");
+	if (!versionOutput.includes(expectedPrefix)) {
+		throw new Error(
+			`Vendored Odin version mismatch: expected ${ODIN_VERSION} (${expectedPrefix}*), got "${versionOutput}"`,
+		);
+	}
+}
+
+async function vendorOdin() {
+	const odinDir = join(process.cwd(), "vendors", "odin");
+	const odinVersionFile = join(odinDir, ".odin-version");
+
+	if (existsSync(PATH.odin.BIN)) {
+		if (existsSync(odinVersionFile)) {
+			const vendoredVersion = readFileSync(odinVersionFile, "utf-8").trim();
+			if (vendoredVersion === ODIN_VERSION) {
+				await verifyVendoredOdin();
+				return;
+			}
+			console.log(
+				`Odin version mismatch: vendored "${vendoredVersion}" vs expected "${ODIN_VERSION}"`,
+			);
+		} else {
+			try {
+				await verifyVendoredOdin();
+				writeFileSync(odinVersionFile, ODIN_VERSION);
+				return;
+			} catch {
+				console.log("Odin vendor directory found without a valid version stamp.");
+			}
+		}
+
+		console.log("Cleaning stale Odin toolchain and re-vendoring...");
+		await $`rm -rf ${odinDir}`;
+	}
+
+	const assetName = getOdinReleaseAssetName();
+	const tempArchive = join("vendors", assetName);
+	const tempExtractDir = join("vendors", "odin-extract-temp");
+	const odinUrl = `https://github.com/odin-lang/Odin/releases/download/${ODIN_VERSION}/${assetName}`;
+
+	try {
+		await $`mkdir -p vendors`;
+		await $`rm -rf ${tempExtractDir}`;
+		console.log(`Downloading Odin ${ODIN_VERSION} (${assetName})...`);
+		await $`curl -L "${odinUrl}" -o "${tempArchive}"`;
+		validateDownload(tempArchive, "odin");
+
+		mkdirSync(tempExtractDir, { recursive: true });
+		if (OS === "win") {
+			await $`powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path "${tempArchive}" -DestinationPath "${tempExtractDir}" -Force`;
+		} else {
+			await $`tar -xzf "${tempArchive}" -C "${tempExtractDir}"`;
+		}
+
+		// Release archives contain a single top-level folder (name varies by
+		// platform/release), which becomes vendors/odin. If files were extracted
+		// flat, use the extract dir directly.
+		const entries = readdirSync(tempExtractDir, { withFileTypes: true });
+		const topLevelDirs = entries.filter((entry) => entry.isDirectory());
+		const extractedRoot =
+			entries.length === 1 && topLevelDirs.length === 1
+				? join(tempExtractDir, topLevelDirs[0].name)
+				: tempExtractDir;
+
+		await $`rm -rf ${odinDir}`;
+		renameSync(extractedRoot, odinDir);
+		if (OS !== "win") {
+			chmodSync(PATH.odin.BIN, 0o755);
+		}
+
+		await verifyVendoredOdin();
+		writeFileSync(odinVersionFile, ODIN_VERSION);
+		console.log("✓ Odin toolchain vendored successfully");
+	} catch (error) {
+		console.error("Failed to vendor Odin:", error);
+		throw new Error("Could not vendor Odin toolchain.");
+	} finally {
+		await $`rm -f "${tempArchive}"`.catch(() => {});
+		await $`rm -rf "${tempExtractDir}"`.catch(() => {});
 	}
 }
 

@@ -22,6 +22,7 @@ import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
 import { BUN_VERSION } from "../shared/bun-version";
 import { RUST_VERSION } from "../shared/rust-version";
 import { GO_VERSION } from "../shared/go-version";
+import { ODIN_VERSION } from "../shared/odin-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import {
 	getAppFileName,
@@ -76,7 +77,7 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
-type MainProcess = "bun" | "zig" | "rust" | "go";
+type MainProcess = "bun" | "zig" | "rust" | "go" | "odin";
 
 // Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
 function resolveElectrobunDir(): string {
@@ -219,6 +220,15 @@ function getVendoredGoBinaryPath(): string {
 		"go",
 		"bin",
 		OS === "win" ? "go.exe" : "go",
+	);
+}
+
+function getVendoredOdinBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"odin",
+		OS === "win" ? "odin.exe" : "odin",
 	);
 }
 
@@ -505,6 +515,90 @@ async function buildGoMainExecutable(options: {
 	}
 
 	return goOutBin;
+}
+
+async function buildOdinMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const odinBinary = getVendoredOdinBinaryPath();
+	if (!existsSync(odinBinary)) {
+		throw new Error(
+			`Vendored Odin compiler not found at ${odinBinary}. Rebuild electrobun/package so vendors/odin is available.`,
+		);
+	}
+
+	// dist/odin-sdk is exposed as the "electrobun_sdk" collection; the SDK itself
+	// is the "electrobun" package inside it (import "electrobun_sdk:electrobun").
+	const odinSdkCollectionPath = join(ELECTROBUN_DEP_PATH, "dist", "odin-sdk");
+	if (!existsSync(join(odinSdkCollectionPath, "electrobun", "electrobun.odin"))) {
+		throw new Error(`Electrobun Odin SDK not found at ${odinSdkCollectionPath}`);
+	}
+
+	// Odin can cross-compile object code, but linking still requires the target
+	// platform's linker/SDK, so mirror the Rust/Go host-only policy.
+	if (options.targetOS !== OS || options.targetArch !== ARCH) {
+		throw new Error(
+			`Odin main process cross-compilation is not supported yet. Vendored Odin targets ${OS}-${ARCH}, but the build target is ${options.targetOS}-${options.targetArch}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-odin-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const odinOutBin = join(tempBuildDir, "main" + binExt);
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	// Odin compiles a package (directory); accept a file entrypoint for config
+	// symmetry with the other languages and compile its containing package.
+	const entrypointDir = statSync(options.entrypoint).isDirectory()
+		? options.entrypoint
+		: dirname(options.entrypoint);
+
+	const odinArgs = [
+		"build",
+		entrypointDir,
+		`-out:${odinOutBin}`,
+		`-collection:electrobun_sdk=${odinSdkCollectionPath}`,
+	];
+
+	if (options.buildEnvironment !== "dev") {
+		odinArgs.push("-o:size");
+	}
+
+	const result = Bun.spawnSync([odinBinary, ...odinArgs], {
+		cwd: projectRoot,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		if (options.targetOS === "win") {
+			console.error(
+				"Note: Odin on Windows requires the MSVC toolchain (link.exe from Visual Studio Build Tools). See the Odin main process docs for prerequisites.",
+			);
+		}
+		throw new Error("Build failed: odin main process compilation failed");
+	}
+
+	if (!existsSync(odinOutBin)) {
+		throw new Error(`Odin main process binary was not produced at ${odinOutBin}`);
+	}
+
+	return odinOutBin;
 }
 
 async function ensureCoreDependencies(
@@ -1900,6 +1994,9 @@ const defaultConfig = {
 		go: {
 			entrypoint: "src/go/main.go",
 		},
+		odin: {
+			entrypoint: "src/odin/main.odin",
+		},
 		views: undefined as
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
 			| undefined,
@@ -2800,6 +2897,8 @@ Categories=Utility;Application;
 		const rustSource = join(projectRoot, rustConfig.entrypoint);
 		const goConfig = config.build.go;
 		const goSource = join(projectRoot, goConfig.entrypoint);
+		const odinConfig = config.build.odin;
+		const odinSource = join(projectRoot, odinConfig.entrypoint);
 
 		if (mainProcess === "bun") {
 			if (!existsSync(bunSource)) {
@@ -2818,6 +2917,10 @@ Categories=Utility;Application;
 		} else if (mainProcess === "go" && !existsSync(goSource)) {
 			throw new Error(
 				`failed to compile ${goSource} because it doesn't exist.\n You need a config.build.go.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "odin" && !existsSync(odinSource)) {
+			throw new Error(
+				`failed to compile ${odinSource} because it doesn't exist.\n You need a config.build.odin.entrypoint source file to build.`,
 			);
 		}
 
@@ -2879,6 +2982,14 @@ Categories=Utility;Application;
 		} else if (mainProcess === "go") {
 			nativeMainBinarySourcePath = await buildGoMainExecutable({
 				entrypoint: goSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "odin") {
+			nativeMainBinarySourcePath = await buildOdinMainExecutable({
+				entrypoint: odinSource,
 				buildFolder,
 				targetOS,
 				targetArch: targetARCH,
@@ -4195,6 +4306,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				: {}),
 			...(mainProcess === "rust" ? { rustVersion: RUST_VERSION } : {}),
 			...(mainProcess === "go" ? { goVersion: GO_VERSION } : {}),
+			...(mainProcess === "odin" ? { odinVersion: ODIN_VERSION } : {}),
 			...(config.build?.bunnyBun ? { bunnyBun: config.build.bunnyBun } : {}),
 		};
 
@@ -4972,6 +5084,11 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		// Go entrypoint directory
 		if (config.build.mainProcess === "go" && config.build.go?.entrypoint) {
 			watchDirs.add(join(projectRoot, dirname(config.build.go.entrypoint)));
+		}
+
+		// Odin entrypoint directory
+		if (config.build.mainProcess === "odin" && config.build.odin?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.odin.entrypoint)));
 		}
 
 		// View entrypoint directories

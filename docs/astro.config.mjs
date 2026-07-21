@@ -32,6 +32,7 @@ export default defineConfig({
               label: "Advanced Guides",
               items: [
                 { label: "Cross-Platform Development", link: "/electrobun/guides/cross-platform-development/" },
+                { label: "Native Main Processes", link: "/electrobun/guides/native-main-process/" },
                 { label: "Compatibility", link: "/electrobun/guides/compatability/" },
                 { label: "Code Signing", link: "/electrobun/guides/code-signing/" },
                 { label: "Architecture Overview", link: "/electrobun/guides/architecture/overview/" },

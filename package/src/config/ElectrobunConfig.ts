@@ -141,10 +141,11 @@ export interface ElectrobunConfig {
 		 * - "zig": compile and run the Zig main process entrypoint
 		 * - "rust": compile and run the Rust main process entrypoint
 		 * - "go": compile and run the Go main process entrypoint
+		 * - "odin": compile and run the Odin main process entrypoint
 		 * - "cottontail": bundle and run the Cottontail main process entrypoint
 		 * @default "bun"
 		 */
-		mainProcess?: "bun" | "zig" | "rust" | "go" | "cottontail";
+		mainProcess?: "bun" | "zig" | "rust" | "go" | "odin" | "cottontail";
 
 		/**
 		 * Bun process build configuration.
@@ -191,6 +192,23 @@ export interface ElectrobunConfig {
 			/**
 			 * Entry point for the main Go process
 			 * @default "src/go/main.go"
+			 */
+			entrypoint?: string;
+		};
+
+		/**
+		 * Odin main process build configuration.
+		 * Used when `build.mainProcess` is set to `"odin"`.
+		 *
+		 * Note: Odin support has platform caveats (x64-only on Windows, MSVC
+		 * Build Tools required on Windows). See docs for details.
+		 */
+		odin?: {
+			/**
+			 * Entry point for the main Odin process. May be a .odin file or a
+			 * package directory; a file entrypoint compiles its containing
+			 * directory as the root package.
+			 * @default "src/odin/main.odin"
 			 */
 			entrypoint?: string;
 		};

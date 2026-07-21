@@ -2,3 +2,9 @@
 title: "Unreleased"
 ---
               <p>Notes for the next stable release will appear here as work lands.</p>
+
+## Odin main process support
+
+<p>Odin joins Zig, Rust, and Go as a native main-process language (<code>build.mainProcess: "odin"</code>). The Odin toolchain is vendored at a pinned release, the SDK mirrors the Zig SDK's API 1:1, and the kitchen sink test suite runs against an Odin main process. A new <code>odin-particles-wgpu</code> template showcases a data-oriented particle simulation built on Odin's <code>#soa</code> arrays rendered to a native WGPU surface.</p>
+
+<p>Platform caveats (see the Native Main Processes guide): Windows builds are x64-only and require Visual Studio Build Tools; the pinned Odin release is pre-1.0; no cross-compilation yet.</p>
