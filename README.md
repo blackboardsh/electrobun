@@ -155,6 +155,18 @@ bun dev:rerun
 bun dev:clean
 ```
 
+With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
+one command to build only changed native layers and run Kitchen with the local
+stack:
+
+```bash
+dash dev --local
+```
+
+The first Dash may be globally installed or vendored. Stack preparation
+replaces Electrobun's vendored Dash and Cottontail bootstrap pair with the
+completed local builds for later invocations.
+
 ### Additional Commands
 
 All commands are run from the `/package` directory:

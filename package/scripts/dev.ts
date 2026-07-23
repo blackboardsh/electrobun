@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
+import { prepareLocalStack } from "./local-stack.js";
 
 export type DevCommand = {
 	label: string;
@@ -16,6 +17,7 @@ type CreateDevCommandsOptions = {
 	platform: string;
 	comSpec?: string;
 	devArgs?: string[];
+	skipPackageBuild?: boolean;
 };
 
 export function createDevCommands({
@@ -25,6 +27,7 @@ export function createDevCommands({
 	platform,
 	comSpec = "cmd.exe",
 	devArgs = [],
+	skipPackageBuild = false,
 }: CreateDevCommandsOptions): DevCommand[] {
 	const installCommand: DevCommand =
 		platform === "win32"
@@ -41,13 +44,16 @@ export function createDevCommands({
 					cwd: kitchenDir,
 				};
 
-	return [
-		{
+	const commands: DevCommand[] = [];
+	if (!skipPackageBuild) {
+		commands.push({
 			label: "Build Electrobun package",
 			command: dashBinary,
 			args: [join(packageDir, "build.ts")],
 			cwd: packageDir,
-		},
+		});
+	}
+	commands.push(
 		installCommand,
 		{
 			label: "Launch Kitchen development app",
@@ -55,7 +61,8 @@ export function createDevCommands({
 			args: ["electrobun", "dev", ...devArgs],
 			cwd: kitchenDir,
 		},
-	];
+	);
+	return commands;
 }
 
 function isAbsoluteExecutablePath(value: string) {
@@ -113,9 +120,20 @@ function runCommand(command: DevCommand) {
 	}
 }
 
+export function parseDevArgs(args: string[]) {
+	return {
+		local: args.includes("--local"),
+		devArgs: args.filter((arg) => arg !== "--local"),
+	};
+}
+
 function main() {
 	const packageDir = resolve(import.meta.dirname, "..");
 	const kitchenDir = resolve(packageDir, "..", "kitchen");
+	const parsedArgs = parseDevArgs(process.argv.slice(2));
+	if (parsedArgs.local) {
+		prepareLocalStack(packageDir);
+	}
 	const dashBinary = resolveDashBinary(packageDir);
 	const comSpec =
 		process.env["ComSpec"] ??
@@ -126,7 +144,8 @@ function main() {
 		kitchenDir,
 		platform: process.platform,
 		comSpec,
-		devArgs: process.argv.slice(2),
+		devArgs: parsedArgs.devArgs,
+		skipPackageBuild: parsedArgs.local,
 	});
 
 	console.log(`[dev] Dash: ${dashBinary}`);

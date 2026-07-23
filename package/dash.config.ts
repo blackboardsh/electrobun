@@ -4,6 +4,7 @@ export default {
 		"check-zig-version": "vendors/zig/zig version",
 		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "./vendors/dash-cli/dash build.ts",
+		"build:local": "scripts/build-local.js",
 		"build:release": "./vendors/dash-cli/dash build.ts --release",
 		dev: "scripts/dev.ts",
 		"dev:test": "scripts/dev.test.ts",

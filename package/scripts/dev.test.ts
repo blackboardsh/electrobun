@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { createDevCommands } from "./dev.ts";
+import { createDevCommands, parseDevArgs } from "./dev.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -52,5 +52,26 @@ const posixCommands = createDevCommands({
 });
 assert(posixCommands[1]?.command === "npm", "POSIX npm install should execute npm directly");
 assertArray(posixCommands[1]?.args ?? [], ["install"], "POSIX npm install argv");
+
+const localArgs = parseDevArgs(["--watch", "--local"]);
+assert(localArgs.local, "Local dev args should enable local stack mode");
+assertArray(localArgs.devArgs, ["--watch"], "Local flag should not reach Electrobun");
+
+const localCommands = createDevCommands({
+	dashBinary: "/tmp/dash",
+	packageDir: "/tmp/electrobun/package",
+	kitchenDir: "/tmp/electrobun/kitchen",
+	platform: "linux",
+	devArgs: localArgs.devArgs,
+	skipPackageBuild: true,
+});
+assert(localCommands.length === 2, "Prepared local dev plan should skip package rebuild");
+assert(localCommands[0]?.label === "Install Kitchen dependencies", "Local install step mismatch");
+assert(localCommands[1]?.label === "Launch Kitchen development app", "Local launch step mismatch");
+assertArray(
+	localCommands[1]?.args ?? [],
+	["electrobun", "dev", "--watch"],
+	"Local launch argv",
+);
 
 console.log("Electrobun dev command plan passed");

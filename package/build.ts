@@ -4,7 +4,7 @@ import { $ } from "bun";
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { platform, arch, tmpdir } from "os";
-import { join, relative, basename, resolve } from "path";
+import { join, relative, basename, dirname, resolve } from "path";
 import {
 	existsSync,
 	readdirSync,
@@ -641,6 +641,7 @@ async function setup() {
 	await vendorOdin(); // GitHub
 	await vendorDashCli(); // pinned release or explicit local override
 	await vendorCottontail(); // normally supplied by the pinned Dash release
+	syncDashCliRuntimePair();
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -1728,6 +1729,20 @@ async function vendorCottontail() {
 		downloaded.cleanup();
 	}
 	console.log(`✓ Cottontail ${RUNTIME_ARTIFACTS.cottontail.version} vendored`);
+}
+
+function syncDashCliRuntimePair() {
+	if (!existsSync(PATH.dashCli.BIN)) {
+		throw new Error(`Dash CLI bootstrap binary is missing: ${PATH.dashCli.BIN}`);
+	}
+	if (!existsSync(PATH.cottontail.BIN)) {
+		throw new Error(`Cottontail bootstrap binary is missing: ${PATH.cottontail.BIN}`);
+	}
+
+	const packagedCottontail = join(dirname(PATH.dashCli.BIN), cottontailBinary);
+	cpSync(PATH.cottontail.BIN, packagedCottontail, { force: true });
+	if (OS !== "win") chmodSync(packagedCottontail, 0o755);
+	console.log(`✓ Dash CLI bootstrap runtime paired at ${packagedCottontail}`);
 }
 
 async function vendorDashCli() {
