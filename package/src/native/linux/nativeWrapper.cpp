@@ -122,6 +122,30 @@ using electrobun::OperationGuard;
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
 
+// Defined later in this file — isX11Backend() needs it before the full
+// declaration site. In C++, static members can be used after a prior
+// declaration in the same translation unit.
+static std::atomic<bool> g_gtkInitialized{false};
+// Intentionally permissive until GTK selects the real backend. Some legacy
+// startup paths register X11 callbacks before gtk_init(); treating that phase
+// as X11-compatible preserves the old behavior, and the X11 thread fails
+// gracefully if no display exists. Once GTK is initialized this cache is set to
+// the actual GDK backend and Wayland guards become authoritative.
+static std::atomic<bool> g_isX11Backend{true};
+
+// Check if we're running under the X11 GDK backend. GTK may also select
+// Wayland, so every GDK/X11 interop path must verify this before using Xlib.
+// Defaults to true before GTK initialization so X11-only startup paths that
+// register callbacks before gtk_init() are not permanently disabled.
+static bool isX11Backend() {
+#ifdef GDK_WINDOWING_X11
+    if (!g_gtkInitialized.load(std::memory_order_acquire)) return true;
+    return g_isX11Backend.load(std::memory_order_acquire);
+#else
+    return false;
+#endif
+}
+
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
     // Only log severe errors, ignore common ones like BadWindow for destroyed widgets
@@ -2709,18 +2733,12 @@ public:
         // Set size
         gtk_widget_set_size_request(webview, (int)width, (int)height);
         
-        // Check if parent window is transparent and apply transparency to webview
-        GtkWidget* toplevel = gtk_widget_get_toplevel(window);
-        if (GTK_IS_WINDOW(toplevel)) {
-            // Check if window has RGBA visual (transparent)
-            GdkScreen* screen = gtk_window_get_screen(GTK_WINDOW(toplevel));
-            GdkVisual* visual = gtk_widget_get_visual(toplevel);
-            if (visual && gdk_screen_get_rgba_visual(screen) == visual) {
-                // Window is transparent, make webview transparent too
-                GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
-                webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
-                printf("GTK WebKit: Applied transparent background to webview\n");
-            }
+        // Only apply transparent background when explicitly requested.
+        // On Wayland, GDK may default to RGBA visuals even for opaque windows,
+        // so checking the visual is unreliable — use the explicit flag instead.
+        if (pendingStartTransparent) {
+            GdkRGBA transparent_color = {0.0, 0.0, 0.0, 0.0};
+            webkit_web_view_set_background_color(WEBKIT_WEB_VIEW(webview), &transparent_color);
         }
         
         // Add preload scripts
@@ -2770,6 +2788,9 @@ public:
         // Enable context menu (right-click menu)
         g_signal_connect(webview, "context-menu", G_CALLBACK(onContextMenu), this);
         
+        // Required for scroll events to fire on GTK3/Wayland
+        gtk_widget_add_events(webview, GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK);
+
         // Debug scroll events
         g_signal_connect(webview, "scroll-event", G_CALLBACK(onScrollEvent), this);
         
@@ -3330,8 +3351,6 @@ public:
     }
     
     static gboolean onScrollEvent(GtkWidget* widget, GdkEventScroll* event, gpointer user_data) {
-        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
-        fflush(stdout);
         return FALSE; // Allow scroll to continue
     }
     
@@ -3799,10 +3818,12 @@ public:
 
         if (viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(viewWidget);
-            if (gdkWindow) {
+            if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
                 display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
                 window = GDK_WINDOW_XID(gdkWindow);
                 return display && window;
+#endif
             }
         }
 
@@ -4983,6 +5004,11 @@ public:
     WindowFocusCallback focusCallback;
     WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
+    guint configureTimerId = 0;
+    int pendingConfigureX = 0;
+    int pendingConfigureY = 0;
+    int pendingConfigureW = 0;
+    int pendingConfigureH = 0;
   
     ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
@@ -4994,6 +5020,17 @@ public:
         gtk_container_add(GTK_CONTAINER(window), overlay);
         
         gtk_widget_show(overlay);
+    }
+
+    ~ContainerView() {
+        cancelConfigureTimer();
+    }
+    
+    void cancelConfigureTimer() {
+        if (configureTimerId > 0) {
+            g_source_remove(configureTimerId);
+            configureTimerId = 0;
+        }
     }
     
     ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
@@ -5031,6 +5068,16 @@ public:
                 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
                 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -5054,6 +5101,16 @@ public:
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -5079,6 +5136,16 @@ public:
 
                 // Now that widget is anchored, realize it for rendering
                 gtk_widget_realize(view->widget);
+
+                // Ensure scroll events are enabled on the GdkWindow.
+                // WebKitGTK's realize handler may override the event mask, so we
+                // must re-apply scroll masks AFTER realization.
+                GdkWindow* viewGdkWindow = gtk_widget_get_window(view->widget);
+                if (viewGdkWindow) {
+                    GdkEventMask currentMask = gdk_window_get_events(viewGdkWindow);
+                    gdk_window_set_events(viewGdkWindow,
+                        static_cast<GdkEventMask>(currentMask | GDK_SMOOTH_SCROLL_MASK | GDK_SCROLL_MASK));
+                }
 
                 // Apply pending transparency/passthrough flags now that widget is realized
                 if (view->pendingStartTransparent) {
@@ -5149,23 +5216,43 @@ public:
     }
 };
 
+static gboolean onConfigureTimer(gpointer data) {
+    ContainerView* container = static_cast<ContainerView*>(data);
+    if (container) {
+        container->configureTimerId = 0;
+        container->resizeAutoSizingViews(container->pendingConfigureW, container->pendingConfigureH);
+        
+        if (container->moveCallback) {
+            container->moveCallback(container->windowId, container->pendingConfigureX, container->pendingConfigureY);
+        }
+        
+        if (container->resizeCallback) {
+            container->resizeCallback(container->windowId, container->pendingConfigureX, container->pendingConfigureY, container->pendingConfigureW, container->pendingConfigureH);
+        }
+    }
+    return G_SOURCE_REMOVE;
+}
+
 // Window configure callback for move and resize events
 static gboolean onWindowConfigure(GtkWidget* widget, GdkEventConfigure* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
-    if (container) {
-        // Handle resize events
-        container->resizeAutoSizingViews(event->width, event->height);
-        
-        // Handle move events - call the move callback with position
-        if (container->moveCallback) {
-            container->moveCallback(container->windowId, event->x, event->y);
-        }
-        
-        // Handle resize events - call the resize callback with position and size
-        if (container->resizeCallback) {
-            container->resizeCallback(container->windowId, event->x, event->y, event->width, event->height);
-        }
-    }
+    if (!container) return FALSE;
+    
+    // Always resize views immediately for responsive UI, but debounce FFI callbacks
+    container->resizeAutoSizingViews(event->width, event->height);
+    
+    // Store latest dimensions
+    container->pendingConfigureX = event->x;
+    container->pendingConfigureY = event->y;
+    container->pendingConfigureW = event->width;
+    container->pendingConfigureH = event->height;
+    
+    // Remove existing timer if pending
+    container->cancelConfigureTimer();
+    
+    // Schedule callback after 50ms of no further events
+    container->configureTimerId = g_timeout_add(50, onConfigureTimer, container);
+    
     return FALSE; // Let other handlers process this event too
 }
 
@@ -5178,7 +5265,22 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 // Window delete event callback - handles X button clicks
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
+    
+    // Close WebKit inspectors before destroying the window.
+    // The inspector keeps its own GTK window alive which prevents
+    // gtk_main_quit() from actually stopping the event loop.
     if (container) {
+        for (auto& view : container->abstractViews) {
+            if (auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(view.get())) {
+                if (webKitView->widget) {
+                    WebKitWebInspector* inspector = webkit_web_view_get_inspector(WEBKIT_WEB_VIEW(webKitView->widget));
+                    if (inspector) {
+                        webkit_web_inspector_close(inspector);
+                    }
+                }
+            }
+        }
+        
         if (container->closeCallback) {
             container->closeCallback(container->windowId);
         }
@@ -5325,7 +5427,6 @@ static std::mutex g_containersMutex;
 static std::map<uint32_t, std::shared_ptr<TrayItem>> g_trays;
 static std::mutex g_traysMutex;
 #endif
-static bool g_gtkInitialized = false;
 static std::mutex g_gtkInitMutex;
 static std::condition_variable g_gtkInitCondition;
 
@@ -5735,7 +5836,6 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         // Determine MIME type using shared function
         std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
         const char* mimeType = mimeTypeStr.c_str();
-
         // Create response
         GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
         webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
@@ -5756,18 +5856,29 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
 void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
-        if (!g_gtkInitialized) {
-            // Force X11 backend on Wayland systems
-            setenv("GDK_BACKEND", "x11", 1);
+        if (!g_gtkInitialized.load(std::memory_order_acquire)) {
+            // Don't force X11 — let GTK auto-detect the backend (X11 or Wayland).
+            // X11-specific code paths are guarded with GDK_IS_X11_DISPLAY() checks.
             
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
+
+#ifdef GDK_WINDOWING_X11
+            GdkDisplay* display = gdk_display_get_default();
+            g_isX11Backend.store(display != nullptr && GDK_IS_X11_DISPLAY(display), std::memory_order_release);
+#endif
+            g_gtkInitialized.store(true, std::memory_order_release);
             
-            // Install X11 error handler for debugging
-            XSetErrorHandler(x11_error_handler);
-            
-            g_gtkInitialized = true;
+            // Install X11 error handler when X11 is in use (either as GDK
+            // backend or via CEF's own Xlib usage). Without this handler,
+            // asynchronous X11 errors hit the default Xlib handler which
+            // terminates the process.
+#ifdef GDK_WINDOWING_X11
+            if (isX11Backend() || isCEFAvailable()) {
+                XSetErrorHandler(x11_error_handler);
+            }
+#endif
             
             // Register the views:// URI scheme handler AFTER GTK is initialized
             WebKitWebContext* context = webkit_web_context_get_default();
@@ -5781,7 +5892,7 @@ void initializeGTK() {
 // Helper function to wait for GTK initialization
 void waitForGTKInit() {
     std::unique_lock<std::mutex> lock(g_gtkInitMutex);
-    g_gtkInitCondition.wait(lock, []{ return g_gtkInitialized; });
+    g_gtkInitCondition.wait(lock, []{ return g_gtkInitialized.load(std::memory_order_acquire); });
 }
 
 // Helper function to dispatch to main thread synchronously
@@ -6433,7 +6544,7 @@ void runGTKEventLoop() {
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
 
-    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
+    // Note: GDK backend auto-detected (Wayland or X11). X11-specific features guarded at runtime.
 
     gtk_main();
     g_shutdownComplete.store(true);
@@ -6628,7 +6739,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
                    WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
-    
+   
    
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -6705,6 +6816,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         g_signal_connect(window, "destroy", G_CALLBACK(+[](GtkWidget* widget, gpointer user_data) {
             ContainerView* container = static_cast<ContainerView*>(user_data);
             if (container && container->windowId > 0) {
+                container->cancelConfigureTimer();
                 std::lock_guard<std::mutex> lock(g_containersMutex);
                 g_containers.erase(container->windowId);
             }
@@ -7289,16 +7401,16 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             return;
         }
 
-        // GTK transparent toplevels use an RGBA visual, while Dawn/Vulkan expects
-        // the WGPU surface window to support opaque alpha. Use a default-visual
-        // X11 child for every GTK WGPU view so transparent and non-transparent
-        // Linux renderers share the same masking/passthrough behavior.
+        // On X11, GTK transparent toplevels use an RGBA visual while Dawn/Vulkan
+        // expects the WGPU surface window to support opaque alpha. Use a
+        // default-visual X11 child there; Wayland falls back to GtkDrawingArea.
         if (!gtk_widget_get_realized(windowWidget)) {
             gtk_widget_realize(windowWidget);
         }
 
         GdkWindow* parentGdkWindow = gtk_widget_get_window(windowWidget);
-        if (parentGdkWindow) {
+        if (parentGdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
             Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
             Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
 
@@ -7324,6 +7436,7 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
                 XFlush(display);
                 return;
             }
+#endif
         }
 
         if (parentGdkWindow) {
@@ -7431,8 +7544,10 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
     }
     if (view->viewWidget) {
         GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
-        if (gdkWindow) {
+        if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
             return reinterpret_cast<void*>(static_cast<uintptr_t>(GDK_WINDOW_XID(gdkWindow)));
+#endif
         }
     }
     return nullptr;
@@ -8126,8 +8241,14 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
         } else if (view->viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
             if (!gdkWindow) return nullptr;
+            if (!isX11Backend()) {
+                fprintf(stderr, "wgpuCreateSurfaceForView: WGPU surface creation requires X11; not available on this backend\n");
+                return nullptr;
+            }
+#ifdef GDK_WINDOWING_X11
             display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
             window = GDK_WINDOW_XID(gdkWindow);
+#endif
         }
 
         if (!display || !window) return nullptr;
@@ -8406,9 +8527,11 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
             window = view->xWindow;
         } else if (view->viewWidget) {
             GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
-            if (gdkWindow) {
+            if (gdkWindow && isX11Backend()) {
+#ifdef GDK_WINDOWING_X11
                 display = gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
                 window = GDK_WINDOW_XID(gdkWindow);
+#endif
             }
         }
 
@@ -9903,6 +10026,8 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
     }
     
     if (container) {
+        container->cancelConfigureTimer();
+
         // Clean up all webviews in this container
         for (auto& webview : container->abstractViews) {
             if (webview) {
@@ -10860,6 +10985,13 @@ ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback
     printf("GlobalShortcut: Setting callback (callback=%p)\n", callback);
     g_globalShortcutCallback = callback;
 
+    waitForGTKInit();
+
+    if (callback && !isX11Backend()) {
+        printf("GlobalShortcut: X11 backend unavailable; global shortcuts are disabled on Wayland\n");
+        return;
+    }
+
     // Start the event loop thread if not running
     if (!g_shortcutThreadRunning && callback) {
         printf("GlobalShortcut: Starting event loop thread\n");
@@ -10882,6 +11014,10 @@ ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback
 // Register a global keyboard shortcut
 ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
     printf("GlobalShortcut: registerGlobalShortcut called for '%s'\n", accelerator ? accelerator : "(null)");
+    if (!isX11Backend()) {
+        printf("GlobalShortcut: X11 backend unavailable; skipping shortcut registration on Wayland\n");
+        return false;
+    }
     
     if (!accelerator) {
         fprintf(stderr, "ERROR: Cannot register shortcut - accelerator is null\n");
@@ -10950,6 +11086,7 @@ ELECTROBUN_EXPORT bool registerGlobalShortcut(const char* accelerator) {
 
 // Unregister a global keyboard shortcut
 ELECTROBUN_EXPORT bool unregisterGlobalShortcut(const char* accelerator) {
+    if (!isX11Backend()) return false;
     if (!accelerator || !g_shortcutDisplay) return false;
 
     std::string accelStr(accelerator);
@@ -10982,6 +11119,10 @@ ELECTROBUN_EXPORT bool unregisterGlobalShortcut(const char* accelerator) {
 
 // Unregister all global keyboard shortcuts
 ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
+    if (!isX11Backend()) {
+        g_globalShortcuts.clear();
+        return;
+    }
     if (!g_shortcutDisplay) return;
 
     Window root = DefaultRootWindow(g_shortcutDisplay);
