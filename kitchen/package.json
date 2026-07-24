@@ -2,10 +2,10 @@
 	"scripts": {
 		"start": "electrobun run",
 		"dev": "electrobun dev",
-		"check:zig-mirrors": "bun ./scripts/check-zig-test-mirrors.ts",
-		"check:odin-mirrors": "bun ./scripts/check-odin-test-mirrors.ts",
-		"build:canary": "cd ../package && bun build:release && cd ../kitchen && electrobun build --env=canary",
-		"build:stable": "cd ../package && bun build:release && cd ../kitchen && electrobun build --env=stable",
+		"check:zig-mirrors": "../package/bin/dash scripts/check-zig-test-mirrors.ts",
+		"check:odin-mirrors": "../package/bin/dash scripts/check-odin-test-mirrors.ts",
+		"build:canary": "cd ../package && ./vendors/dash-cli/dash build:release && cd ../kitchen && ../package/bin/dash electrobun build --env=canary",
+		"build:stable": "cd ../package && ./vendors/dash-cli/dash build:release && cd ../kitchen && ../package/bin/dash electrobun build --env=stable",
 		"start:canary": "electrobun dev --env=canary"
 	},
 	"dependencies": {

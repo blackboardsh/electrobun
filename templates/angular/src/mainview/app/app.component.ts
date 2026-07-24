@@ -30,15 +30,15 @@ import { Component } from "@angular/core";
 					<ul>
 						<li>
 							<span class="number">1.</span>
-							Run <code>bun run dev</code> for development without HMR
+							Run <code>dash run dev</code> for development without HMR
 						</li>
 						<li>
 							<span class="number">2.</span>
-							Run <code>bun run dev:hmr</code> for development with hot reload
+							Run <code>dash run dev:hmr</code> for development with hot reload
 						</li>
 						<li>
 							<span class="number">3.</span>
-							Run <code>bun run build</code> to build for production
+							Run <code>dash run build:canary</code> to build a canary release
 						</li>
 					</ul>
 				</div>

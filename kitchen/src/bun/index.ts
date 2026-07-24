@@ -296,10 +296,9 @@ testRunnerWindow.webview.on("dom-ready", () => {
 	testRunnerWindow!.webview.rpc?.send.buildConfig({
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
-		mainProcess: buildConfig.mainProcess ?? "bun",
-		cefVersion: buildConfig.cefVersion,
-		bunVersion: buildConfig.bunVersion,
-	});
+			mainProcess: buildConfig.mainProcess ?? "cottontail",
+			cefVersion: buildConfig.cefVersion,
+		});
 	// Send current update status
 	testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);
 });

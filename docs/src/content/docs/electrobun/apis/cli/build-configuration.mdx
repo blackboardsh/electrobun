@@ -27,7 +27,7 @@ export default {
     exitOnLastWindowClosed: true,
   },
   build: {
-    bun: {
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -37,9 +37,9 @@ export default {
 
 ## Bun Bundler Options
 
-              <p>Both `build.bun` and each entry in `build.views` accept all <a href="https://bun.sh/docs/bundler" target="_blank">Bun.build()</a> options as pass-through properties. The only required field is `entrypoint` — everything else is optional.</p>
+              <p>Both `build.cottontail` and each entry in `build.views` accept all Bun-compatible `Bun.build()` options as pass-through properties. The only required field is `entrypoint`; everything else is optional.</p>
 
-              <p>Electrobun controls `entrypoints` (derived from your `entrypoint`), `outdir`, and `target` (`"bun"` for the bun process, `"browser"` for views) automatically. All other Bun bundler options are passed through directly.</p>
+              <p>Electrobun controls `entrypoints` (derived from your `entrypoint`), `outdir`, and `target` (`"bun"` for Cottontail's Bun-compatible main-process bundle, `"browser"` for views) automatically. All other compatible bundler options are passed through directly.</p>
 
 ### Available Options
 
@@ -143,7 +143,7 @@ export default {
     version: "1.0.0",
   },
   build: {
-    bun: {
+    cottontail: {
       entrypoint: "src/bun/index.ts",
       plugins: [myPlugin()],
     },
@@ -223,7 +223,7 @@ const config: ElectrobunConfig = {
 
 ### Handling URL Opens
 
-              <p>Listen for the `open-url` event in your Bun process to handle incoming URLs:</p>
+              <p>Listen for the `open-url` event in your main process to handle incoming URLs:</p>
 
               
 ```javascript
@@ -335,7 +335,7 @@ export default {
     version: packageJson.version,
   },
   build: {
-    bun: {
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -403,7 +403,7 @@ export default {
       "*.so",             // Linux shared objects
       "data/large/**/*",  // Large data files
     ],
-    bun: {
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -448,7 +448,7 @@ export default {
     version: "1.0.0",
   },
   build: {
-    bun: {
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
     // Watch additional directories for changes
@@ -553,7 +553,7 @@ export default {
         version: "0.0.1",
     },
     build: {
-        bun: {
+        cottontail: {
             entrypoint: "src/bun/index.ts",
         },
         views: {
@@ -603,56 +603,6 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-
-## Custom Bun Version
-
-              <p>Each Electrobun release ships with a specific tested Bun version. You can override this with the `bunVersion` option in your build configuration to use a different version from <a href="https://github.com/oven-sh/bun/releases" target="_blank" rel="noopener">Bun's GitHub releases</a>.</p>
-
-### Why Override the Bun Version
-
-              <ul>
-                <li><strong>Use a newer version:</strong> If a newer Bun release includes a performance improvement, bug fix, or API you need, you can adopt it immediately without waiting for Electrobun to update its default.</li>
-                <li><strong>Pin an older version:</strong> If a newer Bun release introduces a regression that affects your app, you can pin to the version that works while you wait for a fix.</li>
-              </ul>
-
-### Configuration
-
-              <p>Set the `bunVersion` field in the `build` section of your `electrobun.config.ts`. The value is a semver version string matching a <a href="https://github.com/oven-sh/bun/releases" target="_blank" rel="noopener">Bun release tag</a>:</p>
-
-              
-```javascript
-// electrobun.config.ts
-import type { ElectrobunConfig } from "electrobun";
-
-export default {
-  app: {
-    name: "MyApp",
-    identifier: "com.example.myapp",
-    version: "1.0.0",
-  },
-  build: {
-    bunVersion: "1.4.2",
-    bun: {
-      entrypoint: "src/bun/index.ts",
-    },
-  },
-} satisfies ElectrobunConfig;
-```
-
-
-### How It Works
-
-              <p>When `bunVersion` is set, the Electrobun CLI downloads the specified Bun binary from GitHub releases and caches it locally. The cached binary is stored in `node_modules/.electrobun-cache/bun-override/` so it survives both dist rebuilds and `bun install` (which replaces `node_modules/electrobun`).</p>
-
-              <p>Unlike the CEF version override, no compilation or restructuring is needed &mdash; Bun is a single standalone binary with no external dependencies.</p>
-
-### Caching
-
-              <p>The downloaded Bun binary is cached per platform and version. If you change `bunVersion`, the CLI detects the mismatch and re-downloads automatically. Removing the override restores the default Bun version shipped with your Electrobun release.</p>
-
-              <Aside type="tip">
-                <p><strong>See also:</strong> For overriding the CEF (Chromium) version, see <a href="/electrobun/apis/bundling-cef">Bundling CEF &mdash; Custom CEF Versions</a>.</p>
-              </Aside>
 
 ## Chromium Flags
 

@@ -5873,8 +5873,8 @@ bool initializeCEF() {
         CefString(&settings.framework_dir_path) = [frameworkPath UTF8String];
     }
 
-    // Match the helper name to the actual host executable ("bun" vs "main")
-    // instead of assuming Bun. Zig mode launches a different host binary.
+    // Match the helper name to the actual host executable. Native modes launch
+    // a different host binary than Cottontail.
     NSString* executablePath = [[[NSProcessInfo processInfo] arguments] firstObject];
     NSString* executableName = [[executablePath lastPathComponent] stringByDeletingPathExtension];
     NSString* helperPath = nil;
@@ -6801,7 +6801,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  * =============================================================================
  */
 
-// Note: This is executed from the main bun thread
+// Note: This is executed from the main runtime thread.
 // Note: `name` parameter is accepted for API consistency with Windows but not used on macOS
 // Forward declaration - stopEventLoop is defined after startEventLoop
 extern "C" void stopEventLoop();

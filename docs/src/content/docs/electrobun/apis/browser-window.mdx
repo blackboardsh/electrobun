@@ -340,7 +340,7 @@ const win = new BrowserWindow({
 
 
 ### rpc
-  <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
+  <p>The RPC property allows you to establish RPC (remote procedure calls) between the main process and this window's default BrowserView. In other words it lets you define functions that execute in the main process that are callable and return a value back to the browser process and visa versa.</p>
   <p>These RPC functions are asynchronous.</p>
 
   <p>`src/shared/types.ts`</p>
@@ -402,7 +402,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
@@ -440,7 +440,7 @@ win.webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 
 
-  <p><strong>Info:</strong> The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
+  <p><strong>Info:</strong> The above code snippet shows defining the main process RPC handlers and calling the browser process handlers from the main process. To see how to handle the browser context code, take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
 
 ## Properties
 

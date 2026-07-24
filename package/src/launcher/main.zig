@@ -104,7 +104,6 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
 }
 
 const MainProcess = enum {
-    bun,
     cottontail,
     zig,
     rust,
@@ -113,16 +112,16 @@ const MainProcess = enum {
 };
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
-    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .bun;
+    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
     defer allocator.free(build_path);
 
-    const file = std.fs.openFileAbsolute(build_path, .{}) catch return .bun;
+    const file = std.fs.openFileAbsolute(build_path, .{}) catch return .cottontail;
     defer file.close();
 
-    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return .bun;
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return .cottontail;
     defer allocator.free(content);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .bun;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .cottontail;
     defer parsed.deinit();
 
     if (parsed.value.object.get("mainProcess")) |main_process_value| {
@@ -143,7 +142,7 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
         }
     }
 
-    return .bun;
+    return .cottontail;
 }
 
 fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: anytype) !void {
@@ -224,21 +223,8 @@ pub fn main() !void {
 
     // Platform-specific paths
     var argv: []const []const u8 = undefined;
-    var resources_path: []u8 = undefined;
 
     switch (main_process) {
-        .bun => switch (builtin.os.tag) {
-            .macos => {
-                resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-                argv = &[_][]const u8{ "./bun", resources_path };
-            },
-            .linux, .windows => {
-                resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-                const bun_name = if (builtin.os.tag == .windows) "bun.exe" else "bun";
-                argv = &[_][]const u8{ try std.fs.path.join(arena_alloc, &.{ exe_dir, bun_name }), resources_path };
-            },
-            else => @panic("Unsupported platform"),
-        },
         .zig, .rust, .go, .odin => {
             const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });

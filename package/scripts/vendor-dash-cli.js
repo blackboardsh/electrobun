@@ -15,21 +15,10 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type Release = {
-	name: string;
-	version: string;
-	revision: string;
-	cottontail?: { version: string; revision: string };
-	platforms: Record<
-		string,
-		{ archive: { url: string; sha256: string; size: number } }
-	>;
-};
-
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const lock = JSON.parse(
 	readFileSync(join(packageRoot, "runtime-artifacts.lock.json"), "utf8"),
-) as { dashCli: Release };
+);
 const release = lock.dashCli;
 const platform = (() => {
 	const key = `${process.platform}-${process.arch}`;
@@ -58,11 +47,22 @@ function installedReleaseMatches() {
 	try {
 		const metadata = JSON.parse(
 			readFileSync(join(dashDir, "dash-cli-release.json"), "utf8"),
-		) as Release & { platform: string };
+		);
+		const cottontailMetadataPath = existsSync(
+			join(dashDir, "cottontail-release.json"),
+		)
+			? join(dashDir, "cottontail-release.json")
+			: join(cottontailDir, "cottontail-release.json");
+		const cottontailMetadata = JSON.parse(
+			readFileSync(cottontailMetadataPath, "utf8"),
+		);
 		return (
 			metadata.version === release.version &&
 			metadata.revision === release.revision &&
 			metadata.platform === platform &&
+			metadata.cottontail?.revision === release.cottontail?.revision &&
+			cottontailMetadata.revision === release.cottontail?.revision &&
+			cottontailMetadata.platform === platform &&
 			existsSync(join(dashDir, dashName)) &&
 			existsSync(join(dashDir, cottontailName))
 		);
@@ -74,10 +74,13 @@ function installedReleaseMatches() {
 function syncElectrobunCottontail() {
 	mkdirSync(cottontailDir, { recursive: true });
 	cpSync(join(dashDir, cottontailName), join(cottontailDir, cottontailName));
-	cpSync(
-		join(dashDir, "cottontail-release.json"),
-		join(cottontailDir, "cottontail-release.json"),
-	);
+	const packagedMetadata = join(dashDir, "cottontail-release.json");
+	const standaloneMetadata = join(cottontailDir, "cottontail-release.json");
+	if (existsSync(packagedMetadata)) {
+		cpSync(packagedMetadata, standaloneMetadata);
+	} else if (!existsSync(standaloneMetadata)) {
+		throw new Error("Cottontail release metadata is missing");
+	}
 	if (process.platform !== "win32") {
 		chmodSync(join(cottontailDir, cottontailName), 0o755);
 	}
@@ -115,13 +118,13 @@ if (!installedReleaseMatches()) {
 			entry.isDirectory(),
 		);
 		if (roots.length !== 1) throw new Error("Dash CLI archive has an unexpected layout");
-		const payload = join(extractRoot, roots[0]!.name);
+		const payload = join(extractRoot, roots[0].name);
 		const dashMetadata = JSON.parse(
 			readFileSync(join(payload, "dash-cli-release.json"), "utf8"),
-		) as Release & { platform: string };
+		);
 		const cottontailMetadata = JSON.parse(
 			readFileSync(join(payload, "cottontail-release.json"), "utf8"),
-		) as Release & { platform: string };
+		);
 		if (
 			dashMetadata.revision !== release.revision ||
 			dashMetadata.platform !== platform ||

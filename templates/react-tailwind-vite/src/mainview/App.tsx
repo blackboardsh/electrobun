@@ -48,7 +48,7 @@ function App() {
 							<span>
 								Run{" "}
 								<code className="bg-gray-100 px-2 py-1 rounded text-sm">
-									bun run dev
+									dash run dev
 								</code>{" "}
 								for development without HMR
 							</span>
@@ -58,7 +58,7 @@ function App() {
 							<span>
 								Run{" "}
 								<code className="bg-gray-100 px-2 py-1 rounded text-sm">
-									bun run dev:hmr
+									dash run dev:hmr
 								</code>{" "}
 								for development with hot reload
 							</span>
@@ -68,7 +68,7 @@ function App() {
 							<span>
 								Run{" "}
 								<code className="bg-gray-100 px-2 py-1 rounded text-sm">
-									bun run build
+									dash run build:canary
 								</code>{" "}
 								to build for production
 							</span>

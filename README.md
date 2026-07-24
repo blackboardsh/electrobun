@@ -14,7 +14,7 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
-Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in Objc, C++, and several core parts written in <a href="https://ziglang.org/">zig</a>.
+Under the hood it uses Cottontail, Electrobun's JSC-based JavaScript runtime, to execute the main process and bundle webview TypeScript. Native bindings are written in ObjC and C++, with several core components written in <a href="https://ziglang.org/">Zig</a>.
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
@@ -25,7 +25,7 @@ Don't miss our:
 - zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
 - `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
 - `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
-- Our Three.js and Babylon.js adapters that work right in Bun
+- Our Three.js and Babylon.js adapters that work directly in the Cottontail main process
 - Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
 - so much more.
 
@@ -33,7 +33,7 @@ Don't miss our:
 
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
-- Small self-extracting app bundles ~14MB (when using system webview, most of this is the bun runtime)
+- Small self-extracting app bundles ~14MB (when using the system webview, most of this is the Cottontail/JSC runtime)
 - Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
@@ -135,8 +135,9 @@ On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-conf
 ```bash
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
-bun install
-bun dev:clean
+npm ci
+npm run dash:vendor
+./vendors/dash-cli/dash dev:clean
 ```
 
 ### Development Workflow
@@ -146,13 +147,10 @@ bun dev:clean
 cd electrobun/package
 
 # After making changes to source code
-bun dev
-
-# If you only changed kitchen sink code (not electrobun source)
-bun dev:rerun
+./vendors/dash-cli/dash dev
 
 # If you need a completely fresh start
-bun dev:clean
+./vendors/dash-cli/dash dev:clean
 ```
 
 With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
@@ -171,9 +169,9 @@ completed local builds for later invocations.
 
 All commands are run from the `/package` directory:
 
-- `bun dev:canary` - Build and run kitchen sink in canary mode
-- `bun build:dev` - Build electrobun in development mode
-- `bun build:release` - Build electrobun in release mode
+- `./vendors/dash-cli/dash dev:canary` - Build and run kitchen sink in canary mode
+- `./vendors/dash-cli/dash build:dev` - Build Electrobun in development mode
+- `./vendors/dash-cli/dash build:release` - Build Electrobun in release mode
 
 ### Debugging
 

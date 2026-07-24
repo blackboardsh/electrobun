@@ -36,7 +36,6 @@ BuildConfigPayload :: struct {
 	availableRenderers: []string,
 	mainProcess:        string,
 	cefVersion:         Maybe(string),
-	bunVersion:         Maybe(string),
 	odinVersion:        Maybe(string),
 }
 

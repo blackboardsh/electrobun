@@ -1,6 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
-const mainProcess = "cottontail" as const; // Flip to "bun", "zig", "rust", "go", or "cottontail" to exercise main-process backends.
+const mainProcess = "cottontail" as const; // Flip to "zig", "rust", "go", or "cottontail" to exercise main-process backends.
 const bundleCEF = true;
 
 export default {
@@ -17,10 +17,6 @@ export default {
 		mainProcess,
 		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
-		// bunVersion: "1.3.7",
-		bun: {
-			entrypoint: "src/bun/index.ts",
-		},
 		zig: {
 			entrypoint: "src/zig/main.zig",
 		},

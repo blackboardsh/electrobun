@@ -11546,7 +11546,7 @@ std::string loadViewsFile(const std::string& path) {
 }
 
 // Shared MIME type detection function
-// Based on Bun runtime supported file types and web development standards
+// Based on Bun-compatible runtime file types and web development standards
 std::string getMimeTypeForFile(const std::string& path) {
     // Web/Code Files (Bun native support)
     if (path.find(".html") != std::string::npos || path.find(".htm") != std::string::npos) {

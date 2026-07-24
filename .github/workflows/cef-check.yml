@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
         with:
-          bun-version: latest
+          node-version: '18'
 
       - name: Install Linux build dependencies
         run: |
@@ -30,17 +30,21 @@ jobs:
 
       - name: Install package dependencies
         working-directory: package
-        run: bun install
+        run: npm ci
+
+      - name: Vendor Dash and Cottontail
+        working-directory: package
+        run: npm run dash:vendor
 
       - name: Check latest stable CEF version
         id: check
         working-directory: package
-        run: bun scripts/update-cef-version.ts
+        run: ./vendors/dash-cli/dash scripts/update-cef-version.ts
 
       - name: Build with latest CEF
         if: steps.check.outputs.has_update == 'true'
         working-directory: package
-        run: bun build.ts
+        run: ./vendors/dash-cli/dash build.ts
 
       - name: Job summary
         if: always()

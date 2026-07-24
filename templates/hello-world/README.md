@@ -7,23 +7,23 @@ A simple Electrobun app to get you started with the framework.
 This hello world app demonstrates:
 - **Native Window**: A cross-platform desktop window
 - **Web-based UI**: Modern HTML, CSS, and JavaScript interface
-- **Simple Architecture**: Clean separation between Bun process and UI
+- **Simple Architecture**: Clean separation between Cottontail process and UI
 
 ## Getting Started
 
 1. Install dependencies:
    ```bash
-   bun install
+   dash install
    ```
 
 2. Run in development mode:
    ```bash
-   bun run dev
+   dash run dev
    ```
 
 3. Build for production:
    ```bash
-   bun run build
+   dash electrobun build --env=stable
    ```
 
 ## Project Structure
@@ -49,7 +49,7 @@ Ready to build something more complex? Check out:
 ### Add More Features
 
 Want to extend this app? Try adding:
-- RPC communication between Bun and webview
+- RPC communication between Cottontail and webview
 - Native menus and system tray
 - File dialogs and system integration
 - Multiple windows and views

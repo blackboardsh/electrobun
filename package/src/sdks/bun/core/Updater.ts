@@ -934,9 +934,9 @@ const Updater = {
 						}
 
 						// Also ensure other binaries are executable
-						const bunPath = join(appBundleDir, "bin", "bun");
-						if (statSync(bunPath, { throwIfNoEntry: false })) {
-							execSync(`chmod +x "${bunPath}"`);
+						const cottontailPath = join(appBundleDir, "bin", "cottontail");
+						if (statSync(cottontailPath, { throwIfNoEntry: false })) {
+							execSync(`chmod +x "${cottontailPath}"`);
 						}
 					}
 
@@ -974,13 +974,13 @@ const Updater = {
 setlocal
 
 :: Wait for the app and any CEF helper processes to fully exit.
-:: launcher.exe spawns bun.exe which spawns "bun Helper*.exe" processes that
+:: launcher.exe spawns cottontail.exe and "main Helper*.exe" processes that
 :: keep libcef.dll locked; if we proceed too early, rmdir partially fails.
 :waitloop
 tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL && goto waitsleep
-tasklist /FI "IMAGENAME eq bun.exe" 2>NUL | find /I /N "bun.exe">NUL && goto waitsleep
-tasklist /FI "IMAGENAME eq bun Helper.exe" 2>NUL | find /I /N "bun Helper.exe">NUL && goto waitsleep
-tasklist 2>NUL | find /I "bun Helper">NUL && goto waitsleep
+tasklist /FI "IMAGENAME eq cottontail.exe" 2>NUL | find /I /N "cottontail.exe">NUL && goto waitsleep
+tasklist /FI "IMAGENAME eq main Helper.exe" 2>NUL | find /I /N "main Helper.exe">NUL && goto waitsleep
+tasklist 2>NUL | find /I "main Helper">NUL && goto waitsleep
 goto waitdone
 :waitsleep
 timeout /t 1 /nobreak >nul

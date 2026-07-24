@@ -9,7 +9,7 @@ import { Aside } from "@astrojs/starlight/components";
   </blockquote>
 
   <Aside type="tip">
-    <p>Instead of creating BrowserViews directly from the bun process, you would use the <a href="/electrobun/apis/browser-window">BrowserWindow</a> class which automatically creates a default BrowserView that fills the window, and then use <a href="/electrobun/apis/browser/electrobun-webview-tag">Webvew Tags</a> within your html to create nested BrowserViews from the browser context.</p>
+    <p>Instead of creating BrowserViews directly from the main process, you would use the <a href="/electrobun/apis/browser-window">BrowserWindow</a> class which automatically creates a default BrowserView that fills the window, and then use <a href="/electrobun/apis/browser/electrobun-webview-tag">Webvew Tags</a> within your html to create nested BrowserViews from the browser context.</p>
   </Aside>
 
   
@@ -143,7 +143,7 @@ const webview = new BrowserView({
 
 
 ### rpc
-  <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
+  <p>The RPC property allows you to establish RPC (remote procedure calls) between the main process and this window's default BrowserView. In other words it lets you define functions that execute in the main process that are callable and return a value back to the browser process and visa versa.</p>
   <p>These RPC functions are asynchronous.</p>
 
   <p>`src/shared/types.ts`</p>
@@ -205,7 +205,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
@@ -243,7 +243,7 @@ webview.rpc.send.logToWebview({ msg: "my message" });
 
 
   <Aside type="tip">
-    <p>The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser-view">Browser API</a>.</p>
+    <p>The above code snippet shows defining the main process RPC handlers and calling the browser process handlers from the main process. To see how to handle the browser context code, take a look at the <a href="/electrobun/apis/browser-view">Browser API</a>.</p>
   </Aside>
 
 ### sandbox
@@ -367,7 +367,7 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
@@ -447,7 +447,7 @@ webview.loadHTML(htmlString);
 
 
 ### setNavigationRules
-  <p>Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Bun process is needed.</p>
+  <p>Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Cottontail process is needed.</p>
 
   <p><strong>Rule Format:</strong></p>
   <ul>
@@ -487,7 +487,7 @@ webview.setNavigationRules([]);
 
 
   <Aside type="tip">
-    <p>Navigation rules are evaluated entirely in native code without calling back to the Bun process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.</p>
+    <p>Navigation rules are evaluated entirely in native code without calling back to the Cottontail process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.</p>
   </Aside>
 
 ### findInPage
@@ -813,4 +813,3 @@ webview.on("download-failed", (event) => {
   console.log("Error:", event.detail.error);
 });
 ```
-

@@ -18,7 +18,7 @@ const config = await Electrobun.BuildConfig.get();
 
 ## Overview
 
-              <p>The `BuildConfig` API gives your Bun process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:</p>
+              <p>The `BuildConfig` API gives your Cottontail main process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:</p>
 
               <ul>
                 <li>Knowing which renderers are available in the current build</li>
@@ -60,11 +60,6 @@ const config = await Electrobun.BuildConfig.get();
                     <td>`cefVersion`</td>
                     <td>`string | undefined`</td>
                     <td>The CEF version string used in this build (e.g., `"144.0.11+ge135be2+chromium-144.0.7559.97"`). Present only when CEF is bundled. Either the custom override from `electrobun.config.ts` or the default version shipped with the Electrobun release.</td>
-                  </tr>
-                  <tr>
-                    <td>`bunVersion`</td>
-                    <td>`string | undefined`</td>
-                    <td>The Bun runtime version used in this build (e.g., `"1.3.8"`). Either the custom override from `electrobun.config.ts` or the default version shipped with the Electrobun release.</td>
                   </tr>
                   <tr>
                     <td>`runtime`</td>
@@ -187,4 +182,3 @@ if (buildConfig.availableRenderers.includes('cef')) {
   });
 }
 ```
-

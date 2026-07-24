@@ -1,6 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -33,7 +33,20 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 // Build everything including CLI (no CI mode needed)
 console.log("Building full release...");
 try {
-	execSync("bun build.ts --release", { stdio: "inherit" });
+	const dashBinary = path.join(
+		__dirname,
+		"..",
+		"vendors",
+		"dash-cli",
+		platform === "win32" ? "dash.exe" : "dash",
+	);
+	if (!fs.existsSync(dashBinary)) {
+		throw new Error("Dash CLI is not vendored. Run npm run dash:vendor first.");
+	}
+	execFileSync(dashBinary, ["build.ts", "--release"], {
+		cwd: path.join(__dirname, ".."),
+		stdio: "inherit",
+	});
 } catch (error) {
 	console.error("Build failed:", error.message);
 	process.exit(1);
@@ -81,7 +94,6 @@ async function createTarballs() {
 	const expectedBinaries = [
 		platform === "win32" ? "dash.exe" : "dash",
 		platform === "win32" ? "cottontail.exe" : "cottontail",
-		platform === "win32" ? "bun.exe" : "bun",
 	];
 
 	const missingBinaries = expectedBinaries.filter(
@@ -124,12 +136,7 @@ async function createTarballs() {
 	// 2. Create core binaries tarball (exclude CEF and CLI)
 	const coreFiles = fs
 		.readdirSync(distPath)
-		.filter(
-			(file) =>
-				file !== "cef" &&
-				file !== dashName &&
-				file !== cottontailName,
-		);
+		.filter((file) => file !== "cef" && file !== dashName);
 
 	if (coreFiles.length > 0) {
 		console.log(`Creating core binaries tarball: ${coreOutputFile}`);

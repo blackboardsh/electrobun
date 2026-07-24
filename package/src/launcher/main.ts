@@ -5,7 +5,7 @@ import { tmpdir } from "os";
 import { spawn } from "child_process";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
-const pathToMacOS = dirname(process.argv0); // bun is still in MacOS/bin directory
+const pathToMacOS = dirname(process.argv0);
 const coreLibFileName =
 	process.platform === "win32"
 		? "ElectrobunCore.dll"
@@ -175,7 +175,7 @@ function main() {
 			throw new Error("Failed to open ASAR archive");
 		}
 
-		// Read bun/index.js from ASAR
+		// Read the source-compatible main-process bundle from ASAR.
 		const filePath = "bun/index.js";
 		const sizeBuffer = new BigUint64Array(1);
 		const fileDataPtr = asarLib.symbols.asar_read_file(

@@ -611,7 +611,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
     // List of files that should be executable
     const executables = [_][]const u8{
         "bin/launcher",
-        "bin/bun",
+        "bin/cottontail",
         "bin/bspatch",
         "bin/bsdiff",
         "bin/zig-zstd",

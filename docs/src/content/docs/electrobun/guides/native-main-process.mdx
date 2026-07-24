@@ -2,7 +2,7 @@
 title: "Native Main Processes (Zig, Rust, Go, Odin)"
 ---
 
-<p>By default an Electrobun app's main process runs in Bun (TypeScript). Electrobun can instead compile a native main process written in Zig, Rust, Go, or Odin. The native binary talks to the same native wrapper layer as the Bun runtime, so windows, webviews, trays, menus, RPC, and the updater all work the same way.</p>
+<p>By default an Electrobun app's TypeScript main process runs in Cottontail. Electrobun can instead compile a native main process written in Zig, Rust, Go, or Odin. The native binary talks to the same native wrapper layer as Cottontail, so windows, webviews, trays, menus, RPC, and the updater all work the same way.</p>
 
 ## Choosing a language
 
@@ -11,7 +11,7 @@ Set `build.mainProcess` in `electrobun.config.ts` and provide the matching entry
 ```ts
 export default {
   build: {
-    mainProcess: "odin", // "bun" | "zig" | "rust" | "go" | "odin"
+    mainProcess: "odin", // "cottontail" | "zig" | "rust" | "go" | "odin"
     odin: {
       entrypoint: "src/odin/main.odin",
     },
@@ -23,11 +23,11 @@ Each language's toolchain is vendored automatically by Electrobun at a pinned ve
 
 | Language | Config block | Default entrypoint |
 | -------- | ------------ | ------------------ |
-| Bun      | `build.bun`  | `src/bun/index.ts` |
-| Zig      | `build.zig`  | `src/zig/main.zig` |
-| Rust     | `build.rust` | `src/rust/main.rs` |
-| Go       | `build.go`   | `src/go/main.go`   |
-| Odin     | `build.odin` | `src/odin/main.odin` |
+| Cottontail | `build.cottontail` | `src/bun/index.ts` |
+| Zig        | `build.zig`        | `src/zig/main.zig` |
+| Rust       | `build.rust`       | `src/rust/main.rs` |
+| Go         | `build.go`         | `src/go/main.go`   |
+| Odin       | `build.odin`       | `src/odin/main.odin` |
 
 ## Shared limitations
 

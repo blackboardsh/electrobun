@@ -3,8 +3,8 @@
 	"version": "1.0.0",
 	"description": "A simple Electrobun app showcasing core features",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch"
+		"start": "dash electrobun dev",
+		"dev": "dash electrobun dev --watch"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

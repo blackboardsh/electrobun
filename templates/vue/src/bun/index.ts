@@ -13,7 +13,7 @@ async function getMainViewUrl(): Promise<string> {
 			return DEV_SERVER_URL;
 		} catch {
 			console.log(
-				"Vite dev server not running. Run 'bun run dev:hmr' for HMR support.",
+				"Vite dev server not running. Run 'dash run dev:hmr' for HMR support.",
 			);
 		}
 	}

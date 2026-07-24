@@ -7,6 +7,10 @@ export default {
 		version: "0.0.1",
 	},
 	build: {
+		mainProcess: "cottontail",
+		cottontail: {
+			entrypoint: "src/bun/index.ts",
+		},
 		// Vite builds to dist/, we copy from there
 		copy: {
 			"dist/index.html": "views/mainview/index.html",

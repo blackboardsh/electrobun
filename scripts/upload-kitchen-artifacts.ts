@@ -35,7 +35,7 @@ async function main() {
 	const artifactsDir = Bun.argv[2];
 	if (!artifactsDir) {
 		console.error(
-			"Usage: bun run scripts/upload-kitchen-artifacts.ts -- <artifactsDir>",
+			"Usage: dash scripts/upload-kitchen-artifacts.ts <artifactsDir>",
 		);
 		process.exit(1);
 	}

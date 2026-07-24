@@ -1,6 +1,6 @@
 // Standalone build script for the preload.
-// Normally this is run as part of "bun build.ts", but you can run this directly:
-//   bun src/preload/build.ts
+// Normally this is run as part of "dash build.ts", but you can run it directly:
+//   ./vendors/dash-cli/dash src/preload/build.ts
 
 import { join, dirname } from "path";
 import { writeFileSync, mkdirSync } from "fs";
@@ -40,13 +40,13 @@ async function buildPreload() {
 		throw new Error("Failed to build sandboxed preload script");
 	}
 
-	// Bun does not currently support iife output, so we wrap the ESM bundle manually
-	// to keep preload globals scoped for script injection.
+	// The compatible bundler does not currently support IIFE output, so wrap
+	// the ESM bundle manually to keep preload globals scoped for injection.
 	const fullPreloadJs = `(function(){${await fullResult.outputs[0]!.text()}})();`;
 	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0]!.text()}})();`;
 
-	const outputContent = `// Auto-generated file. Do not edit directly.
-// Run "bun build.ts" or "bun build:dev" from the package folder to regenerate.
+const outputContent = `// Auto-generated file. Do not edit directly.
+// Run "./vendors/dash-cli/dash build.ts" from the package folder to regenerate.
 
 // Full preload for trusted webviews (RPC, encryption, drag regions, webview tags)
 export const preloadScript = ${JSON.stringify(fullPreloadJs)};

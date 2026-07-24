@@ -1,6 +1,6 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -99,7 +99,10 @@ console.log(`Platform: ${platformName}, Architecture: ${archName}`);
 // Step 1: Build the release artifacts
 console.log("\n1. Building release artifacts...");
 try {
-	execSync("bun scripts/package-release.js", { stdio: "inherit" });
+	execFileSync(process.execPath, ["scripts/package-release.js"], {
+		cwd: path.join(__dirname, ".."),
+		stdio: "inherit",
+	});
 } catch (error) {
 	console.error("Build failed:", error.message);
 	process.exit(1);

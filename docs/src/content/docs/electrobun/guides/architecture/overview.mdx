@@ -5,7 +5,7 @@ import { Aside } from "@astrojs/starlight/components";
 
               
 ## High Level App Architecture
-              <p>An Electrobun app is essentially a Bun app. A tiny launcher (typically a zig binary) will run a Bun app. Since native GUI's require a blocking event loop on the main thread the main Bun thread will create a webworker with your code and then use Bun's FFI to init the native GUI event loop. Your Bun code running in the worker can then use Electrobun's apis, many of which also call Electrobun's native wrapper code via Bun's FFI to open windows, create system trays, relay events and RPC, and so on.</p>
+              <p>An Electrobun app uses a small Zig launcher to start its Cottontail main process. Since native GUIs require a blocking event loop on the main thread, Cottontail creates a worker for your application code and initializes the native GUI event loop through its Bun-compatible FFI layer. Your TypeScript code can then use Electrobun's APIs to open windows, create system trays, relay events and RPC, and call the native wrapper.</p>
 
 ## Application Bundles
 
@@ -23,11 +23,10 @@ import { Aside } from "@astrojs/starlight/components";
 <span style="color: #6b7280">// An optimized zig implementation of bspatch used to generate and apply diffs during updates</span>
 /Contents/MacOS/bspatch
 
-<span style="color: #6b7280">// The bun runtime</span>
-/Contents/MacOS/bun
+<span style="color: #6b7280">// The Cottontail runtime</span>
+/Contents/MacOS/cottontail
 
-<span style="color: #6b7280">// An optimized zig binary that typically just calls `bun index.js` with the included runtime</span>
-<span style="color: #6b7280">// to run your compiled bun entrypoint file.</span>
+<span style="color: #6b7280">// A small Zig binary that starts Cottontail with your compiled entrypoint.</span>
 /Contents/MacOS/launcher
 
 <span style="color: #6b7280">// A library containing Electrobun's native code layer for the platform, on MacOS this these are</span>
@@ -43,7 +42,7 @@ import { Aside } from "@astrojs/starlight/components";
 <span style="color: #6b7280">// Local version info that `Electrobun.Updater` reads</span>
 /Contents/MacOS/Resources/version.json
 
-<span style="color: #6b7280">// Folder containing the bundled javascript code for the main bun process.</span>
+<span style="color: #6b7280">// Folder containing the bundled JavaScript code for the main process.</span>
 <span style="color: #6b7280">// Use electrobun.config to tell Electrobun where your ts entrypoing is and</span>
 <span style="color: #6b7280">// define external dependencies</span>
 /Contents/MacOS/Resources/app/bun/
@@ -57,14 +56,14 @@ import { Aside } from "@astrojs/starlight/components";
 
 #### IPC
 
-              <p>In order to communicate between bun and browser contexts Electrobun has several mechanisms for establishing IPC between the processes involved. For the most part Electrobun uses postmessage and FFI but will also use more efficient encrypted web sockets.</p>
+              <p>To communicate between main and browser contexts, Electrobun provides several IPC mechanisms. It primarily uses postMessage and FFI, with encrypted web sockets where appropriate.</p>
 
 #### Self-Extracting Bundle
 
               <p>Because zip file compression is not the best and we want apps you build with Electrobun to be as tiny as possible Electron automatically bundles your application into a self-extracting ZSTD bundle. Electrobun takes your entire app bundle, tars it, compresses it with zlib which is fast best-in-class modern compression and creates a second wrapper app bundle for distribution.</p>
 
               <Aside type="tip">
-                <strong>Info:</strong> The current Electrobun Playground app is <strong>50.4MB</strong> in size (most of this is the bun runtime), but when compressed and distributed as the self-extracting bundle it's only <strong>13.1MB which is almost 5 times smaller</strong>. <em>Meaning almost 5 times as many users can download your app for the same cost in Storage and Network fees.</em>
+                <strong>Info:</strong> The current Electrobun Playground app is <strong>50.4MB</strong> in size (most of this is the Cottontail/JSC runtime), but when compressed and distributed as the self-extracting bundle it's only <strong>13.1MB which is almost 5 times smaller</strong>. <em>Meaning almost 5 times as many users can download your app for the same cost in Storage and Network fees.</em>
               </Aside>
 
               <p>The self-extracting bundle looks like this:</p>

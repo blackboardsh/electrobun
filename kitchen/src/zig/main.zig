@@ -18,7 +18,6 @@ const BuildConfigPayload = struct {
     availableRenderers: []const []const u8,
     mainProcess: []const u8,
     cefVersion: ?[]const u8 = null,
-    bunVersion: ?[]const u8 = null,
     zigVersion: ?[]const u8 = null,
 };
 

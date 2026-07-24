@@ -1,14 +1,11 @@
-// Contract tests for the bun:ffi APIs that electrobun depends on.
+// Contract tests for the bun:ffi compatibility APIs Electrobun depends on.
 //
-// Bun bumps don't usually break electrobun, but when they do, the breakage
-// almost always lives in this surface — JSCallback marshaling, FFIType
-// encoding, dlopen behavior. These tests are a tripwire: if a new Bun release
-// breaks any of them, we want to know before cutting an electrobun release,
-// not after a user reports a crash.
+// Runtime changes can break JSCallback marshaling, FFIType encoding, or dlopen
+// behavior. Keep these tests with Electrobun so Cottontail changes cannot
+// silently break the native bridge.
 //
-// Skipped on Windows for now since the bun-check workflow runs on Linux and
-// the system library paths differ. If we add a Windows runner later, switch
-// the libc path resolution to include msvcrt/ucrtbase.
+// Skipped on Windows because the system library paths differ. To enable them,
+// extend the libc path resolution to include msvcrt/ucrtbase.
 
 import { describe, expect, it } from "bun:test";
 import {

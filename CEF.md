@@ -23,7 +23,7 @@ const CEF_VERSION = `144.0.11+ge135be2`;
 const CHROMIUM_VERSION = `144.0.7559.97`;
 ```
 
-When `bun build.ts` runs, `vendorCEF()` does the following:
+When `./vendors/dash-cli/dash build.ts` runs, `vendorCEF()` does the following:
 
 1. **Downloads** the CEF minimal distribution from `cef-builds.spotifycdn.com`
 2. **Builds `libcef_dll_wrapper.a`** using cmake (thin C++ wrapper around CEF's stable C API)
@@ -108,8 +108,8 @@ CEF's C API is designed for ABI stability within the same major version line. `p
 
 1. Update `CEF_VERSION` and `CHROMIUM_VERSION` in `package/build.ts`
 2. Delete `vendors/cef/` locally (or the `.cef-version` stamp -- staleness detection will clean it automatically)
-3. Run `bun build.ts` -- it will download the new CEF, rebuild `libcef_dll_wrapper.a` and `process_helper`
-4. Test with the kitchen app (`bun dev` from `package/`)
+3. Run `./vendors/dash-cli/dash build.ts` -- it will download the new CEF, rebuild `libcef_dll_wrapper.a` and `process_helper`
+4. Test with the kitchen app (`./vendors/dash-cli/dash dev` from `package/`)
 5. The release workflow's CEF vendor cache key includes the version, so CI will automatically re-download and rebuild on the next release
 
 ## File Reference

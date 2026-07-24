@@ -137,24 +137,22 @@ export interface ElectrobunConfig {
 	build?: {
 		/**
 		 * Main process implementation to build and package.
-		 * - "bun": bundle and run the Bun main process entrypoint
+		 * - "cottontail": bundle and run the Cottontail main process entrypoint
 		 * - "zig": compile and run the Zig main process entrypoint
 		 * - "rust": compile and run the Rust main process entrypoint
 		 * - "go": compile and run the Go main process entrypoint
 		 * - "odin": compile and run the Odin main process entrypoint
-		 * - "cottontail": bundle and run the Cottontail main process entrypoint
-		 * @default "bun"
+		 * @default "cottontail"
 		 */
-		mainProcess?: "bun" | "zig" | "rust" | "go" | "odin" | "cottontail";
+		mainProcess?: "cottontail" | "zig" | "rust" | "go" | "odin";
 
 		/**
-		 * Bun process build configuration.
-		 * Accepts bundler options (plugins, sourcemap, minify, define, etc.)
-		 * in addition to the entrypoint.
+		 * Cottontail main process build configuration.
+		 * Used when `build.mainProcess` is set to `"cottontail"`.
 		 */
-		bun?: {
+		cottontail?: {
 			/**
-			 * Entry point for the main Bun process
+			 * Entry point for the main Cottontail process
 			 * @default "src/bun/index.ts"
 			 */
 			entrypoint?: string;
@@ -212,18 +210,6 @@ export interface ElectrobunConfig {
 			 */
 			entrypoint?: string;
 		};
-
-		/**
-		 * Cottontail main process build configuration.
-		 * Used when `build.mainProcess` is set to `"cottontail"`.
-		 */
-		cottontail?: {
-			/**
-			 * Entry point for the main Cottontail process
-			 * @default "src/bun/index.ts"
-			 */
-			entrypoint?: string;
-		} & BundlerOptions;
 
 		/**
 		 * Browser view build configurations.
@@ -298,24 +284,6 @@ export interface ElectrobunConfig {
 		 * @default Uses the latest electrobun-dawn release
 		 */
 		wgpuVersion?: string;
-
-		/**
-		 * Override the Bun runtime version.
-		 * Format: semver string (e.g., "1.4.2")
-		 *
-		 * This downloads the specified Bun version from GitHub releases and uses it
-		 * instead of the version bundled with this Electrobun release.
-		 * @default Uses the version bundled with this Electrobun release
-		 */
-		bunVersion?: string;
-
-		/**
-		 * Locales to include in the ICU data file (Linux/Windows only).
-		 * Set to '*' to include all locales, or specify a subset like ['en', 'de']
-		 * to reduce app size. Has no effect on macOS (uses system ICU).
-		 * @default '*'
-		 */
-		locales?: string[] | "*";
 
 		/**
 		 * Additional file or directory paths to watch for changes during `electrobun dev --watch`.
@@ -526,7 +494,7 @@ export interface ElectrobunConfig {
 
 	/**
 	 * Runtime behaviour configuration.
-	 * These values are copied into build.json and available to the Bun process at runtime.
+	 * These values are copied into build.json and available to the main process at runtime.
 	 * You can add arbitrary keys here and access them via BuildConfig.
 	 */
 	runtime?: {

@@ -63,18 +63,20 @@ All commands are run from the `/package` directory:
 
 ```bash
 cd electrobun/package
+npm ci
+npm run dash:vendor
 
 # Full build with all platforms
-bun build.ts
+./vendors/dash-cli/dash build.ts
 
 # Development build with the kitchen sink test app
-bun dev
+./vendors/dash-cli/dash dev
 
 # Release build
-bun build.ts --release
+./vendors/dash-cli/dash build.ts --release
 
 # CI build
-bun build.ts --ci
+./vendors/dash-cli/dash build.ts --ci
 ```
 
 ## Dash CLI and Cottontail
@@ -89,7 +91,7 @@ pins together:
 
 ```bash
 cd electrobun/package
-bun scripts/update-runtime-artifacts.ts
+./vendors/dash-cli/dash scripts/update-runtime-artifacts.ts
 ```
 
 For local runtime development, `DASH_CLI_ROOT` can point at a Dash checkout

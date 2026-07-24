@@ -26,7 +26,6 @@ import {
 	CHROMIUM_VERSION,
 	DEFAULT_CEF_VERSION_STRING,
 } from "./src/shared/cef-version";
-import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
@@ -55,9 +54,7 @@ const IS_NPM_BUILD = args.npm || false;
 const OS: "win" | "linux" | "macos" = getPlatform();
 const ARCH: "arm64" | "x64" = getArch();
 
-const isWindows = platform() === "win32";
 const binExt = OS === "win" ? ".exe" : "";
-const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
@@ -105,10 +102,6 @@ const RUNTIME_ARTIFACTS = JSON.parse(
 
 // PATHS
 const PATH = {
-	bun: {
-		RUNTIME: join(process.cwd(), "vendors", "bun", bunBin),
-		DIST: join(process.cwd(), "dist", bunBin),
-	},
 	zig: {
 		BIN: join(process.cwd(), "vendors", "zig", zigBinary),
 	},
@@ -135,7 +128,6 @@ const PATH = {
 // Minimum expected file sizes for downloaded archives (in bytes)
 // These are sanity checks to detect failed downloads (e.g., HTML error pages)
 const MIN_DOWNLOAD_SIZES: Record<string, number> = {
-	bun: 10 * 1024 * 1024, // Bun zip should be > 10MB
 	"zig-asar": 100 * 1024, // zig-asar tarball should be > 100KB
 	"zig-bsdiff": 100 * 1024, // zig-bsdiff tarball should be > 100KB
 	"zig-zstd": 100 * 1024, // zig-zstd tarball should be > 100KB
@@ -630,7 +622,6 @@ async function setup() {
 	await checkDependencies();
 	// Run vendors sequentially to avoid network/curl conflicts
 	// GitHub downloads have built-in pauses to avoid rate limiting
-	await vendorBun(); // GitHub
 	await vendorBsdiff(); // GitHub
 	await vendorZstd(); // GitHub
 	await vendorAsar(); // GitHub
@@ -733,8 +724,6 @@ function copyMatchingFiles(
 }
 
 async function copyToDist() {
-	// Bun runtime
-	cpSync(PATH.bun.RUNTIME, PATH.bun.DIST, { force: true });
 	// Zig launcher for all platforms
 	cpSync(`src/launcher/zig-out/bin/launcher${binExt}`, `dist/launcher${binExt}`, { force: true });
 	cpSync(`src/extractor/zig-out/bin/extractor${binExt}`, `dist/extractor${binExt}`, { force: true });
@@ -796,7 +785,7 @@ async function copyToDist() {
 
 	if (OS === "win") {
 		// On Windows, copy both x64 and arm64 versions
-		// Note: DLL is needed by launcher to extract bun/index.js from ASAR
+		// The launcher uses this DLL to extract the main bundle from ASAR.
 		mkdirSync(join("dist", "zig-asar", "x64"), { recursive: true });
 		mkdirSync(join("dist", "zig-asar", "arm64"), { recursive: true });
 
@@ -985,7 +974,6 @@ async function copyToDist() {
 function normalizeDistExecutableModes(directory: string) {
 	if (OS === "win") return;
 	for (const filename of [
-		bunBin,
 		cottontailBinary,
 		dashCliBinary,
 		"launcher",
@@ -1110,93 +1098,6 @@ async function installPackageDependencies() {
 		return;
 	}
 	await $`npm install`;
-}
-
-async function vendorBun() {
-	// Check if vendored Bun version matches expected version.
-	// When the hardcoded version is bumped (e.g. after a git pull),
-	// this detects the mismatch and forces a clean re-vendor.
-	const bunDir = join(process.cwd(), "vendors", "bun");
-	const bunVersionFile = join(bunDir, ".bun-version");
-
-	if (existsSync(PATH.bun.RUNTIME)) {
-		if (existsSync(bunVersionFile)) {
-			const vendoredVersion = readFileSync(bunVersionFile, "utf-8").trim();
-			if (vendoredVersion !== BUN_VERSION) {
-				console.log(
-					`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`,
-				);
-				console.log("Cleaning stale Bun binary and re-vendoring...");
-				unlinkSync(PATH.bun.RUNTIME);
-			} else {
-				return;
-			}
-		} else {
-			// Binary exists but no version stamp (legacy state) — write one and keep going
-			mkdirSync(bunDir, { recursive: true });
-			writeFileSync(bunVersionFile, BUN_VERSION);
-			return;
-		}
-	}
-
-	await pauseForGitHub();
-
-	let bunUrlSegment: string;
-	let bunDirName: string;
-
-	if (OS === "win") {
-		// Use baseline x64 for Windows to ensure ARM64 compatibility
-		bunUrlSegment = "bun-windows-x64-baseline.zip";
-		bunDirName = "bun-windows-x64-baseline";
-	} else if (OS === "macos") {
-		bunUrlSegment =
-			ARCH === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64.zip";
-		bunDirName = ARCH === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
-	} else if (OS === "linux") {
-		bunUrlSegment =
-			ARCH === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
-		bunDirName = ARCH === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
-	} else {
-		throw new Error(`Unsupported platform: ${OS}`);
-	}
-
-	const tempZipPath = join("vendors", "bun", "temp.zip");
-	const extractDir = join("vendors", "bun");
-
-	// Download zip file
-	await $`mkdir -p ${extractDir} && curl -L -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${bunUrlSegment}`;
-
-	// Validate download
-	validateDownload(tempZipPath, "bun");
-
-	// Extract zip file
-	if (isWindows) {
-		// Use PowerShell to extract zip on Windows
-		await $`powershell -command "Expand-Archive -Path ${tempZipPath} -DestinationPath ${extractDir} -Force"`;
-	} else {
-		// Use unzip on macOS/Linux
-		await $`unzip -o ${tempZipPath} -d ${extractDir}`;
-	}
-
-	// Move the bun binary to the correct location
-	// The path inside the zip might be different depending on the platform
-	if (isWindows) {
-		await $`mv ${join("vendors", "bun", bunDirName, "bun.exe")} ${PATH.bun.RUNTIME}`;
-	} else {
-		await $`mv ${join("vendors", "bun", bunDirName, "bun")} ${PATH.bun.RUNTIME}`;
-	}
-
-	// Add execute permissions on non-Windows platforms
-	if (!isWindows) {
-		await $`chmod +x ${PATH.bun.RUNTIME}`;
-	}
-
-	// Clean up
-	await $`rm ${tempZipPath}`;
-	await $`rm -rf ${join("vendors", "bun", bunDirName)}`;
-
-	// Write version stamp so future builds can detect staleness
-	writeFileSync(join("vendors", "bun", ".bun-version"), BUN_VERSION);
 }
 
 async function vendorZig() {
@@ -2115,7 +2016,7 @@ async function vendorAsar() {
 		// Check if binaries already exist for this architecture
 		// Note: All platforms need both CLI and library:
 		// - CLI: Used at build time to pack ASARs
-		// - Library: Used by launcher at runtime to extract bun/index.js from ASAR
+		// - Library: Used by the launcher to extract the main bundle from ASAR
 		//   (Native wrapper on Windows has built-in C++ reader for views:// files)
 		const requiredFiles = [asarCli, asarLib];
 

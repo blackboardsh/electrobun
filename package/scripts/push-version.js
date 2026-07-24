@@ -1,8 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Version bump, commit, tag, and push script
  *
- * Usage: bun scripts/push-version.js <type>
+ * Usage: node scripts/push-version.js <type>
  *
  * Types:
  *   beta   - prerelease bump (0.5.0-beta.0 -> 0.5.0-beta.1)
@@ -14,18 +14,19 @@
 
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 const type = process.argv[2];
 
 if (!type || !["beta", "patch", "minor", "major", "stable"].includes(type)) {
 	console.error(
-		"Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>",
+		"Usage: node scripts/push-version.js <beta|patch|minor|major|stable>",
 	);
 	process.exit(1);
 }
 
-const packageDir = import.meta.dir.replace("/scripts", "");
+const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = join(packageDir, "..");
 const packageJsonPath = join(packageDir, "package.json");
 

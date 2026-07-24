@@ -2390,7 +2390,7 @@ bool initializeCEF() {
     CefString(&settings.resources_dir_path) = execDir;
     CefString(&settings.locales_dir_path) = execDir + "/locales";
     
-    // Match the helper name to the actual host executable ("bun" vs "main").
+    // Match the helper name to the actual host executable (Cottontail or native main).
     CefString(&settings.browser_subprocess_path) =
         execDir + "/" + getExecutableBaseName() + " Helper";
     

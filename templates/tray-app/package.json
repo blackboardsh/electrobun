@@ -4,9 +4,9 @@
 	"version": "0.0.1",
 	"type": "module",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch",
-		"build:canary": "electrobun build --env=canary"
+		"start": "dash electrobun dev",
+		"dev": "dash electrobun dev --watch",
+		"build:canary": "dash electrobun build --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

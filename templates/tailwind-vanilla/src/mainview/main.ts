@@ -38,15 +38,15 @@ function render() {
 					<ul class="space-y-3">
 						<li class="flex items-start gap-2 text-gray-500">
 							<span class="text-cyan-600 font-bold">1.</span>
-							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">bun run dev</code> for development without HMR
+							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">dash run dev</code> for development without HMR
 						</li>
 						<li class="flex items-start gap-2 text-gray-500">
 							<span class="text-cyan-600 font-bold">2.</span>
-							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">bun run dev:hmr</code> for development with hot reload
+							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">dash run dev:hmr</code> for development with hot reload
 						</li>
 						<li class="flex items-start gap-2 text-gray-500">
 							<span class="text-cyan-600 font-bold">3.</span>
-							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">bun run build</code> to build for production
+							Run <code class="bg-gray-100 px-2 py-0.5 rounded text-sm font-mono">dash run build:canary</code> to build a canary release
 						</li>
 					</ul>
 				</div>

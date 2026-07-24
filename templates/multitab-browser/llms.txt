@@ -12,7 +12,7 @@ Getting started: https://framework.blackboard.sh/electrobun/guides/quick-start/
 ## Quick Reference
 
 Import patterns:
-- Main process (Bun): `import { BrowserWindow } from "electrobun/bun"`
+- Main process (Cottontail): `import { BrowserWindow } from "electrobun/bun"`
 - Browser context: `import { Electroview } from "electrobun/view"`
 
 Use `views://` URLs to load bundled assets (e.g., `url: "views://mainview/index.html"`).

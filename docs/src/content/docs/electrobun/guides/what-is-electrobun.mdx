@@ -20,7 +20,7 @@ title: "What is Electrobun?"
     <li><strong>Tiny updates:</strong> 14KB patches using custom binary diff vs 100MB+ with Electron</li>
     <li><strong>Pure TypeScript:</strong> Write TypeScript for both main process and UI</li>
     <li><strong>Web technologies:</strong> HTML, CSS, JavaScript - use any frontend framework</li>
-    <li><strong>Native performance:</strong> Zig bindings with Bun runtime for maximum speed</li>
+    <li><strong>Native performance:</strong> Zig bindings with the Cottontail runtime for maximum speed</li>
     <li><strong>Optional CEF:</strong> bundle CEF (Chromium) when cross-platform consistency matters most.</li>
   </ul>
 ## Performance Comparison
@@ -64,8 +64,8 @@ title: "What is Electrobun?"
   <p>Electrobun achieves its performance through a carefully designed architecture:</p>
 ### Zig, and Native Bindings
   <p>Native functionality like window management, system trays, and app menus writtin in C++ and Objc</p>
-### Bun Runtime
-  <p>The main process runs on Bun, providing lightning-fast Typescript execution and built-in bundling without the overhead of Node.js and V8.</p>
+### Cottontail Runtime
+  <p>The main process runs on Cottontail, providing fast TypeScript execution and built-in bundling on JavaScriptCore.</p>
 ### System WebView
   <p>Instead of distributing Chromium, By default Electrobun uses your system's native WebView (WebKit on macOS, Edge WebView2 on Windows, WebKitGTK on Linux).</p>
 ### Custom Update System
