@@ -34,6 +34,7 @@ const TrayState = struct {
     title: [:0]u8,
     image: [:0]u8,
     menu_config: ?[:0]u8,
+    length: ?f64 = null,
     is_template: bool,
     width: u32,
     height: u32,
@@ -1339,6 +1340,7 @@ fn createNativeTrayForState(tray_id: u32, state: *TrayState) bool {
         ?StatusItemHandler,
     ) callconv(.C) TrayPtr;
     const SetNativeTrayMenuFn = *const fn (TrayPtr, [*:0]const u8) callconv(.C) void;
+    const SetNativeTrayLengthFn = *const fn (TrayPtr, f64) callconv(.C) void;
 
     const create_native_tray = lookupNativeSymbol(CreateNativeTrayFn, "createTray") orelse return false;
     const tray_ptr = create_native_tray(
@@ -1358,6 +1360,13 @@ fn createNativeTrayForState(tray_id: u32, state: *TrayState) bool {
 
     state.ptr = tray_ptr;
     state.visible = true;
+
+    if (builtin.os.tag == .macos) {
+        if (state.length) |length| {
+            const set_native_tray_length = lookupNativeSymbol(SetNativeTrayLengthFn, "setTrayLength") orelse return false;
+            set_native_tray_length(tray_ptr, length);
+        }
+    }
 
     if (state.menu_config) |menu_config| {
         const set_native_tray_menu = lookupNativeSymbol(SetNativeTrayMenuFn, "setTrayMenu") orelse return false;
@@ -3274,6 +3283,23 @@ export fn setTrayTitle(tray_id: u32, title: [*:0]const u8) void {
     if (state.ptr) |tray_ptr| {
         const set_native_tray_title = lookupNativeSymbol(SetNativeTrayTitleFn, "setTrayTitle") orelse return;
         set_native_tray_title(tray_ptr, state.title.ptr);
+    }
+}
+
+export fn setTrayLength(tray_id: u32, length: f64) void {
+    clearLastError();
+
+    const SetNativeTrayLengthFn = *const fn (TrayPtr, f64) callconv(.C) void;
+    const state = tray_registry.getPtr(tray_id) orelse return;
+    state.length = length;
+
+    if (builtin.os.tag != .macos) {
+        return;
+    }
+
+    if (state.ptr) |tray_ptr| {
+        const set_native_tray_length = lookupNativeSymbol(SetNativeTrayLengthFn, "setTrayLength") orelse return;
+        set_native_tray_length(tray_ptr, length);
     }
 }
 
