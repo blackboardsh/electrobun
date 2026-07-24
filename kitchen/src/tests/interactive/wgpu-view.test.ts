@@ -11,7 +11,7 @@ import {
 	babylon,
 	webgpu,
 } from "electrobun/bun";
-import { ptr, CString } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
 
 const WGPU_KEEPALIVE: any[] = [];
@@ -64,6 +64,11 @@ function writeU32(view: DataView, offset: number, value: number) {
 
 function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
+}
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeRequestAdapterOptions(surfacePtr: number) {
@@ -486,9 +491,7 @@ function pickSurfaceFormatAlpha(
 	let format = preferredFormat;
 	if (formatCount && formatPtr) {
 		const formats = new Uint32Array(
-			(ptr as any)(formatPtr).buffer,
-			(ptr as any)(formatPtr).byteOffset,
-			formatCount,
+			toArrayBuffer(formatPtr, 0, formatCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (formats.length) {
 			format = formats[0]!;
@@ -500,9 +503,7 @@ function pickSurfaceFormatAlpha(
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (alphas.length) {
 			alphaMode = alphas[0]!;
@@ -517,9 +518,7 @@ function pickAlphaMode(capsView: DataView) {
 	const alphaPtr = readPtr(capsView, 56);
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		const preferred = [
 			WGPUCompositeAlphaMode_Unpremultiplied,
@@ -542,9 +541,7 @@ function pickAlphaModeTransparent(capsView: DataView) {
 	const alphaPtr = readPtr(capsView, 56);
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		const preferred = [
 			WGPUCompositeAlphaMode_Unpremultiplied,
@@ -946,8 +943,8 @@ fn fs_main(
 						return;
 					}
 
-					const entryPoint = new CString("vs_main");
-					const fragEntryPoint = new CString("fs_main");
+					const entryPoint = makeCString("vs_main");
+					const fragEntryPoint = makeCString("fs_main");
 					WGPU_KEEPALIVE.push(entryPoint, fragEntryPoint);
 					const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x3);
 					const normalAttr = makeVertexAttribute(
@@ -1704,8 +1701,8 @@ fn fs_main(
 							const drawEnabled = true;
 							const vsName = "vs_main";
 							const fsName = "fs_main";
-							const entryPoint = new CString(vsName);
-							const fragEntryPoint = new CString(fsName);
+							const entryPoint = makeCString(vsName);
+							const fragEntryPoint = makeCString(fsName);
 							WGPU_KEEPALIVE.push(entryPoint, fragEntryPoint);
 							const vsLen = WGPU_STRLEN;
 							const fsLen = WGPU_STRLEN;

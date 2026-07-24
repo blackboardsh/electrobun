@@ -19,6 +19,18 @@ typedef void (*wgpuQueueWriteBufferFn)(void*, void*, uint64_t, const void*, uint
 typedef void (*wgpuQueueSubmitFn)(void*, uint64_t, const void*);
 typedef void (*wgpuInstanceProcessEventsFn)(void*);
 typedef void (*wgpuReleaseFn)(void*);
+typedef struct {
+	void* nextInChain;
+	uint64_t usages;
+	size_t formatCount;
+	const uint32_t* formats;
+	size_t presentModeCount;
+	const uint32_t* presentModes;
+	size_t alphaModeCount;
+	const uint32_t* alphaModes;
+} goWgpuSurfaceCapabilities;
+typedef int32_t (*wgpuSurfaceGetCapabilitiesFn)(void*, void*, goWgpuSurfaceCapabilities*);
+typedef void (*wgpuSurfaceCapabilitiesFreeMembersFn)(goWgpuSurfaceCapabilities);
 
 static void* go_wgpuDeviceCreateShaderModule(void* fn, void* device, void* desc) {
 	return ((wgpuDeviceCreateShaderModuleFn)fn)(device, desc);
@@ -65,6 +77,29 @@ static void go_wgpuInstanceProcessEvents(void* fn, void* instance) {
 static void go_wgpuRelease(void* fn, void* value) {
 	((wgpuReleaseFn)fn)(value);
 }
+static int go_wgpuPickSurfaceConfiguration(
+	void* getCapabilitiesFn,
+	void* freeMembersFn,
+	void* surface,
+	void* adapter,
+	uint32_t* format,
+	uint32_t* alphaMode
+) {
+	goWgpuSurfaceCapabilities capabilities = {0};
+	int32_t status = ((wgpuSurfaceGetCapabilitiesFn)getCapabilitiesFn)(
+		surface,
+		adapter,
+		&capabilities
+	);
+	if (status == 1 && capabilities.formatCount > 0 && capabilities.formats) {
+		*format = capabilities.formats[0];
+	}
+	if (status == 1 && capabilities.alphaModeCount > 0 && capabilities.alphaModes) {
+		*alphaMode = capabilities.alphaModes[0];
+	}
+	((wgpuSurfaceCapabilitiesFreeMembersFn)freeMembersFn)(capabilities);
+	return status == 1 && capabilities.formatCount > 0;
+}
 */
 import "C"
 
@@ -97,7 +132,6 @@ const (
 	floatsPerVertex  = 6
 	vertexStride     = uint64(floatsPerVertex * 4)
 	vertexBufferSize = uint64(maxTileCount * verticesPerQuad * floatsPerVertex * 4)
-	surfaceFormat    = uint32(0x0000001c)
 
 	targetFrameTime    = 16 * time.Millisecond
 	defaultWindowWidth = 1120.0
@@ -270,6 +304,8 @@ type wgpuAPI struct {
 	textureViewRelease             unsafe.Pointer
 	commandBufferRelease           unsafe.Pointer
 	commandEncoderRelease          unsafe.Pointer
+	surfaceGetCapabilities         unsafe.Pointer
+	surfaceCapabilitiesFreeMembers unsafe.Pointer
 }
 
 type gpuPipeline struct {
@@ -1099,8 +1135,11 @@ func mazeRenderLoop() {
 	var configuredHeight uint32
 	var frame uint64
 	var statFrames int
+	var loggedFirstFrame bool
 	lastStat := time.Now()
 	lastFPS := 0.0
+	surfaceFormat := uint32(0x0000001b)
+	alphaMode := uint32(0x00000001)
 
 	for hostQueueRunning.Load() {
 		snapshot, ok := currentSnapshot()
@@ -1122,7 +1161,13 @@ func mazeRenderLoop() {
 				time.Sleep(250 * time.Millisecond)
 				continue
 			}
-			pipeline, err = createMazePipeline(api, context)
+			surfaceFormat, alphaMode, err = pickSurfaceConfiguration(api, context)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "[go-maze-wgpu] failed to read surface capabilities: %s\n", err)
+				time.Sleep(250 * time.Millisecond)
+				continue
+			}
+			pipeline, err = createMazePipeline(api, context, surfaceFormat)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "[go-maze-wgpu] failed to create WGPU pipeline: %s\n", err)
 				time.Sleep(250 * time.Millisecond)
@@ -1132,11 +1177,25 @@ func mazeRenderLoop() {
 			configuredWidth = 0
 			configuredHeight = 0
 			hasContext = true
-			fmt.Fprintf(os.Stderr, "[go-maze-wgpu] WGPU context ready for view %d\n", snapshot.ViewID)
+			loggedFirstFrame = false
+			fmt.Fprintf(
+				os.Stderr,
+				"[go-maze-wgpu] WGPU context ready for view %d (format=%d alpha=%d)\n",
+				snapshot.ViewID,
+				surfaceFormat,
+				alphaMode,
+			)
 		}
 
 		if configuredWidth != snapshot.SurfaceWidth || configuredHeight != snapshot.SurfaceHeight {
-			if err := configureSurface(state.core, context, snapshot.SurfaceWidth, snapshot.SurfaceHeight); err != nil {
+			if err := configureSurface(
+				state.core,
+				context,
+				snapshot.SurfaceWidth,
+				snapshot.SurfaceHeight,
+				surfaceFormat,
+				alphaMode,
+			); err != nil {
 				fmt.Fprintf(os.Stderr, "[go-maze-wgpu] failed to configure surface: %s\n", err)
 				time.Sleep(250 * time.Millisecond)
 				continue
@@ -1150,6 +1209,14 @@ func mazeRenderLoop() {
 			fmt.Fprintf(os.Stderr, "[go-maze-wgpu] failed to render frame: %s\n", err)
 			time.Sleep(100 * time.Millisecond)
 			continue
+		}
+		if !loggedFirstFrame {
+			loggedFirstFrame = true
+			fmt.Fprintf(
+				os.Stderr,
+				"[go-maze-wgpu] first frame submitted (%d vertices)\n",
+				len(vertices)/floatsPerVertex,
+			)
 		}
 
 		frame++
@@ -1302,13 +1369,43 @@ func loadWgpuAPI(native *electrobun.WgpuNative) (wgpuAPI, error) {
 		return api, err
 	}
 	api.commandEncoderRelease, err = get("wgpuCommandEncoderRelease")
+	if err != nil {
+		return api, err
+	}
+	api.surfaceGetCapabilities, err = get("wgpuSurfaceGetCapabilities")
+	if err != nil {
+		return api, err
+	}
+	api.surfaceCapabilitiesFreeMembers, err = get("wgpuSurfaceCapabilitiesFreeMembers")
 	return api, err
 }
 
-func configureSurface(core *electrobun.Core, context electrobun.WgpuContext, width, height uint32) error {
+func pickSurfaceConfiguration(api wgpuAPI, context electrobun.WgpuContext) (uint32, uint32, error) {
+	format := C.uint32_t(0x0000001b)
+	alphaMode := C.uint32_t(0x00000001)
+	if C.go_wgpuPickSurfaceConfiguration(
+		api.surfaceGetCapabilities,
+		api.surfaceCapabilitiesFreeMembers,
+		context.Surface,
+		context.Adapter,
+		&format,
+		&alphaMode,
+	) == 0 {
+		return 0, 0, errors.New("surface did not report a supported format")
+	}
+	return uint32(format), uint32(alphaMode), nil
+}
+
+func configureSurface(
+	core *electrobun.Core,
+	context electrobun.WgpuContext,
+	width,
+	height,
+	surfaceFormat,
+	alphaMode uint32,
+) error {
 	const (
 		wgpuTextureUsageRenderAttachment = uint64(0x0000000000000010)
-		wgpuCompositeAlphaModeOpaque     = uint32(0x00000001)
 		wgpuPresentModeFIFO              = uint32(0x00000001)
 	)
 
@@ -1322,12 +1419,16 @@ func configureSurface(core *electrobun.Core, context electrobun.WgpuContext, wid
 	writeU32(config, 36, height)
 	writeU64(config, 40, 0)
 	writePtr(config, 48, nil)
-	writeU32(config, 56, wgpuCompositeAlphaModeOpaque)
+	writeU32(config, 56, alphaMode)
 	writeU32(config, 60, wgpuPresentModeFIFO)
 	return core.WgpuSurfaceConfigureMainThread(context.Surface, ptrFromBytes(config))
 }
 
-func createMazePipeline(api wgpuAPI, context electrobun.WgpuContext) (gpuPipeline, error) {
+func createMazePipeline(
+	api wgpuAPI,
+	context electrobun.WgpuContext,
+	surfaceFormat uint32,
+) (gpuPipeline, error) {
 	const (
 		wgpuVertexFormatFloat32x2 = uint32(0x0000001d)
 		wgpuVertexFormatFloat32x4 = uint32(0x0000001f)

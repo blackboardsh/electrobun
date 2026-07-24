@@ -45,8 +45,10 @@ function createWgpuTagTest(name: string, transparent: boolean) {
               },
               wgpuTagReady: ({ id, rect }: { id: number; rect: { x: number; y: number; width: number; height: number } }) => {
                 if (!winRef) return { success: false };
+                log(`WGPU tag ${id} ready at ${Math.round(rect.width)}x${Math.round(rect.height)}`);
                 try {
                   renderer.start(id, winRef, rect);
+                  log(`WGPU tag ${id} renderer started`);
                   return { success: true };
                 } catch (err: any) {
                   log(`WGPU tag start failed: ${String(err?.message ?? err)}`);
@@ -69,7 +71,8 @@ function createWgpuTagTest(name: string, transparent: boolean) {
         winRef = new BrowserWindow({
           title: transparent ? "Transparent WGPU Tag" : "WGPU Tag Playground",
           url: "views://playgrounds/wgpu-tag/index.html",
-          renderer: "native",
+          // CEF hosts the page; <electrobun-wgpu> remains a native overlay.
+          renderer: "cef",
           frame: { width: 860, height: 720, x: 120, y: 60 },
           transparent,
           rpc,

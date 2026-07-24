@@ -3,7 +3,7 @@ import { WGPUView } from "./core/WGPUView";
 import { GpuWindow } from "./core/GpuWindow";
 import WGPU from "./webGPU";
 import { WGPUBridge } from "./proc/native";
-import { ptr, CString, toArrayBuffer, type Pointer, JSCallback } from "bun:ffi";
+import { ptr, toArrayBuffer, type Pointer, JSCallback } from "bun:ffi";
 import { inflateSync } from "zlib";
 
 const WGPUNative = WGPU.native;
@@ -223,9 +223,13 @@ function makeStringView(str?: string | null) {
 	if (!str) {
 		return { ptr: 0, len: 0n, cstr: null };
 	}
-	const cstr = new CString(str);
-	WGPU_KEEPALIVE.push(cstr);
-	return { ptr: cstr.ptr, len: WGPU_STRLEN, cstr };
+	const bytes = new TextEncoder().encode(str);
+	WGPU_KEEPALIVE.push(bytes);
+	return { ptr: ptr(bytes), len: BigInt(bytes.byteLength), cstr: bytes };
+}
+
+function ptrOrNull(value: ArrayBuffer | ArrayBufferView) {
+	return value.byteLength === 0 ? 0 : ptr(value);
 }
 
 function makeSurfaceConfiguration(
@@ -935,7 +939,7 @@ class GPUQueue {
 		WGPUNative.symbols.wgpuQueueSubmit(
 			this.ptr,
 			BigInt(commandBuffers.length) as any,
-			ptr(buffer),
+			ptrOrNull(buffer),
 		);
 		if (LAST_SURFACE_PTR && LAST_SURFACE_HAS_TEXTURE) {
 			LAST_SURFACE_HAS_TEXTURE = false;
@@ -947,7 +951,7 @@ class GPUQueue {
 			this.ptr,
 			buffer.ptr,
 			BigInt(offset),
-			ptr(data),
+			ptrOrNull(data),
 			data.byteLength,
 		);
 	}
@@ -1271,7 +1275,7 @@ class GPUDevice {
 				new Uint8Array(entry.buffer),
 			);
 		});
-		const entryPtr = ptr(entryBuf);
+		const entryPtr = ptrOrNull(entryBuf);
 		WGPU_KEEPALIVE.push(entryBuf);
 		const desc = makeBindGroupLayoutDescriptor(
 			entryPtr as any,
@@ -1286,39 +1290,39 @@ class GPUDevice {
 	}
 	createBindGroup(descriptor: { layout: GPUBindGroupLayout; entries: any[] }) {
 		const entries = descriptor.entries.map((entry) => {
-			if (entry.resource?.buffer || entry.resource instanceof GPUBuffer) {
-				const buffer = entry.resource.buffer ?? entry.resource;
+			const bufferResource =
+				entry.resource?.buffer || entry.resource instanceof GPUBuffer
+					? entry.resource
+					: entry.buffer;
+			if (bufferResource) {
+				const buffer = bufferResource.buffer ?? bufferResource;
 				return makeBindGroupEntry({
 					binding: entry.binding ?? 0,
 					buffer: {
 						buffer,
-						offset: entry.resource.offset ?? 0,
-						size: entry.resource.size ?? 0xffffffffffffffffn,
+						offset: bufferResource.offset ?? 0,
+						size: bufferResource.size ?? 0xffffffffffffffffn,
 					},
 				});
 			}
-			if (entry.resource instanceof GPUSampler) {
+			const sampler =
+				entry.resource instanceof GPUSampler
+					? entry.resource
+					: entry.resource?.sampler ?? entry.sampler;
+			if (sampler) {
 				return makeBindGroupEntry({
 					binding: entry.binding ?? 0,
-					sampler: entry.resource,
+					sampler,
 				});
 			}
-			if (entry.resource instanceof GPUTextureView) {
+			const textureView =
+				entry.resource instanceof GPUTextureView
+					? entry.resource
+					: entry.resource?.textureView ?? entry.textureView;
+			if (textureView) {
 				return makeBindGroupEntry({
 					binding: entry.binding ?? 0,
-					textureView: entry.resource,
-				});
-			}
-			if (entry.resource?.sampler) {
-				return makeBindGroupEntry({
-					binding: entry.binding ?? 0,
-					sampler: entry.resource.sampler,
-				});
-			}
-			if (entry.resource?.textureView) {
-				return makeBindGroupEntry({
-					binding: entry.binding ?? 0,
-					textureView: entry.resource.textureView,
+					textureView,
 				});
 			}
 			return makeBindGroupEntry({ binding: entry.binding ?? 0 });
@@ -1329,7 +1333,7 @@ class GPUDevice {
 				new Uint8Array(entry.buffer),
 			);
 		});
-		const entryPtr = ptr(entryBuf);
+		const entryPtr = ptrOrNull(entryBuf);
 		WGPU_KEEPALIVE.push(entryBuf);
 		const desc = makeBindGroupDescriptor(
 			descriptor.layout.ptr,
@@ -1349,7 +1353,10 @@ class GPUDevice {
 			layouts[i] = BigInt(descriptor.bindGroupLayouts[i]!.ptr);
 		}
 		WGPU_KEEPALIVE.push(layouts);
-		const desc = makePipelineLayoutDescriptor(ptr(layouts) as any, layouts.length);
+		const desc = makePipelineLayoutDescriptor(
+			ptrOrNull(layouts) as any,
+			layouts.length,
+		);
 		WGPU_KEEPALIVE.push(desc.buffer);
 		const layoutPtr = WGPUNative.symbols.wgpuDeviceCreatePipelineLayout(
 			this.ptr,
@@ -1391,7 +1398,7 @@ class GPUDevice {
 					new Uint8Array(attrStruct.buffer),
 				);
 			});
-			const attrPtr = ptr(attrBuf);
+			const attrPtr = ptrOrNull(attrBuf);
 			WGPU_KEEPALIVE.push(attrBuf);
 			const layout = makeVertexBufferLayout(
 				attrPtr as any,
@@ -1410,7 +1417,7 @@ class GPUDevice {
 				new Uint8Array(layoutBuf),
 			);
 		});
-		const vertexLayoutsPtr = ptr(vertexLayoutsBuf);
+		const vertexLayoutsPtr = ptrOrNull(vertexLayoutsBuf);
 		WGPU_KEEPALIVE.push(vertexLayoutsBuf);
 
 		const vertexState = makeVertexState(
@@ -1453,7 +1460,7 @@ class GPUDevice {
 					new Uint8Array(target.buffer),
 				);
 			});
-			const targetPtr = ptr(targetBuf);
+			const targetPtr = ptrOrNull(targetBuf);
 			WGPU_KEEPALIVE.push(targetBuf);
 			const fragState = makeFragmentState(
 				fragModule.ptr,
@@ -1831,7 +1838,7 @@ class GPUCommandEncoder {
 		colorAttachments.forEach((c, i) => {
 			new Uint8Array(colorBuf, i * 72, 72).set(new Uint8Array(c.buffer));
 		});
-		const colorPtr = ptr(colorBuf);
+		const colorPtr = ptrOrNull(colorBuf);
 		WGPU_KEEPALIVE.push(colorBuf);
 
 		let depthPtr: number | null = null;

@@ -391,7 +391,7 @@ fn fs_main(
 // (identical to the byte layouts templates/zig-wgpu builds by hand)
 // ---------------------------------------------------------------------------
 
-SURFACE_FORMAT :: u32(0x0000001c) // BGRA8Unorm
+DEFAULT_SURFACE_FORMAT :: u32(0x0000001b) // BGRA8Unorm
 WGPU_STRLEN :: u64(0xffffffffffffffff)
 STYPE_SHADER_SOURCE_WGSL :: u32(0x00000002)
 TEXTURE_USAGE_RENDER_ATTACHMENT :: u64(0x0000000000000010)
@@ -536,6 +536,17 @@ Wgpu_Surface_Texture :: struct {
 	status:        u32,
 }
 
+Wgpu_Surface_Capabilities :: struct {
+	next_in_chain:     rawptr,
+	usages:            u64,
+	format_count:      uintptr,
+	formats:           [^]u32,
+	present_mode_count: uintptr,
+	present_modes:     [^]u32,
+	alpha_mode_count:  uintptr,
+	alpha_modes:       [^]u32,
+}
+
 Wgpu_Color :: struct {
 	r, g, b, a: f64,
 }
@@ -581,6 +592,9 @@ Wgpu_Render_Pass_Descriptor :: struct {
 #assert(size_of(Wgpu_Surface_Configuration) == 64)
 #assert(offset_of(Wgpu_Surface_Configuration, usage) == 24)
 #assert(size_of(Wgpu_Surface_Texture) == 24)
+#assert(size_of(Wgpu_Surface_Capabilities) == 64)
+#assert(offset_of(Wgpu_Surface_Capabilities, formats) == 24)
+#assert(offset_of(Wgpu_Surface_Capabilities, alpha_modes) == 56)
 #assert(size_of(Wgpu_Render_Pass_Color_Attachment) == 72)
 #assert(offset_of(Wgpu_Render_Pass_Color_Attachment, clear_value) == 40)
 #assert(size_of(Wgpu_Render_Pass_Descriptor) == 64)
@@ -605,6 +619,8 @@ End_Fn :: proc "c" (rawptr)
 Queue_Write_Buffer_Fn :: proc "c" (rawptr, rawptr, u64, rawptr, u64)
 Queue_Submit_Fn :: proc "c" (rawptr, u64, rawptr)
 Process_Events_Fn :: proc "c" (rawptr)
+Surface_Get_Capabilities_Fn :: proc "c" (rawptr, rawptr, ^Wgpu_Surface_Capabilities) -> u32
+Surface_Capabilities_Free_Members_Fn :: proc "c" (Wgpu_Surface_Capabilities)
 
 Wgpu_Api :: struct {
 	device_create_shader_module:      Create_Fn,
@@ -625,6 +641,8 @@ Wgpu_Api :: struct {
 	texture_view_release:             Release_Fn,
 	command_buffer_release:           Release_Fn,
 	command_encoder_release:          Release_Fn,
+	surface_get_capabilities:         Surface_Get_Capabilities_Fn,
+	surface_capabilities_free_members: Surface_Capabilities_Free_Members_Fn,
 }
 
 wgpu_symbol :: proc(lib: dynlib.Library, name: string) -> (rawptr, bool) {
@@ -675,6 +693,10 @@ wgpu_api_load :: proc(native: ^electrobun.WgpuNative) -> (api: Wgpu_Api, ok: boo
 	api.command_buffer_release = cast(Release_Fn)p
 	p = wgpu_symbol(lib, "wgpuCommandEncoderRelease") or_return
 	api.command_encoder_release = cast(Release_Fn)p
+	p = wgpu_symbol(lib, "wgpuSurfaceGetCapabilities") or_return
+	api.surface_get_capabilities = cast(Surface_Get_Capabilities_Fn)p
+	p = wgpu_symbol(lib, "wgpuSurfaceCapabilitiesFreeMembers") or_return
+	api.surface_capabilities_free_members = cast(Surface_Capabilities_Free_Members_Fn)p
 
 	return api, true
 }
@@ -732,6 +754,7 @@ create_particle_pipeline :: proc(
 	api: Wgpu_Api,
 	ctx: electrobun.WgpuContext,
 	queue: rawptr,
+	surface_format: u32,
 ) -> (
 	pipeline: Gpu_Pipeline,
 	ok: bool,
@@ -779,7 +802,7 @@ create_particle_pipeline :: proc(
 		alpha = {operation = BLEND_OPERATION_ADD, src_factor = BLEND_FACTOR_ONE, dst_factor = BLEND_FACTOR_ONE},
 	}
 	color_target := Wgpu_Color_Target_State {
-		format     = SURFACE_FORMAT,
+		format     = surface_format,
 		blend      = &blend,
 		write_mask = COLOR_WRITE_MASK_ALL,
 	}
@@ -842,19 +865,49 @@ create_particle_pipeline :: proc(
 	return pipeline, true
 }
 
+pick_surface_configuration :: proc(
+	api: Wgpu_Api,
+	ctx: electrobun.WgpuContext,
+) -> (
+	format: u32,
+	alpha_mode: u32,
+	ok: bool,
+) {
+	format = DEFAULT_SURFACE_FORMAT
+	alpha_mode = COMPOSITE_ALPHA_MODE_OPAQUE
+	capabilities: Wgpu_Surface_Capabilities
+	status := api.surface_get_capabilities(
+		ctx.surface_ptr,
+		ctx.adapter_ptr,
+		&capabilities,
+	)
+	defer api.surface_capabilities_free_members(capabilities)
+	if status != 1 || capabilities.format_count == 0 || capabilities.formats == nil {
+		return
+	}
+	format = capabilities.formats[0]
+	if capabilities.alpha_mode_count > 0 && capabilities.alpha_modes != nil {
+		alpha_mode = capabilities.alpha_modes[0]
+	}
+	ok = true
+	return
+}
+
 configure_surface :: proc(
 	core: ^electrobun.Core,
 	ctx: electrobun.WgpuContext,
 	width: u32,
 	height: u32,
+	surface_format: u32,
+	alpha_mode: u32,
 ) -> electrobun.Error {
 	config := Wgpu_Surface_Configuration {
 		device       = ctx.device_ptr,
-		format       = SURFACE_FORMAT,
+		format       = surface_format,
 		usage        = TEXTURE_USAGE_RENDER_ATTACHMENT,
 		width        = width,
 		height       = height,
-		alpha_mode   = COMPOSITE_ALPHA_MODE_OPAQUE,
+		alpha_mode   = alpha_mode,
 		present_mode = PRESENT_MODE_FIFO,
 	}
 	return electrobun.wgpuSurfaceConfigureMainThread(core, ctx.surface_ptr, &config)
@@ -996,6 +1049,9 @@ gpu_render_loop :: proc() {
 	configured_width: u32
 	configured_height: u32
 	frame: u64
+	surface_format := DEFAULT_SURFACE_FORMAT
+	alpha_mode := COMPOSITE_ALPHA_MODE_OPAQUE
+	logged_first_frame := false
 
 	DT :: f32(1.0 / 60.0)
 
@@ -1034,21 +1090,48 @@ gpu_render_loop :: proc() {
 				time.sleep(250 * time.Millisecond)
 				continue
 			}
-			new_pipeline, pipeline_ok := create_particle_pipeline(api, ctx, queue)
+			selected_format, selected_alpha_mode, capabilities_ok :=
+				pick_surface_configuration(api, ctx)
+			if !capabilities_ok {
+				fmt.eprintln("[odin-particles] failed to read surface capabilities")
+				time.sleep(250 * time.Millisecond)
+				continue
+			}
+			new_pipeline, pipeline_ok := create_particle_pipeline(
+				api,
+				ctx,
+				queue,
+				selected_format,
+			)
 			if !pipeline_ok {
 				time.sleep(250 * time.Millisecond)
 				continue
 			}
 			pipeline = new_pipeline
+			surface_format = selected_format
+			alpha_mode = selected_alpha_mode
 			has_context = true
 			active_view_id = view_id
 			configured_width = 0
 			configured_height = 0
-			fmt.printfln("[odin-particles] WGPU context ready for view %d", view_id)
+			logged_first_frame = false
+			fmt.printfln(
+				"[odin-particles] WGPU context ready for view %d (format=%d alpha=%d)",
+				view_id,
+				surface_format,
+				alpha_mode,
+			)
 		}
 
 		if configured_width != width || configured_height != height {
-			if configure_surface(state.core, ctx, width, height) != .None {
+			if configure_surface(
+				state.core,
+				ctx,
+				width,
+				height,
+				surface_format,
+				alpha_mode,
+			) != .None {
 				fmt.eprintln("[odin-particles] failed to configure surface")
 				time.sleep(250 * time.Millisecond)
 				continue
@@ -1067,6 +1150,13 @@ gpu_render_loop :: proc() {
 		if !render_frame(state.core, api, ctx, pipeline, queue, instance_data, instance_count) {
 			time.sleep(100 * time.Millisecond)
 			continue
+		}
+		if !logged_first_frame {
+			logged_first_frame = true
+			fmt.printfln(
+				"[odin-particles] first frame submitted (%d instances)",
+				instance_count,
+			)
 		}
 
 		if frame % 30 == 0 && host_webview_id != 0 {

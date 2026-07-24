@@ -251,6 +251,9 @@ export class TestExecutor {
 
       this.results.set(test.id, result);
       console.log(`  \x1b[31m✗ FAILED\x1b[0m: ${result.error}`);
+      if (typeof error?.stack === "string" && error.stack !== result.error) {
+        console.log(error.stack);
+      }
       this.emit({ type: 'test-completed', testId: test.id, result });
       return result;
     } finally {

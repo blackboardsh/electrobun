@@ -17,6 +17,8 @@ export class ElectrobunWgpuTag extends HTMLElement {
 	transparent = false;
 	passthroughEnabled = false;
 	hidden = false;
+	private _ready = false;
+	private _initializing = false;
 	private _eventListeners: Record<string, Array<(event: CustomEvent) => void>> =
 		{};
 
@@ -25,18 +27,26 @@ export class ElectrobunWgpuTag extends HTMLElement {
 	}
 
 	connectedCallback() {
-		requestAnimationFrame(() => this.initWgpuView());
+		requestAnimationFrame(() => {
+			if (this.isConnected) void this.initWgpuView();
+		});
 	}
 
 	disconnectedCallback() {
 		if (this.wgpuViewId !== null) {
 			send("wgpuTagRemove", { id: this.wgpuViewId });
 			delete wgpuTagRegistry[this.wgpuViewId];
+			this.wgpuViewId = null;
 		}
 		if (this._sync) this._sync.stop();
+		this._sync = null;
+		this._ready = false;
 	}
 
 	async initWgpuView() {
+		if (this._initializing || this.wgpuViewId !== null) return;
+		this._initializing = true;
+
 		const rect = this.getBoundingClientRect();
 		const initialRect = {
 			x: rect.x,
@@ -74,8 +84,15 @@ export class ElectrobunWgpuTag extends HTMLElement {
 				passthrough,
 			})) as number;
 
+			if (!this.isConnected) {
+				send("wgpuTagRemove", { id: wgpuViewId });
+				return;
+			}
+
 			this.wgpuViewId = wgpuViewId;
-			this.id = `electrobun-wgpu-${wgpuViewId}`;
+			if (!this.id) {
+				this.id = `electrobun-wgpu-${wgpuViewId}`;
+			}
 			wgpuTagRegistry[wgpuViewId] = this;
 
 			this.setupObservers(initialRect);
@@ -96,9 +113,12 @@ export class ElectrobunWgpuTag extends HTMLElement {
 				});
 			});
 
+			this._ready = true;
 			this.emit("ready", { id: wgpuViewId });
 		} catch (err) {
 			console.error("Failed to init WGPU view:", err);
+		} finally {
+			this._initializing = false;
 		}
 	}
 
@@ -198,6 +218,17 @@ export class ElectrobunWgpuTag extends HTMLElement {
 	on(event: WgpuTagEventType, listener: (event: CustomEvent) => void) {
 		if (!this._eventListeners[event]) this._eventListeners[event] = [];
 		this._eventListeners[event].push(listener);
+
+		if (event === "ready" && this._ready && this.wgpuViewId !== null) {
+			const readyEvent = new CustomEvent(event, {
+				detail: { id: this.wgpuViewId },
+			});
+			queueMicrotask(() => {
+				if (this._eventListeners[event]?.includes(listener)) {
+					listener(readyEvent);
+				}
+			});
+		}
 	}
 
 	off(event: WgpuTagEventType, listener: (event: CustomEvent) => void) {
