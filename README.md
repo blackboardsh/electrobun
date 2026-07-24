@@ -59,6 +59,7 @@ Don't miss our:
 - [dotlock](https://github.com/tsconfigdotjson/dotlock) - macOS desktop app for managing `.env` files across your projects
 - [electrobun-pdf](https://github.com/GijungKim/electrobun-pdf) - local-first PDF & DOCX editor for opening, annotating, and exporting documents without leaving your machine
 - [electrobun-rms](https://github.com/khanhthanhdev/electrobun-rms) - fast Electrobun desktop app template with React, Tailwind CSS, and Vite
+- [FLACK](https://github.com/BLCK-B/FLACK) - local audio player for Windows
 - [golb](https://github.com/chrisdadev13/golb) - desktop AI coding workspace built with React, Vite, and Tailwind
 - [GOG Achievements GUI](https://github.com/timendum/gog-achievements-gui) - desktop app for managing GOG achievements
 - [groov](https://github.com/laurenzcodes/groov) - desktop audio deck monitor
