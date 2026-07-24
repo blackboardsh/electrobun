@@ -5,7 +5,7 @@
     "": {
       "name": "electrobun-rust-flock-wgpu",
       "dependencies": {
-        "electrobun": "../../package",
+        "electrobun": "file:../../package",
       },
       "devDependencies": {
         "@types/bun": "latest",

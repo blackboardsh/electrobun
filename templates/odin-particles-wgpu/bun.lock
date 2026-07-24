@@ -5,7 +5,7 @@
     "": {
       "name": "electrobun-odin-particles-wgpu",
       "dependencies": {
-        "electrobun": "../../package",
+        "electrobun": "file:../../package",
       },
       "devDependencies": {
         "@types/bun": "latest",

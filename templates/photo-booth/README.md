@@ -29,17 +29,17 @@ src/
 
 ### Development Mode
 ```bash
-bun dev
+dash run dev
 ```
 
 ### Build for Production
 ```bash
-bun build
+dash run build:canary
 ```
 
 ### Run the Built App
 ```bash
-bun start
+dash run start
 ```
 
 ## How It Works

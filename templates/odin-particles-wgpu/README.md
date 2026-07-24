@@ -3,9 +3,11 @@
 An Electrobun template with an Odin main process and an `<electrobun-wgpu>` overlay surface. The webview owns layout and controls; Odin runs a data-oriented particle simulation (~10k-50k particles) on the CPU and renders it as additive-blended instanced quads through a native WGPU pipeline. Three emitter modes: fountain, fireworks, and vortex.
 
 ```sh
-bun install
-bun dev
+dash run dev
 ```
+
+`dash run dev` installs dependencies on the first run, builds the app, launches
+it, and rebuilds when source files change.
 
 The main process lives in `src/odin/main.odin`; the webview lives in `src/mainview`.
 

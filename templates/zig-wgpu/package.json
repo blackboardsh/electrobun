@@ -4,9 +4,10 @@
 	"type": "module",
 	"description": "An Electrobun app with a Zig main process driving a native WGPU surface",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch",
-		"build": "electrobun build"
+		"start": "dash electrobun dev",
+		"dev": "dash electrobun dev --watch",
+		"watch": "dash electrobun dev --watch",
+		"build": "dash electrobun build"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

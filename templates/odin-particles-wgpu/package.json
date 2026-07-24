@@ -4,13 +4,13 @@
 	"type": "module",
 	"description": "An Electrobun app with an Odin main process driving a #soa data-oriented particle simulation on a native WGPU surface",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev",
-		"watch": "electrobun dev --watch",
-		"build": "electrobun build"
+		"start": "dash electrobun dev",
+		"dev": "dash electrobun dev --watch",
+		"watch": "dash electrobun dev --watch",
+		"build": "dash electrobun build"
 	},
 	"dependencies": {
-		"electrobun": "../../package"
+		"electrobun": "file:../../package"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
