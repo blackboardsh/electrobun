@@ -9,35 +9,35 @@
     "channel": "preview",
     "name": "cottontail",
     "version": "0.1.1-beta.1",
-    "revision": "dbb67cd9304ebc124a0d38cee4403ea118e0d801",
-    "publishedAt": "2026-07-20T01:15:22.588Z",
+    "revision": "baa29c790529f728c6b7b83fce881ff4aff2bd36",
+    "publishedAt": "2026-07-25T15:43:55.470Z",
     "platforms": {
       "macos-arm64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/dbb67cd9304ebc124a0d38cee4403ea118e0d801/macos-arm64/cottontail.tar.gz",
-          "sha256": "af3502bea4c86718bfcf174fc419cc256fc0852c6e0474538b26867ea598526d",
-          "size": 28929241
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/baa29c790529f728c6b7b83fce881ff4aff2bd36/macos-arm64/cottontail.tar.gz",
+          "sha256": "47fc6aa9a022c68d7ecdfdee61bac3162ff63229b3fd6f2ba671748eaa17d19e",
+          "size": 37435755
         }
       },
       "linux-x64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/dbb67cd9304ebc124a0d38cee4403ea118e0d801/linux-x64/cottontail.tar.gz",
-          "sha256": "15d2413b52525d29aeea458041b68853339cd53c8690f2d5ae5059997d59ca6c",
-          "size": 22559133
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/baa29c790529f728c6b7b83fce881ff4aff2bd36/linux-x64/cottontail.tar.gz",
+          "sha256": "77a9ebaef53b514c89280868b6bd8300f53734083d9881c01963101384ae04d5",
+          "size": 35440798
         }
       },
       "linux-arm64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/dbb67cd9304ebc124a0d38cee4403ea118e0d801/linux-arm64/cottontail.tar.gz",
-          "sha256": "30827c03f54b6196a75a30be88c0c495ca6044d5f11da0284503594999352f3c",
-          "size": 21385301
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/baa29c790529f728c6b7b83fce881ff4aff2bd36/linux-arm64/cottontail.tar.gz",
+          "sha256": "fc3f17c0ef888ccd62d21884c2dd81e5244ec73cfc9cc5b31ffba920f0d572b1",
+          "size": 34346122
         }
       },
       "windows-x64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/dbb67cd9304ebc124a0d38cee4403ea118e0d801/windows-x64/cottontail.tar.gz",
-          "sha256": "500ac281f82d87d50b64247c06ec5368ee6ac90c4d65062755a36cc0e354e238",
-          "size": 20334627
+          "url": "https://electrobun-artifacts.blackboard.sh/cottontail/preview/builds/baa29c790529f728c6b7b83fce881ff4aff2bd36/windows-x64/cottontail.tar.gz",
+          "sha256": "4ed1798e0cc4af3e26ccfbeda5266ca83cc27bf4c410353a95dc38e05929c639",
+          "size": 33848119
         }
       }
     }
@@ -47,39 +47,39 @@
     "channel": "preview",
     "name": "dash-cli",
     "version": "0.1.0-beta.1",
-    "revision": "0c79afa6cd9fba661ba18aa9ad47f8df8b0a78fc",
+    "revision": "6f9d97dd154871d245abc974c0ffd8fb91d4e46c",
     "cottontail": {
       "version": "0.1.1-beta.1",
-      "revision": "dbb67cd9304ebc124a0d38cee4403ea118e0d801"
+      "revision": "baa29c790529f728c6b7b83fce881ff4aff2bd36"
     },
-    "publishedAt": "2026-07-20T02:07:37.597Z",
+    "publishedAt": "2026-07-25T16:39:24.230Z",
     "platforms": {
       "macos-arm64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/0c79afa6cd9fba661ba18aa9ad47f8df8b0a78fc/0325ca5e5a0e157ca013e989b93686e2e437d578e67eeace0898a17226eb5846/dash-cli-v0.1.0-beta.1-macos-arm64.tar.gz",
-          "sha256": "0325ca5e5a0e157ca013e989b93686e2e437d578e67eeace0898a17226eb5846",
-          "size": 28157763
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/6f9d97dd154871d245abc974c0ffd8fb91d4e46c/2b67e2af62544003c2ea40db26a0f1a84ba320a6412a5b88c9d7a55277110447/dash-cli-v0.1.0-beta.1-macos-arm64.tar.gz",
+          "sha256": "2b67e2af62544003c2ea40db26a0f1a84ba320a6412a5b88c9d7a55277110447",
+          "size": 24545198
         }
       },
       "linux-x64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/0c79afa6cd9fba661ba18aa9ad47f8df8b0a78fc/1e23e1dd337e2a16d950045757781e1de79bbfbdbf1f152b252fe2e627e46bb7/dash-cli-v0.1.0-beta.1-linux-x64.tar.gz",
-          "sha256": "1e23e1dd337e2a16d950045757781e1de79bbfbdbf1f152b252fe2e627e46bb7",
-          "size": 21789574
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/6f9d97dd154871d245abc974c0ffd8fb91d4e46c/bf90979dcca9aa77c82f0fa6c4aa6072bdb0a921fad278c027cd8eb43aa605b7/dash-cli-v0.1.0-beta.1-linux-x64.tar.gz",
+          "sha256": "bf90979dcca9aa77c82f0fa6c4aa6072bdb0a921fad278c027cd8eb43aa605b7",
+          "size": 22526855
         }
       },
       "linux-arm64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/0c79afa6cd9fba661ba18aa9ad47f8df8b0a78fc/aacbcabe4117d22bc5e262e0b338163ef3f6a8cfc8d433429ce575fa5fb66aff/dash-cli-v0.1.0-beta.1-linux-arm64.tar.gz",
-          "sha256": "aacbcabe4117d22bc5e262e0b338163ef3f6a8cfc8d433429ce575fa5fb66aff",
-          "size": 20622592
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/6f9d97dd154871d245abc974c0ffd8fb91d4e46c/c59d2c1a2e072430195cef87e142ab069c09bb17d3611ed2bc874763a7e35b4b/dash-cli-v0.1.0-beta.1-linux-arm64.tar.gz",
+          "sha256": "c59d2c1a2e072430195cef87e142ab069c09bb17d3611ed2bc874763a7e35b4b",
+          "size": 21444191
         }
       },
       "windows-x64": {
         "archive": {
-          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/0c79afa6cd9fba661ba18aa9ad47f8df8b0a78fc/a51978787d6a6941d8c645111d650fccab170c5a24db0c5006cb580b332cb04c/dash-cli-v0.1.0-beta.1-windows-x64.tar.gz",
-          "sha256": "a51978787d6a6941d8c645111d650fccab170c5a24db0c5006cb580b332cb04c",
-          "size": 19604158
+          "url": "https://electrobun-artifacts.blackboard.sh/dash-cli/preview/builds/6f9d97dd154871d245abc974c0ffd8fb91d4e46c/6ad858cb66bab64a23499b2012370a80c4bfb857ef8145b550c2c35366640eac/dash-cli-v0.1.0-beta.1-windows-x64.tar.gz",
+          "sha256": "6ad858cb66bab64a23499b2012370a80c4bfb857ef8145b550c2c35366640eac",
+          "size": 21005534
         }
       }
     }
