@@ -110,7 +110,6 @@ try {
 
 // Step 2: Check if the artifacts exist
 const artifacts = [
-	`electrobun-cli-${platformName}-${archName}.tar.gz`,
 	`electrobun-core-${platformName}-${archName}.tar.gz`,
 	`electrobun-cef-${platformName}-${archName}.tar.gz`,
 ];

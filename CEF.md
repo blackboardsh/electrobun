@@ -4,12 +4,11 @@ Internal reference for how Electrobun manages CEF (Chromium Embedded Framework) 
 
 ## Tarball Layout
 
-Electrobun releases ship 3 tarballs per platform:
+Electrobun releases ship 2 tarballs per platform:
 
 | Tarball | Contents | Source |
 |---------|----------|--------|
-| `electrobun-cli-*` | CLI binary | `bin/` |
-| `electrobun-core-*` | Platform binaries including `process_helper` | `dist/` (excluding `cef/` dir and files starting with "electrobun") |
+| `electrobun-core-*` | Platform binaries including `process_helper` | `dist/` (excluding `cef/`) |
 | `electrobun-cef-*` | CEF runtime files only (no electrobun code) | `dist/cef/` |
 
 `process_helper` ships in the **core** tarball, not the CEF tarball. This means the CEF tarball contains only upstream CEF distribution files and can be swapped independently.
@@ -23,7 +22,7 @@ const CEF_VERSION = `144.0.11+ge135be2`;
 const CHROMIUM_VERSION = `144.0.7559.97`;
 ```
 
-When `./vendors/dash-cli/dash build.ts` runs, `vendorCEF()` does the following:
+When `dash build.ts` runs, `vendorCEF()` does the following:
 
 1. **Downloads** the CEF minimal distribution from `cef-builds.spotifycdn.com`
 2. **Builds `libcef_dll_wrapper.a`** using cmake (thin C++ wrapper around CEF's stable C API)
@@ -108,8 +107,8 @@ CEF's C API is designed for ABI stability within the same major version line. `p
 
 1. Update `CEF_VERSION` and `CHROMIUM_VERSION` in `package/build.ts`
 2. Delete `vendors/cef/` locally (or the `.cef-version` stamp -- staleness detection will clean it automatically)
-3. Run `./vendors/dash-cli/dash build.ts` -- it will download the new CEF, rebuild `libcef_dll_wrapper.a` and `process_helper`
-4. Test with the kitchen app (`./vendors/dash-cli/dash dev` from `package/`)
+3. Run `dash build.ts` -- it will download the new CEF, rebuild `libcef_dll_wrapper.a` and `process_helper`
+4. Test with the kitchen app (`dash dev` from `package/`)
 5. The release workflow's CEF vendor cache key includes the version, so CI will automatically re-download and rebuild on the next release
 
 ## File Reference

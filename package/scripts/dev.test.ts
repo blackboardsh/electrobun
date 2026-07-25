@@ -45,7 +45,7 @@ assertArray(
 assert(windowsCommands[2]?.cwd === kitchenDir, "Kitchen launch cwd mismatch");
 
 const posixCommands = createDevCommands({
-	dashBinary: "/tmp/electrobun/package/vendors/dash-cli/dash",
+	dashBinary: "/tmp/dash",
 	packageDir: "/tmp/electrobun/package",
 	kitchenDir: "/tmp/electrobun/kitchen",
 	platform: "linux",

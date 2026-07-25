@@ -136,8 +136,7 @@ On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-conf
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
 npm ci
-npm run dash:vendor
-./vendors/dash-cli/dash dev:clean
+dash dev:clean
 ```
 
 ### Development Workflow
@@ -147,10 +146,10 @@ npm run dash:vendor
 cd electrobun/package
 
 # After making changes to source code
-./vendors/dash-cli/dash dev
+dash dev
 
 # If you need a completely fresh start
-./vendors/dash-cli/dash dev:clean
+dash dev:clean
 ```
 
 With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
@@ -161,17 +160,17 @@ stack:
 dash dev --local
 ```
 
-The first Dash may be globally installed or vendored. Stack preparation
-replaces Electrobun's vendored Dash and Cottontail bootstrap pair with the
-completed local builds for later invocations.
+The first Dash is globally installed. Stack preparation explicitly selects the
+completed local Dash engine and Cottontail build for the remainder of the
+command.
 
 ### Additional Commands
 
 All commands are run from the `/package` directory:
 
-- `./vendors/dash-cli/dash dev:canary` - Build and run kitchen sink in canary mode
-- `./vendors/dash-cli/dash build:dev` - Build Electrobun in development mode
-- `./vendors/dash-cli/dash build:release` - Build Electrobun in release mode
+- `dash dev:canary` - Build and run kitchen sink in canary mode
+- `dash build:dev` - Build Electrobun in development mode
+- `dash build:release` - Build Electrobun in release mode
 
 ### Debugging
 

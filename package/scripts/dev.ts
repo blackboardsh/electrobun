@@ -70,18 +70,14 @@ function isAbsoluteExecutablePath(value: string) {
 }
 
 export function resolveDashBinary(packageDir: string, configuredBinary = process.env.DASH_BINARY) {
-	const binaryName = process.platform === "win32" ? "dash.exe" : "dash";
-	const candidate = configuredBinary
-		? isAbsoluteExecutablePath(configuredBinary)
-			? configuredBinary
-			: resolve(packageDir, configuredBinary)
-		: join(packageDir, "vendors", "dash-cli", binaryName);
+	if (!configuredBinary) return "dash";
 
+	const candidate = isAbsoluteExecutablePath(configuredBinary)
+		? configuredBinary
+		: resolve(packageDir, configuredBinary);
 	if (!existsSync(candidate)) {
-		const source = configuredBinary ? "DASH_BINARY" : "vendored Dash CLI";
-		throw new Error(`${source} points to a missing executable: ${candidate}`);
+		throw new Error(`DASH_BINARY points to a missing executable: ${candidate}`);
 	}
-
 	return candidate;
 }
 

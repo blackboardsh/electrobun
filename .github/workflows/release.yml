@@ -63,9 +63,10 @@ jobs:
         run: npm ci
         working-directory: package
 
-      - name: Vendor Dash and Cottontail
-        run: npm run dash:vendor
-        working-directory: package
+      - name: Install Dash
+        uses: ./.github/actions/install-dash
+        with:
+          channel: canary
 
       - name: Setup MSVC Developer Command Prompt
         if: matrix.platform == 'win32'
@@ -141,12 +142,6 @@ jobs:
         run: node scripts/package-release.js
         working-directory: package
 
-      - name: Upload CLI artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}
-          path: package/electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
-
       - name: Upload core artifact
         uses: actions/upload-artifact@v6
         with:
@@ -209,7 +204,7 @@ jobs:
       - name: Build Kitchen
         run: |
           npm ci
-          node ../package/bin/dash.cjs electrobun build --env=${{ steps.release-type.outputs.env }}
+          dash electrobun build --env=${{ steps.release-type.outputs.env }}
         working-directory: kitchen
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
@@ -223,7 +218,7 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           R2_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: node package/bin/dash.cjs scripts/upload-kitchen-artifacts.ts kitchen/artifacts
+        run: dash scripts/upload-kitchen-artifacts.ts kitchen/artifacts
 
       - name: Clean up kitchen artifacts
         shell: bash
@@ -269,7 +264,6 @@ jobs:
             ---
 
             **Artifact Reference** (downloaded automatically by the CLI):
-            - `electrobun-cli-[platform]-[arch].tar.gz` - CLI tools
             - `electrobun-core-[platform]-[arch].tar.gz` - Core binaries
             - `electrobun-cef-[platform]-[arch].tar.gz` - CEF binaries (optional)
 
@@ -289,13 +283,14 @@ jobs:
         run: npm ci
         working-directory: package
 
-      - name: Vendor Dash and Cottontail
-        run: npm run dash:vendor
-        working-directory: package
+      - name: Install Dash
+        uses: ./.github/actions/install-dash
+        with:
+          channel: canary
 
       - name: Build for npm (JS/TS files only)
         run: |
-          ./vendors/dash-cli/dash build.ts --npm --release
+          dash build.ts --npm --release
 
           echo "Contents of dist/ for npm (should only be main.js and api/):"
           find dist/ -type f | sort

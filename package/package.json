@@ -17,16 +17,12 @@
 		"./view": "./dist/api/browser/index.ts"
 	},
 	"type": "module",
-	"bin": {
-		"dash": "./bin/dash.cjs"
-	},
 	"homepage": "https://electrobun.dev",
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/blackboardsh/electrobun.git"
 	},
 	"scripts": {
-		"dash:vendor": "node scripts/vendor-dash-cli.js",
 		"build:local": "node scripts/build-local.js"
 	},
 	"devDependencies": {

@@ -64,40 +64,30 @@ All commands are run from the `/package` directory:
 ```bash
 cd electrobun/package
 npm ci
-npm run dash:vendor
 
 # Full build with all platforms
-./vendors/dash-cli/dash build.ts
+dash build.ts
 
 # Development build with the kitchen sink test app
-./vendors/dash-cli/dash dev
+dash dev
 
 # Release build
-./vendors/dash-cli/dash build.ts --release
+dash build.ts --release
 
 # CI build
-./vendors/dash-cli/dash build.ts --ci
+dash build.ts --ci
 ```
 
 ## Dash CLI and Cottontail
 
-`package/runtime-artifacts.lock.json` pins the complete Dash CLI and Cottontail
-preview manifests used by Electrobun builds. A normal build downloads the Dash
-archive, verifies its checksum and release metadata, and installs both Dash and
-the matching Cottontail payload contained in that archive.
+Dash and Cottontail are installed and released independently of Electrobun.
+The first-line `// @dash` pragma in `package/dash.config.ts` pins the exact
+versions used for reproducible Electrobun builds. Dash resolves and verifies
+Cottontail, then bundles the selected runtime into each application.
 
-After publishing compatible Cottontail and Dash preview releases, update both
-pins together:
-
-```bash
-cd electrobun/package
-./vendors/dash-cli/dash scripts/update-runtime-artifacts.ts
-```
-
-For local runtime development, `DASH_CLI_ROOT` can point at a Dash checkout
-with an existing `zig-out/bin` build, while `DASH_USE_LOCAL_COTTONTAIL=1`
-selects the adjacent Cottontail checkout. `DASH_CLI_BINARY` and
-`COTTONTAIL_BINARY` remain available for CI and one-off binary overrides.
+For local runtime development, `dash dev --local` builds and selects the
+sibling Dash launcher, Dash engine, and Cottontail binary without changing the
+published version pins.
 
 ## Architecture Support
 

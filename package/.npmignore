@@ -11,14 +11,11 @@
 # Exclude platform-specific dist directories
 /dist-*/
 
-# Note: dist/ contents are controlled by CI build process
-# Only main.js and api/ should be in dist/ when publishing
-/bin/electrobun
-/bin/electrobun.exe
-/.cache/
-
-# Include postinstall script
-!/bin/electrobun.cjs
+# Note: dist/ contents are controlled by CI build process.
+# Only main.js and api/ should be in dist/ when publishing.
+/bin
+/.cache
+/.cottontail-tmp
 
 # Include CLI source
 !/src/cli/

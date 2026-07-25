@@ -2,9 +2,8 @@
 
 import { $ } from "bun";
 import { spawnSync } from "child_process";
-import { createHash } from "crypto";
 import { platform, arch, tmpdir } from "os";
-import { join, relative, basename, dirname, resolve } from "path";
+import { join, relative, basename } from "path";
 import {
 	existsSync,
 	readdirSync,
@@ -60,43 +59,6 @@ const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 const goBinary = OS === "win" ? "go.exe" : "go";
 const odinBinary = OS === "win" ? "odin.exe" : "odin";
-const cottontailBinary = OS === "win" ? "cottontail.exe" : "cottontail";
-const dashCliBinary = OS === "win" ? "dash.exe" : "dash";
-
-type RuntimeArtifact = {
-	url: string;
-	sha256: string;
-	size: number;
-};
-
-type RuntimeRelease = {
-	schema: number;
-	channel: string;
-	name: string;
-	version: string;
-	revision: string;
-	publishedAt: string;
-	platforms: Record<string, { archive: RuntimeArtifact }>;
-};
-
-type RuntimeArtifactsLock = {
-	schema: number;
-	sources: {
-		cottontail: string;
-		dashCli: string;
-	};
-	cottontail: RuntimeRelease;
-	dashCli: RuntimeRelease;
-};
-
-const RUNTIME_ARTIFACTS_LOCK_PATH = join(
-	process.cwd(),
-	"runtime-artifacts.lock.json",
-);
-const RUNTIME_ARTIFACTS = JSON.parse(
-	readFileSync(RUNTIME_ARTIFACTS_LOCK_PATH, "utf8"),
-) as RuntimeArtifactsLock;
-
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
 
@@ -114,14 +76,6 @@ const PATH = {
 	},
 	odin: {
 		BIN: join(process.cwd(), "vendors", "odin", odinBinary),
-	},
-	cottontail: {
-		BIN: join(process.cwd(), "vendors", "cottontail", cottontailBinary),
-		DIST: join(process.cwd(), "dist", cottontailBinary),
-	},
-	dashCli: {
-		BIN: join(process.cwd(), "vendors", "dash-cli", dashCliBinary),
-		DIST: join(process.cwd(), "dist", dashCliBinary),
 	},
 };
 
@@ -620,6 +574,14 @@ async function checkDependencies() {
 
 async function setup() {
 	await checkDependencies();
+	rmSync(join(process.cwd(), "vendors", "dash-cli"), {
+		recursive: true,
+		force: true,
+	});
+	rmSync(join(process.cwd(), "vendors", "cottontail"), {
+		recursive: true,
+		force: true,
+	});
 	// Run vendors sequentially to avoid network/curl conflicts
 	// GitHub downloads have built-in pauses to avoid rate limiting
 	await vendorBsdiff(); // GitHub
@@ -630,9 +592,6 @@ async function setup() {
 	await vendorRust(); // static.rust-lang.org (not GitHub)
 	await vendorGo(); // go.dev (not GitHub)
 	await vendorOdin(); // GitHub
-	await vendorDashCli(); // pinned release or explicit local override
-	await vendorCottontail(); // normally supplied by the pinned Dash release
-	syncDashCliRuntimePair();
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -818,25 +777,17 @@ async function copyToDist() {
 		}
 		console.log(`launcher${binExt} copied successfully to ${launcherPath}`);
 	}
-	// Electrobun npm launcher
-	cpSync("src/npmbin/index.js", "dist/npmbin.js", { force: true });
-	if (existsSync(PATH.cottontail.BIN)) {
-		cpSync(PATH.cottontail.BIN, PATH.cottontail.DIST, { force: true });
+		mkdirSync("bin", { recursive: true });
+	for (const legacyRuntime of [
+		"dash",
+		"dash.exe",
+		"cottontail",
+		"cottontail.exe",
+		".runtime-platform",
+	]) {
+		rmSync(join("bin", legacyRuntime), { force: true });
 	}
-	if (existsSync(PATH.dashCli.BIN)) {
-		cpSync(PATH.dashCli.BIN, PATH.dashCli.DIST, { force: true });
-	}
-	mkdirSync("bin", { recursive: true });
-	rmSync(join("bin", OS === "win" ? "electrobun.exe" : "electrobun"), {
-		force: true,
-	});
-	if (existsSync(PATH.cottontail.BIN)) {
-		await copyExecutableToBin(PATH.cottontail.BIN, cottontailBinary);
-	}
-	if (existsSync(PATH.dashCli.BIN)) {
-		await copyExecutableToBin(PATH.dashCli.BIN, dashCliBinary);
-	}
-	writeFileSync(join("bin", ".runtime-platform"), `${runtimePlatformKey()}\n`);
+	rmSync(join("bin", OS === "win" ? "electrobun.exe" : "electrobun"), { force: true });
 	// Electrobun's Typescript bun and browser apis
 	await copyApiFiles();
 	// Native code and frameworks
@@ -974,8 +925,6 @@ async function copyToDist() {
 function normalizeDistExecutableModes(directory: string) {
 	if (OS === "win") return;
 	for (const filename of [
-		cottontailBinary,
-		dashCliBinary,
 		"launcher",
 		"extractor",
 		"bsdiff",
@@ -1058,35 +1007,6 @@ async function createDistFolder() {
 	if (OS === "win" || OS === "linux") {
 		await $`mkdir -p dist/cef`;
 	}
-}
-
-async function copyExecutableToBin(source: string, filename: string) {
-	const destination = join("bin", filename);
-
-	if (OS === "win") {
-		cpSync(source, destination, { force: true });
-		return;
-	}
-
-	const tempDestination = `${destination}.tmp-${Date.now()}-${Math.floor(
-		Math.random() * 1_000_000,
-	)}`;
-
-	try {
-		await $`cp ${source} ${tempDestination}`;
-		await $`chmod +x ${tempDestination}`;
-		await signExecutableIfNeeded(tempDestination);
-		renameSync(tempDestination, destination);
-	} finally {
-		if (existsSync(tempDestination)) {
-			unlinkSync(tempDestination);
-		}
-	}
-}
-
-async function signExecutableIfNeeded(path: string) {
-	if (OS !== "macos") return;
-	await $`codesign --force --sign - ${path}`;
 }
 
 async function installPackageDependencies() {
@@ -1407,344 +1327,6 @@ async function vendorOdin() {
 	}
 }
 
-function defaultDashCliRoot() {
-	return resolve(process.cwd(), "..", "..", "dash-cloud", "dash-cli");
-}
-
-function defaultCottontailRoot() {
-	return resolve(process.cwd(), "..", "..", "cottontail");
-}
-
-function environmentFlagEnabled(name: string) {
-	const value = process.env[name]?.trim().toLowerCase();
-	return value === "1" || value === "true" || value === "yes";
-}
-
-function hasConfiguredCottontailOverride() {
-	return Boolean(
-		process.env["DASH_COTTONTAIL"] ||
-			process.env["COTTONTAIL_BINARY"] ||
-			process.env["DASH_COTTONTAIL_ROOT"] ||
-			process.env["COTTONTAIL_ROOT"] ||
-			environmentFlagEnabled("DASH_USE_LOCAL_COTTONTAIL"),
-	);
-}
-
-function resolveCottontailRoot() {
-	return resolve(
-		process.env["DASH_COTTONTAIL_ROOT"] ||
-			process.env["COTTONTAIL_ROOT"] ||
-			defaultCottontailRoot(),
-	);
-}
-
-function runtimePlatformKey() {
-	if (OS === "win") return "windows-x64";
-	if (OS === "macos" && ARCH === "arm64") return "macos-arm64";
-	if (OS === "linux") return `linux-${ARCH}`;
-	throw new Error(`No Dash/Cottontail release is published for ${OS}-${ARCH}`);
-}
-
-function readReleaseMetadata(path: string) {
-	return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function metadataMatches(
-	path: string,
-	release: RuntimeRelease,
-	platformKey: string,
-) {
-	if (!existsSync(path)) return false;
-	try {
-		const metadata = readReleaseMetadata(path);
-		return (
-			metadata.name === release.name &&
-			metadata.version === release.version &&
-			metadata.revision === release.revision &&
-			metadata.platform === platformKey
-		);
-	} catch {
-		return false;
-	}
-}
-
-function assertReleaseMetadata(
-	path: string,
-	release: RuntimeRelease,
-	platformKey: string,
-) {
-	if (!metadataMatches(path, release, platformKey)) {
-		throw new Error(
-			`Downloaded ${release.name} metadata does not match the pinned ${release.version}@${release.revision} ${platformKey} release`,
-		);
-	}
-	return readReleaseMetadata(path);
-}
-
-async function downloadRuntimeRelease(
-	release: RuntimeRelease,
-	platformKey: string,
-) {
-	const artifact = release.platforms[platformKey]?.archive;
-	if (!artifact) {
-		throw new Error(`${release.name} ${release.version} has no ${platformKey} artifact`);
-	}
-
-	const tempRoot = join(
-		process.cwd(),
-		"vendors",
-		`.${release.name}-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
-	);
-	const archivePath = join(tempRoot, "release.tar.gz");
-	const extractRoot = join(tempRoot, "extract");
-	mkdirSync(extractRoot, { recursive: true });
-
-	console.log(
-		`Downloading ${release.name} ${release.version} (${platformKey})...`,
-	);
-	// Use the system downloader for large binary payloads. This build script is
-	// intentionally runnable under Cottontail, whose fetch compatibility layer
-	// is not the right byte transport for release archives yet.
-	await $`curl -fsSL --retry 3 ${artifact.url} -o ${archivePath}`;
-	const bytes = readFileSync(archivePath);
-	const actualSha256 = createHash("sha256").update(bytes).digest("hex");
-	if (actualSha256 !== artifact.sha256) {
-		throw new Error(
-			`${release.name} checksum mismatch: expected ${artifact.sha256}, got ${actualSha256}`,
-		);
-	}
-	if (bytes.byteLength !== artifact.size) {
-		throw new Error(
-			`${release.name} size mismatch: expected ${artifact.size}, got ${bytes.byteLength}`,
-		);
-	}
-	await $`tar -xzf ${archivePath} -C ${extractRoot}`;
-
-	const entries = readdirSync(extractRoot, { withFileTypes: true }).filter(
-		(entry) => entry.isDirectory(),
-	);
-	if (entries.length !== 1) {
-		throw new Error(`${release.name} archive did not contain one package root`);
-	}
-
-	return {
-		packageRoot: join(extractRoot, entries[0]!.name),
-		cleanup: () => rmSync(tempRoot, { recursive: true, force: true }),
-	};
-}
-
-async function installCottontailPayload(
-	packageRoot: string,
-	release: RuntimeRelease,
-	platformKey: string,
-) {
-	const metadataPath = join(packageRoot, "cottontail-release.json");
-	assertReleaseMetadata(metadataPath, release, platformKey);
-	const sourceBinary = join(packageRoot, "bin", cottontailBinary);
-	if (!existsSync(sourceBinary)) {
-		throw new Error("Cottontail release is missing its executable");
-	}
-
-	const destination = join(process.cwd(), "vendors", "cottontail");
-	rmSync(destination, { recursive: true, force: true });
-	mkdirSync(destination, { recursive: true });
-	cpSync(sourceBinary, PATH.cottontail.BIN);
-	cpSync(metadataPath, join(destination, "cottontail-release.json"));
-	if (OS !== "win") await $`chmod +x ${PATH.cottontail.BIN}`;
-	await signExecutableIfNeeded(PATH.cottontail.BIN);
-}
-
-async function installLocalCottontail(binary: string) {
-	const destination = join(process.cwd(), "vendors", "cottontail");
-	rmSync(destination, { recursive: true, force: true });
-	mkdirSync(destination, { recursive: true });
-	cpSync(binary, PATH.cottontail.BIN);
-	if (OS !== "win") await $`chmod +x ${PATH.cottontail.BIN}`;
-	await signExecutableIfNeeded(PATH.cottontail.BIN);
-}
-
-async function vendorCottontail() {
-	const envBinary =
-		process.env["DASH_COTTONTAIL"] || process.env["COTTONTAIL_BINARY"];
-	if (envBinary) {
-		if (!existsSync(envBinary)) {
-			throw new Error(`Cottontail binary does not exist: ${envBinary}`);
-		}
-		await installLocalCottontail(envBinary);
-		console.log(
-			`✓ Cottontail vendored from binary override: ${PATH.cottontail.BIN}`,
-		);
-		return;
-	}
-
-	const cottontailRoot = resolveCottontailRoot();
-	const buildZig = join(cottontailRoot, "build.zig");
-	const sourceBinary = join(cottontailRoot, "zig-out", "bin", cottontailBinary);
-	const useLocalCottontail = environmentFlagEnabled(
-		"DASH_USE_LOCAL_COTTONTAIL",
-	);
-	if (useLocalCottontail && (!existsSync(buildZig) || !existsSync(sourceBinary))) {
-		throw new Error(
-			`DASH_USE_LOCAL_COTTONTAIL is set, but no built Cottontail was found at ${sourceBinary}`,
-		);
-	}
-
-	if (
-		(useLocalCottontail ||
-			process.env["DASH_COTTONTAIL_ROOT"] ||
-			process.env["COTTONTAIL_ROOT"]) &&
-		existsSync(buildZig) &&
-		existsSync(sourceBinary)
-	) {
-		await installLocalCottontail(sourceBinary);
-		console.log(`✓ Cottontail vendored from existing build at ${PATH.cottontail.BIN}`);
-		return;
-	}
-
-	const platformKey = runtimePlatformKey();
-	const metadataPath = join(
-		process.cwd(),
-		"vendors",
-		"cottontail",
-		"cottontail-release.json",
-	);
-	if (
-		existsSync(PATH.cottontail.BIN) &&
-		metadataMatches(metadataPath, RUNTIME_ARTIFACTS.cottontail, platformKey)
-	) {
-		console.log(`✓ Using existing vendored Cottontail at ${PATH.cottontail.BIN}`);
-		return;
-	}
-
-	const downloaded = await downloadRuntimeRelease(
-		RUNTIME_ARTIFACTS.cottontail,
-		platformKey,
-	);
-	try {
-		await installCottontailPayload(
-			downloaded.packageRoot,
-			RUNTIME_ARTIFACTS.cottontail,
-			platformKey,
-		);
-	} finally {
-		downloaded.cleanup();
-	}
-	console.log(`✓ Cottontail ${RUNTIME_ARTIFACTS.cottontail.version} vendored`);
-}
-
-function syncDashCliRuntimePair() {
-	if (!existsSync(PATH.dashCli.BIN)) {
-		throw new Error(`Dash CLI bootstrap binary is missing: ${PATH.dashCli.BIN}`);
-	}
-	if (!existsSync(PATH.cottontail.BIN)) {
-		throw new Error(`Cottontail bootstrap binary is missing: ${PATH.cottontail.BIN}`);
-	}
-
-	const packagedCottontail = join(dirname(PATH.dashCli.BIN), cottontailBinary);
-	cpSync(PATH.cottontail.BIN, packagedCottontail, { force: true });
-	if (OS !== "win") chmodSync(packagedCottontail, 0o755);
-	console.log(`✓ Dash CLI bootstrap runtime paired at ${packagedCottontail}`);
-}
-
-async function vendorDashCli() {
-	const envBinary = process.env["DASH_CLI_BINARY"];
-	if (envBinary) {
-		if (!existsSync(envBinary)) {
-			throw new Error(`DASH_CLI_BINARY does not exist: ${envBinary}`);
-		}
-		rmSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true, force: true });
-		mkdirSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true });
-		cpSync(envBinary, PATH.dashCli.BIN);
-		if (OS !== "win") {
-			await $`chmod +x ${PATH.dashCli.BIN}`;
-		}
-		console.log(`✓ Dash CLI vendored from DASH_CLI_BINARY: ${PATH.dashCli.BIN}`);
-		return;
-	}
-
-	const dashCliRoot = resolve(process.env["DASH_CLI_ROOT"] || defaultDashCliRoot());
-	const buildScript = join(dashCliRoot, "scripts", "build.sh");
-	const sourceBinary = join(dashCliRoot, "zig-out", "bin", dashCliBinary);
-
-	if (
-		process.env["DASH_CLI_ROOT"] &&
-		existsSync(buildScript) &&
-		existsSync(sourceBinary)
-	) {
-		rmSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true, force: true });
-		mkdirSync(join(process.cwd(), "vendors", "dash-cli"), { recursive: true });
-		cpSync(sourceBinary, PATH.dashCli.BIN);
-		if (OS !== "win") await $`chmod +x ${PATH.dashCli.BIN}`;
-		await signExecutableIfNeeded(PATH.dashCli.BIN);
-		console.log(`✓ Dash CLI vendored from existing build at ${PATH.dashCli.BIN}`);
-		return;
-	}
-
-	const platformKey = runtimePlatformKey();
-	const dashMetadataPath = join(
-		process.cwd(),
-		"vendors",
-		"dash-cli",
-		"dash-cli-release.json",
-	);
-	const cottontailMetadataPath = join(
-		process.cwd(),
-		"vendors",
-		"cottontail",
-		"cottontail-release.json",
-	);
-	if (
-		existsSync(PATH.dashCli.BIN) &&
-		metadataMatches(dashMetadataPath, RUNTIME_ARTIFACTS.dashCli, platformKey) &&
-		(hasConfiguredCottontailOverride() ||
-			metadataMatches(
-				cottontailMetadataPath,
-				RUNTIME_ARTIFACTS.cottontail,
-				platformKey,
-			))
-	) {
-		console.log(`✓ Using existing vendored Dash CLI at ${PATH.dashCli.BIN}`);
-		return;
-	}
-
-	const downloaded = await downloadRuntimeRelease(
-		RUNTIME_ARTIFACTS.dashCli,
-		platformKey,
-	);
-	try {
-		const metadataPath = join(downloaded.packageRoot, "dash-cli-release.json");
-		const metadata = assertReleaseMetadata(
-			metadataPath,
-			RUNTIME_ARTIFACTS.dashCli,
-			platformKey,
-		);
-		if (
-			metadata.cottontail?.version !== RUNTIME_ARTIFACTS.cottontail.version ||
-			metadata.cottontail?.revision !== RUNTIME_ARTIFACTS.cottontail.revision
-		) {
-			throw new Error(
-				"Dash CLI was not built with the Cottontail release pinned by Electrobun",
-			);
-		}
-
-		const destination = join(process.cwd(), "vendors", "dash-cli");
-		rmSync(destination, { recursive: true, force: true });
-		mkdirSync(destination, { recursive: true });
-		cpSync(join(downloaded.packageRoot, "bin", dashCliBinary), PATH.dashCli.BIN);
-		cpSync(metadataPath, join(destination, "dash-cli-release.json"));
-		if (OS !== "win") await $`chmod +x ${PATH.dashCli.BIN}`;
-		await signExecutableIfNeeded(PATH.dashCli.BIN);
-
-		await installCottontailPayload(
-			downloaded.packageRoot,
-			RUNTIME_ARTIFACTS.cottontail,
-			platformKey,
-		);
-	} finally {
-		downloaded.cleanup();
-	}
-	console.log(`✓ Dash CLI ${RUNTIME_ARTIFACTS.dashCli.version} vendored`);
-}
 
 async function vendorBsdiff() {
 	const BSDIFF_VERSION = "0.1.20";

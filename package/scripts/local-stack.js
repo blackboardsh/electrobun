@@ -28,6 +28,12 @@ export function prepareLocalStack(packageDir) {
 	);
 	const binaryExtension = process.platform === "win32" ? ".exe" : "";
 	const localDash = join(dashCliRoot, "zig-out", "bin", `dash${binaryExtension}`);
+	const localDashEngine = join(
+		dashCliRoot,
+		"zig-out",
+		"bin",
+		`dash-cli${binaryExtension}`,
+	);
 	const localCottontail = join(
 		cottontailRoot,
 		"zig-out",
@@ -71,7 +77,7 @@ export function prepareLocalStack(packageDir) {
 		DASH_COTTONTAIL: localCottontail,
 		COTTONTAIL_BINARY: localCottontail,
 		DASH_CLI_ROOT: dashCliRoot,
-		DASH_CLI_BINARY: localDash,
+		DASH_CLI_BINARY: localDashEngine,
 		DASH_BINARY: localDash,
 		ELECTROBUN_BINARY: localDash,
 		DASH_USE_LOCAL_ELECTROBUN: "1",
@@ -84,6 +90,7 @@ export function prepareLocalStack(packageDir) {
 		cottontailBinary: localCottontail,
 		dashCliRoot,
 		dashBinary: localDash,
+		dashEngineBinary: localDashEngine,
 		electrobunRoot,
 	};
 }

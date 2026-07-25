@@ -32,19 +32,20 @@ jobs:
         working-directory: package
         run: npm ci
 
-      - name: Vendor Dash and Cottontail
-        working-directory: package
-        run: npm run dash:vendor
+      - name: Install Dash
+        uses: ./.github/actions/install-dash
+        with:
+          channel: canary
 
       - name: Check latest stable CEF version
         id: check
         working-directory: package
-        run: ./vendors/dash-cli/dash scripts/update-cef-version.ts
+        run: dash scripts/update-cef-version.ts
 
       - name: Build with latest CEF
         if: steps.check.outputs.has_update == 'true'
         working-directory: package
-        run: ./vendors/dash-cli/dash build.ts
+        run: dash build.ts
 
       - name: Job summary
         if: always()
