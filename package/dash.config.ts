@@ -1,4 +1,4 @@
-// @dash cli=0.1.0-beta.1 cottontail=0.1.1-beta.1
+// @dash cli=0.1.0-beta.1 cottontail=0.1.1-beta.2
 export default {
 	scripts: {
 		start: "dash src/sdks/bun/index.ts",
