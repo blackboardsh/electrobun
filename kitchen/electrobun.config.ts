@@ -207,7 +207,7 @@ export default {
 		postBuild: "./buildScript.ts",
 	},
 	release: {
-		baseUrl: "https://electrobun-kitchen.blackboard.sh/",
+		baseUrl: "https://electrobun-artifacts.blackboard.sh/kitchen/",
 		generatePatch: true,
 	},
 } satisfies ElectrobunConfig;

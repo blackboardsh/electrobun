@@ -1,11 +1,18 @@
 import { readdir, stat } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { basename, join } from "node:path";
 
 type EnvKey =
-	| "R2_ENDPOINT"
+	| "R2_ACCOUNT_ID"
 	| "R2_ACCESS_KEY_ID"
-	| "R2_SECRET_ACCESS_KEY"
-	| "R2_BUCKET";
+	| "R2_SECRET_ACCESS_KEY";
+
+export const KITCHEN_ARTIFACT_BUCKET = "electrobun-artifacts";
+export const KITCHEN_ARTIFACT_PREFIX = "kitchen";
+export const KITCHEN_ARTIFACT_PUBLIC_BASE_URL =
+	"https://electrobun-artifacts.blackboard.sh/kitchen";
+
+const KITCHEN_ARTIFACT_NAME =
+	/^(canary|production)-(macos|linux|win)-(arm64|x64)-.+/;
 
 const requiredEnv = (key: EnvKey): string => {
 	const value = process.env[key];
@@ -28,14 +35,23 @@ async function* walk(dir: string): AsyncGenerator<string> {
 	}
 }
 
-const toPosixKey = (baseDir: string, filePath: string): string =>
-	relative(baseDir, filePath).split(sep).join("/");
+export const kitchenArtifactKey = (filePath: string): string => {
+	const filename = basename(filePath);
+	if (!KITCHEN_ARTIFACT_NAME.test(filename)) {
+		throw new Error(`Unexpected Kitchen artifact filename: ${filename}`);
+	}
+	return `${KITCHEN_ARTIFACT_PREFIX}/${filename}`;
+};
+
+export const isKitchenUpdateManifest = (key: string): boolean =>
+	key.endsWith("-update.json");
 
 async function main() {
-	const artifactsDir = Bun.argv[2];
+	const artifactsDir = process.argv[2];
+	const dryRun = process.argv.includes("--dry-run");
 	if (!artifactsDir) {
 		console.error(
-			"Usage: dash scripts/upload-kitchen-artifacts.ts <artifactsDir>",
+			"Usage: dash scripts/upload-kitchen-artifacts.ts <artifactsDir> [--dry-run]",
 		);
 		process.exit(1);
 	}
@@ -55,20 +71,19 @@ async function main() {
 		process.exit(1);
 	}
 
-	const endpoint = requiredEnv("R2_ENDPOINT");
-	const accessKeyId = requiredEnv("R2_ACCESS_KEY_ID");
-	const secretAccessKey = requiredEnv("R2_SECRET_ACCESS_KEY");
-	const bucket = requiredEnv("R2_BUCKET");
+	const client = dryRun
+		? undefined
+		: new Bun.S3Client({
+				accessKeyId: requiredEnv("R2_ACCESS_KEY_ID"),
+				secretAccessKey: requiredEnv("R2_SECRET_ACCESS_KEY"),
+				endpoint: `https://${requiredEnv("R2_ACCOUNT_ID")}.r2.cloudflarestorage.com`,
+				region: "auto",
+				bucket: KITCHEN_ARTIFACT_BUCKET,
+			});
 
-	const client = new Bun.S3Client({
-		accessKeyId,
-		secretAccessKey,
-		endpoint,
-		region: "auto",
-		bucket,
-	});
-
-	console.log(`Uploading artifacts from ${artifactsDir} to bucket ${bucket}`);
+	console.log(
+		`${dryRun ? "Checking" : "Publishing"} artifacts from ${artifactsDir} to ${KITCHEN_ARTIFACT_BUCKET}/${KITCHEN_ARTIFACT_PREFIX}/`,
+	);
 
 	const files: string[] = [];
 	for await (const filePath of walk(artifactsDir)) {
@@ -80,56 +95,75 @@ async function main() {
 		return;
 	}
 
+	const uploads = files
+		.map((filePath) => ({ filePath, key: kitchenArtifactKey(filePath) }))
+		.sort((left, right) => left.key.localeCompare(right.key));
+	const uniqueKeys = new Set(uploads.map(({ key }) => key));
+	if (uniqueKeys.size !== uploads.length) {
+		throw new Error("Duplicate Kitchen artifact filenames were staged");
+	}
+
+	const payloads = uploads.filter(({ key }) => !isKitchenUpdateManifest(key));
+	const manifests = uploads.filter(({ key }) => isKitchenUpdateManifest(key));
 	const concurrency = 5;
-
-	console.log(
-		`Uploading ${files.length} files with concurrency ${concurrency}`,
-	);
-
 	let uploadedCount = 0;
-	let failedCount = 0;
-	let nextIndex = 0;
 
-	const uploadFile = async (filePath: string) => {
-		const key = toPosixKey(artifactsDir, filePath);
+	const uploadFile = async (filePath: string, key: string) => {
 		const file = Bun.file(filePath);
 		const size = file.size ?? "unknown";
 
 		console.log(`  ${key} (${size} bytes)`);
 
-		await client.write(key, file, file.type ? { type: file.type } : undefined);
+		if (client) {
+			await client.write(
+				key,
+				file,
+				file.type ? { type: file.type } : undefined,
+			);
+		}
 
 		uploadedCount += 1;
 	};
 
-	const worker = async () => {
-		while (true) {
-			const index = nextIndex++;
-			const filePath = files[index];
-			if (!filePath) break;
+	const uploadBatch = async (batch: typeof uploads) => {
+		let nextIndex = 0;
+		const failures: unknown[] = [];
+		const worker = async () => {
+			while (true) {
+				const upload = batch[nextIndex++];
+				if (!upload) break;
 
-			try {
-				await uploadFile(filePath);
-			} catch (error) {
-				failedCount += 1;
-				console.error(`Failed to upload ${filePath}:`, error);
+				try {
+					await uploadFile(upload.filePath, upload.key);
+				} catch (error) {
+					failures.push(error);
+					console.error(`Failed to upload ${upload.filePath}:`, error);
+				}
 			}
+		};
+
+		await Promise.all(
+			Array.from(
+				{ length: Math.min(concurrency, batch.length) },
+				() => worker(),
+			),
+		);
+		if (failures.length > 0) {
+			throw new Error(`${failures.length} file(s) failed to upload`);
 		}
 	};
 
-	await Promise.all(
-		Array.from({ length: Math.min(concurrency, files.length) }, () => worker()),
+	await uploadBatch(payloads);
+	await uploadBatch(manifests);
+
+	console.log(
+		`${dryRun ? "Validated" : "Published"} ${uploadedCount} file(s)${dryRun ? "" : " to R2"}.`,
 	);
-
-	if (failedCount > 0) {
-		console.error(`${failedCount} file(s) failed to upload.`);
-		process.exit(1);
-	}
-
-	console.log(`Uploaded ${uploadedCount} file(s) to R2.`);
 }
 
-await main().catch((error) => {
-	console.error("Upload failed:", error);
-	process.exit(1);
-});
+if (import.meta.main) {
+	await main().catch((error) => {
+		console.error("Upload failed:", error);
+		process.exit(1);
+	});
+}

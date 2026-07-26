@@ -2,6 +2,7 @@
 
 import { $ } from "bun";
 import { spawnSync } from "child_process";
+import { createHash } from "crypto";
 import { platform, arch, tmpdir } from "os";
 import { join, relative, basename } from "path";
 import {
@@ -20,6 +21,14 @@ import {
 } from "fs";
 import { parseArgs } from "util";
 import process from "process";
+import {
+	BUILD_DEPENDENCIES_PUBLIC_BASE_URL,
+	OWNED_BUILD_DEPENDENCY_VERSIONS,
+	ZIG_VERSION,
+	ownedBuildDependencyArtifact,
+	type BuildDependencyArch,
+	type OwnedBuildDependency,
+} from "./src/shared/build-dependencies";
 import {
 	CEF_VERSION,
 	CHROMIUM_VERSION,
@@ -40,6 +49,9 @@ const { values: args } = parseArgs({
 		ci: {
 			type: "boolean",
 		},
+		"core-only": {
+			type: "boolean",
+		},
 		npm: {
 			type: "boolean",
 		},
@@ -50,6 +62,7 @@ const { values: args } = parseArgs({
 // TODO: set via cl arg
 const CHANNEL: "debug" | "release" = args.release ? "release" : "debug";
 const IS_NPM_BUILD = args.npm || false;
+const CORE_ONLY_BUILD = args["core-only"] || false;
 const OS: "win" | "linux" | "macos" = getPlatform();
 const ARCH: "arm64" | "x64" = getArch();
 
@@ -108,6 +121,53 @@ function validateDownload(filePath: string, type: string): void {
 	}
 }
 
+async function downloadOwnedBuildDependency(
+	product: OwnedBuildDependency,
+	targetArch: BuildDependencyArch,
+	destination: string,
+	validationType: string,
+): Promise<void> {
+	const publicBaseUrl =
+		process.env["ELECTROBUN_BUILD_DEPENDENCIES_BASE_URL"] ??
+		BUILD_DEPENDENCIES_PUBLIC_BASE_URL;
+	const artifact = ownedBuildDependencyArtifact(
+		product,
+		OS,
+		targetArch,
+		publicBaseUrl,
+	);
+	const checksumPath = `${destination}.sha256`;
+
+	rmSync(destination, { force: true });
+	rmSync(checksumPath, { force: true });
+	console.log(`Downloading ${product} ${artifact.version} from ${artifact.url}`);
+
+	try {
+		await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 ${artifact.checksumUrl} -o ${checksumPath}`;
+		await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 ${artifact.url} -o ${destination}`;
+		validateDownload(destination, validationType);
+
+		const expected = readFileSync(checksumPath, "utf8")
+			.trim()
+			.split(/\s+/, 1)[0]
+			?.toLowerCase();
+		if (!expected || !/^[a-f0-9]{64}$/.test(expected)) {
+			throw new Error(`Invalid checksum file returned for ${artifact.filename}`);
+		}
+		const actual = createHash("sha256")
+			.update(readFileSync(destination))
+			.digest("hex");
+		if (actual !== expected) {
+			rmSync(destination, { force: true });
+			throw new Error(
+				`Checksum mismatch for ${artifact.filename}: expected ${expected}, got ${actual}`,
+			);
+		}
+	} finally {
+		rmSync(checksumPath, { force: true });
+	}
+}
+
 function outputMissingOrOlder(outputPath: string, inputPaths: string[]): boolean {
 	if (!existsSync(outputPath)) {
 		return true;
@@ -120,25 +180,6 @@ function outputMissingOrOlder(outputPath: string, inputPaths: string[]): boolean
 		}
 		return statSync(inputPath).mtimeMs > outputMtime;
 	});
-}
-
-// Pause between GitHub downloads to avoid rate limiting
-// Track if we've done a GitHub download this session
-let lastGitHubDownload = 0;
-
-async function pauseForGitHub(): Promise<void> {
-	const now = Date.now();
-	const timeSinceLastDownload = now - lastGitHubDownload;
-	const pauseDuration = 60000; // 60 seconds
-
-	if (lastGitHubDownload > 0 && timeSinceLastDownload < pauseDuration) {
-		const remainingPause = pauseDuration - timeSinceLastDownload;
-		console.log(
-			`Pausing ${Math.ceil(remainingPause / 1000)} seconds before next GitHub download...`,
-		);
-		await new Promise((resolve) => setTimeout(resolve, remainingPause));
-	}
-	lastGitHubDownload = Date.now();
 }
 
 // TODO: setup file watchers
@@ -582,16 +623,18 @@ async function setup() {
 		recursive: true,
 		force: true,
 	});
-	// Run vendors sequentially to avoid network/curl conflicts
-	// GitHub downloads have built-in pauses to avoid rate limiting
-	await vendorBsdiff(); // GitHub
-	await vendorZstd(); // GitHub
-	await vendorAsar(); // GitHub
-	await vendorWGPU(); // GitHub
+	await Promise.all([
+		vendorBsdiff(),
+		vendorZstd(),
+		vendorAsar(),
+		vendorWGPU(),
+	]);
 	await vendorZig(); // ziglang.org (not GitHub)
-	await vendorRust(); // static.rust-lang.org (not GitHub)
-	await vendorGo(); // go.dev (not GitHub)
-	await vendorOdin(); // GitHub
+	if (!CORE_ONLY_BUILD) {
+		await vendorRust(); // static.rust-lang.org
+		await vendorGo(); // go.dev
+		await vendorOdin(); // GitHub
+	}
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
 	await vendorLinuxDeps();
@@ -743,21 +786,15 @@ async function copyToDist() {
 	}
 
 	if (OS === "win") {
-		// On Windows, copy both x64 and arm64 versions
-		// The launcher uses this DLL to extract the main bundle from ASAR.
+		// Electrobun ships an x64 Windows runtime and relies on Windows emulation
+		// on ARM machines, so every library loaded by that process must also be x64.
 		mkdirSync(join("dist", "zig-asar", "x64"), { recursive: true });
-		mkdirSync(join("dist", "zig-asar", "arm64"), { recursive: true });
 
-		// Copy x64 version
 		cpSync("vendors/zig-asar/x64/zig-asar.exe", "dist/zig-asar/x64/zig-asar.exe", { force: true });
 		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/zig-asar/x64/libasar.dll", { force: true });
 		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/libasar.dll", { force: true });
 
-		// Copy arm64 version
-		cpSync("vendors/zig-asar/arm64/zig-asar.exe", "dist/zig-asar/arm64/zig-asar.exe", { force: true });
-		cpSync("vendors/zig-asar/arm64/libasar.dll", "dist/zig-asar/arm64/libasar.dll", { force: true });
-
-		console.log("✓ Copied both x64 and arm64 zig-asar to dist");
+		console.log("✓ Copied x64 zig-asar to dist");
 	} else {
 		// Unix: single architecture
 		await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
@@ -1020,23 +1057,54 @@ async function installPackageDependencies() {
 	await $`npm install`;
 }
 
+function verifyVendoredZig() {
+	const versionOutput = runCaptured(PATH.zig.BIN, ["version"]).trim();
+	if (versionOutput !== ZIG_VERSION) {
+		throw new Error(
+			`Vendored Zig version mismatch: expected ${ZIG_VERSION}, got "${versionOutput}"`,
+		);
+	}
+}
+
 async function vendorZig() {
+	const zigDir = join(process.cwd(), "vendors", "zig");
+	const zigVersionFile = join(zigDir, ".zig-version");
+
 	if (existsSync(PATH.zig.BIN)) {
-		return;
+		try {
+			verifyVendoredZig();
+			const currentVersion = existsSync(zigVersionFile)
+				? readFileSync(zigVersionFile, "utf8").trim()
+				: ZIG_VERSION;
+			if (currentVersion === ZIG_VERSION) {
+				writeFileSync(zigVersionFile, ZIG_VERSION);
+				return;
+			}
+		} catch {
+			console.log("Existing Zig toolchain does not match the pinned version.");
+		}
+		await $`rm -rf ${zigDir}`;
 	}
 
 	if (OS === "macos") {
 		const zigArch = ARCH === "arm64" ? "aarch64" : "x86_64";
-		await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-macos-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-macos-${zigArch}-0.13.0/zig zig-macos-${zigArch}-0.13.0/lib  zig-macos-${zigArch}-0.13.0/doc`;
+		const zigFolder = `zig-macos-${zigArch}-${ZIG_VERSION}`;
+		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.tar.xz | tar -xJ --strip-components=1 -C vendors/zig ${zigFolder}/zig ${zigFolder}/lib ${zigFolder}/doc`;
 	} else if (OS === "win") {
 		// Always use x64 for Windows since we only build x64 Windows binaries
 		const zigArch = "x86_64";
-		const zigFolder = `zig-windows-${zigArch}-0.13.0`;
-		await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
+		const zigFolder = `zig-windows-${zigArch}-${ZIG_VERSION}`;
+		await $`rm -rf vendors/zig-temp vendors/zig.zip`;
+		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
+		await $`rm -rf vendors/zig-temp vendors/zig.zip`;
 	} else if (OS === "linux") {
 		const zigArch = ARCH === "arm64" ? "aarch64" : "x86_64";
-		await $`mkdir -p vendors/zig && curl -L https://ziglang.org/download/0.13.0/zig-linux-${zigArch}-0.13.0.tar.xz | tar -xJ --strip-components=1 -C vendors/zig zig-linux-${zigArch}-0.13.0/zig zig-linux-${zigArch}-0.13.0/lib zig-linux-${zigArch}-0.13.0/doc`;
+		const zigFolder = `zig-linux-${zigArch}-${ZIG_VERSION}`;
+		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.tar.xz | tar -xJ --strip-components=1 -C vendors/zig ${zigFolder}/zig ${zigFolder}/lib ${zigFolder}/doc`;
 	}
+
+	verifyVendoredZig();
+	writeFileSync(zigVersionFile, ZIG_VERSION);
 }
 
 function getRustHostTriple(): string {
@@ -1329,59 +1397,43 @@ async function vendorOdin() {
 
 
 async function vendorBsdiff() {
-	const BSDIFF_VERSION = "0.1.20";
+	const BSDIFF_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-bsdiff"];
 	const bsdiffDir = join(process.cwd(), "vendors", "zig-bsdiff");
 	const bsdiffBin = join(bsdiffDir, "bsdiff" + binExt);
 	const bspatchBin = join(bsdiffDir, "bspatch" + binExt);
+	const versionFile = join(bsdiffDir, ".version");
 
-	// Check if binaries already exist
-	if (existsSync(bsdiffBin) && existsSync(bspatchBin)) {
+	if (
+		existsSync(bsdiffBin) &&
+		existsSync(bspatchBin) &&
+		existsSync(versionFile) &&
+		readFileSync(versionFile, "utf8").trim() === BSDIFF_VERSION
+	) {
 		return;
 	}
 
-	await pauseForGitHub();
+	rmSync(bsdiffDir, { recursive: true, force: true });
 	console.log("Downloading zig-bsdiff binaries...");
-
-	// Map OS names to match GitHub release naming
-	const bsdiffPlatformMap: Record<string, string> = {
-		macos: "darwin",
-		win: "win32",
-		linux: "linux",
-	};
-	const bsdiffPlatform = bsdiffPlatformMap[OS];
-	const bsdiffArch = ARCH;
-
-	const tarballUrl = `https://github.com/blackboardsh/zig-bsdiff/releases/download/v${BSDIFF_VERSION}/zig-bsdiff-${bsdiffPlatform}-${bsdiffArch}.tar.gz`;
 	const tempTarball = join("vendors", `zig-bsdiff-temp.tar.gz`);
 
 	try {
-		// Download tarball
 		await $`mkdir -p vendors/zig-bsdiff`;
-		await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
+		await downloadOwnedBuildDependency(
+			"zig-bsdiff",
+			ARCH,
+			tempTarball,
+			"zig-bsdiff",
+		);
+		await $`tar -xzf ${tempTarball} -C vendors/zig-bsdiff`;
 
-		// Validate download
-		validateDownload(tempTarball, "zig-bsdiff");
-
-		// Extract to vendors/zig-bsdiff
-		if (OS === "win") {
-			// Use tar on Windows (built-in on Windows 10+)
-			await $`tar -xzf "${tempTarball}" -C vendors/zig-bsdiff`;
-		} else {
-			await $`tar -xzf "${tempTarball}" -C vendors/zig-bsdiff`;
-		}
-
-		// Clean up temp file
-		await $`rm "${tempTarball}"`;
-
-		// Verify binaries were extracted
 		if (!existsSync(bsdiffBin) || !existsSync(bspatchBin)) {
 			throw new Error(`Binaries not found after extraction: ${bsdiffDir}`);
 		}
 
-		// Make executable on Unix systems
 		if (OS !== "win") {
 			await $`chmod +x ${bsdiffBin} ${bspatchBin}`;
 		}
+		writeFileSync(versionFile, BSDIFF_VERSION);
 
 		console.log("✓ zig-bsdiff binaries downloaded successfully");
 	} catch (error: unknown) {
@@ -1389,53 +1441,39 @@ async function vendorBsdiff() {
 			"Failed to download zig-bsdiff binaries:",
 			error instanceof Error ? error.message : error,
 		);
-		throw new Error(
-			`Failed to download zig-bsdiff binaries. Please try again in a minute.`,
-		);
+		throw new Error(`Failed to download zig-bsdiff binaries.`);
+	} finally {
+		rmSync(tempTarball, { force: true });
 	}
 }
 
 async function vendorZstd() {
-	const ZSTD_VERSION = "0.1.3";
+	const ZSTD_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-zstd"];
 	const zstdDir = join(process.cwd(), "vendors", "zig-zstd");
 	const zstdBin = join(zstdDir, "zig-zstd" + binExt);
+	const versionFile = join(zstdDir, ".version");
 
-	if (existsSync(zstdBin)) {
+	if (
+		existsSync(zstdBin) &&
+		existsSync(versionFile) &&
+		readFileSync(versionFile, "utf8").trim() === ZSTD_VERSION
+	) {
 		return;
 	}
 
-	await pauseForGitHub();
+	rmSync(zstdDir, { recursive: true, force: true });
 	console.log("Downloading zig-zstd binaries...");
-
-	const zstdPlatformMap: Record<string, string> = {
-		macos: "darwin",
-		win: "win32",
-		linux: "linux",
-	};
-	const zstdPlatform = zstdPlatformMap[OS];
-	const zstdArch = ARCH;
-
 	const tempTarball = join("vendors", `zig-zstd-temp.tar.gz`);
 
 	try {
 		await $`mkdir -p vendors/zig-zstd`;
-		const tarballUrl = `https://github.com/blackboardsh/zig-zstd/releases/download/v${ZSTD_VERSION}/zig-zstd-${zstdPlatform}-${zstdArch}.tar.gz`;
-		console.log(`Downloading zig-zstd from: ${tarballUrl}`);
-		await $`rm -f "${tempTarball}"`;
-		const githubToken =
-			process.env["GITHUB_TOKEN"] ??
-			process.env["GH_TOKEN"] ??
-			process.env["GITHUB_ACCESS_TOKEN"];
-		if (githubToken) {
-			await $`curl -fL -H "Authorization: Bearer ${githubToken}" -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
-		} else {
-			await $`curl -fL -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
-		}
-		validateDownload(tempTarball, "zig-zstd");
-
-		await $`tar -xzf "${tempTarball}" -C vendors/zig-zstd`;
-
-		await $`rm "${tempTarball}"`;
+		await downloadOwnedBuildDependency(
+			"zig-zstd",
+			ARCH,
+			tempTarball,
+			"zig-zstd",
+		);
+		await $`tar -xzf ${tempTarball} -C vendors/zig-zstd`;
 
 		if (!existsSync(zstdBin)) {
 			throw new Error(`Binary not found after extraction: ${zstdDir}`);
@@ -1444,6 +1482,7 @@ async function vendorZstd() {
 		if (OS !== "win") {
 			await $`chmod +x ${zstdBin}`;
 		}
+		writeFileSync(versionFile, ZSTD_VERSION);
 
 		console.log("✓ zig-zstd binaries downloaded successfully");
 	} catch (error: unknown) {
@@ -1451,14 +1490,14 @@ async function vendorZstd() {
 			"Failed to download zig-zstd binaries:",
 			error instanceof Error ? error.message : error,
 		);
-		throw new Error(
-			`Failed to download zig-zstd binaries. Please try again in a minute.`,
-		);
+		throw new Error(`Failed to download zig-zstd binaries.`);
+	} finally {
+		rmSync(tempTarball, { force: true });
 	}
 }
 
 async function vendorWGPU() {
-	const WGPU_VERSION = "0.2.3";
+	const WGPU_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["electrobun-dawn"];
 	const wgpuBaseDir = join(process.cwd(), "vendors", "wgpu");
 	const wgpuDir = join(wgpuBaseDir, `${OS}-${ARCH}`);
 	const wgpuVersionFile = join(wgpuBaseDir, ".wgpu-version");
@@ -1484,45 +1523,23 @@ async function vendorWGPU() {
 		return;
 	}
 
-	if (libCandidates.some((p) => existsSync(p)) && !currentVersion) {
-		writeFileSync(wgpuVersionFile, WGPU_VERSION);
-		return;
-	}
-
-	if (currentVersion && currentVersion !== WGPU_VERSION && existsSync(wgpuDir)) {
+	if (currentVersion !== WGPU_VERSION && existsSync(wgpuDir)) {
 		await $`rm -rf "${wgpuDir}"`;
 	}
 
-	await pauseForGitHub();
 	console.log("Downloading electrobun-dawn binaries...");
-
-	const platformMap: Record<string, string> = {
-		macos: "darwin",
-		win: "win32",
-		linux: "linux",
-	};
-	const platformName = platformMap[OS];
-	const archName = ARCH;
-
-	const tarballUrl = `https://github.com/blackboardsh/electrobun-dawn/releases/download/v${WGPU_VERSION}/electrobun-dawn-${platformName}-${archName}.tar.gz`;
 	const tempTarball = join("vendors", `electrobun-dawn-temp.tar.gz`);
 	const tempExtractDir = join("vendors", `electrobun-dawn-extract-${Date.now()}`);
 
 	try {
 		await $`mkdir -p "${wgpuBaseDir}"`;
 		await $`rm -f "${tempTarball}"`;
-
-		const githubToken =
-			process.env["GITHUB_TOKEN"] ??
-			process.env["GH_TOKEN"] ??
-			process.env["GITHUB_ACCESS_TOKEN"];
-		if (githubToken) {
-			await $`curl -fL -H "Authorization: Bearer ${githubToken}" -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
-		} else {
-			await $`curl -fL -H "Accept: application/octet-stream" "${tarballUrl}" -o "${tempTarball}"`;
-		}
-
-		validateDownload(tempTarball, "wgpu");
+		await downloadOwnedBuildDependency(
+			"electrobun-dawn",
+			ARCH,
+			tempTarball,
+			"wgpu",
+		);
 
 		await $`rm -rf "${tempExtractDir}"`;
 		await $`mkdir -p "${tempExtractDir}"`;
@@ -1545,9 +1562,6 @@ async function vendorWGPU() {
 			}
 		}
 
-		await $`rm -rf "${tempExtractDir}"`;
-		await $`rm -f "${tempTarball}"`;
-
 		if (!libCandidates.some((p) => existsSync(p))) {
 			throw new Error(`WGPU library not found after extraction: ${wgpuDir}`);
 		}
@@ -1567,68 +1581,50 @@ async function vendorWGPU() {
 			"Failed to download electrobun-dawn binaries:",
 			error instanceof Error ? error.message : error,
 		);
-		throw new Error(
-			`Failed to download electrobun-dawn binaries. Please try again in a minute.`,
-		);
+		throw new Error(`Failed to download electrobun-dawn binaries.`);
+	} finally {
+		rmSync(tempTarball, { force: true });
+		rmSync(tempExtractDir, { recursive: true, force: true });
 	}
 }
 
 async function vendorAsar() {
-	const ASAR_VERSION = "0.2.2";
+	const ASAR_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-asar"];
 	const asarBaseDir = join(process.cwd(), "vendors", "zig-asar");
+	const versionFile = join(asarBaseDir, ".version");
+	const versionMatches =
+		existsSync(versionFile) &&
+		readFileSync(versionFile, "utf8").trim() === ASAR_VERSION;
+	const archsToDownload: BuildDependencyArch[] = [ARCH];
 
-	// Map OS names to match GitHub release naming
-	const asarPlatformMap: Record<string, string> = {
-		macos: "darwin",
-		win: "win32",
-		linux: "linux",
-	};
-	const asarPlatform = asarPlatformMap[OS];
-
-	// On Windows, download both x64 and arm64 versions for development flexibility
-	// (allows testing on Windows ARM machines while shipping x64 binaries)
-	const archsToDownload = OS === "win" ? ["x64", "arm64"] : [ARCH];
+	if (!versionMatches) {
+		rmSync(asarBaseDir, { recursive: true, force: true });
+	}
 
 	for (const targetArch of archsToDownload) {
 		const asarDir = OS === "win" ? join(asarBaseDir, targetArch) : asarBaseDir;
 		const asarCli = join(asarDir, "zig-asar" + binExt);
 		const libExt = OS === "win" ? ".dll" : OS === "macos" ? ".dylib" : ".so";
 		const asarLib = join(asarDir, "libasar" + libExt);
-
-		// Check if binaries already exist for this architecture
-		// Note: All platforms need both CLI and library:
-		// - CLI: Used at build time to pack ASARs
-		// - Library: Used by the launcher to extract the main bundle from ASAR
-		//   (Native wrapper on Windows has built-in C++ reader for views:// files)
 		const requiredFiles = [asarCli, asarLib];
 
-		if (requiredFiles.every((f) => existsSync(f))) {
-			continue; // Already have this architecture
+		if (versionMatches && requiredFiles.every((f) => existsSync(f))) {
+			continue;
 		}
 
-		await pauseForGitHub();
-		console.log(
-			`Downloading zig-asar binaries for ${asarPlatform}-${targetArch}...`,
-		);
-
-		const tarballUrl = `https://github.com/blackboardsh/zig-asar/releases/download/v${ASAR_VERSION}/zig-asar-${asarPlatform}-${targetArch}.tar.gz`;
+		console.log(`Downloading zig-asar binaries for ${OS}-${targetArch}...`);
 		const tempTarball = join("vendors", `zig-asar-temp-${targetArch}.tar.gz`);
 
 		try {
-			// Download tarball
 			await $`mkdir -p "${asarDir}"`;
-			await $`curl -L "${tarballUrl}" -o "${tempTarball}"`;
-
-			// Validate download
-			validateDownload(tempTarball, "zig-asar");
-
-			// Extract to architecture-specific directory
+			await downloadOwnedBuildDependency(
+				"zig-asar",
+				targetArch,
+				tempTarball,
+				"zig-asar",
+			);
 			await $`tar -xzf "${tempTarball}" -C "${asarDir}"`;
 
-			// Clean up temp file
-			await $`rm "${tempTarball}"`;
-
-			// Verify binaries were extracted
 			const missingFiles = requiredFiles.filter((f) => !existsSync(f));
 			if (missingFiles.length > 0) {
 				console.error("Missing files after extraction:", missingFiles);
@@ -1640,7 +1636,6 @@ async function vendorAsar() {
 				throw new Error(`Required ASAR files not found after extraction`);
 			}
 
-			// Make executable on Unix systems
 			if (OS !== "win") {
 				await $`chmod +x ${asarCli}`;
 			}
@@ -1653,11 +1648,12 @@ async function vendorAsar() {
 				`Failed to download zig-asar binaries for ${targetArch}:`,
 				error instanceof Error ? error.message : error,
 			);
-			throw new Error(
-				`Failed to download zig-asar binaries. Please try again in a minute.`,
-			);
+			throw new Error(`Failed to download zig-asar binaries.`);
+		} finally {
+			rmSync(tempTarball, { force: true });
 		}
 	}
+	writeFileSync(versionFile, ASAR_VERSION);
 }
 
 async function vendorCEF() {

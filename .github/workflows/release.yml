@@ -56,6 +56,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '18'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
 
       - name: Log disk space (job start - Windows)
         if: matrix.platform == 'win32'
@@ -131,6 +133,17 @@ jobs:
         with:
           path: package/vendors/cef
           key: cef-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}
+
+      - name: Cache core build dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            package/vendors/zig
+            package/vendors/zig-asar
+            package/vendors/zig-bsdiff
+            package/vendors/zig-zstd
+            package/vendors/wgpu
+          key: core-build-dependencies-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ hashFiles('package/src/shared/build-dependencies.ts') }}
 
       - name: Cache process_helper binary
         uses: actions/cache@v5
@@ -223,13 +236,12 @@ jobs:
           ${{ matrix.arch }}
           ${{ steps.release-type.outputs.version }}
 
-      - name: Upload Kitchen artifacts to R2
-        env:
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: dash scripts/upload-kitchen-artifacts.ts kitchen/artifacts
+      - name: Stage Kitchen artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: kitchen-${{ matrix.artifact_platform }}-${{ matrix.arch }}
+          path: kitchen/artifacts/*
+          if-no-files-found: error
 
       - name: Clean up kitchen artifacts
         shell: bash
@@ -246,10 +258,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download all artifacts
+      - name: Download Electrobun release artifacts
         uses: actions/download-artifact@v7
         with:
+          pattern: electrobun-*
           path: artifacts
+
+      - name: Download Kitchen artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: kitchen-*
+          path: kitchen-artifacts
+          merge-multiple: true
+
+      - name: Install Dash
+        uses: ./.github/actions/install-dash
+
+      - name: Publish Kitchen artifacts to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: dash scripts/upload-kitchen-artifacts.ts kitchen-artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

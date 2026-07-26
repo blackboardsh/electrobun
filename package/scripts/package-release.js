@@ -33,7 +33,7 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 console.log("Building full release...");
 try {
 	const dashBinary = process.env.DASH_BINARY || "dash";
-	execFileSync(dashBinary, ["build.ts", "--release"], {
+	execFileSync(dashBinary, ["build.ts", "--release", "--core-only"], {
 		cwd: path.join(__dirname, ".."),
 		stdio: "inherit",
 	});
