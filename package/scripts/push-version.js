@@ -72,10 +72,13 @@ console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);
 
-execSync(`git add package/package.json kitchen/electrobun.config.ts`, {
-	cwd: repoRoot,
-	stdio: "inherit",
-});
+execSync(
+	`git add package/package.json package/package-lock.json kitchen/electrobun.config.ts`,
+	{
+		cwd: repoRoot,
+		stdio: "inherit",
+	},
+);
 execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
 execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });
 
