@@ -5,7 +5,7 @@
 		"check:zig-mirrors": "dash scripts/check-zig-test-mirrors.ts",
 		"check:odin-mirrors": "dash scripts/check-odin-test-mirrors.ts",
 		"build:canary": "cd ../package && dash build:release && cd ../kitchen && dash electrobun build --env=canary",
-		"build:stable": "cd ../package && dash build:release && cd ../kitchen && dash electrobun build --env=stable",
+		"build:production": "cd ../package && dash build:release && cd ../kitchen && dash electrobun build --env=production",
 		"start:canary": "dash electrobun dev --env=canary"
 	},
 	"dependencies": {

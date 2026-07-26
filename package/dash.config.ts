@@ -1,4 +1,4 @@
-// @dash cli=0.1.0 cottontail=0.1.1-canary.2
+// @dash cli=0.2.0-canary.1 cottontail=0.1.1-canary.2
 export default {
 	scripts: {
 		start: "dash src/sdks/bun/index.ts",
@@ -11,7 +11,7 @@ export default {
 		"dev:test": "scripts/dev.test.ts",
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && dash dev",
 		"dev:canary": "dash install && dash build:release && cd ../kitchen && dash install && dash electrobun build --env=canary",
-		"dev:stable": "dash install && dash build:release && cd ../kitchen && dash install && dash electrobun build --env=stable",
+		"dev:production": "dash install && dash build:release && cd ../kitchen && dash install && dash electrobun build --env=production",
 		"build:docs:release": "cd ../docs && dash run build",
 		"npm:publish": "dash build:release && npm publish",
 		"npm:publish:beta": "dash build:release && npm publish --tag beta",

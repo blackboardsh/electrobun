@@ -23,18 +23,22 @@ jobs:
             platform: darwin
             arch: arm64
             platform_name: darwin
+            artifact_platform: macos
           - os: ubuntu-24.04
             platform: linux
             arch: x64
             platform_name: linux
+            artifact_platform: linux
           - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             platform_name: linux
+            artifact_platform: linux
           - os: windows-2025
             platform: win32
             arch: x64
             platform_name: win
+            artifact_platform: win
 
     runs-on: ${{ matrix.os }}
 
@@ -175,7 +179,7 @@ jobs:
           if [[ "$TAG" == *"-beta"* ]] || [[ "$TAG" == *"-alpha"* ]] || [[ "$TAG" == *"-rc"* ]] || [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
             echo "env=canary" >> $GITHUB_OUTPUT
           else
-            echo "env=stable" >> $GITHUB_OUTPUT
+            echo "env=production" >> $GITHUB_OUTPUT
           fi
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -209,6 +213,15 @@ jobs:
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
           ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID || '' }}
+
+      - name: Validate Kitchen artifacts
+        run: >-
+          dash scripts/validate-kitchen-artifacts.ts
+          kitchen/artifacts
+          ${{ steps.release-type.outputs.env }}
+          ${{ matrix.artifact_platform }}
+          ${{ matrix.arch }}
+          ${{ steps.release-type.outputs.version }}
 
       - name: Upload Kitchen artifacts to R2
         env:
