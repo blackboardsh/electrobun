@@ -115,6 +115,18 @@ Building apps with Electrobun is as easy as updating your package.json dependenc
 
 ### Prerequisites
 
+Install Dash globally before building Electrobun:
+
+```bash
+curl -fsSL https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://electrobun-artifacts.blackboard.sh/dash-cli/install.ps1)))
+```
+
 **macOS:**
 - Xcode command line tools
 - cmake (install via homebrew: `brew install cmake`)
@@ -135,7 +147,7 @@ On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-conf
 ```bash
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
-npm ci
+dash install
 dash dev:clean
 ```
 

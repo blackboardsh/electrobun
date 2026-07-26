@@ -28,14 +28,12 @@ jobs:
             pkg-config \
             libfuse2
 
-      - name: Install package dependencies
-        working-directory: package
-        run: npm ci
-
       - name: Install Dash
         uses: ./.github/actions/install-dash
-        with:
-          channel: canary
+
+      - name: Install package dependencies
+        working-directory: package
+        run: dash install
 
       - name: Check latest stable CEF version
         id: check

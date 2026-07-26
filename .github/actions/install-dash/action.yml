@@ -5,7 +5,7 @@ inputs:
   channel:
     description: Dash release channel
     required: false
-    default: canary
+    default: production
 
 runs:
   using: composite
@@ -20,7 +20,7 @@ runs:
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
           https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh \
           --output "$installer"
-        sh "$installer" --channel "$DASH_INSTALL_CHANNEL"
+        sh "$installer" --channel "$DASH_INSTALL_CHANNEL" --no-modify-path
         echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
 
     - name: Install Dash

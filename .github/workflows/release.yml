@@ -59,14 +59,12 @@ jobs:
         run: |
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
 
-      - name: Install dependencies
-        run: npm ci
-        working-directory: package
-
       - name: Install Dash
         uses: ./.github/actions/install-dash
-        with:
-          channel: canary
+
+      - name: Install dependencies
+        run: dash install
+        working-directory: package
 
       - name: Setup MSVC Developer Command Prompt
         if: matrix.platform == 'win32'
@@ -203,7 +201,7 @@ jobs:
 
       - name: Build Kitchen
         run: |
-          npm ci
+          dash install
           dash electrobun build --env=${{ steps.release-type.outputs.env }}
         working-directory: kitchen
         env:
@@ -279,14 +277,12 @@ jobs:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install dependencies
-        run: npm ci
-        working-directory: package
-
       - name: Install Dash
         uses: ./.github/actions/install-dash
-        with:
-          channel: canary
+
+      - name: Install dependencies
+        run: dash install
+        working-directory: package
 
       - name: Build for npm (JS/TS files only)
         run: |

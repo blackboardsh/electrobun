@@ -79,7 +79,6 @@ export function prepareLocalStack(packageDir) {
 		DASH_CLI_ROOT: dashCliRoot,
 		DASH_CLI_BINARY: localDashEngine,
 		DASH_BINARY: localDash,
-		ELECTROBUN_BINARY: localDash,
 		DASH_USE_LOCAL_ELECTROBUN: "1",
 		DASH_LOCAL_ELECTROBUN_ROOT: electrobunRoot,
 	});

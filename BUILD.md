@@ -5,7 +5,8 @@ This document describes Electrobun's build system and cross-platform compilation
 ## Overview
 
 Electrobun uses a custom build system (`build.ts`) that handles:
-- Vendoring dependencies (Dash CLI, Cottontail, Bun, Zig, CEF, WebView2)
+- Resolving the globally installed Dash CLI and its selected Cottontail runtime
+- Vendoring application build dependencies such as Zig, CEF, and WebView2
 - Building native wrappers for each platform
 - Creating distribution packages
 
@@ -63,7 +64,7 @@ All commands are run from the `/package` directory:
 
 ```bash
 cd electrobun/package
-npm ci
+dash install
 
 # Full build with all platforms
 dash build.ts

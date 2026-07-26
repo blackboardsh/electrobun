@@ -14,7 +14,7 @@ function assertArray(actual: string[], expected: string[], message: string) {
 
 const packageDir = join("C:\\work tree", "electrobun", "package");
 const kitchenDir = join("C:\\work tree", "electrobun", "kitchen");
-const dashBinary = join(packageDir, "vendors", "dash-cli", "dash.exe");
+const dashBinary = "dash";
 const comSpec = "C:\\Windows\\System32\\cmd.exe";
 const windowsCommands = createDevCommands({
 	dashBinary,
