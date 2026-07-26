@@ -44,12 +44,11 @@ title: "Cross-Platform Development"
 
               
 ```
-<span style="color: #6b7280"># On each CI runner, just run:</span>
-<span style="color: #f59e0b">electrobun</span> build --env=stable
+<span style="color: #6b7280"># On each CI runner, create a host-platform stable release:</span>
+<span style="color: #f59e0b">dash electrobun</span> build --env=stable
 ```
 
-
-              <p>Electrobun's <a href="https://github.com/blackboardsh/electrobun">GitHub repository</a> includes a release workflow that builds natively on each platform using a build matrix. This is the recommended approach — each platform build runs on its native OS, avoiding cross-compilation complexity and ensuring platform-specific tools (code signing, icon utilities, etc.) work correctly.</p>
+              <p>Dash builds, wraps, signs, and packages the app for the runner's native platform. Use a build matrix so platform-specific tools such as code signing and icon utilities are available for each release target.</p>
 
 ### Architecture Considerations
 
@@ -84,11 +83,11 @@ title: "Cross-Platform Development"
 
               <p>On Windows, Electrobun builds your app as a GUI application (Windows subsystem) so that no console window appears when end users launch it. Dev builds automatically attach to the parent console so you can see `console.log` output and debug information in your terminal.</p>
 
-              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>stable</strong> build (for example to debug an issue that only reproduces in a production build), set the `ELECTROBUN_CONSOLE` environment variable:</p>
+              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>stable</strong> bundle, set the `ELECTROBUN_CONSOLE` environment variable:</p>
 
               
 ```
-<span style="color: #6b7280"># Launch a canary/stable build with console output visible</span>
+<span style="color: #6b7280"># Launch a canary/stable bundle with console output visible</span>
 <span style="color: #f59e0b">set</span> ELECTROBUN_CONSOLE=1
 <span style="color: #f59e0b">.\MyApp.exe</span>
 ```

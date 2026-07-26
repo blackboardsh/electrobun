@@ -2,23 +2,21 @@
 title: "CLI Commands"
 ---
               
-              <p>The Electrobun CLI provides commands for initializing new projects and building your applications for different environments.</p>
+              <p>Dash provides Electrobun commands for initializing new projects and building, packaging, and distributing your applications for different environments.</p>
 
 ## Installation
 
-              <p>When you install Electrobun, the CLI tool is added to your `node_modules/bin` folder:</p>
+              <p>Install Dash globally, then use its Electrobun commands to create projects, install dependencies, and build your app. A generated project already includes Electrobun in its `package.json`:</p>
 
               
-```
-bun install electrobun
+```bash
+dash install
 ```
 
-
-              <p>This makes the `electrobun` command available in your npm scripts or via `bunx`/`npx`.</p>
 
 ## Commands
 
-### `electrobun init`
+### `dash electrobun init`
 
               <p>Initializes a new Electrobun project with starter templates.</p>
 
@@ -27,10 +25,10 @@ bun install electrobun
               
 ```bash
 # Interactive template selection
-electrobun init
+dash electrobun init
 
 # Direct template selection
-electrobun init [template-name]
+dash electrobun init [template-name]
 ```
 
 
@@ -39,8 +37,8 @@ electrobun init [template-name]
               <ul>
                 <li>`hello-world` - Basic single-window application</li>
                 <li>`photo-booth` - Camera app with photo capture functionality</li>
-                <li>`interactive-playground` - An interactive playground of Electrobun apis</li>
                 <li>`multitab-browser` - Multi-tabbed web browser</li>
+                <li>`zig-wgpu`, `rust-flock-wgpu`, `go-maze-wgpu`, and `odin-particles-wgpu` - Native main-process examples</li>
               </ul>
 
 #### Examples
@@ -48,25 +46,25 @@ electrobun init [template-name]
               
 ```bash
 # Choose template interactively
-bunx electrobun init
+dash electrobun init
 
 # Initialize with photo-booth template directly
-bunx electrobun init photo-booth
+dash electrobun init photo-booth
 
 # Initialize with multitab-browser template
-bunx electrobun init multitab-browser
+dash electrobun init multitab-browser
 ```
 
 
-### `electrobun build`
+### `dash electrobun build`
 
-              <p>Builds your Electrobun application according to the configuration in `electrobun.config.ts`.</p>
+              <p>Builds and packages your Electrobun application according to `electrobun.config.ts`. Non-dev builds create signed and compressed distribution artifacts, update metadata, and patches when configured.</p>
 
 #### Usage
 
               
 ```
-electrobun build [options]
+dash electrobun build [options]
 ```
 
 
@@ -98,40 +96,40 @@ electrobun build [options]
               
 ```bash
 # Development build for current platform
-electrobun build
+dash electrobun build
 
 # Development build with environment flag
-electrobun build --env=dev
+dash electrobun build --env=dev
 
 # Canary build
-electrobun build --env=canary
+dash electrobun build --env=canary
 
-# Stable (production) build
-electrobun build --env=stable
+# Stable production build
+dash electrobun build --env=stable
 ```
 
 
-### `electrobun run`
+### `dash electrobun run`
 
-              <p>Launches an already-built dev bundle. This is useful when you've already run `electrobun build` and just want to relaunch the app without rebuilding.</p>
+              <p>Launches an already-built dev bundle. This is useful when you've already run `dash electrobun build` and just want to relaunch the app without rebuilding.</p>
 
 #### Usage
 
               
 ```
-electrobun run
+dash electrobun run
 ```
 
 
-### `electrobun dev`
+### `dash electrobun dev`
 
-              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `electrobun build --env=dev` followed by `electrobun run`.</p>
+              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `dash electrobun build --env=dev` followed by `dash electrobun run`.</p>
 
 #### Usage
 
               
 ```
-electrobun dev [options]
+dash electrobun dev [options]
 ```
 
 
@@ -157,10 +155,10 @@ electrobun dev [options]
               
 ```bash
 # Build and launch in dev mode
-electrobun dev
+dash electrobun dev
 
 # Build, launch, and watch for changes
-electrobun dev --watch
+dash electrobun dev --watch
 ```
 
 
@@ -219,16 +217,16 @@ electrobun dev --watch
 
 ### Basic Setup
 
-              
+
 ```javascript
 // package.json
 {
   "scripts": {
-    "start": "electrobun run",
-    "dev": "electrobun dev",
-    "dev:watch": "electrobun dev --watch",
-    "build:canary": "electrobun build --env=canary",
-    "build:stable": "electrobun build --env=stable"
+    "start": "dash electrobun run",
+    "dev": "dash electrobun dev",
+    "dev:watch": "dash electrobun dev --watch",
+    "build:canary": "dash electrobun build --env=canary",
+    "build:stable": "dash electrobun build --env=stable"
   }
 }
 ```
@@ -236,16 +234,16 @@ electrobun dev --watch
 
 ### CI Build Scripts
 
-              <p>For multi-platform distribution, run the same build command on each platform's CI runner:</p>
+              <p>For multi-platform distribution, run the same Dash build command on each platform's CI runner:</p>
 
               
 ```javascript
 // package.json
 {
   "scripts": {
-    "build:dev": "electrobun build",
-    "build:canary": "electrobun build --env=canary",
-    "build:stable": "electrobun build --env=stable"
+    "build:dev": "dash electrobun build",
+    "build:canary": "dash electrobun build --env=canary",
+    "build:stable": "dash electrobun build --env=stable"
   }
 }
 ```

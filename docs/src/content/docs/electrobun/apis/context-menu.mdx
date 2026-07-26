@@ -4,7 +4,7 @@ title: "Context Menu"
               
               <p>Show a context menu</p>
 
-              <p>Typically you'd wire up a rightclick event with preventDefault in the browser context, rpc to bun, then create a native context menu from the bun context. But you can also create and show a context menu entirely from bun which will show at the mouse cursor's position globally positioned on screen even outside of your application window. Even if you have no windows open and another app is focused.</p>
+              <p>Typically you'd handle a right-click event with `preventDefault` in the browser context, call the main process over RPC, and create a native context menu there. You can also create and show a context menu entirely from the main process; it appears at the cursor's global screen position, even outside your application window or when another app is focused.</p>
 
               
 ```javascript

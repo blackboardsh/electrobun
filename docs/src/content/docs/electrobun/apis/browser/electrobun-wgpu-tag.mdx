@@ -7,11 +7,11 @@ title: "<electrobun-wgpu>"
 
   <ul>
     <li>Compositing high-performance GPU content with a web UI (editors, game tools, IDEs).</li>
-    <li>Running Bun-side WGPU rendering while keeping HTML/CSS for layout.</li>
+    <li>Running main-process WGPU rendering while keeping HTML/CSS for layout.</li>
     <li>Mixing native GPU surfaces with webview content without a single WebGL canvas.</li>
   </ul>
 
-  <p>If your rendering is simple and you don’t need Bun‑side control or native surface layering, a standard `<canvas>` inside the webview is still the simplest option.</p>
+  <p>If your rendering is simple and you don’t need main-process control or native surface layering, a standard `<canvas>` inside the webview is still the simplest option.</p>
 
 ## Platform Notes
 
@@ -26,7 +26,7 @@ title: "<electrobun-wgpu>"
 // In your webview HTML
 <electrobun-wgpu id="gpu"></electrobun-wgpu>
 
-// In Bun (RPC handler), create a WGPU surface for the view ID
+// In the main process (RPC handler), create a WGPU surface for the view ID
 // and render via WGPU.native or webgpu.createContext(...)
 ```
 
@@ -66,7 +66,7 @@ wgpu.on("ready", (evt) => {
 
   
 ```javascript
-// Bun-side render loop example
+// Main-process render loop example
 const ctx = webgpu.createContext(win);
 let size = win.getSize();
 

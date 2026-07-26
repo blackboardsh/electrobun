@@ -7,9 +7,9 @@ title: "Code Signing"
 
               <p>You can avoid a lot of headaches by installing the full Xcode via the app store. Open XCode, click the app menu and the Settings. Go to the Accounts tab and add your developer account. Click "Manage Certificates". Then click the + sign and add a "Developer ID Application" certificate. If you open Keychain Access you should be able to see it if you search the Login keychain for "Developer ID Application". You can also log into the Apple Developer portal and look at your certificates and you'll see it there as well.</p>
 
-              <p>Now in the developer portal go to Identifiers and click the plus sign to add one for your app. Make sure "App Attest" is checked so Electrobun's CLI can code sign and notarize your app. You may need other services if you need them.</p>
+              <p>Now in the developer portal go to Identifiers and click the plus sign to add one for your app. Make sure "App Attest" is checked so Dash can code sign and notarize your app. You may need other services if you need them.</p>
 
-              <p>Now in another tab outside the Apple developer portal log into your apple account <a href="https://account.apple.com/sign-in">https://account.apple.com/sign-in</a>. Go to "App Specific Passwords" and Create one for your Electrobun usage, this will be your `ELECTROBUN_APPLEIDPASS` that the Electrobun CLI will use to notarize your apps.</p>
+              <p>Now in another tab outside the Apple developer portal log into your apple account <a href="https://account.apple.com/sign-in">https://account.apple.com/sign-in</a>. Go to "App Specific Passwords" and create one for your Electrobun usage. This will be your `ELECTROBUN_APPLEIDPASS`, which Dash uses to notarize your apps.</p>
 
               <p>Now we need to get some values that you will add to your .zshrc file. Here is the mapping of those values and where to find them</p>
 
@@ -59,7 +59,7 @@ echo $ELECTROBUN_TEAMID
 ```
 
 
-              <p>The next time you build your app the Electrobun CLI will sign and notarize your app, then compress it into the self extractor and sign and notarize the self extractor for you.</p>
+              <p>The next time you run a non-dev build, Dash signs and notarizes your app, compresses it into the self-extractor, and then signs and notarizes the self-extractor.</p>
 
 ### App Store Connect API Key (alternative)
 

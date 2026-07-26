@@ -29,7 +29,7 @@ export type MyWebviewRPCType = {
   // functions that execute in the main process
   bun: RPCSchema<{
     requests: {
-      someBunFunction: {
+      someMainProcessFunction: {
         params: {
           a: number;
           b: number;
@@ -38,7 +38,7 @@ export type MyWebviewRPCType = {
       };
     };
     messages: {
-      logToBun: {
+      logToMainProcess: {
         msg: string;
       };
     };
@@ -74,14 +74,14 @@ const rpc = Electroview.defineRPC<MyWebviewRPCType>({
   handlers: {
     requests: {
       someWebviewFunction: ({ a, b }) => {
-        document.body.innerHTML += `bun asked me to do math with ${a} and ${b}\n`;
+        document.body.innerHTML += `main process asked me to do math with ${a} and ${b}\n`;
         return a + b;
       },
     },
     messages: {
       logToWebview: ({ msg }) => {
         // this will appear in the inspect element devtools console
-        console.log(`bun asked me to logToWebview: ${msg}`);
+        console.log(`main process asked me to logToWebview: ${msg}`);
       },
     },
   },
@@ -90,17 +90,17 @@ const electroview = new Electroview({ rpc });
 ```
 
 
-              <p>Assuming you've wired up rpc on the bun side when creating the <a href="/electrobun/apis/browser-window">BrowserWindow</a> you'll be able to call those bun functions from the browser.</p>
+              <p>Assuming you've wired up RPC on the main-process side when creating the <a href="/electrobun/apis/browser-window">BrowserWindow</a>, you'll be able to call those main-process functions from the browser.</p>
 
               
 ```javascript
 // /src/myview/index.ts
-electroview.rpc.request.someBunFunction({ a: 9, b: 8 }).then((result) => {
+electroview.rpc.request.someMainProcessFunction({ a: 9, b: 8 }).then((result) => {
   console.log("result: ", result);
 });
 
 // or
-electroview.rpc.send.logToBun({ msg: "hi from browser" });
+electroview.rpc.send.logToMainProcess({ msg: "hi from browser" });
 ```
 
 
@@ -116,4 +116,4 @@ electroview.rpc.send.logToBun({ msg: "hi from browser" });
 
               <p>Electrobun doesn't provide browser to browser RPC out of the box as we favour isolation between browser contexts for greater security.</p>
 
-              <p>There's nothing stopping you from creating bun to browser rpc for two different BrowserViews and passing messages between them via bun. You can also establish any number of other web-based mechanisms to communicated between browser contexts from localstorage to webRTC or via a server.</p>
+              <p>There's nothing stopping you from creating main-process-to-browser RPC for two different BrowserViews and passing messages between them via the main process. You can also establish any number of other web-based mechanisms to communicate between browser contexts, from local storage to WebRTC or via a server.</p>

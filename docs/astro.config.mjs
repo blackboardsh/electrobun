@@ -41,9 +41,9 @@ export default defineConfig({
               ],
             },
             {
-              label: "Bun APIs",
+              label: "Main Process APIs",
               items: [
-                { label: "Bun API", link: "/electrobun/apis/bun/" },
+                { label: "Main Process API", link: "/electrobun/apis/bun/" },
                 { label: "BrowserWindow", link: "/electrobun/apis/browser-window/" },
                 { label: "BrowserView", link: "/electrobun/apis/browser-view/" },
                 { label: "WebGPU", link: "/electrobun/apis/webgpu/" },

@@ -27,6 +27,7 @@ export default {
     exitOnLastWindowClosed: true,
   },
   build: {
+    mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",
     },
@@ -35,7 +36,7 @@ export default {
 ```
 
 
-## Bun Bundler Options
+## Bun-Compatible Bundler Options
 
               <p>Both `build.cottontail` and each entry in `build.views` accept all Bun-compatible `Bun.build()` options as pass-through properties. The only required field is `entrypoint`; everything else is optional.</p>
 
@@ -143,6 +144,7 @@ export default {
     version: "1.0.0",
   },
   build: {
+    mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",
       plugins: [myPlugin()],
@@ -335,6 +337,7 @@ export default {
     version: packageJson.version,
   },
   build: {
+    mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",
     },
@@ -422,7 +425,7 @@ export default {
 
 ## Watch Configuration
 
-              <p>When using `electrobun dev --watch`, the CLI automatically watches directories derived from your entrypoints and copy sources. You can extend or refine this behavior with the `watch` and `watchIgnore` options.</p>
+              <p>When using `dash electrobun dev --watch`, the CLI automatically watches directories derived from your entrypoints and copy sources. You can extend or refine this behavior with the `watch` and `watchIgnore` options.</p>
 
 ### watch
               <p><strong>Type:</strong> `string[]`</p>
@@ -448,6 +451,7 @@ export default {
     version: "1.0.0",
   },
   build: {
+    mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",
     },
@@ -553,6 +557,7 @@ export default {
         version: "0.0.1",
     },
     build: {
+        mainProcess: "cottontail",
         cottontail: {
             entrypoint: "src/bun/index.ts",
         },
@@ -801,7 +806,7 @@ console.log(config.runtime?.myCustomSetting); // "hello"
 
 ### Configuration
 
-              <p>Specify hooks as paths to TypeScript or JavaScript files that will be executed with Bun:</p>
+              <p>Specify hooks as paths to TypeScript or JavaScript files that will be executed with Cottontail:</p>
 
               
 ```javascript
@@ -888,7 +893,7 @@ if (!wrapperPath) {
   process.exit(1);
 }
 
-// Only add Liquid Glass assets for production builds
+// Only add Liquid Glass assets for non-dev release builds
 if (buildEnv !== "dev") {
   const resourcesPath = join(wrapperPath, "Contents", "Resources");
   const liquidGlassAssets = "./assets/liquid-glass";
@@ -914,7 +919,7 @@ import { existsSync } from "fs";
 
 const buildEnv = process.env.ELECTROBUN_BUILD_ENV;
 
-// Ensure required environment variables are set for production builds
+// Ensure required environment variables are set for stable builds
 if (buildEnv === "stable") {
   const requiredVars = [
     "ELECTROBUN_DEVELOPER_ID",
@@ -956,7 +961,7 @@ const artifactDir = process.env.ELECTROBUN_ARTIFACT_DIR;
 console.log(`Build complete: ${buildEnv} v${version}`);
 console.log(`Artifacts: ${artifactDir}`);
 
-// Send Slack notification for production builds
+// Send Slack notification for stable builds
 if (buildEnv === "stable" && process.env.SLACK_WEBHOOK_URL) {
   await fetch(process.env.SLACK_WEBHOOK_URL, {
     method: "POST",
@@ -970,5 +975,5 @@ if (buildEnv === "stable" && process.env.SLACK_WEBHOOK_URL) {
 
 
               <Aside type="tip">
-                <p><strong>Note:</strong> Hook scripts are run using the host machine's Bun binary, not the bundled one. This ensures scripts always run regardless of the target platform being built.</p>
+                <p><strong>Note:</strong> Dash transpiles each lifecycle hook and runs it with the selected host-platform Cottontail binary.</p>
               </Aside>

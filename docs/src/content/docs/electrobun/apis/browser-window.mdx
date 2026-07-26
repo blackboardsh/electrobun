@@ -350,7 +350,7 @@ export type MyWebviewRPCType = {
   // functions that execute in the main process
   bun: RPCSchema<{
     requests: {
-      someBunFunction: {
+      someMainProcessFunction: {
         params: {
           a: number;
           b: number;
@@ -359,7 +359,7 @@ export type MyWebviewRPCType = {
       };
     };
     messages: {
-      logToBun: {
+      logToMainProcess: {
         msg: string;
       };
     };
@@ -391,12 +391,12 @@ export type MyWebviewRPCType = {
 import { BrowserWindow, BrowserView } from "electrobun/bun";
 import { type MyWebviewRPCType } from "../shared/types";
 
-// Create an RPC object for the bun handlers with the shared type
+// Create an RPC object for the main-process handlers with the shared type
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
   maxRequestTime: 5000,
   handlers: {
     requests: {
-      someBunFunction: ({ a, b }) => {
+      someMainProcessFunction: ({ a, b }) => {
         console.log(`browser asked me to do math with: ${a} and ${b}`);
         return a + b;
       },
@@ -407,8 +407,8 @@ const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
       },
-      logToBun: ({ msg }) => {
-        console.log("Log to bun: ", msg);
+      logToMainProcess: ({ msg }) => {
+        console.log("Log to main process: ", msg);
       },
     },
   },
@@ -432,10 +432,10 @@ const win = new BrowserWindow({
 
 // Note: These RPC methods will inherit types from the shared type
 
-// Call a browser function from bun
+// Call a browser function from the main process
 const answer = await win.webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
 
-// Send a message to the BrowserView from bun
+// Send a message to the BrowserView from the main process
 win.webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 

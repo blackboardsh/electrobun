@@ -120,11 +120,11 @@ const instance = WGPU.native.symbols.wgpuCreateInstance(0);
 
 ## Compute + Readback
 
-  <p>Electrobun's WebGPU adapter also supports compute workloads from Bun. You can create compute pipelines, dispatch workgroups, and read results back into Bun-managed memory. This is how the `wgpu-mlp` template performs GPU inference while keeping a WebView UI.</p>
+  <p>Electrobun's WebGPU adapter also supports compute workloads from the Cottontail main process. You can create compute pipelines, dispatch workgroups, and read results back into JavaScript-managed memory. This is how the `wgpu-mlp` template performs GPU inference while keeping a WebView UI.</p>
 
 ### Readback Example
 
-  <p>For readback, write GPU output into a buffer with `MAP_READ`, then `mapAsync` and copy the data into a Bun-managed ArrayBuffer.</p>
+  <p>For readback, write GPU output into a buffer with `MAP_READ`, then `mapAsync` and copy the data into a main-process `ArrayBuffer`.</p>
 
   
 ```javascript

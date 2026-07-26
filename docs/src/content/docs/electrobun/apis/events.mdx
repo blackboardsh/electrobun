@@ -32,17 +32,14 @@ win.webview.on('will-navigate', (e) => {
 
 ### Event.response
 
-              <p>You can set a response on some events. Typically these are events initiated from zig which freeze the zig process while waiting for a reply from bun. An example of this is the BrowserView `will-navigate` where objc requires a synchronous response. By freezing the zig process and waiting for bun we allow bun to remain async while the events propagate.</p>
+              <p>Some events accept a response that controls the corresponding native action. For example, a `before-quit` handler can cancel application shutdown.</p>
 
               
 ```javascript
-Electrobun.events.on("will-navigate", (e) => {
-  console.log(
-    "example global will-navigate handler",
-    e.data.url,
-    e.data.webviewId
-  );
-  e.response = { allow: true };
+Electrobun.events.on("before-quit", (e) => {
+  if (hasUnsavedChanges()) {
+    e.response = { allow: false };
+  }
 });
 ```
 
@@ -155,7 +152,7 @@ Electrobun.events.on("before-quit", (e) => {
               <p>When any quit trigger fires, the following sequence occurs:</p>
 
               <ol>
-                <li>The `before-quit` event fires on the bun worker thread</li>
+                <li>The `before-quit` event fires on the Cottontail worker thread</li>
                 <li>Your handlers run — you can do cleanup (save state, close connections, flush logs) or cancel the quit by setting `` event.response = {`{ allow: false }`} ``</li>
                 <li>If the quit is not cancelled, the native event loop stops (CEF shuts down, windows close)</li>
                 <li>The process exits cleanly</li>
@@ -167,7 +164,7 @@ Electrobun.events.on("before-quit", (e) => {
 
 ### Ctrl+C Behavior (Dev Mode)
 
-              <p>In dev mode (`bun dev`), Ctrl+C triggers a graceful shutdown:</p>
+              <p>In dev mode (`dash electrobun dev`), Ctrl+C triggers a graceful shutdown:</p>
 
               <ul>
                 <li><strong>First Ctrl+C:</strong> Fires `before-quit`, gives your app time to clean up. The terminal stays busy (no prompt) until shutdown completes.</li>
@@ -175,9 +172,9 @@ Electrobun.events.on("before-quit", (e) => {
                 <li><strong>Safety timeout:</strong> If the app hangs during shutdown for more than 10 seconds, it is automatically force-killed.</li>
               </ul>
 
-### Comparison with Node.js / Bun Exit Events
+### Comparison with Process Exit Events
 
-              <p>Bun (and Node.js) provide built-in process exit events. Here's how they compare to Electrobun's `before-quit`:</p>
+              <p>Cottontail exposes Node.js-compatible process exit events. Here's how they compare to Electrobun's `before-quit`:</p>
 
               <table>
                 <thead>
