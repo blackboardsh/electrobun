@@ -40,8 +40,6 @@ const ProgressIndicator = struct {
         return self;
     }
 
-
-
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
         // On Windows, use simple console output (no spinner thread to avoid deadlock)
         if (builtin.os.tag == .windows) {
@@ -376,12 +374,12 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     var buffer: [4096]u8 = undefined;
     var bytes_processed: usize = 0;
     const dot_interval = 10 * 1024 * 1024; // Print dot every 10MB
-    
+
     while (true) {
         const read_size = try decompressor.reader().read(&buffer);
         if (read_size == 0) break;
         try decompressed_data.appendSlice(buffer[0..read_size]);
-        
+
         bytes_processed += read_size;
         if (bytes_processed >= dot_interval) {
             std.debug.print(".", .{});
@@ -402,23 +400,12 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
     // Now move the extracted app to the app directory
     // The app bundle is nested inside self-extraction, we need to find it
-    // Use same sanitization as build process: remove spaces and dots
+    // Use the same sanitization as the build process: remove spaces.
     std.debug.print("\nDEBUG: Building extracted app path...\n", .{});
     std.debug.print("DEBUG: metadata.name = '{s}'\n", .{metadata.name});
     std.debug.print("DEBUG: metadata.channel = '{s}'\n", .{metadata.channel});
 
-    const sanitized_name = try std.mem.replaceOwned(u8, allocator, metadata.name, " ", "");
-    defer allocator.free(sanitized_name);
-    std.debug.print("DEBUG: sanitized_name = '{s}'\n", .{sanitized_name});
-
-    const dots_removed = try std.mem.replaceOwned(u8, allocator, sanitized_name, ".", "-");
-    defer allocator.free(dots_removed);
-    std.debug.print("DEBUG: dots_removed = '{s}'\n", .{dots_removed});
-
-    const app_bundle_name = if (std.mem.eql(u8, metadata.channel, "stable"))
-        try allocator.dupe(u8, dots_removed)
-    else
-        try std.fmt.allocPrint(allocator, "{s}-{s}", .{ dots_removed, metadata.channel });
+    const app_bundle_name = try extractedBundleName(allocator, metadata.name, metadata.channel);
     defer allocator.free(app_bundle_name);
     std.debug.print("DEBUG: app_bundle_name = '{s}'\n", .{app_bundle_name});
 
@@ -981,13 +968,13 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
             if (!icon_path_allocated) {
                 const resources_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources" });
                 defer allocator.free(resources_path);
-                
+
                 var resources_dir_handle = std.fs.cwd().openDir(resources_path, .{ .iterate = true }) catch |err| blk: {
                     // Resources directory doesn't exist, that's okay
                     if (err == error.FileNotFound) break :blk null;
                     return err;
                 };
-                
+
                 if (resources_dir_handle) |*res_handle| {
                     defer res_handle.close();
                     var res_icon_iterator = res_handle.iterate();
@@ -1437,11 +1424,11 @@ pub fn main() !void {
 
     std.debug.print("Time taken to untar: {} ns\n", .{std.time.nanoTimestamp() - startTime});
 
-    const bundleBaseName = if (std.mem.eql(u8, channelName, "stable"))
+    const bundleBaseName = if (isProductionChannel(channelName))
         appDisplayName
     else
         try std.fmt.allocPrint(allocator, "{s}-{s}", .{ appDisplayName, channelName });
-    defer if (!std.mem.eql(u8, channelName, "stable")) allocator.free(bundleBaseName);
+    defer if (!isProductionChannel(channelName)) allocator.free(bundleBaseName);
 
     const bundleFileName = try std.fmt.allocPrint(allocator, "{s}.app", .{bundleBaseName});
     defer allocator.free(bundleFileName);
@@ -1500,6 +1487,35 @@ pub fn main() !void {
     // }
 }
 
+fn isProductionChannel(channel: []const u8) bool {
+    return std.mem.eql(u8, channel, "production");
+}
+
+fn extractedBundleName(
+    allocator: std.mem.Allocator,
+    app_name: []const u8,
+    channel: []const u8,
+) ![]u8 {
+    const sanitized_name = try std.mem.replaceOwned(u8, allocator, app_name, " ", "");
+    if (isProductionChannel(channel)) return sanitized_name;
+    defer allocator.free(sanitized_name);
+    return std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, channel });
+}
+
+test "production bundles use the unsuffixed application name" {
+    try std.testing.expect(isProductionChannel("production"));
+    try std.testing.expect(!isProductionChannel("canary"));
+    try std.testing.expect(!isProductionChannel("dev"));
+    try std.testing.expect(!isProductionChannel("stable"));
+
+    const production = try extractedBundleName(std.testing.allocator, "My App.Name", "production");
+    defer std.testing.allocator.free(production);
+    try std.testing.expectEqualStrings("MyApp.Name", production);
+
+    const canary = try extractedBundleName(std.testing.allocator, "My App.Name", "canary");
+    defer std.testing.allocator.free(canary);
+    try std.testing.expectEqualStrings("MyApp.Name-canary", canary);
+}
 
 // Note: zig stdlib's untar function doesn't support file modes. They don't plan on adding it later,
 // or at least not for windows in the near future which we expect to support in the future. In the meantime this is a patched

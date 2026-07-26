@@ -547,7 +547,7 @@ export interface ElectrobunConfig {
 		baseUrl?: string;
 		/**
 		 * Generate delta patch files by diffing against the previous release.
-		 * Disable to skip patch generation for local canary/stable testing.
+		 * Disable to skip patch generation for local canary/production testing.
 		 * @default true
 		 */
 		generatePatch?: boolean;

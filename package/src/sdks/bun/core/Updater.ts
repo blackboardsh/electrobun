@@ -855,7 +855,7 @@ const Updater = {
 				} else if (currentOS === "win") {
 					// On Windows, the actual app is inside a subdirectory.
 					// version.json's `name` field already contains the formatted app
-					// file name (e.g. "MyApp-canary" for non-stable, "MyApp" for stable),
+					// file name (e.g. "MyApp-canary" for canary, "MyApp" for production),
 					// so don't re-apply getAppFileName or it doubles the channel suffix.
 					newAppBundlePath = join(extractionDir, localInfo.name);
 
