@@ -6746,9 +6746,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             // Create user data folder path based on partition
             // Build path with identifier/channel structure (consistent with CLI and updater)
             std::wstring userDataFolder;
-            char* localAppData = getenv("LOCALAPPDATA");
+            // Read via the wide CRT API: getenv() returns active-code-page bytes
+            // (e.g. CP949 on Korean Windows), which corrupt non-ASCII profile
+            // paths when converted as UTF-8 below.
+            wchar_t* localAppData = _wgetenv(L"LOCALAPPDATA");
             if (localAppData) {
-                std::string userDataPath = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "WebView2", '\\');
+                std::string userDataPath = buildAppDataPath(WStringToString(localAppData), g_electrobunIdentifier, g_electrobunChannel, "WebView2", '\\');
 
                 // Handle partition-specific storage
                 if (!partitionStr.empty()) {
