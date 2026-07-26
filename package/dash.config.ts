@@ -12,7 +12,7 @@ export default {
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && dash dev",
 		"dev:canary": "dash install && dash build:release && cd ../kitchen && dash install && dash electrobun build --env=canary",
 		"dev:stable": "dash install && dash build:release && cd ../kitchen && dash install && dash electrobun build --env=stable",
-		"build:docs:release": "cd ../docs && npm run build",
+		"build:docs:release": "cd ../docs && dash run build",
 		"npm:publish": "dash build:release && npm publish",
 		"npm:publish:beta": "dash build:release && npm publish --tag beta",
 		typecheck: "./node_modules/.bin/tsc --noEmit && cd ../kitchen && ./node_modules/.bin/tsc --noEmit",
