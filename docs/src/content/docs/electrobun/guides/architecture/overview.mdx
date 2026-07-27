@@ -87,17 +87,17 @@ import { Aside } from "@astrojs/starlight/components";
 
 #### DMG
 
-              <p>Dash packages the self-extracting bundle in a DMG for macOS distribution.</p>
+              <p>Hutch packages the self-extracting bundle in a DMG for macOS distribution.</p>
 
 ## Code Signing and Notarization
 
-              <p>Dash code signs and notarizes your application automatically when those options are enabled in `electrobun.config.ts`.</p>
+              <p>Hutch code signs and notarizes your application automatically when those options are enabled in `electrobun.config.ts`.</p>
 
 ### MacOS
 
               <p>There is a prerequisite to register for an Apple Developer account and create an app id as well as download your code signing certificate. We'll have a guide that walks you through this process. There is no need to have any private keys in your code repo but you do need to set `codesigning` and `notarization` flags to `true` in your `electrobun.config` file and make some credentials available in your env.</p>
 
-              <p>Dash code signs and notarizes both your app bundle <strong>and</strong> the self-extracting bundle so your end-users can be confident that what they are installing is legitimately from you and has been scanned by Apple.</p>
+              <p>Hutch code signs and notarizes both your app bundle <strong>and</strong> the self-extracting bundle so your end-users can be confident that what they are installing is legitimately from you and has been scanned by Apple.</p>
 
               <p>While code signing is generally very fast, notarization requires uploading a zip file to Apple's servers and waiting for them to scan and verify your app's code which typically takes about 1-2 minutes. The notarization is then stapled to your app bundle.</p>
 
@@ -126,19 +126,19 @@ import { Aside } from "@astrojs/starlight/components";
               </ol>
 
               <Aside type="tip">
-                <strong>Info:</strong> For each non-dev build, Dash generates a patch from the current hosted version to the newly built version.
+                <strong>Info:</strong> For each non-dev build, Hutch generates a patch from the current hosted version to the newly built version.
               </Aside>
 
 ## CLI and development builds
 
-              <p>Add Electrobun to your project's `package.json` and run `dash install`. Project scripts can invoke the CLI with `dash electrobun`, using `electrobun.config.ts` to define how the app is built.</p>
+              <p>Add Electrobun to your project's `package.json` and run `hutch install`. Project scripts can invoke the CLI with `hutch electrobun`, using `electrobun.config.ts` to define how the app is built.</p>
 
 ### Development Builds
 
-              <p>When building a `dev` build of your app instead of the optimized `launcher` binary, Dash uses a special dev launcher that routes output from Cottontail, native main processes, and the native wrapper to your terminal.</p>
+              <p>When building a `dev` build of your app instead of the optimized `launcher` binary, Hutch uses a special dev launcher that routes output from Cottontail, native main processes, and the native wrapper to your terminal.</p>
 
-              <p>Dev builds are not meant to be distributed, so Dash does not generate release artifacts for dev builds.</p>
+              <p>Dev builds are not meant to be distributed, so Hutch does not generate release artifacts for dev builds.</p>
 
 ### Distribution
 
-              <p>Dash accepts `canary` and `stable` build environments for distribution builds. Both wrap and compress your application, apply configured signing and notarization, and create the release `artifacts` folder described in <a href="/electrobun/guides/bundling-and-distribution">Bundling &amp; Distribution</a>.</p>
+              <p>Hutch accepts `canary` and `stable` build environments for distribution builds. Both wrap and compress your application, apply configured signing and notarization, and create the release `artifacts` folder described in <a href="/electrobun/guides/bundling-and-distribution">Bundling &amp; Distribution</a>.</p>

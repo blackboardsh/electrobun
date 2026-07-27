@@ -6,7 +6,7 @@
 
 <div align="center">
   Get started with a template <br />
-  <code><strong>npx electrobun init</strong></code>   
+  <code><strong>hutch electrobun init</strong></code>
 </div>
 
 
@@ -109,22 +109,22 @@ Ways to get involved:
 - Let me know what you're building with Electrobun
 
 ## Development Setup
-Building apps with Electrobun is as easy as updating your package.json dependencies with `npm add electrobun` or try one of our templates via `npx electrobun init`.
+Building apps with Electrobun is as easy as installing Hutch and running `hutch electrobun init`.
 
 **This section is for building Electrobun from source locally in order to contribute fixes to it.**
 
 ### Prerequisites
 
-Install Dash globally before building Electrobun:
+Install Hutch globally before building Electrobun:
 
 ```bash
-curl -fsSL https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh | sh
+curl -fsSL https://hutch.blackboard.sh/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://electrobun-artifacts.blackboard.sh/dash-cli/install.ps1)))
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/install.ps1)))
 ```
 
 **macOS:**
@@ -147,8 +147,8 @@ On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-conf
 ```bash
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
-dash install
-dash dev:clean
+hutch install
+hutch dev:clean
 ```
 
 ### Development Workflow
@@ -158,10 +158,10 @@ dash dev:clean
 cd electrobun/package
 
 # After making changes to source code
-dash dev
+hutch dev
 
 # If you need a completely fresh start
-dash dev:clean
+hutch dev:clean
 ```
 
 With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
@@ -169,20 +169,20 @@ one command to build only changed native layers and run Kitchen with the local
 stack:
 
 ```bash
-dash dev --local
+hutch dev --local
 ```
 
-The first Dash is globally installed. Stack preparation explicitly selects the
-completed local Dash engine and Cottontail build for the remainder of the
+The first Hutch is globally installed. Stack preparation explicitly selects the
+completed local Hutch engine and Cottontail build for the remainder of the
 command.
 
 ### Additional Commands
 
 All commands are run from the `/package` directory:
 
-- `dash dev:canary` - Build and run kitchen sink in canary mode
-- `dash build:dev` - Build Electrobun in development mode
-- `dash build:release` - Build Electrobun in release mode
+- `hutch dev:canary` - Build and run kitchen sink in canary mode
+- `hutch build:dev` - Build Electrobun in development mode
+- `hutch build:release` - Build Electrobun in release mode
 
 ### Debugging
 

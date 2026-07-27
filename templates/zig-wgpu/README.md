@@ -3,10 +3,10 @@
 An Electrobun template with a Zig main process and an `<electrobun-wgpu>` overlay surface. The webview owns layout and controls; Zig creates a native WGPU render pipeline and draws an animated Mandelbrot/Julia shader directly into the surface.
 
 ```sh
-dash run dev
+hutch run dev
 ```
 
-`dash run dev` installs dependencies on the first run, builds the app, launches
+`hutch run dev` installs dependencies on the first run, builds the app, launches
 it, and rebuilds when source files change.
 
 The main process lives in `src/zig/main.zig`; the webview lives in `src/mainview`.

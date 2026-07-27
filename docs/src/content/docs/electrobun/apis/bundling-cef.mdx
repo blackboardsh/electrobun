@@ -211,7 +211,7 @@ export default {
 
 ### How It Works
 
-              <p>When `cefVersion` is set, Dash downloads the CEF minimal distribution directly from Spotify's CDN and extracts the runtime files (shared libraries, resource packs, locales) into your local dependency cache. No compilation or build tools are required on your machine.</p>
+              <p>When `cefVersion` is set, Hutch downloads the CEF minimal distribution directly from Spotify's CDN and extracts the runtime files (shared libraries, resource packs, locales) into your local dependency cache. No compilation or build tools are required on your machine.</p>
 
               <p>Electrobun's helper process (`process_helper`) ships pre-built with each Electrobun release and communicates with CEF through its stable C API. This means the helper binary works with different CEF versions without recompilation, as long as the C API is compatible.</p>
 
@@ -233,4 +233,4 @@ export default {
 
 ### Caching
 
-              <p>The downloaded CEF files are cached locally per platform and version. If you change `cefVersion`, Dash detects the mismatch and re-downloads automatically. Removing the override restores the default CEF version shipped with your Electrobun release.</p>
+              <p>The downloaded CEF files are cached locally per platform and version. If you change `cefVersion`, Hutch detects the mismatch and re-downloads automatically. Removing the override restores the default CEF version shipped with your Electrobun release.</p>

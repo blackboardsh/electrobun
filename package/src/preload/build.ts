@@ -1,6 +1,6 @@
 // Standalone build script for the preload.
-// Normally this is run as part of "dash build.ts", but you can run it directly:
-//   dash src/preload/build.ts
+// Normally this is run as part of "hutch build.ts", but you can run it directly:
+//   hutch src/preload/build.ts
 
 import { join, dirname } from "path";
 import { writeFileSync, mkdirSync } from "fs";
@@ -46,7 +46,7 @@ async function buildPreload() {
 	const sandboxedPreloadJs = `(function(){${await sandboxedResult.outputs[0]!.text()}})();`;
 
 const outputContent = `// Auto-generated file. Do not edit directly.
-// Run "dash build.ts" from the package folder to regenerate.
+// Run "hutch build.ts" from the package folder to regenerate.
 
 // Full preload for trusted webviews (RPC, encryption, drag regions, webview tags)
 export const preloadScript = ${JSON.stringify(fullPreloadJs)};

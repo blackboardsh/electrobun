@@ -11,7 +11,7 @@ export type DevCommand = {
 };
 
 type CreateDevCommandsOptions = {
-	dashBinary: string;
+	hutchBinary: string;
 	packageDir: string;
 	kitchenDir: string;
 	platform: string;
@@ -21,7 +21,7 @@ type CreateDevCommandsOptions = {
 };
 
 export function createDevCommands({
-	dashBinary,
+	hutchBinary,
 	packageDir,
 	kitchenDir,
 	platform,
@@ -48,7 +48,7 @@ export function createDevCommands({
 	if (!skipPackageBuild) {
 		commands.push({
 			label: "Build Electrobun package",
-			command: dashBinary,
+			command: hutchBinary,
 			args: [join(packageDir, "build.ts")],
 			cwd: packageDir,
 		});
@@ -57,7 +57,7 @@ export function createDevCommands({
 		installCommand,
 		{
 			label: "Launch Kitchen development app",
-			command: dashBinary,
+			command: hutchBinary,
 			args: ["electrobun", "dev", ...devArgs],
 			cwd: kitchenDir,
 		},
@@ -69,14 +69,14 @@ function isAbsoluteExecutablePath(value: string) {
 	return isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
 }
 
-export function resolveDashBinary(packageDir: string, configuredBinary = process.env.DASH_BINARY) {
-	if (!configuredBinary) return "dash";
+export function resolveHutchBinary(packageDir: string, configuredBinary = process.env.HUTCH_BINARY) {
+	if (!configuredBinary) return "hutch";
 
 	const candidate = isAbsoluteExecutablePath(configuredBinary)
 		? configuredBinary
 		: resolve(packageDir, configuredBinary);
 	if (!existsSync(candidate)) {
-		throw new Error(`DASH_BINARY points to a missing executable: ${candidate}`);
+		throw new Error(`HUTCH_BINARY points to a missing executable: ${candidate}`);
 	}
 	return candidate;
 }
@@ -130,12 +130,12 @@ function main() {
 	if (parsedArgs.local) {
 		prepareLocalStack(packageDir);
 	}
-	const dashBinary = resolveDashBinary(packageDir);
+	const hutchBinary = resolveHutchBinary(packageDir);
 	const comSpec =
 		process.env["ComSpec"] ??
 		join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", "cmd.exe");
 	const commands = createDevCommands({
-		dashBinary,
+		hutchBinary,
 		packageDir,
 		kitchenDir,
 		platform: process.platform,
@@ -144,7 +144,7 @@ function main() {
 		skipPackageBuild: parsedArgs.local,
 	});
 
-	console.log(`[dev] Dash: ${dashBinary}`);
+	console.log(`[dev] Hutch: ${hutchBinary}`);
 	for (const command of commands) {
 		runCommand(command);
 	}

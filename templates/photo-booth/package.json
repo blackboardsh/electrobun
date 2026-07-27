@@ -3,9 +3,9 @@
 	"version": "1.0.0",
 	"description": "A photo booth app demonstrating getUserMedia with Electrobun",
 	"scripts": {
-		"start": "dash electrobun dev",
-		"dev": "dash electrobun dev --watch",
-		"build:canary": "dash electrobun build --env=canary"
+		"start": "hutch electrobun dev",
+		"dev": "hutch electrobun dev --watch",
+		"build:canary": "hutch electrobun build --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

@@ -7,7 +7,7 @@ title: "Updates"
 
               <ul>
                 <li><a href="/electrobun/apis/updater">Update API</a> to check for, download, and update your apps.</li>
-                <li><a href="/electrobun/apis/cli/cli-args">Dash CLI</a> to build your app bundle, code sign and notarize it, and generate release artifacts.</li>
+                <li><a href="/electrobun/apis/cli/cli-args">Hutch</a> to build your app bundle, code sign and notarize it, and generate release artifacts.</li>
                 <li>A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB</li>
               </ul>
 
@@ -52,18 +52,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Install Dash
+      - name: Install Hutch
         shell: bash
         run: |
-          installer="$RUNNER_TEMP/install-dash.sh"
+          installer="$RUNNER_TEMP/install-hutch.sh"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh \
+            https://hutch.blackboard.sh/install.sh \
             --output "$installer"
           sh "$installer" --channel production --no-modify-path
           echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        run: dash install --frozen-lockfile
+        run: hutch install --frozen-lockfile
 
       - name: Determine build environment
         id: build-env
@@ -81,7 +81,7 @@ jobs:
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
           ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
-        run: dash electrobun build --env="${{ steps.build-env.outputs.env }}"
+        run: hutch electrobun build --env="${{ steps.build-env.outputs.env }}"
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -101,7 +101,7 @@ jobs:
 
 ### Single Patch File
 
-              <p>Dash generates a single patch file per build—from the immediately previous version to the current version. This means:</p>
+              <p>Hutch generates a single patch file per build—from the immediately previous version to the current version. This means:</p>
 
               <ul>
                 <li>Users updating from the previous version get a small delta patch (often just a few KB)</li>

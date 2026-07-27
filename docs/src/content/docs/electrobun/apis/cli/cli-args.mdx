@@ -1,22 +1,22 @@
 ---
-title: "CLI Commands"
+title: "Hutch Commands"
 ---
               
-              <p>Dash provides Electrobun commands for initializing new projects and building, packaging, and distributing your applications for different environments.</p>
+              <p>Hutch provides Electrobun commands for initializing new projects and building, packaging, and distributing your applications for different environments.</p>
 
 ## Installation
 
-              <p>Install Dash globally, then use its Electrobun commands to create projects, install dependencies, and build your app. A generated project already includes Electrobun in its `package.json`:</p>
+              <p>Install Hutch globally, then use its Electrobun commands to create projects, install dependencies, and build your app. A generated project already includes Electrobun in its `package.json`:</p>
 
               
 ```bash
-dash install
+hutch install
 ```
 
 
 ## Commands
 
-### `dash electrobun init`
+### `hutch electrobun init`
 
               <p>Initializes a new Electrobun project with starter templates.</p>
 
@@ -25,10 +25,10 @@ dash install
               
 ```bash
 # Interactive template selection
-dash electrobun init
+hutch electrobun init
 
 # Direct template selection
-dash electrobun init [template-name]
+hutch electrobun init [template-name]
 ```
 
 
@@ -46,17 +46,17 @@ dash electrobun init [template-name]
               
 ```bash
 # Choose template interactively
-dash electrobun init
+hutch electrobun init
 
 # Initialize with photo-booth template directly
-dash electrobun init photo-booth
+hutch electrobun init photo-booth
 
 # Initialize with multitab-browser template
-dash electrobun init multitab-browser
+hutch electrobun init multitab-browser
 ```
 
 
-### `dash electrobun build`
+### `hutch electrobun build`
 
               <p>Builds and packages your Electrobun application according to `electrobun.config.ts`. Non-dev builds create signed and compressed distribution artifacts, update metadata, and patches when configured.</p>
 
@@ -64,7 +64,7 @@ dash electrobun init multitab-browser
 
               
 ```
-dash electrobun build [options]
+hutch electrobun build [options]
 ```
 
 
@@ -96,40 +96,40 @@ dash electrobun build [options]
               
 ```bash
 # Development build for current platform
-dash electrobun build
+hutch electrobun build
 
 # Development build with environment flag
-dash electrobun build --env=dev
+hutch electrobun build --env=dev
 
 # Canary build
-dash electrobun build --env=canary
+hutch electrobun build --env=canary
 
 # Stable production build
-dash electrobun build --env=stable
+hutch electrobun build --env=stable
 ```
 
 
-### `dash electrobun run`
+### `hutch electrobun run`
 
-              <p>Launches an already-built dev bundle. This is useful when you've already run `dash electrobun build` and just want to relaunch the app without rebuilding.</p>
+              <p>Launches an already-built dev bundle. This is useful when you've already run `hutch electrobun build` and just want to relaunch the app without rebuilding.</p>
 
 #### Usage
 
               
 ```
-dash electrobun run
+hutch electrobun run
 ```
 
 
-### `dash electrobun dev`
+### `hutch electrobun dev`
 
-              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `dash electrobun build --env=dev` followed by `dash electrobun run`.</p>
+              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `hutch electrobun build --env=dev` followed by `hutch electrobun run`.</p>
 
 #### Usage
 
               
 ```
-dash electrobun dev [options]
+hutch electrobun dev [options]
 ```
 
 
@@ -155,10 +155,10 @@ dash electrobun dev [options]
               
 ```bash
 # Build and launch in dev mode
-dash electrobun dev
+hutch electrobun dev
 
 # Build, launch, and watch for changes
-dash electrobun dev --watch
+hutch electrobun dev --watch
 ```
 
 
@@ -222,11 +222,11 @@ dash electrobun dev --watch
 // package.json
 {
   "scripts": {
-    "start": "dash electrobun run",
-    "dev": "dash electrobun dev",
-    "dev:watch": "dash electrobun dev --watch",
-    "build:canary": "dash electrobun build --env=canary",
-    "build:stable": "dash electrobun build --env=stable"
+    "start": "hutch electrobun run",
+    "dev": "hutch electrobun dev",
+    "dev:watch": "hutch electrobun dev --watch",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build:stable": "hutch electrobun build --env=stable"
   }
 }
 ```
@@ -234,16 +234,16 @@ dash electrobun dev --watch
 
 ### CI Build Scripts
 
-              <p>For multi-platform distribution, run the same Dash build command on each platform's CI runner:</p>
+              <p>For multi-platform distribution, run the same Hutch build command on each platform's CI runner:</p>
 
               
 ```javascript
 // package.json
 {
   "scripts": {
-    "build:dev": "dash electrobun build",
-    "build:canary": "dash electrobun build --env=canary",
-    "build:stable": "dash electrobun build --env=stable"
+    "build:dev": "hutch electrobun build",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build:stable": "hutch electrobun build --env=stable"
   }
 }
 ```

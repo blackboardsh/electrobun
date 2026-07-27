@@ -5,7 +5,7 @@ This document describes Electrobun's build system and cross-platform compilation
 ## Overview
 
 Electrobun uses a custom build system (`build.ts`) that handles:
-- Resolving the globally installed Dash CLI and its selected Cottontail runtime
+- Resolving the globally installed Hutch and its selected Cottontail runtime
 - Vendoring application build dependencies such as Zig, CEF, and WebView2
 - Building native wrappers for each platform
 - Creating distribution packages
@@ -64,30 +64,30 @@ All commands are run from the `/package` directory:
 
 ```bash
 cd electrobun/package
-dash install
+hutch install
 
 # Full build with all platforms
-dash build.ts
+hutch build.ts
 
 # Development build with the kitchen sink test app
-dash dev
+hutch dev
 
 # Release build
-dash build.ts --release
+hutch build.ts --release
 
 # CI build
-dash build.ts --ci
+hutch build.ts --ci
 ```
 
-## Dash CLI and Cottontail
+## Hutch and Cottontail
 
-Dash and Cottontail are installed and released independently of Electrobun.
+Hutch and Cottontail are installed and released independently of Electrobun.
 The first-line `// @dash` pragma in `package/dash.config.ts` pins the exact
-versions used for reproducible Electrobun builds. Dash resolves and verifies
+versions used for reproducible Electrobun builds. Hutch resolves and verifies
 Cottontail, then bundles the selected runtime into each application.
 
-For local runtime development, `dash dev --local` builds and selects the
-sibling Dash launcher, Dash engine, and Cottontail binary without changing the
+For local runtime development, `hutch dev --local` builds and selects the
+sibling Hutch launcher, Hutch engine, and Cottontail binary without changing the
 published version pins.
 
 ## Architecture Support

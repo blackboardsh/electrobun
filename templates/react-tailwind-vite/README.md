@@ -6,28 +6,28 @@ A fast Electrobun desktop app template with React, Tailwind CSS, and Vite for ho
 
 ```bash
 # Install dependencies
-dash install
+hutch install
 
 # Development without HMR (uses bundled assets)
-dash run dev
+hutch run dev
 
 # Development with HMR (recommended)
-dash run dev:hmr
+hutch run dev:hmr
 
 # Build for production
-dash run build:canary
+hutch run build:canary
 ```
 
 ## How HMR Works
 
-When you run `dash run dev:hmr`:
+When you run `hutch run dev:hmr`:
 
 1. **Vite dev server** starts on `http://localhost:5173` with HMR enabled
 2. **Electrobun** starts and detects the running Vite server
 3. The app loads from the Vite dev server instead of bundled assets
 4. Changes to React components update instantly without full page reload
 
-When you run `dash run dev` (without HMR):
+When you run `hutch run dev` (without HMR):
 
 1. Electrobun starts and loads from `views://mainview/index.html`
 2. Vite rebuilds the bundled assets before Electrobun starts

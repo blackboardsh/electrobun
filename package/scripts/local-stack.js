@@ -14,8 +14,8 @@ export function prepareLocalStack(packageDir) {
 	const projectsRoot = resolve(
 		process.env.DASH_LOCAL_PROJECTS_ROOT || resolve(electrobunRoot, ".."),
 	);
-	const dashCliRoot = resolve(
-		process.env.DASH_CLI_ROOT || join(projectsRoot, "dash-cloud", "dash-cli"),
+	const hutchRoot = resolve(
+		process.env.HUTCH_ROOT || join(projectsRoot, "dash-cloud", "hutch"),
 	);
 	const cottontailRoot = resolve(
 		process.env.DASH_LOCAL_COTTONTAIL_ROOT ||
@@ -24,15 +24,15 @@ export function prepareLocalStack(packageDir) {
 	);
 	const localStackScript = resolve(
 		process.env.DASH_LOCAL_STACK_SCRIPT ||
-			join(dashCliRoot, "scripts", "local-stack.js"),
+			join(hutchRoot, "scripts", "local-stack.js"),
 	);
 	const binaryExtension = process.platform === "win32" ? ".exe" : "";
-	const localDash = join(dashCliRoot, "zig-out", "bin", `dash${binaryExtension}`);
-	const localDashEngine = join(
-		dashCliRoot,
+	const localHutch = join(hutchRoot, "zig-out", "bin", `hutch${binaryExtension}`);
+	const localHutchEngine = join(
+		hutchRoot,
 		"zig-out",
 		"bin",
-		`dash-cli${binaryExtension}`,
+		`hutch-engine${binaryExtension}`,
 	);
 	const localCottontail = join(
 		cottontailRoot,
@@ -42,7 +42,7 @@ export function prepareLocalStack(packageDir) {
 	);
 
 	if (!existsSync(localStackScript)) {
-		throw new Error(`[local-stack] Dash local stack script is missing: ${localStackScript}`);
+		throw new Error(`[local-stack] Hutch local stack script is missing: ${localStackScript}`);
 	}
 	const prepared = spawnSync(
 		process.env.NODE_BINARY ?? "node",
@@ -76,9 +76,9 @@ export function prepareLocalStack(packageDir) {
 		COTTONTAIL_ROOT: cottontailRoot,
 		DASH_COTTONTAIL: localCottontail,
 		COTTONTAIL_BINARY: localCottontail,
-		DASH_CLI_ROOT: dashCliRoot,
-		DASH_CLI_BINARY: localDashEngine,
-		DASH_BINARY: localDash,
+		HUTCH_ROOT: hutchRoot,
+		HUTCH_ENGINE_BINARY: localHutchEngine,
+		HUTCH_BINARY: localHutch,
 		DASH_USE_LOCAL_ELECTROBUN: "1",
 		DASH_LOCAL_ELECTROBUN_ROOT: electrobunRoot,
 	});
@@ -87,9 +87,9 @@ export function prepareLocalStack(packageDir) {
 		projectsRoot,
 		cottontailRoot,
 		cottontailBinary: localCottontail,
-		dashCliRoot,
-		dashBinary: localDash,
-		dashEngineBinary: localDashEngine,
+		hutchRoot,
+		hutchBinary: localHutch,
+		hutchEngineBinary: localHutchEngine,
 		electrobunRoot,
 	};
 }

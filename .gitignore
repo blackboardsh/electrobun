@@ -14,8 +14,10 @@ dist
 .cache
 /package/bin/electrobun
 /package/bin/electrobun.exe
-/package/bin/dash
-/package/bin/dash.exe
+/package/bin/hutch
+/package/bin/hutch.exe
+/package/bin/hutch-engine
+/package/bin/hutch-engine.exe
 /package/bin/cottontail
 /package/bin/cottontail.exe
 /package/bin/runtime_modules

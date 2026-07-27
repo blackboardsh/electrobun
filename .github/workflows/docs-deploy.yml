@@ -54,15 +54,15 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Install Dash
-        uses: ./.github/actions/install-dash
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Install docs dependencies
-        run: dash install --frozen-lockfile
+        run: hutch install --frozen-lockfile
         working-directory: docs
 
       - name: Build docs
-        run: dash run build
+        run: hutch run build
         working-directory: docs
 
       - name: Deploy to Cloudflare Pages
@@ -70,5 +70,5 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           PAGES_BRANCH: ${{ steps.deploy-branch.outputs.branch }}
-        run: dash run deploy
+        run: hutch run deploy
         working-directory: docs

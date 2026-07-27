@@ -65,11 +65,11 @@ jobs:
         run: |
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
 
-      - name: Install Dash
-        uses: ./.github/actions/install-dash
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Install dependencies
-        run: dash install
+        run: hutch install
         working-directory: package
 
       - name: Setup MSVC Developer Command Prompt
@@ -218,8 +218,8 @@ jobs:
 
       - name: Build Kitchen
         run: |
-          dash install
-          dash electrobun build --env=${{ steps.release-type.outputs.env }}
+          hutch install
+          hutch electrobun build --env=${{ steps.release-type.outputs.env }}
         working-directory: kitchen
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
@@ -229,7 +229,7 @@ jobs:
 
       - name: Validate Kitchen artifacts
         run: >-
-          dash scripts/validate-kitchen-artifacts.ts
+          hutch scripts/validate-kitchen-artifacts.ts
           kitchen/artifacts
           ${{ steps.release-type.outputs.env }}
           ${{ matrix.artifact_platform }}
@@ -271,15 +271,15 @@ jobs:
           path: kitchen-artifacts
           merge-multiple: true
 
-      - name: Install Dash
-        uses: ./.github/actions/install-dash
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Publish Kitchen artifacts to R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: dash scripts/upload-kitchen-artifacts.ts kitchen-artifacts
+        run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -320,16 +320,16 @@ jobs:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Install Dash
-        uses: ./.github/actions/install-dash
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Install dependencies
-        run: dash install
+        run: hutch install
         working-directory: package
 
       - name: Build for npm (JS/TS files only)
         run: |
-          dash build.ts --npm --release
+          hutch build.ts --npm --release
 
           echo "Contents of dist/ for npm (should only be main.js and api/):"
           find dist/ -type f | sort

@@ -13,17 +13,17 @@ This hello world app demonstrates:
 
 1. Install dependencies:
    ```bash
-   dash install
+   hutch install
    ```
 
 2. Run in development mode:
    ```bash
-   dash run dev
+   hutch run dev
    ```
 
 3. Build for production:
    ```bash
-   dash electrobun build --env=stable
+   hutch electrobun build --env=stable
    ```
 
 ## Project Structure

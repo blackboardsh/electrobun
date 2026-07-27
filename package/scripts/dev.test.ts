@@ -14,10 +14,10 @@ function assertArray(actual: string[], expected: string[], message: string) {
 
 const packageDir = join("C:\\work tree", "electrobun", "package");
 const kitchenDir = join("C:\\work tree", "electrobun", "kitchen");
-const dashBinary = "dash";
+const hutchBinary = "hutch";
 const comSpec = "C:\\Windows\\System32\\cmd.exe";
 const windowsCommands = createDevCommands({
-	dashBinary,
+	hutchBinary,
 	packageDir,
 	kitchenDir,
 	platform: "win32",
@@ -26,7 +26,7 @@ const windowsCommands = createDevCommands({
 });
 
 assert(windowsCommands.length === 3, "Windows dev plan should have three commands");
-assert(windowsCommands[0]?.command === dashBinary, "Package build should use resolved Dash");
+assert(windowsCommands[0]?.command === hutchBinary, "Package build should use resolved Hutch");
 assertArray(windowsCommands[0]?.args ?? [], [join(packageDir, "build.ts")], "Package build argv");
 assert(windowsCommands[0]?.cwd === packageDir, "Package build cwd mismatch");
 assert(windowsCommands[1]?.command === comSpec, "Windows npm install should use ComSpec");
@@ -36,7 +36,7 @@ assertArray(
 	"Windows npm install argv",
 );
 assert(windowsCommands[1]?.cwd === kitchenDir, "Kitchen npm install cwd mismatch");
-assert(windowsCommands[2]?.command === dashBinary, "Kitchen launch should reuse resolved Dash");
+assert(windowsCommands[2]?.command === hutchBinary, "Kitchen launch should reuse resolved Hutch");
 assertArray(
 	windowsCommands[2]?.args ?? [],
 	["electrobun", "dev", "--watch"],
@@ -45,7 +45,7 @@ assertArray(
 assert(windowsCommands[2]?.cwd === kitchenDir, "Kitchen launch cwd mismatch");
 
 const posixCommands = createDevCommands({
-	dashBinary: "/tmp/dash",
+	hutchBinary: "/tmp/hutch",
 	packageDir: "/tmp/electrobun/package",
 	kitchenDir: "/tmp/electrobun/kitchen",
 	platform: "linux",
@@ -58,7 +58,7 @@ assert(localArgs.local, "Local dev args should enable local stack mode");
 assertArray(localArgs.devArgs, ["--watch"], "Local flag should not reach Electrobun");
 
 const localCommands = createDevCommands({
-	dashBinary: "/tmp/dash",
+	hutchBinary: "/tmp/hutch",
 	packageDir: "/tmp/electrobun/package",
 	kitchenDir: "/tmp/electrobun/kitchen",
 	platform: "linux",

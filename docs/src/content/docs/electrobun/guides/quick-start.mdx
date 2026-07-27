@@ -8,21 +8,21 @@ title: "Quick Start"
   
   <p>Before getting started, make sure you have:</p>
   <ul>
-    <li>Dash installed globally</li>
+    <li>Hutch installed globally</li>
     <li>A text editor or IDE (Blackboard's own <a href="https://blackboard.sh/colab/">co(lab)</a> recommended)</li>
     <li>Basic knowledge of TypeScript/JavaScript</li>
   </ul>
 
-  <p>Install Dash on macOS or Linux:</p>
+  <p>Install Hutch on macOS or Linux:</p>
 
 ```bash
-curl -fsSL https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh | sh
+curl -fsSL https://hutch.blackboard.sh/install.sh | sh
 ```
 
   <p>On Windows PowerShell:</p>
 
 ```powershell
-& ([scriptblock]::Create((irm https://electrobun-artifacts.blackboard.sh/dash-cli/install.ps1)))
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/install.ps1)))
 ```
 
 ## Getting Started
@@ -31,7 +31,7 @@ curl -fsSL https://electrobun-artifacts.blackboard.sh/dash-cli/install.sh | sh
   
   
 ```
-dash electrobun init
+hutch electrobun init
 ```
 
 
@@ -62,12 +62,12 @@ my-app/
   
 ```
 cd my-app
-dash install
-dash run dev
+hutch install
+hutch run dev
 ```
 
 
-  <p>Dash will:</p>
+  <p>Hutch will:</p>
   <ul>
     <li>Install the project dependencies through Cottontail</li>
     <li>Create a dev build of your app</li>

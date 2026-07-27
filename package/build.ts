@@ -1,4 +1,4 @@
-// Run this script via terminal or command line with dash build.ts
+// Run this script via terminal or command line with hutch build.ts
 
 import { $ } from "bun";
 import { spawnSync } from "child_process";
@@ -615,7 +615,7 @@ async function checkDependencies() {
 
 async function setup() {
 	await checkDependencies();
-	rmSync(join(process.cwd(), "vendors", "dash-cli"), {
+	rmSync(join(process.cwd(), "vendors", "hutch"), {
 		recursive: true,
 		force: true,
 	});
@@ -815,14 +815,16 @@ async function copyToDist() {
 		console.log(`launcher${binExt} copied successfully to ${launcherPath}`);
 	}
 		mkdirSync("bin", { recursive: true });
-	for (const legacyRuntime of [
-		"dash",
-		"dash.exe",
+	for (const unbundledRuntime of [
+		"hutch",
+		"hutch.exe",
+		"hutch-engine",
+		"hutch-engine.exe",
 		"cottontail",
 		"cottontail.exe",
 		".runtime-platform",
 	]) {
-		rmSync(join("bin", legacyRuntime), { force: true });
+		rmSync(join("bin", unbundledRuntime), { force: true });
 	}
 	rmSync(join("bin", OS === "win" ? "electrobun.exe" : "electrobun"), { force: true });
 	// Electrobun's Typescript bun and browser apis
@@ -2538,7 +2540,7 @@ async function buildPreload() {
 	const distDir = join(process.cwd(), "dist");
 
 	const outputContent = `// Auto-generated file. Do not edit directly.
-// Run "dash build.ts" or "dash run build:dev" from the package folder to regenerate.
+// Run "hutch build.ts" or "hutch run build:dev" from the package folder to regenerate.
 
 // Full preload for trusted webviews (RPC, encryption, drag regions, webview tags)
 export const preloadScript = ${JSON.stringify(fullPreloadJs)};

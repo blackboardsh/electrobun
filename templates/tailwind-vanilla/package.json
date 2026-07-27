@@ -4,11 +4,11 @@
 	"type": "module",
 	"description": "Electrobun app with Tailwind CSS and vanilla TypeScript",
 	"scripts": {
-		"start": "vite build && dash electrobun dev",
-		"dev": "vite build && dash electrobun dev --watch",
-		"dev:hmr": "concurrently \"dash run hmr\" \"dash run start\"",
+		"start": "vite build && hutch electrobun dev",
+		"dev": "vite build && hutch electrobun dev --watch",
+		"dev:hmr": "concurrently \"hutch run hmr\" \"hutch run start\"",
 		"hmr": "vite --port 5173",
-		"build:canary": "vite build && dash electrobun build --env=canary"
+		"build:canary": "vite build && hutch electrobun build --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

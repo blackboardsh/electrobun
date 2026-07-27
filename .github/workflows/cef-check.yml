@@ -28,22 +28,22 @@ jobs:
             pkg-config \
             libfuse2
 
-      - name: Install Dash
-        uses: ./.github/actions/install-dash
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Install package dependencies
         working-directory: package
-        run: dash install
+        run: hutch install
 
       - name: Check latest stable CEF version
         id: check
         working-directory: package
-        run: dash scripts/update-cef-version.ts
+        run: hutch scripts/update-cef-version.ts
 
       - name: Build with latest CEF
         if: steps.check.outputs.has_update == 'true'
         working-directory: package
-        run: dash build.ts
+        run: hutch build.ts
 
       - name: Job summary
         if: always()

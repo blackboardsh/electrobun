@@ -1,12 +1,12 @@
 {
 	"scripts": {
-		"start": "dash electrobun run",
-		"dev": "dash electrobun dev",
-		"check:zig-mirrors": "dash scripts/check-zig-test-mirrors.ts",
-		"check:odin-mirrors": "dash scripts/check-odin-test-mirrors.ts",
-		"build:canary": "cd ../package && dash build:release && cd ../kitchen && dash electrobun build --env=canary",
-		"build:production": "cd ../package && dash build:release && cd ../kitchen && dash electrobun build --env=production",
-		"start:canary": "dash electrobun dev --env=canary"
+		"start": "hutch electrobun run",
+		"dev": "hutch electrobun dev",
+		"check:zig-mirrors": "hutch scripts/check-zig-test-mirrors.ts",
+		"check:odin-mirrors": "hutch scripts/check-odin-test-mirrors.ts",
+		"build:canary": "cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
+		"build:production": "cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=production",
+		"start:canary": "hutch electrobun dev --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "file:../package"

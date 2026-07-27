@@ -51,7 +51,7 @@ async function main() {
 	const dryRun = process.argv.includes("--dry-run");
 	if (!artifactsDir) {
 		console.error(
-			"Usage: dash scripts/upload-kitchen-artifacts.ts <artifactsDir> [--dry-run]",
+			"Usage: hutch scripts/upload-kitchen-artifacts.ts <artifactsDir> [--dry-run]",
 		);
 		process.exit(1);
 	}

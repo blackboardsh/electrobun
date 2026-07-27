@@ -32,8 +32,8 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 
 console.log("Building full release...");
 try {
-	const dashBinary = process.env.DASH_BINARY || "dash";
-	execFileSync(dashBinary, ["build.ts", "--release", "--core-only"], {
+	const hutchBinary = process.env.HUTCH_BINARY || "hutch";
+	execFileSync(hutchBinary, ["build.ts", "--release", "--core-only"], {
 		cwd: path.join(__dirname, ".."),
 		stdio: "inherit",
 	});
@@ -96,7 +96,7 @@ async function createTarballs() {
 
 	console.log("Validation passed: Found expected platform binaries in dist/");
 
-	// 1. Create the Electrobun platform runtime tarball. Dash and Cottontail
+	// 1. Create the Electrobun platform runtime tarball. Hutch and Cottontail
 	// are versioned and distributed independently.
 	const coreFiles = fs
 		.readdirSync(distPath)

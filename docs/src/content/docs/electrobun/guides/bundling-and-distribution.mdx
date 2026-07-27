@@ -24,26 +24,26 @@ import { Aside } from "@astrojs/starlight/components";
     "electrobun": "^0.0.1"
   },
   "scripts": {
-    "start": "dash electrobun run",
-    "dev": "dash electrobun dev",
-    "dev:watch": "dash electrobun dev --watch",
-    "build:dev": "dash electrobun build",
-    "build:canary": "dash electrobun build --env=canary",
-    "build:stable": "dash electrobun build --env=stable"
+    "start": "hutch electrobun run",
+    "dev": "hutch electrobun dev",
+    "dev:watch": "hutch electrobun dev --watch",
+    "build:dev": "hutch electrobun build",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build:stable": "hutch electrobun build --env=stable"
   }
 }
 ```
 
 
-  <p>Run either release build through Dash:</p>
+  <p>Run either release build through Hutch:</p>
 
 
 ```bash
-dash run build:canary
+hutch run build:canary
 
 # or
 
-dash run build:stable
+hutch run build:stable
 ```
 
 
@@ -92,11 +92,11 @@ export default {
 
   <p>You can make your app available by uploading the contents of the `artifacts` folder to your release host (S3, R2, GitHub Releases, etc.).</p>
 
-  <p>The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. Dash builds for the current machine's platform and automatically downloads the core/CEF files during bundling.</p>
+  <p>The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. Hutch builds for the current machine's platform and automatically downloads the core/CEF files during bundling.</p>
 
-  <p>To produce artifacts for all platforms, run the same Dash build command natively on CI runners for each OS/architecture. See the <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a> guide for platform details.</p>
+  <p>To produce artifacts for all platforms, run the same Hutch build command natively on CI runners for each OS/architecture. See the <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a> guide for platform details.</p>
 
-  <p>After you upload the artifacts, subsequent non-dev builds such as `dash run build:canary` use `release.baseUrl` to download the current version of your app and generate a patch file with our optimized BSDIFF implementation. That patch file is added to the artifacts folder.</p>
+  <p>After you upload the artifacts, subsequent non-dev builds such as `hutch run build:canary` use `release.baseUrl` to download the current version of your app and generate a patch file with our optimized BSDIFF implementation. That patch file is added to the artifacts folder.</p>
 
   <p>It's recommended to keep older patch files in your storage. Users on older versions can download successive patches, each as small as 14KB. If patching can't get the user to the latest version, Electrobun's Updater falls back to downloading the full latest build.</p>
 
@@ -119,7 +119,7 @@ export default {
 
 ## Artifacts Folder Structure
 
-  <p>When you build your app, Dash creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
+  <p>When you build your app, Hutch creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
 
   
 ```
