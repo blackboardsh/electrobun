@@ -4,7 +4,7 @@ import { $ } from "bun";
 import { spawnSync } from "child_process";
 import { createHash } from "crypto";
 import { platform, arch, tmpdir } from "os";
-import { join, relative, basename } from "path";
+import { basename, join } from "path";
 import {
 	existsSync,
 	readdirSync,
@@ -1832,8 +1832,7 @@ async function vendorCEF() {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
 			// Download Windows CEF binaries (minimal distribution)
 			const tempPath = join(process.cwd(), "vendors", "cef_temp.tar.bz2");
-			// Create vendors directory if needed
-			await $`powershell -command "if (-not (Test-Path vendors)) { New-Item -ItemType Directory -Path vendors | Out-Null }"`;
+			mkdirSync(join(process.cwd(), "vendors"), { recursive: true });
 
 			// Download CEF - using URL encoding for the + character
 			console.log("Downloading CEF binaries...");
@@ -1847,51 +1846,18 @@ async function vendorCEF() {
 
 			// Extract using tar (Windows 10+ has built-in tar support)
 			console.log("Extracting CEF...");
-			await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef_temp' -Force | Out-Null"`;
-			await $`powershell -command "New-Item -ItemType Directory -Path 'vendors/cef' -Force | Out-Null"`;
+			mkdirSync(join(process.cwd(), "vendors", "cef"), { recursive: true });
 
-			// Extract tar.bz2 using Windows built-in tar
 			console.log("Extracting with tar (this may take a few minutes)...");
 			console.log(
 				"Note: Windows tar extraction of bz2 files can be slow, please be patient...",
 			);
 
-			// Windows tar doesn't support many options, just use basic extraction
-			const relativeTempPath = relative("vendors/cef_temp", tempPath);
-			await $`cd vendors/cef_temp && tar -xjf "${relativeTempPath}"`;
-
-			// Check what was extracted
-			const tempDir = "vendors/cef_temp";
-			console.log("Checking extracted contents...");
-
-			if (!existsSync(tempDir)) {
-				throw new Error("Temp extraction directory not created");
+			try {
+				await $`tar -xjf "${tempPath}" --strip-components=1 -C vendors/cef`;
+			} finally {
+				rmSync(tempPath, { force: true });
 			}
-
-			const extractedDirs = readdirSync(tempDir);
-			console.log("Extracted directories:", extractedDirs);
-
-			if (extractedDirs.length === 0) {
-				throw new Error("No files extracted");
-			}
-
-			// Move the contents from the extracted directory
-			const extractedPath = join(tempDir, extractedDirs[0]);
-			console.log("Moving files from:", extractedPath);
-
-			if (existsSync(extractedPath)) {
-				// Use PowerShell Copy-Item for reliable directory copying
-				await $`powershell -command "Copy-Item -Path '${extractedPath}\\*' -Destination 'vendors\\cef' -Recurse -Force"`;
-			} else {
-				// If it's not a directory, the files might be directly in cef_temp
-				await $`powershell -command "Copy-Item -Path 'vendors\\cef_temp\\*' -Destination 'vendors\\cef' -Recurse -Force"`;
-			}
-
-			// Clean up temp directory
-			await $`powershell -command "Remove-Item 'vendors/cef_temp' -Recurse -Force"`;
-
-			// Clean up temp file
-			await $`powershell -command "Remove-Item '${tempPath}' -Force"`;
 
 			// Verify extraction worked
 			const cefCMakeFile = join(
