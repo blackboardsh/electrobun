@@ -1,4 +1,4 @@
-// @dash cli=0.2.0 cottontail=0.1.1-canary.2
+// @dash cli=0.2.1 cottontail=0.1.1-canary.2
 export default {
 	scripts: {
 		start: "hutch src/sdks/bun/index.ts",
