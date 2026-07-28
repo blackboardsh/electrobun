@@ -118,13 +118,13 @@ Building apps with Electrobun is as easy as installing Hutch and running `hutch 
 Install Hutch globally before building Electrobun:
 
 ```bash
-curl -fsSL https://hutch.blackboard.sh/install.sh | sh
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 ```
 
 On Windows PowerShell:
 
 ```powershell
-& ([scriptblock]::Create((irm https://hutch.blackboard.sh/install.ps1)))
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
 **macOS:**

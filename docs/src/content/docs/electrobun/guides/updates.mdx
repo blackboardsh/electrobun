@@ -57,7 +57,7 @@ jobs:
         run: |
           installer="$RUNNER_TEMP/install-hutch.sh"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://hutch.blackboard.sh/install.sh \
+            https://hutch.blackboard.sh/hutch/install.sh \
             --output "$installer"
           sh "$installer" --channel production --no-modify-path
           echo "$HOME/.dash/bin" >> "$GITHUB_PATH"

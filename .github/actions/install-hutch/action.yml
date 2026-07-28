@@ -18,7 +18,7 @@ runs:
       run: |
         installer="$RUNNER_TEMP/install-hutch.sh"
         curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-          https://hutch.blackboard.sh/install.sh \
+          https://hutch.blackboard.sh/hutch/install.sh \
           --output "$installer"
         sh "$installer" --channel "$HUTCH_INSTALL_CHANNEL" --no-modify-path
         echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
@@ -31,7 +31,7 @@ runs:
       run: |
         $installer = Join-Path $env:RUNNER_TEMP "install-hutch.ps1"
         Invoke-WebRequest -UseBasicParsing `
-          -Uri "https://hutch.blackboard.sh/install.ps1" `
+          -Uri "https://hutch.blackboard.sh/hutch/install.ps1" `
           -OutFile $installer
         & $installer -Channel $env:HUTCH_INSTALL_CHANNEL
         if ($LASTEXITCODE -ne 0) { throw "Hutch installation failed" }
