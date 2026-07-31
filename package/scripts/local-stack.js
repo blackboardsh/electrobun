@@ -79,6 +79,7 @@ export function prepareLocalStack(packageDir) {
 		HUTCH_ROOT: hutchRoot,
 		HUTCH_ENGINE_BINARY: localHutchEngine,
 		HUTCH_BINARY: localHutch,
+		HUTCH_NO_UPDATE_CHECK: "1",
 		DASH_USE_LOCAL_ELECTROBUN: "1",
 		DASH_LOCAL_ELECTROBUN_ROOT: electrobunRoot,
 	});
