@@ -420,6 +420,8 @@ export const rpcTests = [
       }
 
       await sleep(1000);
+      const socketState = await waitForHostSocketOpen(webviewRpc);
+      log(`Host socket open before native burst: ${JSON.stringify(socketState)}`);
       log("Starting webview stress burst via bun -> webview RPC message");
       webviewRpc.send.startStressFromBun({ messageCount, requestCount });
 
@@ -448,6 +450,9 @@ export const rpcTests = [
         45000,
       );
       expect(webviewRequestResult.received).toBe(requestCount);
+      if (webviewRequestResult.errorCount > 0) {
+        log(`Webview -> bun request errors: ${JSON.stringify(webviewRequestResult.errors)}`);
+      }
       expect(webviewRequestResult.errorCount).toBe(0);
       expect(webviewRequestResult.mismatchCount).toBe(0);
       log(`Completed ${webviewRequestResult.received} webview -> bun requests`);
@@ -471,6 +476,9 @@ export const rpcTests = [
       const bunRequestMismatches = bunRequestResults.filter(
         (result) => !("error" in result) && result.value !== result.id,
       );
+      if (bunRequestErrors.length > 0) {
+        log(`Bun -> webview request errors: ${JSON.stringify(bunRequestErrors.slice(0, 10))}`);
+      }
 
       expect(bunRequestResults).toHaveLength(requestCount);
       expect(bunRequestErrors).toHaveLength(0);

@@ -136,7 +136,9 @@ type RPCMessagesProxy<MS extends RPCMessagesSchema> = {
 type RPCTransportHandler = (data: any) => void;
 
 export type RPCTransport = {
-	send?: (data: any) => void;
+	// Async transports may resolve after the packet has actually been handed to
+	// the underlying channel. Request timeouts start after that handoff.
+	send?: (data: any) => void | PromiseLike<void>;
 	registerHandler?: (handler: RPCTransportHandler) => void;
 	unregisterHandler?: () => void;
 };
@@ -247,6 +249,30 @@ export function createRPC<
 	>();
 	const requestTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 
+	function startRequestTimeout(requestId: number) {
+		if (maxRequestTime === Infinity || !requestListeners.has(requestId)) return;
+
+		requestTimeouts.set(
+			requestId,
+			setTimeout(() => {
+				requestTimeouts.delete(requestId);
+				const listener = requestListeners.get(requestId);
+				requestListeners.delete(requestId);
+				listener?.reject(new Error("RPC request timed out."));
+			}, maxRequestTime),
+		);
+	}
+
+	function rejectRequestSend(requestId: number, error: unknown) {
+		const listener = requestListeners.get(requestId);
+		if (!listener) return;
+
+		requestListeners.delete(requestId);
+		listener.reject(
+			error instanceof Error ? error : new Error(String(error)),
+		);
+	}
+
 	function requestFn<M extends keyof RemoteSchema["requests"]>(
 		method: M,
 		...args: "params" extends keyof RemoteSchema["requests"][M]
@@ -267,17 +293,20 @@ export function createRPC<
 				params,
 			};
 			requestListeners.set(requestId, { resolve, reject });
-			if (maxRequestTime !== Infinity)
-				requestTimeouts.set(
-					requestId,
-					setTimeout(() => {
-						requestTimeouts.delete(requestId);
-						requestListeners.delete(requestId);
-						reject(new Error("RPC request timed out."));
-					}, maxRequestTime),
-				);
-			debugHooks.onSend?.(request);
-			transport.send(request);
+			try {
+				debugHooks.onSend?.(request);
+				const sendResult = transport.send(request);
+				if (sendResult && typeof sendResult.then === "function") {
+					Promise.resolve(sendResult).then(
+						() => startRequestTimeout(requestId),
+						(error) => rejectRequestSend(requestId, error),
+					);
+				} else {
+					startRequestTimeout(requestId);
+				}
+			} catch (error) {
+				rejectRequestSend(requestId, error);
+			}
 		});
 	}
 

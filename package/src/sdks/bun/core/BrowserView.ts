@@ -18,6 +18,14 @@ const BrowserViewMap: {
 	[id: number]: BrowserView<any>;
 } = {};
 
+type QueuedWebviewMessage = {
+	message: unknown;
+	markSent: () => void;
+};
+
+const HOST_MESSAGE_SEND_BATCH_SIZE = 32;
+const HOST_MESSAGE_SOCKET_AVAILABLE = process.platform !== "win32";
+
 export type BrowserViewOptions<T = undefined> = {
 	url: string | null;
 	html: string | null;
@@ -87,6 +95,8 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	secretKey!: Uint8Array;
 	rpc?: T;
 	rpcHandler?: (msg: unknown) => void;
+	hostMessageSendQueue: QueuedWebviewMessage[] = [];
+	flushingHostMessageSendQueue: boolean = false;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -185,6 +195,18 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		// todo (yoav): make this a shared const with the browser api
 		const wrappedMessage = `window.__electrobun.receiveMessageFromHost(${stringifiedMessage})`;
 		this.executeJavascript(wrappedMessage);
+	}
+
+	private sendHostMessagesToWebviewViaExecute(jsonMessages: string[]) {
+		if (jsonMessages.length === 0) return;
+
+		const wrappedMessages = jsonMessages
+			.map(
+				(message) =>
+					`window.__electrobun.receiveMessageFromHost(${message});`,
+			)
+			.join("\n");
+		this.executeJavascript(wrappedMessages);
 	}
 
 	sendInternalHostMessageViaExecute(jsonMessage: unknown) {
@@ -304,19 +326,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 		return {
 			send(message: any) {
-				if (!that.ptr || that.isRemoved) {
-					return;
-				}
-				const sentOverSocket = sendMessageToWebviewViaSocket(that.id, message);
-
-				if (!sentOverSocket) {
-					try {
-						const messageString = JSON.stringify(message);
-						that.sendHostMessageToWebviewViaExecute(messageString);
-					} catch (error) {
-						console.error("host: failed to serialize message to webview", error);
-					}
-				}
+				return that.queueHostMessageToWebview(message);
 			},
 			registerHandler(handler: (msg: unknown) => void) {
 				if (that.isRemoved) {
@@ -327,11 +337,108 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		};
 	};
 
+	queueHostMessageToWebview(message: unknown): Promise<void> {
+		return new Promise((markSent) => {
+			if (!this.ptr || this.isRemoved) {
+				markSent();
+				return;
+			}
+
+			this.hostMessageSendQueue.push({ message, markSent });
+			this.scheduleHostMessageFlush();
+		});
+	}
+
+	private scheduleHostMessageFlush() {
+		if (this.flushingHostMessageSendQueue) return;
+
+		this.flushingHostMessageSendQueue = true;
+		queueMicrotask(() => void this.flushHostMessageSendQueue());
+	}
+
+	private sendQueuedHostMessageBatch(
+		queuedMessages: QueuedWebviewMessage[],
+	) {
+		if (HOST_MESSAGE_SOCKET_AVAILABLE) {
+			for (const queuedMessage of queuedMessages) {
+				try {
+					if (
+						!sendMessageToWebviewViaSocket(this.id, queuedMessage.message)
+					) {
+						this.sendHostMessageToWebviewViaExecute(queuedMessage.message);
+					}
+				} catch (error) {
+					console.error("host: failed to send message to webview", error);
+				} finally {
+					queuedMessage.markSent();
+				}
+			}
+			return;
+		}
+
+		const fallbackMessages: Array<{
+			message: string;
+			markSent: () => void;
+		}> = [];
+
+		for (const queuedMessage of queuedMessages) {
+			try {
+				fallbackMessages.push({
+					message: JSON.stringify(queuedMessage.message),
+					markSent: queuedMessage.markSent,
+				});
+			} catch (error) {
+				console.error("host: failed to serialize message to webview", error);
+				queuedMessage.markSent();
+			}
+		}
+
+		try {
+			this.sendHostMessagesToWebviewViaExecute(
+				fallbackMessages.map(({ message }) => message),
+			);
+		} catch (error) {
+			console.error("host: failed to send messages to webview", error);
+		} finally {
+			for (const { markSent } of fallbackMessages) markSent();
+		}
+	}
+
+	async flushHostMessageSendQueue() {
+		try {
+			while (this.hostMessageSendQueue.length > 0 && !this.isRemoved) {
+				const batch = this.hostMessageSendQueue.splice(
+					0,
+					HOST_MESSAGE_SEND_BATCH_SIZE,
+				);
+				this.sendQueuedHostMessageBatch(batch);
+
+				if (this.hostMessageSendQueue.length > 0) {
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				}
+			}
+		} finally {
+			this.flushingHostMessageSendQueue = false;
+			if (this.isRemoved) {
+				this.resolveQueuedHostMessages();
+			} else if (this.hostMessageSendQueue.length > 0) {
+				this.scheduleHostMessageFlush();
+			}
+		}
+	}
+
+	private resolveQueuedHostMessages() {
+		while (this.hostMessageSendQueue.length > 0) {
+			this.hostMessageSendQueue.shift()!.markSent();
+		}
+	}
+
 	remove() {
 		if (this.isRemoved) {
 			return;
 		}
 		this.isRemoved = true;
+		this.resolveQueuedHostMessages();
 		// Drop JS-side references first so late callbacks cannot target a stale view.
 		delete BrowserViewMap[this.id];
 		removeSocketForWebview(this.id);

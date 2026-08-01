@@ -18,12 +18,17 @@ const WEBVIEW_ID = window.__electrobunWebviewId;
 const HOST_SOCKET_PORT =
 	window.__electrobunHostSocketPort ?? window.__electrobunRpcSocketPort;
 
+type QueuedHostMessage = {
+	message: string;
+	markSent: () => void;
+};
+
 class Electroview<T extends RPCWithTransport> {
 	hostSocket?: WebSocket;
 	hostSocketCanSend = false;
-	pendingHostSocketMessages: string[] = [];
+	pendingHostSocketMessages: QueuedHostMessage[] = [];
 	flushingHostSocketMessages = false;
-	hostSocketSendQueue: string[] = [];
+	hostSocketSendQueue: QueuedHostMessage[] = [];
 	flushingHostSocketSendQueue = false;
 	// user's custom rpc browser <-> bun
 	rpc?: T;
@@ -119,7 +124,8 @@ class Electroview<T extends RPCWithTransport> {
 
 		socket.addEventListener("close", (_event) => {
 			this.hostSocketCanSend = false;
-			this.pendingHostSocketMessages = [];
+			this.flushHostMessagesViaFallback(this.pendingHostSocketMessages);
+			this.flushHostMessagesViaFallback(this.hostSocketSendQueue);
 			// console.log("Socket closed:", event);
 		});
 	}
@@ -130,7 +136,7 @@ class Electroview<T extends RPCWithTransport> {
 			send(message: unknown) {
 				try {
 					const messageString = JSON.stringify(message);
-					that.sendMessageToHost(messageString);
+					return that.sendMessageToHost(messageString);
 				} catch (error) {
 					console.error("host: failed to serialize message to webview", error);
 				}
@@ -141,20 +147,24 @@ class Electroview<T extends RPCWithTransport> {
 		};
 	}
 
-	async sendMessageToHost(msg: string) {
-		if (this.canSendToHostSocket()) {
-			this.hostSocketSendQueue.push(msg);
-			void this.flushHostSocketSendQueue();
-			return;
-		}
+	sendMessageToHost(msg: string): Promise<void> {
+		return new Promise((markSent) => {
+			const queuedMessage = { message: msg, markSent };
 
-		if (this.hostSocket?.readyState === WebSocket.CONNECTING) {
-			this.pendingHostSocketMessages.push(msg);
-			return;
-		}
+			if (this.canSendToHostSocket()) {
+				this.hostSocketSendQueue.push(queuedMessage);
+				void this.flushHostSocketSendQueue();
+				return;
+			}
 
-		// if socket's are unavailable, fallback to postMessage
-		window.__electrobunHostBridge?.postMessage(msg);
+			if (this.hostSocket?.readyState === WebSocket.CONNECTING) {
+				this.pendingHostSocketMessages.push(queuedMessage);
+				return;
+			}
+
+			// If sockets are unavailable, hand the packet to the native bridge.
+			this.sendMessageToHostViaFallback(queuedMessage);
+		});
 	}
 
 	canSendToHostSocket() {
@@ -174,7 +184,6 @@ class Electroview<T extends RPCWithTransport> {
 				this.hostSocket!.send(msg);
 				return true;
 			}
-			await new Promise((resolve) => setTimeout(resolve, 0));
 			const { encryptedData, iv, tag } =
 				await window.__electrobun_encrypt(msg);
 
@@ -192,6 +201,22 @@ class Electroview<T extends RPCWithTransport> {
 		}
 	}
 
+	sendMessageToHostViaFallback(queuedMessage: QueuedHostMessage) {
+		try {
+			window.__electrobunHostBridge?.postMessage(queuedMessage.message);
+		} catch (error) {
+			console.error("Error sending message to host via native bridge:", error);
+		} finally {
+			queuedMessage.markSent();
+		}
+	}
+
+	flushHostMessagesViaFallback(queue: QueuedHostMessage[]) {
+		while (queue.length > 0) {
+			this.sendMessageToHostViaFallback(queue.shift()!);
+		}
+	}
+
 	async flushHostSocketSendQueue() {
 		if (this.flushingHostSocketSendQueue) {
 			return;
@@ -203,10 +228,12 @@ class Electroview<T extends RPCWithTransport> {
 				this.hostSocketSendQueue.length > 0 &&
 				this.canSendToHostSocket()
 			) {
-				const message = this.hostSocketSendQueue[0]!;
+				const queuedMessage = this.hostSocketSendQueue[0]!;
 				this.hostSocketSendQueue.shift();
-				if (!(await this.sendMessageToHostSocket(message))) {
-					window.__electrobunHostBridge?.postMessage(message);
+				if (!(await this.sendMessageToHostSocket(queuedMessage.message))) {
+					this.sendMessageToHostViaFallback(queuedMessage);
+				} else {
+					queuedMessage.markSent();
 				}
 			}
 		} finally {
@@ -222,8 +249,8 @@ class Electroview<T extends RPCWithTransport> {
 		this.flushingHostSocketMessages = true;
 		try {
 			while (this.pendingHostSocketMessages.length > 0) {
-				const message = this.pendingHostSocketMessages.shift()!;
-				this.hostSocketSendQueue.push(message);
+				const queuedMessage = this.pendingHostSocketMessages.shift()!;
+				this.hostSocketSendQueue.push(queuedMessage);
 			}
 			await this.flushHostSocketSendQueue();
 		} finally {
