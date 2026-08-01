@@ -66,6 +66,7 @@
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
+#include "../shared/console_forwarding.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -2479,10 +2480,14 @@ private:
     HandlePostMessage m_callback;
     uint32_t m_webviewId;
     std::string m_bridgeName;
+    bool m_callbackIsSynchronous;
+    bool m_quiet;
 
 public:
-    BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId) 
-        : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName) {
+    BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId,
+                  bool callbackIsSynchronous = false, bool quiet = false)
+        : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName),
+          m_callbackIsSynchronous(callbackIsSynchronous), m_quiet(quiet) {
         
     }
 
@@ -2529,7 +2534,9 @@ public:
     HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
         if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
             if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
-                printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
+                if (!m_quiet) {
+                    printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
+                }
                 return PostMessage(pDispParams->rgvarg[0].bstrVal);
             }
             printf("[Bridge:%s] Bad param count for webview %u\n", m_bridgeName.c_str(), m_webviewId);
@@ -2561,7 +2568,17 @@ public:
             return E_FAIL;
         }
 
-        
+        if (m_callbackIsSynchronous) {
+            try {
+                m_callback(m_webviewId, message_char);
+            } catch (...) {
+                ::log("ERROR: Exception in bridge callback");
+                delete[] message_char;
+                return E_FAIL;
+            }
+            delete[] message_char;
+            return S_OK;
+        }
 
         // Create a copy for the callback to avoid memory issues
         char* messageCopy = new char[strlen(message_char) + 1];
@@ -2851,6 +2868,7 @@ public:
     ComPtr<BridgeHandler> eventBridgeHandler;  // Event-only bridge (always available)
     ComPtr<BridgeHandler> bunBridgeHandler;
     ComPtr<BridgeHandler> internalBridgeHandler;
+    ComPtr<BridgeHandler> consoleBridgeHandler;
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
     ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
 
@@ -3162,6 +3180,29 @@ public:
     // Set up the JavaScript bridge objects in the WebView2 context using hostObjects
     void setupJavaScriptBridges() {
         if (!webview) return;
+
+        if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+            consoleBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler(
+                "electrobunConsole",
+                printWebviewConsoleMessage,
+                webviewId,
+                true,
+                true));
+            VARIANT consoleBridgeVariant = {};
+            VariantInit(&consoleBridgeVariant);
+            consoleBridgeVariant.vt = VT_DISPATCH;
+            consoleBridgeVariant.pdispVal = static_cast<IDispatch*>(consoleBridgeHandler.Get());
+            HRESULT bridgeResult = webview->AddHostObjectToScript(
+                L"electrobunConsole",
+                &consoleBridgeVariant);
+            VariantClear(&consoleBridgeVariant);
+
+            if (SUCCEEDED(bridgeResult)) {
+                const char* source = webviewConsoleForwardingScript();
+                std::wstring script(source, source + strlen(source));
+                webview->AddScriptToExecuteOnDocumentCreated(script.c_str(), nullptr);
+            }
+        }
 
         // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
         eventBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("eventBridge", eventBridgeCallbackHandler, webviewId));

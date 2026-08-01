@@ -81,6 +81,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
+#include "../shared/console_forwarding.h"
 
 using namespace electrobun;
 
@@ -951,6 +952,10 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
     @property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface ConsoleScriptMessageHandler : NSObject <WKScriptMessageHandler>
     @property (nonatomic, assign) uint32_t webviewId;
 @end
 
@@ -2525,6 +2530,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
     }
 @end
 
+@implementation ConsoleScriptMessageHandler
+    - (void)userContentController:(WKUserContentController *)userContentController
+        didReceiveScriptMessage:(WKScriptMessage *)message {
+        if ([message.body isKindOfClass:[NSString class]]) {
+            printWebviewConsoleMessage(self.webviewId, [(NSString *)message.body UTF8String]);
+        }
+    }
+@end
+
 // ----------------------- WKWebViewImpl -----------------------
 
 
@@ -2614,6 +2628,22 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 objc_setAssociatedObject(self.webView, "UIDelegate", uiDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);                                    
 
                 // postmessage handlers
+
+                if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+                    ConsoleScriptMessageHandler *consoleHandler = [[ConsoleScriptMessageHandler alloc] init];
+                    consoleHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController
+                        addScriptMessageHandler:consoleHandler
+                        name:@"electrobunConsole"];
+                    objc_setAssociatedObject(self.webView, "consoleHandler", consoleHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                    NSString *consoleScriptSource = [NSString stringWithUTF8String:webviewConsoleForwardingScript()];
+                    WKUserScript *consoleScript = [[WKUserScript alloc]
+                        initWithSource:consoleScriptSource
+                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                        forMainFrameOnly:false];
+                    [self.webView.configuration.userContentController addUserScript:consoleScript];
+                }
 
                 // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
                 MyScriptMessageHandler *eventHandler = [[MyScriptMessageHandler alloc] init];

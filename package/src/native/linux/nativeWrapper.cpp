@@ -62,6 +62,7 @@
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
+#include "../shared/console_forwarding.h"
 
 using namespace electrobun;
 
@@ -2724,6 +2725,20 @@ public:
         }
         
         // Add preload scripts
+        if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+            WebKitUserScript* consoleScript = webkit_user_script_new(
+                webviewConsoleForwardingScript(),
+                WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                nullptr,
+                nullptr);
+            webkit_user_content_manager_add_script(manager, consoleScript);
+            webkit_user_script_unref(consoleScript);
+            g_signal_connect(manager, "script-message-received::electrobunConsole",
+                           G_CALLBACK(onConsoleMessage), this);
+            webkit_user_content_manager_register_script_message_handler(manager, "electrobunConsole");
+        }
+
         if (!this->electrobunPreloadScript.empty()) {
             addPreloadScriptToWebView(this->electrobunPreloadScript.c_str());
         }
@@ -3110,6 +3125,17 @@ public:
     }
     
     // Static callback functions
+
+    static void onConsoleMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (!impl || !js_result) return;
+        JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+        if (!value || !JSC_IS_VALUE(value) || !jsc_value_is_string(value)) return;
+        gchar* message = jsc_value_to_string(value);
+        if (!message) return;
+        printWebviewConsoleMessage(impl->webviewId, message);
+        g_free(message);
+    }
 
     // eventBridge handler - event-only bridge for all webviews (including sandboxed)
     static void onEventBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
