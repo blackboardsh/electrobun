@@ -18,6 +18,13 @@ const BrowserViewMap: {
 	[id: number]: BrowserView<any>;
 } = {};
 
+export type BrowserViewFrame = {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+};
+
 export type BrowserViewOptions<T = undefined> = {
 	url: string | null;
 	html: string | null;
@@ -25,12 +32,7 @@ export type BrowserViewOptions<T = undefined> = {
 	viewsRoot: string | null;
 	renderer: "native" | "cef";
 	partition: string | null;
-	frame: {
-		x: number;
-		y: number;
-		width: number;
-		height: number;
-	};
+	frame: BrowserViewFrame;
 	rpc: T;
 	hostWebviewId: number;
 	autoResize: boolean;
@@ -73,12 +75,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	viewsRoot: string | null = null;
 	partition: string | null = null;
 	autoResize: boolean = true;
-	frame: {
-		x: number;
-		y: number;
-		width: number;
-		height: number;
-	} = {
+	frame: BrowserViewFrame = {
 		x: 0,
 		y: 0,
 		width: 800,
@@ -276,6 +273,26 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	 */
 	getPageZoom(): number {
 		return ffi.request.webviewGetPageZoom({ id: this.id }) as number;
+	}
+
+	setFrame(frame: BrowserViewFrame): void {
+		if (this.isRemoved) {
+			return;
+		}
+
+		const { x, y, width, height } = frame;
+		if (![x, y, width, height].every(Number.isFinite)) {
+			throw new TypeError("BrowserView frame values must be finite numbers");
+		}
+		if (width < 0 || height < 0) {
+			throw new RangeError(
+				"BrowserView frame dimensions must be greater than or equal to zero",
+			);
+		}
+
+		const nextFrame = { x, y, width, height };
+		ffi.request.resizeWebview({ id: this.id, frame: nextFrame });
+		this.frame = nextFrame;
 	}
 
 	// todo (yoav): move this to a class that also has off, append, prepend, etc.
