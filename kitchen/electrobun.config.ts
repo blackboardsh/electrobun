@@ -1,12 +1,25 @@
 import type { ElectrobunConfig } from "electrobun";
+import {
+	kitchenVariantKey,
+	readKitchenVariant,
+} from "./scripts/kitchen-matrix-plan";
 
-const mainProcess = "cottontail" as const; // Flip to "zig", "rust", "go", or "cottontail" to exercise main-process backends.
-const bundleCEF = true;
+const matrixVariant = readKitchenVariant(process.env);
+const mainProcess = matrixVariant?.mainProcess ?? "cottontail";
+const defaultRenderer = matrixVariant?.renderer ?? "native";
+const bundleCEF = matrixVariant ? defaultRenderer === "cef" : true;
+const variantKey = matrixVariant ? kitchenVariantKey(matrixVariant) : null;
+const appName = variantKey
+	? `Electrobun Kitchen Sink (${variantKey})`
+	: "Electrobun Kitchen Sink";
+const appIdentifier = variantKey
+	? `sh.blackboard.electrobun-kitchen.${variantKey}`
+	: "sh.blackboard.electrobun-kitchen";
 
 export default {
 	app: {
-		name: "Electrobun Kitchen Sink",
-		identifier: "sh.blackboard.electrobun-kitchen",
+		name: appName,
+		identifier: appIdentifier,
 		version: "1.18.4-beta.12",
 		urlSchemes: ["electrobun-playground"],
 	},
@@ -15,16 +28,24 @@ export default {
 	},
 	build: {
 		mainProcess,
+		buildFolder: variantKey ? `build/matrix/${variantKey}` : "build",
+		artifactFolder: variantKey ? `artifacts/matrix/${variantKey}` : "artifacts",
 		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
 		zig: {
 			entrypoint: "src/zig/main.zig",
+		},
+		bun: {
+			entrypoint: "src/bun/index.ts",
 		},
 		rust: {
 			entrypoint: "src/rust/main.rs",
 		},
 		go: {
 			entrypoint: "src/go/main.go",
+		},
+		odin: {
+			entrypoint: "src/odin/main.odin",
 		},
 		cottontail: {
 			entrypoint: "src/bun/index.ts",
@@ -174,6 +195,7 @@ export default {
 			codesign: true,
 			notarize: true,
 			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			entitlements: {},
 			chromiumFlags: {
@@ -184,6 +206,7 @@ export default {
 		},
 		linux: {
 			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
@@ -194,6 +217,7 @@ export default {
 		},
 		win: {
 			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {

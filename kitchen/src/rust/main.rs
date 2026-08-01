@@ -842,6 +842,7 @@ fn create_ui() {
         "views://test-runner/index.html",
         Rect::new(0.0, 0.0, 1200.0, 800.0),
     );
+    webview_options.renderer = renderer_from_str(&state.default_renderer);
     webview_options.secret_key = DEFAULT_SECRET_KEY;
     webview_options.sandbox = false;
     webview_options.callbacks = WebviewCallbacks {

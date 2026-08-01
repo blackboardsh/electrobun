@@ -1,10 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { assertNoLegacyBunMainProcessConfig } from "./validate";
+import { assertNoLegacyBunVersionConfig } from "./validate";
 
-describe("assertNoLegacyBunMainProcessConfig", () => {
-	it("accepts Cottontail and native main-process configurations", () => {
+describe("assertNoLegacyBunVersionConfig", () => {
+	it("accepts Bun, Cottontail, and native main-process configurations", () => {
 		expect(() =>
-			assertNoLegacyBunMainProcessConfig({
+			assertNoLegacyBunVersionConfig({
 				build: {
 					mainProcess: "cottontail",
 					cottontail: { entrypoint: "src/bun/index.ts" },
@@ -12,20 +12,26 @@ describe("assertNoLegacyBunMainProcessConfig", () => {
 			}),
 		).not.toThrow();
 		expect(() =>
-			assertNoLegacyBunMainProcessConfig({
+			assertNoLegacyBunVersionConfig({
 				build: { mainProcess: "zig" },
+			}),
+		).not.toThrow();
+		expect(() =>
+			assertNoLegacyBunVersionConfig({
+				build: {
+					mainProcess: "bun",
+					bun: { entrypoint: "src/bun/index.ts" },
+				},
 			}),
 		).not.toThrow();
 	});
 
 	it.each([
-		{ mainProcess: "bun" },
-		{ bun: { entrypoint: "src/bun/index.ts" } },
 		{ bunVersion: "1.3.8" },
 		{ bunnyBun: "bunny-bun-test" },
-	])("rejects removed Bun configuration: %p", (build) => {
-		expect(() => assertNoLegacyBunMainProcessConfig({ build })).toThrow(
-			'Use build.mainProcess = "cottontail"',
+	])("rejects unsupported per-project Bun version configuration: %p", (build) => {
+		expect(() => assertNoLegacyBunVersionConfig({ build })).toThrow(
+			"one pinned Bun runtime version",
 		);
 	});
 });

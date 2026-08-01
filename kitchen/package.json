@@ -2,6 +2,8 @@
 	"scripts": {
 		"start": "hutch electrobun run",
 		"dev": "hutch electrobun dev",
+		"matrix": "hutch scripts/kitchen-matrix.ts",
+		"matrix:full": "hutch scripts/kitchen-matrix.ts --full",
 		"check:zig-mirrors": "hutch scripts/check-zig-test-mirrors.ts",
 		"check:odin-mirrors": "hutch scripts/check-odin-test-mirrors.ts",
 		"build:canary": "cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",

@@ -325,6 +325,7 @@ func createUI() {
 	}
 
 	options := electrobun.NewWebviewOptions(windowID, "views://test-runner/index.html", electrobun.NewRect(0, 0, 1200, 800))
+	options.Renderer = rendererFromString(state.defaultRenderer)
 	options.SecretKey = defaultSecretKey
 	options.Sandbox = false
 	options.Callbacks = electrobun.WebviewCallbacks{

@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { createDevCommands, parseDevArgs } from "./dev.ts";
+import { createMatrixDevCommands } from "./dev-matrix.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -72,6 +73,37 @@ assertArray(
 	localCommands[1]?.args ?? [],
 	["electrobun", "dev", "--watch"],
 	"Local launch argv",
+);
+
+const matrixCommands = createMatrixDevCommands({
+	hutchBinary,
+	packageDir,
+	kitchenDir,
+	platform: "win32",
+	comSpec,
+	matrixArgs: ["--full", "--jobs=2"],
+});
+assert(matrixCommands.length === 3, "Matrix dev plan should prepare package and Kitchen");
+assert(matrixCommands[2]?.label === "Run Kitchen interactive matrix", "Matrix label mismatch");
+assertArray(
+	matrixCommands[2]?.args ?? [],
+	["scripts/kitchen-matrix.ts", "--full", "--jobs=2"],
+	"Matrix runner argv",
+);
+
+const localMatrixCommands = createMatrixDevCommands({
+	hutchBinary,
+	packageDir,
+	kitchenDir,
+	platform: "linux",
+	matrixArgs: ["--launch-only"],
+	skipPackageBuild: true,
+});
+assert(localMatrixCommands.length === 2, "Local matrix plan should skip package rebuild");
+assertArray(
+	localMatrixCommands[1]?.args ?? [],
+	["scripts/kitchen-matrix.ts", "--launch-only"],
+	"Local matrix runner argv",
 );
 
 console.log("Electrobun dev command plan passed");

@@ -4317,7 +4317,7 @@ fn createUi(context: *CreateUiContext) void {
 
     const webview_id = context.state.core.createWebview(.{
         .window_id = window_id,
-        .renderer = .native,
+        .renderer = activePlaygroundRenderer(context.state),
         .url = "views://test-runner/index.html",
         .frame = .{
             .x = 0,

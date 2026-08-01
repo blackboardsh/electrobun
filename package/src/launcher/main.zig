@@ -104,6 +104,7 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
 }
 
 const MainProcess = enum {
+    bun,
     cottontail,
     zig,
     rust,
@@ -125,6 +126,9 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     defer parsed.deinit();
 
     if (parsed.value.object.get("mainProcess")) |main_process_value| {
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "bun")) {
+            return .bun;
+        }
         if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "cottontail")) {
             return .cottontail;
         }
@@ -230,14 +234,18 @@ pub fn main() !void {
             const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
             argv = &[_][]const u8{main_binary_path};
         },
-        .cottontail => {
+        .bun, .cottontail => {
             const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-            const cottontail_name = if (builtin.os.tag == .windows) "cottontail.exe" else "cottontail";
-            const cottontail_path = switch (builtin.os.tag) {
-                .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, cottontail_name }),
+            const runtime_name = switch (main_process) {
+                .bun => if (builtin.os.tag == .windows) "bun.exe" else "bun",
+                .cottontail => if (builtin.os.tag == .windows) "cottontail.exe" else "cottontail",
+                else => unreachable,
+            };
+            const runtime_path = switch (builtin.os.tag) {
+                .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, runtime_name }),
                 else => @panic("Unsupported platform"),
             };
-            argv = &[_][]const u8{ cottontail_path, main_script };
+            argv = &[_][]const u8{ runtime_path, main_script };
         },
     }
 

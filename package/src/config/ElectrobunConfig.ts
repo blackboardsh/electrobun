@@ -137,6 +137,7 @@ export interface ElectrobunConfig {
 	build?: {
 		/**
 		 * Main process implementation to build and package.
+		 * - "bun": bundle and run the Bun main process entrypoint
 		 * - "cottontail": bundle and run the Cottontail main process entrypoint
 		 * - "zig": compile and run the Zig main process entrypoint
 		 * - "rust": compile and run the Rust main process entrypoint
@@ -144,7 +145,19 @@ export interface ElectrobunConfig {
 		 * - "odin": compile and run the Odin main process entrypoint
 		 * @default "cottontail"
 		 */
-		mainProcess?: "cottontail" | "zig" | "rust" | "go" | "odin";
+		mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
+
+		/**
+		 * Bun main process build configuration.
+		 * Used when `build.mainProcess` is set to `"bun"`.
+		 */
+		bun?: {
+			/**
+			 * Entry point for the main Bun process
+			 * @default "src/bun/index.ts"
+			 */
+			entrypoint?: string;
+		} & BundlerOptions;
 
 		/**
 		 * Cottontail main process build configuration.

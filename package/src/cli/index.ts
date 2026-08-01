@@ -23,7 +23,7 @@ import { RUST_VERSION } from "../shared/rust-version";
 import { GO_VERSION } from "../shared/go-version";
 import { ODIN_VERSION } from "../shared/odin-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
-import { assertNoLegacyBunMainProcessConfig } from "../config/validate";
+import { assertNoLegacyBunVersionConfig } from "../config/validate";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -4964,7 +4964,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
-		assertNoLegacyBunMainProcessConfig(loadedConfig);
+		assertNoLegacyBunVersionConfig(loadedConfig);
 
 		// todo (yoav): write a deep clone fn
 		return {

@@ -533,8 +533,9 @@ async function submitVerification(action: 'pass' | 'fail' | 'retest') {
 function updateBuildConfigUI(config: {
   defaultRenderer: string;
   availableRenderers: string[];
-  mainProcess?: 'cottontail' | 'zig' | 'rust' | 'go' | 'odin';
+  mainProcess?: 'bun' | 'cottontail' | 'zig' | 'rust' | 'go' | 'odin';
   cefVersion?: string;
+  bunVersion?: string;
   zigVersion?: string;
   rustVersion?: string;
   goVersion?: string;
@@ -571,6 +572,8 @@ function updateBuildConfigUI(config: {
       hostRuntimeVersionEl.textContent = `Rust ${config.rustVersion}`;
     } else if (config.mainProcess === 'go' && config.goVersion) {
       hostRuntimeVersionEl.textContent = `Go ${config.goVersion}`;
+    } else if (config.mainProcess === 'bun' && config.bunVersion) {
+      hostRuntimeVersionEl.textContent = `Bun ${config.bunVersion}`;
     } else if (config.mainProcess === 'cottontail') {
       hostRuntimeVersionEl.textContent = 'Cottontail';
     } else if (config.zigVersion) {

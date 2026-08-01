@@ -34,6 +34,7 @@ import {
 	CHROMIUM_VERSION,
 	DEFAULT_CEF_VERSION_STRING,
 } from "./src/shared/cef-version";
+import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
@@ -66,7 +67,9 @@ const CORE_ONLY_BUILD = args["core-only"] || false;
 const OS: "win" | "linux" | "macos" = getPlatform();
 const ARCH: "arm64" | "x64" = getArch();
 
+const isWindows = platform() === "win32";
 const binExt = OS === "win" ? ".exe" : "";
+const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
@@ -77,6 +80,10 @@ const odinBinary = OS === "win" ? "odin.exe" : "odin";
 
 // PATHS
 const PATH = {
+	bun: {
+		RUNTIME: join(process.cwd(), "vendors", "bun", bunBin),
+		DIST: join(process.cwd(), "dist", bunBin),
+	},
 	zig: {
 		BIN: join(process.cwd(), "vendors", "zig", zigBinary),
 	},
@@ -95,6 +102,7 @@ const PATH = {
 // Minimum expected file sizes for downloaded archives (in bytes)
 // These are sanity checks to detect failed downloads (e.g., HTML error pages)
 const MIN_DOWNLOAD_SIZES: Record<string, number> = {
+	bun: 10 * 1024 * 1024, // Bun zip should be > 10MB
 	"zig-asar": 100 * 1024, // zig-asar tarball should be > 100KB
 	"zig-bsdiff": 100 * 1024, // zig-bsdiff tarball should be > 100KB
 	"zig-zstd": 100 * 1024, // zig-zstd tarball should be > 100KB
@@ -623,6 +631,7 @@ async function setup() {
 		recursive: true,
 		force: true,
 	});
+	await vendorBun();
 	await Promise.all([
 		vendorBsdiff(),
 		vendorZstd(),
@@ -726,6 +735,9 @@ function copyMatchingFiles(
 }
 
 async function copyToDist() {
+	// Bun remains an optional application runtime. Hutch and Electrobun's build
+	// pipeline continue to run through Cottontail.
+	cpSync(PATH.bun.RUNTIME, PATH.bun.DIST, { force: true });
 	// Zig launcher for all platforms
 	cpSync(`src/launcher/zig-out/bin/launcher${binExt}`, `dist/launcher${binExt}`, { force: true });
 	cpSync(`src/extractor/zig-out/bin/extractor${binExt}`, `dist/extractor${binExt}`, { force: true });
@@ -964,6 +976,7 @@ async function copyToDist() {
 function normalizeDistExecutableModes(directory: string) {
 	if (OS === "win") return;
 	for (const filename of [
+		bunBin,
 		"launcher",
 		"extractor",
 		"bsdiff",
@@ -1057,6 +1070,65 @@ async function installPackageDependencies() {
 		return;
 	}
 	await $`npm install`;
+}
+
+async function vendorBun() {
+	const bunDir = join(process.cwd(), "vendors", "bun");
+	const bunVersionFile = join(bunDir, ".bun-version");
+
+	if (existsSync(PATH.bun.RUNTIME)) {
+		if (existsSync(bunVersionFile)) {
+			const vendoredVersion = readFileSync(bunVersionFile, "utf-8").trim();
+			if (vendoredVersion === BUN_VERSION) return;
+			console.log(
+				`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`,
+			);
+			unlinkSync(PATH.bun.RUNTIME);
+		} else {
+			mkdirSync(bunDir, { recursive: true });
+			writeFileSync(bunVersionFile, BUN_VERSION);
+			return;
+		}
+	}
+
+	await pauseForGitHub();
+
+	let assetName: string;
+	let archiveDirectory: string;
+	if (OS === "win") {
+		// Electrobun's Windows target is x64, including on ARM hosts.
+		assetName = "bun-windows-x64-baseline.zip";
+		archiveDirectory = "bun-windows-x64-baseline";
+	} else if (OS === "macos") {
+		assetName = ARCH === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64.zip";
+		archiveDirectory = ARCH === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
+	} else {
+		assetName = ARCH === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
+		archiveDirectory = ARCH === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
+	}
+
+	const tempZipPath = join(bunDir, "temp.zip");
+	mkdirSync(bunDir, { recursive: true });
+	await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${assetName}`;
+	validateDownload(tempZipPath, "bun");
+
+	if (isWindows) {
+		await $`powershell -NoProfile -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${bunDir}' -Force"`;
+	} else {
+		await $`unzip -o ${tempZipPath} -d ${bunDir}`;
+	}
+
+	const extractedBinary = join(
+		bunDir,
+		archiveDirectory,
+		isWindows ? "bun.exe" : "bun",
+	);
+	cpSync(extractedBinary, PATH.bun.RUNTIME, { force: true });
+	if (!isWindows) chmodSync(PATH.bun.RUNTIME, 0o755);
+
+	rmSync(tempZipPath, { force: true });
+	rmSync(join(bunDir, archiveDirectory), { recursive: true, force: true });
+	writeFileSync(bunVersionFile, BUN_VERSION);
 }
 
 function verifyVendoredZig() {

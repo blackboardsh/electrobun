@@ -1,10 +1,11 @@
 import { readFileSync } from "fs";
 
 export type BuildConfigType = {
-	mainProcess?: "cottontail" | "zig" | "rust" | "go" | "odin";
+	mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
 	cefVersion?: string;
+	bunVersion?: string;
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;

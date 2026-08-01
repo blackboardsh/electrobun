@@ -92,7 +92,7 @@ function formatExitStatus(status: number | null) {
 		: String(value);
 }
 
-function runCommand(command: DevCommand) {
+export function runCommand(command: DevCommand) {
 	console.log(`[dev] ${command.label}...`);
 	const result = spawnSync(command.command, command.args, {
 		cwd: command.cwd,

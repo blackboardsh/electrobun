@@ -8,6 +8,7 @@ export default {
 		"build:local": "scripts/build-local.js",
 		"build:release": "hutch build.ts --release",
 		dev: "scripts/dev.ts",
+		"dev:matrix": "scripts/dev-matrix.ts",
 		"dev:test": "scripts/dev.test.ts",
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && hutch dev",
 		"dev:canary": "hutch install && hutch build:release && cd ../kitchen && hutch install && hutch electrobun build --env=canary",

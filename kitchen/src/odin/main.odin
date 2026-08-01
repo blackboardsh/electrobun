@@ -5087,7 +5087,7 @@ createUi :: proc(ui_context: ^CreateUiContext) {
 	}
 
 	webview_options := electrobun.defaultWebviewOptions(window_id)
-	webview_options.renderer = .native
+	webview_options.renderer = activePlaygroundRenderer(state)
 	webview_options.url = "views://test-runner/index.html"
 	webview_options.frame = {0, 0, 1200, 800}
 	webview_options.secret_key = default_secret_key
