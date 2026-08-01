@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -119,6 +120,7 @@ const (
 	kindWindowTrafficLightPositionAPI        testKind = "window_traffic_light_position_api"
 	kindWebviewCreate                        testKind = "webview_create"
 	kindWebviewPageZoom                      testKind = "webview_page_zoom"
+	kindWebviewSpellCheck                    testKind = "webview_spell_check"
 	kindWebviewTagPlaygroundIntegration      testKind = "webview_tag_playground_integration"
 	kindWebviewTagPlaygroundInteractive      testKind = "webview_tag_playground_interactive"
 	kindWgpuTagPlaygroundIntegration         testKind = "wgpu_tag_playground_integration"
@@ -196,6 +198,7 @@ var goTests = []goTest{
 	test("go-window-traffic-light-position-api", "Window traffic light position API (Go)", "BrowserWindow", kindWindowTrafficLightPositionAPI),
 	test("go-webview-create", "BrowserView create (Go)", "BrowserView", kindWebviewCreate),
 	test("go-webview-page-zoom", "BrowserView page zoom API (Go)", "BrowserWindow", kindWebviewPageZoom),
+	test("go-webview-spell-check", "BrowserView spell check capability (Go)", "BrowserWindow", kindWebviewSpellCheck),
 	test("go-webview-tag-playground-integration", "Webview Tag playground integration (Go)", "Webview Tag", kindWebviewTagPlaygroundIntegration),
 	interactiveTest("go-webview-tag-playground", "Webview Tag playground (Go)", "Webview Tag (Interactive)", kindWebviewTagPlaygroundInteractive),
 	test("go-wgpu-tag-playground-integration", "WGPU Tag playground integration (Go)", "WGPU Tag", kindWgpuTagPlaygroundIntegration),
@@ -595,6 +598,8 @@ func runGoTestBody(test goTest) error {
 		return runWindowInactiveShowAPITest()
 	case kindWindowPageZoom, kindWebviewPageZoom:
 		return runWebviewPageZoomTest()
+	case kindWebviewSpellCheck:
+		return runWebviewSpellCheckTest()
 	case kindWindowSetTitle:
 		return runWindowSetTitleTest()
 	case kindWindowMinimizeUnminimize:
@@ -1536,6 +1541,29 @@ func runWebviewPageZoomTest() error {
 	return finishWithWindow(created.windowID, err)
 }
 
+func runWebviewSpellCheckTest() error {
+	created, err := createWindowWithTestHarness("Go Spell Check Test", electrobun.NewRect(100, 100, 640, 420), true, false)
+	if err != nil {
+		return err
+	}
+	err = func() error {
+		expectedSupport := runtime.GOOS == "darwin"
+		disabled, err := state.core.SetWebviewSpellCheck(created.webviewID, false)
+		if err != nil {
+			return err
+		}
+		enabled, err := state.core.SetWebviewSpellCheck(created.webviewID, true)
+		if err != nil {
+			return err
+		}
+		if disabled != expectedSupport || enabled != expectedSupport {
+			return fmt.Errorf("unexpected spell-check support: disabled=%t, enabled=%t", disabled, enabled)
+		}
+		return nil
+	}()
+	return finishWithWindow(created.windowID, err)
+}
+
 func runWebviewTagPlaygroundIntegrationTest() error {
 	created, err := openInteractivePlaygroundWindow("Go Webview Tag Integration", "views://playgrounds/webviewtag/index.html")
 	if err != nil {
@@ -2122,6 +2150,11 @@ func handleInternalBridgeRequest(hostWebviewID uint32, requestID, method, params
 	case "webviewTagCanGoForward":
 		id := uint32(numberField(params, "id"))
 		payloadJSON = fmt.Sprintf("%t", state.core.CanWebviewGoForward(id))
+	case "webviewTagSetSpellCheck":
+		id := uint32(numberField(params, "id"))
+		var supported bool
+		supported, err = state.core.SetWebviewSpellCheck(id, boolField(params, "enabled", false))
+		payloadJSON = fmt.Sprintf("%t", supported)
 	case "wgpuTagInit":
 		var id uint32
 		id, err = createWGPUViewFromInternalBridge(params)
@@ -2234,6 +2267,7 @@ func createChildWebviewFromInternalBridge(hostWebviewID uint32, params string) (
 	options.Sandbox = boolField(params, "sandbox", false)
 	options.StartTransparent = boolField(params, "transparent", false)
 	options.StartPassthrough = boolField(params, "passthrough", false)
+	options.SpellCheck = boolField(params, "spellCheck", false)
 	options.Callbacks = noopWebviewCallbacks()
 	webviewID, err := state.core.CreateWebview(options)
 	if err != nil {

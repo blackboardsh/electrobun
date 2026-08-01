@@ -136,6 +136,9 @@ pub const WebviewOptions = struct {
     sandbox: bool = true,
     start_transparent: bool = false,
     start_passthrough: bool = false,
+    /// Effective only for macOS native WKWebView. Other renderers return false
+    /// from setWebviewSpellCheck and leave their behavior unchanged.
+    spell_check: bool = false,
 };
 
 pub const WGPUViewOptions = struct {
@@ -588,7 +591,7 @@ pub const Core = struct {
     const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
     const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.C) u32;
     const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.C) u32;
-    const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool) callconv(.C) u32;
+    const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool, bool) callconv(.C) u32;
     const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.C) u32;
     const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
     const MinimizeWindowFn = *const fn (u32) callconv(.C) void;
@@ -630,6 +633,7 @@ pub const Core = struct {
     const WebviewSetTransparentFn = *const fn (u32, bool) callconv(.C) void;
     const WebviewSetPassthroughFn = *const fn (u32, bool) callconv(.C) void;
     const WebviewSetHiddenFn = *const fn (u32, bool) callconv(.C) void;
+    const WebviewSetSpellCheckFn = *const fn (u32, bool) callconv(.C) bool;
     const SetWebviewNavigationRulesFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
     const WebviewFindInPageFn = *const fn (u32, [*:0]const u8, bool, bool) callconv(.C) void;
     const WebviewStopFindFn = *const fn (u32) callconv(.C) void;
@@ -747,6 +751,7 @@ pub const Core = struct {
         webview_set_transparent: WebviewSetTransparentFn,
         webview_set_passthrough: WebviewSetPassthroughFn,
         webview_set_hidden: WebviewSetHiddenFn,
+        webview_set_spell_check: WebviewSetSpellCheckFn,
         set_webview_navigation_rules: SetWebviewNavigationRulesFn,
         webview_find_in_page: WebviewFindInPageFn,
         webview_stop_find: WebviewStopFindFn,
@@ -882,6 +887,7 @@ pub const Core = struct {
                 .webview_set_transparent = lib.lookup(WebviewSetTransparentFn, "webviewSetTransparent") orelse return error.MissingCoreSymbol,
                 .webview_set_passthrough = lib.lookup(WebviewSetPassthroughFn, "webviewSetPassthrough") orelse return error.MissingCoreSymbol,
                 .webview_set_hidden = lib.lookup(WebviewSetHiddenFn, "webviewSetHidden") orelse return error.MissingCoreSymbol,
+                .webview_set_spell_check = lib.lookup(WebviewSetSpellCheckFn, "webviewSetSpellCheck") orelse return error.MissingCoreSymbol,
                 .set_webview_navigation_rules = lib.lookup(SetWebviewNavigationRulesFn, "setWebviewNavigationRules") orelse return error.MissingCoreSymbol,
                 .webview_find_in_page = lib.lookup(WebviewFindInPageFn, "webviewFindInPage") orelse return error.MissingCoreSymbol,
                 .webview_stop_find = lib.lookup(WebviewStopFindFn, "webviewStopFind") orelse return error.MissingCoreSymbol,
@@ -1233,6 +1239,7 @@ pub const Core = struct {
             options.sandbox,
             options.start_transparent,
             options.start_passthrough,
+            options.spell_check,
         );
 
         if (webview_id == 0) {
@@ -1334,6 +1341,12 @@ pub const Core = struct {
     pub fn setWebviewHidden(self: *Core, webview_id: u32, hidden: bool) !void {
         self.symbols.webview_set_hidden(webview_id, hidden);
         try self.ensureLastCallSucceeded();
+    }
+
+    pub fn setWebviewSpellCheck(self: *Core, webview_id: u32, enabled: bool) !bool {
+        const supported = self.symbols.webview_set_spell_check(webview_id, enabled);
+        try self.ensureLastCallSucceeded();
+        return supported;
     }
 
     pub fn setWebviewNavigationRules(self: *Core, webview_id: u32, rules_json: []const u8) !void {

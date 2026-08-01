@@ -71,6 +71,7 @@ enum TestKind {
     WindowTrafficLightPositionApi,
     WebviewCreate,
     WebviewPageZoom,
+    WebviewSpellCheck,
     WebviewTagPlaygroundIntegration,
     WebviewTagPlaygroundInteractive,
     WgpuTagPlaygroundIntegration,
@@ -430,6 +431,14 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Set and read BrowserView page zoom in Rust mode.",
         interactive: false,
         kind: TestKind::WebviewPageZoom,
+    },
+    RustTest {
+        id: "rust-webview-spell-check",
+        name: "BrowserView spell check capability (Rust)",
+        category: "BrowserWindow",
+        description: "Report native WKWebView spell-check support through the Rust SDK.",
+        interactive: false,
+        kind: TestKind::WebviewSpellCheck,
     },
     RustTest {
         id: "rust-webview-tag-playground-integration",
@@ -1319,6 +1328,7 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         TestKind::WindowTrafficLightPositionApi => run_window_traffic_light_position_api_test(),
         TestKind::WebviewCreate => run_webview_create_test(),
         TestKind::WebviewPageZoom => run_webview_page_zoom_test(),
+        TestKind::WebviewSpellCheck => run_webview_spell_check_test(),
         TestKind::WebviewTagPlaygroundIntegration => run_webview_tag_playground_integration_test(),
         TestKind::WebviewTagPlaygroundInteractive => run_interactive_playground_test(
             "Webview Tag Playground",
@@ -2298,6 +2308,31 @@ fn run_webview_page_zoom_test() -> Result<(), String> {
     finish_with_window(created.window_id, result)
 }
 
+fn run_webview_spell_check_test() -> Result<(), String> {
+    let created = create_window_with_test_harness(
+        "Rust Spell Check Test",
+        Rect::new(100.0, 100.0, 640.0, 420.0),
+        true,
+        false,
+    )?;
+    let result = (|| {
+        let expected_support = std::env::consts::OS == "macos";
+        let disabled = app_state()
+            .core
+            .set_webview_spell_check(created.webview_id, false)?;
+        let enabled = app_state()
+            .core
+            .set_webview_spell_check(created.webview_id, true)?;
+        if disabled != expected_support || enabled != expected_support {
+            return Err(format!(
+                "unexpected spell-check support: disabled={disabled}, enabled={enabled}"
+            ));
+        }
+        Ok(())
+    })();
+    finish_with_window(created.window_id, result)
+}
+
 fn run_webview_tag_playground_integration_test() -> Result<(), String> {
     let created = open_interactive_playground_window(
         "Rust Webview Tag Integration",
@@ -2910,6 +2945,14 @@ fn handle_internal_bridge_request(
             let id = json_u64_field(params, "id").unwrap_or_default() as u32;
             Ok(app_state().core.can_webview_go_forward(id).to_string())
         }
+        "webviewTagSetSpellCheck" => {
+            let id = json_u64_field(params, "id").unwrap_or_default() as u32;
+            let enabled = electrobun::json_bool_field(params, "enabled").unwrap_or(false);
+            app_state()
+                .core
+                .set_webview_spell_check(id, enabled)
+                .map(|supported| supported.to_string())
+        }
         "wgpuTagInit" => create_wgpu_view_from_internal_bridge(params).map(|id| id.to_string()),
         _ => Err(format!("Unsupported internal bridge request: {method}")),
     };
@@ -3084,6 +3127,7 @@ fn create_child_webview_from_internal_bridge(
     options.sandbox = electrobun::json_bool_field(params, "sandbox").unwrap_or(false);
     options.start_transparent = electrobun::json_bool_field(params, "transparent").unwrap_or(false);
     options.start_passthrough = electrobun::json_bool_field(params, "passthrough").unwrap_or(false);
+    options.spell_check = electrobun::json_bool_field(params, "spellCheck").unwrap_or(false);
     options.callbacks = WebviewCallbacks {
         decide_navigation: Some(electrobun::allow_all_navigation),
         event: Some(electrobun::noop_webview_event),

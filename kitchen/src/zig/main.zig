@@ -75,6 +75,7 @@ const TestKind = enum {
     window_traffic_light_position_api,
     webview_create,
     webview_page_zoom,
+    webview_spell_check,
     webview_tag_playground_integration,
     webview_tag_playground_interactive,
     wgpu_tag_playground_integration,
@@ -378,6 +379,14 @@ const zig_tests = [_]ZigTest{
         .description = "Set and read BrowserView page zoom in Zig mode.",
         .mirrors_bun_test_name = "BrowserView page zoom API",
         .kind = .webview_page_zoom,
+    },
+    .{
+        .id = "zig-webview-spell-check",
+        .name = "BrowserView spell check capability (Zig)",
+        .category = "BrowserWindow",
+        .description = "Report native WKWebView spell-check support through the Zig SDK.",
+        .mirrors_bun_test_name = "BrowserView spell check capability",
+        .kind = .webview_spell_check,
     },
     .{
         .id = "zig-webview-tag-playground-integration",
@@ -1069,6 +1078,7 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .window_traffic_light_position_api => runWindowTrafficLightPositionApiTest(state),
         .webview_create => runWebviewCreateTest(state),
         .webview_page_zoom => runWebviewPageZoomTest(state),
+        .webview_spell_check => runWebviewSpellCheckTest(state),
         .webview_tag_playground_integration => runWebviewTagPlaygroundIntegrationTest(state),
         .webview_tag_playground_interactive => runWebviewTagPlaygroundInteractiveTest(state),
         .wgpu_tag_playground_integration => runWgpuTagPlaygroundIntegrationTest(state),
@@ -1855,6 +1865,7 @@ fn createChildWebviewFromInternalBridge(host_webview_id: u32, params_object: *co
     const sandbox = getJsonBoolField(params_object, "sandbox", false);
     const transparent = getJsonBoolField(params_object, "transparent", false);
     const passthrough = getJsonBoolField(params_object, "passthrough", false);
+    const spell_check = getJsonBoolField(params_object, "spellCheck", false);
 
     const frame_value = getJsonField(params_object, "frame") orelse return error.MissingFrame;
     if (frame_value != .object) {
@@ -1895,6 +1906,7 @@ fn createChildWebviewFromInternalBridge(host_webview_id: u32, params_object: *co
         .sandbox = sandbox,
         .start_transparent = transparent,
         .start_passthrough = passthrough,
+        .spell_check = spell_check,
     });
 
     try rememberChildWebview(webview_id, renderer);
@@ -1958,6 +1970,18 @@ fn handleInternalBridgeRequest(host_webview_id: u32, request_id: []const u8, met
 
     if (std.mem.eql(u8, method, "webviewTagCanGoForward")) {
         sendInternalBridgeResponse(host_webview_id, request_id, true, appState().core.canWebviewGoForward(getJsonU32Field(params_object, "id", 0)));
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "webviewTagSetSpellCheck")) {
+        const supported = appState().core.setWebviewSpellCheck(
+            getJsonU32Field(params_object, "id", 0),
+            getJsonBoolField(params_object, "enabled", false),
+        ) catch |err| {
+            sendInternalBridgeError(host_webview_id, request_id, @errorName(err));
+            return;
+        };
+        sendInternalBridgeResponse(host_webview_id, request_id, true, supported);
         return;
     }
 
@@ -3045,6 +3069,25 @@ fn runWebviewPageZoomTest(state: *AppState) !void {
         }
     } else if (!approxEq(zoom, 1.0, 0.02)) {
         return error.UnexpectedWebviewZoom;
+    }
+}
+
+fn runWebviewSpellCheckTest(state: *AppState) !void {
+    const created = try createWindowWithTestHarness(
+        state,
+        "Spell Check Test",
+        .{ .x = 240, .y = 240, .width = 420, .height = 320 },
+        true,
+        false,
+    );
+    defer state.core.closeWindow(created.window_id) catch {};
+
+    const expected_support = builtin.os.tag == .macos;
+    if (try state.core.setWebviewSpellCheck(created.webview_id, false) != expected_support) {
+        return error.UnexpectedSpellCheckSupport;
+    }
+    if (try state.core.setWebviewSpellCheck(created.webview_id, true) != expected_support) {
+        return error.UnexpectedSpellCheckSupport;
     }
 }
 

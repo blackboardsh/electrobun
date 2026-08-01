@@ -311,6 +311,8 @@ pub struct WebviewOptions<'a> {
     pub sandbox: bool,
     pub start_transparent: bool,
     pub start_passthrough: bool,
+    /// Effective only for macOS native WKWebView. Other renderers report false.
+    pub spell_check: bool,
 }
 
 impl<'a> WebviewOptions<'a> {
@@ -330,6 +332,7 @@ impl<'a> WebviewOptions<'a> {
             sandbox: true,
             start_transparent: false,
             start_passthrough: false,
+            spell_check: false,
         }
     }
 }
@@ -645,6 +648,7 @@ type CreateWebviewFn = unsafe extern "C" fn(
     bool,
     bool,
     bool,
+    bool,
 ) -> u32;
 type CreateWGPUViewFn = unsafe extern "C" fn(u32, f64, f64, f64, f64, bool, bool, bool) -> u32;
 type SetWindowTitleFn = unsafe extern "C" fn(u32, *const c_char);
@@ -686,6 +690,7 @@ type SetWebviewHTMLContentFn = unsafe extern "C" fn(u32, *const c_char);
 type WebviewSetTransparentFn = unsafe extern "C" fn(u32, bool);
 type WebviewSetPassthroughFn = unsafe extern "C" fn(u32, bool);
 type WebviewSetHiddenFn = unsafe extern "C" fn(u32, bool);
+type WebviewSetSpellCheckFn = unsafe extern "C" fn(u32, bool) -> bool;
 type SetWebviewNavigationRulesFn = unsafe extern "C" fn(u32, *const c_char);
 type WebviewFindInPageFn = unsafe extern "C" fn(u32, *const c_char, bool, bool);
 type WebviewStopFindFn = unsafe extern "C" fn(u32);
@@ -820,6 +825,7 @@ struct Symbols {
     webview_set_transparent: WebviewSetTransparentFn,
     webview_set_passthrough: WebviewSetPassthroughFn,
     webview_set_hidden: WebviewSetHiddenFn,
+    webview_set_spell_check: WebviewSetSpellCheckFn,
     set_webview_navigation_rules: SetWebviewNavigationRulesFn,
     webview_find_in_page: WebviewFindInPageFn,
     webview_stop_find: WebviewStopFindFn,
@@ -951,6 +957,7 @@ impl Core {
             webview_set_transparent: lib.symbol("webviewSetTransparent")?,
             webview_set_passthrough: lib.symbol("webviewSetPassthrough")?,
             webview_set_hidden: lib.symbol("webviewSetHidden")?,
+            webview_set_spell_check: lib.symbol("webviewSetSpellCheck")?,
             set_webview_navigation_rules: lib.symbol("setWebviewNavigationRules")?,
             webview_find_in_page: lib.symbol("webviewFindInPage")?,
             webview_stop_find: lib.symbol("webviewStopFind")?,
@@ -1315,6 +1322,7 @@ impl Core {
                 options.sandbox,
                 options.start_transparent,
                 options.start_passthrough,
+                options.spell_check,
             )
         };
 
@@ -1431,6 +1439,12 @@ impl Core {
             (self.symbols.webview_set_hidden)(webview_id, hidden);
         }
         self.ensure_last_call_succeeded()
+    }
+
+    pub fn set_webview_spell_check(&self, webview_id: u32, enabled: bool) -> Result<bool, String> {
+        let supported = unsafe { (self.symbols.webview_set_spell_check)(webview_id, enabled) };
+        self.ensure_last_call_succeeded()?;
+        Ok(supported)
     }
 
     pub fn set_webview_navigation_rules(

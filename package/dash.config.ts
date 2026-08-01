@@ -35,6 +35,8 @@ export default {
 		"test:deployment-target": "node scripts/run-cottontail-test.js scripts/verify-macho-deployment-target.test.ts",
 		"test:npm-bootstrap": "node scripts/run-cottontail-test.js bin/npm-bootstrap-retirement.test.ts",
 		"test:release-notes": "node scripts/release-notes-contract.test.mjs",
+		"test:spell-check": "node --test src/shared/spell-check.test.js",
+		"test:macos-spell-check": "scripts/test-macos-spell-check.sh",
 		"bump-cef": "hutch scripts/update-cef-version.ts",
 	},
 };

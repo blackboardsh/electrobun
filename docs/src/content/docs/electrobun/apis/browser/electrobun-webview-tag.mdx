@@ -119,6 +119,20 @@ webview.removeMaskSelector('.context-menu');
               <p><strong>Type:</strong> `string`<br />
               <strong>Description:</strong> Sets a partition to provide separate storage for different sessions, useful in multi-user applications.</p>
 
+### spellcheck
+              <p><strong>Type:</strong> `boolean` attribute<br />
+              <strong>Description:</strong> Enables macOS system continuous spell checking for editable content when this tag uses the native WKWebView renderer. An absent attribute or `spellcheck="false"` leaves the renderer default unchanged.</p>
+
+```html
+<electrobun-webview
+  renderer="native"
+  spellcheck
+  html="<div contenteditable>Type here</div>"
+></electrobun-webview>
+```
+
+              <p>CEF and non-macOS renderers do not change behavior. See <a href="/electrobun/apis/browser-view#spellcheck">BrowserView spellCheck</a> for the guarded WebKit SPI maintenance caveat.</p>
+
 ### sandbox
               <p><strong>Type:</strong> `boolean`<br />
               <strong>Description:</strong> When set to true, creates the webview in sandbox mode. Sandbox mode disables RPC communication and only allows event emission, making it suitable for loading untrusted third-party content securely.</p>
@@ -226,6 +240,16 @@ webview.removeMaskSelector('.context-menu');
 ### loadURL
               <p><strong>Parameters:</strong> `url: string`<br />
               <strong>Description:</strong> Loads a given URL into the webview, similar to setting the `src` attribute.</p>
+
+### setSpellCheck
+              <p><strong>Parameters:</strong> `enabled: boolean`<br />
+              <strong>Returns:</strong> `Promise&lt;boolean&gt;`<br />
+              <strong>Description:</strong> Enables or disables macOS system spell checking at runtime. Resolves to `true` only for a supported native WKWebView. A `false` result means no renderer state was changed.</p>
+
+```javascript
+const webview = document.querySelector('electrobun-webview');
+const supported = await webview.setSpellCheck(true);
+```
 
 ### setNavigationRules
               <p><strong>Parameters:</strong> `rules: string[]`<br />

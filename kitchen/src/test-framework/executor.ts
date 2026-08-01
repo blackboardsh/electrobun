@@ -123,6 +123,7 @@ export class TestExecutor {
           titleBarStyle: options.titleBarStyle,
           trafficLightOffset: options.trafficLightOffset,
           sandbox: options.sandbox || false,
+          spellCheck: options.spellCheck ?? false,
         });
 
         // Wait a bit for window to be created

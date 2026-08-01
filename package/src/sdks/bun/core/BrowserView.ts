@@ -54,6 +54,9 @@ export type BrowserViewOptions<T = undefined> = {
 	startTransparent: boolean;
 	// Set passthrough on the AbstractView at creation (before first paint)
 	startPassthrough: boolean;
+	// Enables macOS system spell checking for native WKWebView content.
+	// Unsupported renderers/platforms leave their behavior unchanged.
+	spellCheck: boolean;
 	// renderer:
 };
 
@@ -106,6 +109,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	sandbox: boolean = false;
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
+	spellCheck: boolean = false;
 	isRemoved: boolean = false;
 
 	get ptr(): Pointer | null {
@@ -139,6 +143,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.sandbox = options.sandbox ?? false;
 		this.startTransparent = options.startTransparent ?? false;
 		this.startPassthrough = options.startPassthrough ?? false;
+		this.spellCheck = options.spellCheck ?? false;
 
 		this.id = this.init() as number;
 		BrowserViewMap[this.id] = this;
@@ -176,6 +181,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			sandbox: this.sandbox,
 			startTransparent: this.startTransparent,
 			startPassthrough: this.startPassthrough,
+			spellCheck: this.spellCheck,
 			// transparent is looked up from parent window in native.ts
 		});
 	}
@@ -256,6 +262,15 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.navigationRules = JSON.stringify(rules);
 		const rulesJson = JSON.stringify(rules);
 		ffi.request.setWebviewNavigationRules({ id: this.id, rulesJson });
+	}
+
+	/**
+	 * Toggles macOS system spell checking for native WKWebView content.
+	 * Returns false when the current renderer/platform does not support it.
+	 */
+	setSpellCheck(enabled: boolean): boolean {
+		this.spellCheck = enabled;
+		return ffi.request.webviewSetSpellCheck({ id: this.id, enabled });
 	}
 
 	findInPage(
@@ -513,6 +528,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		view.sandbox = options.sandbox ?? false;
 		view.startTransparent = options.startTransparent ?? false;
 		view.startPassthrough = options.startPassthrough ?? false;
+		view.spellCheck = options.spellCheck ?? false;
 		view.isRemoved = false;
 		BrowserViewMap[id] = view as BrowserView<any>;
 		return view;

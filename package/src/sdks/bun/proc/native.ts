@@ -156,6 +156,7 @@ const core = (() => {
 					FFIType.bool,
 					FFIType.bool,
 					FFIType.bool,
+					FFIType.bool,
 				],
 				returns: FFIType.u32,
 			},
@@ -392,6 +393,10 @@ const core = (() => {
 			webviewSetHidden: {
 				args: [FFIType.u32, FFIType.bool],
 				returns: FFIType.void,
+			},
+			webviewSetSpellCheck: {
+				args: [FFIType.u32, FFIType.bool],
+				returns: FFIType.bool,
 			},
 			setWebviewNavigationRules: {
 				args: [FFIType.u32, FFIType.cstring],
@@ -1678,6 +1683,7 @@ const _ffiImpl = {
 			sandbox: boolean;
 			startTransparent: boolean;
 			startPassthrough: boolean;
+			spellCheck: boolean;
 		}): number => {
 			const {
 				windowId,
@@ -1693,6 +1699,7 @@ const _ffiImpl = {
 				sandbox,
 				startTransparent,
 				startPassthrough,
+				spellCheck,
 			} = params;
 			ensureWebviewRuntimeConfigured();
 
@@ -1718,6 +1725,7 @@ const _ffiImpl = {
 				sandbox, // When true, hostBridge and internalBridge are not set up in native code
 				startTransparent,
 				startPassthrough,
+				spellCheck,
 			);
 
 			if (!webviewId) {
@@ -1785,6 +1793,9 @@ const _ffiImpl = {
 		},
 		webviewSetHidden: (params: { id: number; hidden: boolean }) => {
 			core_.symbols.webviewSetHidden(params.id, params.hidden);
+		},
+		webviewSetSpellCheck: (params: { id: number; enabled: boolean }) => {
+			return core_.symbols.webviewSetSpellCheck(params.id, params.enabled);
 		},
 		setWebviewNavigationRules: (params: { id: number; rulesJson: string }) => {
 			core_.symbols.setWebviewNavigationRules(params.id, toCString(params.rulesJson));
@@ -3172,6 +3183,7 @@ type WebviewTagInitParams = {
 	sandbox: boolean;
 	transparent: boolean;
 	passthrough: boolean;
+	spellCheck: boolean;
 };
 
 type WgpuTagInitParams = {
@@ -3197,6 +3209,7 @@ export const internalRpcHandlers = {
 				sandbox,
 				transparent,
 				passthrough,
+				spellCheck,
 			} = params;
 
 			const url = !params.url && !html ? "https://electrobun.dev" : params.url;
@@ -3215,6 +3228,7 @@ export const internalRpcHandlers = {
 				sandbox,
 				startTransparent: transparent,
 				startPassthrough: passthrough,
+				spellCheck,
 			});
 
 			// Emit synchronously before resolving the preload request so callers can
@@ -3246,6 +3260,9 @@ export const internalRpcHandlers = {
 		},
 		webviewTagCanGoForward: (params: { id: number }) => {
 			return core_.symbols.webviewCanGoForward(params.id);
+		},
+		webviewTagSetSpellCheck: (params: { id: number; enabled: boolean }) => {
+			return core_.symbols.webviewSetSpellCheck(params.id, params.enabled);
 		},
 	},
 	message: {

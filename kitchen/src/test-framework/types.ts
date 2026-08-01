@@ -62,6 +62,7 @@ export interface WindowOptions {
   hidden?: boolean;
   activate?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
+  spellCheck?: boolean;
 }
 
 export interface TestWindow {

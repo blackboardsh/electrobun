@@ -93,6 +93,7 @@ TestKind :: enum {
 	window_traffic_light_position_api,
 	webview_create,
 	webview_page_zoom,
+	webview_spell_check,
 	webview_tag_playground_integration,
 	webview_tag_playground_interactive,
 	wgpu_tag_playground_integration,
@@ -396,6 +397,14 @@ odin_tests := [?]OdinTest {
 		description = "Set and read BrowserView page zoom in Odin mode.",
 		mirrors_bun_test_name = "BrowserView page zoom API",
 		kind = .webview_page_zoom,
+	},
+	{
+		id = "odin-webview-spell-check",
+		name = "BrowserView spell check capability (Odin)",
+		category = "BrowserWindow",
+		description = "Report native WKWebView spell-check support through the Odin SDK.",
+		mirrors_bun_test_name = "BrowserView spell check capability",
+		kind = .webview_spell_check,
 	},
 	{
 		id = "odin-webview-tag-playground-integration",
@@ -2034,6 +2043,7 @@ createChildWebviewFromInternalBridge :: proc(host_webview_id: u32, params_obj: j
 	sandbox := getJsonBoolField(params_obj, "sandbox", false)
 	transparent := getJsonBoolField(params_obj, "transparent", false)
 	passthrough := getJsonBoolField(params_obj, "passthrough", false)
+	spell_check := getJsonBoolField(params_obj, "spellCheck", false)
 
 	frame_value, has_frame := params_obj["frame"]
 	if !has_frame {
@@ -2073,6 +2083,7 @@ createChildWebviewFromInternalBridge :: proc(host_webview_id: u32, params_obj: j
 	options.sandbox = sandbox
 	options.start_transparent = transparent
 	options.start_passthrough = passthrough
+	options.spell_check = spell_check
 
 	webview_id, create_err := electrobun.createWebview(appState().core, options)
 	if create_err != .None {
@@ -2158,6 +2169,20 @@ handleInternalBridgeRequest :: proc(host_webview_id: u32, request_id: string, me
 			true,
 			electrobun.canWebviewGoForward(appState().core, getJsonU32Field(params_obj, "id", 0)),
 		)
+		return
+	}
+
+	if method == "webviewTagSetSpellCheck" {
+		supported, err := electrobun.setWebviewSpellCheck(
+			appState().core,
+			getJsonU32Field(params_obj, "id", 0),
+			getJsonBoolField(params_obj, "enabled", false),
+		)
+		if err != .None {
+			sendInternalBridgeError(host_webview_id, request_id, errName(err))
+			return
+		}
+		sendInternalBridgeResponse(host_webview_id, request_id, true, supported)
 		return
 	}
 
@@ -3521,6 +3546,34 @@ runWebviewPageZoomTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
+runWebviewSpellCheckTest :: proc(state: ^AppState) -> string {
+	created, create_err := createWindowWithTestHarness(
+		state,
+		"Spell Check Test",
+		{240, 240, 420, 320},
+		true,
+		false,
+	)
+	if create_err != "" {
+		return create_err
+	}
+	defer electrobun.closeWindow(state.core, created.window_id)
+
+	expected_support := ODIN_OS == .Darwin
+	disabled, disable_err := electrobun.setWebviewSpellCheck(state.core, created.webview_id, false)
+	if disable_err != .None {
+		return errName(disable_err)
+	}
+	enabled, enable_err := electrobun.setWebviewSpellCheck(state.core, created.webview_id, true)
+	if enable_err != .None {
+		return errName(enable_err)
+	}
+	if disabled != expected_support || enabled != expected_support {
+		return "UnexpectedSpellCheckSupport"
+	}
+	return ""
+}
+
 runWebviewTagPlaygroundIntegrationTest :: proc(state: ^AppState) -> string {
 	clearChildWebviews()
 	resetCallbackState()
@@ -4661,6 +4714,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runWebviewCreateTest(state)
 	case .webview_page_zoom:
 		error_name = runWebviewPageZoomTest(state)
+	case .webview_spell_check:
+		error_name = runWebviewSpellCheckTest(state)
 	case .webview_tag_playground_integration:
 		error_name = runWebviewTagPlaygroundIntegrationTest(state)
 	case .webview_tag_playground_interactive:

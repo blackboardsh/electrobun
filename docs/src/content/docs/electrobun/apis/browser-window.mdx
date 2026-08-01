@@ -259,6 +259,19 @@ externalBrowser.webview.on("will-navigate", (event) => {
 ```
 
 
+### spellCheck
+  <p>Set `spellCheck: true` to enable macOS system continuous spell checking in the window's default native WKWebView. Omitting it or setting it to `false` leaves the renderer default unchanged. CEF and non-macOS renderers do not change behavior.</p>
+
+```typescript
+const win = new BrowserWindow({
+  html: "<div contenteditable>Type here</div>",
+  renderer: "native",
+  spellCheck: true,
+});
+```
+
+  <p>See <a href="/electrobun/apis/browser-view#spellcheck">BrowserView spellCheck</a> for platform support and the guarded WebKit SPI maintenance caveat.</p>
+
   <p><strong>Info:</strong> The following options are used to instantiate the default BrowserView.</p>
 
 ### url
@@ -754,6 +767,14 @@ win.setPageZoom(1.0);
   <Aside type="tip">
     <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
   </Aside>
+
+### setSpellCheck
+  <p>Enable or disable system spell checking in the default BrowserView. Returns `true` only for a supported macOS native WKWebView; `false` means no renderer state was changed.</p>
+
+```typescript
+const supported = win.setSpellCheck(true);
+win.setSpellCheck(false);
+```
 
 ### on(name, handler)
   <p>Subscribe to BrowserWindow events (see below).</p>

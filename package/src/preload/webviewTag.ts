@@ -30,6 +30,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	private _sync: OverlaySyncController | null = null;
 	transparent = false;
 	passthroughEnabled = false;
+	spellCheckEnabled = false;
 	hidden = false;
 	// Sandbox mode: when true, disables RPC and only allows event emission in the child webview
 	sandboxed = false;
@@ -37,7 +38,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		{};
 
 	static get observedAttributes() {
-		return ["src", "html"];
+		return ["src", "html", "spellcheck"];
 	}
 
 	constructor() {
@@ -54,10 +55,14 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		newValue: string | null,
 	) {
 		if (oldValue === newValue) return;
-		if (newValue === null) return;
 		if (this.webviewId === null) return;
-		if (name === "src") this.loadURL(newValue);
-		else if (name === "html") this.loadHTML(newValue);
+		if (name === "src" && newValue !== null) this.loadURL(newValue);
+		else if (name === "html" && newValue !== null) this.loadHTML(newValue);
+		else if (name === "spellcheck") {
+			void this.setSpellCheck(
+				newValue !== null && newValue.toLowerCase() !== "false",
+			);
+		}
 	}
 
 	disconnectedCallback() {
@@ -115,8 +120,13 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		// Read transparent/passthrough attributes for initial state (avoids flash)
 		const transparent = this.hasAttribute("transparent");
 		const passthrough = this.hasAttribute("passthrough");
+		const spellCheckAttribute = this.getAttribute("spellcheck");
+		const spellCheck =
+			spellCheckAttribute !== null &&
+			spellCheckAttribute.toLowerCase() !== "false";
 		this.transparent = transparent;
 		this.passthroughEnabled = passthrough;
+		this.spellCheckEnabled = spellCheck;
 		if (transparent) this.style.opacity = "0";
 		if (passthrough) this.style.pointerEvents = "none";
 
@@ -142,6 +152,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 				sandbox,
 				transparent,
 				passthrough,
+				spellCheck,
 				...(navigationRules === null ? {} : { navigationRules }),
 			};
 
@@ -258,6 +269,16 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		if (this.webviewId === null) return false;
 		return (await request("webviewTagCanGoForward", {
 			id: this.webviewId,
+		})) as boolean;
+	}
+
+	/** Returns false when system spell checking is unsupported by the renderer. */
+	async setSpellCheck(enabled: boolean): Promise<boolean> {
+		this.spellCheckEnabled = enabled;
+		if (this.webviewId === null) return false;
+		return (await request("webviewTagSetSpellCheck", {
+			id: this.webviewId,
+			enabled,
 		})) as boolean;
 	}
 

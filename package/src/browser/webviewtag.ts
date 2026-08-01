@@ -23,6 +23,7 @@ interface WebviewTagElement extends HTMLElement {
 	maskSelectors: Set<string>;
 	transparent: boolean;
 	passthroughEnabled: boolean;
+	spellCheckEnabled: boolean;
 	hidden: boolean;
 	hiddenMirrorMode: boolean;
 	partition: string | null;
@@ -45,6 +46,7 @@ interface WebviewTagElement extends HTMLElement {
 	reload(): void;
 	loadURL(url: string): void;
 	loadHTML(html: string): void;
+	setSpellCheck(enabled: boolean): Promise<boolean>;
 
 	// Visibility and interaction
 	toggleTransparent(transparent?: boolean, bypassState?: boolean): void;

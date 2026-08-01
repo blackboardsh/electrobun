@@ -77,6 +77,15 @@ jobs:
         run: hutch test:macos-inspector-layout
         working-directory: package
 
+      - name: Test spell-check ownership contract
+        run: hutch test:spell-check
+        working-directory: package
+
+      - name: Exercise macOS WKWebView spell checking
+        if: matrix.platform == 'darwin'
+        run: hutch test:macos-spell-check
+        working-directory: package
+
       - name: Setup MSVC Developer Command Prompt
         if: matrix.platform == 'win32'
         uses: ilammy/msvc-dev-cmd@v1

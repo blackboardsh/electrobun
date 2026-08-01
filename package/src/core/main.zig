@@ -1665,6 +1665,7 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
     const sandbox = jsonBool(params_object.get("sandbox") orelse .{ .bool = false }) orelse false;
     const transparent = jsonBool(params_object.get("transparent") orelse .{ .bool = false }) orelse false;
     const passthrough = jsonBool(params_object.get("passthrough") orelse .{ .bool = false }) orelse false;
+    const spell_check = jsonBool(params_object.get("spellCheck") orelse .{ .bool = false }) orelse false;
     const url_value = params_object.get("url");
     const html_value = params_object.get("html");
     const preload_value = params_object.get("preload");
@@ -1727,6 +1728,7 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
         sandbox,
         transparent,
         passthrough,
+        spell_check,
     );
 
     if (webview_id == 0) {
@@ -1813,6 +1815,19 @@ fn handleInternalRequest(request_object: std.json.ObjectMap) void {
         if (params != .object) return;
         const webview_id = jsonU32(params.object.get("id") orelse return) orelse return;
         sendInternalBridgeResponse(host_webview_id, request_id, true, webviewCanGoForward(webview_id));
+        return;
+    }
+
+    if (std.mem.eql(u8, method, "webviewTagSetSpellCheck")) {
+        if (params != .object) return;
+        const webview_id = jsonU32(params.object.get("id") orelse return) orelse return;
+        const enabled = jsonBool(params.object.get("enabled") orelse return) orelse return;
+        sendInternalBridgeResponse(
+            host_webview_id,
+            request_id,
+            true,
+            webviewSetSpellCheck(webview_id, enabled),
+        );
         return;
     }
 
@@ -2605,6 +2620,7 @@ export fn createWebview(
     sandbox: bool,
     start_transparent: bool,
     start_passthrough: bool,
+    spell_check: bool,
 ) u32 {
     clearLastError();
     _ = _host_bridge_handler;
@@ -2742,6 +2758,12 @@ export fn createWebview(
     };
     state.ptr = webview_ptr;
     webview_registry_mutex.unlock();
+
+    // `false` preserves the renderer/platform default. An explicit runtime
+    // setter can still be used to disable spell checking after enabling it.
+    if (spell_check) {
+        _ = webviewSetSpellCheck(webview_id, true);
+    }
 
     return webview_id;
 }
@@ -2888,6 +2910,17 @@ export fn webviewSetHidden(webview_id: u32, hidden: bool) void {
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_set_hidden = lookupNativeSymbol(WebviewSetHiddenFn, "webviewSetHidden") orelse return;
     webview_set_hidden(webview, hidden);
+}
+
+export fn webviewSetSpellCheck(webview_id: u32, enabled: bool) bool {
+    clearLastError();
+    const WebviewSetSpellCheckFn = *const fn (WebviewPtr, bool) callconv(.C) bool;
+    const webview = requireWebviewPtr(webview_id) orelse return false;
+    const webview_set_spell_check = lookupNativeSymbol(
+        WebviewSetSpellCheckFn,
+        "webviewSetSpellCheck",
+    ) orelse return false;
+    return webview_set_spell_check(webview, enabled);
 }
 
 export fn setWebviewNavigationRules(webview_id: u32, rules_json: [*:0]const u8) void {

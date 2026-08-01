@@ -33,6 +33,7 @@ static bool wgpuDebugEnabled() {
 #include <mutex>
 #include "inspector_layout.h"
 #include "../shared/pending_resize_queue.h"
+#include "spell_check.h"
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -828,6 +829,8 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, assign) BOOL pendingStartTransparent;
     @property (nonatomic, assign) BOOL pendingStartPassthrough;
+    @property (nonatomic, assign) BOOL pendingSpellCheckConfigured;
+    @property (nonatomic, assign) BOOL pendingSpellCheckEnabled;
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
     @property (atomic, assign) uint32_t resizeGeneration;
@@ -844,6 +847,7 @@ void releaseObjCObject(id objcObject) {
     - (void)setHidden:(BOOL)hidden;
     - (void)toggleMirrorMode:(BOOL)enable;
     - (BOOL)shouldSuppressMirrorMode;
+    - (BOOL)setSpellCheck:(BOOL)enabled;
 
     - (BOOL)canGoBack;
     - (BOOL)canGoForward;
@@ -927,6 +931,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) uint32_t webviewId;
     @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSString *> *downloadPaths;
     @property (nonatomic, strong) NSMutableSet<WKDownload *> *observedDownloads;
+    @property (nonatomic, assign) BOOL spellCheckConfigured;
+    @property (nonatomic, assign) BOOL spellCheckEnabled;
+    @property (nonatomic, assign) BOOL hasFinishedNavigation;
 @end
 
 @interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
@@ -1289,6 +1296,11 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
     }
 
     - (BOOL)shouldSuppressMirrorMode {
+        return NO;
+    }
+
+    - (BOOL)setSpellCheck:(BOOL)enabled {
+        (void)enabled;
         return NO;
     }
 
@@ -2156,6 +2168,11 @@ static void schedulePendingResizeDrain() {
     }
 
     - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+        self.hasFinishedNavigation = YES;
+        if (self.spellCheckConfigured) {
+            electrobun::setContinuousSpellChecking(webView, self.spellCheckEnabled);
+        }
+
         NSString *urlString = webView.URL.absoluteString ?: @"";
         if (urlString.length > 0) {
             self.zigEventHandler(self.webviewId, strdup("did-navigate"), strdup(urlString.UTF8String));
@@ -2620,6 +2637,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 navigationDelegate.zigCallback = navigationCallback;                
                 navigationDelegate.zigEventHandler = webviewEventHandler;
                 navigationDelegate.webviewId = webviewId;
+                navigationDelegate.spellCheckConfigured = self.pendingSpellCheckConfigured;
+                navigationDelegate.spellCheckEnabled = self.pendingSpellCheckEnabled;
                 self.webView.navigationDelegate = navigationDelegate;
                 objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -2747,6 +2766,29 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         }
         
         return self;
+    }
+
+    - (BOOL)setSpellCheck:(BOOL)enabled {
+        self.pendingSpellCheckConfigured = YES;
+        self.pendingSpellCheckEnabled = enabled;
+
+        SEL selector = electrobun::continuousSpellCheckingSelector();
+        if (![WKWebView instancesRespondToSelector:selector]) {
+            return NO;
+        }
+
+        if (!self.webView) {
+            return YES;
+        }
+
+        MyNavigationDelegate *navigationDelegate =
+            (MyNavigationDelegate *)objc_getAssociatedObject(self.webView, "NavigationDelegate");
+        navigationDelegate.spellCheckConfigured = YES;
+        navigationDelegate.spellCheckEnabled = enabled;
+        if (navigationDelegate.hasFinishedNavigation) {
+            return electrobun::setContinuousSpellChecking(self.webView, enabled);
+        }
+        return YES;
     }
 
     - (void)loadURL:(const char *)urlString {
@@ -7455,6 +7497,15 @@ extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePas
 extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
     runOnMainThreadAsyncVoid(^{
         [abstractView setHidden:hidden];
+    });
+}
+
+extern "C" bool webviewSetSpellCheck(AbstractView *abstractView, bool enabled) {
+    if (!abstractView) {
+        return false;
+    }
+    return runOnMainThreadSyncBool(^bool {
+        return [abstractView setSpellCheck:enabled ? YES : NO] == YES;
     });
 }
 

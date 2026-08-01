@@ -196,6 +196,8 @@ WebviewOptions :: struct {
 	sandbox:           bool,
 	start_transparent: bool,
 	start_passthrough: bool,
+	// Effective only for macOS native WKWebView. Other renderers report false.
+	spell_check:       bool,
 }
 
 // Mirrors the zig SDK's WebviewOptions default field values.
@@ -705,12 +707,13 @@ RunMainThreadFn :: proc "c" (cstring, cstring, cstring, c.int) -> c.int
 ConfigureWebviewRuntimeFn :: proc "c" (u32, cstring, cstring) -> bool
 GetWindowStyleFn :: proc "c" (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) -> u32
 CreateWindowFn :: proc "c" (f64, f64, f64, f64, u32, cstring, bool, cstring, bool, bool, bool, f64, f64, WindowCloseHandler, WindowMoveHandler, WindowResizeHandler, WindowFocusHandler, WindowBlurHandler, WindowKeyHandler, WindowShouldCloseHandler) -> u32
-CreateWebviewFn :: proc "c" (u32, u32, cstring, cstring, f64, f64, f64, f64, bool, cstring, DecideNavigationHandler, WebviewEventHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, cstring, cstring, cstring, bool, bool, bool) -> u32
+CreateWebviewFn :: proc "c" (u32, u32, cstring, cstring, f64, f64, f64, f64, bool, cstring, DecideNavigationHandler, WebviewEventHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, cstring, cstring, cstring, bool, bool, bool, bool) -> u32
 CreateWGPUViewFn :: proc "c" (u32, f64, f64, f64, f64, bool, bool, bool) -> u32
 SetWindowTitleFn :: proc "c" (u32, cstring)
 WindowIdFn :: proc "c" (u32)
 WindowIdBoolFn :: proc "c" (u32) -> bool
 SetWindowBoolFn :: proc "c" (u32, bool)
+SetWebviewSpellCheckFn :: proc "c" (u32, bool) -> bool
 SetWindowXYFn :: proc "c" (u32, f64, f64)
 GetWindowPointFn :: proc "c" (u32, ^f64, ^f64)
 SetWindowFrameFn :: proc "c" (u32, f64, f64, f64, f64)
@@ -799,6 +802,7 @@ Symbols :: struct {
 	webviewSetTransparent:                  SetWindowBoolFn,
 	webviewSetPassthrough:                  SetWindowBoolFn,
 	webviewSetHidden:                       SetWindowBoolFn,
+	webviewSetSpellCheck:                   SetWebviewSpellCheckFn,
 	setWebviewNavigationRules:              IdCstringFn,
 	webviewFindInPage:                      WebviewFindInPageFn,
 	webviewStopFind:                        WindowIdFn,
@@ -1171,6 +1175,7 @@ createWebview :: proc(self: ^Core, options: WebviewOptions) -> (webview_id: u32,
 		options.sandbox,
 		options.start_transparent,
 		options.start_passthrough,
+		options.spell_check,
 	)
 
 	if webview_id == 0 {
@@ -1263,6 +1268,14 @@ setWebviewPassthrough :: proc(self: ^Core, webview_id: u32, passthrough: bool) -
 setWebviewHidden :: proc(self: ^Core, webview_id: u32, hidden: bool) -> Error {
 	self.symbols.webviewSetHidden(webview_id, hidden)
 	return ensure_last_call_succeeded(self)
+}
+
+setWebviewSpellCheck :: proc(self: ^Core, webview_id: u32, enabled: bool) -> (supported: bool, err: Error) {
+	supported = self.symbols.webviewSetSpellCheck(webview_id, enabled)
+	if call_err := ensure_last_call_succeeded(self); call_err != .None {
+		return false, call_err
+	}
+	return supported, .None
 }
 
 setWebviewNavigationRules :: proc(self: ^Core, webview_id: u32, rules_json: string) -> Error {

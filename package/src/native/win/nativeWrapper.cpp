@@ -9414,6 +9414,13 @@ ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden)
     }
 }
 
+ELECTROBUN_EXPORT bool webviewSetSpellCheck(AbstractView* abstractView, bool enabled) {
+    (void)abstractView;
+    (void)enabled;
+    // This option intentionally targets macOS WKWebView, not WebView2 or CEF.
+    return false;
+}
+
 ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
     if (abstractView) {
         // UI operations must be performed on the main thread

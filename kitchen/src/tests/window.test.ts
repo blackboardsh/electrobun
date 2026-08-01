@@ -216,6 +216,29 @@ export const windowTests = [
   }),
 
   defineTest({
+    name: "BrowserView spell check capability",
+    category: "BrowserWindow",
+    description: "Test initial and runtime macOS WKWebView spell checking support",
+    async run({ createWindow, log }) {
+      const win = await createWindow({
+        html: "<!doctype html><div contenteditable>mispellled wurd</div>",
+        title: "Spell Check Test",
+        width: 420,
+        height: 320,
+        renderer: "native",
+        hidden: true,
+        spellCheck: true,
+      });
+
+      const expectedSupport = process.platform === "darwin";
+      expect(win.window.spellCheck).toBe(true);
+      expect(win.window.setSpellCheck(false)).toBe(expectedSupport);
+      expect(win.webview.setSpellCheck(true)).toBe(expectedSupport);
+      log(`Native spell-check support: ${expectedSupport}`);
+    },
+  }),
+
+  defineTest({
     name: "Window setTitle",
     category: "BrowserWindow",
     description: "Test setting window title",

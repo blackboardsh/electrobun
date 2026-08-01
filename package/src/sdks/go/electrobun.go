@@ -103,9 +103,9 @@ static uint32_t eb_call_create_window(void* fn, double x, double y, double width
 	return ((eb_create_window_fn)fn)(x, y, width, height, style, title_bar_style, transparent, title, hidden, activate, centered, traffic_x, traffic_y, close_enabled ? eb_window_close : 0, move_enabled ? eb_window_move : 0, resize_enabled ? eb_window_resize : 0, focus_enabled ? eb_window_focus : 0, blur_enabled ? eb_window_blur : 0, key_enabled ? eb_window_key : 0, should_close_enabled ? eb_window_should_close : 0);
 }
 
-typedef uint32_t (*eb_create_webview_fn)(uint32_t, uint32_t, const char*, const char*, double, double, double, double, bool, const char*, eb_decide_navigation_cb, eb_webview_event_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, const char*, const char*, const char*, bool, bool, bool);
-static uint32_t eb_call_create_webview(void* fn, uint32_t window_id, uint32_t host_webview_id, const char* renderer, const char* url, double x, double y, double width, double height, bool auto_resize, const char* partition, bool decide_enabled, bool event_enabled, bool event_bridge_enabled, bool host_bridge_enabled, bool internal_bridge_enabled, const char* secret_key, const char* preload, const char* views_root, bool sandbox, bool start_transparent, bool start_passthrough) {
-	return ((eb_create_webview_fn)fn)(window_id, host_webview_id, renderer, url, x, y, width, height, auto_resize, partition, decide_enabled ? eb_decide_navigation : 0, event_enabled ? eb_webview_event : 0, event_bridge_enabled ? eb_webview_event_bridge : 0, host_bridge_enabled ? eb_webview_host_bridge : 0, internal_bridge_enabled ? eb_webview_internal_bridge : 0, secret_key, preload, views_root, sandbox, start_transparent, start_passthrough);
+typedef uint32_t (*eb_create_webview_fn)(uint32_t, uint32_t, const char*, const char*, double, double, double, double, bool, const char*, eb_decide_navigation_cb, eb_webview_event_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, const char*, const char*, const char*, bool, bool, bool, bool);
+static uint32_t eb_call_create_webview(void* fn, uint32_t window_id, uint32_t host_webview_id, const char* renderer, const char* url, double x, double y, double width, double height, bool auto_resize, const char* partition, bool decide_enabled, bool event_enabled, bool event_bridge_enabled, bool host_bridge_enabled, bool internal_bridge_enabled, const char* secret_key, const char* preload, const char* views_root, bool sandbox, bool start_transparent, bool start_passthrough, bool spell_check) {
+	return ((eb_create_webview_fn)fn)(window_id, host_webview_id, renderer, url, x, y, width, height, auto_resize, partition, decide_enabled ? eb_decide_navigation : 0, event_enabled ? eb_webview_event : 0, event_bridge_enabled ? eb_webview_event_bridge : 0, host_bridge_enabled ? eb_webview_host_bridge : 0, internal_bridge_enabled ? eb_webview_internal_bridge : 0, secret_key, preload, views_root, sandbox, start_transparent, start_passthrough, spell_check);
 }
 
 typedef uint32_t (*eb_create_wgpu_view_fn)(uint32_t, double, double, double, double, bool, bool, bool);
@@ -121,6 +121,9 @@ static bool eb_call_u32_bool_ret(void* fn, uint32_t value) { return ((eb_u32_boo
 
 typedef void (*eb_u32_bool_fn)(uint32_t, bool);
 static void eb_call_u32_bool(void* fn, uint32_t value, bool flag) { ((eb_u32_bool_fn)fn)(value, flag); }
+
+typedef bool (*eb_u32_bool_bool_ret_fn)(uint32_t, bool);
+static bool eb_call_u32_bool_bool_ret(void* fn, uint32_t value, bool flag) { return ((eb_u32_bool_bool_ret_fn)fn)(value, flag); }
 
 typedef void (*eb_bool_fn)(bool);
 static void eb_call_bool(void* fn, bool flag) { ((eb_bool_fn)fn)(flag); }
@@ -388,7 +391,9 @@ type WebviewOptions struct {
 	Sandbox          bool
 	StartTransparent bool
 	StartPassthrough bool
-	Callbacks        WebviewCallbacks
+	// Effective only for macOS native WKWebView. Other renderers report false.
+	SpellCheck bool
+	Callbacks  WebviewCallbacks
 }
 
 func NewWebviewOptions(windowID uint32, url string, frame Rect) WebviewOptions {
@@ -666,6 +671,7 @@ var requiredSymbols = []string{
 	"webviewSetTransparent",
 	"webviewSetPassthrough",
 	"webviewSetHidden",
+	"webviewSetSpellCheck",
 	"setWebviewNavigationRules",
 	"webviewFindInPage",
 	"webviewStopFind",
@@ -1026,6 +1032,7 @@ func (c *Core) CreateWebview(options WebviewOptions) (uint32, error) {
 		cbool(options.Sandbox),
 		cbool(options.StartTransparent),
 		cbool(options.StartPassthrough),
+		cbool(options.SpellCheck),
 	)
 	if webviewID == 0 {
 		return 0, errors.New(c.LastError())
@@ -1118,6 +1125,14 @@ func (c *Core) SetWebviewPassthrough(webviewID uint32, passthrough bool) error {
 func (c *Core) SetWebviewHidden(webviewID uint32, hidden bool) error {
 	C.eb_call_u32_bool(c.symbol("webviewSetHidden"), C.uint32_t(webviewID), cbool(hidden))
 	return c.ensureLastCallSucceeded()
+}
+
+func (c *Core) SetWebviewSpellCheck(webviewID uint32, enabled bool) (bool, error) {
+	supported := bool(C.eb_call_u32_bool_bool_ret(c.symbol("webviewSetSpellCheck"), C.uint32_t(webviewID), cbool(enabled)))
+	if err := c.ensureLastCallSucceeded(); err != nil {
+		return false, err
+	}
+	return supported, nil
 }
 
 func (c *Core) SetWebviewNavigationRules(webviewID uint32, rulesJSON string) error {

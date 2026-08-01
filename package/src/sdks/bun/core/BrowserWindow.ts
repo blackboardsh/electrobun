@@ -40,6 +40,8 @@ export type WindowOptionsType<T = undefined> = {
 	transparent: boolean;
 	// passthrough: when true, mouse events pass through transparent regions
 	passthrough: boolean;
+	// Enables macOS system spell checking for native WKWebView content.
+	spellCheck: boolean;
 	hidden?: boolean;
 	navigationRules: string | null;
 	// Sandbox mode: when true, disables RPC and only allows event emission
@@ -62,6 +64,7 @@ const defaultOptions: WindowOptionsType = {
 	titleBarStyle: "default",
 	transparent: false,
 	passthrough: false,
+	spellCheck: false,
 	hidden: false,
 	navigationRules: null,
 	sandbox: false,
@@ -106,6 +109,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	renderer: "native" | "cef" = "native";
 	transparent: boolean = false;
 	passthrough: boolean = false;
+	spellCheck: boolean = false;
 	hidden: boolean = false;
 	trafficLightOffset: { x: number; y: number } = { x: 0, y: 0 };
 	navigationRules: string | null = null;
@@ -147,6 +151,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.renderer = options.renderer || defaultOptions.renderer;
 		this.transparent = options.transparent ?? false;
 		this.passthrough = options.passthrough ?? false;
+		this.spellCheck = options.spellCheck ?? false;
 		this.hidden = options.hidden ?? false;
 		this.trafficLightOffset = {
 			x: options.trafficLightOffset?.x ?? 0,
@@ -253,6 +258,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			navigationRules: this.navigationRules,
 			sandbox: this.sandbox,
 			startPassthrough: this.passthrough,
+			spellCheck: this.spellCheck,
 		});
 
 		this.webviewId = webview.id;
@@ -271,6 +277,15 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 	setTitle(title: string) {
 		this.title = title;
 		return ffi.request.setTitle({ winId: this.id, title });
+	}
+
+	/**
+	 * Toggles macOS system spell checking for this window's native WKWebView.
+	 * Returns false when the current renderer/platform does not support it.
+	 */
+	setSpellCheck(enabled: boolean): boolean {
+		this.spellCheck = enabled;
+		return this.webview?.setSpellCheck(enabled) ?? false;
 	}
 
 	close() {

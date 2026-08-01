@@ -279,6 +279,21 @@ webview.on("will-navigate", (event) => {
 
   <p>See the <a href="/electrobun/apis/browser-window">BrowserWindow sandbox documentation</a> for a complete overview of the security model and use cases.</p>
 
+### spellCheck
+  <p>Set `spellCheck: true` to enable macOS system continuous spell checking for editable content in a native WKWebView. The setting is reapplied after each completed navigation. Omitting the option or setting it to `false` leaves the renderer's existing default unchanged.</p>
+
+```typescript
+const webview = new BrowserView({
+  html: "<div contenteditable>Type here</div>",
+  renderer: "native",
+  spellCheck: true,
+});
+```
+
+  <Aside type="caution">
+    <p>This capability is available only for macOS native WKWebView. CEF, WebView2, and WebKitGTK leave their behavior unchanged and report unsupported from `setSpellCheck()`. WKWebView has no public API for this setting, so Electrobun uses the guarded WebKit testing SPI `_setContinuousSpellCheckingEnabledForTesting:`. WebKit may rename or remove that selector, and its current implementation uses process-level text-checker state that can be observed by webviews sharing a WebKit process.</p>
+  </Aside>
+
 ## Static Methods
 
 ### BrowserView.getAll
@@ -472,6 +487,16 @@ webview.setPageZoom(1.0);
   <Aside type="tip">
     <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
   </Aside>
+
+### setSpellCheck
+  <p>Explicitly enable or disable system spell checking after creation. Returns `true` only when the current view is a macOS native WKWebView and the required WebKit selector is available. A `false` return means no renderer state was changed.</p>
+
+```typescript
+const supported = webview.setSpellCheck(true);
+if (!supported) console.log("System spell checking is unavailable");
+
+webview.setSpellCheck(false);
+```
 
 ### loadURL
   <p>Load a url into the webview. This will navigate the webview and trigger navigation events.</p>
