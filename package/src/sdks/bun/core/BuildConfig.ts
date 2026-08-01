@@ -4,6 +4,12 @@ export type BuildConfigType = {
 	mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
+	buildEnvironment?: "dev" | "canary" | "production" | "stable";
+	chromiumFlags?: Record<string, string | boolean>;
+	/** Runtime channel read from the packaged Resources/version.json metadata. */
+	channel: string;
+	/** False for dev builds; true for canary, production, and other release channels. */
+	isPackaged: boolean;
 	cefVersion?: string;
 	bunVersion?: string;
 	runtime?: {
@@ -14,11 +20,31 @@ export type BuildConfigType = {
 
 let buildConfig: BuildConfigType | null = null;
 
-function fallbackBuildConfig(): BuildConfigType {
+export function isPackagedBuildChannel(channel: unknown): boolean {
+	return typeof channel === "string" && channel.length > 0 && channel !== "dev";
+}
+
+function withRuntimeMode(
+	config: Omit<BuildConfigType, "channel" | "isPackaged">,
+	channel: unknown,
+): BuildConfigType {
+	const resolvedChannel =
+		typeof channel === "string" && channel.length > 0 ? channel : "dev";
 	return {
-		defaultRenderer: "native",
-		availableRenderers: ["native"],
+		...config,
+		channel: resolvedChannel,
+		isPackaged: isPackagedBuildChannel(resolvedChannel),
 	};
+}
+
+function fallbackBuildConfig(): BuildConfigType {
+	return withRuntimeMode(
+		{
+			defaultRenderer: "native",
+			availableRenderers: ["native"],
+		},
+		"dev",
+	);
 }
 
 const BuildConfig = {
@@ -32,10 +58,22 @@ const BuildConfig = {
 
 		try {
 			const resourcesDir = "Resources";
-			buildConfig = await Bun.file(`../${resourcesDir}/build.json`).json();
+			const config = (await Bun.file(
+				`../${resourcesDir}/build.json`,
+			).json()) as Omit<BuildConfigType, "channel" | "isPackaged">;
+			let channel: unknown = "dev";
+			try {
+				const version = (await Bun.file(
+					`../${resourcesDir}/version.json`,
+				).json()) as { channel?: unknown };
+				channel = version.channel;
+			} catch {
+				// Missing runtime metadata is treated as a development build.
+			}
+			buildConfig = withRuntimeMode(config, channel);
 			return buildConfig!;
-		} catch (error) {
-			// Fallback for dev mode or missing file
+		} catch {
+			// Fallback for development tools or an incomplete bundle.
 			buildConfig = fallbackBuildConfig();
 			return buildConfig;
 		}
@@ -52,11 +90,21 @@ const BuildConfig = {
 
 		try {
 			const resourcesDir = "Resources";
-			buildConfig = JSON.parse(
+			const config = JSON.parse(
 				readFileSync(`../${resourcesDir}/build.json`, "utf8"),
-			) as BuildConfigType;
+			) as Omit<BuildConfigType, "channel" | "isPackaged">;
+			let channel: unknown = "dev";
+			try {
+				const version = JSON.parse(
+					readFileSync(`../${resourcesDir}/version.json`, "utf8"),
+				) as { channel?: unknown };
+				channel = version.channel;
+			} catch {
+				// Missing runtime metadata is treated as a development build.
+			}
+			buildConfig = withRuntimeMode(config, channel);
 			return buildConfig;
-		} catch (error) {
+		} catch {
 			buildConfig = fallbackBuildConfig();
 			return buildConfig;
 		}

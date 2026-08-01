@@ -36,6 +36,10 @@ import {
 	getMacOSBundleDisplayName,
 } from "../shared/naming";
 import { getTemplate, getTemplateNames } from "./templates/embedded";
+import {
+	MACOS_DEPLOYMENT_TARGET,
+	macosZigTarget,
+} from "../../scripts/macos-release.js";
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
 // @ts-expect-error - reserved for future use
@@ -170,7 +174,7 @@ function getZigTarget(
 	if (targetOS === "linux") {
 		return targetArch === "arm64" ? "aarch64-linux" : "x86_64-linux";
 	}
-	return targetArch === "arm64" ? "aarch64-macos" : "x86_64-macos";
+	return macosZigTarget(targetArch);
 }
 
 function getRustTarget(
@@ -401,6 +405,12 @@ fn main() {
 
 	const result = Bun.spawnSync([rustBinary, ...rustArgs], {
 		cwd: tempBuildDir,
+		env: {
+			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
+		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 
@@ -480,6 +490,9 @@ async function buildGoMainExecutable(options: {
 		cwd: tempBuildDir,
 		env: {
 			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
 			CGO_ENABLED: "1",
 			GO111MODULE: "off",
 			GOARCH: target.goArch,
@@ -570,6 +583,12 @@ async function buildOdinMainExecutable(options: {
 
 	const result = Bun.spawnSync([odinBinary, ...odinArgs], {
 		cwd: projectRoot,
+		env: {
+			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
+		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 
@@ -3843,6 +3862,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			mainProcess,
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
+			buildEnvironment,
 			runtime: config.runtime ?? {},
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }

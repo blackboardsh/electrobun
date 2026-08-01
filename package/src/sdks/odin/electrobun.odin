@@ -40,6 +40,7 @@ Error :: enum {
 // ---------------------------------------------------------------------------
 
 WindowCloseHandler :: proc "c" (u32)
+WindowShouldCloseHandler :: proc "c" (u32)
 WindowMoveHandler :: proc "c" (u32, f64, f64)
 WindowResizeHandler :: proc "c" (u32, f64, f64, f64, f64)
 WindowFocusHandler :: proc "c" (u32)
@@ -95,6 +96,11 @@ borrowed :: proc(self: OwnedAppInfo) -> AppInfo {
 	return {identifier = self.identifier, name = self.name, channel = self.channel}
 }
 
+// False for dev builds; true for nonempty release channels.
+appInfoIsPackaged :: proc(app_info: AppInfo) -> bool {
+	return len(app_info.channel) > 0 && app_info.channel != "dev"
+}
+
 Rect :: struct {
 	x:      f64,
 	y:      f64,
@@ -132,12 +138,13 @@ DEFAULT_WINDOW_STYLE :: WindowStyle {
 }
 
 WindowCallbacks :: struct {
-	close:  WindowCloseHandler,
-	move:   WindowMoveHandler,
-	resize: WindowResizeHandler,
-	focus:  WindowFocusHandler,
-	blur:   WindowBlurHandler,
-	key:    WindowKeyHandler,
+	close:        WindowCloseHandler,
+	should_close: WindowShouldCloseHandler,
+	move:         WindowMoveHandler,
+	resize:       WindowResizeHandler,
+	focus:        WindowFocusHandler,
+	blur:         WindowBlurHandler,
+	key:          WindowKeyHandler,
 }
 
 WindowOptions :: struct {
@@ -148,6 +155,7 @@ WindowOptions :: struct {
 	transparent:          bool,
 	hidden:               bool,
 	activate:             bool,
+	centered:             bool,
 	traffic_light_offset: TrafficLightOffset,
 	callbacks:            WindowCallbacks,
 }
@@ -160,6 +168,7 @@ defaultWindowOptions :: proc(title: string) -> WindowOptions {
 		style = DEFAULT_WINDOW_STYLE,
 		title_bar_style = "default",
 		activate = true,
+		centered = false,
 	}
 }
 
@@ -496,12 +505,20 @@ windowClose :: proc(self: BrowserWindowRef) -> Error {
 	return .None
 }
 
+windowRequestClose :: proc(self: BrowserWindowRef) -> Error {
+	return requestWindowClose(self.registry.core, self.id)
+}
+
 getFrame :: proc(self: BrowserWindowRef) -> (Rect, Error) {
 	return getWindowFrame(self.registry.core, self.id)
 }
 
 windowSetWindowButtonPosition :: proc(self: BrowserWindowRef, x: f64, y: f64) -> Error {
 	return coreSetWindowButtonPosition(self.registry.core, self.id, x, y)
+}
+
+windowGetWindowButtonPosition :: proc(self: BrowserWindowRef) -> (Point, Error) {
+	return coreGetWindowButtonPosition(self.registry.core, self.id)
 }
 
 // ---------------------------------------------------------------------------
@@ -687,7 +704,7 @@ LastErrorFn :: proc "c" () -> cstring
 RunMainThreadFn :: proc "c" (cstring, cstring, cstring, c.int) -> c.int
 ConfigureWebviewRuntimeFn :: proc "c" (u32, cstring, cstring) -> bool
 GetWindowStyleFn :: proc "c" (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) -> u32
-CreateWindowFn :: proc "c" (f64, f64, f64, f64, u32, cstring, bool, cstring, bool, bool, f64, f64, WindowCloseHandler, WindowMoveHandler, WindowResizeHandler, WindowFocusHandler, WindowBlurHandler, WindowKeyHandler) -> u32
+CreateWindowFn :: proc "c" (f64, f64, f64, f64, u32, cstring, bool, cstring, bool, bool, bool, f64, f64, WindowCloseHandler, WindowMoveHandler, WindowResizeHandler, WindowFocusHandler, WindowBlurHandler, WindowKeyHandler, WindowShouldCloseHandler) -> u32
 CreateWebviewFn :: proc "c" (u32, u32, cstring, cstring, f64, f64, f64, f64, bool, cstring, DecideNavigationHandler, WebviewEventHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, cstring, cstring, cstring, bool, bool, bool) -> u32
 CreateWGPUViewFn :: proc "c" (u32, f64, f64, f64, f64, bool, bool, bool) -> u32
 SetWindowTitleFn :: proc "c" (u32, cstring)
@@ -695,6 +712,7 @@ WindowIdFn :: proc "c" (u32)
 WindowIdBoolFn :: proc "c" (u32) -> bool
 SetWindowBoolFn :: proc "c" (u32, bool)
 SetWindowXYFn :: proc "c" (u32, f64, f64)
+GetWindowPointFn :: proc "c" (u32, ^f64, ^f64)
 SetWindowFrameFn :: proc "c" (u32, f64, f64, f64, f64)
 GetWindowFrameFn :: proc "c" (u32, ^f64, ^f64, ^f64, ^f64)
 ResizeViewFn :: proc "c" (u32, f64, f64, f64, f64, cstring)
@@ -757,12 +775,16 @@ Symbols :: struct {
 	showWindow:                             SetWindowBoolFn,
 	activateWindow:                         WindowIdFn,
 	hideWindow:                             WindowIdFn,
+	isWindowVisible:                        WindowIdBoolFn,
 	setWindowButtonPosition:                SetWindowXYFn,
+	getWindowButtonPosition:                GetWindowPointFn,
 	setWindowPosition:                      SetWindowXYFn,
+	centerWindow:                           WindowIdFn,
 	setWindowSize:                          SetWindowXYFn,
 	setWindowFrame:                         SetWindowFrameFn,
 	getWindowFrame:                         GetWindowFrameFn,
 	closeWindow:                            WindowIdFn,
+	requestWindowClose:                     WindowIdFn,
 	resizeWebview:                          ResizeViewFn,
 	loadURLInWebView:                       IdCstringFn,
 	loadHTMLInWebView:                      IdCstringFn,
@@ -960,6 +982,7 @@ createWindow :: proc(self: ^Core, options: WindowOptions) -> (window_id: u32, er
 		title_z,
 		options.hidden,
 		options.activate,
+		options.centered,
 		options.traffic_light_offset.x,
 		options.traffic_light_offset.y,
 		options.callbacks.close,
@@ -968,6 +991,7 @@ createWindow :: proc(self: ^Core, options: WindowOptions) -> (window_id: u32, er
 		options.callbacks.focus,
 		options.callbacks.blur,
 		options.callbacks.key,
+		options.callbacks.should_close,
 	)
 
 	if window_id == 0 {
@@ -1053,13 +1077,29 @@ hideWindow :: proc(self: ^Core, window_id: u32) -> Error {
 	return ensure_last_call_succeeded(self)
 }
 
+isWindowVisible :: proc(self: ^Core, window_id: u32) -> bool {
+	return self.symbols.isWindowVisible(window_id)
+}
+
 coreSetWindowButtonPosition :: proc(self: ^Core, window_id: u32, x: f64, y: f64) -> Error {
 	self.symbols.setWindowButtonPosition(window_id, x, y)
 	return ensure_last_call_succeeded(self)
 }
 
+coreGetWindowButtonPosition :: proc(self: ^Core, window_id: u32) -> (position: Point, err: Error) {
+	x, y: f64
+	self.symbols.getWindowButtonPosition(window_id, &x, &y)
+	ensure_last_call_succeeded(self) or_return
+	return Point{x = x, y = y}, .None
+}
+
 setWindowPosition :: proc(self: ^Core, window_id: u32, x: f64, y: f64) -> Error {
 	self.symbols.setWindowPosition(window_id, x, y)
+	return ensure_last_call_succeeded(self)
+}
+
+centerWindow :: proc(self: ^Core, window_id: u32) -> Error {
+	self.symbols.centerWindow(window_id)
 	return ensure_last_call_succeeded(self)
 }
 
@@ -1082,6 +1122,11 @@ getWindowFrame :: proc(self: ^Core, window_id: u32) -> (frame: Rect, err: Error)
 
 closeWindow :: proc(self: ^Core, window_id: u32) -> Error {
 	self.symbols.closeWindow(window_id)
+	return ensure_last_call_succeeded(self)
+}
+
+requestWindowClose :: proc(self: ^Core, window_id: u32) -> Error {
+	self.symbols.requestWindowClose(window_id)
 	return ensure_last_call_succeeded(self)
 }
 
@@ -1512,7 +1557,7 @@ openPath :: proc(self: ^Core, path: string) -> bool {
 	return self.symbols.openPath(path_z)
 }
 
-// Returns a comma-separated list of selected paths ("" when cancelled).
+// Returns the raw JSON array payload used by the native C ABI.
 // The returned string is allocated with core.allocator; free with delete().
 openFileDialog :: proc(self: ^Core, options: OpenFileDialogOptions) -> string {
 	starting_folder_z := dupe_cstring(self, options.starting_folder)
@@ -1531,6 +1576,22 @@ openFileDialog :: proc(self: ^Core, options: OpenFileDialogOptions) -> string {
 		return clone_string("", self.allocator)
 	}
 	return clone_string(string(result), self.allocator)
+}
+
+openFileDialogPaths :: proc(self: ^Core, options: OpenFileDialogOptions) -> (paths: []string, err: Error) {
+	payload := openFileDialog(self, options)
+	defer delete(payload, self.allocator)
+	if len(payload) == 0 {
+		return make([]string, 0, self.allocator), .None
+	}
+	return parse_dialog_paths_json(self.allocator, payload)
+}
+
+freeDialogPaths :: proc(self: ^Core, paths: []string) {
+	for path in paths {
+		delete(path, self.allocator)
+	}
+	delete(paths, self.allocator)
 }
 
 showMessageBox :: proc(self: ^Core, options: MessageBoxOptions) -> (response: c.int, err: Error) {
@@ -1797,6 +1858,10 @@ close :: proc {
 setWindowButtonPosition :: proc {
 	coreSetWindowButtonPosition,
 	windowSetWindowButtonPosition,
+}
+getWindowButtonPosition :: proc {
+	coreGetWindowButtonPosition,
+	windowGetWindowButtonPosition,
 }
 // zig: OwnedAppInfo.deinit / Paths.deinit / WindowRegistry.deinit / BundlePaths.deinit
 deinit :: proc {
@@ -2098,6 +2163,34 @@ parse_displays_json :: proc(allocator: runtime.Allocator, text: string) -> (disp
 			return nil, .InvalidJson
 		}
 		result[index] = display
+	}
+	return result, .None
+}
+
+@(private = "file")
+parse_dialog_paths_json :: proc(allocator: runtime.Allocator, text: string) -> (paths: []string, err: Error) {
+	value, parse_err := json.parse_string(text, json.DEFAULT_SPECIFICATION, true, allocator)
+	if parse_err != .None {
+		return nil, .InvalidJson
+	}
+	defer json.destroy_value(value, allocator)
+
+	arr, is_array := value.(json.Array)
+	if !is_array {
+		return nil, .InvalidJson
+	}
+
+	result := make([]string, len(arr), allocator)
+	for item, index in arr {
+		path, is_string := item.(json.String)
+		if !is_string {
+			for previous_index := 0; previous_index < index; previous_index += 1 {
+				delete(result[previous_index], allocator)
+			}
+			delete(result, allocator)
+			return nil, .InvalidJson
+		}
+		result[index] = clone_string(string(path), allocator)
 	}
 	return result, .None
 }

@@ -19,8 +19,8 @@ export type WindowOptionsType<T = undefined> = {
 	activate?: boolean;
 	title: string;
 	frame: {
-		x: number;
-		y: number;
+		x?: number;
+		y?: number;
 		width: number;
 		height: number;
 	};
@@ -51,8 +51,6 @@ export type WindowOptionsType<T = undefined> = {
 const defaultOptions: WindowOptionsType = {
 	title: "Electrobun",
 	frame: {
-		x: 0,
-		y: 0,
 		width: 800,
 		height: 600,
 	},
@@ -133,9 +131,15 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 
 	constructor(options: Partial<WindowOptionsType<T>> = defaultOptions) {
 		this.title = options.title || "New Window";
+		const centered = options.frame?.x === undefined || options.frame?.y === undefined;
 		this.frame = options.frame
-			? { ...defaultOptions.frame, ...options.frame }
-			: { ...defaultOptions.frame };
+			? {
+				x: options.frame.x ?? 0,
+				y: options.frame.y ?? 0,
+				width: options.frame.width,
+				height: options.frame.height,
+			}
+			: { x: 0, y: 0, width: defaultOptions.frame.width, height: defaultOptions.frame.height };
 		this.url = options.url || null;
 		this.html = options.html || null;
 		this.preload = options.preload || null;
@@ -151,17 +155,20 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		this.navigationRules = options.navigationRules || null;
 		this.sandbox = options.sandbox ?? false;
 
-		this.init(options);
+		this.init(options, centered);
 	}
 
-	init({
-		rpc,
-		styleMask,
-		titleBarStyle,
-		transparent,
-		hidden,
-		activate,
-	}: Partial<WindowOptionsType<T>>) {
+	init(
+		{
+			rpc,
+			styleMask,
+			titleBarStyle,
+			transparent,
+			hidden,
+			activate,
+		}: Partial<WindowOptionsType<T>>,
+		centered: boolean,
+	) {
 		const windowId = ffi.request.createWindow({
 			title: this.title,
 			url: this.url || "",
@@ -204,6 +211,7 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 			transparent: transparent ?? false,
 			hidden: hidden ?? false,
 			activate: activate ?? true,
+			centered,
 			trafficLightOffset: this.trafficLightOffset,
 		});
 
@@ -212,6 +220,9 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		}
 
 		this.id = windowId as number;
+		if (centered) {
+			this.frame = ffi.request.getWindowFrame({ winId: this.id });
+		}
 
 		BrowserWindowMap[this.id] = this;
 
@@ -266,6 +277,10 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 
+	requestClose() {
+		return ffi.request.requestWindowClose({ winId: this.id });
+	}
+
 	activate() {
 		return ffi.request.activateWindow({ winId: this.id });
 	}
@@ -287,6 +302,10 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 
 	hide() {
 		return ffi.request.hideWindow({ winId: this.id });
+	}
+
+	isVisible(): boolean {
+		return ffi.request.isWindowVisible({ winId: this.id });
 	}
 
 	minimize() {
@@ -343,8 +362,17 @@ export class BrowserWindow<T extends RPCWithTransport = RPCWithTransport> {
 		return ffi.request.setWindowPosition({ winId: this.id, x, y });
 	}
 
+	center() {
+		ffi.request.centerWindow({ winId: this.id });
+		this.frame = ffi.request.getWindowFrame({ winId: this.id });
+	}
+
 	setWindowButtonPosition(x: number, y: number) {
 		return ffi.request.setWindowButtonPosition({ winId: this.id, x, y });
+	}
+
+	getWindowButtonPosition(): { x: number; y: number } {
+		return ffi.request.getWindowButtonPosition({ winId: this.id });
 	}
 
 	setSize(width: number, height: number) {

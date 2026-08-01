@@ -10,6 +10,7 @@ const WebviewPtr = ?*anyopaque;
 const WgpuViewPtr = ?*anyopaque;
 const TrayPtr = ?*anyopaque;
 const WindowCloseHandler = *const fn (u32) callconv(.C) void;
+const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
 const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.C) void;
 const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
 const WindowFocusHandler = *const fn (u32) callconv(.C) void;
@@ -46,6 +47,7 @@ const WindowState = struct {
     ptr: WindowPtr,
     transparent: bool,
     close_handler: ?WindowCloseHandler,
+    should_close_handler: ?WindowShouldCloseHandler,
     move_handler: ?WindowMoveHandler,
     resize_handler: ?WindowResizeHandler,
     focus_handler: ?WindowFocusHandler,
@@ -2132,6 +2134,13 @@ fn windowKeyTrampoline(window_id: u32, key_code: u32, modifiers: u32, is_down: u
     }
 }
 
+fn windowShouldCloseTrampoline(window_id: u32) callconv(.C) void {
+    const state = lookupWindowState(window_id) orelse return;
+    if (state.should_close_handler) |handler| {
+        handler(window_id);
+    }
+}
+
 fn managedQuitRequestedTrampoline() callconv(.C) void {
     if (managed_quit_requested_handler) |handler| {
         handler();
@@ -2219,6 +2228,7 @@ export fn createWindow(
     title: [*:0]const u8,
     hidden: bool,
     activate: bool,
+    centered: bool,
     traffic_light_offset_x: f64,
     traffic_light_offset_y: f64,
     close_handler: ?WindowCloseHandler,
@@ -2227,6 +2237,7 @@ export fn createWindow(
     focus_handler: ?WindowFocusHandler,
     blur_handler: ?WindowBlurHandler,
     key_handler: ?WindowKeyHandler,
+    should_close_handler: ?WindowShouldCloseHandler,
 ) u32 {
     clearLastError();
 
@@ -2247,8 +2258,10 @@ export fn createWindow(
         ?WindowFocusHandler,
         ?WindowBlurHandler,
         ?WindowKeyHandler,
+        ?WindowShouldCloseHandler,
     ) callconv(.C) WindowPtr;
     const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.C) void;
+    const CenterWindowFn = *const fn (WindowPtr) callconv(.C) void;
     const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
 
     const create_window = lookupNativeSymbol(
@@ -2256,6 +2269,7 @@ export fn createWindow(
         "createWindowWithFrameAndStyleFromWorker",
     ) orelse return 0;
     const set_window_title = lookupNativeSymbol(SetWindowTitleFn, "setWindowTitle") orelse return 0;
+    const center_window = lookupNativeSymbol(CenterWindowFn, "centerWindow") orelse return 0;
     const show_window = lookupNativeSymbol(ShowWindowFn, "showWindow") orelse return 0;
 
     window_registry_mutex.lock();
@@ -2283,6 +2297,7 @@ export fn createWindow(
         .ptr = null,
         .transparent = transparent,
         .close_handler = close_handler,
+        .should_close_handler = should_close_handler,
         .move_handler = move_handler,
         .resize_handler = resize_handler,
         .focus_handler = focus_handler,
@@ -2312,6 +2327,7 @@ export fn createWindow(
         windowFocusTrampoline,
         windowBlurTrampoline,
         windowKeyTrampoline,
+        if (should_close_handler != null) windowShouldCloseTrampoline else null,
     );
 
     if (window_ptr == null) {
@@ -2332,6 +2348,9 @@ export fn createWindow(
     window_registry_mutex.unlock();
 
     set_window_title(window_ptr, title);
+    if (centered) {
+        center_window(window_ptr);
+    }
     if (!hidden) {
         show_window(window_ptr, activate);
     }
@@ -2451,6 +2470,18 @@ export fn setWindowButtonPosition(window_id: u32, x: f64, y: f64) void {
     set_window_button_position(window, x, y);
 }
 
+export fn getWindowButtonPosition(window_id: u32, x: *f64, y: *f64) void {
+    x.* = 0;
+    y.* = 0;
+    const GetWindowButtonPositionFn = *const fn (WindowPtr, *f64, *f64) callconv(.C) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const get_window_button_position = lookupNativeSymbol(
+        GetWindowButtonPositionFn,
+        "getWindowButtonPosition",
+    ) orelse return;
+    get_window_button_position(window, x, y);
+}
+
 export fn showWindow(window_id: u32, activate: bool) void {
     const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
     const window = requireWindowPtr(window_id) orelse return;
@@ -2472,6 +2503,13 @@ export fn hideWindow(window_id: u32) void {
     hide_window(window);
 }
 
+export fn isWindowVisible(window_id: u32) bool {
+    const IsWindowVisibleFn = *const fn (WindowPtr) callconv(.C) bool;
+    const window = lookupWindowPtr(window_id) orelse return false;
+    const is_window_visible = lookupNativeSymbol(IsWindowVisibleFn, "isWindowVisible") orelse return false;
+    return is_window_visible(window);
+}
+
 export fn closeWindow(window_id: u32) void {
     const CloseWindowFn = *const fn (WindowPtr) callconv(.C) void;
     const window = requireWindowPtr(window_id) orelse return;
@@ -2479,11 +2517,28 @@ export fn closeWindow(window_id: u32) void {
     close_window(window);
 }
 
+export fn requestWindowClose(window_id: u32) void {
+    const RequestWindowCloseFn = *const fn (WindowPtr) callconv(.C) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const request_window_close = lookupNativeSymbol(
+        RequestWindowCloseFn,
+        "requestWindowClose",
+    ) orelse return;
+    request_window_close(window);
+}
+
 export fn setWindowPosition(window_id: u32, x: f64, y: f64) void {
     const SetWindowPositionFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_position = lookupNativeSymbol(SetWindowPositionFn, "setWindowPosition") orelse return;
     set_window_position(window, x, y);
+}
+
+export fn centerWindow(window_id: u32) void {
+    const CenterWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const center_window = lookupNativeSymbol(CenterWindowFn, "centerWindow") orelse return;
+    center_window(window);
 }
 
 export fn setWindowSize(window_id: u32, width: f64, height: f64) void {
@@ -3400,6 +3455,7 @@ export fn openFileDialog(
     can_choose_directories: c_int,
     allows_multiple_selection: c_int,
 ) ?[*:0]const u8 {
+    // The native wrapper returns a JSON array so path contents remain lossless.
     const OpenFileDialogFn = *const fn ([*:0]const u8, [*:0]const u8, c_int, c_int, c_int) callconv(.C) ?[*:0]const u8;
     const open_file_dialog = lookupNativeSymbol(OpenFileDialogFn, "openFileDialog") orelse return null;
     return open_file_dialog(

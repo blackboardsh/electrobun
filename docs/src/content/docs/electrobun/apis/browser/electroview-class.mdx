@@ -99,9 +99,17 @@ electroview.rpc.request.someMainProcessFunction({ a: 9, b: 8 }).then((result) =>
   console.log("result: ", result);
 });
 
+// Disable the timeout for this request without changing other RPC calls.
+const paths = await electroview.rpc.request.openFileDialog(
+  { startingFolder: "~/" },
+  { maxRequestTime: Infinity },
+);
+
 // or
 electroview.rpc.send.logToMainProcess({ msg: "hi from browser" });
 ```
+
+              <p>Per-request options are local to the caller and are not sent to the request handler. Set <code>maxRequestTime</code> to a duration in milliseconds, or to <code>Infinity</code> for a modal request that should wait for user input.</p>
 
 
 ## Static Methods

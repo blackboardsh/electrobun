@@ -76,6 +76,7 @@ export const dialogTests = [
       await showInstructions([
         "A control panel will open for file dialog testing",
         "Configure options and click 'Open Dialog' to test",
+        "Select a path containing a comma and verify it is returned as one unchanged path",
         "Close the window when done to pass the test",
       ]);
 
@@ -87,7 +88,6 @@ export const dialogTests = [
         let winRef: BrowserWindow<any> | null = null;
 
         const rpc = BrowserView.defineRPC<any>({
-          maxRequestTime: 600000, // 10 minutes - file dialogs can take a while
           handlers: {
             requests: {
               closeWindow: () => {

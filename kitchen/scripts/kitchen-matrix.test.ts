@@ -1,11 +1,26 @@
 import { describe, expect, it } from "bun:test";
 import {
+	existsSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
 	kitchenVariantKey,
 	readKitchenVariant,
 } from "./kitchen-matrix-plan";
-import { parseKitchenMatrixArguments } from "./kitchen-matrix";
+import {
+	createKitchenMatrixRunRoot,
+	parseKitchenMatrixArguments,
+	prepareKitchenVariantWorkspace,
+	publishKitchenVariantWorkspace,
+} from "./kitchen-matrix";
 
 describe("kitchen matrix", () => {
 	it("uses the reduced seven-variant interactive matrix by default", () => {
@@ -94,5 +109,95 @@ describe("kitchen matrix", () => {
 		expect(() =>
 			parseKitchenMatrixArguments(["--full", "--with=go:system"], 3),
 		).toThrow("cannot be used together");
+	});
+
+	it("isolates and publishes staging output for every native runtime variant", () => {
+		const fixtureRoot = mkdtempSync(join(tmpdir(), "electrobun-kitchen-matrix-"));
+		const kitchenRoot = join(fixtureRoot, "kitchen");
+		const variants = (["zig", "rust", "go", "odin"] as const).map(
+			(mainProcess) => ({ mainProcess, renderer: "native" as const }),
+		);
+
+		try {
+			mkdirSync(join(kitchenRoot, "src"), { recursive: true });
+			writeFileSync(join(kitchenRoot, "src", "shared.ts"), "export {};\n");
+			writeFileSync(join(kitchenRoot, "electrobun.config.ts"), "export default {};\n");
+			mkdirSync(join(kitchenRoot, "build", "matrix", "rust-native"), {
+				recursive: true,
+			});
+			writeFileSync(
+				join(kitchenRoot, "build", "matrix", "rust-native", "stale.txt"),
+				"stale",
+			);
+
+			const runRoot = createKitchenMatrixRunRoot(kitchenRoot);
+			const workspaces = variants.map((variant) =>
+				prepareKitchenVariantWorkspace(kitchenRoot, runRoot, variant),
+			);
+			expect(new Set(workspaces.map((workspace) => workspace.root)).size).toBe(4);
+			writeFileSync(join(workspaces[0]!.root, "src", "shared.ts"), "zig only\n");
+			expect(readFileSync(join(kitchenRoot, "src", "shared.ts"), "utf8")).toBe(
+				"export {};\n",
+			);
+
+			for (const [index, workspace] of workspaces.entries()) {
+				const key = kitchenVariantKey(variants[index]!);
+				const scratchFile = join(
+					workspace.root,
+					".cottontail-tmp",
+					"electrobun",
+					"cottontail-build-spec.json",
+				);
+				const bundledView = join(
+					workspace.buildOutput,
+					"dev-test-arch",
+					"app",
+					"views",
+					"test-runner",
+					"index.js",
+				);
+				mkdirSync(dirname(scratchFile), { recursive: true });
+				mkdirSync(dirname(bundledView), { recursive: true });
+				writeFileSync(scratchFile, key);
+				writeFileSync(bundledView, key);
+			}
+
+			for (const [index, workspace] of workspaces.entries()) {
+				const key = kitchenVariantKey(variants[index]!);
+				expect(
+					readFileSync(
+						join(
+							workspace.root,
+							".cottontail-tmp",
+							"electrobun",
+							"cottontail-build-spec.json",
+						),
+						"utf8",
+					),
+				).toBe(key);
+				publishKitchenVariantWorkspace(workspace);
+			}
+
+			for (const variant of variants) {
+				const key = kitchenVariantKey(variant);
+				const bundledView = join(
+					kitchenRoot,
+					"build",
+					"matrix",
+					key,
+					"dev-test-arch",
+					"app",
+					"views",
+					"test-runner",
+					"index.js",
+				);
+				expect(readFileSync(bundledView, "utf8")).toBe(key);
+			}
+			expect(
+				existsSync(join(kitchenRoot, "build", "matrix", "rust-native", "stale.txt")),
+			).toBe(false);
+		} finally {
+			rmSync(fixtureRoot, { recursive: true, force: true });
+		}
 	});
 });

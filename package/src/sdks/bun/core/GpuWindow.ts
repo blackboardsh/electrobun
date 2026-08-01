@@ -13,8 +13,8 @@ export type GpuWindowOptionsType = {
 	activate?: boolean;
 	title: string;
 	frame: {
-		x: number;
-		y: number;
+		x?: number;
+		y?: number;
 		width: number;
 		height: number;
 	};
@@ -26,8 +26,6 @@ export type GpuWindowOptionsType = {
 const defaultOptions: GpuWindowOptionsType = {
 	title: "Electrobun",
 	frame: {
-		x: 0,
-		y: 0,
 		width: 800,
 		height: 600,
 	},
@@ -83,24 +81,28 @@ export class GpuWindow {
 
 	constructor(options: Partial<GpuWindowOptionsType> = defaultOptions) {
 		this.title = options.title || "New Window";
+		const centered = options.frame?.x === undefined || options.frame?.y === undefined;
 		this.frame = options.frame
-			? { ...defaultOptions.frame, ...options.frame }
-			: { ...defaultOptions.frame };
+			? {
+				x: options.frame.x ?? 0,
+				y: options.frame.y ?? 0,
+				width: options.frame.width,
+				height: options.frame.height,
+			}
+			: { x: 0, y: 0, width: defaultOptions.frame.width, height: defaultOptions.frame.height };
 		this.transparent = options.transparent ?? false;
 		this.trafficLightOffset = {
 			x: options.trafficLightOffset?.x ?? 0,
 			y: options.trafficLightOffset?.y ?? 0,
 		};
 
-		this.init(options);
+		this.init(options, centered);
 	}
 
-	init({
-		styleMask,
-		titleBarStyle,
-		transparent,
-		activate,
-	}: Partial<GpuWindowOptionsType>) {
+	init(
+		{ styleMask, titleBarStyle, transparent, activate }: Partial<GpuWindowOptionsType>,
+		centered: boolean,
+	) {
 		const windowId = ffi.request.createWindow({
 			title: this.title,
 			url: "",
@@ -142,6 +144,7 @@ export class GpuWindow {
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
 			activate: activate ?? true,
+			centered,
 			trafficLightOffset: this.trafficLightOffset,
 		});
 
@@ -150,6 +153,9 @@ export class GpuWindow {
 		}
 
 		this.id = windowId as number;
+		if (centered) {
+			this.frame = ffi.request.getWindowFrame({ winId: this.id });
+		}
 
 		GpuWindowMap[this.id] = this;
 
@@ -184,6 +190,10 @@ export class GpuWindow {
 
 	close() {
 		return ffi.request.closeWindow({ winId: this.id });
+	}
+
+	requestClose() {
+		return ffi.request.requestWindowClose({ winId: this.id });
 	}
 
 	activate() {
@@ -253,6 +263,15 @@ export class GpuWindow {
 
 	setWindowButtonPosition(x: number, y: number) {
 		return ffi.request.setWindowButtonPosition({ winId: this.id, x, y });
+	}
+
+	center() {
+		ffi.request.centerWindow({ winId: this.id });
+		this.frame = ffi.request.getWindowFrame({ winId: this.id });
+	}
+
+	getWindowButtonPosition(): { x: number; y: number } {
+		return ffi.request.getWindowButtonPosition({ winId: this.id });
 	}
 
 	setSize(width: number, height: number) {

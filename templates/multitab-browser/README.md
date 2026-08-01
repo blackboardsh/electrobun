@@ -21,7 +21,7 @@ hutch install
 hutch run dev
 
 # Build for production
-hutch electrobun build --env=stable
+hutch run build
 ```
 
 ## Architecture

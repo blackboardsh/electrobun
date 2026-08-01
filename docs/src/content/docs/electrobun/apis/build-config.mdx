@@ -128,6 +128,8 @@ if (cached) {
               <ul>
                 <li><strong>defaultRenderer</strong> - From the platform-specific `defaultRenderer` setting in your config</li>
                 <li><strong>availableRenderers</strong> - Determined by whether `bundleCEF` was enabled for the target platform</li>
+                <li><strong>buildEnvironment</strong> - The environment used by Hutch (`dev`, `canary`, or `production`)</li>
+                <li><strong>chromiumFlags</strong> - The selected platform's CEF flags, when configured</li>
                 <li><strong>runtime</strong> - The entire `runtime` section from your `electrobun.config.ts`, including `exitOnLastWindowClosed` and any custom keys</li>
               </ul>
 

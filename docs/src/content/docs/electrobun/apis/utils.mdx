@@ -256,6 +256,15 @@ setTimeout(async () => {
  }, 2000);
 ```
 
+              <p>When a browser calls a main-process handler that wraps <code>openFileDialog()</code>, disable the timeout for that request rather than increasing the timeout for every RPC method:</p>
+
+```javascript
+const chosenPaths = await electroview.rpc.request.openFileDialog(
+  options,
+  { maxRequestTime: Infinity },
+);
+```
+
 
 ## showMessageBox
 

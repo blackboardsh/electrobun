@@ -5,6 +5,11 @@ import WGPU from "./webGPU";
 import { WGPUBridge } from "./proc/native";
 import { ptr, toArrayBuffer, type Pointer, JSCallback } from "bun:ffi";
 import { inflateSync } from "zlib";
+import {
+	mapLoadOp,
+	mapStoreOp,
+	normalizeRenderPassDepthStencilFields,
+} from "./webgpuRenderPass";
 
 const WGPUNative = WGPU.native;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
@@ -73,10 +78,8 @@ const WGPUFrontFace_CW = 0x00000002;
 const WGPUCullMode_None = 0x00000001;
 const WGPUCullMode_Front = 0x00000002;
 const WGPUCullMode_Back = 0x00000003;
-const WGPULoadOp_Load = 0x00000001;
 const WGPULoadOp_Clear = 0x00000002;
 const WGPUStoreOp_Store = 0x00000001;
-const WGPUStoreOp_Discard = 0x00000002;
 const WGPUTextureDimension_2D = 0x00000002;
 const WGPUTextureViewDimension_2D = 0x00000002;
 const WGPUTextureViewDimension_2DArray = 0x00000003;
@@ -1848,16 +1851,10 @@ class GPUCommandEncoder {
 			if (viewFormat && !isDepthFormat(viewFormat)) {
 				// Skip invalid depth/stencil view attachments.
 			} else {
+				const fields = normalizeRenderPassDepthStencilFields(d);
 				const depth = makeRenderPassDepthStencilAttachment({
 					view: d.view.ptr,
-					depthLoadOp: mapLoadOp(d.depthLoadOp),
-					depthStoreOp: mapStoreOp(d.depthStoreOp),
-					depthClearValue: d.depthClearValue ?? 1,
-					depthReadOnly: !!d.depthReadOnly,
-					stencilLoadOp: mapLoadOp(d.stencilLoadOp),
-					stencilStoreOp: mapStoreOp(d.stencilStoreOp),
-					stencilClearValue: d.stencilClearValue ?? 0,
-					stencilReadOnly: !!d.stencilReadOnly,
+					...fields,
 				});
 				WGPU_KEEPALIVE.push(depth.buffer);
 				depthPtr = depth.ptr as any;
@@ -2111,6 +2108,7 @@ class GPUCanvasContext {
 	width = 1;
 	height = 1;
 	private _hasCurrentTexture = false;
+	private _usage = WGPUTextureUsage_RenderAttachment;
 	_fallbackSize?: { width: number; height: number };
 	constructor(surfacePtr: number, instancePtr?: number) {
 		this.surfacePtr = surfacePtr;
@@ -2156,19 +2154,40 @@ class GPUCanvasContext {
 		if (options.size) {
 			this.width = options.size.width;
 			this.height = options.size.height;
+			this._fallbackSize = {
+				width: options.size.width,
+				height: options.size.height,
+			};
 		}
+		this._usage = toBigInt(
+			options.usage ?? WGPUTextureUsage_RenderAttachment,
+		);
+		this._configureSurface();
+	}
+	private _configureSurface() {
+		if (!this.devicePtr) return;
 		const config = makeSurfaceConfiguration(
 			this.devicePtr,
 			this.width,
 			this.height,
 			this.format,
 			this.alphaMode,
-			toBigInt(options.usage ?? WGPUTextureUsage_RenderAttachment),
+			this._usage,
 		);
 		WGPUBridge.surfaceConfigure(this.surfacePtr as any, config.ptr as any);
 		this._hasCurrentTexture = false;
 	}
 	getCurrentTexture() {
+		if (
+			this.devicePtr &&
+			this._fallbackSize &&
+			(this.width !== this._fallbackSize.width ||
+				this.height !== this._fallbackSize.height)
+		) {
+			this.width = this._fallbackSize.width;
+			this.height = this._fallbackSize.height;
+			this._configureSurface();
+		}
 		const surfaceTexture = makeSurfaceTexture();
 		WGPUBridge.surfaceGetCurrentTexture(
 			this.surfacePtr as any,
@@ -2262,9 +2281,27 @@ function createContext(view: WGPUView | GpuWindow) {
 function createCanvasShim(win: GpuWindow) {
 	const size = win.getSize();
 	const ctx = createContext(win);
+	let width = size.width;
+	let height = size.height;
+	const syncFallbackSize = () => {
+		ctx.context._fallbackSize = { width, height };
+	};
+	syncFallbackSize();
 	return {
-		width: size.width,
-		height: size.height,
+		get width() {
+			return width;
+		},
+		set width(value: number) {
+			width = value;
+			syncFallbackSize();
+		},
+		get height() {
+			return height;
+		},
+		set height(value: number) {
+			height = value;
+			syncFallbackSize();
+		},
 		clientWidth: size.width,
 		clientHeight: size.height,
 		style: {},
@@ -2761,28 +2798,6 @@ function mapBlendFactor(factor?: string | number | null) {
 			return WGPUBlendFactor_OneMinusSrcAlpha;
 		default:
 			return WGPUBlendFactor_One;
-	}
-}
-
-function mapLoadOp(op?: string | number | null) {
-	if (typeof op === "number") return op;
-	switch (op) {
-		case "load":
-			return WGPULoadOp_Load;
-		case "clear":
-		default:
-			return WGPULoadOp_Clear;
-	}
-}
-
-function mapStoreOp(op?: string | number | null) {
-	if (typeof op === "number") return op;
-	switch (op) {
-		case "discard":
-			return WGPUStoreOp_Discard;
-		case "store":
-		default:
-			return WGPUStoreOp_Store;
 	}
 }
 

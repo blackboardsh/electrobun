@@ -8,6 +8,7 @@
 		"dev": "vite build && hutch electrobun dev --watch",
 		"dev:hmr": "concurrently \"hutch run hmr\" \"hutch run start\"",
 		"hmr": "vite --port 5173",
+		"build": "vite build && hutch electrobun build --env=production",
 		"build:canary": "vite build && hutch electrobun build --env=canary"
 	},
 	"dependencies": {

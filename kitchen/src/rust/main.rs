@@ -42,6 +42,7 @@ struct AppState {
 #[derive(Clone, Copy)]
 enum TestKind {
     Smoke,
+    AppPackagedMode,
     WindowCreateClose,
     WindowCreationWithUrl,
     WindowHiddenOption,
@@ -56,12 +57,14 @@ enum TestKind {
     WindowSetFrame,
     WindowGetFrame,
     WindowGetPosition,
+    WindowOmittedPositionCenters,
     WindowGetSize,
     WindowMaximizeUnmaximize,
     WindowAlwaysOnTop,
     WindowVisibleOnAllWorkspaces,
     WindowFocus,
     WindowCloseEvent,
+    WindowWillCloseVeto,
     WindowResizeEvent,
     WindowGetById,
     WindowInsetTitlebarStyle,
@@ -76,6 +79,7 @@ enum TestKind {
     NavigationLoadHtml,
     NavigationDomReadyEvent,
     NavigationDidNavigateEvent,
+    NavigationDidCommitNavigationEvent,
     NavigationExecuteJavascript,
     TrayVisibilityToggleAndBounds,
     SessionFromPartition,
@@ -131,10 +135,12 @@ struct TestRunResult {
 
 struct CallbackState {
     window_close_count: u32,
+    window_should_close_count: u32,
     window_resize_count: u32,
     window_focus_count: u32,
     webview_will_navigate_count: u32,
     webview_did_navigate_count: u32,
+    webview_did_commit_navigation_count: u32,
     webview_dom_ready_count: u32,
     webview_tag_init_count: u32,
     wgpu_tag_init_count: u32,
@@ -149,10 +155,12 @@ impl CallbackState {
     const fn new() -> Self {
         Self {
             window_close_count: 0,
+            window_should_close_count: 0,
             window_resize_count: 0,
             window_focus_count: 0,
             webview_will_navigate_count: 0,
             webview_did_navigate_count: 0,
+            webview_did_commit_navigation_count: 0,
             webview_dom_ready_count: 0,
             webview_tag_init_count: 0,
             wgpu_tag_init_count: 0,
@@ -170,6 +178,7 @@ impl CallbackState {
         self.window_focus_count = 0;
         self.webview_will_navigate_count = 0;
         self.webview_did_navigate_count = 0;
+        self.webview_did_commit_navigation_count = 0;
         self.webview_dom_ready_count = 0;
         self.webview_tag_init_count = 0;
         self.wgpu_tag_init_count = 0;
@@ -191,6 +200,14 @@ const RUST_TESTS: &[RustTest] = &[
         kind: TestKind::Smoke,
     },
     RustTest {
+        id: "rust-app-packaged-mode",
+        name: "App packaged mode reflects build channel",
+        category: "Runtime",
+        description: "Verify packaged mode is derived from the Resources/version.json build channel.",
+        interactive: false,
+        kind: TestKind::AppPackagedMode,
+    },
+    RustTest {
         id: "rust-window-create-close",
         name: "Window create/close (Rust)",
         category: "BrowserWindow",
@@ -210,7 +227,7 @@ const RUST_TESTS: &[RustTest] = &[
         id: "rust-window-hidden-option",
         name: "Window hidden option (Rust)",
         category: "BrowserWindow",
-        description: "Create a hidden native window, then show it through the Rust SDK.",
+        description: "Verify native visibility across hidden creation, show, and hide through the Rust SDK.",
         interactive: false,
         kind: TestKind::WindowHiddenOption,
     },
@@ -274,7 +291,7 @@ const RUST_TESTS: &[RustTest] = &[
         id: "rust-window-set-size",
         name: "Window setSize (Rust)",
         category: "BrowserWindow",
-        description: "Resize a native window and read the new frame back from core.",
+        description: "Grow and shrink a native-renderer window through core.",
         interactive: false,
         kind: TestKind::WindowSetSize,
     },
@@ -301,6 +318,14 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Read the current native window position through the Rust SDK.",
         interactive: false,
         kind: TestKind::WindowGetPosition,
+    },
+    RustTest {
+        id: "rust-window-omitted-position-centers",
+        name: "Window omitted position centers on primary display",
+        category: "BrowserWindow",
+        description: "Create a hidden centered window and verify its frame is centered in the primary work area.",
+        interactive: false,
+        kind: TestKind::WindowOmittedPositionCenters,
     },
     RustTest {
         id: "rust-window-get-size",
@@ -349,6 +374,14 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Verify a per-window close callback fires in Rust mode.",
         interactive: false,
         kind: TestKind::WindowCloseEvent,
+    },
+    RustTest {
+        id: "rust-window-will-close-veto",
+        name: "Window will-close can veto user close (Rust)",
+        category: "BrowserWindow",
+        description: "Verify a native user-close request can be vetoed before destruction.",
+        interactive: false,
+        kind: TestKind::WindowWillCloseVeto,
     },
     RustTest {
         id: "rust-window-resize-event",
@@ -461,6 +494,14 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Verify did-navigate is emitted for BrowserView navigation in Rust mode.",
         interactive: false,
         kind: TestKind::NavigationDidNavigateEvent,
+    },
+    RustTest {
+        id: "rust-navigation-did-commit-navigation-event",
+        name: "did-commit-navigation event (Rust)",
+        category: "Navigation",
+        description: "Verify did-commit-navigation crosses the Rust callback boundary before load completion.",
+        interactive: false,
+        kind: TestKind::NavigationDidCommitNavigationEvent,
     },
     RustTest {
         id: "rust-navigation-execute-javascript",
@@ -917,6 +958,18 @@ extern "C" fn observed_window_close(_: u32) {
     }
 }
 
+extern "C" fn observed_window_should_close(window_id: u32) {
+    let should_allow = if let Ok(mut state) = CALLBACK_STATE.lock() {
+        state.window_should_close_count += 1;
+        state.window_should_close_count > 1
+    } else {
+        false
+    };
+    if should_allow {
+        let _ = app_state().core.close_window(window_id);
+    }
+}
+
 extern "C" fn observed_window_resize(_: u32, _: f64, _: f64, width: f64, height: f64) {
     if let Ok(mut state) = CALLBACK_STATE.lock() {
         state.window_resize_count += 1;
@@ -957,6 +1010,7 @@ fn record_observed_webview_event(event_name: &str, detail: &str) {
         match event_name {
             "will-navigate" => state.webview_will_navigate_count += 1,
             "did-navigate" => state.webview_did_navigate_count += 1,
+            "did-commit-navigation" => state.webview_did_commit_navigation_count += 1,
             "dom-ready" => state.webview_dom_ready_count += 1,
             _ => {}
         }
@@ -1236,6 +1290,7 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
     let started = Instant::now();
     let result = match test.kind {
         TestKind::Smoke => Ok(()),
+        TestKind::AppPackagedMode => run_app_packaged_mode_test(),
         TestKind::WindowCreateClose => run_window_create_close_test(),
         TestKind::WindowCreationWithUrl => run_window_creation_with_url_test(),
         TestKind::WindowHiddenOption => run_window_hidden_option_test(),
@@ -1250,12 +1305,14 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         TestKind::WindowSetFrame => run_window_set_frame_test(),
         TestKind::WindowGetFrame => run_window_get_frame_test(),
         TestKind::WindowGetPosition => run_window_get_position_test(),
+        TestKind::WindowOmittedPositionCenters => run_window_omitted_position_centers_test(),
         TestKind::WindowGetSize => run_window_get_size_test(),
         TestKind::WindowMaximizeUnmaximize => run_window_maximize_unmaximize_test(),
         TestKind::WindowAlwaysOnTop => run_window_always_on_top_test(),
         TestKind::WindowVisibleOnAllWorkspaces => run_window_visible_on_all_workspaces_test(),
         TestKind::WindowFocus => run_window_focus_test(),
         TestKind::WindowCloseEvent => run_window_close_event_test(),
+        TestKind::WindowWillCloseVeto => run_window_will_close_veto_test(),
         TestKind::WindowResizeEvent => run_window_resize_event_test(),
         TestKind::WindowGetById => run_window_get_by_id_test(),
         TestKind::WindowInsetTitlebarStyle => run_window_inset_titlebar_style_test(),
@@ -1276,6 +1333,9 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         TestKind::NavigationLoadHtml => run_navigation_load_html_test(),
         TestKind::NavigationDomReadyEvent => run_navigation_dom_ready_event_test(),
         TestKind::NavigationDidNavigateEvent => run_navigation_did_navigate_event_test(),
+        TestKind::NavigationDidCommitNavigationEvent => {
+            run_navigation_did_commit_navigation_event_test()
+        }
         TestKind::NavigationExecuteJavascript => run_navigation_execute_javascript_test(),
         TestKind::TrayVisibilityToggleAndBounds => run_tray_visibility_toggle_and_bounds_test(),
         TestKind::SessionFromPartition => run_session_from_partition_test(),
@@ -1333,6 +1393,24 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         duration_ms: started.elapsed().as_millis(),
         error: result.err(),
     }
+}
+
+fn run_app_packaged_mode_test() -> Result<(), String> {
+    let app_info = &app_state().app_info;
+    if !matches!(app_info.channel.as_str(), "dev" | "canary" | "production") {
+        return Err(format!("unexpected build channel: {}", app_info.channel));
+    }
+
+    let expected = app_info.channel != "dev";
+    if app_info.is_packaged() != expected {
+        return Err(format!(
+            "is_packaged returned {} for channel {}",
+            app_info.is_packaged(),
+            app_info.channel
+        ));
+    }
+
+    Ok(())
 }
 
 fn run_window_create_close_test() -> Result<(), String> {
@@ -1495,6 +1573,28 @@ fn create_window_with_harness_custom(
     window_callbacks: electrobun::WindowCallbacks,
     webview_callbacks: WebviewCallbacks,
 ) -> Result<WindowWithWebview, String> {
+    create_window_with_harness_custom_renderer(
+        title,
+        frame,
+        Renderer::Native,
+        hidden,
+        activate,
+        title_bar_style,
+        window_callbacks,
+        webview_callbacks,
+    )
+}
+
+fn create_window_with_harness_custom_renderer(
+    title: &'static str,
+    frame: Rect,
+    renderer: Renderer,
+    hidden: bool,
+    activate: bool,
+    title_bar_style: &'static str,
+    window_callbacks: electrobun::WindowCallbacks,
+    webview_callbacks: WebviewCallbacks,
+) -> Result<WindowWithWebview, String> {
     let state = app_state();
     let mut window_options = WindowOptions::new(title, frame);
     window_options.hidden = hidden;
@@ -1508,7 +1608,7 @@ fn create_window_with_harness_custom(
         TEST_HARNESS_URL,
         Rect::new(0.0, 0.0, frame.width, frame.height),
     );
-    webview_options.renderer = Renderer::Native;
+    webview_options.renderer = renderer;
     webview_options.secret_key = DEFAULT_SECRET_KEY;
     webview_options.sandbox = false;
     webview_options.callbacks = webview_callbacks;
@@ -1635,9 +1735,23 @@ fn run_window_hidden_option_test() -> Result<(), String> {
     let window_id = state.core.create_window(options)?;
     let result = (|| {
         sleep_ms(SHORT_WAIT_MS);
+        if state.core.is_window_visible(window_id) {
+            return Err("window was visible after hidden creation".to_string());
+        }
+
         state.core.show_window(window_id, true)?;
         sleep_ms(SHORT_WAIT_MS);
-        state.core.hide_window(window_id)
+        if !state.core.is_window_visible(window_id) {
+            return Err("window did not become visible after show".to_string());
+        }
+
+        state.core.hide_window(window_id)?;
+        sleep_ms(SHORT_WAIT_MS);
+        if state.core.is_window_visible(window_id) {
+            return Err("window remained visible after hide".to_string());
+        }
+
+        Ok(())
     })();
     finish_with_window(window_id, result)
 }
@@ -1744,20 +1858,40 @@ fn run_window_set_position_test() -> Result<(), String> {
 
 fn run_window_set_size_test() -> Result<(), String> {
     let state = app_state();
-    let mut options = WindowOptions::new("Rust Size Test", Rect::new(80.0, 80.0, 420.0, 280.0));
-    options.hidden = true;
-    options.activate = false;
-    let window_id = state.core.create_window(options)?;
+    let created = create_window_with_test_harness(
+        "Rust Size Test",
+        Rect::new(80.0, 80.0, 420.0, 280.0),
+        false,
+        false,
+    )?;
     let result = (|| {
-        state.core.set_window_size(window_id, 520.0, 360.0)?;
         sleep_ms(SHORT_WAIT_MS);
-        let frame = state.core.get_window_frame(window_id)?;
-        if !approx_eq(frame.width, 520.0, 24.0) || !approx_eq(frame.height, 360.0, 24.0) {
-            return Err(format!("unexpected size {}x{}", frame.width, frame.height));
+        state
+            .core
+            .set_window_size(created.window_id, 600.0, 500.0)?;
+        sleep_ms(SHORT_WAIT_MS);
+        let grown = state.core.get_window_frame(created.window_id)?;
+        if !approx_eq(grown.width, 600.0, 24.0) || !approx_eq(grown.height, 500.0, 24.0) {
+            return Err(format!(
+                "unexpected grown size {}x{}",
+                grown.width, grown.height
+            ));
+        }
+
+        state
+            .core
+            .set_window_size(created.window_id, 320.0, 240.0)?;
+        sleep_ms(SHORT_WAIT_MS);
+        let shrunk = state.core.get_window_frame(created.window_id)?;
+        if !approx_eq(shrunk.width, 320.0, 24.0) || !approx_eq(shrunk.height, 240.0, 24.0) {
+            return Err(format!(
+                "unexpected shrunk size {}x{}",
+                shrunk.width, shrunk.height
+            ));
         }
         Ok(())
     })();
-    finish_with_window(window_id, result)
+    finish_with_window(created.window_id, result)
 }
 
 fn run_window_set_frame_test() -> Result<(), String> {
@@ -1811,6 +1945,32 @@ fn run_window_get_position_test() -> Result<(), String> {
         let frame = state.core.get_window_frame(window_id)?;
         if !frame.x.is_finite() || !frame.y.is_finite() {
             return Err("window position was not finite".to_string());
+        }
+        Ok(())
+    })();
+    finish_with_window(window_id, result)
+}
+
+fn run_window_omitted_position_centers_test() -> Result<(), String> {
+    let state = app_state();
+    let display = state.core.get_primary_display()?;
+    let mut options = WindowOptions::new(
+        "Rust Centered Window Test",
+        Rect::new(0.0, 0.0, 420.0, 280.0),
+    );
+    options.hidden = true;
+    options.activate = false;
+    options.centered = true;
+    let window_id = state.core.create_window(options)?;
+    let result = (|| {
+        let frame = state.core.get_window_frame(window_id)?;
+        let expected_x = display.work_area.x + (display.work_area.width - frame.width) / 2.0;
+        let expected_y = display.work_area.y + (display.work_area.height - frame.height) / 2.0;
+        if !approx_eq(frame.x, expected_x, 8.0) || !approx_eq(frame.y, expected_y, 8.0) {
+            return Err(format!(
+                "window frame {},{} was not centered at {},{}",
+                frame.x, frame.y, expected_x, expected_y
+            ));
         }
         Ok(())
     })();
@@ -1960,6 +2120,43 @@ fn run_window_close_event_test() -> Result<(), String> {
     Ok(())
 }
 
+fn run_window_will_close_veto_test() -> Result<(), String> {
+    reset_callback_state();
+    let state = app_state();
+    let mut options = WindowOptions::new(
+        "Rust Will Close Veto Test",
+        Rect::new(120.0, 120.0, 420.0, 280.0),
+    );
+    options.callbacks = electrobun::WindowCallbacks {
+        close: Some(observed_window_close),
+        should_close: Some(observed_window_should_close),
+        ..electrobun::WindowCallbacks::default()
+    };
+    let window_id = state.core.create_window(options)?;
+
+    state.core.request_window_close(window_id)?;
+    sleep_ms(SHORT_WAIT_MS);
+    if callback_count(|state| state.window_should_close_count) != 1
+        || callback_count(|state| state.window_close_count) != 0
+    {
+        close_window_silent(window_id);
+        return Err("first close request was not vetoed".to_string());
+    }
+    state.core.get_window_frame(window_id)?;
+
+    state.core.request_window_close(window_id)?;
+    if !wait_until(LONG_WAIT_MS, || {
+        callback_count(|state| state.window_close_count) > 0
+    }) {
+        close_window_silent(window_id);
+        return Err("second close request was not allowed".to_string());
+    }
+    if callback_count(|state| state.window_should_close_count) != 2 {
+        return Err("will-close callback count mismatch".to_string());
+    }
+    Ok(())
+}
+
 fn run_window_resize_event_test() -> Result<(), String> {
     reset_callback_state();
     let state = app_state();
@@ -2021,17 +2218,60 @@ fn run_window_inset_titlebar_style_test() -> Result<(), String> {
 
 fn run_window_traffic_light_position_api_test() -> Result<(), String> {
     let state = app_state();
+    let mut baseline_options = WindowOptions::new(
+        "Rust Traffic Light Baseline",
+        Rect::new(100.0, 100.0, 520.0, 340.0),
+    );
+    baseline_options.title_bar_style = "hiddenInset";
+    baseline_options.activate = false;
+    let baseline_id = state.core.create_window(baseline_options)?;
+
     let mut options = WindowOptions::new(
         "Rust Traffic Light Test",
-        Rect::new(100.0, 100.0, 520.0, 340.0),
+        Rect::new(160.0, 160.0, 520.0, 340.0),
     );
     options.title_bar_style = "hiddenInset";
     options.traffic_light_offset = TrafficLightOffset { x: 20.0, y: 18.0 };
-    options.hidden = true;
     options.activate = false;
-    let window_id = state.core.create_window(options)?;
-    let result = state.core.set_window_button_position(window_id, 28.0, 22.0);
-    finish_with_window(window_id, result)
+    let window_id = match state.core.create_window(options) {
+        Ok(id) => id,
+        Err(error) => {
+            let _ = state.core.close_window(baseline_id);
+            return Err(error);
+        }
+    };
+
+    let result = (|| {
+        sleep_ms(SHORT_WAIT_MS);
+        let baseline = state.core.get_window_button_position(baseline_id)?;
+        let offset = state.core.get_window_button_position(window_id)?;
+        if !approx_eq(offset.x - baseline.x, 20.0, 0.5)
+            || !approx_eq(offset.y - baseline.y, 18.0, 0.5)
+        {
+            return Err("constructor traffic light offset was not applied".to_string());
+        }
+
+        state
+            .core
+            .set_window_button_position(window_id, 28.0, 22.0)?;
+        sleep_ms(SHORT_WAIT_MS);
+        let positioned = state.core.get_window_button_position(window_id)?;
+        if !approx_eq(positioned.x, 28.0, 0.5) || !approx_eq(positioned.y, 22.0, 0.5) {
+            return Err("runtime traffic light position was not applied".to_string());
+        }
+
+        state.core.set_window_size(window_id, 560.0, 380.0)?;
+        sleep_ms(SHORT_WAIT_MS);
+        let resized = state.core.get_window_button_position(window_id)?;
+        if !approx_eq(resized.x, 28.0, 0.5) || !approx_eq(resized.y, 22.0, 0.5) {
+            return Err("traffic light position changed after resize".to_string());
+        }
+        Ok(())
+    })();
+
+    let _ = state.core.close_window(window_id);
+    let _ = state.core.close_window(baseline_id);
+    result
 }
 
 fn run_webview_page_zoom_test() -> Result<(), String> {
@@ -2189,6 +2429,37 @@ fn run_navigation_did_navigate_event_test() -> Result<(), String> {
                 || last_webview_detail_contains("views://zig")
         }) {
             return Err("did-navigate did not fire".to_string());
+        }
+        Ok(())
+    })();
+    finish_with_window(created.window_id, result)
+}
+
+fn run_navigation_did_commit_navigation_event_test() -> Result<(), String> {
+    reset_callback_state();
+    let created = create_window_with_harness_custom_renderer(
+        "Rust Did Commit Navigation Test",
+        Rect::new(100.0, 100.0, 640.0, 420.0),
+        active_playground_renderer(),
+        true,
+        false,
+        "default",
+        electrobun::WindowCallbacks::default(),
+        observed_harness_webview_callbacks(),
+    )?;
+    let result = (|| {
+        sleep_ms(MEDIUM_WAIT_MS);
+        reset_callback_state();
+        app_state()
+            .core
+            .load_url_in_webview(created.webview_id, ZIG_VIEW_URL)?;
+        if !wait_until(3_000, || {
+            callback_count(|state| state.webview_did_commit_navigation_count) > 0
+        }) {
+            return Err("did-commit-navigation did not fire".to_string());
+        }
+        if !last_webview_detail_contains("views://zig") {
+            return Err("did-commit-navigation URL was not forwarded".to_string());
         }
         Ok(())
     })();

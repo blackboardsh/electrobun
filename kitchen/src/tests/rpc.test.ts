@@ -1,7 +1,7 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
 import { defineTest, expect } from "../test-framework/types";
-import { BrowserView } from "electrobun/bun";
+import { BrowserView, BuildConfig } from "electrobun/bun";
 import type {
   HostSocketStressState,
   SocketSendSummary,
@@ -173,6 +173,45 @@ export function createTestHarnessRPC(
 }
 
 export const rpcTests = [
+	defineTest({
+		name: "Webview tag BrowserView created event",
+		category: "BrowserView",
+		description:
+			"Attach typed RPC when an electrobun-webview tag creates its BrowserView",
+		timeout: 20000,
+		async run({ createWindow, log }) {
+			const tagRpc = createTestHarnessRPC(10000);
+			let callbackView: BrowserView | undefined;
+			let resolveDomReady: (() => void) | undefined;
+			const domReady = new Promise<void>((resolve) => {
+				resolveDomReady = resolve;
+			});
+
+			const removeCreatedListener = BrowserView.on("created", (view) => {
+				callbackView = view;
+				expect(BrowserView.getById(view.id)).toBe(view);
+				tagRpc.setTransport(view.createTransport());
+				view.on("dom-ready", () => resolveDomReady?.());
+			});
+
+			try {
+				await createWindow({
+					url: "views://test-oopif/index.html",
+					title: "Webview tag created event",
+					renderer: "cef",
+				});
+
+				await domReady;
+				expect(callbackView).toBeDefined();
+				const product = await tagRpc.request.multiply({ a: 6, b: 7 });
+				expect(product).toBe(42);
+				log(`Attached typed RPC to BrowserView ${callbackView!.id}`);
+			} finally {
+				removeCreatedListener();
+			}
+		},
+	}),
+
   defineTest({
     name: "bun to webview: request with response",
     category: "RPC",
@@ -221,6 +260,47 @@ export const rpcTests = [
 
       expect(result).toBe(123);
       log(`Got result: ${result}`);
+    },
+  }),
+
+  defineTest({
+    name: "webview to bun: per-request timeout override",
+    category: "RPC",
+    description: "Keep a modal-style request alive without changing other RPC timeouts",
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC();
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "RPC Timeout Override Test",
+        renderer: BuildConfig.getSync().defaultRenderer,
+      });
+
+      await sleep(1000);
+
+      const timedOut = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+        script: `
+          return window.electrobun.rpc.request.delayed(
+            { ms: 150, value: "late" },
+            { maxRequestTime: 20 },
+          ).then(
+            () => "unexpected success",
+            error => error.message,
+          );
+        `,
+      });
+      expect(timedOut).toBe("RPC request timed out.");
+
+      const dialogStyleResult = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+        script: `
+          return window.electrobun.rpc.request.delayed(
+            { ms: 150, value: "dialog completed" },
+            { maxRequestTime: Infinity },
+          );
+        `,
+      });
+      expect(dialogStyleResult).toBe("dialog completed");
+      log("Finite override timed out and modal-style request completed");
     },
   }),
 

@@ -41,6 +41,30 @@ inline std::string buildAppDataPath(
     return result;
 }
 
+inline std::wstring buildAppDataPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& suffix = L"",
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring appId = !identifier.empty() ? identifier : L"Electrobun";
+    std::wstring channelPath = !channel.empty() ? channel : L"default";
+
+    std::wstring result = basePath;
+    result += pathSeparator;
+    result += appId;
+    result += pathSeparator;
+    result += channelPath;
+
+    if (!suffix.empty()) {
+        result += pathSeparator;
+        result += suffix;
+    }
+
+    return result;
+}
+
 /**
  * Build a partition-specific path under the app data directory.
  *
@@ -63,6 +87,23 @@ inline std::string buildPartitionPath(
     std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
     base += pathSeparator;
     base += "Partitions";
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
+inline std::wstring buildPartitionPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& renderer,
+    const std::wstring& partitionName,
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring base = buildAppDataPath(
+        basePath, identifier, channel, renderer, pathSeparator);
+    base += pathSeparator;
+    base += L"Partitions";
     base += pathSeparator;
     base += partitionName;
     return base;
@@ -100,6 +141,23 @@ inline std::string buildCEFPartitionPath(
     std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
     base += pathSeparator;
     base += "partitions";
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
+inline std::wstring buildCEFPartitionPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& renderer,
+    const std::wstring& partitionName,
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring base = buildAppDataPath(
+        basePath, identifier, channel, renderer, pathSeparator);
+    base += pathSeparator;
+    base += L"partitions";
     base += pathSeparator;
     base += partitionName;
     return base;

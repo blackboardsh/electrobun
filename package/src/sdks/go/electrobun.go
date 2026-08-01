@@ -13,6 +13,7 @@ package electrobun
 #endif
 
 extern void electrobunWindowCloseHandler(uint32_t);
+extern void electrobunWindowShouldCloseHandler(uint32_t);
 extern void electrobunWindowMoveHandler(uint32_t, double, double);
 extern void electrobunWindowResizeHandler(uint32_t, double, double, double, double);
 extern void electrobunWindowFocusHandler(uint32_t);
@@ -45,6 +46,7 @@ typedef void (*eb_app_reopen_cb)(void);
 typedef void (*eb_quit_requested_cb)(void);
 
 static void eb_window_close(uint32_t id) { electrobunWindowCloseHandler(id); }
+static void eb_window_should_close(uint32_t id) { electrobunWindowShouldCloseHandler(id); }
 static void eb_window_move(uint32_t id, double x, double y) { electrobunWindowMoveHandler(id, x, y); }
 static void eb_window_resize(uint32_t id, double x, double y, double w, double h) { electrobunWindowResizeHandler(id, x, y, w, h); }
 static void eb_window_focus(uint32_t id) { electrobunWindowFocusHandler(id); }
@@ -96,9 +98,9 @@ static uint32_t eb_call_get_window_style(void* fn, bool borderless, bool titled,
 	return ((eb_get_window_style_fn)fn)(borderless, titled, closable, miniaturizable, resizable, unified_title_and_toolbar, full_screen, full_size_content_view, utility_window, doc_modal_window, nonactivating_panel, hud_window);
 }
 
-typedef uint32_t (*eb_create_window_fn)(double, double, double, double, uint32_t, const char*, bool, const char*, bool, bool, double, double, eb_window_close_cb, eb_window_move_cb, eb_window_resize_cb, eb_window_focus_cb, eb_window_blur_cb, eb_window_key_cb);
-static uint32_t eb_call_create_window(void* fn, double x, double y, double width, double height, uint32_t style, const char* title_bar_style, bool transparent, const char* title, bool hidden, bool activate, double traffic_x, double traffic_y, bool close_enabled, bool move_enabled, bool resize_enabled, bool focus_enabled, bool blur_enabled, bool key_enabled) {
-	return ((eb_create_window_fn)fn)(x, y, width, height, style, title_bar_style, transparent, title, hidden, activate, traffic_x, traffic_y, close_enabled ? eb_window_close : 0, move_enabled ? eb_window_move : 0, resize_enabled ? eb_window_resize : 0, focus_enabled ? eb_window_focus : 0, blur_enabled ? eb_window_blur : 0, key_enabled ? eb_window_key : 0);
+typedef uint32_t (*eb_create_window_fn)(double, double, double, double, uint32_t, const char*, bool, const char*, bool, bool, bool, double, double, eb_window_close_cb, eb_window_move_cb, eb_window_resize_cb, eb_window_focus_cb, eb_window_blur_cb, eb_window_key_cb, eb_window_close_cb);
+static uint32_t eb_call_create_window(void* fn, double x, double y, double width, double height, uint32_t style, const char* title_bar_style, bool transparent, const char* title, bool hidden, bool activate, bool centered, double traffic_x, double traffic_y, bool close_enabled, bool move_enabled, bool resize_enabled, bool focus_enabled, bool blur_enabled, bool key_enabled, bool should_close_enabled) {
+	return ((eb_create_window_fn)fn)(x, y, width, height, style, title_bar_style, transparent, title, hidden, activate, centered, traffic_x, traffic_y, close_enabled ? eb_window_close : 0, move_enabled ? eb_window_move : 0, resize_enabled ? eb_window_resize : 0, focus_enabled ? eb_window_focus : 0, blur_enabled ? eb_window_blur : 0, key_enabled ? eb_window_key : 0, should_close_enabled ? eb_window_should_close : 0);
 }
 
 typedef uint32_t (*eb_create_webview_fn)(uint32_t, uint32_t, const char*, const char*, double, double, double, double, bool, const char*, eb_decide_navigation_cb, eb_webview_event_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, eb_webview_post_message_cb, const char*, const char*, const char*, bool, bool, bool);
@@ -146,6 +148,9 @@ static void eb_call_u32_f64_f64_f64_f64(void* fn, uint32_t value, double x, doub
 
 typedef void (*eb_get_window_frame_fn)(uint32_t, double*, double*, double*, double*);
 static void eb_call_get_window_frame(void* fn, uint32_t value, double* x, double* y, double* width, double* height) { ((eb_get_window_frame_fn)fn)(value, x, y, width, height); }
+
+typedef void (*eb_get_window_point_fn)(uint32_t, double*, double*);
+static void eb_call_get_window_point(void* fn, uint32_t value, double* x, double* y) { ((eb_get_window_point_fn)fn)(value, x, y); }
 
 typedef void (*eb_resize_webview_fn)(uint32_t, double, double, double, double, const char*);
 static void eb_call_resize_webview(void* fn, uint32_t value, double x, double y, double width, double height, const char* masks_json) { ((eb_resize_webview_fn)fn)(value, x, y, width, height, masks_json); }
@@ -269,6 +274,11 @@ type AppInfo struct {
 	Channel    string
 }
 
+// IsPackaged returns false for dev builds and true for nonempty release channels.
+func (a AppInfo) IsPackaged() bool {
+	return a.Channel != "" && a.Channel != "dev"
+}
+
 type Rect struct {
 	X      float64 `json:"x"`
 	Y      float64 `json:"y"`
@@ -305,6 +315,7 @@ func StandardWindowStyle() WindowStyle {
 }
 
 type WindowCloseHandler func(uint32)
+type WindowShouldCloseHandler func(uint32)
 type WindowMoveHandler func(uint32, float64, float64)
 type WindowResizeHandler func(uint32, float64, float64, float64, float64)
 type WindowFocusHandler func(uint32)
@@ -312,12 +323,13 @@ type WindowBlurHandler func(uint32)
 type WindowKeyHandler func(uint32, uint32, uint32, uint32, uint32)
 
 type WindowCallbacks struct {
-	Close  WindowCloseHandler
-	Move   WindowMoveHandler
-	Resize WindowResizeHandler
-	Focus  WindowFocusHandler
-	Blur   WindowBlurHandler
-	Key    WindowKeyHandler
+	Close       WindowCloseHandler
+	ShouldClose WindowShouldCloseHandler
+	Move        WindowMoveHandler
+	Resize      WindowResizeHandler
+	Focus       WindowFocusHandler
+	Blur        WindowBlurHandler
+	Key         WindowKeyHandler
 }
 
 type TrafficLightOffset struct {
@@ -333,6 +345,7 @@ type WindowOptions struct {
 	Transparent        bool
 	Hidden             bool
 	Activate           bool
+	Centered           bool
 	TrafficLightOffset TrafficLightOffset
 	Callbacks          WindowCallbacks
 }
@@ -344,6 +357,7 @@ func NewWindowOptions(title string, frame Rect) WindowOptions {
 		Style:         StandardWindowStyle(),
 		TitleBarStyle: "default",
 		Activate:      true,
+		Centered:      false,
 	}
 }
 
@@ -629,12 +643,16 @@ var requiredSymbols = []string{
 	"showWindow",
 	"activateWindow",
 	"hideWindow",
+	"isWindowVisible",
 	"setWindowButtonPosition",
+	"getWindowButtonPosition",
 	"setWindowPosition",
+	"centerWindow",
 	"setWindowSize",
 	"setWindowFrame",
 	"getWindowFrame",
 	"closeWindow",
+	"requestWindowClose",
 	"resizeWebview",
 	"loadURLInWebView",
 	"loadHTMLInWebView",
@@ -794,6 +812,7 @@ func (c *Core) CreateWindow(options WindowOptions) (uint32, error) {
 		title,
 		cbool(options.Hidden),
 		cbool(options.Activate),
+		cbool(options.Centered),
 		C.double(options.TrafficLightOffset.X),
 		C.double(options.TrafficLightOffset.Y),
 		cbool(options.Callbacks.Close != nil),
@@ -802,6 +821,7 @@ func (c *Core) CreateWindow(options WindowOptions) (uint32, error) {
 		cbool(options.Callbacks.Focus != nil),
 		cbool(options.Callbacks.Blur != nil),
 		cbool(options.Callbacks.Key != nil),
+		cbool(options.Callbacks.ShouldClose != nil),
 	)
 	if windowID == 0 {
 		return 0, errors.New(c.LastError())
@@ -890,13 +910,31 @@ func (c *Core) HideWindow(windowID uint32) error {
 	return c.ensureLastCallSucceeded()
 }
 
+func (c *Core) IsWindowVisible(windowID uint32) bool {
+	return bool(C.eb_call_u32_bool_ret(c.symbol("isWindowVisible"), C.uint32_t(windowID)))
+}
+
 func (c *Core) SetWindowButtonPosition(windowID uint32, x, y float64) error {
 	C.eb_call_u32_f64_f64(c.symbol("setWindowButtonPosition"), C.uint32_t(windowID), C.double(x), C.double(y))
 	return c.ensureLastCallSucceeded()
 }
 
+func (c *Core) GetWindowButtonPosition(windowID uint32) (Point, error) {
+	var x, y C.double
+	C.eb_call_get_window_point(c.symbol("getWindowButtonPosition"), C.uint32_t(windowID), &x, &y)
+	if err := c.ensureLastCallSucceeded(); err != nil {
+		return Point{}, err
+	}
+	return Point{X: float64(x), Y: float64(y)}, nil
+}
+
 func (c *Core) SetWindowPosition(windowID uint32, x, y float64) error {
 	C.eb_call_u32_f64_f64(c.symbol("setWindowPosition"), C.uint32_t(windowID), C.double(x), C.double(y))
+	return c.ensureLastCallSucceeded()
+}
+
+func (c *Core) CenterWindow(windowID uint32) error {
+	C.eb_call_u32(c.symbol("centerWindow"), C.uint32_t(windowID))
 	return c.ensureLastCallSucceeded()
 }
 
@@ -921,6 +959,11 @@ func (c *Core) GetWindowFrame(windowID uint32) (Rect, error) {
 
 func (c *Core) CloseWindow(windowID uint32) error {
 	C.eb_call_u32(c.symbol("closeWindow"), C.uint32_t(windowID))
+	return c.ensureLastCallSucceeded()
+}
+
+func (c *Core) RequestWindowClose(windowID uint32) error {
+	C.eb_call_u32(c.symbol("requestWindowClose"), C.uint32_t(windowID))
 	return c.ensureLastCallSucceeded()
 }
 
@@ -1466,6 +1509,7 @@ func (c *Core) ShowContextMenuJSON(menuJSON string, handler StatusItemHandler) e
 }
 
 func (c *Core) OpenFileDialog(options OpenFileDialogOptions) (string, error) {
+	// The low-level C ABI returns a JSON array of selected paths.
 	startingFolder, freeStartingFolder, err := cString(options.StartingFolder, "starting folder")
 	if err != nil {
 		return "", err

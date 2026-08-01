@@ -142,6 +142,12 @@ On Windows PowerShell:
 
 On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
 
+Linux applications also require the corresponding GTK 3, WebKitGTK 4.1,
+Ayatana AppIndicator, and librsvg runtime packages on end-user systems. See the
+[cross-platform development guide](./docs/src/content/docs/electrobun/guides/cross-platform-development.mdx#linux)
+for distro-specific install commands. The launcher reports the exact missing
+shared library when these dependencies are unavailable.
+
 ### First-time Setup
 
 ```bash
@@ -163,6 +169,11 @@ hutch dev
 # If you need a completely fresh start
 hutch dev:clean
 ```
+
+The native build generates `package/src/native/compile_flags.txt` from the
+compiler flags resolved for the current machine. clangd-compatible editors
+discover it automatically; rerun the build after changing native dependencies
+or system toolchains.
 
 With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
 one command to build only changed native layers and run Kitchen with the local

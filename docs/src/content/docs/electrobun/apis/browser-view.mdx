@@ -115,6 +115,10 @@ const webview = new BrowserView({
 });
 ```
 
+`persist:default` selects the app's shared default persistent profile. Other
+`persist:*` names create isolated persistent profiles, while names without the
+prefix remain ephemeral.
+
 
 ### preload
   <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
@@ -235,11 +239,16 @@ const webview = new BrowserView({
 // Note: These RPC methods will inherit types from the shared type
 
 // Call a browser function from the main process
-const answer = await webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
+const answer = await webview.rpc.request.someWebviewFunction(
+  { a: 4, b: 6 },
+  { maxRequestTime: 5000 },
+);
 
 // Send a message to the BrowserView from the main process
 webview.rpc.send.logToWebview({ msg: "my message" });
 ```
+
+  <p>The second argument to a request can set <code>maxRequestTime</code> for that call only. Requests without an override continue to use the RPC instance's configured timeout.</p>
 
 
   <Aside type="tip">
@@ -302,6 +311,49 @@ const win = new BrowserWindow({
 });
 
 const webview = BrowserView.getById(win.webview.id);
+```
+
+
+### BrowserView.on("created")
+  <p>Subscribe to BrowserViews created by <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTags</a>. The handler runs after the BrowserView is registered and before the tag's initialization request resolves, so RPC can be attached without polling.</p>
+
+
+```typescript
+import { BrowserView } from "electrobun/bun";
+import type { TabRPC } from "../shared/types";
+
+const tabRPCs = new Map();
+
+const stopListening = BrowserView.on("created", (view) => {
+  const rpc = BrowserView.defineRPC<TabRPC>({
+    handlers: {
+      requests: {},
+      messages: {},
+    },
+  });
+
+  rpc.setTransport(view.createTransport());
+  tabRPCs.set(view.id, rpc);
+});
+
+// Later, when new tab creation is no longer expected:
+stopListening();
+```
+
+
+### BrowserView.off("created")
+  <p>Remove a previously registered WebviewTag BrowserView creation handler.</p>
+
+
+```typescript
+import type { BrowserViewCreatedHandler } from "electrobun/bun";
+
+const handleCreated: BrowserViewCreatedHandler = (view) => {
+  console.log(`Created BrowserView ${view.id}`);
+};
+
+BrowserView.on("created", handleCreated);
+BrowserView.off("created", handleCreated);
 ```
 
 

@@ -377,6 +377,10 @@ export interface ElectrobunConfig {
 			 * - `"value"` — add a flag with a value
 			 * - `false` — remove a default flag set by Electrobun
 			 *
+			 * CEF remote debugging is automatic for dev builds and disabled by
+			 * default for packaged builds. Set `"remote-debugging-port"` to a
+			 * string port to opt in, or `false` to disable it explicitly.
+			 *
 			 * @example
 			 * ```typescript
 			 * chromiumFlags: {
@@ -436,6 +440,10 @@ export interface ElectrobunConfig {
 			 * - `"value"` — add a flag with a value
 			 * - `false` — remove a default flag set by Electrobun
 			 *
+			 * CEF remote debugging is automatic for dev builds and disabled by
+			 * default for packaged builds. Set `"remote-debugging-port"` to a
+			 * string port to opt in, or `false` to disable it explicitly.
+			 *
 			 * @example
 			 * ```typescript
 			 * chromiumFlags: {
@@ -484,6 +492,10 @@ export interface ElectrobunConfig {
 			 * - `true` — add a switch-only flag
 			 * - `"value"` — add a flag with a value
 			 * - `false` — remove a default flag set by Electrobun
+			 *
+			 * CEF remote debugging is automatic for dev builds and disabled by
+			 * default for packaged builds. Set `"remote-debugging-port"` to a
+			 * string port to opt in, or `false` to disable it explicitly.
 			 *
 			 * @example
 			 * ```typescript

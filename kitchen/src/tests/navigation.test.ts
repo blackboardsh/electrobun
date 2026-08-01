@@ -356,6 +356,46 @@ export const navigationTests = [
   }),
 
   defineTest({
+    name: "did-commit-navigation event",
+    category: "Navigation",
+    description: "Test that navigation commits before the page finishes loading",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      const lifecycle: string[] = [];
+      let committedUrl = "";
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Did Commit Navigation Test",
+        renderer: "cef",
+      });
+
+      win.webview.on("did-commit-navigation", (event: any) => {
+        lifecycle.push("commit");
+        committedUrl = event.data?.detail || "";
+      });
+      win.webview.on("did-navigate", () => {
+        lifecycle.push("finish");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      lifecycle.length = 0;
+      committedUrl = "";
+
+      win.webview.loadURL("views://test-runner/index.html");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const commitIndex = lifecycle.indexOf("commit");
+      const finishIndex = lifecycle.indexOf("finish");
+      log(`Navigation lifecycle: ${lifecycle.join(" -> ")}; URL: ${committedUrl}`);
+
+      expect(commitIndex).toBeGreaterThanOrEqual(0);
+      expect(finishIndex).toBeGreaterThan(commitIndex);
+      expect(committedUrl).toContain("test-runner");
+    },
+  }),
+
+  defineTest({
     name: "will-navigate event with response control",
     category: "Navigation",
     description: "Test that will-navigate can block navigation",

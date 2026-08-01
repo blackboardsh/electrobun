@@ -130,6 +130,7 @@ mod dynlib {
 }
 
 pub type WindowCloseHandler = extern "C" fn(u32);
+pub type WindowShouldCloseHandler = extern "C" fn(u32);
 pub type WindowMoveHandler = extern "C" fn(u32, f64, f64);
 pub type WindowResizeHandler = extern "C" fn(u32, f64, f64, f64, f64);
 pub type WindowFocusHandler = extern "C" fn(u32);
@@ -164,6 +165,13 @@ pub struct AppInfo {
     pub identifier: String,
     pub name: String,
     pub channel: String,
+}
+
+impl AppInfo {
+    /// Returns false for dev builds and true for nonempty release channels.
+    pub fn is_packaged(&self) -> bool {
+        !self.channel.is_empty() && self.channel != "dev"
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -234,6 +242,7 @@ impl WindowStyle {
 #[derive(Default)]
 pub struct WindowCallbacks {
     pub close: Option<WindowCloseHandler>,
+    pub should_close: Option<WindowShouldCloseHandler>,
     pub move_handler: Option<WindowMoveHandler>,
     pub resize: Option<WindowResizeHandler>,
     pub focus: Option<WindowFocusHandler>,
@@ -255,6 +264,7 @@ pub struct WindowOptions<'a> {
     pub transparent: bool,
     pub hidden: bool,
     pub activate: bool,
+    pub centered: bool,
     pub traffic_light_offset: TrafficLightOffset,
     pub callbacks: WindowCallbacks,
 }
@@ -269,6 +279,7 @@ impl<'a> WindowOptions<'a> {
             transparent: false,
             hidden: false,
             activate: true,
+            centered: false,
             traffic_light_offset: TrafficLightOffset::default(),
             callbacks: WindowCallbacks::default(),
         }
@@ -601,6 +612,7 @@ type CreateWindowFn = unsafe extern "C" fn(
     *const c_char,
     bool,
     bool,
+    bool,
     f64,
     f64,
     Option<WindowCloseHandler>,
@@ -609,6 +621,7 @@ type CreateWindowFn = unsafe extern "C" fn(
     Option<WindowFocusHandler>,
     Option<WindowBlurHandler>,
     Option<WindowKeyHandler>,
+    Option<WindowShouldCloseHandler>,
 ) -> u32;
 type CreateWebviewFn = unsafe extern "C" fn(
     u32,
@@ -650,12 +663,16 @@ type IsWindowVisibleOnAllWorkspacesFn = unsafe extern "C" fn(u32) -> bool;
 type ShowWindowFn = unsafe extern "C" fn(u32, bool);
 type ActivateWindowFn = unsafe extern "C" fn(u32);
 type HideWindowFn = unsafe extern "C" fn(u32);
+type IsWindowVisibleFn = unsafe extern "C" fn(u32) -> bool;
 type SetWindowButtonPositionFn = unsafe extern "C" fn(u32, f64, f64);
+type GetWindowButtonPositionFn = unsafe extern "C" fn(u32, *mut f64, *mut f64);
 type SetWindowPositionFn = unsafe extern "C" fn(u32, f64, f64);
+type CenterWindowFn = unsafe extern "C" fn(u32);
 type SetWindowSizeFn = unsafe extern "C" fn(u32, f64, f64);
 type SetWindowFrameFn = unsafe extern "C" fn(u32, f64, f64, f64, f64);
 type GetWindowFrameFn = unsafe extern "C" fn(u32, *mut f64, *mut f64, *mut f64, *mut f64);
 type CloseWindowFn = unsafe extern "C" fn(u32);
+type RequestWindowCloseFn = unsafe extern "C" fn(u32);
 type ResizeWebviewFn = unsafe extern "C" fn(u32, f64, f64, f64, f64, *const c_char);
 type LoadURLInWebViewFn = unsafe extern "C" fn(u32, *const c_char);
 type LoadHTMLInWebViewFn = unsafe extern "C" fn(u32, *const c_char);
@@ -780,12 +797,16 @@ struct Symbols {
     show_window: ShowWindowFn,
     activate_window: ActivateWindowFn,
     hide_window: HideWindowFn,
+    is_window_visible: IsWindowVisibleFn,
     set_window_button_position: SetWindowButtonPositionFn,
+    get_window_button_position: GetWindowButtonPositionFn,
     set_window_position: SetWindowPositionFn,
+    center_window: CenterWindowFn,
     set_window_size: SetWindowSizeFn,
     set_window_frame: SetWindowFrameFn,
     get_window_frame: GetWindowFrameFn,
     close_window: CloseWindowFn,
+    request_window_close: RequestWindowCloseFn,
     resize_webview: ResizeWebviewFn,
     load_url_in_webview: LoadURLInWebViewFn,
     load_html_in_webview: LoadHTMLInWebViewFn,
@@ -907,12 +928,16 @@ impl Core {
             show_window: lib.symbol("showWindow")?,
             activate_window: lib.symbol("activateWindow")?,
             hide_window: lib.symbol("hideWindow")?,
+            is_window_visible: lib.symbol("isWindowVisible")?,
             set_window_button_position: lib.symbol("setWindowButtonPosition")?,
+            get_window_button_position: lib.symbol("getWindowButtonPosition")?,
             set_window_position: lib.symbol("setWindowPosition")?,
+            center_window: lib.symbol("centerWindow")?,
             set_window_size: lib.symbol("setWindowSize")?,
             set_window_frame: lib.symbol("setWindowFrame")?,
             get_window_frame: lib.symbol("getWindowFrame")?,
             close_window: lib.symbol("closeWindow")?,
+            request_window_close: lib.symbol("requestWindowClose")?,
             resize_webview: lib.symbol("resizeWebview")?,
             load_url_in_webview: lib.symbol("loadURLInWebView")?,
             load_html_in_webview: lib.symbol("loadHTMLInWebView")?,
@@ -1064,6 +1089,7 @@ impl Core {
                 title.as_ptr(),
                 options.hidden,
                 options.activate,
+                options.centered,
                 options.traffic_light_offset.x,
                 options.traffic_light_offset.y,
                 options.callbacks.close,
@@ -1072,6 +1098,7 @@ impl Core {
                 options.callbacks.focus,
                 options.callbacks.blur,
                 options.callbacks.key,
+                options.callbacks.should_close,
             )
         };
 
@@ -1187,6 +1214,10 @@ impl Core {
         self.ensure_last_call_succeeded()
     }
 
+    pub fn is_window_visible(&self, window_id: u32) -> bool {
+        unsafe { (self.symbols.is_window_visible)(window_id) }
+    }
+
     pub fn set_window_button_position(&self, window_id: u32, x: f64, y: f64) -> Result<(), String> {
         unsafe {
             (self.symbols.set_window_button_position)(window_id, x, y);
@@ -1194,9 +1225,26 @@ impl Core {
         self.ensure_last_call_succeeded()
     }
 
+    pub fn get_window_button_position(&self, window_id: u32) -> Result<Point, String> {
+        let mut x = 0.0;
+        let mut y = 0.0;
+        unsafe {
+            (self.symbols.get_window_button_position)(window_id, &mut x, &mut y);
+        }
+        self.ensure_last_call_succeeded()?;
+        Ok(Point { x, y })
+    }
+
     pub fn set_window_position(&self, window_id: u32, x: f64, y: f64) -> Result<(), String> {
         unsafe {
             (self.symbols.set_window_position)(window_id, x, y);
+        }
+        self.ensure_last_call_succeeded()
+    }
+
+    pub fn center_window(&self, window_id: u32) -> Result<(), String> {
+        unsafe {
+            (self.symbols.center_window)(window_id);
         }
         self.ensure_last_call_succeeded()
     }
@@ -1593,6 +1641,13 @@ impl Core {
         self.ensure_last_call_succeeded()
     }
 
+    pub fn request_window_close(&self, window_id: u32) -> Result<(), String> {
+        unsafe {
+            (self.symbols.request_window_close)(window_id);
+        }
+        self.ensure_last_call_succeeded()
+    }
+
     pub fn evaluate_javascript_with_no_completion(
         &self,
         webview_id: u32,
@@ -1833,6 +1888,7 @@ impl Core {
     }
 
     pub fn open_file_dialog(&self, options: OpenFileDialogOptions<'_>) -> Result<String, String> {
+        // The low-level C ABI returns a JSON array of selected paths.
         let starting_folder = to_c_string(options.starting_folder, "starting folder")?;
         let allowed_file_types = to_c_string(options.allowed_file_types, "allowed file types")?;
         let ptr = unsafe {

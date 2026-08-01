@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 pub const WindowCloseHandler = *const fn (u32) callconv(.C) void;
+pub const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
 pub const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.C) void;
 pub const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
 pub const WindowFocusHandler = *const fn (u32) callconv(.C) void;
@@ -25,7 +26,21 @@ pub const AppInfo = struct {
     identifier: []const u8,
     name: []const u8,
     channel: []const u8,
+
+    /// False for dev builds; true for nonempty release channels.
+    pub fn isPackaged(self: AppInfo) bool {
+        return self.channel.len > 0 and !std.mem.eql(u8, self.channel, "dev");
+    }
 };
+
+test "AppInfo packaged mode reflects build channel" {
+    const base = AppInfo{ .identifier = "dev.example", .name = "Example", .channel = "" };
+
+    try std.testing.expect(!base.isPackaged());
+    try std.testing.expect(!(AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "dev" }).isPackaged());
+    try std.testing.expect((AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "canary" }).isPackaged());
+    try std.testing.expect((AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "production" }).isPackaged());
+}
 
 pub const OwnedAppInfo = struct {
     identifier: []u8,
@@ -76,6 +91,7 @@ pub const WindowStyle = struct {
 
 pub const WindowCallbacks = struct {
     close: ?WindowCloseHandler = null,
+    should_close: ?WindowShouldCloseHandler = null,
     move: ?WindowMoveHandler = null,
     resize: ?WindowResizeHandler = null,
     focus: ?WindowFocusHandler = null,
@@ -91,6 +107,7 @@ pub const WindowOptions = struct {
     transparent: bool = false,
     hidden: bool = false,
     activate: bool = true,
+    centered: bool = false,
     traffic_light_offset: TrafficLightOffset = .{},
     callbacks: WindowCallbacks = .{},
 };
@@ -200,7 +217,7 @@ pub const MessageBoxOptions = struct {
     title: []const u8 = "",
     message: []const u8 = "",
     detail: []const u8 = "",
-    buttons: []const []const u8 = &.{ "OK" },
+    buttons: []const []const u8 = &.{"OK"},
     default_id: c_int = 0,
     cancel_id: c_int = -1,
 };
@@ -304,12 +321,24 @@ pub const BrowserWindowRef = struct {
         _ = self.registry.ids.remove(self.id);
     }
 
+    pub fn requestClose(self: BrowserWindowRef) !void {
+        try self.registry.core.requestWindowClose(self.id);
+    }
+
     pub fn getFrame(self: BrowserWindowRef) !Rect {
         return try self.registry.core.getWindowFrame(self.id);
     }
 
+    pub fn center(self: BrowserWindowRef) !void {
+        try self.registry.core.centerWindow(self.id);
+    }
+
     pub fn setWindowButtonPosition(self: BrowserWindowRef, x: f64, y: f64) !void {
         try self.registry.core.setWindowButtonPosition(self.id, x, y);
+    }
+
+    pub fn getWindowButtonPosition(self: BrowserWindowRef) !Point {
+        return try self.registry.core.getWindowButtonPosition(self.id);
     }
 };
 
@@ -558,7 +587,7 @@ pub const Core = struct {
     const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.C) c_int;
     const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
     const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.C) u32;
-    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler) callconv(.C) u32;
+    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.C) u32;
     const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool) callconv(.C) u32;
     const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.C) u32;
     const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -577,12 +606,16 @@ pub const Core = struct {
     const ShowWindowFn = *const fn (u32, bool) callconv(.C) void;
     const ActivateWindowFn = *const fn (u32) callconv(.C) void;
     const HideWindowFn = *const fn (u32) callconv(.C) void;
+    const IsWindowVisibleFn = *const fn (u32) callconv(.C) bool;
     const SetWindowButtonPositionFn = *const fn (u32, f64, f64) callconv(.C) void;
+    const GetWindowButtonPositionFn = *const fn (u32, *f64, *f64) callconv(.C) void;
+    const CenterWindowFn = *const fn (u32) callconv(.C) void;
     const SetWindowPositionFn = *const fn (u32, f64, f64) callconv(.C) void;
     const SetWindowSizeFn = *const fn (u32, f64, f64) callconv(.C) void;
     const SetWindowFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
     const GetWindowFrameFn = *const fn (u32, *f64, *f64, *f64, *f64) callconv(.C) void;
     const CloseWindowFn = *const fn (u32) callconv(.C) void;
+    const RequestWindowCloseFn = *const fn (u32) callconv(.C) void;
     const ResizeWebviewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
     const LoadURLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
     const LoadHTMLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
@@ -690,12 +723,16 @@ pub const Core = struct {
         show_window: ShowWindowFn,
         activate_window: ActivateWindowFn,
         hide_window: HideWindowFn,
+        is_window_visible: IsWindowVisibleFn,
         set_window_button_position: SetWindowButtonPositionFn,
+        get_window_button_position: GetWindowButtonPositionFn,
+        center_window: CenterWindowFn,
         set_window_position: SetWindowPositionFn,
         set_window_size: SetWindowSizeFn,
         set_window_frame: SetWindowFrameFn,
         get_window_frame: GetWindowFrameFn,
         close_window: CloseWindowFn,
+        request_window_close: RequestWindowCloseFn,
         resize_webview: ResizeWebviewFn,
         load_url_in_webview: LoadURLInWebViewFn,
         load_html_in_webview: LoadHTMLInWebViewFn,
@@ -821,12 +858,16 @@ pub const Core = struct {
                 .show_window = lib.lookup(ShowWindowFn, "showWindow") orelse return error.MissingCoreSymbol,
                 .activate_window = lib.lookup(ActivateWindowFn, "activateWindow") orelse return error.MissingCoreSymbol,
                 .hide_window = lib.lookup(HideWindowFn, "hideWindow") orelse return error.MissingCoreSymbol,
+                .is_window_visible = lib.lookup(IsWindowVisibleFn, "isWindowVisible") orelse return error.MissingCoreSymbol,
                 .set_window_button_position = lib.lookup(SetWindowButtonPositionFn, "setWindowButtonPosition") orelse return error.MissingCoreSymbol,
+                .get_window_button_position = lib.lookup(GetWindowButtonPositionFn, "getWindowButtonPosition") orelse return error.MissingCoreSymbol,
+                .center_window = lib.lookup(CenterWindowFn, "centerWindow") orelse return error.MissingCoreSymbol,
                 .set_window_position = lib.lookup(SetWindowPositionFn, "setWindowPosition") orelse return error.MissingCoreSymbol,
                 .set_window_size = lib.lookup(SetWindowSizeFn, "setWindowSize") orelse return error.MissingCoreSymbol,
                 .set_window_frame = lib.lookup(SetWindowFrameFn, "setWindowFrame") orelse return error.MissingCoreSymbol,
                 .get_window_frame = lib.lookup(GetWindowFrameFn, "getWindowFrame") orelse return error.MissingCoreSymbol,
                 .close_window = lib.lookup(CloseWindowFn, "closeWindow") orelse return error.MissingCoreSymbol,
+                .request_window_close = lib.lookup(RequestWindowCloseFn, "requestWindowClose") orelse return error.MissingCoreSymbol,
                 .resize_webview = lib.lookup(ResizeWebviewFn, "resizeWebview") orelse return error.MissingCoreSymbol,
                 .load_url_in_webview = lib.lookup(LoadURLInWebViewFn, "loadURLInWebView") orelse return error.MissingCoreSymbol,
                 .load_html_in_webview = lib.lookup(LoadHTMLInWebViewFn, "loadHTMLInWebView") orelse return error.MissingCoreSymbol,
@@ -990,6 +1031,7 @@ pub const Core = struct {
             title_z.ptr,
             options.hidden,
             options.activate,
+            options.centered,
             options.traffic_light_offset.x,
             options.traffic_light_offset.y,
             options.callbacks.close,
@@ -998,6 +1040,7 @@ pub const Core = struct {
             options.callbacks.focus,
             options.callbacks.blur,
             options.callbacks.key,
+            options.callbacks.should_close,
         );
 
         if (window_id == 0) {
@@ -1084,8 +1127,25 @@ pub const Core = struct {
         try self.ensureLastCallSucceeded();
     }
 
+    pub fn isWindowVisible(self: *Core, window_id: u32) bool {
+        return self.symbols.is_window_visible(window_id);
+    }
+
     pub fn setWindowButtonPosition(self: *Core, window_id: u32, x: f64, y: f64) !void {
         self.symbols.set_window_button_position(window_id, x, y);
+        try self.ensureLastCallSucceeded();
+    }
+
+    pub fn getWindowButtonPosition(self: *Core, window_id: u32) !Point {
+        var x: f64 = 0;
+        var y: f64 = 0;
+        self.symbols.get_window_button_position(window_id, &x, &y);
+        try self.ensureLastCallSucceeded();
+        return .{ .x = x, .y = y };
+    }
+
+    pub fn centerWindow(self: *Core, window_id: u32) !void {
+        self.symbols.center_window(window_id);
         try self.ensureLastCallSucceeded();
     }
 
@@ -1129,6 +1189,11 @@ pub const Core = struct {
 
     pub fn closeWindow(self: *Core, window_id: u32) !void {
         self.symbols.close_window(window_id);
+        try self.ensureLastCallSucceeded();
+    }
+
+    pub fn requestWindowClose(self: *Core, window_id: u32) !void {
+        self.symbols.request_window_close(window_id);
         try self.ensureLastCallSucceeded();
     }
 
@@ -1579,6 +1644,16 @@ pub const Core = struct {
         return try self.allocator.dupe(u8, std.mem.span(result));
     }
 
+    pub fn openFileDialogPaths(self: *Core, options: OpenFileDialogOptions) ![][]u8 {
+        const payload = try self.openFileDialog(options);
+        defer self.allocator.free(payload);
+        return parseDialogPathsJson(self.allocator, payload);
+    }
+
+    pub fn freeDialogPaths(self: *Core, paths: [][]u8) void {
+        releaseDialogPaths(self.allocator, paths);
+    }
+
     pub fn showMessageBox(self: *Core, options: MessageBoxOptions) !c_int {
         const box_type_z = try self.dupeZ(options.box_type);
         defer self.allocator.free(box_type_z);
@@ -1980,6 +2055,36 @@ fn parseJsonSliceOwned(allocator: std.mem.Allocator, comptime T: type, json: []c
     return try allocator.dupe(T, parsed.value);
 }
 
+pub fn parseDialogPathsJson(allocator: std.mem.Allocator, payload: []const u8) ![][]u8 {
+    if (payload.len == 0) {
+        return allocator.alloc([]u8, 0);
+    }
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, allocator, payload, .{});
+    defer parsed.deinit();
+    if (parsed.value != .array) return error.InvalidDialogPathsJson;
+
+    const values = parsed.value.array.items;
+    const paths = try allocator.alloc([]u8, values.len);
+    var initialized: usize = 0;
+    errdefer {
+        for (paths[0..initialized]) |path| allocator.free(path);
+        allocator.free(paths);
+    }
+
+    for (values, 0..) |value, index| {
+        if (value != .string) return error.InvalidDialogPathsJson;
+        paths[index] = try allocator.dupe(u8, value.string);
+        initialized += 1;
+    }
+    return paths;
+}
+
+pub fn releaseDialogPaths(allocator: std.mem.Allocator, paths: [][]u8) void {
+    for (paths) |path| allocator.free(path);
+    allocator.free(paths);
+}
+
 fn jsonValueToF64(value: std.json.Value) ?f64 {
     return switch (value) {
         .float => |float_value| float_value,
@@ -2003,3 +2108,17 @@ pub fn allowAllNavigation(_: u32, _: [*:0]const u8) callconv(.C) u32 {
 pub fn noopWebviewEvent(_: u32, _: [*:0]const u8, _: [*:0]const u8) callconv(.C) void {}
 
 pub fn noopWebviewPostMessage(_: u32, _: [*:0]const u8) callconv(.C) void {}
+
+test "dialog path JSON preserves commas and escaped characters" {
+    const allocator = std.testing.allocator;
+    const paths = try parseDialogPathsJson(
+        allocator,
+        "[\"/tmp/report,final.txt\",\"C:\\\\Temp\\\\quoted\\\"file.txt\",\"line\\nbreak\"]",
+    );
+    defer releaseDialogPaths(allocator, paths);
+
+    try std.testing.expectEqual(@as(usize, 3), paths.len);
+    try std.testing.expectEqualStrings("/tmp/report,final.txt", paths[0]);
+    try std.testing.expectEqualStrings("C:\\Temp\\quoted\"file.txt", paths[1]);
+    try std.testing.expectEqualStrings("line\nbreak", paths[2]);
+}

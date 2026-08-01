@@ -5,6 +5,7 @@ import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import process from "process";
+import { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -59,6 +60,27 @@ const cefOutputFile = path.join(
 if (!fs.existsSync(distPath)) {
 	console.error("Error: dist directory not found");
 	process.exit(1);
+}
+
+if (platform === "darwin") {
+	const deploymentVerifier = path.join(
+		__dirname,
+		"verify-macho-deployment-target.js",
+	);
+	execFileSync(process.execPath, [deploymentVerifier, distPath], {
+		stdio: "inherit",
+	});
+	console.log(
+		`Verified all release Mach-O files support macOS ${MACOS_DEPLOYMENT_TARGET}`,
+	);
+
+	const verifier = path.join(__dirname, "verify-macho-code-signing.js");
+	const signedRuntimeArtifacts = ["launcher", "extractor", "libasar.dylib"].map(
+		(filename) => path.join(distPath, filename),
+	);
+	execFileSync(process.execPath, [verifier, ...signedRuntimeArtifacts], {
+		stdio: "inherit",
+	});
 }
 
 // Create a tar.gz file using system tar (preserves file permissions)

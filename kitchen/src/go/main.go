@@ -44,19 +44,21 @@ type appState struct {
 }
 
 type callbackState struct {
-	windowCloseCount    uint32
-	windowResizeCount   uint32
-	windowFocusCount    uint32
-	webviewWillNavigate uint32
-	webviewDidNavigate  uint32
-	webviewDomReady     uint32
-	webviewTagInit      uint32
-	wgpuTagInit         uint32
-	wgpuTagReady        uint32
-	beforeQuitCount     uint32
-	lastResizeWidth     float64
-	lastResizeHeight    float64
-	lastWebviewDetail   string
+	windowCloseCount           uint32
+	windowShouldCloseCount     uint32
+	windowResizeCount          uint32
+	windowFocusCount           uint32
+	webviewWillNavigate        uint32
+	webviewDidNavigate         uint32
+	webviewDidCommitNavigation uint32
+	webviewDomReady            uint32
+	webviewTagInit             uint32
+	wgpuTagInit                uint32
+	wgpuTagReady               uint32
+	beforeQuitCount            uint32
+	lastResizeWidth            float64
+	lastResizeHeight           float64
+	lastWebviewDetail          string
 }
 
 type testKind string
@@ -88,6 +90,7 @@ var hostQueueRunning atomic.Bool
 
 const (
 	kindSmoke                                testKind = "smoke"
+	kindAppPackagedModeReflectsBuildChannel  testKind = "app_packaged_mode_reflects_build_channel"
 	kindWindowCreateClose                    testKind = "window_create_close"
 	kindWindowCreationWithURL                testKind = "window_creation_with_url"
 	kindWindowHiddenOption                   testKind = "window_hidden_option"
@@ -101,6 +104,7 @@ const (
 	kindWindowSetSize                        testKind = "window_set_size"
 	kindWindowSetFrame                       testKind = "window_set_frame"
 	kindWindowGetFrame                       testKind = "window_get_frame"
+	kindWindowOmittedPositionCentersDisplay  testKind = "window_omitted_position_centers_display"
 	kindWindowGetPosition                    testKind = "window_get_position"
 	kindWindowGetSize                        testKind = "window_get_size"
 	kindWindowMaximizeUnmaximize             testKind = "window_maximize_unmaximize"
@@ -108,6 +112,7 @@ const (
 	kindWindowVisibleOnAllWorkspaces         testKind = "window_visible_on_all_workspaces"
 	kindWindowFocus                          testKind = "window_focus"
 	kindWindowCloseEvent                     testKind = "window_close_event"
+	kindWindowWillCloseVeto                  testKind = "window_will_close_veto"
 	kindWindowResizeEvent                    testKind = "window_resize_event"
 	kindWindowGetByID                        testKind = "window_get_by_id"
 	kindWindowInsetTitlebarStyle             testKind = "window_inset_titlebar_style"
@@ -122,6 +127,7 @@ const (
 	kindNavigationLoadHTML                   testKind = "navigation_load_html"
 	kindNavigationDomReadyEvent              testKind = "navigation_dom_ready_event"
 	kindNavigationDidNavigateEvent           testKind = "navigation_did_navigate_event"
+	kindNavigationDidCommitNavigationEvent   testKind = "navigation_did_commit_navigation_event"
 	kindNavigationExecuteJavascript          testKind = "navigation_execute_javascript"
 	kindTrayVisibilityToggleAndBounds        testKind = "tray_visibility_toggle_and_bounds"
 	kindSessionFromPartition                 testKind = "session_from_partition"
@@ -161,6 +167,7 @@ const (
 
 var goTests = []goTest{
 	test("go-smoke-test", "Go host smoke test", "Go Native", kindSmoke),
+	test("go-app-packaged-mode-reflects-build-channel", "App packaged mode reflects build channel", "Runtime", kindAppPackagedModeReflectsBuildChannel),
 	test("go-window-create-close", "Window create/close (Go)", "BrowserWindow", kindWindowCreateClose),
 	test("go-window-creation-with-url", "Window creation with URL (Go)", "BrowserWindow", kindWindowCreationWithURL),
 	test("go-window-hidden-option", "Window hidden option (Go)", "BrowserWindow", kindWindowHiddenOption),
@@ -174,6 +181,7 @@ var goTests = []goTest{
 	test("go-window-set-size", "Window setSize (Go)", "BrowserWindow", kindWindowSetSize),
 	test("go-window-set-frame", "Window setFrame (Go)", "BrowserWindow", kindWindowSetFrame),
 	test("go-window-get-frame", "Window getFrame (Go)", "BrowserWindow", kindWindowGetFrame),
+	test("go-window-omitted-position-centers-display", "Window omitted position centers on primary display", "BrowserWindow", kindWindowOmittedPositionCentersDisplay),
 	test("go-window-get-position", "Window getPosition (Go)", "BrowserWindow", kindWindowGetPosition),
 	test("go-window-get-size", "Window getSize (Go)", "BrowserWindow", kindWindowGetSize),
 	test("go-window-maximize-unmaximize", "Window maximize/unmaximize (Go)", "BrowserWindow", kindWindowMaximizeUnmaximize),
@@ -181,6 +189,7 @@ var goTests = []goTest{
 	test("go-window-visible-on-all-workspaces", "Window visibleOnAllWorkspaces (macOS) (Go)", "BrowserWindow", kindWindowVisibleOnAllWorkspaces),
 	test("go-window-focus", "Window focus (Go)", "BrowserWindow", kindWindowFocus),
 	test("go-window-close-event", "Window close event (Go)", "BrowserWindow", kindWindowCloseEvent),
+	test("go-window-will-close-veto", "Window will-close can veto user close (Go)", "BrowserWindow", kindWindowWillCloseVeto),
 	test("go-window-resize-event", "Window resize event (Go)", "BrowserWindow", kindWindowResizeEvent),
 	test("go-window-get-by-id", "BrowserWindow.getById (Go)", "BrowserWindow", kindWindowGetByID),
 	test("go-window-inset-titlebar-style", "Window with inset titlebar style (Go)", "BrowserWindow", kindWindowInsetTitlebarStyle),
@@ -195,6 +204,7 @@ var goTests = []goTest{
 	test("go-navigation-load-html", "loadHTML (Go)", "Navigation", kindNavigationLoadHTML),
 	test("go-navigation-dom-ready-event", "dom-ready event (Go)", "Navigation", kindNavigationDomReadyEvent),
 	test("go-navigation-did-navigate-event", "did-navigate event (Go)", "Navigation", kindNavigationDidNavigateEvent),
+	test("go-navigation-did-commit-navigation-event", "did-commit-navigation event (Go)", "Navigation", kindNavigationDidCommitNavigationEvent),
 	test("go-navigation-execute-javascript", "executeJavascript (fire and forget) (Go)", "Navigation", kindNavigationExecuteJavascript),
 	test("go-tray-visibility-toggle-bounds", "Tray visibility toggle and bounds (Go)", "Tray", kindTrayVisibilityToggleAndBounds),
 	test("go-session-from-partition", "Session.fromPartition (Go)", "Session", kindSessionFromPartition),
@@ -573,6 +583,8 @@ func runGoTestBody(test goTest) error {
 	switch test.Kind {
 	case kindSmoke:
 		return nil
+	case kindAppPackagedModeReflectsBuildChannel:
+		return runAppPackagedModeReflectsBuildChannelTest()
 	case kindWindowCreateClose:
 		return runWindowCreateCloseTest()
 	case kindWindowCreationWithURL:
@@ -599,6 +611,8 @@ func runGoTestBody(test goTest) error {
 		return runWindowSetFrameTest()
 	case kindWindowGetFrame:
 		return runWindowGetFrameTest()
+	case kindWindowOmittedPositionCentersDisplay:
+		return runWindowOmittedPositionCentersDisplayTest()
 	case kindWindowGetPosition:
 		return runWindowGetPositionTest()
 	case kindWindowGetSize:
@@ -613,6 +627,8 @@ func runGoTestBody(test goTest) error {
 		return runWindowFocusTest()
 	case kindWindowCloseEvent:
 		return runWindowCloseEventTest()
+	case kindWindowWillCloseVeto:
+		return runWindowWillCloseVetoTest()
 	case kindWindowResizeEvent:
 		return runWindowResizeEventTest()
 	case kindWindowGetByID:
@@ -639,6 +655,8 @@ func runGoTestBody(test goTest) error {
 		return runNavigationDomReadyEventTest()
 	case kindNavigationDidNavigateEvent:
 		return runNavigationDidNavigateEventTest()
+	case kindNavigationDidCommitNavigationEvent:
+		return runNavigationDidCommitNavigationEventTest()
 	case kindNavigationExecuteJavascript:
 		return runNavigationExecuteJavascriptTest()
 	case kindTrayVisibilityToggleAndBounds:
@@ -705,6 +723,21 @@ func runGoTestBody(test goTest) error {
 		return runScreenBoundsVsWorkAreaTest()
 	}
 	return fmt.Errorf("unsupported Go test kind: %s", test.Kind)
+}
+
+func runAppPackagedModeReflectsBuildChannelTest() error {
+	channel := state.appInfo.Channel
+	switch channel {
+	case "dev", "canary", "production":
+	default:
+		return fmt.Errorf("unexpected app build channel %q", channel)
+	}
+
+	expected := channel != "dev"
+	if actual := state.appInfo.IsPackaged(); actual != expected {
+		return fmt.Errorf("AppInfo.IsPackaged() = %t for channel %q, expected %t", actual, channel, expected)
+	}
+	return nil
 }
 
 func runWindowCreateCloseTest() error {
@@ -838,6 +871,10 @@ func noopWebviewCallbacks() electrobun.WebviewCallbacks {
 }
 
 func createWindowWithHarnessCustom(title string, frame electrobun.Rect, hidden, activate bool, titleBarStyle string, windowCallbacks electrobun.WindowCallbacks, webviewCallbacks electrobun.WebviewCallbacks) (windowWithWebview, error) {
+	return createWindowWithHarnessCustomRenderer(title, frame, electrobun.RendererNative, hidden, activate, titleBarStyle, windowCallbacks, webviewCallbacks)
+}
+
+func createWindowWithHarnessCustomRenderer(title string, frame electrobun.Rect, renderer electrobun.Renderer, hidden, activate bool, titleBarStyle string, windowCallbacks electrobun.WindowCallbacks, webviewCallbacks electrobun.WebviewCallbacks) (windowWithWebview, error) {
 	windowOptions := electrobun.NewWindowOptions(title, frame)
 	windowOptions.Hidden = hidden
 	windowOptions.Activate = activate
@@ -848,7 +885,7 @@ func createWindowWithHarnessCustom(title string, frame electrobun.Rect, hidden, 
 		return windowWithWebview{}, err
 	}
 	webviewOptions := electrobun.NewWebviewOptions(windowID, testHarnessURL, electrobun.NewRect(0, 0, frame.Width, frame.Height))
-	webviewOptions.Renderer = electrobun.RendererNative
+	webviewOptions.Renderer = renderer
 	webviewOptions.SecretKey = defaultSecretKey
 	webviewOptions.Sandbox = false
 	webviewOptions.Callbacks = webviewCallbacks
@@ -929,11 +966,27 @@ func runWindowHiddenOptionTest() error {
 	}
 	err = func() error {
 		time.Sleep(shortWait)
+		if state.core.IsWindowVisible(windowID) {
+			return fmt.Errorf("window was visible after hidden creation")
+		}
+
 		if err := state.core.ShowWindow(windowID, true); err != nil {
 			return err
 		}
 		time.Sleep(shortWait)
-		return state.core.HideWindow(windowID)
+		if !state.core.IsWindowVisible(windowID) {
+			return fmt.Errorf("window did not become visible after show")
+		}
+
+		if err := state.core.HideWindow(windowID); err != nil {
+			return err
+		}
+		time.Sleep(shortWait)
+		if state.core.IsWindowVisible(windowID) {
+			return fmt.Errorf("window remained visible after hide")
+		}
+
+		return nil
 	}()
 	return finishWithWindow(windowID, err)
 }
@@ -1053,25 +1106,38 @@ func runWindowSetPositionTest() error {
 }
 
 func runWindowSetSizeTest() error {
-	windowID, err := hiddenWindow("Go Size Test", electrobun.NewRect(80, 80, 420, 280))
+	created, err := createWindowWithTestHarness("Go Size Test", electrobun.NewRect(80, 80, 420, 280), false, false)
 	if err != nil {
 		return err
 	}
 	err = func() error {
-		if err := state.core.SetWindowSize(windowID, 520, 360); err != nil {
+		time.Sleep(shortWait)
+		if err := state.core.SetWindowSize(created.windowID, 600, 500); err != nil {
 			return err
 		}
 		time.Sleep(shortWait)
-		frame, err := state.core.GetWindowFrame(windowID)
+		grown, err := state.core.GetWindowFrame(created.windowID)
 		if err != nil {
 			return err
 		}
-		if !approxEq(frame.Width, 520, 24) || !approxEq(frame.Height, 360, 24) {
-			return fmt.Errorf("unexpected size %vx%v", frame.Width, frame.Height)
+		if !approxEq(grown.Width, 600, 24) || !approxEq(grown.Height, 500, 24) {
+			return fmt.Errorf("unexpected grown size %vx%v", grown.Width, grown.Height)
+		}
+
+		if err := state.core.SetWindowSize(created.windowID, 320, 240); err != nil {
+			return err
+		}
+		time.Sleep(shortWait)
+		shrunk, err := state.core.GetWindowFrame(created.windowID)
+		if err != nil {
+			return err
+		}
+		if !approxEq(shrunk.Width, 320, 24) || !approxEq(shrunk.Height, 240, 24) {
+			return fmt.Errorf("unexpected shrunk size %vx%v", shrunk.Width, shrunk.Height)
 		}
 		return nil
 	}()
-	return finishWithWindow(windowID, err)
+	return finishWithWindow(created.windowID, err)
 }
 
 func runWindowSetFrameTest() error {
@@ -1109,6 +1175,47 @@ func runWindowGetFrameTest() error {
 		}
 		if frame.Width <= 0 || frame.Height <= 0 {
 			return fmt.Errorf("window frame returned empty size")
+		}
+		return nil
+	}()
+	return finishWithWindow(windowID, err)
+}
+
+func runWindowOmittedPositionCentersDisplayTest() error {
+	display, err := state.core.GetPrimaryDisplay()
+	if err != nil {
+		return err
+	}
+
+	options := electrobun.NewWindowOptions("Go Centered Window Test", electrobun.NewRect(0, 0, 480, 320))
+	options.Hidden = true
+	options.Activate = false
+	options.Centered = true
+	windowID, err := state.core.CreateWindow(options)
+	if err != nil {
+		return err
+	}
+
+	err = func() error {
+		frame, err := state.core.GetWindowFrame(windowID)
+		if err != nil {
+			return err
+		}
+		actualCenterX := frame.X + frame.Width/2
+		actualCenterY := frame.Y + frame.Height/2
+		expectedCenterX := display.WorkArea.X + display.WorkArea.Width/2
+		expectedCenterY := display.WorkArea.Y + display.WorkArea.Height/2
+		const tolerance = 24.0
+		if !approxEq(actualCenterX, expectedCenterX, tolerance) || !approxEq(actualCenterY, expectedCenterY, tolerance) {
+			return fmt.Errorf(
+				"window was not centered on primary display: frame=%+v workArea=%+v actualCenter=(%v,%v) expectedCenter=(%v,%v)",
+				frame,
+				display.WorkArea,
+				actualCenterX,
+				actualCenterY,
+				expectedCenterX,
+				expectedCenterY,
+			)
 		}
 		return nil
 	}()
@@ -1266,6 +1373,49 @@ func runWindowCloseEventTest() error {
 	return nil
 }
 
+func runWindowWillCloseVetoTest() error {
+	resetCallbackState()
+	options := electrobun.NewWindowOptions("Go Will Close Veto Test", electrobun.NewRect(120, 120, 420, 280))
+	options.Callbacks = electrobun.WindowCallbacks{
+		Close:       observedWindowClose,
+		ShouldClose: observedWindowShouldClose,
+	}
+	windowID, err := state.core.CreateWindow(options)
+	if err != nil {
+		return err
+	}
+
+	if err := state.core.RequestWindowClose(windowID); err != nil {
+		closeWindowSilent(windowID)
+		return err
+	}
+	time.Sleep(shortWait)
+	if callbackCount(func(c callbackState) uint32 { return c.windowShouldCloseCount }) != 1 ||
+		callbackCount(func(c callbackState) uint32 { return c.windowCloseCount }) != 0 {
+		closeWindowSilent(windowID)
+		return fmt.Errorf("first close request was not vetoed")
+	}
+	if _, err := state.core.GetWindowFrame(windowID); err != nil {
+		closeWindowSilent(windowID)
+		return err
+	}
+
+	if err := state.core.RequestWindowClose(windowID); err != nil {
+		closeWindowSilent(windowID)
+		return err
+	}
+	if !waitUntil(longWait, func() bool {
+		return callbackCount(func(c callbackState) uint32 { return c.windowCloseCount }) > 0
+	}) {
+		closeWindowSilent(windowID)
+		return fmt.Errorf("second close request was not allowed")
+	}
+	if callbackCount(func(c callbackState) uint32 { return c.windowShouldCloseCount }) != 2 {
+		return fmt.Errorf("will-close callback count mismatch")
+	}
+	return nil
+}
+
 func runWindowResizeEventTest() error {
 	resetCallbackState()
 	options := electrobun.NewWindowOptions("Go Resize Event Test", electrobun.NewRect(120, 120, 420, 280))
@@ -1309,16 +1459,62 @@ func runWindowInsetTitlebarStyleTest() error {
 }
 
 func runWindowTrafficLightPositionAPITest() error {
-	options := electrobun.NewWindowOptions("Go Traffic Light Test", electrobun.NewRect(100, 100, 520, 340))
+	baselineOptions := electrobun.NewWindowOptions("Go Traffic Light Baseline", electrobun.NewRect(100, 100, 520, 340))
+	baselineOptions.TitleBarStyle = "hiddenInset"
+	baselineOptions.Activate = false
+	baselineID, err := state.core.CreateWindow(baselineOptions)
+	if err != nil {
+		return err
+	}
+	defer state.core.CloseWindow(baselineID)
+
+	options := electrobun.NewWindowOptions("Go Traffic Light Test", electrobun.NewRect(160, 160, 520, 340))
 	options.TitleBarStyle = "hiddenInset"
 	options.TrafficLightOffset = electrobun.TrafficLightOffset{X: 20, Y: 18}
-	options.Hidden = true
 	options.Activate = false
 	windowID, err := state.core.CreateWindow(options)
 	if err != nil {
 		return err
 	}
-	return finishWithWindow(windowID, state.core.SetWindowButtonPosition(windowID, 28, 22))
+	defer state.core.CloseWindow(windowID)
+
+	time.Sleep(shortWait)
+	baseline, err := state.core.GetWindowButtonPosition(baselineID)
+	if err != nil {
+		return err
+	}
+	offset, err := state.core.GetWindowButtonPosition(windowID)
+	if err != nil {
+		return err
+	}
+	if !approxEq(offset.X-baseline.X, 20, 0.5) || !approxEq(offset.Y-baseline.Y, 18, 0.5) {
+		return fmt.Errorf("constructor traffic light offset was not applied: baseline=%+v offset=%+v", baseline, offset)
+	}
+
+	if err := state.core.SetWindowButtonPosition(windowID, 28, 22); err != nil {
+		return err
+	}
+	time.Sleep(shortWait)
+	positioned, err := state.core.GetWindowButtonPosition(windowID)
+	if err != nil {
+		return err
+	}
+	if !approxEq(positioned.X, 28, 0.5) || !approxEq(positioned.Y, 22, 0.5) {
+		return fmt.Errorf("runtime traffic light position was not applied: %+v", positioned)
+	}
+
+	if err := state.core.SetWindowSize(windowID, 560, 380); err != nil {
+		return err
+	}
+	time.Sleep(shortWait)
+	resized, err := state.core.GetWindowButtonPosition(windowID)
+	if err != nil {
+		return err
+	}
+	if !approxEq(resized.X, 28, 0.5) || !approxEq(resized.Y, 22, 0.5) {
+		return fmt.Errorf("traffic light position changed after resize: %+v", resized)
+	}
+	return nil
 }
 
 func runWebviewPageZoomTest() error {
@@ -1439,6 +1635,31 @@ func runNavigationDidNavigateEventTest() error {
 			return callbackCount(func(c callbackState) uint32 { return c.webviewDidNavigate }) > 0 || lastWebviewDetailContains("views://zig")
 		}) {
 			return fmt.Errorf("did-navigate did not fire")
+		}
+		return nil
+	}()
+	return finishWithWindow(created.windowID, err)
+}
+
+func runNavigationDidCommitNavigationEventTest() error {
+	resetCallbackState()
+	created, err := createWindowWithHarnessCustomRenderer("Go Did Commit Navigation Test", electrobun.NewRect(100, 100, 640, 420), activePlaygroundRenderer(), true, false, "default", electrobun.WindowCallbacks{}, observedHarnessWebviewCallbacks())
+	if err != nil {
+		return err
+	}
+	err = func() error {
+		time.Sleep(mediumWait)
+		resetCallbackState()
+		if err := state.core.LoadURLInWebview(created.webviewID, goViewURL); err != nil {
+			return err
+		}
+		if !waitUntil(3*time.Second, func() bool {
+			return callbackCount(func(c callbackState) uint32 { return c.webviewDidCommitNavigation }) > 0
+		}) {
+			return fmt.Errorf("did-commit-navigation did not fire")
+		}
+		if !lastWebviewDetailContains("views://zig") {
+			return fmt.Errorf("did-commit-navigation URL was not forwarded")
 		}
 		return nil
 	}()
@@ -2198,6 +2419,16 @@ func observedWindowClose(uint32) {
 	callbacksMu.Unlock()
 }
 
+func observedWindowShouldClose(windowID uint32) {
+	callbacksMu.Lock()
+	callbacks.windowShouldCloseCount++
+	shouldAllow := callbacks.windowShouldCloseCount > 1
+	callbacksMu.Unlock()
+	if shouldAllow {
+		_ = state.core.CloseWindow(windowID)
+	}
+}
+
 func observedWindowResize(_ uint32, _, _, width, height float64) {
 	callbacksMu.Lock()
 	callbacks.windowResizeCount++
@@ -2240,6 +2471,8 @@ func recordObservedWebviewEvent(eventName, detail string) {
 		callbacks.webviewWillNavigate++
 	case "did-navigate":
 		callbacks.webviewDidNavigate++
+	case "did-commit-navigation":
+		callbacks.webviewDidCommitNavigation++
 	case "dom-ready":
 		callbacks.webviewDomReady++
 	}

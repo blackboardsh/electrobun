@@ -20,6 +20,7 @@ var quitRequestedHandler func()
 
 func registerWindowCallbacks(windowID uint32, callbacks WindowCallbacks) {
 	if callbacks.Close == nil &&
+		callbacks.ShouldClose == nil &&
 		callbacks.Move == nil &&
 		callbacks.Resize == nil &&
 		callbacks.Focus == nil &&
@@ -92,6 +93,17 @@ func electrobunWindowCloseHandler(windowID C.uint32_t) {
 	id := uint32(windowID)
 	callbackMu.RLock()
 	handler := windowCallbackRegistry[id].Close
+	callbackMu.RUnlock()
+	if handler != nil {
+		handler(id)
+	}
+}
+
+//export electrobunWindowShouldCloseHandler
+func electrobunWindowShouldCloseHandler(windowID C.uint32_t) {
+	id := uint32(windowID)
+	callbackMu.RLock()
+	handler := windowCallbackRegistry[id].ShouldClose
 	callbackMu.RUnlock()
 	if handler != nil {
 		handler(id)

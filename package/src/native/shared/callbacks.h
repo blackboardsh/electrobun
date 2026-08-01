@@ -24,6 +24,7 @@ enum class ChromeStyle : uint32_t { Default, Hidden, HiddenInset };
 
 // Window event callbacks
 typedef void (*WindowCloseHandler)(uint32_t windowId);
+typedef void (*WindowShouldCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusHandler)(uint32_t windowId);

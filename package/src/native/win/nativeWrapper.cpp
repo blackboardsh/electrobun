@@ -62,11 +62,14 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/windows_profile_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
 #include "../shared/console_forwarding.h"
+#include "../shared/dialog_paths.h"
+#include "../shared/cef_find_session.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -506,7 +509,7 @@ static std::mutex g_visibleOnAllWorkspacesMutex;
 static const int OFFSCREEN_OFFSET = -20000;
 
 // Remote DevTools port
-static int g_remoteDebugPort = 9222;
+static int g_remoteDebugPort = 0;
 
 static bool IsPortAvailable(int port) {
     WSADATA wsaData;
@@ -530,15 +533,6 @@ static bool IsPortAvailable(int port) {
     closesocket(sock);
     WSACleanup();
     return result == 0;
-}
-
-static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
-    for (int port = startPort; port <= endPort; ++port) {
-        if (IsPortAvailable(port)) {
-            return port;
-        }
-    }
-    return 0;
 }
 
 // CEF global variables
@@ -1275,47 +1269,19 @@ private:
 
 // Helper functions for string conversion
 std::wstring StringToWString(const std::string& str) {
-    if (str.empty()) return std::wstring();
-    
-    int sizeRequired = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-    if (sizeRequired <= 0) {
-        // Fallback to simple conversion (ASCII safe)
-        std::wstring result;
-        result.reserve(str.length());
-        for (char c : str) {
-            result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-        }
-        return result;
+    std::wstring result;
+    if (!electrobun::utf8ToWide(str, result)) {
+        return L"";
     }
-    
-    std::wstring wstr(sizeRequired, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeRequired);
-    wstr.pop_back(); // Remove null terminator
-    return wstr;
+    return result;
 }
 
 std::string WStringToString(const std::wstring& wstr) {
-    if (wstr.empty()) return std::string();
-    
-    int sizeRequired = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (sizeRequired <= 0) {
-        // Fallback to simple conversion (ASCII safe)
-        std::string result;
-        result.reserve(wstr.length());
-        for (wchar_t wc : wstr) {
-            if (wc <= 127) { // ASCII range
-                result.push_back(static_cast<char>(wc));
-            } else {
-                result.push_back('?'); // Replace non-ASCII with ?
-            }
-        }
-        return result;
+    std::string result;
+    if (!electrobun::wideToUtf8(wstr, result)) {
+        return "";
     }
-    
-    std::string str(sizeRequired, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], sizeRequired, nullptr, nullptr);
-    str.pop_back(); // Remove null terminator
-    return str;
+    return result;
 }
 
 // CEF Dialog Handler for file dialogs
@@ -1980,6 +1946,11 @@ public:
     // Open remote DevTools frontend for a specific browser (including OOPIFs)
     void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
         if (!browser || !browser->GetHost()) return;
+        if (g_remoteDebugPort == 0) {
+            std::cout << "[CEF] Remote DevTools unavailable because remote debugging is disabled"
+                      << std::endl;
+            return;
+        }
 
         int target_id = browser->GetIdentifier();
 
@@ -2369,6 +2340,10 @@ void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrow
 void ElectrobunLoadHandler::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) {
     // NOTE: OnLoadStart is now a fallback - primary injection happens via GetResourceResponseFilter
     // This ensures preload scripts are in the HTML before parsing, guaranteeing execution order
+    if (frame->IsMain() && webview_event_handler_) {
+        std::string url = frame->GetURL().ToString();
+        webview_event_handler_(webview_id_, _strdup("did-commit-navigation"), _strdup(url.c_str()));
+    }
 }
 
 void ElectrobunLoadHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
@@ -2417,19 +2392,19 @@ CefRefPtr<CefResponseFilter> ElectrobunResourceRequestHandler::GetResourceRespon
 
 // Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
 bool isCEFAvailable() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0';
+    std::wstring exePath = electrobun::getModuleFileNameWide();
+    const size_t lastSlash = exePath.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) {
+        return false;
     }
+    exePath.resize(lastSlash);
     
     // Check for essential CEF files
-    std::string cefLibPath = std::string(exePath) + "\\libcef.dll";
-    std::string icuDataPath = std::string(exePath) + "\\icudtl.dat";
+    const std::wstring cefLibPath = exePath + L"\\libcef.dll";
+    const std::wstring icuDataPath = exePath + L"\\icudtl.dat";
     
-    DWORD libAttributes = GetFileAttributesA(cefLibPath.c_str());
-    DWORD icuAttributes = GetFileAttributesA(icuDataPath.c_str());
+    DWORD libAttributes = GetFileAttributesW(cefLibPath.c_str());
+    DWORD icuAttributes = GetFileAttributesW(icuDataPath.c_str());
     
     bool libExists = (libAttributes != INVALID_FILE_ATTRIBUTES && !(libAttributes & FILE_ATTRIBUTE_DIRECTORY));
     bool icuExists = (icuAttributes != INVALID_FILE_ATTRIBUTES && !(icuAttributes & FILE_ATTRIBUTE_DIRECTORY));
@@ -2532,7 +2507,11 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
-        if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
+        if (dispIdMember == 1 && !(wFlags & DISPATCH_METHOD)) {
+            // WebView2 may probe a known method as a property before invoking it.
+            return DISP_E_MEMBERNOTFOUND;
+        }
+        if (dispIdMember == 1) { // postMessage method
             if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
                 if (!m_quiet) {
                     printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
@@ -3627,6 +3606,7 @@ private:
     CefRefPtr<ElectrobunCefClient> client;
     OSRWindow* osr_window;
     bool is_osr_mode;
+    CefFindSession findSession;
 
 public:
     CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
@@ -3830,6 +3810,7 @@ public:
     
     // CEF-specific methods
     void setBrowser(CefRefPtr<CefBrowser> br) {
+        findSession.reset();
         browser = br;
         // If OSR mode, also set the browser on the OSR window for event handling
         if (osr_window && br) {
@@ -4082,20 +4063,32 @@ public:
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!searchText || strlen(searchText) == 0) {
+            findSession.reset();
+            if (!browser) return;
+
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            if (host) {
+                host->StopFinding(true);
+            }
+            return;
+        }
+
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (!host) return;
 
-        if (!searchText || strlen(searchText) == 0) {
+        const bool findNext = findSession.begin(searchText, matchCase);
+        if (!findNext) {
             host->StopFinding(true);
-            return;
         }
 
-        host->Find(CefString(searchText), forward, matchCase, false);
+        host->Find(CefString(searchText), forward, matchCase, findNext);
     }
 
     void stopFindInPage() override {
+        findSession.reset();
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
@@ -4767,12 +4760,14 @@ struct createNSWindowWithFrameAndStyleParams {
 typedef struct {
     uint32_t windowId;
     WindowCloseHandler closeHandler;
+    WindowShouldCloseHandler shouldCloseHandler;
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
     ChromeStyle chromeStyle;
+    bool bypassShouldClose;
 } WindowData;
 
 
@@ -5045,7 +5040,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case WM_CLOSE:
+            if (data && data->shouldCloseHandler && !data->bypassShouldClose) {
+                data->shouldCloseHandler(data->windowId);
+                return 0;
+            }
             if (data && data->closeHandler) {
+                data->bypassShouldClose = false;
                 data->closeHandler(data->windowId);
             }
             break;
@@ -5954,44 +5954,62 @@ ELECTROBUN_EXPORT bool initCEF() {
         }
     }
 
-    // Get the directory where the current executable is located
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    std::string helperBaseName = "bun";
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        std::string exeName(lastSlash + 1);
-        size_t dot = exeName.find_last_of('.');
-        if (dot != std::string::npos) {
+    // Keep startup filesystem paths in UTF-16. Windows' ANSI APIs cannot
+    // represent every valid profile or installation directory.
+    const std::wstring executablePath = electrobun::getModuleFileNameWide();
+    const size_t lastSlash = executablePath.find_last_of(L"\\/");
+    if (executablePath.empty() || lastSlash == std::wstring::npos) {
+        ::log("Failed to resolve the executable path for CEF");
+        return false;
+    }
+    const std::wstring executableDir = executablePath.substr(0, lastSlash);
+
+    std::wstring helperBaseName = L"bun";
+    {
+        std::wstring exeName = executablePath.substr(lastSlash + 1);
+        const size_t dot = exeName.find_last_of(L'.');
+        if (dot != std::wstring::npos) {
             exeName = exeName.substr(0, dot);
         }
         if (!exeName.empty()) {
             helperBaseName = exeName;
         }
-        *lastSlash = '\0'; // Remove the executable name
     }
 
     // Set up CEF paths (resources are in ./cef relative to executable)
-    std::string cefResourceDir = std::string(exePath) + "\\cef";
+    const std::wstring cefResourceDir = executableDir + L"\\cef";
+
+    std::wstring identifier;
+    std::wstring channel;
+    if (!electrobun::utf8ToWide(g_electrobunIdentifier, identifier) ||
+        !electrobun::utf8ToWide(g_electrobunChannel, channel)) {
+        ::log("Failed to decode the Electrobun identifier or channel as UTF-8");
+        return false;
+    }
 
     // Build cache path with identifier/channel structure (consistent with CLI and updater)
     // Use %LOCALAPPDATA%\{identifier}\{channel}\CEF
-    std::string userDataDir;
-    char* localAppData = getenv("LOCALAPPDATA");
-    if (localAppData) {
-        userDataDir = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", '\\');
-        std::cout << "[CEF] Using path: " << userDataDir << std::endl;
+    std::wstring userDataDir;
+    const std::wstring localAppData =
+        electrobun::getEnvironmentVariableWide(L"LOCALAPPDATA");
+    if (!localAppData.empty()) {
+        userDataDir = buildAppDataPath(
+            localAppData, identifier, channel, L"CEF", L'\\');
+        std::cout << "[CEF] Using path: " << WStringToString(userDataDir)
+                  << std::endl;
     } else {
         // Fallback to executable directory if LOCALAPPDATA not available
-        userDataDir = buildAppDataPath(exePath, g_electrobunIdentifier, g_electrobunChannel, "cef_cache", '\\');
+        userDataDir = buildAppDataPath(
+            executableDir, identifier, channel, L"cef_cache", L'\\');
     }
 
-    // Create cache directory if it doesn't exist
-    CreateDirectoryA(userDataDir.c_str(), NULL);
+    // Create every missing parent without narrowing the path.
+    SHCreateDirectoryExW(nullptr, userDataDir.c_str(), nullptr);
 
     // One-shot wipe if Electrobun's cache format version has been bumped
     // since the user's last launch. See cache_migration.h.
-    electrobun::migrateCacheFolderIfNeeded(userDataDir);
+    electrobun::migrateCacheFolderIfNeeded(
+        std::filesystem::path(userDataDir));
 
     // Initialize CEF
     CefMainArgs main_args(GetModuleHandle(NULL));
@@ -6000,7 +6018,9 @@ ELECTROBUN_EXPORT bool initCEF() {
     g_cef_app = new ElectrobunCefApp();
 
     // Read user-defined chromium flags from build.json
-    std::string buildJsonPath = std::string(exePath) + "\\..\\Resources\\build.json";
+    const std::filesystem::path buildJsonPath =
+        std::filesystem::path(executableDir) / L".." / L"Resources" /
+        L"build.json";
     std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
     if (!buildJsonContent.empty()) {
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
@@ -6013,21 +6033,38 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.external_message_pump = true; // We pump CEF via OnScheduleMessagePumpWork
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
 
-    // Remote DevTools port with scan for availability
-    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
-    if (selectedPort == 0) {
-        selectedPort = 9222;
-        std::cout << "[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222" << std::endl;
-    }
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
     g_remoteDebugPort = selectedPort;
-    settings.remote_debugging_port = selectedPort;
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        std::cout << "[CEF] Remote debugging enabled on 127.0.0.1:"
+                  << selectedPort << " ("
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << ")" << std::endl;
+    } else if (remoteDebugging.enabled()) {
+        std::cout << "[CEF] Remote debugging disabled: no free port in "
+                  << electrobun::kDefaultRemoteDebuggingPort << "-"
+                  << electrobun::kLastAutomaticRemoteDebuggingPort << std::endl;
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        std::cout << "[CEF] Remote debugging disabled: "
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << std::endl;
+    }
 
     // Set the subprocess path to the helper executable
-    CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\" + helperBaseName + " Helper.exe";
+    CefString(&settings.browser_subprocess_path) =
+        executableDir + L"\\" + helperBaseName + L" Helper.exe";
     
     // Set paths - icudtl.dat and .pak files are in cef directory root
     CefString(&settings.resources_dir_path) = cefResourceDir;
-    CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
+    CefString(&settings.locales_dir_path) = cefResourceDir + L"\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     
     // Add language settings like macOS
@@ -6050,6 +6087,33 @@ ELECTROBUN_EXPORT bool initCEF() {
     }
     
     return success;
+}
+
+static RECT initialWebView2Bounds(
+    HWND containerHwnd,
+    bool fullSize,
+    double x,
+    double y,
+    double width,
+    double height) {
+    RECT bounds = {
+        static_cast<LONG>(x),
+        static_cast<LONG>(y),
+        static_cast<LONG>(x + width),
+        static_cast<LONG>(y + height),
+    };
+
+    // The window's first WM_SIZE can run before the asynchronous WebView2
+    // controller exists. Read the container's current client area here so a
+    // full-size view starts with the same bounds used by later WM_SIZE events.
+    if (fullSize) {
+        RECT clientBounds = {};
+        if (GetClientRect(containerHwnd, &clientBounds)) {
+            bounds = clientBounds;
+        }
+    }
+
+    return bounds;
 }
 
 // Internal factory method for creating WebView2 instances
@@ -6206,9 +6270,26 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
                             
-                            // Set bounds and visibility
-                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                            ctrl->put_Bounds(bounds);
+                            // Set bounds and visibility. BrowserWindow's full-size view must use
+                            // the live client area rather than its requested outer-frame size.
+                            RECT bounds = initialWebView2Bounds(
+                                container->GetHwnd(),
+                                view->fullSize,
+                                x,
+                                y,
+                                width,
+                                height);
+                            HRESULT boundsResult = ctrl->put_Bounds(bounds);
+                            if (FAILED(boundsResult)) {
+                                char errorLog[256];
+                                sprintf_s(
+                                    errorLog,
+                                    "[WebView2] Initial put_Bounds failed for webview %u, HRESULT: 0x%08X",
+                                    view->webviewId,
+                                    boundsResult);
+                                ::log(errorLog);
+                            }
+                            view->visualBounds = bounds;
 
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
@@ -6787,36 +6868,26 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             // Create user data folder path based on partition
             // Build path with identifier/channel structure (consistent with CLI and updater)
             std::wstring userDataFolder;
-            char* localAppData = getenv("LOCALAPPDATA");
-            if (localAppData) {
-                std::string userDataPath = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "WebView2", '\\');
-
-                // Handle partition-specific storage
-                if (!partitionStr.empty()) {
-                    bool isPersistent = partitionStr.substr(0, 8) == "persist:";
-                    if (isPersistent) {
-                        // Persistent partition: use named subfolder
-                        std::string partitionName = partitionStr.substr(8);
-                        userDataPath += "\\Partitions\\" + partitionName;
-                    } else {
-                        // Ephemeral partition: use unique temp folder per webview
-                        // Note: WebView2 doesn't support true ephemeral sessions,
-                        // so we use a timestamped folder that gets cleaned up
-                        userDataPath += "\\Ephemeral\\" + std::to_string(view->webviewId);
-                    }
+            const std::wstring localAppData =
+                electrobun::getEnvironmentVariableWide(L"LOCALAPPDATA");
+            if (!localAppData.empty()) {
+                std::wstring identifier;
+                std::wstring channel;
+                std::wstring partition;
+                if (electrobun::utf8ToWide(g_electrobunIdentifier, identifier) &&
+                    electrobun::utf8ToWide(g_electrobunChannel, channel) &&
+                    electrobun::utf8ToWide(partitionStr, partition)) {
+                    userDataFolder = electrobun::buildWebView2UserDataPath(
+                        localAppData,
+                        identifier,
+                        channel,
+                        partition,
+                        view->webviewId);
+                    SHCreateDirectoryExW(
+                        nullptr, userDataFolder.c_str(), nullptr);
+                } else {
+                    ::log("ERROR: WebView2 profile path contains invalid UTF-8");
                 }
-                // If no partition specified, use default WebView2 folder (shared)
-
-                // Convert to wide string for WebView2 API
-                int wideSize = MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, nullptr, 0);
-                if (wideSize > 0) {
-                    userDataFolder.resize(wideSize - 1);
-                    MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, &userDataFolder[0], wideSize);
-                }
-
-                // Create directory if it doesn't exist
-                // Use SHCreateDirectoryExW for recursive creation
-                SHCreateDirectoryExW(NULL, userDataFolder.c_str(), NULL);
             }
 
             // Use partition-specific user data folder (nullptr if empty for default behavior)
@@ -6850,16 +6921,35 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 // causes the caller to fall back to an ephemeral context.
 namespace electrobun {
 std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
-    char* localAppData = getenv("LOCALAPPDATA");
-    if (!localAppData) {
+    const std::wstring localAppData =
+        getEnvironmentVariableWide(L"LOCALAPPDATA");
+    if (localAppData.empty()) {
         printf("ERROR CEF: LOCALAPPDATA not found for partition '%s'\n", partitionName.c_str());
         return "";
     }
-    std::string cachePath = buildCEFPartitionPath(
-        localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
-    std::wstring wideCachePath(cachePath.begin(), cachePath.end());
-    SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
-    return cachePath;
+
+    std::wstring identifier;
+    std::wstring channel;
+    std::wstring partition;
+    if (!utf8ToWide(g_electrobunIdentifier, identifier) ||
+        !utf8ToWide(g_electrobunChannel, channel) ||
+        !utf8ToWide(partitionName, partition)) {
+        printf("ERROR CEF: invalid UTF-8 in partition cache path\n");
+        return "";
+    }
+
+    const std::wstring cachePath = buildCEFPartitionPath(
+        localAppData, identifier, channel, L"CEF", partition, L'\\');
+    SHCreateDirectoryExW(nullptr, cachePath.c_str(), nullptr);
+
+    // partition_context.h accepts UTF-8 at the CEF boundary. Keep all Windows
+    // filesystem work above in UTF-16 and convert exactly once here.
+    std::string utf8CachePath;
+    if (!wideToUtf8(cachePath, utf8CachePath)) {
+        printf("ERROR CEF: failed to encode partition cache path as UTF-8\n");
+        return "";
+    }
+    return utf8CachePath;
 }
 } // namespace electrobun
 
@@ -9441,7 +9531,8 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowResizeHandler zigResizeHandler,
                                          WindowFocusHandler zigFocusHandler,
                                          WindowBlurHandler zigBlurHandler,
-                                         WindowKeyHandler zigKeyHandler) {
+                                         WindowKeyHandler zigKeyHandler,
+                                         WindowShouldCloseHandler zigShouldCloseHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -9467,7 +9558,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
     WindowBlurHandler zigBlurHandler,
-    WindowKeyHandler zigKeyHandler) {
+    WindowKeyHandler zigKeyHandler,
+    WindowShouldCloseHandler zigShouldCloseHandler) {
 
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
@@ -9492,11 +9584,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
         data->windowId = windowId;
         data->closeHandler = zigCloseHandler;
+        data->shouldCloseHandler = zigShouldCloseHandler;
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
         data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
+        data->bypassShouldClose = false;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
@@ -9672,6 +9766,19 @@ ELECTROBUN_EXPORT void hideWindow(void *window) {
     });
 }
 
+ELECTROBUN_EXPORT bool isWindowVisible(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in isWindowVisible");
+        return false;
+    }
+
+    return MainThreadDispatcher::dispatch_sync([=]() -> bool {
+        return IsWindowVisible(hwnd) != FALSE;
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
@@ -9727,6 +9834,11 @@ ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
     // Dispatch to main thread to ensure thread safety
     MainThreadDispatcher::dispatch_sync([=]() {
 
+        WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (data) {
+            data->bypassShouldClose = true;
+        }
+
 
         // Clean up any associated container views before closing
         auto containerIt = g_containerViews.find(hwnd);
@@ -9754,6 +9866,12 @@ ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
             }
         }
     });
+}
+
+ELECTROBUN_EXPORT void requestWindowClose(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+    PostMessage(hwnd, WM_CLOSE, 0, 0);
 }
 
 ELECTROBUN_EXPORT void minimizeWindow(NSWindow *window) {
@@ -9949,11 +10067,35 @@ ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+ELECTROBUN_EXPORT void centerWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+
+    RECT windowRect{};
+    RECT workArea{};
+    if (!GetWindowRect(hwnd, &windowRect) ||
+        !SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
+        return;
+    }
+
+    const int width = windowRect.right - windowRect.left;
+    const int height = windowRect.bottom - windowRect.top;
+    const int x = workArea.left + std::max(0, ((workArea.right - workArea.left) - width) / 2);
+    const int y = workArea.top + std::max(0, ((workArea.bottom - workArea.top) - height) / 2);
+    SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, double y) {
     (void)window;
     (void)x;
     (void)y;
     // Not applicable on Windows - no-op
+}
+
+ELECTROBUN_EXPORT void getWindowButtonPosition(NSWindow *window, double* x, double* y) {
+    (void)window;
+    if (x) *x = 0;
+    if (y) *y = 0;
 }
 
 ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
@@ -10388,7 +10530,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     
     // Show the dialog
     hr = pFileDialog->Show(nullptr);
-    std::string result;
+    std::vector<std::string> paths;
     
     if (SUCCEEDED(hr)) {
         if (allowsMultipleSelection) {
@@ -10398,7 +10540,6 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                 DWORD itemCount = 0;
                 pShellItemArray->GetCount(&itemCount);
                 
-                std::vector<std::string> paths;
                 for (DWORD i = 0; i < itemCount; i++) {
                     IShellItem *pShellItem = nullptr;
                     hr = pShellItemArray->GetItemAt(i, &pShellItem);
@@ -10418,12 +10559,6 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                     }
                 }
                 pShellItemArray->Release();
-                
-                // Join paths with comma
-                for (size_t i = 0; i < paths.size(); i++) {
-                    if (i > 0) result += ",";
-                    result += paths[i];
-                }
             }
         } else {
             IShellItem *pShellItem = nullptr;
@@ -10436,7 +10571,7 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                     if (utf8Len > 0) {
                         std::vector<char> utf8Path(utf8Len);
                         WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, utf8Path.data(), utf8Len, nullptr, nullptr);
-                        result = std::string(utf8Path.data());
+                        paths.emplace_back(utf8Path.data());
                     }
                     CoTaskMemFree(pszPath);
                 }
@@ -10448,12 +10583,11 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     pFileDialog->Release();
     CoUninitialize();
     
-    if (result.empty()) {
+    if (paths.empty()) {
         ::log("File dialog cancelled or no selection made");
-        return nullptr;
     }
-    
-    return strdup(result.c_str());
+
+    return strdup(serializeDialogPaths(paths).c_str());
 }
 
 ELECTROBUN_EXPORT int showMessageBox(const char *type,

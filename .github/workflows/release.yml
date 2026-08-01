@@ -72,6 +72,11 @@ jobs:
         run: hutch install
         working-directory: package
 
+      - name: Test macOS docked Web Inspector layout
+        if: matrix.platform == 'darwin'
+        run: hutch test:macos-inspector-layout
+        working-directory: package
+
       - name: Setup MSVC Developer Command Prompt
         if: matrix.platform == 'win32'
         uses: ilammy/msvc-dev-cmd@v1
@@ -121,6 +126,10 @@ jobs:
             cmake \
             pkg-config
 
+      - name: Test portable CEF find behavior
+        run: node scripts/run-cottontail-test.js src/shared/cef-find-session.test.ts
+        working-directory: package
+
       - name: Get CEF version for cache key
         id: cef-version
         shell: bash
@@ -151,10 +160,19 @@ jobs:
           path: |
             package/src/native/build/process_helper
             package/src/native/build/process_helper.exe
-          key: process-helper-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}-${{ hashFiles('package/src/native/**/cef_process_helper_*') }}
+          key: process-helper-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}-${{ hashFiles('package/src/native/**/cef_process_helper_*', 'package/scripts/macos-release.js') }}
 
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: node scripts/package-release.js
+        working-directory: package
+
+      - name: Test CEF remote debugging policy
+        run: hutch test:cef-debug
+        working-directory: package
+
+      - name: Test Linux native file dialog
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: hutch test:linux-native-dialog
         working-directory: package
 
       - name: Upload core artifact
@@ -258,6 +276,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Verify release notes configuration
+        run: node package/scripts/release-notes-contract.test.mjs
+
       - name: Download Electrobun release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -287,26 +308,8 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
-          generate_release_notes: false
+          generate_release_notes: true
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
-          body: |
-            ## Getting Started
-
-            To build apps with Electrobun, add it as a dependency in your package.json:
-
-            ```bash
-            npm install electrobun
-            ```
-
-            The Electrobun CLI will automatically download these artifacts when you build your app. You don't need to download them directly.
-
-            See the [documentation](https://framework.blackboard.sh/electrobun/guides/quick-start/) for more information.
-
-            ---
-
-            **Artifact Reference** (downloaded automatically by the CLI):
-            - `electrobun-core-[platform]-[arch].tar.gz` - Core binaries
-            - `electrobun-cef-[platform]-[arch].tar.gz` - CEF binaries (optional)
 
   npm-publish:
     needs: [release]

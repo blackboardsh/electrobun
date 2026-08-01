@@ -23,7 +23,7 @@ This hello world app demonstrates:
 
 3. Build for production:
    ```bash
-   hutch electrobun build --env=stable
+   hutch run build
    ```
 
 ## Project Structure

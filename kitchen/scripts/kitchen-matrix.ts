@@ -1,6 +1,19 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import {
+	copyFileSync,
+	cpSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+} from "node:fs";
 import { availableParallelism } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import {
 	createKitchenMatrix,
@@ -24,6 +37,98 @@ export type KitchenMatrixOptions = {
 };
 
 const activeChildren = new Set<ChildProcess>();
+const workspaceExcludedEntries = new Set([
+	".cottontail-tmp",
+	"artifacts",
+	"build",
+]);
+const workspaceSharedDirectoryEntries = new Set(["node_modules", "vendors"]);
+
+export type KitchenVariantWorkspace = {
+	root: string;
+	buildOutput: string;
+	artifactOutput: string;
+	publishedBuildOutput: string;
+	publishedArtifactOutput: string;
+};
+
+export function createKitchenMatrixRunRoot(kitchenRoot: string): string {
+	const scratchRoot = join(kitchenRoot, ".cottontail-tmp", "kitchen-matrix");
+	mkdirSync(scratchRoot, { recursive: true });
+	return mkdtempSync(join(scratchRoot, `${process.pid}-`));
+}
+
+function mirrorWorkspaceEntry(
+	entryName: string,
+	source: string,
+	destination: string,
+): void {
+	const stat = statSync(source);
+	if (stat.isDirectory()) {
+		if (workspaceSharedDirectoryEntries.has(entryName)) {
+			symlinkSync(
+				source,
+				destination,
+				process.platform === "win32" ? "junction" : "dir",
+			);
+		} else {
+			cpSync(source, destination, { recursive: true, dereference: true });
+		}
+		return;
+	}
+	if (stat.isFile()) copyFileSync(source, destination);
+}
+
+export function prepareKitchenVariantWorkspace(
+	kitchenRoot: string,
+	runRoot: string,
+	variant: KitchenVariant,
+): KitchenVariantWorkspace {
+	const key = kitchenVariantKey(variant);
+	const root = join(runRoot, key);
+	rmSync(root, { recursive: true, force: true });
+	mkdirSync(root, { recursive: true });
+
+	for (const entry of readdirSync(kitchenRoot, { withFileTypes: true })) {
+		if (workspaceExcludedEntries.has(entry.name)) continue;
+		mirrorWorkspaceEntry(
+			entry.name,
+			join(kitchenRoot, entry.name),
+			join(root, entry.name),
+		);
+	}
+
+	return {
+		root,
+		buildOutput: join(root, "build", "matrix", key),
+		artifactOutput: join(root, "artifacts", "matrix", key),
+		publishedBuildOutput: join(kitchenRoot, "build", "matrix", key),
+		publishedArtifactOutput: join(kitchenRoot, "artifacts", "matrix", key),
+	};
+}
+
+function replacePublishedOutput(source: string, destination: string): void {
+	mkdirSync(dirname(destination), { recursive: true });
+	rmSync(destination, { recursive: true, force: true });
+	renameSync(source, destination);
+}
+
+export function publishKitchenVariantWorkspace(
+	workspace: KitchenVariantWorkspace,
+): void {
+	if (!existsSync(workspace.buildOutput)) {
+		throw new Error(
+			`Matrix build completed without variant output: ${workspace.buildOutput}`,
+		);
+	}
+	replacePublishedOutput(workspace.buildOutput, workspace.publishedBuildOutput);
+	if (existsSync(workspace.artifactOutput)) {
+		replacePublishedOutput(
+			workspace.artifactOutput,
+			workspace.publishedArtifactOutput,
+		);
+	}
+}
 
 function defaultJobCount(): number {
 	return Math.max(1, Math.min(4, availableParallelism()));
@@ -161,15 +266,19 @@ function pipePrefixed(stream: Readable, prefix: string, target: NodeJS.WriteStre
 
 function runHutchForVariant(
 	hutchBinary: string,
-	kitchenRoot: string,
+	workingRoot: string,
+	electrobunPackageRoot: string,
 	variant: KitchenVariant,
 	command: "build" | "run",
 ): Promise<void> {
 	const key = kitchenVariantKey(variant);
 	return new Promise((resolvePromise, rejectPromise) => {
 		const child = spawn(hutchBinary, ["electrobun", command], {
-			cwd: kitchenRoot,
-			env: kitchenVariantEnvironment(process.env, variant),
+			cwd: workingRoot,
+			env: {
+				...kitchenVariantEnvironment(process.env, variant),
+				COTTONTAIL_ELECTROBUN_PACKAGE: electrobunPackageRoot,
+			},
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: false,
 		});
@@ -256,16 +365,40 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 
 	const kitchenRoot = resolve(import.meta.dirname, "..");
 	const hutchBinary = process.env["HUTCH_BINARY"] || "hutch";
+	const electrobunPackageRoot = realpathSync(
+		join(kitchenRoot, "node_modules", "electrobun"),
+	);
 	const interrupt = () => stopChildren();
 	process.once("SIGINT", interrupt);
 	process.once("SIGTERM", interrupt);
+	let matrixRunRoot: string | null = null;
 
 	try {
 		if (!options.launchOnly) {
-			console.log(`Building with up to ${options.jobs} concurrent jobs...`);
-			await runBuildPool(variants, options.jobs, (variant) =>
-				runHutchForVariant(hutchBinary, kitchenRoot, variant, "build"),
+			const runRoot = createKitchenMatrixRunRoot(kitchenRoot);
+			matrixRunRoot = runRoot;
+			const workspaces = new Map(
+				variants.map((variant) => [
+					kitchenVariantKey(variant),
+					prepareKitchenVariantWorkspace(kitchenRoot, runRoot, variant),
+				]),
 			);
+			console.log(`Building with up to ${options.jobs} concurrent jobs...`);
+			await runBuildPool(variants, options.jobs, async (variant) => {
+				const key = kitchenVariantKey(variant);
+				const workspace = workspaces.get(key);
+				if (!workspace) throw new Error(`${key}: matrix workspace was not prepared`);
+				await runHutchForVariant(
+					hutchBinary,
+					workspace.root,
+					electrobunPackageRoot,
+					variant,
+					"build",
+				);
+				publishKitchenVariantWorkspace(workspace);
+			});
+			rmSync(matrixRunRoot, { recursive: true, force: true });
+			matrixRunRoot = null;
 			console.log("Kitchen matrix build complete.");
 		}
 
@@ -274,7 +407,13 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 		const results = await Promise.all(
 			variants.map(async (variant) => {
 				try {
-					await runHutchForVariant(hutchBinary, kitchenRoot, variant, "run");
+					await runHutchForVariant(
+						hutchBinary,
+						kitchenRoot,
+						electrobunPackageRoot,
+						variant,
+						"run",
+					);
 					return null;
 				} catch (error) {
 					return error instanceof Error ? error : new Error(String(error));
@@ -290,6 +429,7 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 		process.off("SIGINT", interrupt);
 		process.off("SIGTERM", interrupt);
 		stopChildren();
+		if (matrixRunRoot) rmSync(matrixRunRoot, { recursive: true, force: true });
 	}
 }
 

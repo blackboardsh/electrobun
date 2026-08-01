@@ -312,6 +312,10 @@ const win = new BrowserWindow({
 });
 ```
 
+`persist:default` selects the app's shared default persistent profile. Other
+`persist:*` names create isolated persistent profiles, while names without the
+prefix remain ephemeral.
+
 
 ### preload
   <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
@@ -477,8 +481,8 @@ win.close();
 ```
 
 
-### show / showInactive / activate / hide
-  <p>Control window visibility and focus. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it.</p>
+### show / showInactive / activate / hide / isVisible
+  <p>Control and query native window visibility. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it. `isVisible()` reads the current state from the native window.</p>
 
   
 ```javascript
@@ -497,9 +501,11 @@ win.activate();
 
 // Hide without closing
 win.hide();
+console.log(win.isVisible()); // false
 
 // Show and activate
 win.show();
+console.log(win.isVisible()); // true
 ```
 
 

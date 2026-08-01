@@ -4,6 +4,7 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { OS } from "../../../shared/platform";
+import { decodeDialogPaths } from "../../../shared/dialog-paths";
 
 export const moveToTrash = (path: string) => {
 	return ffi.request.moveToTrash({ path });
@@ -185,8 +186,7 @@ export const openFileDialog = async (
 		allowsMultipleSelection: optsWithDefault.allowsMultipleSelection,
 	});
 
-	const filePaths = result.split(",");
-	return filePaths;
+	return decodeDialogPaths(result);
 };
 
 export type MessageBoxOptions = {

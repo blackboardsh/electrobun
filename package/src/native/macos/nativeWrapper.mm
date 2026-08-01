@@ -31,6 +31,7 @@ static bool wgpuDebugEnabled() {
 #include <signal.h>
 #include <atomic>
 #include <mutex>
+#include "inspector_layout.h"
 #include "../shared/pending_resize_queue.h"
 
 // CEF includes
@@ -82,6 +83,7 @@ static bool wgpuDebugEnabled() {
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
 #include "../shared/console_forwarding.h"
+#include "../shared/dialog_paths.h"
 
 using namespace electrobun;
 
@@ -108,7 +110,7 @@ static CGFloat offsetY = 0.0;
 static id mouseDraggedMonitor = nil;
 static id mouseUpMonitor = nil;
 
-static int g_remoteDebugPort = 9222;
+static int g_remoteDebugPort = 0;
 
 // Menu role to selector mapping
 // This maps Electrobun role strings to their corresponding Objective-C selectors.
@@ -303,16 +305,6 @@ static bool IsPortAvailable(int port) {
     close(sock);
     return result == 0;
 }
-
-static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
-    for (int port = startPort; port <= endPort; ++port) {
-        if (IsPortAvailable(port)) {
-            return port;
-        }
-    }
-    return 0;
-}
-
 
 // Forward declare the CEF classes
 class CefApp;
@@ -510,10 +502,12 @@ typedef struct {
 
 static const void *kTrafficLightOffsetXKey = &kTrafficLightOffsetXKey;
 static const void *kTrafficLightOffsetYKey = &kTrafficLightOffsetYKey;
-static const void *kTrafficLightAppliedOffsetXKey = &kTrafficLightAppliedOffsetXKey;
-static const void *kTrafficLightAppliedOffsetYKey = &kTrafficLightAppliedOffsetYKey;
+static const void *kTrafficLightDefaultPositionXKey = &kTrafficLightDefaultPositionXKey;
+static const void *kTrafficLightDefaultPositionYKey = &kTrafficLightDefaultPositionYKey;
 
 static const void *kTrafficLightTitleBarStyleKey = &kTrafficLightTitleBarStyleKey;
+
+static void applyWindowButtonPosition(NSWindow *window, double x, double y);
 
 static bool shouldManageTrafficLights(NSWindow *window) {
     if (!window) {
@@ -538,42 +532,32 @@ static void applyTrafficLightOffset(NSWindow *window) {
         return;
     }
 
-    NSNumber *appliedOffsetXValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetXKey);
-    NSNumber *appliedOffsetYValue = objc_getAssociatedObject(window, kTrafficLightAppliedOffsetYKey);
-    const double appliedOffsetX = appliedOffsetXValue ? appliedOffsetXValue.doubleValue : 0;
-    const double appliedOffsetY = appliedOffsetYValue ? appliedOffsetYValue.doubleValue : 0;
-
     NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
-    NSButton *minimizeButton = [window standardWindowButton:NSWindowMiniaturizeButton];
-    NSButton *zoomButton = [window standardWindowButton:NSWindowZoomButton];
-
-    for (NSButton *button in @[closeButton, minimizeButton, zoomButton]) {
-        if (button == nil) {
-            continue;
-        }
-
-        NSPoint origin = button.frame.origin;
-        NSView *superview = button.superview;
-        origin.x = origin.x - appliedOffsetX + offsetX;
-        origin.y = origin.y + appliedOffsetY - offsetY;
-
-        if (superview != nil) {
-            CGFloat maxX = NSWidth(superview.bounds) - NSWidth(button.frame);
-            CGFloat maxY = NSHeight(superview.bounds) - NSHeight(button.frame);
-            origin.x = MAX(0, MIN(origin.x, maxX));
-            origin.y = MAX(0, MIN(origin.y, maxY));
-        }
-
-        [button setFrameOrigin:origin];
+    NSView *titlebarView = closeButton.superview;
+    if (!closeButton || !titlebarView) {
+        return;
     }
 
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(offsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(offsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    NSNumber *defaultXValue = objc_getAssociatedObject(window, kTrafficLightDefaultPositionXKey);
+    NSNumber *defaultYValue = objc_getAssociatedObject(window, kTrafficLightDefaultPositionYKey);
+    const double defaultX = defaultXValue
+        ? defaultXValue.doubleValue
+        : NSMinX(closeButton.frame);
+    const double defaultY = defaultYValue
+        ? defaultYValue.doubleValue
+        : NSHeight(titlebarView.bounds) - NSMaxY(closeButton.frame);
+
+    if (!defaultXValue) {
+        objc_setAssociatedObject(window, kTrafficLightDefaultPositionXKey, @(defaultX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!defaultYValue) {
+        objc_setAssociatedObject(window, kTrafficLightDefaultPositionYKey, @(defaultY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    applyWindowButtonPosition(window, defaultX + offsetX, defaultY + offsetY);
 }
 
 static void applyTrafficLightOffsetFromDefault(NSWindow *window) {
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     applyTrafficLightOffset(window);
 }
 
@@ -590,13 +574,16 @@ static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
     NSView *titlebarContainerView = [titlebarView superview];
     if (!titlebarContainerView) return;
 
+    const CGFloat normalizedX = MAX(0, x);
+    const CGFloat normalizedY = MAX(0, y);
     CGFloat buttonSpacing = 20.0;
     CGFloat buttonHeight = closeBtn.frame.size.height;
-    CGFloat requiredHeight = y + buttonHeight;
+    CGFloat requiredHeight = MAX(NSHeight(titlebarView.frame), normalizedY + buttonHeight);
 
     NSRect containerFrame = titlebarContainerView.frame;
+    const CGFloat containerTop = NSMaxY(containerFrame);
     containerFrame.size.height = requiredHeight;
-    containerFrame.origin.y = NSHeight(window.frame) - requiredHeight;
+    containerFrame.origin.y = containerTop - requiredHeight;
     [titlebarContainerView setFrame:containerFrame];
 
     NSRect titlebarFrame = titlebarView.frame;
@@ -604,10 +591,10 @@ static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
     titlebarFrame.origin.y = 0;
     [titlebarView setFrame:titlebarFrame];
 
-    CGFloat adjustedY = requiredHeight - y - buttonHeight;
-    [closeBtn setFrameOrigin:NSMakePoint(x, adjustedY)];
-    [minimizeBtn setFrameOrigin:NSMakePoint(x + buttonSpacing, adjustedY)];
-    [zoomBtn setFrameOrigin:NSMakePoint(x + 2 * buttonSpacing, adjustedY)];
+    CGFloat adjustedY = requiredHeight - normalizedY - buttonHeight;
+    [closeBtn setFrameOrigin:NSMakePoint(normalizedX, adjustedY)];
+    [minimizeBtn setFrameOrigin:NSMakePoint(normalizedX + buttonSpacing, adjustedY)];
+    [zoomBtn setFrameOrigin:NSMakePoint(normalizedX + 2 * buttonSpacing, adjustedY)];
 }
 
 // Window, tray, menu, and snapshot callbacks are defined in shared/callbacks.h
@@ -855,6 +842,8 @@ void releaseObjCObject(id objcObject) {
     - (void)setTransparent:(BOOL)transparent;
     - (void)setPassthrough:(BOOL)enable;
     - (void)setHidden:(BOOL)hidden;
+    - (void)toggleMirrorMode:(BOOL)enable;
+    - (BOOL)shouldSuppressMirrorMode;
 
     - (BOOL)canGoBack;
     - (BOOL)canGoForward;
@@ -1003,6 +992,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface WindowDelegate : NSObject <NSWindowDelegate>
     @property (nonatomic, assign) WindowCloseHandler closeHandler;
+    @property (nonatomic, assign) WindowShouldCloseHandler shouldCloseHandler;
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
@@ -1298,9 +1288,17 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         }
     }
 
+    - (BOOL)shouldSuppressMirrorMode {
+        return NO;
+    }
+
 
     - (void)toggleMirrorMode:(BOOL)enable {
         NSView *subview = self.nsView;
+
+        if ([self shouldSuppressMirrorMode]) {
+            enable = NO;
+        }
 
         if (self.mirrorModeEnabled == enable) {
             return;
@@ -2544,6 +2542,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
 @implementation WKWebViewImpl
 
+    - (BOOL)shouldSuppressMirrorMode {
+        return !electrobunShouldEnableMirrorMode(self.webView, YES);
+    }
+
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
                             url:(const char *)url
@@ -3028,6 +3030,9 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
     - (void)openDevTools {
         dispatch_async(dispatch_get_main_queue(), ^{
+            // WebKit owns the inspected view's frame while its inspector is
+            // docked. Restore the real view before WebKit computes that layout.
+            [self toggleMirrorMode:NO];
             // WKWebView doesn't have public DevTools API, but we can use private API if available
             if ([self.webView respondsToSelector:@selector(_inspector)]) {
                 id inspector = [self.webView performSelector:@selector(_inspector)];
@@ -4812,6 +4817,11 @@ private:
     }
 
     void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
+        if (g_remoteDebugPort == 0) {
+            NSLog(@"[CEF] Remote DevTools unavailable because remote debugging is disabled");
+            return;
+        }
+
         int target_id = static_cast<int>(webview_id_);
         std::string targetUrl;
         if (browser && browser->GetMainFrame()) {
@@ -5257,13 +5267,20 @@ public:
 
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
-                           TransitionType transition_type) override {    
+                           TransitionType transition_type) override {
+        if (frame->IsMain() && webview_event_handler_) {
+            std::string url = frame->GetURL().ToString();
+            char* eventCopy = strdup("did-commit-navigation");
+            char* urlCopy = strdup(url.c_str());
+            webview_event_handler_(webview_id_, eventCopy, urlCopy);
 
-        std::string frameUrl = frame->GetURL().ToString();
-        std::string scriptUrl = GetScriptExecutionUrl(frameUrl);
-
-        // NSLog(@"OnLoadStart %s", frameUrl.c_str());//, electrobun_script_.code.c_str());           
-    }   
+            // The FFI callback may marshal to another thread before reading the strings.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                free((void*)eventCopy);
+                free((void*)urlCopy);
+            });
+        }
+    }
 
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
@@ -5870,8 +5887,9 @@ bool initializeCEF() {
 
     // Read user-defined chromium flags from build.json
     NSString* buildJsonPath = [[NSBundle mainBundle] pathForResource:@"build" ofType:@"json"];
+    std::string buildJsonContent;
     if (buildJsonPath) {
-        std::string buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
+        buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
     }
 
@@ -5879,14 +5897,28 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
-    // Remote DevTools port with simple scan for availability.
-    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
-    if (selectedPort == 0) {
-        selectedPort = 9222;
-        NSLog(@"[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222");
-    }
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
     g_remoteDebugPort = selectedPort;
-    settings.remote_debugging_port = selectedPort;
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        NSLog(@"[CEF] Remote debugging enabled on 127.0.0.1:%d (%s)",
+              selectedPort,
+              electrobun::remoteDebuggingSourceName(remoteDebugging.source));
+    } else if (remoteDebugging.enabled()) {
+        NSLog(@"[CEF] Remote debugging disabled: no free port in %d-%d",
+              electrobun::kDefaultRemoteDebuggingPort,
+              electrobun::kLastAutomaticRemoteDebuggingPort);
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        NSLog(@"[CEF] Remote debugging disabled: %s",
+              electrobun::remoteDebuggingSourceName(remoteDebugging.source));
+    }
     // settings.log_severity = LOGSEVERITY_VERBOSE;
 
     // Set explicit paths to avoid bundle lookup issues in newer CEF builds.
@@ -6244,6 +6276,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (self) {
             self.webviewId = webviewId;
             self.isSandboxed = sandbox;
+            BOOL windowWasVisible = [window isVisible];
 
             if (autoResize) {
                 self.fullSize = YES;
@@ -6252,7 +6285,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             }
 
             void (^createCEFBrowser)(void) = ^{
-                [window makeKeyAndOrderFront:nil];
+                if (windowWasVisible) {
+                    [window makeKeyAndOrderFront:nil];
+                }
                 CefBrowserSettings browserSettings;
 
                 // Set transparent background if requested
@@ -6420,7 +6455,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     }
                 }];
             }
-            [window makeKeyAndOrderFront:nil];
+            if (windowWasVisible) {
+                [window makeKeyAndOrderFront:nil];
+            }
 
             // Force trigger window update to ensure CEF browser is created immediately
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -6450,6 +6487,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         }
         
         return self;
+    }
+
+    - (void)resizeWithFrame:(NSRect)frame parsedMasks:(NSArray *)parsedMasks {
+        [super resizeWithFrame:frame parsedMasks:parsedMasks];
+
+        // CEFOSRView::setFrameSize handles windowless rendering separately.
+        if (!self.isOSRMode && self.browser) {
+            CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
+            if (host) {
+                host->WasResized();
+            }
+        }
     }
 
 
@@ -6737,7 +6786,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 @implementation WindowDelegate
     - (BOOL)windowShouldClose:(NSWindow *)sender {
-    return YES;
+        if (self.shouldCloseHandler) {
+            self.shouldCloseHandler(self.windowId);
+            return NO;
+        }
+        return YES;
     }
     - (void)windowWillClose:(NSNotification *)notification {
         NSWindow *window = [notification object];
@@ -7493,7 +7546,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowResizeHandler zigResizeHandler,
                                                      WindowFocusHandler zigFocusHandler,
                                                      WindowBlurHandler zigBlurHandler,
-                                                     WindowKeyHandler zigKeyHandler) {
+                                                     WindowKeyHandler zigKeyHandler,
+                                                     WindowShouldCloseHandler zigShouldCloseHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -7516,10 +7570,9 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
     objc_setAssociatedObject(window, kTrafficLightTitleBarStyleKey, [NSString stringWithUTF8String:config.titleBarStyle ?: "default"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(window, kTrafficLightOffsetXKey, @(config.trafficLightOffsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     objc_setAssociatedObject(window, kTrafficLightOffsetYKey, @(config.trafficLightOffsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetXKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    objc_setAssociatedObject(window, kTrafficLightAppliedOffsetYKey, @(0), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
     delegate.closeHandler = zigCloseHandler;
+    delegate.shouldCloseHandler = zigShouldCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
@@ -7560,7 +7613,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   WindowResizeHandler zigResizeHandler,
   WindowFocusHandler zigFocusHandler,
   WindowBlurHandler zigBlurHandler,
-  WindowKeyHandler zigKeyHandler
+  WindowKeyHandler zigKeyHandler,
+  WindowShouldCloseHandler zigShouldCloseHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -7591,7 +7645,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigResizeHandler,
             zigFocusHandler,
             zigBlurHandler,
-            zigKeyHandler
+            zigKeyHandler,
+            zigShouldCloseHandler
         );
 
         // Handle transparent window background
@@ -7656,6 +7711,12 @@ extern "C" void hideWindow(NSWindow *window) {
     });
 }
 
+extern "C" bool isWindowVisible(NSWindow *window) {
+    return runOnMainThreadSyncBool(^{
+        return [window isVisible] ? true : false;
+    });
+}
+
 extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
 
@@ -7667,6 +7728,12 @@ extern "C" void setWindowTitle(NSWindow *window, const char *title) {
 extern "C" void closeWindow(NSWindow *window) {
     runOnMainThreadSyncVoid(^{
         [window close];
+    });
+}
+
+extern "C" void requestWindowClose(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        [window performClose:nil];
     });
 }
 
@@ -7756,6 +7823,30 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
     });
 }
 
+extern "C" void centerWindow(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        if (!window) return;
+
+        const CGDirectDisplayID primaryDisplayId = CGMainDisplayID();
+        NSScreen *primaryScreen = nil;
+        for (NSScreen *screen in [NSScreen screens]) {
+            NSNumber *screenNumber = [screen deviceDescription][@"NSScreenNumber"];
+            if (screenNumber && screenNumber.unsignedIntValue == primaryDisplayId) {
+                primaryScreen = screen;
+                break;
+            }
+        }
+        primaryScreen = primaryScreen ?: [NSScreen mainScreen];
+        if (!primaryScreen) return;
+
+        const NSRect workArea = primaryScreen.visibleFrame;
+        NSRect frame = window.frame;
+        frame.origin.x = NSMinX(workArea) + (NSWidth(workArea) - NSWidth(frame)) / 2.0;
+        frame.origin.y = NSMinY(workArea) + (NSHeight(workArea) - NSHeight(frame)) / 2.0;
+        [window setFrameOrigin:frame.origin];
+    });
+}
+
 extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
     runOnMainThreadAsyncVoid(^{
         if (!window) return;
@@ -7768,6 +7859,22 @@ extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
         }
 
         applyWindowButtonPosition(window, x, y);
+    });
+}
+
+extern "C" void getWindowButtonPosition(NSWindow *window, double *x, double *y) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+
+    runOnMainThreadSyncVoid(^{
+        if (!window) return;
+
+        NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+        NSView *titlebarView = closeButton.superview;
+        if (!closeButton || !titlebarView) return;
+
+        if (x) *x = NSMinX(closeButton.frame);
+        if (y) *y = NSHeight(titlebarView.bounds) - NSMaxY(closeButton.frame);
     });
 }
 
@@ -8068,16 +8175,20 @@ extern "C" const char *openFileDialog(const char *startingFolder,
 
         NSModalResponse response = [panel runModal];
         if (response != NSModalResponseOK) {
-            return (void *)NULL;
+            return (void *)strdup("[]");
         }
 
         NSArray<NSURL *> *selectedFileURLs = [panel URLs];
-        NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
+        std::vector<std::string> pathStrings;
+        pathStrings.reserve(selectedFileURLs.count);
         for (NSURL *u in selectedFileURLs) {
-            [pathStrings addObject:u.path];
+            const char *path = u.path.UTF8String;
+            if (path) {
+                pathStrings.emplace_back(path);
+            }
         }
-        NSString *concatenatedPaths = [pathStrings componentsJoinedByString:@","];
-        return concatenatedPaths ? strdup([concatenatedPaths UTF8String]) : (void *)NULL;
+        const std::string payload = serializeDialogPaths(pathStrings);
+        return (void *)strdup(payload.c_str());
     });
 }
 

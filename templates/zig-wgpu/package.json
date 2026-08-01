@@ -7,7 +7,7 @@
 		"start": "hutch electrobun dev",
 		"dev": "hutch electrobun dev --watch",
 		"watch": "hutch electrobun dev --watch",
-		"build": "hutch electrobun build"
+		"build": "hutch electrobun build --env=production"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

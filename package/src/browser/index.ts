@@ -1,6 +1,7 @@
 import {
 	type RPCSchema,
 	type RPCTransport,
+	type RPCRequestOptions,
 	type ElectrobunRPCSchema,
 	type ElectrobunRPCConfig,
 	type RPCWithTransport,
@@ -320,6 +321,7 @@ class Electroview<T extends RPCWithTransport> {
 
 export {
 	type RPCSchema,
+	type RPCRequestOptions,
 	type ElectrobunRPCSchema,
 	type ElectrobunRPCConfig,
 	createRPC,

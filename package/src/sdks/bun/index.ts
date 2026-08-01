@@ -1,6 +1,10 @@
 import electobunEventEmmitter from "./events/eventEmitter";
 import { BrowserWindow, type WindowOptionsType } from "./core/BrowserWindow";
-import { BrowserView, type BrowserViewOptions } from "./core/BrowserView";
+import {
+	BrowserView,
+	type BrowserViewCreatedHandler,
+	type BrowserViewOptions,
+} from "./core/BrowserView";
 import { GpuWindow, type GpuWindowOptionsType } from "./core/GpuWindow";
 import { WGPUView, type WGPUViewOptions } from "./core/WGPUView";
 import { Tray, type TrayOptions } from "./core/Tray";
@@ -20,6 +24,7 @@ import type {
 } from "./core/Utils";
 import {
 	type RPCSchema,
+	type RPCRequestOptions,
 	type ElectrobunRPCSchema,
 	createRPC,
 	defineElectrobunRPC,
@@ -142,6 +147,9 @@ export const app = {
 	quit() {
 		Utils.quit();
 	},
+	get isPackaged() {
+		return BuildConfig.getSync().isPackaged;
+	},
 	get isCarrotMode() {
 		return !hasFFI;
 	},
@@ -214,12 +222,14 @@ export const app = {
 // Named Exports
 export {
 	type RPCSchema,
+	type RPCRequestOptions,
 	type ElectrobunRPCSchema,
 	type ElectrobunEvent,
 	type ElectrobunConfig,
 	type BuildConfigType,
 	type WindowOptionsType,
 	type BrowserViewOptions,
+	type BrowserViewCreatedHandler,
 	type GpuWindowOptionsType,
 	type WGPUViewOptions,
 	type TrayOptions,
@@ -264,6 +274,7 @@ export {
 
 // Default Export
 const Electrobun = {
+	app,
 	BrowserWindow,
 	BrowserView,
 	GpuWindow,

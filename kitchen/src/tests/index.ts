@@ -18,6 +18,7 @@ import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
 import { sandboxTests } from "./sandbox.test";
 import { trayApiTests } from "./tray-api.test";
+import { runtimeTests } from "./runtime.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -36,6 +37,7 @@ import { wgpuViewTests } from "./interactive/wgpu-view.test";
 import { wgpuTagTests } from "./interactive/wgpu-tag.test";
 import { fullsizeFrameReproTests } from "./interactive/fullsize-frame-repro.test";
 import { permissionTests } from "./interactive/permissions.test";
+import { devtoolsLayoutTests } from "./interactive/devtools-layout.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -51,6 +53,7 @@ export const allTests: TestDefinition[] = [
   ...updaterTests,
   ...sandboxTests,
   ...trayApiTests,
+  ...runtimeTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -73,6 +76,7 @@ export const allTests: TestDefinition[] = [
   ...wgpuTagTests,
   ...fullsizeFrameReproTests,
   ...permissionTests,
+  ...devtoolsLayoutTests,
 ];
 
 // Export by category for selective running
@@ -92,6 +96,7 @@ export {
   updaterTests,
   sandboxTests,
   trayApiTests,
+  runtimeTests,
   wgpuFfiTests,
   wgpuAdapterTests,
   babylonAdapterTests,
@@ -112,4 +117,5 @@ export {
   wgpuTagTests,
   fullsizeFrameReproTests,
   permissionTests,
+  devtoolsLayoutTests,
 };

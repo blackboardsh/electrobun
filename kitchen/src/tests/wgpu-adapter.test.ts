@@ -1,5 +1,7 @@
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, webgpu } from "electrobun/bun";
+import { GpuWindow, WGPU, webgpu } from "electrobun/bun";
+
+const WGPUNative = WGPU.native;
 
 const TextureUsage = {
   CopyDst: 0x2,
@@ -90,6 +92,81 @@ export const wgpuAdapterTests = [
         device.queue.submit([commandBuffer]);
         log("Render pass submitted");
         await sleep(100);
+      } finally {
+        win.close();
+      }
+    },
+  }),
+  defineTest({
+    name: "WebGPU adapter: canvas resize reconfigures surface",
+    category: "WebGPU",
+    description: "Acquire a surface texture matching the resized canvas",
+    timeout: 15000,
+    async run({ log }) {
+      if (!webgpu?.createContext || !WGPUNative.available) {
+        log("WebGPU adapter not available; skipping test");
+        return;
+      }
+
+      const win = new GpuWindow({
+        title: "WGPU Adapter Resize Test",
+        frame: { width: 320, height: 240, x: 140, y: 140 },
+        titleBarStyle: "default",
+        transparent: false,
+      });
+
+      try {
+        webgpu.install();
+        const canvas = webgpu.utils.createCanvasShim(win);
+        const context = canvas.getContext("webgpu");
+        if (!context) {
+          throw new Error("Failed to create WebGPU canvas context");
+        }
+        const adapter = await webgpu.navigator.requestAdapter({
+          compatibleSurface: context,
+        });
+        const device = await adapter.requestDevice();
+        context.configure({
+          device,
+          format: "bgra8unorm",
+          usage: TextureUsage.RenderAttachment,
+        });
+
+        const initialTexture = context.getCurrentTexture();
+        const initialWidth = WGPUNative.symbols.wgpuTextureGetWidth(
+          initialTexture.ptr as any,
+        );
+        const initialHeight = WGPUNative.symbols.wgpuTextureGetHeight(
+          initialTexture.ptr as any,
+        );
+        context.present();
+        WGPUNative.symbols.wgpuTextureRelease(initialTexture.ptr as any);
+
+        win.setSize(initialWidth + 120, initialHeight + 80);
+        await sleep(100);
+        const resized = win.getSize();
+        canvas.width = resized.width;
+        canvas.height = resized.height;
+
+        const resizedTexture = context.getCurrentTexture();
+        const textureWidth = WGPUNative.symbols.wgpuTextureGetWidth(
+          resizedTexture.ptr as any,
+        );
+        const textureHeight = WGPUNative.symbols.wgpuTextureGetHeight(
+          resizedTexture.ptr as any,
+        );
+        context.present();
+        WGPUNative.symbols.wgpuTextureRelease(resizedTexture.ptr as any);
+
+        expect(textureWidth, "resized surface texture width").toBe(
+          resized.width,
+        );
+        expect(textureHeight, "resized surface texture height").toBe(
+          resized.height,
+        );
+        log(
+          `Surface texture resized from ${initialWidth}x${initialHeight} to ${textureWidth}x${textureHeight}`,
+        );
       } finally {
         win.close();
       }

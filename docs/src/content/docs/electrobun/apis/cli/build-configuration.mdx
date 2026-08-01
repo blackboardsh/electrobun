@@ -676,7 +676,36 @@ const config: ElectrobunConfig = {
 
 
               <Aside type="tip">
-                <p><strong>Note:</strong> Chromium flags are powerful and can change browser behavior in unexpected ways. Only use flags you understand. Electrobun does not validate flag names or values — they are passed directly to CEF.</p>
+                <p><strong>Note:</strong> Chromium flags are powerful and can change browser behavior in unexpected ways. Only use flags you understand. Other than the reserved and validated `remote-debugging-port`, Electrobun passes flag names and values directly to CEF.</p>
+              </Aside>
+
+### CEF Remote Debugging
+
+              <p>CEF remote debugging follows the build environment on macOS, Windows, and Linux:</p>
+              <ul>
+                <li><strong>dev:</strong> enabled automatically on the first available loopback port from `9222` through `9232`, preserving `openDevTools()` and the development inspector workflow.</li>
+                <li><strong>canary and production:</strong> disabled by default, so packaged applications do not expose a Chrome DevTools Protocol endpoint.</li>
+              </ul>
+
+              <p>To opt a packaged build into remote debugging, configure an explicit port on that platform:</p>
+
+```typescript
+build: {
+  mac: {
+    bundleCEF: true,
+    chromiumFlags: {
+      "remote-debugging-port": "9333",
+    },
+  },
+}
+```
+
+              <p>The port must be a string containing an integer from `1024` through `65535`. Set the value to `false` to disable the automatic endpoint in a dev build.</p>
+
+              <p>For a one-off launch, `ELECTROBUN_CEF_REMOTE_DEBUGGING_PORT=9333` overrides both the build environment and config. Set it to `0`, `off`, or `false` to disable the endpoint. An invalid override or configured port disables remote debugging and writes a diagnostic to the host console.</p>
+
+              <Aside type="caution">
+                <p>Only enable remote debugging for a packaged application in a controlled debugging environment. Anyone able to connect to the endpoint can inspect and control its CEF pages.</p>
               </Aside>
 
 ### Common Flags

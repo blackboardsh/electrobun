@@ -40,6 +40,8 @@
 #include <fstream>
 #include <set>
 #include <cstdarg>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include "dawn/webgpu.h"
 
 // Shared cross-platform utilities
@@ -63,6 +65,9 @@
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
 #include "../shared/console_forwarding.h"
+#include "native_file_dialog.h"
+#include "../shared/dialog_paths.h"
+#include "../shared/cef_find_session.h"
 
 using namespace electrobun;
 
@@ -222,6 +227,7 @@ struct X11Window {
     double x, y, width, height;
     std::string title;
     WindowCloseCallback closeCallback;
+    WindowShouldCloseHandler shouldCloseCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
@@ -231,7 +237,7 @@ struct X11Window {
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
 
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), keyCallback(nullptr), transparent(false) {}
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
 
 // Forward declarations for icon management
@@ -359,6 +365,23 @@ static std::map<int, std::string> g_preloadScripts;
 
 CefRefPtr<class ElectrobunApp> g_app;
 electrobun::ChromiumFlagConfig g_userChromiumFlags;
+
+static bool IsPortAvailable(int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(static_cast<uint16_t>(port));
+
+    const int result = bind(sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    close(sock);
+    return result == 0;
+}
 
 
 // Get the directory of the current executable
@@ -1295,6 +1318,15 @@ public:
     }
 
 
+    void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                     CefRefPtr<CefFrame> frame,
+                     TransitionType transition_type) override {
+        if (frame->IsMain() && webview_event_handler_) {
+            std::string url = frame->GetURL().ToString();
+            webview_event_handler_(webview_id_, strdup("did-commit-navigation"), strdup(url.c_str()));
+        }
+    }
+
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
                   int httpStatusCode) override {
@@ -1911,9 +1943,7 @@ public:
         
         printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
         
-        // Run the file dialog using GTK on the main thread
-        // Since this is Linux, we can use GTK dialogs directly
-        GtkWidget* dialog = nullptr;
+        // Run the file dialog using the desktop-native GTK portal integration.
         GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
         const char* buttonText = "_Open";
         
@@ -1937,18 +1967,16 @@ public:
                 break;
         }
         
-        dialog = gtk_file_chooser_dialog_new(
-            title.empty() ? "Select File" : title.ToString().c_str(),
-            nullptr, // No parent window
-            action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonText, GTK_RESPONSE_ACCEPT,
-            nullptr
-        );
+        const std::string dialogTitle = title.empty() ? "Select File" : title.ToString();
+        LinuxNativeFileDialog dialog(dialogTitle.c_str(), nullptr, action, buttonText);
+        if (!dialog.valid()) {
+            callback->Continue(std::vector<CefString>{});
+            return true;
+        }
         
         // Set multiple selection for OPEN_MULTIPLE mode
         if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-            gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+            dialog.setSelectMultiple(true);
         }
         
         // Set default file path if provided
@@ -1956,10 +1984,10 @@ public:
             std::string path = default_file_path.ToString();
             if (mode == FILE_DIALOG_SAVE) {
                 // For save dialogs, set the filename
-                gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), path.c_str());
+                dialog.setCurrentName(path.c_str());
             } else {
                 // For open dialogs, set the folder
-                gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), path.c_str());
+                dialog.setCurrentFolder(path.c_str());
             }
         }
         
@@ -1982,38 +2010,25 @@ public:
                     gtk_file_filter_add_pattern(gtkFilter, pattern.c_str());
                 }
                 
-                gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), gtkFilter);
+                dialog.addFilter(gtkFilter);
             }
             
             // Always add an "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            dialog.addFilter(allFilter);
         }
         
         // Show the dialog
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = dialog.run();
         
         std::vector<CefString> file_paths;
         if (response == GTK_RESPONSE_ACCEPT) {
-            if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-                GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-                for (GSList* iter = filenames; iter != nullptr; iter = iter->next) {
-                    file_paths.push_back((char*)iter->data);
-                    g_free(iter->data);
-                }
-                g_slist_free(filenames);
-            } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-                if (filename) {
-                    file_paths.push_back(filename);
-                    g_free(filename);
-                }
+            for (const auto& path : dialog.selectedPaths()) {
+                file_paths.emplace_back(path);
             }
         }
-        
-        gtk_widget_destroy(dialog);
         
         // Call the callback with results
         callback->Continue(file_paths);
@@ -2378,9 +2393,30 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
     settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
-    // settings.remote_debugging_port = 9222;
-    
-    // printf("CEF: Remote debugging enabled on port 9222\n");
+
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        std::cout << "[CEF] Remote debugging enabled on 127.0.0.1:"
+                  << selectedPort << " ("
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << ")" << std::endl;
+    } else if (remoteDebugging.enabled()) {
+        std::cout << "[CEF] Remote debugging disabled: no free port in "
+                  << electrobun::kDefaultRemoteDebuggingPort << "-"
+                  << electrobun::kLastAutomaticRemoteDebuggingPort << std::endl;
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        std::cout << "[CEF] Remote debugging disabled: "
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << std::endl;
+    }
     
     // Use centralized GTK initialization to ensure proper setlocale handling
     initializeGTK();
@@ -2707,8 +2743,14 @@ public:
             throw std::runtime_error("Failed to create WebKit webview");
         }
 
-        // Set size
-        gtk_widget_set_size_request(webview, (int)width, (int)height);
+        // A GTK size request is a minimum, not a one-time allocation. Full-size
+        // host views fill their container through expand/fill, while positioned
+        // child views still need their explicit initial allocation.
+        gtk_widget_set_size_request(
+            webview,
+            autoResize ? -1 : (int)width,
+            autoResize ? -1 : (int)height
+        );
         
         // Check if parent window is transparent and apply transparency to webview
         GtkWidget* toplevel = gtk_widget_get_toplevel(window);
@@ -3013,12 +3055,20 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
-            // Resizing webview
-            
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
-            if (wrapper) {
+
+            if (fullSize) {
+                // Full-size views receive their allocation from GTK. Keeping
+                // the request unset avoids turning every grow into a new
+                // minimum window size.
+                gtk_widget_set_size_request(webview, -1, -1);
+            } else {
+                // Positioned child views need an explicit widget allocation.
                 gtk_widget_set_size_request(webview, frame.width, frame.height);
+            }
+
+            if (wrapper) {
 
                 // TODO: this only sort of works, the webview ends up half height
                 // and other overlay stuff is just janky and gross
@@ -3040,9 +3090,7 @@ public:
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
                
                 // OOPIF positioned with coordinate adjustment
-            } else {
-                gtk_widget_set_size_request(webview, -1, -1);
-
+            } else if (!fullSize) {
                 // For host webview, position directly with margins (can't be negative)
                 gtk_widget_set_margin_start(webview, MAX(0, frame.x));
                 gtk_widget_set_margin_top(webview, MAX(0, frame.y));
@@ -3477,18 +3525,19 @@ public:
         gboolean allowsMultipleSelection = webkit_file_chooser_request_get_select_multiple(request);
         const gchar* const* acceptedMimeTypes = webkit_file_chooser_request_get_mime_types(request);
         
-        // Create the file chooser dialog
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        LinuxNativeFileDialog dialog(
             "Select File(s)",
             nullptr, // No parent window for now
             GTK_FILE_CHOOSER_ACTION_OPEN,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            "_Open", GTK_RESPONSE_ACCEPT,
-            nullptr
+            "_Open"
         );
+        if (!dialog.valid()) {
+            webkit_file_chooser_request_cancel(request);
+            return TRUE;
+        }
         
         // Set multiple selection
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection);
+        dialog.setSelectMultiple(allowsMultipleSelection);
         
         // Set up MIME type filters if provided
         if (acceptedMimeTypes && acceptedMimeTypes[0] != nullptr) {
@@ -3520,44 +3569,30 @@ public:
                 }
             }
             
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+            dialog.addFilter(filter);
         }
         
         // Always add "All files" filter as fallback
         GtkFileFilter* allFilter = gtk_file_filter_new();
         gtk_file_filter_set_name(allFilter, "All files");
         gtk_file_filter_add_pattern(allFilter, "*");
-        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+        dialog.addFilter(allFilter);
         
         // Run the dialog and handle the response
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = dialog.run();
         
         if (response == GTK_RESPONSE_ACCEPT) {
-            GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-            
-            // Convert GSList to array of strings
-            guint length = g_slist_length(filenames);
-            gchar** files = g_new(gchar*, length + 1);
-            
-            GSList* iter = filenames;
-            for (guint i = 0; i < length; i++) {
-                files[i] = (gchar*)iter->data;
-                iter = iter->next;
+            const auto filenames = dialog.selectedPaths();
+            std::vector<const gchar*> files;
+            files.reserve(filenames.size() + 1);
+            for (const auto& filename : filenames) {
+                files.push_back(filename.c_str());
             }
-            files[length] = nullptr;
-            
-            // Select the files in the request
-            webkit_file_chooser_request_select_files(request, (const gchar* const*)files);
-            
-            // Clean up
-            g_slist_free_full(filenames, g_free);
-            g_free(files);
+            files.push_back(nullptr);
+            webkit_file_chooser_request_select_files(request, files.data());
         } else {
-            // User cancelled - WebKit will handle this automatically
             webkit_file_chooser_request_cancel(request);
         }
-        
-        gtk_widget_destroy(dialog);
         return TRUE; // We handled the request
     }
 
@@ -3931,7 +3966,11 @@ public:
             XFlush(xDisplay);
             visualBounds = frame;
         } else if (viewWidget) {
-            gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
+            if (fullSize) {
+                gtk_widget_set_size_request(viewWidget, -1, -1);
+            } else {
+                gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
+            }
 
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
             if (wrapper) {
@@ -4136,6 +4175,7 @@ class CEFWebViewImpl : public AbstractView {
 public:
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<ElectrobunClient> client;
+    CefFindSession findSession;
     DecideNavigationCallback navigationCallback;
     WebviewEventHandler eventHandler;
     HandlePostMessage eventBridgeHandler;
@@ -4304,6 +4344,7 @@ public:
         
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
         client->SetBrowserCreatedCallback([this, x11win](CefRefPtr<CefBrowser> browser) {
+            this->findSession.reset();
             this->browser = browser;
             
             CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
@@ -4366,6 +4407,7 @@ public:
         // Set up browser close callback to clear browser reference
         client->SetBrowserCloseCallback([this]() {
             // Don't acquire the mutex here - OnBeforeClose already has it
+            this->findSession.reset();
             this->browser = nullptr;
             printf("CEF: Browser reference cleared in CEFWebViewImpl\n");
         });
@@ -4935,20 +4977,32 @@ public:
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!searchText || strlen(searchText) == 0) {
+            findSession.reset();
+            if (!browser) return;
+
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            if (host) {
+                host->StopFinding(true);
+            }
+            return;
+        }
+
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (!host) return;
 
-        if (!searchText || strlen(searchText) == 0) {
+        const bool findNext = findSession.begin(searchText, matchCase);
+        if (!findNext) {
             host->StopFinding(true);
-            return;
         }
 
-        host->Find(CefString(searchText), forward, matchCase, false);
+        host->Find(CefString(searchText), forward, matchCase, findNext);
     }
 
     void stopFindInPage() override {
+        findSession.reset();
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
@@ -5004,13 +5058,14 @@ public:
     AbstractView* activeWebView = nullptr;
     uint32_t windowId;
     WindowCloseCallback closeCallback;
+    WindowShouldCloseHandler shouldCloseCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
     WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
   
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
 
         // Create an overlay container as the main container
@@ -5022,8 +5077,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowShouldCloseHandler shouldCloseCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), shouldCloseCallback(shouldCloseCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_widget_set_hexpand(overlay, TRUE);
@@ -5205,6 +5260,10 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
     if (container) {
+        if (container->shouldCloseCallback) {
+            container->shouldCloseCallback(container->windowId);
+            return TRUE;
+        }
         if (container->closeCallback) {
             container->closeCallback(container->windowId);
         }
@@ -6337,12 +6396,16 @@ gboolean process_x11_events(gpointer data) {
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(x11win->display, "WM_DELETE_WINDOW", False)) {
-                        if (x11win->closeCallback) {
-                            x11win->closeCallback(x11win->windowId);
+                        if (x11win->shouldCloseCallback) {
+                            x11win->shouldCloseCallback(x11win->windowId);
+                        } else {
+                            if (x11win->closeCallback) {
+                                x11win->closeCallback(x11win->windowId);
+                            }
+
+                            // Mark for safe cleanup after event processing
+                            windows_to_close.push_back(windowId);
                         }
-                        
-                        // Mark for safe cleanup after event processing
-                        windows_to_close.push_back(windowId);
                     }
                     break;
                     
@@ -6478,7 +6541,7 @@ void runEventLoop() {
 void showWindow(void* window, bool activate);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -6622,6 +6685,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->height = height;
             x11win->title = title;
             x11win->closeCallback = closeCallback;
+            x11win->shouldCloseCallback = shouldCloseCallback;
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
@@ -6652,7 +6716,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
@@ -6711,7 +6775,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, shouldCloseCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
       
         {
             std::lock_guard<std::mutex> lock(g_containersMutex);
@@ -6812,16 +6876,16 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              double trafficLightOffsetX, double trafficLightOffsetY,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback) {
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
 
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, shouldCloseCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, shouldCloseCallback, titleBarStyle, transparent);
     }
 
 }
@@ -6977,6 +7041,29 @@ ELECTROBUN_EXPORT void hideWindow(void* window) {
     } else {
         hideGTKWindow(window);
     }
+}
+
+bool isX11WindowVisible(void* window) {
+    return dispatch_sync_main([&]() -> bool {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win || !x11win->display || !x11win->window) {
+            return false;
+        }
+
+        XWindowAttributes attributes = {};
+        return XGetWindowAttributes(x11win->display, x11win->window, &attributes) != 0 &&
+               attributes.map_state != IsUnmapped;
+    });
+}
+
+bool isGTKWindowVisible(void* window) {
+    return dispatch_sync_main([&]() -> bool {
+        return window && gtk_widget_get_visible(GTK_WIDGET(window));
+    });
+}
+
+ELECTROBUN_EXPORT bool isWindowVisible(void* window) {
+    return isCEFAvailable() ? isX11WindowVisible(window) : isGTKWindowVisible(window);
 }
 
 // Cross-platform compatible function for Linux - return dummy style mask
@@ -7364,7 +7451,11 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
         view->viewWidget = gtk_drawing_area_new();
         view->widget = view->viewWidget;
 
-        gtk_widget_set_size_request(view->viewWidget, (int)width, (int)height);
+        gtk_widget_set_size_request(
+            view->viewWidget,
+            autoResize ? -1 : (int)width,
+            autoResize ? -1 : (int)height
+        );
         container->addWebview(view, x, y);
         view->resize(frame, "");
 
@@ -9263,22 +9354,24 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
             buttonLabel = "_Open";
         }
         
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        LinuxNativeFileDialog dialog(
             "Open File",
             nullptr, // No parent window for now
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonLabel, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonLabel
         );
+        if (!dialog.valid()) {
+            static std::string emptyResult = "[]";
+            return emptyResult.c_str();
+        }
         
         // Set starting folder if provided
         if (startingFolder && strlen(startingFolder) > 0) {
-            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), startingFolder);
+            dialog.setCurrentFolder(startingFolder);
         }
         
         // Allow multiple selection if requested
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection != 0);
+        dialog.setSelectMultiple(allowsMultipleSelection != 0);
         
         // Set up file filters if provided
         if (allowedFileTypes && strlen(allowedFileTypes) > 0) {
@@ -9308,45 +9401,25 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 gtk_file_filter_add_pattern(filter, typesStr.c_str());
             }
             
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+            dialog.addFilter(filter);
             
             // Also add "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            dialog.addFilter(allFilter);
         }
         
         // Run the dialog
-        static std::string resultString; // Static to persist after function returns
-        resultString.clear();
-        
-        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-            if (allowsMultipleSelection != 0) {
-                GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-                GSList* iter = fileList;
-                
-                while (iter != nullptr) {
-                    if (!resultString.empty()) {
-                        resultString += ","; // Separate multiple files with comma (like Mac)
-                    }
-                    resultString += (char*)iter->data;
-                    g_free(iter->data);
-                    iter = iter->next;
-                }
-                g_slist_free(fileList);
-            } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-                if (filename) {
-                    resultString = filename;
-                    g_free(filename);
-                }
-            }
+        std::vector<std::string> paths;
+
+        if (dialog.run() == GTK_RESPONSE_ACCEPT) {
+            paths = dialog.selectedPaths();
         }
-        
-        gtk_widget_destroy(dialog);
-        
-        return resultString.empty() ? nullptr : resultString.c_str();
+
+        static std::string resultString; // Static to persist after function returns.
+        resultString = serializeDialogPaths(paths);
+        return resultString.c_str();
     });
 }
 
@@ -10069,6 +10142,32 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
     }
 }
 
+ELECTROBUN_EXPORT void requestWindowClose(void* window) {
+    if (!window || g_shuttingDown.load()) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            gtk_window_close(GTK_WINDOW(window));
+            return;
+        }
+
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win->display || !x11win->window) return;
+
+        Atom wmProtocols = XInternAtom(x11win->display, "WM_PROTOCOLS", False);
+        Atom wmDelete = XInternAtom(x11win->display, "WM_DELETE_WINDOW", False);
+        XEvent event = {};
+        event.xclient.type = ClientMessage;
+        event.xclient.window = x11win->window;
+        event.xclient.message_type = wmProtocols;
+        event.xclient.format = 32;
+        event.xclient.data.l[0] = wmDelete;
+        event.xclient.data.l[1] = CurrentTime;
+        XSendEvent(x11win->display, x11win->window, False, NoEventMask, &event);
+        XFlush(x11win->display);
+    });
+}
+
 ELECTROBUN_EXPORT void minimizeWindow(void* window) {
     if (!window) return;
 
@@ -10512,11 +10611,55 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     });
 }
 
+ELECTROBUN_EXPORT void centerWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([=]() {
+        GdkDisplay* gdkDisplay = gdk_display_get_default();
+        if (!gdkDisplay) return;
+        GdkMonitor* monitor = gdk_display_get_primary_monitor(gdkDisplay);
+        if (!monitor && gdk_display_get_n_monitors(gdkDisplay) > 0) {
+            monitor = gdk_display_get_monitor(gdkDisplay, 0);
+        }
+        if (!monitor) return;
+
+        GdkRectangle workarea{};
+        gdk_monitor_get_workarea(monitor, &workarea);
+
+        if (isCEFAvailable()) {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (!x11win || !x11win->display || !x11win->window) return;
+            XWindowAttributes attributes{};
+            if (!XGetWindowAttributes(x11win->display, x11win->window, &attributes)) return;
+            const int x = workarea.x + std::max(0, (workarea.width - attributes.width) / 2);
+            const int y = workarea.y + std::max(0, (workarea.height - attributes.height) / 2);
+            XMoveWindow(x11win->display, x11win->window, x, y);
+            XFlush(x11win->display);
+            return;
+        }
+
+        if (GTK_IS_WINDOW(window)) {
+            int width = 0;
+            int height = 0;
+            gtk_window_get_size(GTK_WINDOW(window), &width, &height);
+            const int x = workarea.x + std::max(0, (workarea.width - width) / 2);
+            const int y = workarea.y + std::max(0, (workarea.height - height) / 2);
+            gtk_window_move(GTK_WINDOW(window), x, y);
+        }
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
     (void)window;
     (void)x;
     (void)y;
     // Not applicable on Linux - no-op
+}
+
+ELECTROBUN_EXPORT void getWindowButtonPosition(void* window, double* x, double* y) {
+    (void)window;
+    if (x) *x = 0;
+    if (y) *y = 0;
 }
 
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {

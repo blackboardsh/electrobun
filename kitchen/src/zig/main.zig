@@ -46,7 +46,9 @@ const TestResult = struct {
 
 const TestKind = enum {
     smoke,
+    app_packaged_mode_reflects_build_channel,
     window_create_close,
+    window_omitted_position_centers_on_primary_display,
     window_creation_with_url,
     window_hidden_option,
     window_inactive_show_api,
@@ -66,6 +68,7 @@ const TestKind = enum {
     window_visible_on_all_workspaces,
     window_focus,
     window_close_event,
+    window_will_close_veto,
     window_resize_event,
     window_get_by_id,
     window_inset_titlebar_style,
@@ -80,6 +83,7 @@ const TestKind = enum {
     navigation_load_html,
     navigation_dom_ready_event,
     navigation_did_navigate_event,
+    navigation_did_commit_navigation_event,
     navigation_execute_javascript,
     tray_visibility_toggle_and_bounds,
     session_from_partition,
@@ -146,11 +150,27 @@ const zig_tests = [_]ZigTest{
         .kind = .smoke,
     },
     .{
+        .id = "zig-app-packaged-mode-reflects-build-channel",
+        .name = "App packaged mode reflects build channel",
+        .category = "Runtime",
+        .description = "Verify packaged mode is derived from the app build channel metadata.",
+        .mirrors_bun_test_name = "App packaged mode reflects build channel",
+        .kind = .app_packaged_mode_reflects_build_channel,
+    },
+    .{
         .id = "zig-window-create-close",
         .name = "Window create/close (Zig)",
         .category = "BrowserWindow",
         .description = "Create a native window through the Zig SDK and close it again.",
         .kind = .window_create_close,
+    },
+    .{
+        .id = "zig-window-omitted-position-centers-on-primary-display",
+        .name = "Window omitted position centers on primary display",
+        .category = "BrowserWindow",
+        .description = "Create a hidden centered window and verify its frame is centered in the primary display work area.",
+        .mirrors_bun_test_name = "Window omitted position centers on primary display",
+        .kind = .window_omitted_position_centers_on_primary_display,
     },
     .{
         .id = "zig-window-creation-with-url",
@@ -164,7 +184,7 @@ const zig_tests = [_]ZigTest{
         .id = "zig-window-hidden-option",
         .name = "Window hidden option (Zig)",
         .category = "BrowserWindow",
-        .description = "Create a hidden native window, then show it through the Zig SDK.",
+        .description = "Verify native visibility across hidden creation, show, and hide through the Zig SDK.",
         .mirrors_bun_test_name = "Window hidden option",
         .kind = .window_hidden_option,
     },
@@ -228,7 +248,7 @@ const zig_tests = [_]ZigTest{
         .id = "zig-window-set-size",
         .name = "Window setSize (Zig)",
         .category = "BrowserWindow",
-        .description = "Resize a native window and read the new frame back from core.",
+        .description = "Grow and shrink a native-renderer window through core.",
         .mirrors_bun_test_name = "Window setSize",
         .kind = .window_set_size,
     },
@@ -303,6 +323,14 @@ const zig_tests = [_]ZigTest{
         .description = "Verify a per-window close callback fires in Zig mode.",
         .mirrors_bun_test_name = "Window close event",
         .kind = .window_close_event,
+    },
+    .{
+        .id = "zig-window-will-close-veto",
+        .name = "Window will-close can veto user close (Zig)",
+        .category = "BrowserWindow",
+        .description = "Verify a native user-close request can be vetoed before destruction.",
+        .mirrors_bun_test_name = "Window will-close can veto user close",
+        .kind = .window_will_close_veto,
     },
     .{
         .id = "zig-window-resize-event",
@@ -414,6 +442,14 @@ const zig_tests = [_]ZigTest{
         .description = "Verify did-navigate is emitted for BrowserView navigation in Zig mode.",
         .mirrors_bun_test_name = "did-navigate event",
         .kind = .navigation_did_navigate_event,
+    },
+    .{
+        .id = "zig-navigation-did-commit-navigation-event",
+        .name = "did-commit-navigation event (Zig)",
+        .category = "Navigation",
+        .description = "Verify did-commit-navigation crosses the Zig callback boundary before load completion.",
+        .mirrors_bun_test_name = "did-commit-navigation event",
+        .kind = .navigation_did_commit_navigation_event,
     },
     .{
         .id = "zig-navigation-execute-javascript",
@@ -1004,7 +1040,9 @@ fn runZigTest(zig_test: ZigTest) TestResult {
 
     const run_result = switch (zig_test.kind) {
         .smoke => runSmokeTest(),
+        .app_packaged_mode_reflects_build_channel => runAppPackagedModeReflectsBuildChannelTest(state),
         .window_create_close => runWindowCreateCloseTest(state),
+        .window_omitted_position_centers_on_primary_display => runWindowOmittedPositionCentersOnPrimaryDisplayTest(state),
         .window_creation_with_url => runWindowCreationWithUrlTest(state),
         .window_hidden_option => runWindowHiddenOptionTest(state),
         .window_inactive_show_api => runWindowInactiveShowApiTest(state),
@@ -1024,6 +1062,7 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .window_visible_on_all_workspaces => runWindowVisibleOnAllWorkspacesTest(state),
         .window_focus => runWindowFocusTest(state),
         .window_close_event => runWindowCloseEventTest(state),
+        .window_will_close_veto => runWindowWillCloseVetoTest(state),
         .window_resize_event => runWindowResizeEventTest(state),
         .window_get_by_id => runWindowGetByIdTest(state),
         .window_inset_titlebar_style => runWindowInsetTitlebarStyleTest(state),
@@ -1038,6 +1077,7 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .navigation_load_html => runNavigationLoadHtmlTest(state),
         .navigation_dom_ready_event => runNavigationDomReadyEventTest(state),
         .navigation_did_navigate_event => runNavigationDidNavigateEventTest(state),
+        .navigation_did_commit_navigation_event => runNavigationDidCommitNavigationEventTest(state),
         .navigation_execute_javascript => runNavigationExecuteJavascriptTest(state),
         .tray_visibility_toggle_and_bounds => runTrayVisibilityToggleAndBoundsTest(state),
         .session_from_partition => runSessionFromPartitionTest(state),
@@ -1100,6 +1140,18 @@ fn runSmokeTest() !void {
     return;
 }
 
+fn runAppPackagedModeReflectsBuildChannelTest(state: *AppState) !void {
+    const channel = state.app_info.channel;
+    const is_known_channel = std.mem.eql(u8, channel, "dev") or
+        std.mem.eql(u8, channel, "canary") or
+        std.mem.eql(u8, channel, "production");
+
+    if (!is_known_channel) return error.UnexpectedBuildChannel;
+    if (state.app_info.isPackaged() != !std.mem.eql(u8, channel, "dev")) {
+        return error.PackagedModeMismatch;
+    }
+}
+
 const WindowWithWebview = struct {
     window_id: u32,
     webview_id: u32,
@@ -1108,12 +1160,14 @@ const WindowWithWebview = struct {
 const CallbackState = struct {
     mutex: std.Thread.Mutex = .{},
     window_close_count: u32 = 0,
+    window_should_close_count: u32 = 0,
     window_resize_count: u32 = 0,
     window_focus_count: u32 = 0,
     last_resize_width: f64 = 0,
     last_resize_height: f64 = 0,
     webview_will_navigate_count: u32 = 0,
     webview_did_navigate_count: u32 = 0,
+    webview_did_commit_navigation_count: u32 = 0,
     webview_dom_ready_count: u32 = 0,
     webview_tag_init_count: u32 = 0,
     wgpu_tag_init_count: u32 = 0,
@@ -1130,12 +1184,14 @@ const CallbackState = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
         self.window_close_count = 0;
+        self.window_should_close_count = 0;
         self.window_resize_count = 0;
         self.window_focus_count = 0;
         self.last_resize_width = 0;
         self.last_resize_height = 0;
         self.webview_will_navigate_count = 0;
         self.webview_did_navigate_count = 0;
+        self.webview_did_commit_navigation_count = 0;
         self.webview_dom_ready_count = 0;
         self.webview_tag_init_count = 0;
         self.wgpu_tag_init_count = 0;
@@ -1166,6 +1222,12 @@ fn getWindowCloseCount() u32 {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
     return g_callback_state.window_close_count;
+}
+
+fn getWindowShouldCloseCount() u32 {
+    g_callback_state.mutex.lock();
+    defer g_callback_state.mutex.unlock();
+    return g_callback_state.window_should_close_count;
 }
 
 fn getWindowResizeCount() u32 {
@@ -1199,6 +1261,12 @@ fn getWebviewDidNavigateCount() u32 {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
     return g_callback_state.webview_did_navigate_count;
+}
+
+fn getWebviewDidCommitNavigationCount() u32 {
+    g_callback_state.mutex.lock();
+    defer g_callback_state.mutex.unlock();
+    return g_callback_state.webview_did_commit_navigation_count;
 }
 
 fn getWebviewDomReadyCount() u32 {
@@ -1265,6 +1333,17 @@ fn observedWindowClose(_: u32) callconv(.C) void {
     g_callback_state.window_close_count += 1;
 }
 
+fn observedWindowShouldClose(window_id: u32) callconv(.C) void {
+    g_callback_state.mutex.lock();
+    g_callback_state.window_should_close_count += 1;
+    const should_allow = g_callback_state.window_should_close_count > 1;
+    g_callback_state.mutex.unlock();
+
+    if (should_allow) {
+        appState().core.closeWindow(window_id) catch {};
+    }
+}
+
 fn observedWindowResize(_: u32, _: f64, _: f64, width: f64, height: f64) callconv(.C) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
@@ -1287,6 +1366,8 @@ fn recordObservedWebviewEvent(event_name_slice: []const u8, detail_slice: []cons
         g_callback_state.webview_will_navigate_count += 1;
     } else if (std.mem.eql(u8, event_name_slice, "did-navigate")) {
         g_callback_state.webview_did_navigate_count += 1;
+    } else if (std.mem.eql(u8, event_name_slice, "did-commit-navigation")) {
+        g_callback_state.webview_did_commit_navigation_count += 1;
     } else if (std.mem.eql(u8, event_name_slice, "dom-ready")) {
         g_callback_state.webview_dom_ready_count += 1;
     }
@@ -1731,34 +1812,6 @@ fn appReopenHandler() callconv(.C) void {
     recordReopen();
 }
 
-fn splitCsvPaths(allocator: std.mem.Allocator, csv: []const u8) ![][]u8 {
-    if (csv.len == 0) {
-        return allocator.alloc([]u8, 0);
-    }
-
-    var list = std.ArrayList([]u8).init(allocator);
-    errdefer {
-        for (list.items) |item| {
-            allocator.free(item);
-        }
-        list.deinit();
-    }
-
-    var iterator = std.mem.splitScalar(u8, csv, ',');
-    while (iterator.next()) |part| {
-        try list.append(try allocator.dupe(u8, part));
-    }
-
-    return try list.toOwnedSlice();
-}
-
-fn releaseSplitCsvPaths(allocator: std.mem.Allocator, items: [][]u8) void {
-    for (items) |item| {
-        allocator.free(item);
-    }
-    allocator.free(items);
-}
-
 fn expandTildePathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     if (path.len == 0 or path[0] != '~') {
         return allocator.dupe(u8, path);
@@ -2141,13 +2194,36 @@ fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callco
             handleInternalBridgeRequest(host_webview_id, request_id, method, &params_value.object);
         }
     }
-
 }
 
 fn createWindowWithHarnessCustom(
     state: *AppState,
     title: []const u8,
     frame: electrobun.Rect,
+    hidden: bool,
+    activate: bool,
+    title_bar_style: []const u8,
+    window_callbacks: electrobun.WindowCallbacks,
+    webview_callbacks: electrobun.WebviewCallbacks,
+) !WindowWithWebview {
+    return createWindowWithHarnessCustomRenderer(
+        state,
+        title,
+        frame,
+        .native,
+        hidden,
+        activate,
+        title_bar_style,
+        window_callbacks,
+        webview_callbacks,
+    );
+}
+
+fn createWindowWithHarnessCustomRenderer(
+    state: *AppState,
+    title: []const u8,
+    frame: electrobun.Rect,
+    renderer: electrobun.Renderer,
     hidden: bool,
     activate: bool,
     title_bar_style: []const u8,
@@ -2166,7 +2242,7 @@ fn createWindowWithHarnessCustom(
 
     const webview_id = try state.core.createWebview(.{
         .window_id = window_id,
-        .renderer = .native,
+        .renderer = renderer,
         .url = test_harness_url,
         .frame = .{
             .x = 0,
@@ -2285,6 +2361,33 @@ fn runWindowCreateCloseTest(state: *AppState) !void {
     try state.core.closeWindow(window_id);
 }
 
+fn runWindowOmittedPositionCentersOnPrimaryDisplayTest(state: *AppState) !void {
+    var registry = electrobun.WindowRegistry.init(state.allocator, state.core);
+    defer registry.deinit();
+
+    const window = try registry.createBrowserWindow(.{
+        .title = "Centered Window Test",
+        .frame = .{ .x = 0, .y = 0, .width = 480, .height = 320 },
+        .hidden = true,
+        .activate = false,
+        .centered = true,
+    });
+    defer window.close() catch {};
+
+    const display = try state.core.getPrimaryDisplay();
+    const frame = try window.getFrame();
+    const expected_x = display.workArea.x + (display.workArea.width - frame.width) / 2;
+    const expected_y = display.workArea.y + (display.workArea.height - frame.height) / 2;
+
+    if (!approxEq(frame.x, expected_x, 4) or !approxEq(frame.y, expected_y, 4)) {
+        std.debug.print(
+            "[kitchen zig] centered frame=({d:.2},{d:.2},{d:.2},{d:.2}) expected=({d:.2},{d:.2}) workArea=({d:.2},{d:.2},{d:.2},{d:.2})\n",
+            .{ frame.x, frame.y, frame.width, frame.height, expected_x, expected_y, display.workArea.x, display.workArea.y, display.workArea.width, display.workArea.height },
+        );
+        return error.WindowNotCenteredOnPrimaryDisplay;
+    }
+}
+
 fn runWindowCreationWithUrlTest(state: *AppState) !void {
     const created = try createWindowWithTestHarness(
         state,
@@ -2310,8 +2413,23 @@ fn runWindowHiddenOptionTest(state: *AppState) !void {
     );
     defer state.core.closeWindow(created.window_id) catch {};
 
+    if (state.core.isWindowVisible(created.window_id)) {
+        return error.WindowUnexpectedlyVisible;
+    }
+
     try state.core.showWindow(created.window_id, true);
     sleepMs(medium_wait_ms);
+
+    if (!state.core.isWindowVisible(created.window_id)) {
+        return error.WindowDidNotBecomeVisible;
+    }
+
+    try state.core.hideWindow(created.window_id);
+    sleepMs(medium_wait_ms);
+
+    if (state.core.isWindowVisible(created.window_id)) {
+        return error.WindowDidNotHide;
+    }
 }
 
 fn runWindowInactiveShowApiTest(state: *AppState) !void {
@@ -2483,19 +2601,29 @@ fn runWindowSetPositionTest(state: *AppState) !void {
 }
 
 fn runWindowSetSizeTest(state: *AppState) !void {
-    const window_id = try state.core.createWindow(.{
-        .title = "Size Test",
-        .frame = .{ .x = 70, .y = 80, .width = 420, .height = 320 },
-        .hidden = true,
-        .activate = false,
-    });
-    defer state.core.closeWindow(window_id) catch {};
+    const created = try createWindowWithTestHarness(
+        state,
+        "Size Test",
+        .{ .x = 70, .y = 80, .width = 420, .height = 320 },
+        false,
+        false,
+    );
+    defer state.core.closeWindow(created.window_id) catch {};
 
-    try state.core.setWindowSize(window_id, 600, 500);
+    sleepMs(short_wait_ms);
+    try state.core.setWindowSize(created.window_id, 600, 500);
     sleepMs(short_wait_ms);
 
-    const frame = try state.core.getWindowFrame(window_id);
-    if (!approxEq(frame.width, 600, 4) or !approxEq(frame.height, 500, 4)) {
+    const grown_frame = try state.core.getWindowFrame(created.window_id);
+    if (!approxEq(grown_frame.width, 600, 24) or !approxEq(grown_frame.height, 500, 24)) {
+        return error.UnexpectedWindowSize;
+    }
+
+    try state.core.setWindowSize(created.window_id, 320, 240);
+    sleepMs(short_wait_ms);
+
+    const shrunk_frame = try state.core.getWindowFrame(created.window_id);
+    if (!approxEq(shrunk_frame.width, 320, 24) or !approxEq(shrunk_frame.height, 240, 24)) {
         return error.UnexpectedWindowSize;
     }
 }
@@ -2722,6 +2850,34 @@ fn runWindowCloseEventTest(state: *AppState) !void {
     }
 }
 
+fn runWindowWillCloseVetoTest(state: *AppState) !void {
+    resetCallbackState();
+
+    const window_id = try state.core.createWindow(.{
+        .title = "Will Close Veto Test",
+        .frame = .{ .x = 120, .y = 120, .width = 360, .height = 260 },
+        .callbacks = .{
+            .close = observedWindowClose,
+            .should_close = observedWindowShouldClose,
+        },
+    });
+    errdefer state.core.closeWindow(window_id) catch {};
+
+    sleepMs(short_wait_ms);
+    try state.core.requestWindowClose(window_id);
+    sleepMs(short_wait_ms);
+    if (getWindowShouldCloseCount() != 1 or getWindowCloseCount() != 0) {
+        return error.FirstCloseRequestWasNotVetoed;
+    }
+    _ = try state.core.getWindowFrame(window_id);
+
+    try state.core.requestWindowClose(window_id);
+    sleepMs(short_wait_ms);
+    if (getWindowShouldCloseCount() != 2 or getWindowCloseCount() == 0) {
+        return error.SecondCloseRequestWasNotAllowed;
+    }
+}
+
 fn runWindowResizeEventTest(state: *AppState) !void {
     resetCallbackState();
 
@@ -2789,17 +2945,47 @@ fn runWindowTrafficLightPositionApiTest(state: *AppState) !void {
     var registry = electrobun.WindowRegistry.init(state.allocator, state.core);
     defer registry.deinit();
 
+    const baseline = try registry.createBrowserWindow(.{
+        .title = "Traffic Light Baseline",
+        .frame = .{ .x = 220, .y = 220, .width = 480, .height = 340 },
+        .title_bar_style = "hiddenInset",
+        .activate = false,
+    });
+    defer baseline.close() catch {};
+
+    sleepMs(300);
+    const baseline_position = try baseline.getWindowButtonPosition();
+
     const window = try registry.createBrowserWindow(.{
         .title = "Traffic Light Position Test",
         .frame = .{ .x = 280, .y = 280, .width = 480, .height = 340 },
         .title_bar_style = "hiddenInset",
         .traffic_light_offset = .{ .x = 24, .y = 18 },
+        .activate = false,
     });
     defer window.close() catch {};
 
     sleepMs(300);
+    const offset_position = try window.getWindowButtonPosition();
+    if (!approxEq(offset_position.x - baseline_position.x, 24, 0.5) or
+        !approxEq(offset_position.y - baseline_position.y, 18, 0.5))
+    {
+        return error.UnexpectedTrafficLightOffset;
+    }
+
     try window.setWindowButtonPosition(52, 22);
     sleepMs(300);
+    const runtime_position = try window.getWindowButtonPosition();
+    if (!approxEq(runtime_position.x, 52, 0.5) or !approxEq(runtime_position.y, 22, 0.5)) {
+        return error.UnexpectedTrafficLightPosition;
+    }
+
+    try state.core.setWindowSize(window.id, 540, 380);
+    sleepMs(300);
+    const resized_position = try window.getWindowButtonPosition();
+    if (!approxEq(resized_position.x, 52, 0.5) or !approxEq(resized_position.y, 22, 0.5)) {
+        return error.TrafficLightPositionChangedAfterResize;
+    }
 }
 
 fn runWebviewCreateTest(state: *AppState) !void {
@@ -3145,6 +3331,34 @@ fn runNavigationDidNavigateEventTest(state: *AppState) !void {
     }
     if (!lastWebviewDetailContains("test-runner")) {
         return error.DidNavigateMissingExpectedUrl;
+    }
+}
+
+fn runNavigationDidCommitNavigationEventTest(state: *AppState) !void {
+    resetCallbackState();
+    const created = try createWindowWithHarnessCustomRenderer(
+        state,
+        "Did Commit Navigation Test",
+        .{ .x = 295, .y = 295, .width = 500, .height = 360 },
+        activePlaygroundRenderer(state),
+        false,
+        true,
+        "default",
+        .{},
+        observedHarnessWebviewCallbacks(),
+    );
+    defer state.core.closeWindow(created.window_id) catch {};
+
+    sleepMs(medium_wait_ms);
+    resetCallbackState();
+    try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
+    sleepMs(2000);
+
+    if (getWebviewDidCommitNavigationCount() == 0) {
+        return error.DidCommitNavigationDidNotFire;
+    }
+    if (!lastWebviewDetailContains("test-runner")) {
+        return error.DidCommitNavigationMissingExpectedUrl;
     }
 }
 
@@ -4042,7 +4256,7 @@ fn handleRpcRequest(webview_id: u32, request_id: u64, method: []const u8, params
         };
         defer appState().allocator.free(starting_folder);
 
-        const csv = appState().core.openFileDialog(.{
+        const paths = appState().core.openFileDialogPaths(.{
             .starting_folder = starting_folder,
             .allowed_file_types = getJsonStringField(&params_value.object, "allowedFileTypes") orelse "*",
             .can_choose_files = getJsonBoolField(&params_value.object, "canChooseFiles", true),
@@ -4052,13 +4266,7 @@ fn handleRpcRequest(webview_id: u32, request_id: u64, method: []const u8, params
             sendRpcResponseError(webview_id, request_id, @errorName(err));
             return;
         };
-        defer appState().allocator.free(csv);
-
-        const paths = splitCsvPaths(appState().allocator, csv) catch |err| {
-            sendRpcResponseError(webview_id, request_id, @errorName(err));
-            return;
-        };
-        defer releaseSplitCsvPaths(appState().allocator, paths);
+        defer appState().core.freeDialogPaths(paths);
 
         sendRpcResponseSuccess(webview_id, request_id, paths);
         return;

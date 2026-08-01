@@ -34,6 +34,21 @@ title: "Cross-Platform Development"
 ### Linux
               <p>By default on Linux we use GTK windows and GTKWebkit webviews. This is as close to a "system" webview on Linux that's managed/updated by the OS. Some distros don't have this installed by default so you will need to ask your end users to install those dependencies.</p>
 
+              <p>Electrobun's Linux native wrapper currently requires GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, and librsvg at runtime, including when CEF is bundled. Install them with the command for the target distro family:</p>
+
+```bash
+# Ubuntu/Debian
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2
+
+# Fedora/RHEL
+sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 librsvg2
+
+# Arch/Manjaro
+sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
+```
+
+              <p>If the main process fails to start because one of these dependencies is absent, the Electrobun launcher lists the missing shared-library name and the same package guidance. Run <code>ldd path/to/libNativeWrapper.so</code> to inspect the complete resolved dependency list.</p>
+
               <p>In addition GTK and GTKWebkit have severe limitations and are unable to handle Electrobun's more advanced webview layering and masking functionality.</p>
 
               <p>So we strongly recommend bundling CEF (just set bundleCEF to true in your electrobun.config.ts file) for your app's linux distribution. And make sure you open `new BrowserWindow()`s and `<electrobun-webview>`s with `renderer="cef"` which uses pure x11 windows.</p>

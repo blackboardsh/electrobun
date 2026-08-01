@@ -13,6 +13,8 @@ type KeyData = { id: number; keyCode: number; modifiers: number; isRepeat: boole
 
 export default {
 	close: (data: IdData) => new ElectrobunEvent<IdData, {}>("close", data),
+	willClose: (data: IdData) =>
+		new ElectrobunEvent<IdData, { allow: boolean }>("will-close", data),
 	resize: (data: ResizeData) =>
 		new ElectrobunEvent<ResizeData, {}>("resize", data),
 	move: (data: MoveData) => new ElectrobunEvent<MoveData, {}>("move", data),

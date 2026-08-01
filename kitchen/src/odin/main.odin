@@ -64,6 +64,7 @@ TestResult :: struct {
 
 TestKind :: enum {
 	smoke,
+	app_packaged_mode_reflects_build_channel,
 	window_create_close,
 	window_creation_with_url,
 	window_hidden_option,
@@ -73,6 +74,7 @@ TestKind :: enum {
 	window_minimize_unminimize,
 	window_fullscreen_toggle,
 	window_fullscreen_toggle_hidden_titlebar,
+	window_omitted_position_centers_on_primary_display,
 	window_set_position,
 	window_set_size,
 	window_set_frame,
@@ -84,6 +86,7 @@ TestKind :: enum {
 	window_visible_on_all_workspaces,
 	window_focus,
 	window_close_event,
+	window_will_close_veto,
 	window_resize_event,
 	window_get_by_id,
 	window_inset_titlebar_style,
@@ -98,6 +101,7 @@ TestKind :: enum {
 	navigation_load_html,
 	navigation_dom_ready_event,
 	navigation_did_navigate_event,
+	navigation_did_commit_navigation_event,
 	navigation_execute_javascript,
 	tray_visibility_toggle_and_bounds,
 	session_from_partition,
@@ -164,6 +168,14 @@ odin_tests := [?]OdinTest {
 		kind = .smoke,
 	},
 	{
+		id = "odin-app-packaged-mode-reflects-build-channel",
+		name = "App packaged mode reflects build channel",
+		category = "Runtime",
+		description = "Verify packaged mode is derived from the authoritative build channel metadata.",
+		mirrors_bun_test_name = "App packaged mode reflects build channel",
+		kind = .app_packaged_mode_reflects_build_channel,
+	},
+	{
 		id = "odin-window-create-close",
 		name = "Window create/close (Odin)",
 		category = "BrowserWindow",
@@ -182,7 +194,7 @@ odin_tests := [?]OdinTest {
 		id = "odin-window-hidden-option",
 		name = "Window hidden option (Odin)",
 		category = "BrowserWindow",
-		description = "Create a hidden native window, then show it through the Odin SDK.",
+		description = "Verify native visibility across hidden creation, show, and hide through the Odin SDK.",
 		mirrors_bun_test_name = "Window hidden option",
 		kind = .window_hidden_option,
 	},
@@ -235,6 +247,14 @@ odin_tests := [?]OdinTest {
 		kind = .window_fullscreen_toggle_hidden_titlebar,
 	},
 	{
+		id = "odin-window-omitted-position-centers-on-primary-display",
+		name = "Window omitted position centers on primary display (Odin)",
+		category = "BrowserWindow",
+		description = "Create a hidden centered window and compare its frame to the primary display work area.",
+		mirrors_bun_test_name = "Window omitted position centers on primary display",
+		kind = .window_omitted_position_centers_on_primary_display,
+	},
+	{
 		id = "odin-window-set-position",
 		name = "Window setPosition (Odin)",
 		category = "BrowserWindow",
@@ -246,7 +266,7 @@ odin_tests := [?]OdinTest {
 		id = "odin-window-set-size",
 		name = "Window setSize (Odin)",
 		category = "BrowserWindow",
-		description = "Resize a native window and read the new frame back from core.",
+		description = "Grow and shrink a native-renderer window through core.",
 		mirrors_bun_test_name = "Window setSize",
 		kind = .window_set_size,
 	},
@@ -321,6 +341,14 @@ odin_tests := [?]OdinTest {
 		description = "Verify a per-window close callback fires in Odin mode.",
 		mirrors_bun_test_name = "Window close event",
 		kind = .window_close_event,
+	},
+	{
+		id = "odin-window-will-close-veto",
+		name = "Window will-close can veto user close (Odin)",
+		category = "BrowserWindow",
+		description = "Verify a native user-close request can be vetoed before destruction.",
+		mirrors_bun_test_name = "Window will-close can veto user close",
+		kind = .window_will_close_veto,
 	},
 	{
 		id = "odin-window-resize-event",
@@ -432,6 +460,14 @@ odin_tests := [?]OdinTest {
 		description = "Verify did-navigate is emitted for BrowserView navigation in Odin mode.",
 		mirrors_bun_test_name = "did-navigate event",
 		kind = .navigation_did_navigate_event,
+	},
+	{
+		id = "odin-navigation-did-commit-navigation-event",
+		name = "did-commit-navigation event (Odin)",
+		category = "Navigation",
+		description = "Verify did-commit-navigation crosses the Odin callback boundary before load completion.",
+		mirrors_bun_test_name = "did-commit-navigation event",
+		kind = .navigation_did_commit_navigation_event,
 	},
 	{
 		id = "odin-navigation-execute-javascript",
@@ -1165,12 +1201,14 @@ WindowWithWebview :: struct {
 CallbackState :: struct {
 	mutex:                      sync.Mutex,
 	window_close_count:         u32,
+	window_should_close_count:  u32,
 	window_resize_count:        u32,
 	window_focus_count:         u32,
 	last_resize_width:          f64,
 	last_resize_height:         f64,
 	webview_will_navigate_count: u32,
 	webview_did_navigate_count: u32,
+	webview_did_commit_navigation_count: u32,
 	webview_dom_ready_count:    u32,
 	webview_tag_init_count:     u32,
 	wgpu_tag_init_count:        u32,
@@ -1198,12 +1236,14 @@ resetCallbackState :: proc() {
 	sync.mutex_lock(&g_callback_state.mutex)
 	defer sync.mutex_unlock(&g_callback_state.mutex)
 	g_callback_state.window_close_count = 0
+	g_callback_state.window_should_close_count = 0
 	g_callback_state.window_resize_count = 0
 	g_callback_state.window_focus_count = 0
 	g_callback_state.last_resize_width = 0
 	g_callback_state.last_resize_height = 0
 	g_callback_state.webview_will_navigate_count = 0
 	g_callback_state.webview_did_navigate_count = 0
+	g_callback_state.webview_did_commit_navigation_count = 0
 	g_callback_state.webview_dom_ready_count = 0
 	g_callback_state.webview_tag_init_count = 0
 	g_callback_state.wgpu_tag_init_count = 0
@@ -1219,6 +1259,12 @@ getWindowCloseCount :: proc() -> u32 {
 	sync.mutex_lock(&g_callback_state.mutex)
 	defer sync.mutex_unlock(&g_callback_state.mutex)
 	return g_callback_state.window_close_count
+}
+
+getWindowShouldCloseCount :: proc() -> u32 {
+	sync.mutex_lock(&g_callback_state.mutex)
+	defer sync.mutex_unlock(&g_callback_state.mutex)
+	return g_callback_state.window_should_close_count
 }
 
 getWindowResizeCount :: proc() -> u32 {
@@ -1249,6 +1295,12 @@ getWebviewDidNavigateCount :: proc() -> u32 {
 	sync.mutex_lock(&g_callback_state.mutex)
 	defer sync.mutex_unlock(&g_callback_state.mutex)
 	return g_callback_state.webview_did_navigate_count
+}
+
+getWebviewDidCommitNavigationCount :: proc() -> u32 {
+	sync.mutex_lock(&g_callback_state.mutex)
+	defer sync.mutex_unlock(&g_callback_state.mutex)
+	return g_callback_state.webview_did_commit_navigation_count
 }
 
 getWebviewDomReadyCount :: proc() -> u32 {
@@ -1315,6 +1367,17 @@ observedWindowClose :: proc "c" (_: u32) {
 	g_callback_state.window_close_count += 1
 }
 
+observedWindowShouldClose :: proc "c" (window_id: u32) {
+	context = runtime.default_context()
+	sync.mutex_lock(&g_callback_state.mutex)
+	g_callback_state.window_should_close_count += 1
+	should_allow := g_callback_state.window_should_close_count > 1
+	sync.mutex_unlock(&g_callback_state.mutex)
+	if should_allow {
+		_ = electrobun.closeWindow(appState().core, window_id)
+	}
+}
+
 observedWindowResize :: proc "c" (_: u32, _: f64, _: f64, width: f64, height: f64) {
 	context = runtime.default_context()
 	sync.mutex_lock(&g_callback_state.mutex)
@@ -1339,6 +1402,8 @@ recordObservedWebviewEvent :: proc(event_name_slice: string, detail_slice: strin
 		g_callback_state.webview_will_navigate_count += 1
 	} else if event_name_slice == "did-navigate" {
 		g_callback_state.webview_did_navigate_count += 1
+	} else if event_name_slice == "did-commit-navigation" {
+		g_callback_state.webview_did_commit_navigation_count += 1
 	} else if event_name_slice == "dom-ready" {
 		g_callback_state.webview_dom_ready_count += 1
 	}
@@ -1909,14 +1974,6 @@ appReopenHandler :: proc "c" () {
 	recordReopen()
 }
 
-splitCsvPaths :: proc(allocator: runtime.Allocator, csv: string) -> []string {
-	if len(csv) == 0 {
-		return make([]string, 0, allocator)
-	}
-	parts, _ := strings.split(csv, ",", allocator)
-	return parts
-}
-
 expandTildePathAlloc :: proc(allocator: runtime.Allocator, path: string) -> (string, bool) {
 	if len(path) == 0 || path[0] != '~' {
 		cloned, _ := strings.clone(path, allocator)
@@ -2429,6 +2486,30 @@ createWindowWithHarnessCustom :: proc(
 	window_callbacks: electrobun.WindowCallbacks,
 	webview_callbacks: electrobun.WebviewCallbacks,
 ) -> (WindowWithWebview, string) {
+	return createWindowWithHarnessCustomRenderer(
+		state,
+		title,
+		frame,
+		.native,
+		hidden,
+		activate,
+		title_bar_style,
+		window_callbacks,
+		webview_callbacks,
+	)
+}
+
+createWindowWithHarnessCustomRenderer :: proc(
+	state: ^AppState,
+	title: string,
+	frame: electrobun.Rect,
+	renderer: electrobun.Renderer,
+	hidden: bool,
+	activate: bool,
+	title_bar_style: string,
+	window_callbacks: electrobun.WindowCallbacks,
+	webview_callbacks: electrobun.WebviewCallbacks,
+) -> (WindowWithWebview, string) {
 	window_options := electrobun.defaultWindowOptions(title)
 	window_options.frame = frame
 	window_options.hidden = hidden
@@ -2442,7 +2523,7 @@ createWindowWithHarnessCustom :: proc(
 	}
 
 	webview_options := electrobun.defaultWebviewOptions(window_id)
-	webview_options.renderer = .native
+	webview_options.renderer = renderer
 	webview_options.url = test_harness_url
 	webview_options.frame = {0, 0, frame.width, frame.height}
 	webview_options.secret_key = default_secret_key
@@ -2531,6 +2612,19 @@ runSmokeTest :: proc() -> string {
 	return ""
 }
 
+runAppPackagedModeReflectsBuildChannelTest :: proc(state: ^AppState) -> string {
+	channel := state.app_info.channel
+	if channel != "dev" && channel != "canary" && channel != "production" {
+		return "UnexpectedBuildChannel"
+	}
+
+	expected_packaged := channel != "dev"
+	if electrobun.appInfoIsPackaged(state.app_info) != expected_packaged {
+		return "PackagedModeDoesNotReflectBuildChannel"
+	}
+	return ""
+}
+
 runWindowCreateCloseTest :: proc(state: ^AppState) -> string {
 	window_options := electrobun.defaultWindowOptions("Electrobun Odin Window Test")
 	window_options.frame = {60, 60, 320, 240}
@@ -2580,10 +2674,28 @@ runWindowHiddenOptionTest :: proc(state: ^AppState) -> string {
 	}
 	defer electrobun.closeWindow(state.core, created.window_id)
 
+	if electrobun.isWindowVisible(state.core, created.window_id) {
+		return "WindowUnexpectedlyVisible"
+	}
+
 	if err := electrobun.showWindow(state.core, created.window_id, true); err != .None {
 		return errName(err)
 	}
 	sleepMs(medium_wait_ms)
+
+	if !electrobun.isWindowVisible(state.core, created.window_id) {
+		return "WindowDidNotBecomeVisible"
+	}
+
+	if err := electrobun.hideWindow(state.core, created.window_id); err != .None {
+		return errName(err)
+	}
+	sleepMs(medium_wait_ms)
+
+	if electrobun.isWindowVisible(state.core, created.window_id) {
+		return "WindowDidNotHide"
+	}
+
 	return ""
 }
 
@@ -2804,11 +2916,17 @@ runWindowSetPositionTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
-runWindowSetSizeTest :: proc(state: ^AppState) -> string {
-	window_options := electrobun.defaultWindowOptions("Size Test")
-	window_options.frame = {70, 80, 420, 320}
+runWindowOmittedPositionCentersOnPrimaryDisplayTest :: proc(state: ^AppState) -> string {
+	display, display_err := electrobun.getPrimaryDisplay(state.core)
+	if display_err != .None {
+		return errName(display_err)
+	}
+
+	window_options := electrobun.defaultWindowOptions("Centered Window Test")
+	window_options.frame = {0, 0, 480, 320}
 	window_options.hidden = true
 	window_options.activate = false
+	window_options.centered = true
 
 	window_id, window_err := electrobun.createWindow(state.core, window_options)
 	if window_err != .None {
@@ -2816,16 +2934,58 @@ runWindowSetSizeTest :: proc(state: ^AppState) -> string {
 	}
 	defer electrobun.closeWindow(state.core, window_id)
 
-	if err := electrobun.setWindowSize(state.core, window_id, 600, 500); err != .None {
-		return errName(err)
-	}
-	sleepMs(short_wait_ms)
-
 	frame, frame_err := electrobun.getWindowFrame(state.core, window_id)
 	if frame_err != .None {
 		return errName(frame_err)
 	}
-	if !approxEq(frame.width, 600, 4) || !approxEq(frame.height, 500, 4) {
+
+	expected_x := display.workArea.x + (display.workArea.width - frame.width) / 2
+	expected_y := display.workArea.y + (display.workArea.height - frame.height) / 2
+	center_tolerance: f64 = 8
+	if !approxEq(frame.x, expected_x, center_tolerance) ||
+	   !approxEq(frame.y, expected_y, center_tolerance) {
+		return "WindowNotCenteredOnPrimaryDisplay"
+	}
+	return ""
+}
+
+runWindowSetSizeTest :: proc(state: ^AppState) -> string {
+	created, create_err := createWindowWithTestHarness(
+		state,
+		"Size Test",
+		{70, 80, 420, 320},
+		false,
+		false,
+	)
+	if create_err != "" {
+		return create_err
+	}
+	defer electrobun.closeWindow(state.core, created.window_id)
+
+	sleepMs(short_wait_ms)
+	if err := electrobun.setWindowSize(state.core, created.window_id, 600, 500); err != .None {
+		return errName(err)
+	}
+	sleepMs(short_wait_ms)
+
+	grown_frame, grown_frame_err := electrobun.getWindowFrame(state.core, created.window_id)
+	if grown_frame_err != .None {
+		return errName(grown_frame_err)
+	}
+	if !approxEq(grown_frame.width, 600, 24) || !approxEq(grown_frame.height, 500, 24) {
+		return "UnexpectedWindowSize"
+	}
+
+	if err := electrobun.setWindowSize(state.core, created.window_id, 320, 240); err != .None {
+		return errName(err)
+	}
+	sleepMs(short_wait_ms)
+
+	shrunk_frame, shrunk_frame_err := electrobun.getWindowFrame(state.core, created.window_id)
+	if shrunk_frame_err != .None {
+		return errName(shrunk_frame_err)
+	}
+	if !approxEq(shrunk_frame.width, 320, 24) || !approxEq(shrunk_frame.height, 240, 24) {
 		return "UnexpectedWindowSize"
 	}
 	return ""
@@ -3114,6 +3274,48 @@ runWindowCloseEventTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
+runWindowWillCloseVetoTest :: proc(state: ^AppState) -> string {
+	resetCallbackState()
+
+	window_options := electrobun.defaultWindowOptions("Will Close Veto Test")
+	window_options.frame = {120, 120, 360, 260}
+	window_options.callbacks = {
+		close = observedWindowClose,
+		should_close = observedWindowShouldClose,
+	}
+
+	window_id, window_err := electrobun.createWindow(state.core, window_options)
+	if window_err != .None {
+		return errName(window_err)
+	}
+
+	if err := electrobun.requestWindowClose(state.core, window_id); err != .None {
+		_ = electrobun.closeWindow(state.core, window_id)
+		return errName(err)
+	}
+	sleepMs(short_wait_ms)
+	if getWindowShouldCloseCount() != 1 || getWindowCloseCount() != 0 {
+		_ = electrobun.closeWindow(state.core, window_id)
+		return "FirstCloseRequestWasNotVetoed"
+	}
+	_, frame_err := electrobun.getWindowFrame(state.core, window_id)
+	if frame_err != .None {
+		_ = electrobun.closeWindow(state.core, window_id)
+		return errName(frame_err)
+	}
+
+	if err := electrobun.requestWindowClose(state.core, window_id); err != .None {
+		_ = electrobun.closeWindow(state.core, window_id)
+		return errName(err)
+	}
+	sleepMs(short_wait_ms)
+	if getWindowShouldCloseCount() != 2 || getWindowCloseCount() == 0 {
+		_ = electrobun.closeWindow(state.core, window_id)
+		return "SecondCloseRequestWasNotAllowed"
+	}
+	return ""
+}
+
 runWindowResizeEventTest :: proc(state: ^AppState) -> string {
 	resetCallbackState()
 
@@ -3197,10 +3399,21 @@ runWindowTrafficLightPositionApiTest :: proc(state: ^AppState) -> string {
 		registry := electrobun.windowRegistryInit(state.allocator, state.core)
 		defer electrobun.windowRegistryDeinit(&registry)
 
+		baseline_options := electrobun.defaultWindowOptions("Traffic Light Baseline")
+		baseline_options.frame = {220, 220, 480, 340}
+		baseline_options.title_bar_style = "hiddenInset"
+		baseline_options.activate = false
+		baseline, baseline_err := electrobun.createBrowserWindow(&registry, baseline_options)
+		if baseline_err != .None {
+			return errName(baseline_err)
+		}
+		defer electrobun.windowClose(baseline)
+
 		window_options := electrobun.defaultWindowOptions("Traffic Light Position Test")
 		window_options.frame = {280, 280, 480, 340}
 		window_options.title_bar_style = "hiddenInset"
 		window_options.traffic_light_offset = {x = 24, y = 18}
+		window_options.activate = false
 
 		window, window_err := electrobun.createBrowserWindow(&registry, window_options)
 		if window_err != .None {
@@ -3209,10 +3422,42 @@ runWindowTrafficLightPositionApiTest :: proc(state: ^AppState) -> string {
 		defer electrobun.windowClose(window)
 
 		sleepMs(300)
+		baseline_position, baseline_position_err := electrobun.getWindowButtonPosition(baseline)
+		if baseline_position_err != .None {
+			return errName(baseline_position_err)
+		}
+		offset_position, offset_position_err := electrobun.getWindowButtonPosition(window)
+		if offset_position_err != .None {
+			return errName(offset_position_err)
+		}
+		if !approxEq(offset_position.x - baseline_position.x, 24, 0.5) ||
+		   !approxEq(offset_position.y - baseline_position.y, 18, 0.5) {
+			return "UnexpectedTrafficLightOffset"
+		}
+
 		if err := electrobun.windowSetWindowButtonPosition(window, 52, 22); err != .None {
 			return errName(err)
 		}
 		sleepMs(300)
+		positioned, position_err := electrobun.getWindowButtonPosition(window)
+		if position_err != .None {
+			return errName(position_err)
+		}
+		if !approxEq(positioned.x, 52, 0.5) || !approxEq(positioned.y, 22, 0.5) {
+			return "UnexpectedTrafficLightPosition"
+		}
+
+		if err := electrobun.setWindowSize(state.core, window.id, 540, 380); err != .None {
+			return errName(err)
+		}
+		sleepMs(300)
+		resized, resized_err := electrobun.getWindowButtonPosition(window)
+		if resized_err != .None {
+			return errName(resized_err)
+		}
+		if !approxEq(resized.x, 52, 0.5) || !approxEq(resized.y, 22, 0.5) {
+			return "TrafficLightPositionChangedAfterResize"
+		}
 		return ""
 	}
 }
@@ -3595,6 +3840,40 @@ runNavigationDidNavigateEventTest :: proc(state: ^AppState) -> string {
 	}
 	if !lastWebviewDetailContains("test-runner") {
 		return "DidNavigateMissingExpectedUrl"
+	}
+	return ""
+}
+
+runNavigationDidCommitNavigationEventTest :: proc(state: ^AppState) -> string {
+	resetCallbackState()
+	created, create_err := createWindowWithHarnessCustomRenderer(
+		state,
+		"Did Commit Navigation Test",
+		{295, 295, 500, 360},
+		activePlaygroundRenderer(state),
+		false,
+		true,
+		"default",
+		{},
+		observedHarnessWebviewCallbacks(),
+	)
+	if create_err != "" {
+		return create_err
+	}
+	defer electrobun.closeWindow(state.core, created.window_id)
+
+	sleepMs(medium_wait_ms)
+	resetCallbackState()
+	if err := electrobun.loadURLInWebview(state.core, created.webview_id, "views://test-runner/index.html"); err != .None {
+		return errName(err)
+	}
+	sleepMs(2000)
+
+	if getWebviewDidCommitNavigationCount() == 0 {
+		return "DidCommitNavigationDidNotFire"
+	}
+	if !lastWebviewDetailContains("test-runner") {
+		return "DidCommitNavigationMissingExpectedUrl"
 	}
 	return ""
 }
@@ -4324,6 +4603,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 	switch odin_test.kind {
 	case .smoke:
 		error_name = runSmokeTest()
+	case .app_packaged_mode_reflects_build_channel:
+		error_name = runAppPackagedModeReflectsBuildChannelTest(state)
 	case .window_create_close:
 		error_name = runWindowCreateCloseTest(state)
 	case .window_creation_with_url:
@@ -4342,6 +4623,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runWindowFullscreenToggleTest(state)
 	case .window_fullscreen_toggle_hidden_titlebar:
 		error_name = runWindowFullscreenToggleHiddenTitlebarTest(state)
+	case .window_omitted_position_centers_on_primary_display:
+		error_name = runWindowOmittedPositionCentersOnPrimaryDisplayTest(state)
 	case .window_set_position:
 		error_name = runWindowSetPositionTest(state)
 	case .window_set_size:
@@ -4364,6 +4647,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runWindowFocusTest(state)
 	case .window_close_event:
 		error_name = runWindowCloseEventTest(state)
+	case .window_will_close_veto:
+		error_name = runWindowWillCloseVetoTest(state)
 	case .window_resize_event:
 		error_name = runWindowResizeEventTest(state)
 	case .window_get_by_id:
@@ -4392,6 +4677,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runNavigationDomReadyEventTest(state)
 	case .navigation_did_navigate_event:
 		error_name = runNavigationDidNavigateEventTest(state)
+	case .navigation_did_commit_navigation_event:
+		error_name = runNavigationDidCommitNavigationEventTest(state)
 	case .navigation_execute_javascript:
 		error_name = runNavigationExecuteJavascriptTest(state)
 	case .tray_visibility_toggle_and_bounds:
@@ -4829,11 +5116,12 @@ handleRpcRequest :: proc(webview_id: u32, request_id: u64, method: string, param
 		options.can_choose_directory = getJsonBoolField(params_obj, "canChooseDirectory", true)
 		options.allows_multiple_selection = getJsonBoolField(params_obj, "allowsMultipleSelection", true)
 
-		csv := electrobun.openFileDialog(appState().core, options)
-		defer delete(csv, appState().core.allocator)
-
-		paths := splitCsvPaths(appState().allocator, csv)
-		defer delete(paths, appState().allocator)
+		paths, dialog_err := electrobun.openFileDialogPaths(appState().core, options)
+		if dialog_err != .None {
+			sendRpcResponseError(webview_id, request_id, errName(dialog_err))
+			return
+		}
+		defer electrobun.freeDialogPaths(appState().core, paths)
 
 		sendRpcResponseSuccess(webview_id, request_id, paths)
 		return

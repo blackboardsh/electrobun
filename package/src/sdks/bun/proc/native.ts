@@ -2,7 +2,10 @@ import { dirname, join } from "path";
 import { createReadStream } from "node:fs";
 import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
-import { BrowserView } from "../core/BrowserView";
+import {
+	BrowserView,
+	emitWebviewTagBrowserViewCreated,
+} from "../core/BrowserView";
 import { WGPUView } from "../core/WGPUView";
 import {
 	preloadScript,
@@ -168,8 +171,10 @@ const core = (() => {
 					FFIType.cstring,
 					FFIType.bool,
 					FFIType.bool,
+					FFIType.bool,
 					FFIType.f64,
 					FFIType.f64,
+					FFIType.function,
 					FFIType.function,
 					FFIType.function,
 					FFIType.function,
@@ -223,7 +228,15 @@ const core = (() => {
 				args: [FFIType.u32],
 				returns: FFIType.void,
 			},
+			isWindowVisible: {
+				args: [FFIType.u32],
+				returns: FFIType.bool,
+			},
 			closeWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
+			requestWindowClose: {
 				args: [FFIType.u32],
 				returns: FFIType.void,
 			},
@@ -255,8 +268,16 @@ const core = (() => {
 				args: [FFIType.u32, FFIType.f64, FFIType.f64],
 				returns: FFIType.void,
 			},
+			centerWindow: {
+				args: [FFIType.u32],
+				returns: FFIType.void,
+			},
 			setWindowButtonPosition: {
 				args: [FFIType.u32, FFIType.f64, FFIType.f64],
+				returns: FFIType.void,
+			},
+			getWindowButtonPosition: {
+				args: [FFIType.u32, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
 			setWindowSize: {
@@ -1234,6 +1255,7 @@ const _ffiImpl = {
 			transparent: boolean;
 			hidden?: boolean;
 			activate?: boolean;
+			centered?: boolean;
 			trafficLightOffset?: {
 				x: number;
 				y: number;
@@ -1261,6 +1283,7 @@ const _ffiImpl = {
 				transparent,
 				hidden = false,
 				activate = true,
+				centered = false,
 				trafficLightOffset = { x: 0, y: 0 },
 			} = params;
 
@@ -1292,6 +1315,7 @@ const _ffiImpl = {
 				toCString(title),
 				hidden,
 				activate,
+				centered,
 				trafficLightOffset.x,
 				trafficLightOffset.y,
 				// callbacks
@@ -1301,6 +1325,7 @@ const _ffiImpl = {
 				windowFocusCallback,
 				windowBlurCallback,
 				windowKeyCallback,
+				windowShouldCloseCallback,
 			);
 
 			if (!windowId) {
@@ -1336,6 +1361,11 @@ const _ffiImpl = {
 			// Note: Cleanup of BrowserWindowMap happens in the windowCloseCallback
 		},
 
+		requestWindowClose: (params: { winId: number }) => {
+			if (!getWindowPtr(params.winId)) return;
+			core_.symbols.requestWindowClose(params.winId);
+		},
+
 		showWindow: (params: { winId: number; activate?: boolean }) => {
 			const { winId } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1367,6 +1397,17 @@ const _ffiImpl = {
 			}
 
 			core_.symbols.hideWindow(winId);
+		},
+
+		isWindowVisible: (params: { winId: number }): boolean => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return false;
+			}
+
+			return core_.symbols.isWindowVisible(winId);
 		},
 
 		minimizeWindow: (params: { winId: number }) => {
@@ -1518,6 +1559,14 @@ const _ffiImpl = {
 			core_.symbols.setWindowPosition(winId, x, y);
 		},
 
+		centerWindow: (params: { winId: number }) => {
+			const { winId } = params;
+			if (!getWindowPtr(winId)) {
+				throw `Can't center window. Window no longer exists`;
+			}
+			core_.symbols.centerWindow(winId);
+		},
+
 		setWindowButtonPosition: (params: { winId: number; x: number; y: number }) => {
 			const { winId, x, y } = params;
 			const windowPtr = getWindowPtr(winId);
@@ -1527,6 +1576,23 @@ const _ffiImpl = {
 			}
 
 			core_.symbols.setWindowButtonPosition(winId, x, y);
+		},
+
+		getWindowButtonPosition: (params: {
+			winId: number;
+		}): { x: number; y: number } => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return { x: 0, y: 0 };
+			}
+
+			const xBuf = new Float64Array(1);
+			const yBuf = new Float64Array(1);
+			core_.symbols.getWindowButtonPosition(winId, ptr(xBuf), ptr(yBuf));
+
+			return { x: xBuf[0]!, y: yBuf[0]! };
 		},
 
 		setWindowSize: (params: {
@@ -1992,7 +2058,7 @@ const _ffiImpl = {
 				canChooseDirectory,
 				allowsMultipleSelection,
 			} = params;
-			const filePath = core_.symbols.openFileDialog(
+			const payload = core_.symbols.openFileDialog(
 				toCString(startingFolder),
 				toCString(allowedFileTypes),
 				canChooseFiles ? 1 : 0,
@@ -2000,7 +2066,7 @@ const _ffiImpl = {
 				allowsMultipleSelection ? 1 : 0,
 			);
 
-			return filePath.toString();
+			return payload?.toString() ?? "[]";
 		},
 		showMessageBox: (params: {
 			type?: string;
@@ -2280,6 +2346,25 @@ const windowCloseCallback = new JSCallback(
 		// before the global handler (e.g. exitOnLastWindowClosed)
 		electrobunEventEmitter.emitEvent(event, id);
 		electrobunEventEmitter.emitEvent(event);
+	},
+	{
+		args: ["u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+const windowShouldCloseCallback = new JSCallback(
+	(id) => {
+		const handler = electrobunEventEmitter.events.window.willClose;
+		const event = handler({ id });
+
+		electrobunEventEmitter.emitEvent(event, id);
+		electrobunEventEmitter.emitEvent(event);
+
+		if (!event.responseWasSet || event.response?.allow !== false) {
+			core_.symbols.closeWindow(id);
+		}
 	},
 	{
 		args: ["u32"],
@@ -3131,6 +3216,10 @@ export const internalRpcHandlers = {
 				startTransparent: transparent,
 				startPassthrough: passthrough,
 			});
+
+			// Emit synchronously before resolving the preload request so callers can
+			// attach RPC transport without polling or racing tag initialization.
+			emitWebviewTagBrowserViewCreated(webviewForTag);
 
 			return webviewForTag.id;
 		},

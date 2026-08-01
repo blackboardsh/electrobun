@@ -18,6 +18,8 @@ const BrowserViewMap: {
 	[id: number]: BrowserView<any>;
 } = {};
 
+const webviewTagCreatedEvent = Symbol("webview-tag-browser-view-created");
+
 type QueuedWebviewMessage = {
 	message: unknown;
 	markSent: () => void;
@@ -54,6 +56,8 @@ export type BrowserViewOptions<T = undefined> = {
 	startPassthrough: boolean;
 	// renderer:
 };
+
+export type BrowserViewCreatedHandler = (view: BrowserView) => void;
 
 const buildConfig = BuildConfig.getSync();
 
@@ -518,9 +522,27 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		return Object.values(BrowserViewMap);
 	}
 
+	/**
+	 * Listen for BrowserViews created by <electrobun-webview> tags.
+	 * The handler runs before the tag's initialization request resolves.
+	 */
+	static on(name: "created", handler: BrowserViewCreatedHandler) {
+		electrobunEventEmitter.on(webviewTagCreatedEvent, handler);
+		return () => BrowserView.off(name, handler);
+	}
+
+	static off(_name: "created", handler: BrowserViewCreatedHandler) {
+		electrobunEventEmitter.off(webviewTagCreatedEvent, handler);
+	}
+
 	static defineRPC<Schema extends ElectrobunRPCSchema>(
 		config: ElectrobunRPCConfig<Schema, "bun">,
 	) {
 		return defineElectrobunRPC("bun", config);
 	}
+}
+
+// Internal lifecycle bridge used by webviewTagInit after the view is registered.
+export function emitWebviewTagBrowserViewCreated(view: BrowserView) {
+	electrobunEventEmitter.emit(webviewTagCreatedEvent, view);
 }
