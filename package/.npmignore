@@ -2,7 +2,7 @@
 /assets
 /scripts/*
 /src/*
-!/src/cli/
+/src/cli/
 /vendors
 /bun.lockb
 /tsconfig.json
@@ -16,7 +16,3 @@
 /bin
 /.cache
 /.cottontail-tmp
-
-# Include CLI source
-!/src/cli/
-/src/cli/build/

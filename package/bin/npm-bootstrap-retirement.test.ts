@@ -41,4 +41,17 @@ describe("retired npm CLI bootstrap", () => {
 			),
 		).toBe(false);
 	});
+
+	test("keeps the retired CLI and embedded templates out of npm", () => {
+		const npmIgnoreEntries = readFileSync(
+			join(packageRoot, ".npmignore"),
+			"utf8",
+		)
+			.split(/\r?\n/u)
+			.map((entry) => entry.trim())
+			.filter((entry) => entry && !entry.startsWith("#"));
+
+		expect(npmIgnoreEntries).toContain("/src/cli/");
+		expect(npmIgnoreEntries).not.toContain("!/src/cli/");
+	});
 });
