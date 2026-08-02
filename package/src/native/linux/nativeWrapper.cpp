@@ -68,6 +68,8 @@
 #include "native_file_dialog.h"
 #include "../shared/dialog_paths.h"
 #include "../shared/cef_find_session.h"
+#include "../shared/linux_dpi.h"
+#include "../shared/linux_x11_geometry.h"
 
 using namespace electrobun;
 
@@ -109,6 +111,7 @@ using electrobun::OperationGuard;
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/views/cef_display.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_context_menu_handler.h"
@@ -127,6 +130,19 @@ using electrobun::OperationGuard;
 
 // Ensure the exported functions have appropriate visibility
 #define ELECTROBUN_EXPORT __attribute__((visibility("default")))
+
+static std::once_flag g_xlibThreadsOnce;
+static std::atomic<bool> g_xlibThreadsInitialized{false};
+
+static void ensureXlibThreadSupport() {
+    std::call_once(g_xlibThreadsOnce, []() {
+        g_xlibThreadsInitialized.store(XInitThreads() != 0);
+    });
+    if (!g_xlibThreadsInitialized.load()) {
+        fprintf(stderr, "FATAL: XInitThreads failed before X11 initialization\n");
+        abort();
+    }
+}
 
 // X11 Error Handler (non-fatal errors are common in WebKit/GTK)
 static int x11_error_handler(Display* display, XErrorEvent* error) {
@@ -286,7 +302,7 @@ using electrobun::parseMenuJson;
 
 // Mask rectangle structure for X11 regions
 struct MaskRect {
-    int x, y, width, height;
+    double x, y, width, height;
 };
 
 // Parse maskJSON string into rectangles
@@ -320,39 +336,41 @@ std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
         
         MaskRect rect = {};
         
+        // Geometry originates in getBoundingClientRect(), so retain fractional
+        // DIPs until the final X11 conversion.
         // Parse x
         size_t xPos = obj.find("\"x\":");
         if (xPos != std::string::npos) {
-            size_t valueStart = obj.find_first_of("0123456789-", xPos + 4);
+            size_t valueStart = obj.find_first_of("0123456789-.", xPos + 4);
             if (valueStart != std::string::npos) {
-                rect.x = atoi(obj.substr(valueStart).c_str());
+                rect.x = strtod(obj.c_str() + valueStart, nullptr);
             }
         }
         
         // Parse y
         size_t yPos = obj.find("\"y\":");
         if (yPos != std::string::npos) {
-            size_t valueStart = obj.find_first_of("0123456789-", yPos + 4);
+            size_t valueStart = obj.find_first_of("0123456789-.", yPos + 4);
             if (valueStart != std::string::npos) {
-                rect.y = atoi(obj.substr(valueStart).c_str());
+                rect.y = strtod(obj.c_str() + valueStart, nullptr);
             }
         }
         
         // Parse width
         size_t widthPos = obj.find("\"width\":");
         if (widthPos != std::string::npos) {
-            size_t valueStart = obj.find_first_of("0123456789", widthPos + 8);
+            size_t valueStart = obj.find_first_of("0123456789-.", widthPos + 8);
             if (valueStart != std::string::npos) {
-                rect.width = atoi(obj.substr(valueStart).c_str());
+                rect.width = strtod(obj.c_str() + valueStart, nullptr);
             }
         }
         
         // Parse height
         size_t heightPos = obj.find("\"height\":");
         if (heightPos != std::string::npos) {
-            size_t valueStart = obj.find_first_of("0123456789", heightPos + 9);
+            size_t valueStart = obj.find_first_of("0123456789-.", heightPos + 9);
             if (valueStart != std::string::npos) {
-                rect.height = atoi(obj.substr(valueStart).c_str());
+                rect.height = strtod(obj.c_str() + valueStart, nullptr);
             }
         }
         
@@ -364,7 +382,7 @@ std::vector<MaskRect> parseMaskJson(const std::string& jsonStr) {
 }
 
 // Check if a point is within any of the mask rectangles
-bool isPointInMask(int x, int y, const std::vector<MaskRect>& masks) {
+bool isPointInMask(double x, double y, const std::vector<MaskRect>& masks) {
     for (const auto& mask : masks) {
         if (x >= mask.x && x < mask.x + mask.width &&
             y >= mask.y && y < mask.y + mask.height) {
@@ -456,33 +474,18 @@ std::string getExecutableBaseName() {
     return "bun";
 }
 
-static std::mutex g_x11ErrorTrapMutex;
-static int g_lastX11ErrorCode = 0;
-
-static int x11ErrorTrapHandler(Display* /*display*/, XErrorEvent* errorEvent) {
-    g_lastX11ErrorCode = errorEvent ? errorEvent->error_code : BadWindow;
-    return 0;
-}
-
 static bool x11GetWindowAttributesSafe(Display* display, Window window, XWindowAttributes* outAttrs) {
     if (!display || !window || !outAttrs) return false;
-    std::lock_guard<std::mutex> lock(g_x11ErrorTrapMutex);
-    auto previousHandler = XSetErrorHandler(x11ErrorTrapHandler);
-    g_lastX11ErrorCode = 0;
-    Status status = XGetWindowAttributes(display, window, outAttrs);
-    XSync(display, False);
-    XSetErrorHandler(previousHandler);
-    return status != 0 && g_lastX11ErrorCode == 0;
+    // The process-wide handler installed by initializeGTK ignores BadWindow.
+    // Do not swap Xlib's global handler here: another Display may be painting
+    // concurrently on CEF's UI thread.
+    return XGetWindowAttributes(display, window, outAttrs) != 0;
 }
 
 static void x11DestroyWindowSafe(Display* display, Window window) {
     if (!display || !window) return;
-    std::lock_guard<std::mutex> lock(g_x11ErrorTrapMutex);
-    auto previousHandler = XSetErrorHandler(x11ErrorTrapHandler);
-    g_lastX11ErrorCode = 0;
     XDestroyWindow(display, window);
     XSync(display, False);
-    XSetErrorHandler(previousHandler);
 }
 
 // CEF availability check - runtime check for CEF files in app bundle
@@ -1007,6 +1010,7 @@ private:
     std::function<void()> load_end_callback_;  // Callback for page load completion
     std::atomic<bool> owner_detached_{false};
     std::atomic<bool> initial_browser_creation_pending_{false};
+    guint layout_interval_source_id_ = 0;
     
     // OSR (Off-Screen Rendering) members for transparency
     Window x11_window_;
@@ -1014,9 +1018,11 @@ private:
     bool osr_enabled_;
     int osr_width_, osr_height_;
     Cursor osr_cursor_;
+    std::mutex osr_state_mutex_;
     
     // Parent window handle for proper CEF window parenting
     Window parent_window_handle_;
+    Display* parent_display_;
 
 public:
     ElectrobunClient(uint32_t webviewId,
@@ -1041,7 +1047,8 @@ public:
         , osr_width_(0)
         , osr_height_(0)
         , osr_cursor_(0)
-        , parent_window_handle_(0) {}
+        , parent_window_handle_(0)
+        , parent_display_(nullptr) {}
 
     void AddPreloadScript(const std::string& script, bool mainFrameOnly = false) {
         electrobun_script_ = script;
@@ -1063,8 +1070,9 @@ public:
         browser_ = browser;
     }
     
-    void SetParentWindowHandle(Window parent_window) {
+    void SetParentWindowHandle(Window parent_window, Display* parent_display) {
         parent_window_handle_ = parent_window;
+        parent_display_ = parent_display;
     }
     
     CefRefPtr<CefBrowser> GetBrowser() {
@@ -1099,8 +1107,18 @@ public:
         load_end_callback_ = callback;
     }
 
+    void CancelLayoutInterval() {
+        const guint sourceId = layout_interval_source_id_;
+        layout_interval_source_id_ = 0;
+        if (sourceId) {
+            g_source_remove(sourceId);
+        }
+    }
+
     void DetachOwnerCallbacks() {
         owner_detached_.store(true);
+        CancelLayoutInterval();
+        DisableOSR();
         browser_created_callback_ = nullptr;
         browser_close_callback_ = nullptr;
         load_end_callback_ = nullptr;
@@ -1116,6 +1134,7 @@ public:
     }
     
     void EnableOSR(Window x11_window, Display* display, int width, int height) {
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
         x11_window_ = x11_window;
         display_ = display;
         osr_enabled_ = true;
@@ -1124,25 +1143,46 @@ public:
         printf("CEF: OSR enabled for window %lu, size %dx%d\n", x11_window, width, height);
     }
 
+    void DisableOSR() {
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
+        osr_enabled_ = false;
+        if (display_ && osr_cursor_) {
+            XFreeCursor(display_, osr_cursor_);
+        }
+        osr_cursor_ = 0;
+        x11_window_ = 0;
+        display_ = nullptr;
+    }
+
     void UpdateOSRSize(int width, int height) {
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
         if (!osr_enabled_) return;
         osr_width_ = std::max(1, width);
         osr_height_ = std::max(1, height);
     }
     
     void SendMouseEvent(const CefMouseEvent& event, bool mouse_down, int click_count) {
-        if (browser_ && osr_enabled_) {
-            browser_->GetHost()->SendMouseMoveEvent(event, false);
-            if (mouse_down) {
-                browser_->GetHost()->SendMouseClickEvent(event, MBT_LEFT, false, click_count);
-            }
+        CefRefPtr<CefBrowser> browser;
+        {
+            std::lock_guard<std::mutex> lock(osr_state_mutex_);
+            if (!browser_ || !osr_enabled_) return;
+            browser = browser_;
+        }
+        browser->GetHost()->SendMouseMoveEvent(event, false);
+        if (mouse_down) {
+            browser->GetHost()->SendMouseClickEvent(
+                event, MBT_LEFT, false, click_count);
         }
     }
     
     void SendKeyEvent(const CefKeyEvent& event) {
-        if (browser_ && osr_enabled_) {
-            browser_->GetHost()->SendKeyEvent(event);
+        CefRefPtr<CefBrowser> browser;
+        {
+            std::lock_guard<std::mutex> lock(osr_state_mutex_);
+            if (!browser_ || !osr_enabled_) return;
+            browser = browser_;
         }
+        browser->GetHost()->SendKeyEvent(event);
     }
 
     virtual CefRefPtr<CefLoadHandler> GetLoadHandler() override {
@@ -1193,11 +1233,12 @@ public:
         (void)cursor;
         (void)custom_cursor_info;
 
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
         if (!osr_enabled_) {
             return false;
         }
 
-        Display* display = display_ ? display_ : gdk_x11_get_default_xdisplay();
+        Display* display = display_ ? display_ : parent_display_;
         Window window = x11_window_ ? x11_window_ : parent_window_handle_;
         if (!display || !window) {
             return false;
@@ -1537,45 +1578,57 @@ public:
             return;
         }
 
-        // Notify CEFWebViewImpl that browser is created.
-        if (browser_created_callback_) {
-            browser_created_callback_(browser);
-        }
-        
         // Schedule rapid interval to trigger OOPIF positioning
         // Runs every 5ms for up to 1 second to ensure OOPIFs are positioned correctly
         struct LayoutIntervalData {
+            CefRefPtr<ElectrobunClient> owner;
             CefRefPtr<CefBrowser> browser;
+            Display* display;
             gint64 start_time;
-            int trigger_count;
         };
-        
+
+        CancelLayoutInterval();
         auto* interval_data = new LayoutIntervalData{
-            browser, 
+            this,
+            browser,
+            parent_display_,
             g_get_monotonic_time(), // microseconds since arbitrary point
-            0
         };
-        
-        g_timeout_add(5, [](gpointer data) -> gboolean {
+
+        layout_interval_source_id_ = g_timeout_add_full(
+            G_PRIORITY_DEFAULT,
+            5,
+            [](gpointer data) -> gboolean {
             auto* lid = static_cast<LayoutIntervalData*>(data);
-            
+
+            const auto finish = [lid]() {
+                if (lid->owner) {
+                    lid->owner->layout_interval_source_id_ = 0;
+                }
+                return G_SOURCE_REMOVE;
+            };
+
             // Check if 1 second has elapsed
             gint64 elapsed = g_get_monotonic_time() - lid->start_time;
             if (elapsed > 1000000) { // 1 second in microseconds
-                delete lid;
-                return G_SOURCE_REMOVE;
+                return finish();
             }
-            
-            if (!g_shuttingDown && lid->browser) {
+
+            if (g_shuttingDown.load() || !lid->owner ||
+                lid->owner->owner_detached_.load()) {
+                return finish();
+            }
+
+            if (lid->browser) {
                 CefWindowHandle cefWindow = lid->browser->GetHost()->GetWindowHandle();
                 
                 if (cefWindow && cefWindow != 0x1) {
                     
                     
                     // Get window dimensions for mouse event coordinates
-                    Display* display = gdk_x11_get_default_xdisplay();
+                    Display* display = lid->display;
                     XWindowAttributes attrs;
-                    if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) != 0) {
+                    if (display && XGetWindowAttributes(display, (Window)cefWindow, &attrs) != 0) {
                         // Send mouse move event to trigger layout recalculation
                         CefMouseEvent moveEvent;
                         moveEvent.x = attrs.width / 2;
@@ -1590,12 +1643,13 @@ public:
                         lid->browser->GetHost()->SendMouseWheelEvent(scrollEvent, 0, -1);
                     }
                     
-                    lid->trigger_count++;
                 }
             }
-            
+
             return G_SOURCE_CONTINUE; // Continue interval
-        }, interval_data);
+        }, interval_data, [](gpointer data) {
+            delete static_cast<LayoutIntervalData*>(data);
+        });
         
         // The CEF browser window is now fully created
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
@@ -1604,7 +1658,10 @@ public:
         
         // Validate the CEF window handle and ensure proper parenting
         if (cefWindow) {
-            Display* display = gdk_x11_get_default_xdisplay();
+            Display* display = parent_display_;
+            if (!display) {
+                fprintf(stderr, "CEF: parent X11 Display is unavailable\n");
+            } else {
             
             // Try to get window attributes to validate the handle
             XWindowAttributes attrs;
@@ -1655,12 +1712,20 @@ public:
                     positioning_callback_();
                 }
             }
+            }
+        }
+
+        // Reparenting above resets child coordinates to 0,0. Notify the owning
+        // view only after that step so its final WM/DPI-aware bounds win.
+        if (!owner_detached_.load() && browser_created_callback_) {
+            browser_created_callback_(browser);
         }
     }
 
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
+        CancelLayoutInterval();
 
         // This is the shutdown barrier: only after this erase may the main
         // loop observe that every CEF browser has finished closing.
@@ -1703,8 +1768,9 @@ public:
             if (cefWindow) {
    
                 
-                Display* display = gdk_x11_get_default_xdisplay();
-                XWindowAttributes attrs;
+                Display* display = parent_display_;
+                if (!display) return;
+                XWindowAttributes attrs = {};
                 int result = XGetWindowAttributes(display, cefWindow, &attrs);
                 
                 if (result == 0) {
@@ -2197,6 +2263,7 @@ public:
 
     // CefRenderHandler methods for OSR (Off-Screen Rendering)
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
         if (osr_enabled_) {
             rect.Set(0, 0, osr_width_, osr_height_);
             // printf("CEF OSR GetViewRect: returning %dx%d\n", osr_width_, osr_height_);
@@ -2212,7 +2279,7 @@ public:
                  const void* buffer,
                  int width,
                  int height) override {
-        
+        std::lock_guard<std::mutex> lock(osr_state_mutex_);
         if (!osr_enabled_ || !display_ || !x11_window_ || type != PET_VIEW) {
             printf("CEF OSR OnPaint: skipping (enabled=%d, display=%p, window=%lu, type=%d)\n", 
                    osr_enabled_, display_, x11_window_, type);
@@ -2236,8 +2303,10 @@ public:
         }
         
         // Get window attributes to ensure we have the right visual
-        XWindowAttributes win_attrs;
-        XGetWindowAttributes(display_, x11_window_, &win_attrs);
+        XWindowAttributes win_attrs = {};
+        if (!XGetWindowAttributes(display_, x11_window_, &win_attrs)) {
+            return;
+        }
         
         // Create XImage with the window's visual for proper transparency support
         XImage* image = XCreateImage(display_,
@@ -2582,7 +2651,7 @@ public:
     std::atomic<uint64_t> pendingResizeGeneration{0};
     uint64_t appliedResizeGeneration = 0;
     bool hasPendingResize = false;
-    GdkRectangle pendingResizeFrame = {};
+    LogicalRect pendingResizeFrame = {};
     std::string pendingResizeMasks;
 
     // Navigation rules for URL filtering
@@ -2662,6 +2731,15 @@ public:
     virtual void addPreloadScriptToWebView(const char* jsString) = 0;
     virtual void updateCustomPreloadScript(const char* jsString) = 0;
     virtual void resize(const GdkRectangle& frame, const char* masksJson) = 0;
+    virtual void resizeLogical(const LogicalRect& frame, const char* masksJson) {
+        const GdkRectangle integerFrame = {
+            static_cast<int>(frame.x),
+            static_cast<int>(frame.y),
+            static_cast<int>(frame.width),
+            static_cast<int>(frame.height),
+        };
+        resize(integerFrame, masksJson);
+    }
     virtual void applyVisualMask() = 0;
     virtual void removeMasks() = 0;
     virtual void toggleMirrorMode(bool enable) = 0;
@@ -2680,7 +2758,7 @@ public:
     virtual void closeDevTools() = 0;
     virtual void toggleDevTools() = 0;
 
-    void storePendingResize(const GdkRectangle& frame, const char* masksJson) {
+    void storePendingResize(const LogicalRect& frame, const char* masksJson) {
         std::lock_guard<std::mutex> lock(pendingResizeMutex);
         pendingResizeFrame = frame;
         pendingResizeMasks = masksJson ? masksJson : "";
@@ -2688,7 +2766,7 @@ public:
         pendingResizeGeneration++;
     }
 
-    bool consumePendingResize(GdkRectangle& outFrame, std::string& outMasks) {
+    bool consumePendingResize(LogicalRect& outFrame, std::string& outMasks) {
         std::lock_guard<std::mutex> lock(pendingResizeMutex);
         if (!hasPendingResize) return false;
         uint64_t gen = pendingResizeGeneration.load();
@@ -2711,10 +2789,10 @@ static void drainPendingResizes() {
     for (void* item : items) {
         AbstractView* view = static_cast<AbstractView*>(item);
         if (!view) continue;
-        GdkRectangle frame = {};
+        LogicalRect frame = {};
         std::string masks;
         if (view->consumePendingResize(frame, masks)) {
-            view->resize(frame, masks.c_str());
+            view->resizeLogical(frame, masks.c_str());
         }
     }
 }
@@ -4059,20 +4137,32 @@ public:
             return;
         }
 
+        const LinuxXRectangleFields baseFields =
+            linuxPhysicalRectToXRectangleFields({
+                0,
+                0,
+                std::max(1, visualBounds.width),
+                std::max(1, visualBounds.height),
+            });
         XRectangle baseRect = {
-            0,
-            0,
-            static_cast<unsigned short>(std::max(1, visualBounds.width)),
-            static_cast<unsigned short>(std::max(1, visualBounds.height)),
+            baseFields.x,
+            baseFields.y,
+            baseFields.width,
+            baseFields.height,
         };
         XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &baseRect, 1, ShapeSet, YXBanded);
 
         for (const auto& mask : masks) {
+            const LinuxXRectangleFields fields =
+                linuxPhysicalRectToXRectangleFields(
+                    logicalToLinuxPhysicalRect(
+                        mask.x, mask.y, mask.width, mask.height, 1.0));
+            if (fields.width == 0 || fields.height == 0) continue;
             XRectangle rect = {
-                static_cast<short>(mask.x),
-                static_cast<short>(mask.y),
-                static_cast<unsigned short>(mask.width),
-                static_cast<unsigned short>(mask.height),
+                fields.x,
+                fields.y,
+                fields.width,
+                fields.height,
             };
             XShapeCombineRectangles(display, window, ShapeInput, 0, 0, &rect, 1, ShapeSubtract, YXBanded);
         }
@@ -4194,20 +4284,32 @@ public:
             return;
         }
 
+        const LinuxXRectangleFields baseFields =
+            linuxPhysicalRectToXRectangleFields({
+                0,
+                0,
+                std::max(1, visualBounds.width),
+                std::max(1, visualBounds.height),
+            });
         XRectangle baseRect = {
-            0,
-            0,
-            static_cast<unsigned short>(std::max(1, visualBounds.width)),
-            static_cast<unsigned short>(std::max(1, visualBounds.height)),
+            baseFields.x,
+            baseFields.y,
+            baseFields.width,
+            baseFields.height,
         };
         XShapeCombineRectangles(display, window, ShapeBounding, 0, 0, &baseRect, 1, ShapeSet, YXBanded);
 
         for (const auto& mask : masks) {
+            const LinuxXRectangleFields fields =
+                linuxPhysicalRectToXRectangleFields(
+                    logicalToLinuxPhysicalRect(
+                        mask.x, mask.y, mask.width, mask.height, 1.0));
+            if (fields.width == 0 || fields.height == 0) continue;
             XRectangle rect = {
-                static_cast<short>(mask.x),
-                static_cast<short>(mask.y),
-                static_cast<unsigned short>(mask.width),
-                static_cast<unsigned short>(mask.height),
+                fields.x,
+                fields.y,
+                fields.width,
+                fields.height,
             };
             XShapeCombineRectangles(display, window, ShapeBounding, 0, 0, &rect, 1, ShapeSubtract, YXBanded);
         }
@@ -4338,16 +4440,6 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         partitionIdentifier, webviewId, schemeFactory);
 }
 
-// Forward declaration for X11 event processing
-void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client);
-
-// OSR event handling data structure
-struct OSREventData {
-    uint32_t windowId;
-    CefRefPtr<ElectrobunClient> client;
-    std::atomic<bool> active{true};
-};
-
 // CEF WebView implementation
 class CEFWebViewImpl : public AbstractView {
 public:
@@ -4364,13 +4456,18 @@ public:
     std::string customPreloadScript;
     std::string partition;
     
-    // Pending frame for deferred positioning
-    GdkRectangle pendingFrame;
+    // Public/browser-tag geometry remains in logical pixels until the X11
+    // boundary. Full-size views are the explicit exception: ConfigureNotify
+    // already reports physical pixels.
+    LogicalRect logicalBounds = {};
+    LogicalRect pendingFrame = {};
     bool hasPendingFrame = false;
     
     // For popup reparenting approach
     unsigned long parentXWindow = 0;
+    Display* parentXDisplay = nullptr;
     CefRect targetBounds;
+    double lastAppliedScaleFactor = 1.0;
     
     // For deferred browser creation
     GtkWidget* gtkWindow = nullptr;
@@ -4380,14 +4477,7 @@ public:
     // Track if parent window is transparent
     bool parentTransparent = false;
     
-    // OSR event handling data
-    std::shared_ptr<OSREventData> osr_event_data_;
-    guint osr_timeout_source_id_ = 0;
-    guint osr_idle_source_id_ = 0;
-    
-    // X11 event handling for OSR windows is now handled via processX11EventsForOSR
-    Window osr_x11_window_ = 0;
-    Display* osr_display_ = nullptr;
+    // Transparent OSR input is forwarded by the shared X11 event source.
     uint32_t osr_window_id_ = 0;
     
     CEFWebViewImpl(uint32_t webviewId,
@@ -4415,6 +4505,9 @@ public:
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
     {
+        // This must be known before SetAsChild computes its initial bounds.
+        this->fullSize = autoResize;
+
         // Set initial state flags
         this->pendingStartTransparent = startTransparent;
         this->pendingStartPassthrough = startPassthrough;
@@ -4442,23 +4535,87 @@ public:
             browser = nullptr;
         }
 
-        // Clean up OSR event handling
-        if (osr_event_data_) {
-            osr_event_data_->active.store(false);
-        }
-        if (osr_timeout_source_id_) {
-            g_source_remove(osr_timeout_source_id_);
-            osr_timeout_source_id_ = 0;
-        }
-        if (osr_idle_source_id_) {
-            g_source_remove(osr_idle_source_id_);
-            osr_idle_source_id_ = 0;
-        }
-        osr_event_data_.reset();
         if (osr_window_id_) {
             registerOSRClientForWindow(osr_window_id_, nullptr);
             osr_window_id_ = 0;
         }
+    }
+
+    bool queryParentPhysicalBounds(LogicalRect& bounds) const {
+        if (!parentXDisplay || !parentXWindow) return false;
+        XWindowAttributes attributes = {};
+        if (!XGetWindowAttributes(parentXDisplay, parentXWindow, &attributes)) {
+            return false;
+        }
+        bounds = {
+            0.0,
+            0.0,
+            static_cast<double>(attributes.width),
+            static_cast<double>(attributes.height),
+        };
+        return true;
+    }
+
+    double parentDeviceScaleFactor() const {
+        if (!parentXDisplay || !parentXWindow) return 1.0;
+
+        XWindowAttributes attributes = {};
+        int rootX = 0;
+        int rootY = 0;
+        Window child = 0;
+        CefRefPtr<CefDisplay> display;
+        if (XGetWindowAttributes(parentXDisplay, parentXWindow, &attributes) &&
+            XTranslateCoordinates(
+                parentXDisplay,
+                parentXWindow,
+                DefaultRootWindow(parentXDisplay),
+                0,
+                0,
+                &rootX,
+                &rootY,
+                &child)) {
+            // CEF display bounds are DIPs by default; `true` declares these
+            // root coordinates as physical pixels, including negative origins.
+            const CefRect physicalParentBounds(
+                rootX, rootY, attributes.width, attributes.height);
+            display = CefDisplay::GetDisplayMatchingBounds(
+                physicalParentBounds, true);
+        }
+        if (!display) display = CefDisplay::GetPrimaryDisplay();
+        return normalizeLinuxScaleFactor(
+            display ? display->GetDeviceScaleFactor() : 1.0);
+    }
+
+    double x11BoundsScaleFactor() const {
+        return fullSize ? 1.0 : parentDeviceScaleFactor();
+    }
+
+    LogicalRect clippedLogicalBounds(const LogicalRect& bounds) const {
+        if (fullSize) {
+            return {
+                bounds.x,
+                bounds.y,
+                std::max(0.0, bounds.width),
+                std::max(0.0, bounds.height),
+            };
+        }
+        return clipLinuxLogicalRectToOrigin(bounds);
+    }
+
+    LinuxPhysicalRect toX11BoundsRect(const LogicalRect& bounds) const {
+        return logicalToLinuxPhysicalRect(
+            clippedLogicalBounds(bounds), x11BoundsScaleFactor());
+    }
+
+    void rememberLogicalBounds(const LogicalRect& bounds) {
+        logicalBounds = bounds;
+        const LogicalRect clipped = clippedLogicalBounds(bounds);
+        visualBounds = {
+            static_cast<int>(clipped.x),
+            static_cast<int>(clipped.y),
+            static_cast<int>(clipped.width),
+            static_cast<int>(clipped.height),
+        };
     }
     
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
@@ -4475,13 +4632,22 @@ public:
         
         // Store the parent X11 window handle for later window association
         this->parentXWindow = x11win->window;
+        this->parentXDisplay = x11win->display;
+
+        LogicalRect initialBounds = {x, y, width, height};
+        if (fullSize) {
+            // A WM may have replaced the requested startup size before CEF's
+            // asynchronous child creation reaches this point.
+            queryParentPhysicalBounds(initialBounds);
+        }
+        rememberLogicalBounds(initialBounds);
         
         // Store the parameters
         this->deferredUrl = url ? url : "";
-        this->deferredX = x;
-        this->deferredY = y;
-        this->deferredWidth = width;
-        this->deferredHeight = height;
+        this->deferredX = initialBounds.x;
+        this->deferredY = initialBounds.y;
+        this->deferredWidth = initialBounds.width;
+        this->deferredHeight = initialBounds.height;
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
@@ -4489,14 +4655,18 @@ public:
         // external X11 parent. Alloy is still used automatically for OSR.
         window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
         
-        // For child windows, position should be relative to parent (0,0 for fullscreen)
-        CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
+        const LinuxPhysicalRect physicalBounds = toX11BoundsRect(initialBounds);
+        CefRect cef_rect(
+            physicalBounds.x,
+            physicalBounds.y,
+            std::max(1, physicalBounds.width),
+            std::max(1, physicalBounds.height));
         
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
         
         // Ensure X11 is synced before creating browser
-        Display* display = gdk_x11_get_default_xdisplay();
+        Display* display = parentXDisplay;
         if (display) {
             XSync(display, False);
         }
@@ -4532,11 +4702,15 @@ public:
         );
         
         // Set parent window handle for proper CEF window parenting
-        client->SetParentWindowHandle(x11win->window);
+        client->SetParentWindowHandle(x11win->window, x11win->display);
         
         // Enable OSR for transparent windows
         if (x11win->transparent) {
-            client->EnableOSR(x11win->window, x11win->display, (int)width, (int)height);
+            client->EnableOSR(
+                x11win->window,
+                x11win->display,
+                std::max(1, physicalBounds.width),
+                std::max(1, physicalBounds.height));
         }
         
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
@@ -4546,11 +4720,17 @@ public:
             
             CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
             
-            // Handle pending frame positioning now that browser is available
-            if (hasPendingFrame) {
-                syncCEFPositionWithFrame(pendingFrame);
-                hasPendingFrame = false;
+            // Re-read full-size bounds after WM placement. Nested views retain
+            // their latest fractional public frame. This callback runs after
+            // OnAfterCreated's reparent step, so the final position is not reset.
+            LogicalRect finalBounds = logicalBounds;
+            if (fullSize) {
+                queryParentPhysicalBounds(finalBounds);
+            } else if (hasPendingFrame) {
+                finalBounds = pendingFrame;
             }
+            hasPendingFrame = false;
+            resizeLogical(finalBounds, maskJSON.c_str());
             
             // Apply deferred initial transparent/passthrough state now that browser is ready
             // Don't apply transparency immediately - wait for page load to complete
@@ -4570,44 +4750,6 @@ public:
             if (this->parentTransparent && x11win && x11win->transparent) {
                 this->osr_window_id_ = x11win->windowId;
                 registerOSRClientForWindow(x11win->windowId, this->client);
-
-                // Create a data structure to pass to the timer callback
-                auto eventData = std::make_shared<OSREventData>();
-                eventData->windowId = x11win->windowId;
-                eventData->client = this->client;
-                
-                // Store event data in the webview for cleanup
-                this->osr_event_data_ = eventData;
-                
-                // Use a higher frequency timer for better responsiveness
-                this->osr_timeout_source_id_ = g_timeout_add_full(
-                    G_PRIORITY_DEFAULT,
-                    5,
-                    [](gpointer data) -> gboolean {  // 200fps - process events more frequently
-                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
-                    if (osrData && osrData->active.load()) {
-                        processX11EventsForOSR(osrData->windowId, osrData->client);
-                        return TRUE; // Continue timer
-                    }
-                    return FALSE; // Stop timer
-                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
-                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
-                });
-                
-                // Also use idle processing for immediate event handling
-                this->osr_idle_source_id_ = g_idle_add_full(
-                    G_PRIORITY_DEFAULT_IDLE,
-                    [](gpointer data) -> gboolean {
-                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
-                    if (osrData && osrData->active.load()) {
-                        processX11EventsForOSR(osrData->windowId, osrData->client);
-                        return TRUE; // Continue processing
-                    }
-                    return FALSE; // Stop
-                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
-                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
-                });
-                
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
         });
@@ -4674,63 +4816,58 @@ public:
     
     // Removed createCEFBrowserInX11Window and createCEFBrowserDeferred - functionality moved to createCEFBrowser
     
-    void syncCEFPositionWithFrame(const GdkRectangle& frame) {
-        // Note: This may be called with or without g_cefBrowserMutex held
-        // So we need to be careful about browser access
-        CefRefPtr<CefBrowser> browserRef = browser;  // Atomic read
-        if (!browserRef) {
+    void syncCEFPositionWithFrame(const LogicalRect& frame) {
+        CefRefPtr<CefBrowser> browserRef;
+        {
+            std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+            browserRef = browser;
+        }
+        if (!browserRef || !parentXDisplay) return;
+
+        CefRefPtr<CefBrowserHost> host = browserRef->GetHost();
+        if (!host) return;
+        const CefWindowHandle cefWindow = host->GetWindowHandle();
+        if (!cefWindow) return;
+
+        XWindowAttributes current = {};
+        if (!XGetWindowAttributes(
+                parentXDisplay, static_cast<Window>(cefWindow), &current)) {
+            // Asynchronous creation may not have installed the child XID yet;
+            // pendingFrame is retried after OnAfterCreated/reparenting.
             return;
         }
-        
-        
-        // Get the CEF browser's X11 window handle
-        CefWindowHandle cefWindow = browserRef->GetHost()->GetWindowHandle();
-        if (!cefWindow) {
-            printf("CEF: No window handle available for positioning\n");
-            return;
-        }
-        
-        // Validate the CEF window handle before using it
-        Display* display = gdk_x11_get_default_xdisplay();
-        XWindowAttributes attrs;
-        if (XGetWindowAttributes(display, (Window)cefWindow, &attrs) == 0) {
-            // Store the target frame for later positioning
-            // For now, just skip positioning - this is likely during initial creation
-            return;
-        }
-        
-        // Check current window state before modifying
-        XWindowAttributes currentAttrs;
-        bool isCurrentlyMapped = false;
-        if (XGetWindowAttributes(display, (Window)cefWindow, &currentAttrs) != 0) {
-            isCurrentlyMapped = (currentAttrs.map_state != IsUnmapped);
-        }
-        
-        // For mapped windows, configure position/size without changing stacking order
-        if (isCurrentlyMapped) {
-            // Simply move and resize without changing z-order
-            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
-        } else {
-            // Window is unmapped (transparent), just move/resize without mapping
-            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
-        }
-        XFlush(display);
-                
-        // Check if the resize actually took effect
-        XWindowAttributes newAttrs;
-        if (XGetWindowAttributes(display, (Window)cefWindow, &newAttrs) != 0) {
-            // Check parent window
-            Window root, parent;
-            Window* children;
-            unsigned int nchildren;
-            if (XQueryTree(display, (Window)cefWindow, &root, &parent, &children, &nchildren) != 0) {
-                
-                if (children) XFree(children);
+
+        const LinuxPhysicalRect physicalBounds = toX11BoundsRect(frame);
+        const int physicalWidth = std::max(1, physicalBounds.width);
+        const int physicalHeight = std::max(1, physicalBounds.height);
+        const bool moved =
+            current.x != physicalBounds.x || current.y != physicalBounds.y;
+        const bool resized =
+            current.width != physicalWidth || current.height != physicalHeight;
+
+        if (moved || resized) {
+            XMoveResizeWindow(
+                parentXDisplay,
+                static_cast<Window>(cefWindow),
+                physicalBounds.x,
+                physicalBounds.y,
+                physicalWidth,
+                physicalHeight);
+            if (resized) {
+                // CEF may observe the child from a separate X connection.
+                // Complete the server-side resize before notifying its host.
+                XSync(parentXDisplay, False);
+            } else {
+                XFlush(parentXDisplay);
             }
-        } else {
-            printf("CEF: [POSITION] ERROR - Could not get window attributes after resize\n");
         }
-        
+
+        lastAppliedScaleFactor = x11BoundsScaleFactor();
+        if (resized) {
+            // Notify only after X11 has accepted the new physical size. Pure
+            // moves must not trigger a layout/repaint storm.
+            host->WasResized();
+        }
     }
     
     // Event handling will be implemented separately after global declarations
@@ -4765,8 +4902,8 @@ public:
         // Move the CEF browser window to match the widget position
         CefWindowHandle cefWindow = browser->GetHost()->GetWindowHandle();
         
-        if (cefWindow) {        
-            Display* display = gdk_x11_get_default_xdisplay();
+        if (cefWindow && parentXDisplay) {
+            Display* display = parentXDisplay;
             
             // Validate CEF window handle before using it
             XWindowAttributes attrs;
@@ -4792,11 +4929,12 @@ public:
             GtkAllocation allocation;
             gtk_widget_get_allocation(widget, &allocation);
             
-            GdkRectangle frame;
-            frame.x = allocation.x;
-            frame.y = allocation.y;
-            frame.width = allocation.width;
-            frame.height = allocation.height;
+            LogicalRect frame = {
+                static_cast<double>(allocation.x),
+                static_cast<double>(allocation.y),
+                static_cast<double>(allocation.width),
+                static_cast<double>(allocation.height),
+            };
             
             syncCEFPositionWithFrame(frame);
         }
@@ -4855,22 +4993,19 @@ public:
         }
     }
     
-    void remove() override {
-        OperationGuard guard;
-        if (!guard.isValid()) {
-            return;
-        }
-        
+    void removeInternal(bool parentIsBeingDestroyed) {
+        if (isRemoved) return;
+        // Teardown must remain valid after stopEventLoop sets g_shuttingDown;
+        // OperationGuard intentionally rejects new work in that state, but a
+        // parent XID may not be destroyed until paint/input callbacks detach.
+        isRemoved = true;
+
         // Remove from global webview map first
         {
             std::lock_guard<std::mutex> lock(g_webviewMapMutex);
             g_webviewMap.erase(webviewId);
         }
-        
-        // Mark as removed to prevent further operations
-        isRemoved = true;
-        
-        // Don't hold the mutex while calling CloseBrowser - schedule it async
+
         CefRefPtr<CefBrowser> browser_to_close;
         GtkWidget* widget_to_destroy = nullptr;
         
@@ -4892,17 +5027,22 @@ public:
             client->DetachOwnerCallbacks();
         }
 
-        // Close browser asynchronously outside the lock
+        // Parent destruction and global shutdown cannot leave a close request
+        // queued behind the XDestroyWindow that invalidates the child XID.
         if (browser_to_close) {
-            // Schedule browser close on idle
-            g_idle_add([](gpointer data) -> gboolean {
-                CefRefPtr<CefBrowser>* browser_ref = static_cast<CefRefPtr<CefBrowser>*>(data);
-                if (*browser_ref) {
-                    (*browser_ref)->GetHost()->CloseBrowser(false);
-                }
-                delete browser_ref;
-                return G_SOURCE_REMOVE;
-            }, new CefRefPtr<CefBrowser>(browser_to_close));
+            if (parentIsBeingDestroyed || g_shuttingDown.load()) {
+                browser_to_close->GetHost()->CloseBrowser(true);
+            } else {
+                g_idle_add([](gpointer data) -> gboolean {
+                    auto* browser_ref =
+                        static_cast<CefRefPtr<CefBrowser>*>(data);
+                    if (*browser_ref) {
+                        (*browser_ref)->GetHost()->CloseBrowser(false);
+                    }
+                    delete browser_ref;
+                    return G_SOURCE_REMOVE;
+                }, new CefRefPtr<CefBrowser>(browser_to_close));
+            }
         }
         
         // Destroy widget asynchronously. The parent window may have already
@@ -4917,6 +5057,14 @@ public:
                 return G_SOURCE_REMOVE;
             }, widget_to_destroy);
         }
+    }
+
+    void removeForParentDestruction() {
+        removeInternal(true);
+    }
+
+    void remove() override {
+        removeInternal(false);
     }
     
     bool canGoBack() override {
@@ -4984,58 +5132,95 @@ public:
     }
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
+        resizeLogical(
+            {
+                static_cast<double>(frame.x),
+                static_cast<double>(frame.y),
+                static_cast<double>(frame.width),
+                static_cast<double>(frame.height),
+            },
+            masksJson);
+    }
+
+    void resizeLogical(const LogicalRect& frame, const char* masksJson) override {
         OperationGuard guard;
         if (!guard.isValid()) return;
-        
-        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-        if (browser) {
-            
-            // CEF webviews don't have GTK widgets (widget = nullptr)
-            // They manage their own X11 windows, so we only need to sync CEF positioning
-            
-            // Transform viewport-relative coordinates to window-relative coordinates
-            GdkRectangle adjustedFrame = frame;
-            
-            // Handle negative coordinates (when element is scrolled partially out of view)
-            // Clamp to 0 and adjust size accordingly
-            if (adjustedFrame.x < 0) {
-                adjustedFrame.width += adjustedFrame.x;
-                adjustedFrame.x = 0;
-            }
-            if (adjustedFrame.y < 0) {
-                adjustedFrame.height += adjustedFrame.y;
-                adjustedFrame.y = 0;
-            }
-            
-            // Ensure positive dimensions
-            if (adjustedFrame.width < 0) adjustedFrame.width = 0;
-            if (adjustedFrame.height < 0) adjustedFrame.height = 0;
-            
-            if (parentTransparent && client) {
-                client->UpdateOSRSize(adjustedFrame.width, adjustedFrame.height);
-                browser->GetHost()->WasResized();
-                browser->GetHost()->Invalidate(PET_VIEW);
-                visualBounds = adjustedFrame;
-            } else {
-                // Notify CEF that the browser was resized
-                browser->GetHost()->WasResized();
 
-                // Sync CEF browser window position using adjusted frame coordinates
-                syncCEFPositionWithFrame(adjustedFrame);
+        // Internal relayouts may pass maskJSON.c_str(); copy before assigning
+        // the destination string so that aliased storage cannot be invalidated.
+        const std::string nextMasks = masksJson ? masksJson : "";
+        rememberLogicalBounds(frame);
+        maskJSON = nextMasks;
 
-                visualBounds = adjustedFrame;
-            }
+        CefRefPtr<CefBrowser> browserRef;
+        {
+            std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+            browserRef = browser;
         }
-        maskJSON = masksJson ? masksJson : "";
-        
+        if (!browserRef) {
+            pendingFrame = frame;
+            hasPendingFrame = true;
+            return;
+        }
+
+        if (parentTransparent && client) {
+            const LinuxPhysicalRect physicalBounds = toX11BoundsRect(frame);
+            client->UpdateOSRSize(
+                std::max(1, physicalBounds.width),
+                std::max(1, physicalBounds.height));
+            lastAppliedScaleFactor = x11BoundsScaleFactor();
+            browserRef->GetHost()->WasResized();
+            browserRef->GetHost()->Invalidate(PET_VIEW);
+        } else {
+            syncCEFPositionWithFrame(frame);
+        }
+
         // Apply visual mask if maskJSON is provided
         // Check if masksJson is nullptr, empty, or just "[]" (empty array)
-        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
+        if (!maskJSON.empty() && maskJSON != "[]") {
             applyVisualMask();
         } else {
             // If no masks, remove any existing masks
             removeMasks();
         }
+    }
+
+    void handleParentGeometryChanged(
+        bool moved,
+        bool resized,
+        int width,
+        int height
+    ) {
+        CefRefPtr<CefBrowser> browserRef;
+        {
+            std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
+            browserRef = browser;
+        }
+        if (!browserRef) return;
+
+        CefRefPtr<CefBrowserHost> host = browserRef->GetHost();
+        if (!host) return;
+
+        if (moved || resized) {
+            // Update CEF's display/DPR model before any scale-driven resize.
+            host->NotifyScreenInfoChanged();
+            host->NotifyMoveOrResizeStarted();
+        }
+
+        if (fullSize && resized) {
+            LogicalRect actualBounds = {
+                0.0, 0.0, static_cast<double>(width), static_cast<double>(height)};
+            queryParentPhysicalBounds(actualBounds);
+            resizeLogical(actualBounds, maskJSON.c_str());
+        } else if (!fullSize) {
+            const double nextScaleFactor = parentDeviceScaleFactor();
+            const bool scaleChanged =
+                std::abs(nextScaleFactor - lastAppliedScaleFactor) > 0.0001;
+            if (scaleChanged) {
+                resizeLogical(logicalBounds, maskJSON.c_str());
+            }
+        }
+
     }
     
     void applyVisualMask() override {
@@ -5056,40 +5241,64 @@ public:
             return;
         }
         
-        // Get the X11 display
-        Display* display = gdk_x11_get_default_xdisplay();
+        Display* display = parentXDisplay;
+        if (!display) return;
+
+        const LogicalRect clippedBounds = clippedLogicalBounds(logicalBounds);
+        const double scaleFactor = x11BoundsScaleFactor();
         
-        // Create X11 rectangles for the mask regions
+        // Convert local mask edges against the original view origin, then
+        // express them relative to the clipped child origin. This keeps holes
+        // aligned at fractional scale and while a child is scrolled offscreen.
         std::vector<XRectangle> xrects;
         for (const auto& mask : masks) {
-            XRectangle rect = {
-                static_cast<short>(mask.x),
-                static_cast<short>(mask.y),
-                static_cast<unsigned short>(mask.width),
-                static_cast<unsigned short>(mask.height)
-            };
+            const LinuxPhysicalRect physicalMask =
+                logicalSubrectToLinuxPhysicalRect(
+                    clippedBounds.x,
+                    clippedBounds.y,
+                    logicalBounds.x + mask.x - clippedBounds.x,
+                    logicalBounds.y + mask.y - clippedBounds.y,
+                    mask.width,
+                    mask.height,
+                    scaleFactor);
+            const LinuxXRectangleFields fields =
+                linuxPhysicalRectToXRectangleFields(physicalMask);
+            if (fields.width == 0 || fields.height == 0) continue;
+            XRectangle rect = {fields.x, fields.y, fields.width, fields.height};
             xrects.push_back(rect);
         }
         
-        // Apply the shape mask to the X11 window
-        // This creates holes in the window where the mask rectangles are
-        if (!xrects.empty()) {
-            
+        // Apply the shape mask to the X11 window. Rebuild the base even when
+        // every parsed hole clips to zero so an older shape cannot linger.
+        {
             // First, create the base shape (full window rectangle)
+            LinuxPhysicalRect physicalBase = toX11BoundsRect(logicalBounds);
+            physicalBase.x = 0;
+            physicalBase.y = 0;
+            const LinuxXRectangleFields baseFields =
+                linuxPhysicalRectToXRectangleFields(physicalBase);
             XRectangle baseRect = {
-                0, 0, 
-                static_cast<unsigned short>(visualBounds.width),
-                static_cast<unsigned short>(visualBounds.height)
-            };
+                baseFields.x,
+                baseFields.y,
+                baseFields.width,
+                baseFields.height};
             
             // Set the base shape to the full window
             XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
                                    &baseRect, 1, ShapeSet, YXBanded);
+            if (!isMousePassthroughEnabled) {
+                XShapeCombineRectangles(display, window, ShapeInput, 0, 0,
+                                       &baseRect, 1, ShapeSet, YXBanded);
+            }
             
             // Subtract each mask rectangle individually
             for (size_t i = 0; i < xrects.size(); i++) {
                 XShapeCombineRectangles(display, window, ShapeBounding, 0, 0,
                                        &xrects[i], 1, ShapeSubtract, YXBanded);
+                if (!isMousePassthroughEnabled) {
+                    XShapeCombineRectangles(display, window, ShapeInput, 0, 0,
+                                           &xrects[i], 1, ShapeSubtract, YXBanded);
+                }
             }
             
             XFlush(display);
@@ -5107,12 +5316,15 @@ public:
             return;
         }
         
-        // Get the X11 display
-        Display* display = gdk_x11_get_default_xdisplay();
+        Display* display = parentXDisplay;
+        if (!display) return;
         
         // Reset the window shape to be fully opaque/visible
         // This removes any existing shape mask
         XShapeCombineMask(display, window, ShapeBounding, 0, 0, None, ShapeSet);
+        if (!isMousePassthroughEnabled) {
+            XShapeCombineMask(display, window, ShapeInput, 0, 0, None, ShapeSet);
+        }
         XFlush(display);
         
         // Clear the mask JSON
@@ -5128,8 +5340,8 @@ public:
         if (browser) {
             // Use X11 APIs to show/hide the CEF window
             CefWindowHandle window = browser->GetHost()->GetWindowHandle();
-            if (window) {
-                Display* display = gdk_x11_get_default_xdisplay();
+            if (window && parentXDisplay) {
+                Display* display = parentXDisplay;
                 if (hidden) {
                     XUnmapWindow(display, window);
                 } else {
@@ -5144,8 +5356,8 @@ public:
         // Use the same approach as setHidden: XUnmapWindow/XMapWindow
         if (browser) {
             CefWindowHandle window = browser->GetHost()->GetWindowHandle();
-            if (window) {
-                Display* display = gdk_x11_get_default_xdisplay();
+            if (window && parentXDisplay) {
+                Display* display = parentXDisplay;
                 if (transparent) {
                     XUnmapWindow(display, window);
                 } else {
@@ -5153,8 +5365,8 @@ public:
                     
                     // When making visible again, sync position to ensure it's in the right place
                     // This is needed because unmapped windows don't receive position updates
-                    if (visualBounds.width && visualBounds.height) {
-                        syncCEFPositionWithFrame(visualBounds);
+                    if (logicalBounds.width && logicalBounds.height) {
+                        syncCEFPositionWithFrame(logicalBounds);
                     }
                 }
                 XFlush(display);
@@ -5168,16 +5380,20 @@ public:
         if (browser) {
             // Use X11 input shape extension for mouse passthrough
             CefWindowHandle window = browser->GetHost()->GetWindowHandle();
-            if (window) {
-                Display* display = gdk_x11_get_default_xdisplay();
+            if (window && parentXDisplay) {
+                Display* display = parentXDisplay;
                 if (enable) {
                     // Make window invisible to mouse events
                     XRectangle rect = {0, 0, 0, 0}; // Empty rectangle
                     XShapeCombineRectangles(display, window, ShapeInput, 0, 0,
                                            &rect, 1, ShapeSet, YXBanded);
                 } else {
-                    // Reset input shape to allow mouse events
-                    XShapeCombineMask(display, window, ShapeInput, 0, 0, None, ShapeSet);
+                    if (!maskJSON.empty() && maskJSON != "[]") {
+                        applyVisualMask();
+                    } else {
+                        XShapeCombineMask(
+                            display, window, ShapeInput, 0, 0, None, ShapeSet);
+                    }
                 }
                 XFlush(display);
             }
@@ -5256,7 +5472,7 @@ public:
 };
 
 static void removeCEFViewsForParentWindow(Window parent_window) {
-    std::vector<std::shared_ptr<AbstractView>> views_to_remove;
+    std::vector<std::shared_ptr<CEFWebViewImpl>> views_to_remove;
     {
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
         for (const auto& [id, view] : g_webviewMap) {
@@ -5268,9 +5484,10 @@ static void removeCEFViewsForParentWindow(Window parent_window) {
         }
     }
 
-    // remove() erases g_webviewMap, so never invoke it while holding the map lock.
+    // Teardown erases g_webviewMap; never invoke it while holding the map lock.
+    // The parent-specific path is unconditional during global shutdown.
     for (const auto& view : views_to_remove) {
-        view->remove();
+        view->removeForParentDestruction();
     }
 }
 
@@ -5678,36 +5895,6 @@ static void focusX11Window(Display* display, Window window) {
     XFlush(display);
 }
 
-// X11 event processing for OSR windows
-void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> client) {
-    // Check if shutting down
-    if (g_shuttingDown.load()) return;
-    
-    std::shared_ptr<X11Window> x11win;
-    {
-        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
-        auto it = g_x11_windows.find(windowId);
-        if (it != g_x11_windows.end() && it->second && it->second->transparent) {
-            x11win = it->second;
-        }
-    }
-    
-    if (!x11win) return;
-    
-    Display* display = x11win->display;
-    Window window = x11win->window;
-    
-    XEvent event;
-    long eventMask = ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                     FocusChangeMask | EnterWindowMask | LeaveWindowMask |
-                     ExposureMask;
-    while (XCheckWindowEvent(display, window, eventMask, &event)) {
-        forwardX11EventToOSRClient(event, display, window, client);
-    }
-    
-    XFlush(display);
-}
-
 // Helper function to get ContainerView overlay for a window
 GtkWidget* getContainerViewOverlay(GtkWidget* window) {
     std::lock_guard<std::mutex> lock(g_containersMutex);
@@ -6069,6 +6256,15 @@ void initializeGTK() {
     {
         std::unique_lock<std::mutex> lock(g_gtkInitMutex);
         if (!g_gtkInitialized) {
+            // Shared Display contract: XInitThreads must precede gtk_init/CEF
+            // and every XOpenDisplay. Each X11Window owns its Display, ordinary
+            // event/mutation work runs on the GLib main context, and OSR paint
+            // and cursor callbacks are the deliberate cross-thread users. Xlib
+            // serializes individual calls; Electrobun map locks only protect
+            // C++ lifetimes and are never held across Xlib/CEF/application
+            // callbacks. OSR's state mutex closes the parent/paint race.
+            ensureXlibThreadSupport();
+
             // Force X11 backend on Wayland systems
             setenv("GDK_BACKEND", "x11", 1);
             
@@ -6447,20 +6643,9 @@ extern "C" {
 // Constructor to run when library is loaded
 __attribute__((constructor))
 void on_library_load() {
-}
-
-// Timer callback to process CEF message loop
-gboolean cef_timer_callback(gpointer user_data) {
-    // Check if we're shutting down
-    if (g_shuttingDown.load()) {
-        return G_SOURCE_REMOVE;
-    }
-
-    if (g_cefInitialized) {
-        CefDoMessageLoopWork();
-    }
-
-    return G_SOURCE_CONTINUE; // Keep the timer running
+    // Library constructors run before callers can initialize GTK/CEF or open a
+    // Display, satisfying Xlib's ordering requirement for thread support.
+    ensureXlibThreadSupport();
 }
 
 static bool cefBrowsersFinishedClosing() {
@@ -6473,10 +6658,6 @@ static bool cefBrowsersFinishedClosing() {
 }
 
 static gboolean drainCEFForShutdown(gpointer) {
-    if (g_cefInitialized.load()) {
-        CefDoMessageLoopWork();
-    }
-
     // OnBeforeClose removes the browser from g_liveCefBrowsers. Pending
     // CreateBrowser calls are also part of the barrier because OnAfterCreated
     // must get a chance to immediately close them during shutdown.
@@ -6485,7 +6666,7 @@ static gboolean drainCEFForShutdown(gpointer) {
     }
 
     printf("[stopEventLoop] All CEF browsers closed\n");
-    gtk_main_quit();
+    CefQuitMessageLoop();
     return G_SOURCE_REMOVE;
 }
 
@@ -6509,35 +6690,17 @@ static void beginCEFShutdownOnMainThread() {
         browser->GetHost()->CloseBrowser(true);
     }
 
-    // Keep the GTK loop alive while servicing CEF. This source removes itself
-    // only after every successful CreateBrowser request has resolved and every
-    // live browser has reached OnBeforeClose.
+    // CefRunMessageLoop owns the GLib context. Quit only after every successful
+    // CreateBrowser request has resolved and every live browser has reached
+    // OnBeforeClose.
     g_timeout_add(10, drainCEFForShutdown, nullptr);
 }
-
-// Global debounce state
-static std::map<uint32_t, std::chrono::steady_clock::time_point> g_lastResizeTime;
-static std::map<uint32_t, std::pair<int, int>> g_lastResizeSize;
 
 // Auto-resize webviews in a specific window
 void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) {
     OperationGuard guard;
     if (!guard.isValid()) return;
-    // Debounce rapid resize events (ignore events within 50ms of the same size)
-    auto now = std::chrono::steady_clock::now();
-    auto lastTime = g_lastResizeTime[windowId];
-    auto lastSize = g_lastResizeSize[windowId];
-    
-    if (lastSize.first == width && lastSize.second == height) {
-        auto timeDiff = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastTime).count();
-        if (timeDiff < 50) {
-            return;
-        }
-    }
-    
-    g_lastResizeTime[windowId] = now;
-    g_lastResizeSize[windowId] = {width, height};
-    
+
     // Find the X11 window handle for this window ID
     Window x11WindowHandle;
     {
@@ -6550,31 +6713,27 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
     }
     
     // Find all webviews that belong to this window
-    std::vector<std::pair<uint32_t, std::shared_ptr<AbstractView>>> fullSizeWebviews;
-    std::vector<std::pair<uint32_t, std::shared_ptr<AbstractView>>> oopifWebviews;
+    std::vector<std::shared_ptr<AbstractView>> fullSizeWebviews;
     {
         std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        // Create separate copies for fullSize and non-fullSize webviews
         for (auto& [webviewId, webview] : g_webviewMap) {
+            (void)webviewId;
             if (webview) {
                 CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
                 WGPUViewImpl* wgpuView = dynamic_cast<WGPUViewImpl*>(webview.get());
-                bool belongsToWindow =
-                    (cefView && cefView->parentXWindow == x11WindowHandle) ||
-                    (wgpuView && wgpuView->parentXWindow == x11WindowHandle);
-                if (belongsToWindow) {
-                    if (webview->fullSize) {
-                        fullSizeWebviews.push_back({webviewId, webview});
-                    } else {
-                        oopifWebviews.push_back({webviewId, webview});
-                    }
+                // CEF has a separate geometry hook because pure parent moves
+                // may change monitor scale without changing parent size.
+                if (!cefView && wgpuView &&
+                    wgpuView->parentXWindow == x11WindowHandle &&
+                    webview->fullSize) {
+                    fullSizeWebviews.push_back(webview);
                 }
             }
         }
     }
     
     // Process fullSize webviews - resize them to fill the window
-    for (auto& [webviewId, webview] : fullSizeWebviews) {
+    for (const auto& webview : fullSizeWebviews) {
         if (webview && webview->fullSize) {
             // Check if the webview is already the right size to avoid infinite resize loops
             GdkRectangle currentBounds = webview->visualBounds;
@@ -6587,17 +6746,31 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
             webview->resize(frame, "");
         }
     }
-    
-    // Process OOPIF webviews - trigger position sync to maintain visibility
-    for (auto& [webviewId, webview] : oopifWebviews) {
-        if (webview && !webview->fullSize) {
-            CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
-            if (cefView && cefView->browser) {
-                // Trigger position sync with current bounds to maintain visibility
-                // The JavaScript ResizeObserver will send updated positions shortly
-                cefView->syncCEFPositionWithFrame(cefView->visualBounds);
+}
+
+void syncCEFViewsForParentGeometry(
+    Window parentWindow,
+    bool moved,
+    bool resized,
+    int width,
+    int height
+) {
+    std::vector<std::shared_ptr<CEFWebViewImpl>> cefViews;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (const auto& [webviewId, webview] : g_webviewMap) {
+            (void)webviewId;
+            auto cefView = std::dynamic_pointer_cast<CEFWebViewImpl>(webview);
+            if (cefView && cefView->parentXWindow == parentWindow &&
+                !cefView->isRemoved) {
+                cefViews.push_back(std::move(cefView));
             }
         }
+    }
+
+    // Never call CEF/Xlib while holding the webview registry mutex.
+    for (const auto& cefView : cefViews) {
+        cefView->handleParentGeometryChanged(moved, resized, width, height);
     }
 }
 
@@ -6625,6 +6798,12 @@ gboolean process_x11_events(gpointer data) {
     
     for (auto& [windowId, x11win] : windows_to_process) {
         if (!x11win || !x11win->display) continue;
+        LinuxX11GeometryReducer geometryReducer({
+            x11win->x,
+            x11win->y,
+            x11win->width,
+            x11win->height,
+        });
         
         // Check if we're still valid during processing
         if (g_shuttingDown.load()) {
@@ -6700,33 +6879,13 @@ gboolean process_x11_events(gpointer data) {
                     break;
                     
                 case ConfigureNotify:
-                    // Only process ConfigureNotify events for the actual main window, not CEF child windows
-                    if (event.xconfigure.window != x11win->window) {
-                        break;
-                    }
-                    
-                    if (event.xconfigure.width != x11win->width || event.xconfigure.height != x11win->height ||
-                        event.xconfigure.x != x11win->x || event.xconfigure.y != x11win->y) {
-                        
-                        
-                        x11win->x = event.xconfigure.x;
-                        x11win->y = event.xconfigure.y;
-                        x11win->width = event.xconfigure.width;
-                        x11win->height = event.xconfigure.height;
-                        
-                        // Call move callback when position changes
-                        if (x11win->moveCallback) {
-                            x11win->moveCallback(x11win->windowId, x11win->x, x11win->y);
-                        }
-                        
-                        if (x11win->resizeCallback) {
-                            x11win->resizeCallback(x11win->windowId, x11win->x, x11win->y, 
-                                                    x11win->width, x11win->height);
-                        }
-                        
-                        // Auto-resize webviews in this window
-                        resizeAutoSizingWebviewsInWindow(x11win->windowId, x11win->width, x11win->height);
-                    }
+                    // Keep only the WM's latest parent geometry in this drain.
+                    // Child ConfigureNotify events were filtered above.
+                    geometryReducer.observe(
+                        event.xconfigure.x,
+                        event.xconfigure.y,
+                        event.xconfigure.width,
+                        event.xconfigure.height);
                     break;
                     
                 case Expose:
@@ -6760,22 +6919,92 @@ gboolean process_x11_events(gpointer data) {
                     break;
             }
         }
+
+        const auto windowIsStillRegistered = [&]() {
+            std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+            auto current = g_x11_windows.find(windowId);
+            return current != g_x11_windows.end() &&
+                current->second.get() == x11win.get();
+        };
+
+        const bool closeQueued =
+            std::find(windows_to_close.begin(), windows_to_close.end(), windowId) !=
+            windows_to_close.end();
+        const LinuxX11GeometryChange geometryChange = geometryReducer.result();
+        if (geometryChange.hasConfigure && !closeQueued &&
+            windowIsStillRegistered()) {
+            const bool moved = geometryChange.moved;
+            const bool resized = geometryChange.resized;
+
+            x11win->x = geometryChange.geometry.x;
+            x11win->y = geometryChange.geometry.y;
+            x11win->width = geometryChange.geometry.width;
+            x11win->height = geometryChange.geometry.height;
+
+            if (moved && x11win->moveCallback) {
+                x11win->moveCallback(
+                    x11win->windowId, x11win->x, x11win->y);
+            }
+            if (!windowIsStillRegistered()) continue;
+            if (resized && x11win->resizeCallback) {
+                x11win->resizeCallback(
+                    x11win->windowId,
+                    x11win->x,
+                    x11win->y,
+                    x11win->width,
+                    x11win->height);
+            }
+            if (!windowIsStillRegistered()) continue;
+
+            if (moved || resized) {
+                // This is intentionally separate from public resize delivery:
+                // a same-size monitor move can still change CEF's DPR.
+                syncCEFViewsForParentGeometry(
+                    x11win->window,
+                    moved,
+                    resized,
+                    static_cast<int>(x11win->width),
+                    static_cast<int>(x11win->height));
+            }
+            if (resized) {
+                resizeAutoSizingWebviewsInWindow(
+                    x11win->windowId,
+                    static_cast<int>(x11win->width),
+                    static_cast<int>(x11win->height));
+            }
+        }
     }
     
     // Safely clean up windows that requested closure
     for (uint32_t windowId : windows_to_close) {
-        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
-        auto winIt = g_x11_windows.find(windowId);
-        if (winIt != g_x11_windows.end()) {
-            auto x11win = winIt->second;
-            if (x11win && x11win->display && x11win->window) {
-                XDestroyWindow(x11win->display, x11win->window);
-                XFlush(x11win->display);
-                
-                // Remove from global maps
-                g_x11_window_to_id.erase(x11win->window);
-                g_x11_windows.erase(windowId);
+        std::shared_ptr<X11Window> closingWindow;
+        {
+            std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+            auto winIt = g_x11_windows.find(windowId);
+            if (winIt != g_x11_windows.end()) {
+                closingWindow = winIt->second;
+                if (closingWindow) {
+                    for (auto childIt = g_x11_child_window_to_parent_id.begin();
+                         childIt != g_x11_child_window_to_parent_id.end();) {
+                        if (childIt->second == windowId) {
+                            childIt = g_x11_child_window_to_parent_id.erase(childIt);
+                        } else {
+                            ++childIt;
+                        }
+                    }
+                    g_x11_window_to_id.erase(closingWindow->window);
+                }
+                g_x11_windows.erase(winIt);
             }
+        }
+
+        if (closingWindow && closingWindow->display && closingWindow->window) {
+            // Disable/detach paint callbacks before invalidating their XID.
+            // This function takes registry locks internally, so it must remain
+            // outside g_x11WindowsMutex.
+            removeCEFViewsForParentWindow(closingWindow->window);
+            XDestroyWindow(closingWindow->display, closingWindow->window);
+            XFlush(closingWindow->display);
         }
     }
     
@@ -6783,27 +7012,33 @@ gboolean process_x11_events(gpointer data) {
 }
 
 void runCEFEventLoop() {
-    // Initialize GTK on the main thread (this MUST be done here)
-    initializeGTK();
+    // initializeCEF initializes GTK on this thread after disabling locale, and
+    // Xlib thread support was already installed by the library constructor.
+    ensureXlibThreadSupport();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === CEF EVENT LOOP STARTED ===\n");
     fflush(stdout);
-        
-    // Set up a timer to periodically call CefDoMessageLoopWork()
-    // This integrates CEF message loop with GTK main loop
-    g_timeout_add(10, cef_timer_callback, nullptr); // 10ms interval
-        
+
+    // Chromium's Linux message pump installs a GLib source that only blocks
+    // correctly while CefRunMessageLoop owns it. Driving that source from
+    // gtk_main plus a fixed CefDoMessageLoopWork timer leaves it perpetually
+    // ready and spins an idle CPU core.
+    if (!initializeCEF()) {
+        fprintf(stderr, "CEF: initialization failed; running GTK loop for clean shutdown\n");
+        initializeGTK();
+        gtk_main();
+        g_shutdownComplete.store(true);
+        return;
+    }
     
     // Set up X11 event processing
     g_timeout_add(10, process_x11_events, nullptr); // Process X11 events every 10ms
 
-    sleep(1); // Give time for output to flush
-    gtk_main();
+    CefRunMessageLoop();
     
     // Cleanup CEF on shutdown
 
-    if (g_cefInitialized) {
+    if (g_cefInitialized.exchange(false)) {
         CefShutdown();
-        g_cefInitialized.store(false);
     }
     g_shutdownComplete.store(true);
 }
@@ -6840,6 +7075,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             // CEF mode - create pure X11 window
             
             // Create X11 window
+            ensureXlibThreadSupport();
             Display* display = XOpenDisplay(nullptr);
             if (!display) {
                 printf("ERROR: Failed to open X11 display\n");
@@ -7414,9 +7650,6 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                 return nullptr;
             }
             
-            // Set fullSize flag for auto-resize functionality
-            webview->fullSize = autoResize;
-            
             // Store the viewsRoot for views:// protocol resolution
             if (viewsRoot && strlen(viewsRoot) > 0) {
                 webview->viewsRoot = std::string(viewsRoot);
@@ -7431,11 +7664,10 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
             if (cefView) {
                 // Defer positioning until CEF window is ready
-                GdkRectangle frame;
-                frame.x = (int)x;
-                frame.y = (int)y;
-                frame.width = (int)width;
-                frame.height = (int)height;
+                LogicalRect frame = {x, y, width, height};
+                if (cefView->fullSize) {
+                    cefView->queryParentPhysicalBounds(frame);
+                }
                 
                 // Store the frame for later positioning
                 cefView->pendingFrame = frame;
@@ -7786,7 +8018,7 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView* abstractView, const char* 
 
 ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView* abstractView, double x, double y, double width, double height) {
     if (!abstractView) return;
-    GdkRectangle frame = {(int)x, (int)y, (int)width, (int)height};
+    LogicalRect frame = {x, y, width, height};
     abstractView->storePendingResize(frame, "");
     g_pendingResizeQueue.enqueue(abstractView);
     schedulePendingResizeDrain();
@@ -9129,7 +9361,7 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView* abstractView, double x, doubl
         return;
     }
 
-    GdkRectangle frame = { (int)x, (int)y, (int)width, (int)height };
+    LogicalRect frame = {x, y, width, height};
     abstractView->storePendingResize(frame, masksJson);
     g_pendingResizeQueue.enqueue(abstractView);
     schedulePendingResizeDrain();
@@ -11299,6 +11531,7 @@ static unsigned int parseX11Modifiers(const std::string& accelerator, std::strin
 
 // X11 event loop for global shortcuts
 static void shortcutEventLoop() {
+    ensureXlibThreadSupport();
     g_shortcutDisplay = XOpenDisplay(nullptr);
     if (!g_shortcutDisplay) {
         fprintf(stderr, "ERROR: Failed to open X11 display for shortcuts\n");
