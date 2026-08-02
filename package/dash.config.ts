@@ -1,4 +1,4 @@
-// @dash cli=0.3.1 cottontail=0.2.3
+// @dash cli=0.5.0-canary.1 cottontail=0.2.3
 export default {
 	scripts: {
 		start: "hutch src/sdks/bun/index.ts",
@@ -18,7 +18,7 @@ export default {
 		"npm:publish:beta": "hutch build:release && npm publish --tag beta",
 		typecheck:
 			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:templates && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch test:templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
@@ -37,6 +37,7 @@ export default {
 		"test:webview2-permissions": "scripts/test-webview2-permissions.ts",
 		"test:macos-inspector-layout": "scripts/test-macos-inspector-layout.sh",
 		"test:templates": "node scripts/run-cottontail-test.js ../templates/template-manifests.test.ts",
+		"test:template-publisher": "node --test ../scripts/publish-templates.test.mjs",
 		"test:signing": "node scripts/run-cottontail-test.js scripts/verify-macho-code-signing.test.ts",
 		"test:deployment-target": "node scripts/run-cottontail-test.js scripts/verify-macho-deployment-target.test.ts",
 		"test:linux-abi": "node scripts/run-cottontail-test.js scripts/verify-linux-elf-abi.test.ts",

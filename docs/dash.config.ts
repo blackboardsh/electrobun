@@ -1,4 +1,4 @@
-// @dash cli=0.3.1 cottontail=0.2.3
+// @dash cli=0.5.0-canary.1 cottontail=0.2.3
 export default {
   scripts: {
     dev: "astro dev",
