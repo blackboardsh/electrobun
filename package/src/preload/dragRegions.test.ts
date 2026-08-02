@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	DRAG_REGION_COMPATIBILITY_CSS,
 	isAppRegionDragTarget,
 	registerDragRegionListeners,
 	rewriteAppRegionDeclarations,
@@ -39,6 +40,18 @@ function asEventTarget(element: TestElement): EventTarget {
 }
 
 describe("drag-region stylesheet mirroring", () => {
+	test("maps legacy drag classes onto native app-region CSS", () => {
+		expect(DRAG_REGION_COMPATIBILITY_CSS).toContain(
+			".electrobun-webkit-app-region-drag",
+		);
+		expect(DRAG_REGION_COMPATIBILITY_CSS).toContain(
+			"-webkit-app-region: drag",
+		);
+		expect(DRAG_REGION_COMPATIBILITY_CSS).toContain(
+			"-webkit-app-region: no-drag",
+		);
+	});
+
 	test("rewrites stylesheet declarations without touching comments, strings, or selectors", () => {
 		const source = `
 /* .ignored { -webkit-app-region: drag; } */

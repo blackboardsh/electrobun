@@ -8,10 +8,14 @@ import {
 	statSync,
 	readdirSync,
 } from "fs";
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { OS as currentOS, ARCH as currentArch } from "../../../shared/platform";
 import { getPlatformPrefix, getTarballFileName } from "../../../shared/naming";
 import { quit } from "./Utils";
+import {
+	createWindowsUpdateTaskPlan,
+	executeWindowsUpdateTaskPlan,
+} from "./WindowsUpdateTask";
 
 // Update status types for granular progress tracking
 export type UpdateStatusType =
@@ -961,6 +965,11 @@ const Updater = {
 						const newAppWin = newAppBundlePath.replace(/\//g, "\\");
 						const extractionDirWin = extractionDir.replace(/\//g, "\\");
 						const launcherPathWin = launcherPath.replace(/\//g, "\\");
+						const taskName = `ElectrobunUpdate_${Date.now()}`;
+						const taskPlan = createWindowsUpdateTaskPlan(
+							taskName,
+							updateScriptPath.replace(/\//g, "\\"),
+						);
 
 						// Create a batch script that will:
 						// 1. Wait for the current app and its helper processes to exit
@@ -1003,16 +1012,18 @@ goto rmloop
 :rmfailed
 echo Update failed: could not remove "${runningAppWin}" after retries.
 echo Files may still be locked by a helper process.
-pause
-exit /b 1
+goto updatefailed
 :rmdone
 
 :: Move new app to current location (safe now that destination is gone)
 move "${newAppWin}" "${runningAppWin}"
+if errorlevel 1 (
+    echo Update failed: could not move "${newAppWin}" to "${runningAppWin}".
+    goto updatefailed
+)
 if not exist "${launcherPathWin}" (
     echo Update failed: launcher not found at "${launcherPathWin}" after move.
-    pause
-    exit /b 1
+    goto updatefailed
 )
 
 :: Clean up extraction directory
@@ -1020,31 +1031,40 @@ rmdir /s /q "${extractionDirWin}" 2>nul
 
 :: Launch the new app
 start "" "${launcherPathWin}"
-
-:: Clean up scheduled tasks starting with ElectrobunUpdate_
-for /f "tokens=1" %%t in ('schtasks /query /fo list ^| findstr /i "ElectrobunUpdate_"') do (
-    schtasks /delete /tn "%%t" /f >nul 2>&1
+if errorlevel 1 (
+    echo Update failed: could not launch "${launcherPathWin}".
+    goto updatefailed
 )
+
+:: Remove this updater's scheduled task. The task name is generated internally
+:: and embedded directly so localized schtasks output never needs parsing.
+${taskPlan.cleanupBatchLine}
 
 :: Delete this update script after a short delay
 ping -n 2 127.0.0.1 >nul
 del "%~f0"
+exit /b 0
+
+:updatefailed
+:: Do not leave the generated task registered when an update step fails.
+${taskPlan.cleanupBatchLine}
+pause
+exit /b 1
 `;
 
 						await Bun.write(updateScriptPath, updateScript);
 
 						// Use Windows Task Scheduler to run the update script independently
 						// This ensures the script runs even after the app exits
-						const scriptPathWin = updateScriptPath.replace(/\//g, "\\");
-						const taskName = `ElectrobunUpdate_${Date.now()}`;
-
-						// Create a scheduled task that runs immediately and deletes itself
-						execSync(
-							`schtasks /create /tn "${taskName}" /tr "cmd /c \\"${scriptPathWin}\\"" /sc once /st 00:00 /f`,
-							{ stdio: "ignore" },
-						);
-						execSync(`schtasks /run /tn "${taskName}"`, { stdio: "ignore" });
-						// The task will be cleaned up by Windows after it runs, or we delete it in the batch script
+						// schtasks creates AC-only tasks by default. Configure the task to
+						// start and continue on battery before running it; if any command
+						// fails, the surrounding catch prevents the app from quitting.
+						executeWindowsUpdateTaskPlan(taskPlan, (command) => {
+							execFileSync(command.executable, command.args, {
+								stdio: "ignore",
+								windowsHide: true,
+							});
+						});
 
 						// Use quit() for graceful shutdown - this closes all windows and processes
 						quit();

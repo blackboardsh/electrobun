@@ -3264,6 +3264,11 @@ export const internalRpcHandlers = {
 		webviewTagSetSpellCheck: (params: { id: number; enabled: boolean }) => {
 			return core_.symbols.webviewSetSpellCheck(params.id, params.enabled);
 		},
+		restoreWindowFocusAfterExternalDrop: (params: { windowId: number }) => {
+			if (!getWindowPtr(params.windowId)) return false;
+			core_.symbols.activateWindow(params.windowId);
+			return true;
+		},
 	},
 	message: {
 		webviewTagResize: (params: {

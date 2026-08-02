@@ -37,6 +37,7 @@ import webgpu from "./webgpuAdapter";
 import * as three from "three";
 import * as babylon from "@babylonjs/core";
 import type { ElectrobunConfig } from "../../config/ElectrobunConfig";
+import type { WindowsWebView2Permission } from "../../config/windowsPermissions";
 import { GlobalShortcut, Screen, Session, WGPUBridge } from "./proc/native";
 import type {
 	Display,
@@ -226,6 +227,7 @@ export {
 	type ElectrobunRPCSchema,
 	type ElectrobunEvent,
 	type ElectrobunConfig,
+	type WindowsWebView2Permission,
 	type BuildConfigType,
 	type WindowOptionsType,
 	type BrowserViewOptions,

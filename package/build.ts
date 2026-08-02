@@ -2380,7 +2380,7 @@ async function buildNative() {
 		// d3d12.lib: D3D12 types used by D3D11On12 interop
 		// DELAYLOAD webgpu_dawn.dll: only loaded when zero-copy bridge is used
 		await runMsvcCommand(
-			`link /DLL /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib d3d12.lib kernel32.lib comctl32.lib ${wgpuLib} "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /DELAYLOAD:webgpu_dawn.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
+			`link /DLL /MANIFEST:EMBED /OUT:src/native/win/build/libNativeWrapper.dll user32.lib ole32.lib shell32.lib shlwapi.lib advapi32.lib dcomp.lib d2d1.lib d3d12.lib kernel32.lib comctl32.lib ${wgpuLib} "${webview2Lib}" "${cefLib}" "${cefWrapperLib}" delayimp.lib /DELAYLOAD:libcef.dll /DELAYLOAD:webgpu_dawn.dll libcmt.lib /IMPLIB:src/native/win/build/libNativeWrapper.lib src/native/win/build/nativeWrapper.obj`,
 		);
 	} else if (OS === "linux") {
 		// Skip package checks in CI or continue anyway if packages are missing

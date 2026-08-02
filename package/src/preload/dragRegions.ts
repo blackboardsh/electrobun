@@ -14,6 +14,17 @@ const APP_REGION_PROPERTIES = [
 	"window-drag",
 ] as const;
 
+export const DRAG_REGION_COMPATIBILITY_CSS = `
+.electrobun-webkit-app-region-drag {
+	-webkit-app-region: drag;
+	app-region: drag;
+}
+.electrobun-webkit-app-region-no-drag {
+	-webkit-app-region: no-drag;
+	app-region: no-drag;
+}
+`;
+
 type AppRegion = "drag" | "no-drag" | null;
 type ComputedStyleReader = (
 	element: Element,
@@ -354,6 +365,22 @@ function initStylesheetMirroring() {
 	scheduleScan();
 }
 
+function installCompatibilityStyles() {
+	if (document.querySelector("style[data-electrobun-drag-region-compat]")) return;
+
+	const style = document.createElement("style");
+	style.setAttribute("data-electrobun-drag-region-compat", "");
+	style.textContent = DRAG_REGION_COMPATIBILITY_CSS;
+
+	const install = () => {
+		if (!document.head || style.isConnected) return;
+		document.head.insertBefore(style, document.head.firstChild);
+	};
+
+	if (document.head) install();
+	else document.addEventListener("DOMContentLoaded", install, { once: true });
+}
+
 function inlineRegion(element: Element): AppRegion {
 	const style = element.getAttribute?.("style");
 	if (!style) return null;
@@ -430,6 +457,7 @@ export function registerDragRegionListeners(
 }
 
 export function initDragRegions() {
+	installCompatibilityStyles();
 	initStylesheetMirroring();
 	registerDragRegionListeners(document, () => window.__electrobunWindowId);
 }

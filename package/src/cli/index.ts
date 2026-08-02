@@ -25,6 +25,10 @@ import { ODIN_VERSION } from "../shared/odin-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
 import { assertNoLegacyBunVersionConfig } from "../config/validate";
 import {
+	getWindowsPermissionBuildConfig,
+	type WindowsWebView2Permission,
+} from "../config/windowsPermissions";
+import {
 	getAppFileName,
 	getBundleFileName,
 	getPlatformPrefix,
@@ -1590,6 +1594,9 @@ const defaultConfig = {
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
+			autoGrantPermissions: undefined as
+				| WindowsWebView2Permission[]
+				| undefined,
 		},
 		linux: {
 			bundleCEF: false,
@@ -3864,6 +3871,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
 			buildEnvironment,
 			runtime: config.runtime ?? {},
+			...getWindowsPermissionBuildConfig(
+				targetOS,
+				config.build.win?.autoGrantPermissions,
+			),
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
 				: {}),

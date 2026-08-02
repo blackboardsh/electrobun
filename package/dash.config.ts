@@ -16,7 +16,8 @@ export default {
 		"build:docs:release": "cd ../docs && hutch run build",
 		"npm:publish": "hutch build:release && npm publish",
 		"npm:publish:beta": "hutch build:release && npm publish --tag beta",
-		typecheck: "./node_modules/.bin/tsc --noEmit && cd ../kitchen && ./node_modules/.bin/tsc --noEmit",
+		typecheck:
+			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
 		"check:release": "hutch typecheck && hutch test:templates && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
@@ -25,10 +26,14 @@ export default {
 		"push:stable": "hutch check:release && node scripts/push-version.js stable",
 		"build:push:artifacts": "node scripts/build-and-upload-artifacts.js",
 		"test:dialog-paths-native": "hutch scripts/test-dialog-paths-native.js",
-		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/bun src/config src/preload && hutch test:dialog-paths-native",
+		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
+		"test:windows-ui-native-integration":
+			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
+		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/bun src/config src/preload && hutch test:dialog-paths-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",
+		"test:webview2-permissions": "scripts/test-webview2-permissions.ts",
 		"test:macos-inspector-layout": "scripts/test-macos-inspector-layout.sh",
 		"test:templates": "node scripts/run-cottontail-test.js ../templates/template-manifests.test.ts",
 		"test:signing": "node scripts/run-cottontail-test.js scripts/verify-macho-code-signing.test.ts",

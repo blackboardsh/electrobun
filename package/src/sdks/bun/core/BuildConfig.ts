@@ -1,4 +1,5 @@
 import { readFileSync } from "fs";
+import type { WindowsWebView2Permission } from "../../../config/windowsPermissions";
 
 export type BuildConfigType = {
 	mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
@@ -6,6 +7,7 @@ export type BuildConfigType = {
 	availableRenderers: ("native" | "cef")[];
 	buildEnvironment?: "dev" | "canary" | "production" | "stable";
 	chromiumFlags?: Record<string, string | boolean>;
+	autoGrantPermissions?: WindowsWebView2Permission[];
 	/** Runtime channel read from the packaged Resources/version.json metadata. */
 	channel: string;
 	/** False for dev builds; true for canary, production, and other release channels. */

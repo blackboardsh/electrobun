@@ -122,6 +122,8 @@ export default {
 			"src/test-runner/index.css": "views/test-runner/index.css",
 			"src/test-harness/index.html": "views/test-harness/index.html",
 			"src/test-oopif/index.html": "views/test-oopif/index.html",
+			"src/test-oopif-navigation/index.html":
+				"views/test-oopif-navigation/index.html",
 			"src/playgrounds/file-dialog/index.html":
 				"views/playgrounds/file-dialog/index.html",
 			"src/playgrounds/file-dialog/index.css":

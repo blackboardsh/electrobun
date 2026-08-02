@@ -4,6 +4,10 @@
 import "./globals.d.ts";
 import { send, request } from "./internalRpc";
 import { OverlaySyncController, type Rect } from "./overlaySync";
+import {
+	WebviewTagNavigationQueue,
+	type WebviewTagNavigation,
+} from "./webviewTagNavigation";
 
 type WebviewEventType =
 	| "will-navigate"
@@ -28,6 +32,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	webviewId: number | null = null;
 	maskSelectors: Set<string> = new Set();
 	private _sync: OverlaySyncController | null = null;
+	private readonly _navigationQueue = new WebviewTagNavigationQueue();
+	private _initializationStarted = false;
 	transparent = false;
 	passthroughEnabled = false;
 	spellCheckEnabled = false;
@@ -55,10 +61,11 @@ export class ElectrobunWebviewTag extends HTMLElement {
 		newValue: string | null,
 	) {
 		if (oldValue === newValue) return;
-		if (this.webviewId === null) return;
-		if (name === "src" && newValue !== null) this.loadURL(newValue);
-		else if (name === "html" && newValue !== null) this.loadHTML(newValue);
-		else if (name === "spellcheck") {
+		if (name === "src" && newValue !== null) {
+			this.navigate({ kind: "url", value: newValue });
+		} else if (name === "html" && newValue !== null) {
+			this.navigate({ kind: "html", value: newValue });
+		} else if (name === "spellcheck" && this.webviewId !== null) {
 			void this.setSpellCheck(
 				newValue !== null && newValue.toLowerCase() !== "false",
 			);
@@ -97,6 +104,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	}
 
 	async initWebview() {
+		this._initializationStarted = true;
+		this._navigationQueue.beginInitialization();
 		const rect = this.getBoundingClientRect();
 		const initialRect = {
 			x: rect.x,
@@ -143,12 +152,7 @@ export class ElectrobunWebviewTag extends HTMLElement {
 				html,
 				preload,
 				partition,
-				frame: {
-					width: rect.width,
-					height: rect.height,
-					x: rect.x,
-					y: rect.y,
-				},
+				frame: initialRect,
 				sandbox,
 				transparent,
 				passthrough,
@@ -164,6 +168,8 @@ export class ElectrobunWebviewTag extends HTMLElement {
 			this.webviewId = webviewId;
 			this.id = `electrobun-webview-${webviewId}`;
 			webviewRegistry[webviewId] = this;
+			const pendingNavigation = this._navigationQueue.take();
+			if (pendingNavigation) this.navigate(pendingNavigation);
 
 			this.setupObservers(initialRect);
 			// Force immediate sync after initialization
@@ -232,15 +238,39 @@ export class ElectrobunWebviewTag extends HTMLElement {
 	}
 
 	// Navigation methods
+	private navigate(navigation: WebviewTagNavigation) {
+		if (this.webviewId === null) {
+			this._navigationQueue.defer(navigation);
+			return;
+		}
+
+		if (navigation.kind === "url") {
+			send("webviewTagUpdateSrc", {
+				id: this.webviewId,
+				url: navigation.value,
+			});
+		} else {
+			send("webviewTagUpdateHtml", {
+				id: this.webviewId,
+				html: navigation.value,
+			});
+		}
+	}
+
 	loadURL(url: string) {
-		if (this.webviewId === null) return;
-		this.setAttribute("src", url);
-		send("webviewTagUpdateSrc", { id: this.webviewId, url });
+		if (this.getAttribute("src") === url) {
+			this.navigate({ kind: "url", value: url });
+		} else {
+			this.setAttribute("src", url);
+		}
 	}
 
 	loadHTML(html: string) {
-		if (this.webviewId === null) return;
-		send("webviewTagUpdateHtml", { id: this.webviewId, html });
+		if (this.webviewId === null && !this._initializationStarted) {
+			this.setAttribute("html", html);
+			return;
+		}
+		this.navigate({ kind: "html", value: html });
 	}
 
 	reload() {

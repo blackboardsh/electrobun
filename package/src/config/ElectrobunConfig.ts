@@ -3,6 +3,8 @@
  * Used in electrobun.config.ts files
  */
 
+import type { WindowsWebView2Permission } from "./windowsPermissions";
+
 type BundlerOptions = {
 	external?: string[];
 	define?: Record<string, string>;
@@ -453,6 +455,17 @@ export interface ElectrobunConfig {
 			 * ```
 			 */
 			chromiumFlags?: Record<string, string | boolean>;
+
+			/**
+			 * WebView2 permissions to grant automatically without showing a prompt.
+			 * This applies to every origin loaded in a native Windows webview, so only
+			 * enable permissions that the application intentionally delegates to its
+			 * web content. This option does not affect CEF webviews.
+			 *
+			 * @example ["camera", "microphone"]
+			 * @default []
+			 */
+			autoGrantPermissions?: WindowsWebView2Permission[];
 
 			/**
 			 * Path to application icon (.ico format)

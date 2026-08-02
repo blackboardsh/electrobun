@@ -22,6 +22,27 @@ if (!existsSync(zig)) {
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "electrobun-dialog-paths-"));
 const binary = join(temporaryDirectory, `dialog-paths-test${executableSuffix}`);
+const cleanupWaiter = new Int32Array(new SharedArrayBuffer(4));
+
+function removeTemporaryDirectory(directory) {
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		try {
+			rmSync(directory, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const code = error?.code;
+			if (
+				process.platform !== "win32" ||
+				!["EACCES", "EPERM", "EBUSY", "ENOTEMPTY"].includes(code)
+			) {
+				throw error;
+			}
+			if (attempt === 19) throw error;
+			// Windows scanners can briefly retain a just-executed binary.
+			Atomics.wait(cleanupWaiter, 0, 0, 50 * (attempt + 1));
+		}
+	}
+}
 
 try {
 	const compile = spawnSync(
@@ -30,11 +51,17 @@ try {
 		{ stdio: "inherit" },
 	);
 	if (compile.error) throw compile.error;
-	if (compile.status !== 0) process.exit(compile.status ?? 1);
+	if (compile.status !== 0) {
+		throw new Error(
+			`Dialog path native test compilation exited with ${compile.status ?? 1}`,
+		);
+	}
 
 	const test = spawnSync(binary, [], { stdio: "inherit" });
 	if (test.error) throw test.error;
-	if (test.status !== 0) process.exit(test.status ?? 1);
+	if (test.status !== 0) {
+		throw new Error(`Dialog path native test exited with ${test.status ?? 1}`);
+	}
 } finally {
-	rmSync(temporaryDirectory, { recursive: true, force: true });
+	removeTemporaryDirectory(temporaryDirectory);
 }

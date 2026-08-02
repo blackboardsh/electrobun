@@ -332,6 +332,50 @@ export const rpcTests = [
   }),
 
   defineTest({
+    name: "RPC native Unicode survives idle round trips",
+    category: "RPC",
+    description:
+      "Verify mixed-script UTF-8 remains exact across the Windows native RPC fallback after idle periods",
+    timeout: 30000,
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC(20000);
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "Unicode RPC 测试 Тест",
+        renderer: "native",
+      });
+
+      const webviewRpc = win.webview.rpc;
+      if (!webviewRpc) {
+        throw new Error("Expected webview RPC to be available");
+      }
+
+      await sleep(1000);
+      const scripts =
+        "Български Ελληνικά 日本語 测试 한국어 café 🧪🚀";
+      const boundaryPayload = Array.from(
+        { length: 2048 },
+        (_, index) => `${index}:${scripts}\n`,
+      ).join("");
+
+      for (let round = 0; round < 3; round++) {
+        // Leave the transport idle between requests. This is safe to automate
+        // while still exercising the resume-sensitive native transport path.
+        await sleep(250);
+        const result = await webviewRpc.request.echoFromHost({
+          value: `${round}:${boundaryPayload}`,
+        });
+        expect(result).toBe(`${round}:${boundaryPayload}`);
+      }
+
+      log(
+        `Preserved ${boundaryPayload.length} UTF-16 code units over 3 native RPC round trips`,
+      );
+    },
+  }),
+
+  defineTest({
     name: "RPC large payload transfer",
     category: "RPC",
     description: "Test transferring 1MB of data via RPC",

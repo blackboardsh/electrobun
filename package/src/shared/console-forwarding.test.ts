@@ -7,7 +7,7 @@ const header = readFileSync(
 	"utf8",
 );
 const scriptMatch = header.match(
-	/R"ELECTROBUN_JS\(\n([\s\S]*?)\n\)ELECTROBUN_JS"/,
+	/R"ELECTROBUN_JS\(\r?\n([\s\S]*?)\r?\n\)ELECTROBUN_JS"/,
 );
 if (!scriptMatch?.[1]) throw new Error("Embedded console forwarding script was not found");
 const forwardingScript = scriptMatch[1];

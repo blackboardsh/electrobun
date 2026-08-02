@@ -1834,6 +1834,14 @@ fn handleInternalRequest(request_object: std.json.ObjectMap) void {
         return;
     }
 
+    if (std.mem.eql(u8, method, "restoreWindowFocusAfterExternalDrop")) {
+        if (params != .object) return;
+        const window_id = jsonU32(params.object.get("windowId") orelse return) orelse return;
+        activateWindow(window_id);
+        sendInternalBridgeResponse(host_webview_id, request_id, true, true);
+        return;
+    }
+
     sendInternalBridgeResponse(host_webview_id, request_id, false, "Unknown internal request");
 }
 
@@ -2874,7 +2882,14 @@ export fn webviewRemove(webview_id: u32) void {
     const webview = if (removed) |entry| entry.value.ptr else null;
     const socket_handle = if (removed) |entry| entry.value.socket_handle else null;
     if (socket_handle) |handle| {
-        shutdownSocketHandle(handle);
+        // On Windows the connection thread owns a blocking read on this
+        // socket. Shutting it down from the UI thread can wedge inside
+        // Winsock while the peer WebView2 controller is still alive. Closing
+        // the controller below closes the browser endpoint; the connection
+        // thread then returns from its read loop and closes its own socket.
+        if (builtin.os.tag != .windows) {
+            shutdownSocketHandle(handle);
+        }
     }
     if (webview == null) {
         return;

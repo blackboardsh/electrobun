@@ -182,6 +182,10 @@ export type TestHarnessRPC = {
         params: { a: number; b: number };
         response: number;
       };
+      echoFromHost: {
+        params: { value: string };
+        response: string;
+      };
       // Get a DOM element's text
       getElementText: {
         params: { selector: string };
@@ -234,6 +238,7 @@ const rpc = Electroview.defineRPC<TestHarnessRPC>({
     requests: {
       getDocumentTitle: () => document.title,
       multiply: ({ a, b }) => a * b,
+      echoFromHost: ({ value }) => value,
       getElementText: ({ selector }) => {
         const el = document.querySelector(selector);
         return el?.textContent || null;

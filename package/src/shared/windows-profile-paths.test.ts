@@ -10,6 +10,14 @@ const helper = readFileSync(
 	join(import.meta.dirname, "../native/shared/windows_profile_paths.h"),
 	"utf8",
 );
+const utfHelper = readFileSync(
+	join(import.meta.dirname, "../native/shared/windows_utf.h"),
+	"utf8",
+);
+const resourceHelper = readFileSync(
+	join(import.meta.dirname, "../native/shared/windows_resource_paths.h"),
+	"utf8",
+);
 const appPaths = readFileSync(
 	join(import.meta.dirname, "../native/shared/app_paths.h"),
 	"utf8",
@@ -23,8 +31,21 @@ describe("Windows profile path source contract", () => {
 	test("does not use ANSI filesystem APIs for renderer startup paths", () => {
 		expect(wrapper).not.toContain('getenv("LOCALAPPDATA")');
 		expect(wrapper).not.toContain("GetModuleFileNameA");
+		expect(wrapper).not.toContain("GetCurrentDirectoryA");
 		expect(wrapper).not.toContain("GetFileAttributesA");
 		expect(wrapper).not.toContain("CreateDirectoryA");
+	});
+
+	test("opens views resources and ASAR archives through wide filesystem paths", () => {
+		expect(wrapper).toContain('#include "../shared/windows_resource_paths.h"');
+		expect(wrapper).toContain(
+			"static AsarArchive* open(const std::filesystem::path& path)",
+		);
+		expect(wrapper).toContain("electrobun::windowsResourcesDirectory()");
+		expect(wrapper).toContain("electrobun::readWindowsBinaryFile(");
+		expect(resourceHelper).toContain("getModuleFileNameWide()");
+		expect(resourceHelper).toContain("windowsExtendedLengthPath(");
+		expect(resourceHelper).toContain("std::ifstream file(");
 	});
 
 	test("routes WebView2 and CEF profile paths through wide helpers", () => {
@@ -36,10 +57,11 @@ describe("Windows profile path source contract", () => {
 	});
 
 	test("uses strict UTF-8 and UTF-16 conversion APIs", () => {
-		expect(helper).toContain("MultiByteToWideChar(");
-		expect(helper).toContain("MB_ERR_INVALID_CHARS");
-		expect(helper).toContain("WideCharToMultiByte(");
-		expect(helper).toContain("WC_ERR_INVALID_CHARS");
+		expect(helper).toContain('#include "windows_utf.h"');
+		expect(utfHelper).toContain("MultiByteToWideChar(");
+		expect(utfHelper).toContain("MB_ERR_INVALID_CHARS");
+		expect(utfHelper).toContain("WideCharToMultiByte(");
+		expect(utfHelper).toContain("WC_ERR_INVALID_CHARS");
 	});
 
 	test("keeps named CEF profiles directly under root_cache_path", () => {

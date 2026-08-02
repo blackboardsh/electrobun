@@ -18,6 +18,7 @@ import "./globals.d.ts";
 import { initEncryption } from "./encryption";
 import { handleResponse } from "./internalRpc";
 import { initDragRegions } from "./dragRegions";
+import { initExternalDropFocusRestoration } from "./externalDropFocus";
 import { initWebviewTag } from "./webviewTag";
 import { initWgpuTag } from "./wgpuTag";
 import {
@@ -73,5 +74,6 @@ initCmdClickHandling();
 initSPANavigationInterception();
 initOverscrollPrevention();
 initDragRegions();
+initExternalDropFocusRestoration();
 initWebviewTag();
 initWgpuTag();

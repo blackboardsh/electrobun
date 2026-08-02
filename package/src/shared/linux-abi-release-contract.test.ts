@@ -6,7 +6,7 @@ const packageRoot = join(import.meta.dirname, "../..");
 const releaseWorkflow = readFileSync(
 	join(packageRoot, "../.github/workflows/release.yml"),
 	"utf8",
-);
+).replaceAll("\r\n", "\n");
 const releaseScript = readFileSync(
 	join(packageRoot, "scripts/package-release.js"),
 	"utf8",

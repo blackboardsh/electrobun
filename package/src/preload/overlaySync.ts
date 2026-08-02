@@ -101,6 +101,8 @@ export class OverlaySyncController {
 		this.burstUntil = performance.now() + this.options.burstDurationMs;
 		this.lastRect = newRect;
 
+		// DOM CSS pixels are Electrobun DIPs. Native wrappers own the single
+		// DIP-to-physical-pixel conversion at the platform boundary.
 		const masks = this.options.getMasks();
 		this.options.onSync(newRect, JSON.stringify(masks));
 	}

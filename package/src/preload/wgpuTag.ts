@@ -74,12 +74,7 @@ export class ElectrobunWgpuTag extends HTMLElement {
 		try {
 			const wgpuViewId = (await request("wgpuTagInit", {
 				windowId: window.__electrobunWindowId,
-				frame: {
-					width: rect.width,
-					height: rect.height,
-					x: rect.x,
-					y: rect.y,
-				},
+				frame: initialRect,
 				transparent,
 				passthrough,
 			})) as number;

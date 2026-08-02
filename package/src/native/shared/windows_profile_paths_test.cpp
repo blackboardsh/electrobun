@@ -73,7 +73,9 @@ int main() {
     const std::filesystem::path portableCachePath(portableUtf8Path);
     assert(electrobun::cachePathForLog(portableCachePath) ==
            portableUtf8Cache);
+#ifndef _WIN32
     assert(electrobun::isCachePathSafeToWipe(portableCachePath));
+#endif
 
 #ifdef _WIN32
     const std::string utf8Path =

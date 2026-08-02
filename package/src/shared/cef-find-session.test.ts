@@ -1,14 +1,31 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 const nativeRoot = join(import.meta.dirname, "../native");
 const sharedRoot = join(nativeRoot, "shared");
 const windowsSource = readFileSync(join(nativeRoot, "win/nativeWrapper.cpp"), "utf8");
 const linuxSource = readFileSync(join(nativeRoot, "linux/nativeWrapper.cpp"), "utf8");
 const behaviorSourcePath = join(sharedRoot, "cef_find_session_test.cpp");
+
+function removeTemporaryDirectory(directory: string) {
+	const delay = new Int32Array(new SharedArrayBuffer(4));
+	for (let attempt = 0; attempt < 20; attempt += 1) {
+		try {
+			rmSync(directory, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			if (process.platform !== "win32" || (code !== "EACCES" && code !== "EPERM")) {
+				throw error;
+			}
+			Atomics.wait(delay, 0, 0, 100);
+		}
+	}
+	rmSync(directory, { recursive: true, force: true });
+}
 
 function compileAndRunBehaviorProgram() {
 	const directory = mkdtempSync(join(tmpdir(), "electrobun-cef-find-"));
@@ -18,11 +35,17 @@ function compileAndRunBehaviorProgram() {
 	);
 
 	try {
+		const vendoredZig = join(import.meta.dirname, "../../vendors/zig/zig.exe");
 		const compiler =
-			process.platform === "win32" ? "cl.exe" : process.env["CXX"] || "c++";
-		const args =
-			process.platform === "win32"
-				? [
+			process.env["CXX"] ||
+			(process.platform === "win32" && existsSync(vendoredZig)
+				? vendoredZig
+				: process.platform === "win32"
+					? "cl.exe"
+					: "c++");
+		const usesMsvc = basename(compiler).toLowerCase() === "cl.exe";
+		const args = usesMsvc
+			? [
 						"/nologo",
 						"/std:c++17",
 						"/EHsc",
@@ -30,7 +53,8 @@ function compileAndRunBehaviorProgram() {
 						behaviorSourcePath,
 						`/Fe${executablePath}`,
 					]
-				: [
+			: [
+						...(compiler === vendoredZig ? ["c++"] : []),
 						"-std=c++17",
 						"-Wall",
 						"-Wextra",
@@ -48,13 +72,21 @@ function compileAndRunBehaviorProgram() {
 			`${compiler} failed:\n${compileResult.stdout}\n${compileResult.stderr}`,
 		).toBe(0);
 
-		const runResult = spawnSync(executablePath, [], { encoding: "utf8" });
+		const runCommand =
+			process.platform === "win32"
+				? process.env["ComSpec"] || "C:\\Windows\\System32\\cmd.exe"
+				: executablePath;
+		const runArgs =
+			process.platform === "win32"
+				? ["/d", "/c", executablePath]
+				: [];
+		const runResult = spawnSync(runCommand, runArgs, { encoding: "utf8" });
 		expect(
 			runResult.status,
 			`CEF find session test failed:\n${runResult.stdout}\n${runResult.stderr}`,
 		).toBe(0);
 	} finally {
-		rmSync(directory, { recursive: true, force: true });
+		removeTemporaryDirectory(directory);
 	}
 }
 

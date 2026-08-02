@@ -2,12 +2,12 @@
 #define ELECTROBUN_WINDOWS_PROFILE_PATHS_H
 
 #include <cstdint>
-#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "app_paths.h"
+#include "windows_utf.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -41,61 +41,6 @@ inline std::wstring buildWebView2UserDataPath(
 }
 
 #ifdef _WIN32
-
-inline bool utf8ToWide(std::string_view input, std::wstring& output) {
-    output.clear();
-    if (input.empty()) {
-        return true;
-    }
-    if (input.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-
-    const int inputLength = static_cast<int>(input.size());
-    const int outputLength = MultiByteToWideChar(
-        CP_UTF8, MB_ERR_INVALID_CHARS, input.data(), inputLength, nullptr, 0);
-    if (outputLength <= 0) {
-        return false;
-    }
-
-    output.resize(static_cast<size_t>(outputLength));
-    return MultiByteToWideChar(
-               CP_UTF8,
-               MB_ERR_INVALID_CHARS,
-               input.data(),
-               inputLength,
-               output.data(),
-               outputLength) == outputLength;
-}
-
-inline bool wideToUtf8(std::wstring_view input, std::string& output) {
-    output.clear();
-    if (input.empty()) {
-        return true;
-    }
-    if (input.size() > static_cast<size_t>(std::numeric_limits<int>::max())) {
-        return false;
-    }
-
-    const int inputLength = static_cast<int>(input.size());
-    const int outputLength = WideCharToMultiByte(
-        CP_UTF8, WC_ERR_INVALID_CHARS, input.data(), inputLength, nullptr, 0,
-        nullptr, nullptr);
-    if (outputLength <= 0) {
-        return false;
-    }
-
-    output.resize(static_cast<size_t>(outputLength));
-    return WideCharToMultiByte(
-               CP_UTF8,
-               WC_ERR_INVALID_CHARS,
-               input.data(),
-               inputLength,
-               output.data(),
-               outputLength,
-               nullptr,
-               nullptr) == outputLength;
-}
 
 inline std::wstring getEnvironmentVariableWide(const wchar_t* name) {
     if (!name || *name == L'\0') {
