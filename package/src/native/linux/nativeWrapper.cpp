@@ -68,6 +68,7 @@
 #include "native_file_dialog.h"
 #include "../shared/dialog_paths.h"
 #include "../shared/cef_find_session.h"
+#include "../shared/linux_dpi.h"
 
 using namespace electrobun;
 
@@ -109,6 +110,7 @@ using electrobun::OperationGuard;
 #include "include/cef_app.h"
 #include "include/cef_browser.h"
 #include "include/cef_client.h"
+#include "include/views/cef_display.h"
 #include "include/cef_load_handler.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_context_menu_handler.h"
@@ -4420,6 +4422,7 @@ public:
     
     // For popup reparenting approach
     unsigned long parentXWindow = 0;
+    Display* parentXDisplay = nullptr;
     CefRect targetBounds;
     
     // For deferred browser creation
@@ -4465,6 +4468,11 @@ public:
           customPreloadScript(customPreloadScript ? customPreloadScript : ""),
           partition(partitionIdentifier ? partitionIdentifier : "")
     {
+        // Full-size BrowserViews are resized from raw X11 ConfigureNotify
+        // dimensions. Fixed child views, including <electrobun-webview>, use
+        // public DIP geometry and are converted at the X11 boundary.
+        this->fullSize = autoResize;
+
         // Set initial state flags
         this->pendingStartTransparent = startTransparent;
         this->pendingStartPassthrough = startPassthrough;
@@ -4510,6 +4518,68 @@ public:
             osr_window_id_ = 0;
         }
     }
+
+    double parentDeviceScaleFactor() const {
+        if (!parentXDisplay || !parentXWindow) {
+            return 1.0;
+        }
+
+        XWindowAttributes attributes = {};
+        int rootX = 0;
+        int rootY = 0;
+        Window child = 0;
+        CefRefPtr<CefDisplay> display;
+
+        if (XGetWindowAttributes(parentXDisplay, parentXWindow, &attributes) &&
+            XTranslateCoordinates(
+                parentXDisplay,
+                parentXWindow,
+                DefaultRootWindow(parentXDisplay),
+                0,
+                0,
+                &rootX,
+                &rootY,
+                &child
+            )) {
+            const CefRect physicalBounds(
+                rootX,
+                rootY,
+                attributes.width,
+                attributes.height);
+            display = CefDisplay::GetDisplayMatchingBounds(
+                physicalBounds, true);
+        }
+
+        if (!display) {
+            display = CefDisplay::GetPrimaryDisplay();
+        }
+
+        return electrobun::normalizeLinuxScaleFactor(
+            display ? display->GetDeviceScaleFactor() : 1.0);
+    }
+
+    electrobun::LinuxPhysicalRect toPhysicalOverlayRect(
+        double x,
+        double y,
+        double width,
+        double height
+    ) const {
+        return electrobun::logicalToLinuxPhysicalRect(
+            x, y, width, height, parentDeviceScaleFactor());
+    }
+
+    electrobun::LinuxPhysicalRect toX11BoundsRect(
+        double x,
+        double y,
+        double width,
+        double height
+    ) const {
+        if (fullSize) {
+            return electrobun::logicalToLinuxPhysicalRect(
+                x, y, width, height, 1.0);
+        }
+        return toPhysicalOverlayRect(x, y, width, height);
+    }
     
     void createCEFBrowser(GtkWidget* window, const char* url, double x, double y, double width, double height) {
         // NO GTK widget needed - CEF will be a direct child of the X11 window
@@ -4525,6 +4595,7 @@ public:
         
         // Store the parent X11 window handle for later window association
         this->parentXWindow = x11win->window;
+        this->parentXDisplay = x11win->display;
         
         // Store the parameters
         this->deferredUrl = url ? url : "";
@@ -4539,8 +4610,14 @@ public:
         // external X11 parent. Alloy is still used automatically for OSR.
         window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
         
-        // For child windows, position should be relative to parent (0,0 for fullscreen)
-        CefRect cef_rect((int)x, (int)y, (int)width, (int)height);
+        // Public webview geometry is expressed in DIPs. X11 child bounds are
+        // physical pixels, so convert exactly once at the native boundary.
+        const auto physicalRect = toX11BoundsRect(x, y, width, height);
+        CefRect cef_rect(
+            physicalRect.x,
+            physicalRect.y,
+            std::max(1, physicalRect.width),
+            std::max(1, physicalRect.height));
         
         // Use SetAsChild with the X11 window
         window_info.SetAsChild(x11win->window, cef_rect);
@@ -4749,21 +4826,17 @@ public:
             return;
         }
         
-        // Check current window state before modifying
-        XWindowAttributes currentAttrs;
-        bool isCurrentlyMapped = false;
-        if (XGetWindowAttributes(display, (Window)cefWindow, &currentAttrs) != 0) {
-            isCurrentlyMapped = (currentAttrs.map_state != IsUnmapped);
-        }
-        
-        // For mapped windows, configure position/size without changing stacking order
-        if (isCurrentlyMapped) {
-            // Simply move and resize without changing z-order
-            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
-        } else {
-            // Window is unmapped (transparent), just move/resize without mapping
-            XMoveResizeWindow(display, (Window)cefWindow, frame.x, frame.y, frame.width, frame.height);
-        }
+        const auto physicalRect = toX11BoundsRect(
+            frame.x, frame.y, frame.width, frame.height);
+
+        // Configure the child without changing stacking or mapping state.
+        XMoveResizeWindow(
+            display,
+            (Window)cefWindow,
+            physicalRect.x,
+            physicalRect.y,
+            std::max(1, physicalRect.width),
+            std::max(1, physicalRect.height));
         XFlush(display);
                 
         // Check if the resize actually took effect
@@ -5109,14 +5182,17 @@ public:
         // Get the X11 display
         Display* display = gdk_x11_get_default_xdisplay();
         
-        // Create X11 rectangles for the mask regions
+        // Create X11 rectangles for the mask regions. Mask geometry arrives in
+        // the same DIP coordinate space as the webview bounds.
         std::vector<XRectangle> xrects;
         for (const auto& mask : masks) {
+            const auto physicalMask = toPhysicalOverlayRect(
+                mask.x, mask.y, mask.width, mask.height);
             XRectangle rect = {
-                static_cast<short>(mask.x),
-                static_cast<short>(mask.y),
-                static_cast<unsigned short>(mask.width),
-                static_cast<unsigned short>(mask.height)
+                static_cast<short>(physicalMask.x),
+                static_cast<short>(physicalMask.y),
+                static_cast<unsigned short>(physicalMask.width),
+                static_cast<unsigned short>(physicalMask.height)
             };
             xrects.push_back(rect);
         }
@@ -5126,10 +5202,12 @@ public:
         if (!xrects.empty()) {
             
             // First, create the base shape (full window rectangle)
+            const auto physicalBounds = toX11BoundsRect(
+                0, 0, visualBounds.width, visualBounds.height);
             XRectangle baseRect = {
-                0, 0, 
-                static_cast<unsigned short>(visualBounds.width),
-                static_cast<unsigned short>(visualBounds.height)
+                0, 0,
+                static_cast<unsigned short>(physicalBounds.width),
+                static_cast<unsigned short>(physicalBounds.height)
             };
             
             // Set the base shape to the full window

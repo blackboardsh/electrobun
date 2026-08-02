@@ -26,10 +26,11 @@ export default {
 		"push:stable": "hutch check:release && node scripts/push-version.js stable",
 		"build:push:artifacts": "node scripts/build-and-upload-artifacts.js",
 		"test:dialog-paths-native": "hutch scripts/test-dialog-paths-native.js",
+		"test:linux-dpi-native": "hutch scripts/test-linux-dpi-native.js",
 		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
-		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/bun src/config src/preload && hutch test:dialog-paths-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/bun src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",
