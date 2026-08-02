@@ -72,6 +72,7 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
+import { parseWebviewEventBridgeMessage } from "./eventBridge";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -429,6 +430,14 @@ const core = (() => {
 			freeCoreString: {
 				args: [FFIType.ptr],
 				returns: FFIType.void,
+			},
+			setRuntimeCallbacksAsync: {
+				args: [FFIType.bool],
+				returns: FFIType.void,
+			},
+			releaseRuntimeCallbackPayload: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
 			},
 			clearWebviewHostTransport: {
 				args: [FFIType.u32],
@@ -1139,7 +1148,18 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 // Non-null accessor for use inside _ffiImpl — these methods are only called when hasFFI is true.
 const core_ = core!;
 const native_ = native!;
+core?.symbols.setRuntimeCallbacksAsync(true);
 const queuedHostMessageWebviewIdBuf = new Uint32Array(1);
+
+const readOwnedRuntimeCallbackPayload = (messagePointer: number): string => {
+	try {
+		return new CString(messagePointer as unknown as Pointer).toString();
+	} finally {
+		core_.symbols.releaseRuntimeCallbackPayload(
+			messagePointer as unknown as Pointer,
+		);
+	}
+};
 
 const drainQueuedHostMessages = () => {
 	if (!core) {
@@ -2992,21 +3012,13 @@ const hostBridgePostmessageHandler = new JSCallback(
 // This is available on ALL webviews including sandboxed ones.
 // It cannot process RPC requests - only event emission.
 const eventBridgeHandler = new JSCallback(
-	(_id: number, msg: number) => {
+	(id: number, msg: number) => {
 		try {
-			const message = new CString(msg as unknown as Pointer);
-			const rawMessage = message.toString().trim();
-			if (!rawMessage || (rawMessage[0] !== "{" && rawMessage[0] !== "[")) {
-				return;
+			const rawMessage = readOwnedRuntimeCallbackPayload(msg).trim();
+			const event = parseWebviewEventBridgeMessage(id, rawMessage);
+			if (event) {
+				webviewEventHandler(event.id, event.eventName, event.detail);
 			}
-			const jsonMessage = JSON.parse(rawMessage);
-
-			// Only handle webviewEvent messages - no RPC
-			if (jsonMessage.id === "webviewEvent") {
-				const { payload } = jsonMessage;
-				webviewEventHandler(payload.id, payload.eventName, payload.detail);
-			}
-			// Silently ignore any other message types - sandboxed webviews shouldn't send them
 		} catch (err) {
 			console.error("error in eventBridgeHandler: ", err);
 		}
@@ -3021,19 +3033,17 @@ const eventBridgeHandler = new JSCallback(
 // internalBridgeHandler: handles internal RPC (webview tags, drag regions, etc.)
 // This is only available on trusted (non-sandboxed) webviews.
 const internalBridgeHandler = new JSCallback(
-	(_id: number, msg: number) => {
+	(id: number, msg: number) => {
 		try {
-			const batchMessage = new CString(msg as unknown as Pointer);
-			const jsonBatch = JSON.parse(batchMessage.toString());
-
-			if (jsonBatch.id === "webviewEvent") {
-				// Note: Some WebviewEvents from inside the webview are routed through here
-				// Others call the JSCallback directly from native code.
-				const { payload } = jsonBatch;
-				webviewEventHandler(payload.id, payload.eventName, payload.detail);
+			const rawMessage = readOwnedRuntimeCallbackPayload(msg);
+			const event = parseWebviewEventBridgeMessage(id, rawMessage.trim());
+			if (event) {
+				webviewEventHandler(event.id, event.eventName, event.detail);
 				return;
 			}
+			const jsonBatch = JSON.parse(rawMessage);
 
+			if (!Array.isArray(jsonBatch)) return;
 			jsonBatch.forEach((msgStr: string) => {
 				// if (!msgStr.length) {
 				//   console.error('WEBVIEW EVENT SENT TO WEBVIEW TAG BRIDGE HANDLER?', )

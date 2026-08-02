@@ -2125,12 +2125,10 @@ public:
         std::string messageName = message->GetName().ToString();
         std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
         
-        char* contentCopy = strdup(messageContent.c_str());
-
         // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
         if (messageName == "EventBridgeMessage") {
             if (event_bridge_handler_) {
-                event_bridge_handler_(webview_id_, contentCopy);
+                event_bridge_handler_(webview_id_, messageContent.c_str());
             }
             return true;
         }
@@ -2138,12 +2136,12 @@ public:
         else if (!is_sandboxed_) {
             if (messageName == "BunBridgeMessage") {
                 if (bun_bridge_handler_) {
-                    bun_bridge_handler_(webview_id_, contentCopy);
+                    bun_bridge_handler_(webview_id_, messageContent.c_str());
                 }
                 return true;
             } else if (messageName == "internalMessage") {
                 if (webview_tag_handler_) {
-                    webview_tag_handler_(webview_id_, contentCopy);
+                    webview_tag_handler_(webview_id_, messageContent.c_str());
                 }
                 return true;
             }
@@ -2694,14 +2692,13 @@ private:
     HandlePostMessage m_callback;
     uint32_t m_webviewId;
     std::string m_bridgeName;
-    bool m_callbackIsSynchronous;
     bool m_quiet;
 
 public:
     BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId,
-                  bool callbackIsSynchronous = false, bool quiet = false)
+                  bool quiet = false)
         : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName),
-          m_callbackIsSynchronous(callbackIsSynchronous), m_quiet(quiet) {
+          m_quiet(quiet) {
         
     }
 
@@ -2778,43 +2775,12 @@ public:
             return E_FAIL;
         }
 
-        char* message_char = new char[messageUtf8.size() + 1];
-        memcpy(message_char, messageUtf8.c_str(), messageUtf8.size() + 1);
-
-        if (m_callbackIsSynchronous) {
-            try {
-                m_callback(m_webviewId, message_char);
-            } catch (...) {
-                ::log("ERROR: Exception in bridge callback");
-                delete[] message_char;
-                return E_FAIL;
-            }
-            delete[] message_char;
-            return S_OK;
-        }
-
-        // Create a copy for the callback to avoid memory issues
-        char* messageCopy = new char[strlen(message_char) + 1];
-        strcpy_s(messageCopy, strlen(message_char) + 1, message_char);
-
-        // Call the callback
         try {
-            m_callback(m_webviewId, messageCopy);
+            m_callback(m_webviewId, messageUtf8.c_str());
         } catch (...) {
             ::log("ERROR: Exception in bridge callback");
-            delete[] message_char;
-            delete[] messageCopy;
             return E_FAIL;
         }
-
-        // Schedule cleanup after a delay to avoid premature deallocation
-        // (similar to the original delay-based cleanup)
-        std::thread([messageCopy, message_char]() {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            delete[] messageCopy;
-            delete[] message_char;
-        }).detach();
-
         return S_OK;
     }
 };
@@ -3482,7 +3448,6 @@ public:
                 "electrobunConsole",
                 printWebviewConsoleMessage,
                 webviewId,
-                true,
                 true));
             VARIANT consoleBridgeVariant = {};
             VariantInit(&consoleBridgeVariant);

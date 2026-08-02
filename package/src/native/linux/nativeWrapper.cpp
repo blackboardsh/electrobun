@@ -1800,33 +1800,25 @@ public:
         std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
         
         
-        char* contentCopy = strdup(messageContent.c_str());
         bool result = false;
 
         // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
         if (messageName == "EventBridgeMessage") {
-            event_bridge_handler_(webview_id_, contentCopy);
+            event_bridge_handler_(webview_id_, messageContent.c_str());
             result = true;
         }
         // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
         else if (!is_sandboxed_) {
             if (messageName == "BunBridgeMessage") {
                 // printf("CEF: Forwarding BunBridgeMessage to handler\n");
-                bun_bridge_handler_(webview_id_, contentCopy);
+                bun_bridge_handler_(webview_id_, messageContent.c_str());
                 result = true;
             } else if (messageName == "internalMessage") {
                 // printf("CEF: Forwarding internalMessage to handler\n");
-                webview_tag_handler_(webview_id_, contentCopy);
+                webview_tag_handler_(webview_id_, messageContent.c_str());
                 result = true;
             }
         }
-
-        // Free the copied string after a delay to ensure the callback has time to process it
-        // This is necessary because the callbacks are invoked on the JS worker thread
-        g_timeout_add(1000, [](gpointer data) -> gboolean {
-            free(data);
-            return G_SOURCE_REMOVE;
-        }, contentCopy);
         
         return result;
     }
@@ -3422,21 +3414,7 @@ public:
             if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
                 gchar* str_value = jsc_value_to_string(value);
                 if (str_value) {
-                    // Create a copy for the callback to avoid memory issues
-                    size_t len = strlen(str_value);
-                    char* message_copy = new char[len + 1];
-                    strcpy(message_copy, str_value);
-
-                    // Call the callback
-                    impl->eventBridgeHandler(impl->webviewId, message_copy);
-
-                    // Schedule cleanup after a delay to avoid premature deallocation
-                    std::thread([message_copy, str_value]() {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        delete[] message_copy;
-                        g_free(str_value);
-                    }).detach();
-                } else {
+                    impl->eventBridgeHandler(impl->webviewId, str_value);
                     g_free(str_value);
                 }
             }
@@ -3451,21 +3429,7 @@ public:
             if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
                 gchar* str_value = jsc_value_to_string(value);
                 if (str_value) {
-                    // Create a copy for the callback to avoid memory issues
-                    size_t len = strlen(str_value);
-                    char* message_copy = new char[len + 1];
-                    strcpy(message_copy, str_value);
-                    
-                    // Call the callback
-                    impl->bunBridgeHandler(impl->webviewId, message_copy);
-                    
-                    // Schedule cleanup after a delay to avoid premature deallocation
-                    std::thread([message_copy, str_value]() {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        delete[] message_copy;
-                        g_free(str_value);
-                    }).detach();
-                } else {
+                    impl->bunBridgeHandler(impl->webviewId, str_value);
                     g_free(str_value);
                 }
             }
@@ -3480,21 +3444,7 @@ public:
             if (value && JSC_IS_VALUE(value) && jsc_value_is_string(value)) {
                 gchar* str_value = jsc_value_to_string(value);
                 if (str_value) {
-                    // Create a copy for the callback to avoid memory issues
-                    size_t len = strlen(str_value);
-                    char* message_copy = new char[len + 1];
-                    strcpy(message_copy, str_value);
-                    
-                    // Call the callback
-                    impl->internalBridgeHandler(impl->webviewId, message_copy);
-                    
-                    // Schedule cleanup after a delay to avoid premature deallocation
-                    std::thread([message_copy, str_value]() {
-                        std::this_thread::sleep_for(std::chrono::seconds(1));
-                        delete[] message_copy;
-                        g_free(str_value);
-                    }).detach();
-                } else {
+                    impl->internalBridgeHandler(impl->webviewId, str_value);
                     g_free(str_value);
                 }
             }

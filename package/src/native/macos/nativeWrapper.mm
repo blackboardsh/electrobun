@@ -719,7 +719,12 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
         return nil;
     }
 
-    std::string relativePath = electrobun::normalizeViewsRelativePath(std::string([urlString UTF8String]));
+    std::string relativePath;
+    if (!electrobun::normalizeViewsRelativePath(
+            std::string([urlString UTF8String]),
+            relativePath)) {
+        return nil;
+    }
     return [NSString stringWithUTF8String:relativePath.c_str()];
 }
 
@@ -2529,19 +2534,9 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 @implementation MyScriptMessageHandler
     - (void)userContentController:(WKUserContentController *)userContentController
         didReceiveScriptMessage:(WKScriptMessage *)message {
-        NSString *body = message.body;
-        const char *bodyCStr = strdup(body.UTF8String);
-        self.zigCallback(self.webviewId, bodyCStr); 
-
-        // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
-        // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
-        // ends up getting garbage.
-
-        // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
-        // before freeing the memory
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            free((void*)bodyCStr);
-        });              
+        if (!self.zigCallback || ![message.body isKindOfClass:[NSString class]]) return;
+        const char *body = [(NSString *)message.body UTF8String];
+        if (body) self.zigCallback(self.webviewId, body);
     }
 @end
 
@@ -5349,34 +5344,23 @@ public:
     std::string messageName = message->GetName().ToString();
     std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
     
-    char* contentCopy = strdup(messageContent.c_str());
     bool result = false;
 
     // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
     if (messageName == "EventBridgeMessage") {
-        event_bridge_handler_(webview_id_, contentCopy);
+        event_bridge_handler_(webview_id_, messageContent.c_str());
         result = true;
     }
     // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
     else if (!is_sandboxed_) {
         if (messageName == "BunBridgeMessage") {
-            bun_bridge_handler_(webview_id_, contentCopy);
+            bun_bridge_handler_(webview_id_, messageContent.c_str());
             result = true;
         } else if (messageName == "internalMessage") {
-            webview_tag_handler_(webview_id_, contentCopy);
+            webview_tag_handler_(webview_id_, messageContent.c_str());
             result = true;
         }
     }
-
-    // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
-    // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
-    // ends up getting garbage.
-
-    // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
-    // before freeing the memory
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        free((void*)contentCopy);
-    });   
     
     return result;
 }

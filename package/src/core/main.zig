@@ -77,6 +77,9 @@ const WebviewState = struct {
     window_id: u32,
     host_webview_id: ?u32,
     renderer: WebviewRendererKind,
+    webview_event_handler: ?WebviewEventHandler,
+    event_bridge_handler: ?WebviewPostMessageHandler,
+    internal_bridge_handler: ?WebviewPostMessageHandler,
     secret_key: WebviewSecretKey,
     socket_handle: ?std.posix.socket_t,
     transport_ready: bool,
@@ -167,6 +170,9 @@ var managed_quit_requested_handler: ?QuitRequestedHandler = null;
 var exit_on_last_window_closed: bool = true;
 var host_message_wakeup_state = HostMessageWakeupState{};
 var host_message_wakeup_mutex: std.Thread.Mutex = .{};
+var runtime_callbacks_async = false;
+var pending_runtime_callback_payloads = std.AutoHashMap(usize, [:0]u8).init(allocator);
+var pending_runtime_callback_payloads_mutex: std.Thread.Mutex = .{};
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
 
@@ -350,6 +356,62 @@ fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
 
 fn hostBridgeQueueTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
     enqueuePendingHostMessage(webview_id, message);
+}
+
+fn dispatchRuntimePostMessage(
+    handler: WebviewPostMessageHandler,
+    webview_id: u32,
+    message: []const u8,
+) void {
+    const owned_message = allocator.dupeZ(u8, message) catch return;
+
+    if (!runtime_callbacks_async) {
+        defer allocator.free(owned_message);
+        handler(webview_id, owned_message.ptr);
+        return;
+    }
+
+    pending_runtime_callback_payloads_mutex.lock();
+    pending_runtime_callback_payloads.put(
+        @intFromPtr(owned_message.ptr),
+        owned_message,
+    ) catch {
+        pending_runtime_callback_payloads_mutex.unlock();
+        allocator.free(owned_message);
+        return;
+    };
+    pending_runtime_callback_payloads_mutex.unlock();
+
+    handler(webview_id, owned_message.ptr);
+}
+
+export fn setRuntimeCallbacksAsync(enabled: bool) void {
+    runtime_callbacks_async = enabled;
+}
+
+export fn releaseRuntimeCallbackPayload(payload: ?[*:0]const u8) bool {
+    const payload_ptr = payload orelse return false;
+
+    pending_runtime_callback_payloads_mutex.lock();
+    const removed = pending_runtime_callback_payloads.fetchRemove(@intFromPtr(payload_ptr));
+    pending_runtime_callback_payloads_mutex.unlock();
+
+    if (removed) |entry| {
+        allocator.free(entry.value);
+        return true;
+    }
+    return false;
+}
+
+fn clearPendingRuntimeCallbackPayloads() void {
+    pending_runtime_callback_payloads_mutex.lock();
+    defer pending_runtime_callback_payloads_mutex.unlock();
+
+    var iterator = pending_runtime_callback_payloads.valueIterator();
+    while (iterator.next()) |payload| {
+        allocator.free(payload.*);
+    }
+    pending_runtime_callback_payloads.clearRetainingCapacity();
 }
 
 export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
@@ -1519,16 +1581,16 @@ fn buildHostWebviewEventJavascript(
     const encoded_event_name = quoteJavascriptString(event_name) orelse return null;
     defer allocator.free(encoded_event_name);
 
+    const encoded_detail = quoteJavascriptString(detail) orelse return null;
+    defer allocator.free(encoded_detail);
+
     const event_name_slice = std.mem.span(event_name);
     if (std.mem.eql(u8, event_name_slice, "new-window-open") or std.mem.eql(u8, event_name_slice, "host-message")) {
         return allocateOwnedJavascriptString(
-            "document.querySelector('#electrobun-webview-{d}').emit({s}, {s});",
-            .{ webview_id, encoded_event_name, std.mem.span(detail) },
+            "document.querySelector('#electrobun-webview-{d}').emit({s}, (() => {{ try {{ return JSON.parse({s}); }} catch {{ return {s}; }} }})());",
+            .{ webview_id, encoded_event_name, encoded_detail, encoded_detail },
         );
     }
-
-    const encoded_detail = quoteJavascriptString(detail) orelse return null;
-    defer allocator.free(encoded_detail);
 
     return allocateOwnedJavascriptString(
         "document.querySelector('#electrobun-webview-{d}').emit({s}, {s});",
@@ -1630,14 +1692,16 @@ fn sendInternalBridgeResponse(
     _ = sendInternalMessageToWebview(host_webview_id, response_json.ptr);
 }
 
-fn dispatchStoredWebviewEvent(payload: std.json.Value) void {
+fn dispatchStoredWebviewEvent(source_webview_id: u32, payload: std.json.Value) void {
     if (payload != .object) {
         return;
     }
 
-    const handler = default_webview_callbacks.webview_event_handler orelse return;
+    const state = lookupWebviewState(source_webview_id) orelse return;
+    const handler = state.webview_event_handler orelse return;
     const payload_object = payload.object;
     const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
+    if (webview_id != source_webview_id) return;
     const event_name = jsonString(payload_object.get("eventName") orelse return) orelse return;
     const detail = jsonString(payload_object.get("detail") orelse return) orelse return;
 
@@ -1845,9 +1909,9 @@ fn handleInternalRequest(request_object: std.json.ObjectMap) void {
     sendInternalBridgeResponse(host_webview_id, request_id, false, "Unknown internal request");
 }
 
-fn handleInternalMessage(message_id: []const u8, payload: std.json.Value) void {
+fn handleInternalMessage(source_webview_id: u32, message_id: []const u8, payload: std.json.Value) void {
     if (std.mem.eql(u8, message_id, "webviewEvent")) {
-        dispatchStoredWebviewEvent(payload);
+        dispatchStoredWebviewEvent(source_webview_id, payload);
         return;
     }
 
@@ -2049,7 +2113,7 @@ fn handleInternalMessage(message_id: []const u8, payload: std.json.Value) void {
     }
 }
 
-fn handleInternalBridgePacket(packet: std.json.Value) void {
+fn handleInternalBridgePacket(source_webview_id: u32, packet: std.json.Value) void {
     if (packet != .object) {
         return;
     }
@@ -2065,11 +2129,11 @@ fn handleInternalBridgePacket(packet: std.json.Value) void {
     if (std.mem.eql(u8, packet_type, "message")) {
         const message_id = jsonString(object.get("id") orelse return) orelse return;
         const payload = object.get("payload") orelse .null;
-        handleInternalMessage(message_id, payload);
+        handleInternalMessage(source_webview_id, message_id, payload);
     }
 }
 
-fn processInternalBridgeBatch(message_json: []const u8) void {
+fn processInternalBridgeBatch(source_webview_id: u32, message_json: []const u8) void {
     var parsed = std.json.parseFromSlice(std.json.Value, allocator, message_json, .{}) catch return;
     defer parsed.deinit();
 
@@ -2078,17 +2142,51 @@ fn processInternalBridgeBatch(message_json: []const u8) void {
             const item_json = jsonString(item) orelse continue;
             var nested = std.json.parseFromSlice(std.json.Value, allocator, item_json, .{}) catch continue;
             defer nested.deinit();
-            handleInternalBridgePacket(nested.value);
+            handleInternalBridgePacket(source_webview_id, nested.value);
         }
         return;
     }
 
-    handleInternalBridgePacket(parsed.value);
+    handleInternalBridgePacket(source_webview_id, parsed.value);
 }
 
-fn internalBridgeCoreTrampoline(_webview_id: u32, message: [*:0]const u8) callconv(.C) void {
-    _ = _webview_id;
-    processInternalBridgeBatch(std.mem.span(message));
+fn internalBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+    const state = lookupWebviewState(webview_id) orelse return;
+    const message_slice = std.mem.span(message);
+    if (state.internal_bridge_handler) |handler| {
+        dispatchRuntimePostMessage(handler, webview_id, message_slice);
+        return;
+    }
+    processInternalBridgeBatch(webview_id, message_slice);
+}
+
+fn isValidEventBridgeMessage(source_webview_id: u32, message: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, message, .{}) catch return false;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return false;
+    const object = parsed.value.object;
+    const message_id = jsonString(object.get("id") orelse return false) orelse return false;
+    if (!std.mem.eql(u8, message_id, "webviewEvent")) return false;
+    const message_type = jsonString(object.get("type") orelse return false) orelse return false;
+    if (!std.mem.eql(u8, message_type, "message")) return false;
+
+    const payload = object.get("payload") orelse return false;
+    if (payload != .object) return false;
+    const payload_object = payload.object;
+    const claimed_webview_id = jsonU32(payload_object.get("id") orelse return false) orelse return false;
+    if (claimed_webview_id != source_webview_id) return false;
+    if (jsonString(payload_object.get("eventName") orelse return false) == null) return false;
+    if (jsonString(payload_object.get("detail") orelse return false) == null) return false;
+    return true;
+}
+
+fn eventBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+    const state = lookupWebviewState(webview_id) orelse return;
+    const handler = state.event_bridge_handler orelse return;
+    const message_slice = std.mem.span(message);
+    if (!isValidEventBridgeMessage(webview_id, message_slice)) return;
+    dispatchRuntimePostMessage(handler, webview_id, message_slice);
 }
 
 fn windowCloseTrampoline(window_id: u32) callconv(.C) void {
@@ -2635,7 +2733,6 @@ export fn createWebview(
 ) u32 {
     clearLastError();
     _ = _host_bridge_handler;
-    const internal_bridge_handler = _internal_bridge_handler orelse internalBridgeCoreTrampoline;
     rememberDefaultWebviewCallbacks(
         navigation_callback,
         webview_event_handler,
@@ -2704,6 +2801,9 @@ export fn createWebview(
         .window_id = window_id,
         .host_webview_id = if (host_webview_id == 0) null else host_webview_id,
         .renderer = parseWebviewRenderer(renderer),
+        .webview_event_handler = webview_event_handler,
+        .event_bridge_handler = event_bridge_handler,
+        .internal_bridge_handler = _internal_bridge_handler,
         .secret_key = parsed_secret_key,
         .socket_handle = null,
         .transport_ready = false,
@@ -2743,9 +2843,9 @@ export fn createWebview(
         partition_identifier,
         navigation_callback,
         webview_event_handler,
-        event_bridge_handler,
+        if (event_bridge_handler != null) eventBridgeCoreTrampoline else null,
         hostBridgeQueueTrampoline,
-        internal_bridge_handler,
+        internalBridgeCoreTrampoline,
         electrobun_preload_script.ptr,
         custom_preload_script,
         views_root,
@@ -3757,6 +3857,8 @@ export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
         wait_for_shutdown_complete(timeout_ms);
     }
 
+    clearPendingRuntimeCallbackPayloads();
+
     if (ensureNativeWrapperLoaded()) {
         native_wrapper_state.force_exit(code);
     }
@@ -3839,4 +3941,62 @@ export fn wgpuSurfacePresentMainThread(surface_ptr: ?*anyopaque) i32 {
         "wgpuSurfacePresentMainThread",
     ) orelse return -1;
     return wgpu_surface_present_main_thread(surface_ptr);
+}
+
+test "event bridge requires the native sender identity" {
+    try std.testing.expect(isValidEventBridgeMessage(
+        17,
+        "{\"id\":\"webviewEvent\",\"type\":\"message\",\"payload\":{\"id\":17,\"eventName\":\"host-message\",\"detail\":\"{\\\"message\\\":\\\"hello\\\"}\"}}",
+    ));
+    try std.testing.expect(!isValidEventBridgeMessage(
+        17,
+        "{\"id\":\"webviewEvent\",\"type\":\"message\",\"payload\":{\"id\":99,\"eventName\":\"host-message\",\"detail\":\"spoofed\"}}",
+    ));
+    try std.testing.expect(!isValidEventBridgeMessage(
+        17,
+        "{\"id\":\"webviewEvent\",\"type\":\"message\",\"payload\":{\"id\":17,\"eventName\":42,\"detail\":\"invalid\"}}",
+    ));
+}
+
+test "host webview JSON events encode detail as data" {
+    const js = buildHostWebviewEventJavascript(
+        7,
+        "host-message",
+        "null); globalThis.pwned = \"yes\"; //",
+    ) orelse return error.OutOfMemory;
+    defer allocator.free(js);
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        js,
+        "JSON.parse(\"null); globalThis.pwned = \\\"yes\\\"; //\")",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        js,
+        "catch { return \"null); globalThis.pwned = \\\"yes\\\"; //\"; }",
+    ) != null);
+}
+
+var captured_runtime_callback_payload: ?[*:0]const u8 = null;
+
+fn captureRuntimeCallbackPayload(_: u32, payload: [*:0]const u8) callconv(.C) void {
+    captured_runtime_callback_payload = payload;
+}
+
+test "asynchronous runtime bridge payloads require explicit release" {
+    clearPendingRuntimeCallbackPayloads();
+    runtime_callbacks_async = true;
+    defer {
+        runtime_callbacks_async = false;
+        clearPendingRuntimeCallbackPayloads();
+        captured_runtime_callback_payload = null;
+    }
+
+    dispatchRuntimePostMessage(captureRuntimeCallbackPayload, 7, "owned payload");
+    const payload = captured_runtime_callback_payload orelse return error.MissingPayload;
+
+    try std.testing.expectEqualStrings("owned payload", std.mem.span(payload));
+    try std.testing.expect(releaseRuntimeCallbackPayload(payload));
+    try std.testing.expect(!releaseRuntimeCallbackPayload(payload));
 }
