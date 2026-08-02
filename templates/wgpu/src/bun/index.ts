@@ -1,5 +1,5 @@
 import { GpuWindow, Screen, WGPU, WGPUBridge } from "electrobun/bun";
-import { CString, ptr, toArrayBuffer } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 const WGPU_STRLEN = 0xffffffffffffffffn;
@@ -17,6 +17,11 @@ const WGPUCullMode_None = 0x00000001;
 const WGPUPresentMode_Fifo = 0x00000001;
 
 const KEEPALIVE: any[] = [];
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
+}
 
 function writePtr(view: DataView, offset: number, value: number | bigint | null) {
 	view.setBigUint64(offset, BigInt(value ?? 0), true);
@@ -409,8 +414,8 @@ const shaderSource = makeShaderSourceWGSL(shaderPtr);
 const shaderDesc = makeShaderModuleDescriptor(shaderSource.ptr as number);
 const shaderModule = WGPUNative.symbols.wgpuDeviceCreateShaderModule(device, shaderDesc.ptr as number);
 
-const entryPoint = new CString("vs_main");
-const fragEntryPoint = new CString("fs_main");
+const entryPoint = makeCString("vs_main");
+const fragEntryPoint = makeCString("fs_main");
 KEEPALIVE.push(entryPoint, fragEntryPoint);
 const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x2);
 const timeAttr = makeVertexAttribute(8, 1, WGPUVertexFormat_Float32);

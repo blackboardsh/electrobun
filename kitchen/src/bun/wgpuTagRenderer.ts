@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { BrowserWindow, Screen, WGPU, WGPUBridge, WGPUView } from "electrobun/bun";
-import { CString, ptr } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -25,6 +25,7 @@ type ViewState = {
 	useAlt: boolean;
 	keepAlive: unknown[];
 	stopped: boolean;
+	renderedFirstFrame: boolean;
 };
 
 const WGPUNative = WGPU.native;
@@ -46,6 +47,11 @@ const WGPULoadOp_Clear = 0x00000002;
 const WGPUStoreOp_Store = 0x00000001;
 const WGPU_STRLEN = 0xffffffffffffffffn;
 const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
+}
 
 const kShaderWindow = `
 var<private> gTime: f32 = 0.0;
@@ -529,9 +535,7 @@ function pickSurfaceFormatAlpha(
 	let format = preferredFormat;
 	if (formatCount && formatPtr) {
 		const formats = new Uint32Array(
-			(ptr as any)(formatPtr).buffer,
-			(ptr as any)(formatPtr).byteOffset,
-			formatCount,
+			toArrayBuffer(formatPtr, 0, formatCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (formats.length) {
 			format = formats[0]!;
@@ -543,9 +547,7 @@ function pickSurfaceFormatAlpha(
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (alphas.length) {
 			alphaMode = alphas[0]!;
@@ -585,8 +587,8 @@ function createPipeline(
 		throw new Error("WGPU shader module is null");
 	}
 
-	const entryPoint = new CString("vs_main");
-	const fragEntryPoint = new CString("fs_main");
+	const entryPoint = makeCString("vs_main");
+	const fragEntryPoint = makeCString("fs_main");
 	keepAlive.push(entryPoint, fragEntryPoint);
 
 	const attrBuf = new ArrayBuffer(32 * attributes.length);
@@ -653,7 +655,11 @@ export class WgpuTagRenderer {
 		if (!WGPUNative.available) {
 			throw new Error("WGPU native library not available");
 		}
-		const view = WGPUView.getById(viewId);
+		const view = WGPUView.getById(viewId) ?? WGPUView.adoptExisting(viewId, {
+			windowId: win.id,
+			autoResize: false,
+			frame: rect,
+		});
 		if (!view?.ptr) {
 			throw new Error(`WGPUView not found for id ${viewId}`);
 		}
@@ -762,6 +768,7 @@ export class WgpuTagRenderer {
 			useAlt: false,
 			keepAlive,
 			stopped: false,
+			renderedFirstFrame: false,
 		};
 
 		state.timerId = setInterval(() => this.renderFrame(state), 16);
@@ -793,12 +800,6 @@ export class WgpuTagRenderer {
 		
 		// Remove from states immediately to prevent any further access
 		this.states.delete(viewId);
-		
-		// Mark the associated WGPU view as stopped to prevent double cleanup
-		const wgpuView = WGPUView.getById(viewId);
-		if (wgpuView) {
-			wgpuView.ptr = null as any;
-		}
 		
 		// Don't manually release WGPU resources - let the native view cleanup handle them
 		// Manually calling wgpuDeviceRelease/wgpuSurfaceRelease after view destruction causes crashes
@@ -928,6 +929,10 @@ export class WgpuTagRenderer {
 			commandArray.ptr as number,
 		);
 		WGPUBridge.surfacePresent(state.surface);
+		if (!state.renderedFirstFrame) {
+			state.renderedFirstFrame = true;
+			console.log(`[wgpu-tag] first frame rendered for view ${state.viewId}`);
+		}
 
 		WGPUNative.symbols.wgpuTextureViewRelease(textureView);
 		WGPUNative.symbols.wgpuTextureRelease(texPtr);

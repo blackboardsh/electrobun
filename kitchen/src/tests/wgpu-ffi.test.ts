@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
 import { GpuWindow, WGPU, WGPUBridge } from "electrobun/bun";
-import { CString, ptr, toArrayBuffer } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;
 
@@ -28,6 +28,11 @@ function writeU32(view: DataView, offset: number, value: number | bigint) {
 
 function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
+}
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeSurfaceConfiguration(
@@ -344,8 +349,8 @@ fn fs_main() -> @location(0) vec4<f32> {
 			);
 			expect(!!shaderModule).toBeTruthy();
 
-			const entryPoint = new CString("vs_main");
-			const fragEntryPoint = new CString("fs_main");
+			const entryPoint = makeCString("vs_main");
+			const fragEntryPoint = makeCString("fs_main");
 			const vertexState = makeVertexStateNoBuffers(
 				shaderModule,
 				entryPoint.ptr,

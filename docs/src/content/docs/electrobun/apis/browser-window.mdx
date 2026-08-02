@@ -259,6 +259,19 @@ externalBrowser.webview.on("will-navigate", (event) => {
 ```
 
 
+### spellCheck
+  <p>Set `spellCheck: true` to enable macOS system continuous spell checking in the window's default native WKWebView. Omitting it or setting it to `false` leaves the renderer default unchanged. CEF and non-macOS renderers do not change behavior.</p>
+
+```typescript
+const win = new BrowserWindow({
+  html: "<div contenteditable>Type here</div>",
+  renderer: "native",
+  spellCheck: true,
+});
+```
+
+  <p>See <a href="/electrobun/apis/browser-view#spellcheck">BrowserView spellCheck</a> for platform support and the guarded WebKit SPI maintenance caveat.</p>
+
   <p><strong>Info:</strong> The following options are used to instantiate the default BrowserView.</p>
 
 ### url
@@ -312,6 +325,10 @@ const win = new BrowserWindow({
 });
 ```
 
+`persist:default` selects the app's shared default persistent profile. Other
+`persist:*` names create isolated persistent profiles, while names without the
+prefix remain ephemeral.
+
 
 ### preload
   <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
@@ -340,7 +357,7 @@ const win = new BrowserWindow({
 
 
 ### rpc
-  <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
+  <p>The RPC property allows you to establish RPC (remote procedure calls) between the main process and this window's default BrowserView. In other words it lets you define functions that execute in the main process that are callable and return a value back to the browser process and visa versa.</p>
   <p>These RPC functions are asynchronous.</p>
 
   <p>`src/shared/types.ts`</p>
@@ -350,7 +367,7 @@ export type MyWebviewRPCType = {
   // functions that execute in the main process
   bun: RPCSchema<{
     requests: {
-      someBunFunction: {
+      someMainProcessFunction: {
         params: {
           a: number;
           b: number;
@@ -359,7 +376,7 @@ export type MyWebviewRPCType = {
       };
     };
     messages: {
-      logToBun: {
+      logToMainProcess: {
         msg: string;
       };
     };
@@ -391,24 +408,24 @@ export type MyWebviewRPCType = {
 import { BrowserWindow, BrowserView } from "electrobun/bun";
 import { type MyWebviewRPCType } from "../shared/types";
 
-// Create an RPC object for the bun handlers with the shared type
+// Create an RPC object for the main-process handlers with the shared type
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
   maxRequestTime: 5000,
   handlers: {
     requests: {
-      someBunFunction: ({ a, b }) => {
+      someMainProcessFunction: ({ a, b }) => {
         console.log(`browser asked me to do math with: ${a} and ${b}`);
         return a + b;
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
       },
-      logToBun: ({ msg }) => {
-        console.log("Log to bun: ", msg);
+      logToMainProcess: ({ msg }) => {
+        console.log("Log to main process: ", msg);
       },
     },
   },
@@ -432,15 +449,15 @@ const win = new BrowserWindow({
 
 // Note: These RPC methods will inherit types from the shared type
 
-// Call a browser function from bun
+// Call a browser function from the main process
 const answer = await win.webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
 
-// Send a message to the BrowserView from bun
+// Send a message to the BrowserView from the main process
 win.webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 
 
-  <p><strong>Info:</strong> The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
+  <p><strong>Info:</strong> The above code snippet shows defining the main process RPC handlers and calling the browser process handlers from the main process. To see how to handle the browser context code, take a look at the <a href="/electrobun/apis/browser/electroview-class">Electroview Class (Browser API)</a>.</p>
 
 ## Properties
 
@@ -477,8 +494,8 @@ win.close();
 ```
 
 
-### show / showInactive / activate / hide
-  <p>Control window visibility and focus. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it.</p>
+### show / showInactive / activate / hide / isVisible
+  <p>Control and query native window visibility. `show()` shows and activates the window. `showInactive()` shows it without activating it. `activate()` focuses an already-visible window. `hide()` hides the window without closing it. `isVisible()` reads the current state from the native window.</p>
 
   
 ```javascript
@@ -497,9 +514,11 @@ win.activate();
 
 // Hide without closing
 win.hide();
+console.log(win.isVisible()); // false
 
 // Show and activate
 win.show();
+console.log(win.isVisible()); // true
 ```
 
 
@@ -748,6 +767,14 @@ win.setPageZoom(1.0);
   <Aside type="tip">
     <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
   </Aside>
+
+### setSpellCheck
+  <p>Enable or disable system spell checking in the default BrowserView. Returns `true` only for a supported macOS native WKWebView; `false` means no renderer state was changed.</p>
+
+```typescript
+const supported = win.setSpellCheck(true);
+win.setSpellCheck(false);
+```
 
 ### on(name, handler)
   <p>Subscribe to BrowserWindow events (see below).</p>

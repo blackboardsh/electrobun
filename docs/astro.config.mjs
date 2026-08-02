@@ -3,7 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 
 export default defineConfig({
-  site: "https://docs.electrobunny.ai",
+  site: "https://framework.blackboard.sh",
   integrations: [
     starlight({
       title: "Electrobun Docs",
@@ -32,6 +32,7 @@ export default defineConfig({
               label: "Advanced Guides",
               items: [
                 { label: "Cross-Platform Development", link: "/electrobun/guides/cross-platform-development/" },
+                { label: "Native Main Processes", link: "/electrobun/guides/native-main-process/" },
                 { label: "Compatibility", link: "/electrobun/guides/compatability/" },
                 { label: "Code Signing", link: "/electrobun/guides/code-signing/" },
                 { label: "Architecture Overview", link: "/electrobun/guides/architecture/overview/" },
@@ -40,9 +41,9 @@ export default defineConfig({
               ],
             },
             {
-              label: "Bun APIs",
+              label: "Main Process APIs",
               items: [
-                { label: "Bun API", link: "/electrobun/apis/bun/" },
+                { label: "Main Process API", link: "/electrobun/apis/bun/" },
                 { label: "BrowserWindow", link: "/electrobun/apis/browser-window/" },
                 { label: "BrowserView", link: "/electrobun/apis/browser-view/" },
                 { label: "WebGPU", link: "/electrobun/apis/webgpu/" },

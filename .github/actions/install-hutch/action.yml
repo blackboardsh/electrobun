@@ -1,0 +1,38 @@
+name: Install Hutch
+description: Install a published Hutch channel for Electrobun builds
+
+inputs:
+  channel:
+    description: Hutch release channel
+    required: false
+    default: production
+
+runs:
+  using: composite
+  steps:
+    - name: Install Hutch
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        HUTCH_INSTALL_CHANNEL: ${{ inputs.channel }}
+      run: |
+        installer="$RUNNER_TEMP/install-hutch.sh"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          https://hutch.blackboard.sh/hutch/install.sh \
+          --output "$installer"
+        sh "$installer" --channel "$HUTCH_INSTALL_CHANNEL" --no-modify-path
+        echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
+
+    - name: Install Hutch
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        HUTCH_INSTALL_CHANNEL: ${{ inputs.channel }}
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP "install-hutch.ps1"
+        Invoke-WebRequest -UseBasicParsing `
+          -Uri "https://hutch.blackboard.sh/hutch/install.ps1" `
+          -OutFile $installer
+        & $installer -Channel $env:HUTCH_INSTALL_CHANNEL
+        if ($LASTEXITCODE -ne 0) { throw "Hutch installation failed" }
+        (Join-Path $HOME ".dash\bin") | Out-File -FilePath $env:GITHUB_PATH -Append

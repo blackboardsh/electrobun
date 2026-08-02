@@ -7,7 +7,7 @@ import {
 	WGPUBridge,
 	three,
 } from "electrobun/bun";
-import { CString, ptr, toArrayBuffer } from "bun:ffi";
+import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
 import { existsSync } from "fs";
 import { join, resolve } from "path";
@@ -15,6 +15,11 @@ import * as CANNON from "cannon-es";
 
 const WGPUNative = WGPU.native;
 const WGPU_KEEPALIVE: any[] = [];
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
+}
 
 const WGPUTextureFormat_RGBA8UnormSrgb = 0x00000017;
 const WGPUTextureUsage_RenderAttachment = 0x0000000000000010n;
@@ -630,8 +635,8 @@ if (!shaderModule) {
 	throw new Error("Failed to create shader module");
 }
 
-const entryPoint = new CString("vs_main");
-const fragEntryPoint = new CString("fs_main");
+const entryPoint = makeCString("vs_main");
+const fragEntryPoint = makeCString("fs_main");
 WGPU_KEEPALIVE.push(entryPoint, fragEntryPoint);
 const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x3);
 const normalAttr = makeVertexAttribute(12, 1, WGPUVertexFormat_Float32x3);

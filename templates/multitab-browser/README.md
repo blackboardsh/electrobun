@@ -15,13 +15,13 @@ A demonstration of building a multi-tab browser using Electrobun framework.
 
 ```bash
 # Install dependencies
-bun install
+hutch install
 
 # Run in development mode
-bun run dev
+hutch run dev
 
 # Build for production
-bun run build
+hutch run build
 ```
 
 ## Architecture

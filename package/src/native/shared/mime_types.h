@@ -1,5 +1,5 @@
 // mime_types.h - Cross-platform MIME type detection
-// Based on Bun runtime supported file types and web development standards
+// Based on Bun-compatible runtime file types and web development standards
 // Used across Windows, macOS, and Linux
 //
 // This is a header-only implementation to avoid build complexity.

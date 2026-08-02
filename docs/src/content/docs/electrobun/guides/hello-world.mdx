@@ -5,50 +5,48 @@ import { Aside } from "@astrojs/starlight/components";
 
   
   <Aside type="tip">
-    <strong>Info:</strong> Electrobun will install a specific version of bun as a dependency in `node_modules`.
+    <strong>Info:</strong> Electrobun includes a pinned Cottontail runtime and bundles it with your application.
   </Aside>
   <Aside type="tip">
-    <strong>Info:</strong> This guide assumes you have bun installed globally, if you're using node.js or another package manager then you may need to adjust the terminal commands and package.json scripts accordingly.
+    <strong>Info:</strong> This guide assumes you have Hutch installed globally. See the <a href="/electrobun/guides/quick-start#prerequisites">Quick Start prerequisites</a> for installation commands.
   </Aside>
 ## Step 0: Init templates
   
   <p>This guide will walk you through building a hello world from scratch.</p>
-  <p>If you'd prefer to be up and running in seconds we offer starter templates including a `hello-world`, `photo-booth`, and multi-tabbed `web-browser`. If you have bun installed and want to get started in a few clicks.</p>
-  <p>Just run <strong>`bunx electrobun init`</strong> and choose the starter template you want to explore.</p>
+  <p>If you'd prefer to be up and running in seconds, we offer starter templates including `hello-world`, `photo-booth`, and `multitab-browser`.</p>
+  <p>Just run <strong>`hutch electrobun init`</strong> and choose the starter template you want to explore.</p>
 ## Step 1: Initialize your project folder
   <p>Create a new folder for your project. Let's call it `/electrobun-test`.</p>
-  <p>In your `electrobun-test` folder run `bun init .` You'll be prompted to enter a package name, let's use `my-app` and an entrypoint which we don't need so just hit enter.</p>
-## Step 2: Install Electrobun as a dependency
-  <p>Let's install electrobun. Just run: `bun install electrobun` to add it as a dependency.</p>
-## Step 3: Add package.json scripts to build and run your app
-  <p>Open your `package.json` in a code editor and add a build:dev script and a start script so that your `package.json` looks like this:</p>
+## Step 2: Configure the project
+  <p>Create a `package.json` in that folder with Electrobun as a dependency and Hutch-based development scripts:</p>
   
 ```javascript
 {
   "name": "my-app",
   "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5.0.0"
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
   },
   "dependencies": {
-    "electrobun": "^0.0.1"
+    "electrobun": "latest"
   },
   "scripts": {
-    "start": "electrobun dev",
-    "dev": "electrobun dev --watch"
+    "start": "hutch electrobun dev",
+    "dev": "hutch electrobun dev --watch"
   }
 }
 ```
 
   <Aside type="note">
-    <strong>Note:</strong> That we've modified the default package.json that bun creates
-    <ul>
-      <li>Removed the "type": "module" and "module": "index.ts" properties since we don't need them.</li>
-      <li>Added two npm scripts that will use the electrobun cli that should now be in your node_modules/.bin folder.</li>
-    </ul>
+    <strong>Note:</strong> The `electrobun/bun` import path and `@types/bun` package are retained for source compatibility; Cottontail executes the TypeScript main process.
   </Aside>
+## Step 3: Install dependencies
+  <p>Install the project dependencies through Hutch:</p>
+
+```bash
+hutch install
+```
+
 ## Step 4: Hello World
   <p>We now have electrobun installed and a way to build and run our hello world app, let's add some code.</p>
   <p>Create a file in `src/bun/index.ts` with the following contents:</p>
@@ -62,7 +60,7 @@ const win = new BrowserWindow({
 ```
 
 ## Step 5: Configure Electrobun
-  <p>One last thing, we need to a way to let the Electrobun cli know where our bun entrypoint file is and how to build it. We do that by creating an `` electrobun.config.ts `` file in the root of the project.</p>
+  <p>One last thing, we need to tell Hutch where our TypeScript main-process entrypoint is and how to build it. We do that by creating an `` electrobun.config.ts `` file in the root of the project.</p>
   
 ```javascript
 export default {
@@ -72,7 +70,8 @@ export default {
     version: "0.0.1",
   },
   build: {
-    bun: {
+    mainProcess: "cottontail",
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -80,5 +79,5 @@ export default {
 ```
 
 ## Step 6: Run your app
-  <p>With this we can now go back to our terminal and run `bun start` and you should see a window pop up and load the site.</p>
-  <p>To stop running the app just hit `cmd+c`</p>
+  <p>With this we can now go back to our terminal and run `hutch run dev`. You should see a window pop up and load the site, and Electrobun will rebuild when your source files change.</p>
+  <p>To stop running the app, press `Ctrl+C`.</p>

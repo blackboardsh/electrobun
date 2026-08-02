@@ -2,7 +2,7 @@
 // Sandbox mode disables RPC and only allows event emission for untrusted content
 
 import { defineTest, expect } from "../test-framework/types";
-import { BrowserView } from "electrobun/bun";
+import { BrowserView, BuildConfig } from "electrobun/bun";
 import type { TestHarnessRPC } from "../test-harness/index";
 
 // Create RPC config for test harness (same as rpc.test.ts)
@@ -289,6 +289,42 @@ export const sandboxTests = [
       // 2. The OOPIF created by the webview tag
       expect(newViews).toBe(2);
       log("Non-sandbox mode correctly allowed OOPIF creation");
+    },
+  }),
+
+  defineTest({
+    name: "Webview tag queues navigation during multi-instance initialization",
+    category: "Webview Tag",
+    description: "Verify immediate URL changes are replayed for multiple asynchronous OOPIFs",
+    timeout: 20000,
+    async run({ createWindow, log }) {
+      if (BuildConfig.getSync().defaultRenderer === "cef") {
+        log("Skipping the system-webview navigation queue regression under CEF");
+        return;
+      }
+
+      const viewsBefore = new Set(BrowserView.getAll().map((view) => view.id));
+      const win = await createWindow({
+        url: "views://test-oopif-navigation/index.html",
+        title: "OOPIF Initialization Navigation Test",
+        sandbox: false,
+        width: 720,
+        height: 520,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 5000));
+
+      const nestedUrls = BrowserView.getAll()
+        .filter((view) => !viewsBefore.has(view.id))
+        .filter((view) => view.hostWebviewId === win.webview.id)
+        .map((view) => view.url)
+        .sort();
+
+      expect(nestedUrls).toEqual([
+        "views://test-runner/index.html#queued-attribute",
+        "views://test-runner/index.html#queued-load-url",
+      ]);
+      log(`Queued navigation reached both OOPIFs: ${nestedUrls.join(", ")}`);
     },
   }),
 

@@ -5,6 +5,12 @@
 // (e.g. include/cef_app.h, which pulls them in transitively).
 //
 // Behavior (consistent across macOS, Linux, Windows):
+//   - partition == "persist:default" -> CEF's process-wide global context.
+//     The global context owns the app's default persistent profile. Creating a
+//     second context with a custom profile named "default" fails under CEF's
+//     Chrome runtime on Linux and prevents persistent storage such as OPFS from
+//     opening. This exact identifier is intentionally handled before the generic
+//     persist:* branch below.
 //   - partition == ""               → fresh ephemeral CefRequestContext per call.
 //     We deliberately do NOT route the default partition to GetGlobalContext():
 //     under Chrome runtime, attaching multiple browsers to the global context in
@@ -69,7 +75,17 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
 
     bool isPersistent = identifier.size() >= 8 && identifier.compare(0, 8, "persist:") == 0;
 
-    // Default partition → fresh ephemeral context per webview.
+    // The default persistent session is CEF's global profile. Chrome runtime
+    // rejects a second request context whose custom cache path represents that
+    // same default profile, which breaks persistent storage (including OPFS) on
+    // Linux. Keep this exact match separate from named persistent partitions.
+    if (identifier == "persist:default") {
+        CefRefPtr<CefRequestContext> ctx = CefRequestContext::GetGlobalContext();
+        registerScheme(ctx);
+        return ctx;
+    }
+
+    // No partition -> fresh ephemeral context per webview.
     // Avoids a Chrome-runtime race where multiple browsers attached to the
     // global context can spawn their own top-level chrome window instead of
     // embedding via SetAsChild. See behavior comment at top of file.

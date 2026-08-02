@@ -29,17 +29,17 @@ src/
 
 ### Development Mode
 ```bash
-bun dev
+hutch run dev
 ```
 
 ### Build for Production
 ```bash
-bun build
+hutch run build:canary
 ```
 
 ### Run the Built App
 ```bash
-bun start
+hutch run start
 ```
 
 ## How It Works

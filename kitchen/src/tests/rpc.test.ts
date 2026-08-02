@@ -1,13 +1,144 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
 import { defineTest, expect } from "../test-framework/types";
-import { BrowserView } from "electrobun/bun";
-import type { TestHarnessRPC } from "../test-harness/index";
+import { BrowserView, BuildConfig } from "electrobun/bun";
+import type {
+  HostSocketStressState,
+  SocketSendSummary,
+  StressMessageStats,
+  StressRequestSummary,
+  TestHarnessRPC,
+} from "../test-harness/index";
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function createStressMessageCollector() {
+  const ids = new Set<number>();
+  const duplicates = new Set<number>();
+
+  return {
+    reset() {
+      ids.clear();
+      duplicates.clear();
+    },
+    record(id: number) {
+      if (ids.has(id)) {
+        duplicates.add(id);
+      }
+      ids.add(id);
+    },
+    getStats(expectedCount: number): StressMessageStats {
+      const missing: number[] = [];
+      for (let id = 0; id < expectedCount; id++) {
+        if (!ids.has(id)) {
+          missing.push(id);
+        }
+      }
+
+      return {
+        count: ids.size,
+        expectedCount,
+        missing,
+        duplicates: Array.from(duplicates).sort((a, b) => a - b),
+      };
+    },
+  };
+}
+
+type StressValueCollector<T> = {
+  set(value: T): void;
+  wait(label: string, timeoutMs?: number): Promise<T>;
+};
+
+function createStressValueCollector<T>(): StressValueCollector<T> {
+  let value: T | undefined;
+
+  return {
+    set(nextValue: T) {
+      value = nextValue;
+    },
+    async wait(label: string, timeoutMs = 10000) {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (value !== undefined) {
+          return value;
+        }
+        await sleep(50);
+      }
+      throw new Error(`Timed out waiting for ${label}`);
+    },
+  };
+}
+
+function describeStressFailure(label: string, stats: StressMessageStats) {
+  return [
+    `${label}: expected ${stats.expectedCount}, received ${stats.count}`,
+    `missing=${stats.missing.length ? stats.missing.slice(0, 20).join(",") : "none"}`,
+    `duplicates=${stats.duplicates.length ? stats.duplicates.slice(0, 20).join(",") : "none"}`,
+  ].join("; ");
+}
+
+async function waitForStressStats(
+  readStats: () => StressMessageStats | Promise<StressMessageStats>,
+  expectedCount: number,
+  timeoutMs = 5000,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let stats = await readStats();
+
+  while (
+    Date.now() < deadline &&
+    (stats.count < expectedCount || stats.missing.length > 0)
+  ) {
+    await sleep(50);
+    stats = await readStats();
+  }
+
+  return stats;
+}
+
+function assertAllStressMessagesArrived(label: string, stats: StressMessageStats) {
+  if (
+    stats.count !== stats.expectedCount ||
+    stats.missing.length > 0 ||
+    stats.duplicates.length > 0
+  ) {
+    throw new Error(describeStressFailure(label, stats));
+  }
+}
+
+async function waitForHostSocketOpen(webviewRpc: any, timeoutMs = 10000): Promise<HostSocketStressState> {
+	const deadline = Date.now() + timeoutMs;
+	let lastState: HostSocketStressState | undefined;
+
+	while (Date.now() < deadline) {
+		const currentState = await webviewRpc.request.getHostSocketStressState({}) as HostSocketStressState;
+		lastState = currentState;
+		if (currentState.readyState === 1) {
+			return currentState;
+		}
+		await sleep(100);
+	}
+
+  throw new Error(`Timed out waiting for webview host socket to open: ${JSON.stringify(lastState)}`);
+}
 
 // Create RPC config for test harness
-function createTestHarnessRPC() {
+type StressHandlers = {
+  bunStressMessages?: ReturnType<typeof createStressMessageCollector>;
+  webviewMessageSummary?: StressValueCollector<StressMessageStats>;
+  webviewRequestSummary?: StressValueCollector<StressRequestSummary>;
+  socketSendSummary?: StressValueCollector<SocketSendSummary>;
+};
+
+export function createTestHarnessRPC(
+  maxRequestTime = 10000,
+  stressHandlers: StressHandlers = {},
+) {
   return BrowserView.defineRPC<TestHarnessRPC>({
-    maxRequestTime: 10000,
+    maxRequestTime,
     handlers: {
       requests: {
         echo: ({ value }) => value,
@@ -24,12 +155,63 @@ function createTestHarnessRPC() {
         ping: ({ timestamp }) => {
           console.log(`Received ping at ${timestamp}`);
         },
+        stressMessageToBun: ({ id }) => {
+          stressHandlers.bunStressMessages?.record(id);
+        },
+        stressWebviewMessageSummary: (stats) => {
+          stressHandlers.webviewMessageSummary?.set(stats);
+        },
+        stressWebviewRequestSummary: (summary) => {
+          stressHandlers.webviewRequestSummary?.set(summary);
+        },
+        stressSocketSendSummary: (summary) => {
+          stressHandlers.socketSendSummary?.set(summary);
+        },
       },
     },
   });
 }
 
 export const rpcTests = [
+	defineTest({
+		name: "Webview tag BrowserView created event",
+		category: "BrowserView",
+		description:
+			"Attach typed RPC when an electrobun-webview tag creates its BrowserView",
+		timeout: 20000,
+		async run({ createWindow, log }) {
+			const tagRpc = createTestHarnessRPC(10000);
+			let callbackView: BrowserView | undefined;
+			let resolveDomReady: (() => void) | undefined;
+			const domReady = new Promise<void>((resolve) => {
+				resolveDomReady = resolve;
+			});
+
+			const removeCreatedListener = BrowserView.on("created", (view) => {
+				callbackView = view;
+				expect(BrowserView.getById(view.id)).toBe(view);
+				tagRpc.setTransport(view.createTransport());
+				view.on("dom-ready", () => resolveDomReady?.());
+			});
+
+			try {
+				await createWindow({
+					url: "views://test-oopif/index.html",
+					title: "Webview tag created event",
+					renderer: "cef",
+				});
+
+				await domReady;
+				expect(callbackView).toBeDefined();
+				const product = await tagRpc.request.multiply({ a: 6, b: 7 });
+				expect(product).toBe(42);
+				log(`Attached typed RPC to BrowserView ${callbackView!.id}`);
+			} finally {
+				removeCreatedListener();
+			}
+		},
+	}),
+
   defineTest({
     name: "bun to webview: request with response",
     category: "RPC",
@@ -82,6 +264,47 @@ export const rpcTests = [
   }),
 
   defineTest({
+    name: "webview to bun: per-request timeout override",
+    category: "RPC",
+    description: "Keep a modal-style request alive without changing other RPC timeouts",
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC();
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "RPC Timeout Override Test",
+        renderer: BuildConfig.getSync().defaultRenderer,
+      });
+
+      await sleep(1000);
+
+      const timedOut = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+        script: `
+          return window.electrobun.rpc.request.delayed(
+            { ms: 150, value: "late" },
+            { maxRequestTime: 20 },
+          ).then(
+            () => "unexpected success",
+            error => error.message,
+          );
+        `,
+      });
+      expect(timedOut).toBe("RPC request timed out.");
+
+      const dialogStyleResult = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+        script: `
+          return window.electrobun.rpc.request.delayed(
+            { ms: 150, value: "dialog completed" },
+            { maxRequestTime: Infinity },
+          );
+        `,
+      });
+      expect(dialogStyleResult).toBe("dialog completed");
+      log("Finite override timed out and modal-style request completed");
+    },
+  }),
+
+  defineTest({
     name: "RPC echo with string",
     category: "RPC",
     description: "Test echo with a simple string",
@@ -105,6 +328,50 @@ export const rpcTests = [
 
       expect(result).toBe(testString);
       log(`Echo successful: ${result}`);
+    },
+  }),
+
+  defineTest({
+    name: "RPC native Unicode survives idle round trips",
+    category: "RPC",
+    description:
+      "Verify mixed-script UTF-8 remains exact across the Windows native RPC fallback after idle periods",
+    timeout: 30000,
+    async run({ createWindow, log }) {
+      const rpc = createTestHarnessRPC(20000);
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "Unicode RPC 测试 Тест",
+        renderer: "native",
+      });
+
+      const webviewRpc = win.webview.rpc;
+      if (!webviewRpc) {
+        throw new Error("Expected webview RPC to be available");
+      }
+
+      await sleep(1000);
+      const scripts =
+        "Български Ελληνικά 日本語 测试 한국어 café 🧪🚀";
+      const boundaryPayload = Array.from(
+        { length: 2048 },
+        (_, index) => `${index}:${scripts}\n`,
+      ).join("");
+
+      for (let round = 0; round < 3; round++) {
+        // Leave the transport idle between requests. This is safe to automate
+        // while still exercising the resume-sensitive native transport path.
+        await sleep(250);
+        const result = await webviewRpc.request.echoFromHost({
+          value: `${round}:${boundaryPayload}`,
+        });
+        expect(result).toBe(`${round}:${boundaryPayload}`);
+      }
+
+      log(
+        `Preserved ${boundaryPayload.length} UTF-16 code units over 3 native RPC round trips`,
+      );
     },
   }),
 
@@ -244,6 +511,217 @@ export const rpcTests = [
 
       expect(title).toBe("Test Harness");
       log(`Document title: ${title}`);
+    },
+  }),
+
+  defineTest({
+    name: "RPC stress: native burst delivery",
+    category: "RPC",
+    description: "Stress native renderer RPC bursts to catch dropped messages or responses",
+    timeout: 120000,
+    async run({ createWindow, log }) {
+      const messageCount = 5000;
+      const requestCount = 1000;
+      const bunStressMessages = createStressMessageCollector();
+      const webviewMessageSummary = createStressValueCollector<StressMessageStats>();
+      const webviewRequestSummary = createStressValueCollector<StressRequestSummary>();
+      const rpc = createTestHarnessRPC(30000, {
+        bunStressMessages,
+        webviewMessageSummary,
+        webviewRequestSummary,
+      });
+      bunStressMessages.reset();
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "RPC Native Stress Test",
+        renderer: 'native',
+      });
+
+      const webviewRpc = win.webview.rpc;
+      if (!webviewRpc) {
+        throw new Error("Expected webview RPC to be available");
+      }
+
+      await sleep(1000);
+      const socketState = await waitForHostSocketOpen(webviewRpc);
+      log(`Host socket open before native burst: ${JSON.stringify(socketState)}`);
+      log("Starting webview stress burst via bun -> webview RPC message");
+      webviewRpc.send.startStressFromBun({ messageCount, requestCount });
+
+      log(`Sending ${messageCount} large fire-and-forget messages from bun to webview concurrently`);
+      const outputPayload = "x".repeat(16384);
+      for (let id = 0; id < messageCount; id++) {
+        webviewRpc.send.stressMessageToWebview({
+          id,
+          payload: `${id}:${outputPayload}`,
+        });
+      }
+      webviewRpc.send.finishStressMessageToWebview({ expectedCount: messageCount });
+
+      log(`Waiting for ${messageCount} fire-and-forget messages from webview to bun`);
+      const bunStats = await waitForStressStats(
+        () => bunStressMessages.getStats(messageCount),
+        messageCount,
+        30000,
+      );
+      assertAllStressMessagesArrived("webview -> bun messages", bunStats);
+      log(`Received all ${bunStats.count} webview -> bun messages`);
+
+      log(`Waiting for ${requestCount} concurrent requests from webview to bun`);
+      const webviewRequestResult = await webviewRequestSummary.wait(
+        "webview -> bun request summary",
+        45000,
+      );
+      expect(webviewRequestResult.received).toBe(requestCount);
+      if (webviewRequestResult.errorCount > 0) {
+        log(`Webview -> bun request errors: ${JSON.stringify(webviewRequestResult.errors)}`);
+      }
+      expect(webviewRequestResult.errorCount).toBe(0);
+      expect(webviewRequestResult.mismatchCount).toBe(0);
+      log(`Completed ${webviewRequestResult.received} webview -> bun requests`);
+
+      const webviewStats = await webviewMessageSummary.wait(
+        "bun -> webview message summary",
+        30000,
+      );
+      assertAllStressMessagesArrived("bun -> webview messages", webviewStats);
+      log(`Received all ${webviewStats.count} bun -> webview messages`);
+
+      log(`Running ${requestCount} concurrent requests from bun to webview`);
+      const bunRequestResults = await Promise.all(
+        Array.from({ length: requestCount }, (_, id) =>
+          webviewRpc.request.multiply({ a: id, b: 1 })
+            .then((value: number) => ({ id, value }))
+            .catch((error: Error) => ({ id, error: String(error?.message || error) })),
+        ),
+      );
+      const bunRequestErrors = bunRequestResults.filter((result) => "error" in result);
+      const bunRequestMismatches = bunRequestResults.filter(
+        (result) => !("error" in result) && result.value !== result.id,
+      );
+      if (bunRequestErrors.length > 0) {
+        log(`Bun -> webview request errors: ${JSON.stringify(bunRequestErrors.slice(0, 10))}`);
+      }
+
+      expect(bunRequestResults).toHaveLength(requestCount);
+      expect(bunRequestErrors).toHaveLength(0);
+      expect(bunRequestMismatches).toHaveLength(0);
+      log(`Completed ${bunRequestResults.length} bun -> webview requests`);
+    },
+  }),
+
+  defineTest({
+    name: "RPC stress: native fallback to socket transition",
+    category: "RPC",
+    description: "Stress the webview-to-bun RPC transition from postMessage fallback to websocket transport",
+    timeout: 120000,
+    async run({ createWindow, log }) {
+      const messageCount = 5000;
+      const requestCount = 500;
+      const enableSocketAt = Math.floor(messageCount / 2);
+      const bunStressMessages = createStressMessageCollector();
+      const webviewRequestSummary = createStressValueCollector<StressRequestSummary>();
+      const rpc = createTestHarnessRPC(30000, {
+        bunStressMessages,
+        webviewRequestSummary,
+      });
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "RPC Native Transport Transition Test",
+        renderer: 'native',
+      });
+
+      const webviewRpc = win.webview.rpc;
+      if (!webviewRpc) {
+        throw new Error("Expected webview RPC to be available");
+      }
+
+      await sleep(1000);
+      const socketState = await waitForHostSocketOpen(webviewRpc);
+      log(`Host socket open before transition: ${JSON.stringify(socketState)}`);
+      expect(socketState.socketUrl, "transition socket URL").toContain("ws://127.0.0.1:");
+      expect(socketState.canSend, "transition socket send-ready").toBe(true);
+
+      bunStressMessages.reset();
+      log(
+        `Starting ${messageCount} webview -> bun messages: first ${enableSocketAt} via fallback, rest via websocket`,
+      );
+      webviewRpc.send.startTransportTransitionStressFromBun({
+        messageCount,
+        requestCount,
+        enableSocketAt,
+      });
+
+      const bunStats = await waitForStressStats(
+        () => bunStressMessages.getStats(messageCount),
+        messageCount,
+        30000,
+      );
+      assertAllStressMessagesArrived("webview -> bun fallback/socket transition messages", bunStats);
+      log(`Received all ${bunStats.count} transition messages`);
+
+      const webviewRequestResult = await webviewRequestSummary.wait(
+        "webview -> bun transition request summary",
+        45000,
+      );
+      expect(webviewRequestResult.received).toBe(requestCount);
+      expect(webviewRequestResult.errorCount).toBe(0);
+      expect(webviewRequestResult.mismatchCount).toBe(0);
+      log(`Completed ${webviewRequestResult.received} post-transition webview -> bun requests`);
+    },
+  }),
+
+  defineTest({
+    name: "RPC stress: native steady socket delivery",
+    category: "RPC",
+    description: "Send low-rate webview-to-bun RPC messages over websocket to catch persistent socket drops",
+    timeout: 30000,
+    async run({ createWindow, log }) {
+      const messageCount = 30;
+      const intervalMs = 100;
+      const bunStressMessages = createStressMessageCollector();
+      const socketSendSummary = createStressValueCollector<SocketSendSummary>();
+      const rpc = createTestHarnessRPC(10000, {
+        bunStressMessages,
+        socketSendSummary,
+      });
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        rpc,
+        title: "RPC Native Steady Socket Test",
+        renderer: 'native',
+      });
+
+      const webviewRpc = win.webview.rpc;
+      if (!webviewRpc) {
+        throw new Error("Expected webview RPC to be available");
+      }
+
+      await sleep(1000);
+      const socketState = await waitForHostSocketOpen(webviewRpc);
+      log(`Host socket open before steady socket test: ${JSON.stringify(socketState)}`);
+      expect(socketState.socketUrl, "steady socket URL").toContain("ws://127.0.0.1:");
+      expect(socketState.canSend, "steady socket send-ready").toBe(true);
+
+      bunStressMessages.reset();
+      log(`Starting ${messageCount} webview -> bun websocket messages at ${intervalMs}ms intervals`);
+      webviewRpc.send.startTimedSocketStressFromBun({
+        messageCount,
+        intervalMs,
+      });
+
+      const summary = await socketSendSummary.wait("webview socket send summary", 15000);
+      log(`Socket send summary: ${JSON.stringify(summary)}`);
+
+      const bunStats = await waitForStressStats(
+        () => bunStressMessages.getStats(messageCount),
+        messageCount,
+        10000,
+      );
+      assertAllStressMessagesArrived("steady webview -> bun socket messages", bunStats);
+      log(`Received all ${bunStats.count} steady socket messages`);
     },
   }),
 

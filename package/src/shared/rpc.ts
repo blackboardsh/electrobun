@@ -39,6 +39,14 @@ type RPCRequestResponse<
 	M extends keyof RS = keyof RS,
 > = "response" extends keyof RS[M] ? RS[M]["response"] : void;
 
+export type RPCRequestOptions = {
+	/**
+	 * Maximum time in milliseconds to await this request.
+	 * Infinity disables the timeout.
+	 */
+	maxRequestTime?: number;
+};
+
 type BaseRPCMessagesSchema = Record<never, unknown>;
 
 export type RPCMessagesSchema<
@@ -115,9 +123,9 @@ type RPCRequestsProxy<RS extends RPCRequestsSchema> = {
 	[K in keyof RS]: (
 		...args: "params" extends keyof RS[K]
 			? undefined extends RS[K]["params"]
-				? [params?: RS[K]["params"]]
-				: [params: RS[K]["params"]]
-			: []
+				? [params?: RS[K]["params"], options?: RPCRequestOptions]
+				: [params: RS[K]["params"], options?: RPCRequestOptions]
+			: [params?: undefined, options?: RPCRequestOptions]
 	) => Promise<RPCRequestResponse<RS, K>>;
 };
 
@@ -136,7 +144,9 @@ type RPCMessagesProxy<MS extends RPCMessagesSchema> = {
 type RPCTransportHandler = (data: any) => void;
 
 export type RPCTransport = {
-	send?: (data: any) => void;
+	// Async transports may resolve after the packet has actually been handed to
+	// the underlying channel. Request timeouts start after that handoff.
+	send?: (data: any) => void | PromiseLike<void>;
 	registerHandler?: (handler: RPCTransportHandler) => void;
 	unregisterHandler?: () => void;
 };
@@ -247,15 +257,55 @@ export function createRPC<
 	>();
 	const requestTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
 
+	function startRequestTimeout(
+		requestId: number,
+		requestOptions?: RPCRequestOptions,
+	) {
+		const requestMaxRequestTime =
+			requestOptions?.maxRequestTime ?? maxRequestTime;
+		if (
+			requestMaxRequestTime === Infinity ||
+			!requestListeners.has(requestId)
+		)
+			return;
+
+		requestTimeouts.set(
+			requestId,
+			setTimeout(() => {
+				requestTimeouts.delete(requestId);
+				const listener = requestListeners.get(requestId);
+				requestListeners.delete(requestId);
+				listener?.reject(new Error("RPC request timed out."));
+			}, requestMaxRequestTime),
+		);
+	}
+
+	function rejectRequestSend(requestId: number, error: unknown) {
+		const listener = requestListeners.get(requestId);
+		if (!listener) return;
+
+		requestListeners.delete(requestId);
+		listener.reject(
+			error instanceof Error ? error : new Error(String(error)),
+		);
+	}
+
 	function requestFn<M extends keyof RemoteSchema["requests"]>(
 		method: M,
 		...args: "params" extends keyof RemoteSchema["requests"][M]
 			? undefined extends RemoteSchema["requests"][M]["params"]
-				? [params?: RemoteSchema["requests"][M]["params"]]
-				: [params: RemoteSchema["requests"][M]["params"]]
-			: []
+				? [
+						params?: RemoteSchema["requests"][M]["params"],
+						options?: RPCRequestOptions,
+					]
+				: [
+						params: RemoteSchema["requests"][M]["params"],
+						options?: RPCRequestOptions,
+					]
+			: [params?: undefined, options?: RPCRequestOptions]
 	): Promise<RPCRequestResponse<RemoteSchema["requests"], M>> {
 		const params = args[0];
+		const requestOptions = args[1] as RPCRequestOptions | undefined;
 		return new Promise((resolve, reject) => {
 			if (!transport.send)
 				throw missingTransportMethodError(["send"], "make requests");
@@ -267,24 +317,28 @@ export function createRPC<
 				params,
 			};
 			requestListeners.set(requestId, { resolve, reject });
-			if (maxRequestTime !== Infinity)
-				requestTimeouts.set(
-					requestId,
-					setTimeout(() => {
-						requestTimeouts.delete(requestId);
-						requestListeners.delete(requestId);
-						reject(new Error("RPC request timed out."));
-					}, maxRequestTime),
-				);
-			debugHooks.onSend?.(request);
-			transport.send(request);
+			try {
+				debugHooks.onSend?.(request);
+				const sendResult = transport.send(request);
+				if (sendResult && typeof sendResult.then === "function") {
+					Promise.resolve(sendResult).then(
+						() => startRequestTimeout(requestId, requestOptions),
+						(error) => rejectRequestSend(requestId, error),
+					);
+				} else {
+					startRequestTimeout(requestId, requestOptions);
+				}
+			} catch (error) {
+				rejectRequestSend(requestId, error);
+			}
 		});
 	}
 
 	const request = new Proxy(requestFn, {
 		get: (target, prop, receiver) => {
 			if (prop in target) return Reflect.get(target, prop, receiver);
-			return (params: any) => (requestFn as any)(prop, params);
+			return (params: any, requestOptions?: RPCRequestOptions) =>
+				(requestFn as any)(prop, params, requestOptions);
 		},
 	}) as typeof requestFn & RPCRequestsProxy<RemoteSchema["requests"]>;
 

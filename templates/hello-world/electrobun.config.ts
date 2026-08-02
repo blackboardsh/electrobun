@@ -7,6 +7,10 @@ export default {
 		version: "0.0.1",
 	},
 	build: {
+		mainProcess: "cottontail",
+		cottontail: {
+			entrypoint: "src/bun/index.ts",
+		},
 		views: {
 			mainview: {
 				entrypoint: "src/mainview/index.ts",

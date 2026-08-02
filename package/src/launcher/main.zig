@@ -1,5 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const automation = @import("automation.zig");
+const linux_dependencies = @import("linux_dependencies.zig");
 const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
@@ -103,6 +105,73 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     return false;
 }
 
+const MainProcess = enum {
+    bun,
+    cottontail,
+    zig,
+    rust,
+    go,
+    odin,
+};
+
+fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
+    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
+    defer allocator.free(build_path);
+
+    const file = std.fs.openFileAbsolute(build_path, .{}) catch return .cottontail;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return .cottontail;
+    defer allocator.free(content);
+
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .cottontail;
+    defer parsed.deinit();
+
+    if (parsed.value.object.get("mainProcess")) |main_process_value| {
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "bun")) {
+            return .bun;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "cottontail")) {
+            return .cottontail;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
+            return .zig;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "rust")) {
+            return .rust;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "go")) {
+            return .go;
+        }
+        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "odin")) {
+            return .odin;
+        }
+    }
+
+    return .cottontail;
+}
+
+fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: anytype) !void {
+    try env_map.put("COTTONTAIL_ELECTROBUN_DIST", exe_dir);
+
+    const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return;
+    const file = std.fs.openFileAbsolute(version_path, .{}) catch return;
+    defer file.close();
+
+    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return;
+    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return;
+
+    if (parsed.value.object.get("name")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_NAME", value.string);
+    }
+    if (parsed.value.object.get("identifier")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_IDENTIFIER", value.string);
+    }
+    if (parsed.value.object.get("channel")) |value| {
+        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_CHANNEL", value.string);
+    }
+}
+
 // SIGALRM handler - safety net timeout for hung shutdowns
 fn alarmHandler(_: c_int) callconv(.C) void {
     // Timeout expired - app hung during shutdown. Kill entire process group.
@@ -153,39 +222,65 @@ pub fn main() !void {
         _ = c.signal(c.SIGALRM, alarmHandler);
     }
 
-    // Platform-specific paths
-    var argv: []const []const u8 = undefined;
-    var resources_path: []u8 = undefined;
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
+    const launcher_args = try std.process.argsAlloc(arena_alloc);
+    const main_process = detectMainProcess(arena_alloc, exe_dir);
 
-    switch (builtin.os.tag) {
-        .macos => {
-            // macOS: launcher is in MacOS/, resources in Resources/
-            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-            argv = &[_][]const u8{ "./bun", resources_path };
+    // Platform-specific paths
+    var argv: []const []const u8 = undefined;
+
+    switch (main_process) {
+        .zig, .rust, .go, .odin => {
+            const main_binary_name = if (builtin.os.tag == .windows) "main.exe" else "main";
+            const main_binary_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, main_binary_name });
+            argv = &[_][]const u8{main_binary_path};
         },
-        .linux, .windows => {
-            // Linux/Windows: launcher is in bin/, resources in Resources/
-            resources_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
-            const bun_name = if (builtin.os.tag == .windows) "bun.exe" else "bun";
-            argv = &[_][]const u8{ try std.fs.path.join(arena_alloc, &.{ exe_dir, bun_name }), resources_path };
+        .bun, .cottontail => {
+            const main_script = try std.fs.path.join(arena_alloc, &.{ exe_dir, "..", "Resources", "main.js" });
+            const runtime_name = switch (main_process) {
+                .bun => if (builtin.os.tag == .windows) "bun.exe" else "bun",
+                .cottontail => if (builtin.os.tag == .windows) "cottontail.exe" else "cottontail",
+                else => unreachable,
+            };
+            const runtime_path = switch (builtin.os.tag) {
+                .macos, .linux, .windows => try std.fs.path.join(arena_alloc, &.{ exe_dir, runtime_name }),
+                else => @panic("Unsupported platform"),
+            };
+            argv = &[_][]const u8{ runtime_path, main_script };
         },
-        else => @panic("Unsupported platform"),
     }
 
     // Create an instance of ChildProcess
     var child_process = std.process.Child.init(argv, alloc);
     child_process.cwd = exe_dir;
+    var env_map = try std.process.getEnvMap(arena_alloc);
 
     // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
+        // WebKitGTK automation is disabled unless WebKitWebDriver launches the
+        // app with the exact `--automation` flag. Keep the marker private to the
+        // child process so the application's own argument contract is unchanged.
+        if (automation.requested(launcher_args)) {
+            try env_map.put(automation.environment_variable, "1");
+
+            // WebKitWebDriver supplies this endpoint for WebKitGTK. Shield it
+            // while Cottontail/Bun initializes its own JavaScriptCore runtime,
+            // then let the native wrapper restore it immediately before WebKit
+            // creates its context. Otherwise the main runtime claims the port.
+            if (env_map.get(automation.inspector_server_environment_variable)) |server| {
+                try env_map.put(
+                    automation.private_inspector_server_environment_variable,
+                    server,
+                );
+                env_map.remove(automation.inspector_server_environment_variable);
+            }
+        }
+
         // Check for CEF libraries that need LD_PRELOAD
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
         const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
-
-        var env_map = try std.process.getEnvMap(arena_alloc);
 
         // Set LD_LIBRARY_PATH to include current directory
         if (env_map.get("LD_LIBRARY_PATH")) |existing_ld_path| {
@@ -221,18 +316,22 @@ pub fn main() !void {
 
         // Set ICU_DATA for external ICU data file (Linux)
         try env_map.put("ICU_DATA", exe_dir);
-
-        child_process.env_map = &env_map;
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
     } else if (builtin.os.tag == .windows) {
         // On Windows, get environment and set ICU_DATA for external ICU data
-        var env_map = try std.process.getEnvMap(arena_alloc);
         try env_map.put("ICU_DATA", exe_dir);
-        child_process.env_map = &env_map;
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
     } else {
         // On macOS, get environment and inherit it (uses system ICU)
-        var env_map = try std.process.getEnvMap(arena_alloc);
-        child_process.env_map = &env_map;
+        if (main_process == .cottontail) {
+            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+        }
     }
+    child_process.env_map = &env_map;
 
     std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
 
@@ -332,6 +431,17 @@ pub fn main() !void {
             .Exited => |code| {
                 if (code != 0) {
                     std.debug.print("Child process exited with code: {d}\n", .{code});
+
+                    if (builtin.os.tag == .linux and linux_dependencies.shouldDiagnoseChildExit(code)) {
+                        if (std.fs.path.join(arena_alloc, &.{ exe_dir, "libNativeWrapper.so" })) |native_wrapper_path| {
+                            _ = linux_dependencies.diagnoseNativeWrapperFailure(
+                                alloc,
+                                native_wrapper_path,
+                                env_map.get("LD_LIBRARY_PATH"),
+                            ) catch false;
+                        } else |_| {}
+                    }
+
                     std.process.exit(@intCast(code));
                 }
             },

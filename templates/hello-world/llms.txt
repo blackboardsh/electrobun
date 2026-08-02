@@ -6,13 +6,13 @@ IMPORTANT: Electrobun is NOT Electron. Do not use Electron APIs or patterns.
 
 ## Documentation
 
-Full API reference: https://blackboard.sh/electrobun/llms.txt
-Getting started: https://blackboard.sh/electrobun/docs/
+Full API reference: https://framework.blackboard.sh/electrobun/apis/
+Getting started: https://framework.blackboard.sh/electrobun/guides/quick-start/
 
 ## Quick Reference
 
 Import patterns:
-- Main process (Bun): `import { BrowserWindow } from "electrobun/bun"`
+- Main process (Cottontail): `import { BrowserWindow } from "electrobun/bun"`
 - Browser context: `import { Electroview } from "electrobun/view"`
 
 Use `views://` URLs to load bundled assets (e.g., `url: "views://mainview/index.html"`).

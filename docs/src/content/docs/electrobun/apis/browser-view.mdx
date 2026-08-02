@@ -9,7 +9,7 @@ import { Aside } from "@astrojs/starlight/components";
   </blockquote>
 
   <Aside type="tip">
-    <p>Instead of creating BrowserViews directly from the bun process, you would use the <a href="/electrobun/apis/browser-window">BrowserWindow</a> class which automatically creates a default BrowserView that fills the window, and then use <a href="/electrobun/apis/browser/electrobun-webview-tag">Webvew Tags</a> within your html to create nested BrowserViews from the browser context.</p>
+    <p>Instead of creating BrowserViews directly from the main process, you would use the <a href="/electrobun/apis/browser-window">BrowserWindow</a> class which automatically creates a default BrowserView that fills the window, and then use <a href="/electrobun/apis/browser/electrobun-webview-tag">Webvew Tags</a> within your html to create nested BrowserViews from the browser context.</p>
   </Aside>
 
   
@@ -42,7 +42,7 @@ const webview = new BrowserView({
 
 
   <Aside type="note">
-    <p>While you can create a BrowserView directly in bun it will only render when you add it to a window.</p>
+    <p>While you can create a BrowserView directly in the main process, it will only render when you add it to a window.</p>
   </Aside>
 
 ## Constructor Options
@@ -115,6 +115,10 @@ const webview = new BrowserView({
 });
 ```
 
+`persist:default` selects the app's shared default persistent profile. Other
+`persist:*` names create isolated persistent profiles, while names without the
+prefix remain ephemeral.
+
 
 ### preload
   <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
@@ -143,7 +147,7 @@ const webview = new BrowserView({
 
 
 ### rpc
-  <p>The RPC property allows you to establish RPC (remote procedure calls) between the bun process and this window's default BrowserView. In other words it lets you define functions that execute in the bun process that are callable and return a value back to the browser process and visa versa.</p>
+  <p>The RPC property allows you to establish RPC (remote procedure calls) between the main process and this window's default BrowserView. In other words it lets you define functions that execute in the main process that are callable and return a value back to the browser process and visa versa.</p>
   <p>These RPC functions are asynchronous.</p>
 
   <p>`src/shared/types.ts`</p>
@@ -153,7 +157,7 @@ export type MyWebviewRPCType = {
   // functions that execute in the main process
   bun: RPCSchema<{
     requests: {
-      someBunFunction: {
+      someMainProcessFunction: {
         params: {
           a: number;
           b: number;
@@ -162,7 +166,7 @@ export type MyWebviewRPCType = {
       };
     };
     messages: {
-      logToBun: {
+      logToMainProcess: {
         msg: string;
       };
     };
@@ -194,24 +198,24 @@ export type MyWebviewRPCType = {
 import { BrowserView } from "electrobun/bun";
 import { type MyWebviewRPCType } from "../shared/types";
 
-// Create an RPC object for the bun handlers with the shared type
+// Create an RPC object for the main-process handlers with the shared type
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
   maxRequestTime: 5000,
   handlers: {
     requests: {
-      someBunFunction: ({ a, b }) => {
+      someMainProcessFunction: ({ a, b }) => {
         console.log(`browser asked me to do math with: ${a} and ${b}`);
         return a + b;
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
       },
-      logToBun: ({ msg }) => {
-        console.log("Log to bun: ", msg);
+      logToMainProcess: ({ msg }) => {
+        console.log("Log to main process: ", msg);
       },
     },
   },
@@ -234,16 +238,21 @@ const webview = new BrowserView({
 
 // Note: These RPC methods will inherit types from the shared type
 
-// Call a browser function from bun
-const answer = await webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
+// Call a browser function from the main process
+const answer = await webview.rpc.request.someWebviewFunction(
+  { a: 4, b: 6 },
+  { maxRequestTime: 5000 },
+);
 
-// Send a message to the BrowserView from bun
+// Send a message to the BrowserView from the main process
 webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 
+  <p>The second argument to a request can set <code>maxRequestTime</code> for that call only. Requests without an override continue to use the RPC instance's configured timeout.</p>
+
 
   <Aside type="tip">
-    <p>The above code snippet shows defining the bun process rpc handlers and calling the browser process handlers from bun. To see how to handle the Browser context code take a look at the <a href="/electrobun/apis/browser-view">Browser API</a>.</p>
+    <p>The above code snippet shows defining the main process RPC handlers and calling the browser process handlers from the main process. To see how to handle the browser context code, take a look at the <a href="/electrobun/apis/browser-view">Browser API</a>.</p>
   </Aside>
 
 ### sandbox
@@ -269,6 +278,21 @@ webview.on("will-navigate", (event) => {
 
 
   <p>See the <a href="/electrobun/apis/browser-window">BrowserWindow sandbox documentation</a> for a complete overview of the security model and use cases.</p>
+
+### spellCheck
+  <p>Set `spellCheck: true` to enable macOS system continuous spell checking for editable content in a native WKWebView. The setting is reapplied after each completed navigation. Omitting the option or setting it to `false` leaves the renderer's existing default unchanged.</p>
+
+```typescript
+const webview = new BrowserView({
+  html: "<div contenteditable>Type here</div>",
+  renderer: "native",
+  spellCheck: true,
+});
+```
+
+  <Aside type="caution">
+    <p>This capability is available only for macOS native WKWebView. CEF, WebView2, and WebKitGTK leave their behavior unchanged and report unsupported from `setSpellCheck()`. WKWebView has no public API for this setting, so Electrobun uses the guarded WebKit testing SPI `_setContinuousSpellCheckingEnabledForTesting:`. WebKit may rename or remove that selector, and its current implementation uses process-level text-checker state that can be observed by webviews sharing a WebKit process.</p>
+  </Aside>
 
 ## Static Methods
 
@@ -305,6 +329,49 @@ const webview = BrowserView.getById(win.webview.id);
 ```
 
 
+### BrowserView.on("created")
+  <p>Subscribe to BrowserViews created by <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTags</a>. The handler runs after the BrowserView is registered and before the tag's initialization request resolves, so RPC can be attached without polling.</p>
+
+
+```typescript
+import { BrowserView } from "electrobun/bun";
+import type { TabRPC } from "../shared/types";
+
+const tabRPCs = new Map();
+
+const stopListening = BrowserView.on("created", (view) => {
+  const rpc = BrowserView.defineRPC<TabRPC>({
+    handlers: {
+      requests: {},
+      messages: {},
+    },
+  });
+
+  rpc.setTransport(view.createTransport());
+  tabRPCs.set(view.id, rpc);
+});
+
+// Later, when new tab creation is no longer expected:
+stopListening();
+```
+
+
+### BrowserView.off("created")
+  <p>Remove a previously registered WebviewTag BrowserView creation handler.</p>
+
+
+```typescript
+import type { BrowserViewCreatedHandler } from "electrobun/bun";
+
+const handleCreated: BrowserViewCreatedHandler = (view) => {
+  console.log(`Created BrowserView ${view.id}`);
+};
+
+BrowserView.on("created", handleCreated);
+BrowserView.off("created", handleCreated);
+```
+
+
 ### BrowserView.defineRPC
   <p>Whenever you create a BrowserWindow with async RPC you'll use this static method to create an RPC instance.</p>
 
@@ -315,7 +382,7 @@ export type MyWebviewRPCType = {
   // functions that execute in the main process
   bun: RPCSchema<{
     requests: {
-      someBunFunction: {
+      someMainProcessFunction: {
         params: {
           a: number;
           b: number;
@@ -324,7 +391,7 @@ export type MyWebviewRPCType = {
       };
     };
     messages: {
-      logToBun: {
+      logToMainProcess: {
         msg: string;
       };
     };
@@ -356,24 +423,24 @@ export type MyWebviewRPCType = {
 import { BrowserWindow, BrowserView } from "electrobun/bun";
 import { type MyWebviewRPCType } from "../shared/types";
 
-// Create an RPC object for the bun handlers with the shared type
+// Create an RPC object for the main-process handlers with the shared type
 const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
   maxRequestTime: 5000,
   handlers: {
     requests: {
-      someBunFunction: ({ a, b }) => {
+      someMainProcessFunction: ({ a, b }) => {
         console.log(`browser asked me to do math with: ${a} and ${b}`);
         return a + b;
       },
     },
     // When the browser sends a message we can handle it
-    // in the main bun process
+    // in the main process
     messages: {
       "*": (messageName, payload) => {
         console.log("global message handler", messageName, payload);
       },
-      logToBun: ({ msg }) => {
-        console.log("Log to bun: ", msg);
+      logToMainProcess: ({ msg }) => {
+        console.log("Log to main process: ", msg);
       },
     },
   },
@@ -421,6 +488,16 @@ webview.setPageZoom(1.0);
     <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
   </Aside>
 
+### setSpellCheck
+  <p>Explicitly enable or disable system spell checking after creation. Returns `true` only when the current view is a macOS native WKWebView and the required WebKit selector is available. A `false` return means no renderer state was changed.</p>
+
+```typescript
+const supported = webview.setSpellCheck(true);
+if (!supported) console.log("System spell checking is unavailable");
+
+webview.setSpellCheck(false);
+```
+
 ### loadURL
   <p>Load a url into the webview. This will navigate the webview and trigger navigation events.</p>
 
@@ -447,7 +524,7 @@ webview.loadHTML(htmlString);
 
 
 ### setNavigationRules
-  <p>Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Bun process is needed.</p>
+  <p>Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Cottontail process is needed.</p>
 
   <p><strong>Rule Format:</strong></p>
   <ul>
@@ -487,7 +564,7 @@ webview.setNavigationRules([]);
 
 
   <Aside type="tip">
-    <p>Navigation rules are evaluated entirely in native code without calling back to the Bun process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.</p>
+    <p>Navigation rules are evaluated entirely in native code without calling back to the Cottontail process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.</p>
   </Aside>
 
 ### findInPage
@@ -578,10 +655,10 @@ webview.toggleDevTools();
 ```typescript
 // ... configure BrowserWindow with BrowserView.defineRPC and new BrowserWindow()
 
-// Call a browser function from bun
+// Call a browser function from the main process
 const answer = await webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
 
-// Send a message to the BrowserView from bun
+// Send a message to the BrowserView from the main process
 webview.rpc.send.logToWebview({ msg: "my message" });
 ```
 
@@ -813,4 +890,3 @@ webview.on("download-failed", (event) => {
   console.log("Error:", event.detail.error);
 });
 ```
-

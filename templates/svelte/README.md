@@ -6,41 +6,38 @@ A fast Electrobun desktop app template with Svelte 5 and Vite for hot module rep
 
 ```bash
 # Install dependencies
-bun install
+hutch install
 
 # Development without HMR (uses bundled assets)
-bun run dev
+hutch run dev
 
 # Development with HMR (recommended)
-bun run dev:hmr
+hutch run dev:hmr
 
 # Build for production
-bun run build
-
-# Build for production release
-bun run build:prod
+hutch run build:canary
 ```
 
 ## How HMR Works
 
-When you run `bun run dev:hmr`:
+When you run `hutch run dev:hmr`:
 
 1. **Vite dev server** starts on `http://localhost:5173` with HMR enabled
 2. **Electrobun** starts and detects the running Vite server
 3. The app loads from the Vite dev server instead of bundled assets
 4. Changes to Svelte components update instantly without full page reload
 
-When you run `bun run dev` (without HMR):
+When you run `hutch run dev` (without HMR):
 
 1. Electrobun starts and loads from `views://mainview/index.html`
-2. You need to rebuild (`bun run build`) to see changes
+2. Vite rebuilds the bundled assets before Electrobun starts
 
 ## Project Structure
 
 ```
 ├── src/
 │   ├── bun/
-│   │   └── index.ts        # Main process (Electrobun/Bun)
+│   │   └── index.ts        # Main process (Electrobun/Cottontail)
 │   └── mainview/
 │       ├── App.svelte      # Svelte app component
 │       ├── main.ts         # Svelte entry point

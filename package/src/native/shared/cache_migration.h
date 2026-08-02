@@ -57,7 +57,10 @@ namespace electrobun {
 //   v2: partitions moved from <root>/<name> to <root>/partitions/<name> to
 //       avoid case-insensitive collisions with Chromium's auto-created
 //       <root>/Default profile folder.
-constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 2;
+//   v3: named partitions moved back to direct children of <root>, as required
+//       by CEF's Chrome runtime. persist:default now uses the global context,
+//       so it no longer creates a colliding named profile.
+constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 3;
 
 inline const char* cacheSentinelFilename() {
     return ".electrobun_cef_cache_version";
@@ -71,6 +74,12 @@ inline uint32_t readCacheSentinel(const std::filesystem::path& sentinelPath) {
     return in ? v : 0;
 }
 
+inline std::string cachePathForLog(const std::filesystem::path& path) {
+    const std::u8string value = path.u8string();
+    return std::string(
+        reinterpret_cast<const char*>(value.data()), value.size());
+}
+
 inline void writeCacheSentinel(const std::filesystem::path& sentinelPath,
                                uint32_t version) {
     std::filesystem::path tmpPath = sentinelPath;
@@ -80,7 +89,7 @@ inline void writeCacheSentinel(const std::filesystem::path& sentinelPath,
         if (!out) {
             fprintf(stderr,
                     "[cache_migration] warning: cannot open sentinel temp file: %s\n",
-                    tmpPath.string().c_str());
+                    cachePathForLog(tmpPath).c_str());
             return;
         }
         out << version << "\n";
@@ -108,8 +117,11 @@ inline bool isCachePathSafeToWipe(const std::filesystem::path& cachePath) {
     if (cachePath.empty()) return false;
     if (!cachePath.is_absolute()) return false;
 
-    const std::string leaf = cachePath.filename().string();
-    if (leaf != "CEF" && leaf != "cef_cache") return false;
+    const std::filesystem::path leaf = cachePath.filename();
+    if (leaf != std::filesystem::path("CEF") &&
+        leaf != std::filesystem::path("cef_cache")) {
+        return false;
+    }
 
     size_t depth = 0;
     for (const auto& part : cachePath.relative_path()) {
@@ -123,7 +135,9 @@ inline bool isCachePathSafeToWipe(const std::filesystem::path& cachePath) {
     return true;
 }
 
-inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
+inline void migrateCacheFolderIfNeeded(
+    const std::filesystem::path& cacheFolderPath
+) {
     try {
         if (cacheFolderPath.empty()) {
             fprintf(stderr,
@@ -132,11 +146,12 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
         }
 
         const std::filesystem::path cachePath(cacheFolderPath);
+        const std::string cachePathLog = cachePathForLog(cachePath);
 
         if (!isCachePathSafeToWipe(cachePath)) {
             fprintf(stderr,
                     "[cache_migration] skipped: path failed safety check: %s\n",
-                    cacheFolderPath.c_str());
+                    cachePathLog.c_str());
             return;
         }
 
@@ -156,7 +171,7 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
             if (mkEc) {
                 fprintf(stderr,
                         "[cache_migration] skipped: cannot create cache folder %s (%s)\n",
-                        cacheFolderPath.c_str(), mkEc.message().c_str());
+                        cachePathLog.c_str(), mkEc.message().c_str());
                 return;
             }
             writeCacheSentinel(sentinelPath, CEF_CACHE_FORMAT_VERSION);
@@ -166,7 +181,7 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
         if (!std::filesystem::is_directory(cachePath, ec)) {
             fprintf(stderr,
                     "[cache_migration] skipped: path exists but is not a directory: %s\n",
-                    cacheFolderPath.c_str());
+                    cachePathLog.c_str());
             return;
         }
 
@@ -178,7 +193,7 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
             if (itEc) {
                 fprintf(stderr,
                         "[cache_migration] skipped: cannot enumerate cache folder %s (%s)\n",
-                        cacheFolderPath.c_str(), itEc.message().c_str());
+                        cachePathLog.c_str(), itEc.message().c_str());
                 return;
             }
             for (const auto& entry : it) {
@@ -205,7 +220,7 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
         fprintf(stderr,
                 "[cache_migration] wiping CEF cache folder (format %u -> %u): %s\n",
                 existingVersion, CEF_CACHE_FORMAT_VERSION,
-                cacheFolderPath.c_str());
+                cachePathLog.c_str());
 
         // Wipe contents but preserve the folder itself. Per-entry failures
         // are warned and skipped — a partial wipe still beats refusing to
@@ -215,7 +230,7 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
         if (itEc) {
             fprintf(stderr,
                     "[cache_migration] warning: cannot enumerate cache folder for wipe %s (%s)\n",
-                    cacheFolderPath.c_str(), itEc.message().c_str());
+                    cachePathLog.c_str(), itEc.message().c_str());
             return;
         }
         for (const auto& entry : it) {
@@ -224,7 +239,8 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
             if (rmEc) {
                 fprintf(stderr,
                         "[cache_migration] warning: failed to remove %s (%s)\n",
-                        entry.path().string().c_str(), rmEc.message().c_str());
+                        cachePathForLog(entry.path()).c_str(),
+                        rmEc.message().c_str());
             }
         }
 
@@ -237,6 +253,10 @@ inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
         fprintf(stderr,
                 "[cache_migration] aborting due to unknown error\n");
     }
+}
+
+inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
+    migrateCacheFolderIfNeeded(std::filesystem::path(cacheFolderPath));
 }
 
 }  // namespace electrobun

@@ -19,8 +19,15 @@ import { execSync } from "child_process";
 import * as readline from "readline";
 import { OS, ARCH } from "../shared/platform";
 import { DEFAULT_CEF_VERSION_STRING } from "../shared/cef-version";
-import { BUN_VERSION } from "../shared/bun-version";
+import { RUST_VERSION } from "../shared/rust-version";
+import { GO_VERSION } from "../shared/go-version";
+import { ODIN_VERSION } from "../shared/odin-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
+import { assertNoLegacyBunVersionConfig } from "../config/validate";
+import {
+	getWindowsPermissionBuildConfig,
+	type WindowsWebView2Permission,
+} from "../config/windowsPermissions";
 import {
 	getAppFileName,
 	getBundleFileName,
@@ -33,6 +40,10 @@ import {
 	getMacOSBundleDisplayName,
 } from "../shared/naming";
 import { getTemplate, getTemplateNames } from "./templates/embedded";
+import {
+	MACOS_DEPLOYMENT_TARGET,
+	macosZigTarget,
+} from "../../scripts/macos-release.js";
 // import { loadBsdiff, loadBspatch } from 'bsdiff-wasm';
 // MacOS named pipes hang at around 4KB
 // @ts-expect-error - reserved for future use
@@ -74,6 +85,8 @@ const indexOfElectrobun = process.argv.findIndex((arg) =>
 );
 const commandArg = process.argv[indexOfElectrobun + 1] || "build";
 
+type MainProcess = "cottontail" | "zig" | "rust" | "go" | "odin";
+
 // Walk up from projectRoot to find electrobun in node_modules (supports hoisted monorepo layouts)
 function resolveElectrobunDir(): string {
 	let dir = projectRoot;
@@ -108,9 +121,12 @@ function getPlatformPaths(
 
 	return {
 		// Platform-specific binaries (from dist-OS-ARCH/)
-		BUN_BINARY: join(platformDistDir, "bun") + binExt,
+		COTTONTAIL_BINARY: join(platformDistDir, "cottontail") + binExt,
 		LAUNCHER_DEV: join(platformDistDir, "electrobun") + binExt,
 		LAUNCHER_RELEASE: join(platformDistDir, "launcher") + binExt,
+		CORE_MACOS: join(platformDistDir, "libElectrobunCore.dylib"),
+		CORE_WIN: join(platformDistDir, "ElectrobunCore.dll"),
+		CORE_LINUX: join(platformDistDir, "libElectrobunCore.so"),
 		NATIVE_WRAPPER_MACOS: join(platformDistDir, "libNativeWrapper.dylib"),
 		NATIVE_WRAPPER_WIN: join(platformDistDir, "libNativeWrapper.dll"),
 		NATIVE_WRAPPER_LINUX: join(platformDistDir, "libNativeWrapper.so"),
@@ -134,12 +150,475 @@ function getPlatformPaths(
 		// These work with existing package.json and development workflow
 		MAIN_JS: join(sharedDistDir, "main.js"),
 		API_DIR: join(sharedDistDir, "api"),
+		PRELOAD_FULL_JS: join(sharedDistDir, "preload-full.js"),
+		PRELOAD_SANDBOXED_JS: join(sharedDistDir, "preload-sandboxed.js"),
 	};
 }
 
 // Default PATHS for host platform (backward compatibility)
 // @ts-expect-error - reserved for future use
 const _PATHS = getPlatformPaths(OS, ARCH);
+
+function getVendoredZigBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"zig",
+		OS === "win" ? "zig.exe" : "zig",
+	);
+}
+
+function getZigTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): string {
+	if (targetOS === "win") {
+		return "x86_64-windows";
+	}
+	if (targetOS === "linux") {
+		return targetArch === "arm64" ? "aarch64-linux" : "x86_64-linux";
+	}
+	return macosZigTarget(targetArch);
+}
+
+function getRustTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): string {
+	if (targetOS === "win") {
+		return targetArch === "arm64"
+			? "aarch64-pc-windows-msvc"
+			: "x86_64-pc-windows-msvc";
+	}
+	if (targetOS === "linux") {
+		return targetArch === "arm64"
+			? "aarch64-unknown-linux-gnu"
+			: "x86_64-unknown-linux-gnu";
+	}
+	return targetArch === "arm64"
+		? "aarch64-apple-darwin"
+		: "x86_64-apple-darwin";
+}
+
+function getVendoredRustBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"rust",
+		"bin",
+		OS === "win" ? "rustc.exe" : "rustc",
+	);
+}
+
+function getGoTarget(
+	targetOS: "macos" | "win" | "linux",
+	targetArch: "arm64" | "x64",
+): { goOS: string; goArch: string } {
+	return {
+		goOS:
+			targetOS === "macos" ? "darwin" : targetOS === "win" ? "windows" : "linux",
+		goArch: targetArch === "arm64" ? "arm64" : "amd64",
+	};
+}
+
+function getVendoredGoBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"go",
+		"bin",
+		OS === "win" ? "go.exe" : "go",
+	);
+}
+
+function getVendoredOdinBinaryPath(): string {
+	return join(
+		ELECTROBUN_DEP_PATH,
+		"vendors",
+		"odin",
+		OS === "win" ? "odin.exe" : "odin",
+	);
+}
+
+function getCEFHelperNames(): string[] {
+	const baseName = "main";
+	return [
+		`${baseName} Helper`,
+		`${baseName} Helper (Alerts)`,
+		`${baseName} Helper (GPU)`,
+		`${baseName} Helper (Plugin)`,
+		`${baseName} Helper (Renderer)`,
+	];
+}
+
+async function buildZigMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const zigBinary = getVendoredZigBinaryPath();
+	if (!existsSync(zigBinary)) {
+		throw new Error(
+			`Vendored Zig compiler not found at ${zigBinary}. Rebuild electrobun/package so vendors/zig is available.`,
+		);
+	}
+
+	const zigSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "zig-sdk", "electrobun.zig");
+	if (!existsSync(zigSdkPath)) {
+		throw new Error(`Electrobun Zig SDK not found at ${zigSdkPath}`);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-zig-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const relativeZigSdkPath = path.relative(tempBuildDir, zigSdkPath) || ".";
+	const relativeEntrypointPath = path.relative(tempBuildDir, options.entrypoint) || ".";
+	const zigOutBin = join(tempBuildDir, "zig-out", "bin", "main" + binExt);
+	const buildScriptPath = join(tempBuildDir, "build.zig");
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	const buildScript = `const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    const electrobun = b.createModule(.{
+        .root_source_file = b.path(${JSON.stringify(relativeZigSdkPath)}),
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "main",
+        .root_source_file = b.path(${JSON.stringify(relativeEntrypointPath)}),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    exe.root_module.addImport("electrobun", electrobun);
+    exe.linkLibC();
+    b.installArtifact(exe);
+}
+`;
+	writeFileSync(buildScriptPath, buildScript, "utf8");
+
+	const zigArgs = [
+		"build",
+		`-Dtarget=${getZigTarget(options.targetOS, options.targetArch)}`,
+	];
+
+	if (options.targetOS === "win") {
+		zigArgs.push("-Dcpu=baseline");
+	}
+
+	if (options.buildEnvironment !== "dev") {
+		zigArgs.push("-Doptimize=ReleaseSmall");
+	}
+
+	const result = Bun.spawnSync([zigBinary, ...zigArgs], {
+		cwd: tempBuildDir,
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: zig main process compilation failed");
+	}
+
+	if (!existsSync(zigOutBin)) {
+		throw new Error(`Zig main process binary was not produced at ${zigOutBin}`);
+	}
+
+	return zigOutBin;
+}
+
+async function buildRustMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const rustBinary = getVendoredRustBinaryPath();
+	if (!existsSync(rustBinary)) {
+		throw new Error(
+			`Vendored Rust compiler not found at ${rustBinary}. Rebuild electrobun/package so vendors/rust is available.`,
+		);
+	}
+
+	const rustSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "rust-sdk", "electrobun.rs");
+	if (!existsSync(rustSdkPath)) {
+		throw new Error(`Electrobun Rust SDK not found at ${rustSdkPath}`);
+	}
+
+	const targetTriple = getRustTarget(options.targetOS, options.targetArch);
+	const hostTriple = getRustTarget(OS, ARCH);
+	if (targetTriple !== hostTriple) {
+		throw new Error(
+			`Rust main process cross-compilation is not supported yet. Vendored rustc is ${hostTriple}, but the build target is ${targetTriple}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-rust-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const rustOutBin = join(tempBuildDir, "main" + binExt);
+	const wrapperPath = join(tempBuildDir, "main.rs");
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	const wrapperSource = `#[path = ${JSON.stringify(rustSdkPath)}]
+pub mod electrobun;
+
+#[path = ${JSON.stringify(options.entrypoint)}]
+mod user_main;
+
+fn main() {
+    user_main::main();
+}
+`;
+	writeFileSync(wrapperPath, wrapperSource, "utf8");
+
+	const rustArgs = [
+		"--edition=2021",
+		wrapperPath,
+		"--target",
+		targetTriple,
+		"-o",
+		rustOutBin,
+	];
+
+	if (options.buildEnvironment === "dev") {
+		rustArgs.push("-C", "opt-level=2", "-C", "debuginfo=0");
+	} else {
+		rustArgs.push("-C", "opt-level=z", "-C", "strip=symbols");
+	}
+
+	const result = Bun.spawnSync([rustBinary, ...rustArgs], {
+		cwd: tempBuildDir,
+		env: {
+			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: rust main process compilation failed");
+	}
+
+	if (!existsSync(rustOutBin)) {
+		throw new Error(`Rust main process binary was not produced at ${rustOutBin}`);
+	}
+
+	return rustOutBin;
+}
+
+async function buildGoMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const goBinary = getVendoredGoBinaryPath();
+	if (!existsSync(goBinary)) {
+		throw new Error(
+			`Vendored Go compiler not found at ${goBinary}. Rebuild electrobun/package so vendors/go is available.`,
+		);
+	}
+
+	const goSdkPath = join(ELECTROBUN_DEP_PATH, "dist", "go-sdk");
+	if (!existsSync(goSdkPath)) {
+		throw new Error(`Electrobun Go SDK not found at ${goSdkPath}`);
+	}
+
+	const target = getGoTarget(options.targetOS, options.targetArch);
+	const host = getGoTarget(OS, ARCH);
+	if (target.goOS !== host.goOS || target.goArch !== host.goArch) {
+		throw new Error(
+			`Go main process cross-compilation is not supported yet. Vendored Go is ${host.goOS}-${host.goArch}, but the build target is ${target.goOS}-${target.goArch}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-go-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const goOutBin = join(tempBuildDir, "main" + binExt);
+	const goPath = join(tempBuildDir, "gopath");
+	const goSrcPath = join(goPath, "src");
+	const sdkDestPath = join(goSrcPath, "electrobun");
+	const appDestPath = join(goSrcPath, "electrobun-app");
+	const entrypointDir = statSync(options.entrypoint).isDirectory()
+		? options.entrypoint
+		: dirname(options.entrypoint);
+
+	rmSync(tempBuildDir, { recursive: true, force: true });
+	mkdirSync(goSrcPath, { recursive: true });
+	cpSync(goSdkPath, sdkDestPath, { recursive: true, dereference: true });
+	cpSync(entrypointDir, appDestPath, { recursive: true, dereference: true });
+
+	const goArgs = ["build", "-o", goOutBin];
+	if (options.buildEnvironment !== "dev") {
+		goArgs.push("-ldflags=-s -w");
+	}
+	goArgs.push("electrobun-app");
+
+	const result = Bun.spawnSync([goBinary, ...goArgs], {
+		cwd: tempBuildDir,
+		env: {
+			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
+			CGO_ENABLED: "1",
+			GO111MODULE: "off",
+			GOARCH: target.goArch,
+			GOOS: target.goOS,
+			GOPATH: goPath,
+			GOROOT: join(ELECTROBUN_DEP_PATH, "vendors", "go"),
+			GOTOOLCHAIN: "local",
+			...(options.targetOS === "win"
+				? { CC: `${getVendoredZigBinaryPath()} cc` }
+				: {}),
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		throw new Error("Build failed: go main process compilation failed");
+	}
+
+	if (!existsSync(goOutBin)) {
+		throw new Error(`Go main process binary was not produced at ${goOutBin}`);
+	}
+
+	return goOutBin;
+}
+
+async function buildOdinMainExecutable(options: {
+	entrypoint: string;
+	buildFolder: string;
+	targetOS: "macos" | "win" | "linux";
+	targetArch: "arm64" | "x64";
+	buildEnvironment: "dev" | "canary" | "stable";
+}) {
+	const odinBinary = getVendoredOdinBinaryPath();
+	if (!existsSync(odinBinary)) {
+		throw new Error(
+			`Vendored Odin compiler not found at ${odinBinary}. Rebuild electrobun/package so vendors/odin is available.`,
+		);
+	}
+
+	// dist/odin-sdk is exposed as the "electrobun_sdk" collection; the SDK itself
+	// is the "electrobun" package inside it (import "electrobun_sdk:electrobun").
+	const odinSdkCollectionPath = join(ELECTROBUN_DEP_PATH, "dist", "odin-sdk");
+	if (!existsSync(join(odinSdkCollectionPath, "electrobun", "electrobun.odin"))) {
+		throw new Error(`Electrobun Odin SDK not found at ${odinSdkCollectionPath}`);
+	}
+
+	// Odin can cross-compile object code, but linking still requires the target
+	// platform's linker/SDK, so mirror the Rust/Go host-only policy.
+	if (options.targetOS !== OS || options.targetArch !== ARCH) {
+		throw new Error(
+			`Odin main process cross-compilation is not supported yet. Vendored Odin targets ${OS}-${ARCH}, but the build target is ${options.targetOS}-${options.targetArch}.`,
+		);
+	}
+
+	const binExt = options.targetOS === "win" ? ".exe" : "";
+	const tempBuildDir = join(
+		options.buildFolder,
+		".electrobun-odin-main",
+		`${options.targetOS}-${options.targetArch}`,
+	);
+	const odinOutBin = join(tempBuildDir, "main" + binExt);
+	mkdirSync(tempBuildDir, { recursive: true });
+
+	// Odin compiles a package (directory); accept a file entrypoint for config
+	// symmetry with the other languages and compile its containing package.
+	const entrypointDir = statSync(options.entrypoint).isDirectory()
+		? options.entrypoint
+		: dirname(options.entrypoint);
+
+	const odinArgs = [
+		"build",
+		entrypointDir,
+		`-out:${odinOutBin}`,
+		`-collection:electrobun_sdk=${odinSdkCollectionPath}`,
+	];
+
+	if (options.buildEnvironment !== "dev") {
+		odinArgs.push("-o:size");
+	}
+
+	const result = Bun.spawnSync([odinBinary, ...odinArgs], {
+		cwd: projectRoot,
+		env: {
+			...process.env,
+			...(options.targetOS === "macos"
+				? { MACOSX_DEPLOYMENT_TARGET: MACOS_DEPLOYMENT_TARGET }
+				: {}),
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+
+	if (result.exitCode !== 0) {
+		const stdout = result.stdout ? new TextDecoder().decode(result.stdout) : "";
+		const stderr = result.stderr ? new TextDecoder().decode(result.stderr) : "";
+		if (stdout.trim()) {
+			console.error(stdout);
+		}
+		if (stderr.trim()) {
+			console.error(stderr);
+		}
+		if (options.targetOS === "win") {
+			console.error(
+				"Note: Odin on Windows requires the MSVC toolchain (link.exe from Visual Studio Build Tools). See the Odin main process docs for prerequisites.",
+			);
+		}
+		throw new Error("Build failed: odin main process compilation failed");
+	}
+
+	if (!existsSync(odinOutBin)) {
+		throw new Error(`Odin main process binary was not produced at ${odinOutBin}`);
+	}
+
+	return odinOutBin;
+}
 
 async function ensureCoreDependencies(
 	targetOS?: "macos" | "win" | "linux",
@@ -154,7 +633,7 @@ async function ensureCoreDependencies(
 
 	// Check platform-specific binaries
 	const requiredBinaries = [
-		platformPaths.BUN_BINARY,
+		platformPaths.COTTONTAIL_BINARY,
 		platformPaths.BSDIFF,
 		platformPaths.BSPATCH,
 	];
@@ -298,7 +777,7 @@ async function ensureCoreDependencies(
 
 		// Verify extraction completed successfully - check platform-specific binaries only
 		const requiredBinaries = [
-			platformPaths.BUN_BINARY,
+			platformPaths.COTTONTAIL_BINARY,
 			platformPaths.BSDIFF,
 			platformPaths.BSPATCH,
 			platformPaths.ZSTD,
@@ -360,7 +839,7 @@ async function ensureCoreDependencies(
 /**
  * Returns the effective CEF directory path. When a custom cefVersion is set,
  * CEF files are stored in node_modules/.electrobun-cache/ which survives
- * both dist rebuilds and bun install (which replaces node_modules/electrobun).
+ * both dist rebuilds and package reinstalls.
  * When using the default version, returns the standard dist-{platform}/cef/ path.
  */
 function getEffectiveCEFDir(
@@ -376,7 +855,7 @@ function getEffectiveCEFDir(
 
 /**
  * Returns the effective WGPU directory path. WGPU files are stored in
- * node_modules/.electrobun-cache/ to survive dist rebuilds and bun install.
+ * node_modules/.electrobun-cache/ to survive dist rebuilds and package reinstalls.
  */
 function getEffectiveWGPUDir(
 	platformOS: "macos" | "win" | "linux",
@@ -389,402 +868,6 @@ function getEffectiveWGPUDir(
 		"wgpu",
 		`${platformOS}-${platformArch}`,
 	);
-}
-
-/**
- * Trims an ICU .dat file to only include the specified locales.
- * Uses icupkg (from ICU tools) to list and remove unwanted locale data.
- */
-async function trimICUData(
-	source: string,
-	dest: string,
-	locales: string[],
-): Promise<void> {
-	// Copy the full .dat file first
-	cpSync(source, dest);
-
-	// Try to find icupkg in PATH or common locations
-	let icupkgPath = "icupkg";
-	try {
-		execSync(`${icupkgPath} --help`, { stdio: "ignore" });
-	} catch {
-		// icupkg not available, skip trimming
-		throw new Error(
-			"icupkg not found in PATH. Install ICU tools to enable locale trimming.",
-		);
-	}
-
-	// List all items in the .dat file
-	const listOutput = execSync(`${icupkgPath} -l "${dest}"`, {
-		encoding: "utf-8",
-	});
-	const allItems = listOutput.split("\n").filter((line) => line.trim());
-
-	// Locale-specific directories in ICU data
-	const localeDirs = [
-		"brkitr/",
-		"coll/",
-		"curr/",
-		"lang/",
-		"locales/",
-		"rbnf/",
-		"region/",
-		"unit/",
-		"zone/",
-	];
-
-	const toRemove = allItems.filter((item) => {
-		// Only consider items in locale-specific directories
-		const isLocaleItem = localeDirs.some((dir) => item.startsWith(dir));
-		if (!isLocaleItem) return false;
-
-		// Extract the basename (after the last /)
-		const basename = item.split("/").pop() || "";
-		// Remove file extension for matching
-		const name = basename.replace(/\.res$/, "");
-
-		// Keep items matching requested locales (exact match or with region suffix)
-		return !locales.some(
-			(l) =>
-				name === l ||
-				name === "root" ||
-				name.startsWith(`${l}_`) ||
-				name.startsWith(`${l}-`),
-		);
-	});
-
-	if (toRemove.length > 0) {
-		// Write removal list to temp file
-		const { tmpdir } = await import("os");
-		const removeListPath = join(tmpdir(), "icu-remove.txt");
-		writeFileSync(removeListPath, toRemove.join("\n"));
-
-		try {
-			execSync(`${icupkgPath} -r "@${removeListPath}" "${dest}"`, {
-				stdio: "inherit",
-			});
-		} finally {
-			try {
-				unlinkSync(removeListPath);
-			} catch {
-				// ignore cleanup errors
-			}
-		}
-	}
-}
-
-/**
- * Ensures the correct Bun binary is available for bundling. When a custom
- * bunVersion is specified in the config, downloads that version from GitHub
- * releases and caches it. Otherwise returns the default binary path.
- */
-async function ensureBunBinary(
-	targetOS: "macos" | "win" | "linux",
-	targetArch: "arm64" | "x64",
-	bunVersion?: string,
-	bunnyBun?: string,
-): Promise<string> {
-	const effectiveVersion = bunnyBun || bunVersion;
-	if (!effectiveVersion) {
-		return getPlatformPaths(targetOS, targetArch).BUN_BINARY;
-	}
-
-	const binExt = targetOS === "win" ? ".exe" : "";
-	const cacheSubdir = bunnyBun ? "bunny-bun-override" : "bun-override";
-	const overrideDir = join(ELECTROBUN_CACHE_PATH, cacheSubdir, `${targetOS}-${targetArch}`);
-	const overrideBinary = join(overrideDir, `bun${binExt}`);
-	const versionFile = join(overrideDir, ".bun-version");
-
-	// Check if already downloaded with matching version
-	if (existsSync(overrideBinary) && existsSync(versionFile)) {
-		const cachedVersion = readFileSync(versionFile, "utf8").trim();
-		if (cachedVersion === effectiveVersion) {
-			console.log(
-				`${bunnyBun ? "Bunny" : "Custom"} Bun ${effectiveVersion} already cached for ${targetOS}-${targetArch}`,
-			);
-			return overrideBinary;
-		}
-		console.log(
-			`Cached Bun version "${cachedVersion}" does not match requested "${effectiveVersion}", re-downloading...`,
-		);
-		rmSync(overrideDir, { recursive: true, force: true });
-	} else if (existsSync(overrideDir)) {
-		rmSync(overrideDir, { recursive: true, force: true });
-	}
-
-	if (bunnyBun) {
-		await downloadBunnyBun(bunnyBun, targetOS, targetArch);
-	} else {
-		await downloadCustomBun(effectiveVersion, targetOS, targetArch);
-	}
-	return overrideBinary;
-}
-
-/**
- * Downloads a specific Bun version from GitHub releases for a custom version
- * override. The binary is cached in node_modules/.electrobun-cache/bun-override/
- * so it survives dist rebuilds and bun install.
- */
-async function downloadCustomBun(
-	bunVersion: string,
-	platformOS: "macos" | "win" | "linux",
-	platformArch: "arm64" | "x64",
-) {
-	// Map to GitHub release asset names
-	let bunUrlSegment: string;
-	let bunDirName: string;
-
-	if (platformOS === "win") {
-		bunUrlSegment = "bun-windows-x64-baseline.zip";
-		bunDirName = "bun-windows-x64-baseline";
-	} else if (platformOS === "macos") {
-		bunUrlSegment =
-			platformArch === "arm64"
-				? "bun-darwin-aarch64.zip"
-				: "bun-darwin-x64.zip";
-		bunDirName =
-			platformArch === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
-	} else if (platformOS === "linux") {
-		bunUrlSegment =
-			platformArch === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
-		bunDirName =
-			platformArch === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
-	} else {
-		throw new Error(`Unsupported platform for custom Bun: ${platformOS}`);
-	}
-
-	const binExt = platformOS === "win" ? ".exe" : "";
-	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bun-override", `${platformOS}-${platformArch}`);
-	const overrideBinary = join(overrideDir, `bun${binExt}`);
-	const bunUrl = `https://github.com/oven-sh/bun/releases/download/bun-v${bunVersion}/${bunUrlSegment}`;
-
-	console.log(`Using custom Bun version: ${bunVersion}`);
-	console.log(`Downloading from: ${bunUrl}`);
-
-	mkdirSync(overrideDir, { recursive: true });
-
-	const tempZipPath = join(overrideDir, "temp.zip");
-
-	try {
-		console.log(`Downloading custom Bun...`);
-		const response = await fetch(bunUrl);
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-		}
-
-		const contentLength = response.headers.get("content-length");
-		const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
-		const fileStream = createWriteStream(tempZipPath);
-		let downloadedSize = 0;
-		let lastReportedPercent = -1;
-
-		if (response.body) {
-			const reader = response.body.getReader();
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				const chunk = Buffer.from(value);
-				fileStream.write(chunk);
-				downloadedSize += chunk.length;
-
-				if (totalSize > 0) {
-					const percent = Math.round((downloadedSize / totalSize) * 100);
-					const percentTier = Math.floor(percent / 10) * 10;
-					if (percentTier > lastReportedPercent && percentTier <= 100) {
-						console.log(
-							`  Progress: ${percentTier}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`,
-						);
-						lastReportedPercent = percentTier;
-					}
-				}
-			}
-		}
-
-		await new Promise((resolve, reject) => {
-			fileStream.end((error: any) => {
-				if (error) reject(error);
-				else resolve(void 0);
-			});
-		});
-
-		console.log(
-			`Download completed (${Math.round(downloadedSize / 1024 / 1024)}MB), extracting...`,
-		);
-
-		// Extract zip file
-		if (platformOS === "win") {
-			execSync(
-				`powershell -command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${overrideDir}' -Force"`,
-				{ stdio: "inherit" },
-			);
-		} else {
-			execSync(`unzip -o ${escapePathForTerminal(tempZipPath)} -d ${escapePathForTerminal(overrideDir)}`, {
-				stdio: "inherit",
-			});
-		}
-
-		// Move binary from extracted subdirectory to override dir root
-		const extractedBinary = join(overrideDir, bunDirName, `bun${binExt}`);
-		if (existsSync(extractedBinary)) {
-			renameSync(extractedBinary, overrideBinary);
-		} else {
-			throw new Error(
-				`Bun binary not found after extraction at ${extractedBinary}`,
-			);
-		}
-
-		// Set execute permissions on non-Windows
-		if (platformOS !== "win") {
-			execSync(`chmod +x ${escapePathForTerminal(overrideBinary)}`);
-		}
-
-		// Write version stamp
-		writeFileSync(join(overrideDir, ".bun-version"), bunVersion);
-
-		// Clean up
-		if (existsSync(tempZipPath)) unlinkSync(tempZipPath);
-		const extractedDir = join(overrideDir, bunDirName);
-		if (existsSync(extractedDir))
-			rmSync(extractedDir, { recursive: true, force: true });
-
-		console.log(
-			`Custom Bun ${bunVersion} for ${platformOS}-${platformArch} set up successfully`,
-		);
-	} catch (error: any) {
-		// Clean up on failure
-		if (existsSync(overrideDir)) {
-			try {
-				rmSync(overrideDir, { recursive: true, force: true });
-			} catch {}
-		}
-
-		console.error(
-			`Failed to set up custom Bun ${bunVersion} for ${platformOS}-${platformArch}:`,
-			error.message,
-		);
-		console.error(
-			`\nVerify the Bun version string and that it exists at: https://github.com/oven-sh/bun/releases`,
-		);
-		process.exit(1);
-	}
-}
-
-/**
- * Downloads Electrobunny's Bun fork from blackboardsh/bun GitHub releases.
- * Release assets follow the same naming convention as oven-sh/bun:
- *   bun-darwin-aarch64.zip, bun-linux-x64.zip, etc.
- */
-async function downloadBunnyBun(
-	releaseTag: string,
-	platformOS: "macos" | "win" | "linux",
-	platformArch: "arm64" | "x64",
-) {
-	let assetName: string;
-	let dirName: string;
-
-	// Asset names match the CI artifact names from blackboardsh/bun
-	if (platformOS === "win") {
-		assetName = "bun-windows-x64.zip";
-		dirName = "bun-windows-x64";
-	} else if (platformOS === "macos") {
-		assetName = platformArch === "arm64" ? "bun-darwin-arm64.zip" : "bun-darwin-x64.zip";
-		dirName = platformArch === "arm64" ? "bun-darwin-arm64" : "bun-darwin-x64";
-	} else {
-		assetName = platformArch === "arm64" ? "bun-linux-arm64.zip" : "bun-linux-x64.zip";
-		dirName = platformArch === "arm64" ? "bun-linux-arm64" : "bun-linux-x64";
-	}
-
-	const binExt = platformOS === "win" ? ".exe" : "";
-	const overrideDir = join(ELECTROBUN_CACHE_PATH, "bunny-bun-override", `${platformOS}-${platformArch}`);
-	const overrideBinary = join(overrideDir, `bun${binExt}`);
-	const bunUrl = `https://github.com/blackboardsh/bun/releases/download/${releaseTag}/${assetName}`;
-
-	console.log(`Using Bunny Bun: ${releaseTag}`);
-	console.log(`Downloading from: ${bunUrl}`);
-
-	mkdirSync(overrideDir, { recursive: true });
-	const tempZipPath = join(overrideDir, "temp.zip");
-
-	try {
-		const response = await fetch(bunUrl);
-		if (!response.ok) {
-			throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-		}
-
-		const contentLength = response.headers.get("content-length");
-		const totalSize = contentLength ? parseInt(contentLength, 10) : 0;
-		const fileStream = createWriteStream(tempZipPath);
-		let downloadedSize = 0;
-		let lastReportedPercent = -1;
-
-		if (response.body) {
-			const reader = response.body.getReader();
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				const chunk = Buffer.from(value);
-				fileStream.write(chunk);
-				downloadedSize += chunk.length;
-				if (totalSize > 0) {
-					const percent = Math.round((downloadedSize / totalSize) * 100);
-					const percentTier = Math.floor(percent / 10) * 10;
-					if (percentTier > lastReportedPercent && percentTier <= 100) {
-						console.log(`  Progress: ${percentTier}% (${Math.round(downloadedSize / 1024 / 1024)}MB/${Math.round(totalSize / 1024 / 1024)}MB)`);
-						lastReportedPercent = percentTier;
-					}
-				}
-			}
-		}
-
-		await new Promise((resolve, reject) => {
-			fileStream.end((error: any) => { if (error) reject(error); else resolve(void 0); });
-		});
-
-		console.log(`Download completed (${Math.round(downloadedSize / 1024 / 1024)}MB), extracting...`);
-
-		if (platformOS === "win") {
-			execSync(`powershell -command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${overrideDir}' -Force"`, { stdio: "inherit" });
-		} else {
-			execSync(`unzip -o ${escapePathForTerminal(tempZipPath)} -d ${escapePathForTerminal(overrideDir)}`, { stdio: "inherit" });
-		}
-
-		// Move binary from extracted subdirectory
-		const extractedBinary = join(overrideDir, dirName, `bun${binExt}`);
-		if (existsSync(extractedBinary)) {
-			renameSync(extractedBinary, overrideBinary);
-		} else {
-			throw new Error(`Bun binary not found after extraction at ${extractedBinary}`);
-		}
-
-		if (platformOS !== "win") {
-			execSync(`chmod +x ${escapePathForTerminal(overrideBinary)}`);
-		}
-
-		// Also extract ICU data if present
-		const extractedDir = join(overrideDir, dirName);
-		if (existsSync(extractedDir)) {
-			for (const file of readdirSync(extractedDir)) {
-				if (file.endsWith(".dat")) {
-					renameSync(join(extractedDir, file), join(overrideDir, file));
-				}
-			}
-		}
-
-		writeFileSync(join(overrideDir, ".bun-version"), releaseTag);
-
-		if (existsSync(tempZipPath)) unlinkSync(tempZipPath);
-		if (existsSync(extractedDir)) rmSync(extractedDir, { recursive: true, force: true });
-
-		console.log(`Bunny Bun ${releaseTag} for ${platformOS}-${platformArch} set up successfully`);
-	} catch (error: any) {
-		if (existsSync(overrideDir)) {
-			try { rmSync(overrideDir, { recursive: true, force: true }); } catch {}
-		}
-		console.error(`Failed to set up Bunny Bun ${releaseTag} for ${platformOS}-${platformArch}:`, error.message);
-		console.error(`\nVerify the release tag exists at: https://github.com/blackboardsh/bun/releases`);
-		process.exit(1);
-	}
 }
 
 async function ensureCEFDependencies(
@@ -1306,7 +1389,7 @@ async function downloadAndExtractCustomCEF(
 	console.log(`Using custom CEF version: ${cefVersion}`);
 	console.log(`Downloading from: ${cefUrl}`);
 
-	// Store custom CEF in .electrobun-cache so it survives dist rebuilds and bun install
+	// Store custom CEF in .electrobun-cache so it survives dist rebuilds and package reinstalls.
 	const cefDir = getEffectiveCEFDir(platformOS, platformArch, cefVersion);
 	console.log(`Caching custom CEF to ${cefDir}`);
 	mkdirSync(cefDir, { recursive: true });
@@ -1470,7 +1553,7 @@ type FileAssociation = {
 };
 
 // Default values merged with user's electrobun.config.ts
-// For the user-facing type, see ElectrobunConfig in src/bun/ElectrobunConfig.ts
+// For the user-facing type, see ElectrobunConfig in src/config/ElectrobunConfig.ts
 const defaultConfig = {
 	app: {
 		name: "MyApp",
@@ -1483,13 +1566,11 @@ const defaultConfig = {
 	build: {
 		buildFolder: "build",
 		artifactFolder: "artifacts",
+		mainProcess: "cottontail" as MainProcess,
 		useAsar: false,
 		asarUnpack: undefined as string[] | undefined, // Glob patterns for files to exclude from ASAR (e.g., ["*.node", "*.dll"])
 		cefVersion: undefined as string | undefined, // Override CEF version: "CEF_VERSION+chromium-CHROMIUM_VERSION"
 		wgpuVersion: undefined as string | undefined, // Override Dawn (WebGPU) version: "0.2.3" or "v0.2.3-beta.0"
-		bunVersion: undefined as string | undefined, // Override Bun runtime version: "1.4.2"
-		bunnyBun: undefined as string | undefined, // Use Electrobunny's Bun fork: "bunny-bun-abc1234" (release tag from blackboardsh/bun)
-		locales: undefined as string[] | "*" | undefined, // ICU locales subset (Linux/Windows)
 		mac: {
 			codesign: false,
 			createDmg: true,
@@ -1499,7 +1580,7 @@ const defaultConfig = {
 			entitlements: {
 				// This entitlement is required for Electrobun apps with a hardened runtime (required for notarization) to run on macos
 				"com.apple.security.cs.allow-jit": true,
-				// Required for bun runtime to work with dynamic code execution and JIT compilation when signed
+				// Required for Cottontail/JSC dynamic code execution and JIT compilation when signed
 				"com.apple.security.cs.allow-unsigned-executable-memory": true,
 				"com.apple.security.cs.disable-library-validation": true,
 			} as Record<string, boolean | string>,
@@ -1513,6 +1594,9 @@ const defaultConfig = {
 			icon: undefined as string | undefined,
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
+			autoGrantPermissions: undefined as
+				| WindowsWebView2Permission[]
+				| undefined,
 		},
 		linux: {
 			bundleCEF: false,
@@ -1521,8 +1605,20 @@ const defaultConfig = {
 			defaultRenderer: undefined as "native" | "cef" | undefined,
 			chromiumFlags: undefined as Record<string, string | boolean> | undefined,
 		},
-		bun: {
+		cottontail: {
 			entrypoint: "src/bun/index.ts",
+		},
+		zig: {
+			entrypoint: "src/zig/main.zig",
+		},
+		rust: {
+			entrypoint: "src/rust/main.rs",
+		},
+		go: {
+			entrypoint: "src/go/main.go",
+		},
+		odin: {
+			entrypoint: "src/odin/main.odin",
 		},
 		views: undefined as
 			| Record<string, { entrypoint: string; [key: string]: unknown }>
@@ -1535,7 +1631,6 @@ const defaultConfig = {
 			name: string;
 			description?: string;
 			mode?: "window" | "background";
-			permissions?: Record<string, unknown>;
 			dependencies?: Record<string, string>;
 			// Map of remote UI ID → config. Two flavors:
 			//   1. { name, entrypoint, ...bunBuildOpts } — electrobun builds it via Bun.build
@@ -1548,6 +1643,24 @@ const defaultConfig = {
 				path?: string;
 				[key: string]: unknown;
 			}>;
+			slateUIs?: Record<string, {
+				name?: string;
+				entrypoint?: string;
+				path?: string;
+				[key: string]: unknown;
+			}>;
+			contributions?: {
+				fileActivators?: Array<{
+					baseName?: string;
+					nodeType?: "file" | "dir" | "any";
+					slate: {
+						type: string;
+						name?: string;
+						icon?: string;
+						config?: Record<string, unknown>;
+					};
+				}>;
+			};
 			carrotOnly?: boolean;
 		} | undefined,
 	},
@@ -2054,8 +2167,8 @@ ${utiDecls}
 			console.log("");
 			console.log("📦 Next steps:");
 			console.log(`   cd ${projectName}`);
-			console.log("   bun install");
-			console.log("   bun start");
+			console.log("   npm install");
+			console.log("   npm start");
 			console.log("");
 			console.log("🎉 Happy building with Electrobun!");
 			console.log("");
@@ -2066,7 +2179,7 @@ ${utiDecls}
 			console.log(
 				"Different architecture, different APIs. Do not use Electron patterns.",
 			);
-			console.log("Docs: https://docs.electrobunny.ai/electrobun/llms.txt");
+			console.log("Docs: https://framework.blackboard.sh/electrobun/");
 			console.log(
 				"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
 			);
@@ -2078,8 +2191,10 @@ ${utiDecls}
 		// Get environment
 		const envArg =
 			process.argv.find((arg) => arg.startsWith("--env="))?.split("=")[1] || "";
-		const buildEnvironment = ["dev", "canary", "stable"].includes(envArg)
-			? envArg
+		const buildEnvironment: "dev" | "canary" | "stable" = ["dev", "canary", "stable"].includes(
+			envArg,
+		)
+			? (envArg as "dev" | "canary" | "stable")
 			: "dev";
 
 		try {
@@ -2110,7 +2225,7 @@ ${utiDecls}
 
 	async function runBuild(
 		config: Awaited<ReturnType<typeof getConfig>>,
-		buildEnvironment: string,
+		buildEnvironment: "dev" | "canary" | "stable",
 	) {
 		// Determine current platform as default target
 		const currentTarget = { os: OS, arch: ARCH };
@@ -2158,10 +2273,10 @@ ${utiDecls}
 			if (!hookScript) return;
 
 			console.log(`Running ${String(hookName)} script:`, hookScript);
-			// Use host platform's bun binary for running scripts, not target platform's
+			// Hooks execute with the host Cottontail runtime.
 			const hostPaths = getPlatformPaths(OS, ARCH);
 
-			const result = Bun.spawnSync([hostPaths.BUN_BINARY, hookScript], {
+			const result = Bun.spawnSync([hostPaths.COTTONTAIL_BINARY, hookScript], {
 				stdio: ["ignore", "inherit", "inherit"],
 				cwd: projectRoot,
 				env: {
@@ -2189,7 +2304,10 @@ ${utiDecls}
 						new TextDecoder().decode(result.stderr as Uint8Array),
 					);
 				}
-				console.error("Tried to run with bun at:", hostPaths.BUN_BINARY);
+				console.error(
+					"Tried to run with Cottontail at:",
+					hostPaths.COTTONTAIL_BINARY,
+				);
 				console.error("Script path:", hookScript);
 				console.error("Working directory:", projectRoot);
 				throw new Error("Build failed: hook script failed");
@@ -2392,20 +2510,52 @@ Categories=Utility;Application;
 
 		// refresh build folder
 		if (existsSync(buildFolder)) {
-			rmSync(buildFolder, { recursive: true });
+			rmSync(buildFolder, { recursive: true, force: true });
 		}
 		mkdirSync(buildFolder, { recursive: true });
-		// bundle bun to build/bun
-		const bunConfig = config.build.bun;
-		const bunSource = join(projectRoot, bunConfig.entrypoint);
 
-		if (!existsSync(bunSource)) {
+		const mainProcess = config.build.mainProcess ?? "cottontail";
+		const cottontailConfig = config.build.cottontail;
+		const cottontailSource = join(projectRoot, cottontailConfig.entrypoint);
+		const zigConfig = config.build.zig;
+		const zigSource = join(projectRoot, zigConfig.entrypoint);
+		const rustConfig = config.build.rust;
+		const rustSource = join(projectRoot, rustConfig.entrypoint);
+		const goConfig = config.build.go;
+		const goSource = join(projectRoot, goConfig.entrypoint);
+		const odinConfig = config.build.odin;
+		const odinSource = join(projectRoot, odinConfig.entrypoint);
+
+		if (mainProcess === "cottontail") {
+			if (!existsSync(cottontailSource)) {
+				throw new Error(
+					`failed to bundle ${cottontailSource} because it doesn't exist.\n You need a config.build.cottontail.entrypoint source file to build.`,
+				);
+			}
+		} else if (mainProcess === "zig" && !existsSync(zigSource)) {
 			throw new Error(
-				`failed to bundle ${bunSource} because it doesn't exist.\n You need a config.build.bun.entrypoint source file to build.`,
+				`failed to compile ${zigSource} because it doesn't exist.\n You need a config.build.zig.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "rust" && !existsSync(rustSource)) {
+			throw new Error(
+				`failed to compile ${rustSource} because it doesn't exist.\n You need a config.build.rust.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "go" && !existsSync(goSource)) {
+			throw new Error(
+				`failed to compile ${goSource} because it doesn't exist.\n You need a config.build.go.entrypoint source file to build.`,
+			);
+		} else if (mainProcess === "odin" && !existsSync(odinSource)) {
+			throw new Error(
+				`failed to compile ${odinSource} because it doesn't exist.\n You need a config.build.odin.entrypoint source file to build.`,
 			);
 		}
 
 		const isCarrotOnly = config.build.carrot?.carrotOnly === true;
+		if (config.build.carrot && mainProcess !== "cottontail") {
+			throw new Error(
+				`build.carrot is not supported with build.mainProcess = "${mainProcess}" yet.`,
+			);
+		}
 
 		// build macos bundle
 		// Use display name (with spaces) for macOS bundle folders, sanitized name for other platforms
@@ -2419,7 +2569,7 @@ Categories=Utility;Application;
 			targetOS === "macos" ? macOSBundleDisplayName : appFileName;
 
 		if (isCarrotOnly) {
-			// For carrot-only builds, create a minimal output structure for bun/view builds
+			// For carrot-only builds, create a minimal output structure for main/view builds
 			appBundleFolderPath = join(buildFolder, "carrot-build");
 			appBundleFolderContentsPath = appBundleFolderPath;
 			appBundleMacOSPath = appBundleFolderPath;
@@ -2438,8 +2588,40 @@ Categories=Utility;Application;
 			mkdirSync(appBundleAppCodePath, { recursive: true });
 		}
 
-		// const bundledBunPath = join(appBundleMacOSPath, 'bun');
-		// cpSync(bunPath, bundledBunPath);
+		let nativeMainBinarySourcePath: string | null = null;
+		if (mainProcess === "zig") {
+			nativeMainBinarySourcePath = await buildZigMainExecutable({
+				entrypoint: zigSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "rust") {
+			nativeMainBinarySourcePath = await buildRustMainExecutable({
+				entrypoint: rustSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "go") {
+			nativeMainBinarySourcePath = await buildGoMainExecutable({
+				entrypoint: goSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		} else if (mainProcess === "odin") {
+			nativeMainBinarySourcePath = await buildOdinMainExecutable({
+				entrypoint: odinSource,
+				buildFolder,
+				targetOS,
+				targetArch: targetARCH,
+				buildEnvironment,
+			});
+		}
 
 		// Note: for sandboxed apps, MacOS will use the CFBundleIdentifier to create a unique container for the app,
 		// mirroring folders like Application Support, Caches, etc. in the user's Library folder that the sandboxed app
@@ -2498,59 +2680,27 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			join(appBundleFolderContentsPath, "Info.plist"),
 			InfoPlistContents,
 		);
-		// in dev builds the log file is a named pipe so we can stream it back to the terminal
-		// in canary/stable builds it'll be a regular log file
-		//     const LauncherContents = `#!/bin/bash
-		// # change directory from whatever open was or double clicking on the app to the dir of the bin in the app bundle
-		// cd "$(dirname "$0")"/
-
-		// # Define the log file path
-		// LOG_FILE="$HOME/${logPath}"
-
-		// # Ensure the directory exists
-		// mkdir -p "$(dirname "$LOG_FILE")"
-
-		// if [[ ! -p $LOG_FILE ]]; then
-		//     mkfifo $LOG_FILE
-		// fi
-
-		// # Execute bun and redirect stdout and stderr to the log file
-		// ./bun ../Resources/app/bun/index.js >"$LOG_FILE" 2>&1
-		// `;
-
-		//     // Launcher binary
-		//     // todo (yoav): This will likely be a zig compiled binary in the future
-		//     Bun.write(join(appBundleMacOSPath, 'MyApp'), LauncherContents);
-		//     chmodSync(join(appBundleMacOSPath, 'MyApp'), '755');
-		// const zigLauncherBinarySource = join(projectRoot, 'node_modules', 'electrobun', 'src', 'launcher', 'zig-out', 'bin', 'launcher');
-		// const zigLauncherDestination = join(appBundleMacOSPath, 'MyApp');
-		// const destLauncherFolder = dirname(zigLauncherDestination);
-		// if (!existsSync(destLauncherFolder)) {
-		//     // console.info('creating folder: ', destFolder);
-		//     mkdirSync(destLauncherFolder, {recursive: true});
-		// }
-		// cpSync(zigLauncherBinarySource, zigLauncherDestination, {recursive: true, dereference: true});
-		// Copy zig launcher for all platforms
-		const bunCliLauncherBinarySource = targetPaths.LAUNCHER_RELEASE;
-		const bunCliLauncherDestination =
+		// Copy the Zig launcher for all platforms.
+		const launcherBinarySource = targetPaths.LAUNCHER_RELEASE;
+		const launcherDestination =
 			join(appBundleMacOSPath, "launcher") + targetBinExt;
-		const destLauncherFolder = dirname(bunCliLauncherDestination);
+		const destLauncherFolder = dirname(launcherDestination);
 		if (!existsSync(destLauncherFolder)) {
 			mkdirSync(destLauncherFolder, { recursive: true });
 		}
 
-		cpSync(bunCliLauncherBinarySource, bunCliLauncherDestination, {
+		cpSync(launcherBinarySource, launcherDestination, {
 			recursive: true,
 			dereference: true,
 		});
 
 		// On Windows, ensure launcher has .exe extension
-		// Bun's cpSync on Windows may create files without .exe despite the destination path having it
+		// cpSync may create files without .exe despite the destination path having it.
 		if (targetOS === "win") {
 			const launcherWithoutExt = join(appBundleMacOSPath, "launcher");
 
 			// Use PowerShell to force rename and add .exe extension
-			// This bypasses Bun's PATHEXT behavior that treats launcher and launcher.exe as the same
+			// because PATHEXT can treat launcher and launcher.exe as the same path.
 			try {
 				execSync(
 					`powershell -Command "if (Test-Path '${launcherWithoutExt}') { Rename-Item -Path '${launcherWithoutExt}' -NewName 'launcher.exe' -Force }"`,
@@ -2595,7 +2745,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					const rceditDir = dirname(rceditPkgPath);
 					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
 					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
-					execFileSync(rceditExe, [bunCliLauncherDestination, "--set-icon", iconPath]);
+					execFileSync(rceditExe, [launcherDestination, "--set-icon", iconPath]);
 					console.log(`Successfully embedded icon into launcher.exe`);
 
 					// Clean up temp ICO file
@@ -2610,105 +2760,98 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
-		cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, "main.js"), {
+		cpSync(targetPaths.PRELOAD_FULL_JS, join(appBundleFolderResourcesPath, "preload-full.js"), {
 			dereference: true,
 		});
-
-		// Bun runtime binary
-		// todo (yoav): this only works for the current architecture
-		const bunBinarySourcePath = await ensureBunBinary(
-			currentTarget.os,
-			currentTarget.arch,
-			config.build.bunVersion,
-			config.build.bunnyBun,
+		cpSync(
+			targetPaths.PRELOAD_SANDBOXED_JS,
+			join(appBundleFolderResourcesPath, "preload-sandboxed.js"),
+			{
+				dereference: true,
+			},
 		);
-		// Note: .bin/bun binary in node_modules is a symlink to the versioned one in another place
-		// in node_modules, so we have to dereference here to get the actual binary in the bundle.
-		const bunBinaryDestInBundlePath =
-			join(appBundleMacOSPath, "bun") + targetBinExt;
-		const destFolder2 = dirname(bunBinaryDestInBundlePath);
-		if (!existsSync(destFolder2)) {
-			// console.info('creating folder: ', destFolder);
-			mkdirSync(destFolder2, { recursive: true });
-		}
-		cpSync(bunBinarySourcePath, bunBinaryDestInBundlePath, {
-			dereference: true,
-		});
 
-		// Copy ICU data file if it exists (Linux/Windows external ICU builds)
-		// ICU version varies per platform WebKit build, so detect the filename dynamically
-		const bunDir = dirname(bunBinarySourcePath);
-		const icuDataFileName = readdirSync(bunDir).find((f) => /^icudt\d+l\.dat$/.test(f));
-		const icuDataSource = icuDataFileName ? join(bunDir, icuDataFileName) : "";
-		if (icuDataFileName && existsSync(icuDataSource) && targetOS !== "macos") {
-			const icuDataDest = join(appBundleMacOSPath, icuDataFileName);
+		if (mainProcess === "cottontail") {
+			cpSync(targetPaths.MAIN_JS, join(appBundleFolderResourcesPath, "main.js"), {
+				dereference: true,
+			});
 
-			const locales = config.build?.locales;
-			if (locales && locales !== "*" && Array.isArray(locales) && locales.length > 0) {
-				// Trim ICU data to specified locales using icupkg
-				try {
-					await trimICUData(icuDataSource, icuDataDest, locales);
-					const originalSize = statSync(icuDataSource).size;
-					const trimmedSize = statSync(icuDataDest).size;
-					console.log(
-						`Trimmed ICU data: ${(originalSize / 1024 / 1024).toFixed(1)}MB → ${(trimmedSize / 1024 / 1024).toFixed(1)}MB (locales: ${locales.join(", ")})`,
-					);
-				} catch (error) {
-					console.warn(`Warning: Failed to trim ICU data, copying full file: ${error}`);
-					cpSync(icuDataSource, icuDataDest);
-				}
-			} else {
-				cpSync(icuDataSource, icuDataDest);
-				console.log(`Copied ICU data file: ${icuDataFileName}`);
+			const cottontailBinarySourcePath = targetPaths.COTTONTAIL_BINARY;
+			if (!existsSync(cottontailBinarySourcePath)) {
+				throw new Error(
+					`Cottontail runtime is missing for ${currentTarget.os}-${currentTarget.arch}: ${cottontailBinarySourcePath}`,
+				);
 			}
-		}
+			const cottontailBinaryDestInBundlePath =
+				join(appBundleMacOSPath, "cottontail") + targetBinExt;
+			mkdirSync(dirname(cottontailBinaryDestInBundlePath), {
+				recursive: true,
+			});
+			cpSync(cottontailBinarySourcePath, cottontailBinaryDestInBundlePath, {
+				dereference: true,
+			});
 
-		// Embed icon into bun.exe on Windows
-		if (targetOS === "win" && config.build.win?.icon) {
-			const iconSourcePath =
-				config.build.win.icon.startsWith("/") ||
-				config.build.win.icon.match(/^[a-zA-Z]:/)
-					? config.build.win.icon
-					: join(projectRoot, config.build.win.icon);
+			// Embed the application icon into the packaged runtime on Windows.
+			if (targetOS === "win" && config.build.win?.icon) {
+				const iconSourcePath =
+					config.build.win.icon.startsWith("/") ||
+					config.build.win.icon.match(/^[a-zA-Z]:/)
+						? config.build.win.icon
+						: join(projectRoot, config.build.win.icon);
 
-			if (existsSync(iconSourcePath)) {
-				console.log(`Embedding icon into bun.exe: ${iconSourcePath}`);
-				try {
-					let iconPath = iconSourcePath;
+				if (existsSync(iconSourcePath)) {
+					console.log(`Embedding icon into cottontail.exe: ${iconSourcePath}`);
+					try {
+						let iconPath = iconSourcePath;
 
-					// Convert PNG to ICO if needed
-					if (iconSourcePath.toLowerCase().endsWith(".png")) {
-						const pngToIco = (await import("png-to-ico")).default;
-						const tempIcoPath = join(buildFolder, "temp-bun-icon.ico");
-						const icoBuffer = await pngToIco(iconSourcePath);
-						writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
-						iconPath = tempIcoPath;
-						console.log(
-							`Converted PNG to ICO format for bun.exe: ${tempIcoPath}`,
+						if (iconSourcePath.toLowerCase().endsWith(".png")) {
+							const pngToIco = (await import("png-to-ico")).default;
+							const tempIcoPath = join(
+								buildFolder,
+								"temp-cottontail-icon.ico",
+							);
+							const icoBuffer = await pngToIco(iconSourcePath);
+							writeFileSync(tempIcoPath, new Uint8Array(icoBuffer));
+							iconPath = tempIcoPath;
+							console.log(
+								`Converted PNG to ICO format for cottontail.exe: ${tempIcoPath}`,
+							);
+						}
+
+						const { execFileSync } = await import("child_process");
+						const rceditPkgPath = require.resolve("rcedit/package.json");
+						const rceditDir = dirname(rceditPkgPath);
+						const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
+						const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
+						execFileSync(rceditExe, [
+							cottontailBinaryDestInBundlePath,
+							"--set-icon",
+							iconPath,
+						]);
+						console.log(`Successfully embedded icon into cottontail.exe`);
+
+						if (iconPath !== iconSourcePath && existsSync(iconPath)) {
+							unlinkSync(iconPath);
+						}
+					} catch (error) {
+						console.warn(
+							`Warning: Failed to embed icon into cottontail.exe: ${error}`,
 						);
 					}
-
-					// Use rcedit to embed the icon into bun.exe
-										const { execFileSync } = await import("child_process");
-					const rceditPkgPath = require.resolve("rcedit/package.json");
-					const rceditDir = dirname(rceditPkgPath);
-					const rceditX64 = join(rceditDir, "bin", "rcedit-x64.exe");
-					const rceditExe = existsSync(rceditX64) ? rceditX64 : join(rceditDir, "bin", "rcedit.exe");
-					execFileSync(rceditExe, [bunBinaryDestInBundlePath, "--set-icon", iconPath]);
-					console.log(`Successfully embedded icon into bun.exe`);
-
-					// Clean up temp ICO file
-					if (iconPath !== iconSourcePath && existsSync(iconPath)) {
-						unlinkSync(iconPath);
-					}
-				} catch (error) {
-					console.warn(`Warning: Failed to embed icon into bun.exe: ${error}`);
 				}
 			}
+		} else if (nativeMainBinarySourcePath) {
+			cpSync(nativeMainBinarySourcePath, join(appBundleMacOSPath, "main") + targetBinExt, {
+				dereference: true,
+			});
 		}
 
 		// copy native wrapper dynamic library
 		if (targetOS === "macos") {
+			cpSync(targetPaths.CORE_MACOS, join(appBundleMacOSPath, "libElectrobunCore.dylib"), {
+				dereference: true,
+			});
+
 			const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_MACOS;
 			const nativeWrapperMacosDestination = join(
 				appBundleMacOSPath,
@@ -2718,6 +2861,10 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				dereference: true,
 			});
 		} else if (targetOS === "win") {
+			cpSync(targetPaths.CORE_WIN, join(appBundleMacOSPath, "ElectrobunCore.dll"), {
+				dereference: true,
+			});
+
 			const nativeWrapperMacosSource = targetPaths.NATIVE_WRAPPER_WIN;
 			const nativeWrapperMacosDestination = join(
 				appBundleMacOSPath,
@@ -2737,6 +2884,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		} else if (targetOS === "linux") {
 			// Choose the appropriate native wrapper based on bundleCEF setting
 			const useCEF = config.build.linux?.bundleCEF;
+			cpSync(targetPaths.CORE_LINUX, join(appBundleMacOSPath, "libElectrobunCore.so"), {
+				dereference: true,
+			});
 			const nativeWrapperLinuxSource = useCEF
 				? targetPaths.NATIVE_WRAPPER_LINUX_CEF
 				: targetPaths.NATIVE_WRAPPER_LINUX;
@@ -2822,13 +2972,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				});
 
 				// cef helpers
-				const cefHelperNames = [
-					"bun Helper",
-					"bun Helper (Alerts)",
-					"bun Helper (GPU)",
-					"bun Helper (Plugin)",
-					"bun Helper (Renderer)",
-				];
+				const cefHelperNames = getCEFHelperNames();
 
 				const helperSourcePath = targetPaths.CEF_HELPER_MACOS;
 				cefHelperNames.forEach((helperName) => {
@@ -2909,13 +3053,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				}
 
 				// Copy CEF helper processes with different names
-				const cefHelperNames = [
-					"bun Helper",
-					"bun Helper (Alerts)",
-					"bun Helper (GPU)",
-					"bun Helper (Plugin)",
-					"bun Helper (Renderer)",
-				];
+				const cefHelperNames = getCEFHelperNames();
 
 				const helperSourcePath = targetPaths.CEF_HELPER_WIN;
 				if (existsSync(helperSourcePath)) {
@@ -3047,13 +3185,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					});
 
 					// Copy CEF helper processes with different names
-					const cefHelperNames = [
-						"bun Helper",
-						"bun Helper (Alerts)",
-						"bun Helper (GPU)",
-						"bun Helper (Plugin)",
-						"bun Helper (Renderer)",
-					];
+					const cefHelperNames = getCEFHelperNames();
 
 					const helperSourcePath = targetPaths.CEF_HELPER_LINUX;
 					if (existsSync(helperSourcePath)) {
@@ -3222,22 +3354,25 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 		} // end if (!isCarrotOnly)
 
-		// transpile developer's bun code
-		const bunDestFolder = join(appBundleAppCodePath, "bun");
-		// Build bun-javascript ts files
-		const { entrypoint: _bunEntrypoint, ...bunBuildOptions } = bunConfig;
-		const buildResult = await Bun.build({
-			...bunBuildOptions,
-			entrypoints: [bunSource],
-			outdir: bunDestFolder,
-			// minify: true, // todo (yoav): add minify in canary and prod builds
-			target: "bun",
-		});
+		if (mainProcess === "cottontail") {
+			// Keep the existing app/bun layout as a source-compatible SDK detail.
+			const mainDestFolder = join(appBundleAppCodePath, "bun");
+			const {
+				entrypoint: _cottontailEntrypoint,
+				...cottontailBuildOptions
+			} = cottontailConfig;
+			const buildResult = await Bun.build({
+				...cottontailBuildOptions,
+				entrypoints: [cottontailSource],
+				outdir: mainDestFolder,
+				target: "bun",
+			});
 
-		if (!buildResult.success) {
-			console.error("failed to build", bunSource);
-			printBuildLogs(buildResult.logs);
-			throw new Error("Build failed: bun build failed");
+			if (!buildResult.success) {
+				console.error("failed to build", cottontailSource);
+				printBuildLogs(buildResult.logs);
+				throw new Error("Build failed: Cottontail main-process bundle failed");
+			}
 		}
 
 		// transpile developer's view code
@@ -3322,11 +3457,14 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 			mkdirSync(carrotBuildDir, { recursive: true });
 
-			// Copy the bun bundle as worker.js
-			const bunOutputDir = join(appBundleAppCodePath, "bun");
+			// Copy the Cottontail main-process bundle as worker.js.
+			const mainOutputDir = join(appBundleAppCodePath, "bun");
 			// The output filename matches the entrypoint name (e.g., worker.ts → worker.js)
-			const bunEntryName = basename(config.build.bun.entrypoint).replace(/\.ts$/, ".js");
-			const workerSrc = join(bunOutputDir, bunEntryName);
+			const mainEntryName = basename(cottontailConfig.entrypoint).replace(
+				/\.ts$/,
+				".js",
+			);
+			const workerSrc = join(mainOutputDir, mainEntryName);
 			if (existsSync(workerSrc)) {
 				cpSync(workerSrc, join(carrotBuildDir, "worker.js"));
 			}
@@ -3402,6 +3540,55 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				}
 			}
 
+			// Build slate UIs if configured.
+			// slateUIs mirrors remoteUIs, but points at an ESM module entry file instead of an HTML page.
+			const resolvedSlateUIs: Record<string, { name: string; path: string }> = {};
+			if (carrotConfig.slateUIs) {
+				for (const slateUIName in carrotConfig.slateUIs) {
+					const slateUIConfig = carrotConfig.slateUIs[slateUIName]!;
+					const label = slateUIConfig.name || slateUIName;
+
+					if (slateUIConfig.entrypoint) {
+						const slateUISource = join(projectRoot, slateUIConfig.entrypoint);
+						if (!existsSync(slateUISource)) {
+							console.error(`Slate UI entrypoint not found: ${slateUISource}`);
+							continue;
+						}
+						const slateUIDestFolder = join(carrotBuildDir, "slate-ui", slateUIName);
+						mkdirSync(slateUIDestFolder, { recursive: true });
+
+						const { entrypoint: _entrypoint, name: _name, path: _path, ...slateUIBuildOptions } = slateUIConfig;
+						const slateUIBuildResult = await Bun.build({
+							...slateUIBuildOptions,
+							entrypoints: [slateUISource],
+							outdir: slateUIDestFolder,
+							target: "browser",
+							format: "esm",
+						});
+
+						if (!slateUIBuildResult.success) {
+							console.error(`Failed to build slate UI: ${slateUIName}`);
+							printBuildLogs(slateUIBuildResult.logs);
+							continue;
+						}
+
+						resolvedSlateUIs[slateUIName] = {
+							name: label,
+							path: `slate-ui/${slateUIName}/index.js`,
+						};
+					} else if (slateUIConfig.path) {
+						resolvedSlateUIs[slateUIName] = {
+							name: label,
+							path: slateUIConfig.path,
+						};
+					} else {
+						console.warn(
+							`Slate UI "${slateUIName}" has neither entrypoint nor path; skipping.`,
+						);
+					}
+				}
+			}
+
 			// Write carrot.json manifest
 			const carrotManifest = {
 				id: carrotConfig.id,
@@ -3409,7 +3596,6 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				version: config.app.version,
 				description: carrotConfig.description || config.app.description || "",
 				mode: carrotConfig.mode || "window",
-				permissions: carrotConfig.permissions || {},
 				dependencies: Object.fromEntries(
 					Object.entries(carrotConfig.dependencies || {}).map(([id, spec]) => [
 						id,
@@ -3419,9 +3605,15 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 							: spec,
 					]),
 				),
+				contributions:
+					carrotConfig.contributions &&
+					Object.keys(carrotConfig.contributions).length > 0
+						? carrotConfig.contributions
+						: undefined,
 				worker: { relativePath: "worker.js" },
 				view: existsSync(viewsSrc) ? { relativePath: "views/index.html" } : undefined,
 				remoteUIs: Object.keys(resolvedRemoteUIs).length > 0 ? resolvedRemoteUIs : undefined,
+				slateUIs: Object.keys(resolvedSlateUIs).length > 0 ? resolvedSlateUIs : undefined,
 			};
 			writeFileSync(
 				join(carrotBuildDir, "carrot.json"),
@@ -3637,7 +3829,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				// so we're being explicit here.
 				hash = Bun.hash.wyhash(archiveBytes, 43770n).toString(36);
 			} else {
-				// Fallback for older Bun versions - use a simple hash of file paths
+				// Fallback for runtimes without Bun.Archive compatibility.
 				console.warn("Bun.Archive not available, using fallback hash method");
 				const fileList = Object.keys(bundleFiles).sort().join("\n");
 				hash = Bun.hash.wyhash(fileList).toString(36);
@@ -3645,9 +3837,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			console.timeEnd("Generate Bundle hash");
 		}
 
-		// const bunVersion = execSync(`${bunBinarySourcePath} --version`).toString().trim();
-
-		// version.json inside the app bundle
+			// version.json inside the app bundle
 		const versionJsonContent = JSON.stringify({
 			version: config.app.version,
 			// The first tar file does not include this, it gets hashed,
@@ -3676,14 +3866,21 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		const bundlesCEF = platformConfig?.bundleCEF ?? false;
 
 		const buildJsonObj: Record<string, unknown> = {
+			mainProcess,
 			defaultRenderer: platformConfig?.defaultRenderer ?? "native",
 			availableRenderers: bundlesCEF ? ["native", "cef"] : ["native"],
+			buildEnvironment,
 			runtime: config.runtime ?? {},
+			...getWindowsPermissionBuildConfig(
+				targetOS,
+				config.build.win?.autoGrantPermissions,
+			),
 			...(bundlesCEF
 				? { cefVersion: config.build?.cefVersion ?? DEFAULT_CEF_VERSION_STRING }
 				: {}),
-			bunVersion: config.build?.bunVersion ?? BUN_VERSION,
-			...(config.build?.bunnyBun ? { bunnyBun: config.build.bunnyBun } : {}),
+			...(mainProcess === "rust" ? { rustVersion: RUST_VERSION } : {}),
+			...(mainProcess === "go" ? { goVersion: GO_VERSION } : {}),
+			...(mainProcess === "odin" ? { odinVersion: ODIN_VERSION } : {}),
 		};
 
 		// Include chromiumFlags only if the developer defined them
@@ -3720,9 +3917,6 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			console.log("skipping codesign");
 		}
 
-		// codesign
-		// NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
-		// see https://github.com/oven-sh/bun/issues/7208
 		if (shouldNotarize) {
 			notarizeAndStaple(appBundleFolderPath, config);
 		} else {
@@ -3760,10 +3954,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			// Tar the app bundle for all platforms
 			createTar(tarPath, buildFolder, [basename(appBundleFolderPath)]);
 
-			// Remove the app bundle folder after tarring (except on Linux where it might be needed for dev)
-			if (targetOS !== "linux" || buildEnvironment !== "dev") {
-				rmSync(appBundleFolderPath, { recursive: true });
-			}
+			// This branch only runs for non-dev release packaging, so the temp app bundle
+			// can always be removed after the tarball is produced.
+			rmSync(appBundleFolderPath, { recursive: true });
 
 			// generate bsdiff
 			// https://storage.googleapis.com/eggbun-static/electrobun-playground/canary/ElectrobunPlayground-canary.app.tar.zst
@@ -4422,6 +4615,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 				console.log(
 					"\n[electrobun dev] Shutting down gracefully... (press Ctrl+C again to force quit)",
 				);
+				handle.kill();
 			} else {
 				console.log("\n[electrobun dev] Force quitting...");
 				try {
@@ -4442,9 +4636,34 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		// Collect watch directories from config entrypoints
 		const watchDirs = new Set<string>();
 
-		// Bun entrypoint directory
-		if (config.build.bun?.entrypoint) {
-			watchDirs.add(join(projectRoot, dirname(config.build.bun.entrypoint)));
+		// Cottontail entrypoint directory
+		if (
+			config.build.mainProcess === "cottontail" &&
+			config.build.cottontail?.entrypoint
+		) {
+			watchDirs.add(
+				join(projectRoot, dirname(config.build.cottontail.entrypoint)),
+			);
+		}
+
+		// Zig entrypoint directory
+		if (config.build.mainProcess === "zig" && config.build.zig?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.zig.entrypoint)));
+		}
+
+		// Rust entrypoint directory
+		if (config.build.mainProcess === "rust" && config.build.rust?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.rust.entrypoint)));
+		}
+
+		// Go entrypoint directory
+		if (config.build.mainProcess === "go" && config.build.go?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.go.entrypoint)));
+		}
+
+		// Odin entrypoint directory
+		if (config.build.mainProcess === "odin" && config.build.odin?.entrypoint) {
+			watchDirs.add(join(projectRoot, dirname(config.build.odin.entrypoint)));
 		}
 
 		// View entrypoint directories
@@ -4526,17 +4745,37 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		);
 
 		function shouldIgnore(fullPath: string): boolean {
+			const resolvedFullPath = path.resolve(fullPath);
+			const pathSegments = resolvedFullPath.split(path.sep).filter(Boolean);
+			const genericIgnoredSegments = new Set([
+				"node_modules",
+				path.basename(buildDir),
+				path.basename(artifactDir),
+				".electrobun-cache",
+			]);
+			if (pathSegments.some((segment) => genericIgnoredSegments.has(segment))) {
+				return true;
+			}
 			// Check built-in ignore dirs
 			if (
 				ignoreDirs.some(
-					(ignored) =>
-						fullPath.startsWith(ignored + "/") || fullPath === ignored,
+					(ignored) => {
+						const relativeToIgnored = path.relative(ignored, resolvedFullPath);
+						return (
+							relativeToIgnored === "" ||
+							(!relativeToIgnored.startsWith("..") &&
+								!path.isAbsolute(relativeToIgnored))
+						);
+					},
 				)
 			) {
 				return true;
 			}
 			// Check user-configured watchIgnore globs (match against project-relative path)
-			const relativePath = fullPath.replace(projectRoot + "/", "");
+			const relativePath = path
+				.relative(projectRoot, resolvedFullPath)
+				.split(path.sep)
+				.join("/");
 			if (ignoreGlobs.some((glob) => glob.match(relativePath))) {
 				return true;
 			}
@@ -4756,6 +4995,8 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
+		assertNoLegacyBunVersionConfig(loadedConfig);
+
 		// todo (yoav): write a deep clone fn
 		return {
 			...defaultConfig,
@@ -4783,9 +5024,21 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 					...defaultConfig.build.linux,
 					...(loadedConfig?.build?.linux || {}),
 				},
-				bun: {
-					...defaultConfig.build.bun,
-					...(loadedConfig?.build?.bun || {}),
+				cottontail: {
+					...defaultConfig.build.cottontail,
+					...(loadedConfig?.build?.cottontail || {}),
+				},
+				zig: {
+					...defaultConfig.build.zig,
+					...(loadedConfig?.build?.zig || {}),
+				},
+				rust: {
+					...defaultConfig.build.rust,
+					...(loadedConfig?.build?.rust || {}),
+				},
+				go: {
+					...defaultConfig.build.go,
+					...(loadedConfig?.build?.go || {}),
 				},
 			},
 			runtime: {
@@ -5084,13 +5337,9 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		// Sign CEF helper apps (they're in the main Frameworks directory, not inside CEF framework)
-		const cefHelperApps = [
-			"bun Helper.app",
-			"bun Helper (GPU).app",
-			"bun Helper (Plugin).app",
-			"bun Helper (Alerts).app",
-			"bun Helper (Renderer).app",
-		];
+		const cefHelperApps = getCEFHelperNames().map(
+			(helperName) => `${helperName}.app`,
+		);
 
 		for (const helperApp of cefHelperApps) {
 			const helperPath = join(frameworksPath, helperApp);
@@ -5193,7 +5442,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 			}
 		}
 
-		// Sign .node native modules in Resources/app/bun
+		// Sign native modules in the source-compatible Resources/app/bun path.
 		const resourcesPath = join(contentsPath, "Resources", "app", "bun");
 		if (existsSync(resourcesPath)) {
 			console.log("Signing native modules in Resources/app/bun...");
@@ -5256,10 +5505,6 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		let fileToNotarize = appOrDmgPath;
-		// codesign
-		// NOTE: Codesigning fails in dev mode (when using a single-file-executable bun cli as the launcher)
-		// see https://github.com/oven-sh/bun/issues/7208
-		// if (shouldNotarize) {
 		console.log("notarizing...");
 		const zipPath = appOrDmgPath + ".zip";
 		// if (appOrDmgPath.endsWith('.app')) {

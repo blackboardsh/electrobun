@@ -10,7 +10,7 @@ import { Aside } from "@astrojs/starlight/components";
 
   <p>Currently our app is opening a browser window and just loading a url. Let's make a simple web browser.</p>
 
-  <p>Create a new folder `src/main-ui/` and add an `index.ts` file. This is where our browser code will go. The Electrobun CLI will automatically transpile this into javascript and make it available at the url `views://main-ui/index.js`.</p>
+  <p>Create a new folder `src/main-ui/` and add an `index.ts` file. This is where our browser code will go. Hutch automatically transpiles it into JavaScript and makes it available at `views://main-ui/index.js`.</p>
 
   
 ```typescript
@@ -75,7 +75,8 @@ export default {
     version: "0.0.1",
   },
   build: {
-    bun: {
+    mainProcess: "cottontail",
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
     views: {
@@ -91,7 +92,7 @@ export default {
 ```
 
 
-  <p>Finally, update the bun process code to load the new HTML file:</p>
+  <p>Finally, update the main process code to load the new HTML file:</p>
 
   
 ```typescript
@@ -104,9 +105,9 @@ const win = new BrowserWindow({
 ```
 
 
-  <p>In your terminal press `ctrl+c` if the dev server is running and then `bun start` to rebuild and launch. You should now see a window with an input—type in `https://google.com` and hit go, then try the back and forward buttons.</p>
+  <p>In your terminal, press `Ctrl+C` if the dev server is running and then run `hutch run dev` to rebuild and launch. You should now see a window with an input—type in `https://google.com` and hit go, then try the back and forward buttons.</p>
 
-  <p>You'll notice that while you can right click on the text input and choose copy and paste from the default context menu, keyboard shortcuts like `cmd+c`, `cmd+v`, and `cmd+a` don't work. Let's update our main bun file to set up an Application Edit menu to enable those keyboard shortcuts.</p>
+  <p>You'll notice that while you can right click on the text input and choose copy and paste from the default context menu, keyboard shortcuts like `cmd+c`, `cmd+v`, and `cmd+a` don't work. Let's update our main-process file to set up an Application Edit menu to enable those keyboard shortcuts.</p>
 
   
 ```typescript

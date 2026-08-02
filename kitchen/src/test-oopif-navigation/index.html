@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>OOPIF Initialization Navigation Test</title>
+  <style>
+    electrobun-webview { display: block; width: 320px; height: 180px; }
+  </style>
+</head>
+<body>
+  <script>
+    const initialUrl = "views://test-harness/index.html";
+
+    const first = document.createElement("electrobun-webview");
+    first.setAttribute("src", initialUrl);
+    document.body.appendChild(first);
+
+    const second = document.createElement("electrobun-webview");
+    second.setAttribute("src", initialUrl);
+    document.body.appendChild(second);
+
+    // connectedCallback schedules initialization in requestAnimationFrame. This
+    // callback is queued afterward, so both changes happen while the async
+    // native initialization request is in flight.
+    requestAnimationFrame(() => {
+      first.loadURL("views://test-runner/index.html#queued-load-url");
+      second.setAttribute("src", "views://test-runner/index.html#queued-attribute");
+    });
+  </script>
+</body>
+</html>

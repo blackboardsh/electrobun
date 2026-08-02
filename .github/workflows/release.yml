@@ -23,22 +23,22 @@ jobs:
             platform: darwin
             arch: arm64
             platform_name: darwin
-          - os: macos-15-intel
-            platform: darwin
-            arch: x64
-            platform_name: darwin
-          - os: ubuntu-24.04
+            artifact_platform: macos
+          - os: ubuntu-22.04
             platform: linux
             arch: x64
             platform_name: linux
-          - os: ubuntu-24.04-arm
+            artifact_platform: linux
+          - os: ubuntu-22.04-arm
             platform: linux
             arch: arm64
             platform_name: linux
+            artifact_platform: linux
           - os: windows-2025
             platform: win32
             arch: x64
             platform_name: win
+            artifact_platform: win
 
     runs-on: ${{ matrix.os }}
 
@@ -53,9 +53,11 @@ jobs:
           echo "Runner OS: $RUNNER_OS"
           df -h /
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
         with:
-          bun-version: 1.3.8
+          node-version: '18'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
 
       - name: Log disk space (job start - Windows)
         if: matrix.platform == 'win32'
@@ -63,8 +65,25 @@ jobs:
         run: |
           Get-PSDrive -PSProvider FileSystem | Format-Table -AutoSize
 
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
+
       - name: Install dependencies
-        run: bun install
+        run: hutch install
+        working-directory: package
+
+      - name: Test macOS docked Web Inspector layout
+        if: matrix.platform == 'darwin'
+        run: hutch test:macos-inspector-layout
+        working-directory: package
+
+      - name: Test spell-check ownership contract
+        run: hutch test:spell-check
+        working-directory: package
+
+      - name: Exercise macOS WKWebView spell checking
+        if: matrix.platform == 'darwin'
+        run: hutch test:macos-spell-check
         working-directory: package
 
       - name: Setup MSVC Developer Command Prompt
@@ -116,6 +135,10 @@ jobs:
             cmake \
             pkg-config
 
+      - name: Test portable CEF find behavior
+        run: node scripts/run-cottontail-test.js src/shared/cef-find-session.test.ts
+        working-directory: package
+
       - name: Get CEF version for cache key
         id: cef-version
         shell: bash
@@ -129,23 +152,42 @@ jobs:
           path: package/vendors/cef
           key: cef-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}
 
+      - name: Cache core build dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            package/vendors/zig
+            package/vendors/zig-asar
+            package/vendors/zig-bsdiff
+            package/vendors/zig-zstd
+            package/vendors/wgpu
+          key: core-build-dependencies-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ hashFiles('package/src/shared/build-dependencies.ts') }}
+
       - name: Cache process_helper binary
         uses: actions/cache@v5
         with:
           path: |
             package/src/native/build/process_helper
             package/src/native/build/process_helper.exe
-          key: process-helper-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}-${{ hashFiles('package/src/native/**/cef_process_helper_*') }}
+          key: process-helper-${{ matrix.platform_name }}-${{ matrix.arch }}-${{ steps.cef-version.outputs.version }}-${{ hashFiles('package/src/native/**/cef_process_helper_*', 'package/scripts/macos-release.js') }}
 
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
-        run: bun scripts/package-release.js
+        run: node scripts/package-release.js
         working-directory: package
 
-      - name: Upload CLI artifact
-        uses: actions/upload-artifact@v6
-        with:
-          name: electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}
-          path: package/electrobun-cli-${{ matrix.platform_name }}-${{ matrix.arch }}.tar.gz
+      - name: Test CEF remote debugging policy
+        run: hutch test:cef-debug
+        working-directory: package
+
+      - name: Test Linux native file dialog
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: hutch test:linux-native-dialog
+        working-directory: package
+
+      - name: Test Linux adjacent archive installation
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: hutch test:linux-extractor
+        working-directory: package
 
       - name: Upload core artifact
         uses: actions/upload-artifact@v6
@@ -182,7 +224,7 @@ jobs:
           if [[ "$TAG" == *"-beta"* ]] || [[ "$TAG" == *"-alpha"* ]] || [[ "$TAG" == *"-rc"* ]] || [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
             echo "env=canary" >> $GITHUB_OUTPUT
           else
-            echo "env=stable" >> $GITHUB_OUTPUT
+            echo "env=production" >> $GITHUB_OUTPUT
           fi
           VERSION="${TAG#v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
@@ -207,21 +249,31 @@ jobs:
           rm certificate.p12
 
       - name: Build Kitchen
-        run: cd ../kitchen && bun install && bun build:${{ steps.release-type.outputs.env }}
-        working-directory: package
+        run: |
+          hutch install
+          hutch electrobun build --env=${{ steps.release-type.outputs.env }}
+        working-directory: kitchen
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
           ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID || '' }}
 
-      - name: Upload Kitchen artifacts to R2
-        env:
-          R2_ENDPOINT: ${{ secrets.R2_ENDPOINT }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-          R2_BUCKET: ${{ secrets.R2_RELEASES_BUCKET }}
-        run: bun scripts/upload-kitchen-artifacts.ts -- kitchen/artifacts
+      - name: Validate Kitchen artifacts
+        run: >-
+          hutch scripts/validate-kitchen-artifacts.ts
+          kitchen/artifacts
+          ${{ steps.release-type.outputs.env }}
+          ${{ matrix.artifact_platform }}
+          ${{ matrix.arch }}
+          ${{ steps.release-type.outputs.version }}
+
+      - name: Stage Kitchen artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: kitchen-${{ matrix.artifact_platform }}-${{ matrix.arch }}
+          path: kitchen/artifacts/*
+          if-no-files-found: error
 
       - name: Clean up kitchen artifacts
         shell: bash
@@ -238,10 +290,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download all artifacts
+      - name: Verify release notes configuration
+        run: node package/scripts/release-notes-contract.test.mjs
+
+      - name: Download Electrobun release artifacts
         uses: actions/download-artifact@v7
         with:
+          pattern: electrobun-*
           path: artifacts
+
+      - name: Download Kitchen artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: kitchen-*
+          path: kitchen-artifacts
+          merge-multiple: true
+
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
+
+      - name: Publish Kitchen artifacts to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
@@ -249,27 +322,8 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
-          generate_release_notes: false
+          generate_release_notes: true
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
-          body: |
-            ## Getting Started
-
-            To build apps with Electrobun, add it as a dependency in your package.json:
-
-            ```bash
-            bun add electrobun
-            ```
-
-            The Electrobun CLI will automatically download these artifacts when you build your app. You don't need to download them directly.
-
-            See the [documentation](https://docs.electrobunny.ai/electrobun/guides/quick-start/) for more information.
-
-            ---
-
-            **Artifact Reference** (downloaded automatically by the CLI):
-            - `electrobun-cli-[platform]-[arch].tar.gz` - CLI tools
-            - `electrobun-core-[platform]-[arch].tar.gz` - Core binaries
-            - `electrobun-cef-[platform]-[arch].tar.gz` - CEF binaries (optional)
 
   npm-publish:
     needs: [release]
@@ -283,18 +337,16 @@ jobs:
           node-version: '18'
           registry-url: 'https://registry.npmjs.org'
 
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: 1.3.8
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
 
       - name: Install dependencies
-        run: bun install
+        run: hutch install
         working-directory: package
 
       - name: Build for npm (JS/TS files only)
         run: |
-          # Use the new --npm flag to build only what's needed for npm
-          bun build.ts --npm --release
+          hutch build.ts --npm --release
 
           echo "Contents of dist/ for npm (should only be main.js and api/):"
           find dist/ -type f | sort

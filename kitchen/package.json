@@ -1,15 +1,20 @@
 {
 	"scripts": {
-		"start": "electrobun run",
-		"dev": "electrobun dev",
-		"build:canary": "cd ../package && bun build:release && cd ../kitchen && electrobun build --env=canary",
-		"build:stable": "cd ../package && bun build:release && cd ../kitchen && electrobun build --env=stable",
-		"start:canary": "electrobun dev --env=canary"
+		"start": "hutch electrobun run",
+		"dev": "hutch electrobun dev",
+		"matrix": "hutch scripts/kitchen-matrix.ts",
+		"matrix:full": "hutch scripts/kitchen-matrix.ts --full",
+		"check:zig-mirrors": "hutch scripts/check-zig-test-mirrors.ts",
+		"check:odin-mirrors": "hutch scripts/check-odin-test-mirrors.ts",
+		"build:canary": "cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
+		"build:production": "cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=production",
+		"start:canary": "hutch electrobun dev --env=canary"
 	},
 	"dependencies": {
 		"electrobun": "file:../package"
 	},
 	"devDependencies": {
+		"@types/bun": "^1.3.8",
 		"typescript": "^5.9.3"
 	}
 }

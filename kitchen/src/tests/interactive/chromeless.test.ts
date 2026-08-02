@@ -103,6 +103,7 @@ export const chromelessTests = [
         "Test the following:",
         "- Verify you can see through the window background",
         "- Drag any of the floating cards to move the window",
+        "- Drag empty transparent space covered by the stylesheet-defined overlay",
         "- Click the red close button when done",
         "Click Pass if transparency and dragging work",
       ]);

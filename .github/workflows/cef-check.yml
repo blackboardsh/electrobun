@@ -12,9 +12,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v6
         with:
-          bun-version: latest
+          node-version: '18'
 
       - name: Install Linux build dependencies
         run: |
@@ -28,19 +28,22 @@ jobs:
             pkg-config \
             libfuse2
 
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
+
       - name: Install package dependencies
         working-directory: package
-        run: bun install
+        run: hutch install
 
       - name: Check latest stable CEF version
         id: check
         working-directory: package
-        run: bun scripts/update-cef-version.ts
+        run: hutch scripts/update-cef-version.ts
 
       - name: Build with latest CEF
         if: steps.check.outputs.has_update == 'true'
         working-directory: package
-        run: bun build.ts
+        run: hutch build.ts
 
       - name: Job summary
         if: always()

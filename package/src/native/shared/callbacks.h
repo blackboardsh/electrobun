@@ -15,7 +15,7 @@ namespace electrobun {
 // so when sending booleans from JSCallbacks we use uint32_t
 typedef uint32_t (*DecideNavigationCallback)(uint32_t webviewId, const char* url);
 typedef void (*WebviewEventHandler)(uint32_t webviewId, const char* type, const char* url);
-typedef uint32_t (*HandlePostMessage)(uint32_t webviewId, const char* message);
+typedef void (*HandlePostMessage)(uint32_t webviewId, const char* message);
 typedef const char* (*HandlePostMessageWithReply)(uint32_t webviewId, const char* message);
 typedef void (*AsyncJavascriptCompletionHandler)(const char* messageId, uint32_t webviewId, uint32_t hostWebviewId, const char* responseJSON);
 
@@ -24,6 +24,7 @@ enum class ChromeStyle : uint32_t { Default, Hidden, HiddenInset };
 
 // Window event callbacks
 typedef void (*WindowCloseHandler)(uint32_t windowId);
+typedef void (*WindowShouldCloseHandler)(uint32_t windowId);
 typedef void (*WindowMoveHandler)(uint32_t windowId, double x, double y);
 typedef void (*WindowResizeHandler)(uint32_t windowId, double x, double y, double width, double height);
 typedef void (*WindowFocusHandler)(uint32_t windowId);

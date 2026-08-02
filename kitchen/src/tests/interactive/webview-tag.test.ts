@@ -63,8 +63,9 @@ export const webviewTagTests = [
     async run({ log, showInstructions }) {
       await showInstructions([
         "A frameless window with draggable regions will open",
-        "Try dragging the window by the dark header area",
-        "The 'Done' button should work without triggering drag",
+        "Drag from both the dark class-based box and outlined stylesheet-based box",
+        "The stylesheet region is transparent and must work on system webviews",
+        "The no-drag controls and 'Done' button must remain clickable",
         "Close the window when done to pass the test",
       ]);
 
@@ -89,8 +90,8 @@ export const webviewTagTests = [
         winRef = new BrowserWindow({
           title: "Draggable Region Test",
           url: "views://playgrounds/draggable/index.html",
-          renderer: "cef",
-          frame: { width: 500, height: 450, x: 200, y: 100 },
+          renderer: "native",
+          frame: { width: 500, height: 600, x: 200, y: 100 },
           titleBarStyle: "hidden",
           rpc,
         });

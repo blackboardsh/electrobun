@@ -7,7 +7,7 @@ title: "Updates"
 
               <ul>
                 <li><a href="/electrobun/apis/updater">Update API</a> to check for, download, and update your apps.</li>
-                <li><a href="/electrobun/apis/cli/cli-args">CLI</a> to build your app bundle, codesign, and generate artifacts.</li>
+                <li><a href="/electrobun/apis/cli/cli-args">Hutch</a> to build your app bundle, code sign and notarize it, and generate release artifacts.</li>
                 <li>A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB</li>
               </ul>
 
@@ -35,7 +35,7 @@ export default {
 
               <p>Here's an example workflow that builds and publishes releases when you push a tag:</p>
 
-              
+
 ```yaml
 name: Build and Release
 
@@ -46,44 +46,45 @@ on:
 
 jobs:
   build-macos-arm64:
-    runs-on: macos-14  # Apple Silicon runner
+    runs-on: macos-14
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - name: Install Hutch
+        shell: bash
+        run: |
+          installer="$RUNNER_TEMP/install-hutch.sh"
+          curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+            https://hutch.blackboard.sh/hutch/install.sh \
+            --output "$installer"
+          sh "$installer" --channel production --no-modify-path
+          echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
 
       - name: Install dependencies
-        run: bun install
+        run: hutch install --frozen-lockfile
 
       - name: Determine build environment
         id: build-env
+        shell: bash
         run: |
           if [[ "${{ github.ref_name }}" == *"-canary"* ]]; then
-            echo "env=canary" >> $GITHUB_OUTPUT
+            echo "env=canary" >> "$GITHUB_OUTPUT"
           else
-            echo "env=stable" >> $GITHUB_OUTPUT
+            echo "env=stable" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build app
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          if [ "${{ steps.build-env.outputs.env }}" = "canary" ]; then
-            bun run build:canary
-          else
-            bun run build:stable
-          fi
+          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
+          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
+          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
+        run: hutch electrobun build --env="${{ steps.build-env.outputs.env }}"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/*
           draft: false
@@ -94,20 +95,21 @@ jobs:
 ```
 
 
-              <p>The `generate_release_notes: true` option uses GitHub's automatic release notes feature, which lists merged PRs and contributors since the last release.</p>
+              <p>The `generate_release_notes: true` option uses GitHub's automatic release notes feature, which lists merged PRs and contributors since the last release. Leave `body` and `body_path` unset when you want the release body to contain only that changelog; GitHub prepends either custom body to the generated notes.</p>
 
 ## Limitations
 
 ### Single Patch File
 
-              <p>Electrobun only generates a single patch file per build - from the immediately previous version to the current version. This means:</p>
+              <p>Hutch generates a single patch file per build—from the immediately previous version to the current version. This means:</p>
 
               <ul>
                 <li>Users updating from the previous version get a small delta patch (often just a few KB)</li>
-                <li>Users more than one version behind will automatically fall back to downloading the full `.tar.zst` bundle</li>
+                <li>Users more than one version behind can apply retained patches successively until they reach the current version</li>
+                <li>If the required patch chain is incomplete or validation fails, the Updater automatically downloads the full `.tar.zst` bundle</li>
               </ul>
 
-              <p>This is a practical tradeoff that keeps the build process simple while still providing delta updates for users who update regularly.</p>
+              <p>This keeps each build simple while still allowing older clients to reach the current version through a retained chain of small delta updates.</p>
 
 ### Canary Builds on GitHub Releases
 

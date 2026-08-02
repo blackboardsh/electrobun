@@ -18,7 +18,7 @@ const config = await Electrobun.BuildConfig.get();
 
 ## Overview
 
-              <p>The `BuildConfig` API gives your Bun process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:</p>
+              <p>The `BuildConfig` API gives your Cottontail main process access to configuration values that were set at build time in your `electrobun.config.ts`. This is useful for:</p>
 
               <ul>
                 <li>Knowing which renderers are available in the current build</li>
@@ -60,11 +60,6 @@ const config = await Electrobun.BuildConfig.get();
                     <td>`cefVersion`</td>
                     <td>`string | undefined`</td>
                     <td>The CEF version string used in this build (e.g., `"144.0.11+ge135be2+chromium-144.0.7559.97"`). Present only when CEF is bundled. Either the custom override from `electrobun.config.ts` or the default version shipped with the Electrobun release.</td>
-                  </tr>
-                  <tr>
-                    <td>`bunVersion`</td>
-                    <td>`string | undefined`</td>
-                    <td>The Bun runtime version used in this build (e.g., `"1.3.8"`). Either the custom override from `electrobun.config.ts` or the default version shipped with the Electrobun release.</td>
                   </tr>
                   <tr>
                     <td>`runtime`</td>
@@ -126,13 +121,15 @@ if (cached) {
 
 ## How It Works
 
-              <p>When you build your Electrobun app, the CLI reads your `electrobun.config.ts` and generates a `build.json` file in the app's Resources folder. This file contains the runtime-relevant build settings.</p>
+              <p>When you build your Electrobun app, Hutch reads your `electrobun.config.ts` and generates a `build.json` file in the app's Resources folder. This file contains the runtime-relevant build settings.</p>
 
               <p>The `BuildConfig` API reads this file and caches the result. The configuration includes:</p>
 
               <ul>
                 <li><strong>defaultRenderer</strong> - From the platform-specific `defaultRenderer` setting in your config</li>
                 <li><strong>availableRenderers</strong> - Determined by whether `bundleCEF` was enabled for the target platform</li>
+                <li><strong>buildEnvironment</strong> - The environment used by Hutch (`dev`, `canary`, or `production`)</li>
+                <li><strong>chromiumFlags</strong> - The selected platform's CEF flags, when configured</li>
                 <li><strong>runtime</strong> - The entire `runtime` section from your `electrobun.config.ts`, including `exitOnLastWindowClosed` and any custom keys</li>
               </ul>
 
@@ -187,4 +184,3 @@ if (buildConfig.availableRenderers.includes('cef')) {
   });
 }
 ```
-

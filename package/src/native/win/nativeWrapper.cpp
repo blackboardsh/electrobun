@@ -15,6 +15,8 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <cmath>
+#include <filesystem>
 #include <windows.h>
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
@@ -61,9 +63,19 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/windows_utf.h"
+#include "../shared/windows_dialog_options.h"
+#include "../shared/windows_profile_paths.h"
+#include "../shared/windows_resource_paths.h"
+#include "../shared/windows_dpi.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/webview2_permissions.h"
 #include "../shared/cache_migration.h"
+#include "../shared/views_url.h"
+#include "../shared/console_forwarding.h"
+#include "../shared/dialog_paths.h"
+#include "../shared/cef_find_session.h"
 
 // DirectComposition compositor (GPU surface compositing for Windows)
 #include "dcomp_compositor.h"
@@ -101,9 +113,10 @@ public:
     AsarDirEntry root;
     size_t dataOffset;
 
-    static AsarArchive* open(const std::string& path) {
+    static AsarArchive* open(const std::filesystem::path& path) {
         auto archive = new AsarArchive();
-        archive->file.open(path, std::ios::binary);
+        archive->file.open(
+            electrobun::windowsExtendedLengthPath(path), std::ios::binary);
         if (!archive->file.is_open()) {
             delete archive;
             return nullptr;
@@ -313,7 +326,11 @@ static std::mutex g_asarReadMutex; // Mutex to protect ASAR read operations
 
 // Export ASAR functions for launcher to use (compatible with libasar.dll API)
 extern "C" __declspec(dllexport) void* asar_open(const char* path) {
-    AsarArchive* archive = AsarArchive::open(std::string(path));
+    if (!path) return nullptr;
+    std::wstring widePath;
+    if (!electrobun::utf8ToWide(path, widePath)) return nullptr;
+    AsarArchive* archive = AsarArchive::open(
+        std::filesystem::path(widePath));
     return static_cast<void*>(archive);
 }
 
@@ -366,6 +383,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #include "../shared/partition_context.h"
 #include "include/cef_download_handler.h"
 #include "include/cef_task.h"
+#include "include/views/cef_display.h"
 #include "include/wrapper/cef_helpers.h"
 
 // Restore macro definitions
@@ -385,6 +403,7 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #pragma comment(lib, "d2d1.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
+#pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
 
 using namespace Microsoft::WRL;
@@ -395,6 +414,7 @@ using namespace Microsoft::WRL;
 #define WM_EXECUTE_SYNC_BLOCK (WM_USER + 1)
 #define WM_EXECUTE_ASYNC_BLOCK (WM_USER + 2)
 #define WM_DEVTOOLS_CREATE (WM_USER + 3)
+#define WM_ELECTROBUN_NOTIFICATION (WM_USER + 4)
 
 // Forward declarations
 class AbstractView;
@@ -413,10 +433,23 @@ typedef double CGFloat;
 
 // Function pointer type definitions are in shared/callbacks.h
 // Platform-specific aliases
-typedef BOOL (*HandlePostMessageWin)(uint32_t webviewId, const char* message);
+typedef void (*HandlePostMessageWin)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
+
+// Window classes implemented by this DLL must be registered and created with
+// the DLL's HINSTANCE. The host executable's module handle identifies a
+// different class namespace.
+static HINSTANCE g_hInstanceDll = NULL;
+
+BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
+    (void)reserved;
+    if (reason == DLL_PROCESS_ATTACH) {
+        g_hInstanceDll = instance;
+    }
+    return TRUE;
+}
 
 // Global map to store container views by window handle
 static std::map<HWND, std::unique_ptr<ContainerView>> g_containerViews;
@@ -491,17 +524,78 @@ static UINT g_nextMenuId = WM_USER + 1000;  // Start menu IDs from a safe range
 static std::vector<ACCEL> g_menuAccelerators;
 static HACCEL g_hAccelTable = NULL;
 
+// Transient notification icons share the dispatcher window, so each active
+// balloon needs its own ID until the shell reports that it is done.
+static std::atomic<UINT> g_nextNotificationId{1};
+
 // Global state for custom window dragging
 static BOOL g_isMovingWindow = FALSE;
 static HWND g_targetWindow = NULL;
 static POINT g_initialCursorPos = {};
 static POINT g_initialWindowPos = {};
+static std::map<HWND, bool> g_visibleOnAllWorkspaces;
+static std::mutex g_visibleOnAllWorkspacesMutex;
 
 // WebView positioning constants
 static const int OFFSCREEN_OFFSET = -20000;
 
+// DPI awareness must be selected before the first HWND is created. Electrobun
+// is loaded into several different runtime executables, so setting it here is
+// more reliable than depending on every runtime carrying the same manifest.
+static void configurePerMonitorDpiAwareness() {
+    HMODULE user32 = GetModuleHandleW(L"user32.dll");
+    if (!user32) return;
+
+    // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 is declared as ((HANDLE)-4).
+    // Keep the dynamically-loaded calls compatible with older Windows SDKs.
+    HANDLE perMonitorV2 = reinterpret_cast<HANDLE>(static_cast<INT_PTR>(-4));
+    using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
+    using SetThreadDpiAwarenessContextFn = HANDLE(WINAPI*)(HANDLE);
+
+    bool processContextSelected = false;
+    auto setProcessContext = reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+        GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+    if (setProcessContext) {
+        SetLastError(ERROR_SUCCESS);
+        processContextSelected = setProcessContext(perMonitorV2) != FALSE;
+        // A manifest or an earlier host call may already have selected the
+        // process context. Do not try to replace it with a weaker fallback.
+        if (!processContextSelected && GetLastError() == ERROR_ACCESS_DENIED) {
+            processContextSelected = true;
+        }
+    }
+
+    if (!processContextSelected) {
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (shcore) {
+            using SetProcessDpiAwarenessFn = HRESULT(WINAPI*)(int);
+            auto setProcessAwareness = reinterpret_cast<SetProcessDpiAwarenessFn>(
+                GetProcAddress(shcore, "SetProcessDpiAwareness"));
+            if (setProcessAwareness) {
+                // PROCESS_PER_MONITOR_DPI_AWARE
+                HRESULT result = setProcessAwareness(2);
+                processContextSelected = SUCCEEDED(result) || result == E_ACCESSDENIED;
+            }
+            FreeLibrary(shcore);
+        }
+    }
+
+    if (!processContextSelected) {
+        using SetProcessDPIAwareFn = BOOL(WINAPI*)();
+        auto setProcessDpiAware = reinterpret_cast<SetProcessDPIAwareFn>(
+            GetProcAddress(user32, "SetProcessDPIAware"));
+        if (setProcessDpiAware) setProcessDpiAware();
+    }
+
+    // Mixed-awareness hosts can have selected a weaker process default before
+    // loading Electrobun. Ensure the UI/event-loop thread itself uses PMv2.
+    auto setThreadContext = reinterpret_cast<SetThreadDpiAwarenessContextFn>(
+        GetProcAddress(user32, "SetThreadDpiAwarenessContext"));
+    if (setThreadContext) setThreadContext(perMonitorV2);
+}
+
 // Remote DevTools port
-static int g_remoteDebugPort = 9222;
+static int g_remoteDebugPort = 0;
 
 static bool IsPortAvailable(int port) {
     WSADATA wsaData;
@@ -527,20 +621,56 @@ static bool IsPortAvailable(int port) {
     return result == 0;
 }
 
-static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
-    for (int port = startPort; port <= endPort; ++port) {
-        if (IsPortAvailable(port)) {
-            return port;
-        }
-    }
-    return 0;
-}
-
 // CEF global variables
 static bool g_cef_initialized = false;
 static CefRefPtr<CefApp> g_cef_app;
 static electrobun::ChromiumFlagConfig g_userChromiumFlags;
+static electrobun::AutoGrantPermissionSet g_autoGrantPermissions;
 static HANDLE g_job_object = nullptr;  // Job object to track all child processes
+
+static void loadWebView2PermissionPolicy() {
+    const std::wstring executablePath = electrobun::getModuleFileNameWide();
+    if (executablePath.empty()) {
+        g_autoGrantPermissions.clear();
+        return;
+    }
+
+    const std::filesystem::path buildJsonPath =
+        std::filesystem::path(executablePath).parent_path() /
+        L".." / L"Resources" / L"build.json";
+    g_autoGrantPermissions = electrobun::parseAutoGrantPermissions(
+        electrobun::readFileToString(buildJsonPath));
+
+    if (!g_autoGrantPermissions.empty()) {
+        printf(
+            "WebView2: Loaded %zu auto-grant permission(s) from build.json\n",
+            g_autoGrantPermissions.size());
+    }
+}
+
+static bool shouldAutoGrantWebView2Permission(
+    COREWEBVIEW2_PERMISSION_KIND kind) {
+    using electrobun::AutoGrantPermission;
+    AutoGrantPermission permission;
+    switch (kind) {
+        case COREWEBVIEW2_PERMISSION_KIND_CAMERA:
+            permission = AutoGrantPermission::camera;
+            break;
+        case COREWEBVIEW2_PERMISSION_KIND_MICROPHONE:
+            permission = AutoGrantPermission::microphone;
+            break;
+        case COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION:
+            permission = AutoGrantPermission::geolocation;
+            break;
+        case COREWEBVIEW2_PERMISSION_KIND_NOTIFICATIONS:
+            permission = AutoGrantPermission::notifications;
+            break;
+        default:
+            return false;
+    }
+    return electrobun::hasAutoGrantPermission(
+        g_autoGrantPermissions, permission);
+}
 
 // Quit/shutdown coordination
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
@@ -723,17 +853,17 @@ struct DevToolsWindowContext {
 };
 
 static std::once_flag g_devtoolsClassRegistered;
-static const char* DEVTOOLS_WINDOW_CLASS = "ElectrobunDevToolsClass";
+static const wchar_t* DEVTOOLS_WINDOW_CLASS = L"ElectrobunDevToolsClass";
 
 static LRESULT CALLBACK DevToolsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     DevToolsWindowContext* dtCtx = nullptr;
 
     if (msg == WM_NCCREATE) {
-        CREATESTRUCTA* cs = (CREATESTRUCTA*)lParam;
+        CREATESTRUCTW* cs = (CREATESTRUCTW*)lParam;
         dtCtx = (DevToolsWindowContext*)cs->lpCreateParams;
-        SetWindowLongPtrA(hwnd, GWLP_USERDATA, (LONG_PTR)dtCtx);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)dtCtx);
     } else {
-        dtCtx = (DevToolsWindowContext*)GetWindowLongPtrA(hwnd, GWLP_USERDATA);
+        dtCtx = (DevToolsWindowContext*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
     }
 
     switch (msg) {
@@ -762,19 +892,19 @@ static LRESULT CALLBACK DevToolsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
             return 0;
     }
 
-    return DefWindowProcA(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 static void EnsureDevToolsWindowClassRegistered() {
     std::call_once(g_devtoolsClassRegistered, []() {
-        WNDCLASSA wc = {};
+        WNDCLASSW wc = {};
         wc.lpfnWndProc = DevToolsWndProc;
-        wc.hInstance = GetModuleHandle(NULL);
+        wc.hInstance = g_hInstanceDll;
         wc.lpszClassName = DEVTOOLS_WINDOW_CLASS;
         wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
         wc.style = CS_HREDRAW | CS_VREDRAW;
-        RegisterClassA(&wc);
+        RegisterClassW(&wc);
     });
 }
 
@@ -792,8 +922,7 @@ public:
         handle_request = true;
 
         std::string url = request->GetURL();
-        std::string path = url.substr(8); // Remove "views://" prefix
-        if (path.empty()) path = "index.html";
+        std::string path = normalizeViewsRelativePath(url);
 
         std::string content;
         // Check for internal/index.html (inline HTML content)
@@ -1152,10 +1281,10 @@ public:
         std::string message = "This page wants to access your camera and/or microphone.\n\nDo you want to allow this?";
         std::string title = "Camera & Microphone Access";
         
-        int result = MessageBoxA(
+        int result = electrobun::messageBoxUtf8(
             nullptr,
-            message.c_str(),
-            title.c_str(),
+            message,
+            title,
             MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
         );
         
@@ -1235,10 +1364,10 @@ public:
         printf("CEF: No cached permission found for %s, showing dialog\n", origin.c_str());
         
         // Show Windows message box
-        int result = MessageBoxA(
+        int result = electrobun::messageBoxUtf8(
             nullptr,
-            message.c_str(),
-            title.c_str(),
+            message,
+            title,
             MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
         );
         
@@ -1271,47 +1400,19 @@ private:
 
 // Helper functions for string conversion
 std::wstring StringToWString(const std::string& str) {
-    if (str.empty()) return std::wstring();
-    
-    int sizeRequired = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-    if (sizeRequired <= 0) {
-        // Fallback to simple conversion (ASCII safe)
-        std::wstring result;
-        result.reserve(str.length());
-        for (char c : str) {
-            result.push_back(static_cast<wchar_t>(static_cast<unsigned char>(c)));
-        }
-        return result;
+    std::wstring result;
+    if (!electrobun::utf8ToWide(str, result)) {
+        return L"";
     }
-    
-    std::wstring wstr(sizeRequired, 0);
-    MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], sizeRequired);
-    wstr.pop_back(); // Remove null terminator
-    return wstr;
+    return result;
 }
 
 std::string WStringToString(const std::wstring& wstr) {
-    if (wstr.empty()) return std::string();
-    
-    int sizeRequired = WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    if (sizeRequired <= 0) {
-        // Fallback to simple conversion (ASCII safe)
-        std::string result;
-        result.reserve(wstr.length());
-        for (wchar_t wc : wstr) {
-            if (wc <= 127) { // ASCII range
-                result.push_back(static_cast<char>(wc));
-            } else {
-                result.push_back('?'); // Replace non-ASCII with ?
-            }
-        }
-        return result;
+    std::string result;
+    if (!electrobun::wideToUtf8(wstr, result)) {
+        return "";
     }
-    
-    std::string str(sizeRequired, 0);
-    WideCharToMultiByte(CP_UTF8, 0, wstr.c_str(), -1, &str[0], sizeRequired, nullptr, nullptr);
-    str.pop_back(); // Remove null terminator
-    return str;
+    return result;
 }
 
 // CEF Dialog Handler for file dialogs
@@ -1382,6 +1483,8 @@ public:
             std::vector<COMDLG_FILTERSPEC> filterSpecs;
             std::vector<std::wstring> filterNames;
             std::vector<std::wstring> filterPatterns;
+            filterNames.reserve(accept_filters.size());
+            filterPatterns.reserve(accept_filters.size());
             
             for (const auto& filter : accept_filters) {
                 std::wstring wFilter = StringToWString(filter.ToString());
@@ -1395,14 +1498,19 @@ public:
                 
                 filterNames.push_back(name);
                 filterPatterns.push_back(pattern);
-                
+            }
+
+            filterSpecs.reserve(filterNames.size());
+            for (size_t index = 0; index < filterNames.size(); ++index) {
                 COMDLG_FILTERSPEC spec;
-                spec.pszName = filterNames.back().c_str();
-                spec.pszSpec = filterPatterns.back().c_str();
+                spec.pszName = filterNames[index].c_str();
+                spec.pszSpec = filterPatterns[index].c_str();
                 filterSpecs.push_back(spec);
             }
             
-            pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+            if (!filterSpecs.empty()) {
+                pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+            }
         }
         
         // Show the dialog
@@ -1481,9 +1589,12 @@ public:
         HRESULT hr = SHGetKnownFolderPath(FOLDERID_Downloads, 0, NULL, &downloadsPath);
 
         if (SUCCEEDED(hr) && downloadsPath) {
-            // Convert suggested name to wide string
             std::string suggestedStr = suggested_name.ToString();
-            std::wstring suggestedNameW(suggestedStr.begin(), suggestedStr.end());
+            std::wstring suggestedNameW;
+            if (!electrobun::utf8ToWide(suggestedStr, suggestedNameW)) {
+                printf("CEF Windows: Suggested download name is not valid UTF-8\n");
+                suggestedNameW = L"download";
+            }
 
             // Build the full destination path
             std::wstring destPath = downloadsPath;
@@ -1506,10 +1617,13 @@ public:
                 counter++;
             }
 
-            // Convert wide string back to UTF-8 for CEF
-            int size = WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-            std::string utf8Path(size - 1, '\0');
-            WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, &utf8Path[0], size, nullptr, nullptr);
+            std::string utf8Path;
+            if (!electrobun::wideToUtf8(destPath, utf8Path)) {
+                printf("CEF Windows: Download path is not valid UTF-16\n");
+                CoTaskMemFree(downloadsPath);
+                callback->Continue("", false);
+                return true;
+            }
 
             printf("CEF Windows: Downloading to %s\n", utf8Path.c_str());
 
@@ -1642,6 +1756,15 @@ public:
 
     HWND GetHWND() const { return parent_; }
 
+    UINT GetDpi() const {
+        return electrobun::windowsDpiForWindow(parent_);
+    }
+
+    float GetDeviceScaleFactor() const {
+        return static_cast<float>(GetDpi()) /
+            electrobun::kWindowsDefaultDpi;
+    }
+
     // Handle mouse events and forward to CEF
     void HandleMouseEvent(UINT message, WPARAM wParam, LPARAM lParam) {
         if (!browser_) {
@@ -1655,9 +1778,20 @@ public:
             return;
         }
 
+        POINT clientPoint = {
+            GET_X_LPARAM(lParam),
+            GET_Y_LPARAM(lParam),
+        };
+        // Wheel messages carry screen coordinates; all other mouse messages
+        // carry client coordinates. CEF expects view coordinates in DIPs.
+        if (message == WM_MOUSEWHEEL) {
+            ScreenToClient(parent_, &clientPoint);
+        }
+
+        const UINT dpi = GetDpi();
         CefMouseEvent mouse_event;
-        mouse_event.x = GET_X_LPARAM(lParam);
-        mouse_event.y = GET_Y_LPARAM(lParam);
+        mouse_event.x = electrobun::physicalToLogicalPixel(clientPoint.x, dpi);
+        mouse_event.y = electrobun::physicalToLogicalPixel(clientPoint.y, dpi);
 
         // Set modifiers
         mouse_event.modifiers = 0;
@@ -1742,23 +1876,92 @@ private:
 // CEF Render Handler for off-screen rendering (OSR) mode
 class ElectrobunRenderHandler : public CefRenderHandler {
 public:
-    ElectrobunRenderHandler() : view_width_(800), view_height_(600), osr_window_(nullptr) {}
+    ElectrobunRenderHandler()
+        : view_width_pixels_(800), view_height_pixels_(600), osr_window_(nullptr) {}
 
     void SetOSRWindow(OSRWindow* window) {
         osr_window_ = window;
     }
 
     void SetViewSize(int width, int height) {
-        view_width_ = width;
-        view_height_ = height;
+        view_width_pixels_ = width;
+        view_height_pixels_ = height;
     }
 
     // CefRenderHandler methods
     void GetViewRect(CefRefPtr<CefBrowser> browser, CefRect& rect) override {
+        const UINT dpi = osr_window_
+            ? osr_window_->GetDpi()
+            : electrobun::kWindowsDefaultDpi;
         rect.x = 0;
         rect.y = 0;
-        rect.width = view_width_ > 0 ? view_width_ : 800;
-        rect.height = view_height_ > 0 ? view_height_ : 600;
+        rect.width = std::max(1L, electrobun::physicalToLogicalSize(
+            view_width_pixels_ > 0 ? view_width_pixels_ : 800, dpi));
+        rect.height = std::max(1L, electrobun::physicalToLogicalSize(
+            view_height_pixels_ > 0 ? view_height_pixels_ : 600, dpi));
+    }
+
+    bool GetRootScreenRect(
+        CefRefPtr<CefBrowser> browser,
+        CefRect& rect
+    ) override {
+        if (!osr_window_ || !IsWindow(osr_window_->GetHWND())) return false;
+
+        RECT physical = {};
+        if (!GetWindowRect(osr_window_->GetHWND(), &physical)) return false;
+        const CefRect pixelRect(
+            physical.left,
+            physical.top,
+            physical.right - physical.left,
+            physical.bottom - physical.top);
+        rect = CefDisplay::ConvertScreenRectFromPixels(pixelRect);
+        return true;
+    }
+
+    bool GetScreenPoint(
+        CefRefPtr<CefBrowser> browser,
+        int viewX,
+        int viewY,
+        int& screenX,
+        int& screenY
+    ) override {
+        if (!osr_window_ || !IsWindow(osr_window_->GetHWND())) return false;
+
+        const UINT dpi = osr_window_->GetDpi();
+        POINT point = {
+            electrobun::logicalToPhysicalPixel(viewX, dpi),
+            electrobun::logicalToPhysicalPixel(viewY, dpi),
+        };
+        if (!ClientToScreen(osr_window_->GetHWND(), &point)) return false;
+        screenX = point.x;
+        screenY = point.y;
+        return true;
+    }
+
+    bool GetScreenInfo(
+        CefRefPtr<CefBrowser> browser,
+        CefScreenInfo& screenInfo
+    ) override {
+        if (!osr_window_ || !IsWindow(osr_window_->GetHWND())) return false;
+
+        RECT physicalRoot = {};
+        if (!GetWindowRect(osr_window_->GetHWND(), &physicalRoot)) return false;
+        const CefRect pixelRoot(
+            physicalRoot.left,
+            physicalRoot.top,
+            physicalRoot.right - physicalRoot.left,
+            physicalRoot.bottom - physicalRoot.top);
+        CefRefPtr<CefDisplay> display =
+            CefDisplay::GetDisplayMatchingBounds(pixelRoot, true);
+        if (!display) return false;
+
+        screenInfo.device_scale_factor = display->GetDeviceScaleFactor();
+        screenInfo.depth = 32;
+        screenInfo.depth_per_component = 8;
+        screenInfo.is_monochrome = false;
+        screenInfo.rect = display->GetBounds();
+        screenInfo.available_rect = display->GetWorkArea();
+        return true;
     }
 
     void OnPaint(CefRefPtr<CefBrowser> browser,
@@ -1769,8 +1972,8 @@ public:
                  int height) override;
 
 private:
-    int view_width_;
-    int view_height_;
+    int view_width_pixels_;
+    int view_height_pixels_;
     OSRWindow* osr_window_;
 
     IMPLEMENT_REFCOUNTING(ElectrobunRenderHandler);
@@ -1831,6 +2034,12 @@ public:
     void SetOSRWindow(OSRWindow* window) {
         if (m_renderHandler) {
             m_renderHandler->SetOSRWindow(window);
+        }
+    }
+
+    void SetOSRViewSize(int width, int height) {
+        if (m_renderHandler && width > 0 && height > 0) {
+            m_renderHandler->SetViewSize(width, height);
         }
     }
 
@@ -1976,6 +2185,11 @@ public:
     // Open remote DevTools frontend for a specific browser (including OOPIFs)
     void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
         if (!browser || !browser->GetHost()) return;
+        if (g_remoteDebugPort == 0) {
+            std::cout << "[CEF] Remote DevTools unavailable because remote debugging is disabled"
+                      << std::endl;
+            return;
+        }
 
         int target_id = browser->GetIdentifier();
 
@@ -2149,15 +2363,15 @@ public:
             host.dt_ctx->ctx = this;
             host.dt_ctx->target_id = target_id;
 
-            host.window = CreateWindowExA(
+            host.window = CreateWindowExW(
                 0,
                 DEVTOOLS_WINDOW_CLASS,
-                "DevTools",
+                L"DevTools",
                 WS_OVERLAPPEDWINDOW,
                 CW_USEDEFAULT, CW_USEDEFAULT, 1100, 800,
                 nullptr,  // No parent - standalone window
                 nullptr,
-                GetModuleHandle(NULL),
+                g_hInstanceDll,
                 host.dt_ctx);
         }
 
@@ -2365,6 +2579,10 @@ void SetBrowserOnClient(CefRefPtr<ElectrobunCefClient> client, CefRefPtr<CefBrow
 void ElectrobunLoadHandler::OnLoadStart(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, TransitionType transition_type) {
     // NOTE: OnLoadStart is now a fallback - primary injection happens via GetResourceResponseFilter
     // This ensures preload scripts are in the HTML before parsing, guaranteeing execution order
+    if (frame->IsMain() && webview_event_handler_) {
+        std::string url = frame->GetURL().ToString();
+        webview_event_handler_(webview_id_, _strdup("did-commit-navigation"), _strdup(url.c_str()));
+    }
 }
 
 void ElectrobunLoadHandler::OnLoadEnd(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, int httpStatusCode) {
@@ -2413,19 +2631,19 @@ CefRefPtr<CefResponseFilter> ElectrobunResourceRequestHandler::GetResourceRespon
 
 // Runtime CEF availability detection - Windows equivalent of macOS isCEFAvailable()
 bool isCEFAvailable() {
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0';
+    std::wstring exePath = electrobun::getModuleFileNameWide();
+    const size_t lastSlash = exePath.find_last_of(L"\\/");
+    if (lastSlash == std::wstring::npos) {
+        return false;
     }
+    exePath.resize(lastSlash);
     
     // Check for essential CEF files
-    std::string cefLibPath = std::string(exePath) + "\\libcef.dll";
-    std::string icuDataPath = std::string(exePath) + "\\icudtl.dat";
+    const std::wstring cefLibPath = exePath + L"\\libcef.dll";
+    const std::wstring icuDataPath = exePath + L"\\icudtl.dat";
     
-    DWORD libAttributes = GetFileAttributesA(cefLibPath.c_str());
-    DWORD icuAttributes = GetFileAttributesA(icuDataPath.c_str());
+    DWORD libAttributes = GetFileAttributesW(cefLibPath.c_str());
+    DWORD icuAttributes = GetFileAttributesW(icuDataPath.c_str());
     
     bool libExists = (libAttributes != INVALID_FILE_ATTRIBUTES && !(libAttributes & FILE_ATTRIBUTE_DIRECTORY));
     bool icuExists = (icuAttributes != INVALID_FILE_ATTRIBUTES && !(icuAttributes & FILE_ATTRIBUTE_DIRECTORY));
@@ -2476,10 +2694,14 @@ private:
     HandlePostMessage m_callback;
     uint32_t m_webviewId;
     std::string m_bridgeName;
+    bool m_callbackIsSynchronous;
+    bool m_quiet;
 
 public:
-    BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId) 
-        : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName) {
+    BridgeHandler(const std::string& bridgeName, HandlePostMessage callback, uint32_t webviewId,
+                  bool callbackIsSynchronous = false, bool quiet = false)
+        : m_refCount(1), m_callback(callback), m_webviewId(webviewId), m_bridgeName(bridgeName),
+          m_callbackIsSynchronous(callbackIsSynchronous), m_quiet(quiet) {
         
     }
 
@@ -2524,9 +2746,15 @@ public:
     }
 
     HRESULT STDMETHODCALLTYPE Invoke(DISPID dispIdMember, REFIID riid, LCID lcid, WORD wFlags, DISPPARAMS* pDispParams, VARIANT* pVarResult, EXCEPINFO* pExcepInfo, UINT* puArgErr) override {
-        if (dispIdMember == 1 && (wFlags & DISPATCH_METHOD)) { // postMessage method
+        if (dispIdMember == 1 && !(wFlags & DISPATCH_METHOD)) {
+            // WebView2 may probe a known method as a property before invoking it.
+            return DISP_E_MEMBERNOTFOUND;
+        }
+        if (dispIdMember == 1) { // postMessage method
             if (pDispParams->cArgs == 1 && pDispParams->rgvarg[0].vt == VT_BSTR) {
-                printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
+                if (!m_quiet) {
+                    printf("[Bridge:%s] Received message for webview %u\n", m_bridgeName.c_str(), m_webviewId);
+                }
                 return PostMessage(pDispParams->rgvarg[0].bstrVal);
             }
             printf("[Bridge:%s] Bad param count for webview %u\n", m_bridgeName.c_str(), m_webviewId);
@@ -2543,22 +2771,27 @@ public:
             return E_FAIL;
         }
 
-        // Convert BSTR to char*
-        int size = WideCharToMultiByte(CP_UTF8, 0, message, -1, NULL, 0, NULL, NULL);
-        if (size <= 0) {
-            ::log("ERROR: Failed to get required buffer size for message conversion");
+        std::string messageUtf8;
+        if (!message || !electrobun::wideToUtf8(
+                std::wstring_view(message, SysStringLen(message)), messageUtf8)) {
+            ::log("ERROR: Bridge message is not valid UTF-16");
             return E_FAIL;
         }
 
-        char* message_char = new char[size];
-        int result = WideCharToMultiByte(CP_UTF8, 0, message, -1, message_char, size, NULL, NULL);
-        if (result == 0) {
+        char* message_char = new char[messageUtf8.size() + 1];
+        memcpy(message_char, messageUtf8.c_str(), messageUtf8.size() + 1);
+
+        if (m_callbackIsSynchronous) {
+            try {
+                m_callback(m_webviewId, message_char);
+            } catch (...) {
+                ::log("ERROR: Exception in bridge callback");
+                delete[] message_char;
+                return E_FAIL;
+            }
             delete[] message_char;
-            ::log("ERROR: Failed to convert message to UTF-8");
-            return E_FAIL;
+            return S_OK;
         }
-
-        
 
         // Create a copy for the callback to avoid memory issues
         char* messageCopy = new char[strlen(message_char) + 1];
@@ -2744,15 +2977,29 @@ public:
 class MainThreadDispatcher {
 private:
     static HWND g_messageWindow;
+    static DWORD g_messageThreadId;
 
 public:
     static void initialize(HWND hwnd) {
         g_messageWindow = hwnd;
+        g_messageThreadId = hwnd ? GetWindowThreadProcessId(hwnd, nullptr) : 0;
+    }
+
+    static bool is_main_thread() {
+        return g_messageThreadId != 0 && GetCurrentThreadId() == g_messageThreadId;
+    }
+
+    static HWND message_window() {
+        return g_messageWindow;
     }
     
     template<typename Func>
     static auto dispatch_sync(Func&& func) -> decltype(func()) {
         using ReturnType = decltype(func());
+
+        if (is_main_thread() || !g_messageWindow) {
+            return func();
+        }
         
         if constexpr (std::is_void_v<ReturnType>) {
             auto promise = std::make_shared<std::promise<void>>();
@@ -2767,7 +3014,14 @@ public:
                 }
             });
             
-            PostMessage(g_messageWindow, WM_EXECUTE_SYNC_BLOCK, 0, (LPARAM)task);
+            if (!PostMessage(
+                    g_messageWindow,
+                    WM_EXECUTE_SYNC_BLOCK,
+                    0,
+                    reinterpret_cast<LPARAM>(task))) {
+                delete task;
+                return;
+            }
             future.get(); // Will re-throw any exceptions
         } else {
             auto promise = std::make_shared<std::promise<ReturnType>>();
@@ -2781,7 +3035,14 @@ public:
                 }
             });
             
-            PostMessage(g_messageWindow, WM_EXECUTE_SYNC_BLOCK, 0, (LPARAM)task);
+            if (!PostMessage(
+                    g_messageWindow,
+                    WM_EXECUTE_SYNC_BLOCK,
+                    0,
+                    reinterpret_cast<LPARAM>(task))) {
+                delete task;
+                return ReturnType{};
+            }
             return future.get();
         }
     }
@@ -2794,18 +3055,30 @@ public:
     
     template<typename Func>
     static void dispatch_async(Func&& func) {
+        if (!g_messageWindow) {
+            func();
+            return;
+        }
         auto task = new std::function<void()>(std::forward<Func>(func));
-        PostMessage(g_messageWindow, WM_EXECUTE_ASYNC_BLOCK, 0, (LPARAM)task);
+        if (!PostMessage(
+                g_messageWindow,
+                WM_EXECUTE_ASYNC_BLOCK,
+                0,
+                reinterpret_cast<LPARAM>(task))) {
+            delete task;
+        }
     }
 };
 
 HWND MainThreadDispatcher::g_messageWindow = NULL;
+DWORD MainThreadDispatcher::g_messageThreadId = 0;
 
 // AbstractView base class - Windows implementation matching Mac pattern
 class AbstractView {
 public:
     uint32_t webviewId;
     HWND hwnd = NULL;
+    HWND parentWindow = NULL;
     bool isMousePassthroughEnabled = false;
     bool mirrorModeEnabled = false;
     bool fullSize = false;
@@ -2817,6 +3090,16 @@ public:
     std::string maskJSON;
     RECT visualBounds = {};
     bool creationFailed = false;
+
+    // Public view frames are DIPs. Keep the canonical logical rectangle so
+    // non-full-size views can be re-rasterized when their parent crosses to a
+    // monitor with a different DPI; visualBounds remains Win32 client pixels.
+    std::mutex logicalFrameMutex;
+    double logicalFrameX = 0;
+    double logicalFrameY = 0;
+    double logicalFrameWidth = 0;
+    double logicalFrameHeight = 0;
+    bool hasLogicalFrame = false;
 
     // Pending resize state (cross-thread)
     std::mutex pendingResizeMutex;
@@ -2833,6 +3116,7 @@ public:
     ComPtr<BridgeHandler> eventBridgeHandler;  // Event-only bridge (always available)
     ComPtr<BridgeHandler> bunBridgeHandler;
     ComPtr<BridgeHandler> internalBridgeHandler;
+    ComPtr<BridgeHandler> consoleBridgeHandler;
     ComPtr<BunBridgeDispatch> bunBridgeDispatch;
     ComPtr<InternalBridgeDispatch> internalBridgeDispatch;
 
@@ -2852,6 +3136,10 @@ public:
     virtual void addPreloadScriptToWebView(const char* jsString) = 0;
     virtual void updateCustomPreloadScript(const char* jsString) = 0;
     virtual void resize(const RECT& frame, const char* masksJson) = 0;
+    virtual void notifyParentWindowPositionChanged() {}
+    virtual void focus() {
+        if (hwnd) ::SetFocus(hwnd);
+    }
     
     // Common implementations
     virtual void setTransparent(bool transparent) {
@@ -2929,6 +3217,31 @@ public:
     virtual bool hasCreationFailed() const {
         return creationFailed;
     }
+
+    void setLogicalFrame(double x, double y, double width, double height) {
+        std::lock_guard<std::mutex> lock(logicalFrameMutex);
+        logicalFrameX = x;
+        logicalFrameY = y;
+        logicalFrameWidth = width;
+        logicalFrameHeight = height;
+        hasLogicalFrame = true;
+    }
+
+    bool physicalFrameForDpi(UINT dpi, RECT& frame) {
+        std::lock_guard<std::mutex> lock(logicalFrameMutex);
+        if (!hasLogicalFrame) return false;
+        frame = electrobun::logicalToPhysicalRect(
+            logicalFrameX,
+            logicalFrameY,
+            logicalFrameWidth,
+            logicalFrameHeight,
+            dpi);
+        return true;
+    }
+
+    UINT parentDpi() const {
+        return electrobun::windowsDpiForWindow(parentWindow);
+    }
     
     // Check if point is in a masked (cut-out) area based on maskJSON
     bool isPointInMask(POINT localPoint) {
@@ -2962,9 +3275,16 @@ public:
                 size_t hEnd = maskJSON.find("}", hStart);
                 int height = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
                 
-                // Check if point is within this mask rectangle
-                if (localPoint.x >= x && localPoint.x < x + width &&
-                    localPoint.y >= y && localPoint.y < y + height) {
+                // Mask JSON is expressed in view DIPs while mouse points are
+                // Win32 client pixels.
+                const double logicalX =
+                    electrobun::physicalToLogicalCoordinate(
+                        localPoint.x, parentDpi());
+                const double logicalY =
+                    electrobun::physicalToLogicalCoordinate(
+                        localPoint.y, parentDpi());
+                if (logicalX >= x && logicalX < x + width &&
+                    logicalY >= y && logicalY < y + height) {
                     return true;  // Point is in a masked area
                 }
                 
@@ -3013,6 +3333,21 @@ public:
     }
 };
 
+static std::map<uint32_t, std::shared_ptr<AbstractView>> g_retainedAbstractViews;
+static std::mutex g_retainedAbstractViewsMutex;
+
+static void retainAbstractView(std::shared_ptr<AbstractView> view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    g_retainedAbstractViews[view->webviewId] = view;
+}
+
+static void releaseRetainedAbstractView(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    g_retainedAbstractViews.erase(webviewId);
+}
+
 // Pending resize queue (cross-thread)
 static PendingResizeQueue g_pendingResizeQueue;
 static std::atomic<bool> g_pendingResizeScheduled{false};
@@ -3058,6 +3393,7 @@ private:
     HandlePostMessage internalBridgeCallbackHandler;
     bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
+    double pageZoomFactor = 1.0;
 
 public:
     std::string pendingUrl;
@@ -3096,6 +3432,39 @@ public:
         return webview;
     }
 
+    void notifyParentWindowPositionChanged() override {
+        if (controller) controller->NotifyParentWindowPositionChanged();
+    }
+
+    void focus() override {
+        if (controller) {
+            controller->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+        } else {
+            AbstractView::focus();
+        }
+    }
+
+    void setPageZoom(double zoomFactor) {
+        pageZoomFactor = zoomFactor;
+        applyPageZoom();
+    }
+
+    void applyPageZoom() {
+        if (controller) {
+            controller->put_ZoomFactor(pageZoomFactor);
+        }
+    }
+
+    double getPageZoom() {
+        if (controller) {
+            double zoomFactor = pageZoomFactor;
+            if (SUCCEEDED(controller->get_ZoomFactor(&zoomFactor))) {
+                pageZoomFactor = zoomFactor;
+            }
+        }
+        return pageZoomFactor;
+    }
+
     void setCreationComplete(bool complete) {
         isCreationComplete = complete;
     }
@@ -3108,6 +3477,29 @@ public:
     void setupJavaScriptBridges() {
         if (!webview) return;
 
+        if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+            consoleBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler(
+                "electrobunConsole",
+                printWebviewConsoleMessage,
+                webviewId,
+                true,
+                true));
+            VARIANT consoleBridgeVariant = {};
+            VariantInit(&consoleBridgeVariant);
+            consoleBridgeVariant.vt = VT_DISPATCH;
+            consoleBridgeVariant.pdispVal = static_cast<IDispatch*>(consoleBridgeHandler.Get());
+            HRESULT bridgeResult = webview->AddHostObjectToScript(
+                L"electrobunConsole",
+                &consoleBridgeVariant);
+            VariantClear(&consoleBridgeVariant);
+
+            if (SUCCEEDED(bridgeResult)) {
+                const char* source = webviewConsoleForwardingScript();
+                std::wstring script(source, source + strlen(source));
+                webview->AddScriptToExecuteOnDocumentCreated(script.c_str(), nullptr);
+            }
+        }
+
         // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
         eventBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("eventBridge", eventBridgeCallbackHandler, webviewId));
         VARIANT eventBridgeVariant = {};
@@ -3117,7 +3509,7 @@ public:
         webview->AddHostObjectToScript(L"eventBridge", &eventBridgeVariant);
         VariantClear(&eventBridgeVariant);
 
-        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
         if (!isSandboxed) {
             // Create COM objects for the bridge handlers
             bunBridgeHandler = ComPtr<BridgeHandler>(new BridgeHandler("bunBridge", bunBridgeCallbackHandler, webviewId));
@@ -3135,6 +3527,7 @@ public:
             internalBridgeVariant.pdispVal = static_cast<IDispatch*>(internalBridgeHandler.Get());
 
             // Add the bridge objects to hostObjects
+            webview->AddHostObjectToScript(L"hostBridge", &bunBridgeVariant);
             webview->AddHostObjectToScript(L"bunBridge", &bunBridgeVariant);
             webview->AddHostObjectToScript(L"internalBridge", &internalBridgeVariant);
 
@@ -3168,7 +3561,11 @@ public:
         uint32_t wvId = webviewId;
         MainThreadDispatcher::dispatch_async([this, urlStr, isViewsUrl, handler, wvId]() {
             if (webview) {
-                std::wstring url(urlStr.begin(), urlStr.end());
+                std::wstring url;
+                if (!electrobun::utf8ToWide(urlStr, url)) {
+                    ::log("[WebView2] Refusing navigation URL that is not valid UTF-8");
+                    return;
+                }
                 webview->Navigate(url.c_str());
 
                 // Fire did-navigate after Navigate() for views:// URLs only
@@ -3199,7 +3596,11 @@ public:
         // Both this and the creation callback run on the main thread, so they can't interleave.
         MainThreadDispatcher::dispatch_async([this, htmlCopy]() {
             if (webview) {
-                std::wstring html(htmlCopy.begin(), htmlCopy.end());
+                std::wstring html;
+                if (!electrobun::utf8ToWide(htmlCopy, html)) {
+                    ::log("[WebView2] Refusing HTML that is not valid UTF-8");
+                    return;
+                }
                 webview->NavigateToString(html.c_str());
             } else {
                 // WebView2 not ready — creation callback will load this
@@ -3227,6 +3628,14 @@ public:
     }
     
     void remove() override {
+        for (auto it = g_webview2Views.begin(); it != g_webview2Views.end();) {
+            if (it->second == this) {
+                it = g_webview2Views.erase(it);
+            } else {
+                ++it;
+            }
+        }
+
         if (controller) {
             controller->Close();
             controller = nullptr;
@@ -3321,26 +3730,38 @@ public:
     }
     
     void evaluateJavaScriptWithNoCompletion(const char* jsString) override {
-        if (webview) {
+        if (webview && jsString) {
             // Copy string to avoid lifetime issues in lambda
             std::string jsStringCopy = jsString;
             MainThreadDispatcher::dispatch_sync([this, jsStringCopy]() {
-                std::wstring js = std::wstring(jsStringCopy.begin(), jsStringCopy.end());
+                std::wstring js;
+                if (!electrobun::utf8ToWide(jsStringCopy, js)) {
+                    ::log("[WebView2] Refusing to execute JavaScript that is not valid UTF-8");
+                    return;
+                }
                 webview->ExecuteScript(js.c_str(), nullptr);
             });
         }
     }
     
     void callAsyncJavascript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) override {
-        if (webview) {
-            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
+        if (webview && jsString) {
+            std::wstring js;
+            if (!electrobun::utf8ToWide(jsString, js)) {
+                ::log("[WebView2] Refusing async JavaScript that is not valid UTF-8");
+                return;
+            }
             webview->ExecuteScript(js.c_str(), (ICoreWebView2ExecuteScriptCompletedHandler*)completionHandler);
         }
     }
     
     void addPreloadScriptToWebView(const char* jsString) override {
         if (webview && jsString) {
-            std::wstring js = std::wstring(jsString, jsString + strlen(jsString));
+            std::wstring js;
+            if (!electrobun::utf8ToWide(jsString, js)) {
+                ::log("[WebView2] Refusing preload JavaScript that is not valid UTF-8");
+                return;
+            }
             webview->AddScriptToExecuteOnDocumentCreated(js.c_str(), nullptr);
             std::cout << "[WebView2] Added preload script to execute on document created (length: " << strlen(jsString) << ")" << std::endl;
         }
@@ -3353,8 +3774,7 @@ public:
 
         // Check if this is a views:// URL for a script file
         if (strncmp(jsString, "views://", 8) == 0) {
-            // Remove "views://" prefix and load the file
-            scriptContent = loadViewsFile(std::string(jsString + 8));
+            scriptContent = loadViewsFile(normalizeViewsRelativePath(jsString));
             if (scriptContent.empty()) {
                 std::cout << "[WebView2] Could not read preload script from: " << jsString << std::endl;
                 return;
@@ -3364,8 +3784,13 @@ public:
             scriptContent = jsString;
         }
 
-        // Convert to wide string and execute
-        std::wstring wScript(scriptContent.begin(), scriptContent.end());
+        // WebView2 accepts UTF-16. Byte-wise widening corrupts any non-ASCII
+        // source, including the JSON RPC fallback used on Windows.
+        std::wstring wScript;
+        if (!electrobun::utf8ToWide(scriptContent, wScript)) {
+            ::log("[WebView2] Refusing custom preload that is not valid UTF-8");
+            return;
+        }
 
         // Add as a script to execute on document creation for future navigations
         webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
@@ -3484,7 +3909,11 @@ public:
             (matchCase ? "true" : "false") + ", " +
             (forward ? "false" : "true") + ", true, false, false, false)";
 
-        std::wstring wjs(js.begin(), js.end());
+        std::wstring wjs;
+        if (!electrobun::utf8ToWide(js, wjs)) {
+            ::log("[WebView2] Refusing find text that is not valid UTF-8");
+            return;
+        }
         webview->ExecuteScript(wjs.c_str(), nullptr);
     }
 
@@ -3523,6 +3952,7 @@ private:
     CefRefPtr<ElectrobunCefClient> client;
     OSRWindow* osr_window;
     bool is_osr_mode;
+    CefFindSession findSession;
 
 public:
     CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
@@ -3708,7 +4138,7 @@ public:
         // Check if this is a views:// URL for a script file
         if (strncmp(jsString, "views://", 8) == 0) {
             // Read the script file using existing WebView2 logic
-            std::string scriptContent = loadViewsFile(std::string(jsString + 8)); // Remove "views://" prefix
+            std::string scriptContent = loadViewsFile(normalizeViewsRelativePath(jsString));
             if (!scriptContent.empty()) {
                 if (browser) {
                     browser->GetMainFrame()->ExecuteJavaScript(scriptContent.c_str(), browser->GetMainFrame()->GetURL(), 0);
@@ -3726,6 +4156,7 @@ public:
     
     // CEF-specific methods
     void setBrowser(CefRefPtr<CefBrowser> br) {
+        findSession.reset();
         browser = br;
         // If OSR mode, also set the browser on the OSR window for event handling
         if (osr_window && br) {
@@ -3744,21 +4175,42 @@ public:
     CefRefPtr<ElectrobunCefClient> getClient() {
         return client;
     }
+
+    void notifyParentWindowPositionChanged() override {
+        if (!browser) return;
+        browser->GetHost()->NotifyScreenInfoChanged();
+        browser->GetHost()->NotifyMoveOrResizeStarted();
+    }
+
+    void focus() override {
+        if (browser) {
+            browser->GetHost()->SetFocus(true);
+        } else {
+            AbstractView::focus();
+        }
+    }
     
     void resize(const RECT& frame, const char* masksJson) override {
         if (browser) {
-            // Get the CEF browser's window handle and update its position/size
-            HWND browserHwnd = browser->GetHost()->GetWindowHandle();
-            if (browserHwnd) {
-                int width = frame.right - frame.left;
-                int height = frame.bottom - frame.top;
-                
-                
-                // Move and resize the CEF browser window, bringing it to front
-                SetWindowPos(browserHwnd, HWND_TOP, frame.left, frame.top, width, height,
-                           SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            int width = frame.right - frame.left;
+            int height = frame.bottom - frame.top;
+
+            if (is_osr_mode) {
+                // Windowless CEF has no child HWND to resize. Its render handler
+                // owns a physical-pixel surface but exposes a DIP viewport to
+                // CEF. Refresh screen info before repainting so a monitor move
+                // updates devicePixelRatio as well as the buffer dimensions.
+                if (client) client->SetOSRViewSize(width, height);
+                browser->GetHost()->NotifyScreenInfoChanged();
+            } else {
+                // Get the CEF browser's window handle and update its position/size
+                HWND browserHwnd = browser->GetHost()->GetWindowHandle();
+                if (browserHwnd) {
+                    SetWindowPos(browserHwnd, HWND_TOP, frame.left, frame.top, width, height,
+                               SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
             }
-            
+
             // Notify CEF that the browser was resized
             browser->GetHost()->WasResized();
             visualBounds = frame;
@@ -3842,8 +4294,19 @@ public:
                     size_t hEnd = maskJSON.find("}", hStart);
                     int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
                     
-                    // Create hole region and subtract from browser region
-                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
+                    // Mask JSON is in DIPs; Win32 regions use client pixels.
+                    const RECT holeBounds =
+                        electrobun::logicalToPhysicalRect(
+                            x,
+                            y,
+                            maskWidth,
+                            maskHeight,
+                            parentDpi());
+                    HRGN holeRegion = CreateRectRgn(
+                        holeBounds.left,
+                        holeBounds.top,
+                        holeBounds.right,
+                        holeBounds.bottom);
                     if (holeRegion) {
                         CombineRgn(browserRegion, browserRegion, holeRegion, RGN_DIFF);
                         DeleteObject(holeRegion);
@@ -3978,26 +4441,37 @@ public:
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!searchText || strlen(searchText) == 0) {
+            findSession.reset();
+            if (!browser) return;
+
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            if (host) {
+                host->StopFinding(true);
+            }
+            return;
+        }
+
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (!host) return;
 
-        if (!searchText || strlen(searchText) == 0) {
+        const bool findNext = findSession.begin(searchText, matchCase);
+        if (!findNext) {
             host->StopFinding(true);
-            return;
         }
 
-        // Use CEF's native find functionality
-        host->Find(CefString(searchText), forward, matchCase, false);
+        host->Find(CefString(searchText), forward, matchCase, findNext);
     }
 
     void stopFindInPage() override {
+        findSession.reset();
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (host) {
-            host->StopFinding(true); // true = clear selection
+            host->StopFinding(true);
         }
     }
 
@@ -4129,7 +4603,18 @@ public:
                     size_t hEnd = maskJSON.find("}", hStart);
                     int maskHeight = std::stoi(maskJSON.substr(hStart, hEnd - hStart));
 
-                    HRGN holeRegion = CreateRectRgn(x, y, x + maskWidth, y + maskHeight);
+                    const RECT holeBounds =
+                        electrobun::logicalToPhysicalRect(
+                            x,
+                            y,
+                            maskWidth,
+                            maskHeight,
+                            parentDpi());
+                    HRGN holeRegion = CreateRectRgn(
+                        holeBounds.left,
+                        holeBounds.top,
+                        holeBounds.right,
+                        holeBounds.bottom);
                     if (holeRegion) {
                         CombineRgn(baseRegion, baseRegion, holeRegion, RGN_DIFF);
                         DeleteObject(holeRegion);
@@ -4219,18 +4704,25 @@ private:
         ContainerView* container = nullptr;
         
         if (msg == WM_NCCREATE) {
-            CREATESTRUCT* cs = (CREATESTRUCT*)lParam;
+            CREATESTRUCTW* cs = reinterpret_cast<CREATESTRUCTW*>(lParam);
             container = (ContainerView*)cs->lpCreateParams;
-            SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)container);
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)container);
+            // CreateWindowExW sends WM_NCCREATE before it returns, so bind the
+            // HWND now. HandleMessage's DefWindowProcW call must receive this
+            // real handle or window creation returns FALSE and falls back to
+            // the STATIC class. See #458.
+            if (container) {
+                container->m_hwnd = hwnd;
+            }
         } else {
-            container = (ContainerView*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+            container = (ContainerView*)GetWindowLongPtrW(hwnd, GWLP_USERDATA);
         }
         
         if (container) {
             return container->HandleMessage(msg, wParam, lParam);
         }
         
-        return DefWindowProc(hwnd, msg, wParam, lParam);
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -4272,7 +4764,7 @@ private:
             }
         }
         
-        return DefWindowProc(m_hwnd, msg, wParam, lParam);
+        return DefWindowProcW(m_hwnd, msg, wParam, lParam);
     }
     
     void UpdateActiveWebviewForMousePosition(POINT mousePos) {
@@ -4439,55 +4931,63 @@ public:
         
         // Register our custom window class for proper event handling
         static bool classRegistered = false;
+        bool useStaticClass = false;
         if (!classRegistered) {
-            WNDCLASSA wc = {0};
+            WNDCLASSW wc = {0};
             wc.lpfnWndProc = ContainerWndProc;
-            wc.hInstance = GetModuleHandle(NULL);
-            wc.lpszClassName = "ContainerViewClass";
+            wc.hInstance = g_hInstanceDll;
+            wc.lpszClassName = L"ContainerViewClass";
             wc.hbrBackground = NULL; // Transparent background
-            wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-            wc.style = CS_HREDRAW | CS_VREDRAW;
+            wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
+            wc.style = CS_HREDRAW | CS_VREDRAW | CS_GLOBALCLASS;
             
-            if (!RegisterClassA(&wc)) {
+            if (!RegisterClassW(&wc)) {
                 DWORD error = GetLastError();
                 if (error != ERROR_CLASS_ALREADY_EXISTS) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to register ContainerViewClass, error: %lu", error);
                     ::log(errorMsg);
-                    // Fall back to STATIC class
-                    goto use_static_class;
+                    useStaticClass = true;
                 }
             }
-            classRegistered = true;
+            if (!useStaticClass) {
+                classRegistered = true;
+            }
         }
         
         // Try creating with our custom class first
-        m_hwnd = CreateWindowExA(
-            0,
-            "ContainerViewClass",
-            "",  // No title text
-            WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-            0, 0, width, height,
-            parentWindow,
-            NULL,
-            GetModuleHandle(NULL),
-            this   // Pass this pointer for message handling
-        );
-        
-        if (!m_hwnd) {
-            ::log("Custom class failed, falling back to STATIC class");
-            
-            use_static_class:
-            // Fallback to STATIC class
-            m_hwnd = CreateWindowExA(
+        if (!useStaticClass) {
+            m_hwnd = CreateWindowExW(
                 0,
-                "STATIC",
-                "",  // No title text  
+                L"ContainerViewClass",
+                L"",  // No title text
                 WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
                 0, 0, width, height,
                 parentWindow,
                 NULL,
-                GetModuleHandle(NULL),
+                g_hInstanceDll,
+                this   // Pass this pointer for message handling
+            );
+        }
+        
+        if (!m_hwnd) {
+            if (!useStaticClass) {
+                DWORD error = GetLastError();
+                char errorMsg[256];
+                sprintf_s(errorMsg, "Custom class failed (error: %lu), falling back to STATIC class", error);
+                ::log(errorMsg);
+            }
+
+            // Fallback to STATIC class
+            m_hwnd = CreateWindowExW(
+                0,
+                L"STATIC",
+                L"",  // No title text
+                WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
+                0, 0, width, height,
+                parentWindow,
+                NULL,
+                g_hInstanceDll,
                 NULL
             );
             
@@ -4529,6 +5029,43 @@ public:
         }
     }
 
+    void ResizeFixedViewsForDpi(UINT dpi) {
+        for (auto& view : m_abstractViews) {
+            if (view->fullSize) continue;
+            RECT bounds = {};
+            if (!view->physicalFrameForDpi(dpi, bounds)) continue;
+            view->resize(bounds, view->maskJSON.c_str());
+            // A DPI transition changes the pixel edges of an unchanged DIP
+            // mask, so force region reconstruction even when the JSON itself
+            // did not change.
+            view->applyVisualMask();
+        }
+    }
+
+    void NotifyParentWindowPositionChanged() {
+        for (auto& view : m_abstractViews) {
+            view->notifyParentWindowPositionChanged();
+        }
+    }
+
+    void FocusActiveView() {
+        AbstractView* target = m_activeWebView;
+        if (!target) {
+            auto fullSizeView = std::find_if(
+                m_abstractViews.begin(),
+                m_abstractViews.end(),
+                [](const std::shared_ptr<AbstractView>& view) {
+                    return view->fullSize;
+                });
+            if (fullSizeView != m_abstractViews.end()) {
+                target = fullSizeView->get();
+            } else if (!m_abstractViews.empty()) {
+                target = m_abstractViews.front().get();
+            }
+        }
+        if (target) target->focus();
+    }
+
     void BringViewToFront(uint32_t webviewId) {
         auto it = std::find_if(m_abstractViews.begin(), m_abstractViews.end(),
             [webviewId](const std::shared_ptr<AbstractView>& view) {
@@ -4563,11 +5100,13 @@ public:
         // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
+            uint32_t viewId = view->webviewId;
             view->remove();
             {
                 std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-                g_abstractViews.erase(view->webviewId);
+                g_abstractViews.erase(viewId);
             }
+            releaseRetainedAbstractView(viewId);
         }
         if (m_hwnd) {
             DestroyWindow(m_hwnd);
@@ -4589,6 +5128,9 @@ public:
     }
     
     void RemoveAbstractViewWithId(uint32_t webviewId) {
+        if (m_activeWebView && m_activeWebView->webviewId == webviewId) {
+            m_activeWebView = nullptr;
+        }
         m_abstractViews.erase(
             std::remove_if(m_abstractViews.begin(), m_abstractViews.end(),
                 [webviewId](const std::shared_ptr<AbstractView>& view) {
@@ -4662,13 +5204,53 @@ struct createNSWindowWithFrameAndStyleParams {
 typedef struct {
     uint32_t windowId;
     WindowCloseHandler closeHandler;
+    WindowShouldCloseHandler shouldCloseHandler;
     WindowMoveHandler moveHandler;
     WindowResizeHandler resizeHandler;
     WindowFocusHandler focusHandler;
     WindowBlurHandler blurHandler;
     WindowKeyHandler keyHandler;
     ChromeStyle chromeStyle;
+    bool bypassShouldClose;
 } WindowData;
+
+static bool readAppsUseDarkTheme(BOOL* useDarkTheme) {
+    DWORD appsUseLightTheme = 1;
+    DWORD valueSize = sizeof(appsUseLightTheme);
+    LONG status = RegGetValueW(
+        HKEY_CURRENT_USER,
+        L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+        L"AppsUseLightTheme",
+        RRF_RT_REG_DWORD,
+        nullptr,
+        &appsUseLightTheme,
+        &valueSize);
+    if (status != ERROR_SUCCESS) return false;
+
+    *useDarkTheme = appsUseLightTheme == 0 ? TRUE : FALSE;
+    return true;
+}
+
+static void updateWindowTheme(HWND hwnd) {
+    using DwmSetWindowAttributeFn = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static HMODULE dwmApi = LoadLibraryW(L"dwmapi.dll");
+    static auto setWindowAttribute = dwmApi
+        ? reinterpret_cast<DwmSetWindowAttributeFn>(
+              GetProcAddress(dwmApi, "DwmSetWindowAttribute"))
+        : nullptr;
+    if (!setWindowAttribute) return;
+
+    BOOL useDarkTheme = FALSE;
+    if (!readAppsUseDarkTheme(&useDarkTheme)) return;
+
+    // Attribute 20 is DWMWA_USE_IMMERSIVE_DARK_MODE on current Windows SDKs.
+    // Windows 10 1809 used the same behavior under attribute 19.
+    HRESULT result = setWindowAttribute(
+        hwnd, 20, &useDarkTheme, sizeof(useDarkTheme));
+    if (FAILED(result)) {
+        setWindowAttribute(hwnd, 19, &useDarkTheme, sizeof(useDarkTheme));
+    }
+}
 
 
 // Handle application menu item selection
@@ -4805,11 +5387,65 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
     
     switch (msg) {
+        case WM_GETMINMAXINFO: {
+            // WS_POPUP is used for hidden/custom chrome and otherwise maximizes
+            // to rcMonitor, covering the taskbar. Clamp it to this monitor's
+            // work area, including monitors with negative desktop coordinates.
+            LONG_PTR style = GetWindowLongPtr(hwnd, GWL_STYLE);
+            if ((style & WS_POPUP) != 0) {
+                HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+                MONITORINFO monitorInfo = { sizeof(MONITORINFO) };
+                if (GetMonitorInfoW(monitor, &monitorInfo)) {
+                    MINMAXINFO* minMaxInfo = reinterpret_cast<MINMAXINFO*>(lParam);
+                    minMaxInfo->ptMaxPosition.x =
+                        monitorInfo.rcWork.left - monitorInfo.rcMonitor.left;
+                    minMaxInfo->ptMaxPosition.y =
+                        monitorInfo.rcWork.top - monitorInfo.rcMonitor.top;
+                    minMaxInfo->ptMaxSize.x =
+                        monitorInfo.rcWork.right - monitorInfo.rcWork.left;
+                    minMaxInfo->ptMaxSize.y =
+                        monitorInfo.rcWork.bottom - monitorInfo.rcWork.top;
+                    return 0;
+                }
+            }
+            break;
+        }
+
+        case WM_DPICHANGED: {
+            // Windows supplies a physical-pixel rectangle that preserves the
+            // window's logical size on the destination monitor.
+            const RECT* suggested = reinterpret_cast<const RECT*>(lParam);
+            if (suggested) {
+                SetWindowPos(
+                    hwnd,
+                    nullptr,
+                    suggested->left,
+                    suggested->top,
+                    suggested->right - suggested->left,
+                    suggested->bottom - suggested->top,
+                    SWP_NOACTIVATE | SWP_NOZORDER);
+            }
+            auto containerIt = g_containerViews.find(hwnd);
+            if (containerIt != g_containerViews.end()) {
+                containerIt->second->ResizeFixedViewsForDpi(
+                    HIWORD(wParam));
+                containerIt->second->NotifyParentWindowPositionChanged();
+            }
+            return 0;
+        }
+
+        case WM_SETTINGCHANGE:
+            // Windows broadcasts ImmersiveColorSet when the app color mode
+            // changes. Re-reading for every settings broadcast is cheap and
+            // also covers shell versions that use a different lParam string.
+            updateWindowTheme(hwnd);
+            break;
+
         case WM_NCCALCSIZE:
             if (wParam == TRUE && data && data->chromeStyle == ChromeStyle::HiddenInset) {
                 NCCALCSIZE_PARAMS* p = (NCCALCSIZE_PARAMS*)lParam;
                 RECT original = p->rgrc[0];
-                LRESULT ret = DefWindowProc(hwnd, msg, wParam, lParam);
+                LRESULT ret = DefWindowProcW(hwnd, msg, wParam, lParam);
                 if (IsZoomed(hwnd)) {
                     // Maximized: clip client area to monitor work area so
                     // we still strip the caption bar without pushing content
@@ -4940,18 +5576,40 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case WM_CLOSE:
+            if (data && data->shouldCloseHandler && !data->bypassShouldClose) {
+                data->shouldCloseHandler(data->windowId);
+                return 0;
+            }
             if (data && data->closeHandler) {
+                data->bypassShouldClose = false;
                 data->closeHandler(data->windowId);
             }
             break;
             
-        case WM_MOVE:
+        case WM_MOVE: {
+            auto containerIt = g_containerViews.find(hwnd);
+            if (containerIt != g_containerViews.end()) {
+                containerIt->second->NotifyParentWindowPositionChanged();
+            }
             if (data && data->moveHandler) {
-                int x = LOWORD(lParam);
-                int y = HIWORD(lParam);
-                data->moveHandler(data->windowId, x, y);
+                RECT physicalFrame = {};
+                if (GetWindowRect(hwnd, &physicalFrame)) {
+                    const auto monitor = electrobun::windowsMonitorForHandle(
+                        MonitorFromRect(
+                            &physicalFrame, MONITOR_DEFAULTTONEAREST));
+                    const POINT logicalOrigin =
+                        electrobun::physicalScreenPointToLogical(
+                            physicalFrame.left,
+                            physicalFrame.top,
+                            monitor);
+                    data->moveHandler(
+                        data->windowId,
+                        logicalOrigin.x,
+                        logicalOrigin.y);
+                }
             }
             break;
+        }
             
         case WM_SIZE:
             {
@@ -4975,7 +5633,27 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (data && data->resizeHandler) {
                     int width = LOWORD(lParam);
                     int height = HIWORD(lParam);
-                    data->resizeHandler(data->windowId, 0, 0, width, height);
+                    const UINT dpi = electrobun::windowsDpiForWindow(hwnd);
+                    RECT physicalFrame = {};
+                    POINT logicalOrigin = {};
+                    if (GetWindowRect(hwnd, &physicalFrame)) {
+                        const auto monitor =
+                            electrobun::windowsMonitorForHandle(
+                                MonitorFromRect(
+                                    &physicalFrame,
+                                    MONITOR_DEFAULTTONEAREST));
+                        logicalOrigin =
+                            electrobun::physicalScreenPointToLogical(
+                                physicalFrame.left,
+                                physicalFrame.top,
+                                monitor);
+                    }
+                    data->resizeHandler(
+                        data->windowId,
+                        logicalOrigin.x,
+                        logicalOrigin.y,
+                        electrobun::physicalToLogicalCoordinate(width, dpi),
+                        electrobun::physicalToLogicalCoordinate(height, dpi));
                 }
             }
             break;
@@ -5018,6 +5696,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_applicationMenu = NULL;
             }
             g_appMenuTarget.reset();
+            {
+                std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+                g_visibleOnAllWorkspaces.erase(hwnd);
+            }
             
             // Clean up container view
             g_containerViews.erase(hwnd);
@@ -5030,7 +5712,25 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
     }
     
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void removeTransientNotificationIcon(HWND hwnd, UINT notificationId) {
+    KillTimer(hwnd, notificationId);
+    NOTIFYICONDATAW nid = {};
+    nid.cbSize = sizeof(nid);
+    nid.hWnd = hwnd;
+    nid.uID = notificationId;
+    Shell_NotifyIconW(NIM_DELETE, &nid);
+}
+
+static VOID CALLBACK transientNotificationTimerProc(
+    HWND hwnd,
+    UINT,
+    UINT_PTR timerId,
+    DWORD
+) {
+    removeTransientNotificationIcon(hwnd, static_cast<UINT>(timerId));
 }
 
 // handles window things on Windows
@@ -5042,15 +5742,32 @@ LRESULT CALLBACK MessageWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
         case WM_EXECUTE_ASYNC_BLOCK:
             MainThreadDispatcher::handleSyncTask(lParam);
             return 0;
+        case WM_ELECTROBUN_NOTIFICATION: {
+            // NOTIFYICON_VERSION_4 places the event in LOWORD(lParam) and the
+            // icon ID in HIWORD(lParam). Fall back to the legacy layout if the
+            // shell rejected the version request.
+            UINT eventCode = LOWORD(lParam);
+            UINT notificationId = HIWORD(lParam);
+            if (notificationId == 0) {
+                eventCode = static_cast<UINT>(lParam);
+                notificationId = static_cast<UINT>(wParam);
+            }
+            if (eventCode == NIN_BALLOONHIDE ||
+                eventCode == NIN_BALLOONTIMEOUT ||
+                eventCode == NIN_BALLOONUSERCLICK) {
+                removeTransientNotificationIcon(hwnd, notificationId);
+            }
+            return 0;
+        }
         default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
 }
 
 
 class NSStatusItem {
 public:
-    NOTIFYICONDATA nid;
+    NOTIFYICONDATAW nid;
     HWND hwnd;
     uint32_t trayId;
     ZigStatusItemHandler handler;
@@ -5059,7 +5776,7 @@ public:
     std::string imagePath;
     
     NSStatusItem() {
-        memset(&nid, 0, sizeof(NOTIFYICONDATA));
+        memset(&nid, 0, sizeof(NOTIFYICONDATAW));
         hwnd = NULL;
         trayId = 0;
         handler = nullptr;
@@ -5071,7 +5788,7 @@ public:
             DestroyMenu(contextMenu);
         }
         // Remove from system tray
-        Shell_NotifyIcon(NIM_DELETE, &nid);
+        Shell_NotifyIconW(NIM_DELETE, &nid);
     }
 };
 
@@ -5396,7 +6113,7 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
         if (hidden) {
             continue;
         } else if (type == "divider") {
-            AppendMenuA(menu, MF_SEPARATOR, 0, NULL);
+            AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
         } else {
             UINT flags = MF_STRING;
             if (!enabled) flags |= MF_GRAYED;
@@ -5456,7 +6173,7 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
             }
 
             // Append the menu item
-            AppendMenuA(menu, flags, menuId, displayLabel.c_str());
+            electrobun::appendMenuUtf8(menu, flags, menuId, displayLabel);
 
             if (checked) {
                 CheckMenuItem(menu, menuId, MF_BYCOMMAND | MF_CHECKED);
@@ -5467,7 +6184,12 @@ HMENU createMenuFromConfig(const SimpleJsonValue& menuConfig, NSStatusItem* stat
             if (submenuIt != itemData.end() && submenuIt->second.type == SimpleJsonValue::ARRAY) {
                 HMENU submenu = createMenuFromConfig(submenuIt->second, statusItem);
                 if (submenu) {
-                    ModifyMenuA(menu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)submenu, displayLabel.c_str());
+                    electrobun::modifyMenuUtf8(
+                        menu,
+                        menuId,
+                        MF_BYCOMMAND | MF_POPUP,
+                        (UINT_PTR)submenu,
+                        displayLabel);
                 }
             }
         }
@@ -5504,7 +6226,7 @@ static void rebuildAcceleratorTable() {
     }
 
     if (!g_menuAccelerators.empty()) {
-        g_hAccelTable = CreateAcceleratorTableA(g_menuAccelerators.data(), (int)g_menuAccelerators.size());
+        g_hAccelTable = CreateAcceleratorTableW(g_menuAccelerators.data(), (int)g_menuAccelerators.size());
         if (g_hAccelTable) {
             // ::log("Created accelerator table with " + std::to_string(g_menuAccelerators.size()) + " entries");
         }
@@ -5652,7 +6374,7 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
                 if (subHidden) {
                     continue;
                 } else if (subType == "divider") {
-                    AppendMenuA(popupMenu, MF_SEPARATOR, 0, NULL);
+                    AppendMenuW(popupMenu, MF_SEPARATOR, 0, NULL);
                 } else {
                     UINT flags = MF_STRING;
                     if (!subEnabled) flags |= MF_GRAYED;
@@ -5728,7 +6450,7 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
                     }
 
                     // Append the menu item
-                    AppendMenuA(popupMenu, flags, menuId, displayLabel.c_str());
+                    electrobun::appendMenuUtf8(popupMenu, flags, menuId, displayLabel);
 
                     if (subChecked) {
                         CheckMenuItem(popupMenu, menuId, MF_BYCOMMAND | MF_CHECKED);
@@ -5739,14 +6461,20 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
                     if (nestedSubmenuIt != subItemData.end() && nestedSubmenuIt->second.type == SimpleJsonValue::ARRAY) {
                         HMENU nestedSubmenu = createMenuFromConfig(nestedSubmenuIt->second, reinterpret_cast<NSStatusItem*>(target));
                         if (nestedSubmenu) {
-                            ModifyMenuA(popupMenu, menuId, MF_BYCOMMAND | MF_POPUP, (UINT_PTR)nestedSubmenu, subLabel.c_str());
+                            electrobun::modifyMenuUtf8(
+                                popupMenu,
+                                menuId,
+                                MF_BYCOMMAND | MF_POPUP,
+                                (UINT_PTR)nestedSubmenu,
+                                subLabel);
                         }
                     }
                 }
             }
             
             // Add the popup menu to the menu bar
-            AppendMenuA(menuBar, MF_POPUP, (UINT_PTR)popupMenu, label.c_str());
+            electrobun::appendMenuUtf8(
+                menuBar, MF_POPUP, (UINT_PTR)popupMenu, label);
         } else {
             // Top-level item without submenu
             UINT menuId = g_nextMenuId++;
@@ -5759,7 +6487,7 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
             UINT flags = MF_STRING;
             if (!getBool("enabled", true)) flags |= MF_GRAYED;
             
-            AppendMenuA(menuBar, flags, menuId, label.c_str());
+            electrobun::appendMenuUtf8(menuBar, flags, menuId, label);
         }
     }
     
@@ -5785,6 +6513,19 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
 
 // Helper function to terminate all CEF helper processes
 void TerminateCEFHelperProcesses() {
+    wchar_t currentExePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, currentExePath, MAX_PATH);
+    std::wstring helperExeName = L"bun Helper.exe";
+    wchar_t* currentExeBase = wcsrchr(currentExePath, L'\\');
+    if (currentExeBase && *(currentExeBase + 1) != L'\0') {
+        std::wstring baseName = currentExeBase + 1;
+        size_t dot = baseName.find_last_of(L'.');
+        if (dot != std::wstring::npos) {
+            baseName = baseName.substr(0, dot);
+        }
+        helperExeName = baseName + L" Helper.exe";
+    }
+
     HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
     if (hSnapshot == INVALID_HANDLE_VALUE) {
         return;
@@ -5795,8 +6536,8 @@ void TerminateCEFHelperProcesses() {
     
     if (Process32FirstW(hSnapshot, &pe32)) {
         do {
-            // Check if this is a "bun Helper.exe" process
-            if (wcsstr(pe32.szExeFile, L"bun Helper.exe") != nullptr) {
+            // Match the helper executable to the current host executable name.
+            if (_wcsicmp(pe32.szExeFile, helperExeName.c_str()) == 0) {
                 HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pe32.th32ProcessID);
                 if (hProcess != nullptr) {
                     std::wcout << L"[CEF] Terminating helper process: " << pe32.szExeFile 
@@ -5832,35 +6573,62 @@ ELECTROBUN_EXPORT bool initCEF() {
         }
     }
 
-    // Get the directory where the current executable is located
-    char exePath[MAX_PATH];
-    GetModuleFileNameA(NULL, exePath, MAX_PATH);
-    char* lastSlash = strrchr(exePath, '\\');
-    if (lastSlash) {
-        *lastSlash = '\0'; // Remove the executable name
+    // Keep startup filesystem paths in UTF-16. Windows' ANSI APIs cannot
+    // represent every valid profile or installation directory.
+    const std::wstring executablePath = electrobun::getModuleFileNameWide();
+    const size_t lastSlash = executablePath.find_last_of(L"\\/");
+    if (executablePath.empty() || lastSlash == std::wstring::npos) {
+        ::log("Failed to resolve the executable path for CEF");
+        return false;
+    }
+    const std::wstring executableDir = executablePath.substr(0, lastSlash);
+
+    std::wstring helperBaseName = L"bun";
+    {
+        std::wstring exeName = executablePath.substr(lastSlash + 1);
+        const size_t dot = exeName.find_last_of(L'.');
+        if (dot != std::wstring::npos) {
+            exeName = exeName.substr(0, dot);
+        }
+        if (!exeName.empty()) {
+            helperBaseName = exeName;
+        }
     }
 
     // Set up CEF paths (resources are in ./cef relative to executable)
-    std::string cefResourceDir = std::string(exePath) + "\\cef";
+    const std::wstring cefResourceDir = executableDir + L"\\cef";
+
+    std::wstring identifier;
+    std::wstring channel;
+    if (!electrobun::utf8ToWide(g_electrobunIdentifier, identifier) ||
+        !electrobun::utf8ToWide(g_electrobunChannel, channel)) {
+        ::log("Failed to decode the Electrobun identifier or channel as UTF-8");
+        return false;
+    }
 
     // Build cache path with identifier/channel structure (consistent with CLI and updater)
     // Use %LOCALAPPDATA%\{identifier}\{channel}\CEF
-    std::string userDataDir;
-    char* localAppData = getenv("LOCALAPPDATA");
-    if (localAppData) {
-        userDataDir = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", '\\');
-        std::cout << "[CEF] Using path: " << userDataDir << std::endl;
+    std::wstring userDataDir;
+    const std::wstring localAppData =
+        electrobun::getEnvironmentVariableWide(L"LOCALAPPDATA");
+    if (!localAppData.empty()) {
+        userDataDir = buildAppDataPath(
+            localAppData, identifier, channel, L"CEF", L'\\');
+        std::cout << "[CEF] Using path: " << WStringToString(userDataDir)
+                  << std::endl;
     } else {
         // Fallback to executable directory if LOCALAPPDATA not available
-        userDataDir = buildAppDataPath(exePath, g_electrobunIdentifier, g_electrobunChannel, "cef_cache", '\\');
+        userDataDir = buildAppDataPath(
+            executableDir, identifier, channel, L"cef_cache", L'\\');
     }
 
-    // Create cache directory if it doesn't exist
-    CreateDirectoryA(userDataDir.c_str(), NULL);
+    // Create every missing parent without narrowing the path.
+    SHCreateDirectoryExW(nullptr, userDataDir.c_str(), nullptr);
 
     // One-shot wipe if Electrobun's cache format version has been bumped
     // since the user's last launch. See cache_migration.h.
-    electrobun::migrateCacheFolderIfNeeded(userDataDir);
+    electrobun::migrateCacheFolderIfNeeded(
+        std::filesystem::path(userDataDir));
 
     // Initialize CEF
     CefMainArgs main_args(GetModuleHandle(NULL));
@@ -5869,7 +6637,9 @@ ELECTROBUN_EXPORT bool initCEF() {
     g_cef_app = new ElectrobunCefApp();
 
     // Read user-defined chromium flags from build.json
-    std::string buildJsonPath = std::string(exePath) + "\\..\\Resources\\build.json";
+    const std::filesystem::path buildJsonPath =
+        std::filesystem::path(executableDir) / L".." / L"Resources" /
+        L"build.json";
     std::string buildJsonContent = electrobun::readFileToString(buildJsonPath);
     if (!buildJsonContent.empty()) {
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
@@ -5882,21 +6652,38 @@ ELECTROBUN_EXPORT bool initCEF() {
     settings.external_message_pump = true; // We pump CEF via OnScheduleMessagePumpWork
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
 
-    // Remote DevTools port with scan for availability
-    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
-    if (selectedPort == 0) {
-        selectedPort = 9222;
-        std::cout << "[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222" << std::endl;
-    }
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
     g_remoteDebugPort = selectedPort;
-    settings.remote_debugging_port = selectedPort;
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        std::cout << "[CEF] Remote debugging enabled on 127.0.0.1:"
+                  << selectedPort << " ("
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << ")" << std::endl;
+    } else if (remoteDebugging.enabled()) {
+        std::cout << "[CEF] Remote debugging disabled: no free port in "
+                  << electrobun::kDefaultRemoteDebuggingPort << "-"
+                  << electrobun::kLastAutomaticRemoteDebuggingPort << std::endl;
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        std::cout << "[CEF] Remote debugging disabled: "
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << std::endl;
+    }
 
     // Set the subprocess path to the helper executable
-    CefString(&settings.browser_subprocess_path) = std::string(exePath) + "\\bun Helper.exe";
+    CefString(&settings.browser_subprocess_path) =
+        executableDir + L"\\" + helperBaseName + L" Helper.exe";
     
     // Set paths - icudtl.dat and .pak files are in cef directory root
     CefString(&settings.resources_dir_path) = cefResourceDir;
-    CefString(&settings.locales_dir_path) = cefResourceDir + "\\Resources\\locales";
+    CefString(&settings.locales_dir_path) = cefResourceDir + L"\\Resources\\locales";
     CefString(&settings.cache_path) = userDataDir;
     
     // Add language settings like macOS
@@ -5919,6 +6706,33 @@ ELECTROBUN_EXPORT bool initCEF() {
     }
     
     return success;
+}
+
+static RECT initialWebView2Bounds(
+    HWND containerHwnd,
+    bool fullSize,
+    double x,
+    double y,
+    double width,
+    double height) {
+    RECT bounds = electrobun::logicalToPhysicalRect(
+        x,
+        y,
+        width,
+        height,
+        electrobun::windowsDpiForWindow(containerHwnd));
+
+    // The window's first WM_SIZE can run before the asynchronous WebView2
+    // controller exists. Read the container's current client area here so a
+    // full-size view starts with the same bounds used by later WM_SIZE events.
+    if (fullSize) {
+        RECT clientBounds = {};
+        if (GetClientRect(containerHwnd, &clientBounds)) {
+            bounds = clientBounds;
+        }
+    }
+
+    return bounds;
 }
 
 // Internal factory method for creating WebView2 instances
@@ -5960,7 +6774,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
     auto view = std::make_shared<WebView2View>(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
     view->hwnd = hwnd;
+    view->parentWindow = hwnd;
     view->fullSize = autoResize;
+    view->setLogicalFrame(x, y, width, height);
     view->webviewEventHandler = webviewEventHandler;
 
     // Store URL and scripts in view to survive async callbacks
@@ -5976,6 +6792,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             char errorMsg[256];
             sprintf_s(errorMsg, "ERROR: Failed to initialize COM, HRESULT: 0x%08X", comResult);
             ::log(errorMsg);
+            view->setCreationFailed(true);
             return;
         }
         
@@ -5983,6 +6800,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         auto container = GetOrCreateContainer(hwnd);
         if (!container) {
             ::log("ERROR: Failed to create container");
+            view->setCreationFailed(true);
             return;
         }
         
@@ -5994,6 +6812,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Verify the container window is valid
         if (!IsWindow(containerHwnd)) {
             ::log("ERROR: Container window handle is invalid");
+            view->setCreationFailed(true);
             return;
         }
         
@@ -6056,7 +6875,27 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             view->setController(ctrl);
                             view->setWebView(webview);
-                            
+
+                            // Keep WebView2's rasterization scale and popup/OOPIF
+                            // screen origin synchronized when the host crosses
+                            // monitors with different DPI/origin values.
+                            ComPtr<ICoreWebView2Controller3> ctrl3;
+                            if (SUCCEEDED(ctrl.As(&ctrl3)) && ctrl3) {
+                                ctrl3->put_ShouldDetectMonitorScaleChanges(TRUE);
+                                ctrl3->put_BoundsMode(COREWEBVIEW2_BOUNDS_MODE_USE_RAW_PIXELS);
+                            }
+
+                            // Let WebView2 participate in Win32 non-client hit
+                            // testing for CSS app-region elements. Older runtimes
+                            // simply fail QueryInterface and retain the JS fallback.
+                            ComPtr<ICoreWebView2Settings> settings;
+                            if (webview && SUCCEEDED(webview->get_Settings(&settings)) && settings) {
+                                ComPtr<ICoreWebView2Settings9> settings9;
+                                if (SUCCEEDED(settings.As(&settings9)) && settings9) {
+                                    settings9->put_IsNonClientRegionSupportEnabled(TRUE);
+                                }
+                            }
+
                             // Try to get composition controller interface if available
                             ComPtr<ICoreWebView2CompositionController> compCtrl;
                             HRESULT compResult = ctrl->QueryInterface(IID_PPV_ARGS(&compCtrl));
@@ -6072,12 +6911,30 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
                             
-                            // Set bounds and visibility
-                            RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-                            ctrl->put_Bounds(bounds);
+                            // Set bounds and visibility. BrowserWindow's full-size view must use
+                            // the live client area rather than its requested outer-frame size.
+                            RECT bounds = initialWebView2Bounds(
+                                container->GetHwnd(),
+                                view->fullSize,
+                                x,
+                                y,
+                                width,
+                                height);
+                            HRESULT boundsResult = ctrl->put_Bounds(bounds);
+                            if (FAILED(boundsResult)) {
+                                char errorLog[256];
+                                sprintf_s(
+                                    errorLog,
+                                    "[WebView2] Initial put_Bounds failed for webview %u, HRESULT: 0x%08X",
+                                    view->webviewId,
+                                    boundsResult);
+                                ::log(errorLog);
+                            }
+                            view->visualBounds = bounds;
 
                             // Make sure the controller is visible
                             ctrl->put_IsVisible(TRUE);
+                            view->applyPageZoom();
 
                             // Set transparent background if requested
                             if (transparent) {
@@ -6108,22 +6965,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         LPWSTR uri;
                                         request->get_Uri(&uri);
                                         
-                                        // Safe string conversion
                                         std::string uriStr;
-                                        int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, nullptr, 0, nullptr, nullptr);
-                                        if (size > 0) {
-                                            uriStr.resize(size - 1);
-                                            WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, nullptr, nullptr);
+                                        if (uri && !electrobun::wideToUtf8(uri, uriStr)) {
+                                            ::log("[WebView2] Request URI is not valid UTF-16");
+                                            CoTaskMemFree(uri);
+                                            return E_INVALIDARG;
                                         }
                                         
                                         // ::log("[WebView2] Request URI converted successfully");
                                         
                                         if (uriStr.substr(0, 8) == "views://") {
-                                            std::string filePath = uriStr.substr(8);
-                                            // Strip trailing slashes - WebView2 may normalize URLs without folder components
-                                            while (!filePath.empty() && (filePath.back() == '/' || filePath.back() == '\\')) {
-                                                filePath.pop_back();
-                                            }
+                                            std::string filePath = normalizeViewsRelativePath(uriStr);
                                             std::string content;
 
                                             // Check for internal/index.html (inline HTML content)
@@ -6161,7 +7013,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                     // This avoids duplicate events and ensures proper timing
                                                 }
 
-                                                std::wstring wMimeType(mimeType.begin(), mimeType.end());
+                                                std::wstring wMimeType;
+                                                if (!electrobun::utf8ToWide(mimeType, wMimeType)) {
+                                                    wMimeType = L"application/octet-stream";
+                                                }
 
                                                 // Create memory stream
                                                 ComPtr<IStream> contentStream;
@@ -6205,7 +7060,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 }
                                 // Resolve views:// URLs to file content (matching macOS behavior)
                                 if (view->customScript.substr(0, 8) == "views://") {
-                                    std::string fileContent = loadViewsFile(view->customScript.substr(8));
+                                    std::string fileContent = loadViewsFile(normalizeViewsRelativePath(view->customScript));
                                     if (!fileContent.empty()) {
                                         combinedScript += fileContent;
                                     } else {
@@ -6226,10 +7081,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         args->get_Uri(&uriWStr);
                                         std::string uri;
                                         if (uriWStr) {
-                                            int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
-                                            if (size > 0) {
-                                                uri.resize(size - 1);
-                                                WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                            if (!electrobun::wideToUtf8(uriWStr, uri)) {
+                                                ::log("[WebView2] Navigation URI is not valid UTF-16");
                                             }
                                             CoTaskMemFree(uriWStr);
                                         }
@@ -6316,10 +7169,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         sender->get_Source(&uriWStr);
                                         std::string uri;
                                         if (uriWStr) {
-                                            int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
-                                            if (size > 0) {
-                                                uri.resize(size - 1);
-                                                WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                            if (!electrobun::wideToUtf8(uriWStr, uri)) {
+                                                ::log("[WebView2] Source URI is not valid UTF-16");
                                             }
                                             CoTaskMemFree(uriWStr);
                                         }
@@ -6344,8 +7195,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 nullptr);
 
                             if (!combinedScript.empty()) {
-                                std::wstring wScript(combinedScript.begin(), combinedScript.end());
-                                webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                std::wstring wScript;
+                                if (electrobun::utf8ToWide(combinedScript, wScript)) {
+                                    webview->AddScriptToExecuteOnDocumentCreated(wScript.c_str(), nullptr);
+                                } else {
+                                    ::log("[WebView2] Refusing initial preload that is not valid UTF-8");
+                                }
 
                                 // NOTE: Do NOT re-run the preload via NavigationStarting + ExecuteScript.
                                 // AddScriptToExecuteOnDocumentCreated already handles this correctly.
@@ -6365,10 +7220,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             
                                             std::string uri;
                                             if (uriWStr) {
-                                                int size = WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, nullptr, 0, nullptr, nullptr);
-                                                if (size > 0) {
-                                                    uri.resize(size - 1);
-                                                    WideCharToMultiByte(CP_UTF8, 0, uriWStr, -1, &uri[0], size, nullptr, nullptr);
+                                                if (!electrobun::wideToUtf8(uriWStr, uri)) {
+                                                    ::log("[WebView2] Permission URI is not valid UTF-16");
                                                 }
                                                 CoTaskMemFree(uriWStr);
                                             }
@@ -6399,7 +7252,17 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             }
                                             
                                             printf("WebView2: %s requested for %s\n", permissionName.c_str(), origin.c_str());
-                                            
+
+                                            // Explicit developer policy takes precedence over cached user
+                                            // decisions and dialogs. Do not cache this result: keeping it
+                                            // kind-specific means granting camera never implicitly grants
+                                            // microphone (both otherwise share the USER_MEDIA cache bucket).
+                                            if (shouldAutoGrantWebView2Permission(kind)) {
+                                                printf("WebView2: Auto-granting configured %s for %s\n", permissionName.c_str(), origin.c_str());
+                                                args->put_State(COREWEBVIEW2_PERMISSION_STATE_ALLOW);
+                                                return S_OK;
+                                            }
+
                                             // Check cache first
                                             PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
                                             
@@ -6436,10 +7299,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                             }
                                             
                                             // Show Windows message box
-                                            int result = MessageBoxA(
+                                            int result = electrobun::messageBoxUtf8(
                                                 nullptr,
-                                                message.c_str(),
-                                                permissionName.c_str(),
+                                                message,
+                                                permissionName,
                                                 MB_YESNO | MB_ICONQUESTION | MB_TOPMOST
                                             );
                                             
@@ -6549,11 +7412,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                         // Hide the default download dialog
                                                         args->put_Handled(TRUE);
 
-                                                        // Log the download
-                                                        int size = WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, nullptr, 0, nullptr, nullptr);
-                                                        if (size > 0) {
-                                                            std::string utf8Path(size - 1, '\0');
-                                                            WideCharToMultiByte(CP_UTF8, 0, destPath.c_str(), -1, &utf8Path[0], size, nullptr, nullptr);
+                                                        std::string utf8Path;
+                                                        if (electrobun::wideToUtf8(destPath, utf8Path)) {
                                                             printf("WebView2: Downloading to %s\n", utf8Path.c_str());
                                                         }
 
@@ -6579,8 +7439,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Navigate to URL or load pending HTML
                             if (!view->pendingHtml.empty()) {
-                                std::wstring html(view->pendingHtml.begin(), view->pendingHtml.end());
-                                webview->NavigateToString(html.c_str());
+                                std::wstring html;
+                                if (electrobun::utf8ToWide(view->pendingHtml, html)) {
+                                    webview->NavigateToString(html.c_str());
+                                } else {
+                                    ::log("[WebView2] Refusing queued HTML that is not valid UTF-8");
+                                }
                                 view->pendingHtml.clear();
                             } else if (!view->pendingUrl.empty()) {
                                 view->loadURL(view->pendingUrl.c_str());
@@ -6656,36 +7520,26 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
             // Create user data folder path based on partition
             // Build path with identifier/channel structure (consistent with CLI and updater)
             std::wstring userDataFolder;
-            char* localAppData = getenv("LOCALAPPDATA");
-            if (localAppData) {
-                std::string userDataPath = buildAppDataPath(localAppData, g_electrobunIdentifier, g_electrobunChannel, "WebView2", '\\');
-
-                // Handle partition-specific storage
-                if (!partitionStr.empty()) {
-                    bool isPersistent = partitionStr.substr(0, 8) == "persist:";
-                    if (isPersistent) {
-                        // Persistent partition: use named subfolder
-                        std::string partitionName = partitionStr.substr(8);
-                        userDataPath += "\\Partitions\\" + partitionName;
-                    } else {
-                        // Ephemeral partition: use unique temp folder per webview
-                        // Note: WebView2 doesn't support true ephemeral sessions,
-                        // so we use a timestamped folder that gets cleaned up
-                        userDataPath += "\\Ephemeral\\" + std::to_string(view->webviewId);
-                    }
+            const std::wstring localAppData =
+                electrobun::getEnvironmentVariableWide(L"LOCALAPPDATA");
+            if (!localAppData.empty()) {
+                std::wstring identifier;
+                std::wstring channel;
+                std::wstring partition;
+                if (electrobun::utf8ToWide(g_electrobunIdentifier, identifier) &&
+                    electrobun::utf8ToWide(g_electrobunChannel, channel) &&
+                    electrobun::utf8ToWide(partitionStr, partition)) {
+                    userDataFolder = electrobun::buildWebView2UserDataPath(
+                        localAppData,
+                        identifier,
+                        channel,
+                        partition,
+                        view->webviewId);
+                    SHCreateDirectoryExW(
+                        nullptr, userDataFolder.c_str(), nullptr);
+                } else {
+                    ::log("ERROR: WebView2 profile path contains invalid UTF-8");
                 }
-                // If no partition specified, use default WebView2 folder (shared)
-
-                // Convert to wide string for WebView2 API
-                int wideSize = MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, nullptr, 0);
-                if (wideSize > 0) {
-                    userDataFolder.resize(wideSize - 1);
-                    MultiByteToWideChar(CP_UTF8, 0, userDataPath.c_str(), -1, &userDataFolder[0], wideSize);
-                }
-
-                // Create directory if it doesn't exist
-                // Use SHCreateDirectoryExW for recursive creation
-                SHCreateDirectoryExW(NULL, userDataFolder.c_str(), NULL);
             }
 
             // Use partition-specific user data folder (nullptr if empty for default behavior)
@@ -6698,6 +7552,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 char errorMsg[256];
                 sprintf_s(errorMsg, "ERROR: CreateCoreWebView2EnvironmentWithOptions failed with HRESULT: 0x%08X", hr);
                 ::log(errorMsg);
+                view->setCreationFailed(true);
             } else {
                 // ::log("[WebView2] CreateCoreWebView2EnvironmentWithOptions succeeded");
             }
@@ -6718,16 +7573,35 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 // causes the caller to fall back to an ephemeral context.
 namespace electrobun {
 std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
-    char* localAppData = getenv("LOCALAPPDATA");
-    if (!localAppData) {
+    const std::wstring localAppData =
+        getEnvironmentVariableWide(L"LOCALAPPDATA");
+    if (localAppData.empty()) {
         printf("ERROR CEF: LOCALAPPDATA not found for partition '%s'\n", partitionName.c_str());
         return "";
     }
-    std::string cachePath = buildCEFPartitionPath(
-        localAppData, g_electrobunIdentifier, g_electrobunChannel, "CEF", partitionName, '\\');
-    std::wstring wideCachePath(cachePath.begin(), cachePath.end());
-    SHCreateDirectoryExW(NULL, wideCachePath.c_str(), NULL);
-    return cachePath;
+
+    std::wstring identifier;
+    std::wstring channel;
+    std::wstring partition;
+    if (!utf8ToWide(g_electrobunIdentifier, identifier) ||
+        !utf8ToWide(g_electrobunChannel, channel) ||
+        !utf8ToWide(partitionName, partition)) {
+        printf("ERROR CEF: invalid UTF-8 in partition cache path\n");
+        return "";
+    }
+
+    const std::wstring cachePath = buildCEFPartitionPath(
+        localAppData, identifier, channel, L"CEF", partition, L'\\');
+    SHCreateDirectoryExW(nullptr, cachePath.c_str(), nullptr);
+
+    // partition_context.h accepts UTF-8 at the CEF boundary. Keep all Windows
+    // filesystem work above in UTF-16 and convert exactly once here.
+    std::string utf8CachePath;
+    if (!wideToUtf8(cachePath, utf8CachePath)) {
+        printf("ERROR CEF: failed to encode partition cache path as UTF-8\n");
+        return "";
+    }
+    return utf8CachePath;
 }
 } // namespace electrobun
 
@@ -6759,7 +7633,9 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     
     auto view = std::make_shared<CEFView>(webviewId);
     view->hwnd = hwnd;
+    view->parentWindow = hwnd;
     view->fullSize = autoResize;
+    view->setLogicalFrame(x, y, width, height);
     
     // Initialize CEF on main thread
     bool cefInitResult = MainThreadDispatcher::dispatch_sync([=]() -> bool {
@@ -6782,7 +7658,17 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         // Create CEF browser info
         CefWindowInfo windowInfo;
         windowInfo.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-        CefRect cefBounds((int)x, (int)y, (int)width, (int)height);
+        const RECT physicalBounds = electrobun::logicalToPhysicalRect(
+            x,
+            y,
+            width,
+            height,
+            electrobun::windowsDpiForWindow(hwnd));
+        CefRect cefBounds(
+            physicalBounds.left,
+            physicalBounds.top,
+            physicalBounds.right - physicalBounds.left,
+            physicalBounds.bottom - physicalBounds.top);
 
         CefBrowserSettings browserSettings;
         // Note: web_security setting for CEF would need correct API
@@ -6798,12 +7684,23 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
 
         // Configure OSR mode for transparent windows
         if (transparent) {
+            int osrWidthPixels = physicalBounds.right - physicalBounds.left;
+            int osrHeightPixels = physicalBounds.bottom - physicalBounds.top;
+            if (autoResize) {
+                RECT clientBounds = {};
+                if (GetClientRect(hwnd, &clientBounds)) {
+                    osrWidthPixels = clientBounds.right - clientBounds.left;
+                    osrHeightPixels = clientBounds.bottom - clientBounds.top;
+                }
+            }
+
             // Enable OSR mode
-            client->EnableOSR((int)width, (int)height);
+            client->EnableOSR(osrWidthPixels, osrHeightPixels);
 
             // Create OSR window for rendering
             // For OSR, the window should fill the parent window's client area (0, 0)
-            OSRWindow* osrWindow = new OSRWindow(hwnd, 0, 0, (int)width, (int)height);
+            OSRWindow* osrWindow = new OSRWindow(
+                hwnd, 0, 0, osrWidthPixels, osrHeightPixels);
             view->setOSRWindow(osrWindow);
             client->SetOSRWindow(osrWindow);
 
@@ -6907,7 +7804,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             client->SetBrowser(browser);
 
             // Set initial bounds on view before calling resize
-            RECT initialBounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+            RECT initialBounds = physicalBounds;
             view->visualBounds = initialBounds;
 
             // Handle z-ordering immediately since browser is ready
@@ -6963,6 +7860,7 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
 extern "C" {
 
 ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
+    configurePerMonitorDpiAwareness();
     g_mainThreadId = GetCurrentThreadId();
 
     // Store identifier, name, and channel globally for use in CEF initialization
@@ -6976,25 +7874,27 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
         g_electrobunChannel = std::string(channel);
     }
 
+    loadWebView2PermissionPolicy();
+
     // Set up console control handler for graceful shutdown on Ctrl+C
     if (!SetConsoleCtrlHandler(ConsoleControlHandler, TRUE)) {
         std::cout << "[CEF] Warning: Failed to set console control handler" << std::endl;
     }
     
     // Create a hidden message-only window for dispatching
-    WNDCLASSA wc = {0};  // Use ANSI version
+    WNDCLASSW wc = {0};
     wc.lpfnWndProc = MessageWindowProc;
-    wc.hInstance = GetModuleHandle(NULL);
-    wc.lpszClassName = "MessageWindowClass";  // Use ANSI string
-    RegisterClassA(&wc);  // Use ANSI version
+    wc.hInstance = g_hInstanceDll;
+    wc.lpszClassName = L"MessageWindowClass";
+    RegisterClassW(&wc);
     
-    HWND messageWindow = CreateWindowA(  // Use ANSI version
-        "MessageWindowClass",  // Use ANSI string
-        "", 
+    HWND messageWindow = CreateWindowW(
+        L"MessageWindowClass",
+        L"",
         0, 0, 0, 0, 0,
         HWND_MESSAGE, // This makes it a message-only window
         NULL, 
-        GetModuleHandle(NULL), 
+        g_hInstanceDll,
         NULL
     );
     
@@ -7011,19 +7911,19 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             // OnScheduleMessagePumpWork posts WM_CEF_SCHEDULE_WORK for immediate
             // work and uses SetTimer for delayed work. We also keep a baseline
             // timer to ensure CEF always gets serviced.
-            WNDCLASSA cefPumpWc = {0};
+            WNDCLASSW cefPumpWc = {0};
             cefPumpWc.lpfnWndProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
                 if (msg == WM_CEF_SCHEDULE_WORK || msg == WM_TIMER) {
                     CefDoMessageLoopWork();
                     return 0;
                 }
-                return DefWindowProc(hwnd, msg, wParam, lParam);
+                return DefWindowProcW(hwnd, msg, wParam, lParam);
             };
-            cefPumpWc.hInstance = GetModuleHandle(NULL);
-            cefPumpWc.lpszClassName = "CefPumpWindowClass";
-            RegisterClassA(&cefPumpWc);
-            g_cefPumpWindow = CreateWindowA("CefPumpWindowClass", "", 0, 0, 0, 0, 0,
-                                           HWND_MESSAGE, NULL, GetModuleHandle(NULL), NULL);
+            cefPumpWc.hInstance = g_hInstanceDll;
+            cefPumpWc.lpszClassName = L"CefPumpWindowClass";
+            RegisterClassW(&cefPumpWc);
+            g_cefPumpWindow = CreateWindowW(L"CefPumpWindowClass", L"", 0, 0, 0, 0, 0,
+                                           HWND_MESSAGE, NULL, g_hInstanceDll, NULL);
 
             // Baseline timer ensures CEF always gets serviced even if
             // OnScheduleMessagePumpWork misses a beat
@@ -7183,6 +8083,7 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
                                               electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+        retainAbstractView(webview2View);
         view = webview2View.get();
     }
 
@@ -7215,11 +8116,13 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
     }
 
     auto view = std::make_shared<WGPUView>(webviewId);
+    view->parentWindow = hwnd;
     view->fullSize = autoResize;
+    view->setLogicalFrame(x, y, width, height);
 
     // Create both container and WGPUView child on the main thread to avoid
     // cross-thread child window deadlock (container on FFI thread + child on
-    // main thread would deadlock because CreateWindowExA sends messages to
+    // main thread would deadlock because CreateWindowExW sends messages to
     // the parent's thread which is blocked on dispatch_sync).
     ContainerView* container = nullptr;
     MainThreadDispatcher::dispatch_sync([&container, view, hwnd, x, y, width, height, startTransparent, startPassthrough]() {
@@ -7236,15 +8139,21 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             return;
         }
 
-        view->hwnd = CreateWindowExA(
+        const RECT physicalBounds = electrobun::logicalToPhysicalRect(
+            x,
+            y,
+            width,
+            height,
+            electrobun::windowsDpiForWindow(hwnd));
+        view->hwnd = CreateWindowExW(
             0,
-            "STATIC",
-            "",
+            L"STATIC",
+            L"",
             WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
-            (int)x,
-            (int)y,
-            (int)width,
-            (int)height,
+            physicalBounds.left,
+            physicalBounds.top,
+            physicalBounds.right - physicalBounds.left,
+            physicalBounds.bottom - physicalBounds.top,
             containerHwnd,
             NULL,
             GetModuleHandle(NULL),
@@ -7256,8 +8165,7 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
             return;
         }
 
-        RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
-        view->visualBounds = bounds;
+        view->visualBounds = physicalBounds;
 
         if (startTransparent) {
             view->setTransparent(true);
@@ -7305,7 +8213,9 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
 
 ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
     if (!abstractView) return;
-    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+    abstractView->setLogicalFrame(x, y, width, height);
+    const RECT bounds = electrobun::logicalToPhysicalRect(
+        x, y, width, height, abstractView->parentDpi());
     abstractView->storePendingResize(bounds, "");
     g_pendingResizeQueue.enqueue(abstractView);
     schedulePendingResizeDrain();
@@ -7342,6 +8252,7 @@ ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
         std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
         g_abstractViews.erase(viewId);
     }
+    releaseRetainedAbstractView(viewId);
 }
 
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
@@ -7648,7 +8559,8 @@ struct GPUTestState {
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
+    WGPURenderPipeline pipelineA = nullptr;
+    WGPURenderPipeline pipelineB = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
     WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
@@ -7657,6 +8569,7 @@ struct GPUTestState {
     float angle = 0.0f;
     uint32_t lastWidth = 0;
     uint32_t lastHeight = 0;
+    bool useAlt = false;
     bool running = false;
 };
 
@@ -7683,6 +8596,10 @@ static const float kCubeVertices[] = {
     -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
 };
 
+static constexpr size_t kCubeFloatCount = sizeof(kCubeVertices) / sizeof(float);
+static constexpr size_t kCubeVertexCount = kCubeFloatCount / 3;
+static constexpr size_t kGpuTestStrideFloats = 7;
+
 static void buildRotatedVertices(float angle, float* out, size_t count) {
     const float sinY = sinf(angle);
     const float cosY = cosf(angle);
@@ -7701,6 +8618,54 @@ static void buildRotatedVertices(float angle, float* out, size_t count) {
         out[i] = x1 * proj;
         out[i + 1] = y1 * proj;
         out[i + 2] = 0.0f;
+    }
+}
+
+static float clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void gpuTestGetMouseState(GPUTestState* state, float* outX, float* outY, float* outDown) {
+    if (outX) *outX = 0.5f;
+    if (outY) *outY = 0.5f;
+    if (outDown) *outDown = 0.0f;
+    if (!state || !state->hwnd || !IsWindow(state->hwnd)) return;
+
+    RECT rc;
+    if (!GetClientRect(state->hwnd, &rc)) return;
+    const int width = std::max(1L, rc.right - rc.left);
+    const int height = std::max(1L, rc.bottom - rc.top);
+
+    POINT point;
+    if (GetCursorPos(&point) && ScreenToClient(state->hwnd, &point)) {
+        if (outX) *outX = clamp01f((float)point.x / (float)width);
+        if (outY) *outY = clamp01f((float)point.y / (float)height);
+    }
+    if (outDown) *outDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) ? 1.0f : 0.0f;
+}
+
+static void buildInterleavedVertices(
+    float angle,
+    float mouseX,
+    float mouseY,
+    float mouseDown,
+    float timeValue,
+    float* out
+) {
+    float positions[kCubeFloatCount];
+    buildRotatedVertices(angle, positions, kCubeFloatCount);
+    for (size_t vertexIndex = 0; vertexIndex < kCubeVertexCount; vertexIndex++) {
+        const size_t positionIndex = vertexIndex * 3;
+        const size_t outputIndex = vertexIndex * kGpuTestStrideFloats;
+        out[outputIndex] = positions[positionIndex];
+        out[outputIndex + 1] = positions[positionIndex + 1];
+        out[outputIndex + 2] = positions[positionIndex + 2];
+        out[outputIndex + 3] = mouseX;
+        out[outputIndex + 4] = mouseY;
+        out[outputIndex + 5] = mouseDown;
+        out[outputIndex + 6] = timeValue;
     }
 }
 
@@ -7739,26 +8704,8 @@ static void gpuTestConfigureSurface(GPUTestState* state) {
     wgpu_log("WGPU test: surface configured %ux%u", w, h);
 }
 
-static void gpuTestSetupPipeline(GPUTestState* state) {
-    if (!state->device) return;
-    const char* shaderSrc = R"WGSL(
-struct VSOut {
-  @builtin(position) position : vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
-  var out: VSOut;
-  out.position = vec4<f32>(position, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
-}
-)WGSL";
-
+static WGPURenderPipeline gpuTestCreatePipeline(GPUTestState* state, const char* shaderSrc) {
+    if (!state->device) return nullptr;
     WGPUShaderSourceWGSL wgsl = {};
     wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgsl.code.data = shaderSrc;
@@ -7770,22 +8717,25 @@ fn fs_main() -> @location(0) vec4<f32> {
     WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
     if (!shader) {
         wgpu_log("WGPU test: FAILED to create shader module");
-        return;
+        return nullptr;
     }
     wgpu_log("WGPU test: shader module created");
 
     WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
     WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
 
-    WGPUVertexAttribute attr = {};
-    attr.format = WGPUVertexFormat_Float32x3;
-    attr.offset = 0;
-    attr.shaderLocation = 0;
+    WGPUVertexAttribute attrs[2] = {};
+    attrs[0].format = WGPUVertexFormat_Float32x3;
+    attrs[0].offset = 0;
+    attrs[0].shaderLocation = 0;
+    attrs[1].format = WGPUVertexFormat_Float32x4;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[1].shaderLocation = 1;
 
     WGPUVertexBufferLayout vbuf = {};
-    vbuf.arrayStride = sizeof(float) * 3;
-    vbuf.attributeCount = 1;
-    vbuf.attributes = &attr;
+    vbuf.arrayStride = sizeof(float) * kGpuTestStrideFloats;
+    vbuf.attributeCount = 2;
+    vbuf.attributes = attrs;
     vbuf.stepMode = WGPUVertexStepMode_Vertex;
 
     WGPUVertexState vstate = {};
@@ -7822,26 +8772,90 @@ fn fs_main() -> @location(0) vec4<f32> {
     rpDesc.multisample = ms;
     rpDesc.fragment = &fstate;
 
-    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
-    if (!state->pipeline) {
+    WGPURenderPipeline pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!pipeline) {
         wgpu_log("WGPU test: FAILED to create render pipeline");
-        return;
+        return nullptr;
     }
     wgpu_log("WGPU test: render pipeline created");
+    return pipeline;
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrcA = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    const char* shaderSrcB = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+  @location(0) local_pos : vec3<f32>,
+  @location(1) mouse_state : vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  out.local_pos = position;
+  out.mouse_state = mouse_state;
+  return out;
+}
+
+@fragment
+fn fs_main(
+  @location(0) local_pos: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> @location(0) vec4<f32> {
+  let cursor = vec2<f32>(mouse_state.x * 2.0 - 1.0, (1.0 - mouse_state.y) * 2.0 - 1.0);
+  let dist = distance(local_pos.xy, cursor);
+  let wave = 0.5 + 0.5 * sin(mouse_state.w * 3.0 - dist * 14.0);
+  let pulse = select(wave, 1.0 - wave, mouse_state.z > 0.5);
+  let base = vec3<f32>(0.25 + cursor.x * 0.35, 0.35 + cursor.y * 0.25, 0.75);
+  let highlight = vec3<f32>(1.0, 0.45, 0.15);
+  let color = max(mix(base, highlight, pulse), vec3<f32>(0.05));
+  let alpha = 0.7 + 0.3 * pulse;
+  return vec4<f32>(color, alpha);
+}
+)WGSL";
+
+    state->pipelineA = gpuTestCreatePipeline(state, shaderSrcA);
+    state->pipelineB = gpuTestCreatePipeline(state, shaderSrcB);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.size = kCubeVertexCount * kGpuTestStrideFloats * sizeof(float);
     bufDesc.mappedAtCreation = false;
     state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
     if (!state->vertexBuffer) {
         wgpu_log("WGPU test: FAILED to create vertex buffer");
         return;
     }
-    wgpu_log("WGPU test: vertex buffer created (%zu bytes)", sizeof(kCubeVertices));
+    wgpu_log(
+        "WGPU test: vertex buffer created (%zu bytes)",
+        (size_t)(kCubeVertexCount * kGpuTestStrideFloats * sizeof(float))
+    );
 
-    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    float initialVerts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(0.0f, 0.5f, 0.5f, 0.0f, 0.0f, initialVerts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
     wgpu_log("WGPU test: pipeline setup complete");
 }
@@ -7849,7 +8863,8 @@ fn fs_main() -> @location(0) vec4<f32> {
 static void gpuTestRenderFrame(GPUTestState* state) {
     if (!state->device || !state->surface || !state->queue) return;
     if (!state->hwnd || !IsWindow(state->hwnd)) return;
-    if (!state->pipeline) return;
+    WGPURenderPipeline pipeline = state->useAlt && state->pipelineB ? state->pipelineB : state->pipelineA;
+    if (!pipeline) return;
 
     RECT rc;
     GetClientRect(state->hwnd, &rc);
@@ -7862,8 +8877,12 @@ static void gpuTestRenderFrame(GPUTestState* state) {
     }
 
     state->angle += 0.02f;
-    float verts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    float mouseX = 0.5f;
+    float mouseY = 0.5f;
+    float mouseDown = 0.0f;
+    gpuTestGetMouseState(state, &mouseX, &mouseY, &mouseDown);
+    float verts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(state->angle, mouseX, mouseY, mouseDown, state->angle * 1.5f, verts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     WGPUSurfaceTexture surfaceTexture = {};
@@ -7893,9 +8912,15 @@ static void gpuTestRenderFrame(GPUTestState* state) {
 
     WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
     WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
-    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
-    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(
+        pass,
+        0,
+        state->vertexBuffer,
+        0,
+        kCubeVertexCount * kGpuTestStrideFloats * sizeof(float)
+    );
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)kCubeVertexCount, 1, 0, 0);
     p_wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
@@ -8760,6 +9785,7 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         wgpu_log("WGPU test: HWND client rect = %ldx%ld", rc.right - rc.left, rc.bottom - rc.top);
 
         g_gpuTest.hwnd = hwnd;
+        g_gpuTest.useAlt = false;
 
         // Create WGPU instance
         if (!g_gpuTest.instance) {
@@ -8797,6 +9823,19 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         cbInfo.userdata1 = &g_gpuTest;
         wgpu_log("WGPU test: requesting adapter...");
         p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuToggleGPUTestShader(void* abstractView) {
+    if (!abstractView) return;
+    if (!ensureWgpuTestSymbols()) return;
+
+    MainThreadDispatcher::dispatch_async([abstractView]() {
+        AbstractView* view = (AbstractView*)abstractView;
+        if (!view || !view->hwnd || !IsWindow(view->hwnd)) return;
+        if (g_gpuTest.hwnd == view->hwnd) {
+            g_gpuTest.useAlt = !g_gpuTest.useAlt;
+        }
     });
 }
 
@@ -8938,7 +9977,14 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
 
+    uint32_t viewId = abstractView->webviewId;
+    g_pendingResizeQueue.remove(abstractView);
     abstractView->remove();
+    {
+        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+        g_abstractViews.erase(viewId);
+    }
+    releaseRetainedAbstractView(viewId);
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
@@ -8962,6 +10008,11 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
     if (!abstractView || !script) {
         ::log("ERROR: Invalid parameters passed to evaluateJavaScriptWithNoCompletion");
+        return;
+    }
+
+    if (abstractView->hasCreationFailed()) {
+        ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
         return;
     }
 
@@ -9050,6 +10101,13 @@ ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden)
     }
 }
 
+ELECTROBUN_EXPORT bool webviewSetSpellCheck(AbstractView* abstractView, bool enabled) {
+    (void)abstractView;
+    (void)enabled;
+    // This option intentionally targets macOS WKWebView, not WebView2 or CEF.
+    return false;
+}
+
 ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
     if (abstractView) {
         // UI operations must be performed on the main thread
@@ -9118,13 +10176,40 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
 }
 
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
-    // pageZoom is WebKit-specific, not available on Windows
-    // TODO: implement WebView2 zoom if needed
+    if (!abstractView) return;
+
+    MainThreadDispatcher::dispatch_sync([abstractView, zoomLevel]() {
+        if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
+            webview2->setPageZoom(zoomLevel);
+            return;
+        }
+
+        if (auto cefView = dynamic_cast<CEFView*>(abstractView)) {
+            if (auto browser = cefView->getBrowser()) {
+                double cefZoomLevel = std::log(zoomLevel) / std::log(1.2);
+                browser->GetHost()->SetZoomLevel(cefZoomLevel);
+            }
+        }
+    });
 }
 
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
-    // pageZoom is WebKit-specific, not available on Windows
-    return 1.0;
+    if (!abstractView) return 1.0;
+
+    return MainThreadDispatcher::dispatch_sync([abstractView]() -> double {
+        if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
+            return webview2->getPageZoom();
+        }
+
+        if (auto cefView = dynamic_cast<CEFView*>(abstractView)) {
+            if (auto browser = cefView->getBrowser()) {
+                double cefZoomLevel = browser->GetHost()->GetZoomLevel();
+                return std::pow(1.2, cefZoomLevel);
+            }
+        }
+
+        return 1.0;
+    });
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {
@@ -9140,7 +10225,8 @@ ELECTROBUN_EXPORT NSWindow* createNSWindowWithFrameAndStyle(uint32_t windowId,
                                          WindowResizeHandler zigResizeHandler,
                                          WindowFocusHandler zigFocusHandler,
                                          WindowBlurHandler zigBlurHandler,
-                                         WindowKeyHandler zigKeyHandler) {
+                                         WindowKeyHandler zigKeyHandler,
+                                         WindowShouldCloseHandler zigShouldCloseHandler) {
     // Stub implementation
     return new NSWindow();
 }
@@ -9166,7 +10252,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
     WindowResizeHandler zigResizeHandler,
     WindowFocusHandler zigFocusHandler,
     WindowBlurHandler zigBlurHandler,
-    WindowKeyHandler zigKeyHandler) {
+    WindowKeyHandler zigKeyHandler,
+    WindowShouldCloseHandler zigShouldCloseHandler) {
 
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
@@ -9177,11 +10264,14 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         // Register window class with our custom procedure
         static bool classRegistered = false;
         if (!classRegistered) {
-            WNDCLASSA wc = {0};  // Use ANSI version
+            WNDCLASSW wc = {0};
             wc.lpfnWndProc = WindowProc;
-            wc.hInstance = GetModuleHandle(NULL);
-            wc.lpszClassName = "BasicWindowClass";  // Use ANSI string
-            RegisterClassA(&wc);  // Use ANSI version
+            wc.hInstance = g_hInstanceDll;
+            wc.lpszClassName = L"BasicWindowClass";
+            if (!RegisterClassW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+                ::log("ERROR: Failed to register BasicWindowClass");
+                return NULL;
+            }
             classRegistered = true;
         }
 
@@ -9191,11 +10281,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
         data->windowId = windowId;
         data->closeHandler = zigCloseHandler;
+        data->shouldCloseHandler = zigShouldCloseHandler;
         data->moveHandler = zigMoveHandler;
         data->resizeHandler = zigResizeHandler;
         data->focusHandler = zigFocusHandler;
         data->blurHandler = zigBlurHandler;
         data->keyHandler = zigKeyHandler;
+        data->bypassShouldClose = false;
 
         // Map style mask to Windows style
         DWORD windowStyle = WS_OVERLAPPEDWINDOW; // Default
@@ -9223,20 +10315,30 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
             windowExStyle |= WS_EX_LAYERED;
         }
 
+        // Electrobun's cross-platform window geometry is expressed in DIPs.
+        // PMv2 Win32 APIs consume physical pixels, so select the destination
+        // monitor in logical space and scale both rectangle edges once.
+        const auto targetMonitor =
+            electrobun::windowsMonitorForLogicalPoint(x, y);
+        const RECT physicalFrame = electrobun::logicalToPhysicalScreenRect(
+            x, y, width, height, targetMonitor);
+
         // Create the window
-        HWND hwnd = CreateWindowExA(  // Use CreateWindowExA to support extended styles
+        HWND hwnd = CreateWindowExW(
             windowExStyle,
-            "BasicWindowClass",  // Use ANSI string
-            "",
+            L"BasicWindowClass",
+            L"",
             windowStyle,
-            (int)x, (int)y,
-            (int)width, (int)height,
-            NULL, NULL, GetModuleHandle(NULL), NULL
+            physicalFrame.left, physicalFrame.top,
+            physicalFrame.right - physicalFrame.left,
+            physicalFrame.bottom - physicalFrame.top,
+            NULL, NULL, g_hInstanceDll, NULL
         );
 
         if (hwnd) {
             // Store our data with the window
             SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)data);
+            updateWindowTheme(hwnd);
 
             // Apply transparent window background if requested
             if (transparent) {
@@ -9317,6 +10419,13 @@ static void activateVisibleWindow(HWND hwnd) {
     SetFocus(hwnd);
     SetWindowPos(hwnd, HWND_TOP, 0, 0, 0, 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+
+    // Top-level HWND activation alone does not return keyboard focus to an
+    // embedded WebView2 controller after an OLE drag/drop deactivates it.
+    auto containerIt = g_containerViews.find(hwnd);
+    if (containerIt != g_containerViews.end()) {
+        containerIt->second->FocusActiveView();
+    }
 }
 
 ELECTROBUN_EXPORT void showWindow(void *window, bool activate) {
@@ -9371,6 +10480,19 @@ ELECTROBUN_EXPORT void hideWindow(void *window) {
     });
 }
 
+ELECTROBUN_EXPORT bool isWindowVisible(void *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in isWindowVisible");
+        return false;
+    }
+
+    return MainThreadDispatcher::dispatch_sync([=]() -> bool {
+        return IsWindowVisible(hwnd) != FALSE;
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     // On Windows, NSWindow* is actually HWND
     HWND hwnd = reinterpret_cast<HWND>(window);
@@ -9382,34 +10504,12 @@ ELECTROBUN_EXPORT void setWindowTitle(NSWindow *window, const char *title) {
     
     // Dispatch to main thread to ensure thread safety
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (title && strlen(title) > 0) {
-            // Convert UTF-8 to wide string for Unicode support
-            int size = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
-            if (size > 0) {
-                std::wstring wTitle(size - 1, 0);
-                MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], size);
-                
-                // Set the window title
-                if (SetWindowTextW(hwnd, wTitle.c_str())) {
-                    
-                } else {
-                    DWORD error = GetLastError();
-                    char errorMsg[256];
-                    sprintf_s(errorMsg, "Failed to set window title, error: %lu", error);
-                    ::log(errorMsg);
-                }
-            } else {
-                ::log("ERROR: Failed to convert title to wide string");
-            }
-        } else {
-            // Set empty title
-            if (SetWindowTextW(hwnd, L"")) {
-            } else {
-                DWORD error = GetLastError();
-                char errorMsg[256];
-                sprintf_s(errorMsg, "Failed to clear window title, error: %lu", error);
-                ::log(errorMsg);
-            }
+        const std::string_view utf8Title = title ? std::string_view(title) : std::string_view();
+        if (!electrobun::setWindowTextUtf8(hwnd, utf8Title)) {
+            DWORD error = GetLastError();
+            char errorMsg[256];
+            sprintf_s(errorMsg, "Failed to set UTF-8 window title, error: %lu", error);
+            ::log(errorMsg);
         }
     });
 }
@@ -9426,15 +10526,17 @@ ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
     // Dispatch to main thread to ensure thread safety
     MainThreadDispatcher::dispatch_sync([=]() {
 
-
-        // Clean up any associated container views before closing
-        auto containerIt = g_containerViews.find(hwnd);
-        if (containerIt != g_containerViews.end()) {
-            g_containerViews.erase(containerIt);
+        WindowData* data = (WindowData*)GetWindowLongPtr(hwnd, GWLP_USERDATA);
+        if (data) {
+            data->bypassShouldClose = true;
         }
 
+
         // Send WM_CLOSE message to the window
-        // This will trigger the window's close handler if one is set
+        // This triggers the core close trampoline, which unregisters child
+        // webviews before WM_DESTROY releases the owning ContainerView. Erasing
+        // the container here would destroy those views first and leave stale
+        // pointers in the core registry during the close callback.
         if (PostMessage(hwnd, WM_CLOSE, 0, 0)) {
         } else {
             DWORD error = GetLastError();
@@ -9453,6 +10555,12 @@ ELECTROBUN_EXPORT void closeWindow(NSWindow *window) {
             }
         }
     });
+}
+
+ELECTROBUN_EXPORT void requestWindowClose(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+    PostMessage(hwnd, WM_CLOSE, 0, 0);
 }
 
 ELECTROBUN_EXPORT void minimizeWindow(NSWindow *window) {
@@ -9620,19 +10728,63 @@ ELECTROBUN_EXPORT bool isWindowAlwaysOnTop(NSWindow *window) {
 }
 
 ELECTROBUN_EXPORT void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
-    // Not applicable on Windows - no-op
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        ::log("ERROR: Invalid window handle in setWindowVisibleOnAllWorkspaces");
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+    g_visibleOnAllWorkspaces[hwnd] = visible;
 }
 
 ELECTROBUN_EXPORT bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
-    // Not applicable on Windows
-    return false;
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_visibleOnAllWorkspacesMutex);
+    auto it = g_visibleOnAllWorkspaces.find(hwnd);
+    return it != g_visibleOnAllWorkspaces.end() && it->second;
 }
 
 ELECTROBUN_EXPORT void setWindowPosition(NSWindow *window, double x, double y) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;
 
-    SetWindowPos(hwnd, NULL, (int)x, (int)y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    const auto targetMonitor = electrobun::windowsMonitorForLogicalPoint(
+        x,
+        y,
+        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+    const POINT physicalOrigin = electrobun::logicalScreenPointToPhysical(
+        x, y, targetMonitor);
+    SetWindowPos(
+        hwnd,
+        NULL,
+        physicalOrigin.x,
+        physicalOrigin.y,
+        0,
+        0,
+        SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+ELECTROBUN_EXPORT void centerWindow(NSWindow *window) {
+    HWND hwnd = reinterpret_cast<HWND>(window);
+    if (!IsWindow(hwnd)) return;
+
+    RECT windowRect{};
+    RECT workArea{};
+    if (!GetWindowRect(hwnd, &windowRect) ||
+        !SystemParametersInfoW(SPI_GETWORKAREA, 0, &workArea, 0)) {
+        return;
+    }
+
+    const int width = windowRect.right - windowRect.left;
+    const int height = windowRect.bottom - windowRect.top;
+    const int x = workArea.left + std::max<LONG>(0, ((workArea.right - workArea.left) - width) / 2);
+    const int y = workArea.top + std::max<LONG>(0, ((workArea.bottom - workArea.top) - height) / 2);
+    SetWindowPos(hwnd, NULL, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, double y) {
@@ -9642,18 +10794,47 @@ ELECTROBUN_EXPORT void setWindowButtonPosition(NSWindow *window, double x, doubl
     // Not applicable on Windows - no-op
 }
 
+ELECTROBUN_EXPORT void getWindowButtonPosition(NSWindow *window, double* x, double* y) {
+    (void)window;
+    if (x) *x = 0;
+    if (y) *y = 0;
+}
+
 ELECTROBUN_EXPORT void setWindowSize(NSWindow *window, double width, double height) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;
 
-    SetWindowPos(hwnd, NULL, 0, 0, (int)width, (int)height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    const UINT dpi = electrobun::windowsDpiForWindow(hwnd);
+    const RECT physicalSize = electrobun::logicalToPhysicalRect(
+        0, 0, width, height, dpi);
+    SetWindowPos(
+        hwnd,
+        NULL,
+        0,
+        0,
+        physicalSize.right,
+        physicalSize.bottom,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 ELECTROBUN_EXPORT void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
     HWND hwnd = reinterpret_cast<HWND>(window);
     if (!IsWindow(hwnd)) return;
 
-    SetWindowPos(hwnd, NULL, (int)x, (int)y, (int)width, (int)height, SWP_NOZORDER | SWP_NOACTIVATE);
+    const auto targetMonitor = electrobun::windowsMonitorForLogicalPoint(
+        x,
+        y,
+        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST));
+    const RECT physicalFrame = electrobun::logicalToPhysicalScreenRect(
+        x, y, width, height, targetMonitor);
+    SetWindowPos(
+        hwnd,
+        NULL,
+        physicalFrame.left,
+        physicalFrame.top,
+        physicalFrame.right - physicalFrame.left,
+        physicalFrame.bottom - physicalFrame.top,
+        SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
 ELECTROBUN_EXPORT void getWindowFrame(NSWindow *window, double *outX, double *outY, double *outWidth, double *outHeight) {
@@ -9666,12 +10847,24 @@ ELECTROBUN_EXPORT void getWindowFrame(NSWindow *window, double *outX, double *ou
         return;
     }
 
-    RECT rect;
-    GetWindowRect(hwnd, &rect);
-    *outX = (double)rect.left;
-    *outY = (double)rect.top;
-    *outWidth = (double)(rect.right - rect.left);
-    *outHeight = (double)(rect.bottom - rect.top);
+    RECT rect = {};
+    if (!GetWindowRect(hwnd, &rect)) {
+        *outX = 0;
+        *outY = 0;
+        *outWidth = 0;
+        *outHeight = 0;
+        return;
+    }
+    const auto monitor = electrobun::windowsMonitorForHandle(
+        MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST));
+    const POINT logicalOrigin = electrobun::physicalScreenPointToLogical(
+        rect.left, rect.top, monitor);
+    *outX = logicalOrigin.x;
+    *outY = logicalOrigin.y;
+    *outWidth = electrobun::physicalToLogicalCoordinate(
+        rect.right - rect.left, monitor.dpi);
+    *outHeight = electrobun::physicalToLogicalCoordinate(
+        rect.bottom - rect.top, monitor.dpi);
 }
 
 ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, double y, double width, double height, const char *masksJson) {
@@ -9679,9 +10872,9 @@ ELECTROBUN_EXPORT void resizeWebview(AbstractView *abstractView, double x, doubl
         ::log("ERROR: Invalid AbstractView in resizeWebview");
         return;
     }
-    
-    
-    RECT bounds = {(LONG)x, (LONG)y, (LONG)(x + width), (LONG)(y + height)};
+    abstractView->setLogicalFrame(x, y, width, height);
+    const RECT bounds = electrobun::logicalToPhysicalRect(
+        x, y, width, height, abstractView->parentDpi());
     abstractView->storePendingResize(bounds, masksJson);
     g_pendingResizeQueue.enqueue(abstractView);
     schedulePendingResizeDrain();
@@ -9746,16 +10939,16 @@ ELECTROBUN_EXPORT BOOL moveToTrash(char *pathString) {
         return FALSE;
     }
     
-    // Convert to wide string for Windows API
-    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
-    if (wideCharLen == 0) {
+    std::wstring widePathValue;
+    if (!electrobun::utf8ToWide(pathString, widePathValue)) {
         ::log("ERROR: Failed to convert path to wide string");
         return FALSE;
     }
-    
-    std::vector<wchar_t> widePath(wideCharLen + 1);  // +1 for double null terminator
-    MultiByteToWideChar(CP_UTF8, 0, pathString, -1, widePath.data(), wideCharLen);
-    widePath[wideCharLen] = L'\0';  // Ensure double null termination
+
+    std::vector<wchar_t> widePath(
+        widePathValue.begin(), widePathValue.end());
+    widePath.push_back(L'\0');
+    widePath.push_back(L'\0');
     
     // Use SHFileOperation to move to recycle bin
     SHFILEOPSTRUCTW fileOp = {};
@@ -9791,18 +10984,14 @@ ELECTROBUN_EXPORT void showItemInFolder(char *path) {
         return;
     }
     
-    // Convert to wide string for Windows API
-    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, path, -1, NULL, 0);
-    if (wideCharLen == 0) {
+    std::wstring widePath;
+    if (!electrobun::utf8ToWide(pathString, widePath)) {
         ::log("ERROR: Failed to convert path to wide string in showItemInFolder");
         return;
     }
-    
-    std::vector<wchar_t> widePath(wideCharLen);
-    MultiByteToWideChar(CP_UTF8, 0, path, -1, widePath.data(), wideCharLen);
-    
+
     // Use ShellExecute to open Explorer and select the file
-    std::wstring selectParam = L"/select,\"" + std::wstring(widePath.data()) + L"\"";
+    std::wstring selectParam = L"/select,\"" + widePath + L"\"";
     
     HINSTANCE result = ShellExecuteW(
         NULL,                    // parent window
@@ -9834,21 +11023,17 @@ ELECTROBUN_EXPORT BOOL openExternal(const char *urlString) {
         return FALSE;
     }
 
-    // Convert to wide string for Windows API
-    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, urlString, -1, NULL, 0);
-    if (wideCharLen == 0) {
+    std::wstring wideUrl;
+    if (!electrobun::utf8ToWide(url, wideUrl)) {
         ::log("ERROR: Failed to convert URL to wide string");
         return FALSE;
     }
-
-    std::vector<wchar_t> wideUrl(wideCharLen);
-    MultiByteToWideChar(CP_UTF8, 0, urlString, -1, wideUrl.data(), wideCharLen);
 
     // Use ShellExecuteW to open the URL
     HINSTANCE result = ShellExecuteW(
         NULL,           // parent window
         L"open",        // operation
-        wideUrl.data(), // URL to open
+        wideUrl.c_str(), // URL to open
         NULL,           // parameters
         NULL,           // working directory
         SW_SHOWNORMAL   // show command
@@ -9876,21 +11061,17 @@ ELECTROBUN_EXPORT BOOL openPath(const char *pathString) {
         return FALSE;
     }
 
-    // Convert to wide string for Windows API
-    int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, pathString, -1, NULL, 0);
-    if (wideCharLen == 0) {
+    std::wstring widePath;
+    if (!electrobun::utf8ToWide(path, widePath)) {
         ::log("ERROR: Failed to convert path to wide string");
         return FALSE;
     }
-
-    std::vector<wchar_t> widePath(wideCharLen);
-    MultiByteToWideChar(CP_UTF8, 0, pathString, -1, widePath.data(), wideCharLen);
 
     // Use ShellExecuteW to open the file/folder with default application
     HINSTANCE result = ShellExecuteW(
         NULL,            // parent window
         L"open",         // operation
-        widePath.data(), // file/folder to open
+        widePath.c_str(), // file/folder to open
         NULL,            // parameters
         NULL,            // working directory
         SW_SHOWNORMAL    // show command
@@ -9912,65 +11093,76 @@ ELECTROBUN_EXPORT void showNotification(const char *title, const char *body, con
         return;
     }
 
-    // Convert strings to wide chars
-    int titleLen = MultiByteToWideChar(CP_UTF8, 0, title, -1, NULL, 0);
-    std::vector<wchar_t> wideTitle(titleLen);
-    MultiByteToWideChar(CP_UTF8, 0, title, -1, wideTitle.data(), titleLen);
+    const std::string titleCopy(title);
+    const std::string bodyCopy(body ? body : "");
+    const std::string subtitleCopy(subtitle ? subtitle : "");
+    const bool isSilent = silent != FALSE;
 
-    std::wstring wideBody;
-    if (body) {
-        int bodyLen = MultiByteToWideChar(CP_UTF8, 0, body, -1, NULL, 0);
-        std::vector<wchar_t> bodyBuf(bodyLen);
-        MultiByteToWideChar(CP_UTF8, 0, body, -1, bodyBuf.data(), bodyLen);
-        wideBody = bodyBuf.data();
-    }
+    MainThreadDispatcher::dispatch_async(
+        [titleCopy, bodyCopy, subtitleCopy, isSilent]() {
+            HWND owner = MainThreadDispatcher::message_window();
+            if (!owner) {
+                ::log("ERROR: Cannot show notification before the Windows event loop starts");
+                return;
+            }
 
-    // If subtitle is provided, prepend it to body
-    if (subtitle) {
-        int subtitleLen = MultiByteToWideChar(CP_UTF8, 0, subtitle, -1, NULL, 0);
-        std::vector<wchar_t> subtitleBuf(subtitleLen);
-        MultiByteToWideChar(CP_UTF8, 0, subtitle, -1, subtitleBuf.data(), subtitleLen);
-        if (!wideBody.empty()) {
-            wideBody = std::wstring(subtitleBuf.data()) + L"\n" + wideBody;
-        } else {
-            wideBody = subtitleBuf.data();
-        }
-    }
+            std::wstring wideTitle;
+            std::wstring wideBody;
+            std::wstring wideSubtitle;
+            if (!electrobun::utf8ToWide(titleCopy, wideTitle) ||
+                !electrobun::utf8ToWide(bodyCopy, wideBody) ||
+                !electrobun::utf8ToWide(subtitleCopy, wideSubtitle)) {
+                ::log("ERROR: Notification text is not valid UTF-8");
+                return;
+            }
 
-    // Create notification icon data
-    NOTIFYICONDATAW nid = {};
-    nid.cbSize = sizeof(NOTIFYICONDATAW);
-    nid.hWnd = NULL;  // No window handle needed for balloon
-    nid.uID = 1;
-    nid.uFlags = NIF_INFO | NIF_ICON;
-    nid.dwInfoFlags = NIIF_INFO | (silent ? NIIF_NOSOUND : 0);
+            if (!wideSubtitle.empty()) {
+                wideBody = wideBody.empty()
+                    ? wideSubtitle
+                    : wideSubtitle + L"\n" + wideBody;
+            }
+            // An empty szInfo removes a balloon instead of showing one.
+            if (wideBody.empty()) {
+                wideBody = wideTitle;
+            }
 
-    // Copy title (max 63 chars)
-    wcsncpy_s(nid.szInfoTitle, wideTitle.data(), _TRUNCATE);
+            NOTIFYICONDATAW nid = {};
+            nid.cbSize = sizeof(nid);
+            nid.hWnd = owner;
+            nid.uID = (g_nextNotificationId.fetch_add(1) % 0xfffeu) + 1u;
+            nid.uCallbackMessage = WM_ELECTROBUN_NOTIFICATION;
+            nid.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+            nid.hIcon = LoadIconW(NULL, MAKEINTRESOURCEW(32512));
+            nid.dwInfoFlags = NIIF_INFO | (isSilent ? NIIF_NOSOUND : 0);
 
-    // Copy body (max 255 chars)
-    if (!wideBody.empty()) {
-        wcsncpy_s(nid.szInfo, wideBody.c_str(), _TRUNCATE);
-    }
+            electrobun::copyUtf8ToWideBuffer(titleCopy, nid.szTip);
+            electrobun::copyWideToBuffer(wideTitle, nid.szInfoTitle);
+            electrobun::copyWideToBuffer(wideBody, nid.szInfo);
 
-    // Use app icon or default
-    nid.hIcon = LoadIcon(NULL, IDI_APPLICATION);
+            if (!Shell_NotifyIconW(NIM_ADD, &nid)) {
+                ::log("ERROR: Shell_NotifyIconW(NIM_ADD) failed");
+                return;
+            }
 
-    // Add the notification icon (required before showing balloon)
-    Shell_NotifyIconW(NIM_ADD, &nid);
+            nid.uVersion = NOTIFYICON_VERSION_4;
+            Shell_NotifyIconW(NIM_SETVERSION, &nid);
+            nid.uFlags |= NIF_INFO;
+            if (!Shell_NotifyIconW(NIM_MODIFY, &nid)) {
+                ::log("ERROR: Shell_NotifyIconW(NIM_MODIFY) failed");
+                removeTransientNotificationIcon(owner, nid.uID);
+                return;
+            }
 
-    // Show the balloon notification
-    Shell_NotifyIconW(NIM_MODIFY, &nid);
-
-    // Remove the icon after a delay (fire and forget - icon will be cleaned up)
-    // Note: In a real app, you might want to keep the icon around
-    // For now, we schedule removal after notification timeout
-    std::thread([nid]() mutable {
-        Sleep(5000);  // Wait for notification to be shown
-        Shell_NotifyIconW(NIM_DELETE, &nid);
-    }).detach();
-
-    ::log("Notification shown: " + std::string(title));
+            // The shell normally reports balloon completion through the
+            // callback above. This timer prevents a stale tray icon if it does
+            // not (for example while Explorer is restarting).
+            SetTimer(
+                owner,
+                nid.uID,
+                30000,
+                transientNotificationTimerProc);
+            ::log("Notification shown: " + titleCopy);
+        });
 }
 
 ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
@@ -10015,13 +11207,14 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     
     // Set starting folder
     if (startingFolder && strlen(startingFolder) > 0) {
-        int wideCharLen = MultiByteToWideChar(CP_UTF8, 0, startingFolder, -1, nullptr, 0);
-        if (wideCharLen > 0) {
-            std::vector<wchar_t> wideStartingFolder(wideCharLen);
-            MultiByteToWideChar(CP_UTF8, 0, startingFolder, -1, wideStartingFolder.data(), wideCharLen);
-            
+        std::wstring wideStartingFolder;
+        if (electrobun::utf8ToWide(startingFolder, wideStartingFolder)) {
             IShellItem *pStartingFolder = nullptr;
-            hr = SHCreateItemFromParsingName(wideStartingFolder.data(), nullptr, IID_IShellItem, (void**)&pStartingFolder);
+            hr = SHCreateItemFromParsingName(
+                wideStartingFolder.c_str(),
+                nullptr,
+                IID_IShellItem,
+                (void**)&pStartingFolder);
             if (SUCCEEDED(hr)) {
                 pFileDialog->SetFolder(pStartingFolder);
                 pStartingFolder->Release();
@@ -10050,9 +11243,15 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
             std::vector<COMDLG_FILTERSPEC> filterSpecs;
             std::vector<std::wstring> filterNames;
             std::vector<std::wstring> filterPatterns;
+            filterNames.reserve(extensions.size());
+            filterPatterns.reserve(extensions.size());
             
             for (const auto& ext : extensions) {
-                std::wstring wExt = std::wstring(ext.begin(), ext.end());
+                std::wstring wExt;
+                if (!electrobun::utf8ToWide(ext, wExt)) {
+                    ::log("ERROR: File dialog extension is not valid UTF-8");
+                    continue;
+                }
                 if (wExt.find(L".") != 0) {
                     wExt = L"." + wExt;
                 }
@@ -10061,20 +11260,25 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                 
                 filterNames.push_back(name);
                 filterPatterns.push_back(pattern);
-                
+            }
+
+            filterSpecs.reserve(filterNames.size());
+            for (size_t index = 0; index < filterNames.size(); ++index) {
                 COMDLG_FILTERSPEC spec;
-                spec.pszName = filterNames.back().c_str();
-                spec.pszSpec = filterPatterns.back().c_str();
+                spec.pszName = filterNames[index].c_str();
+                spec.pszSpec = filterPatterns[index].c_str();
                 filterSpecs.push_back(spec);
             }
             
-            pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+            if (!filterSpecs.empty()) {
+                pFileDialog->SetFileTypes(static_cast<UINT>(filterSpecs.size()), filterSpecs.data());
+            }
         }
     }
     
     // Show the dialog
     hr = pFileDialog->Show(nullptr);
-    std::string result;
+    std::vector<std::string> paths;
     
     if (SUCCEEDED(hr)) {
         if (allowsMultipleSelection) {
@@ -10084,7 +11288,6 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                 DWORD itemCount = 0;
                 pShellItemArray->GetCount(&itemCount);
                 
-                std::vector<std::string> paths;
                 for (DWORD i = 0; i < itemCount; i++) {
                     IShellItem *pShellItem = nullptr;
                     hr = pShellItemArray->GetItemAt(i, &pShellItem);
@@ -10092,11 +11295,9 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                         PWSTR pszPath = nullptr;
                         hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath);
                         if (SUCCEEDED(hr)) {
-                            int utf8Len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, nullptr, 0, nullptr, nullptr);
-                            if (utf8Len > 0) {
-                                std::vector<char> utf8Path(utf8Len);
-                                WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, utf8Path.data(), utf8Len, nullptr, nullptr);
-                                paths.push_back(std::string(utf8Path.data()));
+                            std::string utf8Path;
+                            if (pszPath && electrobun::wideToUtf8(pszPath, utf8Path)) {
+                                paths.push_back(std::move(utf8Path));
                             }
                             CoTaskMemFree(pszPath);
                         }
@@ -10104,12 +11305,6 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                     }
                 }
                 pShellItemArray->Release();
-                
-                // Join paths with comma
-                for (size_t i = 0; i < paths.size(); i++) {
-                    if (i > 0) result += ",";
-                    result += paths[i];
-                }
             }
         } else {
             IShellItem *pShellItem = nullptr;
@@ -10118,11 +11313,9 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
                 PWSTR pszPath = nullptr;
                 hr = pShellItem->GetDisplayName(SIGDN_FILESYSPATH, &pszPath);
                 if (SUCCEEDED(hr)) {
-                    int utf8Len = WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, nullptr, 0, nullptr, nullptr);
-                    if (utf8Len > 0) {
-                        std::vector<char> utf8Path(utf8Len);
-                        WideCharToMultiByte(CP_UTF8, 0, pszPath, -1, utf8Path.data(), utf8Len, nullptr, nullptr);
-                        result = std::string(utf8Path.data());
+                    std::string utf8Path;
+                    if (pszPath && electrobun::wideToUtf8(pszPath, utf8Path)) {
+                        paths.push_back(std::move(utf8Path));
                     }
                     CoTaskMemFree(pszPath);
                 }
@@ -10134,12 +11327,52 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char *startingFolder,
     pFileDialog->Release();
     CoUninitialize();
     
-    if (result.empty()) {
+    if (paths.empty()) {
         ::log("File dialog cancelled or no selection made");
-        return nullptr;
     }
-    
-    return strdup(result.c_str());
+
+    return strdup(serializeDialogPaths(paths).c_str());
+}
+
+using TaskDialogIndirectFn = HRESULT (WINAPI*)(
+    const TASKDIALOGCONFIG*, int*, int*, BOOL*);
+
+static HRESULT showTaskDialogWithDllActivationContext(
+    const TASKDIALOGCONFIG& config,
+    int& pressedButton
+) {
+    ACTCTXW activationConfig = {};
+    activationConfig.cbSize = sizeof(activationConfig);
+    activationConfig.dwFlags =
+        ACTCTX_FLAG_HMODULE_VALID | ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    activationConfig.hModule = g_hInstanceDll;
+    // DLL manifests use resource ID 2 by convention.
+    activationConfig.lpResourceName = MAKEINTRESOURCEW(2);
+
+    HANDLE activationContext = CreateActCtxW(&activationConfig);
+    ULONG_PTR activationCookie = 0;
+    const bool activated = activationContext != INVALID_HANDLE_VALUE &&
+        ActivateActCtx(activationContext, &activationCookie) != FALSE;
+
+    HMODULE commonControls = LoadLibraryW(L"comctl32.dll");
+    auto taskDialogIndirect = commonControls
+        ? reinterpret_cast<TaskDialogIndirectFn>(
+              GetProcAddress(commonControls, "TaskDialogIndirect"))
+        : nullptr;
+    const HRESULT result = taskDialogIndirect
+        ? taskDialogIndirect(&config, &pressedButton, nullptr, nullptr)
+        : HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+
+    if (commonControls) {
+        FreeLibrary(commonControls);
+    }
+    if (activated) {
+        DeactivateActCtx(0, activationCookie);
+    }
+    if (activationContext != INVALID_HANDLE_VALUE) {
+        ReleaseActCtx(activationContext);
+    }
+    return result;
 }
 
 ELECTROBUN_EXPORT int showMessageBox(const char *type,
@@ -10150,93 +11383,87 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
                                      int defaultId,
                                      int cancelId) {
     return MainThreadDispatcher::dispatch_sync([=]() -> int {
-        // Convert strings to wide
-        std::wstring wTitle, wMessage;
-        if (title && strlen(title) > 0) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, title, -1, nullptr, 0);
-            wTitle.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, title, -1, &wTitle[0], len);
+        std::wstring wideTitle;
+        std::wstring wideMessage;
+        std::wstring wideDetail;
+        if (!electrobun::utf8ToWide(title ? title : "", wideTitle) ||
+            !electrobun::utf8ToWide(message ? message : "", wideMessage) ||
+            !electrobun::utf8ToWide(detail ? detail : "", wideDetail)) {
+            ::log("ERROR: Message box text is not valid UTF-8");
+            return -1;
         }
 
-        // Combine message and detail
-        std::string fullMsg;
-        if (message && strlen(message) > 0) {
-            fullMsg = message;
+        std::vector<std::wstring> buttonLabels;
+        if (!electrobun::parseWindowsDialogButtonLabels(
+                buttons ? buttons : "", buttonLabels)) {
+            ::log("ERROR: Message box button text is not valid UTF-8");
+            return -1;
         }
-        if (detail && strlen(detail) > 0) {
-            if (!fullMsg.empty()) fullMsg += "\n\n";
-            fullMsg += detail;
-        }
-        if (!fullMsg.empty()) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, fullMsg.c_str(), -1, nullptr, 0);
-            wMessage.resize(len - 1);
-            MultiByteToWideChar(CP_UTF8, 0, fullMsg.c_str(), -1, &wMessage[0], len);
+        if (buttonLabels.size() > 4096) {
+            ::log("ERROR: Message box has too many buttons");
+            return -1;
         }
 
-        // Determine icon based on type
-        UINT uType = MB_OK;
-        if (type) {
-            std::string typeStr(type);
-            if (typeStr == "warning") {
-                uType |= MB_ICONWARNING;
-            } else if (typeStr == "error" || typeStr == "critical") {
-                uType |= MB_ICONERROR;
-            } else if (typeStr == "question") {
-                uType |= MB_ICONQUESTION;
-            } else {
-                uType |= MB_ICONINFORMATION;
+        std::vector<TASKDIALOG_BUTTON> taskButtons;
+        taskButtons.reserve(buttonLabels.size());
+        for (size_t index = 0; index < buttonLabels.size(); ++index) {
+            taskButtons.push_back({
+                electrobun::windowsTaskDialogButtonId(index),
+                buttonLabels[index].c_str(),
+            });
+        }
+
+        PCWSTR icon = TD_INFORMATION_ICON;
+        const std::string typeString(type ? type : "info");
+        if (typeString == "warning") {
+            icon = TD_WARNING_ICON;
+        } else if (typeString == "error" || typeString == "critical") {
+            icon = TD_ERROR_ICON;
+        }
+
+        HWND owner = GetActiveWindow();
+        TASKDIALOGCONFIG config = {};
+        config.cbSize = sizeof(config);
+        config.hwndParent = owner;
+        config.hInstance = g_hInstanceDll;
+        config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+        if (owner) {
+            config.dwFlags |= TDF_POSITION_RELATIVE_TO_WINDOW;
+        }
+        config.pszWindowTitle = wideTitle.c_str();
+        config.pszMainInstruction = wideMessage.empty()
+            ? nullptr
+            : wideMessage.c_str();
+        config.pszContent = wideDetail.empty() ? nullptr : wideDetail.c_str();
+        config.pszMainIcon = icon;
+        config.cButtons = static_cast<UINT>(taskButtons.size());
+        config.pButtons = taskButtons.data();
+        config.nDefaultButton = electrobun::windowsTaskDialogButtonId(
+            static_cast<size_t>(electrobun::normalizeWindowsDialogDefaultId(
+                defaultId, buttonLabels.size())));
+
+        int pressedButton = 0;
+        const HRESULT result = showTaskDialogWithDllActivationContext(
+            config, pressedButton);
+        if (FAILED(result)) {
+            ::log(
+                "ERROR: TaskDialogIndirect failed with HRESULT " +
+                std::to_string(static_cast<long>(result)));
+            std::wstring fallbackText = wideMessage;
+            if (!wideDetail.empty()) {
+                if (!fallbackText.empty()) fallbackText += L"\n\n";
+                fallbackText += wideDetail;
             }
-        } else {
-            uType |= MB_ICONINFORMATION;
+            MessageBoxW(
+                owner,
+                fallbackText.c_str(),
+                wideTitle.c_str(),
+                MB_OK | MB_ICONERROR);
+            return 0;
         }
 
-        // Parse button labels to determine button type
-        // MessageBox only supports predefined button combinations
-        std::vector<std::string> buttonLabels;
-        if (buttons && strlen(buttons) > 0) {
-            std::string buttonsStr(buttons);
-            std::stringstream ss(buttonsStr);
-            std::string buttonLabel;
-            while (std::getline(ss, buttonLabel, ',')) {
-                // Trim whitespace
-                buttonLabel.erase(0, buttonLabel.find_first_not_of(" \t"));
-                buttonLabel.erase(buttonLabel.find_last_not_of(" \t") + 1);
-                // Convert to lowercase for comparison
-                std::transform(buttonLabel.begin(), buttonLabel.end(), buttonLabel.begin(), ::tolower);
-                if (!buttonLabel.empty()) {
-                    buttonLabels.push_back(buttonLabel);
-                }
-            }
-        }
-
-        // Map common button combinations to MessageBox types
-        if (buttonLabels.size() == 2) {
-            if ((buttonLabels[0] == "ok" && buttonLabels[1] == "cancel") ||
-                (buttonLabels[0] == "yes" && buttonLabels[1] == "no")) {
-                uType = (uType & ~MB_OK) | MB_OKCANCEL;
-            } else if (buttonLabels[0] == "yes" && buttonLabels[1] == "no") {
-                uType = (uType & ~MB_OK) | MB_YESNO;
-            }
-        } else if (buttonLabels.size() == 3) {
-            if (buttonLabels[0] == "yes" && buttonLabels[1] == "no" && buttonLabels[2] == "cancel") {
-                uType = (uType & ~MB_OK) | MB_YESNOCANCEL;
-            }
-        }
-
-        int result = MessageBoxW(nullptr, wMessage.c_str(), wTitle.c_str(), uType);
-
-        // Map MessageBox result to button index
-        switch (result) {
-            case IDOK:
-            case IDYES:
-                return 0;
-            case IDNO:
-                return 1;
-            case IDCANCEL:
-                return cancelId >= 0 ? cancelId : (buttonLabels.size() > 2 ? 2 : 1);
-            default:
-                return -1;
-        }
+        return electrobun::windowsTaskDialogButtonIndex(
+            pressedButton, buttonLabels.size(), cancelId);
     });
 }
 
@@ -10244,11 +11471,21 @@ ELECTROBUN_EXPORT int showMessageBox(const char *type,
 // Clipboard API
 // ============================================================================
 
+static bool openClipboardWithRetry(HWND owner = nullptr) {
+    for (int attempt = 0; attempt < 50; attempt++) {
+        if (OpenClipboard(owner)) {
+            return true;
+        }
+        Sleep(10);
+    }
+    return false;
+}
+
 // clipboardReadText - Read text from the system clipboard
 // Returns: UTF-8 string (caller must free) or NULL if no text available
 ELECTROBUN_EXPORT const char* clipboardReadText() {
     return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return nullptr;
         }
 
@@ -10257,11 +11494,16 @@ ELECTROBUN_EXPORT const char* clipboardReadText() {
         if (hData) {
             wchar_t* wText = static_cast<wchar_t*>(GlobalLock(hData));
             if (wText) {
-                // Convert wide string to UTF-8
-                int utf8Len = WideCharToMultiByte(CP_UTF8, 0, wText, -1, nullptr, 0, nullptr, nullptr);
-                if (utf8Len > 0) {
-                    char* utf8Text = static_cast<char*>(malloc(utf8Len));
-                    WideCharToMultiByte(CP_UTF8, 0, wText, -1, utf8Text, utf8Len, nullptr, nullptr);
+                std::string utf8TextValue;
+                if (electrobun::wideToUtf8(wText, utf8TextValue)) {
+                    char* utf8Text = static_cast<char*>(
+                        malloc(utf8TextValue.size() + 1));
+                    if (utf8Text) {
+                        memcpy(
+                            utf8Text,
+                            utf8TextValue.c_str(),
+                            utf8TextValue.size() + 1);
+                    }
                     result = utf8Text;
                 }
                 GlobalUnlock(hData);
@@ -10278,21 +11520,28 @@ ELECTROBUN_EXPORT void clipboardWriteText(const char* text) {
     if (!text) return;
 
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return;
         }
 
         EmptyClipboard();
 
-        // Convert UTF-8 to wide string
-        int wideLen = MultiByteToWideChar(CP_UTF8, 0, text, -1, nullptr, 0);
-        if (wideLen > 0) {
-            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideLen * sizeof(wchar_t));
+        std::wstring wideText;
+        if (electrobun::utf8ToWide(text, wideText)) {
+            const size_t wideBytes =
+                (wideText.size() + 1) * sizeof(wchar_t);
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, wideBytes);
             if (hMem) {
                 wchar_t* wText = static_cast<wchar_t*>(GlobalLock(hMem));
-                MultiByteToWideChar(CP_UTF8, 0, text, -1, wText, wideLen);
-                GlobalUnlock(hMem);
-                SetClipboardData(CF_UNICODETEXT, hMem);
+                if (wText) {
+                    memcpy(wText, wideText.c_str(), wideBytes);
+                    GlobalUnlock(hMem);
+                    if (!SetClipboardData(CF_UNICODETEXT, hMem)) {
+                        GlobalFree(hMem);
+                    }
+                } else {
+                    GlobalFree(hMem);
+                }
             }
         }
 
@@ -10306,7 +11555,7 @@ ELECTROBUN_EXPORT const uint8_t* clipboardReadImage(size_t* outSize) {
     return MainThreadDispatcher::dispatch_sync([=]() -> const uint8_t* {
         if (outSize) *outSize = 0;
 
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return nullptr;
         }
 
@@ -10339,7 +11588,7 @@ ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) 
     if (!pngData || size == 0) return;
 
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return;
         }
 
@@ -10365,7 +11614,7 @@ ELECTROBUN_EXPORT void clipboardWriteImage(const uint8_t* pngData, size_t size) 
 // clipboardClear - Clear the clipboard
 ELECTROBUN_EXPORT void clipboardClear() {
     MainThreadDispatcher::dispatch_sync([=]() {
-        if (OpenClipboard(nullptr)) {
+        if (openClipboardWithRetry()) {
             EmptyClipboard();
             CloseClipboard();
         }
@@ -10376,34 +11625,51 @@ ELECTROBUN_EXPORT void clipboardClear() {
 // Returns: comma-separated list of formats (caller must free)
 ELECTROBUN_EXPORT const char* clipboardAvailableFormats() {
     return MainThreadDispatcher::dispatch_sync([=]() -> const char* {
-        if (!OpenClipboard(nullptr)) {
+        if (!openClipboardWithRetry()) {
             return strdup("");
         }
 
-        std::vector<std::string> formats;
-
-        // Check for text
-        if (IsClipboardFormatAvailable(CF_UNICODETEXT) || IsClipboardFormatAvailable(CF_TEXT)) {
-            formats.push_back("text");
-        }
-
-        // Check for image
-        if (IsClipboardFormatAvailable(CF_DIB) || IsClipboardFormatAvailable(CF_BITMAP)) {
-            formats.push_back("image");
-        }
-
-        // Check for files
-        if (IsClipboardFormatAvailable(CF_HDROP)) {
-            formats.push_back("files");
-        }
-
-        // Check for HTML
+        bool hasText = false;
+        bool hasImage = false;
+        bool hasFiles = false;
+        bool hasHtml = false;
         UINT htmlFormat = RegisterClipboardFormatA("HTML Format");
-        if (IsClipboardFormatAvailable(htmlFormat)) {
-            formats.push_back("html");
+
+        UINT format = 0;
+        while ((format = EnumClipboardFormats(format)) != 0) {
+            switch (format) {
+                case CF_UNICODETEXT:
+                case CF_TEXT:
+                case CF_OEMTEXT:
+                    hasText = true;
+                    break;
+                case CF_DIB:
+                case CF_DIBV5:
+                case CF_BITMAP:
+                    hasImage = true;
+                    break;
+                case CF_HDROP:
+                    hasFiles = true;
+                    break;
+                default:
+                    if (format == htmlFormat) {
+                        hasHtml = true;
+                    }
+                    break;
+            }
+        }
+
+        if (!hasText && (GetClipboardData(CF_UNICODETEXT) || GetClipboardData(CF_TEXT))) {
+            hasText = true;
         }
 
         CloseClipboard();
+
+        std::vector<std::string> formats;
+        if (hasText) formats.push_back("text");
+        if (hasImage) formats.push_back("image");
+        if (hasFiles) formats.push_back("files");
+        if (hasHtml) formats.push_back("html");
 
         // Join formats with comma
         std::string result;
@@ -10504,7 +11770,7 @@ LRESULT CALLBACK TrayWindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             break;
     }
     
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, const char *pathToImage, bool isTemplate,
@@ -10527,15 +11793,15 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         // Create a hidden window to receive tray messages
         static bool classRegistered = false;
         if (!classRegistered) {
-            WNDCLASSA wc = {0};
+            WNDCLASSW wc = {0};
             wc.lpfnWndProc = TrayWindowProc;
-            wc.hInstance = GetModuleHandle(NULL);
-            wc.lpszClassName = "TrayWindowClass";
+            wc.hInstance = g_hInstanceDll;
+            wc.lpszClassName = L"TrayWindowClass";
             wc.hbrBackground = NULL;
-            wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+            wc.hCursor = LoadCursorW(NULL, MAKEINTRESOURCEW(32512));
             wc.style = 0; // No special styles
             
-            if (!RegisterClassA(&wc)) {
+            if (!RegisterClassW(&wc)) {
                 DWORD error = GetLastError();
                 if (error != ERROR_CLASS_ALREADY_EXISTS) {
                     char errorMsg[256];
@@ -10549,14 +11815,14 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         }
         
         // Create message-only window (safer for tray operations)
-        statusItem->hwnd = CreateWindowA(
-            "TrayWindowClass", 
-            "TrayWindow", 
+        statusItem->hwnd = CreateWindowW(
+            L"TrayWindowClass",
+            L"TrayWindow",
             0,                    // No visible style
             0, 0, 0, 0,          // Position and size (ignored for message-only)
             HWND_MESSAGE,        // Message-only window
             NULL, 
-            GetModuleHandle(NULL), 
+            g_hInstanceDll,
             NULL
         );
         
@@ -10575,7 +11841,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         g_trayItems[statusItem->hwnd] = statusItem;
         
         // Set up NOTIFYICONDATA
-        statusItem->nid.cbSize = sizeof(NOTIFYICONDATA);
+        statusItem->nid.cbSize = sizeof(NOTIFYICONDATAW);
         statusItem->nid.hWnd = statusItem->hwnd;
         statusItem->nid.uID = trayId;
         statusItem->nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
@@ -10583,18 +11849,16 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         
         // Set title/tooltip
         if (!statusItem->title.empty()) {
-            strncpy_s(statusItem->nid.szTip, sizeof(statusItem->nid.szTip), 
-                     statusItem->title.c_str(), sizeof(statusItem->nid.szTip) - 1);
+            if (!electrobun::copyUtf8ToWideBuffer(
+                    statusItem->title, statusItem->nid.szTip)) {
+                ::log("ERROR: Tray title is not valid UTF-8");
+            }
         }
         
         // Load icon
         if (!statusItem->imagePath.empty()) {
-            // Convert to wide string for LoadImage
-            int size = MultiByteToWideChar(CP_UTF8, 0, statusItem->imagePath.c_str(), -1, NULL, 0);
-            if (size > 0) {
-                std::wstring wImagePath(size - 1, 0);
-                MultiByteToWideChar(CP_UTF8, 0, statusItem->imagePath.c_str(), -1, &wImagePath[0], size);
-                
+            std::wstring wImagePath;
+            if (electrobun::utf8ToWide(statusItem->imagePath, wImagePath)) {
                 statusItem->nid.hIcon = (HICON)LoadImageW(NULL, wImagePath.c_str(), IMAGE_ICON,
                                                          width, height, LR_LOADFROMFILE);
                 
@@ -10613,7 +11877,7 @@ ELECTROBUN_EXPORT NSStatusItem* createTray(uint32_t trayId, const char *title, c
         }
         
         // Add to system tray
-        if (Shell_NotifyIcon(NIM_ADD, &statusItem->nid)) {
+        if (Shell_NotifyIconW(NIM_ADD, &statusItem->nid)) {
             // char successMsg[256];
             // sprintf_s(successMsg, "System tray icon created successfully: ID=%u, HWND=%p", trayId, statusItem->hwnd);
             // ::log(successMsg);
@@ -10640,14 +11904,17 @@ ELECTROBUN_EXPORT void setTrayTitle(NSStatusItem *statusItem, const char *title)
         
         if (title) {
             statusItem->title = std::string(title);
-            strncpy_s(statusItem->nid.szTip, title, sizeof(statusItem->nid.szTip) - 1);
+            if (!electrobun::copyUtf8ToWideBuffer(
+                    statusItem->title, statusItem->nid.szTip)) {
+                ::log("ERROR: Tray title is not valid UTF-8");
+            }
         } else {
             statusItem->title.clear();
-            statusItem->nid.szTip[0] = '\0';
+            statusItem->nid.szTip[0] = L'\0';
         }
         
         // Update the tray icon
-        Shell_NotifyIcon(NIM_MODIFY, &statusItem->nid);
+        Shell_NotifyIconW(NIM_MODIFY, &statusItem->nid);
     });
 }
 
@@ -10661,12 +11928,8 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
         if (image && strlen(image) > 0) {
             statusItem->imagePath = std::string(image);
             
-            // Convert to wide string
-            int size = MultiByteToWideChar(CP_UTF8, 0, image, -1, NULL, 0);
-            if (size > 0) {
-                std::wstring wImagePath(size - 1, 0);
-                MultiByteToWideChar(CP_UTF8, 0, image, -1, &wImagePath[0], size);
-                
+            std::wstring wImagePath;
+            if (electrobun::utf8ToWide(image, wImagePath)) {
                 statusItem->nid.hIcon = (HICON)LoadImageW(NULL, wImagePath.c_str(), IMAGE_ICON,
                                                          0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
             }
@@ -10678,7 +11941,7 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
         }
         
         // Update the tray icon
-        if (Shell_NotifyIcon(NIM_MODIFY, &statusItem->nid)) {
+        if (Shell_NotifyIconW(NIM_MODIFY, &statusItem->nid)) {
             // Clean up old icon if it's not the default
             if (oldIcon && oldIcon != LoadIcon(NULL, IDI_APPLICATION)) {
                 DestroyIcon(oldIcon);
@@ -10843,7 +12106,7 @@ ELECTROBUN_EXPORT void setApplicationMenu(const char *jsonString, ZigStatusItemH
                 // Find the main application window to set the menu
                 HWND mainWindow = GetActiveWindow();
                 if (!mainWindow) {
-                    mainWindow = FindWindowA("BasicWindowClass", NULL);
+                    mainWindow = FindWindowW(L"BasicWindowClass", NULL);
                 }
                 
                 if (mainWindow) {
@@ -11025,12 +12288,7 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
                 LPWSTR uri;
                 request->get_Uri(&uri);
                 
-                std::wstring wUri(uri);
-                
-                // Convert to string for logging
-                int size = WideCharToMultiByte(CP_UTF8, 0, uri, -1, NULL, 0, NULL, NULL);
-                std::string uriStr(size - 1, 0);
-                WideCharToMultiByte(CP_UTF8, 0, uri, -1, &uriStr[0], size, NULL, NULL);
+                std::wstring wUri(uri ? uri : L"");
                 
                 
                 
@@ -11067,20 +12325,17 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
                              uint32_t webviewId) {
     
     
-    // Convert URI to std::string for processing
-    int size = WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, NULL, 0, NULL, NULL);
-    std::string uriStr(size - 1, 0);
-    WideCharToMultiByte(CP_UTF8, 0, uri.c_str(), -1, &uriStr[0], size, NULL, NULL);
+    std::string uriStr;
+    if (!electrobun::wideToUtf8(uri, uriStr)) {
+        ::log("ERROR: views:// URI is not valid UTF-16");
+        return;
+    }
 
     
     // Extract the path after "views://"
     std::string path;
     if (uriStr.length() > 8) {
-        path = uriStr.substr(8); // Remove "views://" prefix
-        // Strip trailing slashes - WebView2 may normalize URLs without folder components
-        while (!path.empty() && (path.back() == '/' || path.back() == '\\')) {
-            path.pop_back();
-        }
+        path = normalizeViewsRelativePath(uriStr);
     } else {
         path = "index.html"; // Default
     }
@@ -11150,7 +12405,10 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
         
         // Create the response
         ComPtr<ICoreWebView2WebResourceResponse> response;
-        std::wstring mimeTypeW(mimeType.begin(), mimeType.end());
+        std::wstring mimeTypeW;
+        if (!electrobun::utf8ToWide(mimeType, mimeTypeW)) {
+            mimeTypeW = L"application/octet-stream";
+        }
         std::wstring headers = L"Content-Type: " + mimeTypeW + L"\r\nAccess-Control-Allow-Origin: *";
         
         HRESULT responseResult = g_environment->CreateWebResourceResponse(
@@ -11180,30 +12438,25 @@ void handleViewsSchemeRequest(ICoreWebView2WebResourceRequestedEventArgs* args,
 
 // Helper functions
 std::string loadViewsFile(const std::string& path) {
-    // Get the current working directory instead of executable directory
-    char currentDir[MAX_PATH];
-    DWORD result = GetCurrentDirectoryA(MAX_PATH, currentDir);
-
-    if (result == 0 || result > MAX_PATH) {
-        ::log("ERROR: Failed to get current working directory");
+    const std::filesystem::path resourcesDir =
+        electrobun::windowsResourcesDirectory();
+    if (resourcesDir.empty()) {
+        ::log("ERROR loadViewsFile: Failed to resolve Resources directory");
         return "";
     }
 
-    std::string resourcesDir = std::string(currentDir) + "\\..\\Resources";
-    std::string asarPath = resourcesDir + "\\app.asar";
+    const std::filesystem::path asarPath = resourcesDir / L"app.asar";
+    const std::string asarPathLog = electrobun::windowsPathForLog(asarPath);
 
     // Check if ASAR archive exists
-    std::ifstream asarCheck(asarPath);
-    if (asarCheck.good()) {
-        asarCheck.close();
-
+    if (electrobun::windowsRegularFileExists(asarPath)) {
         // Thread-safe lazy-load ASAR archive on first use
-        std::call_once(g_asarArchiveInitFlag, [&asarPath]() {
+        std::call_once(g_asarArchiveInitFlag, [asarPath, asarPathLog]() {
             g_asarArchive = AsarArchive::open(asarPath);
             if (g_asarArchive) {
-                ::log("DEBUG loadViewsFile: Opened ASAR archive at " + asarPath);
+                ::log("DEBUG loadViewsFile: Opened ASAR archive at " + asarPathLog);
             } else {
-                ::log("ERROR loadViewsFile: Failed to open ASAR archive at " + asarPath);
+                ::log("ERROR loadViewsFile: Failed to open ASAR archive at " + asarPathLog);
             }
         });
 
@@ -11231,26 +12484,28 @@ std::string loadViewsFile(const std::string& path) {
     }
 
     // Fallback: Read from flat file system (for non-ASAR builds or missing files)
-    std::string fullPath = resourcesDir + "\\app\\views\\" + path;
-
-    ::log("DEBUG loadViewsFile: Attempting flat file read: " + fullPath);
-
-    // Try to read the file
-    std::ifstream file(fullPath, std::ios::binary);
-    if (!file.is_open()) {
-        ::log("ERROR: Could not open views file: " + fullPath);
+    std::wstring wideRelativePath;
+    if (!electrobun::utf8ToWide(path, wideRelativePath)) {
+        ::log("ERROR loadViewsFile: Relative path is not valid UTF-8");
         return "";
     }
+    const std::filesystem::path fullPath =
+        resourcesDir / L"app" / L"views" /
+        std::filesystem::path(wideRelativePath);
+    const std::string fullPathLog = electrobun::windowsPathForLog(fullPath);
 
-    // Read file contents
-    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-    file.close();
+    ::log("DEBUG loadViewsFile: Attempting flat file read: " + fullPathLog);
 
+    std::string content;
+    if (!electrobun::readWindowsBinaryFile(fullPath, content)) {
+        ::log("ERROR: Could not open views file: " + fullPathLog);
+        return "";
+    }
     return content;
 }
 
 // Shared MIME type detection function
-// Based on Bun runtime supported file types and web development standards
+// Based on Bun-compatible runtime file types and web development standards
 std::string getMimeTypeForFile(const std::string& path) {
     // Web/Code Files (Bun native support)
     if (path.find(".html") != std::string::npos || path.find(".htm") != std::string::npos) {
@@ -11367,6 +12622,7 @@ static HWND g_hotkeyWindow = NULL;
 static std::thread g_hotkeyThread;
 static bool g_hotkeyThreadRunning = false;
 static std::mutex g_hotkeyMutex;  // Protect access to g_globalShortcuts and g_hotkeyIdToAccelerator
+static std::mutex g_hotkeyThreadMutex;
 
 // Helper to parse virtual key code from key string
 static UINT getVirtualKeyCode(const std::string& key) {
@@ -11473,7 +12729,7 @@ static LRESULT CALLBACK HotkeyWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         ::log("GlobalShortcut: Unregistered all shortcuts");
         return 0;
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 // Message loop thread for hotkey window
@@ -11505,14 +12761,24 @@ static void hotkeyMessageLoop() {
     g_hotkeyWindow = NULL;
 }
 
+static void ensureHotkeyThreadRunning() {
+    std::lock_guard<std::mutex> lock(g_hotkeyThreadMutex);
+    if (g_hotkeyThreadRunning) {
+        return;
+    }
+
+    g_hotkeyThreadRunning = true;
+    g_hotkeyThread = std::thread(hotkeyMessageLoop);
+    g_hotkeyThread.detach();
+}
+
 // Set the callback for global shortcut events
 extern "C" ELECTROBUN_EXPORT void setGlobalShortcutCallback(GlobalShortcutCallback callback) {
     g_globalShortcutCallback = callback;
 
     // Start the hotkey message loop thread if not running
-    if (!g_hotkeyThreadRunning && callback) {
-        g_hotkeyThreadRunning = true;
-        g_hotkeyThread = std::thread(hotkeyMessageLoop);
+    if (callback) {
+        ensureHotkeyThreadRunning();
         // Wait for window to be created
         while (!g_hotkeyWindow && g_hotkeyThreadRunning) {
             Sleep(10);
@@ -11526,6 +12792,8 @@ extern "C" ELECTROBUN_EXPORT BOOL registerGlobalShortcut(const char* accelerator
         ::log("ERROR: Cannot register shortcut - invalid accelerator");
         return FALSE;
     }
+
+    ensureHotkeyThreadRunning();
 
     // Wait for hotkey window to be ready (with timeout)
     int waitCount = 0;
@@ -11620,9 +12888,22 @@ extern "C" ELECTROBUN_EXPORT BOOL unregisterGlobalShortcut(const char* accelerat
 
 // Unregister all global keyboard shortcuts
 extern "C" ELECTROBUN_EXPORT void unregisterAllGlobalShortcuts() {
-    if (g_hotkeyWindow) {
-        PostMessage(g_hotkeyWindow, WM_UNREGISTER_ALL_HOTKEYS, 0, 0);
+    std::vector<int> hotkeyIds;
+    {
+        std::lock_guard<std::mutex> lock(g_hotkeyMutex);
+        for (const auto& pair : g_globalShortcuts) {
+            hotkeyIds.push_back(pair.second);
+        }
+        g_globalShortcuts.clear();
+        g_hotkeyIdToAccelerator.clear();
     }
+
+    if (g_hotkeyWindow) {
+        for (int hotkeyId : hotkeyIds) {
+            PostMessage(g_hotkeyWindow, WM_UNREGISTER_HOTKEY, hotkeyId, 0);
+        }
+    }
+    ::log("GlobalShortcut: Unregistered all shortcuts");
 }
 
 // Check if a shortcut is registered
@@ -11642,152 +12923,55 @@ extern "C" ELECTROBUN_EXPORT BOOL isGlobalShortcutRegistered(const char* acceler
  * =============================================================================
  */
 
-// Structure to collect monitor info during enumeration
-struct MonitorEnumData {
-    std::vector<std::string> displays;
-};
-
-// Callback for EnumDisplayMonitors
-static BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-    MonitorEnumData* data = reinterpret_cast<MonitorEnumData*>(dwData);
-
-    MONITORINFOEX monitorInfo;
-    monitorInfo.cbSize = sizeof(MONITORINFOEX);
-
-    if (GetMonitorInfo(hMonitor, &monitorInfo)) {
-        // Get DPI/scale factor using GetDpiForMonitor if available (Windows 8.1+)
-        double scaleFactor = 1.0;
-
-        // Try to get DPI - load dynamically as it may not be available on all Windows versions
-        typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
-        HMODULE shcore = LoadLibraryW(L"Shcore.dll");
-        if (shcore) {
-            GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
-            if (getDpi) {
-                UINT dpiX, dpiY;
-                // MDT_EFFECTIVE_DPI = 0
-                if (SUCCEEDED(getDpi(hMonitor, 0, &dpiX, &dpiY))) {
-                    scaleFactor = dpiX / 96.0;  // 96 DPI is 100% scaling
-                }
-            }
-            FreeLibrary(shcore);
-        }
-
-        // Check if primary
-        bool isPrimary = (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) != 0;
-
-        // Build JSON for this display
-        std::ostringstream json;
-        json << "{";
-        json << "\"id\":" << reinterpret_cast<uintptr_t>(hMonitor) << ",";
-        json << "\"bounds\":{";
-        json << "\"x\":" << monitorInfo.rcMonitor.left << ",";
-        json << "\"y\":" << monitorInfo.rcMonitor.top << ",";
-        json << "\"width\":" << (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left) << ",";
-        json << "\"height\":" << (monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top);
-        json << "},";
-        json << "\"workArea\":{";
-        json << "\"x\":" << monitorInfo.rcWork.left << ",";
-        json << "\"y\":" << monitorInfo.rcWork.top << ",";
-        json << "\"width\":" << (monitorInfo.rcWork.right - monitorInfo.rcWork.left) << ",";
-        json << "\"height\":" << (monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
-        json << "},";
-        json << "\"scaleFactor\":" << scaleFactor << ",";
-        json << "\"isPrimary\":" << (isPrimary ? "true" : "false");
-        json << "}";
-
-        data->displays.push_back(json.str());
-    }
-
-    return TRUE;  // Continue enumeration
+static std::string serializeWindowsDisplay(
+    const electrobun::WindowsLogicalMonitor& monitor
+) {
+    const double scaleFactor = static_cast<double>(monitor.dpi) /
+        electrobun::kWindowsDefaultDpi;
+    const RECT& bounds = monitor.logicalBounds;
+    const RECT& workArea = monitor.logicalWorkArea;
+    std::ostringstream json;
+    json << "{";
+    json << "\"id\":" << reinterpret_cast<uintptr_t>(monitor.handle) << ",";
+    json << "\"bounds\":{";
+    json << "\"x\":" << bounds.left << ",";
+    json << "\"y\":" << bounds.top << ",";
+    json << "\"width\":" << (bounds.right - bounds.left) << ",";
+    json << "\"height\":" << (bounds.bottom - bounds.top);
+    json << "},";
+    json << "\"workArea\":{";
+    json << "\"x\":" << workArea.left << ",";
+    json << "\"y\":" << workArea.top << ",";
+    json << "\"width\":" << (workArea.right - workArea.left) << ",";
+    json << "\"height\":" << (workArea.bottom - workArea.top);
+    json << "},";
+    json << "\"scaleFactor\":" << scaleFactor << ",";
+    json << "\"isPrimary\":" << (monitor.primary ? "true" : "false");
+    json << "}";
+    return json.str();
 }
 
 // Get all displays as JSON array
 extern "C" ELECTROBUN_EXPORT const char* getAllDisplays() {
-    MonitorEnumData data;
-
-    EnumDisplayMonitors(NULL, NULL, MonitorEnumProc, reinterpret_cast<LPARAM>(&data));
-
-    // Build JSON array
+    const auto monitors = electrobun::windowsLogicalMonitors();
     std::ostringstream result;
     result << "[";
-    for (size_t i = 0; i < data.displays.size(); i++) {
+    for (size_t i = 0; i < monitors.size(); ++i) {
         if (i > 0) result << ",";
-        result << data.displays[i];
+        result << serializeWindowsDisplay(monitors[i]);
     }
     result << "]";
-
     return _strdup(result.str().c_str());
-}
-
-// Callback for finding primary display
-struct PrimaryMonitorData {
-    std::string json;
-    bool found;
-};
-
-static BOOL CALLBACK PrimaryMonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
-    PrimaryMonitorData* data = reinterpret_cast<PrimaryMonitorData*>(dwData);
-
-    MONITORINFOEX monitorInfo;
-    monitorInfo.cbSize = sizeof(MONITORINFOEX);
-
-    if (GetMonitorInfo(hMonitor, &monitorInfo)) {
-        if (monitorInfo.dwFlags & MONITORINFOF_PRIMARY) {
-            // Get DPI/scale factor
-            double scaleFactor = 1.0;
-            HMODULE shcore = LoadLibraryW(L"Shcore.dll");
-            if (shcore) {
-                typedef HRESULT(WINAPI *GetDpiForMonitorFunc)(HMONITOR, int, UINT*, UINT*);
-                GetDpiForMonitorFunc getDpi = (GetDpiForMonitorFunc)GetProcAddress(shcore, "GetDpiForMonitor");
-                if (getDpi) {
-                    UINT dpiX, dpiY;
-                    if (SUCCEEDED(getDpi(hMonitor, 0, &dpiX, &dpiY))) {
-                        scaleFactor = dpiX / 96.0;
-                    }
-                }
-                FreeLibrary(shcore);
-            }
-
-            std::ostringstream json;
-            json << "{";
-            json << "\"id\":" << reinterpret_cast<uintptr_t>(hMonitor) << ",";
-            json << "\"bounds\":{";
-            json << "\"x\":" << monitorInfo.rcMonitor.left << ",";
-            json << "\"y\":" << monitorInfo.rcMonitor.top << ",";
-            json << "\"width\":" << (monitorInfo.rcMonitor.right - monitorInfo.rcMonitor.left) << ",";
-            json << "\"height\":" << (monitorInfo.rcMonitor.bottom - monitorInfo.rcMonitor.top);
-            json << "},";
-            json << "\"workArea\":{";
-            json << "\"x\":" << monitorInfo.rcWork.left << ",";
-            json << "\"y\":" << monitorInfo.rcWork.top << ",";
-            json << "\"width\":" << (monitorInfo.rcWork.right - monitorInfo.rcWork.left) << ",";
-            json << "\"height\":" << (monitorInfo.rcWork.bottom - monitorInfo.rcWork.top);
-            json << "},";
-            json << "\"scaleFactor\":" << scaleFactor << ",";
-            json << "\"isPrimary\":true";
-            json << "}";
-
-            data->json = json.str();
-            data->found = true;
-            return FALSE;  // Stop enumeration
-        }
-    }
-
-    return TRUE;  // Continue enumeration
 }
 
 // Get primary display as JSON
 extern "C" ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
-    PrimaryMonitorData data;
-    data.found = false;
-
-    EnumDisplayMonitors(NULL, NULL, PrimaryMonitorEnumProc, reinterpret_cast<LPARAM>(&data));
-
-    if (data.found) {
-        return _strdup(data.json.c_str());
+    const auto monitors = electrobun::windowsLogicalMonitors();
+    for (const auto& monitor : monitors) {
+        if (monitor.primary) {
+            return _strdup(serializeWindowsDisplay(monitor).c_str());
+        }
     }
-
     return _strdup("{}");
 }
 
@@ -11795,8 +12979,16 @@ extern "C" ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
 extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     POINT cursorPos;
     if (GetCursorPos(&cursorPos)) {
+        const HMONITOR monitor = MonitorFromPoint(
+            cursorPos, MONITOR_DEFAULTTONEAREST);
+        const auto logicalMonitor =
+            electrobun::windowsMonitorForHandle(monitor);
+        const POINT logicalCursor =
+            electrobun::physicalScreenPointToLogical(
+                cursorPos.x, cursorPos.y, logicalMonitor);
         std::ostringstream json;
-        json << "{\"x\":" << cursorPos.x << ",\"y\":" << cursorPos.y << "}";
+        json << "{\"x\":" << logicalCursor.x
+             << ",\"y\":" << logicalCursor.y << "}";
         return _strdup(json.str().c_str());
     }
 
@@ -11877,16 +13069,15 @@ extern "C" ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partition
         return _strdup("[]");
     }
 
+    std::wstring wFilterUrl;
+    if (!filterUrl.empty() &&
+        !electrobun::utf8ToWide(filterUrl, wFilterUrl)) {
+        return _strdup("[]");
+    }
+
     // Get cookies synchronously using event
     std::string cookiesJson = "[]";
     HANDLE event = CreateEvent(NULL, FALSE, FALSE, NULL);
-
-    std::wstring wFilterUrl;
-    if (!filterUrl.empty()) {
-        int wideSize = MultiByteToWideChar(CP_UTF8, 0, filterUrl.c_str(), -1, nullptr, 0);
-        wFilterUrl.resize(wideSize - 1);
-        MultiByteToWideChar(CP_UTF8, 0, filterUrl.c_str(), -1, &wFilterUrl[0], wideSize);
-    }
 
     LPCWSTR uri = filterUrl.empty() ? nullptr : wFilterUrl.c_str();
 
@@ -11917,9 +13108,8 @@ extern "C" ELECTROBUN_EXPORT const char* sessionGetCookies(const char* partition
                             // Convert to UTF-8
                             auto toUtf8 = [](LPWSTR wstr) -> std::string {
                                 if (!wstr) return "";
-                                int size = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nullptr, 0, nullptr, nullptr);
-                                std::string str(size - 1, '\0');
-                                WideCharToMultiByte(CP_UTF8, 0, wstr, -1, &str[0], size, nullptr, nullptr);
+                                std::string str;
+                                electrobun::wideToUtf8(wstr, str);
                                 return str;
                             };
 
@@ -12040,21 +13230,24 @@ extern "C" ELECTROBUN_EXPORT bool sessionSetCookie(const char* partitionIdentifi
 
     if (path.empty()) path = "/";
 
-    // Convert to wide strings
-    auto toWide = [](const std::string& str) -> std::wstring {
-        int size = MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, nullptr, 0);
-        std::wstring wstr(size - 1, L'\0');
-        MultiByteToWideChar(CP_UTF8, 0, str.c_str(), -1, &wstr[0], size);
-        return wstr;
-    };
-
-    // Create cookie - need to use CreateCookie which requires a URI
-    std::string cookieUrl = url.empty() ? ("https://" + domain + "/") : url;
-    std::wstring wUrl = toWide(cookieUrl);
+    std::wstring wideName;
+    std::wstring wideValue;
+    std::wstring wideDomain;
+    std::wstring widePath;
+    if (!electrobun::utf8ToWide(name, wideName) ||
+        !electrobun::utf8ToWide(value, wideValue) ||
+        !electrobun::utf8ToWide(domain, wideDomain) ||
+        !electrobun::utf8ToWide(path, widePath)) {
+        return false;
+    }
 
     ComPtr<ICoreWebView2Cookie> cookie;
-    if (FAILED(cookieManager->CreateCookie(toWide(name).c_str(), toWide(value).c_str(),
-                                           toWide(domain).c_str(), toWide(path).c_str(), &cookie))) {
+    if (FAILED(cookieManager->CreateCookie(
+            wideName.c_str(),
+            wideValue.c_str(),
+            wideDomain.c_str(),
+            widePath.c_str(),
+            &cookie))) {
         return false;
     }
 
@@ -12101,17 +13294,12 @@ extern "C" ELECTROBUN_EXPORT bool sessionRemoveCookie(const char* partitionIdent
         return false;
     }
 
-    std::string url = urlStr;
-    std::string name = cookieName;
-
-    // Convert to wide strings
-    int wideSize = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, nullptr, 0);
-    std::wstring wUrl(wideSize - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, url.c_str(), -1, &wUrl[0], wideSize);
-
-    wideSize = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, nullptr, 0);
-    std::wstring wName(wideSize - 1, L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, name.c_str(), -1, &wName[0], wideSize);
+    std::wstring wUrl;
+    std::wstring wName;
+    if (!electrobun::utf8ToWide(urlStr, wUrl) ||
+        !electrobun::utf8ToWide(cookieName, wName)) {
+        return false;
+    }
 
     // Get cookies matching URL, then delete the one with matching name
     bool found = false;

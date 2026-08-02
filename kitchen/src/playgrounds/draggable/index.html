@@ -65,6 +65,17 @@
             -webkit-user-select: none;
             user-select: none;
         }
+        .stylesheet-drag-zone {
+            -webkit-app-region: drag;
+            background: rgba(34, 34, 34, 0);
+            border: 2px solid #333;
+            color: #222;
+        }
+        .stylesheet-no-drag {
+            -webkit-app-region: no-drag;
+            margin-top: 15px;
+            padding: 10px 14px;
+        }
         .no-drag {
             background: #fff;
             padding: 20px;
@@ -96,12 +107,16 @@
     <div class="content">
         <div class="info">
             <p><strong>Instructions:</strong></p>
-            <p>The dark box below has the <code>.electrobun-webkit-app-region-drag</code> class.</p>
-            <p>Try dragging the window by clicking and dragging in that box.</p>
-            <p>Use <code>.electrobun-webkit-app-region-no-drag</code> on child elements to exclude them from dragging.</p>
+            <p>The first dark box uses the <code>.electrobun-webkit-app-region-drag</code> class.</p>
+            <p>The outlined transparent box uses a stylesheet <code>-webkit-app-region: drag</code> declaration.</p>
+            <p>Drag from both boxes, then verify their no-drag controls remain clickable.</p>
         </div>
         <div class="electrobun-webkit-app-region-drag drag-zone">
             Drag the window from here!
+        </div>
+        <div class="drag-zone stylesheet-drag-zone">
+            Stylesheet-declared transparent drag region
+            <button class="stylesheet-no-drag" type="button">No-drag button</button>
         </div>
         <div class="electrobun-webkit-app-region-drag no-drag">
             <p>

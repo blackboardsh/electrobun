@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
     <p>Continuing on from the <a href="/electrobun/guides/creating-ui">Creating UI</a> guide.</p>
   </Aside>
 
-  <p>Let's add two more scripts to `package.json` to get our app ready for distribution: `build:canary` and `build:stable`.</p>
+  <p>Add `build:canary` and `build:stable` scripts to `package.json` to get your app ready for distribution:</p>
 
   
 ```json
@@ -24,30 +24,30 @@ import { Aside } from "@astrojs/starlight/components";
     "electrobun": "^0.0.1"
   },
   "scripts": {
-    "start": "electrobun run",
-    "dev": "electrobun dev",
-    "dev:watch": "electrobun dev --watch",
-    "build:dev": "bun install && electrobun build",
-    "build:canary": "electrobun build --env=canary",
-    "build:stable": "electrobun build --env=stable"
+    "start": "hutch electrobun run",
+    "dev": "hutch electrobun dev",
+    "dev:watch": "hutch electrobun dev --watch",
+    "build:dev": "hutch electrobun build",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build:stable": "hutch electrobun build --env=stable"
   }
 }
 ```
 
 
-  <p>In your terminal you can now run:</p>
+  <p>Run either release build through Hutch:</p>
 
-  
+
 ```bash
-bun run build:canary
+hutch run build:canary
 
 # or
 
-bun run build:stable
+hutch run build:stable
 ```
 
 
-  <p>Both of these non-dev builds will:</p>
+  <p>Both non-dev builds:</p>
   <ul>
     <li>Build an optimized app bundle</li>
     <li>Tar and compress it using state-of-the-art ZSTD compression</li>
@@ -70,7 +70,8 @@ export default {
     version: "0.0.1",
   },
   build: {
-    bun: {
+    mainProcess: "cottontail",
+    cottontail: {
       entrypoint: "src/bun/index.ts",
     },
     views: {
@@ -91,11 +92,11 @@ export default {
 
   <p>You can make your app available by uploading the contents of the `artifacts` folder to your release host (S3, R2, GitHub Releases, etc.).</p>
 
-  <p>The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. The Electrobun CLI builds for the current machine's platform and automatically downloads the core/CEF files during bundling.</p>
+  <p>The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. Hutch builds for the current machine's platform and automatically downloads the core/CEF files during bundling.</p>
 
-  <p>To produce artifacts for all platforms, run the same build command on CI runners for each OS/architecture. See the <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a> guide for details.</p>
+  <p>To produce artifacts for all platforms, run the same Hutch build command natively on CI runners for each OS/architecture. See the <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a> guide for platform details.</p>
 
-  <p>Once you've uploaded artifacts to your host, the next time you run a non-dev build (like `bun run build:canary`) the Electrobun CLI will download the current version of your app using `release.baseUrl` and generate a patch file using our optimized BSDIFF implementation. That patch file gets added to your artifacts folder.</p>
+  <p>After you upload the artifacts, subsequent non-dev builds such as `hutch run build:canary` use `release.baseUrl` to download the current version of your app and generate a patch file with our optimized BSDIFF implementation. That patch file is added to the artifacts folder.</p>
 
   <p>It's recommended to keep older patch files in your storage. Users on older versions can download successive patches, each as small as 14KB. If patching can't get the user to the latest version, Electrobun's Updater falls back to downloading the full latest build.</p>
 
@@ -118,7 +119,7 @@ export default {
 
 ## Artifacts Folder Structure
 
-  <p>When you build your app, Electrobun creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
+  <p>When you build your app, Hutch creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
 
   
 ```

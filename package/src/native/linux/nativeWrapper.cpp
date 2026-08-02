@@ -40,6 +40,8 @@
 #include <fstream>
 #include <set>
 #include <cstdarg>
+#include <sys/socket.h>
+#include <netinet/in.h>
 #include "dawn/webgpu.h"
 
 // Shared cross-platform utilities
@@ -58,9 +60,14 @@
 #include "../shared/json_menu_parser.h"
 #include "../shared/download_event.h"
 #include "../shared/app_paths.h"
+#include "../shared/views_url.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/cache_migration.h"
+#include "../shared/console_forwarding.h"
+#include "native_file_dialog.h"
+#include "../shared/dialog_paths.h"
+#include "../shared/cef_find_session.h"
 
 using namespace electrobun;
 
@@ -182,6 +189,39 @@ static std::mutex webviewHTMLMutex;
 // Global variables for CEF cache path isolation
 static std::string g_electrobunChannel = "";
 static std::string g_electrobunIdentifier = "";
+static std::string g_electrobunName = "";
+static std::string g_electrobunWindowClass = "Electrobun";
+
+static std::string deriveLinuxWindowClass(
+    const std::string& name,
+    const std::string& channel) {
+    std::string result;
+    result.reserve(name.size() + channel.size() + 1);
+    for (char character : name) {
+        if (character != ' ') {
+            result.push_back(character);
+        }
+    }
+    if (result.empty()) {
+        result = "Electrobun";
+    }
+    if (!channel.empty() && channel != "production" && channel != "stable") {
+        result += "-";
+        result += channel;
+    }
+    return result;
+}
+
+// The launcher sets this private marker only for the exact `--automation`
+// opt-in. WebKitGTK permits automation on one context per process, so the first
+// context used by an Electrobun WebKit view becomes the sole automation context.
+static constexpr const char* kWebKitAutomationEnvironment = "ELECTROBUN_WEBKIT_AUTOMATION";
+static constexpr const char* kWebKitAutomationInspectorServerEnvironment =
+    "ELECTROBUN_WEBKIT_AUTOMATION_INSPECTOR_SERVER";
+static WebKitWebContext* g_webKitAutomationContext = nullptr;
+static WebKitWebView* g_webKitAutomationTarget = nullptr;
+static bool g_webKitAutomationConfigured = false;
+static bool g_webKitAutomationInspectorServerRestored = false;
 
 // Forward declarations for HTML content management
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
@@ -205,6 +245,7 @@ using MenuJsonValue = MenuItemJson;
 class ContainerView;
 class CEFWebViewImpl;
 std::string getExecutableDir();
+std::string getExecutableBaseName();
 GtkWidget* getContainerViewOverlay(GtkWidget* window);
 GtkWidget* createMenuFromParsedItems(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler, uint32_t trayId);
 GtkWidget* createApplicationMenuBar(const std::vector<MenuJsonValue>& items, ZigStatusItemHandler clickHandler);
@@ -219,6 +260,7 @@ struct X11Window {
     double x, y, width, height;
     std::string title;
     WindowCloseCallback closeCallback;
+    WindowShouldCloseHandler shouldCloseCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
@@ -228,7 +270,7 @@ struct X11Window {
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
 
-    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), focusCallback(nullptr), keyCallback(nullptr), transparent(false) {}
+    X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
 
 // Forward declarations for icon management
@@ -348,12 +390,38 @@ static std::atomic<bool> g_checkedForCEF{false};
 // Global webview storage to keep shared_ptr alive
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 static std::mutex g_webviewMapMutex;
+static std::map<uint32_t, std::string> g_webviewViewsRoot;
+static std::mutex g_webviewViewsRootMutex;
+
+// CefShutdown requires every browser to have completed OnBeforeClose first.
+// Track browsers independently of g_webviewMap because a removed view can keep
+// closing asynchronously after its owner has been erased from that map.
+static std::map<int, CefRefPtr<CefBrowser>> g_liveCefBrowsers;
+static std::mutex g_liveCefBrowsersMutex;
+static std::atomic<int> g_pendingCefBrowserCreations{0};
 
 // Global map to store preload scripts by browser ID (for multi-process CEF)
 static std::map<int, std::string> g_preloadScripts;
 
 CefRefPtr<class ElectrobunApp> g_app;
 electrobun::ChromiumFlagConfig g_userChromiumFlags;
+
+static bool IsPortAvailable(int port) {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock < 0) return false;
+
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    sockaddr_in address = {};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    address.sin_port = htons(static_cast<uint16_t>(port));
+
+    const int result = bind(sock, reinterpret_cast<sockaddr*>(&address), sizeof(address));
+    close(sock);
+    return result == 0;
+}
 
 
 // Get the directory of the current executable
@@ -369,6 +437,23 @@ std::string getExecutableDir() {
         }
     }
     return "."; // fallback to current directory
+}
+
+std::string getExecutableBaseName() {
+    char path[1024];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len != -1) {
+        path[len] = '\0';
+        std::string exePath(path);
+        size_t lastSlash = exePath.find_last_of('/');
+        std::string fileName = lastSlash != std::string::npos
+            ? exePath.substr(lastSlash + 1)
+            : exePath;
+        if (!fileName.empty()) {
+            return fileName;
+        }
+    }
+    return "bun";
 }
 
 static std::mutex g_x11ErrorTrapMutex;
@@ -534,14 +619,7 @@ public:
         std::string url = request->GetURL();
         
         // Parse the URI to get everything after views://
-        std::string fullPath = "index.html"; // default
-        if (url.find("views://") == 0) {
-            fullPath = url.substr(8); // Skip "views://"
-            // Strip trailing slashes - WebKit may normalize URLs without folder components
-            while (!fullPath.empty() && (fullPath.back() == '/' || fullPath.back() == '\\')) {
-                fullPath.pop_back();
-            }
-        }
+        std::string fullPath = normalizeViewsRelativePath(url);
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
@@ -561,6 +639,56 @@ public:
             }
         }
         
+        // Check if this webview has a custom viewsRoot
+        std::string viewsRootPath;
+        {
+            std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+            auto it = g_webviewViewsRoot.find(webviewId_);
+            if (it != g_webviewViewsRoot.end()) {
+                viewsRootPath = it->second;
+            }
+        }
+        
+        // If viewsRoot is set, try to read from that directory first
+        if (!viewsRootPath.empty()) {
+            gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath.c_str(), nullptr);
+            
+            if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+                GError* error = nullptr;
+                gchar* fileContents = nullptr;
+                gsize fileSize = 0;
+                
+                if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+                    data_ = std::string(fileContents, fileSize);
+                    g_free(fileContents);
+                    
+                    // Determine MIME type
+                    std::string mimeType = "application/octet-stream";
+                    if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
+                    else if (fullPath.find(".css") != std::string::npos) mimeType = "text/css";
+                    else if (fullPath.find(".js") != std::string::npos) mimeType = "text/javascript";
+                    else if (fullPath.find(".json") != std::string::npos) mimeType = "application/json";
+                    else if (fullPath.find(".png") != std::string::npos) mimeType = "image/png";
+                    else if (fullPath.find(".jpg") != std::string::npos || fullPath.find(".jpeg") != std::string::npos) mimeType = "image/jpeg";
+                    else if (fullPath.find(".svg") != std::string::npos) mimeType = "image/svg+xml";
+                    else if (fullPath.find(".woff") != std::string::npos) mimeType = "font/woff";
+                    else if (fullPath.find(".woff2") != std::string::npos) mimeType = "font/woff2";
+                    else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
+                    mimeType_ = mimeType;
+                    
+                    g_free(filePath);
+                    handle_request = true;
+                    return true;
+                }
+                
+                if (error) {
+                    g_error_free(error);
+                }
+            }
+            
+            g_free(filePath);
+        }
+
         // Build paths relative to current directory (bin)
         char* cwd = g_get_current_dir();
         gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
@@ -820,11 +948,12 @@ public:
         // Get the global object
         CefRefPtr<CefV8Value> global = context->GetGlobal();
         
-        // Create bunBridge object with postMessage method
+        // Create hostBridge/bunBridge object with postMessage method
         CefRefPtr<CefV8Value> bunBridge = CefV8Value::CreateObject(nullptr, nullptr);
         CefRefPtr<CefV8Handler> bunHandler = new V8MessageHandler(browser, "BunBridgeMessage");
         CefRefPtr<CefV8Value> bunPostMessage = CefV8Value::CreateFunction("postMessage", bunHandler);
         bunBridge->SetValue("postMessage", bunPostMessage, V8_PROPERTY_ATTRIBUTE_NONE);
+        global->SetValue("hostBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
         global->SetValue("bunBridge", bunBridge, V8_PROPERTY_ATTRIBUTE_NONE);
         
         // Create internalBridge object with postMessage method
@@ -876,6 +1005,8 @@ private:
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
     std::function<void()> browser_close_callback_;  // Callback to clear parent webview browser
     std::function<void()> load_end_callback_;  // Callback for page load completion
+    std::atomic<bool> owner_detached_{false};
+    std::atomic<bool> initial_browser_creation_pending_{false};
     
     // OSR (Off-Screen Rendering) members for transparency
     Window x11_window_;
@@ -939,17 +1070,41 @@ public:
     CefRefPtr<CefBrowser> GetBrowser() {
         return browser_;
     }
+
+    void MarkInitialBrowserCreationPending() {
+        bool expected = false;
+        if (initial_browser_creation_pending_.compare_exchange_strong(expected, true)) {
+            g_pendingCefBrowserCreations.fetch_add(1);
+        }
+    }
+
+    void ResolveInitialBrowserCreationPending() {
+        if (initial_browser_creation_pending_.exchange(false)) {
+            g_pendingCefBrowserCreations.fetch_sub(1);
+        }
+    }
     
     void SetBrowserCreatedCallback(std::function<void(CefRefPtr<CefBrowser>)> callback) {
+        if (owner_detached_.load()) return;
         browser_created_callback_ = callback;
     }
     
     void SetBrowserCloseCallback(std::function<void()> callback) {
+        if (owner_detached_.load()) return;
         browser_close_callback_ = callback;
     }
     
     void SetLoadEndCallback(std::function<void()> callback) {
+        if (owner_detached_.load()) return;
         load_end_callback_ = callback;
+    }
+
+    void DetachOwnerCallbacks() {
+        owner_detached_.store(true);
+        browser_created_callback_ = nullptr;
+        browser_close_callback_ = nullptr;
+        load_end_callback_ = nullptr;
+        positioning_callback_ = nullptr;
     }
     
     void SetBrowserPreloadScript(int browserId, const std::string& script) {
@@ -1229,6 +1384,15 @@ public:
     }
 
 
+    void OnLoadStart(CefRefPtr<CefBrowser> browser,
+                     CefRefPtr<CefFrame> frame,
+                     TransitionType transition_type) override {
+        if (frame->IsMain() && webview_event_handler_) {
+            std::string url = frame->GetURL().ToString();
+            webview_event_handler_(webview_id_, strdup("did-commit-navigation"), strdup(url.c_str()));
+        }
+    }
+
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
                   int httpStatusCode) override {
@@ -1238,7 +1402,7 @@ public:
         }
         
         // Call load end callback for deferred operations (like transparency)
-        if (frame->IsMain() && load_end_callback_) {
+        if (frame->IsMain() && !owner_detached_.load() && load_end_callback_) {
             load_end_callback_();
         }
         
@@ -1350,6 +1514,14 @@ public:
         
         // Set the browser reference
         SetBrowser(browser);
+        ResolveInitialBrowserCreationPending();
+
+        // Keep a strong reference until OnBeforeClose. A view may already have
+        // been removed from g_webviewMap while its close is still in flight.
+        {
+            std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+            g_liveCefBrowsers[browser->GetIdentifier()] = browser;
+        }
         
         // Register browser ID → webviewId so scheme handlers can look up content
         {
@@ -1357,7 +1529,15 @@ public:
             g_browserIdToWebviewId[browser->GetIdentifier()] = webview_id_;
         }
         
-        // Notify CEFWebViewImpl that browser is created
+        // A view can be removed before asynchronous browser creation finishes.
+        // In that case the client owns the only safe reference and must close
+        // the new browser instead of leaving it orphaned.
+        if (g_shuttingDown.load() || owner_detached_.load()) {
+            browser->GetHost()->CloseBrowser(g_shuttingDown.load());
+            return;
+        }
+
+        // Notify CEFWebViewImpl that browser is created.
         if (browser_created_callback_) {
             browser_created_callback_(browser);
         }
@@ -1471,7 +1651,7 @@ public:
             } else {
                        
                 // Try positioning callback if window is ready
-                if (positioning_callback_) {
+                if (!owner_detached_.load() && positioning_callback_) {
                     positioning_callback_();
                 }
             }
@@ -1481,6 +1661,13 @@ public:
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
+
+        // This is the shutdown barrier: only after this erase may the main
+        // loop observe that every CEF browser has finished closing.
+        {
+            std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+            g_liveCefBrowsers.erase(browser->GetIdentifier());
+        }
         
         // Remove browser ID → webviewId mapping
         {
@@ -1495,7 +1682,7 @@ public:
             browser_ = nullptr;
             
             // Notify parent webview to clear its browser reference too
-            if (browser_close_callback_) {
+            if (!owner_detached_.load() && browser_close_callback_) {
                 browser_close_callback_();
             }
         }
@@ -1845,9 +2032,7 @@ public:
         
         printf("CEF Linux: File dialog requested - mode: %d\n", static_cast<int>(mode));
         
-        // Run the file dialog using GTK on the main thread
-        // Since this is Linux, we can use GTK dialogs directly
-        GtkWidget* dialog = nullptr;
+        // Run the file dialog using the desktop-native GTK portal integration.
         GtkFileChooserAction action = GTK_FILE_CHOOSER_ACTION_OPEN;
         const char* buttonText = "_Open";
         
@@ -1871,18 +2056,16 @@ public:
                 break;
         }
         
-        dialog = gtk_file_chooser_dialog_new(
-            title.empty() ? "Select File" : title.ToString().c_str(),
-            nullptr, // No parent window
-            action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonText, GTK_RESPONSE_ACCEPT,
-            nullptr
-        );
+        const std::string dialogTitle = title.empty() ? "Select File" : title.ToString();
+        LinuxNativeFileDialog dialog(dialogTitle.c_str(), nullptr, action, buttonText);
+        if (!dialog.valid()) {
+            callback->Continue(std::vector<CefString>{});
+            return true;
+        }
         
         // Set multiple selection for OPEN_MULTIPLE mode
         if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-            gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+            dialog.setSelectMultiple(true);
         }
         
         // Set default file path if provided
@@ -1890,10 +2073,10 @@ public:
             std::string path = default_file_path.ToString();
             if (mode == FILE_DIALOG_SAVE) {
                 // For save dialogs, set the filename
-                gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), path.c_str());
+                dialog.setCurrentName(path.c_str());
             } else {
                 // For open dialogs, set the folder
-                gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), path.c_str());
+                dialog.setCurrentFolder(path.c_str());
             }
         }
         
@@ -1916,38 +2099,25 @@ public:
                     gtk_file_filter_add_pattern(gtkFilter, pattern.c_str());
                 }
                 
-                gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), gtkFilter);
+                dialog.addFilter(gtkFilter);
             }
             
             // Always add an "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            dialog.addFilter(allFilter);
         }
         
         // Show the dialog
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = dialog.run();
         
         std::vector<CefString> file_paths;
         if (response == GTK_RESPONSE_ACCEPT) {
-            if (mode == FILE_DIALOG_OPEN_MULTIPLE) {
-                GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-                for (GSList* iter = filenames; iter != nullptr; iter = iter->next) {
-                    file_paths.push_back((char*)iter->data);
-                    g_free(iter->data);
-                }
-                g_slist_free(filenames);
-            } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-                if (filename) {
-                    file_paths.push_back(filename);
-                    g_free(filename);
-                }
+            for (const auto& path : dialog.selectedPaths()) {
+                file_paths.emplace_back(path);
             }
         }
-        
-        gtk_widget_destroy(dialog);
         
         // Call the callback with results
         callback->Continue(file_paths);
@@ -2312,9 +2482,30 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.windowless_rendering_enabled = true;  // Required for OSR/transparent windows
     settings.log_severity = LOGSEVERITY_ERROR;  // Change to WARNING to see more CEF logs
-    // settings.remote_debugging_port = 9222;
-    
-    // printf("CEF: Remote debugging enabled on port 9222\n");
+
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        std::cout << "[CEF] Remote debugging enabled on 127.0.0.1:"
+                  << selectedPort << " ("
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << ")" << std::endl;
+    } else if (remoteDebugging.enabled()) {
+        std::cout << "[CEF] Remote debugging disabled: no free port in "
+                  << electrobun::kDefaultRemoteDebuggingPort << "-"
+                  << electrobun::kLastAutomaticRemoteDebuggingPort << std::endl;
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        std::cout << "[CEF] Remote debugging disabled: "
+                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                  << std::endl;
+    }
     
     // Use centralized GTK initialization to ensure proper setlocale handling
     initializeGTK();
@@ -2325,8 +2516,9 @@ bool initializeCEF() {
     CefString(&settings.resources_dir_path) = execDir;
     CefString(&settings.locales_dir_path) = execDir + "/locales";
     
-    // Set browser subprocess path to the main helper binary
-    CefString(&settings.browser_subprocess_path) = execDir + "/bun Helper";
+    // Match the helper name to the actual host executable (Cottontail or native main).
+    CefString(&settings.browser_subprocess_path) =
+        execDir + "/" + getExecutableBaseName() + " Helper";
     
     // Set cache path with identifier/channel structure (consistent with CLI and updater)
     // Use ~/.cache/identifier/channel/CEF
@@ -2403,6 +2595,9 @@ public:
 
     // Navigation rules for URL filtering
     std::vector<std::string> navigationRules;
+    
+    // Root directory for views:// protocol resolution
+    std::string viewsRoot;
 
     AbstractView(uint32_t webviewId) : webviewId(webviewId) {}
     virtual ~AbstractView() {}
@@ -2545,6 +2740,130 @@ bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string&
     return view->shouldAllowNavigationToURL(url);
 }
 
+static bool isWebKitAutomationRequested() {
+    const char* value = getenv(kWebKitAutomationEnvironment);
+    return value && strcmp(value, "1") == 0;
+}
+
+static void restoreWebKitAutomationInspectorServer() {
+    if (!isWebKitAutomationRequested()) {
+        return;
+    }
+
+    const char* server = getenv(kWebKitAutomationInspectorServerEnvironment);
+    if (!server || server[0] == '\0') {
+        return;
+    }
+
+    setenv("WEBKIT_INSPECTOR_SERVER", server, 1);
+    unsetenv(kWebKitAutomationInspectorServerEnvironment);
+    g_webKitAutomationInspectorServerRestored = true;
+}
+
+static void onWebKitAutomationContextDestroyed(gpointer, GObject*) {
+    g_webKitAutomationContext = nullptr;
+    g_webKitAutomationConfigured = false;
+}
+
+static bool selectWebKitAutomationContext(WebKitWebContext* context) {
+    if (!context || !isWebKitAutomationRequested()) {
+        return false;
+    }
+
+    if (!g_webKitAutomationContext) {
+        g_webKitAutomationContext = context;
+        g_object_weak_ref(
+            G_OBJECT(context),
+            onWebKitAutomationContextDestroyed,
+            nullptr);
+    }
+
+    return context == g_webKitAutomationContext;
+}
+
+static WebKitWebView* onWebKitAutomationCreateWebView(
+    WebKitAutomationSession*,
+    gpointer) {
+    if (!g_webKitAutomationTarget ||
+        !webkit_web_view_is_controlled_by_automation(g_webKitAutomationTarget)) {
+        fprintf(stderr, "ERROR: WebKitGTK automation has no controlled app view\n");
+        return nullptr;
+    }
+
+    printf("[WebKit] W3C automation attached to the primary app view\n");
+    fflush(stdout);
+    return g_webKitAutomationTarget;
+}
+
+static void onWebKitAutomationStarted(
+    WebKitWebContext*,
+    WebKitAutomationSession* session,
+    gpointer) {
+    printf("[WebKit] W3C automation session requested\n");
+    fflush(stdout);
+
+    WebKitApplicationInfo* info = webkit_application_info_new();
+    webkit_application_info_set_name(
+        info,
+        g_electrobunIdentifier.empty()
+            ? "Electrobun"
+            : g_electrobunIdentifier.c_str());
+    webkit_automation_session_set_application_info(session, info);
+    webkit_application_info_unref(info);
+
+    g_signal_connect(
+        session,
+        "create-web-view",
+        G_CALLBACK(onWebKitAutomationCreateWebView),
+        nullptr);
+}
+
+static void configureWebKitAutomation(
+    WebKitWebContext* context,
+    WebKitWebView* target,
+    bool isControlledByAutomation) {
+    if (!isControlledByAutomation || context != g_webKitAutomationContext) {
+        return;
+    }
+
+    if (!g_webKitAutomationTarget) {
+        g_webKitAutomationTarget = target;
+        g_object_add_weak_pointer(
+            G_OBJECT(target),
+            reinterpret_cast<gpointer*>(&g_webKitAutomationTarget));
+    }
+
+    if (g_webKitAutomationConfigured) {
+        return;
+    }
+
+    g_signal_connect(
+        context,
+        "automation-started",
+        G_CALLBACK(onWebKitAutomationStarted),
+        nullptr);
+    webkit_web_context_set_automation_allowed(context, TRUE);
+    g_webKitAutomationConfigured =
+        webkit_web_context_is_automation_allowed(context) == TRUE;
+
+    // Give WebKitGTK's remote-inspector server one main-loop turn to consume
+    // the endpoint, then hide it from JavaScriptCore VMs created later.
+    if (g_webKitAutomationInspectorServerRestored) {
+        g_webKitAutomationInspectorServerRestored = false;
+        g_timeout_add(1000, [](gpointer) -> gboolean {
+            unsetenv("WEBKIT_INSPECTOR_SERVER");
+            return G_SOURCE_REMOVE;
+        }, nullptr);
+    }
+
+    if (g_webKitAutomationConfigured) {
+        printf("[WebKit] W3C automation enabled for the primary app view\n");
+        fflush(stdout);
+    } else {
+        fprintf(stderr, "ERROR: WebKitGTK automation could not be enabled\n");
+    }
+}
+
 // WebKitGTK implementation
 class WebKitWebViewImpl : public AbstractView {
 public:
@@ -2594,6 +2913,11 @@ public:
         // Set initial state flags
         this->pendingStartTransparent = startTransparent;
         this->pendingStartPassthrough = startPassthrough;
+
+        // This is the first WebKitGTK API path used during app webview
+        // construction. Restore WebKitWebDriver's endpoint here: the main JSC
+        // runtime is already initialized, while WebKit has not initialized yet.
+        restoreWebKitAutomationInspectorServer();
         
         // Create the user content controller and manager
         manager = webkit_user_content_manager_new();
@@ -2625,20 +2949,36 @@ public:
 
         // Get or create shared context for this partition
         WebKitWebContext* context = getContextForPartition(partition.empty() ? nullptr : partition.c_str());
+        const bool isControlledByAutomation = selectWebKitAutomationContext(context);
 
         // Create webview with context and user content manager
         webview = GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW,
             "web-context", context,
             "user-content-manager", manager,
             "settings", settings,
+            "is-controlled-by-automation", isControlledByAutomation ? TRUE : FALSE,
             NULL));
         if (!webview) {
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
 
-        // Set size
-        gtk_widget_set_size_request(webview, (int)width, (int)height);
+        // Connect the session only after the controlled target exists. This
+        // prevents WebKitWebDriver from requesting a browsing context during
+        // the small gap between enabling the context and constructing the view.
+        configureWebKitAutomation(
+            context,
+            WEBKIT_WEB_VIEW(webview),
+            isControlledByAutomation);
+
+        // A GTK size request is a minimum, not a one-time allocation. Full-size
+        // host views fill their container through expand/fill, while positioned
+        // child views still need their explicit initial allocation.
+        gtk_widget_set_size_request(
+            webview,
+            autoResize ? -1 : (int)width,
+            autoResize ? -1 : (int)height
+        );
         
         // Check if parent window is transparent and apply transparency to webview
         GtkWidget* toplevel = gtk_widget_get_toplevel(window);
@@ -2655,6 +2995,20 @@ public:
         }
         
         // Add preload scripts
+        if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+            WebKitUserScript* consoleScript = webkit_user_script_new(
+                webviewConsoleForwardingScript(),
+                WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
+                nullptr,
+                nullptr);
+            webkit_user_content_manager_add_script(manager, consoleScript);
+            webkit_user_script_unref(consoleScript);
+            g_signal_connect(manager, "script-message-received::electrobunConsole",
+                           G_CALLBACK(onConsoleMessage), this);
+            webkit_user_content_manager_register_script_message_handler(manager, "electrobunConsole");
+        }
+
         if (!this->electrobunPreloadScript.empty()) {
             addPreloadScriptToWebView(this->electrobunPreloadScript.c_str());
         }
@@ -2671,9 +3025,12 @@ public:
             webkit_user_content_manager_register_script_message_handler(manager, "eventBridge");
         }
 
-        // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+        // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
         if (!isSandboxed) {
             if (bunBridgeHandler) {
+                g_signal_connect(manager, "script-message-received::hostBridge",
+                               G_CALLBACK(onBunBridgeMessage), this);
+                webkit_user_content_manager_register_script_message_handler(manager, "hostBridge");
                 g_signal_connect(manager, "script-message-received::bunBridge",
                                G_CALLBACK(onBunBridgeMessage), this);
                 webkit_user_content_manager_register_script_message_handler(manager, "bunBridge");
@@ -2926,12 +3283,20 @@ public:
     
     void resize(const GdkRectangle& frame, const char* masksJson) override {
         if (webview) {
-            // Resizing webview
-            
             // Check if this webview has a wrapper (OOPIF case)
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(webview), "wrapper");
-            if (wrapper) {
+
+            if (fullSize) {
+                // Full-size views receive their allocation from GTK. Keeping
+                // the request unset avoids turning every grow into a new
+                // minimum window size.
+                gtk_widget_set_size_request(webview, -1, -1);
+            } else {
+                // Positioned child views need an explicit widget allocation.
                 gtk_widget_set_size_request(webview, frame.width, frame.height);
+            }
+
+            if (wrapper) {
 
                 // TODO: this only sort of works, the webview ends up half height
                 // and other overlay stuff is just janky and gross
@@ -2953,9 +3318,7 @@ public:
                 gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
                
                 // OOPIF positioned with coordinate adjustment
-            } else {
-                gtk_widget_set_size_request(webview, -1, -1);
-
+            } else if (!fullSize) {
                 // For host webview, position directly with margins (can't be negative)
                 gtk_widget_set_margin_start(webview, MAX(0, frame.x));
                 gtk_widget_set_margin_top(webview, MAX(0, frame.y));
@@ -3038,6 +3401,17 @@ public:
     }
     
     // Static callback functions
+
+    static void onConsoleMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
+        WebKitWebViewImpl* impl = static_cast<WebKitWebViewImpl*>(user_data);
+        if (!impl || !js_result) return;
+        JSCValue* value = webkit_javascript_result_get_js_value(js_result);
+        if (!value || !JSC_IS_VALUE(value) || !jsc_value_is_string(value)) return;
+        gchar* message = jsc_value_to_string(value);
+        if (!message) return;
+        printWebviewConsoleMessage(impl->webviewId, message);
+        g_free(message);
+    }
 
     // eventBridge handler - event-only bridge for all webviews (including sandboxed)
     static void onEventBridgeMessage(WebKitUserContentManager* manager, WebKitJavascriptResult* js_result, gpointer user_data) {
@@ -3379,18 +3753,19 @@ public:
         gboolean allowsMultipleSelection = webkit_file_chooser_request_get_select_multiple(request);
         const gchar* const* acceptedMimeTypes = webkit_file_chooser_request_get_mime_types(request);
         
-        // Create the file chooser dialog
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        LinuxNativeFileDialog dialog(
             "Select File(s)",
             nullptr, // No parent window for now
             GTK_FILE_CHOOSER_ACTION_OPEN,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            "_Open", GTK_RESPONSE_ACCEPT,
-            nullptr
+            "_Open"
         );
+        if (!dialog.valid()) {
+            webkit_file_chooser_request_cancel(request);
+            return TRUE;
+        }
         
         // Set multiple selection
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection);
+        dialog.setSelectMultiple(allowsMultipleSelection);
         
         // Set up MIME type filters if provided
         if (acceptedMimeTypes && acceptedMimeTypes[0] != nullptr) {
@@ -3422,44 +3797,30 @@ public:
                 }
             }
             
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+            dialog.addFilter(filter);
         }
         
         // Always add "All files" filter as fallback
         GtkFileFilter* allFilter = gtk_file_filter_new();
         gtk_file_filter_set_name(allFilter, "All files");
         gtk_file_filter_add_pattern(allFilter, "*");
-        gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+        dialog.addFilter(allFilter);
         
         // Run the dialog and handle the response
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
+        gint response = dialog.run();
         
         if (response == GTK_RESPONSE_ACCEPT) {
-            GSList* filenames = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-            
-            // Convert GSList to array of strings
-            guint length = g_slist_length(filenames);
-            gchar** files = g_new(gchar*, length + 1);
-            
-            GSList* iter = filenames;
-            for (guint i = 0; i < length; i++) {
-                files[i] = (gchar*)iter->data;
-                iter = iter->next;
+            const auto filenames = dialog.selectedPaths();
+            std::vector<const gchar*> files;
+            files.reserve(filenames.size() + 1);
+            for (const auto& filename : filenames) {
+                files.push_back(filename.c_str());
             }
-            files[length] = nullptr;
-            
-            // Select the files in the request
-            webkit_file_chooser_request_select_files(request, (const gchar* const*)files);
-            
-            // Clean up
-            g_slist_free_full(filenames, g_free);
-            g_free(files);
+            files.push_back(nullptr);
+            webkit_file_chooser_request_select_files(request, files.data());
         } else {
-            // User cancelled - WebKit will handle this automatically
             webkit_file_chooser_request_cancel(request);
         }
-        
-        gtk_widget_destroy(dialog);
         return TRUE; // We handled the request
     }
 
@@ -3833,7 +4194,11 @@ public:
             XFlush(xDisplay);
             visualBounds = frame;
         } else if (viewWidget) {
-            gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
+            if (fullSize) {
+                gtk_widget_set_size_request(viewWidget, -1, -1);
+            } else {
+                gtk_widget_set_size_request(viewWidget, frame.width, frame.height);
+            }
 
             GtkWidget* wrapper = (GtkWidget*)g_object_get_data(G_OBJECT(viewWidget), "wrapper");
             if (wrapper) {
@@ -4030,7 +4395,7 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
 struct OSREventData {
     uint32_t windowId;
     CefRefPtr<ElectrobunClient> client;
-    bool active;
+    std::atomic<bool> active{true};
 };
 
 // CEF WebView implementation
@@ -4038,6 +4403,7 @@ class CEFWebViewImpl : public AbstractView {
 public:
     CefRefPtr<CefBrowser> browser;
     CefRefPtr<ElectrobunClient> client;
+    CefFindSession findSession;
     DecideNavigationCallback navigationCallback;
     WebviewEventHandler eventHandler;
     HandlePostMessage eventBridgeHandler;
@@ -4065,7 +4431,9 @@ public:
     bool parentTransparent = false;
     
     // OSR event handling data
-    void* osr_event_data_ = nullptr;
+    std::shared_ptr<OSREventData> osr_event_data_;
+    guint osr_timeout_source_id_ = 0;
+    guint osr_idle_source_id_ = 0;
     
     // X11 event handling for OSR windows is now handled via processX11EventsForOSR
     Window osr_x11_window_ = 0;
@@ -4113,13 +4481,30 @@ public:
     }
     
     ~CEFWebViewImpl() {
+        // Native window teardown can release the last shared_ptr without going
+        // through remove(). Detach every callback that captures this before the
+        // owner storage becomes invalid.
+        if (client) {
+            client->DetachOwnerCallbacks();
+        }
+        if (!isRemoved && browser) {
+            browser->GetHost()->CloseBrowser(false);
+            browser = nullptr;
+        }
+
         // Clean up OSR event handling
         if (osr_event_data_) {
-            auto* eventData = static_cast<OSREventData*>(osr_event_data_);
-            eventData->active = false;  // Stop the timer
-            delete eventData;
-            osr_event_data_ = nullptr;
+            osr_event_data_->active.store(false);
         }
+        if (osr_timeout_source_id_) {
+            g_source_remove(osr_timeout_source_id_);
+            osr_timeout_source_id_ = 0;
+        }
+        if (osr_idle_source_id_) {
+            g_source_remove(osr_idle_source_id_);
+            osr_idle_source_id_ = 0;
+        }
+        osr_event_data_.reset();
         if (osr_window_id_) {
             registerOSRClientForWindow(osr_window_id_, nullptr);
             osr_window_id_ = 0;
@@ -4206,6 +4591,7 @@ public:
         
         // Set up browser creation callback to notify CEFWebViewImpl when browser is ready
         client->SetBrowserCreatedCallback([this, x11win](CefRefPtr<CefBrowser> browser) {
+            this->findSession.reset();
             this->browser = browser;
             
             CefWindowHandle handle = browser->GetHost()->GetWindowHandle();
@@ -4236,30 +4622,41 @@ public:
                 registerOSRClientForWindow(x11win->windowId, this->client);
 
                 // Create a data structure to pass to the timer callback
-                auto* eventData = new OSREventData{x11win->windowId, this->client, true};
+                auto eventData = std::make_shared<OSREventData>();
+                eventData->windowId = x11win->windowId;
+                eventData->client = this->client;
                 
                 // Store event data in the webview for cleanup
                 this->osr_event_data_ = eventData;
                 
                 // Use a higher frequency timer for better responsiveness
-                g_timeout_add(5, [](gpointer data) -> gboolean {  // 200fps - process events more frequently
-                    auto* osrData = static_cast<OSREventData*>(data);
-                    if (osrData && osrData->active) {
+                this->osr_timeout_source_id_ = g_timeout_add_full(
+                    G_PRIORITY_DEFAULT,
+                    5,
+                    [](gpointer data) -> gboolean {  // 200fps - process events more frequently
+                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
+                    if (osrData && osrData->active.load()) {
                         processX11EventsForOSR(osrData->windowId, osrData->client);
                         return TRUE; // Continue timer
                     }
                     return FALSE; // Stop timer
-                }, eventData);
+                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
+                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
+                });
                 
                 // Also use idle processing for immediate event handling
-                g_idle_add([](gpointer data) -> gboolean {
-                    auto* osrData = static_cast<OSREventData*>(data);
-                    if (osrData && osrData->active) {
+                this->osr_idle_source_id_ = g_idle_add_full(
+                    G_PRIORITY_DEFAULT_IDLE,
+                    [](gpointer data) -> gboolean {
+                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
+                    if (osrData && osrData->active.load()) {
                         processX11EventsForOSR(osrData->windowId, osrData->client);
                         return TRUE; // Continue processing
                     }
                     return FALSE; // Stop
-                }, eventData);
+                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
+                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
+                });
                 
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
@@ -4268,6 +4665,7 @@ public:
         // Set up browser close callback to clear browser reference
         client->SetBrowserCloseCallback([this]() {
             // Don't acquire the mutex here - OnBeforeClose already has it
+            this->findSession.reset();
             this->browser = nullptr;
             printf("CEF: Browser reference cleared in CEFWebViewImpl\n");
         });
@@ -4310,9 +4708,11 @@ public:
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", isSandboxed);
 
+        client->MarkInitialBrowserCreationPending();
         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
         
         if (!create_result) {
+            client->ResolveInitialBrowserCreationPending();
             printf("CEF: CreateBrowser returned false\n");
             creationFailed = true;
         } else {
@@ -4535,13 +4935,11 @@ public:
             widget = nullptr;
         }
 
-        // Clear the browser_close_callback before scheduling CloseBrowser.
-        // OnBeforeClose fires after CloseBrowser and invokes this callback, but by
-        // that time the CEFWebViewImpl may already be destroyed (last shared_ptr
-        // released). Clearing it here is safe because we already set browser=nullptr
-        // above, so the callback would be a no-op anyway.
+        // The client may outlive this view while asynchronous creation, load, or
+        // close callbacks are still pending. It also closes a browser that is
+        // created after this view has already been removed.
         if (client) {
-            client->SetBrowserCloseCallback(nullptr);
+            client->DetachOwnerCallbacks();
         }
 
         // Close browser asynchronously outside the lock
@@ -4837,26 +5235,37 @@ public:
     }
 
     void findInPage(const char* searchText, bool forward, bool matchCase) override {
+        if (!searchText || strlen(searchText) == 0) {
+            findSession.reset();
+            if (!browser) return;
+
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            if (host) {
+                host->StopFinding(true);
+            }
+            return;
+        }
+
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (!host) return;
 
-        if (!searchText || strlen(searchText) == 0) {
+        const bool findNext = findSession.begin(searchText, matchCase);
+        if (!findNext) {
             host->StopFinding(true);
-            return;
         }
 
-        // Use CEF's native find functionality
-        host->Find(CefString(searchText), forward, matchCase, false);
+        host->Find(CefString(searchText), forward, matchCase, findNext);
     }
 
     void stopFindInPage() override {
+        findSession.reset();
         if (!browser) return;
 
         CefRefPtr<CefBrowserHost> host = browser->GetHost();
         if (host) {
-            host->StopFinding(true); // true = clear selection
+            host->StopFinding(true);
         }
     }
 
@@ -4896,6 +5305,25 @@ public:
     }
 };
 
+static void removeCEFViewsForParentWindow(Window parent_window) {
+    std::vector<std::shared_ptr<AbstractView>> views_to_remove;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (const auto& [id, view] : g_webviewMap) {
+            (void)id;
+            auto cef_view = std::dynamic_pointer_cast<CEFWebViewImpl>(view);
+            if (cef_view && cef_view->parentXWindow == parent_window && !cef_view->isRemoved) {
+                views_to_remove.push_back(std::move(cef_view));
+            }
+        }
+    }
+
+    // remove() erases g_webviewMap, so never invoke it while holding the map lock.
+    for (const auto& view : views_to_remove) {
+        view->remove();
+    }
+}
+
 
 
 // Container for managing multiple webviews
@@ -4907,13 +5335,14 @@ public:
     AbstractView* activeWebView = nullptr;
     uint32_t windowId;
     WindowCloseCallback closeCallback;
+    WindowShouldCloseHandler shouldCloseCallback;
     WindowMoveCallback moveCallback;
     WindowResizeCallback resizeCallback;
     WindowFocusCallback focusCallback;
     WindowBlurCallback blurCallback;
     WindowKeyHandler keyCallback;
   
-    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
+    ContainerView(GtkWidget* window) : window(window), windowId(0), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr) {
 
 
         // Create an overlay container as the main container
@@ -4925,8 +5354,8 @@ public:
         gtk_widget_show(overlay);
     }
     
-    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
-        : window(window), windowId(windowId), closeCallback(closeCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
+    ContainerView(GtkWidget* window, uint32_t windowId, WindowCloseCallback closeCallback, WindowShouldCloseHandler shouldCloseCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback)
+        : window(window), windowId(windowId), closeCallback(closeCallback), shouldCloseCallback(shouldCloseCallback), moveCallback(moveCallback), resizeCallback(resizeCallback), focusCallback(focusCallback), blurCallback(blurCallback), keyCallback(keyCallback) {
         // Create an overlay container as the main container
         overlay = gtk_overlay_new();
         gtk_widget_set_hexpand(overlay, TRUE);
@@ -5108,6 +5537,10 @@ static gboolean onMouseMove(GtkWidget* widget, GdkEventMotion* event, gpointer u
 static gboolean onWindowDeleteEvent(GtkWidget* widget, GdkEvent* event, gpointer user_data) {
     ContainerView* container = static_cast<ContainerView*>(user_data);
     if (container) {
+        if (container->shouldCloseCallback) {
+            container->shouldCloseCallback(container->windowId);
+            return TRUE;
+        }
         if (container->closeCallback) {
             container->closeCallback(container->windowId);
         }
@@ -5491,10 +5924,8 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     
     // Parse the full URI to get everything after views://
     // For views://webviewtag/index.html, we want "webviewtag/index.html"
-    const char* fullPath = "index.html"; // default
-    if (uri && strncmp(uri, "views://", 8) == 0) {
-        fullPath = uri + 8; // Skip "views://"
-    }
+    std::string fullPathString = normalizeViewsRelativePath(uri ? std::string(uri) : std::string());
+    const char* fullPath = fullPathString.c_str();
     
     // Check if this is the internal HTML request
     if (strcmp(fullPath, "internal/index.html") == 0) {
@@ -5535,17 +5966,62 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         }
     }
     
+    // Check if this webview has a custom viewsRoot
+    std::string viewsRootPath;
+    {
+        // First get the webviewId for the requesting WebKitWebView
+        uint32_t webviewId = 0;
+        WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+        if (requestingWebView) {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& [id, view] : g_webviewMap) {
+                auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+                if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) {
+                    webviewId = id;
+                    break;
+                }
+            }
+        }
+        
+        // Now check if this webview has a custom viewsRoot
+        if (webviewId > 0) {
+            std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+            auto it = g_webviewViewsRoot.find(webviewId);
+            if (it != g_webviewViewsRoot.end()) {
+                viewsRootPath = it->second;
+            }
+        }
+    }
+    
+    gchar* fileContents = nullptr;
+    gsize fileSize = 0;
+    bool foundFile = false;
+    
+    // If viewsRoot is set, try to read from that directory first
+    if (!viewsRootPath.empty()) {
+        gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath, nullptr);
+        
+        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
+            GError* error = nullptr;
+            if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
+                foundFile = true;
+            } else {
+                if (error) {
+                    g_error_free(error);
+                }
+            }
+        }
+        
+        g_free(filePath);
+    }
+    
     // Build paths relative to current directory (bin)
     char* cwd = g_get_current_dir();
     gchar* resourcesDir = g_build_filename(cwd, "..", "Resources", nullptr);
     gchar* asarPath = g_build_filename(resourcesDir, "app.asar", nullptr);
 
-    gchar* fileContents = nullptr;
-    gsize fileSize = 0;
-    bool foundFile = false;
-
-    // Check if ASAR archive exists
-    if (g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
+    // Check if ASAR archive exists (only if file not found in viewsRoot)
+    if (!foundFile && g_file_test(asarPath, G_FILE_TEST_EXISTS)) {
         // Thread-safe lazy-load ASAR archive on first use
         std::call_once(g_asarArchiveInitFlag, [asarPath]() {
             g_asarArchive = asar_open(asarPath);
@@ -5655,9 +6131,6 @@ void initializeGTK() {
             
             g_gtkInitialized = true;
             
-            // Register the views:// URI scheme handler AFTER GTK is initialized
-            WebKitWebContext* context = webkit_web_context_get_default();
-            webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
         }
     }
     // Notify all waiting threads that GTK is initialized
@@ -5795,6 +6268,27 @@ dispatch_sync_main_void(Func&& func) {
     if (data->exception) {
         std::rethrow_exception(data->exception);
     }
+}
+
+template<typename Func>
+void dispatch_async_main_void(Func&& func) {
+    if (g_main_context_is_owner(g_main_context_default())) {
+        func();
+        return;
+    }
+
+    using FuncType = typename std::decay<Func>::type;
+    struct DispatchData {
+        FuncType func;
+        explicit DispatchData(Func&& f) : func(std::forward<Func>(f)) {}
+    };
+
+    auto data = new DispatchData(std::forward<Func>(func));
+    g_idle_add([](gpointer user_data) -> gboolean {
+        std::unique_ptr<DispatchData> dispatch_data(static_cast<DispatchData*>(user_data));
+        dispatch_data->func();
+        return G_SOURCE_REMOVE;
+    }, data);
 }
 
 // Store for partition-specific contexts (for session storage synchronization)
@@ -5945,13 +6439,27 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
             g_object_unref(dataManager);
         }
 
-        // Register views:// scheme handler for this partition context
-        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-        
         g_partitionContexts[partition] = context;
         if (isEphemeralPartition) {
             g_ephemeralPartitionContextRefCounts[partition] = 1;
         }
+    }
+
+    // Mark each context after registration so the default context and custom
+    // partition contexts both receive the handler exactly once.
+    static const char* viewsSchemeRegisteredKey =
+        "electrobun-views-scheme-registered";
+    if (!g_object_get_data(G_OBJECT(context), viewsSchemeRegisteredKey)) {
+        webkit_web_context_register_uri_scheme(
+            context,
+            "views",
+            handleViewsURIScheme,
+            nullptr,
+            nullptr);
+        g_object_set_data(
+            G_OBJECT(context),
+            viewsSchemeRegisteredKey,
+            GINT_TO_POINTER(1));
     }
 
     return context;
@@ -6003,6 +6511,58 @@ gboolean cef_timer_callback(gpointer user_data) {
     }
 
     return G_SOURCE_CONTINUE; // Keep the timer running
+}
+
+static bool cefBrowsersFinishedClosing() {
+    if (g_pendingCefBrowserCreations.load() != 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+    return g_liveCefBrowsers.empty();
+}
+
+static gboolean drainCEFForShutdown(gpointer) {
+    if (g_cefInitialized.load()) {
+        CefDoMessageLoopWork();
+    }
+
+    // OnBeforeClose removes the browser from g_liveCefBrowsers. Pending
+    // CreateBrowser calls are also part of the barrier because OnAfterCreated
+    // must get a chance to immediately close them during shutdown.
+    if (!cefBrowsersFinishedClosing()) {
+        return G_SOURCE_CONTINUE;
+    }
+
+    printf("[stopEventLoop] All CEF browsers closed\n");
+    gtk_main_quit();
+    return G_SOURCE_REMOVE;
+}
+
+static void beginCEFShutdownOnMainThread() {
+    std::vector<CefRefPtr<CefBrowser>> browsers;
+    {
+        std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+        browsers.reserve(g_liveCefBrowsers.size());
+        for (const auto& [browser_id, browser] : g_liveCefBrowsers) {
+            (void)browser_id;
+            if (browser) {
+                browsers.push_back(browser);
+            }
+        }
+    }
+
+    // Force-close is appropriate for application shutdown: a beforeunload
+    // handler must not leave the native event-loop thread stuck indefinitely.
+    // Never hold the registry mutex while invoking CEF callbacks.
+    for (const auto& browser : browsers) {
+        browser->GetHost()->CloseBrowser(true);
+    }
+
+    // Keep the GTK loop alive while servicing CEF. This source removes itself
+    // only after every successful CreateBrowser request has resolved and every
+    // live browser has reached OnBeforeClose.
+    g_timeout_add(10, drainCEFForShutdown, nullptr);
 }
 
 // Global debounce state
@@ -6176,12 +6736,16 @@ gboolean process_x11_events(gpointer data) {
             switch (event.type) {
                 case ClientMessage:
                     if (event.xclient.data.l[0] == (long)XInternAtom(x11win->display, "WM_DELETE_WINDOW", False)) {
-                        if (x11win->closeCallback) {
-                            x11win->closeCallback(x11win->windowId);
+                        if (x11win->shouldCloseCallback) {
+                            x11win->shouldCloseCallback(x11win->windowId);
+                        } else {
+                            if (x11win->closeCallback) {
+                                x11win->closeCallback(x11win->windowId);
+                            }
+
+                            // Mark for safe cleanup after event processing
+                            windows_to_close.push_back(windowId);
                         }
-                        
-                        // Mark for safe cleanup after event processing
-                        windows_to_close.push_back(windowId);
                     }
                     break;
                     
@@ -6289,6 +6853,7 @@ void runCEFEventLoop() {
 
     if (g_cefInitialized) {
         CefShutdown();
+        g_cefInitialized.store(false);
     }
     g_shutdownComplete.store(true);
 }
@@ -6317,7 +6882,7 @@ void runEventLoop() {
 void showWindow(void* window, bool activate);
 
 void* createX11Window(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
     void* result = dispatch_sync_main([&]() -> void* {
@@ -6399,8 +6964,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             
             // Set WM_CLASS for proper taskbar icon matching
             XClassHint class_hint;
-            class_hint.res_name = (char*)"ElectrobunKitchenSink-dev";
-            class_hint.res_class = (char*)"ElectrobunKitchenSink-dev";
+            class_hint.res_name = const_cast<char*>(g_electrobunWindowClass.c_str());
+            class_hint.res_class = const_cast<char*>(g_electrobunWindowClass.c_str());
             XSetClassHint(display, x11_window, &class_hint);
             
             // Set window protocols for close button
@@ -6461,6 +7026,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             x11win->height = height;
             x11win->title = title;
             x11win->closeCallback = closeCallback;
+            x11win->shouldCloseCallback = shouldCloseCallback;
             x11win->moveCallback = moveCallback;
             x11win->resizeCallback = resizeCallback;
             x11win->focusCallback = focusCallback;
@@ -6491,7 +7057,7 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
 }
 
 ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, double width, double height, const char* title,
-                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback,
+                   WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback,
                    const char* titleBarStyle = nullptr, bool transparent = false) {
     
    
@@ -6505,8 +7071,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
        
         gtk_window_set_title(GTK_WINDOW(window), title);
         
-        // Set WM_CLASS for proper taskbar icon matching
-        gtk_window_set_wmclass(GTK_WINDOW(window), "ElectrobunKitchenSink-dev", "ElectrobunKitchenSink-dev");
+        // Match the channel-specific StartupWMClass emitted by Hutch.
+        gtk_window_set_wmclass(
+            GTK_WINDOW(window),
+            g_electrobunWindowClass.c_str(),
+            g_electrobunWindowClass.c_str());
         
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
@@ -6550,7 +7119,7 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Create container with callbacks
-        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
+        auto container = std::make_shared<ContainerView>(window, windowId, closeCallback, shouldCloseCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback);
       
         {
             std::lock_guard<std::mutex> lock(g_containersMutex);
@@ -6651,16 +7220,16 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
 ELECTROBUN_EXPORT void* createWindowWithFrameAndStyleFromWorker(uint32_t windowId, double x, double y, double width, double height,
                                              uint32_t styleMask, const char* titleBarStyle, bool transparent,
                                              double trafficLightOffsetX, double trafficLightOffsetY,
-                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback) {
+                                             WindowCloseCallback closeCallback, WindowMoveCallback moveCallback, WindowResizeCallback resizeCallback, WindowFocusCallback focusCallback, WindowBlurCallback blurCallback, WindowKeyHandler keyCallback, WindowShouldCloseHandler shouldCloseCallback) {
     (void)trafficLightOffsetX;
     (void)trafficLightOffsetY;
 
     // CEF supports custom frames and transparency, GTK doesn't
     if (isCEFAvailable()) {
-        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createX11Window(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, shouldCloseCallback, titleBarStyle, transparent);
     } else {
         // Pass titleBarStyle and transparent to GTK window creation
-        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, titleBarStyle, transparent);
+        return createGTKWindow(windowId, x, y, width, height, "Window", closeCallback, moveCallback, resizeCallback, focusCallback, blurCallback, keyCallback, shouldCloseCallback, titleBarStyle, transparent);
     }
 
 }
@@ -6818,6 +7387,29 @@ ELECTROBUN_EXPORT void hideWindow(void* window) {
     }
 }
 
+bool isX11WindowVisible(void* window) {
+    return dispatch_sync_main([&]() -> bool {
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win || !x11win->display || !x11win->window) {
+            return false;
+        }
+
+        XWindowAttributes attributes = {};
+        return XGetWindowAttributes(x11win->display, x11win->window, &attributes) != 0 &&
+               attributes.map_state != IsUnmapped;
+    });
+}
+
+bool isGTKWindowVisible(void* window) {
+    return dispatch_sync_main([&]() -> bool {
+        return window && gtk_widget_get_visible(GTK_WIDGET(window));
+    });
+}
+
+ELECTROBUN_EXPORT bool isWindowVisible(void* window) {
+    return isCEFAvailable() ? isX11WindowVisible(window) : isGTKWindowVisible(window);
+}
+
 // Cross-platform compatible function for Linux - return dummy style mask
 ELECTROBUN_EXPORT uint32_t getWindowStyle(bool borderless, bool titled, bool closable, bool miniaturizable,
                         bool resizable, bool unifiedTitleAndToolbar, bool fullScreen,
@@ -6848,6 +7440,7 @@ AbstractView* initCEFWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
+                         const char* viewsRoot,
                          bool sandbox,
                          bool startTransparent,
                          bool startPassthrough) {
@@ -6873,6 +7466,16 @@ AbstractView* initCEFWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            
+            // Store the viewsRoot for views:// protocol resolution
+            if (viewsRoot && strlen(viewsRoot) > 0) {
+                webview->viewsRoot = std::string(viewsRoot);
+                // Also store in the separate map for access by handlers
+                {
+                    std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+                    g_webviewViewsRoot[webviewId] = std::string(viewsRoot);
+                }
+            }
         
             // For CEF, we need to manually trigger position sync since there's no container       
             CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
@@ -6939,6 +7542,7 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          HandlePostMessage internalBridgeHandler,
                          const char* electrobunPreloadScript,
                          const char* customPreloadScript,
+                         const char* viewsRoot,
                          bool sandbox,
                          bool startTransparent,
                          bool startPassthrough) {
@@ -6959,6 +7563,16 @@ AbstractView* initGTKWebkitWebview(uint32_t webviewId,
             
             // Set fullSize flag for auto-resize functionality
             webview->fullSize = autoResize;
+            
+            // Store the viewsRoot for views:// protocol resolution
+            if (viewsRoot && strlen(viewsRoot) > 0) {
+                webview->viewsRoot = std::string(viewsRoot);
+                // Also store in the separate map for access by handlers
+                {
+                    std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+                    g_webviewViewsRoot[webviewId] = std::string(viewsRoot);
+                }
+            }
             
             // Store the webview in global map to keep it alive and for navigation rules
             {
@@ -7033,13 +7647,13 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         view = initCEFWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                               partitionIdentifier, navigationCallback, webviewEventHandler,
                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                              electrobunPreloadScript, customPreloadScript, sandbox,
+                              electrobunPreloadScript, customPreloadScript, viewsRoot, sandbox,
                               startTransparent, startPassthrough);
     } else {
         view = initGTKWebkitWebview(webviewId, window, renderer, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, sandbox,
+                                    electrobunPreloadScript, customPreloadScript, viewsRoot, sandbox,
                                     startTransparent, startPassthrough);
     }
 
@@ -7181,7 +7795,11 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
         view->viewWidget = gtk_drawing_area_new();
         view->widget = view->viewWidget;
 
-        gtk_widget_set_size_request(view->viewWidget, (int)width, (int)height);
+        gtk_widget_set_size_request(
+            view->viewWidget,
+            autoResize ? -1 : (int)width,
+            autoResize ? -1 : (int)height
+        );
         container->addWebview(view, x, y);
         view->resize(frame, "");
 
@@ -7458,7 +8076,8 @@ struct GPUTestState {
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
+    WGPURenderPipeline pipelineA = nullptr;
+    WGPURenderPipeline pipelineB = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8Unorm;
     WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
@@ -7469,6 +8088,7 @@ struct GPUTestState {
     uint32_t lastWidth = 0;
     uint32_t lastHeight = 0;
     bool surfaceConfigured = false;
+    bool useAlt = false;
     bool running = false;
     WGPUViewImpl* view = nullptr;
 };
@@ -7490,6 +8110,10 @@ static const float kCubeVertices[] = {
     -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
 };
 
+static constexpr size_t kCubeFloatCount = sizeof(kCubeVertices) / sizeof(float);
+static constexpr size_t kCubeVertexCount = kCubeFloatCount / 3;
+static constexpr size_t kGpuTestStrideFloats = 7;
+
 static void buildRotatedVertices(float angle, float* out, size_t count) {
     const float sinY = sinf(angle);
     const float cosY = cosf(angle);
@@ -7508,6 +8132,59 @@ static void buildRotatedVertices(float angle, float* out, size_t count) {
         out[i] = x1 * proj;
         out[i + 1] = y1 * proj;
         out[i + 2] = 0.0f;
+    }
+}
+
+static float clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void gpuTestGetMouseState(GPUTestState* state, float* outX, float* outY, float* outDown) {
+    if (outX) *outX = 0.5f;
+    if (outY) *outY = 0.5f;
+    if (outDown) *outDown = 0.0f;
+    if (!state || !state->display || !state->window) return;
+
+    Window root = 0;
+    Window child = 0;
+    int rootX = 0;
+    int rootY = 0;
+    int winX = 0;
+    int winY = 0;
+    unsigned int mask = 0;
+    if (!XQueryPointer(state->display, state->window, &root, &child, &rootX, &rootY, &winX, &winY, &mask)) {
+        return;
+    }
+
+    const uint32_t width = std::max(1u, state->lastWidth);
+    const uint32_t height = std::max(1u, state->lastHeight);
+    if (outX) *outX = clamp01f((float)winX / (float)width);
+    if (outY) *outY = clamp01f((float)winY / (float)height);
+    if (outDown) *outDown = (mask & Button1Mask) ? 1.0f : 0.0f;
+}
+
+static void buildInterleavedVertices(
+    float angle,
+    float mouseX,
+    float mouseY,
+    float mouseDown,
+    float timeValue,
+    float* out
+) {
+    float positions[kCubeFloatCount];
+    buildRotatedVertices(angle, positions, kCubeFloatCount);
+    for (size_t vertexIndex = 0; vertexIndex < kCubeVertexCount; vertexIndex++) {
+        const size_t positionIndex = vertexIndex * 3;
+        const size_t outputIndex = vertexIndex * kGpuTestStrideFloats;
+        out[outputIndex] = positions[positionIndex];
+        out[outputIndex + 1] = positions[positionIndex + 1];
+        out[outputIndex + 2] = positions[positionIndex + 2];
+        out[outputIndex + 3] = mouseX;
+        out[outputIndex + 4] = mouseY;
+        out[outputIndex + 5] = mouseDown;
+        out[outputIndex + 6] = timeValue;
     }
 }
 
@@ -7576,27 +8253,8 @@ static void gpuTestConfigureSurface(GPUTestState* state) {
     state->surfaceConfigured = true;
 }
 
-static void gpuTestSetupPipeline(GPUTestState* state) {
-    if (!state || !state->device) return;
-
-    const char* shaderSrc = R"WGSL(
-struct VSOut {
-  @builtin(position) position : vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
-  var out: VSOut;
-  out.position = vec4<f32>(position, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
-}
-)WGSL";
-
+static WGPURenderPipeline gpuTestCreatePipeline(GPUTestState* state, const char* shaderSrc) {
+    if (!state || !state->device) return nullptr;
     WGPUShaderSourceWGSL wgsl = {};
     wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgsl.code.data = shaderSrc;
@@ -7607,21 +8265,24 @@ fn fs_main() -> @location(0) vec4<f32> {
     WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
     if (!shader) {
         wgpu_log("failed to create shader module");
-        return;
+        return nullptr;
     }
 
     WGPUStringView vsEntry = {"vs_main", WGPU_STRLEN};
     WGPUStringView fsEntry = {"fs_main", WGPU_STRLEN};
 
-    WGPUVertexAttribute attr = {};
-    attr.format = WGPUVertexFormat_Float32x3;
-    attr.offset = 0;
-    attr.shaderLocation = 0;
+    WGPUVertexAttribute attrs[2] = {};
+    attrs[0].format = WGPUVertexFormat_Float32x3;
+    attrs[0].offset = 0;
+    attrs[0].shaderLocation = 0;
+    attrs[1].format = WGPUVertexFormat_Float32x4;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[1].shaderLocation = 1;
 
     WGPUVertexBufferLayout vbuf = {};
-    vbuf.arrayStride = sizeof(float) * 3;
-    vbuf.attributeCount = 1;
-    vbuf.attributes = &attr;
+    vbuf.arrayStride = sizeof(float) * kGpuTestStrideFloats;
+    vbuf.attributeCount = 2;
+    vbuf.attributes = attrs;
     vbuf.stepMode = WGPUVertexStepMode_Vertex;
 
     WGPUVertexState vstate = {};
@@ -7657,15 +8318,77 @@ fn fs_main() -> @location(0) vec4<f32> {
     rpDesc.multisample = ms;
     rpDesc.fragment = &fstate;
 
-    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
-    if (!state->pipeline) {
+    WGPURenderPipeline pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!pipeline) {
         wgpu_log("failed to create render pipeline");
-        return;
+        return nullptr;
     }
+    return pipeline;
+}
+
+static void gpuTestSetupPipeline(GPUTestState* state) {
+    if (!state || !state->device) return;
+
+    const char* shaderSrcA = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    const char* shaderSrcB = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+  @location(0) local_pos : vec3<f32>,
+  @location(1) mouse_state : vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  out.local_pos = position;
+  out.mouse_state = mouse_state;
+  return out;
+}
+
+@fragment
+fn fs_main(
+  @location(0) local_pos: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> @location(0) vec4<f32> {
+  let cursor = vec2<f32>(mouse_state.x * 2.0 - 1.0, (1.0 - mouse_state.y) * 2.0 - 1.0);
+  let dist = distance(local_pos.xy, cursor);
+  let wave = 0.5 + 0.5 * sin(mouse_state.w * 3.0 - dist * 14.0);
+  let pulse = select(wave, 1.0 - wave, mouse_state.z > 0.5);
+  let base = vec3<f32>(0.25 + cursor.x * 0.35, 0.35 + cursor.y * 0.25, 0.75);
+  let highlight = vec3<f32>(1.0, 0.45, 0.15);
+  let color = max(mix(base, highlight, pulse), vec3<f32>(0.05));
+  let alpha = 0.7 + 0.3 * pulse;
+  return vec4<f32>(color, alpha);
+}
+)WGSL";
+
+    state->pipelineA = gpuTestCreatePipeline(state, shaderSrcA);
+    state->pipelineB = gpuTestCreatePipeline(state, shaderSrcB);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.size = kCubeVertexCount * kGpuTestStrideFloats * sizeof(float);
     bufDesc.mappedAtCreation = false;
     state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
     if (!state->vertexBuffer) {
@@ -7673,13 +8396,15 @@ fn fs_main() -> @location(0) vec4<f32> {
         return;
     }
 
-    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    float initialVerts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(0.0f, 0.5f, 0.5f, 0.0f, 0.0f, initialVerts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
 }
 
 static void gpuTestRenderFrame(GPUTestState* state) {
-    if (!state || !state->device || !state->surface || !state->queue || !state->pipeline) return;
+    if (!state || !state->device || !state->surface || !state->queue) return;
+    WGPURenderPipeline pipeline = state->useAlt && state->pipelineB ? state->pipelineB : state->pipelineA;
+    if (!pipeline) return;
 
     uint32_t width = 1;
     uint32_t height = 1;
@@ -7696,8 +8421,12 @@ static void gpuTestRenderFrame(GPUTestState* state) {
     }
 
     state->angle += 0.02f;
-    float verts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    float mouseX = 0.5f;
+    float mouseY = 0.5f;
+    float mouseDown = 0.0f;
+    gpuTestGetMouseState(state, &mouseX, &mouseY, &mouseDown);
+    float verts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(state->angle, mouseX, mouseY, mouseDown, state->angle * 1.5f, verts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     WGPUSurfaceTexture surfaceTexture = {};
@@ -7725,9 +8454,15 @@ static void gpuTestRenderFrame(GPUTestState* state) {
 
     WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
     WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
-    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
-    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(
+        pass,
+        0,
+        state->vertexBuffer,
+        0,
+        kCubeVertexCount * kGpuTestStrideFloats * sizeof(float)
+    );
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)kCubeVertexCount, 1, 0, 0);
     p_wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
@@ -7822,6 +8557,10 @@ static void* runOnMainThreadSyncPtr(std::function<void*()> fn) {
 
 static void runOnMainThreadSyncVoid(std::function<void()> fn) {
     dispatch_sync_main_void([&]() { fn(); });
+}
+
+static void runOnMainThreadAsyncVoid(std::function<void()> fn) {
+    dispatch_async_main_void([fn = std::move(fn)]() { fn(); });
 }
 
 ELECTROBUN_EXPORT void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
@@ -8144,6 +8883,7 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         g_gpuTest.display = display;
         g_gpuTest.window = window;
         g_gpuTest.view = view;
+        g_gpuTest.useAlt = false;
 
         if (!g_gpuTest.instance) {
             g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
@@ -8173,6 +8913,19 @@ ELECTROBUN_EXPORT void wgpuRunGPUTest(void* abstractView) {
         cbInfo.callback = gpuTestRequestAdapterCallback;
         cbInfo.userdata1 = &g_gpuTest;
         p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+ELECTROBUN_EXPORT void wgpuToggleGPUTestShader(void* abstractView) {
+    if (!abstractView) return;
+    if (!ensureWgpuTestSymbols()) return;
+
+    runOnMainThreadSyncVoid([abstractView]() {
+        WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>((AbstractView*)abstractView);
+        if (!view || !g_gpuTest.view) return;
+        if (g_gpuTest.view == view) {
+            g_gpuTest.useAlt = !g_gpuTest.useAlt;
+        }
     });
 }
 
@@ -8471,6 +9224,13 @@ void webviewSetHidden(AbstractView* abstractView, bool hidden) {
             abstractView->setHidden(hidden);
         });
     }
+}
+
+ELECTROBUN_EXPORT bool webviewSetSpellCheck(AbstractView* abstractView, bool enabled) {
+    (void)abstractView;
+    (void)enabled;
+    // This option intentionally targets macOS WKWebView, not WebKitGTK or CEF.
+    return false;
 }
 
 ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView* abstractView, const char* rulesJson) {
@@ -8945,22 +9705,24 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
             buttonLabel = "_Open";
         }
         
-        GtkWidget* dialog = gtk_file_chooser_dialog_new(
+        LinuxNativeFileDialog dialog(
             "Open File",
             nullptr, // No parent window for now
             action,
-            "_Cancel", GTK_RESPONSE_CANCEL,
-            buttonLabel, GTK_RESPONSE_ACCEPT,
-            nullptr
+            buttonLabel
         );
+        if (!dialog.valid()) {
+            static std::string emptyResult = "[]";
+            return emptyResult.c_str();
+        }
         
         // Set starting folder if provided
         if (startingFolder && strlen(startingFolder) > 0) {
-            gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), startingFolder);
+            dialog.setCurrentFolder(startingFolder);
         }
         
         // Allow multiple selection if requested
-        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), allowsMultipleSelection != 0);
+        dialog.setSelectMultiple(allowsMultipleSelection != 0);
         
         // Set up file filters if provided
         if (allowedFileTypes && strlen(allowedFileTypes) > 0) {
@@ -8990,45 +9752,25 @@ ELECTROBUN_EXPORT const char* openFileDialog(const char* startingFolder, const c
                 gtk_file_filter_add_pattern(filter, typesStr.c_str());
             }
             
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+            dialog.addFilter(filter);
             
             // Also add "All files" filter
             GtkFileFilter* allFilter = gtk_file_filter_new();
             gtk_file_filter_set_name(allFilter, "All files");
             gtk_file_filter_add_pattern(allFilter, "*");
-            gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), allFilter);
+            dialog.addFilter(allFilter);
         }
         
         // Run the dialog
-        static std::string resultString; // Static to persist after function returns
-        resultString.clear();
-        
-        if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-            if (allowsMultipleSelection != 0) {
-                GSList* fileList = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
-                GSList* iter = fileList;
-                
-                while (iter != nullptr) {
-                    if (!resultString.empty()) {
-                        resultString += ","; // Separate multiple files with comma (like Mac)
-                    }
-                    resultString += (char*)iter->data;
-                    g_free(iter->data);
-                    iter = iter->next;
-                }
-                g_slist_free(fileList);
-            } else {
-                char* filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
-                if (filename) {
-                    resultString = filename;
-                    g_free(filename);
-                }
-            }
+        std::vector<std::string> paths;
+
+        if (dialog.run() == GTK_RESPONSE_ACCEPT) {
+            paths = dialog.selectedPaths();
         }
-        
-        gtk_widget_destroy(dialog);
-        
-        return resultString.empty() ? nullptr : resultString.c_str();
+
+        static std::string resultString; // Static to persist after function returns.
+        resultString = serializeDialogPaths(paths);
+        return resultString.c_str();
     });
 }
 
@@ -9457,17 +10199,20 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
 // Forward declaration - stopEventLoop is defined after startEventLoop
 ELECTROBUN_EXPORT void stopEventLoop();
 
-// Note: `name` parameter is accepted for API consistency with Windows but not used on Linux
 ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
-    (void)name; // Unused on Linux - kept for API consistency with Windows
-
-    // Store identifier and channel globally for use in CEF initialization
+    // Store app identity before any native windows or renderer contexts are made.
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
+    }
+    if (name && name[0]) {
+        g_electrobunName = std::string(name);
     }
     if (channel && channel[0]) {
         g_electrobunChannel = std::string(channel);
     }
+    g_electrobunWindowClass = deriveLinuxWindowClass(
+        g_electrobunName,
+        g_electrobunChannel);
 
     // Linux uses runEventLoop instead
     runEventLoop();
@@ -9480,11 +10225,13 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     g_shuttingDown.store(true);
     printf("[stopEventLoop] Initiating clean event loop exit\n");
 
-    // gtk_main_quit should be called from the GTK thread
-    g_idle_add([](gpointer) -> gboolean {
-        gtk_main_quit();
-        return G_SOURCE_REMOVE;
-    }, nullptr);
+    runOnMainThreadAsyncVoid([]() {
+        if (g_cefInitialized.load()) {
+            beginCEFShutdownOnMainThread();
+        } else {
+            gtk_main_quit();
+        }
+    });
 }
 
 ELECTROBUN_EXPORT void killApp() {
@@ -9723,6 +10470,11 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 if (callback) {
                     callback(windowId);
                 }
+
+                // Shared-core callers normally remove child views from their
+                // close callback. Also cover native adapters and abnormal window
+                // teardown before destroying the X11 parent.
+                removeCEFViewsForParentWindow(x11_window);
                 
                 // Remove the X11 window from global maps.
                 {
@@ -9751,6 +10503,32 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
         std::lock_guard<std::mutex> close_lock(s_closeWindowMutex);
         s_closingWindows.erase(window);
     }
+}
+
+ELECTROBUN_EXPORT void requestWindowClose(void* window) {
+    if (!window || g_shuttingDown.load()) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            gtk_window_close(GTK_WINDOW(window));
+            return;
+        }
+
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win->display || !x11win->window) return;
+
+        Atom wmProtocols = XInternAtom(x11win->display, "WM_PROTOCOLS", False);
+        Atom wmDelete = XInternAtom(x11win->display, "WM_DELETE_WINDOW", False);
+        XEvent event = {};
+        event.xclient.type = ClientMessage;
+        event.xclient.window = x11win->window;
+        event.xclient.message_type = wmProtocols;
+        event.xclient.format = 32;
+        event.xclient.data.l[0] = wmDelete;
+        event.xclient.data.l[1] = CurrentTime;
+        XSendEvent(x11win->display, x11win->window, False, NoEventMask, &event);
+        XFlush(x11win->display);
+    });
 }
 
 ELECTROBUN_EXPORT void minimizeWindow(void* window) {
@@ -10196,11 +10974,55 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
     });
 }
 
+ELECTROBUN_EXPORT void centerWindow(void* window) {
+    if (!window) return;
+
+    dispatch_sync_main_void([=]() {
+        GdkDisplay* gdkDisplay = gdk_display_get_default();
+        if (!gdkDisplay) return;
+        GdkMonitor* monitor = gdk_display_get_primary_monitor(gdkDisplay);
+        if (!monitor && gdk_display_get_n_monitors(gdkDisplay) > 0) {
+            monitor = gdk_display_get_monitor(gdkDisplay, 0);
+        }
+        if (!monitor) return;
+
+        GdkRectangle workarea{};
+        gdk_monitor_get_workarea(monitor, &workarea);
+
+        if (isCEFAvailable()) {
+            X11Window* x11win = static_cast<X11Window*>(window);
+            if (!x11win || !x11win->display || !x11win->window) return;
+            XWindowAttributes attributes{};
+            if (!XGetWindowAttributes(x11win->display, x11win->window, &attributes)) return;
+            const int x = workarea.x + std::max(0, (workarea.width - attributes.width) / 2);
+            const int y = workarea.y + std::max(0, (workarea.height - attributes.height) / 2);
+            XMoveWindow(x11win->display, x11win->window, x, y);
+            XFlush(x11win->display);
+            return;
+        }
+
+        if (GTK_IS_WINDOW(window)) {
+            int width = 0;
+            int height = 0;
+            gtk_window_get_size(GTK_WINDOW(window), &width, &height);
+            const int x = workarea.x + std::max(0, (workarea.width - width) / 2);
+            const int y = workarea.y + std::max(0, (workarea.height - height) / 2);
+            gtk_window_move(GTK_WINDOW(window), x, y);
+        }
+    });
+}
+
 ELECTROBUN_EXPORT void setWindowButtonPosition(void* window, double x, double y) {
     (void)window;
     (void)x;
     (void)y;
     // Not applicable on Linux - no-op
+}
+
+ELECTROBUN_EXPORT void getWindowButtonPosition(void* window, double* x, double* y) {
+    (void)window;
+    if (x) *x = 0;
+    if (y) *y = 0;
 }
 
 ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) {
@@ -10332,11 +11154,7 @@ ELECTROBUN_EXPORT void setWindowIcon(void* window, const char* iconPath) {
         
         // Handle views:// protocol
         if (actualPath.substr(0, 8) == "views://") {
-            std::string viewPath = actualPath.substr(8);
-            // Strip trailing slashes - WebKit may normalize URLs without folder components
-            while (!viewPath.empty() && (viewPath.back() == '/' || viewPath.back() == '\\')) {
-                viewPath.pop_back();
-            }
+            std::string viewPath = normalizeViewsRelativePath(actualPath);
             
             // Try to load from ASAR archive first if available
             if (g_asarArchive) {
@@ -11453,18 +12271,11 @@ ELECTROBUN_EXPORT bool isDockIconVisible() {
 // Graceful shutdown function to coordinate cleanup
 ELECTROBUN_EXPORT void shutdownNativeWrapper() {
     printf("Starting graceful shutdown of native wrapper...\n");
-    
-    // Set shutdown flag to prevent new operations
-    g_shuttingDown.store(true);
-    
-    // CEF cleanup
-    if (g_cefInitialized) {
-        printf("Shutting down CEF...\n");
-        CefShutdown();
-        g_cefInitialized = false;
-    }
-    
-    printf("Native wrapper shutdown complete.\n");
+
+    // Use the same coordinated path as Utils.quit. Calling CefShutdown here
+    // while browser close callbacks are pending can tear down profile services
+    // that those browsers still reference.
+    stopEventLoop();
 }
 
 }

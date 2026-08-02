@@ -235,7 +235,7 @@ Utils.showNotification({
 
 ## openFileDialog
 
-              <p>Open a file dialogue to let the user specify a file or folder and return the path to your app. Typically you would have an event handler in the browser context like clicking an "open" button, this would trigger an rpc call to bun, which would call `` openFileDialog() `` and then optionally pass the response back to the browser context via rpc after the user has made their selection</p>
+              <p>Open a file dialogue to let the user specify a file or folder and return the path to your app. Typically, an event handler in the browser context—such as clicking an "open" button—would trigger an RPC call to the main process, which calls `` openFileDialog() `` and optionally returns the response over RPC after the user makes a selection.</p>
 
               
 ```javascript
@@ -254,6 +254,15 @@ setTimeout(async () => {
 
     console.log("chosen paths", chosenPaths);
  }, 2000);
+```
+
+              <p>When a browser calls a main-process handler that wraps <code>openFileDialog()</code>, disable the timeout for that request rather than increasing the timeout for every RPC method:</p>
+
+```javascript
+const chosenPaths = await electroview.rpc.request.openFileDialog(
+  options,
+  { maxRequestTime: Infinity },
+);
 ```
 
 
@@ -457,7 +466,7 @@ Electrobun.events.on("before-quit", (e) => {
 ```
 
 
-              <p>See <a href="/electrobun/apis/events#shutdown-lifecycle">Events — Shutdown Lifecycle</a> for the full list of quit triggers, shutdown sequence, and how `before-quit` compares to bun's native `process.on("exit")`.</p>
+              <p>See <a href="/electrobun/apis/events#shutdown-lifecycle">Events — Shutdown Lifecycle</a> for the full list of quit triggers, shutdown sequence, and how `before-quit` compares to Cottontail's Bun-compatible `process.on("exit")`.</p>
 
 ## Clipboard API
 

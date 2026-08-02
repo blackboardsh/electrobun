@@ -4,8 +4,9 @@
 	"description": "A multi-tab browser demo for Electrobun",
 	"type": "module",
 	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch"
+		"start": "hutch electrobun dev",
+		"dev": "hutch electrobun dev --watch",
+		"build": "hutch electrobun build --env=production"
 	},
 	"dependencies": {
 		"electrobun": "file:../../package"

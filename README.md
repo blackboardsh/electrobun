@@ -6,7 +6,7 @@
 
 <div align="center">
   Get started with a template <br />
-  <code><strong>npx electrobun init</strong></code>   
+  <code><strong>hutch electrobun init</strong></code>
 </div>
 
 
@@ -14,9 +14,9 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
-Under the hood it uses <a href="https://bun.sh">bun</a> to execute the main process and to bundle webview typescript, and has native bindings written in Objc, C++, and several core parts written in <a href="https://ziglang.org/">zig</a>.
+Under the hood it uses Cottontail, Electrobun's JSC-based JavaScript runtime, to execute the main process and bundle webview TypeScript. Native bindings are written in ObjC and C++, with several core components written in <a href="https://ziglang.org/">Zig</a>.
 
-Visit <a href="https://docs.electrobunny.ai/electrobun/">https://docs.electrobunny.ai/electrobun/</a> to see api documentation, guides, and more.
+Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
 You use it via npm.
 
@@ -25,7 +25,7 @@ Don't miss our:
 - zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
 - `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
 - `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
-- Our Three.js and Babylon.js adapters that work right in Bun
+- Our Three.js and Babylon.js adapters that work directly in the Cottontail main process
 - Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
 - so much more.
 
@@ -33,7 +33,7 @@ Don't miss our:
 
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
-- Small self-extracting app bundles ~14MB (when using system webview, most of this is the bun runtime)
+- Small self-extracting app bundles ~14MB (when using the system webview, most of this is the Cottontail/JSC runtime)
 - Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
@@ -60,10 +60,12 @@ Don't miss our:
 - [electrobun-pdf](https://github.com/GijungKim/electrobun-pdf) - local-first PDF & DOCX editor for opening, annotating, and exporting documents without leaving your machine
 - [electrobun-rms](https://github.com/khanhthanhdev/electrobun-rms) - fast Electrobun desktop app template with React, Tailwind CSS, and Vite
 - [FLACK](https://github.com/BLCK-B/FLACK) - local audio player for Windows
+- [gloomberb](https://gloom.sh) - financial terminal for the rest of us
 - [golb](https://github.com/chrisdadev13/golb) - desktop AI coding workspace built with React, Vite, and Tailwind
 - [GOG Achievements GUI](https://github.com/timendum/gog-achievements-gui) - desktop app for managing GOG achievements
 - [groov](https://github.com/laurenzcodes/groov) - desktop audio deck monitor
 - [Guerilla Glass](https://github.com/okikeSolutions/guerillaglass) - open-source cross-platform creator studio for fast Record -> Edit -> Deliver workflows
+- [Invoke](https://getinvoke.com) - macOS UI automation & shortcut platform
 - [Marginalia](https://github.com/lars-hoeijmans/Marginalia) - a simple note taking app
 - [MarkBun](https://github.com/xiaochong/markbun) - fast, beautiful, Typora-like markdown desktop editor
 - [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
@@ -109,11 +111,23 @@ Ways to get involved:
 - Let me know what you're building with Electrobun
 
 ## Development Setup
-Building apps with Electrobun is as easy as updating your package.json dependencies with `npm add electrobun` or try one of our templates via `npx electrobun init`.
+Building apps with Electrobun is as easy as installing Hutch and running `hutch electrobun init`.
 
 **This section is for building Electrobun from source locally in order to contribute fixes to it.**
 
 ### Prerequisites
+
+Install Hutch globally before building Electrobun:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
 
 **macOS:**
 - Xcode command line tools
@@ -130,13 +144,19 @@ Building apps with Electrobun is as easy as updating your package.json dependenc
 
 On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
 
+Linux applications also require the corresponding GTK 3, WebKitGTK 4.1,
+Ayatana AppIndicator, and librsvg runtime packages on end-user systems. See the
+[cross-platform development guide](./docs/src/content/docs/electrobun/guides/cross-platform-development.mdx#linux)
+for distro-specific install commands. The launcher reports the exact missing
+shared library when these dependencies are unavailable.
+
 ### First-time Setup
 
 ```bash
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
-bun install
-bun dev:clean
+hutch install
+hutch dev:clean
 ```
 
 ### Development Workflow
@@ -146,22 +166,36 @@ bun dev:clean
 cd electrobun/package
 
 # After making changes to source code
-bun dev
-
-# If you only changed kitchen sink code (not electrobun source)
-bun dev:rerun
+hutch dev
 
 # If you need a completely fresh start
-bun dev:clean
+hutch dev:clean
 ```
+
+The native build generates `package/src/native/compile_flags.txt` from the
+compiler flags resolved for the current machine. clangd-compatible editors
+discover it automatically; rerun the build after changing native dependencies
+or system toolchains.
+
+With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
+one command to build only changed native layers and run Kitchen with the local
+stack:
+
+```bash
+hutch dev --local
+```
+
+The first Hutch is globally installed. Stack preparation explicitly selects the
+completed local Hutch engine and Cottontail build for the remainder of the
+command.
 
 ### Additional Commands
 
 All commands are run from the `/package` directory:
 
-- `bun dev:canary` - Build and run kitchen sink in canary mode
-- `bun build:dev` - Build electrobun in development mode
-- `bun build:release` - Build electrobun in release mode
+- `hutch dev:canary` - Build and run kitchen sink in canary mode
+- `hutch build:dev` - Build Electrobun in development mode
+- `hutch build:release` - Build Electrobun in release mode
 
 ### Debugging
 
