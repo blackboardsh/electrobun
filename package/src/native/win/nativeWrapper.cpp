@@ -15,6 +15,7 @@
 #include <functional>
 #include <future>
 #include <memory>
+#include <thread>
 #include <cmath>
 #include <filesystem>
 #include <windows.h>
@@ -46,7 +47,6 @@
 #include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
 #include <direct.h>    // For _getcwd
-#include <tlhelp32.h>  // For process enumeration
 
 // Shared cross-platform utilities
 #include "../shared/glob_match.h"
@@ -622,7 +622,7 @@ static bool IsPortAvailable(int port) {
 }
 
 // CEF global variables
-static bool g_cef_initialized = false;
+static std::atomic<bool> g_cef_initialized{false};
 static CefRefPtr<CefApp> g_cef_app;
 static electrobun::ChromiumFlagConfig g_userChromiumFlags;
 static electrobun::AutoGrantPermissionSet g_autoGrantPermissions;
@@ -676,12 +676,70 @@ static bool shouldAutoGrantWebView2Permission(
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
+static std::atomic<bool> g_cefShutdownTimedOut{false};
+static std::atomic<int> g_pendingCefBrowserCreations{0};
+static bool g_cefShutdownStartedOnUI = false;
 static DWORD g_mainThreadId = 0;
+static std::atomic<HWND> g_cefPumpWindow{nullptr};
+static constexpr UINT_PTR CEF_SHUTDOWN_TIMER_ID = 3;
+static constexpr UINT CEF_SHUTDOWN_TIMEOUT_MS = 3000;
+static constexpr int CEF_GRACEFUL_SHUTDOWN_WAIT_MS = 15000;
+
+static std::mutex g_remoteDevToolsThreadsMutex;
+static std::vector<std::thread> g_remoteDevToolsThreads;
+
+static void trackRemoteDevToolsThread(std::thread worker) {
+    std::lock_guard<std::mutex> lock(g_remoteDevToolsThreadsMutex);
+    g_remoteDevToolsThreads.push_back(std::move(worker));
+}
+
+static void joinRemoteDevToolsThreads() {
+    std::vector<std::thread> workers;
+    {
+        std::lock_guard<std::mutex> lock(g_remoteDevToolsThreadsMutex);
+        workers.swap(g_remoteDevToolsThreads);
+    }
+    for (auto& worker : workers) {
+        if (worker.joinable()) {
+            worker.join();
+        }
+    }
+}
+
+static void quitCEFMessageLoopWhenDrained() {
+    if (g_eventLoopStopping.load() &&
+        g_cefBrowsers.empty() &&
+        g_pendingCefBrowserCreations.load() == 0) {
+        const HWND pumpWindow = g_cefPumpWindow.load();
+        if (pumpWindow) {
+            KillTimer(pumpWindow, CEF_SHUTDOWN_TIMER_ID);
+        }
+        std::cout << "[CEF] All browsers reached OnBeforeClose" << std::endl;
+        PostQuitMessage(0);
+    }
+}
+
+static void trackCEFBrowser(CefRefPtr<CefBrowser> browser) {
+    if (!browser) return;
+    const auto [it, inserted] = g_cefBrowsers.emplace(
+        browser->GetIdentifier(), browser);
+    (void)it;
+    if (inserted) {
+        ++g_browser_count;
+    }
+}
+
+static void untrackCEFBrowser(CefRefPtr<CefBrowser> browser) {
+    if (!browser) return;
+    if (g_cefBrowsers.erase(browser->GetIdentifier()) != 0 &&
+        g_browser_count > 0) {
+        --g_browser_count;
+    }
+}
 
 // Simple CEF App class for minimal implementation
 // Hidden window message for CEF external message pump scheduling
 #define WM_CEF_SCHEDULE_WORK (WM_USER + 100)
-static HWND g_cefPumpWindow = NULL;
 
 class ElectrobunCefApp : public CefApp, public CefBrowserProcessHandler {
 public:
@@ -693,13 +751,15 @@ public:
         // Called by CEF when it needs CefDoMessageLoopWork to be called.
         // With external_message_pump=true, CEF does NOT internally pump Windows messages,
         // preventing it from stealing WebView2 messages.
-        if (g_cefPumpWindow) {
+        if (!g_eventLoopStopping.load()) {
+            const HWND pumpWindow = g_cefPumpWindow.load();
+            if (!pumpWindow) return;
             if (delay_ms <= 0) {
                 // Immediate work needed
-                ::PostMessage(g_cefPumpWindow, WM_CEF_SCHEDULE_WORK, 0, 0);
+                ::PostMessage(pumpWindow, WM_CEF_SCHEDULE_WORK, 0, 0);
             } else {
                 // Schedule work after delay
-                SetTimer(g_cefPumpWindow, 1, (UINT)delay_ms, nullptr);
+                SetTimer(pumpWindow, 1, (UINT)delay_ms, nullptr);
             }
         }
     }
@@ -771,8 +831,66 @@ void SetWebViewOnWebView2View(HWND containerWindow, void* webview);
 // CEF Life Span Handler for async browser creation
 class ElectrobunLifeSpanHandler : public CefLifeSpanHandler {
 public:
+    void MarkInitialBrowserCreationPending() {
+        bool expected = false;
+        if (initial_browser_creation_pending_.compare_exchange_strong(
+                expected, true)) {
+            g_pendingCefBrowserCreations.fetch_add(1);
+        }
+    }
+
+    void ResolveInitialBrowserCreationPending() {
+        if (initial_browser_creation_pending_.exchange(false)) {
+            g_pendingCefBrowserCreations.fetch_sub(1);
+        }
+    }
+
+    void SetBrowserCreatedCallback(
+        std::function<void(CefRefPtr<CefBrowser>)> callback) {
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        if (!owner_detached_.load()) {
+            browser_created_callback_ = std::move(callback);
+        }
+    }
+
+    void DetachOwnerCallback() {
+        owner_detached_.store(true);
+        std::lock_guard<std::mutex> lock(callback_mutex_);
+        browser_created_callback_ = nullptr;
+    }
+
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
-        // Note: Browser setup is now handled synchronously during CreateBrowserSync
+        // Track every browser, including popups created by page content. The
+        // shutdown barrier must not report drained while any CEF browser lives.
+        trackCEFBrowser(browser);
+
+        // CreateBrowser is asynchronous so native->runtime callbacks cannot
+        // re-enter Bun before initWebview has returned and installed its native
+        // pointer. Only the first browser created by this client resolves the
+        // initial creation request; later popup browsers are tracked normally.
+        ResolveInitialBrowserCreationPending();
+
+        std::function<void(CefRefPtr<CefBrowser>)> callback;
+        {
+            std::lock_guard<std::mutex> lock(callback_mutex_);
+            if (!owner_detached_.load()) {
+                callback = std::move(browser_created_callback_);
+            }
+            browser_created_callback_ = nullptr;
+        }
+
+        if (g_eventLoopStopping.load() || owner_detached_.load()) {
+            CefRefPtr<CefBrowserHost> host = browser->GetHost();
+            if (host) {
+                host->CloseBrowser(true);
+            }
+            quitCEFMessageLoopWhenDrained();
+            return;
+        }
+
+        if (callback) {
+            callback(browser);
+        }
     }
 
     // DoClose is called when the browser window is about to close.
@@ -782,15 +900,16 @@ public:
         std::cout << "[CEF] DoClose: Browser ID " << browser->GetIdentifier()
                   << ", browser_count=" << g_browser_count << std::endl;
 
-        // For OOPIFs (when there are other browsers still open, or when we're not shutting down),
-        // return true to prevent CEF from sending WM_CLOSE to the parent window.
-        // We handle the actual close ourselves in remove() by calling CloseBrowser.
         if (!g_eventLoopStopping.load()) {
-            std::cout << "[CEF] DoClose: Returning true to prevent parent window close" << std::endl;
-            return true;  // We'll handle the close - prevents CEF from closing parent
+            std::cout << "[CEF] DoClose: Returning true to preserve parent window" << std::endl;
+            return true;
         }
 
-        std::cout << "[CEF] DoClose: Returning false - app is shutting down" << std::endl;
+        // During application shutdown WindowProc bypasses application close
+        // callbacks and destroys the top-level owner. Returning false asks CEF
+        // to send that final WM_CLOSE and complete its documented windowed-
+        // browser close sequence.
+        std::cout << "[CEF] DoClose: Returning false for final owner teardown" << std::endl;
         return false;
     }
 
@@ -798,14 +917,15 @@ public:
         std::cout << "[CEF] OnBeforeClose: Browser ID " << browser->GetIdentifier() << " closing" << std::endl;
 
         // Remove browser from global tracking
-        g_cefBrowsers.erase(browser->GetIdentifier());
+        untrackCEFBrowser(browser);
         {
             std::lock_guard<std::mutex> lock(browserMapMutex);
             browserToWebviewMap.erase(browser->GetIdentifier());
         }
-        g_browser_count--;
 
         std::cout << "[CEF] Remaining browsers: " << g_browser_count << std::endl;
+
+        quitCEFMessageLoopWhenDrained();
 
         // Note: Do NOT quit the message loop here when browser count reaches 0.
         // OOPIFs are CEF browsers that can be removed while the main window stays open.
@@ -813,13 +933,19 @@ public:
     }
 
 private:
+    std::mutex callback_mutex_;
+    std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
+    std::atomic<bool> initial_browser_creation_pending_{false};
+    std::atomic<bool> owner_detached_{false};
     IMPLEMENT_REFCOUNTING(ElectrobunLifeSpanHandler);
 };
 
 // Forward declaration for DevTools callback
 class ElectrobunCefClient;
-typedef void (*RemoteDevToolsClosedCallback)(void* ctx, int target_id);
-void RemoteDevToolsClosed(void* ctx, int target_id);
+typedef void (*RemoteDevToolsClosedCallback)(
+    void* ctx, int target_id, bool browserClosed);
+void RemoteDevToolsClosed(void* ctx, int target_id, bool browserClosed);
+static constexpr UINT WM_DESTROY_DEVTOOLS_WINDOW = WM_APP + 0x31;
 
 // Lightweight CefClient for the DevTools browser window
 class RemoteDevToolsClient : public CefClient, public CefLifeSpanHandler {
@@ -831,10 +957,37 @@ public:
         return this;
     }
 
-    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
-        if (callback_) {
-            callback_(ctx_, target_id_);
+    void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        trackCEFBrowser(browser);
+    }
+
+    bool DoClose(CefRefPtr<CefBrowser> browser) override {
+        // DevTools normally hides WM_CLOSE. Send an explicit hierarchy-
+        // teardown message instead so OnBeforeClose is guaranteed to follow.
+        if (browser && browser->GetHost()) {
+            const HWND browserWindow = browser->GetHost()->GetWindowHandle();
+            const HWND ownerWindow = browserWindow
+                ? GetAncestor(browserWindow, GA_ROOT)
+                : nullptr;
+            if (ownerWindow) {
+                PostMessageW(
+                    ownerWindow, WM_DESTROY_DEVTOOLS_WINDOW, 0, 0);
+            }
         }
+        return true;
+    }
+
+    void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        untrackCEFBrowser(browser);
+        if (callback_) {
+            callback_(ctx_, target_id_, true);
+        }
+        quitCEFMessageLoopWhenDrained();
+    }
+
+    void DetachCallback() {
+        callback_ = nullptr;
+        ctx_ = nullptr;
     }
 
 private:
@@ -867,11 +1020,19 @@ static LRESULT CALLBACK DevToolsWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPAR
     }
 
     switch (msg) {
+        case WM_DESTROY_DEVTOOLS_WINDOW:
+            DestroyWindow(hwnd);
+            return 0;
+
         case WM_CLOSE:
+            if (g_eventLoopStopping.load()) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
             // Hide the window instead of destroying it to avoid CEF teardown issues
             ShowWindow(hwnd, SW_HIDE);
             if (dtCtx && dtCtx->close_callback) {
-                dtCtx->close_callback(dtCtx->ctx, dtCtx->target_id);
+                dtCtx->close_callback(dtCtx->ctx, dtCtx->target_id, false);
             }
             return 0;
 
@@ -2166,6 +2327,26 @@ public:
         // Don't execute scripts here - they should execute on each navigation
     }
 
+    void MarkInitialBrowserCreationPending() {
+        if (m_lifeSpanHandler) {
+            m_lifeSpanHandler->MarkInitialBrowserCreationPending();
+        }
+    }
+
+    void ResolveInitialBrowserCreationPending() {
+        if (m_lifeSpanHandler) {
+            m_lifeSpanHandler->ResolveInitialBrowserCreationPending();
+        }
+    }
+
+    void SetBrowserCreatedCallback(
+        std::function<void(CefRefPtr<CefBrowser>)> callback) {
+        if (m_lifeSpanHandler) {
+            m_lifeSpanHandler->SetBrowserCreatedCallback(
+                std::move(callback));
+        }
+    }
+
     void ExecutePreloadScripts() {
         std::string script = GetCombinedScript();
         if (!script.empty() && browser_ && browser_->GetMainFrame()) {
@@ -2180,9 +2361,13 @@ public:
         }
     }
 
+    bool CanCreateRemoteDevTools() const {
+        return !devtools_stopping_.load() && !g_eventLoopStopping.load();
+    }
+
     // Open remote DevTools frontend for a specific browser (including OOPIFs)
     void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
-        if (!browser || !browser->GetHost()) return;
+        if (!CanCreateRemoteDevTools() || !browser || !browser->GetHost()) return;
         if (g_remoteDebugPort == 0) {
             std::cout << "[CEF] Remote DevTools unavailable because remote debugging is disabled"
                       << std::endl;
@@ -2210,14 +2395,17 @@ public:
         // Keep ref to self for the background thread
         CefRefPtr<ElectrobunCefClient> self(this);
 
-        // Fetch /json on a background thread
-        std::thread([self, target_id, targetUrl, targetTitle, port]() {
+        // Fetch /json on a tracked background thread. Shutdown joins these
+        // workers before CEF references are released.
+        trackRemoteDevToolsThread(std::thread(
+            [self, target_id, targetUrl, targetTitle, port]() {
             // WinHTTP synchronous GET to http://127.0.0.1:{port}/json
             HINTERNET hSession = WinHttpOpen(L"Electrobun/DevTools",
                                               WINHTTP_ACCESS_TYPE_NO_PROXY,
                                               WINHTTP_NO_PROXY_NAME,
                                               WINHTTP_NO_PROXY_BYPASS, 0);
             if (!hSession) return;
+            WinHttpSetTimeouts(hSession, 1000, 1000, 1000, 1000);
 
             wchar_t hostStr[64];
             swprintf_s(hostStr, L"127.0.0.1");
@@ -2336,7 +2524,9 @@ public:
                 CreateDevToolsTask(CefRefPtr<ElectrobunCefClient> client, int tid, const std::string& url)
                     : client_(client), target_id_(tid), url_(url) {}
                 void Execute() override {
-                    client_->CreateRemoteDevToolsWindow(target_id_, url_);
+                    if (client_->CanCreateRemoteDevTools()) {
+                        client_->CreateRemoteDevToolsWindow(target_id_, url_);
+                    }
                 }
             private:
                 CefRefPtr<ElectrobunCefClient> client_;
@@ -2344,13 +2534,18 @@ public:
                 std::string url_;
                 IMPLEMENT_REFCOUNTING(CreateDevToolsTask);
             };
-            CefPostTask(TID_UI, new CreateDevToolsTask(self, target_id, finalUrl));
+            if (self->CanCreateRemoteDevTools()) {
+                CefPostTask(
+                    TID_UI,
+                    new CreateDevToolsTask(self, target_id, finalUrl));
+            }
 
-        }).detach();
+        }));
     }
 
     // Create or reuse a DevTools window for a specific target
     void CreateRemoteDevToolsWindow(int target_id, const std::string& url) {
+        if (!CanCreateRemoteDevTools()) return;
         EnsureDevToolsWindowClassRegistered();
 
         DevToolsHost& host = devtools_hosts_[target_id];
@@ -2413,18 +2608,67 @@ public:
         host.is_open = true;
     }
 
-    void OnRemoteDevToolsClosed(int target_id) {
+    void OnRemoteDevToolsClosed(int target_id, bool browserClosed) {
         auto it = devtools_hosts_.find(target_id);
         if (it == devtools_hosts_.end()) return;
-        it->second.is_open = false;
-        if (it->second.window) {
-            ShowWindow(it->second.window, SW_HIDE);
+        DevToolsHost& host = it->second;
+        host.is_open = false;
+        if (host.window) {
+            ShowWindow(host.window, SW_HIDE);
+        }
+        if (browserClosed) {
+            host.browser = nullptr;
+            host.window = nullptr;
+            if (host.dt_ctx) {
+                host.dt_ctx->browser = nullptr;
+            }
+            host.client = nullptr;
         }
     }
 
     bool IsDevToolsOpen(int target_id) {
         auto it = devtools_hosts_.find(target_id);
         return it != devtools_hosts_.end() && it->second.is_open;
+    }
+
+    void PrepareForBrowserClose() {
+        devtools_stopping_.store(true);
+        if (m_lifeSpanHandler) {
+            m_lifeSpanHandler->DetachOwnerCallback();
+        }
+        ClearOSRWindow();
+        browser_ = nullptr;
+        if (m_loadHandler) {
+            m_loadHandler->SetClient(nullptr);
+        }
+        if (m_requestHandler) {
+            m_requestHandler->SetClient(nullptr);
+            m_requestHandler->SetAbstractView(nullptr);
+        }
+
+        // DevTools browsers have their own life-span handler and are part of
+        // the same shutdown barrier as application browsers.
+        for (auto& [target_id, host] : devtools_hosts_) {
+            (void)target_id;
+            if (host.client) {
+                host.client->DetachCallback();
+            }
+            if (host.dt_ctx) {
+                host.dt_ctx->close_callback = nullptr;
+                host.dt_ctx->ctx = nullptr;
+            }
+            if (host.browser && !g_eventLoopStopping.load()) {
+                CefRefPtr<CefBrowserHost> browserHost = host.browser->GetHost();
+                if (browserHost) {
+                    browserHost->CloseBrowser(true);
+                }
+            }
+            host.browser = nullptr;
+            if (host.dt_ctx) {
+                host.dt_ctx->browser = nullptr;
+            }
+            host.client = nullptr;
+        }
     }
 
     // Set load-end callback for deferred operations (like applying transparency after page load)
@@ -2470,14 +2714,16 @@ private:
     };
     std::map<int, DevToolsHost> devtools_hosts_;
     std::string last_title_;
+    std::atomic<bool> devtools_stopping_{false};
 
     IMPLEMENT_REFCOUNTING(ElectrobunCefClient);
 };
 
 // Free function callback for RemoteDevToolsClient -> ElectrobunCefClient
-void RemoteDevToolsClosed(void* ctx, int target_id) {
+void RemoteDevToolsClosed(void* ctx, int target_id, bool browserClosed) {
     if (!ctx) return;
-    static_cast<ElectrobunCefClient*>(ctx)->OnRemoteDevToolsClosed(target_id);
+    static_cast<ElectrobunCefClient*>(ctx)->OnRemoteDevToolsClosed(
+        target_id, browserClosed);
 }
 
 // Out-of-line definitions for handlers that need ElectrobunCefClient to be fully defined
@@ -3918,6 +4164,10 @@ private:
     OSRWindow* osr_window;
     bool is_osr_mode;
     CefFindSession findSession;
+    std::string pending_url;
+    std::string pending_html;
+    bool has_pending_url = false;
+    bool has_pending_html = false;
 
 public:
     CEFView(uint32_t webviewId) : osr_window(nullptr), is_osr_mode(false) {
@@ -3931,6 +4181,7 @@ public:
             // Invalidate render handler's OSR pointer before we delete it
             if (client) {
                 client->ClearOSRWindow();
+                client->PrepareForBrowserClose();
             }
 
             CefRefPtr<CefBrowserHost> host = browser->GetHost();
@@ -3944,6 +4195,7 @@ public:
             // remove() was called (browser is null) but client might still be set
             // in older code paths - clear the OSR pointer just in case
             client->ClearOSRWindow();
+            client->PrepareForBrowserClose();
             client = nullptr;
         }
 
@@ -3973,20 +4225,45 @@ public:
     bool isOSRMode() const {
         return is_osr_mode;
     }
+
+    void ReleaseCEFReferencesForShutdown() {
+        findSession.reset();
+        if (client) {
+            client->PrepareForBrowserClose();
+        }
+        if (osr_window) {
+            osr_window->SetBrowser(nullptr);
+        }
+        browser = nullptr;
+        client = nullptr;
+    }
     
     void loadURL(const char* urlString) override {
-        if (browser) {
-            browser->GetMainFrame()->LoadURL(urlString);
+        const std::string url = urlString ? urlString : "";
+        if (!browser) {
+            pending_html.clear();
+            has_pending_html = false;
+            pending_url = url;
+            has_pending_url = true;
+            return;
         }
+        browser->GetMainFrame()->LoadURL(CefString(url));
     }
     
     void loadHTML(const char* htmlString) override {
-        if (browser && htmlString) {
-            // Create a data URI for the HTML content
-            std::string dataUri = "data:text/html;charset=utf-8,";
-            dataUri += htmlString;
-            browser->GetMainFrame()->LoadURL(CefString(dataUri));
+        if (!htmlString) return;
+        if (!browser) {
+            pending_url.clear();
+            has_pending_url = false;
+            pending_html = htmlString;
+            has_pending_html = true;
+            return;
         }
+
+        // Create a data URI for the HTML content.
+        std::string dataUri = "data:text/html;charset=utf-8,";
+        dataUri += htmlString;
+        browser->GetMainFrame()->LoadURL(CefString(dataUri));
     }
     
     void goBack() override {
@@ -4025,6 +4302,7 @@ public:
             // the OSRWindow will be deleted when this CEFView is destroyed.
             if (client) {
                 client->ClearOSRWindow();
+                client->PrepareForBrowserClose();
             }
 
             // Clean up global maps to prevent stale pointer access from window messages
@@ -4053,6 +4331,28 @@ public:
                 std::cout << "[CEF] Calling CloseBrowser(true) from dispatch_async" << std::endl;
                 host->CloseBrowser(true);  // force=true since DoClose returns true
             });
+        } else if (client) {
+            // Async CreateBrowser may still be pending. Detaching the owner
+            // callback makes OnAfterCreated close that browser immediately
+            // instead of attaching it to a view that has already been removed.
+            CefRefPtr<ElectrobunCefClient> pendingClient = client;
+            pendingClient->PrepareForBrowserClose();
+            client = nullptr;
+
+            for (auto it = g_cefViews.begin(); it != g_cefViews.end();) {
+                if (it->second == this) {
+                    it = g_cefViews.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+            for (auto it = g_cefClients.begin(); it != g_cefClients.end();) {
+                if (it->second == pendingClient) {
+                    it = g_cefClients.erase(it);
+                } else {
+                    ++it;
+                }
+            }
         }
     }
     
@@ -4124,8 +4424,23 @@ public:
         findSession.reset();
         browser = br;
         // If OSR mode, also set the browser on the OSR window for event handling
-        if (osr_window && br) {
+        if (osr_window) {
             osr_window->SetBrowser(br);
+        }
+
+        // Async creation may take longer than constructor-adjacent calls such
+        // as BrowserView's deferred HTML load. Apply only the latest queued
+        // navigation after OnAfterCreated has installed all browser mappings.
+        if (browser && has_pending_html) {
+            std::string html = std::move(pending_html);
+            pending_html.clear();
+            has_pending_html = false;
+            loadHTML(html.c_str());
+        } else if (browser && has_pending_url) {
+            std::string url = std::move(pending_url);
+            pending_url.clear();
+            has_pending_url = false;
+            loadURL(url.c_str());
         }
     }
     
@@ -4448,14 +4763,14 @@ public:
     void closeDevTools() override {
         if (!browser || !client) return;
         int target_id = browser->GetIdentifier();
-        client->OnRemoteDevToolsClosed(target_id);
+        client->OnRemoteDevToolsClosed(target_id, false);
     }
 
     void toggleDevTools() override {
         if (!browser || !client) return;
         int target_id = browser->GetIdentifier();
         if (client->IsDevToolsOpen(target_id)) {
-            client->OnRemoteDevToolsClosed(target_id);
+            client->OnRemoteDevToolsClosed(target_id, false);
         } else {
             client->OpenRemoteDevToolsFrontend(browser);
         }
@@ -5013,6 +5328,14 @@ public:
         }
     }
 
+    void ReleaseCEFReferencesForShutdown() {
+        for (auto& view : m_abstractViews) {
+            if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
+                cefView->ReleaseCEFReferencesForShutdown();
+            }
+        }
+    }
+
     void FocusActiveView() {
         AbstractView* target = m_activeWebView;
         if (!target) {
@@ -5066,7 +5389,18 @@ public:
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
             uint32_t viewId = view->webviewId;
-            view->remove();
+            if (g_eventLoopStopping.load()) {
+                if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
+                    // The parent hierarchy is already being destroyed by the
+                    // CEF close handshake. Drop app-owned references without
+                    // scheduling another CloseBrowser call after OnBeforeClose.
+                    cefView->ReleaseCEFReferencesForShutdown();
+                } else {
+                    view->remove();
+                }
+            } else {
+                view->remove();
+            }
             {
                 std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
                 g_abstractViews.erase(viewId);
@@ -5541,6 +5875,10 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case WM_CLOSE:
+            if (g_eventLoopStopping.load()) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
             if (data && data->shouldCloseHandler && !data->bypassShouldClose) {
                 data->shouldCloseHandler(data->windowId);
                 return 0;
@@ -6476,49 +6814,8 @@ HMENU createApplicationMenuFromConfig(const SimpleJsonValue& menuConfig, StatusI
 
 
 
-// Helper function to terminate all CEF helper processes
-void TerminateCEFHelperProcesses() {
-    wchar_t currentExePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, currentExePath, MAX_PATH);
-    std::wstring helperExeName = L"bun Helper.exe";
-    wchar_t* currentExeBase = wcsrchr(currentExePath, L'\\');
-    if (currentExeBase && *(currentExeBase + 1) != L'\0') {
-        std::wstring baseName = currentExeBase + 1;
-        size_t dot = baseName.find_last_of(L'.');
-        if (dot != std::wstring::npos) {
-            baseName = baseName.substr(0, dot);
-        }
-        helperExeName = baseName + L" Helper.exe";
-    }
-
-    HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hSnapshot == INVALID_HANDLE_VALUE) {
-        return;
-    }
-    
-    PROCESSENTRY32W pe32;
-    pe32.dwSize = sizeof(PROCESSENTRY32W);
-    
-    if (Process32FirstW(hSnapshot, &pe32)) {
-        do {
-            // Match the helper executable to the current host executable name.
-            if (_wcsicmp(pe32.szExeFile, helperExeName.c_str()) == 0) {
-                HANDLE hProcess = OpenProcess(PROCESS_TERMINATE, FALSE, pe32.th32ProcessID);
-                if (hProcess != nullptr) {
-                    std::wcout << L"[CEF] Terminating helper process: " << pe32.szExeFile 
-                              << L" (PID: " << pe32.th32ProcessID << L")" << std::endl;
-                    TerminateProcess(hProcess, 0);
-                    CloseHandle(hProcess);
-                }
-            }
-        } while (Process32NextW(hSnapshot, &pe32));
-    }
-    
-    CloseHandle(hSnapshot);
-}
-
 ELECTROBUN_EXPORT bool initCEF() {
-    if (g_cef_initialized) {
+    if (g_cef_initialized.load()) {
         return true; // Already initialized
     }
     
@@ -6592,8 +6889,12 @@ ELECTROBUN_EXPORT bool initCEF() {
 
     // One-shot wipe if Electrobun's cache format version has been bumped
     // since the user's last launch. See cache_migration.h.
-    electrobun::migrateCacheFolderIfNeeded(
-        std::filesystem::path(userDataDir));
+    if (!electrobun::migrateCacheFolderIfNeeded(
+            std::filesystem::path(userDataDir),
+            electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION)) {
+        ::log("Failed to prepare the Windows CEF cache format safely");
+        return false;
+    }
 
     // Initialize CEF
     CefMainArgs main_args(GetModuleHandle(NULL));
@@ -6649,6 +6950,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     // Set paths - icudtl.dat and .pak files are in cef directory root
     CefString(&settings.resources_dir_path) = cefResourceDir;
     CefString(&settings.locales_dir_path) = cefResourceDir + L"\\Resources\\locales";
+    CefString(&settings.root_cache_path) = userDataDir;
     CefString(&settings.cache_path) = userDataDir;
     
     // Add language settings like macOS
@@ -6661,7 +6963,7 @@ ELECTROBUN_EXPORT bool initCEF() {
     
     bool success = CefInitialize(main_args, settings, g_cef_app.get(), nullptr);
     if (success) {
-        g_cef_initialized = true;
+        g_cef_initialized.store(true);
         // Register the views:// scheme handler factory
         CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory());
         
@@ -6715,6 +7017,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HandlePostMessage internalBridgeHandler,
                                                  const char *electrobunPreloadScript,
                                                  const char *customPreloadScript,
+                                                 bool startTransparent,
+                                                 bool startPassthrough,
                                                  bool transparent,
                                                  bool sandbox) {
     // Check if WebView2 runtime is available
@@ -6723,6 +7027,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     if (FAILED(result)) {
         ::log("ERROR: WebView2 runtime is not available. Please install Microsoft Edge WebView2 Runtime");
         auto view = std::make_shared<WebView2View>(webviewId, eventBridgeHandler, bunBridgeHandler, internalBridgeHandler, sandbox);
+        view->pendingStartTransparent = startTransparent;
+        view->pendingStartPassthrough = startPassthrough;
         view->setCreationFailed(true);
         return view;
     }
@@ -6741,6 +7047,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->hwnd = hwnd;
     view->parentWindow = hwnd;
     view->fullSize = autoResize;
+    view->pendingStartTransparent = startTransparent;
+    view->pendingStartPassthrough = startPassthrough;
     view->setLogicalFrame(x, y, width, height);
     view->webviewEventHandler = webviewEventHandler;
 
@@ -7534,8 +7842,8 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 // Utility function for creating CEF request contexts with partition support
 // Platform implementation for partition_context.h — builds the on-disk
 // cache_path for a persistent partition under %LOCALAPPDATA%, creating any
-// missing parent directories. Returns "" if %LOCALAPPDATA% is unset, which
-// causes the caller to fall back to an ephemeral context.
+// missing parent directories. Returns "" when a safe persistent path cannot
+// be built, which makes the caller fail closed instead of merging storage.
 namespace electrobun {
 std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
     const std::wstring localAppData =
@@ -7547,17 +7855,37 @@ std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
 
     std::wstring identifier;
     std::wstring channel;
-    std::wstring partition;
+    const auto partition =
+        buildWindowsCEFPartitionDirectoryName(partitionName);
+    if (!partition) {
+        printf("ERROR CEF: persistent partition name is not supported on Windows\n");
+        return "";
+    }
     if (!utf8ToWide(g_electrobunIdentifier, identifier) ||
-        !utf8ToWide(g_electrobunChannel, channel) ||
-        !utf8ToWide(partitionName, partition)) {
+        !utf8ToWide(g_electrobunChannel, channel)) {
         printf("ERROR CEF: invalid UTF-8 in partition cache path\n");
         return "";
     }
 
     const std::wstring cachePath = buildCEFPartitionPath(
-        localAppData, identifier, channel, L"CEF", partition, L'\\');
-    SHCreateDirectoryExW(nullptr, cachePath.c_str(), nullptr);
+        localAppData, identifier, channel, L"CEF", *partition, L'\\');
+    const int createResult =
+        SHCreateDirectoryExW(nullptr, cachePath.c_str(), nullptr);
+    if (createResult != ERROR_SUCCESS &&
+        createResult != ERROR_ALREADY_EXISTS &&
+        createResult != ERROR_FILE_EXISTS) {
+        printf(
+            "ERROR CEF: failed to create persistent partition directory (%d)\n",
+            createResult);
+        return "";
+    }
+
+    const DWORD attributes = GetFileAttributesW(cachePath.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES ||
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+        printf("ERROR CEF: persistent partition path is not a directory\n");
+        return "";
+    }
 
     // partition_context.h accepts UTF-8 at the CEF boundary. Keep all Windows
     // filesystem work above in UTF-16 and convert exactly once here.
@@ -7570,12 +7898,128 @@ std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
 }
 } // namespace electrobun
 
+static CefRefPtr<ElectrobunSchemeHandlerFactory> g_partitionSchemeFactory;
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
-    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory =
-        new ElectrobunSchemeHandlerFactory();
+    if (!g_partitionSchemeFactory) {
+        g_partitionSchemeFactory = new ElectrobunSchemeHandlerFactory();
+    }
     return electrobun::getOrCreateRequestContextForPartition(
-        partitionIdentifier, webviewId, schemeFactory);
+        partitionIdentifier,
+        webviewId,
+        g_partitionSchemeFactory);
+}
+
+static void beginCEFShutdownOnMainThread() {
+    if (g_cefShutdownStartedOnUI) {
+        quitCEFMessageLoopWhenDrained();
+        return;
+    }
+    g_cefShutdownStartedOnUI = true;
+
+    // No background DevTools fetch may retain a client or enqueue new CEF work
+    // once browser teardown begins.
+    joinRemoteDevToolsThreads();
+
+    std::vector<CefRefPtr<CefBrowser>> browsers;
+    browsers.reserve(g_cefBrowsers.size());
+    for (const auto& [browserId, browser] : g_cefBrowsers) {
+        (void)browserId;
+        if (browser) {
+            browsers.push_back(browser);
+        }
+    }
+
+    if (!browsers.empty() || g_pendingCefBrowserCreations.load() != 0) {
+        const HWND pumpWindow = g_cefPumpWindow.load();
+        if (pumpWindow) {
+            SetTimer(
+                pumpWindow,
+                CEF_SHUTDOWN_TIMER_ID,
+                CEF_SHUTDOWN_TIMEOUT_MS,
+                nullptr);
+        }
+    }
+
+    // Force-close is appropriate during application shutdown: beforeunload
+    // handlers must not keep the native event-loop thread alive indefinitely.
+    // OnBeforeClose removes each browser from g_cefBrowsers and posts WM_QUIT
+    // only after the final browser has completed CEF teardown.
+    for (const auto& browser : browsers) {
+        CefRefPtr<CefBrowserHost> host = browser->GetHost();
+        if (host) {
+            host->CloseBrowser(true);
+        }
+    }
+
+    quitCEFMessageLoopWhenDrained();
+}
+
+static bool drainCEFForShutdownOnMainThread(int timeoutMs) {
+    beginCEFShutdownOnMainThread();
+    if (g_cefShutdownTimedOut.load()) {
+        return false;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(timeoutMs);
+
+    while ((!g_cefBrowsers.empty() ||
+            g_pendingCefBrowserCreations.load() != 0) &&
+           std::chrono::steady_clock::now() < deadline) {
+        CefDoMessageLoopWork();
+
+        MSG message;
+        while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if (message.message == WM_QUIT) {
+                continue;
+            }
+            TranslateMessage(&message);
+            DispatchMessage(&message);
+        }
+        Sleep(1);
+    }
+
+    return g_cefBrowsers.empty() &&
+        g_pendingCefBrowserCreations.load() == 0 &&
+        !g_cefShutdownTimedOut.load();
+}
+
+static void releaseCEFReferencesBeforeShutdown() {
+    // A failed asynchronous creation can be retained by the FFI owner without
+    // ever reaching a ContainerView. Release every retained CEF view as well as
+    // the container-owned views so no CefRefPtr survives CefShutdown.
+    std::vector<std::shared_ptr<CEFView>> retainedCefViews;
+    {
+        std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+        for (const auto& [webviewId, view] : g_retainedAbstractViews) {
+            (void)webviewId;
+            if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
+                retainedCefViews.push_back(std::move(cefView));
+            }
+        }
+    }
+    for (const auto& cefView : retainedCefViews) {
+        cefView->ReleaseCEFReferencesForShutdown();
+    }
+
+    for (const auto& [window, container] : g_containerViews) {
+        (void)window;
+        if (container) {
+            container->ReleaseCEFReferencesForShutdown();
+        }
+    }
+
+    g_cefViews.clear();
+    g_cefClients.clear();
+    g_cefBrowsers.clear();
+    {
+        std::lock_guard<std::mutex> lock(
+            electrobun::partitionContextMutex_());
+        electrobun::partitionContextMap_().clear();
+    }
+    g_partitionSchemeFactory = nullptr;
+    g_cef_app = nullptr;
 }
 
 // Internal factory method for creating CEF instances
@@ -7593,13 +8037,21 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
                                        HandlePostMessage internalBridgeHandler,
                                        const char *electrobunPreloadScript,
                                        const char *customPreloadScript,
+                                       bool startTransparent,
+                                       bool startPassthrough,
                                        bool transparent,
                                        bool sandbox) {
     
     auto view = std::make_shared<CEFView>(webviewId);
+    if (g_eventLoopStopping.load()) {
+        view->setCreationFailed(true);
+        return view;
+    }
     view->hwnd = hwnd;
     view->parentWindow = hwnd;
     view->fullSize = autoResize;
+    view->pendingStartTransparent = startTransparent;
+    view->pendingStartPassthrough = startPassthrough;
     view->setLogicalFrame(x, y, width, height);
     
     // Initialize CEF on main thread
@@ -7609,14 +8061,20 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
     
     if (!cefInitResult) {
         ::log("ERROR: Failed to initialize CEF");
+        view->setCreationFailed(true);
         return view;
     }
     
     // CEF browser creation logic
     MainThreadDispatcher::dispatch_sync([=]() {
+        if (g_eventLoopStopping.load()) {
+            view->setCreationFailed(true);
+            return;
+        }
         auto container = GetOrCreateContainer(hwnd);
         if (!container) {
             ::log("ERROR: Failed to create container");
+            view->setCreationFailed(true);
             return;
         }
         
@@ -7692,21 +8150,27 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
 
         view->setClient(client);
 
-        // Set up load-end callback for deferred transparency/passthrough application
-        // CEF navigation events can reset window state, so we re-apply after page load
-        CEFView* viewPtr = view.get();
-        client->SetLoadEndCallback([viewPtr]() {
-            if (viewPtr->pendingStartTransparent) {
-                viewPtr->setTransparent(true);
-                viewPtr->pendingStartTransparent = false;
+        // Set up load-end callback for deferred transparency/passthrough
+        // application. Use a weak reference because browser close can outlive
+        // removal of the app-owned view.
+        std::weak_ptr<CEFView> weakView = view;
+        client->SetLoadEndCallback([weakView]() {
+            auto readyView = weakView.lock();
+            if (!readyView) return;
+
+            if (readyView->pendingStartTransparent) {
+                readyView->setTransparent(true);
+                readyView->pendingStartTransparent = false;
             }
-            if (viewPtr->pendingStartPassthrough) {
-                viewPtr->setPassthrough(true);
-                viewPtr->pendingStartPassthrough = false;
+            if (readyView->pendingStartPassthrough) {
+                readyView->setPassthrough(true);
+                readyView->pendingStartPassthrough = false;
             }
-            // Re-apply passthrough if it was already set (in case navigation reset it)
-            if (viewPtr->isMousePassthroughEnabled && !viewPtr->pendingStartPassthrough) {
-                viewPtr->setPassthrough(true);
+            // Re-apply passthrough if it was already set (in case navigation
+            // reset it).
+            if (readyView->isMousePassthroughEnabled &&
+                !readyView->pendingStartPassthrough) {
+                readyView->setPassthrough(true);
             }
         });
 
@@ -7715,78 +8179,103 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
             partitionIdentifier,
             webviewId
         );
-
-        // Create browser synchronously (like Mac implementation)
-        // Note: OnLoadStart will fire during this call, but the load handler has a direct
-        // reference to the client, so preload scripts are available immediately without race condition
+        if (!requestContext) {
+            ::log("ERROR: Failed to initialize the CEF request context");
+            client->PrepareForBrowserClose();
+            view->setClient(nullptr);
+            view->setCreationFailed(true);
+            return;
+        }
 
         // Pass sandbox flag to renderer process via extra_info
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", sandbox);
 
-        CefRefPtr<CefBrowser> browser = CefBrowserHost::CreateBrowserSync(
-            windowInfo, client, url ? url : "about:blank", browserSettings, extra_info, requestContext);
+        // Install app-owned state before requesting creation. CreateBrowser is
+        // intentionally asynchronous: CEF may need to initialize a newly
+        // created named request context, and manually pumping that initialization
+        // from this synchronous FFI call re-enters Bun before initWebview has
+        // returned and installed the native view pointer.
+        const HWND containerHwnd = container->GetHwnd();
+        const HWND mapKey = transparent ? hwnd : containerHwnd;
+        const RECT initialBounds = physicalBounds;
+        view->visualBounds = initialBounds;
+        container->AddAbstractView(view);
 
-        if (browser) {
-            // Store preload script by browser ID for compatibility with other code paths
-            std::string combinedScript = client->GetCombinedScript();
-            if (!combinedScript.empty()) {
-                g_preloadScripts[browser->GetIdentifier()] = combinedScript;
+        {
+            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+            g_abstractViews[view->webviewId] = view.get();
+        }
+        g_cefClients[mapKey] = client;
+        g_cefViews[mapKey] = view.get();
+
+        if (url && url[0] != '\0') {
+            view->loadURL(url);
+        }
+
+        ElectrobunCefClient* clientPtr = client;
+        client->SetBrowserCreatedCallback(
+            [weakView, clientPtr, webviewId, mapKey, transparent, initialBounds](
+                CefRefPtr<CefBrowser> browser) {
+                auto readyView = weakView.lock();
+                if (!readyView ||
+                    readyView->getClient().get() != clientPtr ||
+                    g_eventLoopStopping.load()) {
+                    CefRefPtr<CefBrowserHost> host = browser->GetHost();
+                    if (host) {
+                        host->CloseBrowser(true);
+                    }
+                    return;
+                }
+
+                SetBrowserOnClient(clientPtr, browser);
+                {
+                    std::lock_guard<std::mutex> lock(browserMapMutex);
+                    browserToWebviewMap[browser->GetIdentifier()] = webviewId;
+                }
+                readyView->setBrowser(browser);
+
+                printf(
+                    "CEF: Registered view with hwnd=%p (transparent=%d)\n",
+                    mapKey,
+                    transparent);
+
+                // Bring the asynchronously-created child into its requested
+                // position and apply initial window state. Load-end repeats the
+                // state in case navigation resets it.
+                readyView->resize(initialBounds, nullptr);
+                if (readyView->pendingStartTransparent) {
+                    readyView->setTransparent(true);
+                }
+                if (readyView->pendingStartPassthrough) {
+                    readyView->setPassthrough(true);
+                }
+            });
+
+        client->MarkInitialBrowserCreationPending();
+        const bool browserCreationStarted = CefBrowserHost::CreateBrowser(
+            windowInfo,
+            client,
+            "about:blank",
+            browserSettings,
+            extra_info,
+            requestContext);
+
+        if (!browserCreationStarted) {
+            client->ResolveInitialBrowserCreationPending();
+            client->PrepareForBrowserClose();
+            view->setClient(nullptr);
+            view->setCreationFailed(true);
+            if (auto it = g_cefViews.find(mapKey);
+                it != g_cefViews.end() && it->second == view.get()) {
+                g_cefViews.erase(it);
             }
-
-            // Map browser ID to webview ID for CEF scheme handler
-            {
-                std::lock_guard<std::mutex> lock(browserMapMutex);
-                browserToWebviewMap[browser->GetIdentifier()] = webviewId;
+            if (auto it = g_cefClients.find(mapKey);
+                it != g_cefClients.end() && it->second.get() == clientPtr) {
+                g_cefClients.erase(it);
             }
-
-            // Set browser on view immediately since we have it synchronously
-            view->setBrowser(browser);
-
-            // Track browser in global map
-            g_cefBrowsers[browser->GetIdentifier()] = browser;
-            g_browser_count++;
-
-            container->AddAbstractView(view);
-
-            // Register in global AbstractView map for navigation rules
-            {
-                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-                g_abstractViews[view->webviewId] = view.get();
-            }
-
-            // Add client to global map
-            // For OSR mode, use the main window hwnd; for normal mode, use container hwnd
-            HWND containerHwnd = container->GetHwnd();
-            HWND mapKey = transparent ? hwnd : containerHwnd;
-
-            g_cefClients[mapKey] = client;
-            g_cefViews[mapKey] = view.get();
-
-            printf("CEF: Registered view with hwnd=%p (transparent=%d)\n", mapKey, transparent);
-
-            // Set browser on client for script execution
-            client->SetBrowser(browser);
-
-            // Set initial bounds on view before calling resize
-            RECT initialBounds = physicalBounds;
-            view->visualBounds = initialBounds;
-
-            // Handle z-ordering immediately since browser is ready
-            view->resize(initialBounds, nullptr);
-
-            // Apply deferred initial transparent/passthrough state now that browser is ready
-            // Note: We apply immediately here, but also have a load-end callback to re-apply
-            // after page load completes (since CEF navigation can reset window state)
-            if (view->pendingStartTransparent) {
-                view->setTransparent(true);
-                // Don't clear yet - load-end callback will handle it after page loads
-            }
-            if (view->pendingStartPassthrough) {
-                view->setPassthrough(true);
-                // Don't clear yet - load-end callback will handle it after page loads
-            }
-
+            ::log("ERROR: CefBrowserHost::CreateBrowser returned false");
+            quitCEFMessageLoopWhenDrained();
         }
     });
 
@@ -7814,7 +8303,9 @@ BOOL WINAPI ConsoleControlHandler(DWORD dwCtrlType) {
                 }
             } else {
                 // Fallback: direct shutdown - post WM_QUIT to exit the message loop
-                PostQuitMessage(0);
+                if (g_mainThreadId != 0) {
+                    PostThreadMessage(g_mainThreadId, WM_QUIT, 0, 0);
+                }
             }
             return TRUE;
         default:
@@ -7878,6 +8369,19 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             // timer to ensure CEF always gets serviced.
             WNDCLASSW cefPumpWc = {0};
             cefPumpWc.lpfnWndProc = [](HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) -> LRESULT {
+                if (msg == WM_TIMER && wParam == CEF_SHUTDOWN_TIMER_ID) {
+                    KillTimer(hwnd, CEF_SHUTDOWN_TIMER_ID);
+                    if (g_eventLoopStopping.load() &&
+                        (!g_cefBrowsers.empty() ||
+                         g_pendingCefBrowserCreations.load() != 0)) {
+                        g_cefShutdownTimedOut.store(true);
+                        std::cerr
+                            << "[CEF] Timed out waiting for browser teardown"
+                            << std::endl;
+                        PostQuitMessage(0);
+                    }
+                    return 0;
+                }
                 if (msg == WM_CEF_SCHEDULE_WORK || msg == WM_TIMER) {
                     CefDoMessageLoopWork();
                     return 0;
@@ -7887,12 +8391,14 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             cefPumpWc.hInstance = g_hInstanceDll;
             cefPumpWc.lpszClassName = L"CefPumpWindowClass";
             RegisterClassW(&cefPumpWc);
-            g_cefPumpWindow = CreateWindowW(L"CefPumpWindowClass", L"", 0, 0, 0, 0, 0,
-                                           HWND_MESSAGE, NULL, g_hInstanceDll, NULL);
+            const HWND cefPumpWindow = CreateWindowW(
+                L"CefPumpWindowClass", L"", 0, 0, 0, 0, 0,
+                HWND_MESSAGE, NULL, g_hInstanceDll, NULL);
+            g_cefPumpWindow.store(cefPumpWindow);
 
             // Baseline timer ensures CEF always gets serviced even if
             // OnScheduleMessagePumpWork misses a beat
-            SetTimer(g_cefPumpWindow, 2, 16, nullptr);
+            SetTimer(cefPumpWindow, 2, 16, nullptr);
 
             // Kick off initial CEF work
             CefDoMessageLoopWork();
@@ -7908,15 +8414,28 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
             }
             // Clean up after shutdown
             std::cout << "[CEF] CEF message loop ended, performing cleanup..." << std::endl;
-            TerminateCEFHelperProcesses();
+            const bool browsersDrained =
+                drainCEFForShutdownOnMainThread(CEF_SHUTDOWN_TIMEOUT_MS);
 
-            // Close job object
-            if (g_job_object) {
-                CloseHandle(g_job_object);
-                g_job_object = nullptr;
+            const HWND pumpWindow = g_cefPumpWindow.exchange(nullptr);
+            if (pumpWindow) {
+                KillTimer(pumpWindow, 1);
+                KillTimer(pumpWindow, 2);
+                KillTimer(pumpWindow, CEF_SHUTDOWN_TIMER_ID);
+                DestroyWindow(pumpWindow);
             }
 
-            CefShutdown();
+            if (browsersDrained) {
+                releaseCEFReferencesBeforeShutdown();
+                std::cout << "[CEF] Calling CefShutdown" << std::endl;
+                CefShutdown();
+                std::cout << "[CEF] CefShutdown complete" << std::endl;
+                g_cef_initialized.store(false);
+            } else {
+                std::cerr << "[CEF] Timed out waiting for OnBeforeClose; "
+                             "skipping CefShutdown before forced process exit"
+                          << std::endl;
+            }
             g_shutdownComplete.store(true);
         } else {
             // Fall back to Windows message loop if CEF init fails
@@ -7954,10 +8473,10 @@ ELECTROBUN_EXPORT void stopEventLoop() {
 
     std::cout << "[stopEventLoop] Initiating clean event loop exit" << std::endl;
 
-    if (isCEFAvailable() && g_cef_initialized) {
-        // We use a standard Windows message loop (not CefRunMessageLoop),
-        // so PostQuitMessage is the correct way to exit.
-        PostQuitMessage(0);
+    if (isCEFAvailable() && g_cef_initialized.load()) {
+        MainThreadDispatcher::dispatch_async([]() {
+            beginCEFShutdownOnMainThread();
+        });
     } else {
         // Post WM_QUIT to the main thread's message queue
         if (g_mainThreadId != 0) {
@@ -7972,8 +8491,11 @@ ELECTROBUN_EXPORT void killApp() {
 }
 
 ELECTROBUN_EXPORT void waitForShutdownComplete(int timeoutMs) {
+    const int effectiveTimeoutMs = g_cef_initialized.load()
+        ? (std::max)(timeoutMs, CEF_GRACEFUL_SHUTDOWN_WAIT_MS)
+        : timeoutMs;
     int waited = 0;
-    while (!g_shutdownComplete.load() && waited < timeoutMs) {
+    while (!g_shutdownComplete.load() && waited < effectiveTimeoutMs) {
         Sleep(10);
         waited += 10;
     }
@@ -8041,26 +8563,24 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
         auto cefView = createCEFView(webviewId, hwnd, url, x, y, width, height, autoResize,
                                     partitionIdentifier, navigationCallback, webviewEventHandler,
                                     eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                    electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+                                    electrobunPreloadScript, customPreloadScript,
+                                    startTransparent, startPassthrough,
+                                    transparent, sandbox);
+        retainAbstractView(cefView);
         view = cefView.get();
     } else {
         auto webview2View = createWebView2View(webviewId, hwnd, url, x, y, width, height, autoResize,
                                               partitionIdentifier, navigationCallback, webviewEventHandler,
                                               eventBridgeHandler, bunBridgeHandler, internalBridgeHandler,
-                                              electrobunPreloadScript, customPreloadScript, transparent, sandbox);
+                                              electrobunPreloadScript, customPreloadScript,
+                                              startTransparent, startPassthrough,
+                                              transparent, sandbox);
         retainAbstractView(webview2View);
         view = webview2View.get();
     }
 
     // Note: Object lifetime is managed by the ContainerView which holds shared_ptr references
     // The factories add the views to containers, so they remain alive after this function returns
-
-    // Store initial state flags — applied later when the view is fully initialized
-    // (browser/HWND may not be available yet due to async creation)
-    if (view) {
-        view->pendingStartTransparent = startTransparent;
-        view->pendingStartPassthrough = startPassthrough;
-    }
 
     return view;
 
@@ -8171,9 +8691,10 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
         return;
     }
     
-    // Use virtual method which handles threading and implementation details
-    
-    abstractView->loadURL(urlString);
+    const std::string url(urlString);
+    MainThreadDispatcher::dispatch_sync([abstractView, url]() {
+        abstractView->loadURL(url.c_str());
+    });
 }
 
 ELECTROBUN_EXPORT void wgpuViewSetFrame(AbstractView *abstractView, double x, double y, double width, double height) {
@@ -9906,7 +10427,10 @@ ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char 
         return;
     }
 
-    abstractView->loadHTML(htmlString);
+    const std::string html(htmlString);
+    MainThreadDispatcher::dispatch_sync([abstractView, html]() {
+        abstractView->loadHTML(html.c_str());
+    });
 }
 
 ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
@@ -9915,7 +10439,9 @@ ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    abstractView->goBack();
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->goBack();
+    });
 }
 
 ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
@@ -9924,7 +10450,9 @@ ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    abstractView->goForward();
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->goForward();
+    });
 }
 
 ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
@@ -9933,7 +10461,9 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    abstractView->reload();
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->reload();
+    });
 }
 
 ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
@@ -9944,7 +10474,12 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
 
     uint32_t viewId = abstractView->webviewId;
     g_pendingResizeQueue.remove(abstractView);
-    abstractView->remove();
+    // CEF browser creation and lifecycle callbacks run on the native UI
+    // thread. Serialize removal with OnAfterCreated so a pending async browser
+    // cannot attach itself to a view while the runtime is releasing it.
+    MainThreadDispatcher::dispatch_sync([abstractView]() {
+        abstractView->remove();
+    });
     {
         std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
         g_abstractViews.erase(viewId);
@@ -9958,7 +10493,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return abstractView->canGoBack();
+    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+        return abstractView->canGoBack() ? TRUE : FALSE;
+    });
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
@@ -9967,7 +10504,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return abstractView->canGoForward();
+    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+        return abstractView->canGoForward() ? TRUE : FALSE;
+    });
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
@@ -9976,12 +10515,14 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
         return;
     }
 
-    if (abstractView->hasCreationFailed()) {
-        ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
-        return;
-    }
-
-    abstractView->evaluateJavaScriptWithNoCompletion(script);
+    const std::string scriptCopy(script);
+    MainThreadDispatcher::dispatch_sync([abstractView, scriptCopy]() {
+        if (abstractView->hasCreationFailed()) {
+            ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
+            return;
+        }
+        abstractView->evaluateJavaScriptWithNoCompletion(scriptCopy.c_str());
+    });
     
 }
 

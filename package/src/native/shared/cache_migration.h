@@ -44,6 +44,10 @@
 #include <string>
 #include <system_error>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace electrobun {
 
 // MANUAL bump only. Increment when a release requires that end users'
@@ -61,6 +65,12 @@ namespace electrobun {
 //       by CEF's Chrome runtime. persist:default now uses the global context,
 //       so it no longer creates a colliding named profile.
 constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 3;
+
+// Windows v4 encodes every named profile directory component. This avoids
+// aliases with Chromium-owned root entries on its case-insensitive filesystem
+// and makes the on-disk change explicit for users of interim v3 builds without
+// unnecessarily invalidating macOS/Linux profiles.
+constexpr uint32_t WINDOWS_CEF_CACHE_FORMAT_VERSION = 4;
 
 inline const char* cacheSentinelFilename() {
     return ".electrobun_cef_cache_version";
@@ -80,7 +90,7 @@ inline std::string cachePathForLog(const std::filesystem::path& path) {
         reinterpret_cast<const char*>(value.data()), value.size());
 }
 
-inline void writeCacheSentinel(const std::filesystem::path& sentinelPath,
+inline bool writeCacheSentinel(const std::filesystem::path& sentinelPath,
                                uint32_t version) {
     std::filesystem::path tmpPath = sentinelPath;
     tmpPath += ".tmp";
@@ -90,24 +100,44 @@ inline void writeCacheSentinel(const std::filesystem::path& sentinelPath,
             fprintf(stderr,
                     "[cache_migration] warning: cannot open sentinel temp file: %s\n",
                     cachePathForLog(tmpPath).c_str());
-            return;
+            return false;
         }
         out << version << "\n";
         if (!out) {
             fprintf(stderr,
                     "[cache_migration] warning: failed writing sentinel temp file\n");
-            return;
+            return false;
         }
     }
+#ifdef _WIN32
+    // MoveFileExW replaces the existing sentinel atomically on Windows. Do not
+    // remove the old sentinel first: keeping it intact makes a failed commit
+    // retryable on the next launch.
+    if (!MoveFileExW(
+            tmpPath.c_str(),
+            sentinelPath.c_str(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        const DWORD error = GetLastError();
+        fprintf(stderr,
+                "[cache_migration] warning: failed to commit sentinel: %s\n",
+                std::system_category().message(error).c_str());
+        std::error_code cleanupEc;
+        std::filesystem::remove(tmpPath, cleanupEc);
+        return false;
+    }
+#else
     std::error_code ec;
     std::filesystem::rename(tmpPath, sentinelPath, ec);
     if (ec) {
         fprintf(stderr,
                 "[cache_migration] warning: failed to commit sentinel: %s\n",
                 ec.message().c_str());
-        std::error_code rmEc;
-        std::filesystem::remove(tmpPath, rmEc);
+        std::error_code cleanupEc;
+        std::filesystem::remove(tmpPath, cleanupEc);
+        return false;
     }
+#endif
+    return true;
 }
 
 // Refuses paths that look unsafe to wipe. Returns true only when the path
@@ -135,14 +165,15 @@ inline bool isCachePathSafeToWipe(const std::filesystem::path& cachePath) {
     return true;
 }
 
-inline void migrateCacheFolderIfNeeded(
-    const std::filesystem::path& cacheFolderPath
+inline bool migrateCacheFolderIfNeeded(
+    const std::filesystem::path& cacheFolderPath,
+    uint32_t targetVersion = CEF_CACHE_FORMAT_VERSION
 ) {
     try {
         if (cacheFolderPath.empty()) {
             fprintf(stderr,
                     "[cache_migration] skipped: empty cache path\n");
-            return;
+            return false;
         }
 
         const std::filesystem::path cachePath(cacheFolderPath);
@@ -152,7 +183,7 @@ inline void migrateCacheFolderIfNeeded(
             fprintf(stderr,
                     "[cache_migration] skipped: path failed safety check: %s\n",
                     cachePathLog.c_str());
-            return;
+            return false;
         }
 
         const std::filesystem::path sentinelPath =
@@ -172,17 +203,16 @@ inline void migrateCacheFolderIfNeeded(
                 fprintf(stderr,
                         "[cache_migration] skipped: cannot create cache folder %s (%s)\n",
                         cachePathLog.c_str(), mkEc.message().c_str());
-                return;
+                return false;
             }
-            writeCacheSentinel(sentinelPath, CEF_CACHE_FORMAT_VERSION);
-            return;
+            return writeCacheSentinel(sentinelPath, targetVersion);
         }
 
         if (!std::filesystem::is_directory(cachePath, ec)) {
             fprintf(stderr,
                     "[cache_migration] skipped: path exists but is not a directory: %s\n",
                     cachePathLog.c_str());
-            return;
+            return false;
         }
 
         // Determine if folder is effectively empty (only sentinel or nothing).
@@ -194,7 +224,7 @@ inline void migrateCacheFolderIfNeeded(
                 fprintf(stderr,
                         "[cache_migration] skipped: cannot enumerate cache folder %s (%s)\n",
                         cachePathLog.c_str(), itEc.message().c_str());
-                return;
+                return false;
             }
             for (const auto& entry : it) {
                 if (entry.path().filename() == sentinelPath.filename()) continue;
@@ -204,8 +234,7 @@ inline void migrateCacheFolderIfNeeded(
         }
 
         if (effectivelyEmpty) {
-            writeCacheSentinel(sentinelPath, CEF_CACHE_FORMAT_VERSION);
-            return;
+            return writeCacheSentinel(sentinelPath, targetVersion);
         }
 
         const uint32_t existingVersion =
@@ -213,30 +242,35 @@ inline void migrateCacheFolderIfNeeded(
                 ? readCacheSentinel(sentinelPath)
                 : 0;
 
-        if (existingVersion == CEF_CACHE_FORMAT_VERSION) {
-            return;
+        if (existingVersion == targetVersion) {
+            return true;
         }
 
         fprintf(stderr,
                 "[cache_migration] wiping CEF cache folder (format %u -> %u): %s\n",
-                existingVersion, CEF_CACHE_FORMAT_VERSION,
+                existingVersion, targetVersion,
                 cachePathLog.c_str());
 
-        // Wipe contents but preserve the folder itself. Per-entry failures
-        // are warned and skipped — a partial wipe still beats refusing to
-        // start the app cleanly.
+        // Wipe contents but preserve the folder itself. Never stamp the new
+        // version after a partial wipe; the next launch
+        // must retry instead of accepting mixed, incompatible layouts.
         std::error_code itEc;
         std::filesystem::directory_iterator it(cachePath, itEc);
         if (itEc) {
             fprintf(stderr,
                     "[cache_migration] warning: cannot enumerate cache folder for wipe %s (%s)\n",
                     cachePathLog.c_str(), itEc.message().c_str());
-            return;
+            return false;
         }
+        bool wipeComplete = true;
         for (const auto& entry : it) {
+            // Preserve the old sentinel until every incompatible data entry is
+            // gone. A partial wipe must remain visibly old and retryable.
+            if (entry.path().filename() == sentinelPath.filename()) continue;
             std::error_code rmEc;
             std::filesystem::remove_all(entry.path(), rmEc);
             if (rmEc) {
+                wipeComplete = false;
                 fprintf(stderr,
                         "[cache_migration] warning: failed to remove %s (%s)\n",
                         cachePathForLog(entry.path()).c_str(),
@@ -244,19 +278,32 @@ inline void migrateCacheFolderIfNeeded(
             }
         }
 
-        writeCacheSentinel(sentinelPath, CEF_CACHE_FORMAT_VERSION);
+        if (!wipeComplete) {
+            fprintf(stderr,
+                    "[cache_migration] warning: cache wipe was incomplete; "
+                    "leaving the old format sentinel for retry\n");
+            return false;
+        }
+
+        return writeCacheSentinel(sentinelPath, targetVersion);
     } catch (const std::exception& e) {
         fprintf(stderr,
                 "[cache_migration] aborting due to filesystem error: %s\n",
                 e.what());
+        return false;
     } catch (...) {
         fprintf(stderr,
                 "[cache_migration] aborting due to unknown error\n");
+        return false;
     }
 }
 
-inline void migrateCacheFolderIfNeeded(const std::string& cacheFolderPath) {
-    migrateCacheFolderIfNeeded(std::filesystem::path(cacheFolderPath));
+inline bool migrateCacheFolderIfNeeded(
+    const std::string& cacheFolderPath,
+    uint32_t targetVersion = CEF_CACHE_FORMAT_VERSION
+) {
+    return migrateCacheFolderIfNeeded(
+        std::filesystem::path(cacheFolderPath), targetVersion);
 }
 
 }  // namespace electrobun

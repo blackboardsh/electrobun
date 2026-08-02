@@ -26,10 +26,9 @@
 //   - any other partition (e.g. "temp:foo") → fresh ephemeral in-memory context
 //     per call, never cached. Closing and reopening a webview that uses
 //     "temp:foo" therefore yields fresh storage.
-//   - if CefRequestContext::CreateContext returns null (some Chrome runtime
-//     configurations refuse custom profile paths), we fall back to the global
-//     context for that partition with a warning. The webview still loads;
-//     isolation is lost for that one partition.
+//   - if CefRequestContext::CreateContext returns null, context creation fails.
+//     Falling back to the global context would silently merge an isolated or
+//     ephemeral partition into persistent default storage.
 
 #ifndef ELECTROBUN_PARTITION_CONTEXT_H
 #define ELECTROBUN_PARTITION_CONTEXT_H
@@ -43,8 +42,8 @@ namespace electrobun {
 
 // Platform-provided. Returns the absolute filesystem cache_path for a
 // persistent partition with the given name (e.g. "test1"), creating any
-// missing parent directories. Returning an empty string causes the caller
-// to fall back to an ephemeral (in-memory) context for that webview.
+// missing parent directories. Returning an empty string makes persistent
+// context creation fail closed so storage is never silently merged.
 std::string buildAndEnsurePartitionCachePath(const std::string& partitionName);
 
 inline std::map<std::string, CefRefPtr<CefRequestContext>>& partitionContextMap_() {
@@ -92,11 +91,11 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
     if (identifier.empty()) {
         CefRequestContextSettings defaultSettings;
         defaultSettings.persist_session_cookies = false;
-        CefRefPtr<CefRequestContext> ctx = CefRequestContext::CreateContext(defaultSettings, nullptr);
+        CefRefPtr<CefRequestContext> ctx =
+            CefRequestContext::CreateContext(defaultSettings, nullptr);
         if (!ctx) {
             fprintf(stderr, "[partition_context] WARNING: CreateContext returned null for default partition "
-                            "— falling back to global context\n");
-            ctx = CefRequestContext::GetGlobalContext();
+                            "— refusing to merge it into global storage\n");
         }
         registerScheme(ctx);
         return ctx;
@@ -121,26 +120,26 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
             CefString(&settings.cache_path).FromString(cachePathStr);
         } else {
             fprintf(stderr, "[partition_context] webview %u: failed to build cache path for '%s', "
-                            "falling back to ephemeral\n",
+                            "refusing persistent context creation\n",
                     webviewId, identifier.c_str());
-            settings.persist_session_cookies = false;
+            return nullptr;
         }
     } else {
         settings.persist_session_cookies = false;
     }
 
-    CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
+    CefRefPtr<CefRequestContext> context =
+        CefRequestContext::CreateContext(settings, nullptr);
 
     if (!context) {
         fprintf(stderr, "[partition_context] WARNING: CreateContext returned null for partition '%s' "
-                        "— falling back to global context (this partition will NOT be isolated)\n",
+                        "— refusing to merge it into global storage\n",
                 identifier.c_str());
-        context = CefRequestContext::GetGlobalContext();
     }
 
     registerScheme(context);
 
-    if (isPersistent) {
+    if (isPersistent && context) {
         std::lock_guard<std::mutex> lock(partitionContextMutex_());
         partitionContextMap_()[identifier] = context;
     }

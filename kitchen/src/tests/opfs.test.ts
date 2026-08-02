@@ -184,7 +184,7 @@ async function createPartitionView(
     frame: { x: 0, y: 0, width: 640, height: 480 },
   });
 
-  // CEF creates and navigates the browser asynchronously on the GTK thread.
+  // CEF creates and navigates the browser asynchronously.
   await sleep(1000);
   return view;
 }
@@ -195,10 +195,10 @@ export const opfsTests = [
     category: "Session",
     description:
       "Verify sync-access OPFS, persist:default sharing, named persistent isolation, and ephemeral reset",
-    timeout: 60000,
+    timeout: 90000,
     async run({ createWindow, log }) {
-      if (process.platform !== "linux") {
-        log("Skipping the Linux CEF OPFS regression on this platform");
+      if (process.platform !== "linux" && process.platform !== "win32") {
+        log("Skipping the CEF OPFS regression on this platform");
         return;
       }
 
@@ -251,6 +251,8 @@ export const opfsTests = [
       const isolatedFile = `electrobun-opfs-isolation-${runToken}`;
       const restartFile = "electrobun-opfs-restart-v1";
       const restartValue = "electrobun-opfs-persisted-v1";
+      const namedRestartFile = "electrobun-opfs-named-restart-v1";
+      const namedRestartValue = "electrobun-opfs-named-persisted-v1";
 
       await sleep(1000);
 
@@ -295,6 +297,21 @@ export const opfsTests = [
           pageUrl,
         );
         createdViews.push(persistentA);
+        const namedBeforeRestart = await runOpfsOperation(
+          persistentA,
+          harness,
+          { action: "read", name: namedRestartFile },
+        );
+        if (namedBeforeRestart.value !== null) {
+          expect(namedBeforeRestart.value, "named persisted restart marker").toBe(
+            namedRestartValue,
+          );
+        }
+        await runOpfsOperation(persistentA, harness, {
+          action: "write",
+          name: namedRestartFile,
+          value: namedRestartValue,
+        });
         await runOpfsOperation(persistentA, harness, {
           action: "write",
           name: isolatedFile,
@@ -377,9 +394,10 @@ export const opfsTests = [
         });
 
         log(
-          beforeRestart.value === restartValue
-            ? "OPFS sync handles passed; persist:default marker survived an earlier app process"
-            : "OPFS sync handles and partition semantics passed; restart marker primed for the next app process",
+          beforeRestart.value === restartValue &&
+              namedBeforeRestart.value === namedRestartValue
+            ? "OPFS sync handles passed; default and named markers survived an earlier app process"
+            : "OPFS sync handles and partition semantics passed; restart markers primed for the next app process",
         );
       } finally {
         for (const view of createdViews) {

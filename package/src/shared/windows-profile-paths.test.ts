@@ -73,5 +73,33 @@ describe("Windows profile path source contract", () => {
 		expect(cacheMigration).toContain(
 			"constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 3;",
 		);
+		expect(cacheMigration).toContain(
+			"constexpr uint32_t WINDOWS_CEF_CACHE_FORMAT_VERSION = 4;",
+		);
+	});
+
+	test("encodes every Windows CEF partition name", () => {
+		expect(helper).toContain("buildWindowsCEFPartitionDirectoryName(");
+		expect(helper).toContain('encodedPrefix = "__electrobun_partition_"');
+		expect(helper).toContain("for (const unsigned char ch : partitionName)");
+		expect(wrapper).toContain("buildWindowsCEFPartitionDirectoryName(partitionName)");
+	});
+
+	test("atomically replaces the Windows sentinel and rejects partial wipes", () => {
+		expect(cacheMigration).toContain("MoveFileExW(");
+		expect(cacheMigration).toContain("MOVEFILE_REPLACE_EXISTING");
+		expect(cacheMigration).not.toContain(
+			"std::filesystem::remove(sentinelPath",
+		);
+		expect(cacheMigration).toContain(
+			"entry.path().filename() == sentinelPath.filename()",
+		);
+		expect(cacheMigration).toContain("if (!wipeComplete)");
+		expect(cacheMigration).toContain(
+			"leaving the old format sentinel for retry",
+		);
+		expect(wrapper).toContain(
+			"electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION",
+		);
 	});
 });

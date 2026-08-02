@@ -1,4 +1,6 @@
 #include <cassert>
+#include <chrono>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -27,6 +29,42 @@ int main() {
     assert(cefPartition ==
            cefRoot + L"\\\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb");
 
+    const auto encodedPartition =
+        electrobun::buildWindowsCEFPartitionDirectoryName("profile-a");
+    assert(encodedPartition &&
+           *encodedPartition ==
+               L"__electrobun_partition_70726f66696c652d61");
+
+    const auto defaultVariant =
+        electrobun::buildWindowsCEFPartitionDirectoryName("Default");
+    const auto exactDefault =
+        electrobun::buildWindowsCEFPartitionDirectoryName("default");
+    assert(defaultVariant && exactDefault);
+    assert(*defaultVariant == L"__electrobun_partition_44656661756c74");
+    assert(*exactDefault == L"__electrobun_partition_64656661756c74");
+    assert(*defaultVariant != *exactDefault);
+
+    const auto separatedPartition =
+        electrobun::buildWindowsCEFPartitionDirectoryName("account/a\\b");
+    assert(separatedPartition);
+    assert(separatedPartition->find(L'/') == std::wstring::npos);
+    assert(separatedPartition->find(L'\\') == std::wstring::npos);
+
+    const auto reservedDevice =
+        electrobun::buildWindowsCEFPartitionDirectoryName("con");
+    const auto reservedPrefix =
+        electrobun::buildWindowsCEFPartitionDirectoryName(
+            "__electrobun_partition_636f6e");
+    assert(reservedDevice && reservedPrefix);
+    assert(*reservedDevice == L"__electrobun_partition_636f6e");
+    assert(*reservedPrefix != *reservedDevice);
+
+    assert(!electrobun::buildWindowsCEFPartitionDirectoryName(""));
+    assert(electrobun::buildWindowsCEFPartitionDirectoryName(
+        std::string(100, 'a')));
+    assert(!electrobun::buildWindowsCEFPartitionDirectoryName(
+        std::string(101, 'a')));
+
     const std::string linuxCefRoot = "/home/test/.cache/app/dev/CEF";
     const std::string linuxCefPartition = electrobun::buildCEFPartitionPath(
         "/home/test/.cache", "app", "dev", "CEF", "account-a");
@@ -34,6 +72,60 @@ int main() {
     assert(linuxCefPartition.find("/partitions/") == std::string::npos);
 
     assert(electrobun::CEF_CACHE_FORMAT_VERSION == 3);
+    assert(electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION == 4);
+
+    const auto migrationRoot = std::filesystem::temp_directory_path() /
+        ("electrobun-cache-migration-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto migrationCache = migrationRoot / "app" / "dev" / "CEF";
+    const auto migrationSentinel =
+        migrationCache / electrobun::cacheSentinelFilename();
+    std::filesystem::create_directories(migrationCache);
+
+    assert(electrobun::writeCacheSentinel(migrationSentinel, 3));
+    assert(electrobun::readCacheSentinel(migrationSentinel) == 3);
+    assert(electrobun::migrateCacheFolderIfNeeded(
+        migrationCache, electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION));
+    assert(electrobun::readCacheSentinel(migrationSentinel) == 4);
+
+    {
+        std::ofstream stale(migrationCache / "stale-profile-data");
+        stale << "v3";
+    }
+    assert(electrobun::writeCacheSentinel(migrationSentinel, 3));
+    assert(electrobun::migrateCacheFolderIfNeeded(
+        migrationCache, electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION));
+    assert(!std::filesystem::exists(migrationCache / "stale-profile-data"));
+    assert(electrobun::readCacheSentinel(migrationSentinel) == 4);
+
+#ifdef _WIN32
+    const auto lockedProfileData = migrationCache / "locked-profile-data";
+    {
+        std::ofstream lockedData(lockedProfileData);
+        lockedData << "v3";
+    }
+    HANDLE lockedHandle = CreateFileW(
+        lockedProfileData.c_str(),
+        GENERIC_READ,
+        0,
+        nullptr,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    assert(lockedHandle != INVALID_HANDLE_VALUE);
+    assert(electrobun::writeCacheSentinel(migrationSentinel, 3));
+    assert(!electrobun::migrateCacheFolderIfNeeded(
+        migrationCache, electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION));
+    assert(electrobun::readCacheSentinel(migrationSentinel) == 3);
+    assert(std::filesystem::exists(lockedProfileData));
+    CloseHandle(lockedHandle);
+
+    assert(electrobun::migrateCacheFolderIfNeeded(
+        migrationCache, electrobun::WINDOWS_CEF_CACHE_FORMAT_VERSION));
+    assert(!std::filesystem::exists(lockedProfileData));
+    assert(electrobun::readCacheSentinel(migrationSentinel) == 4);
+#endif
+    std::filesystem::remove_all(migrationRoot);
 
     const std::wstring webViewDefault =
         electrobun::buildWebView2UserDataPath(

@@ -2,6 +2,7 @@
 #define ELECTROBUN_WINDOWS_PROFILE_PATHS_H
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,35 @@
 #endif
 
 namespace electrobun {
+
+/**
+ * Return a single, collision-resistant Windows directory component for a CEF
+ * persistent partition name.
+ *
+ * Every name is byte-encoded so case variants, Unicode names, separators,
+ * traversal components, Windows-reserved names, and future Chromium-owned root
+ * entries cannot alias one another or escape root_cache_path.
+ */
+inline std::optional<std::wstring> buildWindowsCEFPartitionDirectoryName(
+    std::string_view partitionName
+) {
+    constexpr std::string_view encodedPrefix = "__electrobun_partition_";
+    constexpr size_t maxEncodedInputLength = 100;
+
+    if (partitionName.empty() ||
+        partitionName.size() > maxEncodedInputLength) {
+        return std::nullopt;
+    }
+
+    static constexpr wchar_t hex[] = L"0123456789abcdef";
+    std::wstring encoded(encodedPrefix.begin(), encodedPrefix.end());
+    encoded.reserve(encoded.size() + partitionName.size() * 2);
+    for (const unsigned char ch : partitionName) {
+        encoded.push_back(hex[ch >> 4]);
+        encoded.push_back(hex[ch & 0x0f]);
+    }
+    return encoded;
+}
 
 inline std::wstring buildWebView2UserDataPath(
     const std::wstring& localAppData,

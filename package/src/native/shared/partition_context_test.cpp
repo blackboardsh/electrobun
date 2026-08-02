@@ -36,6 +36,10 @@ public:
     static CefRefPtr<CefRequestContext> CreateContext(
         const CefRequestContextSettings& settings,
         void*) {
+        if (failNextCreate()) {
+            failNextCreate() = false;
+            return nullptr;
+        }
         createdContexts().push_back(std::make_unique<CefRequestContext>(false, settings));
         return createdContexts().back().get();
     }
@@ -67,6 +71,11 @@ public:
         return context;
     }
 
+    static bool& failNextCreate() {
+        static bool fail = false;
+        return fail;
+    }
+
     bool global;
     CefRequestContextSettings settings;
     std::vector<RegisteredScheme> registeredSchemes;
@@ -89,6 +98,7 @@ void expect(bool condition, const std::string& message) {
 
 void resetState() {
     CefRequestContext::createdContexts().clear();
+    CefRequestContext::failNextCreate() = false;
     CefRequestContext::globalContext().registeredSchemes.clear();
     electrobun::partitionContextMap_().clear();
     builtPartitionPaths.clear();
@@ -139,10 +149,28 @@ int main() {
            "a named persistent partition must use its isolated profile path");
 
     resetState();
+    CefRequestContext::failNextCreate() = true;
+    auto* failedPersistent = electrobun::getOrCreateRequestContextForPartition(
+        "persist:retryable", 4, &schemeFactory);
+    expect(failedPersistent == nullptr,
+           "a failed named context creation must report failure");
+    expect(electrobun::partitionContextMap_().find("persist:retryable") ==
+               electrobun::partitionContextMap_().end(),
+           "a failed named context must not poison the persistent cache");
+
+    auto* retriedPersistent = electrobun::getOrCreateRequestContextForPartition(
+        "persist:retryable", 5, &schemeFactory);
+    expect(retriedPersistent != nullptr,
+           "a named context creation failure must be retryable");
+    expect(builtPartitionPaths ==
+               std::vector<std::string>{"retryable", "retryable"},
+           "a retry must rebuild the named profile path");
+
+    resetState();
     auto* ephemeralFirst = electrobun::getOrCreateRequestContextForPartition(
-        "temporary", 4, &schemeFactory);
+        "temporary", 6, &schemeFactory);
     auto* ephemeralSecond = electrobun::getOrCreateRequestContextForPartition(
-        "temporary", 5, &schemeFactory);
+        "temporary", 7, &schemeFactory);
     expect(ephemeralFirst != ephemeralSecond,
            "a named ephemeral partition must create a fresh context per webview");
     expect(!ephemeralFirst->global && !ephemeralSecond->global,
@@ -155,9 +183,9 @@ int main() {
 
     resetState();
     auto* unnamedFirst = electrobun::getOrCreateRequestContextForPartition(
-        nullptr, 6, &schemeFactory);
+        nullptr, 8, &schemeFactory);
     auto* unnamedSecond = electrobun::getOrCreateRequestContextForPartition(
-        "", 7, &schemeFactory);
+        "", 9, &schemeFactory);
     expect(unnamedFirst != unnamedSecond,
            "an omitted partition must retain fresh ephemeral context semantics");
     expect(!unnamedFirst->global && !unnamedSecond->global,
