@@ -19,6 +19,7 @@ import { updaterTests } from "./updater.test";
 import { sandboxTests } from "./sandbox.test";
 import { trayApiTests } from "./tray-api.test";
 import { runtimeTests } from "./runtime.test";
+import { opfsTests } from "./opfs.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -54,6 +55,7 @@ export const allTests: TestDefinition[] = [
   ...sandboxTests,
   ...trayApiTests,
   ...runtimeTests,
+  ...opfsTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -97,6 +99,7 @@ export {
   sandboxTests,
   trayApiTests,
   runtimeTests,
+  opfsTests,
   wgpuFfiTests,
   wgpuAdapterTests,
   babylonAdapterTests,

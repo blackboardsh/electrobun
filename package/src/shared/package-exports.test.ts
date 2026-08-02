@@ -124,7 +124,7 @@ function reportComparison(
 	legacyRoot: BundleGraph,
 	focused: BundleGraph,
 ) {
-	if (process.env.ELECTROBUN_REPORT_PACKAGE_EXPORT_METRICS !== "1") return;
+	if (process.env["ELECTROBUN_REPORT_PACKAGE_EXPORT_METRICS"] !== "1") return;
 	console.info(
 		`${label}: root ${legacyRoot.modules} modules/${legacyRoot.bytes} bytes; ` +
 			`focused ${focused.modules} modules/${focused.bytes} bytes`,
@@ -142,6 +142,7 @@ describe("published package exports", () => {
 		for (const specifier of Object.keys(focusedImports)) {
 			const exportKey = `.${specifier.slice("electrobun".length)}`;
 			const target = manifest.exports[exportKey];
+			if (!target) throw new Error(`Missing package export ${exportKey}`);
 			expect(target).toMatch(/^\.\/dist\/api\/sdks\/bun\/entries\/.+\.ts$/);
 
 			const sourcePath = join(

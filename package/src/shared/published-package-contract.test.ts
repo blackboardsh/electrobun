@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import {
 	cpSync,
 	mkdirSync,
@@ -11,7 +12,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript";
 
 type PackageManifest = {
 	exports: Record<string, string>;
@@ -23,14 +23,6 @@ const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(
 	readFileSync(join(packageDir, "package.json"), "utf8"),
 ) as PackageManifest;
-
-function formatDiagnostics(diagnostics: readonly ts.Diagnostic[]): string {
-	return ts.formatDiagnosticsWithColorAndContext(diagnostics, {
-		getCanonicalFileName: (fileName) => fileName,
-		getCurrentDirectory: () => packageDir,
-		getNewLine: () => "\n",
-	});
-}
 
 describe("published package dependency contract", () => {
 	test("ships Three.js declarations as a production dependency", () => {
@@ -80,28 +72,54 @@ describe("published package dependency contract", () => {
 			writeFileSync(
 				consumerPath,
 				[
-					'import { three } from "electrobun";',
+					'import { three, type ElectrobunConfig } from "electrobun";',
 					"const scene: three.Scene = new three.Scene();",
 					"scene.add(new three.Object3D());",
+					"const config = {",
+					'  app: { name: "Flatpak app", identifier: "dev.electrobun.flatpak", version: "1.0.0" },',
+					"  build: { linux: { flatpak: {",
+					"    enabled: true,",
+					'    outputPath: "flatpak",',
+					'    runtime: "org.freedesktop.Platform",',
+					'    runtimeVersion: "25.08",',
+					'    sdk: "org.freedesktop.Sdk",',
+					'    finishArgs: ["--share=network"],',
+					"  } } },",
+					"} satisfies ElectrobunConfig;",
+					"void config;",
 				].join("\n"),
 			);
 
-			const program = ts.createProgram([consumerPath], {
-				allowImportingTsExtensions: true,
-				allowJs: true,
-				module: ts.ModuleKind.ESNext,
-				moduleResolution: ts.ModuleResolutionKind.Bundler,
-				noEmit: true,
-				resolveJsonModule: true,
-				// Electrobun ships TypeScript, so missing declarations in its source
-				// remain visible even when consumers skip dependency declaration checks.
-				skipLibCheck: true,
-				strict: true,
-				target: ts.ScriptTarget.ESNext,
-			});
-			const diagnostics = ts.getPreEmitDiagnostics(program);
+			// Run the same compiler that consumers invoke, in a separate Node process.
+			// Keeping the compiler outside the test runtime also avoids coupling this
+			// package-contract check to a particular main-process JavaScript engine.
+			const result = spawnSync(
+				"node",
+				[
+					join(packageDir, "node_modules", "typescript", "bin", "tsc"),
+					"--allowImportingTsExtensions",
+					"--allowJs",
+					"--module",
+					"ESNext",
+					"--moduleResolution",
+					"Bundler",
+					"--noEmit",
+					"--resolveJsonModule",
+					// Electrobun ships TypeScript, so missing declarations in its source
+					// remain visible even when consumers skip dependency declaration checks.
+					"--skipLibCheck",
+					"--strict",
+					"--target",
+					"ESNext",
+					"--types",
+					"bun",
+					consumerPath,
+				],
+				{ cwd: packageDir, encoding: "utf8" },
+			);
 
-			expect(formatDiagnostics(diagnostics)).toBe("");
+			if (result.error) throw result.error;
+			expect([result.status, result.stdout, result.stderr]).toEqual([0, "", ""]);
 			expect(manifest.exports["."]).toBe("./dist/api/sdks/bun/index.ts");
 		} finally {
 			rmSync(tempDir, { force: true, recursive: true });

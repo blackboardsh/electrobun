@@ -189,6 +189,39 @@ static std::mutex webviewHTMLMutex;
 // Global variables for CEF cache path isolation
 static std::string g_electrobunChannel = "";
 static std::string g_electrobunIdentifier = "";
+static std::string g_electrobunName = "";
+static std::string g_electrobunWindowClass = "Electrobun";
+
+static std::string deriveLinuxWindowClass(
+    const std::string& name,
+    const std::string& channel) {
+    std::string result;
+    result.reserve(name.size() + channel.size() + 1);
+    for (char character : name) {
+        if (character != ' ') {
+            result.push_back(character);
+        }
+    }
+    if (result.empty()) {
+        result = "Electrobun";
+    }
+    if (!channel.empty() && channel != "production" && channel != "stable") {
+        result += "-";
+        result += channel;
+    }
+    return result;
+}
+
+// The launcher sets this private marker only for the exact `--automation`
+// opt-in. WebKitGTK permits automation on one context per process, so the first
+// context used by an Electrobun WebKit view becomes the sole automation context.
+static constexpr const char* kWebKitAutomationEnvironment = "ELECTROBUN_WEBKIT_AUTOMATION";
+static constexpr const char* kWebKitAutomationInspectorServerEnvironment =
+    "ELECTROBUN_WEBKIT_AUTOMATION_INSPECTOR_SERVER";
+static WebKitWebContext* g_webKitAutomationContext = nullptr;
+static WebKitWebView* g_webKitAutomationTarget = nullptr;
+static bool g_webKitAutomationConfigured = false;
+static bool g_webKitAutomationInspectorServerRestored = false;
 
 // Forward declarations for HTML content management
 extern "C" ELECTROBUN_EXPORT const char* getWebviewHTMLContent(uint32_t webviewId);
@@ -359,6 +392,13 @@ static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 static std::mutex g_webviewMapMutex;
 static std::map<uint32_t, std::string> g_webviewViewsRoot;
 static std::mutex g_webviewViewsRootMutex;
+
+// CefShutdown requires every browser to have completed OnBeforeClose first.
+// Track browsers independently of g_webviewMap because a removed view can keep
+// closing asynchronously after its owner has been erased from that map.
+static std::map<int, CefRefPtr<CefBrowser>> g_liveCefBrowsers;
+static std::mutex g_liveCefBrowsersMutex;
+static std::atomic<int> g_pendingCefBrowserCreations{0};
 
 // Global map to store preload scripts by browser ID (for multi-process CEF)
 static std::map<int, std::string> g_preloadScripts;
@@ -965,6 +1005,8 @@ private:
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
     std::function<void()> browser_close_callback_;  // Callback to clear parent webview browser
     std::function<void()> load_end_callback_;  // Callback for page load completion
+    std::atomic<bool> owner_detached_{false};
+    std::atomic<bool> initial_browser_creation_pending_{false};
     
     // OSR (Off-Screen Rendering) members for transparency
     Window x11_window_;
@@ -1028,17 +1070,41 @@ public:
     CefRefPtr<CefBrowser> GetBrowser() {
         return browser_;
     }
+
+    void MarkInitialBrowserCreationPending() {
+        bool expected = false;
+        if (initial_browser_creation_pending_.compare_exchange_strong(expected, true)) {
+            g_pendingCefBrowserCreations.fetch_add(1);
+        }
+    }
+
+    void ResolveInitialBrowserCreationPending() {
+        if (initial_browser_creation_pending_.exchange(false)) {
+            g_pendingCefBrowserCreations.fetch_sub(1);
+        }
+    }
     
     void SetBrowserCreatedCallback(std::function<void(CefRefPtr<CefBrowser>)> callback) {
+        if (owner_detached_.load()) return;
         browser_created_callback_ = callback;
     }
     
     void SetBrowserCloseCallback(std::function<void()> callback) {
+        if (owner_detached_.load()) return;
         browser_close_callback_ = callback;
     }
     
     void SetLoadEndCallback(std::function<void()> callback) {
+        if (owner_detached_.load()) return;
         load_end_callback_ = callback;
+    }
+
+    void DetachOwnerCallbacks() {
+        owner_detached_.store(true);
+        browser_created_callback_ = nullptr;
+        browser_close_callback_ = nullptr;
+        load_end_callback_ = nullptr;
+        positioning_callback_ = nullptr;
     }
     
     void SetBrowserPreloadScript(int browserId, const std::string& script) {
@@ -1336,7 +1402,7 @@ public:
         }
         
         // Call load end callback for deferred operations (like transparency)
-        if (frame->IsMain() && load_end_callback_) {
+        if (frame->IsMain() && !owner_detached_.load() && load_end_callback_) {
             load_end_callback_();
         }
         
@@ -1448,6 +1514,14 @@ public:
         
         // Set the browser reference
         SetBrowser(browser);
+        ResolveInitialBrowserCreationPending();
+
+        // Keep a strong reference until OnBeforeClose. A view may already have
+        // been removed from g_webviewMap while its close is still in flight.
+        {
+            std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+            g_liveCefBrowsers[browser->GetIdentifier()] = browser;
+        }
         
         // Register browser ID → webviewId so scheme handlers can look up content
         {
@@ -1455,7 +1529,15 @@ public:
             g_browserIdToWebviewId[browser->GetIdentifier()] = webview_id_;
         }
         
-        // Notify CEFWebViewImpl that browser is created
+        // A view can be removed before asynchronous browser creation finishes.
+        // In that case the client owns the only safe reference and must close
+        // the new browser instead of leaving it orphaned.
+        if (g_shuttingDown.load() || owner_detached_.load()) {
+            browser->GetHost()->CloseBrowser(g_shuttingDown.load());
+            return;
+        }
+
+        // Notify CEFWebViewImpl that browser is created.
         if (browser_created_callback_) {
             browser_created_callback_(browser);
         }
@@ -1569,7 +1651,7 @@ public:
             } else {
                        
                 // Try positioning callback if window is ready
-                if (positioning_callback_) {
+                if (!owner_detached_.load() && positioning_callback_) {
                     positioning_callback_();
                 }
             }
@@ -1579,6 +1661,13 @@ public:
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
+
+        // This is the shutdown barrier: only after this erase may the main
+        // loop observe that every CEF browser has finished closing.
+        {
+            std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+            g_liveCefBrowsers.erase(browser->GetIdentifier());
+        }
         
         // Remove browser ID → webviewId mapping
         {
@@ -1593,7 +1682,7 @@ public:
             browser_ = nullptr;
             
             // Notify parent webview to clear its browser reference too
-            if (browser_close_callback_) {
+            if (!owner_detached_.load() && browser_close_callback_) {
                 browser_close_callback_();
             }
         }
@@ -2651,6 +2740,130 @@ bool checkNavigationRules(std::shared_ptr<AbstractView> view, const std::string&
     return view->shouldAllowNavigationToURL(url);
 }
 
+static bool isWebKitAutomationRequested() {
+    const char* value = getenv(kWebKitAutomationEnvironment);
+    return value && strcmp(value, "1") == 0;
+}
+
+static void restoreWebKitAutomationInspectorServer() {
+    if (!isWebKitAutomationRequested()) {
+        return;
+    }
+
+    const char* server = getenv(kWebKitAutomationInspectorServerEnvironment);
+    if (!server || server[0] == '\0') {
+        return;
+    }
+
+    setenv("WEBKIT_INSPECTOR_SERVER", server, 1);
+    unsetenv(kWebKitAutomationInspectorServerEnvironment);
+    g_webKitAutomationInspectorServerRestored = true;
+}
+
+static void onWebKitAutomationContextDestroyed(gpointer, GObject*) {
+    g_webKitAutomationContext = nullptr;
+    g_webKitAutomationConfigured = false;
+}
+
+static bool selectWebKitAutomationContext(WebKitWebContext* context) {
+    if (!context || !isWebKitAutomationRequested()) {
+        return false;
+    }
+
+    if (!g_webKitAutomationContext) {
+        g_webKitAutomationContext = context;
+        g_object_weak_ref(
+            G_OBJECT(context),
+            onWebKitAutomationContextDestroyed,
+            nullptr);
+    }
+
+    return context == g_webKitAutomationContext;
+}
+
+static WebKitWebView* onWebKitAutomationCreateWebView(
+    WebKitAutomationSession*,
+    gpointer) {
+    if (!g_webKitAutomationTarget ||
+        !webkit_web_view_is_controlled_by_automation(g_webKitAutomationTarget)) {
+        fprintf(stderr, "ERROR: WebKitGTK automation has no controlled app view\n");
+        return nullptr;
+    }
+
+    printf("[WebKit] W3C automation attached to the primary app view\n");
+    fflush(stdout);
+    return g_webKitAutomationTarget;
+}
+
+static void onWebKitAutomationStarted(
+    WebKitWebContext*,
+    WebKitAutomationSession* session,
+    gpointer) {
+    printf("[WebKit] W3C automation session requested\n");
+    fflush(stdout);
+
+    WebKitApplicationInfo* info = webkit_application_info_new();
+    webkit_application_info_set_name(
+        info,
+        g_electrobunIdentifier.empty()
+            ? "Electrobun"
+            : g_electrobunIdentifier.c_str());
+    webkit_automation_session_set_application_info(session, info);
+    webkit_application_info_unref(info);
+
+    g_signal_connect(
+        session,
+        "create-web-view",
+        G_CALLBACK(onWebKitAutomationCreateWebView),
+        nullptr);
+}
+
+static void configureWebKitAutomation(
+    WebKitWebContext* context,
+    WebKitWebView* target,
+    bool isControlledByAutomation) {
+    if (!isControlledByAutomation || context != g_webKitAutomationContext) {
+        return;
+    }
+
+    if (!g_webKitAutomationTarget) {
+        g_webKitAutomationTarget = target;
+        g_object_add_weak_pointer(
+            G_OBJECT(target),
+            reinterpret_cast<gpointer*>(&g_webKitAutomationTarget));
+    }
+
+    if (g_webKitAutomationConfigured) {
+        return;
+    }
+
+    g_signal_connect(
+        context,
+        "automation-started",
+        G_CALLBACK(onWebKitAutomationStarted),
+        nullptr);
+    webkit_web_context_set_automation_allowed(context, TRUE);
+    g_webKitAutomationConfigured =
+        webkit_web_context_is_automation_allowed(context) == TRUE;
+
+    // Give WebKitGTK's remote-inspector server one main-loop turn to consume
+    // the endpoint, then hide it from JavaScriptCore VMs created later.
+    if (g_webKitAutomationInspectorServerRestored) {
+        g_webKitAutomationInspectorServerRestored = false;
+        g_timeout_add(1000, [](gpointer) -> gboolean {
+            unsetenv("WEBKIT_INSPECTOR_SERVER");
+            return G_SOURCE_REMOVE;
+        }, nullptr);
+    }
+
+    if (g_webKitAutomationConfigured) {
+        printf("[WebKit] W3C automation enabled for the primary app view\n");
+        fflush(stdout);
+    } else {
+        fprintf(stderr, "ERROR: WebKitGTK automation could not be enabled\n");
+    }
+}
+
 // WebKitGTK implementation
 class WebKitWebViewImpl : public AbstractView {
 public:
@@ -2700,6 +2913,11 @@ public:
         // Set initial state flags
         this->pendingStartTransparent = startTransparent;
         this->pendingStartPassthrough = startPassthrough;
+
+        // This is the first WebKitGTK API path used during app webview
+        // construction. Restore WebKitWebDriver's endpoint here: the main JSC
+        // runtime is already initialized, while WebKit has not initialized yet.
+        restoreWebKitAutomationInspectorServer();
         
         // Create the user content controller and manager
         manager = webkit_user_content_manager_new();
@@ -2731,17 +2949,27 @@ public:
 
         // Get or create shared context for this partition
         WebKitWebContext* context = getContextForPartition(partition.empty() ? nullptr : partition.c_str());
+        const bool isControlledByAutomation = selectWebKitAutomationContext(context);
 
         // Create webview with context and user content manager
         webview = GTK_WIDGET(g_object_new(WEBKIT_TYPE_WEB_VIEW,
             "web-context", context,
             "user-content-manager", manager,
             "settings", settings,
+            "is-controlled-by-automation", isControlledByAutomation ? TRUE : FALSE,
             NULL));
         if (!webview) {
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
+
+        // Connect the session only after the controlled target exists. This
+        // prevents WebKitWebDriver from requesting a browsing context during
+        // the small gap between enabling the context and constructing the view.
+        configureWebKitAutomation(
+            context,
+            WEBKIT_WEB_VIEW(webview),
+            isControlledByAutomation);
 
         // A GTK size request is a minimum, not a one-time allocation. Full-size
         // host views fill their container through expand/fill, while positioned
@@ -4167,7 +4395,7 @@ void processX11EventsForOSR(uint32_t windowId, CefRefPtr<ElectrobunClient> clien
 struct OSREventData {
     uint32_t windowId;
     CefRefPtr<ElectrobunClient> client;
-    bool active;
+    std::atomic<bool> active{true};
 };
 
 // CEF WebView implementation
@@ -4203,7 +4431,9 @@ public:
     bool parentTransparent = false;
     
     // OSR event handling data
-    void* osr_event_data_ = nullptr;
+    std::shared_ptr<OSREventData> osr_event_data_;
+    guint osr_timeout_source_id_ = 0;
+    guint osr_idle_source_id_ = 0;
     
     // X11 event handling for OSR windows is now handled via processX11EventsForOSR
     Window osr_x11_window_ = 0;
@@ -4251,13 +4481,30 @@ public:
     }
     
     ~CEFWebViewImpl() {
+        // Native window teardown can release the last shared_ptr without going
+        // through remove(). Detach every callback that captures this before the
+        // owner storage becomes invalid.
+        if (client) {
+            client->DetachOwnerCallbacks();
+        }
+        if (!isRemoved && browser) {
+            browser->GetHost()->CloseBrowser(false);
+            browser = nullptr;
+        }
+
         // Clean up OSR event handling
         if (osr_event_data_) {
-            auto* eventData = static_cast<OSREventData*>(osr_event_data_);
-            eventData->active = false;  // Stop the timer
-            delete eventData;
-            osr_event_data_ = nullptr;
+            osr_event_data_->active.store(false);
         }
+        if (osr_timeout_source_id_) {
+            g_source_remove(osr_timeout_source_id_);
+            osr_timeout_source_id_ = 0;
+        }
+        if (osr_idle_source_id_) {
+            g_source_remove(osr_idle_source_id_);
+            osr_idle_source_id_ = 0;
+        }
+        osr_event_data_.reset();
         if (osr_window_id_) {
             registerOSRClientForWindow(osr_window_id_, nullptr);
             osr_window_id_ = 0;
@@ -4375,30 +4622,41 @@ public:
                 registerOSRClientForWindow(x11win->windowId, this->client);
 
                 // Create a data structure to pass to the timer callback
-                auto* eventData = new OSREventData{x11win->windowId, this->client, true};
+                auto eventData = std::make_shared<OSREventData>();
+                eventData->windowId = x11win->windowId;
+                eventData->client = this->client;
                 
                 // Store event data in the webview for cleanup
                 this->osr_event_data_ = eventData;
                 
                 // Use a higher frequency timer for better responsiveness
-                g_timeout_add(5, [](gpointer data) -> gboolean {  // 200fps - process events more frequently
-                    auto* osrData = static_cast<OSREventData*>(data);
-                    if (osrData && osrData->active) {
+                this->osr_timeout_source_id_ = g_timeout_add_full(
+                    G_PRIORITY_DEFAULT,
+                    5,
+                    [](gpointer data) -> gboolean {  // 200fps - process events more frequently
+                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
+                    if (osrData && osrData->active.load()) {
                         processX11EventsForOSR(osrData->windowId, osrData->client);
                         return TRUE; // Continue timer
                     }
                     return FALSE; // Stop timer
-                }, eventData);
+                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
+                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
+                });
                 
                 // Also use idle processing for immediate event handling
-                g_idle_add([](gpointer data) -> gboolean {
-                    auto* osrData = static_cast<OSREventData*>(data);
-                    if (osrData && osrData->active) {
+                this->osr_idle_source_id_ = g_idle_add_full(
+                    G_PRIORITY_DEFAULT_IDLE,
+                    [](gpointer data) -> gboolean {
+                    const auto& osrData = *static_cast<std::shared_ptr<OSREventData>*>(data);
+                    if (osrData && osrData->active.load()) {
                         processX11EventsForOSR(osrData->windowId, osrData->client);
                         return TRUE; // Continue processing
                     }
                     return FALSE; // Stop
-                }, eventData);
+                }, new std::shared_ptr<OSREventData>(eventData), [](gpointer data) {
+                    delete static_cast<std::shared_ptr<OSREventData>*>(data);
+                });
                 
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
@@ -4450,9 +4708,11 @@ public:
         CefRefPtr<CefDictionaryValue> extra_info = CefDictionaryValue::Create();
         extra_info->SetBool("sandbox", isSandboxed);
 
+        client->MarkInitialBrowserCreationPending();
         bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
         
         if (!create_result) {
+            client->ResolveInitialBrowserCreationPending();
             printf("CEF: CreateBrowser returned false\n");
             creationFailed = true;
         } else {
@@ -4675,13 +4935,11 @@ public:
             widget = nullptr;
         }
 
-        // Clear the browser_close_callback before scheduling CloseBrowser.
-        // OnBeforeClose fires after CloseBrowser and invokes this callback, but by
-        // that time the CEFWebViewImpl may already be destroyed (last shared_ptr
-        // released). Clearing it here is safe because we already set browser=nullptr
-        // above, so the callback would be a no-op anyway.
+        // The client may outlive this view while asynchronous creation, load, or
+        // close callbacks are still pending. It also closes a browser that is
+        // created after this view has already been removed.
         if (client) {
-            client->SetBrowserCloseCallback(nullptr);
+            client->DetachOwnerCallbacks();
         }
 
         // Close browser asynchronously outside the lock
@@ -5046,6 +5304,25 @@ public:
         }
     }
 };
+
+static void removeCEFViewsForParentWindow(Window parent_window) {
+    std::vector<std::shared_ptr<AbstractView>> views_to_remove;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        for (const auto& [id, view] : g_webviewMap) {
+            (void)id;
+            auto cef_view = std::dynamic_pointer_cast<CEFWebViewImpl>(view);
+            if (cef_view && cef_view->parentXWindow == parent_window && !cef_view->isRemoved) {
+                views_to_remove.push_back(std::move(cef_view));
+            }
+        }
+    }
+
+    // remove() erases g_webviewMap, so never invoke it while holding the map lock.
+    for (const auto& view : views_to_remove) {
+        view->remove();
+    }
+}
 
 
 
@@ -5854,9 +6131,6 @@ void initializeGTK() {
             
             g_gtkInitialized = true;
             
-            // Register the views:// URI scheme handler AFTER GTK is initialized
-            WebKitWebContext* context = webkit_web_context_get_default();
-            webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
         }
     }
     // Notify all waiting threads that GTK is initialized
@@ -6165,13 +6439,27 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
             g_object_unref(dataManager);
         }
 
-        // Register views:// scheme handler for this partition context
-        webkit_web_context_register_uri_scheme(context, "views", handleViewsURIScheme, nullptr, nullptr);
-        
         g_partitionContexts[partition] = context;
         if (isEphemeralPartition) {
             g_ephemeralPartitionContextRefCounts[partition] = 1;
         }
+    }
+
+    // Mark each context after registration so the default context and custom
+    // partition contexts both receive the handler exactly once.
+    static const char* viewsSchemeRegisteredKey =
+        "electrobun-views-scheme-registered";
+    if (!g_object_get_data(G_OBJECT(context), viewsSchemeRegisteredKey)) {
+        webkit_web_context_register_uri_scheme(
+            context,
+            "views",
+            handleViewsURIScheme,
+            nullptr,
+            nullptr);
+        g_object_set_data(
+            G_OBJECT(context),
+            viewsSchemeRegisteredKey,
+            GINT_TO_POINTER(1));
     }
 
     return context;
@@ -6223,6 +6511,58 @@ gboolean cef_timer_callback(gpointer user_data) {
     }
 
     return G_SOURCE_CONTINUE; // Keep the timer running
+}
+
+static bool cefBrowsersFinishedClosing() {
+    if (g_pendingCefBrowserCreations.load() != 0) {
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+    return g_liveCefBrowsers.empty();
+}
+
+static gboolean drainCEFForShutdown(gpointer) {
+    if (g_cefInitialized.load()) {
+        CefDoMessageLoopWork();
+    }
+
+    // OnBeforeClose removes the browser from g_liveCefBrowsers. Pending
+    // CreateBrowser calls are also part of the barrier because OnAfterCreated
+    // must get a chance to immediately close them during shutdown.
+    if (!cefBrowsersFinishedClosing()) {
+        return G_SOURCE_CONTINUE;
+    }
+
+    printf("[stopEventLoop] All CEF browsers closed\n");
+    gtk_main_quit();
+    return G_SOURCE_REMOVE;
+}
+
+static void beginCEFShutdownOnMainThread() {
+    std::vector<CefRefPtr<CefBrowser>> browsers;
+    {
+        std::lock_guard<std::mutex> lock(g_liveCefBrowsersMutex);
+        browsers.reserve(g_liveCefBrowsers.size());
+        for (const auto& [browser_id, browser] : g_liveCefBrowsers) {
+            (void)browser_id;
+            if (browser) {
+                browsers.push_back(browser);
+            }
+        }
+    }
+
+    // Force-close is appropriate for application shutdown: a beforeunload
+    // handler must not leave the native event-loop thread stuck indefinitely.
+    // Never hold the registry mutex while invoking CEF callbacks.
+    for (const auto& browser : browsers) {
+        browser->GetHost()->CloseBrowser(true);
+    }
+
+    // Keep the GTK loop alive while servicing CEF. This source removes itself
+    // only after every successful CreateBrowser request has resolved and every
+    // live browser has reached OnBeforeClose.
+    g_timeout_add(10, drainCEFForShutdown, nullptr);
 }
 
 // Global debounce state
@@ -6513,6 +6853,7 @@ void runCEFEventLoop() {
 
     if (g_cefInitialized) {
         CefShutdown();
+        g_cefInitialized.store(false);
     }
     g_shutdownComplete.store(true);
 }
@@ -6623,8 +6964,8 @@ void* createX11Window(uint32_t windowId, double x, double y, double width, doubl
             
             // Set WM_CLASS for proper taskbar icon matching
             XClassHint class_hint;
-            class_hint.res_name = (char*)"ElectrobunKitchenSink-dev";
-            class_hint.res_class = (char*)"ElectrobunKitchenSink-dev";
+            class_hint.res_name = const_cast<char*>(g_electrobunWindowClass.c_str());
+            class_hint.res_class = const_cast<char*>(g_electrobunWindowClass.c_str());
             XSetClassHint(display, x11_window, &class_hint);
             
             // Set window protocols for close button
@@ -6730,8 +7071,11 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
        
         gtk_window_set_title(GTK_WINDOW(window), title);
         
-        // Set WM_CLASS for proper taskbar icon matching
-        gtk_window_set_wmclass(GTK_WINDOW(window), "ElectrobunKitchenSink-dev", "ElectrobunKitchenSink-dev");
+        // Match the channel-specific StartupWMClass emitted by Hutch.
+        gtk_window_set_wmclass(
+            GTK_WINDOW(window),
+            g_electrobunWindowClass.c_str(),
+            g_electrobunWindowClass.c_str());
         
         gtk_window_set_default_size(GTK_WINDOW(window), (int)width, (int)height);
        
@@ -9855,17 +10199,20 @@ const char* getWebviewHTMLContent(uint32_t webviewId) {
 // Forward declaration - stopEventLoop is defined after startEventLoop
 ELECTROBUN_EXPORT void stopEventLoop();
 
-// Note: `name` parameter is accepted for API consistency with Windows but not used on Linux
 ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, const char* channel) {
-    (void)name; // Unused on Linux - kept for API consistency with Windows
-
-    // Store identifier and channel globally for use in CEF initialization
+    // Store app identity before any native windows or renderer contexts are made.
     if (identifier && identifier[0]) {
         g_electrobunIdentifier = std::string(identifier);
+    }
+    if (name && name[0]) {
+        g_electrobunName = std::string(name);
     }
     if (channel && channel[0]) {
         g_electrobunChannel = std::string(channel);
     }
+    g_electrobunWindowClass = deriveLinuxWindowClass(
+        g_electrobunName,
+        g_electrobunChannel);
 
     // Linux uses runEventLoop instead
     runEventLoop();
@@ -9879,7 +10226,11 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     printf("[stopEventLoop] Initiating clean event loop exit\n");
 
     runOnMainThreadAsyncVoid([]() {
-        gtk_main_quit();
+        if (g_cefInitialized.load()) {
+            beginCEFShutdownOnMainThread();
+        } else {
+            gtk_main_quit();
+        }
     });
 }
 
@@ -10119,6 +10470,11 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 if (callback) {
                     callback(windowId);
                 }
+
+                // Shared-core callers normally remove child views from their
+                // close callback. Also cover native adapters and abnormal window
+                // teardown before destroying the X11 parent.
+                removeCEFViewsForParentWindow(x11_window);
                 
                 // Remove the X11 window from global maps.
                 {
@@ -11915,18 +12271,11 @@ ELECTROBUN_EXPORT bool isDockIconVisible() {
 // Graceful shutdown function to coordinate cleanup
 ELECTROBUN_EXPORT void shutdownNativeWrapper() {
     printf("Starting graceful shutdown of native wrapper...\n");
-    
-    // Set shutdown flag to prevent new operations
-    g_shuttingDown.store(true);
-    
-    // CEF cleanup
-    if (g_cefInitialized) {
-        printf("Shutting down CEF...\n");
-        CefShutdown();
-        g_cefInitialized = false;
-    }
-    
-    printf("Native wrapper shutdown complete.\n");
+
+    // Use the same coordinated path as Utils.quit. Calling CefShutdown here
+    // while browser close callbacks are pending can tear down profile services
+    // that those browsers still reference.
+    stopEventLoop();
 }
 
 }

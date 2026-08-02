@@ -57,7 +57,10 @@ namespace electrobun {
 //   v2: partitions moved from <root>/<name> to <root>/partitions/<name> to
 //       avoid case-insensitive collisions with Chromium's auto-created
 //       <root>/Default profile folder.
-constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 2;
+//   v3: named partitions moved back to direct children of <root>, as required
+//       by CEF's Chrome runtime. persist:default now uses the global context,
+//       so it no longer creates a colliding named profile.
+constexpr uint32_t CEF_CACHE_FORMAT_VERSION = 3;
 
 inline const char* cacheSentinelFilename() {
     return ".electrobun_cef_cache_version";

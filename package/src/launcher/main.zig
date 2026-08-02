@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const automation = @import("automation.zig");
 const linux_dependencies = @import("linux_dependencies.zig");
 const c = @cImport({
     @cInclude("signal.h");
@@ -224,6 +225,7 @@ pub fn main() !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const arena_alloc = arena.allocator();
+    const launcher_args = try std.process.argsAlloc(arena_alloc);
     const main_process = detectMainProcess(arena_alloc, exe_dir);
 
     // Platform-specific paths
@@ -257,6 +259,25 @@ pub fn main() !void {
 
     // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
+        // WebKitGTK automation is disabled unless WebKitWebDriver launches the
+        // app with the exact `--automation` flag. Keep the marker private to the
+        // child process so the application's own argument contract is unchanged.
+        if (automation.requested(launcher_args)) {
+            try env_map.put(automation.environment_variable, "1");
+
+            // WebKitWebDriver supplies this endpoint for WebKitGTK. Shield it
+            // while Cottontail/Bun initializes its own JavaScriptCore runtime,
+            // then let the native wrapper restore it immediately before WebKit
+            // creates its context. Otherwise the main runtime claims the port.
+            if (env_map.get(automation.inspector_server_environment_variable)) |server| {
+                try env_map.put(
+                    automation.private_inspector_server_environment_variable,
+                    server,
+                );
+                env_map.remove(automation.inspector_server_environment_variable);
+            }
+        }
+
         // Check for CEF libraries that need LD_PRELOAD
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
         const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
@@ -298,7 +319,6 @@ pub fn main() !void {
         if (main_process == .cottontail) {
             try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
         }
-
     } else if (builtin.os.tag == .windows) {
         // On Windows, get environment and set ICU_DATA for external ICU data
         try env_map.put("ICU_DATA", exe_dir);

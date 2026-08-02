@@ -110,17 +110,12 @@ inline std::wstring buildPartitionPath(
 }
 
 /**
- * Build a CEF partition-specific path under the renderer root.
+ * Build a CEF partition-specific path as a direct child of the renderer root.
  *
- * Partitions live in a `partitions/` subdirectory of the renderer cache root
- * rather than directly under it. The renderer root itself is CefSettings.cache_path,
- * which Chromium populates with auto-created profile directories such as
- * `Default`, `System Profile`, etc. On case-insensitive filesystems (Windows
- * NTFS, macOS APFS in default config) a partition literally named `default`
- * would collide with that auto-created `Default` folder; CEF then refuses to
- * bind a CefRequestContext to the colliding path and CreateBrowserSync
- * silently returns null. Nesting under `partitions/` keeps user partitions
- * cleanly separated from Chromium's own profile state.
+ * CEF's Chrome runtime requires persistent profile directories to live directly
+ * under root_cache_path. The reserved `persist:default` partition is handled by
+ * CEF's global request context, so named persistent partitions do not need a
+ * nested directory to avoid its auto-created `Default` profile.
  *
  * @param basePath The base application support/data path
  * @param identifier The app identifier
@@ -128,7 +123,7 @@ inline std::wstring buildPartitionPath(
  * @param renderer The renderer type (typically "CEF")
  * @param partitionName The partition name
  * @param pathSeparator The path separator to use
- * @return The full path: basePath/identifier/channel/renderer/partitions/partitionName
+ * @return The full path: basePath/identifier/channel/renderer/partitionName
  */
 inline std::string buildCEFPartitionPath(
     const std::string& basePath,
@@ -139,8 +134,6 @@ inline std::string buildCEFPartitionPath(
     char pathSeparator = '/'
 ) {
     std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
-    base += pathSeparator;
-    base += "partitions";
     base += pathSeparator;
     base += partitionName;
     return base;
@@ -156,8 +149,6 @@ inline std::wstring buildCEFPartitionPath(
 ) {
     std::wstring base = buildAppDataPath(
         basePath, identifier, channel, renderer, pathSeparator);
-    base += pathSeparator;
-    base += L"partitions";
     base += pathSeparator;
     base += partitionName;
     return base;

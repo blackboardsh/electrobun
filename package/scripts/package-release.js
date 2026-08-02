@@ -83,6 +83,16 @@ if (platform === "darwin") {
 	});
 }
 
+if (platform === "linux") {
+	const verifier = path.join(__dirname, "verify-linux-elf-abi.js");
+	execFileSync(process.execPath, [verifier, distPath], {
+		stdio: "inherit",
+	});
+	console.log(
+		"Verified all release ELF files support the Ubuntu 22.04 ABI baseline",
+	);
+}
+
 // Create a tar.gz file using system tar (preserves file permissions)
 function createTarGz(tarGzPath, cwd, entries) {
 	execSync(

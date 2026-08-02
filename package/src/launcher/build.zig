@@ -48,6 +48,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
+
+    const automation_tests = b.addTest(.{
+        .root_source_file = b.path("automation.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
+    const run_automation_tests = b.addRunArtifact(automation_tests);
+
     const test_step = b.step("test", "Run launcher tests");
     test_step.dependOn(&run_unit_tests.step);
+    test_step.dependOn(&run_automation_tests.step);
 }

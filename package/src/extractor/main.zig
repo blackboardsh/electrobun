@@ -109,140 +109,134 @@ const ProgressIndicator = struct {
     }
 };
 
+fn linuxAdjacentMetadataPath(allocator: std.mem.Allocator, exe_path: []const u8) !?[]u8 {
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
+    if (!std.mem.eql(u8, std.fs.path.basename(exe_dir), "bin")) return null;
+    const bundle_dir = std.fs.path.dirname(exe_dir) orelse return error.InvalidPath;
+    return try std.fs.path.join(allocator, &.{ bundle_dir, "Resources", "metadata.json" });
+}
+
+fn adjacentArchivePathForMetadata(
+    allocator: std.mem.Allocator,
+    metadata_path: []const u8,
+    hash: []const u8,
+) ![]u8 {
+    const resources_dir = std.fs.path.dirname(metadata_path) orelse return error.InvalidPath;
+    const archive_name = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{hash});
+    defer allocator.free(archive_name);
+    return std.fs.path.join(allocator, &.{ resources_dir, archive_name });
+}
+
+fn extractAdjacentArchive(
+    allocator: std.mem.Allocator,
+    metadata_path: []const u8,
+    explicit_archive_path: ?[]const u8,
+) !?bool {
+    const metadata_file = std.fs.openFileAbsolute(metadata_path, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return null,
+        else => return err,
+    };
+    defer metadata_file.close();
+
+    const metadata_contents = try metadata_file.readToEndAlloc(allocator, 4096);
+    defer allocator.free(metadata_contents);
+    const parsed = try std.json.parseFromSlice(
+        AppMetadata,
+        allocator,
+        metadata_contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    const metadata = parsed.value;
+
+    const generated_archive_path = if (explicit_archive_path == null)
+        try adjacentArchivePathForMetadata(
+            allocator,
+            metadata_path,
+            metadata.hash orelse return error.MissingArchiveHash,
+        )
+    else
+        null;
+    defer if (generated_archive_path) |path| allocator.free(path);
+    const archive_path = explicit_archive_path orelse generated_archive_path.?;
+
+    const archive_file = std.fs.openFileAbsolute(archive_path, .{}) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return null,
+        else => return err,
+    };
+    defer archive_file.close();
+
+    std.debug.print("Found adjacent archive file: {s}\n", .{archive_path});
+    std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{
+        metadata.identifier,
+        metadata.name,
+        metadata.channel,
+    });
+
+    const app_data_dir = try getAppDataDir(allocator);
+    defer allocator.free(app_data_dir);
+    const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, metadata.channel });
+    defer allocator.free(app_base_dir);
+    const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
+    defer allocator.free(self_extraction_dir);
+    const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
+    defer allocator.free(app_dir);
+
+    std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
+    std.debug.print("App will be installed to: {s}\n", .{app_dir});
+
+    const file_size = try archive_file.getEndPos();
+    const compressed_data = try allocator.alloc(u8, file_size);
+    defer allocator.free(compressed_data);
+    try archive_file.seekTo(0);
+    const bytes_read = try archive_file.readAll(compressed_data);
+    if (bytes_read != file_size) return error.UnexpectedEndOfStream;
+
+    return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+}
+
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get path to self
     const exe_path = try std.fs.selfExePathAlloc(allocator);
     defer allocator.free(exe_path);
 
-    // For Windows, check for adjacent archive file first
-    if (builtin.os.tag == .windows) {
-        // Try to read from adjacent .tar.zst file
-        const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
-        const exe_name = std.fs.path.basename(exe_path);
-        const exe_stem = std.fs.path.stem(exe_name);
+    // Normal Linux bundles keep their payload and metadata in ../Resources.
+    if (builtin.os.tag == .linux) {
+        if (try linuxAdjacentMetadataPath(allocator, exe_path)) |metadata_path| {
+            defer allocator.free(metadata_path);
+            if (try extractAdjacentArchive(allocator, metadata_path, null)) |result| return result;
+        }
+    }
 
-        // Look for archive file - first in .installer subdirectory, then adjacent
+    // Windows installers keep their adjacent payload in .installer, with a
+    // legacy fallback beside the executable.
+    if (builtin.os.tag == .windows) {
+        const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
+        const exe_stem = std.fs.path.stem(std.fs.path.basename(exe_path));
         const archive_name = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{exe_stem});
         defer allocator.free(archive_name);
+        const metadata_name = try std.fmt.allocPrint(allocator, "{s}.metadata.json", .{exe_stem});
+        defer allocator.free(metadata_name);
 
-        // Try .installer subdirectory first (new location)
         const installer_archive_path = try std.fs.path.join(allocator, &.{ exe_dir, ".installer", archive_name });
         defer allocator.free(installer_archive_path);
-
-        // Fallback to adjacent location (legacy)
         const archive_path = try std.fs.path.join(allocator, &.{ exe_dir, archive_name });
         defer allocator.free(archive_path);
-
-        // Determine which archive path exists
         const final_archive_path = if (std.fs.accessAbsolute(installer_archive_path, .{})) |_|
             installer_archive_path
         else |_|
             archive_path;
 
-        // Also check for metadata file
-        const metadata_name = try std.fmt.allocPrint(allocator, "{s}.metadata.json", .{exe_stem});
-        defer allocator.free(metadata_name);
-
-        // Try .installer subdirectory first (new location)
         const installer_metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, ".installer", metadata_name });
         defer allocator.free(installer_metadata_path);
-
-        // Fallback to adjacent location (legacy)
         const metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, metadata_name });
         defer allocator.free(metadata_path);
-
-        // Determine which metadata path exists
         const final_metadata_path = if (std.fs.accessAbsolute(installer_metadata_path, .{})) |_|
             installer_metadata_path
         else |_|
             metadata_path;
 
-        // Try to open the metadata file
-        if (std.fs.cwd().openFile(final_metadata_path, .{})) |metadata_file| {
-            defer metadata_file.close();
-
-            // Read metadata
-            const metadata_contents = try metadata_file.readToEndAlloc(allocator, 4096);
-            defer allocator.free(metadata_contents);
-
-            const parsed = try std.json.parseFromSlice(struct {
-                identifier: []const u8,
-                name: []const u8,
-                channel: []const u8,
-                hash: []const u8,
-            }, allocator, metadata_contents, .{ .ignore_unknown_fields = true });
-            defer parsed.deinit();
-
-            const metadata = AppMetadata{
-                .identifier = try allocator.dupe(u8, parsed.value.identifier),
-                .name = try allocator.dupe(u8, parsed.value.name),
-                .channel = try allocator.dupe(u8, parsed.value.channel),
-                .hash = try allocator.dupe(u8, parsed.value.hash),
-            };
-
-            std.debug.print("DEBUG: Parsed metadata hash: {s}\n", .{parsed.value.hash});
-
-            // Don't free metadata fields here - they need to persist through extractAndInstall
-            // They will be freed at the end of this function
-
-            // Try to open the archive file
-            if (std.fs.cwd().openFile(final_archive_path, .{})) |archive_file| {
-                defer archive_file.close();
-
-                std.debug.print("Found adjacent archive file: {s}\n", .{final_archive_path});
-                std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{ metadata.identifier, metadata.name, metadata.channel });
-
-                // Build application support directory path
-                const app_data_dir = try getAppDataDir(allocator);
-                defer allocator.free(app_data_dir);
-
-                // Use identifier + channel for the app data folder
-                // e.g., ~/Library/Application Support/sh.blackboard.myapp/canary/
-                const app_base_dir = try std.fs.path.join(allocator, &.{ app_data_dir, metadata.identifier, metadata.channel });
-                defer allocator.free(app_base_dir);
-
-                const self_extraction_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "self-extraction" });
-                defer allocator.free(self_extraction_dir);
-
-                // Handle Windows versioned app directories
-                std.debug.print("\nDEBUG: Building app_dir path...\n", .{});
-                std.debug.print("DEBUG: builtin.os.tag = {}\n", .{builtin.os.tag});
-                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
-                std.debug.print("DEBUG: app_base_dir = '{s}'\n", .{app_base_dir});
-
-                // Always use "app" folder instead of hash-based versioning
-                const app_dir = try std.fs.path.join(allocator, &.{ app_base_dir, "app" });
-                defer allocator.free(app_dir);
-
-                std.debug.print("DEBUG: Final app_dir = '{s}'\n", .{app_dir});
-                std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
-
-                std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
-                std.debug.print("App will be installed to: {s}\n", .{app_dir});
-                std.debug.print("DEBUG: app_base_dir = {s}\n", .{app_base_dir});
-                std.debug.print("DEBUG: metadata.hash = {s}\n", .{metadata.hash orelse "null"});
-
-                // Read compressed data from archive file
-                const file_size = try archive_file.getEndPos();
-                const compressed_data = try allocator.alloc(u8, file_size);
-                defer allocator.free(compressed_data);
-
-                try archive_file.seekTo(0);
-                _ = try archive_file.read(compressed_data);
-
-                // Continue with decompression (shared code path)
-                const result = try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
-                // Clean up metadata fields
-                allocator.free(metadata.identifier);
-                allocator.free(metadata.name);
-                allocator.free(metadata.channel);
-                if (metadata.hash) |hash| {
-                    allocator.free(hash);
-                }
-
-                return result;
-            } else |_| {}
-        } else |_| {}
+        if (try extractAdjacentArchive(allocator, final_metadata_path, final_archive_path)) |result| return result;
     }
 
     // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows)
@@ -510,7 +504,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
     // Create desktop shortcuts on Linux and Windows
     if (builtin.os.tag == .linux) {
-        try createDesktopShortcut(allocator, app_dir, metadata);
+        try createDesktopShortcut(allocator, app_dir);
     }
 
     if (builtin.os.tag == .windows) {
@@ -895,7 +889,50 @@ fn escapeDesktopString(allocator: std.mem.Allocator, str: []const u8) ![]u8 {
     return escaped;
 }
 
-fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
+fn desktopEntryInstallName(source_name: []const u8) ?[]const u8 {
+    if (!std.mem.endsWith(u8, source_name, ".desktop")) return null;
+    return source_name;
+}
+
+fn rewriteDesktopEntry(
+    allocator: std.mem.Allocator,
+    desktop_content: []const u8,
+    launcher_path: []const u8,
+    icon_path: ?[]const u8,
+) ![]u8 {
+    var lines = std.mem.tokenizeScalar(u8, desktop_content, '\n');
+    var result = std.ArrayList(u8).init(allocator);
+    errdefer result.deinit();
+
+    while (lines.next()) |line| {
+        if (std.mem.startsWith(u8, line, "Exec=")) {
+            try result.appendSlice("Exec=\"");
+            try result.appendSlice(launcher_path);
+            try result.appendSlice("\"\n");
+        } else if (std.mem.startsWith(u8, line, "Icon=")) {
+            if (icon_path) |path| {
+                try result.appendSlice("Icon=");
+                try result.appendSlice(path);
+                try result.appendSlice("\n");
+            } else if (!std.mem.eql(u8, line, "Icon=appIcon") and
+                !std.mem.eql(u8, line, "Icon=appIcon.png"))
+            {
+                // Keep explicit freedesktop theme icon names. Only remove the
+                // generated bundle-relative placeholder when no bundled icon
+                // was actually installed.
+                try result.appendSlice(line);
+                try result.appendSlice("\n");
+            }
+        } else {
+            try result.appendSlice(line);
+            try result.appendSlice("\n");
+        }
+    }
+
+    return result.toOwnedSlice();
+}
+
+fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
     // Get home directory for desktop path
     const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
         std.debug.print("Warning: Could not get HOME directory\n", .{});
@@ -925,13 +962,6 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
         return;
     };
 
-    // Create desktop file name
-    const desktop_filename = try std.fmt.allocPrint(allocator, "{s}.desktop", .{metadata.name});
-    defer allocator.free(desktop_filename);
-
-    const desktop_file_path = try std.fs.path.join(allocator, &.{ desktop_dir, desktop_filename });
-    defer allocator.free(desktop_file_path);
-
     // Look for the desktop file in the extracted app directory and copy it
     var app_dir_handle = try std.fs.cwd().openDir(app_dir, .{ .iterate = true });
     defer app_dir_handle.close();
@@ -941,7 +971,11 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     var applications_entry_created = false;
     var iterator = app_dir_handle.iterate();
     while (try iterator.next()) |entry| {
-        if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".desktop")) {
+        if (entry.kind == .file) {
+            const desktop_filename = desktopEntryInstallName(entry.name) orelse continue;
+            const desktop_file_path = try std.fs.path.join(allocator, &.{ desktop_dir, desktop_filename });
+            defer allocator.free(desktop_file_path);
+
             // Copy the desktop file from app dir to Desktop
             const source_desktop = try std.fs.path.join(allocator, &.{ app_dir, entry.name });
             defer allocator.free(source_desktop);
@@ -989,27 +1023,13 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
             }
             defer if (icon_path_allocated) allocator.free(icon_path);
 
-            // Update the Exec and Icon lines in the desktop file
-            var lines = std.mem.tokenize(u8, desktop_content, "\n");
-            var result = std.ArrayList(u8).init(allocator);
-            defer result.deinit();
-
-            while (lines.next()) |line| {
-                if (std.mem.startsWith(u8, line, "Exec=")) {
-                    // Replace with new Exec line - point to launcher binary
-                    try result.appendSlice("Exec=\"");
-                    try result.appendSlice(launcher_path);
-                    try result.appendSlice("\"\n");
-                } else if (std.mem.startsWith(u8, line, "Icon=") and icon_path_allocated) {
-                    // Replace with new Icon line
-                    try result.appendSlice("Icon=");
-                    try result.appendSlice(icon_path);
-                    try result.appendSlice("\n");
-                } else {
-                    try result.appendSlice(line);
-                    try result.appendSlice("\n");
-                }
-            }
+            const rewritten_desktop = try rewriteDesktopEntry(
+                allocator,
+                desktop_content,
+                launcher_path,
+                if (icon_path_allocated) icon_path else null,
+            );
+            defer allocator.free(rewritten_desktop);
 
             // Write the updated desktop file to Desktop (optional)
             if (desktop_dir_available) {
@@ -1019,7 +1039,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                         break :desktop_shortcut;
                     };
                     defer desktop_file.close();
-                    desktop_file.writeAll(result.items) catch |err| {
+                    desktop_file.writeAll(rewritten_desktop) catch |err| {
                         std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
                         break :desktop_shortcut;
                     };
@@ -1061,7 +1081,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
                 };
                 defer applications_file.close();
 
-                applications_file.writeAll(result.items) catch |err| {
+                applications_file.writeAll(rewritten_desktop) catch |err| {
                     std.debug.print("Warning: Could not write applications desktop file: {}\n", .{err});
                     break :write_applications_dir;
                 };
@@ -1103,36 +1123,36 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
             if (!desktop_shortcut_created and !applications_entry_created) {
                 std.debug.print("Warning: Could not create Desktop shortcut or applications menu entry\n", .{});
             }
+
+            if (desktop_shortcut_created) {
+                // Make desktop file executable (required for some desktop environments)
+                const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
+                defer allocator.free(desktop_file_path_z);
+
+                const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
+                if (result != 0) {
+                    std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
+                }
+
+                // Try to mark as trusted for GNOME/Ubuntu using gio
+                const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
+                var gio_child = std.process.Child.init(&gio_argv, allocator);
+                gio_child.stdin_behavior = .Ignore;
+                gio_child.stdout_behavior = .Ignore;
+                gio_child.stderr_behavior = .Inherit;
+                _ = gio_child.spawnAndWait() catch |err| {
+                    std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
+                };
+
+                std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
+                std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
+            }
             break;
         }
     }
 
     if (!found_desktop_file) {
         std.debug.print("Warning: No desktop file found in extracted app directory\n", .{});
-    }
-
-    if (desktop_shortcut_created) {
-        // Make desktop file executable (required for some desktop environments)
-        const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
-        defer allocator.free(desktop_file_path_z);
-
-        const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
-        if (result != 0) {
-            std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
-        }
-
-        // Try to mark as trusted for GNOME/Ubuntu using gio
-        const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
-        var gio_child = std.process.Child.init(&gio_argv, allocator);
-        gio_child.stdin_behavior = .Ignore;
-        gio_child.stdout_behavior = .Ignore;
-        gio_child.stderr_behavior = .Inherit;
-        _ = gio_child.spawnAndWait() catch |err| {
-            std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
-        };
-
-        std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
-        std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
     }
 }
 
@@ -1515,6 +1535,70 @@ test "production bundles use the unsuffixed application name" {
     const canary = try extractedBundleName(std.testing.allocator, "My App.Name", "canary");
     defer std.testing.allocator.free(canary);
     try std.testing.expectEqualStrings("MyApp.Name-canary", canary);
+}
+
+test "normal Linux bundle launchers resolve their adjacent release payload" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    const metadata_path = (try linuxAdjacentMetadataPath(
+        std.testing.allocator,
+        "/opt/ArchiveApp/bin/launcher",
+    )) orelse return error.TestUnexpectedResult;
+    defer std.testing.allocator.free(metadata_path);
+    try std.testing.expectEqualStrings(
+        "/opt/ArchiveApp/Resources/metadata.json",
+        metadata_path,
+    );
+
+    const archive_path = try adjacentArchivePathForMetadata(
+        std.testing.allocator,
+        metadata_path,
+        "release-hash",
+    );
+    defer std.testing.allocator.free(archive_path);
+    try std.testing.expectEqualStrings(
+        "/opt/ArchiveApp/Resources/release-hash.tar.zst",
+        archive_path,
+    );
+
+    try std.testing.expect(
+        try linuxAdjacentMetadataPath(std.testing.allocator, "/tmp/staging/installer") == null,
+    );
+}
+
+test "Linux desktop entries preserve channel-specific names and omit missing icons" {
+    try std.testing.expectEqualStrings(
+        "ArchiveApp.desktop",
+        desktopEntryInstallName("ArchiveApp.desktop") orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expectEqualStrings(
+        "ArchiveApp-canary.desktop",
+        desktopEntryInstallName("ArchiveApp-canary.desktop") orelse return error.TestUnexpectedResult,
+    );
+    try std.testing.expect(desktopEntryInstallName("ArchiveApp.png") == null);
+
+    const source =
+        "[Desktop Entry]\n" ++
+        "Name=Archive App\n" ++
+        "Exec=launcher\n" ++
+        "Icon=appIcon\n" ++
+        "Terminal=false\n";
+    const without_icon = try rewriteDesktopEntry(std.testing.allocator, source, "/opt/archive/bin/launcher", null);
+    defer std.testing.allocator.free(without_icon);
+    try std.testing.expect(std.mem.indexOf(u8, without_icon, "Exec=\"/opt/archive/bin/launcher\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, without_icon, "Icon=") == null);
+
+    const themed_source =
+        "[Desktop Entry]\n" ++
+        "Exec=launcher\n" ++
+        "Icon=org.example.ArchiveApp\n";
+    const themed_icon = try rewriteDesktopEntry(std.testing.allocator, themed_source, "/opt/archive/bin/launcher", null);
+    defer std.testing.allocator.free(themed_icon);
+    try std.testing.expect(std.mem.indexOf(u8, themed_icon, "Icon=org.example.ArchiveApp") != null);
+
+    const with_icon = try rewriteDesktopEntry(std.testing.allocator, source, "/opt/archive/bin/launcher", "/opt/archive/Resources/appIcon.png");
+    defer std.testing.allocator.free(with_icon);
+    try std.testing.expect(std.mem.indexOf(u8, with_icon, "Icon=/opt/archive/Resources/appIcon.png") != null);
 }
 
 // Note: zig stdlib's untar function doesn't support file modes. They don't plan on adding it later,

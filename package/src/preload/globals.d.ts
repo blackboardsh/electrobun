@@ -3,6 +3,7 @@
 
 declare global {
 	interface Window {
+		__electrobunPlatform: "linux" | "macos" | "windows";
 		__electrobunWebviewId: number;
 		__electrobunWindowId: number;
 		__electrobunRpcSocketPort: number;

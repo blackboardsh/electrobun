@@ -1185,13 +1185,14 @@ fn buildElectrobunPreload(
         const sandboxed_preload_script = webview_runtime_state.preload_script_sandboxed.?;
         return std.fmt.allocPrintZ(
             allocator,
+            \\window.__electrobunPlatform = "{s}";
             \\window.__electrobunWebviewId = {d};
             \\window.__electrobunWindowId = {d};
             \\window.__electrobunEventBridge = window.__electrobunEventBridge || window.webkit?.messageHandlers?.eventBridge || window.eventBridge || window.chrome?.webview?.hostObjects?.eventBridge;
             \\window.__electrobunInternalBridge = window.__electrobunInternalBridge || window.webkit?.messageHandlers?.internalBridge || window.internalBridge || window.chrome?.webview?.hostObjects?.internalBridge;
             \\{s}
         ,
-            .{ webview_id, window_id, sandboxed_preload_script },
+            .{ @tagName(builtin.os.tag), webview_id, window_id, sandboxed_preload_script },
         ) catch |err| {
             setLastError("Failed to build sandboxed preload script: {s}", .{@errorName(err)});
             return null;
@@ -1201,6 +1202,7 @@ fn buildElectrobunPreload(
     const preload_script = webview_runtime_state.preload_script.?;
     return std.fmt.allocPrintZ(
         allocator,
+        \\window.__electrobunPlatform = "{s}";
         \\window.__electrobunWebviewId = {d};
         \\window.__electrobunWindowId = {d};
         \\window.__electrobunHostSocketPort = {d};
@@ -1213,6 +1215,7 @@ fn buildElectrobunPreload(
         \\{s}
     ,
         .{
+            @tagName(builtin.os.tag),
             webview_id,
             window_id,
             webview_runtime_state.rpc_port,

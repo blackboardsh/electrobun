@@ -487,6 +487,31 @@ export interface ElectrobunConfig {
 			defaultRenderer?: "native" | "cef";
 
 			/**
+			 * Emit an expanded Flatpak-builder recipe alongside the normal Linux
+			 * artifacts. This is an opt-in packaging MVP: Hutch writes a manifest
+			 * and `/app` payload but does not invoke `flatpak-builder`.
+			 */
+			flatpak?: {
+				/** Enable Flatpak recipe generation. @default false */
+				enabled: boolean;
+
+				/** Output directory relative to `build.artifactFolder`. @default "flatpak" */
+				outputPath?: string;
+
+				/** Flatpak runtime identifier. @default "org.freedesktop.Platform" */
+				runtime?: string;
+
+				/** Flatpak runtime branch. @default "25.08" */
+				runtimeVersion?: string;
+
+				/** Flatpak SDK identifier. @default "org.freedesktop.Sdk" */
+				sdk?: string;
+
+				/** Override the manifest's default sandbox finish arguments. */
+				finishArgs?: string[];
+			};
+
+			/**
 			 * Custom Chromium command-line flags to pass to CEF during initialization.
 			 * Keys are flag names without the "--" prefix.
 			 * - `true` — add a switch-only flag

@@ -18,7 +18,8 @@ function compileAndRunBehaviorProgram() {
 	);
 
 	try {
-		const compiler = process.platform === "win32" ? "cl.exe" : process.env.CXX || "c++";
+		const compiler =
+			process.platform === "win32" ? "cl.exe" : process.env["CXX"] || "c++";
 		const args =
 			process.platform === "win32"
 				? [

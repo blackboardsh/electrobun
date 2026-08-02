@@ -25,7 +25,15 @@ int main() {
         L"\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb",
         L'\\');
     assert(cefPartition ==
-           cefRoot + L"\\partitions\\\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb");
+           cefRoot + L"\\\u30d7\u30ed\u30d5\u30a1\u30a4\u30eb");
+
+    const std::string linuxCefRoot = "/home/test/.cache/app/dev/CEF";
+    const std::string linuxCefPartition = electrobun::buildCEFPartitionPath(
+        "/home/test/.cache", "app", "dev", "CEF", "account-a");
+    assert(linuxCefPartition == linuxCefRoot + "/account-a");
+    assert(linuxCefPartition.find("/partitions/") == std::string::npos);
+
+    assert(electrobun::CEF_CACHE_FORMAT_VERSION == 3);
 
     const std::wstring webViewDefault =
         electrobun::buildWebView2UserDataPath(

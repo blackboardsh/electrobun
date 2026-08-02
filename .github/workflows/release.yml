@@ -24,12 +24,12 @@ jobs:
             arch: arm64
             platform_name: darwin
             artifact_platform: macos
-          - os: ubuntu-24.04
+          - os: ubuntu-22.04
             platform: linux
             arch: x64
             platform_name: linux
             artifact_platform: linux
-          - os: ubuntu-24.04-arm
+          - os: ubuntu-22.04-arm
             platform: linux
             arch: arm64
             platform_name: linux
@@ -182,6 +182,11 @@ jobs:
       - name: Test Linux native file dialog
         if: matrix.platform == 'linux' && matrix.arch == 'x64'
         run: hutch test:linux-native-dialog
+        working-directory: package
+
+      - name: Test Linux adjacent archive installation
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: hutch test:linux-extractor
         working-directory: package
 
       - name: Upload core artifact

@@ -158,14 +158,31 @@ export function initSPANavigationInterception() {
 	};
 }
 
-// Prevent overscroll bounce effect
-export function initOverscrollPrevention() {
-	document.addEventListener("DOMContentLoaded", () => {
-		const style = document.createElement("style");
+export function shouldApplyOverscrollPrevention(platform: string): boolean {
+	// WebKitGTK stops scrolling the root viewport with the mouse wheel when
+	// overscroll-behavior is set on html/body. Linux desktop compositors do not
+	// need the bounce-prevention workaround, so leave root scrolling untouched.
+	// Use the native host marker because applications can legitimately override
+	// navigator.userAgent through chromiumFlags.
+	return platform !== "linux";
+}
+
+// Prevent overscroll bounce effect on platforms that support it without
+// disabling root viewport scrolling.
+export function initOverscrollPrevention(
+	targetDocument: Document = document,
+	platform: string = window.__electrobunPlatform,
+) {
+	if (!shouldApplyOverscrollPrevention(platform)) return;
+
+	targetDocument.addEventListener("DOMContentLoaded", () => {
+		const style = targetDocument.createElement("style");
 		style.type = "text/css";
 		style.appendChild(
-			document.createTextNode("html, body { overscroll-behavior: none; }"),
+			targetDocument.createTextNode(
+				"html, body { overscroll-behavior: none; }",
+			),
 		);
-		document.head.appendChild(style);
+		targetDocument.head.appendChild(style);
 	});
 }
