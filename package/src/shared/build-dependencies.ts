@@ -5,8 +5,8 @@ export const ZIG_VERSION = "0.13.0";
 
 export const OWNED_BUILD_DEPENDENCY_VERSIONS = {
 	"zig-bsdiff": "0.1.21",
-	"zig-zstd": "0.1.4",
-	"zig-asar": "0.2.4",
+	"zig-zstd": "0.1.6",
+	"zig-asar": "0.2.5",
 	"electrobun-dawn": "0.2.5",
 } as const;
 
