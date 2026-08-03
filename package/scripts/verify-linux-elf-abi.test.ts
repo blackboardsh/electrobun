@@ -170,21 +170,21 @@ describe("Linux ELF ABI verification", () => {
 
 	test("checks the maximum requirement even when a lower version appears first", () => {
 		const inspection = inspectElfAbiRequirements(
-			makeElf({ versions: ["GLIBCXX_3.4.31", "GLIBCXX_3.4.32"] }),
+			makeElf({ versions: ["GLIBCXX_3.4.32", "GLIBCXX_3.4.33"] }),
 		)!;
 
 		expect(maximumAbiRequirements(inspection.requirements)).toEqual({
-			GLIBCXX: "3.4.32",
+			GLIBCXX: "3.4.33",
 		});
 		expect(() => assertElfAbiBaseline(inspection, "fixture.so")).toThrow(
-			"requires GLIBCXX_3.4.32",
+			"requires GLIBCXX_3.4.33",
 		);
 	});
 
 	test("parses GNU requirements from 64-bit little-endian ELF files", () => {
 		const inspection = inspectElfAbiRequirements(
 			makeElf({
-				versions: ["GLIBC_2.35", "GLIBCXX_3.4.30", "CXXABI_1.3.13"],
+				versions: ["GLIBC_2.39", "GLIBCXX_3.4.32", "CXXABI_1.3.14"],
 			}),
 		)!;
 
@@ -211,16 +211,16 @@ describe("Linux ELF ABI verification", () => {
 	});
 
 	test.each([
-		["GLIBC_2.38", "GLIBC_2.35"],
-		["GLIBCXX_3.4.32", "GLIBCXX_3.4.30"],
-		["CXXABI_1.3.14", "CXXABI_1.3.13"],
-	])("rejects %s above the Jammy baseline", (required, maximum) => {
+		["GLIBC_2.40", "GLIBC_2.39"],
+		["GLIBCXX_3.4.33", "GLIBCXX_3.4.32"],
+		["CXXABI_1.3.15", "CXXABI_1.3.14"],
+	])("rejects %s above the Noble baseline", (required, maximum) => {
 		const inspection = inspectElfAbiRequirements(
 			makeElf({ versions: [required] }),
 		)!;
 
 		expect(() => assertElfAbiBaseline(inspection, "fixture.so")).toThrow(
-			`requires ${required}, exceeding the Ubuntu 22.04 baseline ${maximum}`,
+			`requires ${required}, exceeding the Ubuntu 24.04 baseline ${maximum}`,
 		);
 	});
 
@@ -269,16 +269,16 @@ describe("Linux ELF ABI verification", () => {
 		temporaryDirectories.push(directory);
 		writeFileSync(
 			join(directory, "libNativeWrapper.so"),
-			makeElf({ versions: ["GLIBC_2.38"] }),
+			makeElf({ versions: ["GLIBC_2.40"] }),
 		);
 		writeFileSync(
 			join(directory, "libwebgpu_dawn.so"),
-			makeElf({ versions: ["GLIBCXX_3.4.32"] }),
+			makeElf({ versions: ["GLIBCXX_3.4.33"] }),
 		);
 
 		expect(() => verifyLinuxElfRelease([directory])).toThrow(
 			new RegExp(
-				"libNativeWrapper[.]so[\\s\\S]+GLIBC_2[.]38[\\s\\S]+libwebgpu_dawn[.]so[\\s\\S]+GLIBCXX_3[.]4[.]32",
+				"libNativeWrapper[.]so[\\s\\S]+GLIBC_2[.]40[\\s\\S]+libwebgpu_dawn[.]so[\\s\\S]+GLIBCXX_3[.]4[.]33",
 			),
 		);
 	});

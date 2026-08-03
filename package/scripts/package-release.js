@@ -89,7 +89,7 @@ if (platform === "linux") {
 		stdio: "inherit",
 	});
 	console.log(
-		"Verified all release ELF files support the Ubuntu 22.04 ABI baseline",
+		"Verified all release ELF files support the Ubuntu 24.04 ABI baseline",
 	);
 }
 

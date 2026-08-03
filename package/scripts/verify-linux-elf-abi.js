@@ -12,11 +12,11 @@ const ELFDATA2MSB = 2;
 const SHT_GNU_VERNEED = 0x6ffffffe;
 const PT_DYNAMIC = 2;
 
-// Ubuntu 22.04 ships glibc 2.35 and GCC 11's libstdc++ runtime.
+// Ubuntu 24.04 ships glibc 2.39 and GCC 13's libstdc++ runtime.
 export const LINUX_ELF_ABI_BASELINE = Object.freeze({
-	GLIBC: "2.35",
-	GLIBCXX: "3.4.30",
-	CXXABI: "1.3.13",
+	GLIBC: "2.39",
+	GLIBCXX: "3.4.32",
+	CXXABI: "1.3.14",
 });
 
 const requireRange = (buffer, offset, size, label) => {
@@ -402,7 +402,7 @@ export function assertElfAbiBaseline(
 		const required = maximums[family];
 		if (required && compareAbiVersions(required, maximum) > 0) {
 			violations.push(
-				`requires ${family}_${required}, exceeding the Ubuntu 22.04 baseline ${family}_${maximum}`,
+				`requires ${family}_${required}, exceeding the Ubuntu 24.04 baseline ${family}_${maximum}`,
 			);
 		}
 	}
