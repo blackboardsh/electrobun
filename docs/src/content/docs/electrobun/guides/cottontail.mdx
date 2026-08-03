@@ -20,6 +20,11 @@ New projects use Cottontail by default. The explicit configuration is:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  app: {
+    name: "Cottontail App",
+    identifier: "dev.example.cottontail-app",
+    version: "0.1.0",
+  },
   build: {
     mainProcess: "cottontail",
     cottontail: {

@@ -1,91 +1,103 @@
 ---
 title: "Updater"
+description: "Check, download, apply, and observe Electrobun application updates."
 ---
-              
-              <p>Electrobun's built-in update mechanism for your app</p>
+import { Aside } from "@astrojs/starlight/components";
 
-              
-```javascript
-// /src/bun/index.ts
+Hutch production and canary builds create update metadata, compressed full
+bundles, and optional delta patches. Publish the artifact directory to a static
+host and configure its public base URL:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Updater Example",
+    identifier: "dev.example.updater",
+    version: "1.0.0",
+  },
+  release: {
+    baseUrl: "https://downloads.example.com/my-app",
+    generatePatch: true,
+  },
+} satisfies ElectrobunConfig;
+```
+
+## Check and install
+
+```ts
 import { Updater } from "electrobun/bun";
-```
 
+const local = await Updater.getLocalInfo();
+console.log(`Running ${local.version} (${local.channel})`);
 
-              
-```javascript
-// /electrobun.config
-{
- ...
+const update = await Updater.checkForUpdate();
+if (update.updateAvailable) {
+  await Updater.downloadUpdate();
 
- "release": {
-    "baseUrl": "https://your-release-url"
- }
+  if (Updater.updateInfo().updateReady) {
+    await Updater.applyUpdate();
+  }
 }
 ```
 
+`applyUpdate()` quits the current process, replaces the installed app, and
+launches the new version. It does nothing until a download is ready.
 
-## Updating Electrobun Apps
+<Aside type="note">
+The `dev` channel never reports an available update. Exercise updater behavior
+with a packaged canary or production build.
+</Aside>
 
-              <p>Electrobun ships with a built-in update mechanism that prefers compact binary patches and falls back to a compressed full application download. Specify the URL where artifacts are stored in `electrobun.config.ts`; a static host such as S3, Cloudflare R2, or GitHub Releases is sufficient.</p>
+## Local and update metadata
 
-              <p>For each canary or production build, Hutch creates a flat release `artifacts` folder containing update metadata, patches, and full bundles. Upload that folder to your release host, set `baseUrl`, and use this API to check for and install updates when your app launches, on an interval, or in response to a system tray menu item.</p>
+`getLocalInfo()` returns the packaged `version.json` data:
 
-## Methods
+```ts
+import { Updater } from "electrobun/bun";
 
-### getLocalInfo
+const info = await Updater.getLocalInfo();
 
-              <p>Get the local version info for display in your app or other logic. This will read the `version.json` file bundled with your app.</p>
+const version: string = info.version;
+const hash: string = info.hash;
+const baseUrl: string = info.baseUrl;
+const channel: string = info.channel;
+const name: string = info.name;
+const identifier: string = info.identifier;
 
-              
-```yaml
-const localInfo = await Electrobun.Updater.getLocalInfo();
-
-localInfo: {
-  version: string;
-  hash: string;
-  baseUrl: string;
-  channel: string;
-  name: string;
-  identifier: string;
-};
+void version;
+void hash;
+void baseUrl;
+void channel;
+void name;
+void identifier;
 ```
 
+`checkForUpdate()` and `updateInfo()` expose `version`, `hash`,
+`updateAvailable`, `updateReady`, and `error`.
 
-### checkForUpdate
+Convenience methods under `Updater.localInfo` return the current `version`,
+`hash`, `channel`, and `baseUrl`. `channelBucketUrl()` returns the base URL, and
+`appDataFolder()` returns the channel-specific update workspace.
 
-              <p>Checks for an update by fetching the `update.json` file from the `baseUrl` for the current channel and platform.</p>
+## Status reporting
 
-              
-```javascript
-const updateInfo = await Electrobun.Updater.checkForUpdate();
+```ts
+import { Updater, type UpdateStatusEntry } from "electrobun/bun";
 
-updateInfo: {
-  version: string;
-  hash: string;
-  updateAvailable: boolean;
-  updateReady: boolean;
-  error: string;
-};
+Updater.onStatusChange((entry: UpdateStatusEntry) => {
+  console.log(entry.status, entry.message, entry.details);
+});
+
+const history = Updater.getStatusHistory();
+Updater.clearStatusHistory();
+Updater.onStatusChange(null);
+
+void history;
 ```
 
-
-### downloadUpdate
-
-              <p>This will initiate a process where it attempts to download patch files and apply them until the patched app matches the current version. If something goes wrong like there isn't a trail of patch files from the user's version to current it will download the latest full version of the app directly.</p>
-
-              
-```javascript
-await Electrobun.Updater.downloadUpdate();
-```
-
-
-### applyUpdate
-
-              <p>Once the latest version is either patched or downloaded and ready to install you can call `applyUpdate` to quit the current app, replace it with the latest version, and relaunch.</p>
-
-              
-```javascript
-if (Electrobun.Updater.updateInfo()?.updateReady) {
-  await Electrobun.Updater.applyUpdate();
-}
-```
+Statuses cover checking, patch discovery and application, full-bundle fallback,
+download progress, extraction, replacement, relaunch, completion, and errors.
+`UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
+structured `details`.

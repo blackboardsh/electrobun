@@ -28,6 +28,15 @@ export function emitWebviewEvent(eventName: string, detail: string) {
 	});
 }
 
+export function initHostMessageBridge(
+	targetWindow: Window = window,
+	emit: typeof emitWebviewEvent = emitWebviewEvent,
+) {
+	targetWindow.__electrobunSendToHost = (message: unknown) => {
+		emit("host-message", JSON.stringify(message));
+	};
+}
+
 // Set up standard lifecycle event listeners
 export function initLifecycleEvents() {
 	// Emit dom-ready when page loads (top-level window only)

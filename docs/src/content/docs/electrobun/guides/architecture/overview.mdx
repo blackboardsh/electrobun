@@ -32,8 +32,9 @@ Every Electrobun application contains:
 
 The main process owns application state and privileged native objects. It opens
 windows, views, menus, trays, and GPU surfaces through Electrobun Core. Each
-webview runs in an isolated browser process and communicates with the main
-process through Electrobun's event and RPC bridges.
+webview is a separate native browsing context and communicates with the main
+process through Electrobun's event and RPC bridges. The renderer controls its
+exact operating-system process model.
 
 ## Main-thread model
 
@@ -72,8 +73,9 @@ System views are the default:
 - Linux: WebKitGTK 4.1
 
 CEF can be bundled when a pinned Chromium engine is more important than
-download size. A single app can choose renderers for its Electrobun views while
-using the same main-process APIs.
+download size. macOS and Windows applications can select the renderer per
+view. A Linux process uses its CEF wrapper when CEF is bundled and GTK WebKit
+otherwise.
 
 `<electrobun-webview>` creates a separately composited native browser view, not
 an iframe. `<electrobun-wgpu>` places a native GPU surface in the same layout.

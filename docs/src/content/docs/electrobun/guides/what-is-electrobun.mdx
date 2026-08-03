@@ -28,7 +28,8 @@ main process while using the same Hutch build and packaging workflow.
 ## Why Electrobun
 
 - Use TypeScript and existing web frameworks for application UI.
-- Keep each webview in an isolated process and communicate through typed RPC.
+- Keep privileged native APIs out of page JavaScript and communicate through
+  typed RPC.
 - Use native windows and platform APIs without shipping Chromium by default.
 - Embed independent `<electrobun-webview>` and `<electrobun-wgpu>` surfaces in
   an application's HTML layout.

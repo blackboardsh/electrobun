@@ -1,127 +1,206 @@
 ---
-title: "Electroview Class"
+title: "Electroview"
+description: "Connect a browser view to Electrobun's typed RPC transport."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
-              
-              <Aside type="tip">
-                <p>Instantiate Electrobun APIs in the browser.</p>
-              </Aside>
+`Electroview` is the browser-side SDK. Its primary job is to attach a typed RPC
+object to the webview's encrypted loopback transport, with a native bridge as
+fallback.
 
-              
-```javascript
-import {Electroview} from "electrobun/view";
+## Define A Shared Schema
 
-const electrobun = new Electroview({ ...options })
-```
+An RPC schema has a `bun` side and a `webview` side. Requests have a typed
+parameter and response; messages are one-way payloads.
 
+```typescript
+import type { RPCSchema } from "electrobun/view";
 
-## Constructor Options
-
-### rpc
-
-              <p>This is the browser side of creating typed RPC between the main process and a given BrowserView's context.</p>
-
-              
-```javascript
-// src/shared/types.ts
-export type MyWebviewRPCType = {
-  // functions that execute in the main process
+export type AppRPC = {
   bun: RPCSchema<{
     requests: {
-      someMainProcessFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
+      add: {
+        params: { a: number; b: number };
+        response: { sum: number };
       };
     };
     messages: {
-      logToMainProcess: {
-        msg: string;
-      };
+      rendererReady: { title: string };
     };
   }>;
-  // functions that execute in the browser context
   webview: RPCSchema<{
     requests: {
-      someWebviewFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
+      getDocumentTitle: {
+        params: {};
+        response: string;
       };
     };
     messages: {
-      logToWebview: {
-        msg: string;
-      };
+      showStatus: { message: string };
     };
   }>;
 };
 ```
 
+Keep the schema in a module imported by both contexts. It contains types only
+and emits no runtime code.
 
-              
+## Browser Side
+
+Use `Electroview.defineRPC()` to provide handlers for the `webview` side, then
+pass the returned object to the constructor. Calls can use the local `rpc`
+variable immediately after construction.
+
 ```typescript
-// /src/myview/index.ts
-import { Electroview } from "electrobun/view";
-import { type MyWebviewRPCType } from "../shared/types";
+import { Electroview, type RPCSchema } from "electrobun/view";
 
-const rpc = Electroview.defineRPC<MyWebviewRPCType>({
+type AppRPC = {
+  bun: RPCSchema<{
+    requests: {
+      add: { params: { a: number; b: number }; response: { sum: number } };
+    };
+    messages: { rendererReady: { title: string } };
+  }>;
+  webview: RPCSchema<{
+    requests: {
+      getDocumentTitle: { params: {}; response: string };
+    };
+    messages: { showStatus: { message: string } };
+  }>;
+};
+
+const rpc = Electroview.defineRPC<AppRPC>({
+  maxRequestTime: 10_000,
   handlers: {
     requests: {
-      someWebviewFunction: ({ a, b }) => {
-        document.body.innerHTML += `main process asked me to do math with ${a} and ${b}\n`;
-        return a + b;
-      },
+      getDocumentTitle: () => document.title,
     },
     messages: {
-      logToWebview: ({ msg }) => {
-        // this will appear in the inspect element devtools console
-        console.log(`main process asked me to logToWebview: ${msg}`);
-      },
+      showStatus: ({ message }) => console.log(message),
     },
   },
 });
-const electroview = new Electroview({ rpc });
+
+const view = new Electroview({ rpc });
+
+const result = await rpc.request.add(
+  { a: 9, b: 8 },
+  { maxRequestTime: 5_000 },
+);
+rpc.send.rendererReady({ title: document.title });
+
+console.log(result.sum);
+void view;
 ```
 
+`maxRequestTime` on `defineRPC` is the default request timeout in
+milliseconds. The optional second argument to one request overrides it;
+`Infinity` disables the timeout for that call.
 
-              <p>Assuming you've wired up RPC on the main-process side when creating the <a href="/electrobun/apis/browser-window">BrowserWindow</a>, you'll be able to call those main-process functions from the browser.</p>
+## Main-Process Side
 
-              
-```javascript
-// /src/myview/index.ts
-electroview.rpc.request.someMainProcessFunction({ a: 9, b: 8 }).then((result) => {
-  console.log("result: ", result);
+The same schema is attached to a `BrowserView` or `BrowserWindow` with
+`BrowserView.defineRPC()`:
+
+```typescript
+import {
+  BrowserView,
+  BrowserWindow,
+  type RPCSchema,
+} from "electrobun/bun";
+
+type AppRPC = {
+  bun: RPCSchema<{
+    requests: {
+      add: { params: { a: number; b: number }; response: { sum: number } };
+    };
+    messages: { rendererReady: { title: string } };
+  }>;
+  webview: RPCSchema<{
+    requests: {
+      getDocumentTitle: { params: {}; response: string };
+    };
+    messages: { showStatus: { message: string } };
+  }>;
+};
+
+const rpc = BrowserView.defineRPC<AppRPC>({
+  handlers: {
+    requests: {
+      add: ({ a, b }) => ({ sum: a + b }),
+    },
+    messages: {
+      rendererReady: ({ title }) => console.log("Ready", title),
+    },
+  },
 });
 
-// Disable the timeout for this request without changing other RPC calls.
-const paths = await electroview.rpc.request.openFileDialog(
-  { startingFolder: "~/" },
-  { maxRequestTime: Infinity },
-);
+const win = new BrowserWindow({
+  title: "Typed RPC",
+  url: "views://main/index.html",
+  rpc,
+});
 
-// or
-electroview.rpc.send.logToMainProcess({ msg: "hi from browser" });
+const title = await rpc.request.getDocumentTitle({});
+rpc.send.showStatus({ message: `Loaded ${title}` });
+void win;
 ```
 
-              <p>Per-request options are local to the caller and are not sent to the request handler. Set <code>maxRequestTime</code> to a duration in milliseconds, or to <code>Infinity</code> for a modal request that should wait for user input.</p>
+The directions are deliberate:
 
+- `bun.requests` execute in the main process and are called by the webview.
+- `bun.messages` are received in the main process and sent by the webview.
+- `webview.requests` execute in the browser and are called by the main process.
+- `webview.messages` are received in the browser and sent by the main process.
 
-## Static Methods
+## Empty RPC
 
-### defineRPC
+The constructor still requires an RPC object when the view has no application
+messages:
 
-              <p>Pass `Electroview.defineRPC` the shared rpc type to generate the typed rpc and message functions you can call from the browser and to set up types for the browser handlers for functions handled in the browser.</p>
+```typescript
+import { Electroview, type RPCSchema } from "electrobun/view";
 
-## Methods
+type EmptyRPC = {
+  bun: RPCSchema<{ requests: {}; messages: {} }>;
+  webview: RPCSchema<{ requests: {}; messages: {} }>;
+};
 
-### Browser to Browser RPC
+const rpc = Electroview.defineRPC<EmptyRPC>({
+  handlers: { requests: {}, messages: {} },
+});
 
-              <p>Electrobun doesn't provide browser to browser RPC out of the box as we favour isolation between browser contexts for greater security.</p>
+new Electroview({ rpc });
+```
 
-              <p>There's nothing stopping you from creating main-process-to-browser RPC for two different BrowserViews and passing messages between them via the main process. You can also establish any number of other web-based mechanisms to communicate between browser contexts, from local storage to WebRTC or via a server.</p>
+Importing the view SDK is not required merely to use preload-provided custom
+elements or draggable regions. Construct `Electroview` when the page needs the
+application RPC transport.
+
+## Carrot Invocation
+
+`view.carrots.invoke()` sends a request through the configured host RPC. It is
+available only when the packaged host exposes the Carrot invocation handler.
+
+```typescript
+import { Electroview, type RPCSchema } from "electrobun/view";
+
+type EmptyRPC = {
+  bun: RPCSchema<{ requests: {}; messages: {} }>;
+  webview: RPCSchema<{ requests: {}; messages: {} }>;
+};
+
+const rpc = Electroview.defineRPC<EmptyRPC>({
+  handlers: { requests: {}, messages: {} },
+});
+const view = new Electroview({ rpc });
+
+const result = await view.carrots.invoke<{ value: string }>(
+  "com.example.settings",
+  "read",
+  { key: "theme" },
+);
+console.log(result.value);
+```
+
+Electrobun intentionally has no implicit browser-to-browser RPC. Route
+communication through the main process or use an explicit web transport.

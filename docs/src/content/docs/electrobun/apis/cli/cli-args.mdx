@@ -140,10 +140,10 @@ Hutch also owns the package-manager commands used by Electrobun projects:
 
 ```bash
 hutch install
-hutch add <package>
-hutch remove <package>
+hutch add zod
+hutch remove zod
 hutch update
-hutch x <package-or-bin> [args...]
+hutch x --package=typescript tsc --version
 ```
 
 `hutch x` runs a local package binary when available and otherwise installs it

@@ -1,95 +1,157 @@
 ---
 title: "Code Signing"
+description: "Sign and notarize Electrobun releases on macOS."
 ---
-              
-## Mac
-              <p>Apple often ships machines with expired certificates which is a huge pain. You can easily end up in a loop of generating certificates in the developer portal, installing them, and seeing the certificate is not trusted.</p>
 
-              <p>You can avoid a lot of headaches by installing the full Xcode via the app store. Open XCode, click the app menu and the Settings. Go to the Accounts tab and add your developer account. Click "Manage Certificates". Then click the + sign and add a "Developer ID Application" certificate. If you open Keychain Access you should be able to see it if you search the Login keychain for "Developer ID Application". You can also log into the Apple Developer portal and look at your certificates and you'll see it there as well.</p>
+Hutch can sign, notarize, and staple macOS canary and production builds. Dev
+builds are not signed even when `build.mac.codesign` is enabled.
 
-              <p>Now in the developer portal go to Identifiers and click the plus sign to add one for your app. Make sure "App Attest" is checked so Hutch can code sign and notarize your app. You may need other services if you need them.</p>
+Windows release signing is not currently part of Hutch's packaging pipeline.
 
-              <p>Now in another tab outside the Apple developer portal log into your apple account <a href="https://account.apple.com/sign-in">https://account.apple.com/sign-in</a>. Go to "App Specific Passwords" and create one for your Electrobun usage. This will be your `ELECTROBUN_APPLEIDPASS`, which Hutch uses to notarize your apps.</p>
+## Apple Prerequisites
 
-              <p>Now we need to get some values that you will add to your .zshrc file. Here is the mapping of those values and where to find them</p>
+Install Xcode and its command-line tools, then add your Apple Developer account
+under Xcode Settings > Accounts. Create or install a **Developer ID
+Application** certificate whose private key is present in the login keychain.
 
-              
+Confirm that macOS can use the identity:
+
 ```bash
-ELECTROBUN_DEVELOPER_ID: In Apple Dev Portal open the certificate you created. The certificate name (probably your company name). eg: "My Corp Inc."
-
-ELECTROBUN_TEAMID: In the Apple Dev Portal open the App Identifier you created for your app. Under "App ID Prefix" you'll see something like "BGU899NB8T (Team ID)" it's the "BGU899NB8T" part.
-
-ELECTROBUN_APPLEID: This is your apple id email address, likely your personal apple id email address
-
-ELECTROBUN_APPLEIDPASS: This is the app specific password you created for Electrobun code signing
+security find-identity -v -p codesigning
 ```
 
+The value for `ELECTROBUN_DEVELOPER_ID` is the identity printed by that command,
+for example `Developer ID Application: Example Corp (AB12C3D4E5)`.
 
-              <p>Now open your .zshrc file and add the following lines so that they're in your env</p>
+## Configuration
 
-              
+Enable signing and notarization in `electrobun.config.ts`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Signed App",
+    identifier: "com.example.signed-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      createDmg: true,
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Hutch signs nested Mach-O files and code bundles before signing the outer app.
+It verifies the result with `codesign`, submits the app and DMG when
+notarization is enabled, staples the accepted ticket, and validates it.
+
+## Signing Identity
+
+Signing always requires:
+
 ```bash
-export ELECTROBUN_DEVELOPER_ID="ELECTROBUN_DEVELOPER_ID: My Corp Inc. (BGU899NB8T)"
-export ELECTROBUN_TEAMID="BGU899NB8T"
-export ELECTROBUN_APPLEID="myemail@email.com"
-export ELECTROBUN_APPLEIDPASS="your-app-specific-password"
+export ELECTROBUN_DEVELOPER_ID="Developer ID Application: Example Corp (AB12C3D4E5)"
 ```
 
+Store credentials in the CI secret manager rather than committing them or
+placing them in project files.
 
-              <p>Now in your electrobun.config file make sure Build.mac.codesign and build.mac.notarize are set to true. eg:</p>
+## Notarization Credentials
 
-              
-```javascript
-{
-    "build": {
-        "mac": {
-            "codesign": true,
-            "notarize": true,
-        }
-    }
-}
-```
+Choose one authentication method. App Store Connect API credentials are the
+preferred CI option.
 
+### App Store Connect API Key
 
-              <p>Restart your terminal. You can confirm your env is setup correctly by entering the following and hitting enter to see if it outputs the value in your .zshrc file. You may need to restart or add it to a different file if it doesn't.</p>
-              
-              
+Create a key in App Store Connect under Users and Access > Integrations. Save
+the downloaded `.p8` file and configure all three variables:
+
 ```bash
-echo $ELECTROBUN_TEAMID
+export ELECTROBUN_APPLEAPIKEYPATH="$HOME/private_keys/AuthKey_ABC123DEFG.p8"
+export ELECTROBUN_APPLEAPIKEY="ABC123DEFG"
+export ELECTROBUN_APPLEAPIISSUER="01234567-89ab-cdef-0123-456789abcdef"
 ```
 
+`ELECTROBUN_APPLEAPIKEYPATH` must identify an existing file on the build
+machine.
 
-              <p>The next time you run a non-dev build, Hutch signs and notarizes your app, compresses it into the self-extractor, and then signs and notarizes the self-extractor.</p>
+### Apple ID And App-Specific Password
 
-### App Store Connect API Key (alternative)
+Alternatively, create an app-specific password at account.apple.com and set:
 
-              <p>Instead of using an Apple ID and app-specific password, you can authenticate using an App Store Connect API key. This is often preferred for CI/CD environments and avoids issues with two-factor authentication.</p>
-
-              <p>Create an API key in <a href="https://appstoreconnect.apple.com/access/integrations/api">App Store Connect &gt; Users and Access &gt; Integrations &gt; App Store Connect API</a>. Download the `.p8` key file and note your Issuer ID and Key ID.</p>
-
-              <p>Add the following environment variables:</p>
-
-              
 ```bash
-export ELECTROBUN_APPLEAPIKEYPATH="/path/to/AuthKey_XXXXXXXXXX.p8"
-export ELECTROBUN_APPLEAPIKEY="XXXXXXXXXX"
-export ELECTROBUN_APPLEAPIISSUER="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+export ELECTROBUN_APPLEID="developer@example.com"
+export ELECTROBUN_APPLEIDPASS="xxxx-xxxx-xxxx-xxxx"
+export ELECTROBUN_TEAMID="AB12C3D4E5"
 ```
 
+The team ID is the ten-character Apple Developer team identifier. These three
+variables are used together; a partial set is not sufficient.
 
-              <p>When these variables are set, Electrobun will use the API key for notarization instead of the Apple ID credentials. You still need `ELECTROBUN_DEVELOPER_ID` and `ELECTROBUN_TEAMID` for code signing.</p>
+## Build A Signed Release
 
-## Unsigned Apps
-              <p>If you distribute an unsigned app (with `codesign: false`), users who download it from the internet will see a "damaged and can't be opened" error when trying to launch it. This happens because macOS adds a quarantine attribute to downloaded files, and Gatekeeper blocks unsigned quarantined apps.</p>
+Code signing runs for canary and production builds:
 
-              <p>To run an unsigned app that was downloaded from the internet, users need to remove the quarantine attribute:</p>
-
-              
 ```bash
-xattr -cr /Applications/YourApp.app
+hutch electrobun build --env=canary
+hutch electrobun build --env=production
 ```
 
+To diagnose packaging without submitting to Apple, retain `notarize: true` in
+the checked configuration and disable notarization for one invocation:
 
-              <p>After running this command, the app should open normally. Note that this is only necessary for apps downloaded from the internet - apps built and run locally don't have the quarantine attribute.</p>
+```bash
+ELECTROBUN_SKIP_NOTARIZATION=1 hutch electrobun build --env=canary
+```
 
-              <p>For production apps intended for end users, it's strongly recommended to enable code signing and notarization for the best user experience.</p>
+This still signs the release when `codesign` is enabled.
+
+## Entitlements
+
+Electrobun supplies the JIT and dynamic-library entitlements needed by its
+runtime by default. Add application-specific entitlements under
+`build.mac.entitlements`; Hutch writes them into the generated entitlements
+file used for executable and app signing.
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Camera App",
+    identifier: "com.example.camera-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      entitlements: {
+        "com.apple.security.device.camera": true,
+        "com.apple.security.device.microphone": true,
+      },
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+An entitlement does not replace the matching usage-description metadata or
+application permission flow.
+
+## Unsigned Downloads
+
+Gatekeeper may reject an unsigned app downloaded from the internet because
+the browser adds a quarantine attribute. For internal testing, the recipient
+can explicitly remove it:
+
+```bash
+xattr -cr /Applications/Signed\ App.app
+```
+
+Do not treat this as a production distribution flow. User-facing macOS apps
+should be signed and notarized.

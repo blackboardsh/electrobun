@@ -297,7 +297,6 @@ testRunnerWindow.webview.on("dom-ready", () => {
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
 		mainProcess: buildConfig.mainProcess ?? "cottontail",
-		cefVersion: buildConfig.cefVersion,
 		bunVersion: buildConfig.mainProcess === "bun" ? Bun.version : undefined,
 	});
 	// Send current update status

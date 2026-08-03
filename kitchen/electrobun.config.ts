@@ -30,7 +30,6 @@ export default {
 		mainProcess,
 		buildFolder: variantKey ? `build/matrix/${variantKey}` : "build",
 		artifactFolder: variantKey ? `artifacts/matrix/${variantKey}` : "artifacts",
-		useAsar: true,
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
 		zig: {
 			entrypoint: "src/zig/main.zig",

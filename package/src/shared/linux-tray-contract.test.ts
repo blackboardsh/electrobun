@@ -19,11 +19,11 @@ describe("Linux tray interaction contract", () => {
 		expect(trayDocs).toContain(
 			"Ayatana AppIndicator backend supports tray menus and their actions",
 		);
-		expect(trayDocs).toContain(
-			"does not expose raw primary icon activation",
+		expect(trayDocs).toMatch(
+			/does not\s+expose raw primary icon activation/,
 		);
-		expect(trayDocs).toContain(
-			"Linux apps should use <code>setMenu</code> and handle menu actions",
+		expect(trayDocs).toMatch(
+			/Linux apps should use `setMenu\(\)` and handle\s+menu actions/,
 		);
 		expect(trayDocs).not.toContain(
 			"Fired when the system tray icon is clicked, or when a menu item is clicked",

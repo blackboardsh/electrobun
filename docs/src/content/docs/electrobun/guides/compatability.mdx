@@ -8,7 +8,6 @@ description: "Supported operating systems, architectures, runtimes, and webview 
 | Operating system | Architecture | System webview | Bundled webview |
 | --- | --- | --- | --- |
 | macOS | arm64 | WKWebView | CEF |
-| macOS | x64 | WKWebView | CEF |
 | Windows | x64 | WebView2 | CEF |
 | Linux | x64 | WebKitGTK 4.1 | CEF |
 | Linux | arm64 | WebKitGTK 4.1 | CEF |
@@ -40,8 +39,8 @@ System webviews produce the smallest bundles and receive browser updates from
 the operating system. Set `bundleCEF: true` and select the CEF renderer when an
 application needs a pinned Chromium implementation.
 
-Electrobun currently pins CEF 147.0.10 by default. `build.cefVersion` can select
-a compatible release where supported.
+Electrobun pins and tests one CEF release with each framework release. Hutch
+does not currently expose a per-project CEF version override.
 
 Linux requires GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, and librsvg runtime
 packages even when CEF is bundled. See

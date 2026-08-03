@@ -66,14 +66,21 @@ To move an existing TypeScript main process to Cottontail, change the config
 block while keeping the entrypoint itself:
 
 ```ts
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
   build: {
     mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",
     },
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
 The `electrobun/bun` SDK import path remains valid. No application source rename
@@ -82,14 +89,21 @@ is required.
 To keep the actual Bun runtime, configure it explicitly:
 
 ```ts
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
   build: {
     mainProcess: "bun",
     bun: {
       entrypoint: "src/bun/index.ts",
     },
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
 Hutch still performs the build and packaging in this mode.

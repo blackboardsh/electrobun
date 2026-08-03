@@ -11,6 +11,7 @@
 
 import "./globals.d.ts";
 import {
+	initHostMessageBridge,
 	initLifecycleEvents,
 	initCmdClickHandling,
 	initSPANavigationInterception,
@@ -22,6 +23,7 @@ import {
 // No drag regions - sandboxed content shouldn't control window movement
 // No webview tags - sandboxed content cannot create OOPIFs
 
+initHostMessageBridge();
 initLifecycleEvents();
 initCmdClickHandling();
 initSPANavigationInterception();

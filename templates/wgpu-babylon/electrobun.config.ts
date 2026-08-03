@@ -7,7 +7,6 @@ export default {
     version: "0.0.1",
   },
   build: {
-    useAsar: false,
     mainProcess: "cottontail",
     cottontail: {
       entrypoint: "src/bun/index.ts",

@@ -1,111 +1,130 @@
 ---
 title: "Cross-Platform Development"
+description: "Build and test Electrobun applications on macOS, Windows, and Linux."
 ---
-              
-              <p>Electrobun enables you to build desktop applications that run on macOS, Windows, and Linux from a single codebase. This guide covers platform-specific considerations and best practices for cross-platform development.</p>
 
-## Platform-Specific Issues
+Electrobun applications share configuration and application source across
+platforms, but Hutch builds for the operating system and architecture on which
+it is running. Produce and test each release on a native runner.
 
-### Window Management
-              <p>Some window options like frameless windows work differently on different OSes.</p>
+## Supported Release Targets
 
-### Webview Behavior
+| Platform | Architecture | System renderer |
+| --- | --- | --- |
+| macOS | ARM64 | WKWebView |
+| Windows | x64 | WebView2 |
+| Linux | x64 and ARM64 | GTK WebKit 4.1 |
 
-              <p>Webview hiding and passthrough behavior varies between platforms:</p>
+Windows on ARM runs the x64 application through Windows emulation. The current
+Electrobun release workflow does not publish a macOS x64 core artifact.
 
-              <ul>
-                <li><strong>macOS</strong>: Webviews can be set to hidden and passthrough separately. These are independent settings.</li>
-                <li><strong>Windows &amp; Linux</strong>: Setting a webview to hidden using also automatically enables passthrough behavior. There is no separate passthrough setting - clicks will pass through hidden webviews to underlying content.</li>
-              </ul>
-
-              
-```
-<span style="color: #6b7280">// Hide a webview (behavior differs by platform)</span>
-<span style="color: #f59e0b">webviewSetHidden</span>(<span style="color: #10b981">webviewId</span>, <span style="color: #3b82f6">true</span>);
-
-<span style="color: #6b7280">// On macOS: webview is hidden but still intercepts clicks (unless passthrough is also enabled)</span>
-<span style="color: #6b7280">// On Windows/Linux: webview is hidden AND clicks pass through automatically</span>
-
-<span style="color: #6b7280">// Enable click passthrough (macOS only - no effect on Windows/Linux)</span>
-<span style="color: #f59e0b">webviewSetPassthrough</span>(<span style="color: #10b981">webviewId</span>, <span style="color: #3b82f6">true</span>);
-```
-
-
-### Linux
-              <p>By default on Linux we use GTK windows and GTKWebkit webviews. This is as close to a "system" webview on Linux that's managed/updated by the OS. Some distros don't have this installed by default so you will need to ask your end users to install those dependencies.</p>
-
-              <p>Electrobun's Linux native wrapper currently requires GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, and librsvg at runtime, including when CEF is bundled. Install them with the command for the target distro family:</p>
+On each runner, install Hutch and execute the same production command:
 
 ```bash
-# Ubuntu/Debian
+hutch install
+hutch electrobun build --env=production
+```
+
+macOS signing and notarization must run on macOS. Native main-process builds
+also require that language's host toolchain and platform linker.
+
+## Platform Configuration
+
+Use the `mac`, `win`, and `linux` objects for differences that belong in the
+package rather than branching application code:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Cross Platform App",
+    identifier: "com.example.cross-platform-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      icons: "App.icon",
+    },
+    win: {
+      icon: "assets/icon.ico",
+    },
+    linux: {
+      icon: "assets/icon.png",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Runtime branches should use standard platform detection only when behavior
+cannot be expressed as build configuration:
+
+```typescript
+const platform = process.platform;
+
+if (platform === "darwin") console.log("macOS");
+else if (platform === "win32") console.log("Windows");
+else if (platform === "linux") console.log("Linux");
+```
+
+## Renderer Differences
+
+System webviews are different browser engines and versions. Test layout,
+media permissions, keyboard handling, downloads, context menus, and any API
+that is sensitive to browser-engine behavior on all three platforms.
+
+Bundle CEF when the application needs a pinned Chromium engine or advanced
+native overlay behavior. macOS and Windows can mix CEF and native views when
+CEF is bundled. A Linux process uses either its CEF wrapper or GTK WebKit
+wrapper, so do not depend on mixed renderers there.
+
+Native overlay surfaces also have renderer-specific transparency,
+passthrough, and mask constraints. See the
+[`<electrobun-webview>`](/electrobun/apis/browser/electrobun-webview-tag) and
+[`<electrobun-wgpu>`](/electrobun/apis/browser/electrobun-wgpu-tag) references.
+
+## Linux Runtime Packages
+
+Electrobun's Linux native wrapper links GTK 3, WebKitGTK 4.1, Ayatana
+AppIndicator, and librsvg, including in CEF-enabled builds. Install the runtime
+packages for the target distribution:
+
+```bash
+# Ubuntu or Debian
 sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2
 
-# Fedora/RHEL
+# Fedora or RHEL
 sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 librsvg2
 
-# Arch/Manjaro
+# Arch or Manjaro
 sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
 ```
 
-              <p>If the main process fails to start because one of these dependencies is absent, the Electrobun launcher lists the missing shared-library name and the same package guidance. Run <code>ldd path/to/libNativeWrapper.so</code> to inspect the complete resolved dependency list.</p>
-
-              <p>In addition GTK and GTKWebkit have severe limitations and are unable to handle Electrobun's more advanced webview layering and masking functionality.</p>
-
-              <p>So we strongly recommend bundling CEF (just set bundleCEF to true in your electrobun.config.ts file) for your app's linux distribution. And make sure you open `new BrowserWindow()`s and `<electrobun-webview>`s with `renderer="cef"` which uses pure x11 windows.</p>
-
-## Building for Multiple Platforms
-
-              <p>Electrobun builds for the current host platform. To produce builds for all platforms, use a CI service like GitHub Actions with a runner for each OS/architecture. GitHub Actions provides free CI runners for open-source projects covering all supported platforms.</p>
-
-              
-```
-<span style="color: #6b7280"># On each CI runner, create a host-platform production release:</span>
-<span style="color: #f59e0b">hutch electrobun</span> build --env=production
-```
-
-              <p>Hutch builds, wraps, signs, and packages the app for the runner's native platform. Use a build matrix so platform-specific tools such as code signing and icon utilities are available for each release target.</p>
-
-### Architecture Considerations
-
-              <table class="docs-table">
-                <thead>
-                  <tr>
-                    <th>Platform</th>
-                    <th>Architectures</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>macOS</td>
-                    <td>x64, ARM64</td>
-                    <td>Universal binaries supported</td>
-                  </tr>
-                  <tr>
-                    <td>Windows</td>
-                    <td>x64</td>
-                    <td>ARM64 runs via emulation</td>
-                  </tr>
-                  <tr>
-                    <td>Linux</td>
-                    <td>x64, ARM64</td>
-                    <td>Native support for both</td>
-                  </tr>
-                </tbody>
-              </table>
+If startup fails, the launcher reports recognized missing libraries and these
+package commands. Use `ldd path/to/libNativeWrapper.so` to inspect the full
+dynamic dependency set for a distribution.
 
 ## Windows Console Output
 
-              <p>On Windows, Electrobun builds your app as a GUI application (Windows subsystem) so that no console window appears when end users launch it. Dev builds automatically attach to the parent console so you can see `console.log` output and debug information in your terminal.</p>
+Packaged Windows applications use the GUI subsystem and do not open a console
+window. Hutch dev launches attach to the invoking terminal. To expose output
+from a canary or production executable for diagnosis, set
+`ELECTROBUN_CONSOLE=1` before launch:
 
-              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>production</strong> bundle, set the `ELECTROBUN_CONSOLE` environment variable:</p>
-
-              
+```powershell
+$env:ELECTROBUN_CONSOLE = "1"
+& ".\Cross Platform App.exe"
 ```
-<span style="color: #6b7280"># Launch a canary/production bundle with console output visible</span>
-<span style="color: #f59e0b">set</span> ELECTROBUN_CONSOLE=1
-<span style="color: #f59e0b">.\MyApp.exe</span>
-```
 
+This override has no effect on macOS or Linux, where terminal launches already
+inherit standard output and error.
 
-              <p>When `ELECTROBUN_CONSOLE=1` is set, the launcher will attach to the parent console and inherit standard output/error streams, just like a dev build. This has no effect on macOS or Linux where console output is always available.</p>
+## Test Matrix
+
+Automated tests should cover the four published targets. Interactive tests
+that exercise renderer output need a display session and should cover system
+webviews everywhere plus CEF where the application enables it. Native
+main-process SDKs share the Electrobun core, but each wrapper should retain a
+smoke test for initialization, RPC, event dispatch, and shutdown.

@@ -1,8 +1,28 @@
 import { describe, expect, test } from "bun:test";
 import {
+	initHostMessageBridge,
 	initOverscrollPrevention,
 	shouldApplyOverscrollPrevention,
 } from "./events";
+
+describe("host message bridge", () => {
+	test("serializes messages onto the event-only bridge", () => {
+		const emitted: Array<{ eventName: string; detail: string }> = [];
+		const targetWindow = {} as Window;
+
+		initHostMessageBridge(targetWindow, (eventName, detail) => {
+			emitted.push({ eventName, detail });
+		});
+		targetWindow.__electrobunSendToHost({ type: "ready", count: 2 });
+
+		expect(emitted).toEqual([
+			{
+				eventName: "host-message",
+				detail: '{"type":"ready","count":2}',
+			},
+		]);
+	});
+});
 
 describe("overscroll prevention", () => {
 	test("does not install the root overscroll rule on Linux", () => {

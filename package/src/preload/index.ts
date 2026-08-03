@@ -22,7 +22,7 @@ import { initExternalDropFocusRestoration } from "./externalDropFocus";
 import { initWebviewTag } from "./webviewTag";
 import { initWgpuTag } from "./wgpuTag";
 import {
-	emitWebviewEvent,
+	initHostMessageBridge,
 	initLifecycleEvents,
 	initCmdClickHandling,
 	initSPANavigationInterception,
@@ -63,12 +63,8 @@ if (!window.__electrobun) {
 	window.__electrobun.receiveMessageFromBun = defaultUserMessageHandler;
 }
 
-// Allow preload scripts to send custom messages to the host webview
-window.__electrobunSendToHost = (message: unknown) => {
-	emitWebviewEvent("host-message", JSON.stringify(message));
-};
-
 // Initialize all features
+initHostMessageBridge();
 initLifecycleEvents();
 initCmdClickHandling();
 initSPANavigationInterception();

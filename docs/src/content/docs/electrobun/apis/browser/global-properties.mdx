@@ -1,13 +1,58 @@
 ---
 title: "Global Properties"
+description: "Public values injected into every Electrobun webview preload."
 ---
-              
-              <p>These global properties are injected into the browser context regardless of whether you've instantiated the `Electroview`.</p>
 
-### window.__electrobunWebviewId
+Electrobun injects these values before application scripts run. They do not
+require an `Electroview` instance.
 
-              <p>The id of the webview</p>
+## `window.__electrobunWebviewId`
 
-### window.__electrobunWindowId
+The numeric native ID of the current `BrowserView`.
 
-              <p>The id of the window</p>
+```typescript
+import "electrobun/view";
+
+console.log("Current webview", window.__electrobunWebviewId);
+```
+
+## `window.__electrobunWindowId`
+
+The numeric native ID of the containing window.
+
+```typescript
+import "electrobun/view";
+
+console.log("Containing window", window.__electrobunWindowId);
+```
+
+## `window.__electrobunPlatform`
+
+The native platform name: `"macos"`, `"windows"`, or `"linux"`.
+
+```typescript
+import "electrobun/view";
+
+if (window.__electrobunPlatform === "macos") {
+  document.documentElement.dataset.platform = "macos";
+}
+```
+
+## `window.__electrobunSendToHost()`
+
+Emits the value as a `host-message` event on the containing `BrowserView` or
+`<electrobun-webview>` element. The event-only bridge remains available in a
+sandboxed embedded webview.
+
+```typescript
+import "electrobun/view";
+
+window.__electrobunSendToHost({
+  type: "ready",
+  title: document.title,
+});
+```
+
+Other `__electrobun*` globals are transport implementation details. Do not use
+them as application APIs; their names and shapes may change independently of
+the public SDK.

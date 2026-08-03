@@ -5,7 +5,8 @@ export default {
     start: "astro dev",
     build: "astro build",
     preview: "astro preview",
-    check: "astro check",
+    check: "astro check && node scripts/check-code-examples.mjs",
+    "check:examples": "node scripts/check-code-examples.mjs",
     clean: "rm -rf dist .astro",
     deploy:
       'wrangler pages deploy dist --project-name=framework-docs --branch="$PAGES_BRANCH"',

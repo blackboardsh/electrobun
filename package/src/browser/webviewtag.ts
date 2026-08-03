@@ -1,12 +1,20 @@
 import "./global.d.ts";
 
 type WebviewEventTypes =
+	| "will-navigate"
 	| "did-navigate"
 	| "did-navigate-in-page"
 	| "did-commit-navigation"
 	| "dom-ready"
 	| "host-message"
-	| "new-window-open";
+	| "new-window-open"
+	| "download-started"
+	| "download-progress"
+	| "download-completed"
+	| "download-failed"
+	| "load-started"
+	| "load-committed"
+	| "load-finished";
 
 /**
  * Interface representing an <electrobun-webview> custom element.
@@ -19,14 +27,13 @@ type WebviewEventTypes =
  */
 interface WebviewTagElement extends HTMLElement {
 	// Properties
-	webviewId?: number;
+	webviewId: number | null;
 	maskSelectors: Set<string>;
 	transparent: boolean;
 	passthroughEnabled: boolean;
 	spellCheckEnabled: boolean;
 	hidden: boolean;
-	hiddenMirrorMode: boolean;
-	partition: string | null;
+	readonly sandbox: boolean;
 
 	// Attribute-backed properties (getters/setters)
 	src: string | null;
@@ -49,9 +56,9 @@ interface WebviewTagElement extends HTMLElement {
 	setSpellCheck(enabled: boolean): Promise<boolean>;
 
 	// Visibility and interaction
-	toggleTransparent(transparent?: boolean, bypassState?: boolean): void;
-	togglePassthrough(enablePassthrough?: boolean, bypassState?: boolean): void;
-	toggleHidden(hidden?: boolean, bypassState?: boolean): void;
+	toggleTransparent(transparent?: boolean): void;
+	togglePassthrough(enablePassthrough?: boolean): void;
+	toggleHidden(hidden?: boolean): void;
 
 	// Events - listener receives a CustomEvent with detail property
 	on(event: WebviewEventTypes, listener: (event: CustomEvent) => void): void;

@@ -1,88 +1,168 @@
 ---
-title: "<electrobun-wgpu>"
+title: "Electrobun WGPU Tag"
+description: "Place a native WGPU surface inside a webview layout."
 ---
-  <p>`<electrobun-wgpu>` embeds a native WGPU-backed surface inside a webview layout. It behaves like a DOM element but renders via a real GPU surface layered above the host view, with optional masking and passthrough for punch‑through UI.</p>
 
-## When To Use It
+`<electrobun-wgpu>` places a native WGPU surface at an element's bounds. Use
+the host document for layout and controls while a Zig, Rust, Go, Odin, Bun, or
+Cottontail main process renders directly to the native surface.
 
-  <ul>
-    <li>Compositing high-performance GPU content with a web UI (editors, game tools, IDEs).</li>
-    <li>Running main-process WGPU rendering while keeping HTML/CSS for layout.</li>
-    <li>Mixing native GPU surfaces with webview content without a single WebGL canvas.</li>
-  </ul>
+Import `electrobun/view` once to register the element and its TypeScript DOM
+types.
 
-  <p>If your rendering is simple and you don’t need main-process control or native surface layering, a standard `<canvas>` inside the webview is still the simplest option.</p>
-
-## Platform Notes
-
-  <p>On Linux, `passthrough` and mask punch-through behavior for `<electrobun-wgpu>` is not supported inside transparent `BrowserWindow`s. Transparent CEF windows use offscreen rendering painted into the parent X11 window, while `<electrobun-wgpu>` is a separate native child window. The WGPU surface can render and resize correctly, but X11 cannot reliably hit-test through that child surface into the offscreen-rendered host DOM.</p>
-
-  <p>For punch-through UI on Linux, use a non-transparent window, keep the interactive HTML outside the WGPU surface, or render the GPU content into a normal in-webview canvas when that composition model is required.</p>
-
-## Basic Usage
-
-  
-```javascript
-// In your webview HTML
-<electrobun-wgpu id="gpu"></electrobun-wgpu>
-
-// In the main process (RPC handler), create a WGPU surface for the view ID
-// and render via WGPU.native or webgpu.createContext(...)
+```html
+<div class="toolbar">GPU controls</div>
+<electrobun-wgpu
+  id="scene"
+  style="display: block; width: 100%; height: 480px"
+></electrobun-wgpu>
 ```
 
+```typescript
+import type { WgpuTagElement } from "electrobun/view";
+import "electrobun/view";
 
-## API
+const surface = document.querySelector("electrobun-wgpu");
+if (!surface) throw new Error("The WGPU surface was not found");
 
-  
-```javascript
-const wgpu = document.querySelector("electrobun-wgpu");
+surface.on("ready", (event) => {
+  const { id } = event.detail as { id: number };
+  console.log("Native WGPU view ready", id);
+});
 
-// Properties
-console.log(wgpu.wgpuViewId);
-console.log(wgpu.transparent, wgpu.passthroughEnabled, wgpu.hidden);
+const typedSurface: WgpuTagElement = surface;
+void typedSurface;
+```
 
-// Methods
-wgpu.toggleTransparent(true);
-wgpu.togglePassthrough(true);
-wgpu.toggleHidden(false);
-wgpu.syncDimensions(true);
+The `ready` event reports the native `wgpuViewId`. Send that ID to the main
+process through your application's RPC schema, then initialize the renderer
+for that view.
 
-// Masks
-wgpu.addMaskSelector("#hud");
-wgpu.removeMaskSelector("#hud");
+## Attributes
 
-// Events
-wgpu.on("ready", (evt) => {
-  console.log("WGPU view ready", evt.detail);
+| Attribute | Value | Purpose |
+| --- | --- | --- |
+| `transparent` | boolean attribute | Starts the native surface transparent. |
+| `passthrough` | boolean attribute | Starts with pointer input passing through to the host page. |
+| `hidden` | boolean attribute | Starts the native surface hidden. |
+| `masks` | comma-separated selectors | Cuts holes for matching host elements. |
+
+```html
+<div class="toolbar">Host controls rendered over the surface</div>
+<electrobun-wgpu
+  transparent
+  passthrough
+  masks=".toolbar, .popover"
+></electrobun-wgpu>
+```
+
+Boolean attributes configure the initial native view. Use the toggle methods
+for runtime changes.
+
+## Visibility And Input
+
+Each toggle accepts an explicit state. Omit the argument to invert the current
+state.
+
+```typescript
+import "electrobun/view";
+
+const surface = document.querySelector("electrobun-wgpu");
+if (!surface) throw new Error("The WGPU surface was not found");
+
+surface.toggleTransparent(true);
+surface.togglePassthrough(false);
+surface.toggleHidden(false);
+surface.syncDimensions(true);
+
+console.log({
+  transparent: surface.transparent,
+  passthrough: surface.passthroughEnabled,
+  hidden: surface.hidden,
 });
 ```
 
+Normal layout changes are synchronized automatically. Call
+`syncDimensions(true)` when application code needs an immediate update.
 
-  <p>The `wgpuViewId` is the native view identifier. Pass it to your Cottontail process to create a surface for that view.</p>
+## Masks
 
-## Lifecycle + Resize
+The WGPU surface is a native layer above the host webview. Host elements
+cannot cross that layer with `z-index`; masks cut rectangular holes so the
+matching host elements can render and receive input.
 
-  <p>WebGPU surfaces must be reconfigured on size changes. When your WGPU view or window resizes, update the surface config and re-create any size-dependent resources.</p>
+```typescript
+import "electrobun/view";
 
-  
-```javascript
-// Main-process render loop example
-const ctx = webgpu.createContext(win);
-let size = win.getSize();
+const surface = document.querySelector("electrobun-wgpu");
+if (!surface) throw new Error("The WGPU surface was not found");
 
-function resizeIfNeeded() {
-  const next = win.getSize();
-  if (next.width !== size.width || next.height !== size.height) {
-    size = next;
-    ctx.configure({
-      device,
-      format: webgpu.navigator.getPreferredCanvasFormat(),
-      alphaMode: "premultiplied",
-      size: [size.width, size.height],
+surface.addMaskSelector(".context-menu");
+surface.removeMaskSelector(".context-menu");
+```
+
+On Linux, passthrough and masks are unavailable inside transparent
+`BrowserWindow`s because the transparent CEF host is rendered offscreen while
+the WGPU surface is a native child window. Use a non-transparent parent or
+keep interactive HTML outside the surface for that composition.
+
+## Main-Process Surface
+
+In a Bun or Cottontail main process, the tag-created native view is available
+through `WGPUView`. `getById` normally finds it; `adoptExisting` attaches a
+wrapper when it was created outside the current SDK object map.
+
+```typescript
+import { WGPUView, webgpu } from "electrobun/bun";
+
+export function createEmbeddedGpuContext(
+  id: number,
+  windowId: number,
+  width: number,
+  height: number,
+) {
+  const view =
+    WGPUView.getById(id) ??
+    WGPUView.adoptExisting(id, {
+      windowId,
+      autoResize: false,
+      frame: { x: 0, y: 0, width, height },
     });
-  }
+
+  if (!view) throw new Error(`WGPU view ${id} is unavailable`);
+  return webgpu.createContext(view);
 }
 ```
 
+The native Zig, Rust, Go, and Odin SDKs receive the same view ID and expose
+their own WGPU surface bridge. Start from the corresponding WGPU template for
+a complete renderer with lifecycle and resize handling.
 
-  <p>Call `syncDimensions()` after any DOM layout changes so the native view tracks the element bounds.</p>
+## Lifecycle
+
+Removing the element destroys its native view. A later insertion creates a
+new ID, so stop resources tied to the old surface and initialize them again on
+the next `ready` event. Reconfigure the WebGPU context and recreate
+size-dependent textures when dimensions change.
+
+The `runTest()` method invokes Electrobun's native diagnostic renderer. It is
+intended for framework and platform verification rather than application
+render loops.
+
+## Properties And Methods
+
+| Member | Type | Purpose |
+| --- | --- | --- |
+| `wgpuViewId` | `number \| null` | Native view ID after initialization. |
+| `transparent` | `boolean` | Current transparency state. |
+| `passthroughEnabled` | `boolean` | Current input passthrough state. |
+| `hidden` | `boolean` | Current native visibility state. |
+| `toggleTransparent(value?)` | method | Sets or toggles transparency. |
+| `togglePassthrough(value?)` | method | Sets or toggles input passthrough. |
+| `toggleHidden(value?)` | method | Sets or toggles visibility. |
+| `syncDimensions(force?)` | method | Synchronizes geometry and masks. |
+| `addMaskSelector(selector)` | method | Adds a host-page mask selector. |
+| `removeMaskSelector(selector)` | method | Removes a mask selector. |
+| `on("ready", listener)` | method | Subscribes to initialization. |
+| `off("ready", listener)` | method | Removes the exact listener. |
+| `runTest()` | method | Runs the native diagnostic renderer. |

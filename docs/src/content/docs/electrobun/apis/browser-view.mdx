@@ -1,892 +1,234 @@
 ---
-title: "BrowserView API"
+title: "BrowserView"
+description: "Create, attach, navigate, and communicate with native webviews."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-
-  <blockquote>
-    <p>Create and control browser views (sometimes referred to as webviews).</p>
-  </blockquote>
-
-  <Aside type="tip">
-    <p>Instead of creating BrowserViews directly from the main process, you would use the <a href="/electrobun/apis/browser-window">BrowserWindow</a> class which automatically creates a default BrowserView that fills the window, and then use <a href="/electrobun/apis/browser/electrobun-webview-tag">Webvew Tags</a> within your html to create nested BrowserViews from the browser context.</p>
-  </Aside>
-
-  
-```typescript
-// Most use cases: Access webview created by BrowserWindow or WebviewTag
-import { BrowserView } from "electrobun/bun";
-const webview = BrowserView.getById(id);
-
-// or
-
-const win = new BrowserWindow(/*....*/);
-
-const webview = win.webview;
-
-// or
-
-// advnaced use cases: Create BrowserView directly
-import { BrowserWindow } from "electrobun/bun";
-
-const webview = new BrowserView({
-  url: "views://mainview/index.html",
-  frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
-});
-```
-
-
-  <Aside type="note">
-    <p>While you can create a BrowserView directly in the main process, it will only render when you add it to a window.</p>
-  </Aside>
-
-## Constructor Options
-
-### frame
-  <p>Set the Webview's dimensions relative to the window. The default webview created via `new BrowserWindow()` will be stretched to cover the window's dimensions automatically.</p>
-
-  
-```javascript
-const webview = new BrowserView({
-   frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
-});
-```
-
-
-### url
-  <p>Set the initial url for the window's default BrowserView to navigate to when it opens.</p>
-
-  
-```javascript
-// Use any url on the internet
-const webview = new BrowserView({
-   url: "https://example.com",
-});
-
-// or use the views:// url scheme to load local
-// content that you've bundled with your app.
-
-const webview = new BrowserView({
-   url: "views://mainview/index.html",
-});
-```
-
-
-### html
-  <p>Set an html string for the window's default BrowserView to load when it opens. Anything that would be valid in an html file including javascript and css can be used.</p>
-  <p>Use this instead of setting the `url` property.</p>
-
-  
-```javascript
-const htmlString = "<html><head></head><body><h1>hello world</h1></body></html>";
-
-const webview = new BrowserView({
-   html: htmlString,
-
-});
-```
-
-
-### partition
-  <p>Partitions allow you to separate the browser session. Things like cookies and so on. For example if you have two BrowserViews with the same partition and log into gmail in one, the other will also be logged into gmail. If you use two different partitions then you could log into a different gmail account in each BrowserView.</p>
-
-  
-```javascript
-// ephemeral partition. If you close and reopen your app
-// even if you use the same partition name it will not
-// have persisted.
-const webview = new BrowserView({
-   partition: "partition1",
-});
-
-// To make partitions persistent just prefix it with `persist:`
-const webview = new BrowserView({
-   partition: "persist:partition1",
-});
-```
-
-`persist:default` selects the app's shared default persistent profile. Other
-`persist:*` names create isolated persistent profiles, while names without the
-prefix remain ephemeral.
-
-
-### preload
-  <p>Set a preload script for the window's default BrowserView to render after html is parsed but before any other javascript is executed. The preload script will be run after any navigation before the page's scripts are run.</p>
-  <p>You can use either inline javascript or a url.</p>
-
-  
-```javascript
-// Use any url on the internet
-const webview = new BrowserView({
-   preload: "https://example.com/some/remote/file.js",
-});
-
-// or use the views:// preload scheme to load local
-// content that you've bundled with your app.
-
-const webview = new BrowserView({
-   preload: "views://somebundledview/preloadscript.js",
-});
-
-// or use inline javascript
-
-const webview = new BrowserView({
-   preload: "document.body.innerHTML = 'Hello world'; console.log('hello console')",
-});
-```
-
-
-### rpc
-  <p>The RPC property allows you to establish RPC (remote procedure calls) between the main process and this window's default BrowserView. In other words it lets you define functions that execute in the main process that are callable and return a value back to the browser process and visa versa.</p>
-  <p>These RPC functions are asynchronous.</p>
-
-  <p>`src/shared/types.ts`</p>
-  
-```typescript
-export type MyWebviewRPCType = {
-  // functions that execute in the main process
-  bun: RPCSchema<{
-    requests: {
-      someMainProcessFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
-      };
-    };
-    messages: {
-      logToMainProcess: {
-        msg: string;
-      };
-    };
-  }>;
-  // functions that execute in the browser context
-  webview: RPCSchema<{
-    requests: {
-      someWebviewFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
-      };
-    };
-    messages: {
-      logToWebview: {
-        msg: string;
-      };
-    };
-  }>;
-};
-```
-
-
-  <p>`src/bun/index.ts`</p>
-  
-```typescript
-import { BrowserView } from "electrobun/bun";
-import { type MyWebviewRPCType } from "../shared/types";
-
-// Create an RPC object for the main-process handlers with the shared type
-const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
-  maxRequestTime: 5000,
-  handlers: {
-    requests: {
-      someMainProcessFunction: ({ a, b }) => {
-        console.log(`browser asked me to do math with: ${a} and ${b}`);
-        return a + b;
-      },
-    },
-    // When the browser sends a message we can handle it
-    // in the main process
-    messages: {
-      "*": (messageName, payload) => {
-        console.log("global message handler", messageName, payload);
-      },
-      logToMainProcess: ({ msg }) => {
-        console.log("Log to main process: ", msg);
-      },
-    },
-  },
-});
-
-// Pass the RPC object to the BrowserWindow, which will set it
-// on the window's default BrowserView
-const webview = new BrowserView({
-  url: "views://mainview/index.html",
-  frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
-  rpc: myWebviewRPC,
-});
-
-// ... later on
-
-// Note: These RPC methods will inherit types from the shared type
-
-// Call a browser function from the main process
-const answer = await webview.rpc.request.someWebviewFunction(
-  { a: 4, b: 6 },
-  { maxRequestTime: 5000 },
-);
-
-// Send a message to the BrowserView from the main process
-webview.rpc.send.logToWebview({ msg: "my message" });
-```
-
-  <p>The second argument to a request can set <code>maxRequestTime</code> for that call only. Requests without an override continue to use the RPC instance's configured timeout.</p>
-
-
-  <Aside type="tip">
-    <p>The above code snippet shows defining the main process RPC handlers and calling the browser process handlers from the main process. To see how to handle the browser context code, take a look at the <a href="/electrobun/apis/browser-view">Browser API</a>.</p>
-  </Aside>
-
-### sandbox
-  <p>When set to `true`, the BrowserView runs in sandbox mode. This is a security feature that disables RPC (remote procedure calls) and only allows event emission. Use sandbox mode for untrusted content like remote URLs.</p>
-
-  
-```javascript
-// Sandboxed BrowserView for untrusted content
-const webview = new BrowserView({
-  url: "https://untrusted-site.com",
-  sandbox: true,  // Disables RPC, events still work
-});
-
-// Events work normally in sandbox mode
-webview.on("dom-ready", () => {
-  console.log("Page loaded in sandboxed view");
-});
-
-webview.on("will-navigate", (event) => {
-  console.log("Navigation:", event.data.detail);
-});
-```
-
-
-  <p>See the <a href="/electrobun/apis/browser-window">BrowserWindow sandbox documentation</a> for a complete overview of the security model and use cases.</p>
-
-### spellCheck
-  <p>Set `spellCheck: true` to enable macOS system continuous spell checking for editable content in a native WKWebView. The setting is reapplied after each completed navigation. Omitting the option or setting it to `false` leaves the renderer's existing default unchanged.</p>
-
-```typescript
-const webview = new BrowserView({
-  html: "<div contenteditable>Type here</div>",
-  renderer: "native",
-  spellCheck: true,
-});
-```
-
-  <Aside type="caution">
-    <p>This capability is available only for macOS native WKWebView. CEF, WebView2, and WebKitGTK leave their behavior unchanged and report unsupported from `setSpellCheck()`. WKWebView has no public API for this setting, so Electrobun uses the guarded WebKit testing SPI `_setContinuousSpellCheckingEnabledForTesting:`. WebKit may rename or remove that selector, and its current implementation uses process-level text-checker state that can be observed by webviews sharing a WebKit process.</p>
-  </Aside>
-
-## Static Methods
-
-### BrowserView.getAll
-  <p>Get a list of references to all BrowserViews. This includes the default Browserviews created via `new BrowserWindow`, Browserviews created as nested OOPIFs via <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTags</a>, and BrowserViews that you create manually via `new BrowserView()` for advanced use cases.</p>
-
-  
-```typescript
-import { BrowserView } from "electrobun/bun";
-
-const webviews = BrowserView.getAll();
-```
-
-
-### BrowserView.getById
-  <p>Get a specific BrowserView by id. This includes the default Browserviews created via `new BrowserWindow`, Browserviews created as nested OOPIFs via <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTags</a>, and BrowserViews that you create manually via `new BrowserView()` for advanced use cases.</p>
-
-  
-```typescript
-import { BrowserWindow, BrowserView } from "electrobun/bun";
+`BrowserView` is Electrobun's main-process wrapper around a native or CEF
+webview. Every `BrowserWindow` creates one initial view, available as
+`window.webview`. Create additional views when a window needs independently
+positioned web content.
+
+```ts
+import { BrowserView, BrowserWindow } from "electrobun/bun";
 
 const win = new BrowserWindow({
-  title: "my url window",
+  title: "Multiple views",
+  url: "views://shell/index.html",
+  frame: { width: 1000, height: 700 },
+});
+
+const view = new BrowserView({
+  windowId: win.id,
+  url: "views://details/index.html",
+  frame: { x: 320, y: 0, width: 680, height: 700 },
+  autoResize: false,
+});
+
+void view;
+```
+
+## Constructor options
+
+The constructor accepts `Partial<BrowserViewOptions>`.
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `windowId` | `number` | `0` | Native parent window ID. |
+| `hostWebviewId` | `number` | none | Host view for an `<electrobun-webview>` child. |
+| `url` | `string \| null` | `null` | URL to load. |
+| `html` | `string \| null` | `null` | HTML string to load instead of `url`. |
+| `preload` | `string \| null` | `null` | Inline JavaScript or a bundled `views://` script URL. |
+| `viewsRoot` | `string \| null` | `null` | Override for the bundled views root. |
+| `renderer` | `"native" \| "cef"` | Platform build default | Webview renderer. |
+| `partition` | `string \| null` | `null` | Persistent storage/session partition. |
+| `frame` | `{ x: number; y: number; width: number; height: number }` | `{ x: 0, y: 0, width: 800, height: 600 }` | Position inside the parent window. |
+| `autoResize` | `boolean` | `true` | Resize with the parent window. |
+| `rpc` | RPC instance | generated empty RPC | Typed main-process transport. |
+| `navigationRules` | `string \| null` | `null` | Serialized navigation policy. |
+| `sandbox` | `boolean` | `false` | Disable RPC for untrusted content. |
+| `startTransparent` | `boolean` | `false` | Create the native layer transparent. |
+| `startPassthrough` | `boolean` | `false` | Create with input passthrough enabled. |
+| `spellCheck` | `boolean` | `false` | Enable native spell checking where supported. |
+
+<Aside type="note">
+Use the DOM `<electrobun-webview>` element when the view's bounds should follow
+an element in another webview. Construct `BrowserView` directly when the main
+process owns its geometry.
+</Aside>
+
+## Loading and scripting
+
+```ts
+import { BrowserWindow } from "electrobun/bun";
+
+const win = new BrowserWindow({
+  title: "View controls",
   url: "views://mainview/index.html",
-  frame: {
-    width: 1800,
-    height: 600,
-    x: 2000,
-    y: 2000,
-  },
+});
+const view = win.webview;
+
+view.loadURL("views://details/index.html");
+view.loadHTML("<!doctype html><title>Inline content</title><h1>Hello</h1>");
+view.executeJavascript("document.documentElement.dataset.host = 'electrobun'");
+view.setNavigationRules(["views://details/*"]);
+
+view.openDevTools();
+view.closeDevTools();
+view.toggleDevTools();
+
+view.setPageZoom(1.25);
+const zoom = view.getPageZoom();
+const spellCheckChanged = view.setSpellCheck(true);
+
+void zoom;
+void spellCheckChanged;
+```
+
+`executeJavascript()` does not return the evaluated value. Use typed RPC when
+the browser must return data to the main process.
+
+## Find in page
+
+```ts
+import { BrowserWindow } from "electrobun/bun";
+
+const win = new BrowserWindow({
+  title: "Find",
+  url: "views://mainview/index.html",
 });
 
-const webview = BrowserView.getById(win.webview.id);
-```
-
-
-### BrowserView.on("created")
-  <p>Subscribe to BrowserViews created by <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTags</a>. The handler runs after the BrowserView is registered and before the tag's initialization request resolves, so RPC can be attached without polling.</p>
-
-
-```typescript
-import { BrowserView } from "electrobun/bun";
-import type { TabRPC } from "../shared/types";
-
-const tabRPCs = new Map();
-
-const stopListening = BrowserView.on("created", (view) => {
-  const rpc = BrowserView.defineRPC<TabRPC>({
-    handlers: {
-      requests: {},
-      messages: {},
-    },
-  });
-
-  rpc.setTransport(view.createTransport());
-  tabRPCs.set(view.id, rpc);
+win.webview.findInPage("Electrobun", {
+  forward: true,
+  matchCase: false,
 });
-
-// Later, when new tab creation is no longer expected:
-stopListening();
+win.webview.stopFindInPage();
 ```
-
-
-### BrowserView.off("created")
-  <p>Remove a previously registered WebviewTag BrowserView creation handler.</p>
-
-
-```typescript
-import type { BrowserViewCreatedHandler } from "electrobun/bun";
-
-const handleCreated: BrowserViewCreatedHandler = (view) => {
-  console.log(`Created BrowserView ${view.id}`);
-};
-
-BrowserView.on("created", handleCreated);
-BrowserView.off("created", handleCreated);
-```
-
-
-### BrowserView.defineRPC
-  <p>Whenever you create a BrowserWindow with async RPC you'll use this static method to create an RPC instance.</p>
-
-  <p>`src/shared/types.ts`</p>
-  
-```typescript
-export type MyWebviewRPCType = {
-  // functions that execute in the main process
-  bun: RPCSchema<{
-    requests: {
-      someMainProcessFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
-      };
-    };
-    messages: {
-      logToMainProcess: {
-        msg: string;
-      };
-    };
-  }>;
-  // functions that execute in the browser context
-  webview: RPCSchema<{
-    requests: {
-      someWebviewFunction: {
-        params: {
-          a: number;
-          b: number;
-        };
-        response: number;
-      };
-    };
-    messages: {
-      logToWebview: {
-        msg: string;
-      };
-    };
-  }>;
-};
-```
-
-
-  <p>`src/bun/index.ts`</p>
-  
-```typescript
-import { BrowserWindow, BrowserView } from "electrobun/bun";
-import { type MyWebviewRPCType } from "../shared/types";
-
-// Create an RPC object for the main-process handlers with the shared type
-const myWebviewRPC = BrowserView.defineRPC<MyWebviewRPCType>({
-  maxRequestTime: 5000,
-  handlers: {
-    requests: {
-      someMainProcessFunction: ({ a, b }) => {
-        console.log(`browser asked me to do math with: ${a} and ${b}`);
-        return a + b;
-      },
-    },
-    // When the browser sends a message we can handle it
-    // in the main process
-    messages: {
-      "*": (messageName, payload) => {
-        console.log("global message handler", messageName, payload);
-      },
-      logToMainProcess: ({ msg }) => {
-        console.log("Log to main process: ", msg);
-      },
-    },
-  },
-});
-```
-
-
-## Methods
-
-### executeJavascript
-  <p>Execute arbitrary JavaScript in the webview. Unlike a `preload` script that you would typically set as a <a href="/electrobun/apis/browser-window">BrowserWindow</a> configuration option, `executeJavascript()` can be called at any time. This is a fire-and-forget method &mdash; it does not return a result.</p>
-
-  
-```typescript
-// Modify DOM content
-webview.executeJavascript('document.body.innerHTML += "hello"');
-
-// Run any JavaScript
-webview.executeJavascript('document.title = "New Title"');
-```
-
-
-  <Aside type="tip">
-    <p>For executing JavaScript and getting a result back, use `rpc.request.evaluateJavascriptWithResponse()` instead (requires RPC to be configured).</p>
-  </Aside>
-
-### setPageZoom / getPageZoom
-  <p>Control and get the page zoom level for the webview. A value of `1.0` represents 100% zoom.</p>
-
-  
-```typescript
-// Set zoom to 150%
-webview.setPageZoom(1.5);
-
-// Get current zoom level
-const zoom = webview.getPageZoom();
-console.log(`Current zoom: ${zoom * 100}%`);
-
-// Reset to default zoom
-webview.setPageZoom(1.0);
-```
-
-
-  <Aside type="tip">
-    <p>Page zoom is fully supported on macOS (WebKit). On Windows and Linux (CEF), these methods are available but are no-ops &mdash; `getPageZoom()` will always return `1.0`.</p>
-  </Aside>
-
-### setSpellCheck
-  <p>Explicitly enable or disable system spell checking after creation. Returns `true` only when the current view is a macOS native WKWebView and the required WebKit selector is available. A `false` return means no renderer state was changed.</p>
-
-```typescript
-const supported = webview.setSpellCheck(true);
-if (!supported) console.log("System spell checking is unavailable");
-
-webview.setSpellCheck(false);
-```
-
-### loadURL
-  <p>Load a url into the webview. This will navigate the webview and trigger navigation events.</p>
-
-  
-```typescript
-webview.loadURL("https://example.com");
-
-// or
-
-webview.loadURL("views://mainview/somepage.html");
-```
-
-
-### loadHTML
-  <p>Load html directly into the webview. This will completely replace any content that was previously loaded and trigger navigation events.</p>
-
-  
-```typescript
-const htmlString =
-  "<html><head></head><body><h1>hello world</h1></body></html>";
-
-webview.loadHTML(htmlString);
-```
-
-
-### setNavigationRules
-  <p>Set an allow/block list of URL patterns to control which URLs the webview can navigate to. Rules are evaluated synchronously in native code for maximum performance - no callback to the Cottontail process is needed.</p>
-
-  <p><strong>Rule Format:</strong></p>
-  <ul>
-    <li>Rules use glob-style wildcards where `*` matches any characters</li>
-    <li>Prefix a rule with `^` to make it a block rule</li>
-    <li>Rules without the `^` prefix are allow rules</li>
-    <li>Rules are evaluated top-to-bottom, last matching rule wins</li>
-    <li>If no rule matches, navigation is allowed by default</li>
-  </ul>
-
-  
-```typescript
-// Block everything except specific domains
-webview.setNavigationRules([
-  "^*",                           // Block everything by default
-  "*://en.wikipedia.org/*",       // Allow Wikipedia
-  "*://upload.wikimedia.org/*",   // Allow Wikipedia images
-]);
-
-// Allow everything except specific domains
-webview.setNavigationRules([
-  "^*://malware.com/*",           // Block malware.com
-  "^http://*",                    // Block all non-HTTPS
-]);
-
-// Complex rules - block admin paths even on allowed domains
-webview.setNavigationRules([
-  "^*",                           // Block everything by default
-  "https://*.myapp.com/*",        // Allow myapp.com subdomains
-  "https://api.trusted.com/*",    // Allow trusted API
-  "^*/admin/*",                   // But block admin paths
-]);
-
-// Clear all rules (allow all navigation)
-webview.setNavigationRules([]);
-```
-
-
-  <Aside type="tip">
-    <p>Navigation rules are evaluated entirely in native code without calling back to the Cottontail process, making them very fast. The `will-navigate` event will still fire with an `allowed` property indicating whether the navigation was permitted.</p>
-  </Aside>
-
-### findInPage
-  <p>Search for text in the webview content. Highlights all matches and scrolls to the first (or next) match.</p>
-
-  
-```typescript
-// Basic search - find "hello" moving forward
-webview.findInPage("hello");
-
-// Search backwards through matches
-webview.findInPage("hello", { forward: false });
-
-// Case-sensitive search
-webview.findInPage("Hello", { matchCase: true });
-
-// Combined options
-webview.findInPage("query", {
-  forward: true,      // Search direction (default: true)
-  matchCase: false    // Case sensitivity (default: false)
-});
-```
-
-
-  <Aside type="tip">
-    <p>Call `findInPage` repeatedly with the same search text to navigate through matches. Use `stopFindInPage()` to clear the search highlighting.</p>
-  </Aside>
-
-### stopFindInPage
-  <p>Clear the find-in-page search highlighting and results.</p>
-
-  
-```typescript
-// Clear search highlighting
-webview.stopFindInPage();
-```
-
-
-### openDevTools
-  <p>Open the DevTools window for this webview.</p>
-
-  
-```typescript
-// Open DevTools for this webview
-webview.openDevTools();
-```
-
-
-### closeDevTools
-  <p>Close (or hide) the DevTools window for this webview.</p>
-
-  
-```typescript
-// Close DevTools for this webview
-webview.closeDevTools();
-```
-
-
-### toggleDevTools
-  <p>Toggle the DevTools window for this webview.</p>
-
-  
-```typescript
-// Toggle DevTools for this webview
-webview.toggleDevTools();
-```
-
-
-  <Aside type="tip">
-    <p>DevTools behavior varies by renderer and platform. On macOS with CEF, Electrobun uses remote DevTools and opens a separate window per webview (including OOPIFs). Closing the window hides it so it can be re-opened safely.</p>
-  </Aside>
-
-### on(name, handler)
-  <p>Subscribe to BrowserView events (see below).</p>
-
-## Properties
-
-### id
-  <p>This is the webview's id.</p>
-
-### hostWebviewId
-  <p>This is only used for BrowserViews created using the <a href="/electrobun/apis/browser/electrobun-webview-tag">WebviewTag</a> as a nested OOPIF. It's the id of the parent BrowserView.</p>
-
-### rpc
-  <p>Once you've configured async rpc for a webview (typically via new BrowserWindow and Webview.defineRPC()) you'll use the rpc property to access the generated typed request and message methods.</p>
-
-  
-```typescript
-// ... configure BrowserWindow with BrowserView.defineRPC and new BrowserWindow()
-
-// Call a browser function from the main process
-const answer = await webview.rpc.request.someWebviewFunction({ a: 4, b: 6 });
-
-// Send a message to the BrowserView from the main process
-webview.rpc.send.logToWebview({ msg: "my message" });
-```
-
-
-### rpc.request.evaluateJavascriptWithResponse
-  <p>Electrobun includes a built-in RPC method that is automatically available on any webview with RPC configured. This allows you to execute arbitrary JavaScript in the webview and get a result back, without needing to define a custom RPC handler.</p>
-
-  
-```typescript
-// Execute JavaScript and get a result back
-const title = await webview.rpc.request.evaluateJavascriptWithResponse({
-  script: "document.title"
-});
-
-// Works with expressions
-const sum = await webview.rpc.request.evaluateJavascriptWithResponse({
-  script: "2 + 2"
-});
-
-// Also handles async code - Promises are automatically awaited
-const data = await webview.rpc.request.evaluateJavascriptWithResponse({
-  script: "fetch('/api/data').then(r => r.json())"
-});
-```
-
-
-  <Aside type="tip">
-    <p>This built-in method is useful for quick one-off JavaScript execution. For frequently used operations, consider defining typed RPC handlers instead for better type safety and maintainability.</p>
-  </Aside>
 
 ## Events
 
-### will-navigate
-  <p>Fired when a webview is about to navigate. The event includes an `allowed` property indicating whether the navigation was permitted by the navigation rules (set via `setNavigationRules()`).</p>
+Instance events cover navigation, readiness, and downloads. Event payloads are
+currently typed as `unknown`.
 
-  
-```javascript
-event.data = {
-    url: string,      // The URL being navigated to
-    allowed: boolean  // Whether navigation rules permit this URL
-}
-```
+```ts
+import { BrowserView, BrowserWindow } from "electrobun/bun";
 
-
-  <p><strong>Example - Monitor navigation decisions:</strong></p>
-  
-```javascript
-// Set up navigation rules
-webview.setNavigationRules([
-  "^*",                        // Block everything by default
-  "*://en.wikipedia.org/*",    // Allow Wikipedia
-]);
-
-// Listen for navigation attempts
-webview.on("will-navigate", (e) => {
-  console.log("Navigation to:", e.data.url);
-  console.log("Allowed by rules:", e.data.allowed);
-
-  if (!e.data.allowed) {
-    // Navigation was blocked - you could show a message to the user
-    console.log("Navigation blocked by rules");
-  }
+const win = new BrowserWindow({
+  title: "Events",
+  url: "views://mainview/index.html",
 });
-```
 
-
-  <Aside type="tip">
-    <p>Navigation decisions are made synchronously in native code based on the rules set via `setNavigationRules()`. The `will-navigate` event is informational - by the time it fires, the allow/block decision has already been made. To control navigation, use `setNavigationRules()` to update the rules.</p>
-  </Aside>
-
-### did-navigate
-  <p>After a webview navigates.</p>
-
-  
-```javascript
-event.data = {
-    detail: string // the url
-}
-```
-
-
-### did-navigate-in-page
-  <p>After an in-page navigation.</p>
-
-  
-```javascript
-event.data = {
-    detail: string // the url
-}
-```
-
-
-### did-commit-navigation
-  <p>The webview has started to receive content for the main frame after a navigation.</p>
-
-  
-```javascript
-event.data = {
-    detail: string // the url
-}
-```
-
-
-### dom-ready
-  <p>The dom ready event is fired from the browser context.</p>
-
-### new-window-open
-  <p>The browser context is attempting to open a new window. For example a popup or a user right clicked and selected &quot;open in new window&quot;.</p>
-
-  
-```javascript
-event.detail = string | {
-    url: string;
-    isCmdClick: boolean;
-    modifierFlags?: number;
-    targetDisposition?: number;
-    userGesture?: boolean;
-}
-```
-
-
-  <p><strong>Properties:</strong></p>
-  <ul>
-    <li>`url` - The URL that should be opened in the new window</li>
-    <li>`isCmdClick` - Whether the Command key (macOS) or Ctrl key was held during the click</li>
-    <li>`modifierFlags` - Additional modifier flags for the event (optional)</li>
-    <li>`targetDisposition` - Target disposition indicating how the new window should be opened (optional)</li>
-    <li>`userGesture` - Whether this new window request was triggered by a user gesture (optional)</li>
-  </ul>
-
-  <p><strong>Example:</strong></p>
-  
-```typescript
-webview.on("new-window-open", (event) => {
-  if (typeof event.detail === 'object') {
-    console.log("New window requested:", event.detail.url);
-    console.log("Command/Ctrl key held:", event.detail.isCmdClick);
-    console.log("User gesture:", event.detail.userGesture);
-  } else {
-    // Legacy string format
-    console.log("New window requested:", event.detail);
-  }
+win.webview.on("dom-ready", (event: unknown) => {
+  console.log("DOM ready", event);
 });
-```
-
-
-### download-started
-  <p>Fired when a file download begins in the webview.</p>
-
-  
-```javascript
-event.detail = {
-    filename: string,  // The name of the file being downloaded
-    path: string       // The full path where the file will be saved
-}
-```
-
-
-  <p><strong>Example:</strong></p>
-  
-```typescript
-webview.on("download-started", (event) => {
-  console.log("Download started:", event.detail.filename);
-  console.log("Saving to:", event.detail.path);
+win.webview.on("did-navigate", (event: unknown) => {
+  console.log("Navigation finished", event);
 });
-```
-
-
-### download-progress
-  <p>Fired periodically during a file download to report progress.</p>
-
-  
-```javascript
-event.detail = {
-    progress: number  // Download progress as a percentage (0-100)
-}
-```
-
-
-  <p><strong>Example:</strong></p>
-  
-```typescript
-webview.on("download-progress", (event) => {
-  console.log(`Download progress: ${event.detail.progress}%`);
+win.webview.on("download-completed", (event: unknown) => {
+  console.log("Download complete", event);
 });
-```
 
-
-### download-completed
-  <p>Fired when a file download completes successfully.</p>
-
-  
-```javascript
-event.detail = {
-    filename: string,  // The name of the downloaded file
-    path: string       // The full path where the file was saved
-}
-```
-
-
-  <p><strong>Example:</strong></p>
-  
-```typescript
-webview.on("download-completed", (event) => {
-  console.log("Download completed:", event.detail.filename);
-  console.log("Saved to:", event.detail.path);
+const stopWatchingCreatedViews = BrowserView.on("created", (createdView) => {
+  console.log("BrowserView created", createdView.id);
 });
+stopWatchingCreatedViews();
 ```
 
+Supported instance event names are `will-navigate`, `did-navigate`,
+`did-navigate-in-page`, `did-commit-navigation`, `dom-ready`,
+`download-started`, `download-progress`, `download-completed`, and
+`download-failed`.
 
-### download-failed
-  <p>Fired when a file download fails or is canceled.</p>
+## Typed RPC
 
-  
-```javascript
-event.detail = {
-    filename: string,  // The name of the file that failed to download
-    path: string,      // The path where the file would have been saved
-    error: string      // Error message describing why the download failed
-}
-```
+Define the shared schema in a module imported by both contexts. The main process
+uses `BrowserView.defineRPC`; the browser uses `Electroview.defineRPC`.
 
+```ts
+import {
+  BrowserView,
+  BrowserWindow,
+  type RPCSchema,
+} from "electrobun/bun";
 
-  <p><strong>Example:</strong></p>
-  
-```typescript
-webview.on("download-failed", (event) => {
-  console.log("Download failed:", event.detail.filename);
-  console.log("Error:", event.detail.error);
+export type AppRPC = {
+  bun: RPCSchema<{
+    requests: {
+      greet: {
+        params: { name: string };
+        response: { message: string };
+      };
+    };
+    messages: {};
+  }>;
+  webview: RPCSchema<{
+    requests: {};
+    messages: {
+      statusChanged: { online: boolean };
+    };
+  }>;
+};
+
+const rpc = BrowserView.defineRPC<AppRPC>({
+  handlers: {
+    requests: {
+      greet: ({ name }) => ({ message: `Hello, ${name}` }),
+    },
+    messages: {},
+  },
 });
+
+const win = new BrowserWindow({
+  title: "Typed RPC",
+  url: "views://mainview/index.html",
+  rpc,
+});
+
+rpc.send.statusChanged({ online: true });
+void win;
 ```
+
+The browser-side half is documented under
+[Electroview](/electrobun/apis/browser/electroview-class/).
+
+## Lookup, adoption, and removal
+
+```ts
+import { BrowserView, BrowserWindow } from "electrobun/bun";
+
+const win = new BrowserWindow({
+  title: "View ownership",
+  url: "views://mainview/index.html",
+});
+
+const existing = BrowserView.getById(win.webview.id);
+const allViews = BrowserView.getAll();
+
+if (existing) {
+  const wrapped = BrowserView.ensureWrapped(existing.id, {
+    windowId: win.id,
+  });
+  const adopted = BrowserView.adoptExisting(existing.id, {
+    windowId: win.id,
+  });
+  void wrapped;
+  void adopted;
+}
+
+void allViews;
+```
+
+`ensureWrapped()` and `adoptExisting()` are advanced APIs for native views that
+already exist. Calling `remove()` destroys a view and disconnects its RPC
+transport; repeated calls are safe.
+
+## Public methods
+
+- Content: `loadURL`, `loadHTML`, `executeJavascript`, `setNavigationRules`,
+  `setSpellCheck`.
+- Developer tools and find: `openDevTools`, `closeDevTools`, `toggleDevTools`,
+  `findInPage`, `stopFindInPage`.
+- Display: `setPageZoom`, `getPageZoom`.
+- Lifecycle and events: `on`, `remove`, `ptr`.
+- Static ownership: `getById`, `getAll`, `ensureWrapped`, `adoptExisting`, `on`,
+  `off`, and `defineRPC`.

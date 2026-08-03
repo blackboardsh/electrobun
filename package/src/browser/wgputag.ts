@@ -12,7 +12,7 @@ type WgpuEventTypes = "ready";
  */
 interface WgpuTagElement extends HTMLElement {
 	// Properties
-	wgpuViewId?: number;
+	wgpuViewId: number | null;
 	transparent: boolean;
 	passthroughEnabled: boolean;
 	hidden: boolean;

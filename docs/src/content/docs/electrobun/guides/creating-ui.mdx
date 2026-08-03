@@ -1,78 +1,124 @@
 ---
 title: "Creating UI"
+description: "Bundle a browser view and embed isolated web content."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
+This guide extends [Hello World](/electrobun/guides/hello-world) into a small
+browser. It uses a host page for controls and an `<electrobun-webview>` for the
+isolated remote page.
 
-  <Aside type="tip">
-    <p>Continuing on from the <a href="/electrobun/guides/hello-world">Hello World</a> guide we're going to add some UI.</p>
-  </Aside>
+## Browser Code
 
-  <p>Currently our app is opening a browser window and just loading a url. Let's make a simple web browser.</p>
+Create `src/main-ui/index.ts`:
 
-  <p>Create a new folder `src/main-ui/` and add an `index.ts` file. This is where our browser code will go. Hutch automatically transpiles it into JavaScript and makes it available at `views://main-ui/index.js`.</p>
-
-  
 ```typescript
-import { Electroview } from "electrobun/view";
+import "electrobun/view";
 
-// Instantiate the electrobun browser api
-const electrobun = new Electroview({ rpc: null });
+const input = document.querySelector<HTMLInputElement>("#url-input");
+const goButton = document.querySelector<HTMLButtonElement>("#go");
+const backButton = document.querySelector<HTMLButtonElement>("#back");
+const forwardButton = document.querySelector<HTMLButtonElement>("#forward");
+const webview = document.querySelector("electrobun-webview");
 
-window.loadPage = () => {
-  const newUrl = document.querySelector("#urlInput").value;
-  const webview = document.querySelector(".webview");
+if (!input || !goButton || !backButton || !forwardButton || !webview) {
+  throw new Error("Browser UI is incomplete");
+}
 
-  webview.src = newUrl;
-};
+const urlInput = input;
+const embeddedView = webview;
 
-window.goBack = () => {
-  const webview = document.querySelector(".webview");
-  webview.goBack();
-};
+function navigate() {
+  const value = urlInput.value.trim();
+  if (!value) return;
+  const url = /^[a-z][a-z0-9+.-]*:/i.test(value)
+    ? value
+    : `https://${value}`;
+  embeddedView.loadURL(url);
+}
 
-window.goForward = () => {
-  const webview = document.querySelector(".webview");
-  webview.goForward();
-};
+goButton.addEventListener("click", navigate);
+urlInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") navigate();
+});
+backButton.addEventListener("click", () => embeddedView.goBack());
+forwardButton.addEventListener("click", () => embeddedView.goForward());
+
+embeddedView.on("did-navigate", (event) => {
+  if (typeof event.detail === "string") urlInput.value = event.detail;
+});
 ```
 
+The side-effect import adds Electrobun's browser types to TypeScript. The
+native preload registers the custom element before application code runs.
 
-  <p>Now create an HTML file to load into the BrowserView that will import the transpiled javascript above:</p>
+## HTML
 
-  
+Create `src/main-ui/index.html`:
+
 ```html
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
+  <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Web Browser</title>
-    <script src="views://main-ui/index.js"></script>
-</head>
-<body>
-    <h1>My Web Browser</h1>
-    <input type="text" id="urlInput" placeholder="Enter URL" />
-    <button onclick="loadPage()">Go</button>
-    <button onclick="goBack()">Back</button>
-    <button onclick="goForward()">Forward</button>
-
-    <electrobun-webview class="webview" width="100%" height="100%" src="https://example.com"></electrobun-webview>
-
-</body>
+    <meta name="viewport" content="width=device-width" />
+    <title>My Browser</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <nav class="toolbar">
+      <button id="back" type="button" aria-label="Back">Back</button>
+      <button id="forward" type="button" aria-label="Forward">Forward</button>
+      <input id="url-input" type="url" value="https://example.com" />
+      <button id="go" type="button">Go</button>
+    </nav>
+    <electrobun-webview src="https://example.com" sandbox></electrobun-webview>
+    <script src="index.js" type="module"></script>
+  </body>
 </html>
 ```
 
+Create `src/main-ui/index.css`:
 
-  <p>Update `electrobun.config.ts` so that it knows to transpile the new TypeScript and copy the HTML file for `main-ui`:</p>
+```css
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
 
-  
+body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.toolbar {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  padding: 8px;
+}
+
+electrobun-webview {
+  height: 100%;
+  width: 100%;
+}
+```
+
+The webview tag must have stable non-zero dimensions. CSS is preferable to
+the obsolete HTML `width` and `height` attributes.
+
+## Build Configuration
+
+Bundle the TypeScript view and copy its HTML and CSS:
+
 ```typescript
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
   app: {
-    name: "My App",
-    identifier: "dev.my.app",
-    version: "0.0.1",
+    name: "My Browser",
+    identifier: "dev.example.my-browser",
+    version: "0.1.0",
   },
   build: {
     mainProcess: "cottontail",
@@ -86,36 +132,23 @@ export default {
     },
     copy: {
       "src/main-ui/index.html": "views/main-ui/index.html",
+      "src/main-ui/index.css": "views/main-ui/index.css",
     },
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
+## Main Process
 
-  <p>Finally, update the main process code to load the new HTML file:</p>
+Load the copied host page from `src/bun/index.ts`:
 
-  
 ```typescript
-import { BrowserWindow } from "electrobun/bun";
-
-const win = new BrowserWindow({
-  title: "Hello Electrobun",
-  url: "views://main-ui/index.html",
-});
-```
-
-
-  <p>In your terminal, press `Ctrl+C` if the dev server is running and then run `hutch run dev` to rebuild and launch. You should now see a window with an input—type in `https://google.com` and hit go, then try the back and forward buttons.</p>
-
-  <p>You'll notice that while you can right click on the text input and choose copy and paste from the default context menu, keyboard shortcuts like `cmd+c`, `cmd+v`, and `cmd+a` don't work. Let's update our main-process file to set up an Application Edit menu to enable those keyboard shortcuts.</p>
-
-  
-```typescript
-import { BrowserWindow, ApplicationMenu } from "electrobun/bun";
+import { ApplicationMenu, BrowserWindow } from "electrobun/bun";
 
 ApplicationMenu.setApplicationMenu([
   {
-    submenu: [{ label: "Quit", role: "quit" }],
+    label: "App",
+    submenu: [{ role: "quit" }],
   },
   {
     label: "Edit",
@@ -123,36 +156,32 @@ ApplicationMenu.setApplicationMenu([
       { role: "undo" },
       { role: "redo" },
       { type: "separator" },
-      {
-        label: "Custom Menu Item  🚀",
-        action: "custom-action-1",
-        tooltip: "I'm a tooltip",
-      },
-      {
-        label: "Custom menu disabled",
-        enabled: false,
-        action: "custom-action-2",
-      },
-      { type: "separator" },
       { role: "cut" },
       { role: "copy" },
       { role: "paste" },
-      { role: "pasteAndMatchStyle" },
-      { role: "delete" },
       { role: "selectAll" },
     ],
   },
 ]);
 
 const win = new BrowserWindow({
-  title: "Hello Electrobun",
+  title: "My Browser",
   url: "views://main-ui/index.html",
+  frame: { width: 1000, height: 700 },
 });
+
+void win;
 ```
 
+Native edit-menu roles enable the expected system copy, paste, undo, and
+selection shortcuts in editable web content.
 
-  <p>Your app now shows an Edit menu when focused, and because we used roles for the cut/copy/paste/selectAll menu items those global keyboard shortcuts now work in your app's URL input.</p>
+## Run
 
-  <Aside type="tip">
-    <p><strong>Congratulations!</strong> You just built a simple web browser in Electrobun!</p>
-  </Aside>
+```bash
+hutch run dev
+```
+
+For multiple tabs, partitions, navigation rules, and persistent bookmarks,
+start from the `multitab-browser` template rather than extending this minimal
+example ad hoc.

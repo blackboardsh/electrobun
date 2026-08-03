@@ -8,12 +8,14 @@ import type { WindowsWebView2Permission } from "./windowsPermissions";
 type BundlerOptions = {
 	external?: string[];
 	define?: Record<string, string>;
-	loader?: Record<string, string>;
+	alias?: Record<string, string>;
 	minify?: boolean;
 	sourcemap?: boolean | "inline" | "external" | "linked";
-	splitting?: boolean;
-	plugins?: unknown[];
-	[key: string]: unknown;
+	target?: string | string[];
+};
+
+type ViewBundlerOptions = BundlerOptions & {
+	format?: "esm" | "cjs" | "iife";
 };
 
 type CarrotFileActivatorConfig = {
@@ -228,8 +230,8 @@ export interface ElectrobunConfig {
 
 		/**
 		 * Browser view build configurations.
-		 * Each view accepts bundler options (plugins, sourcemap, minify, define, etc.)
-		 * in addition to the entrypoint.
+		 * Each view accepts the supported bundler options in addition to the
+		 * entrypoint.
 		 */
 		views?: {
 			[viewName: string]: {
@@ -237,7 +239,7 @@ export interface ElectrobunConfig {
 				 * Entry point for this view's TypeScript code
 				 */
 				entrypoint: string;
-			} & BundlerOptions;
+			} & ViewBundlerOptions;
 		};
 
 		/**
@@ -258,47 +260,6 @@ export interface ElectrobunConfig {
 		 * @default "artifacts"
 		 */
 		artifactFolder?: string;
-
-		/**
-		 * Build targets to compile for
-		 * Can be "current", "all", or comma-separated list like "macos-arm64,win-x64"
-		 */
-		targets?: string;
-
-		/**
-		 * Enable ASAR archive packaging for bundled assets
-		 * When enabled, all files in the Resources folder will be packed into an app.asar archive
-		 * @default false
-		 */
-		useAsar?: boolean;
-
-		/**
-		 * Glob patterns for files to exclude from ASAR packing (extract to app.asar.unpacked)
-		 * Useful for native modules or executables that need to be accessible as regular files
-		 * @default ["*.node", "*.dll", "*.dylib", "*.so"]
-		 */
-		asarUnpack?: string[];
-
-		/**
-		 * Override the CEF (Chromium Embedded Framework) version.
-		 * Format: "CEF_VERSION+chromium-CHROMIUM_VERSION"
-		 * Example: "144.0.11+ge135be2+chromium-144.0.7559.97"
-		 *
-		 * Check the electrobun-cef-compat compatibility matrix for tested combinations
-		 * before overriding. Using an untested version may cause runtime issues.
-		 * @default Uses the version bundled with this Electrobun release
-		 */
-		cefVersion?: string;
-
-		/**
-		 * Override the Dawn (WebGPU) version.
-		 * Format: semver string (e.g., "0.2.3") or tag (e.g., "v0.2.3-beta.0")
-		 *
-		 * This downloads the specified electrobun-dawn release and uses it
-		 * instead of the latest release.
-		 * @default Uses the latest electrobun-dawn release
-		 */
-		wgpuVersion?: string;
 
 		/**
 		 * Additional file or directory paths to watch for changes during `electrobun dev --watch`.
@@ -468,7 +429,8 @@ export interface ElectrobunConfig {
 			autoGrantPermissions?: WindowsWebView2Permission[];
 
 			/**
-			 * Path to application icon (.ico format)
+			 * Path to an application icon in ICO or PNG format. PNG input is
+			 * converted to ICO by Hutch.
 			 * Used for the installer/extractor wrapper, desktop shortcuts, and taskbar
 			 * Should include multiple sizes (16x16, 32x32, 48x48, 256x256) for best results
 			 * @example "assets/icon.ico"

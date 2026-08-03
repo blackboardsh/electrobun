@@ -1,261 +1,176 @@
 ---
-title: "Bundling & Distribution"
+title: "Bundling And Distribution"
+description: "Create canary and production installers, update archives, and patches."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
+Hutch produces release artifacts for the current host platform. Use canary
+builds for testing and production builds for user-facing releases.
 
-  <Aside type="tip">
-    <p>Continuing on from the <a href="/electrobun/guides/creating-ui">Creating UI</a> guide.</p>
-  </Aside>
-
-  <p>Add `build:canary` and `build:production` scripts to `package.json` to get your app ready for distribution:</p>
-
-  
 ```json
 {
   "name": "my-app",
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5.0.0"
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build:production": "hutch electrobun build --env=production"
   },
   "dependencies": {
     "electrobun": "latest"
   },
-  "scripts": {
-    "start": "hutch electrobun run",
-    "dev": "hutch electrobun dev",
-    "dev:watch": "hutch electrobun dev --watch",
-    "build:dev": "hutch electrobun build",
-    "build:canary": "hutch electrobun build --env=canary",
-    "build:production": "hutch electrobun build --env=production"
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
   }
 }
 ```
 
-
-  <p>Run either release build through Hutch:</p>
-
-
 ```bash
+hutch install
 hutch run build:canary
-
-# or
-
 hutch run build:production
 ```
 
+Each non-dev build creates an application bundle, a Zstandard-compressed
+update archive, platform installer output, update metadata, and optionally a
+delta patch from the previous release.
 
-  <p>Both non-dev builds:</p>
-  <ul>
-    <li>Build an optimized app bundle</li>
-    <li>Tar and compress it using state-of-the-art ZSTD compression</li>
-    <li>Generate a self-extracting app bundle</li>
-    <li>Create an `artifacts` folder for distribution</li>
-  </ul>
+## Release Host
 
-  <Aside type="tip">
-    <p>All you need to distribute your app is a static file host like S3 or Google Cloud Storage. There's no need to run a server beyond that.</p>
-  </Aside>
+Artifacts are flat files and can be served from R2, S3, another object store,
+or any static HTTP host. Configure the public folder URL:
 
-  <p>Assuming you've set up a Google Cloud Storage bucket with a subfolder for this application, add it to `electrobun.config.ts`:</p>
-
-  
 ```typescript
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
   app: {
-    name: "My App",
-    identifier: "dev.my.app",
-    version: "0.0.1",
+    name: "My Cool App",
+    identifier: "com.example.my-cool-app",
+    version: "1.0.0",
   },
   build: {
     mainProcess: "cottontail",
-    cottontail: {
-      entrypoint: "src/bun/index.ts",
-    },
-    views: {
-      "main-ui": {
-        entrypoint: "src/main-ui/index.ts",
-      },
-    },
-    copy: {
-      "src/main-ui/index.html": "views/main-ui/index.html",
-    },
+    cottontail: { entrypoint: "src/bun/index.ts" },
   },
   release: {
-    baseUrl: "https://storage.googleapis.com/mybucketname/myapp/",
+    baseUrl: "https://releases.example.com/my-cool-app",
+    generatePatch: true,
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
+Upload the contents of `artifacts/` without renaming the files. The Updater
+constructs URLs from this base and the channel/platform prefix.
 
-  <p>You can make your app available by uploading the contents of the `artifacts` folder to your release host (S3, R2, GitHub Releases, etc.).</p>
+## Host-Native Matrix
 
-  <p>The artifacts folder contains flat files with a `channel-os-arch` prefix (for example `canary-macos-arm64-update.json`). This flat structure works with any host, including GitHub Releases which don't support folders. Hutch builds for the current machine's platform and automatically downloads the core/CEF files during bundling.</p>
+Run the same build on each published target:
 
-  <p>To produce artifacts for all platforms, run the same Hutch build command natively on CI runners for each OS/architecture. See the <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a> guide for platform details.</p>
+| Runner | Output prefix |
+| --- | --- |
+| macOS ARM64 | `production-macos-arm64-` |
+| Windows x64 | `production-win-x64-` |
+| Linux x64 | `production-linux-x64-` |
+| Linux ARM64 | `production-linux-arm64-` |
 
-  <p>After you upload the artifacts, subsequent non-dev builds such as `hutch run build:canary` use `release.baseUrl` to download the current version of your app and generate a patch file with our optimized BSDIFF implementation. That patch file is added to the artifacts folder.</p>
+Canary builds replace the initial `production` with `canary`. Windows ARM uses
+the x64 artifact through system emulation. Electrobun's current release matrix
+does not publish a macOS x64 core artifact.
 
-  <p>It's recommended to keep older patch files in your storage. Users on older versions can download successive patches, each as small as 14KB. If patching can't get the user to the latest version, Electrobun's Updater falls back to downloading the full latest build.</p>
+## Artifact Names
 
-  <p>Visit the <a href="/electrobun/apis/updater">Updater API docs</a> to learn how to make your app check for and install updates.</p>
+Hutch removes ASCII spaces from the app name in artifact filenames. For an app
+named `My Cool App`, a macOS ARM64 canary build produces:
 
-## Build Lifecycle Hooks
-
-  <p>Electrobun provides lifecycle hooks that let you run custom scripts at various stages of the build process. This is useful for tasks like:</p>
-
-  <ul>
-    <li>Validating your environment before building</li>
-    <li>Transforming compiled code</li>
-    <li>Adding custom files to the app bundle or wrapper</li>
-    <li>Sending notifications when builds complete</li>
-  </ul>
-
-  <p>Available hooks (in execution order): `preBuild`, `postBuild`, `postWrap`, `postPackage`</p>
-
-  <p>See the <a href="/electrobun/apis/cli/build-configuration#build-lifecycle-hooks">Build Configuration docs</a> for detailed information about each hook and example scripts.</p>
-
-## Artifacts Folder Structure
-
-  <p>When you build your app, Hutch creates a flat `artifacts` folder. All files are prefixed with `{'{channel}-{os}-{arch}-'}`:</p>
-
-  
-```
+```text
 artifacts/
-├── canary-macos-arm64-update.json
-├── canary-macos-arm64-MyCoolApp-canary.dmg
-├── canary-macos-arm64-MyCoolApp-canary.app.tar.zst
-├── canary-macos-arm64-a1b2c3d4.patch
-├── canary-win-x64-update.json
-├── canary-win-x64-MyCoolApp-Setup-canary.zip
-├── canary-win-x64-MyCoolApp-canary.tar.zst
-├── canary-win-x64-a1b2c3d4.patch
-├── canary-linux-x64-update.json
-├── canary-linux-x64-MyCoolAppSetup-canary.tar.gz
-├── canary-linux-x64-MyCoolApp-canary.tar.zst
-├── canary-linux-x64-a1b2c3d4.patch
-└── ...
+|-- canary-macos-arm64-update.json
+|-- canary-macos-arm64-MyCoolApp-canary.dmg
+|-- canary-macos-arm64-MyCoolApp-canary.app.tar.zst
+`-- canary-macos-arm64-<previous-hash>.patch
 ```
 
+A Windows x64 canary build produces:
 
-  <p>This flat structure works with any host, including GitHub Releases which don't support folders.</p>
-
-### Artifact Naming Conventions
-
-  <p>App names are <strong>sanitized</strong> by removing spaces. For example, an app named "My Cool App" becomes "MyCoolApp" in all artifact filenames.</p>
-
-  <p>For <strong>production</strong> builds, channel suffixes are omitted. Canary builds include a `-canary` suffix.</p>
-
-  <p>Windows and Linux installers are distributed as archives (`.zip` and `.tar.gz` respectively). The archive filenames are sanitized (no spaces), but the installer files inside the archives preserve spaces for a user-friendly experience.</p>
-
-### macOS Artifacts
-
-  
+```text
+artifacts/
+|-- canary-win-x64-update.json
+|-- canary-win-x64-MyCoolApp-Setup-canary.zip
+|-- canary-win-x64-MyCoolApp-canary.tar.zst
+`-- canary-win-x64-<previous-hash>.patch
 ```
-# Canary:
-canary-macos-arm64-update.json                    # Version metadata for the Updater API
-canary-macos-arm64-MyCoolApp-canary.dmg           # Installer DMG for first-time installs
-canary-macos-arm64-MyCoolApp-canary.app.tar.zst   # Compressed app bundle for updates
-canary-macos-arm64-a1b2c3d4.patch                 # Incremental patch from previous version
 
-# Production (no app-name channel suffix):
+The Windows zip contains the visible setup executable and a hidden installer
+payload. The executable retains the display name's spaces.
+
+A Linux x64 canary build produces:
+
+```text
+artifacts/
+|-- canary-linux-x64-update.json
+|-- canary-linux-x64-MyCoolApp-canary-Setup.tar.gz
+|-- canary-linux-x64-MyCoolApp-canary.tar.zst
+`-- canary-linux-x64-<previous-hash>.patch
+```
+
+The Linux installer archive contains an executable named `installer` and a
+README. Production artifact names omit `-canary` from the app-name portion:
+
+```text
 production-macos-arm64-MyCoolApp.dmg
-production-macos-arm64-MyCoolApp.app.tar.zst
-```
-
-
-### Windows Artifacts
-
-  
-```
-# Canary:
-canary-win-x64-update.json                       # Version metadata
-canary-win-x64-MyCoolApp-Setup-canary.zip        # Zip containing the Setup .exe installer
-canary-win-x64-MyCoolApp-canary.tar.zst          # Compressed app for updates
-canary-win-x64-a1b2c3d4.patch                    # Incremental patch
-
-# Production:
 production-win-x64-MyCoolApp-Setup.zip
-production-win-x64-MyCoolApp.tar.zst
+production-linux-x64-MyCoolApp-Setup.tar.gz
 ```
 
+The leading channel/platform/architecture prefix is always retained.
 
-### Linux Artifacts
+## Delta Patches
 
-  
-```
-# Canary:
-canary-linux-x64-update.json                        # Version metadata
-canary-linux-x64-MyCoolAppSetup-canary.tar.gz       # tar.gz containing the self-extracting setup
-canary-linux-x64-MyCoolApp-canary.tar.zst           # Compressed app for updates
-canary-linux-x64-a1b2c3d4.patch                     # Incremental patch
+When `release.generatePatch` is true and `release.baseUrl` is present, Hutch:
 
-# Production:
-production-linux-x64-MyCoolAppSetup.tar.gz
-production-linux-x64-MyCoolApp.tar.zst
-```
+1. Fetches `<channel>-<os>-<arch>-update.json` from the release host.
+2. Downloads that release's `.tar.zst` update archive.
+3. Decompresses it and creates a binary patch to the new uncompressed tar.
+4. Names the patch after the previous bundle hash.
 
+The first release has no predecessor and therefore no patch. A missing or
+invalid previous artifact also skips patch generation while preserving the
+full update archive. Set `generatePatch: false` for an intentional build that
+must not consult the release host.
 
-### Constructing Download URLs
+Keep previously published patch files when uploading a new release. The latest
+metadata and full archive can be replaced, but users on an older hash need the
+patch named for that hash. If a patch path is unavailable, the Updater falls
+back to the full archive.
 
-  <p>Since artifacts are already prefixed, the download URL is simply `{'{baseUrl}/{artifact-filename}'}`:</p>
+See [Updater](/electrobun/apis/updater) for application-side checks, downloads,
+and installation.
 
-  
-```
-# Examples (assuming baseUrl is "https://releases.example.com/myapp"):
+## Platform Packaging
 
-# macOS ARM (Apple Silicon)
-https://releases.example.com/myapp/canary-macos-arm64-MyCoolApp-canary.dmg
+### macOS
 
-# macOS Intel
-https://releases.example.com/myapp/canary-macos-x64-MyCoolApp-canary.dmg
+Hutch emits a DMG by default and an `.app.tar.zst` update archive. Release
+signing and notarization run when configured. Set `build.mac.createDmg: false`
+when a release only needs the app and update archive.
 
-# Windows
-https://releases.example.com/myapp/canary-win-x64-MyCoolApp-Setup-canary.zip
+### Windows
 
-# Linux x64
-https://releases.example.com/myapp/canary-linux-x64-MyCoolAppSetup-canary.tar.gz
+Hutch emits a zip containing a setup executable and adjacent hidden payload.
+The installed application is a GUI-subsystem executable; dev launches attach
+to the invoking console.
 
-# Linux ARM
-https://releases.example.com/myapp/canary-linux-arm64-MyCoolAppSetup-canary.tar.gz
-```
+### Linux
 
+Hutch emits a `.tar.gz` installer containing a self-extracting setup and a
+`.tar.zst` update archive. Optional Flatpak configuration emits a separate
+expanded payload and `flatpak-builder` manifest; Hutch does not run
+`flatpak-builder`.
 
-### Platform Reference
+## Build Hooks
 
-  <table class="docs-table">
-    <thead>
-      <tr>
-        <th>Platform</th>
-        <th>OS Value</th>
-        <th>Arch Values</th>
-        <th>Installer Format</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>macOS</td>
-        <td>`macos`</td>
-        <td>`arm64`, `x64`</td>
-        <td>`.dmg`</td>
-      </tr>
-      <tr>
-        <td>Windows</td>
-        <td>`win`</td>
-        <td>`x64`</td>
-        <td>`.zip` (contains `-Setup.exe`)</td>
-      </tr>
-      <tr>
-        <td>Linux</td>
-        <td>`linux`</td>
-        <td>`x64`, `arm64`</td>
-        <td>`.tar.gz` (contains self-extracting setup)</td>
-      </tr>
-    </tbody>
-  </table>
-
-### Patch Files
-
-  <p>Patch files are named with the platform prefix and a hash representing the source version (e.g., `canary-macos-arm64-a1b2c3d4.patch`). When replacing the contents of your static file host, keep old patch files so users on older versions can step through incremental updates to reach the latest build.</p>
+`preBuild`, `postBuild`, `postWrap`, and `postPackage` can validate inputs or
+augment the package at defined stages. Their exact timing and environment are
+documented in [Build Configuration](/electrobun/apis/cli/build-configuration#build-hooks).

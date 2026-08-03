@@ -9,7 +9,8 @@
     "build": "astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "check": "astro check",
+    "check": "astro check && node scripts/check-code-examples.mjs",
+    "check:examples": "node scripts/check-code-examples.mjs",
     "clean": "rm -rf dist .astro"
   },
   "dependencies": {
@@ -19,7 +20,13 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.5",
+    "parse5": "^7.3.0",
+    "postcss": "^8.5.10",
+    "remark": "^15.0.1",
+    "remark-mdx": "^3.1.1",
     "typescript": "^5.9.3",
-    "wrangler": "^4.0.0"
+    "unist-util-visit": "^5.0.0",
+    "wrangler": "^4.0.0",
+    "yaml": "^2.8.3"
   }
 }

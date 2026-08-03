@@ -12,8 +12,6 @@ export type BuildConfigType = {
 	channel: string;
 	/** False for dev builds; true for canary, production, and other release channels. */
 	isPackaged: boolean;
-	cefVersion?: string;
-	bunVersion?: string;
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
 		[key: string]: unknown;

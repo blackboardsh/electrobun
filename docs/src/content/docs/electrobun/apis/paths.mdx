@@ -1,21 +1,20 @@
 ---
 title: "Paths"
+description: "Locate packaged Electrobun resources from the main process."
 ---
-              
-              <p>Global paths exposed by Electrobun</p>
 
-              
+`PATHS` exposes the packaged resource and view directories:
+
+```ts
+import { PATHS } from "electrobun/bun";
+
+console.log(PATHS.RESOURCES_FOLDER);
+console.log(PATHS.VIEWS_FOLDER);
 ```
-<span style="color: rgb(245, 158, 11);">import</span> {<span style="color: rgb(16, 185, 129);">PATHS</span>} <span style="color: rgb(245, 158, 11);">from</span> <span style="color: rgb(59, 130, 246);">"electrobun/bun"</span>;
 
-<span style="color: rgb(107, 114, 128);">// in a macOS bundle this is where static bundled resources are kept.</span>
+- `RESOURCES_FOLDER` is the app bundle's `Resources` directory.
+- `VIEWS_FOLDER` is `Resources/app/views`, which backs the `views://` protocol.
 
-<span style="color: rgb(107, 114, 128);">// Note: You shouldn't modify or write to the bundle at runtime as it will affect code signing</span>
-<span style="color: rgb(107, 114, 128);">// integrity.</span>
-<span style="color: rgb(16, 185, 129);">PATHS</span>.<span style="color: rgb(229, 231, 235);">RESOURCES_FOLDER</span>
-
-<span style="color: rgb(107, 114, 128);">// Typically you would use the views:// url scheme which maps to</span>
-<span style="color: rgb(107, 114, 128);">// RESOURCES_FOLDER + '/app/views/'</span>
-<span style="color: rgb(107, 114, 128);">// But there may be cases in the main process where you want to read a file directly.</span>
-<span style="color: rgb(16, 185, 129);">PATHS</span>.<span style="color: rgb(229, 231, 235);">VIEWS_FOLDER</span>
-```
+Packaged resources are read-only application content. Modifying a macOS app
+bundle invalidates its code signature. Use `Utils.paths.userData`,
+`Utils.paths.userCache`, or another writable system directory for mutable data.

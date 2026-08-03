@@ -19,6 +19,7 @@ interface MessageHandler {
 
 declare global {
   interface Window {
+    __electrobunPlatform: "linux" | "macos" | "windows";
     __electrobunWebviewId: number;
     __electrobunWindowId: number;
     __electrobunRpcSocketPort: number;
@@ -31,6 +32,7 @@ declare global {
     __electrobunInternalBridge?: MessageHandler;
     __electrobunHostBridge?: MessageHandler;
     __electrobunBunBridge?: MessageHandler;
+    __electrobunSendToHost: (message: unknown) => void;
   }
 }
 

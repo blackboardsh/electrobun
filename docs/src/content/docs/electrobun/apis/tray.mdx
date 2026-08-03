@@ -1,191 +1,107 @@
 ---
 title: "Tray"
+description: "Create a cross-platform system tray item and native menu."
 ---
-              
-              <p>Create and manage system tray icon and menu.</p>
 
-              <p><strong>Linux:</strong> Electrobun's currently supported Ayatana AppIndicator backend supports tray menus and their actions, but it does not expose raw primary icon activation. Call <code>setMenu</code> when you create or update the tray instead of waiting for an icon-only <code>tray-clicked</code> event.</p>
+Create trays in the main process. Images may be absolute paths or bundled
+`views://` URLs.
 
-              
-```javascript
-import {Tray} from "electrobun/bun";
+```ts
+import { Tray } from "electrobun/bun";
 
 const tray = new Tray({
-  title: "Example Tray Item",
-  // This can be a views url or an absolute file path
-  image: "views://assets/electrobun-logo-32-template.png",
+  title: "My app",
+  image: "views://assets/tray-icon.png",
   template: true,
   width: 32,
   height: 32,
 });
 
-// map action names to clicked state
-// Note: This is just used for this example
-const menuState = {
-  "item-1": false,
-  "sub-item-1": false,
-  "sub-item-2": true,
+const menuState: Record<string, boolean> = {
+  notifications: true,
 };
 
-const updateTrayMenu = () => {
+function updateTrayMenu() {
   tray.setMenu([
     {
       type: "normal",
-      label: "Toggle me",
-      action: "item-1",
-      checked: menuState["item-1"],
-      tooltip: "I'm a tooltip",
-      submenu: [
-        {
-          type: "normal",
-          label: "Click me to toggle sub-item 2",
-          tooltip: "i will also unhide sub-item-3",
-          action: "sub-item-1",
-        },
-        {
-          type: "divider",
-        },
-        {
-          type: "normal",
-          label: "Toggle sub-item-3's visibility",
-          action: "sub-item-2",
-          enabled: menuState["sub-item-1"],
-        },
-        {
-          type: "normal",
-          label: "I was hidden",
-          action: "sub-item-3",
-          hidden: menuState["sub-item-2"],
-        },
-      ],
+      label: "Notifications",
+      action: "notifications",
+      checked: menuState.notifications,
+    },
+    { type: "separator" },
+    {
+      type: "normal",
+      label: "Quit",
+      action: "quit",
     },
   ]);
-};
+}
 
-// Install the menu before the user interacts with the tray. This is the
-// supported interaction path on Linux and works on every platform.
+// Install the menu before listening for interaction. This is required for the
+// supported Linux AppIndicator interaction path and works on every platform.
 updateTrayMenu();
 
-// TODO: events should be typed
-tray.on("tray-clicked", (e) => {
-  const { id, action } = e.data as { id: number; action: string };
+type TrayClickEvent = {
+  data: { id: number; action: string; data?: unknown };
+};
 
-  if (action === "") {
-    // Some platform backends report raw icon activation. The Linux
-    // AppIndicator backend does not, so don't rely on this branch there.
-    return;
+tray.on("tray-clicked", (event: unknown) => {
+  const { action } = (event as TrayClickEvent).data;
+  if (action === "notifications") {
+    menuState.notifications = !menuState.notifications;
+    updateTrayMenu();
   }
-
-  // Menu item actions are supported on every platform, including Linux.
-  menuState[action] = !menuState[action];
-  updateTrayMenu();
-  console.log("event listener for tray clicked", e.data.action);
 });
 ```
 
+## Constructor options
 
-## Constructor Options
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `title` | `string` | `""` | Text shown by the tray backend. |
+| `image` | `string` | `""` | `views://` URL or absolute image path. |
+| `template` | `boolean` | `true` | Treat the image as a macOS template image. |
+| `width` | `number` | `16` | Requested image width. |
+| `height` | `number` | `16` | Requested image height. |
 
-### title
+## Methods and lookup
 
-              <p>This is the text that will appear in your system tray</p>
+```ts
+import { Tray } from "electrobun/bun";
 
-### image
+const tray = new Tray({
+  title: "Status",
+  image: "views://assets/tray-icon.png",
+});
 
-              <p>This is an optional url to an image to load. You can use the `views&#58;//` schema to access local bundled images.</p>
-
-### template
-
-              <p>You can use a full-color image like a png but that image will just be shown as is. On MacOS you can create a template image and set the `template` property to true. A template image uses opacity to define a black and white image that adapts to your systems light/dark mode.</p>
-
-### width and height
-
-              <p>Set the dimensions of the image used in the system tray</p>
-
-## Methods
-
-### setMenu
-
-              <p>Call <code>setMenu</code> to set or update the tray menu. Configure the menu before expecting user interaction; selecting a menu item emits <code>tray-clicked</code> with the item's action. Menu actions are the supported tray interaction path on Linux.</p>
-
-              <p>A common pattern is to create a function that dynamically generates the menu from some kind of state to implement things like checkbox toggles.</p>
-
-### setTitle
-
-              <p>Update the text displayed in the system tray.</p>
-
-              
-```javascript
-tray.setTitle("New Status");
-```
-
-
-### setImage
-
-              <p>Update the tray icon image. Accepts a `views://` URL or an absolute file path.</p>
-
-              
-```javascript
-tray.setImage("views://assets/new-icon-32-template.png");
-```
-
-
-### setVisible
-
-              <p>Show or hide the tray icon. When hidden, the tray is removed from the system tray. When shown again, it is recreated.</p>
-
-              
-```javascript
-// Hide the tray icon
+tray.setTitle("Ready");
+tray.setImage("views://assets/tray-ready.png");
 tray.setVisible(false);
-
-// Show it again
 tray.setVisible(true);
-```
 
-
-### getBounds
-
-              <p>Get the bounding rectangle of the tray icon. Returns an object with `x`, `y`, `width`, and `height` properties.</p>
-
-              
-```javascript
 const bounds = tray.getBounds();
-console.log(`Tray icon at (${bounds.x}, ${bounds.y}) size ${bounds.width}x${bounds.height}`);
-```
+const sameTray = Tray.getById(tray.id);
+const allTrays = Tray.getAll();
 
+void bounds;
+void sameTray;
+void allTrays;
 
-### remove
-
-              <p>Permanently remove the tray icon from the system tray.</p>
-
-              
-```javascript
 tray.remove();
 ```
 
+Use `Tray.removeById(id)` instead when only a stored tray ID is available.
 
-### Menu Items
+`setMenu()` replaces the current menu. Tray menu normal items require `type:
+"normal"` and `label`; they also support `action`, `data`, `submenu`, `enabled`,
+`checked`, `hidden`, and `tooltip`.
 
-              <p>See <a href="/electrobun/apis/application-menu">Application Menu</a> for more info on available properties for menu items.</p>
+## Platform behavior
 
-## Events
-
-### tray-clicked
-
-              <p>Fired when a tray menu item is selected. The event data includes an <code>action</code> property containing the selected item's action. Platform backends that expose raw icon activation can also emit this event with an empty action. Linux's currently supported Ayatana AppIndicator backend does not expose raw primary icon activation, so Linux apps should use <code>setMenu</code> and handle menu actions.</p>
-
-              
-```javascript
-tray.on("tray-clicked", (e) => {
-  const { id, action } = e.data;
-
-  if (action === "") {
-    // Raw icon activation (only on platform backends that expose it)
-    console.log("Tray icon clicked");
-  } else {
-    // A menu item was clicked
-    console.log("Menu item clicked:", action);
-  }
-});
-```
+Ayatana AppIndicator backend supports tray menus and their actions but does not
+expose raw primary icon activation. Linux apps should use `setMenu()` and handle
+menu actions; do not wait for an icon-only click to install the menu. A backend
+that exposes raw activation may emit
+`tray-clicked` with an empty action; portable apps should use explicit menu
+actions.

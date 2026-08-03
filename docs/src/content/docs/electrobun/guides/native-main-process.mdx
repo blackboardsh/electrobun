@@ -21,16 +21,23 @@ the build tool for every option.
 Cottontail is the default. It executes TypeScript and supports the Node.js and
 Bun-compatible APIs used by Electrobun applications.
 
-```ts
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
+  app: {
+    name: "Cottontail App",
+    identifier: "dev.example.cottontail-app",
+    version: "0.1.0",
+  },
   build: {
     mainProcess: "cottontail",
     cottontail: { entrypoint: "src/bun/index.ts" },
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
-```ts
+```typescript
 import { BrowserWindow } from "electrobun/bun";
 
 new BrowserWindow({
@@ -44,13 +51,20 @@ new BrowserWindow({
 Choose Bun only when the application intentionally depends on the actual Bun
 runtime. Hutch still installs packages, bundles source, and packages the app.
 
-```ts
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
 export default {
+  app: {
+    name: "Bun App",
+    identifier: "dev.example.bun-app",
+    version: "0.1.0",
+  },
   build: {
     mainProcess: "bun",
     bun: { entrypoint: "src/bun/index.ts" },
   },
-};
+} satisfies ElectrobunConfig;
 ```
 
 The TypeScript Electrobun SDK remains `electrobun/bun` for both JavaScript
@@ -62,7 +76,7 @@ Zig, Rust, Go, and Odin applications load `ElectrobunCore` through their SDK,
 create native windows and views, and run the platform event loop. Their config
 only changes the runtime and entrypoint:
 
-```ts
+```typescript
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
@@ -81,28 +95,9 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-Use the matching block for another language:
-
-```ts
-build: {
-  mainProcess: "rust",
-  rust: { entrypoint: "src/rust/main.rs" },
-}
-```
-
-```ts
-build: {
-  mainProcess: "go",
-  go: { entrypoint: "src/go/main.go" },
-}
-```
-
-```ts
-build: {
-  mainProcess: "odin",
-  odin: { entrypoint: "src/odin/main.odin" },
-}
-```
+For another language, change `mainProcess` and use its matching config field
+and default entrypoint from the table above. The generated templates are the
+copyable source for complete native SDK initialization and lifecycle code.
 
 The generated native templates contain complete SDK initialization, window,
 webview, RPC, and event-loop examples:

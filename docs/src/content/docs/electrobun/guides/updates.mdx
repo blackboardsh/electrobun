@@ -1,123 +1,186 @@
 ---
 title: "Updates"
+description: "Publish update artifacts and automate cross-platform releases."
 ---
-## Introduction
 
-              <p>We've implemented a batteries included update mechanism. All you need is to bring your own static file host like AWS S3, Cloudflare R2, or GitHub Releases.</p>
+Electrobun updates are static files. Hutch creates the update metadata, full
+bundle, and optional delta patch; the application-side `Updater` checks and
+installs them. R2, S3, GitHub Releases, or another static HTTPS host can serve
+the files.
 
-              <ul>
-                <li><a href="/electrobun/apis/updater">Update API</a> to check for, download, and update your apps.</li>
-                <li><a href="/electrobun/apis/cli/cli-args">Hutch</a> to build your app bundle, code sign and notarize it, and generate release artifacts.</li>
-                <li>A Zig BSDIFF implementation that generates compact binary patches with a compressed full-download fallback.</li>
-              </ul>
+## Configure The Release Host
 
-## Hosting on GitHub Releases
+Point `release.baseUrl` at the directory where every target's artifacts will
+be uploaded:
 
-              <p>GitHub Releases is a convenient option for hosting your update artifacts, especially for open source projects. Electrobun uses a flat, prefix-based naming scheme (for example, `production-macos-arm64-update.json`) that works with hosts that don't support folder structures.</p>
+```typescript
+import type { ElectrobunConfig } from "electrobun";
 
-### Configuration
-
-              <p>Set your `baseUrl` in `electrobun.config` to point to your GitHub Releases:</p>
-
-              
-```javascript
-// electrobun.config.ts
 export default {
-  // ...
-  release: {
-    baseUrl: "https://github.com/YOUR_ORG/YOUR_REPO/releases/latest/download",
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
   },
-};
+  release: {
+    baseUrl: "https://downloads.example.com/my-app",
+    generatePatch: true,
+  },
+} satisfies ElectrobunConfig;
 ```
 
+A production macOS ARM64 build checks
+`production-macos-arm64-update.json`; a canary Windows x64 build checks
+`canary-win-x64-update.json`. Upload `artifacts/` without renaming its files.
 
-### Example GitHub Action
+Hutch generates one patch from the previously published bundle to the new
+bundle. Keep old patch files on the host so clients can follow a retained
+chain. If a required patch is absent or invalid, `Updater` downloads the full
+`.tar.zst` bundle.
 
-              <p>Here's an example workflow that builds and publishes releases when you push a tag:</p>
+## Release Tags
 
+Use an application prefix so unrelated repository tags do not trigger a
+deployment:
+
+```text
+my-app/v2.0.0-canary.1
+my-app/v2.0.0
+```
+
+These are independent releases. A production artifact is built from its own
+tag; a canary artifact is never promoted into production. Keep the version in
+`electrobun.config.ts` aligned with the tag.
+
+## GitHub Actions Matrix
+
+This workflow builds all supported targets first, then creates one GitHub
+Release only after every build succeeds:
 
 ```yaml
-name: Build and Release
+name: Release My App
 
 on:
   push:
     tags:
-      - 'v*'
+      - "my-app/v*"
+
+permissions:
+  contents: read
 
 jobs:
-  build-macos-arm64:
-    runs-on: macos-14
-
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            target: macos-arm64
+          - runner: ubuntu-24.04
+            target: linux-x64
+          - runner: ubuntu-24.04-arm
+            target: linux-arm64
+          - runner: windows-2025
+            target: win-x64
+    runs-on: ${{ matrix.runner }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - name: Install Hutch
+      - name: Install Hutch on macOS or Linux
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           installer="$RUNNER_TEMP/install-hutch.sh"
           curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
-            https://hutch.blackboard.sh/hutch/install.sh \
-            --output "$installer"
+            https://hutch.blackboard.sh/hutch/install.sh --output "$installer"
           sh "$installer" --channel production --no-modify-path
           echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
+
+      - name: Install Hutch on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $script = irm https://hutch.blackboard.sh/hutch/install.ps1
+          & ([scriptblock]::Create($script)) -Channel production
+          "$HOME\.dash\bin" | Out-File $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Select release channel
+        id: channel
+        shell: bash
+        run: |
+          if [[ "${{ github.ref_name }}" == *"-canary."* ]]; then
+            echo "value=canary" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=production" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install dependencies
         run: hutch install --frozen-lockfile
 
-      - name: Determine build environment
-        id: build-env
-        shell: bash
-        run: |
-          if [[ "${{ github.ref_name }}" == *"-canary"* ]]; then
-            echo "env=canary" >> "$GITHUB_OUTPUT"
-          else
-            echo "env=production" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Build app
+      - name: Build release
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
           ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
-        run: hutch electrobun build --env="${{ steps.build-env.outputs.env }}"
+        run: hutch electrobun build --env=${{ steps.channel.outputs.value }}
 
-      - name: Create Release
+      - name: Stage target artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-${{ matrix.target }}
+          path: artifacts/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Collect target artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*
-          draft: false
-          prerelease: ${{ steps.build-env.outputs.env == 'canary' }}
+          files: release-artifacts/*
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{ contains(github.ref_name, '-canary.') }}
 ```
 
+The macOS job needs the signing and notarization secrets only when the config
+enables those features. See [Code Signing](/electrobun/guides/code-signing/)
+for their values.
 
-              <p>The `generate_release_notes: true` option uses GitHub's automatic release notes feature, which lists merged PRs and contributors since the last release. Leave `body` and `body_path` unset when you want the release body to contain only that changelog; GitHub prepends either custom body to the generated notes.</p>
+## GitHub Releases As The Host
 
-## Limitations
+For production-only updates, `release.baseUrl` can use GitHub's latest release
+redirect:
 
-### Single Patch File
+```typescript
+import type { ElectrobunConfig } from "electrobun";
 
-              <p>Hutch generates a single patch file per build—from the immediately previous version to the current version. This means:</p>
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "2.0.0",
+  },
+  release: {
+    baseUrl: "https://github.com/YOUR_ORG/YOUR_REPO/releases/latest/download",
+  },
+} satisfies ElectrobunConfig;
+```
 
-              <ul>
-                <li>Users updating from the previous version get a small delta patch (often just a few KB)</li>
-                <li>Users more than one version behind can apply retained patches successively until they reach the current version</li>
-                <li>If the required patch chain is incomplete or validation fails, the Updater automatically downloads the full `.tar.zst` bundle</li>
-              </ul>
+GitHub excludes prereleases from `/releases/latest`, so that URL cannot track
+canary builds. Use a static host with a stable base URL when canary clients
+must update automatically.
 
-              <p>This keeps each build simple while still allowing older clients to reach the current version through a retained chain of small delta updates.</p>
-
-### Canary Builds on GitHub Releases
-
-              <p>GitHub's `/releases/latest/download` URL only resolves to non-prerelease builds. This means:</p>
-
-              <ul>
-                <li><strong>Production builds</strong>: Auto-updates work correctly via `/releases/latest/download`</li>
-                <li><strong>Canary builds</strong>: Will not auto-update when hosted on GitHub Releases because the `latest` URL won't point to prerelease versions</li>
-              </ul>
-
-              <p>If you need auto-updating canary builds, consider using a static file host like Cloudflare R2 or AWS S3 where you control the URL structure directly.</p>
+See [Updater](/electrobun/apis/updater/) for the application-side API and
+[Bundling and Distribution](/electrobun/guides/bundling-and-distribution/) for
+the complete artifact names.

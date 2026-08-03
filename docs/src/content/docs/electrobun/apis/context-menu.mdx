@@ -1,103 +1,44 @@
 ---
 title: "Context Menu"
+description: "Show a native context menu and handle its actions."
 ---
-              
-              <p>Show a context menu</p>
 
-              <p>Typically you'd handle a right-click event with `preventDefault` in the browser context, call the main process over RPC, and create a native context menu there. You can also create and show a context menu entirely from the main process; it appears at the cursor's global screen position, even outside your application window or when another app is focused.</p>
+Call `ContextMenu.showContextMenu()` from the main process. The menu opens at
+the current global pointer position.
 
-              
-```javascript
-import {ContextMenu} from "electrobun/bun";
+```ts
+import { ContextMenu } from "electrobun/bun";
 
-// Show a context menu wherever the mouse cursor is on screen
-// after 5 seconds.
-setTimeout(() => {
-  ContextMenu.showContextMenu([
-    { role: "undo" },
-    { role: "redo" },
-    { type: "separator" },
-    {
-      label: "Custom Menu Item  🚀",
-      action: "custom-action-1",
-      tooltip: "I'm a tooltip",
-    },
-    {
-      label: "Custom menu disabled",
-      enabled: false,
-      action: "custom-action-2",
-    },
-    {
-      label: "Custom menu disabled",
-      enabled: false,
-      action: "custom-action-2",
-      // todo: support a data property on all menus (app, tray, context)
-      data: {
-        some: "data",
-        that: "is serialized",
-        nested: { thing: 23 },
-      },
-    },
-    { type: "separator" },
-    { role: "cut" },
-    { role: "copy" },
-    { role: "paste" },
-    { role: "pasteAndMatchStyle" },
-    { role: "delete" },
-    { role: "selectAll" },
-  ]);
-}, 5000);
-
-Electrobun.events.on("context-menu-clicked", (e) => {
-  console.log("context event", e.data.action);
-});
-```
-
-
-## Menu Item Properties
-
-### accelerator
-
-              <p>You can set a custom keyboard shortcut hint for context menu items using the `` accelerator `` property. This displays the shortcut next to the menu item label.</p>
-
-              
-```javascript
 ContextMenu.showContextMenu([
   {
-    label: "Save",
-    action: "save",
-    accelerator: "s"  // Shows Cmd+S on macOS
+    label: "Open",
+    action: "open",
+    accelerator: "o",
+    data: { source: "context-menu" },
   },
   {
-    label: "New Tab",
-    action: "new-tab",
-    accelerator: "t"
+    label: "More",
+    submenu: [
+      { label: "Rename", action: "rename" },
+      { label: "Delete", action: "delete", enabled: false },
+    ],
   },
   { type: "separator" },
   { role: "copy" },
   { role: "paste" },
 ]);
+
+ContextMenu.on("context-menu-clicked", (event: unknown) => {
+  console.log("Context menu action", event);
+});
 ```
 
+Normal items support `label`, `action` or `role`, `data`, `submenu`, `enabled`,
+`checked`, `hidden`, `tooltip`, and `accelerator`. Separators accept either
+`separator` or `divider` as their type.
 
-#### Platform Support
+In a webview, prevent the browser's default `contextmenu` event and make an RPC
+request to the main process, which owns the native menu API.
 
-              <ul>
-                <li><strong>macOS:</strong> Full support. Accelerators are displayed next to menu items with Command as the default modifier.</li>
-                <li><strong>Windows:</strong> Supports simple single-character accelerators.</li>
-                <li><strong>Linux:</strong> Context menus are not currently supported on Linux.</li>
-              </ul>
-
-### Other Properties
-
-              <ul>
-                <li><strong>label:</strong> The text displayed for the menu item</li>
-                <li><strong>action:</strong> A string identifier emitted when the item is clicked</li>
-                <li><strong>role:</strong> Use a built-in role instead of a custom action (e.g., "copy", "paste", "cut")</li>
-                <li><strong>enabled:</strong> Set to false to show the item as disabled</li>
-                <li><strong>checked:</strong> Set to true to show a checkbox</li>
-                <li><strong>hidden:</strong> Set to true to hide the item</li>
-                <li><strong>tooltip:</strong> Tooltip text shown on hover</li>
-                <li><strong>data:</strong> Arbitrary data passed through with the click event</li>
-                <li><strong>submenu:</strong> Nested array of menu items for submenus</li>
-              </ul>
+Context menus are currently implemented on macOS and Windows. Linux support is
+not yet available.

@@ -1,90 +1,72 @@
 ---
 title: "Webview Tag Architecture"
+description: "How Electrobun maps a DOM anchor to an isolated native BrowserView."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
-              
-## Overview
+`<electrobun-webview>` is Electrobun's native iframe-style primitive.
+The custom element is an anchor in the host DOM; its content is rendered by a
+separate native `BrowserView`, not as a DOM descendant.
 
-              <p>The `<electrobun-webview>` tag is Electrobun's implementation of an Out-Of-Process IFrame (OOPIF), providing a secure, isolated, and performant way to embed web content within your application. Unlike traditional iframes or Electron's deprecated `<webview>` tag, Electrobun's approach offers full process isolation while maintaining seamless DOM integration.</p>
-
-              <Aside type="tip">
-                <strong>Info:</strong> For a deep dive into the technical implementation and philosophy behind Electrobun's OOPIF approach, check out our blog post: <a href="https://blackboard.sh/blog/building-a-better-oopif">Building a Better OOPIF</a>
-              </Aside>
-
-## Why Not Regular IFrames?
-
-              <p>Standard iframes come with significant limitations for desktop applications:</p>
-              <ul>
-                <li><strong>Security restrictions</strong>: Modern browsers prevent iframes from loading cross-domain content</li>
-                <li><strong>Limited control</strong>: Cannot fully customize behavior or bypass same-origin policies</li>
-                <li><strong>Performance constraints</strong>: Share the same process as the parent page</li>
-                <li><strong>Feature limitations</strong>: Restricted access to native APIs and advanced browser features</li>
-              </ul>
-
-## The OOPIF Advantage
-
-              <p>An Out-Of-Process IFrame (OOPIF) solves these limitations by:</p>
-              <ul>
-                <li><strong>Process isolation</strong>: Each webview runs in its own isolated process</li>
-                <li><strong>Security boundary</strong>: Complete separation between host and embedded content</li>
-                <li><strong>Performance</strong>: Independent resource allocation and crash protection</li>
-                <li><strong>Flexibility</strong>: Full control over content loading and permissions</li>
-              </ul>
-
-## How It Works
-
-              <p>The `<electrobun-webview>` tag functions as a layer positioned above the main window, synchronized with the DOM element's position and size. This architecture provides:</p>
-
-              <ol>
-                <li><strong>DOM Integration</strong>: The webview behaves like any other DOM element - you can style, animate, and position it using CSS</li>
-                <li><strong>Process Separation</strong>: Content runs in a completely isolated process, preventing cross-contamination</li>
-                <li><strong>Transparent Layering</strong>: Support for transparency and layering effects without breaking the host design</li>
-                <li><strong>Native Performance</strong>: Direct rendering without the overhead of iframe restrictions</li>
-              </ol>
-
-## Key Features
-
-### Full Isolation
-              <p>Each `<electrobun-webview>` runs in its own process, ensuring:</p>
-              <ul>
-                <li>Crash protection (one webview crash doesn't affect others)</li>
-                <li>Memory isolation</li>
-                <li>Security boundaries between different content sources</li>
-              </ul>
-
-### Seamless Communication
-              <p>Fast inter-process communication (IPC) between:</p>
-              <ul>
-                <li>The application's main process</li>
-                <li>The host webview</li>
-                <li>Individual OOPIF webviews</li>
-              </ul>
-
-### Not Deprecated
-              <p>Unlike Electron's `<webview>` tag (which relies on Chromium's deprecated implementation scheduled for removal in January 2025), Electrobun's implementation is built from the ground up and will continue to be supported and improved.</p>
-
-## Usage Example
-
-              
-```
-<span style="color: #f59e0b"><electrobun-webview</span> 
-  <span style="color: #3b82f6">src</span>=<span style="color: #10b981">"https://example.com"</span>
-  <span style="color: #3b82f6">style</span>=<span style="color: #10b981">"width: 100%; height: 500px;"</span><span style="color: #f59e0b">></span>
-<span style="color: #f59e0b"></electrobun-webview></span>
+```html
+<electrobun-webview
+  src="https://example.com"
+  sandbox
+  style="display: block; width: 100%; height: 500px"
+></electrobun-webview>
 ```
 
+## Creation
 
-              <p>The webview integrates seamlessly with your application's DOM while maintaining complete process isolation for security and performance.</p>
+Electrobun injects a preload into each host webview. That preload registers the
+custom element and, after it enters the document, sends its initial URL, HTML,
+renderer, partition, sandbox state, navigation rules, and bounding rectangle
+to the main process. The native core creates the matching `BrowserView` and
+returns its numeric ID.
 
-## Architecture Benefits
+The element remains a lightweight anchor. Removing it destroys the native
+view; reinserting it creates a new view and ID.
 
-              <ul>
-                <li><strong>Security</strong>: Complete process isolation prevents cross-site scripting and other attacks</li>
-                <li><strong>Reliability</strong>: Crash isolation ensures one failing webview doesn't bring down your app</li>
-                <li><strong>Performance</strong>: Independent resource allocation and rendering</li>
-                <li><strong>Flexibility</strong>: Full control over content without iframe limitations</li>
-                <li><strong>Future-proof</strong>: Not dependent on deprecated Chromium features</li>
-              </ul>
+## Geometry
 
-              <p>For more technical details and the evolution of this implementation, read our <a href="https://blackboard.sh/blog/building-a-better-oopif">Building a Better OOPIF</a> blog post.</p>
+An overlay controller observes layout and synchronizes the anchor's viewport
+rectangle with the native view. It uses animation, resize, scroll, and periodic
+checks so ordinary DOM and CSS layout can position the embedded view.
+
+The native surface is a distinct layer. Host `z-index` cannot paint an element
+over it. Mask selectors solve this by sending rectangles for matching host DOM
+elements to native code, which cuts corresponding holes in the overlay.
+
+## Navigation And Events
+
+Changing `src` or `html`, or invoking methods such as `loadURL()`, sends a
+navigation command to the native view. Calls made before initialization are
+queued until the native ID exists.
+
+Native navigation, loading, download, new-window, and host-message events are
+routed back to the custom element's `on()` listeners. Event payloads cross a
+serialization boundary; the embedded page is not directly accessible through
+the host DOM.
+
+## Communication
+
+Trusted embedded content can use Electrobun's typed RPC transport. A sandboxed
+tag disables application RPC but retains native lifecycle events and the
+event-only `window.__electrobunSendToHost()` bridge. This distinction lets an
+application observe untrusted content without exposing its request handlers.
+
+Sandbox mode is one layer of the security model, not a blanket guarantee. Use
+navigation rules, validate every message payload, avoid injecting secrets into
+preloads, and treat remote content as untrusted.
+
+## Renderer Model
+
+The concrete process model belongs to the renderer. WKWebView, WebView2, GTK
+WebKit, and CEF use different browser and renderer process arrangements;
+Electrobun does not promise one operating-system process per tag. The stable
+contract is that the embedded document has its own native webview and browsing
+context rather than being a child DOM document.
+
+On macOS and Windows, CEF and native views can coexist when CEF is bundled. A
+Linux build selects CEF or GTK WebKit for the process. Renderer-specific mask,
+passthrough, and transparent-window constraints are documented in the
+[`<electrobun-webview>` API](/electrobun/apis/browser/electrobun-webview-tag).
