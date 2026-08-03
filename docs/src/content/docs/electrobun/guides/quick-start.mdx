@@ -1,96 +1,95 @@
 ---
 title: "Quick Start"
+description: "Create and run an Electrobun 2.x app with Hutch."
 ---
-  
-  <p>Welcome to Electrobun! This guide will help you create your first ultra-fast, tiny desktop application with TypeScript.</p>
 
-## Prerequisites
-  
-  <p>Before getting started, make sure you have:</p>
-  <ul>
-    <li>Hutch installed globally</li>
-    <li>A text editor or IDE (Blackboard's own <a href="https://blackboard.sh/colab/">co(lab)</a> recommended)</li>
-    <li>Basic knowledge of TypeScript/JavaScript</li>
-  </ul>
+## Install Hutch
 
-  <p>Install Hutch on macOS or Linux:</p>
+On macOS or Linux:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 ```
 
-  <p>On Windows PowerShell:</p>
+On Windows PowerShell:
 
 ```powershell
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-## Getting Started
-  
-  <p>Create a new Electrobun project with a single command:</p>
-  
-  
+Restart the terminal if needed, then verify the installation:
+
+```bash
+hutch --version
 ```
+
+## Create a project
+
+Open the interactive template picker:
+
+```bash
 hutch electrobun init
 ```
 
+Use the arrow keys to select a template and press Enter. Hutch downloads the
+current production template catalog and creates the project.
 
-  <p>It'll ask you which template project you want to get started with.</p>
+To skip the picker, provide a project name and template:
 
-  <p>This creates a new directory with the basic project structure:</p>
-
-  
-```
-my-app/
-├── src/
-│   ├── bun/
-│   │   └── index.ts        # Cottontail entry point (TypeScript main process)
-│   └── mainview/
-│       ├── index.html      # UI template
-│       ├── index.css       # Styles
-│       └── index.ts        # Frontend logic
-├── package.json            # Project dependencies
-├── tsconfig.json
-└── electrobun.config.ts    # Build configuration
+```bash
+hutch electrobun init my-app --template=hello-world
 ```
 
+Use `--channel=canary` to scaffold from the canary template catalog.
 
-## Running Your App
+## Run the app
 
-  <p>Navigate to your project directory and start development:</p>
-
-  
-```
+```bash
 cd my-app
 hutch install
 hutch run dev
 ```
 
+The generated `dev` script builds the app, launches it, and watches source files
+for changes. A typical project contains:
 
-  <p>Hutch will:</p>
-  <ul>
-    <li>Install the project dependencies through Cottontail</li>
-    <li>Create a dev build of your app</li>
-    <li>Open your app in dev mode</li>    
-  </ul>
+```text
+my-app/
+|-- src/
+|   |-- bun/
+|   |   `-- index.ts        # Cottontail main process
+|   `-- mainview/
+|       |-- index.html
+|       |-- index.css
+|       `-- index.ts
+|-- electrobun.config.ts
+|-- package.json
+|-- bun.lock
+`-- tsconfig.json
+```
 
-## Next Steps
+Hutch installs packages, runs scripts, bundles source, and prepares Electrobun's
+native files. Cottontail executes the bundled TypeScript main process inside the
+finished application.
 
-  <p>Now that you have a basic app running, explore these topics:</p>
-  
-  <ul>
-    <li><a href="/electrobun/guides/hello-world">Hello World</a> - Create a hello world from scratch.</li>
-    <li><a href="/electrobun/guides/creating-ui">Creating UI</a> - Build beautiful interfaces with web technologies</li>
-    <li><a href="/electrobun/apis/bun">Main Process API</a> - Learn about the main process APIs</li>
-    <li><a href="/electrobun/apis/browser-view">BrowserView</a> - Manage multiple webviews</li>
-    <li><a href="/electrobun/guides/bundling-and-distribution">Bundling & Distribution</a> - Package your app for distribution</li>
-  </ul>
+## Build a release
 
-## Need Help?
+```bash
+hutch electrobun build --env=canary
+hutch electrobun build --env=production
+```
 
-  <p>If you run into any issues:</p>
-  <ul>
-    <li>Check the <a href="https://github.com/blackboardsh/electrobun" target="_blank">GitHub repository</a></li>
-    <li>Join our <a href="https://discord.gg/ueKE4tjaCE" target="_blank">Discord community</a></li>
-    <li>Read through the other documentation guides</li>
-  </ul>
+Hutch builds for the current operating system and architecture. Use native CI
+runners to produce a complete cross-platform release.
+
+## Next steps
+
+- [Hello World](/electrobun/guides/hello-world/) builds the smallest app from
+  scratch.
+- [Hutch](/electrobun/guides/hutch/) explains commands, channels, and project
+  pins.
+- [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.
+- [Main Process Runtimes](/electrobun/guides/native-main-process/) covers
+  Cottontail, Bun, Zig, Rust, Go, and Odin.
+- [Bundling and Distribution](/electrobun/guides/bundling-and-distribution/)
+  covers signed release artifacts and updates.

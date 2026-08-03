@@ -1,0 +1,127 @@
+---
+title: "Migrate from Electrobun 1.x"
+description: "Move an Electrobun 1.x project to the 2.x Hutch and Cottontail toolchain."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+Electrobun 2.x separates build tooling from the JavaScript runtime. Hutch owns
+package management, scripts, builds, toolchains, and distribution. Cottontail
+is the default JavaScript main-process runtime bundled into the finished app.
+
+## 1. Install Hutch
+
+macOS or Linux:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
+
+Restart the terminal if the installer added `~/.dash/bin` to your shell path.
+
+## 2. Keep Electrobun as a project dependency
+
+The `electrobun` package still provides configuration types, browser code,
+preloads, and SDK source. Install it through Hutch:
+
+```bash
+hutch install
+```
+
+Existing `bun.lock` files remain supported. Commit the lockfile as before.
+
+## 3. Replace build commands
+
+Typical script migrations are:
+
+| Electrobun 1.x | Electrobun 2.x |
+| --- | --- |
+| `bun install` | `hutch install` |
+| `bun run dev` | `hutch run dev` |
+| `bunx electrobun dev` | `hutch electrobun dev` |
+| `bunx electrobun build --env=canary` | `hutch electrobun build --env=canary` |
+| `bunx electrobun build --env=stable` | `hutch electrobun build --env=production` |
+| `bunx <package>` | `hutch x <package>` |
+
+For example:
+
+```json
+{
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build:canary": "hutch electrobun build --env=canary",
+    "build": "hutch electrobun build --env=production"
+  }
+}
+```
+
+## 4. Choose the main process
+
+To move an existing TypeScript main process to Cottontail, change the config
+block while keeping the entrypoint itself:
+
+```ts
+export default {
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+};
+```
+
+The `electrobun/bun` SDK import path remains valid. No application source rename
+is required.
+
+To keep the actual Bun runtime, configure it explicitly:
+
+```ts
+export default {
+  build: {
+    mainProcess: "bun",
+    bun: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+};
+```
+
+Hutch still performs the build and packaging in this mode.
+
+## 5. Rename the production channel
+
+Hutch uses `dev`, `canary`, and `production`. Replace public CLI uses of
+`stable` with `production`, including CI commands and artifact upload jobs.
+Production app names are unsuffixed; canary app names include `-canary`.
+
+## 6. Review build automation
+
+Lifecycle hooks now run through Cottontail under Hutch. They receive
+`ELECTROBUN_BUILD_ENV=dev`, `canary`, or `production`. Update comparisons that
+still check for `stable`.
+
+Hutch builds for the current host. Keep one native CI runner for every OS and
+architecture you release.
+
+## 7. Test the migration
+
+```bash
+hutch install
+hutch electrobun dev
+hutch electrobun build --env=canary
+```
+
+Verify application startup, RPC, webviews, updater metadata, signing, and any
+native dependencies on macOS, Windows, and Linux.
+
+<Aside type="note">
+Electrobun 2.x also supports Zig, Rust, Go, and Odin main processes. Migrating
+to a native main process is optional and should be treated as a separate change
+after the 2.x toolchain migration is working.
+</Aside>

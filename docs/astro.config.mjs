@@ -24,15 +24,18 @@ export default defineConfig({
                 { label: "Quick Start", link: "/electrobun/guides/quick-start/" },
                 { label: "What is Electrobun?", link: "/electrobun/guides/what-is-electrobun/" },
                 { label: "Hello World", link: "/electrobun/guides/hello-world/" },
+                { label: "Hutch", link: "/electrobun/guides/hutch/" },
+                { label: "Cottontail", link: "/electrobun/guides/cottontail/" },
+                { label: "Main Process Runtimes", link: "/electrobun/guides/native-main-process/" },
                 { label: "Creating UI", link: "/electrobun/guides/creating-ui/" },
                 { label: "Bundling & Distribution", link: "/electrobun/guides/bundling-and-distribution/" },
+                { label: "Migrate from 1.x", link: "/electrobun/guides/migrating-to-v2/" },
               ],
             },
             {
               label: "Advanced Guides",
               items: [
                 { label: "Cross-Platform Development", link: "/electrobun/guides/cross-platform-development/" },
-                { label: "Native Main Processes", link: "/electrobun/guides/native-main-process/" },
                 { label: "Compatibility", link: "/electrobun/guides/compatability/" },
                 { label: "Code Signing", link: "/electrobun/guides/code-signing/" },
                 { label: "Architecture Overview", link: "/electrobun/guides/architecture/overview/" },
@@ -83,6 +86,7 @@ export default defineConfig({
               items: [
                 { label: "All releases", link: "/electrobun/guides/changelog/" },
                 { label: "Unreleased", link: "/electrobun/guides/changelog/unreleased/" },
+                { label: "v2.x Preview", link: "/electrobun/guides/changelog/v2-x/" },
                 { label: "v1.18.1", link: "/electrobun/guides/changelog/v1-18-1/" },
                 { label: "v1.18.0", link: "/electrobun/guides/changelog/v1-18-0/" },
                 { label: "v1.16.0", link: "/electrobun/guides/changelog/v1-16-0/" },

@@ -1,118 +1,63 @@
 ---
 title: "What is Electrobun?"
+description: "A compact cross-platform desktop framework built around native views and a small runtime."
 ---
-  
-  <p>Electrobun is a desktop application framework that lets you build ultra fast, tiny, and cross-platform applications using TypeScript. It combines the best of native performance with web development simplicity.</p>
-## The Problem
-  
-  <p>Traditional desktop app frameworks force you to choose between developer experience and app performance:</p>
-  
-  <ul>
-    <li><strong>Electron:</strong> Great DX but huge bundle sizes (150MB+), slow startup times (2-5s), and massive update downloads</li>
-    <li><strong>Native development:</strong> Great performance but complex setup, platform-specific code, and limited web technology integration</li>
-    <li><strong>Tauri:</strong> Better than Electron but still large updates and you have to learn Rust</li>
-  </ul>
-## The Solution
-  <p>Electrobun provides a third option that doesn't compromise:</p>
-  <ul>
-    <li><strong>Ultra-small bundles:</strong> ~14MB compressed (90%+ smaller than Electron)</li>
-    <li><strong>Lightning-fast startup:</strong> &lt;50ms cold start vs 2-5s for Electron</li>
-    <li><strong>Tiny updates:</strong> 14KB patches using custom binary diff vs 100MB+ with Electron</li>
-    <li><strong>Pure TypeScript:</strong> Write TypeScript for both main process and UI</li>
-    <li><strong>Web technologies:</strong> HTML, CSS, JavaScript - use any frontend framework</li>
-    <li><strong>Native performance:</strong> Zig bindings with the Cottontail runtime for maximum speed</li>
-    <li><strong>Optional CEF:</strong> bundle CEF (Chromium) when cross-platform consistency matters most.</li>
-  </ul>
-## Performance Comparison
-  <table class="comparison-table">
-    <thead>
-      <tr>
-        <th>Metric</th>
-        <th>Electron</th>
-        <th>Tauri</th>
-        <th>Electrobun</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Bundle Size</td>
-        <td>150MB+</td>
-        <td>25MB</td>
-        <td class="metric">14MB</td>
-      </tr>
-      <tr>
-        <td>Update Size</td>
-        <td>100MB+</td>
-        <td>10MB</td>
-        <td class="metric">14KB</td>
-      </tr>
-      <tr>
-        <td>Startup Time</td>
-        <td>2-5s</td>
-        <td>500ms</td>
-        <td class="metric">&lt;50ms</td>
-      </tr>
-      <tr>
-        <td>Memory Usage</td>
-        <td>100-200MB</td>
-        <td>30-50MB</td>
-        <td class="metric">15-30MB</td>
-      </tr>
-    </tbody>
-  </table>
-## Technical Architecture
-  <p>Electrobun achieves its performance through a carefully designed architecture:</p>
-### Zig, and Native Bindings
-  <p>Native functionality like window management, system trays, and app menus writtin in C++ and Objc</p>
-### Cottontail Runtime
-  <p>The main process runs on Cottontail, providing fast TypeScript execution and built-in bundling on JavaScriptCore.</p>
-### System WebView
-  <p>Instead of distributing Chromium, By default Electrobun uses your system's native WebView (WebKit on macOS, Edge WebView2 on Windows, WebKitGTK on Linux).</p>
-### Custom Update System
-  <p>Hutch generates binary diff updates using a SIMD-optimized BSDIFF implementation written in Zig, allowing update patches that are often just kilobytes instead of megabytes.</p>
-### ZSTD self-extracting distributables
-  <p>Hutch bundles your app and compresses it into a ZSTD self-extractor to keep initial downloads as small as possible.</p>
-### Custom OOPIF Implementation
-  <p>Use OOPIFs (super iframes) in your html for secure, isolated, webviews across browser engines and platforms.</p>
-## Key Benefits
-### 🚀 Faster Development
-  <ul>
-    <li>Fast build times - Hutch uses pre-built Electrobun binaries for your target platform</li>
-    <li>Use any web framework (React, SolidJS, Vue, Svelte, etc.)</li>
-    <li>TypeScript throughout - no context switching</li>
-    <li>Built-in bundling and optimization</li>
-  </ul>
-### 📦 Better Distribution
-  <ul>
-    <li>14MB bundles vs 150MB+ with Electron</li>
-    <li>Kilobyte updates instead of megabyte downloads</li>
-    <li>Built-in code signing and notarization</li>
-    <li>Cross-platform releases built on native CI runners</li>
-    <li>Built-in ZSTD self-extractor</li>
-  </ul>
-### ⚡ Superior Performance
-  <ul>
-    <li>Sub-50ms startup times</li>
-    <li>Minimal memory footprint</li>
-    <li>Native-feeling UI responsiveness</li>
-    <li>Battery-efficient operation</li>
-  </ul>
-### 🔐 Security First
-  <ul>
-    <li>Process isolation by default</li>
-    <li>Secure, encrypted, and typed RPC between processes</li>
-    <li>custom views:// schema for loading bundled assets in webviews</li>
-    <li>Minimal attack surface</li>
-  </ul>
-## When to Use Electrobun
-  <p>Electrobun is perfect for:</p>
-  <ul>
-    <li><strong>Startup MVPs:</strong> Ship fast, iterate quickly with small updates</li>
-    <li><strong>Developer tools:</strong> IDEs, terminals, productivity apps that need native performance</li>
-    <li><strong>Cross-platform apps:</strong> One codebase, native feel everywhere</li>
-    <li><strong>High-performance apps:</strong> When Electron is too slow but native development is too complex</li>
-    <li><strong>Bandwidth-conscious apps:</strong> Frequent updates without user friction</li>
-    <li><strong>Multi-tab web browsers</strong>Build multi-tab experiences and mix CEF and Webkit webviews</li>
-  </ul>
-## Getting Started
-  <p>Ready to build your first Electrobun app? Follow our <a href="/electrobun/guides/hello-world">Hello World guide</a> to create a new project in minutes.</p>
+
+Electrobun is a desktop application framework for macOS, Windows, and Linux. It
+combines web-based user interfaces with native windows, menus, trays, updates,
+WebGPU surfaces, and platform integration.
+
+## The 2.x stack
+
+Electrobun 2.x separates development tooling from application runtime:
+
+- **Hutch** installs dependencies, runs scripts, bundles code, acquires pinned
+  toolchains, and creates signed distribution artifacts.
+- **Cottontail** is the default JavaScript and TypeScript main-process runtime.
+  It provides Node.js and Bun-compatible APIs on JavaScriptCore.
+- **Electrobun Core** implements cross-platform windows, views, RPC, menus,
+  trays, updates, and native integration.
+- **System webviews** render UI by default: WKWebView on macOS, WebView2 on
+  Windows, and WebKitGTK on Linux.
+- **CEF** is an optional pinned Chromium renderer for applications that prefer
+  browser consistency over bundle size.
+
+Applications may replace Cottontail with Bun, Zig, Rust, Go, or Odin as their
+main process while using the same Hutch build and packaging workflow.
+
+## Why Electrobun
+
+- Use TypeScript and existing web frameworks for application UI.
+- Keep each webview in an isolated process and communicate through typed RPC.
+- Use native windows and platform APIs without shipping Chromium by default.
+- Embed independent `<electrobun-webview>` and `<electrobun-wgpu>` surfaces in
+  an application's HTML layout.
+- Produce self-extracting Zstandard-compressed installers.
+- Generate binary-diff updates with a full-download fallback.
+- Build production and canary channels independently.
+
+## Process model
+
+The main process owns application state and native objects. Each browser view is
+isolated from it and communicates through Electrobun's RPC and event bridges.
+This gives an application the convenience of web UI without placing privileged
+main-process APIs directly in page JavaScript.
+
+## Distribution model
+
+Hutch creates a runnable inner application, an outer self-extracting wrapper,
+update metadata, a compressed full-update archive, and platform installer
+artifacts. Code signing and notarization are integrated into the release build.
+Artifacts can be hosted on static storage such as R2, S3, or GitHub Releases.
+
+## Start building
+
+Install Hutch and choose a template:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+hutch electrobun init
+```
+
+Continue with the [Quick Start](/electrobun/guides/quick-start/) or build the
+minimal app in [Hello World](/electrobun/guides/hello-world/).

@@ -59,8 +59,8 @@ sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
 
               
 ```
-<span style="color: #6b7280"># On each CI runner, create a host-platform stable release:</span>
-<span style="color: #f59e0b">hutch electrobun</span> build --env=stable
+<span style="color: #6b7280"># On each CI runner, create a host-platform production release:</span>
+<span style="color: #f59e0b">hutch electrobun</span> build --env=production
 ```
 
               <p>Hutch builds, wraps, signs, and packages the app for the runner's native platform. Use a build matrix so platform-specific tools such as code signing and icon utilities are available for each release target.</p>
@@ -98,11 +98,11 @@ sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
 
               <p>On Windows, Electrobun builds your app as a GUI application (Windows subsystem) so that no console window appears when end users launch it. Dev builds automatically attach to the parent console so you can see `console.log` output and debug information in your terminal.</p>
 
-              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>stable</strong> bundle, set the `ELECTROBUN_CONSOLE` environment variable:</p>
+              <p>When you need to inspect console output from a <strong>canary</strong> or <strong>production</strong> bundle, set the `ELECTROBUN_CONSOLE` environment variable:</p>
 
               
 ```
-<span style="color: #6b7280"># Launch a canary/stable bundle with console output visible</span>
+<span style="color: #6b7280"># Launch a canary/production bundle with console output visible</span>
 <span style="color: #f59e0b">set</span> ELECTROBUN_CONSOLE=1
 <span style="color: #f59e0b">.\MyApp.exe</span>
 ```

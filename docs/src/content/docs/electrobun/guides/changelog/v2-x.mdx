@@ -1,0 +1,48 @@
+---
+title: "Electrobun v2.x Preview"
+description: "Architecture and developer workflow changes in Electrobun 2.x."
+---
+
+Electrobun 2.x is the current preview line. It establishes a new toolchain and
+runtime boundary while preserving the application APIs used by Electrobun 1.x
+projects.
+
+## Hutch build tooling
+
+- Hutch replaces the project-vendored Electrobun CLI.
+- Hutch installs packages, executes package binaries, runs scripts, bundles
+  source, downloads pinned native dependencies, and creates release artifacts.
+- Production and canary Hutch installations can coexist globally.
+- Projects can pin Hutch and Cottontail independently with a first-line pragma.
+- Template catalogs are published with Electrobun release channels and
+  downloaded on demand instead of being embedded in Hutch.
+
+## Cottontail runtime
+
+- Cottontail is the default TypeScript main-process runtime.
+- Node.js and Bun-compatible behavior supports existing package ecosystems.
+- The `electrobun/bun` SDK namespace remains source-compatible.
+- Bun remains available as an explicit main-process runtime while Hutch remains
+  the build tool.
+
+## Main process runtimes
+
+Applications can select Cottontail, Bun, Zig, Rust, Go, or Odin. Hutch acquires
+Electrobun's pinned native toolchains when a matching system compiler is not
+available.
+
+## Cross-platform releases
+
+The 2.x build pipeline produces application bundles and distribution artifacts
+on macOS, Windows x64, Linux x64, and Linux arm64. macOS can use the system
+webview or CEF, Windows can use WebView2 or CEF, and Linux can use WebKitGTK or
+CEF.
+
+## Distribution channels
+
+The public build environments are `dev`, `canary`, and `production`.
+Production builds can be shipped directly; canary builds are independent test
+releases, not artifacts promoted into production.
+
+See [Migrate from Electrobun 1.x](/electrobun/guides/migrating-to-v2/) for the
+required project changes.

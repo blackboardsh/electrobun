@@ -70,7 +70,7 @@ const webview = new BrowserView({
 ```javascript
 // Use any url on the internet
 const webview = new BrowserView({
-   url: "https://electrobun.dev",
+   url: "https://example.com",
 });
 
 // or use the views:// url scheme to load local
@@ -128,7 +128,7 @@ prefix remain ephemeral.
 ```javascript
 // Use any url on the internet
 const webview = new BrowserView({
-   preload: "https://electrobun.dev/some/remote/file.js",
+   preload: "https://example.com/some/remote/file.js",
 });
 
 // or use the views:// preload scheme to load local
@@ -503,7 +503,7 @@ webview.setSpellCheck(false);
 
   
 ```typescript
-webview.loadURL("https://electrobun.dev");
+webview.loadURL("https://example.com");
 
 // or
 

@@ -1,123 +1,60 @@
 ---
 title: "Compatibility"
+description: "Supported operating systems, architectures, runtimes, and webview engines."
 ---
-              
-## Dependencies and Versions
 
-              <table class="docs-table">
-                <thead>
-                  <tr>
-                    <th>Dependency</th>
-                    <th>Version</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>Cottontail</td>
-                    <td>Release-pinned</td>
-                    <td>Bun and Node.js compatibility APIs</td>
-                  </tr>
-                  <tr>
-                    <td>Zig</td>
-                    <td>0.13.0</td>
-                    <td></td>
-                  </tr>
-                  <tr>
-                    <td>CEF</td>
-                    <td>125.0.22</td>
-                    <td>optionally bundled</td>
-                  </tr>
-                </tbody>
-              </table>
+## Supported targets
 
-## Platform Support
+| Operating system | Architecture | System webview | Bundled webview |
+| --- | --- | --- | --- |
+| macOS | arm64 | WKWebView | CEF |
+| macOS | x64 | WKWebView | CEF |
+| Windows | x64 | WebView2 | CEF |
+| Linux | x64 | WebKitGTK 4.1 | CEF |
+| Linux | arm64 | WebKitGTK 4.1 | CEF |
 
-### Development Platform
-              <ul>
-                <li><strong>macOS</strong>: Required for building Electrobun apps (Intel and Apple Silicon supported)</li>
-                <li><strong>Windows</strong>: Development support available</li>
-                <li><strong>Linux</strong>: Development support available</li>
-              </ul>
+Windows on ARM runs Electrobun's x64 build through Windows emulation. Windows
+ARM64 is not a separate build target.
 
-### Target Platforms
-              <p>Apps built with Electrobun can be distributed to:</p>
+Hutch builds for the current host operating system and architecture. Produce a
+cross-platform release with native CI runners; native main-process compilers do
+not currently cross-compile Electrobun apps.
 
-              <table class="docs-table">
-                <thead>
-                  <tr>
-                    <th>Platform</th>
-                    <th>Architecture</th>
-                    <th>Status</th>
-                    <th>Notes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>macOS</td>
-                    <td>ARM64 (Apple Silicon)</td>
-                    <td><span class="status-stable">✅ Stable</span></td>
-                    <td>Full support with system WebKit</td>
-                  </tr>
-                  <tr>
-                    <td>macOS</td>
-                    <td>x64 (Intel)</td>
-                    <td><span class="status-stable">✅ Stable</span></td>
-                    <td>Full support with system WebKit</td>
-                  </tr>
-                  <tr>
-                    <td>Windows</td>
-                    <td>x64</td>
-                    <td><span class="status-stable">✅ Stable</span></td>
-                    <td>WebView2 (Edge) or bundled CEF</td>
-                  </tr>
-                  <tr>
-                    <td>Windows</td>
-                    <td>ARM64</td>
-                    <td><span class="status-stable">✅ Via Emulation</span></td>
-                    <td>Runs x64 binary through Windows emulation</td>
-                  </tr>
-                  <tr>
-                    <td>Linux</td>
-                    <td>x64</td>
-                    <td><span class="status-stable">✅ Stable</span></td>
-                    <td>WebKitGTK or bundled CEF</td>
-                  </tr>
-                  <tr>
-                    <td>Linux</td>
-                    <td>ARM64</td>
-                    <td><span class="status-stable">✅ Stable</span></td>
-                    <td>WebKitGTK or bundled CEF</td>
-                  </tr>
-                </tbody>
-              </table>
+## Main process runtimes
 
-### Webview Engines
-              <p>Electrobun supports both system webviews and bundled engines:</p>
+| Runtime | Status | Notes |
+| --- | --- | --- |
+| Cottontail | Default | Node.js and Bun-compatible TypeScript runtime |
+| Bun | Optional | Actual Bun runtime, built and packaged by Hutch |
+| Zig | Supported | Pinned Zig 0.13.0 toolchain |
+| Rust | Supported | Pinned Rust 1.88.0 toolchain |
+| Go | Supported | Pinned Go 1.26.4 toolchain |
+| Odin | Supported | Pinned pre-1.0 Odin dev-2026-07a toolchain |
 
-              <table class="docs-table">
-                <thead>
-                  <tr>
-                    <th>Platform</th>
-                    <th>System Webview</th>
-                    <th>Bundled Option</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td>macOS</td>
-                    <td>WebKit (WKWebView)</td>
-                    <td>CEF (Chromium) - Optional</td>
-                  </tr>
-                  <tr>
-                    <td>Windows</td>
-                    <td>WebView2 (Edge)</td>
-                    <td>CEF (Chromium) - Optional</td>
-                  </tr>
-                  <tr>
-                    <td>Linux</td>
-                    <td>WebKitGTK</td>
-                    <td>CEF (Chromium) - Optional</td>
-                  </tr>
-                </tbody>
-              </table>
+Hutch accepts an exact matching system compiler. Otherwise it downloads the
+pinned compiler into its shared global toolchain cache.
+
+## Webview engines
+
+System webviews produce the smallest bundles and receive browser updates from
+the operating system. Set `bundleCEF: true` and select the CEF renderer when an
+application needs a pinned Chromium implementation.
+
+Electrobun currently pins CEF 147.0.10 by default. `build.cefVersion` can select
+a compatible release where supported.
+
+Linux requires GTK 3, WebKitGTK 4.1, Ayatana AppIndicator, and librsvg runtime
+packages even when CEF is bundled. See
+[Cross-Platform Development](/electrobun/guides/cross-platform-development/)
+for package names.
+
+## JavaScript compatibility
+
+Cottontail targets practical Node.js and Bun compatibility and is exercised
+against copied upstream conformance tests on macOS, Windows, and Linux. Runtime
+compatibility is separate from package management: Hutch owns `hutch install`,
+`hutch x`, lockfiles, and build orchestration.
+
+Native addons and code that depends on undocumented runtime internals can still
+be platform- or runtime-specific. Test the application on every target before a
+production release.

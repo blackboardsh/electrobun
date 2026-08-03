@@ -8,12 +8,12 @@ title: "Updates"
               <ul>
                 <li><a href="/electrobun/apis/updater">Update API</a> to check for, download, and update your apps.</li>
                 <li><a href="/electrobun/apis/cli/cli-args">Hutch</a> to build your app bundle, code sign and notarize it, and generate release artifacts.</li>
-                <li>A custom BSDIFF implementation in zig that takes advantage of SIMD operations for performance and lets you distribute updates as small as 14KB</li>
+                <li>A Zig BSDIFF implementation that generates compact binary patches with a compressed full-download fallback.</li>
               </ul>
 
 ## Hosting on GitHub Releases
 
-              <p>GitHub Releases is a convenient option for hosting your update artifacts, especially for open source projects. Electrobun uses a flat, prefix-based naming scheme (e.g., `stable-macos-arm64-update.json`) that works with hosts that don't support folder structures.</p>
+              <p>GitHub Releases is a convenient option for hosting your update artifacts, especially for open source projects. Electrobun uses a flat, prefix-based naming scheme (for example, `production-macos-arm64-update.json`) that works with hosts that don't support folder structures.</p>
 
 ### Configuration
 
@@ -72,7 +72,7 @@ jobs:
           if [[ "${{ github.ref_name }}" == *"-canary"* ]]; then
             echo "env=canary" >> "$GITHUB_OUTPUT"
           else
-            echo "env=stable" >> "$GITHUB_OUTPUT"
+            echo "env=production" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build app
@@ -116,7 +116,7 @@ jobs:
               <p>GitHub's `/releases/latest/download` URL only resolves to non-prerelease builds. This means:</p>
 
               <ul>
-                <li><strong>Stable builds</strong>: Auto-updates work correctly via `/releases/latest/download`</li>
+                <li><strong>Production builds</strong>: Auto-updates work correctly via `/releases/latest/download`</li>
                 <li><strong>Canary builds</strong>: Will not auto-update when hosted on GitHub Releases because the `latest` URL won't point to prerelease versions</li>
               </ul>
 

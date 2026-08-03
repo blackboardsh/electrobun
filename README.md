@@ -1,5 +1,5 @@
 <p align="center">
-  <a href="https://electrobun.dev"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
+  <a href="https://framework.blackboard.sh/electrobun/"><img src="https://github.com/blackboardsh/electrobun/assets/75102186/8799b522-0507-45e9-86e3-c3cfded1aa7c" alt="Logo" height=170></a>
 </p>
 
 <h1 align="center">Electrobun</h1>
@@ -13,28 +13,33 @@
 
 ## What is Electrobun?
 
-Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping ultra fast, tiny, and cross-platform desktop applications written in Typescript.
-Under the hood it uses Cottontail, Electrobun's JSC-based JavaScript runtime, to execute the main process and bundle webview TypeScript. Native bindings are written in ObjC and C++, with several core components written in <a href="https://ziglang.org/">Zig</a>.
+Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping fast, compact, cross-platform desktop applications written in TypeScript.
+Hutch is the native build and package-management CLI. Cottontail is Electrobun's JSC-based default JavaScript runtime. Electrobun's platform layer combines Zig, Objective-C, and C++.
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
-You use it via npm.
+Install Hutch globally, then use it to create a project, install the npm package that provides Electrobun's SDKs, and build the application:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+hutch electrobun init
+```
 
 Don't miss our:
-- self-extracting bundles that use ZSTD compression for more compact distributables as small as 16MB
-- zig optimized BSDIFF implementation that lets you ship tiny app updates as small as 4KB
+- self-extracting bundles that use Zstandard compression for compact distributables
+- a Zig-optimized BSDIFF implementation that can produce kilobyte-scale updates
 - `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
 - `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
 - Our Three.js and Babylon.js adapters that work directly in the Cottontail main process
-- Our `<electrobun-webview>` and `<electrobun-wpgu>` html elements that let you composit proper OOPIFs and native GPU surfaces into your UIs
+- Our `<electrobun-webview>` and `<electrobun-wgpu>` HTML elements that let you composite isolated webviews and native GPU surfaces into your UIs
 - so much more.
 
 **Project Goals**
 
 - Write typescript for the main process and webviews without having to think about it.
 - Isolation between main and webview processes with fast, typed, easy to implement RPC between them.
-- Small self-extracting app bundles ~14MB (when using the system webview, most of this is the Cottontail/JSC runtime)
-- Even smaller app updates as small as 4KB (using bsdiff it only downloads tiny patches between versions)
+- Small self-extracting app bundles when using the system webview
+- Small updates that use binary patches before falling back to a compressed full download
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun

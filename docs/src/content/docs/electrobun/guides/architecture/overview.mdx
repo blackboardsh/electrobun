@@ -1,144 +1,110 @@
 ---
 title: "Architecture Overview"
+description: "How Hutch, main-process runtimes, Electrobun Core, and webviews fit together."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
-              
-## High Level App Architecture
-              <p>An Electrobun app uses a small Zig launcher to start its Cottontail main process. Since native GUIs require a blocking event loop on the main thread, Cottontail creates a worker for your application code and initializes the native GUI event loop through its Bun-compatible FFI layer. Your TypeScript code can then use Electrobun's APIs to open windows, create system trays, relay events and RPC, and call the native wrapper.</p>
+## Build-time architecture
 
-## Application Bundles
+Hutch is the only build orchestrator. It:
 
-### MacOS
+1. Loads `electrobun.config.ts`.
+2. Resolves the selected Electrobun release and native platform artifact.
+3. Installs project dependencies and bundles TypeScript views.
+4. Bundles a Cottontail or Bun main process, or compiles a Zig, Rust, Go, or
+   Odin main process.
+5. Assembles the platform application bundle.
+6. For canary and production builds, creates the self-extracting wrapper,
+   compressed update archive, metadata, optional patch, and platform installer.
+7. Applies configured code signing and notarization.
 
-#### Your Installed App
+Hutch and its compiler toolchains are not shipped inside the finished app.
 
-              <p>On MacOS an application bundle is really just a folder with a .app file extension. The key subfolders inside are</p>
+## Runtime architecture
 
-              
-```
-<span style="color: #6b7280">// electrobun places several binaries here. If bundling additional binaries on Mac and code-signing you must place them here</span>
-/Contents/MacOS
+Every Electrobun application contains:
 
-<span style="color: #6b7280">// An optimized zig implementation of bspatch used to generate and apply diffs during updates</span>
-/Contents/MacOS/bspatch
+- a small platform launcher
+- the selected main-process runtime or native executable
+- Electrobun Core and the platform native wrapper
+- bundled application code and view assets
+- optional CEF and WGPU libraries
+- updater metadata and patch tooling
 
-<span style="color: #6b7280">// The Cottontail runtime</span>
-/Contents/MacOS/cottontail
+The main process owns application state and privileged native objects. It opens
+windows, views, menus, trays, and GPU surfaces through Electrobun Core. Each
+webview runs in an isolated browser process and communicates with the main
+process through Electrobun's event and RPC bridges.
 
-<span style="color: #6b7280">// A small Zig binary that starts Cottontail with your compiled entrypoint.</span>
-/Contents/MacOS/launcher
+## Main-thread model
 
-<span style="color: #6b7280">// A library containing Electrobun's native code layer for the platform, on MacOS this these are</span>
-<span style="color: #6b7280">// objc/c++ code for interfacing with MacOS apis like NSWindow and WKWebkit</span>
-/Contents/MacOS/libNativeWrapper.dylib
+Native GUI frameworks require their event loop on the process main thread.
+Cottontail and Bun run application JavaScript on a worker while Electrobun Core
+owns that main-thread event loop. Native SDKs expose the same arrangement
+directly: application code initializes the core, starts its work on another
+thread where needed, and enters `runMainThread`.
 
-<span style="color: #6b7280">// electrobun compiles your application's custom code here</span>
-/Contents/MacOS/Resources
+## Application resources
 
-<span style="color: #6b7280">// Your application icons</span>
-/Contents/MacOS/Resources/AppIcon.icns
+The exact platform layout differs, but the resource model is consistent:
 
-<span style="color: #6b7280">// Local version info that `Electrobun.Updater` reads</span>
-/Contents/MacOS/Resources/version.json
-
-<span style="color: #6b7280">// Folder containing the bundled JavaScript code for the main process.</span>
-<span style="color: #6b7280">// Use electrobun.config to tell Electrobun where your ts entrypoing is and</span>
-<span style="color: #6b7280">// define external dependencies</span>
-/Contents/MacOS/Resources/app/bun/
-
-<span style="color: #6b7280">// This is where your views defined in electrobun.config.ts are transpiled to</span>
-<span style="color: #6b7280">// Browserviews can also use the views:// url schema anywhere urls are loaded</span>
-<span style="color: #6b7280">// to load bundled static content from here.</span>
-/Contents/MacOS/Resources/app/views
-```
-
-
-#### IPC
-
-              <p>To communicate between main and browser contexts, Electrobun provides several IPC mechanisms. It primarily uses postMessage and FFI, with encrypted web sockets where appropriate.</p>
-
-#### Self-Extracting Bundle
-
-              <p>The Electrobun release format uses a self-extracting ZSTD bundle to keep downloads small. Release packaging takes the full app bundle, archives and compresses it, and creates a second wrapper app bundle for distribution.</p>
-
-              <Aside type="tip">
-                <strong>Info:</strong> The current Electrobun Playground app is <strong>50.4MB</strong> in size (most of this is the Cottontail/JSC runtime), but when compressed and distributed as the self-extracting bundle it's only <strong>13.1MB which is almost 5 times smaller</strong>. <em>Meaning almost 5 times as many users can download your app for the same cost in Storage and Network fees.</em>
-              </Aside>
-
-              <p>The self-extracting bundle looks like this:</p>
-
-              
-```
-<span style="color: #6b7280">// This is different from the regular launcher binary. It's a zig binary that uses zlip to decompress your actual app bundle</span>
-/Contents/MacOS/launcher
-
-<span style="color: #6b7280">// App icons are actually stored again so the self-extractor looks just like your extracted bundled app.</span>
-/Contents/Resources/AppIcons.icns
-
-<span style="color: #6b7280">// Your actual app bundled, tarred, and compressed with the name set to the hash</span>
-/Contents/Resources/23fajlkj2.tar.zst
+```text
+Resources/
+|-- app/
+|   |-- bun/             # Bundled JavaScript main process, when selected
+|   `-- views/           # Bundled and copied webview assets
+`-- version.json         # Installed version and update metadata
 ```
 
+Use the `views://` URL scheme to load files under `Resources/app/views` without
+constructing platform filesystem paths.
 
-              <p>A user can install the self-extracting bundle the same as any other application in the `/Applications/` folder or run it from any folder on your machine. When your end-user double clicks to open it, it will transparently self-extract and replace itself with your full application and then launch the full application. To your user it just looks like the first time opening your app takes 1 or 2 seconds longer.</p>
+On macOS, executables and dynamic libraries live under `Contents/MacOS`, assets
+under `Contents/Resources`, and optional frameworks under
+`Contents/Frameworks`. Windows and Linux bundles use equivalent `bin` and
+`Resources` directories.
 
-              <p>The self-extraction process only happens on first install and is entirely local and self-contained using only a designated application support folder for your app for the extraction and verification.</p>
+## Webview engines
 
-#### DMG
+System views are the default:
 
-              <p>Hutch packages the self-extracting bundle in a DMG for macOS distribution.</p>
+- macOS: WKWebView
+- Windows: WebView2
+- Linux: WebKitGTK 4.1
 
-## Code Signing and Notarization
+CEF can be bundled when a pinned Chromium engine is more important than
+download size. A single app can choose renderers for its Electrobun views while
+using the same main-process APIs.
 
-              <p>Hutch code signs and notarizes your application automatically when those options are enabled in `electrobun.config.ts`.</p>
+`<electrobun-webview>` creates a separately composited native browser view, not
+an iframe. `<electrobun-wgpu>` places a native GPU surface in the same layout.
+Electrobun synchronizes their bounds, visibility, masking, and input behavior
+with the host document.
 
-### MacOS
+## Distribution wrapper
 
-              <p>There is a prerequisite to register for an Apple Developer account and create an app id as well as download your code signing certificate. We'll have a guide that walks you through this process. There is no need to have any private keys in your code repo but you do need to set `codesigning` and `notarization` flags to `true` in your `electrobun.config` file and make some credentials available in your env.</p>
+A canary or production release wraps the full runnable app in a small native
+self-extractor. The payload is a Zstandard-compressed archive. On first launch,
+the wrapper verifies and extracts the application to its managed location, then
+starts the inner app.
 
-              <p>Hutch code signs and notarizes both your app bundle <strong>and</strong> the self-extracting bundle so your end-users can be confident that what they are installing is legitimately from you and has been scanned by Apple.</p>
+Hutch emits a DMG on macOS, a Setup ZIP on Windows, and a self-extracting setup
+archive on Linux. See
+[Bundling and Distribution](/electrobun/guides/bundling-and-distribution/) for
+the artifact layout.
 
-              <p>While code signing is generally very fast, notarization requires uploading a zip file to Apple's servers and waiting for them to scan and verify your app's code which typically takes about 1-2 minutes. The notarization is then stapled to your app bundle.</p>
+## Updates
 
-              <p>Because notarization can take time, in cases where a bug only exists on non-dev builds you can simply turn off code signing and/or notarization in your `electrobun.config` while debugging to speed up the build process.</p>
+The installed app compares its local hash with hosted update metadata. It first
+tries a binary patch from the installed hash to the current release, verifies
+the result, and replaces the bundle. If no valid patch path exists, it downloads
+the compressed full archive instead.
 
-              <p>Any notarization issues will be shown to you in the terminal so you can address them. This typically involves setting certain entitlements for your application so that your app declares what it uses to Apple and your end-users.</p>
+Static object storage is sufficient for update hosting. The application decides
+when to check, download, install, and relaunch through the
+[Updater API](/electrobun/apis/updater/).
 
-## Updating
+## Development output
 
-              <p>Electrobun has a <a href="/electrobun/apis/updater/">built-in update mechanism</a> that optimizes updates for file-size and efficiency.</p>
-
-              <Aside type="tip">
-                <strong>Info:</strong> Ship updates to your users as small as 14KB. This lets your ship often without paying huge storage and network fees. No server required, all you need is a static file host like S3 which you can put behind a CDN like Cloudfront. Most apps will fall well within AWS's free tier even if you ship updates often to many users.
-              </Aside>
-
-### How does it work
-
-              <p>Using the <a href="/electrobun/apis/updater/">Electrobun Updater api</a> you can check for updates and automatically download, and install them. The flow looks something like:</p>
-
-              <ol>
-                <li>Check the local version.json hash against the hosted update.json hash of the latest version.</li>
-                <li>If it's different download the tiny patch file that matches the hash you have (generated with BSDIFF) and apply it to the current bundle.</li>
-                <li>Generate a hash of the patched bundle. If it matches the latest hash then replace the running application with the latest version of the app and relaunch (you can control when with the api and let the user trigger this manually when they're ready)</li>
-                <li>If the hash does not match the latest look for another patch file and keep patching until it does.</li>
-                <li>If for some reason the algorithm can't patch its way to the latest version it will download a zlib compressed bundle from your static host and complete the update that way.</li>
-              </ol>
-
-              <Aside type="tip">
-                <strong>Info:</strong> For each non-dev build, Hutch generates a patch from the current hosted version to the newly built version.
-              </Aside>
-
-## CLI and development builds
-
-              <p>Add Electrobun to your project's `package.json` and run `hutch install`. Project scripts can invoke the CLI with `hutch electrobun`, using `electrobun.config.ts` to define how the app is built.</p>
-
-### Development Builds
-
-              <p>When building a `dev` build of your app instead of the optimized `launcher` binary, Hutch uses a special dev launcher that routes output from Cottontail, native main processes, and the native wrapper to your terminal.</p>
-
-              <p>Dev builds are not meant to be distributed, so Hutch does not generate release artifacts for dev builds.</p>
-
-### Distribution
-
-              <p>Hutch accepts `canary` and `stable` build environments for distribution builds. Both wrap and compress your application, apply configured signing and notarization, and create the release `artifacts` folder described in <a href="/electrobun/guides/bundling-and-distribution">Bundling &amp; Distribution</a>.</p>
+Dev builds skip distribution artifacts and route main-process, webview, and
+native diagnostics to the invoking terminal. System webviews and CEF both
+forward browser console output in development mode.

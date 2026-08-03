@@ -1,249 +1,167 @@
 ---
 title: "Hutch Commands"
+description: "Command reference for building and running Electrobun applications with Hutch."
 ---
-              
-              <p>Hutch provides Electrobun commands for initializing new projects and building, packaging, and distributing your applications for different environments.</p>
 
-## Installation
+Hutch is Electrobun 2.x's native build and workspace CLI. Install it globally,
+then run commands from the project root.
 
-              <p>Install Hutch globally, then use its Electrobun commands to create projects, install dependencies, and build your app. A generated project already includes Electrobun in its `package.json`:</p>
+## `hutch electrobun init`
 
-              
+Create a project from the current Electrobun template catalog.
+
 ```bash
-hutch install
-```
-
-
-## Commands
-
-### `hutch electrobun init`
-
-              <p>Initializes a new Electrobun project with starter templates.</p>
-
-#### Usage
-
-              
-```bash
-# Interactive template selection
+# Interactive project name and template selection
 hutch electrobun init
 
-# Direct template selection
-hutch electrobun init [template-name]
+# Select a template directly
+hutch electrobun init my-app --template=hello-world
+
+# Use the canary template catalog
+hutch electrobun init my-app --template=solid --channel=canary
+
+# Require an already cached catalog and template
+hutch electrobun init my-app --template=solid --offline
 ```
 
+Usage:
 
-#### Available Templates
+```text
+hutch electrobun init [project-name] [--template=name]
+  [--channel=production|canary] [--offline]
+```
 
-              <ul>
-                <li>`hello-world` - Basic single-window application</li>
-                <li>`photo-booth` - Camera app with photo capture functionality</li>
-                <li>`multitab-browser` - Multi-tabbed web browser</li>
-                <li>`zig-wgpu`, `rust-flock-wgpu`, `go-maze-wgpu`, and `odin-particles-wgpu` - Native main-process examples</li>
-              </ul>
+Without `--template`, Hutch displays an interactive arrow-key selector. The
+production and canary catalogs are published with their corresponding
+Electrobun releases.
 
-#### Examples
+## `hutch electrobun config`
 
-              
+Load `electrobun.config.ts` and print the normalized build configuration. This
+is useful for validating a dynamically constructed config without building.
+
 ```bash
-# Choose template interactively
-hutch electrobun init
-
-# Initialize with photo-booth template directly
-hutch electrobun init photo-booth
-
-# Initialize with multitab-browser template
-hutch electrobun init multitab-browser
+hutch electrobun config --env=dev
+hutch electrobun config --env=production
 ```
 
+## `hutch electrobun build`
 
-### `hutch electrobun build`
+Build the application for the current host platform and architecture.
 
-              <p>Builds and packages your Electrobun application according to `electrobun.config.ts`. Non-dev builds create signed and compressed distribution artifacts, update metadata, and patches when configured.</p>
-
-#### Usage
-
-              
-```
-hutch electrobun build [options]
-```
-
-
-#### Options
-
-              <table class="options-table">
-                <thead>
-                  <tr>
-                    <th>Option</th>
-                    <th>Description</th>
-                    <th>Values</th>
-                    <th>Default</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><code style="text-wrap:nowrap;">--env</code></td>
-                    <td>Build environment</td>
-                    <td>`dev`, `canary`, `stable`</td>
-                    <td>`dev`</td>
-                  </tr>
-                </tbody>
-              </table>
-
-              <p>Builds always target the current host platform and architecture. To build for multiple platforms, use CI runners for each OS/architecture (see <a href="/electrobun/guides/cross-platform-development">Cross-Platform Development</a>).</p>
-
-#### Examples
-
-              
 ```bash
-# Development build for current platform
-hutch electrobun build
-
-# Development build with environment flag
 hutch electrobun build --env=dev
-
-# Canary build
 hutch electrobun build --env=canary
-
-# Stable production build
-hutch electrobun build --env=stable
+hutch electrobun build --env=production
 ```
 
+| Environment | Result |
+| --- | --- |
+| `dev` | Runnable inner app bundle with terminal diagnostics; no distribution artifacts |
+| `canary` | Optimized canary app, wrapper, update metadata, and platform installer |
+| `production` | Optimized production app, wrapper, update metadata, and platform installer |
 
-### `hutch electrobun run`
+Canary app names include `-canary`. Production names are unsuffixed. Signing,
+notarization, patch generation, CEF, WGPU, and installer behavior come from
+`electrobun.config.ts`.
 
-              <p>Launches an already-built dev bundle. This is useful when you've already run `hutch electrobun build` and just want to relaunch the app without rebuilding.</p>
+Hutch does not cross-compile an Electrobun release. Run the command on native
+macOS, Windows, and Linux CI workers for a complete matrix.
 
-#### Usage
+## `hutch electrobun run`
 
-              
-```
-hutch electrobun run
-```
+Launch an existing application bundle for the selected environment without
+building it again:
 
-
-### `hutch electrobun dev`
-
-              <p>Builds your application in dev mode and then launches it. This is the primary command for day-to-day development — equivalent to running `hutch electrobun build --env=dev` followed by `hutch electrobun run`.</p>
-
-#### Usage
-
-              
-```
-hutch electrobun dev [options]
-```
-
-
-#### Options
-
-              <table class="options-table">
-                <thead>
-                  <tr>
-                    <th>Option</th>
-                    <th>Description</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr>
-                    <td><code style="text-wrap:nowrap;">--watch</code></td>
-                    <td>Watch source files for changes and automatically rebuild + relaunch</td>
-                  </tr>
-                </tbody>
-              </table>
-
-#### Examples
-
-              
 ```bash
-# Build and launch in dev mode
-hutch electrobun dev
+hutch electrobun run --env=dev
+```
 
-# Build, launch, and watch for changes
+Main-process inspection is available for Cottontail and Bun:
+
+```bash
+hutch electrobun run --inspect
+hutch electrobun run --inspect=9229
+hutch electrobun run --inspect-wait=127.0.0.1:9229
+hutch electrobun run --inspect-brk=9229
+```
+
+The CLI flag overrides `ELECTROBUN_INSPECT`, which overrides
+`runtime.mainProcessInspector` in the config. Pass `--no-inspect` to disable
+configured inspection for one invocation.
+
+## `hutch electrobun dev`
+
+Build a dev bundle and launch it:
+
+```bash
+hutch electrobun dev
 hutch electrobun dev --watch
 ```
 
+With `--watch`, Hutch rebuilds and relaunches after changes to:
 
-#### Watch Mode
+- the selected main-process entrypoint directory
+- view entrypoint directories
+- sources in `build.copy`
+- additional paths in `build.watch`
 
-              <p>When using `--watch`, Electrobun automatically watches your source directories for file changes:</p>
+Use `build.watchIgnore` to exclude generated output. Changes are debounced, and
+a failed build leaves the watcher running for the next edit.
 
-              <ul>
-                <li>The directory containing your `build.cottontail.entrypoint`</li>
-                <li>Directories containing each view entrypoint</li>
-                <li>Source paths from `build.copy`</li>
-                <li>Any additional paths specified in `build.watch`</li>
-              </ul>
+## Project scripts
 
-              <p>When a file change is detected, the running app is killed, a fresh build runs (including all lifecycle hooks like `postBuild`), and the app is relaunched. File watchers are paused during builds to avoid false triggers from build output.</p>
+A generated `package.json` generally exposes the common commands:
 
-              <p>Changes are debounced (300ms) so rapid saves only trigger a single rebuild. If a build fails, the error is logged and the watcher keeps running — the app will rebuild on the next file change.</p>
-
-              <p>Use `build.watchIgnore` in your config to exclude files from triggering rebuilds (e.g., generated assets). See <a href="/electrobun/apis/cli/build-configuration">Build Configuration</a> for details.</p>
-
-              <p>Press <kbd>Ctrl+C</kbd> to stop the app and exit watch mode.</p>
-
-## Build Environments
-
-### Development (`dev`)
-
-              <ul>
-                <li>Outputs logs and errors to terminal</li>
-                <li>No code signing or notarization</li>
-                <li>Creates build in `build/` folder</li>
-                <li>No artifacts generated</li>
-                <li>Fast iteration for testing</li>
-              </ul>
-
-### Canary
-
-              <ul>
-                <li>Pre-release/beta builds</li>
-                <li>Optional code signing and notarization</li>
-                <li>Generates distribution artifacts</li>
-                <li>Creates update manifests for auto-updates</li>
-                <li>Suitable for testing with limited users</li>
-              </ul>
-
-### Stable
-
-              <ul>
-                <li>Production-ready builds</li>
-                <li>Full code signing and notarization (if configured)</li>
-                <li>Optimized and compressed artifacts</li>
-                <li>Ready for distribution to end users</li>
-                <li>Generates all update files</li>
-              </ul>
-
-## Build Script Examples
-
-### Basic Setup
-
-
-```javascript
-// package.json
+```json
 {
   "scripts": {
-    "start": "hutch electrobun run",
-    "dev": "hutch electrobun dev",
-    "dev:watch": "hutch electrobun dev --watch",
+    "start": "hutch electrobun dev",
+    "dev": "hutch electrobun dev --watch",
     "build:canary": "hutch electrobun build --env=canary",
-    "build:stable": "hutch electrobun build --env=stable"
+    "build": "hutch electrobun build --env=production"
   }
 }
 ```
 
+Run them through Hutch:
 
-### CI Build Scripts
-
-              <p>For multi-platform distribution, run the same Hutch build command on each platform's CI runner:</p>
-
-              
-```javascript
-// package.json
-{
-  "scripts": {
-    "build:dev": "hutch electrobun build",
-    "build:canary": "hutch electrobun build --env=canary",
-    "build:stable": "hutch electrobun build --env=stable"
-  }
-}
+```bash
+hutch run dev
+hutch run build:canary
+hutch run build
 ```
+
+Hutch resolves scripts from `dash.config.ts` first, then `package.json`.
+
+## Package commands
+
+Hutch also owns the package-manager commands used by Electrobun projects:
+
+```bash
+hutch install
+hutch add <package>
+hutch remove <package>
+hutch update
+hutch x <package-or-bin> [args...]
+```
+
+`hutch x` runs a local package binary when available and otherwise installs it
+into Hutch's package cache for the invocation.
+
+## Lifecycle hook environment
+
+Build hooks receive:
+
+| Variable | Value |
+| --- | --- |
+| `ELECTROBUN_BUILD_ENV` | `dev`, `canary`, or `production` |
+| `ELECTROBUN_OS` | `macos`, `win`, or `linux` |
+| `ELECTROBUN_ARCH` | `arm64` or `x64` |
+| `ELECTROBUN_BUILD_DIR` | Build output path |
+| `ELECTROBUN_ARTIFACT_DIR` | Distribution artifact path |
+| `ELECTROBUN_APP_NAME` | Environment-specific app name |
+| `ELECTROBUN_APP_VERSION` | Version from the config |
+| `ELECTROBUN_APP_IDENTIFIER` | Application identifier |
+
+`postWrap` also receives `ELECTROBUN_WRAPPER_BUNDLE_PATH`.

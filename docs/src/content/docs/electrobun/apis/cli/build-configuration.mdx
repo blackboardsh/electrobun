@@ -603,7 +603,7 @@ export default {
         postBuild: "./buildScript.ts",
     },
     release: {
-        baseUrl: "https://static.electrobun.dev/playground/",
+        baseUrl: "https://releases.example.com/my-app/",
     },
 } satisfies ElectrobunConfig;
 ```
@@ -865,7 +865,7 @@ const config: ElectrobunConfig = {
                 <tbody>
                   <tr>
                     <td>`ELECTROBUN_BUILD_ENV`</td>
-                    <td>Build environment: `dev`, `canary`, or `stable`</td>
+                    <td>Build environment: `dev`, `canary`, or `production`</td>
                   </tr>
                   <tr>
                     <td>`ELECTROBUN_OS`</td>
@@ -948,8 +948,8 @@ import { existsSync } from "fs";
 
 const buildEnv = process.env.ELECTROBUN_BUILD_ENV;
 
-// Ensure required environment variables are set for stable builds
-if (buildEnv === "stable") {
+// Ensure required environment variables are set for production builds
+if (buildEnv === "production") {
   const requiredVars = [
     "ELECTROBUN_DEVELOPER_ID",
     "ELECTROBUN_APPLEID",
@@ -959,7 +959,7 @@ if (buildEnv === "stable") {
 
   const missing = requiredVars.filter(v => !process.env[v]);
   if (missing.length > 0) {
-    console.error("Missing required environment variables for stable build:");
+    console.error("Missing required environment variables for production build:");
     missing.forEach(v => console.error(`  - ${v}`));
     process.exit(1);
   }
@@ -990,13 +990,13 @@ const artifactDir = process.env.ELECTROBUN_ARTIFACT_DIR;
 console.log(`Build complete: ${buildEnv} v${version}`);
 console.log(`Artifacts: ${artifactDir}`);
 
-// Send Slack notification for stable builds
-if (buildEnv === "stable" && process.env.SLACK_WEBHOOK_URL) {
+// Send Slack notification for production builds
+if (buildEnv === "production" && process.env.SLACK_WEBHOOK_URL) {
   await fetch(process.env.SLACK_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      text: `New stable release v${version} built successfully!`,
+      text: `New production release v${version} built successfully!`,
     }),
   });
 }

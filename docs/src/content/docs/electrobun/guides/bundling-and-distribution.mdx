@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
     <p>Continuing on from the <a href="/electrobun/guides/creating-ui">Creating UI</a> guide.</p>
   </Aside>
 
-  <p>Add `build:canary` and `build:stable` scripts to `package.json` to get your app ready for distribution:</p>
+  <p>Add `build:canary` and `build:production` scripts to `package.json` to get your app ready for distribution:</p>
 
   
 ```json
@@ -21,7 +21,7 @@ import { Aside } from "@astrojs/starlight/components";
     "typescript": "^5.0.0"
   },
   "dependencies": {
-    "electrobun": "^0.0.1"
+    "electrobun": "latest"
   },
   "scripts": {
     "start": "hutch electrobun run",
@@ -29,7 +29,7 @@ import { Aside } from "@astrojs/starlight/components";
     "dev:watch": "hutch electrobun dev --watch",
     "build:dev": "hutch electrobun build",
     "build:canary": "hutch electrobun build --env=canary",
-    "build:stable": "hutch electrobun build --env=stable"
+    "build:production": "hutch electrobun build --env=production"
   }
 }
 ```
@@ -43,7 +43,7 @@ hutch run build:canary
 
 # or
 
-hutch run build:stable
+hutch run build:production
 ```
 
 
@@ -146,7 +146,7 @@ artifacts/
 
   <p>App names are <strong>sanitized</strong> by removing spaces. For example, an app named "My Cool App" becomes "MyCoolApp" in all artifact filenames.</p>
 
-  <p>For <strong>stable</strong> builds, channel suffixes are omitted. For other channels (canary, beta, etc.), the channel is appended.</p>
+  <p>For <strong>production</strong> builds, channel suffixes are omitted. Canary builds include a `-canary` suffix.</p>
 
   <p>Windows and Linux installers are distributed as archives (`.zip` and `.tar.gz` respectively). The archive filenames are sanitized (no spaces), but the installer files inside the archives preserve spaces for a user-friendly experience.</p>
 
@@ -160,9 +160,9 @@ canary-macos-arm64-MyCoolApp-canary.dmg           # Installer DMG for first-time
 canary-macos-arm64-MyCoolApp-canary.app.tar.zst   # Compressed app bundle for updates
 canary-macos-arm64-a1b2c3d4.patch                 # Incremental patch from previous version
 
-# Stable (no channel suffix):
-stable-macos-arm64-MyCoolApp.dmg
-stable-macos-arm64-MyCoolApp.app.tar.zst
+# Production (no app-name channel suffix):
+production-macos-arm64-MyCoolApp.dmg
+production-macos-arm64-MyCoolApp.app.tar.zst
 ```
 
 
@@ -176,9 +176,9 @@ canary-win-x64-MyCoolApp-Setup-canary.zip        # Zip containing the Setup .exe
 canary-win-x64-MyCoolApp-canary.tar.zst          # Compressed app for updates
 canary-win-x64-a1b2c3d4.patch                    # Incremental patch
 
-# Stable:
-stable-win-x64-MyCoolApp-Setup.zip
-stable-win-x64-MyCoolApp.tar.zst
+# Production:
+production-win-x64-MyCoolApp-Setup.zip
+production-win-x64-MyCoolApp.tar.zst
 ```
 
 
@@ -192,9 +192,9 @@ canary-linux-x64-MyCoolAppSetup-canary.tar.gz       # tar.gz containing the self
 canary-linux-x64-MyCoolApp-canary.tar.zst           # Compressed app for updates
 canary-linux-x64-a1b2c3d4.patch                     # Incremental patch
 
-# Stable:
-stable-linux-x64-MyCoolAppSetup.tar.gz
-stable-linux-x64-MyCoolApp.tar.zst
+# Production:
+production-linux-x64-MyCoolAppSetup.tar.gz
+production-linux-x64-MyCoolApp.tar.zst
 ```
 
 

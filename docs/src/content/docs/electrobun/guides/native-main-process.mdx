@@ -1,68 +1,143 @@
 ---
-title: "Native Main Processes (Zig, Rust, Go, Odin)"
+title: "Main Process Runtimes"
+description: "Choose Cottontail, Bun, Zig, Rust, Go, or Odin for an Electrobun main process."
 ---
+import { Aside } from "@astrojs/starlight/components";
 
-<p>By default an Electrobun app's TypeScript main process runs in Cottontail. Electrobun can instead compile a native main process written in Zig, Rust, Go, or Odin. The native binary talks to the same native wrapper layer as Cottontail, so windows, webviews, trays, menus, RPC, and the updater all work the same way.</p>
+Electrobun exposes the same native core to six main-process runtimes. Hutch is
+the build tool for every option.
 
-## Choosing a language
+| Runtime | `build.mainProcess` | Default entrypoint | Toolchain |
+| --- | --- | --- | --- |
+| Cottontail | `"cottontail"` | `src/bun/index.ts` | Downloaded runtime |
+| Bun | `"bun"` | `src/bun/index.ts` | Downloaded runtime |
+| Zig | `"zig"` | `src/zig/main.zig` | Zig 0.13.0 |
+| Rust | `"rust"` | `src/rust/main.rs` | Rust 1.88.0 |
+| Go | `"go"` | `src/go/main.go` | Go 1.26.4 |
+| Odin | `"odin"` | `src/odin/main.odin` | Odin dev-2026-07a |
 
-Set `build.mainProcess` in `electrobun.config.ts` and provide the matching entrypoint:
+## Cottontail
+
+Cottontail is the default. It executes TypeScript and supports the Node.js and
+Bun-compatible APIs used by Electrobun applications.
 
 ```ts
 export default {
   build: {
-    mainProcess: "odin", // "cottontail" | "zig" | "rust" | "go" | "odin"
-    odin: {
-      entrypoint: "src/odin/main.odin",
-    },
+    mainProcess: "cottontail",
+    cottontail: { entrypoint: "src/bun/index.ts" },
   },
 };
 ```
 
-Each language's toolchain is vendored automatically by Electrobun at a pinned version — builds never use a system-installed compiler. Defaults for each entrypoint:
+```ts
+import { BrowserWindow } from "electrobun/bun";
 
-| Language | Config block | Default entrypoint |
-| -------- | ------------ | ------------------ |
-| Cottontail | `build.cottontail` | `src/bun/index.ts` |
-| Zig        | `build.zig`        | `src/zig/main.zig` |
-| Rust       | `build.rust`       | `src/rust/main.rs` |
-| Go         | `build.go`         | `src/go/main.go`   |
-| Odin       | `build.odin`       | `src/odin/main.odin` |
-
-## Shared limitations
-
-- **No cross-compilation yet.** Native main processes (Rust, Go, Odin) build for the host platform and architecture only. Build on each target platform (or its VM/CI runner).
-- **Windows targets are x64.** This matches Electrobun's current Windows target policy.
-
-## Odin
-
-Odin main processes import the SDK through the `electrobun_sdk` collection, which Hutch wires up automatically:
-
-```odin
-package main
-
-import electrobun "electrobun_sdk:electrobun"
+new BrowserWindow({
+  title: "Hello Electrobun",
+  url: "views://mainview/index.html",
+});
 ```
 
-The entrypoint may be a single `.odin` file or a package directory; a file entrypoint compiles its containing directory as the root package.
+## Bun
 
-### Odin-specific limitations
+Choose Bun only when the application intentionally depends on the actual Bun
+runtime. Hutch still installs packages, bundles source, and packages the app.
 
-Odin support is functional but intentionally realistic about where the Odin toolchain is today:
+```ts
+export default {
+  build: {
+    mainProcess: "bun",
+    bun: { entrypoint: "src/bun/index.ts" },
+  },
+};
+```
 
-- **Pre-1.0 toolchain.** Odin ships monthly `dev-YYYY-MM` releases that may include breaking changes. Electrobun pins an exact release (see `ODIN_VERSION` in the electrobun package) and the SDK is only guaranteed to compile against that release. Don't expect arbitrary Odin versions to work.
-- **Windows requires MSVC Build Tools.** Unlike Zig (which bundles its own linker), the Odin compiler on Windows links with MSVC's `link.exe` and needs the Windows SDK libraries. Install <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/">Visual Studio Build Tools</a> (the "Desktop development with C++" workload) before building an Odin main process on Windows. This is the same requirement Rust's MSVC target has.
-- **No Windows ARM64.** Odin does not publish windows-arm64 prebuilt toolchains, so Odin main processes are x64-only on Windows (Electrobun's Windows builds are currently x64-only anyway).
-- **macOS/Linux need a system linker.** On macOS the Xcode Command Line Tools must be installed; on Linux, `clang`. Both are already required to develop Electrobun apps on those platforms, so in practice this adds nothing new.
-- **Only Odin `core:`/`base:` libraries are supported in the SDK.** Your own code can use anything from Odin's `core:` and `vendor:` collections, but `vendor:` libraries that need extra native linking (e.g. raylib) may require flags Electrobun's build doesn't currently pass.
+The TypeScript Electrobun SDK remains `electrobun/bun` for both JavaScript
+runtimes.
 
-## Templates
+## Native main processes
 
-Ready-made starters exist for each native language:
+Zig, Rust, Go, and Odin applications load `ElectrobunCore` through their SDK,
+create native windows and views, and run the platform event loop. Their config
+only changes the runtime and entrypoint:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Native App",
+    identifier: "dev.example.native-app",
+    version: "0.0.1",
+  },
+  build: {
+    mainProcess: "zig",
+    zig: { entrypoint: "src/zig/main.zig" },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Use the matching block for another language:
+
+```ts
+build: {
+  mainProcess: "rust",
+  rust: { entrypoint: "src/rust/main.rs" },
+}
+```
+
+```ts
+build: {
+  mainProcess: "go",
+  go: { entrypoint: "src/go/main.go" },
+}
+```
+
+```ts
+build: {
+  mainProcess: "odin",
+  odin: { entrypoint: "src/odin/main.odin" },
+}
+```
+
+The generated native templates contain complete SDK initialization, window,
+webview, RPC, and event-loop examples:
 
 ```bash
-hutch electrobun init zig-wgpu
-hutch electrobun init rust-flock-wgpu
-hutch electrobun init go-maze-wgpu
-hutch electrobun init odin-particles-wgpu
+hutch electrobun init zig-app --template=zig-wgpu
+hutch electrobun init rust-app --template=rust-flock-wgpu
+hutch electrobun init go-app --template=go-maze-wgpu
+hutch electrobun init odin-app --template=odin-particles-wgpu
 ```
+
+## Toolchain resolution
+
+Hutch checks for a system compiler at Electrobun's pinned version. If no exact
+match is available, it downloads the pinned toolchain into
+`~/.dash/toolchains/<language>/<version>/<platform>` and reuses it across
+projects. The compiler is not bundled into the finished application.
+
+Hutch also downloads the matching Electrobun native platform artifact and
+caches it under `~/.dash/products/electrobun`.
+
+## Native limitations
+
+- Native main processes currently build for the host operating system and
+  architecture. Use native CI runners for a release matrix.
+- Windows targets are x64. Windows on ARM runs the x64 build through emulation.
+- Windows Rust and Odin builds require Visual Studio Build Tools and the Windows
+  SDK.
+- macOS needs Xcode Command Line Tools. Linux needs the platform compiler and
+  linker packages documented in [Cross-Platform Development](/electrobun/guides/cross-platform-development/).
+- Odin is pre-1.0. Electrobun guarantees the SDK against its pinned Odin release,
+  not arbitrary Odin versions.
+
+<Aside type="note">
+The TypeScript SDK has the broadest high-level API. Native SDKs mirror the
+underlying core contract and may require more explicit lifecycle and callback
+management.
+</Aside>

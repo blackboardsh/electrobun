@@ -1,0 +1,111 @@
+---
+title: "Hutch"
+description: "Install and use Electrobun's native build and workspace CLI."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+Hutch is the build and workspace CLI for Electrobun 2.x. It installs packages,
+runs project scripts, bundles TypeScript, acquires pinned toolchains and
+Electrobun platform artifacts, and packages applications for distribution.
+Cottontail is a separate runtime selected by Hutch when JavaScript execution is
+needed.
+
+## Install Hutch
+
+Install the current production channel on macOS or Linux:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+Install the canary channel alongside it as `hutch-canary`:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh |
+  sh -s -- --channel canary
+```
+
+On Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
+
+Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
+accept an exact semantic version or build revision. Production and canary are
+installed side by side under `~/.dash/products`, with launchers in
+`~/.dash/bin`.
+
+## Everyday commands
+
+```bash
+# Create a project with an interactive template picker
+hutch electrobun init
+
+# Install dependencies and maintain bun.lock
+hutch install
+
+# Run package.json or dash.config.ts scripts
+hutch run dev
+
+# Build and launch an Electrobun app
+hutch electrobun dev --watch
+
+# Execute a package binary, like npx or bunx
+hutch x --package=typescript tsc --version
+
+# Create distributable builds
+hutch electrobun build --env=canary
+hutch electrobun build --env=production
+```
+
+`hutch run <name>` looks in `dash.config.ts` first and then in
+`package.json`. `hutch <name>` is shorthand when the name is unambiguous.
+
+## Versions and updates
+
+The global launchers track independent production and canary channels. Hutch
+engines and Cottontail runtimes are stored side by side, so one project can pin
+an older release without replacing your global selection.
+
+```bash
+hutch self version
+hutch self update
+hutch cottontail version
+hutch cottontail update
+```
+
+Interactive use checks for updates periodically. CI and other non-interactive
+invocations do not prompt.
+
+## Pin a project
+
+Place an optional pragma on the first line of `dash.config.ts`:
+
+```ts
+// @dash cli=production cottontail=production
+```
+
+Selectors may be `production`, `canary`, an exact semantic version, or
+`build:<full-git-revision>`:
+
+```ts
+// @dash cli=0.5.0-canary.6 cottontail=0.2.3
+```
+
+The pragma selects versions only for that project. It never rewrites the
+globally installed channel.
+
+## Toolchains and caches
+
+For Zig, Rust, Go, and Odin main processes, Hutch first accepts a compatible
+system compiler at Electrobun's pinned version. Otherwise it downloads that
+exact toolchain into `~/.dash/toolchains` and shares it across projects.
+Electrobun native platform artifacts are cached under
+`~/.dash/products/electrobun`.
+
+<Aside type="note">
+Hutch is build-time tooling. The resulting application contains its selected
+main process and Electrobun runtime files; it does not require the user's global
+Hutch installation.
+</Aside>

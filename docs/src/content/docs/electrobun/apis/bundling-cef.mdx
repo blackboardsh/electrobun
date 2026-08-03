@@ -17,7 +17,7 @@ import { type ElectrobunConfig } from "electrobun";
 
 export const config: ElectrobunConfig = {
   build: {
-    macos: {
+    mac: {
       bundleCEF: true
     },
     win: {
@@ -43,7 +43,7 @@ export const config: ElectrobunConfig = {
               </Aside>
 
 ### Bundle Size Impact
-              <p>When bundling CEF, your application's initial self-extracting bundle will increase to approximately <strong>100MB</strong> compared to ~14MB with system webviews. However, incremental updates remain small (as little as 14KB) thanks to Electrobun's differential update system.</p>
+              <p>Bundling CEF materially increases the initial download because the application carries Chromium and its resources. Incremental releases can still use Electrobun's binary-diff update path.</p>
 
 ## Using CEF Renderer
 
@@ -130,7 +130,7 @@ const systemWindow = new BrowserWindow({
               <p>Consider using system webviews when you want:</p>
 
               <ul>
-                <li><strong>Smallest possible bundle size</strong> (~14MB vs ~100MB)</li>
+                <li><strong>Smallest possible bundle size</strong></li>
                 <li><strong>Native platform integration</strong> and appearance</li>
                 <li><strong>Lower memory usage</strong> for simple applications</li>
                 <li><strong>Faster initial download</strong> for users</li>
@@ -147,7 +147,7 @@ import { type ElectrobunConfig } from "electrobun";
 
 export const config: ElectrobunConfig = {
   build: {
-    macos: {
+    mac: {
       bundleCEF: false  // Use system WebKit on macOS
     },
     win: {
@@ -229,7 +229,7 @@ export default {
                 <li><strong>Distant major versions</strong> (e.g., 130.x to 145.x): Higher risk of incompatibility. The further apart the versions, the more likely there are C API changes that affect Electrobun's integration.</li>
               </ul>
 
-              <p>To see which CEF version your Electrobun release was built and tested against, check the `CEF_VERSION` constant in <a href="https://github.com/blackboardsh/electrobun/blob/main/package/build.ts" target="_blank" rel="noopener">package/build.ts</a> for your release tag.</p>
+              <p>To see which CEF version your Electrobun release was built and tested against, check the `CEF_VERSION` constant in <a href="https://github.com/blackboardsh/electrobun/blob/main/package/src/shared/cef-version.ts" target="_blank" rel="noopener">package/src/shared/cef-version.ts</a> for your release tag.</p>
 
 ### Caching
 
