@@ -46,7 +46,7 @@ export default defineConfig({
             {
               label: "Main Process APIs",
               items: [
-                { label: "Main Process API", link: "/electrobun/apis/bun/" },
+                { label: "Main Process API", link: "/electrobun/apis/main/" },
                 { label: "BrowserWindow", link: "/electrobun/apis/browser-window/" },
                 { label: "BrowserView", link: "/electrobun/apis/browser-view/" },
                 { label: "WebGPU", link: "/electrobun/apis/webgpu/" },
@@ -86,7 +86,7 @@ export default defineConfig({
               items: [
                 { label: "All releases", link: "/electrobun/guides/changelog/" },
                 { label: "Unreleased", link: "/electrobun/guides/changelog/unreleased/" },
-                { label: "v2.x Preview", link: "/electrobun/guides/changelog/v2-x/" },
+                { label: "v2.x", link: "/electrobun/guides/changelog/v2-x/" },
                 { label: "v1.18.1", link: "/electrobun/guides/changelog/v1-18-1/" },
                 { label: "v1.18.0", link: "/electrobun/guides/changelog/v1-18-0/" },
                 { label: "v1.16.0", link: "/electrobun/guides/changelog/v1-16-0/" },

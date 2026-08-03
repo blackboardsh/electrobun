@@ -23,8 +23,8 @@ describe("native window visibility contract", () => {
 
 	it("exports one core ABI symbol and loads it in every SDK", () => {
 		const core = read("core/main.zig");
-		const bunWindow = read("sdks/bun/core/BrowserWindow.ts");
-		const bunNative = read("sdks/bun/proc/native.ts");
+		const bunWindow = read("sdks/main/core/BrowserWindow.ts");
+		const bunNative = read("sdks/main/proc/native.ts");
 		const zig = read("sdks/zig/electrobun.zig");
 		const rust = read("sdks/rust/electrobun.rs");
 		const go = read("sdks/go/electrobun.go");

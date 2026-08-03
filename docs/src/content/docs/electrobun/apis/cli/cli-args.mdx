@@ -28,12 +28,12 @@ Usage:
 
 ```text
 hutch electrobun init [project-name] [--template=name]
-  [--channel=production|canary] [--offline]
+  [--channel=production|stable|canary] [--offline]
 ```
 
 Without `--template`, Hutch displays an interactive arrow-key selector. The
 production and canary catalogs are published with their corresponding
-Electrobun releases.
+Electrobun releases. `stable` selects the production catalog.
 
 ## `hutch electrobun config`
 
@@ -64,6 +64,9 @@ hutch electrobun build --env=production
 Canary app names include `-canary`. Production names are unsuffixed. Signing,
 notarization, patch generation, CEF, WGPU, and installer behavior come from
 `electrobun.config.ts`.
+
+`--env=stable` is supported as an alias for `--env=production`. Hutch emits the
+canonical `production` value in lifecycle and release metadata.
 
 Hutch does not cross-compile an Electrobun release. Run the command on native
 macOS, Windows, and Linux CI workers for a complete matrix.

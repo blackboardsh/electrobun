@@ -7,7 +7,7 @@ const nativeWrapper = readFileSync(
 	"utf8",
 );
 const browserView = readFileSync(
-	join(import.meta.dirname, "../sdks/bun/core/BrowserView.ts"),
+	join(import.meta.dirname, "../sdks/main/core/BrowserView.ts"),
 	"utf8",
 );
 const packageBuild = readFileSync(

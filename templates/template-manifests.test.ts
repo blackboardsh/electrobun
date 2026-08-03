@@ -24,6 +24,22 @@ function readManifest(templateName: string): TemplateManifest {
 	) as TemplateManifest;
 }
 
+function collectTemplateTextFiles(directory: string): string[] {
+	const files: string[] = [];
+	for (const entry of readdirSync(directory, { withFileTypes: true })) {
+		if (["build", "dist", "node_modules", "vendors"].includes(entry.name)) {
+			continue;
+		}
+		const path = join(directory, entry.name);
+		if (entry.isDirectory()) {
+			files.push(...collectTemplateTextFiles(path));
+		} else if (/\.(?:[cm]?[jt]sx?|md|txt)$/.test(entry.name)) {
+			files.push(path);
+		}
+	}
+	return files;
+}
+
 describe("Electrobun template build scripts", () => {
 	test("every template exposes a production build through hutch run build", () => {
 		const invalidScripts: string[] = [];
@@ -59,10 +75,25 @@ describe("Electrobun template build scripts", () => {
 				invalidDocs.push(`${templateName}: uses bun run build`);
 			}
 			if (readme.includes("hutch electrobun build --env=stable")) {
-				invalidDocs.push(`${templateName}: uses the retired stable environment`);
+				invalidDocs.push(`${templateName}: uses the non-canonical stable alias`);
 			}
 		}
 
 		expect(invalidDocs).toEqual([]);
+	});
+
+	test("TypeScript templates use the runtime-neutral main SDK namespace", () => {
+		const legacyImports: string[] = [];
+
+		for (const templateName of templateNames) {
+			const templateRoot = join(templatesRoot, templateName);
+			for (const file of collectTemplateTextFiles(templateRoot)) {
+				if (readFileSync(file, "utf8").includes("electrobun/bun")) {
+					legacyImports.push(file.slice(templatesRoot.length + 1));
+				}
+			}
+		}
+
+		expect(legacyImports).toEqual([]);
 	});
 });

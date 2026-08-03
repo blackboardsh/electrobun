@@ -1,0 +1,49 @@
+---
+title: "Main Process API"
+description: "Import Electrobun's TypeScript main-process SDK."
+---
+
+The main-process SDK manages application lifecycle, windows, native menus,
+updates, and communication with webviews. Cottontail is the default runtime;
+`electrobun/main` works with both Cottontail and Bun main processes.
+
+Named imports are recommended:
+
+```ts
+import {
+  BrowserWindow,
+  ApplicationMenu,
+  Utils,
+} from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "My app",
+  url: "views://mainview/index.html",
+});
+
+ApplicationMenu.setApplicationMenu([
+  { label: "File", submenu: [{ role: "quit" }] },
+]);
+
+Utils.showNotification({ title: "Application started" });
+void win;
+```
+
+A default namespace export is also available:
+
+```ts
+import Electrobun from "electrobun/main";
+
+const win = new Electrobun.BrowserWindow({
+  title: "My app",
+  url: "views://mainview/index.html",
+});
+
+void win;
+```
+
+The package root, `electrobun`, currently resolves to the same main-process SDK.
+Use `electrobun/view` inside browser bundles.
+
+The former `electrobun/bun` namespace remains available as a deprecated alias
+for `electrobun/main` so existing 1.x applications can migrate incrementally.

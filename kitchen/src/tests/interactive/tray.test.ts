@@ -1,7 +1,7 @@
 // Interactive Tray Tests - Playground for exploring tray functionality
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow, Tray } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Tray } from "electrobun/main";
 
 export const trayTests = [
   defineTest({

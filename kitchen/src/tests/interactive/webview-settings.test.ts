@@ -1,7 +1,7 @@
 // Interactive Webview Settings Tests - Playground for webview tag initial settings
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 export const webviewSettingsTests = [
   defineTest({

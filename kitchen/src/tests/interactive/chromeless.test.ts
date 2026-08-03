@@ -1,7 +1,7 @@
 // Interactive Chromeless/Transparent Window Tests
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 export const chromelessTests = [
   defineTest({

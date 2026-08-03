@@ -1,8 +1,8 @@
 // Interactive Menu Tests - Playgrounds for Application Menu and Context Menu
 
 import { defineTest } from "../../test-framework/types";
-import { ApplicationMenu, ContextMenu, BrowserView, BrowserWindow } from "electrobun/bun";
-import Electrobun from "electrobun/bun";
+import { ApplicationMenu, ContextMenu, BrowserView, BrowserWindow } from "electrobun/main";
+import Electrobun from "electrobun/main";
 
 export const menuTests = [
   defineTest({

@@ -1,6 +1,6 @@
 // CEF Origin Private File System (OPFS) integration regression.
 
-import { BrowserView, BuildConfig } from "electrobun/bun";
+import { BrowserView, BuildConfig } from "electrobun/main";
 import { defineTest, expect } from "../test-framework/types";
 
 type OpfsOperation =

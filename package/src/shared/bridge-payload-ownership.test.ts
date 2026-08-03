@@ -16,7 +16,7 @@ function between(source: string, start: string, end: string): string {
 describe("bridge callback payload ownership", () => {
 	it("copies asynchronous payloads in core and releases them explicitly", () => {
 		const core = read("core/main.zig");
-		const runtime = read("sdks/bun/proc/native.ts");
+		const runtime = read("sdks/main/proc/native.ts");
 
 		expect(core).toContain("dispatchRuntimePostMessage");
 		expect(core).toContain("releaseRuntimeCallbackPayload");

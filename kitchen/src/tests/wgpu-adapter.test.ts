@@ -1,5 +1,5 @@
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, WGPU, webgpu } from "electrobun/bun";
+import { GpuWindow, WGPU, webgpu } from "electrobun/main";
 
 const WGPUNative = WGPU.native;
 

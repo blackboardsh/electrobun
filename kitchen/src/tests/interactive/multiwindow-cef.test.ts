@@ -2,7 +2,7 @@
 // Tests that multiple CEF windows with OOPIFs load correctly without mouse movement
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 export const multiwindowCefTests = [
   defineTest({

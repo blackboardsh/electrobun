@@ -75,7 +75,7 @@ export default {
 Handle the resulting URL in the main process:
 
 ```typescript
-import Electrobun from "electrobun/bun";
+import Electrobun from "electrobun/main";
 
 Electrobun.events.on("open-url", (event) => {
   const url = new URL(event.data.url);
@@ -111,7 +111,7 @@ export default {
 Opened files arrive through `open-url` as `file:` URLs.
 
 ```typescript
-import Electrobun from "electrobun/bun";
+import Electrobun from "electrobun/main";
 
 Electrobun.events.on("open-url", (event) => {
   const url = new URL(event.data.url);
@@ -412,7 +412,7 @@ export default {
 ```
 
 ```typescript
-import { BuildConfig } from "electrobun/bun";
+import { BuildConfig } from "electrobun/main";
 
 const config = await BuildConfig.get();
 console.log(config.runtime?.serviceEndpoint);

@@ -1,14 +1,5 @@
 ---
 title: "Unreleased"
 ---
-              <p>Notes for the next production release will appear here as work lands.</p>
 
-## Odin main process support
-
-<p>Odin joins Zig, Rust, and Go as a native main-process language (<code>build.mainProcess: "odin"</code>). Hutch uses Electrobun's pinned Odin release, the SDK mirrors the Zig SDK's API, and the kitchen sink test suite runs against an Odin main process. A new <code>odin-particles-wgpu</code> template showcases a data-oriented particle simulation built on Odin's <code>#soa</code> arrays rendered to a native WGPU surface.</p>
-
-<p>Platform caveats (see the Native Main Processes guide): Windows builds are x64-only and require Visual Studio Build Tools; the pinned Odin release is pre-1.0; no cross-compilation yet.</p>
-
-## Windows Unicode profile paths
-
-<p>WebView2 user-data folders and CEF root and partition caches now use Windows wide-character filesystem APIs. Apps installed or launched by Windows users whose profile paths contain CJK, Cyrillic, accented, or other non-ASCII characters retain the exact path instead of passing it through the active ANSI code page.</p>
+Notes for the next production release will appear here as work lands.

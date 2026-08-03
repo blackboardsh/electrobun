@@ -55,8 +55,8 @@ describe("published package dependency contract", () => {
 				'export const preloadScript = "";\nexport const preloadScriptSandboxed = "";\n',
 			);
 			cpSync(
-				join(packageDir, "src", "sdks", "bun"),
-				join(publishedApi, "sdks", "bun"),
+				join(packageDir, "src", "sdks", "main"),
+				join(publishedApi, "sdks", "main"),
 				{ recursive: true },
 			);
 
@@ -73,6 +73,11 @@ describe("published package dependency contract", () => {
 				consumerPath,
 				[
 					'import { three, type ElectrobunConfig } from "electrobun";',
+					'import type { BrowserWindow as MainBrowserWindow } from "electrobun/main";',
+					'import type { BrowserWindow as LegacyBrowserWindow } from "electrobun/bun";',
+					"declare const mainWindow: MainBrowserWindow;",
+					"const legacyWindow: LegacyBrowserWindow = mainWindow;",
+					"void legacyWindow;",
 					"const scene: three.Scene = new three.Scene();",
 					"scene.add(new three.Object3D());",
 					"const config = {",
@@ -120,7 +125,7 @@ describe("published package dependency contract", () => {
 
 			if (result.error) throw result.error;
 			expect([result.status, result.stdout, result.stderr]).toEqual([0, "", ""]);
-			expect(manifest.exports["."]).toBe("./dist/api/sdks/bun/index.ts");
+			expect(manifest.exports["."]).toBe("./dist/api/sdks/main/index.ts");
 		} finally {
 			rmSync(tempDir, { force: true, recursive: true });
 		}

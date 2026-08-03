@@ -1,7 +1,7 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
 import { defineTest, expect } from "../test-framework/types";
-import { BrowserView, BuildConfig } from "electrobun/bun";
+import { BrowserView, BuildConfig } from "electrobun/main";
 import type {
   HostSocketStressState,
   SocketSendSummary,

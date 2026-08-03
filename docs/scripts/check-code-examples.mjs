@@ -53,23 +53,23 @@ const validModes = new Set([
 
 const contextPrelude = {
 	"browser-window": `
-import type { BrowserWindow as __BrowserWindow } from "electrobun/bun";
+import type { BrowserWindow as __BrowserWindow } from "electrobun/main";
 declare const win: __BrowserWindow;
 declare const mainWindow: __BrowserWindow;
 declare const browserWindow: __BrowserWindow;
 `,
 	"browser-view": `
-import type { BrowserView as __BrowserView } from "electrobun/bun";
+import type { BrowserView as __BrowserView } from "electrobun/main";
 declare const view: __BrowserView;
 declare const mainView: __BrowserView;
 declare const browserView: __BrowserView;
 `,
 	tray: `
-import type { Tray as __Tray } from "electrobun/bun";
+import type { Tray as __Tray } from "electrobun/main";
 declare const tray: __Tray;
 `,
 	electrobun: `
-declare const Electrobun: typeof import("electrobun/bun").default;
+declare const Electrobun: typeof import("electrobun/main").default;
 `,
 	"webview-element": `
 import type { WebviewTagElement as __WebviewTagElement } from "electrobun/view";
@@ -311,10 +311,12 @@ function typecheck() {
 		allowImportingTsExtensions: true,
 		baseUrl: repoRoot,
 		paths: {
-			electrobun: ["package/src/sdks/bun/index.ts"],
-			"electrobun/bun": ["package/src/sdks/bun/index.ts"],
-			"electrobun/bun/*": ["package/src/sdks/bun/entries/*.ts"],
-			"electrobun/rpc": ["package/src/sdks/bun/entries/rpc.ts"],
+			electrobun: ["package/src/sdks/main/index.ts"],
+			"electrobun/main": ["package/src/sdks/main/index.ts"],
+			"electrobun/main/*": ["package/src/sdks/main/entries/*.ts"],
+			"electrobun/bun": ["package/src/sdks/main/index.ts"],
+			"electrobun/bun/*": ["package/src/sdks/main/entries/*.ts"],
+			"electrobun/rpc": ["package/src/sdks/main/entries/rpc.ts"],
 			"electrobun/view": ["package/src/browser/index.ts"],
 		},
 		types: ["bun"],

@@ -1,7 +1,7 @@
 // @dash cli=0.5.0-canary.5 cottontail=0.2.3
 export default {
 	scripts: {
-		start: "hutch src/sdks/bun/index.ts",
+		start: "hutch src/sdks/main/index.ts",
 		"check-zig-version": "vendors/zig/zig version",
 		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "hutch build.ts",
@@ -34,7 +34,7 @@ export default {
 		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
-		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/bun src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",

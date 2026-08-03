@@ -1,7 +1,7 @@
 // Utils Tests - Tests for utility functions (clipboard, notifications, etc.)
 
 import { defineTest, expect } from "../test-framework/types";
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 import { mkdtemp, writeFile, access } from "fs/promises";
 import { homedir, tmpdir } from "os";
 import { join } from "path";

@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 import { defineTest } from "../../test-framework/types";
 
 export const devtoolsLayoutTests = [

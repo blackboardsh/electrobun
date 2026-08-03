@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, babylon, webgpu } from "electrobun/bun";
+import { GpuWindow, babylon, webgpu } from "electrobun/main";
 
 const TextureUsage = {
   RenderAttachment: 0x10,

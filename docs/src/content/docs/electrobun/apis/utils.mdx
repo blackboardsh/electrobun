@@ -7,13 +7,13 @@ import { Aside } from "@astrojs/starlight/components";
 Import utilities as the `Utils` namespace from the main-process SDK:
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 ```
 
 ## Files and external applications
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 const openedUrl = Utils.openExternal("https://example.com");
 const openedPath = Utils.openPath("/absolute/path/to/report.pdf");
@@ -39,7 +39,7 @@ for webview content, not native file APIs.
 ## File dialog
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 const paths = await Utils.openFileDialog({
   startingFolder: "~/Documents",
@@ -61,7 +61,7 @@ directories, and multiple selections.
 ## Message boxes
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 const { response } = await Utils.showMessageBox({
   type: "question",
@@ -84,7 +84,7 @@ are `info`, `warning`, `error`, and `question`.
 ## Notifications
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 Utils.showNotification({
   title: "Export complete",
@@ -100,7 +100,7 @@ presentation outside macOS.
 ## Clipboard
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 Utils.clipboardWriteText("Hello from Electrobun");
 const text = Utils.clipboardReadText();
@@ -123,7 +123,7 @@ clipboard representation is unavailable.
 ## Dock icon
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 Utils.setDockIconVisible(false);
 const visible = Utils.isDockIconVisible();
@@ -138,7 +138,7 @@ their native backend's no-op result.
 `Utils.paths` resolves standard user directories and app-scoped directories:
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 const {
   home,
@@ -182,7 +182,7 @@ produce empty identifier/channel path components.
 ## Quitting
 
 ```ts
-import { Utils } from "electrobun/bun";
+import { Utils } from "electrobun/main";
 
 function finishShutdown() {
   Utils.quit();

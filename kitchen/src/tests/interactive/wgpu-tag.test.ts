@@ -1,7 +1,7 @@
 // Interactive WGPU Tag Tests - Playground for <electrobun-wgpu>
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 import { WgpuTagRenderer } from "../../bun/wgpuTagRenderer";
 
 function createWgpuTagTest(name: string, transparent: boolean) {

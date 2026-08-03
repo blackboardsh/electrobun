@@ -1,4 +1,4 @@
-import { GpuWindow, Screen, babylon, webgpu } from "electrobun/bun";
+import { GpuWindow, Screen, babylon, webgpu } from "electrobun/main";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 

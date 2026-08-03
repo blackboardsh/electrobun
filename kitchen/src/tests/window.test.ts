@@ -1,7 +1,7 @@
 // BrowserWindow Tests - Tests for window creation and management
 
 import { defineTest, expect, type TitleBarStyle } from "../test-framework/types";
-import { BrowserWindow, Screen } from "electrobun/bun";
+import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
 
 type ViewportSize = {

@@ -1,4 +1,4 @@
-import { BrowserView } from "electrobun/bun";
+import { BrowserView } from "electrobun/main";
 import { type Tab, type Bookmark } from "./types/rpc";
 
 export class TabManager {

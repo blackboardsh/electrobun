@@ -6,7 +6,7 @@ import {
 	BrowserWindow,
 	Screen,
 	type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 type BunnyRPC = {
 	bun: RPCSchema<{

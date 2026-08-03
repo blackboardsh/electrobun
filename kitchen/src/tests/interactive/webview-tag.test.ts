@@ -1,7 +1,7 @@
 // Interactive Webview Tag Tests - Playgrounds for various webview features
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 export const webviewTagTests = [
   defineTest({

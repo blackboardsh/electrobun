@@ -1,7 +1,7 @@
 // Interactive Quit/Shutdown Tests - Playground
 
 import { defineTest } from "../../test-framework/types";
-import Electrobun, { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import Electrobun, { BrowserView, BrowserWindow, Utils } from "electrobun/main";
 
 // Register the beforeQuit handler globally so it's active for all quit paths
 let beforeQuitRegistered = false;

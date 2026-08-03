@@ -1,7 +1,7 @@
 // Interactive Clipboard Tests - Playground
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils } from "electrobun/main";
 
 export const clipboardInteractiveTests = [
   defineTest({

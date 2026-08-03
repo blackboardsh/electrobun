@@ -1,4 +1,4 @@
-import Electrobun, { app, BuildConfig } from "electrobun/bun";
+import Electrobun, { app, BuildConfig } from "electrobun/main";
 import { defineTest, expect } from "../test-framework/types";
 
 export const runtimeTests = [

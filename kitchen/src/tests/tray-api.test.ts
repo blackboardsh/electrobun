@@ -1,5 +1,5 @@
 import { defineTest, expect } from "../test-framework/types";
-import { Tray, Utils } from "electrobun/bun";
+import { Tray, Utils } from "electrobun/main";
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 

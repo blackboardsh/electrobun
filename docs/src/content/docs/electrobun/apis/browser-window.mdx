@@ -8,7 +8,7 @@ import { Aside } from "@astrojs/starlight/components";
 from the main-process SDK:
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "My app",
@@ -56,7 +56,7 @@ Only bundle and select CEF when the app needs it. See
 [Bundling CEF](/electrobun/apis/bundling-cef/) for the build configuration.
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const cefWindow = new BrowserWindow({
   title: "CEF content",
@@ -82,7 +82,7 @@ content. Use `sandbox: true` and restrictive navigation rules for remote pages.
 ## Window lifecycle
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Lifecycle",
@@ -128,7 +128,7 @@ void onAllWorkspaces;
 ## Title, position, and size
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Geometry",
@@ -161,7 +161,7 @@ The initial view is exposed as `win.webview`. Content, developer tools, find,
 zoom, and navigation operations belong to `BrowserView`:
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Webview access",
@@ -190,7 +190,7 @@ See [BrowserView](/electrobun/apis/browser-view/) for the complete view API.
 currently typed as `unknown`, so narrow them before reading application data.
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Events",

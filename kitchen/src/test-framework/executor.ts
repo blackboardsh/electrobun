@@ -1,6 +1,6 @@
 // Test executor - runs tests in the bun context
 
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 import type {
   TestDefinition,
   TestResult,

@@ -1,5 +1,5 @@
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 export const fullsizeFrameReproTests = [
   defineTest({

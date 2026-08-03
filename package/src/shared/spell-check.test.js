@@ -37,8 +37,8 @@ test("CEF and non-macOS native renderers report unsupported", () => {
 
 test("every main-process SDK exposes initial and runtime controls", () => {
 	const files = [
-		"sdks/bun/core/BrowserView.ts",
-		"sdks/bun/core/BrowserWindow.ts",
+		"sdks/main/core/BrowserView.ts",
+		"sdks/main/core/BrowserWindow.ts",
 		"sdks/zig/electrobun.zig",
 		"sdks/rust/electrobun.rs",
 		"sdks/go/electrobun.go",

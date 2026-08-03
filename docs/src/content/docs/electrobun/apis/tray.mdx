@@ -7,7 +7,7 @@ Create trays in the main process. Images may be absolute paths or bundled
 `views://` URLs.
 
 ```ts
-import { Tray } from "electrobun/bun";
+import { Tray } from "electrobun/main";
 
 const tray = new Tray({
   title: "My app",
@@ -68,7 +68,7 @@ tray.on("tray-clicked", (event: unknown) => {
 ## Methods and lookup
 
 ```ts
-import { Tray } from "electrobun/bun";
+import { Tray } from "electrobun/main";
 
 const tray = new Tray({
   title: "Status",

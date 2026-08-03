@@ -6,7 +6,7 @@ import {
 	WGPU,
 	WGPUBridge,
 	three,
-} from "electrobun/bun";
+} from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
 import { existsSync } from "fs";

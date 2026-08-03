@@ -10,7 +10,7 @@ webview. Every `BrowserWindow` creates one initial view, available as
 positioned web content.
 
 ```ts
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Multiple views",
@@ -60,7 +60,7 @@ process owns its geometry.
 ## Loading and scripting
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "View controls",
@@ -91,7 +91,7 @@ the browser must return data to the main process.
 ## Find in page
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Find",
@@ -111,7 +111,7 @@ Instance events cover navigation, readiness, and downloads. Event payloads are
 currently typed as `unknown`.
 
 ```ts
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Events",
@@ -149,7 +149,7 @@ import {
   BrowserView,
   BrowserWindow,
   type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 export type AppRPC = {
   bun: RPCSchema<{
@@ -194,7 +194,7 @@ The browser-side half is documented under
 ## Lookup, adoption, and removal
 
 ```ts
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "View ownership",

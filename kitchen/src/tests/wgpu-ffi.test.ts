@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, WGPU, WGPUBridge } from "electrobun/bun";
+import { GpuWindow, WGPU, WGPUBridge } from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";
 
 const WGPUNative = WGPU.native;

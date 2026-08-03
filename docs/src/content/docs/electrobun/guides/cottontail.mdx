@@ -34,12 +34,12 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-The `src/bun` directory and `electrobun/bun` import path are retained as
+The `src/bun` directory and `electrobun/main` import path are retained as
 compatibility names. They do not mean the application is running the Bun
 binary:
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 new BrowserWindow({
   title: "My App",

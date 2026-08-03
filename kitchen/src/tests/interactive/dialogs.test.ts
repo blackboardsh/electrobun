@@ -1,7 +1,7 @@
 // Interactive Dialog Tests - Require user interaction
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils } from "electrobun/main";
 import { homedir } from "os";
 import { join } from "path";
 

@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { BrowserWindow, Screen, WGPU, WGPUBridge, WGPUView } from "electrobun/bun";
+import { BrowserWindow, Screen, WGPU, WGPUBridge, WGPUView } from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";
 
 type Rect = { x: number; y: number; width: number; height: number };

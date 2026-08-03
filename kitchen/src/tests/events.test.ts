@@ -1,7 +1,7 @@
 // Event System Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import Electrobun, { Utils } from "electrobun/bun";
+import Electrobun, { Utils } from "electrobun/main";
 
 export const eventsTests = [
   defineTest({

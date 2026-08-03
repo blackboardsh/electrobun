@@ -10,7 +10,7 @@ import {
 	three,
 	babylon,
 	webgpu,
-} from "electrobun/bun";
+} from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
 

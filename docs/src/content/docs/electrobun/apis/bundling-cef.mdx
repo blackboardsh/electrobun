@@ -52,7 +52,7 @@ helper processes, resources, and locales. A CEF renderer is unavailable when
 On macOS and Windows, a bundled application can mix native and CEF views.
 
 ```typescript
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const browserWindow = new BrowserWindow({
   title: "Chromium Window",
@@ -99,7 +99,7 @@ WebKit. Do not design a Linux window around mixed native and CEF children.
 Read the packaged renderer metadata instead of assuming a renderer exists:
 
 ```typescript
-import { BuildConfig } from "electrobun/bun";
+import { BuildConfig } from "electrobun/main";
 
 const build = await BuildConfig.get();
 console.log({

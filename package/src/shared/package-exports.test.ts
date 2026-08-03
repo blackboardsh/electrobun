@@ -4,6 +4,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -24,27 +25,29 @@ const packageRoot = resolve(import.meta.dir, "../..");
 const manifest = JSON.parse(
 	readFileSync(join(packageRoot, "package.json"), "utf8"),
 ) as PackageManifest;
-const tempRoot = mkdtempSync(join(tmpdir(), "electrobun-package-exports-"));
+const tempRoot = realpathSync(
+	mkdtempSync(join(tmpdir(), "electrobun-package-exports-")),
+);
 const consumerRoot = join(tempRoot, "consumer");
 const stagedPackageRoot = join(consumerRoot, "node_modules", "electrobun");
 
 const focusedImports = {
-	"electrobun/bun/app-menu": "setApplicationMenu",
-	"electrobun/bun/browser-view": "BrowserView",
-	"electrobun/bun/browser-window": "BrowserWindow",
-	"electrobun/bun/build-config": "BuildConfig",
-	"electrobun/bun/context-menu": "showContextMenu",
-	"electrobun/bun/events": "electrobunEventEmitter",
-	"electrobun/bun/gpu-window": "GpuWindow",
-	"electrobun/bun/native": "Screen",
-	"electrobun/bun/paths": "RESOURCES_FOLDER",
-	"electrobun/bun/rpc": "createRPC",
-	"electrobun/bun/socket": "sendMessageToWebviewViaSocket",
-	"electrobun/bun/tray": "Tray",
-	"electrobun/bun/updater": "Updater",
-	"electrobun/bun/utils": "openExternal",
-	"electrobun/bun/webgpu": "webgpu",
-	"electrobun/bun/wgpu-view": "WGPUView",
+	"electrobun/main/app-menu": "setApplicationMenu",
+	"electrobun/main/browser-view": "BrowserView",
+	"electrobun/main/browser-window": "BrowserWindow",
+	"electrobun/main/build-config": "BuildConfig",
+	"electrobun/main/context-menu": "showContextMenu",
+	"electrobun/main/events": "electrobunEventEmitter",
+	"electrobun/main/gpu-window": "GpuWindow",
+	"electrobun/main/native": "Screen",
+	"electrobun/main/paths": "RESOURCES_FOLDER",
+	"electrobun/main/rpc": "createRPC",
+	"electrobun/main/socket": "sendMessageToWebviewViaSocket",
+	"electrobun/main/tray": "Tray",
+	"electrobun/main/updater": "Updater",
+	"electrobun/main/utils": "openExternal",
+	"electrobun/main/webgpu": "webgpu",
+	"electrobun/main/wgpu-view": "WGPUView",
 	"electrobun/rpc": "defineElectrobunRPC",
 } as const;
 
@@ -66,7 +69,7 @@ beforeAll(() => {
 		}),
 	);
 
-	copyApiDirectory("sdks/bun", join(stagedPackageRoot, "dist/api/sdks/bun"));
+	copyApiDirectory("sdks/main", join(stagedPackageRoot, "dist/api/sdks/main"));
 	copyApiDirectory("browser", join(stagedPackageRoot, "dist/api/browser"));
 	copyApiDirectory("shared", join(stagedPackageRoot, "dist/api/shared"));
 	copyApiDirectory("config", join(stagedPackageRoot, "dist/api/config"));
@@ -132,10 +135,19 @@ function reportComparison(
 }
 
 describe("published package exports", () => {
-	test("preserves the existing root, bun, and view entry points", () => {
-		expect(manifest.exports["."]).toBe("./dist/api/sdks/bun/index.ts");
-		expect(manifest.exports["./bun"]).toBe("./dist/api/sdks/bun/index.ts");
+	test("publishes the canonical main SDK and preserves legacy entry points", () => {
+		expect(manifest.exports["."]).toBe("./dist/api/sdks/main/index.ts");
+		expect(manifest.exports["./main"]).toBe("./dist/api/sdks/main/index.ts");
+		expect(manifest.exports["./bun"]).toBe("./dist/api/sdks/main/index.ts");
 		expect(manifest.exports["./view"]).toBe("./dist/api/browser/index.ts");
+	});
+
+	test("maps every deprecated bun subpath to its canonical main target", () => {
+		for (const exportKey of Object.keys(manifest.exports)) {
+			if (!exportKey.startsWith("./main/")) continue;
+			const legacyKey = exportKey.replace("./main/", "./bun/");
+			expect(manifest.exports[legacyKey]).toBe(manifest.exports[exportKey]);
+		}
 	});
 
 	test("maps every focused entry to a published, re-export-only module", () => {
@@ -143,11 +155,11 @@ describe("published package exports", () => {
 			const exportKey = `.${specifier.slice("electrobun".length)}`;
 			const target = manifest.exports[exportKey];
 			if (!target) throw new Error(`Missing package export ${exportKey}`);
-			expect(target).toMatch(/^\.\/dist\/api\/sdks\/bun\/entries\/.+\.ts$/);
+			expect(target).toMatch(/^\.\/dist\/api\/sdks\/main\/entries\/.+\.ts$/);
 
 			const sourcePath = join(
 				packageRoot,
-				target.replace("./dist/api/sdks/bun", "src/sdks/bun"),
+				target.replace("./dist/api/sdks/main", "src/sdks/main"),
 			);
 			const source = readFileSync(sourcePath, "utf8");
 			expect(source).not.toMatch(/^\s*import\s/m);
@@ -161,19 +173,35 @@ describe("published package exports", () => {
 		).entries()) {
 			const graph = await bundleImport(`focused-${index}`, specifier, exportName);
 			expect(graph.modules).toBeGreaterThan(1);
-			expect(graph.inputs).not.toContain("dist/api/sdks/bun/index.ts");
+			expect(graph.inputs).not.toContain("dist/api/sdks/main/index.ts");
 		}
+	});
+
+	test("deprecated bun imports resolve through the canonical SDK", async () => {
+		const root = await bundleImport(
+			"legacy-bun-root",
+			"electrobun/bun",
+			"BrowserWindow",
+		);
+		const rpc = await bundleImport(
+			"legacy-bun-rpc",
+			"electrobun/bun/rpc",
+			"createRPC",
+		);
+
+		expect(root.inputs).toContain("dist/api/sdks/main/index.ts");
+		expect(rpc.inputs).not.toContain("dist/api/sdks/main/index.ts");
 	});
 
 	test("pure RPC entry excludes the native and main-process graph", async () => {
 		const root = await bundleImport("root-rpc", "electrobun", "createRPC");
 		const rpc = await bundleImport(
 			"focused-rpc",
-			"electrobun/bun/rpc",
+			"electrobun/main/rpc",
 			"createRPC",
 		);
 
-		expect(rpc.inputs).not.toContain("dist/api/sdks/bun/proc/native.ts");
+		expect(rpc.inputs).not.toContain("dist/api/sdks/main/proc/native.ts");
 		expect(rpc.inputs.some((input) => input.includes("/core/"))).toBe(false);
 		expect(rpc.modules).toBeLessThan(root.modules);
 		expect(rpc.bytes).toBeLessThan(root.bytes);
@@ -184,19 +212,19 @@ describe("published package exports", () => {
 		const root = await bundleImport("root-window", "electrobun", "BrowserWindow");
 		const browserWindow = await bundleImport(
 			"focused-window",
-			"electrobun/bun/browser-window",
+			"electrobun/main/browser-window",
 			"BrowserWindow",
 		);
 		const appMenu = await bundleImport(
 			"focused-menu",
-			"electrobun/bun/app-menu",
+			"electrobun/main/app-menu",
 			"setApplicationMenu",
 		);
 
 		for (const graph of [browserWindow, appMenu]) {
-			expect(graph.inputs).not.toContain("dist/api/sdks/bun/core/Updater.ts");
-			expect(graph.inputs).not.toContain("dist/api/sdks/bun/webGPU.ts");
-			expect(graph.inputs).not.toContain("dist/api/sdks/bun/webgpuAdapter.ts");
+			expect(graph.inputs).not.toContain("dist/api/sdks/main/core/Updater.ts");
+			expect(graph.inputs).not.toContain("dist/api/sdks/main/webGPU.ts");
+			expect(graph.inputs).not.toContain("dist/api/sdks/main/webgpuAdapter.ts");
 			expect(graph.modules).toBeLessThan(root.modules);
 			expect(graph.bytes).toBeLessThan(root.bytes);
 		}

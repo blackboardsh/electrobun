@@ -13,7 +13,7 @@
 // actually testable in this build.
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const PERMISSION_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">

@@ -694,7 +694,7 @@ async function buildForNpm() {
 	await copyApiFiles();
 
 	console.log(
-		"npm build complete! dist/ contains main.js and api/ folder (bun, browser, shared APIs).",
+		"npm build complete! dist/ contains main.js and api/ folder (main, browser, shared APIs).",
 	);
 }
 
@@ -703,7 +703,7 @@ async function copyApiFiles() {
 	// Use Node's copy implementation here so directory-root semantics stay the
 	// same across Windows and Unix shells.
 	mkdirSync("dist/api/sdks", { recursive: true });
-	cpSync("src/sdks/bun", "dist/api/sdks/bun", { recursive: true, force: true });
+	cpSync("src/sdks/main", "dist/api/sdks/main", { recursive: true, force: true });
 	cpSync("src/browser", "dist/api/browser", { recursive: true, force: true });
 	cpSync("src/shared", "dist/api/shared", { recursive: true, force: true });
 	cpSync("src/config", "dist/api/config", { recursive: true, force: true });
@@ -1650,8 +1650,8 @@ async function vendorWGPU() {
 
 		writeFileSync(wgpuVersionFile, WGPU_VERSION);
 
-		// Regenerate Bun FFI bindings when WGPU version changes
-		if (!existsSync(join(process.cwd(), "src", "sdks", "bun", "webGPU.ts"))) {
+		// Regenerate main-process FFI bindings when the WGPU version changes.
+		if (!existsSync(join(process.cwd(), "src", "sdks", "main", "webGPU.ts"))) {
 			await $`node scripts/gen-webgpu-ffi.mjs`;
 		} else if (currentVersion !== WGPU_VERSION) {
 			await $`node scripts/gen-webgpu-ffi.mjs`;

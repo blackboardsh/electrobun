@@ -43,7 +43,7 @@ hutch install
 ```
 
 <Aside type="note">
-The `electrobun/bun` import path and `@types/bun` package are compatibility
+The `electrobun/main` import path and `@types/bun` package are compatibility
 names. Cottontail executes this main process unless the config explicitly
 selects Bun.
 </Aside>
@@ -71,7 +71,7 @@ Create `src/mainview/index.html`:
 Create `src/bun/index.ts`:
 
 ```ts
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 new BrowserWindow({
   title: "Hello Electrobun",

@@ -51,7 +51,7 @@ Use `titleBarStyle: "hidden"` for fully custom chrome. `hiddenInset` retains
 the inset native controls on macOS.
 
 ```typescript
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Custom Titlebar",
@@ -76,7 +76,7 @@ import {
   BrowserView,
   BrowserWindow,
   type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 type WindowControlsRPC = {
   bun: RPCSchema<{

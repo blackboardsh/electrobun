@@ -34,7 +34,7 @@ On Windows PowerShell:
 Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
 accept an exact semantic version or build revision. Production and canary are
 installed side by side under `~/.dash/products`, with launchers in
-`~/.dash/bin`.
+`~/.dash/bin`. `stable` is accepted as an alias for the production channel.
 
 ## Everyday commands
 
@@ -58,6 +58,9 @@ hutch x --package=typescript tsc --version
 hutch electrobun build --env=canary
 hutch electrobun build --env=production
 ```
+
+Hutch's build environments are `dev`, `canary`, and `production`.
+`--env=stable` remains an alias for `--env=production`.
 
 `hutch run <name>` looks in `dash.config.ts` first and then in
 `package.json`. `hutch <name>` is shorthand when the name is unambiguous.
@@ -86,8 +89,8 @@ Place an optional pragma on the first line of `dash.config.ts`:
 // @dash cli=production cottontail=production
 ```
 
-Selectors may be `production`, `canary`, an exact semantic version, or
-`build:<full-git-revision>`:
+Selectors may be `production`, `stable`, `canary`, an exact semantic version,
+or `build:<full-git-revision>`. `stable` resolves to `production`:
 
 ```ts
 // @dash cli=0.5.0-canary.6 cottontail=0.2.3

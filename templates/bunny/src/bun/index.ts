@@ -4,7 +4,7 @@ import {
 	Screen,
 	Utils,
 	type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 const display = Screen.getPrimaryDisplay();
 const workArea = display.workArea;

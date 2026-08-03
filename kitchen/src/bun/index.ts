@@ -8,7 +8,7 @@ import Electrobun, {
 	Utils,
 	BuildConfig,
 	Updater,
-} from "electrobun/bun";
+} from "electrobun/main";
 import { executor } from "../test-framework/executor";
 import { allTests } from "../tests";
 import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";

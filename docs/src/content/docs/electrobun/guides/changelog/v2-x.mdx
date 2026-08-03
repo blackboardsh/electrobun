@@ -1,48 +1,101 @@
 ---
-title: "Electrobun v2.x Preview"
-description: "Architecture and developer workflow changes in Electrobun 2.x."
+title: "Electrobun v2.x"
+description: "The Electrobun 2.0 toolchain, runtime, platform, and API release."
 ---
 
-Electrobun 2.x is the current preview line. It establishes a new toolchain and
-runtime boundary while preserving the application APIs used by Electrobun 1.x
-projects.
+Electrobun 2.0 introduces a new build tool and JavaScript runtime, six supported
+main-process runtimes, native builds across macOS, Windows, and Linux, and a
+large reconciliation of the 1.x issue and pull-request backlog.
+
+## By the numbers
+
+- Resolved **138 issues and 47 pull requests** during the 2.0 reconciliation.
+- Tracks **8,460 owned Node and Bun compatibility test files** across
+  Cottontail and Hutch. The current manifests enable 8,436 files and record 24
+  explicit expected failures.
+- Backed by roughly **1,800 first-party tests and Kitchen Sink scenarios**, in
+  addition to the owned compatibility corpus.
+- Supports six main-process runtimes: Cottontail, Bun, Zig, Rust, Go, and Odin.
+
+Cottontail 0.2.3 is smaller than Bun 1.3.13 on every supported release target
+measured. These figures are extracted executable sizes, not compressed archive
+sizes.
+
+| Platform | Cottontail | Bun | Reduction |
+| --- | ---: | ---: | ---: |
+| macOS ARM64 | 57,714,960 B | 63,072,928 B | 8.5% |
+| Linux x64 | 59,480,576 B | 101,814,712 B | 41.6% |
+| Linux ARM64 | 55,183,872 B | 101,309,000 B | 45.5% |
+| Windows x64 | 55,587,328 B | 117,660,760 B | 52.8% |
 
 ## Hutch build tooling
 
-- Hutch replaces the project-vendored Electrobun CLI.
-- Hutch installs packages, executes package binaries, runs scripts, bundles
-  source, downloads pinned native dependencies, and creates release artifacts.
-- Production and canary Hutch installations can coexist globally.
-- Projects can pin Hutch and Cottontail independently with a first-line pragma.
-- Template catalogs are published with Electrobun release channels and
-  downloaded on demand instead of being embedded in Hutch.
+- Hutch replaces Bun, npm, and the old project-vendored Electrobun CLI for
+  Electrobun project workflows.
+- Hutch installs packages, executes package binaries, runs lifecycle scripts,
+  bundles source, acquires pinned native toolchains, and creates signed release
+  artifacts.
+- Cottontail executes TypeScript and JavaScript lifecycle scripts while Hutch
+  owns build-time package management and orchestration.
+- Production and canary Hutch installations can coexist globally. Projects can
+  pin Hutch and Cottontail independently with a first-line pragma.
+- `hutch electrobun init` now opens an interactive, keyboard-navigable template
+  chooser. Template catalogs ship per Electrobun channel and are downloaded on
+  demand instead of increasing the Hutch executable size.
 
 ## Cottontail runtime
 
-- Cottontail is the default TypeScript main-process runtime.
-- Node.js and Bun-compatible behavior supports existing package ecosystems.
-- The `electrobun/bun` SDK namespace remains source-compatible.
-- Bun remains available as an explicit main-process runtime while Hutch remains
-  the build tool.
+- Cottontail is the default TypeScript main-process runtime and provides broad
+  Node.js and Bun compatibility for existing application code and packages.
+- `electrobun/main` is the canonical, runtime-neutral main-process SDK
+  namespace. `electrobun/bun` remains available as a deprecated alias.
+- Bun remains an explicit main-process option for applications that need to
+  retain the Bun runtime. Hutch still builds and packages those applications.
 
-## Main process runtimes
+## Native main processes
 
-Applications can select Cottontail, Bun, Zig, Rust, Go, or Odin. Hutch acquires
-Electrobun's pinned native toolchains when a matching system compiler is not
-available.
+Applications can use Zig, Rust, Go, or Odin without shipping a JavaScript
+runtime. Hutch uses a compatible system compiler when available and otherwise
+acquires Electrobun's pinned toolchain. The SDKs share the same core window,
+view, RPC, lifecycle, and WGPU contracts.
 
-## Cross-platform releases
+Odin is new in 2.0 and includes the `odin-particles-wgpu` template. Windows
+Odin builds are currently x64-only and require Visual Studio Build Tools; the
+pinned compiler is pre-1.0, and cross-compilation is not yet supported.
 
-The 2.x build pipeline produces application bundles and distribution artifacts
-on macOS, Windows x64, Linux x64, and Linux arm64. macOS can use the system
-webview or CEF, Windows can use WebView2 or CEF, and Linux can use WebKitGTK or
-CEF.
+## App and platform fixes
 
-## Distribution channels
+Highlights from the 2.0 reconciliation include:
 
-The public build environments are `dev`, `canary`, and `production`.
-Production builds can be shipped directly; canary builds are independent test
-releases, not artifacts promoted into production.
+- Shared close cancellation, typed BrowserView creation events, JSON-array
+  dialog results, unbounded user-controlled dialog timeouts, window visibility
+  fixes, and consistent behavior across all six main-process SDKs.
+- System-webview console forwarding in development, CEF lifecycle and shutdown
+  cleanup, persistent partition and OPFS corrections, draggable-region fixes,
+  and broader WGPU adapter and surface coverage.
+- macOS fixes for docked DevTools layout and hover crashes, traffic-light
+  positioning across resize, CEF sizing, code signing, and deployment targets.
+- Windows wide-character paths and UI text, including WebView2 and CEF data
+  directories under non-ASCII user profiles; per-monitor DPI setup, correct
+  initial content bounds, permission handling, native window behavior, icon
+  embedding, and installer shutdown.
+- Linux WebKit and CEF lifecycle fixes, wheel scrolling, GTK grow and shrink
+  behavior, native chooser integration, desktop-entry packaging, adjacent
+  archive extraction, launch dependency diagnostics, ABI checks, and an
+  initial Flatpak output path.
+- Isolated Kitchen Sink matrix builds, remote release templates, R2-hosted
+  owned dependencies, and cross-platform production/canary packaging.
+
+## Platforms and channels
+
+The release pipeline builds application bundles and distributable artifacts on
+macOS ARM64, Windows x64, Linux x64, and Linux ARM64. Apps can use the system
+webview or CEF on each supported operating system.
+
+Hutch's build environments are `dev`, `canary`, and `production`. `stable`
+remains supported as an alias for `production`; emitted metadata and artifacts
+use the canonical `production` name. Canary and production are independent
+release channels.
 
 See [Migrate from Electrobun 1.x](/electrobun/guides/migrating-to-v2/) for the
 required project changes.

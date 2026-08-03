@@ -4,7 +4,7 @@ import {
   Screen,
   type RPCSchema,
   webgpu,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 console.log("wgpu-mlp starting");
 webgpu.install();

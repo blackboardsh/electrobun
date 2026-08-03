@@ -3,7 +3,7 @@ import {
 	BrowserView,
 	Utils,
 	type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 // Define RPC schema for photo saving
 export type PhotoBoothRPC = {

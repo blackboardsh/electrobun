@@ -8,7 +8,7 @@ The default main-process export exposes the global event emitter. Window,
 webview, menu, and tray objects also expose scoped listeners.
 
 ```ts
-import Electrobun, { BrowserWindow } from "electrobun/bun";
+import Electrobun, { BrowserWindow } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "Events",
@@ -44,7 +44,7 @@ Current application event names are `application-menu-clicked`,
 `context-menu-clicked`, `open-url`, `reopen`, and `before-quit`.
 
 ```ts
-import Electrobun from "electrobun/bun";
+import Electrobun from "electrobun/main";
 
 Electrobun.events.on("open-url", (event) => {
   const data = event.data as { url: string };
@@ -88,7 +88,7 @@ prepared cleanup, or cancel shutdown. The current event emitter does **not**
 await a returned promise.
 
 ```ts
-import Electrobun from "electrobun/bun";
+import Electrobun from "electrobun/main";
 
 Electrobun.events.on("before-quit", (event) => {
   const canQuit = true;

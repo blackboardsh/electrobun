@@ -27,7 +27,7 @@ export default {
 ## Check and install
 
 ```ts
-import { Updater } from "electrobun/bun";
+import { Updater } from "electrobun/main";
 
 const local = await Updater.getLocalInfo();
 console.log(`Running ${local.version} (${local.channel})`);
@@ -55,7 +55,7 @@ with a packaged canary or production build.
 `getLocalInfo()` returns the packaged `version.json` data:
 
 ```ts
-import { Updater } from "electrobun/bun";
+import { Updater } from "electrobun/main";
 
 const info = await Updater.getLocalInfo();
 
@@ -84,7 +84,7 @@ Convenience methods under `Updater.localInfo` return the current `version`,
 ## Status reporting
 
 ```ts
-import { Updater, type UpdateStatusEntry } from "electrobun/bun";
+import { Updater, type UpdateStatusEntry } from "electrobun/main";
 
 Updater.onStatusChange((entry: UpdateStatusEntry) => {
   console.log(entry.status, entry.message, entry.details);
