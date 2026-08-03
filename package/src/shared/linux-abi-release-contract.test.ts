@@ -13,14 +13,14 @@ const releaseScript = readFileSync(
 );
 
 describe("Linux release ABI baseline", () => {
-	test("builds both Linux architectures on Ubuntu 22.04", () => {
-		expect(releaseWorkflow).toContain("os: ubuntu-22.04\n");
-		expect(releaseWorkflow).toContain("os: ubuntu-22.04-arm\n");
-		expect(releaseWorkflow).not.toContain("os: ubuntu-24.04\n");
-		expect(releaseWorkflow).not.toContain("os: ubuntu-24.04-arm\n");
+	test("uses build hosts compatible with the pinned Cottontail runtime", () => {
+		expect(releaseWorkflow).toContain("os: ubuntu-24.04\n");
+		expect(releaseWorkflow).toContain("os: ubuntu-24.04-arm\n");
+		expect(releaseWorkflow).not.toContain("os: ubuntu-22.04\n");
+		expect(releaseWorkflow).not.toContain("os: ubuntu-22.04-arm\n");
 	});
 
-	test("verifies every staged ELF before creating release tarballs", () => {
+	test("independently verifies every staged ELF before creating release tarballs", () => {
 		const verifier = releaseScript.indexOf("verify-linux-elf-abi.js");
 		const tarball = releaseScript.indexOf("function createTarGz");
 		expect(verifier).toBeGreaterThan(0);

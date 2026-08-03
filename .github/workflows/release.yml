@@ -24,12 +24,12 @@ jobs:
             arch: arm64
             platform_name: darwin
             artifact_platform: macos
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             platform: linux
             arch: x64
             platform_name: linux
             artifact_platform: linux
-          - os: ubuntu-22.04-arm
+          - os: ubuntu-24.04-arm
             platform: linux
             arch: arm64
             platform_name: linux
