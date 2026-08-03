@@ -37,6 +37,11 @@ For a new project, run the interactive template chooser:
 hutch electrobun init
 ```
 
+Existing `npx electrobun init` and `bunx electrobun init` entry points remain
+available. The npm package now installs the appropriate Hutch channel when it
+is missing and delegates to the same template chooser instead of carrying a
+second CLI implementation.
+
 ## 2. Keep Electrobun as a project dependency
 
 The `electrobun` package still provides configuration types, browser code,

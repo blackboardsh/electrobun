@@ -36,11 +36,21 @@ accept an exact semantic version or build revision. Production and canary are
 installed side by side under `~/.dash/products`, with launchers in
 `~/.dash/bin`. `stable` is accepted as an alias for the production channel.
 
+Developers starting from npm or Bun can run `npx electrobun init` or
+`bunx electrobun init`. The published package installs Hutch when necessary and
+delegates to the same native initializer. Prerelease Electrobun packages select
+Hutch's canary channel; production packages select production. This bootstrap
+is intentionally limited to `init`; development and build commands run through
+Hutch directly.
+
 ## Everyday commands
 
 ```bash
-# Create a project with an interactive template picker
+# Choose a template, edit the suggested project name, and create the project
 hutch electrobun init
+
+# The package-runner spelling is a direct alias
+hutch x electrobun init
 
 # Install dependencies and maintain bun.lock
 hutch install
@@ -64,6 +74,11 @@ Hutch's build environments are `dev`, `canary`, and `production`.
 
 `hutch run <name>` looks in `dash.config.ts` first and then in
 `package.json`. `hutch <name>` is shorthand when the name is unambiguous.
+
+An exact package request such as `hutch x electrobun@2.0.0 init` retains normal
+package-runner semantics, but templates always come from the latest matching
+production or canary catalog. Pinning an old npm package does not pin an old
+starter template.
 
 ## Versions and updates
 

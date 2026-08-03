@@ -40,8 +40,12 @@ sizes.
 - Production and canary Hutch installations can coexist globally. Projects can
   pin Hutch and Cottontail independently with a first-line pragma.
 - `hutch electrobun init` now opens an interactive, keyboard-navigable template
-  chooser. Template catalogs ship per Electrobun channel and are downloaded on
-  demand instead of increasing the Hutch executable size.
+  chooser followed by an editable project-name prompt. Template catalogs ship
+  per Electrobun channel and are downloaded on demand instead of increasing the
+  Hutch executable size.
+- `hutch x electrobun init`, `npx electrobun init`, and `bunx electrobun init`
+  converge on that same initializer. The npm entry point installs Hutch when it
+  is not already present rather than embedding another build CLI.
 
 ## Cottontail runtime
 

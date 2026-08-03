@@ -25,6 +25,15 @@ curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
+Or bootstrap the same interactive initializer from npm or Bun. This installs
+Hutch when it is not already available:
+
+```bash
+npx electrobun init
+# or
+bunx electrobun init
+```
+
 Don't miss our:
 - self-extracting bundles that use Zstandard compression for compact distributables
 - a Zig-optimized BSDIFF implementation that can produce kilobyte-scale updates

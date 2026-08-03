@@ -60,5 +60,15 @@ curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
+If Hutch is not installed yet, the npm package provides equivalent bootstrap
+entry points. They install the matching Hutch channel and open the same
+template and project-name prompts:
+
+```bash
+npx electrobun init
+# or
+bunx electrobun init
+```
+
 Continue with the [Quick Start](/electrobun/guides/quick-start/) or build the
 minimal app in [Hello World](/electrobun/guides/hello-world/).
