@@ -154,4 +154,33 @@ describe("Electrobun template build scripts", () => {
 
 		expect(invalidTemplates).toEqual([]);
 	});
+
+	test("interactive Odin surfaces pass pointer input through native WGPU views", () => {
+		const expectedMasks = new Map([
+			[
+				"odin-alchemy-wgpu",
+				[".topbar", ".material-dock", ".settings", ".stats"],
+			],
+			["odin-fluid-wgpu", [".topbar", ".control-dock"]],
+		]);
+		const invalidTemplates: string[] = [];
+
+		for (const [templateName, masks] of expectedMasks) {
+			const html = readFileSync(
+				join(templatesRoot, templateName, "src", "mainview", "index.html"),
+				"utf8",
+			);
+			const surface = html.match(/<electrobun-wgpu\b[^>]*>/s)?.[0] ?? "";
+			if (!/\bpassthrough\b/.test(surface)) {
+				invalidTemplates.push(`${templateName}: missing WGPU pointer passthrough`);
+			}
+			for (const mask of masks) {
+				if (!surface.includes(mask)) {
+					invalidTemplates.push(`${templateName}: missing native mask ${mask}`);
+				}
+			}
+		}
+
+		expect(invalidTemplates).toEqual([]);
+	});
 });

@@ -8,7 +8,11 @@
 	</head>
 	<body>
 		<main class="app" id="alchemy-app">
-			<electrobun-wgpu id="alchemy-surface"></electrobun-wgpu>
+			<electrobun-wgpu
+				id="alchemy-surface"
+				passthrough
+				masks=".topbar, .material-dock, .settings, .stats"
+			></electrobun-wgpu>
 			<div class="paint-layer" id="paint-layer" aria-label="Alchemy simulation canvas"></div>
 
 			<header class="topbar">
