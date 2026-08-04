@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Neon Fluid Lab</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="lab">
+			<electrobun-wgpu
+				id="fluid-surface"
+				passthrough
+				masks=".topbar, .control-dock"
+			></electrobun-wgpu>
+			<div id="interaction-layer" class="interaction-layer" aria-label="Fluid canvas">
+				<div id="brush-cursor" class="brush-cursor" aria-hidden="true"></div>
+			</div>
+
+			<header class="topbar panel">
+				<div class="identity">
+					<span class="signal" aria-hidden="true"></span>
+					<div>
+						<h1>Neon Fluid Lab</h1>
+						<p id="status">Preparing native surface</p>
+					</div>
+				</div>
+				<div class="hud" aria-label="Simulation statistics">
+					<div><strong id="fps-stat">--</strong><span>FPS</span></div>
+					<div><strong id="grid-stat">--</strong><span>GRID</span></div>
+					<div><strong id="active-stat">--</strong><span>ACTIVE</span></div>
+				</div>
+				<div class="actions">
+					<button id="pause-button" class="icon-command" type="button">Pause</button>
+					<button id="reset-button" class="icon-command secondary" type="button">Reset</button>
+				</div>
+			</header>
+
+			<section class="control-dock panel" aria-label="Fluid controls">
+				<div class="tool-group" role="group" aria-label="Brush tool">
+					<button class="tool active" type="button" data-tool="0"><span class="tool-mark ink"></span>Ink</button>
+					<button class="tool" type="button" data-tool="1"><span class="tool-mark vortex"></span>Vortex</button>
+					<button class="tool" type="button" data-tool="2"><span class="tool-mark heat"></span>Heat</button>
+					<button class="tool" type="button" data-tool="3"><span class="tool-mark erase"></span>Erase</button>
+				</div>
+
+				<div class="control-grid">
+					<label class="select-control">
+						<span>Palette</span>
+						<select id="palette">
+							<option value="0">Aurora</option>
+							<option value="1">Plasma</option>
+							<option value="2">Ember</option>
+							<option value="3">Ultraviolet</option>
+						</select>
+					</label>
+					<label>
+						<span>Hue <output id="hue-value">54</output></span>
+						<input id="hue" type="range" min="0" max="100" value="54" />
+					</label>
+					<label>
+						<span>Radius <output id="radius-value">8</output></span>
+						<input id="radius" type="range" min="2" max="18" value="8" />
+					</label>
+					<label>
+						<span>Force <output id="force-value">68</output></span>
+						<input id="force" type="range" min="5" max="100" value="68" />
+					</label>
+					<label>
+						<span>Swirl <output id="swirl-value">42</output></span>
+						<input id="swirl" type="range" min="0" max="100" value="42" />
+					</label>
+					<label>
+						<span>Viscosity <output id="viscosity-value">12</output></span>
+						<input id="viscosity" type="range" min="0" max="100" value="12" />
+					</label>
+					<label>
+						<span>Fade <output id="fade-value">18</output></span>
+						<input id="fade" type="range" min="0" max="100" value="18" />
+					</label>
+				</div>
+			</section>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>
