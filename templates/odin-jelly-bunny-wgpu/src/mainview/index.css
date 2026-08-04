@@ -1,0 +1,165 @@
+:root {
+	color-scheme: dark;
+	font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+	background: #07090e;
+	color: #f4f7fa;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+	width: 100%;
+	height: 100%;
+	margin: 0;
+	overflow: hidden;
+	background: #07090e;
+}
+
+button, input { font: inherit; }
+
+.app {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 272px;
+	width: 100vw;
+	height: 100vh;
+}
+
+.stage {
+	display: grid;
+	grid-template-rows: 76px minmax(0, 1fr);
+	min-width: 0;
+	background: #090c13;
+}
+
+.topbar {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 20px;
+	padding: 14px 20px;
+	border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+h1, p { margin: 0; }
+
+h1 {
+	font-size: 20px;
+	font-weight: 720;
+	letter-spacing: 0;
+}
+
+.eyebrow {
+	margin-bottom: 3px;
+	color: #65e6d2;
+	font-size: 10px;
+	font-weight: 760;
+	letter-spacing: 0.12em;
+}
+
+.status {
+	border-left: 2px solid #e8bf63;
+	padding-left: 10px;
+	color: #aeb8c5;
+	font-size: 12px;
+}
+
+.status[data-state="ready"] { border-color: #65e6d2; color: #d8fff8; }
+.status[data-state="error"] { border-color: #ff738c; color: #ffdce3; }
+
+.surface-shell {
+	position: relative;
+	min-height: 0;
+	overflow: hidden;
+	touch-action: none;
+	cursor: grab;
+	user-select: none;
+}
+
+.surface-shell[data-dragging="true"] { cursor: grabbing; }
+
+electrobun-wgpu {
+	display: block;
+	width: 100%;
+	height: 100%;
+	min-height: 360px;
+	background: #070a11;
+}
+
+.hud {
+	position: absolute;
+	top: 14px;
+	right: 14px;
+	z-index: 3;
+	display: grid;
+	grid-template-columns: repeat(3, minmax(58px, auto));
+	border: 1px solid rgba(255, 255, 255, 0.13);
+	border-radius: 7px;
+	background: rgba(9, 12, 19, 0.78);
+	backdrop-filter: blur(10px);
+	pointer-events: none;
+}
+
+.hud > div {
+	display: grid;
+	gap: 2px;
+	padding: 8px 10px;
+	border-left: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.hud > div:first-child { border-left: 0; }
+.hud strong { font-size: 14px; font-variant-numeric: tabular-nums; }
+.hud span { color: #8793a2; font-size: 9px; text-transform: uppercase; }
+
+.controls {
+	display: flex;
+	flex-direction: column;
+	gap: 21px;
+	padding: 20px;
+	border-left: 1px solid rgba(255, 255, 255, 0.09);
+	background: #121720;
+}
+
+.control-heading, label span, .telemetry div {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.control-heading span, label span, .telemetry span {
+	color: #8f9aaa;
+	font-size: 11px;
+	text-transform: uppercase;
+}
+
+.control-heading strong { color: #ff9db0; font-size: 13px; }
+
+label { display: grid; gap: 9px; color: #dce3eb; }
+label output { color: #f4f7fa; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; accent-color: #65e6d2; }
+
+.actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+
+button {
+	height: 36px;
+	border: 1px solid #65e6d2;
+	border-radius: 6px;
+	background: #65e6d2;
+	color: #07120f;
+	font-weight: 720;
+	cursor: pointer;
+}
+
+button.secondary { border-color: rgba(255,255,255,.18); background: transparent; color: #edf2f7; }
+button:active { transform: translateY(1px); }
+
+.telemetry { display: grid; gap: 10px; margin-top: auto; }
+.telemetry div { border-top: 1px solid rgba(255,255,255,.08); padding-top: 10px; }
+.telemetry strong { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+@media (max-width: 760px) {
+	.app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
+	.controls { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-left: 0; border-top: 1px solid rgba(255,255,255,.09); padding: 14px; gap: 14px; }
+	.control-heading, .actions, .telemetry { grid-column: 1 / -1; }
+	.telemetry { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
