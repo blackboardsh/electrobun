@@ -848,6 +848,7 @@ void releaseObjCObject(id objcObject) {
     - (void)remove;
 
     - (void)setTransparent:(BOOL)transparent;
+    - (void)setAlphaBlending:(BOOL)enabled;
     - (void)setPassthrough:(BOOL)enable;
     - (void)setHidden:(BOOL)hidden;
     - (void)toggleMirrorMode:(BOOL)enable;
@@ -1298,6 +1299,25 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
             [self.nsView setWantsLayer:YES];
             self.nsView.layer.opacity = transparent ? 0 : 1;
         }
+    }
+
+    // Alpha compositing: unlike setTransparent (which hides the layer for the
+    // webview-tag show/hide dance), this keeps the layer visible and lets the
+    // surface's alpha channel composite against whatever is behind the view —
+    // what a transparent GPU-rendered window needs for rounded corners.
+    - (void)setAlphaBlending:(BOOL)enabled {
+        if (!self.nsView) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.nsView setWantsLayer:YES];
+            self.nsView.layer.opacity = 1;
+            self.nsView.layer.opaque = enabled ? NO : YES;
+            self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            if ([self.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+                CAMetalLayer *metalLayer = (CAMetalLayer *)self.nsView.layer;
+                metalLayer.opaque = enabled ? NO : YES;
+                metalLayer.backgroundColor = [[NSColor clearColor] CGColor];
+            }
+        });
     }
 
     - (BOOL)shouldSuppressMirrorMode {
@@ -7272,7 +7292,14 @@ extern "C" void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transpar
     });
 }
 
-extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+extern "C" void wgpuViewSetAlphaBlending(AbstractView *abstractView, BOOL enabled) {
+    if (!abstractView) return;
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setAlphaBlending:enabled];
+    });
+}
+
+extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
     if (!abstractView) return;
     runOnMainThreadAsyncVoid(^{
         [abstractView setPassthrough:enablePassthrough];

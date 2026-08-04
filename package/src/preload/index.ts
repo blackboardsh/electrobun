@@ -21,6 +21,7 @@ import { initDragRegions } from "./dragRegions";
 import { initExternalDropFocusRestoration } from "./externalDropFocus";
 import { initWebviewTag } from "./webviewTag";
 import { initWgpuTag } from "./wgpuTag";
+import { initUiTag } from "./uiTag";
 import {
 	initHostMessageBridge,
 	initLifecycleEvents,
@@ -73,3 +74,4 @@ initDragRegions();
 initExternalDropFocusRestoration();
 initWebviewTag();
 initWgpuTag();
+initUiTag();

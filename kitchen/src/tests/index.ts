@@ -20,6 +20,7 @@ import { sandboxTests } from "./sandbox.test";
 import { trayApiTests } from "./tray-api.test";
 import { runtimeTests } from "./runtime.test";
 import { opfsTests } from "./opfs.test";
+import { uiRuntimeTests } from "./ui-runtime.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -39,6 +40,8 @@ import { wgpuTagTests } from "./interactive/wgpu-tag.test";
 import { fullsizeFrameReproTests } from "./interactive/fullsize-frame-repro.test";
 import { permissionTests } from "./interactive/permissions.test";
 import { devtoolsLayoutTests } from "./interactive/devtools-layout.test";
+import { cottontailUiTests } from "./interactive/cottontail-ui.test";
+import { uiTagTests } from "./interactive/ui-tag.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -56,6 +59,7 @@ export const allTests: TestDefinition[] = [
   ...trayApiTests,
   ...runtimeTests,
   ...opfsTests,
+  ...uiRuntimeTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -79,6 +83,8 @@ export const allTests: TestDefinition[] = [
   ...fullsizeFrameReproTests,
   ...permissionTests,
   ...devtoolsLayoutTests,
+  ...cottontailUiTests,
+  ...uiTagTests,
 ];
 
 // Export by category for selective running

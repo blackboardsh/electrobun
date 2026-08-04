@@ -276,6 +276,54 @@ export const clipboardWriteText = (text: string): void => {
 	ffi.request.clipboardWriteText({ text });
 };
 
+// Screen Recording permission (macOS). Both calls are struct-free, so they
+// go straight to CoreGraphics; on other platforms they report granted.
+const coreGraphics = (() => {
+	if (OS !== "macos") return null;
+	try {
+		// eslint-disable-next-line @typescript-eslint/no-require-imports
+		const { dlopen, FFIType } = require("bun:ffi");
+		return dlopen(
+			"/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+			{
+				CGPreflightScreenCaptureAccess: { args: [], returns: FFIType.bool },
+				CGRequestScreenCaptureAccess: { args: [], returns: FFIType.bool },
+			},
+		);
+	} catch {
+		return null;
+	}
+})();
+
+export const screenCapture = {
+	/** Whether the app currently has Screen Recording permission. */
+	hasAccess(): boolean {
+		if (OS !== "macos") return true;
+		return coreGraphics
+			? Boolean(coreGraphics.symbols.CGPreflightScreenCaptureAccess())
+			: false;
+	},
+	/**
+	 * Ask macOS for Screen Recording permission. Shows the system prompt the
+	 * first time; afterwards the user must grant it in System Settings →
+	 * Privacy & Security → Screen Recording (and relaunch the app).
+	 */
+	requestAccess(): boolean {
+		if (OS !== "macos") return true;
+		return coreGraphics
+			? Boolean(coreGraphics.symbols.CGRequestScreenCaptureAccess())
+			: false;
+	},
+	/** Open the Screen Recording pane of System Settings (macOS). */
+	openSettings(): void {
+		if (OS !== "macos") return;
+		Bun.spawn([
+			"open",
+			"x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+		]);
+	},
+};
+
 /**
  * Read image from the system clipboard as PNG data.
  * @returns PNG image data as Uint8Array, or null if no image is available

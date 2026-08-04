@@ -97,6 +97,15 @@ export class WGPUView {
 		ffi.request.wgpuViewSetTransparent({ id: this.id, transparent });
 	}
 
+	/**
+	 * Enable alpha compositing: the surface's alpha channel blends against
+	 * whatever is behind the view (unlike setTransparent, which hides the
+	 * layer entirely). Required for transparent GPU-rendered windows.
+	 */
+	setAlphaBlending(enabled: boolean) {
+		ffi.request.wgpuViewSetAlphaBlending({ id: this.id, enabled });
+	}
+
 	setPassthrough(passthrough: boolean) {
 		ffi.request.wgpuViewSetPassthrough({ id: this.id, passthrough });
 	}

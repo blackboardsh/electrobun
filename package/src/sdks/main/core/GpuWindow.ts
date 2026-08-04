@@ -172,6 +172,12 @@ export class GpuWindow {
 			startPassthrough: false,
 		});
 
+		// A transparent window needs its full-window view to alpha-composite
+		// (startTransparent would hide the layer entirely — tag semantics).
+		if (this.transparent) {
+			wgpuView.setAlphaBlending(true);
+		}
+
 		this.wgpuViewId = wgpuView.id;
 	}
 
@@ -207,12 +213,25 @@ export class GpuWindow {
 		return this.activate();
 	}
 
+	private visible = true;
+
 	show() {
+		this.visible = true;
 		return ffi.request.showWindow({ winId: this.id, activate: true });
 	}
 
 	showInactive() {
+		this.visible = true;
 		return ffi.request.showWindow({ winId: this.id, activate: false });
+	}
+
+	hide() {
+		this.visible = false;
+		return ffi.request.hideWindow({ winId: this.id });
+	}
+
+	isVisible(): boolean {
+		return this.visible;
 	}
 
 	minimize() {

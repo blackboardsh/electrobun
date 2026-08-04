@@ -757,6 +757,11 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 
+			wgpuViewSetAlphaBlending: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
 				returns: FFIType.void,
@@ -1896,6 +1901,12 @@ const _ffiImpl = {
 
 		wgpuViewSetTransparent: (params: { id: number; transparent: boolean }) => {
 			core_.symbols.setWGPUViewTransparent(params.id, params.transparent);
+		},
+
+		wgpuViewSetAlphaBlending: (params: { id: number; enabled: boolean }) => {
+			const ptr = core_.symbols.getWGPUViewPointer(params.id);
+			if (!ptr) return;
+			native_.symbols.wgpuViewSetAlphaBlending(ptr, params.enabled);
 		},
 
 		wgpuViewSetPassthrough: (params: {
@@ -3310,6 +3321,9 @@ export const internalRpcHandlers = {
 			}
 
 			const { x, y, width, height } = params.frame;
+			// Keep the JS wrapper's frame current so main-process consumers
+			// (e.g. a UI tree mounted into this view) observe tag moves.
+			view.frame = { x, y, width, height };
 			native_.symbols.resizeWebview(
 				view.ptr,
 				x,
@@ -3318,6 +3332,14 @@ export const internalRpcHandlers = {
 				height,
 				toCString(params.masks ?? "[]"),
 			);
+		},
+		uiTagMount: (params: { id: number; name: string }) => {
+			// An <electrobun-ui> tag finished creating its native view; let a
+			// registered UI root (see electrobun/main/ui registerUIRoot) mount.
+			electrobunEventEmitter.emit("ui-tag-mount", {
+				id: params.id,
+				name: params.name,
+			});
 		},
 		webviewTagUpdateSrc: (params: { id: number; url: string }) => {
 			const webview = BrowserView.ensureWrapped(params.id);
