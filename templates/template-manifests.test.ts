@@ -9,6 +9,13 @@ type TemplateManifest = {
 };
 
 const templatesRoot = import.meta.dirname;
+const odinWgpuTemplates = [
+	"odin-alchemy-wgpu",
+	"odin-fluid-wgpu",
+	"odin-jelly-bunny-wgpu",
+	"odin-particles-wgpu",
+	"odin-tree-wgpu",
+] as const;
 const templateNames = readdirSync(templatesRoot, { withFileTypes: true })
 	.filter(
 		(entry) =>
@@ -95,5 +102,56 @@ describe("Electrobun template build scripts", () => {
 		}
 
 		expect(legacyImports).toEqual([]);
+	});
+
+	test("Odin WGPU showcases keep the native cross-platform template contract", () => {
+		const invalidTemplates: string[] = [];
+
+		for (const templateName of odinWgpuTemplates) {
+			const templateRoot = join(templatesRoot, templateName);
+			const configPath = join(templateRoot, "electrobun.config.ts");
+			const requiredFiles = [
+				"README.md",
+				"package.json",
+				"src/mainview/index.css",
+				"src/mainview/index.html",
+				"src/mainview/index.ts",
+				"src/odin/main.odin",
+				"tsconfig.json",
+			];
+
+			for (const file of requiredFiles) {
+				if (!existsSync(join(templateRoot, file))) {
+					invalidTemplates.push(`${templateName}: missing ${file}`);
+				}
+			}
+			if (!existsSync(configPath)) continue;
+
+			const config = readFileSync(configPath, "utf8");
+			if (!/mainProcess:\s*["']odin["']/.test(config)) {
+				invalidTemplates.push(`${templateName}: mainProcess is not odin`);
+			}
+			if ((config.match(/bundleWGPU:\s*true/g) ?? []).length !== 3) {
+				invalidTemplates.push(
+					`${templateName}: WGPU must be bundled for macOS, Linux, and Windows`,
+				);
+			}
+			if ((config.match(/bundleCEF:\s*false/g) ?? []).length !== 3) {
+				invalidTemplates.push(
+					`${templateName}: system webviews must be used on every platform`,
+				);
+			}
+
+			const tsconfig = JSON.parse(
+				readFileSync(join(templateRoot, "tsconfig.json"), "utf8"),
+			) as { compilerOptions?: { target?: string } };
+			if (tsconfig.compilerOptions?.target !== "ES2021") {
+				invalidTemplates.push(
+					`${templateName}: TypeScript target must be ES2021`,
+				);
+			}
+		}
+
+		expect(invalidTemplates).toEqual([]);
 	});
 });
