@@ -1,0 +1,19 @@
+{
+	"name": "electrobun-odin-alchemy-wgpu",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "An interactive cellular alchemy sandbox powered by Odin and a native Electrobun WGPU surface",
+	"scripts": {
+		"start": "hutch electrobun dev",
+		"dev": "hutch electrobun dev --watch",
+		"watch": "hutch electrobun dev --watch",
+		"build": "hutch electrobun build --env=production"
+	},
+	"dependencies": {
+		"electrobun": "file:../../package"
+	},
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

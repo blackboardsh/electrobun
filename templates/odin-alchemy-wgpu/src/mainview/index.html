@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Odin Alchemy Sandbox</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app" id="alchemy-app">
+			<electrobun-wgpu id="alchemy-surface"></electrobun-wgpu>
+			<div class="paint-layer" id="paint-layer" aria-label="Alchemy simulation canvas"></div>
+
+			<header class="topbar">
+				<div class="title-block">
+					<span class="eyebrow">ODIN / WGPU</span>
+					<h1>Alchemy Sandbox</h1>
+					<p id="surface-status">Preparing native surface</p>
+				</div>
+				<div class="transport" aria-label="Simulation controls">
+					<button id="pause-button" type="button">Pause</button>
+					<button id="step-button" type="button" class="secondary">Step</button>
+					<button id="reset-button" type="button" class="secondary">Reset</button>
+				</div>
+			</header>
+
+			<nav class="material-dock" aria-label="Materials">
+				<button class="material active" type="button" data-material="1" aria-pressed="true">
+					<span class="swatch sand"></span><span>Sand</span><kbd>1</kbd>
+				</button>
+				<button class="material" type="button" data-material="2" aria-pressed="false">
+					<span class="swatch water"></span><span>Water</span><kbd>2</kbd>
+				</button>
+				<button class="material" type="button" data-material="3" aria-pressed="false">
+					<span class="swatch fire"></span><span>Fire</span><kbd>3</kbd>
+				</button>
+				<button class="material" type="button" data-material="4" aria-pressed="false">
+					<span class="swatch seed"></span><span>Seed</span><kbd>4</kbd>
+				</button>
+				<button class="material" type="button" data-material="5" aria-pressed="false">
+					<span class="swatch oil"></span><span>Oil</span><kbd>5</kbd>
+				</button>
+				<button class="material" type="button" data-material="6" aria-pressed="false">
+					<span class="swatch stone"></span><span>Stone</span><kbd>6</kbd>
+				</button>
+				<button class="material" type="button" data-material="0" aria-pressed="false">
+					<span class="swatch erase"></span><span>Erase</span><kbd>7</kbd>
+				</button>
+			</nav>
+
+			<section class="settings" aria-label="Brush settings">
+				<label for="brush-size">
+					<span>Brush</span>
+					<strong id="brush-value">6</strong>
+				</label>
+				<input id="brush-size" type="range" min="1" max="18" step="1" value="6" />
+				<div class="seed-control">
+					<label for="seed-input">Seed</label>
+					<input id="seed-input" type="number" min="1" max="4294967295" value="270544960" />
+					<button id="seed-button" type="button">Apply</button>
+				</div>
+			</section>
+
+			<footer class="stats" aria-label="Simulation statistics">
+				<div><span>FPS</span><strong id="fps-stat">--</strong></div>
+				<div><span>Cells</span><strong id="cell-stat">--</strong></div>
+				<div><span>Tick</span><strong id="tick-stat">--</strong></div>
+				<div><span>Grid</span><strong id="grid-stat">320 x 180</strong></div>
+				<div><span>Surface</span><strong id="surface-stat">--</strong></div>
+			</footer>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>
