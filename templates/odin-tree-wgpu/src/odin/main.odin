@@ -446,13 +446,15 @@ smoothstep01 :: proc(value: f32) -> f32 {
 	return t * t * (3 - 2 * t)
 }
 
-wind_point :: proc(point: Vec3, clock, strength, phase: f32) -> Vec3 {
+wind_point :: proc(point: Vec3, clock, strength: f32) -> Vec3 {
 	height := clamp(point.y / 3.4, 0, 1)
-	weight := height * height * (0.035 + strength * 0.22)
+	weight := height * height * strength * 0.255
+	x_phase := clock * 0.82 + point.y * 1.46 + point.x * 0.73 + point.z * 0.41
+	z_phase := clock * 0.57 + point.y * 1.11 - point.x * 0.37 + point.z * 0.67
 	return {
-		point.x + math.sin(clock * 0.82 + point.y * 1.46 + phase) * weight,
+		point.x + math.sin(x_phase) * weight,
 		point.y,
-		point.z + math.sin(clock * 0.57 + point.y * 1.11 + phase * 0.73) * weight * 0.55,
+		point.z + math.sin(z_phase) * weight * 0.55,
 	}
 }
 
@@ -516,9 +518,9 @@ pack_instances :: proc(
 			(growth - branch.birth_start) /
 				max(branch.birth_end - branch.birth_start, 0.001),
 		)
-		start := wind_point(branch.start, clock, params.wind, branch.phase)
+		start := wind_point(branch.start, clock, params.wind)
 		partial_end := vec_lerp(branch.start, branch.end, grown)
-		end := wind_point(partial_end, clock, params.wind, branch.phase)
+		end := wind_point(partial_end, clock, params.wind)
 		p0 := project_point(start, aspect, clock)
 		p1 := project_point(end, aspect, clock)
 		depth_light := clamp(0.82 + (p0.depth + p1.depth) * 0.055, 0.64, 1.08)
@@ -550,7 +552,7 @@ pack_instances :: proc(
 			continue
 		}
 		fade := smoothstep01((growth - leaf.birth) / 0.11)
-		position := wind_point(leaf.position, clock, params.wind, leaf.phase)
+		position := wind_point(leaf.position, clock, params.wind)
 		projected := project_point(position, aspect, clock)
 		angle := leaf.angle + math.sin(clock * 1.15 + leaf.phase) * params.wind * 0.18
 		depth_light := clamp(0.83 + projected.depth * 0.08, 0.68, 1.12)
