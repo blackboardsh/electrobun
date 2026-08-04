@@ -339,22 +339,23 @@ collide_node :: proc(node: ^Node, aspect: f32, squish: f32) {
 
 	if node.position.x < left {
 		node.position.x = left
-		node.previous.x = node.position.x + velocity.x * restitution
-		node.previous.y = node.position.y - velocity.y * friction
+		velocity.x = -velocity.x * restitution
+		velocity.y *= friction
 	} else if node.position.x > right {
 		node.position.x = right
-		node.previous.x = node.position.x + velocity.x * restitution
-		node.previous.y = node.position.y - velocity.y * friction
+		velocity.x = -velocity.x * restitution
+		velocity.y *= friction
 	}
 	if node.position.y < bottom {
 		node.position.y = bottom
-		node.previous.y = node.position.y + velocity.y * restitution
-		node.previous.x = node.position.x - velocity.x * friction
+		velocity.y = -velocity.y * restitution
+		velocity.x *= friction
 	} else if node.position.y > top {
 		node.position.y = top
-		node.previous.y = node.position.y + velocity.y * restitution
-		node.previous.x = node.position.x - velocity.x * friction
+		velocity.y = -velocity.y * restitution
+		velocity.x *= friction
 	}
+	node.previous = v_sub(node.position, velocity)
 }
 
 sim_substep :: proc(
