@@ -357,10 +357,11 @@ export function live<T>(fn: () => T): Reactive<T> {
 	if (typeof fn !== "function") {
 		throw new Error("Warren: live() takes a function: live(() => ...)");
 	}
-	// Nested inside a running scope: a tracking pass-through. The enclosing
-	// scope already tracks the dynamic extent, so evaluate and return the
-	// value.
-	if (trackingScope) {
+	// Nested inside a running scope while actually tracking: a pass-through.
+	// The enclosing scope already tracks the dynamic extent, so evaluate and
+	// return the value. Inside inert() (component bodies, escapes) tracking
+	// is off, so a live() there is a genuine new binding, not a nested one.
+	if (trackingScope && inertDepth === 0) {
 		if (devMode) {
 			console.warn(
 				"Warren: nested live() — the enclosing scope already tracks these reads; the marker is redundant here.",

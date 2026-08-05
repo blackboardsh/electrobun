@@ -50,6 +50,12 @@ export function element(create: () => void): UIElement {
 
 export interface WarrenRenderer {
 	text(value: string | number | LiveBinding<string | number>): void;
+	/**
+	 * A claimed live() child. Text-only renderers may bind it as reactive
+	 * text; DOM-style renderers should evaluate inside a region so element
+	 * results ({live(() => open() && <div/>)}) remount on change.
+	 */
+	liveChild(binding: LiveBinding<unknown>): void;
 	dynamic(build: () => void): void;
 	each<T>(
 		items: () => readonly T[],
@@ -143,20 +149,7 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 		if (isLive(child)) {
 			const binding = child as LiveBinding<unknown>;
 			binding.claimed = true;
-			// A live child can be a text binding or a conditional element
-			// expression ({live(() => open() && <div/>)}). Peek at the first
-			// value: strings/numbers stay fine-grained text bindings; anything
-			// else (elements, arrays, null, booleans) becomes a dynamic region
-			// that mounts whatever the expression returns. A binding should
-			// consistently return one or the other.
-			const first = inert(() => binding.fn());
-			if (typeof first === "string" || typeof first === "number") {
-				renderer.text(child as LiveBinding<string | number>);
-			} else {
-				renderer.dynamic(() => {
-					mountChild(binding.fn() as UIChild);
-				});
-			}
+			renderer.liveChild(binding);
 			return;
 		}
 		if (typeof child === "function") {
@@ -178,7 +171,13 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 			if (key !== undefined && resolved["key"] === undefined) {
 				resolved = { ...resolved, key };
 			}
-			const result = type(resolved);
+			// Component bodies are inert (the one-line rule) — including when
+			// the component is created lazily inside a live region's tracked
+			// build. Props were already evaluated at the call site, so region
+			// reactivity on prop expressions is unaffected; statement lives
+			// declared in the body stay deferred instead of running (and
+			// tracking) synchronously into the enclosing region.
+			const result = inert(() => type(resolved));
 			if (isUIElement(result)) return result;
 			// Match markers pass through raw so Switch can collect them.
 			if (isMatch(result)) return result as unknown as UIElement;

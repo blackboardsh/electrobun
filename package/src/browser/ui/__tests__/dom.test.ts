@@ -323,6 +323,45 @@ describe("DOM renderer", () => {
 		expect(div!.textContent).toBe("v2");
 	});
 
+	test("components created inside live regions keep inert bodies and deferred lives", () => {
+		const [open, setOpen] = signal(true);
+		const [label, setLabel] = signal("a");
+		let regionBuilds = 0;
+		let effectRuns = 0;
+		function Panel() {
+			// Statement live in a body mounted from a live region: must be
+			// deferred (declared-later variable is fine) and must NOT leak
+			// its reads into the region's dependencies.
+			live(() => {
+				effectRuns++;
+				laterDeclared();
+			});
+			const laterDeclared = () => label();
+			return jsx("span", { class: live(label), children: "panel" });
+		}
+		const { container } = mount(() =>
+			jsx("div", {
+				children: live(() => {
+					regionBuilds++;
+					return open() ? jsx(Panel, {}) : null;
+				}),
+			}),
+		);
+		const [div] = container.children;
+		expect(div!.children[0]!.className).toBe("a");
+		expect(effectRuns).toBe(1);
+		expect(regionBuilds).toBe(1);
+		// Inner signal change: value binding + effect update, region untouched.
+		setLabel("b");
+		expect(div!.children[0]!.className).toBe("b");
+		expect(effectRuns).toBe(2);
+		expect(regionBuilds).toBe(1);
+		// Region's own dependency still reconciles it.
+		setOpen(false);
+		expect(div!.children.length).toBe(0);
+		expect(regionBuilds).toBe(2);
+	});
+
 	test("Fragment and array children mount in order", () => {
 		const { container } = mount(() =>
 			Fragment({

@@ -366,8 +366,45 @@ function createIntrinsic(type: string, props: Record<string, unknown>): void {
 	}
 }
 
+function createLiveChild(binding: LiveBinding<unknown>): void {
+	const point = requireInsert();
+	const doc = docOf(point.parent);
+	const start = doc.createComment("warren");
+	const end = doc.createComment("/warren");
+	insertNode(start);
+	insertNode(end);
+	const parent = point.parent;
+	const ns = point.ns;
+	liveScope(() => {
+		const value = binding.fn();
+		if (typeof value === "string" || typeof value === "number") {
+			// Primitive result: update a single text node in place instead of
+			// rebuilding the region.
+			const existing = start.nextSibling;
+			if (
+				existing !== null &&
+				existing !== end &&
+				existing.nodeType === 3 &&
+				existing.nextSibling === end
+			) {
+				(existing as Text).data = String(value);
+				return;
+			}
+			clearRange(parent, start, end);
+			parent.insertBefore(doc.createTextNode(String(value)), end);
+			return;
+		}
+		clearRange(parent, start, end);
+		if (value == null || typeof value === "boolean") return;
+		withInsert({ parent, before: end, ns }, () =>
+			mountChild(value as UIChild),
+		);
+	});
+}
+
 const renderer: WarrenRenderer = {
 	text: createText,
+	liveChild: createLiveChild,
 	dynamic: createDynamic,
 	each: createEach,
 	intrinsic: createIntrinsic,

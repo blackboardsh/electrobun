@@ -48,6 +48,11 @@ const renderer: WarrenRenderer = {
 	text(value) {
 		ui.text(value as Reactive<string | number>);
 	},
+	liveChild(binding) {
+		// GPU text nodes are leaves with no wrapper: bind as reactive text.
+		// (Element-returning live children aren't part of the GPU JSX types.)
+		ui.text(binding as Reactive<string | number>);
+	},
 	dynamic(build) {
 		ui.dynamic({}, build);
 	},
