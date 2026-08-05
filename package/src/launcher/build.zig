@@ -18,9 +18,13 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "launcher",
-        .root_source_file = b.path("main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+            // Link libc for signal handling on Linux
+            .link_libc = true,
+        }),
     });
 
     // Developer ID signing must be able to add LC_CODE_SIGNATURE without
@@ -28,9 +32,6 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .macos and target.result.cpu.arch == .x86_64) {
         exe.headerpad_size = 0x1000;
     }
-
-    // Link libc for signal handling on Linux
-    exe.linkLibC();
 
     // For production Windows builds, use GUI subsystem to hide console window
     // For dev builds (Debug mode), use default console subsystem for CLI interaction
@@ -43,16 +44,20 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(exe);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("linux_dependencies.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("linux_dependencies.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
     });
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const automation_tests = b.addTest(.{
-        .root_source_file = b.path("automation.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("automation.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
     });
     const run_automation_tests = b.addRunArtifact(automation_tests);
 

@@ -8,6 +8,9 @@ const c = @cImport({
     @cInclude("stdlib.h");
 });
 
+// Initialized at the top of main().
+var g_io: std.Io = undefined;
+
 var child_pid: std.process.Child.Id = undefined;
 var should_exit: bool = false;
 var sigint_count: u32 = 0;
@@ -60,17 +63,17 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
         lpCurrentDirectory: ?LPWSTR,
         lpStartupInfo: *STARTUPINFOW,
         lpProcessInformation: *PROCESS_INFORMATION,
-    ) callconv(win.WINAPI) BOOL;
+    ) callconv(.winapi) BOOL;
 
-    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(win.WINAPI) DWORD;
-    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(win.WINAPI) BOOL;
-    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(.winapi) DWORD;
+    extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(.winapi) BOOL;
+    extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.winapi) BOOL;
 
     // Console attachment for dev mode
-    extern "kernel32" fn AttachConsole(dwProcessId: DWORD) callconv(win.WINAPI) BOOL;
-    extern "kernel32" fn FreeConsole() callconv(win.WINAPI) BOOL;
-    extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(win.WINAPI) ?HANDLE;
-    extern "kernel32" fn SetStdHandle(nStdHandle: DWORD, hHandle: HANDLE) callconv(win.WINAPI) BOOL;
+    extern "kernel32" fn AttachConsole(dwProcessId: DWORD) callconv(.winapi) BOOL;
+    extern "kernel32" fn FreeConsole() callconv(.winapi) BOOL;
+    extern "kernel32" fn GetStdHandle(nStdHandle: DWORD) callconv(.winapi) ?HANDLE;
+    extern "kernel32" fn SetStdHandle(nStdHandle: DWORD, hHandle: HANDLE) callconv(.winapi) BOOL;
 
     const ATTACH_PARENT_PROCESS: DWORD = 0xFFFFFFFF;
     const STD_OUTPUT_HANDLE: DWORD = 0xFFFFFFF5; // -11
@@ -86,10 +89,7 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     defer allocator.free(version_path);
 
     // Read the file
-    const file = std.fs.openFileAbsolute(version_path, .{}) catch return false;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return false;
+    const content = std.Io.Dir.cwd().readFileAlloc(g_io, version_path, allocator, .limited(1024 * 10)) catch return false;
     defer allocator.free(content);
 
     // Parse JSON and look for "channel":"dev"
@@ -118,10 +118,7 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
     defer allocator.free(build_path);
 
-    const file = std.fs.openFileAbsolute(build_path, .{}) catch return .cottontail;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return .cottontail;
+    const content = std.Io.Dir.cwd().readFileAlloc(g_io, build_path, allocator, .limited(1024 * 10)) catch return .cottontail;
     defer allocator.free(content);
 
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .cottontail;
@@ -151,14 +148,11 @@ fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProc
     return .cottontail;
 }
 
-fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: anytype) !void {
+fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: *std.process.Environ.Map) !void {
     try env_map.put("COTTONTAIL_ELECTROBUN_DIST", exe_dir);
 
     const version_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "version.json" }) catch return;
-    const file = std.fs.openFileAbsolute(version_path, .{}) catch return;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 1024 * 10) catch return;
+    const content = std.Io.Dir.cwd().readFileAlloc(g_io, version_path, allocator, .limited(1024 * 10)) catch return;
     const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return;
 
     if (parsed.value.object.get("name")) |value| {
@@ -173,13 +167,13 @@ fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env
 }
 
 // SIGALRM handler - safety net timeout for hung shutdowns
-fn alarmHandler(_: c_int) callconv(.C) void {
+fn alarmHandler(_: c_int) callconv(.c) void {
     // Timeout expired - app hung during shutdown. Kill entire process group.
     _ = c.kill(0, c.SIGKILL);
 }
 
 // Signal handler for graceful shutdown coordination
-fn signalHandler(sig: c_int) callconv(.C) void {
+fn signalHandler(sig: c_int) callconv(.c) void {
     if (sig == c.SIGINT) {
         sigint_count += 1;
         if (sigint_count == 1) {
@@ -205,11 +199,17 @@ fn signalHandler(sig: c_int) callconv(.C) void {
     }
 }
 
-pub fn main() !void {
-    const alloc = std.heap.page_allocator;
+pub fn main(init: std.process.Init) !void {
+    g_io = init.io;
+    const io = init.io;
+    const alloc = init.gpa;
 
-    var exePathBuffer: [1024]u8 = undefined;
-    const exe_dir = try std.fs.selfExeDirPath(exePathBuffer[0..]);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    const exe_path = try std.process.executablePathAlloc(io, arena_alloc);
+    const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
 
     std.debug.print("Launcher starting on {s}...\n", .{@tagName(builtin.os.tag)});
     std.debug.print("Current directory: {s}\n", .{exe_dir});
@@ -222,10 +222,14 @@ pub fn main() !void {
         _ = c.signal(c.SIGALRM, alarmHandler);
     }
 
-    var arena = std.heap.ArenaAllocator.init(alloc);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-    const launcher_args = try std.process.argsAlloc(arena_alloc);
+    const launcher_args = blk: {
+        var args_list: std.ArrayList([]const u8) = .empty;
+        var args_iterator = try std.process.Args.Iterator.initAllocator(init.minimal.args, arena_alloc);
+        while (args_iterator.next()) |arg| {
+            try args_list.append(arena_alloc, arg);
+        }
+        break :blk args_list.items;
+    };
     const main_process = detectMainProcess(arena_alloc, exe_dir);
 
     // Platform-specific paths
@@ -252,10 +256,8 @@ pub fn main() !void {
         },
     }
 
-    // Create an instance of ChildProcess
-    var child_process = std.process.Child.init(argv, alloc);
-    child_process.cwd = exe_dir;
-    var env_map = try std.process.getEnvMap(arena_alloc);
+    // Child processes inherit the launcher's environment plus our overrides.
+    const env_map = init.environ_map;
 
     // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
@@ -274,7 +276,7 @@ pub fn main() !void {
                     automation.private_inspector_server_environment_variable,
                     server,
                 );
-                env_map.remove(automation.inspector_server_environment_variable);
+                _ = env_map.swapRemove(automation.inspector_server_environment_variable);
             }
         }
 
@@ -292,22 +294,22 @@ pub fn main() !void {
 
         // Check if CEF libraries exist and set LD_PRELOAD if needed
         const cef_exists = blk: {
-            std.fs.accessAbsolute(cef_lib_path, .{}) catch {
+            std.Io.Dir.accessAbsolute(io, cef_lib_path, .{}) catch {
                 break :blk false;
             };
             break :blk true;
         };
         const swiftshader_exists = blk: {
-            std.fs.accessAbsolute(swiftshader_lib_path, .{}) catch {
+            std.Io.Dir.accessAbsolute(io, swiftshader_lib_path, .{}) catch {
                 break :blk false;
             };
             break :blk true;
         };
 
         if (cef_exists or swiftshader_exists) {
-            var preload_libs = std.ArrayList([]const u8).init(arena_alloc);
-            if (cef_exists) try preload_libs.append("./libcef.so");
-            if (swiftshader_exists) try preload_libs.append("./libvk_swiftshader.so");
+            var preload_libs: std.ArrayList([]const u8) = .empty;
+            if (cef_exists) try preload_libs.append(arena_alloc, "./libcef.so");
+            if (swiftshader_exists) try preload_libs.append(arena_alloc, "./libvk_swiftshader.so");
 
             const ld_preload = try std.mem.join(arena_alloc, ":", preload_libs.items);
             try env_map.put("LD_PRELOAD", ld_preload);
@@ -317,29 +319,28 @@ pub fn main() !void {
         // Set ICU_DATA for external ICU data file (Linux)
         try env_map.put("ICU_DATA", exe_dir);
         if (main_process == .cottontail) {
-            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+            try configureCottontailEnv(arena_alloc, exe_dir, env_map);
         }
     } else if (builtin.os.tag == .windows) {
         // On Windows, get environment and set ICU_DATA for external ICU data
         try env_map.put("ICU_DATA", exe_dir);
         if (main_process == .cottontail) {
-            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+            try configureCottontailEnv(arena_alloc, exe_dir, env_map);
         }
     } else {
         // On macOS, get environment and inherit it (uses system ICU)
         if (main_process == .cottontail) {
-            try configureCottontailEnv(arena_alloc, exe_dir, &env_map);
+            try configureCottontailEnv(arena_alloc, exe_dir, env_map);
         }
     }
-    child_process.env_map = &env_map;
 
     std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
 
     // Check if console mode is forced via environment variable
-    const force_console = if (std.process.getEnvVarOwned(arena_alloc, "ELECTROBUN_CONSOLE")) |val| blk: {
-        defer arena_alloc.free(val);
-        break :blk std.mem.eql(u8, val, "1");
-    } else |_| false;
+    const force_console = if (env_map.get("ELECTROBUN_CONSOLE")) |val|
+        std.mem.eql(u8, val, "1")
+    else
+        false;
 
     // Check if this is a dev build by reading version.json, or if console is forced
     const is_dev_build = force_console or isDevBuild(arena_alloc, exe_dir);
@@ -358,11 +359,11 @@ pub fn main() !void {
         const win = windows_imports;
 
         // Build command line (needs to be mutable for CreateProcessW)
-        const cmd_line = try std.fmt.allocPrintZ(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] });
-        const cmd_line_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, cmd_line);
+        const cmd_line = try std.fmt.allocPrintSentinel(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] }, 0);
+        const cmd_line_w = try std.unicode.wtf8ToWtf16LeAllocZ(arena_alloc, cmd_line);
 
         // Convert current directory to UTF-16
-        const cwd_w = try std.unicode.utf8ToUtf16LeWithNull(arena_alloc, exe_dir);
+        const cwd_w = try std.unicode.wtf8ToWtf16LeAllocZ(arena_alloc, exe_dir);
 
         var si: win.STARTUPINFOW = std.mem.zeroes(win.STARTUPINFOW);
         si.cb = @sizeOf(win.STARTUPINFOW);
@@ -374,15 +375,15 @@ pub fn main() !void {
             @constCast(cmd_line_w.ptr),
             null,
             null,
-            0, // Don't inherit handles
+            .FALSE, // Don't inherit handles
             win.CREATE_NO_WINDOW,
             null,
-            cwd_w.ptr,
+            @constCast(cwd_w.ptr),
             &si,
             &pi,
         );
 
-        if (success == 0) {
+        if (!success.toBool()) {
             std.debug.print("Failed to create process\n", .{});
             return error.SpawnFailed;
         }
@@ -408,27 +409,34 @@ pub fn main() !void {
         // On Windows dev builds, attach to parent console for output
         if (builtin.os.tag == .windows) {
             const win = windows_imports;
-            if (win.AttachConsole(win.ATTACH_PARENT_PROCESS) != 0) {
+            if (win.AttachConsole(win.ATTACH_PARENT_PROCESS).toBool()) {
                 std.debug.print("Attached to parent console\n", .{});
             }
         }
 
-        child_process.stdout_behavior = .Inherit;
-        child_process.stderr_behavior = .Inherit;
+        var child_process = try std.process.spawn(io, .{
+            .argv = argv,
+            .cwd = .{ .path = exe_dir },
+            .environ_map = env_map,
+            .stdout = .inherit,
+            .stderr = .inherit,
+        });
+        child_pid = child_process.id.?;
 
-        try child_process.spawn();
-        child_pid = child_process.id;
-
-        std.debug.print("Child process spawned with PID {d}\n", .{child_pid});
+        const child_pid_value: usize = if (builtin.os.tag == .windows)
+            @intFromPtr(child_pid)
+        else
+            @intCast(child_pid);
+        std.debug.print("Child process spawned with PID {d}\n", .{child_pid_value});
 
         // Wait for the subprocess to complete
-        const result = child_process.wait() catch |err| {
+        const result = child_process.wait(io) catch |err| {
             std.debug.print("Failed to wait for child process: {}\n", .{err});
             return;
         };
 
         switch (result) {
-            .Exited => |code| {
+            .exited => |code| {
                 if (code != 0) {
                     std.debug.print("Child process exited with code: {d}\n", .{code});
 
@@ -436,21 +444,24 @@ pub fn main() !void {
                         if (std.fs.path.join(arena_alloc, &.{ exe_dir, "libNativeWrapper.so" })) |native_wrapper_path| {
                             _ = linux_dependencies.diagnoseNativeWrapperFailure(
                                 alloc,
+                                io,
+                                init.minimal.environ,
                                 native_wrapper_path,
                                 env_map.get("LD_LIBRARY_PATH"),
                             ) catch false;
                         } else |_| {}
                     }
 
-                    std.process.exit(@intCast(code));
+                    std.process.exit(code);
                 }
             },
-            .Signal => |sig| {
+            .signal => |sig| {
+                const sig_value: u32 = @intFromEnum(sig);
                 // Don't print on SIGINT/SIGTERM - these are expected during graceful shutdown
-                if (builtin.os.tag != .windows and sig != c.SIGINT and sig != c.SIGTERM) {
-                    std.debug.print("Child process terminated by signal: {d}\n", .{sig});
+                if (builtin.os.tag != .windows and sig_value != c.SIGINT and sig_value != c.SIGTERM) {
+                    std.debug.print("Child process terminated by signal: {d}\n", .{sig_value});
                 }
-                std.process.exit(128 + @as(u8, @intCast(sig)));
+                std.process.exit(@intCast(128 + @as(u8, @intCast(sig_value))));
             },
             else => {
                 std.debug.print("Child process terminated unexpectedly\n", .{});

@@ -3,27 +3,82 @@ const builtin = @import("builtin");
 
 const allocator = std.heap.c_allocator;
 
-const StartEventLoopFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.C) void;
-const ForceExitFn = *const fn (c_int) callconv(.C) void;
+// Lazily-initialized event-loop-free Io implementation. The library keeps its
+// C-ABI surface unchanged, so `std.Io` is not threaded through call sites.
+var io_state: struct {
+    status: std.atomic.Value(u8) = .init(0), // 0 = uninitialized, 1 = initializing, 2 = ready
+    threaded: std.Io.Threaded = undefined,
+} = .{};
+
+fn coreIo() std.Io {
+    while (true) {
+        switch (io_state.status.load(.acquire)) {
+            2 => return io_state.threaded.io(),
+            0 => {
+                if (io_state.status.cmpxchgStrong(0, 1, .acquire, .acquire) == null) {
+                    io_state.threaded = std.Io.Threaded.init(allocator, .{});
+                    io_state.status.store(2, .release);
+                    return io_state.threaded.io();
+                }
+            },
+            else => std.atomic.spinLoopHint(),
+        }
+    }
+}
+
+fn allocPrintZ(gpa: std.mem.Allocator, comptime fmt: []const u8, args: anytype) std.mem.Allocator.Error![:0]u8 {
+    return std.fmt.allocPrintSentinel(gpa, fmt, args, 0);
+}
+
+// std.DynLib no longer supports Windows, so provide a LoadLibrary-backed
+// equivalent with the same open/close/lookup surface there.
+const CoreDynLib = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+
+    extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?win.HMODULE;
+    extern "kernel32" fn FreeLibrary(hModule: win.HMODULE) callconv(.winapi) win.BOOL;
+    extern "kernel32" fn GetProcAddress(hModule: win.HMODULE, lpProcName: [*:0]const u8) callconv(.winapi) ?win.FARPROC;
+
+    module: win.HMODULE,
+
+    pub fn open(path: []const u8) !@This() {
+        const path_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, path);
+        defer allocator.free(path_w);
+        const module = LoadLibraryW(path_w.ptr) orelse return error.FileNotFound;
+        return .{ .module = module };
+    }
+
+    pub fn close(self: *@This()) void {
+        _ = FreeLibrary(self.module);
+    }
+
+    pub fn lookup(self: *@This(), comptime T: type, name: [:0]const u8) ?T {
+        const address = GetProcAddress(self.module, name.ptr) orelse return null;
+        return @ptrCast(@alignCast(address));
+    }
+} else std.DynLib;
+
+const StartEventLoopFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) void;
+const ForceExitFn = *const fn (c_int) callconv(.c) void;
 const WindowPtr = ?*anyopaque;
 const WebviewPtr = ?*anyopaque;
 const WgpuViewPtr = ?*anyopaque;
 const TrayPtr = ?*anyopaque;
-const WindowCloseHandler = *const fn (u32) callconv(.C) void;
-const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
-const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.C) void;
-const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
-const WindowFocusHandler = *const fn (u32) callconv(.C) void;
-const WindowBlurHandler = *const fn (u32) callconv(.C) void;
-const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
-const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
-const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
-const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
-const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
-const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.C) void;
-const QuitRequestedHandler = *const fn () callconv(.C) void;
-const URLOpenHandler = *const fn ([*:0]const u8) callconv(.C) void;
-const AppReopenHandler = *const fn () callconv(.C) void;
+const WindowCloseHandler = *const fn (u32) callconv(.c) void;
+const WindowShouldCloseHandler = *const fn (u32) callconv(.c) void;
+const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.c) void;
+const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.c) void;
+const WindowFocusHandler = *const fn (u32) callconv(.c) void;
+const WindowBlurHandler = *const fn (u32) callconv(.c) void;
+const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.c) void;
+const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.c) u32;
+const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.c) void;
+const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.c) void;
+const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.c) void;
+const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.c) void;
+const QuitRequestedHandler = *const fn () callconv(.c) void;
+const URLOpenHandler = *const fn ([*:0]const u8) callconv(.c) void;
+const AppReopenHandler = *const fn () callconv(.c) void;
 const Aes256Gcm = std.crypto.aead.aes_gcm.Aes256Gcm;
 const WebviewSecretKey = [Aes256Gcm.key_length]u8;
 const websocket_magic = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
@@ -132,7 +187,7 @@ const HostTransportDebugState = struct {
 };
 
 const NativeWrapperState = struct {
-    lib: std.DynLib,
+    lib: CoreDynLib,
     path: []u8,
     start_event_loop: StartEventLoopFn,
     force_exit: ForceExitFn,
@@ -147,42 +202,43 @@ var next_webview_id: u32 = 1;
 var next_wgpu_view_id: u32 = 1;
 var tray_registry = std.AutoHashMap(u32, TrayState).init(allocator);
 var window_registry = std.AutoHashMap(u32, WindowState).init(allocator);
-var window_registry_mutex: std.Thread.Mutex = .{};
+var window_registry_mutex: std.Io.Mutex = .init;
 var webview_registry = std.AutoHashMap(u32, WebviewState).init(allocator);
-var webview_registry_mutex: std.Thread.Mutex = .{};
+var webview_registry_mutex: std.Io.Mutex = .init;
 var wgpu_view_registry = std.AutoHashMap(u32, WgpuViewState).init(allocator);
-var wgpu_view_registry_mutex: std.Thread.Mutex = .{};
-var pending_host_messages = std.ArrayList(PendingHostMessage).init(allocator);
-var pending_host_messages_mutex: std.Thread.Mutex = .{};
-var pending_host_transport_sends = std.ArrayList(PendingHostTransportSend).init(allocator);
+var wgpu_view_registry_mutex: std.Io.Mutex = .init;
+var pending_host_messages: std.ArrayList(PendingHostMessage) = .empty;
+var pending_host_messages_mutex: std.Io.Mutex = .init;
+var pending_host_transport_sends: std.ArrayList(PendingHostTransportSend) = .empty;
 var pending_host_transport_sends_head: usize = 0;
-var pending_host_transport_sends_mutex: std.Thread.Mutex = .{};
-var pending_host_transport_sends_condition: std.Thread.Condition = .{};
+var pending_host_transport_sends_mutex: std.Io.Mutex = .init;
+var pending_host_transport_sends_condition: std.Io.Condition = .init;
 var pending_host_transport_send_worker_started = false;
-var host_transport_socket_write_mutex: std.Thread.Mutex = .{};
+var host_transport_socket_write_mutex: std.Io.Mutex = .init;
 var webview_runtime_state = WebviewRuntimeState{};
 var host_transport_state = HostTransportState{};
-var host_transport_mutex: std.Thread.Mutex = .{};
+var host_transport_mutex: std.Io.Mutex = .init;
 var host_transport_debug_state = HostTransportDebugState{};
-var host_transport_debug_mutex: std.Thread.Mutex = .{};
+var host_transport_debug_mutex: std.Io.Mutex = .init;
 var default_webview_callbacks = DefaultWebviewCallbacks{};
 var managed_quit_requested_handler: ?QuitRequestedHandler = null;
 var exit_on_last_window_closed: bool = true;
 var host_message_wakeup_state = HostMessageWakeupState{};
-var host_message_wakeup_mutex: std.Thread.Mutex = .{};
+var host_message_wakeup_mutex: std.Io.Mutex = .init;
 var runtime_callbacks_async = false;
 var pending_runtime_callback_payloads = std.AutoHashMap(usize, [:0]u8).init(allocator);
-var pending_runtime_callback_payloads_mutex: std.Thread.Mutex = .{};
+var pending_runtime_callback_payloads_mutex: std.Io.Mutex = .init;
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
 
 fn setNonblocking(fd: std.posix.fd_t) void {
     if (builtin.os.tag == .windows) return;
 
-    const flags_bits: u32 = @intCast(std.posix.fcntl(fd, std.posix.F.GETFL, 0) catch return);
-    var flags: std.posix.O = @as(std.posix.O, @bitCast(flags_bits));
+    const flags_bits = std.c.fcntl(fd, std.c.F.GETFL, @as(c_int, 0));
+    if (flags_bits < 0) return;
+    var flags: std.c.O = @bitCast(@as(u32, @bitCast(flags_bits)));
     flags.NONBLOCK = true;
-    _ = std.posix.fcntl(fd, std.posix.F.SETFL, @as(u32, @bitCast(flags))) catch {};
+    _ = std.c.fcntl(fd, std.c.F.SETFL, @as(c_int, @bitCast(@as(u32, @bitCast(flags)))));
 }
 
 fn drainHostMessageWakeupLocked() void {
@@ -197,11 +253,8 @@ fn drainHostMessageWakeupLocked() void {
     };
     var buffer: [64]u8 = undefined;
     while (true) {
-        const read_count = std.posix.read(read_fd, &buffer) catch |err| switch (err) {
-            error.WouldBlock => break,
-            else => break,
-        };
-        if (read_count == 0 or read_count < buffer.len) {
+        const read_count = std.c.read(read_fd, &buffer, buffer.len);
+        if (read_count <= 0 or @as(usize, @intCast(read_count)) < buffer.len) {
             break;
         }
     }
@@ -209,8 +262,8 @@ fn drainHostMessageWakeupLocked() void {
 }
 
 fn incrementHostTransportDebug(comptime field: []const u8) void {
-    host_transport_debug_mutex.lock();
-    defer host_transport_debug_mutex.unlock();
+    host_transport_debug_mutex.lockUncancelable(coreIo());
+    defer host_transport_debug_mutex.unlock(coreIo());
     @field(host_transport_debug_state, field) += 1;
 }
 
@@ -223,7 +276,7 @@ fn clearLastError() void {
 
 fn setLastError(comptime fmt: []const u8, args: anytype) void {
     clearLastError();
-    last_error = std.fmt.allocPrintZ(allocator, fmt, args) catch null;
+    last_error = allocPrintZ(allocator, fmt, args) catch null;
 }
 
 fn dupeZ(input: [*:0]const u8) ![:0]u8 {
@@ -297,14 +350,15 @@ fn ensureHostMessageWakeupInitialized() bool {
         return false;
     }
 
-    host_message_wakeup_mutex.lock();
-    defer host_message_wakeup_mutex.unlock();
+    host_message_wakeup_mutex.lockUncancelable(coreIo());
+    defer host_message_wakeup_mutex.unlock(coreIo());
 
     if (host_message_wakeup_state.initialized) {
         return true;
     }
 
-    const fds = std.posix.pipe() catch return false;
+    var fds: [2]std.c.fd_t = undefined;
+    if (std.c.pipe(&fds) != 0) return false;
     setNonblocking(fds[0]);
     setNonblocking(fds[1]);
     host_message_wakeup_state.read_fd = fds[0];
@@ -315,12 +369,16 @@ fn ensureHostMessageWakeupInitialized() bool {
 }
 
 fn signalHostMessageWakeup() void {
+    if (builtin.os.tag == .windows) {
+        return;
+    }
+
     if (!ensureHostMessageWakeupInitialized()) {
         return;
     }
 
-    host_message_wakeup_mutex.lock();
-    defer host_message_wakeup_mutex.unlock();
+    host_message_wakeup_mutex.lockUncancelable(coreIo());
+    defer host_message_wakeup_mutex.unlock(coreIo());
 
     if (host_message_wakeup_state.signaled) {
         return;
@@ -328,10 +386,10 @@ fn signalHostMessageWakeup() void {
 
     const byte: [1]u8 = .{1};
     const write_fd = host_message_wakeup_state.write_fd orelse return;
-    _ = std.posix.write(write_fd, &byte) catch {
+    if (std.c.write(write_fd, &byte, byte.len) != byte.len) {
         incrementHostTransportDebug("wakeup_write_errors");
         return;
-    };
+    }
     incrementHostTransportDebug("wakeup_signals");
     host_message_wakeup_state.signaled = true;
 }
@@ -339,10 +397,10 @@ fn signalHostMessageWakeup() void {
 fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
     const owned_message = dupeZ(message) catch return;
 
-    pending_host_messages_mutex.lock();
-    defer pending_host_messages_mutex.unlock();
+    pending_host_messages_mutex.lockUncancelable(coreIo());
+    defer pending_host_messages_mutex.unlock(coreIo());
 
-    pending_host_messages.append(.{
+    pending_host_messages.append(allocator, .{
         .webview_id = webview_id,
         .message = owned_message,
     }) catch {
@@ -354,7 +412,7 @@ fn enqueuePendingHostMessage(webview_id: u32, message: [*:0]const u8) void {
     signalHostMessageWakeup();
 }
 
-fn hostBridgeQueueTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn hostBridgeQueueTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     enqueuePendingHostMessage(webview_id, message);
 }
 
@@ -371,16 +429,16 @@ fn dispatchRuntimePostMessage(
         return;
     }
 
-    pending_runtime_callback_payloads_mutex.lock();
+    pending_runtime_callback_payloads_mutex.lockUncancelable(coreIo());
     pending_runtime_callback_payloads.put(
         @intFromPtr(owned_message.ptr),
         owned_message,
     ) catch {
-        pending_runtime_callback_payloads_mutex.unlock();
+        pending_runtime_callback_payloads_mutex.unlock(coreIo());
         allocator.free(owned_message);
         return;
     };
-    pending_runtime_callback_payloads_mutex.unlock();
+    pending_runtime_callback_payloads_mutex.unlock(coreIo());
 
     handler(webview_id, owned_message.ptr);
 }
@@ -392,9 +450,9 @@ export fn setRuntimeCallbacksAsync(enabled: bool) void {
 export fn releaseRuntimeCallbackPayload(payload: ?[*:0]const u8) bool {
     const payload_ptr = payload orelse return false;
 
-    pending_runtime_callback_payloads_mutex.lock();
+    pending_runtime_callback_payloads_mutex.lockUncancelable(coreIo());
     const removed = pending_runtime_callback_payloads.fetchRemove(@intFromPtr(payload_ptr));
-    pending_runtime_callback_payloads_mutex.unlock();
+    pending_runtime_callback_payloads_mutex.unlock(coreIo());
 
     if (removed) |entry| {
         allocator.free(entry.value);
@@ -404,8 +462,8 @@ export fn releaseRuntimeCallbackPayload(payload: ?[*:0]const u8) bool {
 }
 
 fn clearPendingRuntimeCallbackPayloads() void {
-    pending_runtime_callback_payloads_mutex.lock();
-    defer pending_runtime_callback_payloads_mutex.unlock();
+    pending_runtime_callback_payloads_mutex.lockUncancelable(coreIo());
+    defer pending_runtime_callback_payloads_mutex.unlock(coreIo());
 
     var iterator = pending_runtime_callback_payloads.valueIterator();
     while (iterator.next()) |payload| {
@@ -417,8 +475,8 @@ fn clearPendingRuntimeCallbackPayloads() void {
 export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
     clearLastError();
 
-    pending_host_messages_mutex.lock();
-    defer pending_host_messages_mutex.unlock();
+    pending_host_messages_mutex.lockUncancelable(coreIo());
+    defer pending_host_messages_mutex.unlock(coreIo());
 
     if (pending_host_messages.items.len == 0) {
         return null;
@@ -426,9 +484,9 @@ export fn popNextQueuedHostMessage(out_webview_id: *u32) ?[*:0]u8 {
 
     const entry = pending_host_messages.orderedRemove(0);
     if (pending_host_messages.items.len == 0) {
-        host_message_wakeup_mutex.lock();
+        host_message_wakeup_mutex.lockUncancelable(coreIo());
         drainHostMessageWakeupLocked();
-        host_message_wakeup_mutex.unlock();
+        host_message_wakeup_mutex.unlock(coreIo());
     }
     out_webview_id.* = entry.webview_id;
     return entry.message.ptr;
@@ -444,25 +502,25 @@ export fn freeCoreString(value: ?[*:0]u8) void {
 export fn getHostTransportDebugJSON() ?[*:0]u8 {
     clearLastError();
 
-    host_transport_debug_mutex.lock();
+    host_transport_debug_mutex.lockUncancelable(coreIo());
     const debug = host_transport_debug_state;
-    host_transport_debug_mutex.unlock();
+    host_transport_debug_mutex.unlock(coreIo());
 
-    pending_host_messages_mutex.lock();
+    pending_host_messages_mutex.lockUncancelable(coreIo());
     const pending_count = pending_host_messages.items.len;
-    pending_host_messages_mutex.unlock();
+    pending_host_messages_mutex.unlock(coreIo());
 
-    pending_host_transport_sends_mutex.lock();
+    pending_host_transport_sends_mutex.lockUncancelable(coreIo());
     const pending_socket_write_count = pending_host_transport_sends.items.len - pending_host_transport_sends_head;
     const socket_write_worker_started = pending_host_transport_send_worker_started;
-    pending_host_transport_sends_mutex.unlock();
+    pending_host_transport_sends_mutex.unlock(coreIo());
 
-    host_message_wakeup_mutex.lock();
+    host_message_wakeup_mutex.lockUncancelable(coreIo());
     const wakeup_initialized = host_message_wakeup_state.initialized;
     const wakeup_signaled = host_message_wakeup_state.signaled;
-    host_message_wakeup_mutex.unlock();
+    host_message_wakeup_mutex.unlock(coreIo());
 
-    const json = std.json.stringifyAlloc(allocator, .{
+    const json = std.json.Stringify.valueAlloc(allocator, .{
         .connections = debug.connections,
         .framesRead = debug.frames_read,
         .framesDispatched = debug.frames_dispatched,
@@ -546,13 +604,17 @@ fn parseWebviewSecretKey(secret_key: [*:0]const u8) ?WebviewSecretKey {
     return parsed;
 }
 
+fn streamFromSocketHandle(handle: std.posix.socket_t) std.Io.net.Stream {
+    return .{ .socket = .{ .handle = handle, .address = undefined } };
+}
+
 fn shutdownSocketHandle(handle: std.posix.socket_t) void {
-    std.posix.shutdown(handle, .both) catch {};
+    streamFromSocketHandle(handle).shutdown(coreIo(), .both) catch {};
 }
 
 fn clearWebviewSocketHandleIfCurrent(webview_id: u32, handle: std.posix.socket_t) void {
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
 
     const state = webview_registry.getPtr(webview_id) orelse return;
     if (state.socket_handle != null and state.socket_handle.? == handle) {
@@ -564,13 +626,13 @@ fn clearWebviewSocketHandleIfCurrent(webview_id: u32, handle: std.posix.socket_t
 fn closeAndClearWebviewSocketHandle(webview_id: u32) void {
     var handle_to_close: ?std.posix.socket_t = null;
 
-    webview_registry_mutex.lock();
+    webview_registry_mutex.lockUncancelable(coreIo());
     if (webview_registry.getPtr(webview_id)) |state| {
         handle_to_close = state.socket_handle;
         state.socket_handle = null;
         state.transport_ready = false;
     }
-    webview_registry_mutex.unlock();
+    webview_registry_mutex.unlock(coreIo());
 
     if (handle_to_close) |handle| {
         shutdownSocketHandle(handle);
@@ -580,9 +642,9 @@ fn closeAndClearWebviewSocketHandle(webview_id: u32) void {
 fn attachWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
     var handle_to_close: ?std.posix.socket_t = null;
 
-    webview_registry_mutex.lock();
+    webview_registry_mutex.lockUncancelable(coreIo());
     const state = webview_registry.getPtr(webview_id) orelse {
-        webview_registry_mutex.unlock();
+        webview_registry_mutex.unlock(coreIo());
         return false;
     };
     if (state.socket_handle) |previous_handle| {
@@ -592,7 +654,7 @@ fn attachWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
     }
     state.socket_handle = handle;
     state.transport_ready = false;
-    webview_registry_mutex.unlock();
+    webview_registry_mutex.unlock(coreIo());
 
     if (handle_to_close) |previous_handle| {
         shutdownSocketHandle(previous_handle);
@@ -619,8 +681,8 @@ fn lookupWebviewTransportContext(webview_id: u32) ?WebviewTransportContext {
 }
 
 fn markWebviewTransportReady(webview_id: u32, handle: std.posix.socket_t) void {
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
 
     const state = webview_registry.getPtr(webview_id) orelse return;
     if (state.socket_handle != null and state.socket_handle.? == handle) {
@@ -629,8 +691,8 @@ fn markWebviewTransportReady(webview_id: u32, handle: std.posix.socket_t) void {
 }
 
 fn isCurrentWebviewSocketHandle(webview_id: u32, handle: std.posix.socket_t) bool {
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
 
     const state = webview_registry.getPtr(webview_id) orelse return false;
     return state.socket_handle != null and state.socket_handle.? == handle;
@@ -692,14 +754,15 @@ fn parseWebviewIdFromTarget(target: []const u8) ?u32 {
     return null;
 }
 
-fn writeSimpleHttpResponse(stream: std.net.Stream, status: []const u8, body: []const u8) !void {
-    try stream.writer().print(
+fn writeSimpleHttpResponse(out: *std.Io.Writer, status: []const u8, body: []const u8) !void {
+    try out.print(
         "HTTP/1.1 {s}\r\nContent-Type: text/plain\r\nContent-Length: {d}\r\nConnection: close\r\n\r\n{s}",
         .{ status, body.len, body },
     );
+    try out.flush();
 }
 
-fn writeWebSocketHandshake(stream: std.net.Stream, websocket_key: []const u8) !void {
+fn writeWebSocketHandshake(out: *std.Io.Writer, websocket_key: []const u8) !void {
     var sha1 = std.crypto.hash.Sha1.init(.{});
     sha1.update(websocket_key);
     sha1.update(websocket_magic);
@@ -710,35 +773,12 @@ fn writeWebSocketHandshake(stream: std.net.Stream, websocket_key: []const u8) !v
     var accept_buffer: [std.base64.standard.Encoder.calcSize(digest.len)]u8 = undefined;
     const accept_value = std.base64.standard.Encoder.encode(&accept_buffer, &digest);
 
-    try stream.writer().print(
+    try out.print(
         "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {s}\r\n\r\n",
         .{accept_value},
     );
+    try out.flush();
 }
-
-const PendingStreamReader = struct {
-    stream: std.net.Stream,
-    pending: []const u8,
-    index: usize = 0,
-
-    fn readExact(self: *PendingStreamReader, dest: []u8) !void {
-        var written: usize = 0;
-
-        if (self.index < self.pending.len) {
-            const available = self.pending.len - self.index;
-            const to_copy = @min(dest.len, available);
-            @memcpy(dest[0..to_copy], self.pending[self.index .. self.index + to_copy]);
-            self.index += to_copy;
-            written += to_copy;
-        }
-
-        if (written == dest.len) {
-            return;
-        }
-
-        try self.stream.reader().readNoEof(dest[written..]);
-    }
-};
 
 const WebSocketFrame = struct {
     opcode: u8,
@@ -751,9 +791,9 @@ const WebSocketFrameFragment = struct {
     payload: []u8,
 };
 
-fn readWebSocketFrameFragment(reader: *PendingStreamReader) !WebSocketFrameFragment {
+fn readWebSocketFrameFragment(reader: *std.Io.Reader) !WebSocketFrameFragment {
     var header: [2]u8 = undefined;
-    reader.readExact(&header) catch |err| switch (err) {
+    reader.readSliceAll(&header) catch |err| switch (err) {
         error.EndOfStream => return error.ConnectionClosed,
         else => return err,
     };
@@ -772,11 +812,11 @@ fn readWebSocketFrameFragment(reader: *PendingStreamReader) !WebSocketFrameFragm
 
     if (payload_len == 126) {
         var extended: [2]u8 = undefined;
-        try reader.readExact(&extended);
+        try reader.readSliceAll(&extended);
         payload_len = (@as(usize, extended[0]) << 8) | @as(usize, extended[1]);
     } else if (payload_len == 127) {
         var extended: [8]u8 = undefined;
-        try reader.readExact(&extended);
+        try reader.readSliceAll(&extended);
         var parsed_len: u64 = 0;
         for (extended) |byte| {
             parsed_len = (parsed_len << 8) | @as(u64, byte);
@@ -789,11 +829,11 @@ fn readWebSocketFrameFragment(reader: *PendingStreamReader) !WebSocketFrameFragm
     }
 
     var mask: [4]u8 = undefined;
-    try reader.readExact(&mask);
+    try reader.readSliceAll(&mask);
 
     const payload = try allocator.alloc(u8, payload_len);
     errdefer allocator.free(payload);
-    try reader.readExact(payload);
+    try reader.readSliceAll(payload);
 
     for (payload, 0..) |*byte, index| {
         byte.* ^= mask[index % mask.len];
@@ -806,7 +846,7 @@ fn readWebSocketFrameFragment(reader: *PendingStreamReader) !WebSocketFrameFragm
     };
 }
 
-fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
+fn readWebSocketFrame(reader: *std.Io.Reader) !WebSocketFrame {
     const first = try readWebSocketFrameFragment(reader);
 
     if (first.fin or first.opcode >= 0x8) {
@@ -822,10 +862,10 @@ fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
     }
 
     // Chromium may fragment large client sends; reassemble continuation frames before dispatch.
-    var payload = std.ArrayList(u8).init(allocator);
-    errdefer payload.deinit();
+    var payload: std.ArrayList(u8) = .empty;
+    errdefer payload.deinit(allocator);
 
-    payload.appendSlice(first.payload) catch |err| {
+    payload.appendSlice(allocator, first.payload) catch |err| {
         allocator.free(first.payload);
         return err;
     };
@@ -845,7 +885,7 @@ fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
             return error.WebSocketFrameTooLarge;
         }
 
-        try payload.appendSlice(next.payload);
+        try payload.appendSlice(allocator, next.payload);
 
         if (next.fin) {
             break;
@@ -854,11 +894,11 @@ fn readWebSocketFrame(reader: *PendingStreamReader) !WebSocketFrame {
 
     return .{
         .opcode = first.opcode,
-        .payload = try payload.toOwnedSlice(),
+        .payload = try payload.toOwnedSlice(allocator),
     };
 }
 
-fn writeWebSocketFrame(stream: std.net.Stream, opcode: u8, payload: []const u8) !void {
+fn writeWebSocketFrame(stream: std.Io.net.Stream, opcode: u8, payload: []const u8) !void {
     var header: [10]u8 = undefined;
     var header_len: usize = 0;
 
@@ -888,15 +928,19 @@ fn writeWebSocketFrame(stream: std.net.Stream, opcode: u8, payload: []const u8) 
         }
     }
 
-    try stream.writer().writeAll(header[0..header_len]);
+    var write_buffer: [1024]u8 = undefined;
+    var stream_writer = stream.writer(coreIo(), &write_buffer);
+    const out = &stream_writer.interface;
+    try out.writeAll(header[0..header_len]);
     if (payload.len > 0) {
-        try stream.writer().writeAll(payload);
+        try out.writeAll(payload);
     }
+    try out.flush();
 }
 
-fn writeWebSocketFrameSerialized(stream: std.net.Stream, opcode: u8, payload: []const u8) !void {
-    host_transport_socket_write_mutex.lock();
-    defer host_transport_socket_write_mutex.unlock();
+fn writeWebSocketFrameSerialized(stream: std.Io.net.Stream, opcode: u8, payload: []const u8) !void {
+    host_transport_socket_write_mutex.lockUncancelable(coreIo());
+    defer host_transport_socket_write_mutex.unlock(coreIo());
     try writeWebSocketFrame(stream, opcode, payload);
 }
 
@@ -928,15 +972,15 @@ fn compactPendingHostTransportSendsLocked() void {
 
 fn hostTransportSendWorker() void {
     while (true) {
-        pending_host_transport_sends_mutex.lock();
+        pending_host_transport_sends_mutex.lockUncancelable(coreIo());
         while (pending_host_transport_sends_head >= pending_host_transport_sends.items.len) {
             compactPendingHostTransportSendsLocked();
-            pending_host_transport_sends_condition.wait(&pending_host_transport_sends_mutex);
+            pending_host_transport_sends_condition.waitUncancelable(coreIo(), &pending_host_transport_sends_mutex);
         }
         const entry = pending_host_transport_sends.items[pending_host_transport_sends_head];
         pending_host_transport_sends_head += 1;
         compactPendingHostTransportSendsLocked();
-        pending_host_transport_sends_mutex.unlock();
+        pending_host_transport_sends_mutex.unlock(coreIo());
 
         defer allocator.free(entry.payload);
 
@@ -945,7 +989,7 @@ fn hostTransportSendWorker() void {
             continue;
         }
 
-        const stream = std.net.Stream{ .handle = entry.socket_handle };
+        const stream = streamFromSocketHandle(entry.socket_handle);
         writeWebSocketFrameSerialized(stream, entry.opcode, entry.payload) catch {
             incrementHostTransportDebug("socket_write_errors");
             clearWebviewSocketHandleIfCurrent(entry.webview_id, entry.socket_handle);
@@ -956,8 +1000,8 @@ fn hostTransportSendWorker() void {
 }
 
 fn ensureHostTransportSendWorkerStarted() bool {
-    pending_host_transport_sends_mutex.lock();
-    defer pending_host_transport_sends_mutex.unlock();
+    pending_host_transport_sends_mutex.lockUncancelable(coreIo());
+    defer pending_host_transport_sends_mutex.unlock(coreIo());
 
     if (pending_host_transport_send_worker_started) {
         return true;
@@ -978,10 +1022,10 @@ fn enqueueHostTransportSend(webview_id: u32, socket_handle: std.posix.socket_t, 
         return false;
     }
 
-    pending_host_transport_sends_mutex.lock();
-    defer pending_host_transport_sends_mutex.unlock();
+    pending_host_transport_sends_mutex.lockUncancelable(coreIo());
+    defer pending_host_transport_sends_mutex.unlock(coreIo());
 
-    pending_host_transport_sends.append(.{
+    pending_host_transport_sends.append(allocator, .{
         .webview_id = webview_id,
         .socket_handle = socket_handle,
         .opcode = opcode,
@@ -992,13 +1036,13 @@ fn enqueueHostTransportSend(webview_id: u32, socket_handle: std.posix.socket_t, 
         return false;
     };
     incrementHostTransportDebug("socket_write_queued");
-    pending_host_transport_sends_condition.signal();
+    pending_host_transport_sends_condition.signal(coreIo());
     return true;
 }
 
 fn encryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecretKey) ![]u8 {
     var nonce: [Aes256Gcm.nonce_length]u8 = undefined;
-    std.crypto.random.bytes(&nonce);
+    coreIo().random(&nonce);
 
     const ciphertext = try allocator.alloc(u8, message_json.len);
     defer allocator.free(ciphertext);
@@ -1013,7 +1057,7 @@ fn encryptHostTransportPacket(message_json: []const u8, secret_key: WebviewSecre
     const tag_b64 = try encodeBase64Alloc(&tag);
     defer allocator.free(tag_b64);
 
-    return try std.json.stringifyAlloc(allocator, .{
+    return try std.json.Stringify.valueAlloc(allocator, .{
         .encryptedData = encrypted_data_b64,
         .iv = nonce_b64,
         .tag = tag_b64,
@@ -1100,43 +1144,44 @@ fn dispatchHostTransportMessage(webview_id: u32, encrypted_packet: []const u8) v
     enqueueHostTransportPlaintext(webview_id, context, plaintext);
 }
 
-fn handleHostTransportConnection(connection: std.net.Server.Connection) void {
+fn handleHostTransportConnection(stream: std.Io.net.Stream) void {
+    const io = coreIo();
     incrementHostTransportDebug("connections");
-    var stream = connection.stream;
-    defer stream.close();
+    defer stream.close(io);
 
     var read_buffer: [16 * 1024]u8 = undefined;
-    var server = std.http.Server.init(connection, &read_buffer);
+    var write_buffer: [1024]u8 = undefined;
+    var stream_reader = stream.reader(io, &read_buffer);
+    var stream_writer = stream.writer(io, &write_buffer);
+    const in = &stream_reader.interface;
+    const out = &stream_writer.interface;
+    var server = std.http.Server.init(in, out);
     const request = server.receiveHead() catch return;
 
-    const request_headers = server.read_buffer[0..request.head_end];
-    const websocket_key = parseRequestHeaderValue(request_headers, "Sec-WebSocket-Key") orelse {
-        writeSimpleHttpResponse(stream, "400 Bad Request", "Missing Sec-WebSocket-Key") catch {};
+    const websocket_key = parseRequestHeaderValue(request.head_buffer, "Sec-WebSocket-Key") orelse {
+        writeSimpleHttpResponse(out, "400 Bad Request", "Missing Sec-WebSocket-Key") catch {};
         return;
     };
     const webview_id = parseWebviewIdFromTarget(request.head.target) orelse {
-        writeSimpleHttpResponse(stream, "400 Bad Request", "Missing webviewId") catch {};
+        writeSimpleHttpResponse(out, "400 Bad Request", "Missing webviewId") catch {};
         return;
     };
 
     if (lookupWebviewState(webview_id) == null) {
-        writeSimpleHttpResponse(stream, "404 Not Found", "Unknown webviewId") catch {};
+        writeSimpleHttpResponse(out, "404 Not Found", "Unknown webviewId") catch {};
         return;
     }
 
-    writeWebSocketHandshake(stream, websocket_key) catch return;
+    writeWebSocketHandshake(out, websocket_key) catch return;
 
-    if (!attachWebviewSocketHandle(webview_id, stream.handle)) {
+    if (!attachWebviewSocketHandle(webview_id, stream.socket.handle)) {
         return;
     }
 
-    var reader = PendingStreamReader{
-        .stream = stream,
-        .pending = server.read_buffer[request.head_end..server.read_buffer_len],
-    };
-
+    // Any bytes the client sent after the HTTP head remain buffered in `in`,
+    // so WebSocket frames are read from the same reader.
     while (true) {
-        const frame = readWebSocketFrame(&reader) catch |err| switch (err) {
+        const frame = readWebSocketFrame(in) catch |err| switch (err) {
             error.ConnectionClosed => break,
             else => break,
         };
@@ -1154,29 +1199,30 @@ fn handleHostTransportConnection(connection: std.net.Server.Connection) void {
         }
     }
 
-    clearWebviewSocketHandleIfCurrent(webview_id, stream.handle);
+    clearWebviewSocketHandleIfCurrent(webview_id, stream.socket.handle);
 }
 
-fn hostTransportAcceptLoop(server: std.net.Server) void {
+fn hostTransportAcceptLoop(server: std.Io.net.Server) void {
+    const io = coreIo();
     var listener = server;
     while (true) {
-        const connection = listener.accept() catch break;
-        const thread = std.Thread.spawn(.{}, handleHostTransportConnection, .{connection}) catch {
-            connection.stream.close();
+        const connection_stream = listener.accept(io) catch break;
+        const thread = std.Thread.spawn(.{}, handleHostTransportConnection, .{connection_stream}) catch {
+            connection_stream.close(io);
             continue;
         };
         thread.detach();
     }
 
-    host_transport_mutex.lock();
+    host_transport_mutex.lockUncancelable(coreIo());
     host_transport_state.started = false;
     host_transport_state.port = 0;
-    host_transport_mutex.unlock();
+    host_transport_mutex.unlock(coreIo());
 }
 
 fn startHostTransportServer(requested_port: u32) bool {
-    host_transport_mutex.lock();
-    defer host_transport_mutex.unlock();
+    host_transport_mutex.lockUncancelable(coreIo());
+    defer host_transport_mutex.unlock(coreIo());
 
     if (host_transport_state.started) {
         webview_runtime_state.rpc_port = host_transport_state.port;
@@ -1196,12 +1242,12 @@ fn startHostTransportServer(requested_port: u32) bool {
         current_port;
 
     while (true) {
-        const address = std.net.Address.parseIp("127.0.0.1", current_port) catch |err| {
+        const address = std.Io.net.IpAddress.parse("127.0.0.1", current_port) catch |err| {
             setLastError("Failed to parse websocket listen address: {s}", .{@errorName(err)});
             return false;
         };
 
-        const server = std.net.Address.listen(address, .{ .reuse_address = true }) catch |err| switch (err) {
+        var server = address.listen(coreIo(), .{ .reuse_address = true }) catch |err| switch (err) {
             error.AddressInUse => {
                 if (current_port == port_limit) {
                     break;
@@ -1215,9 +1261,10 @@ fn startHostTransportServer(requested_port: u32) bool {
             },
         };
 
-        const actual_port = server.listen_address.getPort();
+        // The loop always binds a concrete port, so the bound port is known.
+        const actual_port = current_port;
         const thread = std.Thread.spawn(.{}, hostTransportAcceptLoop, .{server}) catch |err| {
-            server.stream.close();
+            server.deinit(coreIo());
             setLastError("Failed to spawn websocket server thread: {s}", .{@errorName(err)});
             return false;
         };
@@ -1245,7 +1292,7 @@ fn buildElectrobunPreload(
 
     if (sandbox) {
         const sandboxed_preload_script = webview_runtime_state.preload_script_sandboxed.?;
-        return std.fmt.allocPrintZ(
+        return allocPrintZ(
             allocator,
             \\window.__electrobunPlatform = "{s}";
             \\window.__electrobunWebviewId = {d};
@@ -1262,7 +1309,7 @@ fn buildElectrobunPreload(
     }
 
     const preload_script = webview_runtime_state.preload_script.?;
-    return std.fmt.allocPrintZ(
+    return allocPrintZ(
         allocator,
         \\window.__electrobunPlatform = "{s}";
         \\window.__electrobunWebviewId = {d};
@@ -1328,7 +1375,7 @@ fn nativeWrapperFileName() []const u8 {
 }
 
 fn resolveNativeWrapperPath() ![]u8 {
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    const exe_path = try std.process.executablePathAlloc(coreIo(), allocator);
     defer allocator.free(exe_path);
 
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
@@ -1345,7 +1392,7 @@ fn ensureNativeWrapperLoaded() bool {
         return false;
     };
 
-    var native_wrapper = std.DynLib.open(native_wrapper_path) catch |err| {
+    var native_wrapper = CoreDynLib.open(native_wrapper_path) catch |err| {
         setLastError("Failed to open native wrapper at {s}: {s}", .{
             native_wrapper_path,
             @errorName(err),
@@ -1404,8 +1451,8 @@ fn createNativeTrayForState(tray_id: u32, state: *TrayState) bool {
         u32,
         u32,
         ?StatusItemHandler,
-    ) callconv(.C) TrayPtr;
-    const SetNativeTrayMenuFn = *const fn (TrayPtr, [*:0]const u8) callconv(.C) void;
+    ) callconv(.c) TrayPtr;
+    const SetNativeTrayMenuFn = *const fn (TrayPtr, [*:0]const u8) callconv(.c) void;
 
     const create_native_tray = lookupNativeSymbol(CreateNativeTrayFn, "createTray") orelse return false;
     const tray_ptr = create_native_tray(
@@ -1435,7 +1482,7 @@ fn createNativeTrayForState(tray_id: u32, state: *TrayState) bool {
 }
 
 fn hideNativeTray(state: *TrayState) void {
-    const RemoveNativeTrayFn = *const fn (TrayPtr) callconv(.C) void;
+    const RemoveNativeTrayFn = *const fn (TrayPtr) callconv(.c) void;
 
     if (state.ptr) |tray_ptr| {
         const remove_native_tray = lookupNativeSymbol(RemoveNativeTrayFn, "removeTray") orelse {
@@ -1451,8 +1498,8 @@ fn hideNativeTray(state: *TrayState) void {
 }
 
 fn lookupWindowState(window_id: u32) ?WindowState {
-    window_registry_mutex.lock();
-    defer window_registry_mutex.unlock();
+    window_registry_mutex.lockUncancelable(coreIo());
+    defer window_registry_mutex.unlock(coreIo());
     return window_registry.get(window_id);
 }
 
@@ -1470,8 +1517,8 @@ fn requireWindowPtr(window_id: u32) WindowPtr {
 }
 
 fn lookupWebviewState(webview_id: u32) ?WebviewState {
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
     return webview_registry.get(webview_id);
 }
 
@@ -1494,8 +1541,8 @@ fn requireWebviewPtr(webview_id: u32) WebviewPtr {
 }
 
 fn lookupWgpuViewState(wgpu_view_id: u32) ?WgpuViewState {
-    wgpu_view_registry_mutex.lock();
-    defer wgpu_view_registry_mutex.unlock();
+    wgpu_view_registry_mutex.lockUncancelable(coreIo());
+    defer wgpu_view_registry_mutex.unlock(coreIo());
     return wgpu_view_registry.get(wgpu_view_id);
 }
 
@@ -1513,31 +1560,31 @@ fn requireWgpuViewPtr(wgpu_view_id: u32) WgpuViewPtr {
 }
 
 fn hasOpenWindows() bool {
-    window_registry_mutex.lock();
-    defer window_registry_mutex.unlock();
+    window_registry_mutex.lockUncancelable(coreIo());
+    defer window_registry_mutex.unlock(coreIo());
     return window_registry.count() > 0;
 }
 
 fn collectWebviewIdsForWindow(window_id: u32, list: *std.ArrayList(u32)) void {
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
 
     var iterator = webview_registry.iterator();
     while (iterator.next()) |entry| {
         if (entry.value_ptr.window_id == window_id) {
-            list.append(entry.key_ptr.*) catch return;
+            list.append(allocator, entry.key_ptr.*) catch return;
         }
     }
 }
 
 fn collectWgpuViewIdsForWindow(window_id: u32, list: *std.ArrayList(u32)) void {
-    wgpu_view_registry_mutex.lock();
-    defer wgpu_view_registry_mutex.unlock();
+    wgpu_view_registry_mutex.lockUncancelable(coreIo());
+    defer wgpu_view_registry_mutex.unlock(coreIo());
 
     var iterator = wgpu_view_registry.iterator();
     while (iterator.next()) |entry| {
         if (entry.value_ptr.window_id == window_id) {
-            list.append(entry.key_ptr.*) catch return;
+            list.append(allocator, entry.key_ptr.*) catch return;
         }
     }
 }
@@ -1546,7 +1593,7 @@ fn loadManagedHTMLForWebview(webview_id: u32, html: [*:0]const u8) void {
     const state = lookupWebviewState(webview_id) orelse return;
 
     if (state.renderer == .cef) {
-        const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
+        const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
         const set_webview_html_content = lookupNativeSymbol(SetWebviewHTMLContentFn, "setWebviewHTMLContent") orelse return;
         set_webview_html_content(webview_id, html);
         loadURLInWebView(webview_id, "views://internal/index.html");
@@ -1560,14 +1607,14 @@ fn allocateOwnedJavascriptString(
     comptime fmt: []const u8,
     args: anytype,
 ) ?[:0]u8 {
-    return std.fmt.allocPrintZ(allocator, fmt, args) catch |err| {
+    return allocPrintZ(allocator, fmt, args) catch |err| {
         setLastError("Failed to allocate javascript string: {s}", .{@errorName(err)});
         return null;
     };
 }
 
 fn quoteJavascriptString(value: [*:0]const u8) ?[]u8 {
-    return std.json.stringifyAlloc(allocator, std.mem.span(value), .{}) catch |err| {
+    return std.json.Stringify.valueAlloc(allocator, std.mem.span(value), .{}) catch |err| {
         setLastError("Failed to encode javascript string: {s}", .{@errorName(err)});
         return null;
     };
@@ -1676,13 +1723,13 @@ fn sendInternalBridgeResponse(
     success: bool,
     payload: anytype,
 ) void {
-    const encoded_id = std.json.stringifyAlloc(allocator, request_id, .{}) catch return;
+    const encoded_id = std.json.Stringify.valueAlloc(allocator, request_id, .{}) catch return;
     defer allocator.free(encoded_id);
 
-    const payload_json = std.json.stringifyAlloc(allocator, payload, .{}) catch return;
+    const payload_json = std.json.Stringify.valueAlloc(allocator, payload, .{}) catch return;
     defer allocator.free(payload_json);
 
-    const response_json = std.fmt.allocPrintZ(
+    const response_json = allocPrintZ(
         allocator,
         "{{\"type\":\"response\",\"id\":{s},\"success\":{s},\"payload\":{s}}}",
         .{ encoded_id, if (success) "true" else "false", payload_json },
@@ -1739,18 +1786,18 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
     const navigation_rules_value = params_object.get("navigationRules");
 
     var secret_key: WebviewSecretKey = undefined;
-    std.crypto.random.bytes(&secret_key);
+    coreIo().random(&secret_key);
 
-    var secret_key_buffer = std.ArrayList(u8).init(allocator);
-    defer secret_key_buffer.deinit();
+    var secret_key_buffer: std.ArrayList(u8) = .empty;
+    defer secret_key_buffer.deinit(allocator);
     for (secret_key, 0..) |byte, index| {
         if (index > 0) {
-            secret_key_buffer.append(',') catch return null;
+            secret_key_buffer.append(allocator, ',') catch return null;
         }
-        secret_key_buffer.writer().print("{d}", .{byte}) catch return null;
+        secret_key_buffer.print(allocator, "{d}", .{byte}) catch return null;
     }
-    secret_key_buffer.append(0) catch return null;
-    const secret_key_z = secret_key_buffer.toOwnedSliceSentinel(0) catch return null;
+    secret_key_buffer.append(allocator, 0) catch return null;
+    const secret_key_z = secret_key_buffer.toOwnedSliceSentinel(allocator, 0) catch return null;
     defer allocator.free(secret_key_z);
 
     const url = if (url_value) |value| jsonString(value) orelse "" else "";
@@ -1768,7 +1815,7 @@ fn createManagedWebviewFromInternalRequest(params: std.json.Value) ?u32 {
         if (value == .null)
             null
         else
-            std.json.stringifyAlloc(allocator, value, .{}) catch return null
+            std.json.Stringify.valueAlloc(allocator, value, .{}) catch return null
     else
         null;
     defer if (rules_json) |allocated| allocator.free(allocated);
@@ -2060,7 +2107,7 @@ fn handleInternalMessage(source_webview_id: u32, message_id: []const u8, payload
     if (std.mem.eql(u8, message_id, "webviewTagSetNavigationRules")) {
         const webview_id = jsonU32(payload_object.get("id") orelse return) orelse return;
         const rules_value = payload_object.get("rules") orelse return;
-        const rules_json = std.json.stringifyAlloc(allocator, rules_value, .{}) catch return;
+        const rules_json = std.json.Stringify.valueAlloc(allocator, rules_value, .{}) catch return;
         defer allocator.free(rules_json);
         const rules_json_z = duplicateSentinelString(rules_json) orelse return;
         defer allocator.free(rules_json_z);
@@ -2150,7 +2197,7 @@ fn processInternalBridgeBatch(source_webview_id: u32, message_json: []const u8) 
     handleInternalBridgePacket(source_webview_id, parsed.value);
 }
 
-fn internalBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn internalBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     const state = lookupWebviewState(webview_id) orelse return;
     const message_slice = std.mem.span(message);
     if (state.internal_bridge_handler) |handler| {
@@ -2181,7 +2228,7 @@ fn isValidEventBridgeMessage(source_webview_id: u32, message: []const u8) bool {
     return true;
 }
 
-fn eventBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn eventBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     const state = lookupWebviewState(webview_id) orelse return;
     const handler = state.event_bridge_handler orelse return;
     const message_slice = std.mem.span(message);
@@ -2189,18 +2236,18 @@ fn eventBridgeCoreTrampoline(webview_id: u32, message: [*:0]const u8) callconv(.
     dispatchRuntimePostMessage(handler, webview_id, message_slice);
 }
 
-fn windowCloseTrampoline(window_id: u32) callconv(.C) void {
+fn windowCloseTrampoline(window_id: u32) callconv(.c) void {
     var close_handler: ?WindowCloseHandler = null;
-    var child_webview_ids = std.ArrayList(u32).init(allocator);
-    defer child_webview_ids.deinit();
-    var child_wgpu_view_ids = std.ArrayList(u32).init(allocator);
-    defer child_wgpu_view_ids.deinit();
+    var child_webview_ids: std.ArrayList(u32) = .empty;
+    defer child_webview_ids.deinit(allocator);
+    var child_wgpu_view_ids: std.ArrayList(u32) = .empty;
+    defer child_wgpu_view_ids.deinit(allocator);
 
-    window_registry_mutex.lock();
+    window_registry_mutex.lockUncancelable(coreIo());
     if (window_registry.fetchRemove(window_id)) |removed| {
         close_handler = removed.value.close_handler;
     }
-    window_registry_mutex.unlock();
+    window_registry_mutex.unlock(coreIo());
 
     collectWebviewIdsForWindow(window_id, &child_webview_ids);
     for (child_webview_ids.items) |webview_id| {
@@ -2223,49 +2270,49 @@ fn windowCloseTrampoline(window_id: u32) callconv(.C) void {
     }
 }
 
-fn windowMoveTrampoline(window_id: u32, x: f64, y: f64) callconv(.C) void {
+fn windowMoveTrampoline(window_id: u32, x: f64, y: f64) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.move_handler) |handler| {
         handler(window_id, x, y);
     }
 }
 
-fn windowResizeTrampoline(window_id: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void {
+fn windowResizeTrampoline(window_id: u32, x: f64, y: f64, width: f64, height: f64) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.resize_handler) |handler| {
         handler(window_id, x, y, width, height);
     }
 }
 
-fn windowFocusTrampoline(window_id: u32) callconv(.C) void {
+fn windowFocusTrampoline(window_id: u32) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.focus_handler) |handler| {
         handler(window_id);
     }
 }
 
-fn windowBlurTrampoline(window_id: u32) callconv(.C) void {
+fn windowBlurTrampoline(window_id: u32) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.blur_handler) |handler| {
         handler(window_id);
     }
 }
 
-fn windowKeyTrampoline(window_id: u32, key_code: u32, modifiers: u32, is_down: u32, is_repeat: u32) callconv(.C) void {
+fn windowKeyTrampoline(window_id: u32, key_code: u32, modifiers: u32, is_down: u32, is_repeat: u32) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.key_handler) |handler| {
         handler(window_id, key_code, modifiers, is_down, is_repeat);
     }
 }
 
-fn windowShouldCloseTrampoline(window_id: u32) callconv(.C) void {
+fn windowShouldCloseTrampoline(window_id: u32) callconv(.c) void {
     const state = lookupWindowState(window_id) orelse return;
     if (state.should_close_handler) |handler| {
         handler(window_id);
     }
 }
 
-fn managedQuitRequestedTrampoline() callconv(.C) void {
+fn managedQuitRequestedTrampoline() callconv(.c) void {
     if (managed_quit_requested_handler) |handler| {
         handler();
     }
@@ -2290,7 +2337,7 @@ export fn electrobun_core_run_main_thread(
 
 export fn runNativeEventLoopTick(timeout_ms: c_int) void {
     clearLastError();
-    const RunNativeEventLoopTickFn = *const fn (c_int) callconv(.C) void;
+    const RunNativeEventLoopTickFn = *const fn (c_int) callconv(.c) void;
     const run_native_event_loop_tick = lookupNativeSymbol(RunNativeEventLoopTickFn, "runNativeEventLoopTick") orelse return;
     run_native_event_loop_tick(timeout_ms);
 }
@@ -2322,7 +2369,7 @@ export fn getWindowStyle(
         bool,
         bool,
         bool,
-    ) callconv(.C) u32;
+    ) callconv(.c) u32;
 
     const get_window_style = lookupNativeSymbol(GetWindowStyleFn, "getWindowStyle") orelse return 0;
     return get_window_style(
@@ -2383,10 +2430,10 @@ export fn createWindow(
         ?WindowBlurHandler,
         ?WindowKeyHandler,
         ?WindowShouldCloseHandler,
-    ) callconv(.C) WindowPtr;
-    const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.C) void;
-    const CenterWindowFn = *const fn (WindowPtr) callconv(.C) void;
-    const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
+    ) callconv(.c) WindowPtr;
+    const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.c) void;
+    const CenterWindowFn = *const fn (WindowPtr) callconv(.c) void;
+    const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.c) void;
 
     const create_window = lookupNativeSymbol(
         CreateWindowFn,
@@ -2396,7 +2443,7 @@ export fn createWindow(
     const center_window = lookupNativeSymbol(CenterWindowFn, "centerWindow") orelse return 0;
     const show_window = lookupNativeSymbol(ShowWindowFn, "showWindow") orelse return 0;
 
-    window_registry_mutex.lock();
+    window_registry_mutex.lockUncancelable(coreIo());
     const start_id = next_window_id;
     var window_id = next_window_id;
 
@@ -2406,7 +2453,7 @@ export fn createWindow(
             window_id = 1;
         }
         if (window_id == start_id) {
-            window_registry_mutex.unlock();
+            window_registry_mutex.unlock(coreIo());
             setLastError("Failed to allocate window id", .{});
             return 0;
         }
@@ -2428,11 +2475,11 @@ export fn createWindow(
         .blur_handler = blur_handler,
         .key_handler = key_handler,
     }) catch |err| {
-        window_registry_mutex.unlock();
+        window_registry_mutex.unlock(coreIo());
         setLastError("Failed to store window state: {s}", .{@errorName(err)});
         return 0;
     };
-    window_registry_mutex.unlock();
+    window_registry_mutex.unlock(coreIo());
 
     const window_ptr = create_window(
         window_id,
@@ -2455,21 +2502,21 @@ export fn createWindow(
     );
 
     if (window_ptr == null) {
-        window_registry_mutex.lock();
+        window_registry_mutex.lockUncancelable(coreIo());
         _ = window_registry.remove(window_id);
-        window_registry_mutex.unlock();
+        window_registry_mutex.unlock(coreIo());
         setLastError("Failed to create window", .{});
         return 0;
     }
 
-    window_registry_mutex.lock();
+    window_registry_mutex.lockUncancelable(coreIo());
     const state = window_registry.getPtr(window_id) orelse {
-        window_registry_mutex.unlock();
+        window_registry_mutex.unlock(coreIo());
         setLastError("Window {d} disappeared during creation", .{window_id});
         return 0;
     };
     state.ptr = window_ptr;
-    window_registry_mutex.unlock();
+    window_registry_mutex.unlock(coreIo());
 
     set_window_title(window_ptr, title);
     if (centered) {
@@ -2488,84 +2535,84 @@ export fn getWindowPointer(window_id: u32) WindowPtr {
 }
 
 export fn setWindowTitle(window_id: u32, title: [*:0]const u8) void {
-    const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.C) void;
+    const SetWindowTitleFn = *const fn (WindowPtr, [*:0]const u8) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_title = lookupNativeSymbol(SetWindowTitleFn, "setWindowTitle") orelse return;
     set_window_title(window, title);
 }
 
 export fn minimizeWindow(window_id: u32) void {
-    const MinimizeWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const MinimizeWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const minimize_window = lookupNativeSymbol(MinimizeWindowFn, "minimizeWindow") orelse return;
     minimize_window(window);
 }
 
 export fn restoreWindow(window_id: u32) void {
-    const RestoreWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const RestoreWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const restore_window = lookupNativeSymbol(RestoreWindowFn, "restoreWindow") orelse return;
     restore_window(window);
 }
 
 export fn isWindowMinimized(window_id: u32) bool {
-    const IsWindowMinimizedFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowMinimizedFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_minimized = lookupNativeSymbol(IsWindowMinimizedFn, "isWindowMinimized") orelse return false;
     return is_window_minimized(window);
 }
 
 export fn maximizeWindow(window_id: u32) void {
-    const MaximizeWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const MaximizeWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const maximize_window = lookupNativeSymbol(MaximizeWindowFn, "maximizeWindow") orelse return;
     maximize_window(window);
 }
 
 export fn unmaximizeWindow(window_id: u32) void {
-    const UnmaximizeWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const UnmaximizeWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const unmaximize_window = lookupNativeSymbol(UnmaximizeWindowFn, "unmaximizeWindow") orelse return;
     unmaximize_window(window);
 }
 
 export fn isWindowMaximized(window_id: u32) bool {
-    const IsWindowMaximizedFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowMaximizedFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_maximized = lookupNativeSymbol(IsWindowMaximizedFn, "isWindowMaximized") orelse return false;
     return is_window_maximized(window);
 }
 
 export fn setWindowFullScreen(window_id: u32, full_screen: bool) void {
-    const SetWindowFullScreenFn = *const fn (WindowPtr, bool) callconv(.C) void;
+    const SetWindowFullScreenFn = *const fn (WindowPtr, bool) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_full_screen = lookupNativeSymbol(SetWindowFullScreenFn, "setWindowFullScreen") orelse return;
     set_window_full_screen(window, full_screen);
 }
 
 export fn isWindowFullScreen(window_id: u32) bool {
-    const IsWindowFullScreenFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowFullScreenFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_full_screen = lookupNativeSymbol(IsWindowFullScreenFn, "isWindowFullScreen") orelse return false;
     return is_window_full_screen(window);
 }
 
 export fn setWindowAlwaysOnTop(window_id: u32, always_on_top: bool) void {
-    const SetWindowAlwaysOnTopFn = *const fn (WindowPtr, bool) callconv(.C) void;
+    const SetWindowAlwaysOnTopFn = *const fn (WindowPtr, bool) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_always_on_top = lookupNativeSymbol(SetWindowAlwaysOnTopFn, "setWindowAlwaysOnTop") orelse return;
     set_window_always_on_top(window, always_on_top);
 }
 
 export fn isWindowAlwaysOnTop(window_id: u32) bool {
-    const IsWindowAlwaysOnTopFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowAlwaysOnTopFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_always_on_top = lookupNativeSymbol(IsWindowAlwaysOnTopFn, "isWindowAlwaysOnTop") orelse return false;
     return is_window_always_on_top(window);
 }
 
 export fn setWindowVisibleOnAllWorkspaces(window_id: u32, visible_on_all_workspaces: bool) void {
-    const SetWindowVisibleOnAllWorkspacesFn = *const fn (WindowPtr, bool) callconv(.C) void;
+    const SetWindowVisibleOnAllWorkspacesFn = *const fn (WindowPtr, bool) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_visible_on_all_workspaces = lookupNativeSymbol(
         SetWindowVisibleOnAllWorkspacesFn,
@@ -2575,7 +2622,7 @@ export fn setWindowVisibleOnAllWorkspaces(window_id: u32, visible_on_all_workspa
 }
 
 export fn isWindowVisibleOnAllWorkspaces(window_id: u32) bool {
-    const IsWindowVisibleOnAllWorkspacesFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowVisibleOnAllWorkspacesFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_visible_on_all_workspaces = lookupNativeSymbol(
         IsWindowVisibleOnAllWorkspacesFn,
@@ -2585,7 +2632,7 @@ export fn isWindowVisibleOnAllWorkspaces(window_id: u32) bool {
 }
 
 export fn setWindowButtonPosition(window_id: u32, x: f64, y: f64) void {
-    const SetWindowButtonPositionFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
+    const SetWindowButtonPositionFn = *const fn (WindowPtr, f64, f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_button_position = lookupNativeSymbol(
         SetWindowButtonPositionFn,
@@ -2597,7 +2644,7 @@ export fn setWindowButtonPosition(window_id: u32, x: f64, y: f64) void {
 export fn getWindowButtonPosition(window_id: u32, x: *f64, y: *f64) void {
     x.* = 0;
     y.* = 0;
-    const GetWindowButtonPositionFn = *const fn (WindowPtr, *f64, *f64) callconv(.C) void;
+    const GetWindowButtonPositionFn = *const fn (WindowPtr, *f64, *f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const get_window_button_position = lookupNativeSymbol(
         GetWindowButtonPositionFn,
@@ -2607,42 +2654,42 @@ export fn getWindowButtonPosition(window_id: u32, x: *f64, y: *f64) void {
 }
 
 export fn showWindow(window_id: u32, activate: bool) void {
-    const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.C) void;
+    const ShowWindowFn = *const fn (WindowPtr, bool) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const show_window = lookupNativeSymbol(ShowWindowFn, "showWindow") orelse return;
     show_window(window, activate);
 }
 
 export fn activateWindow(window_id: u32) void {
-    const ActivateWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const ActivateWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const activate_window = lookupNativeSymbol(ActivateWindowFn, "activateWindow") orelse return;
     activate_window(window);
 }
 
 export fn hideWindow(window_id: u32) void {
-    const HideWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const HideWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const hide_window = lookupNativeSymbol(HideWindowFn, "hideWindow") orelse return;
     hide_window(window);
 }
 
 export fn isWindowVisible(window_id: u32) bool {
-    const IsWindowVisibleFn = *const fn (WindowPtr) callconv(.C) bool;
+    const IsWindowVisibleFn = *const fn (WindowPtr) callconv(.c) bool;
     const window = lookupWindowPtr(window_id) orelse return false;
     const is_window_visible = lookupNativeSymbol(IsWindowVisibleFn, "isWindowVisible") orelse return false;
     return is_window_visible(window);
 }
 
 export fn closeWindow(window_id: u32) void {
-    const CloseWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const CloseWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const close_window = lookupNativeSymbol(CloseWindowFn, "closeWindow") orelse return;
     close_window(window);
 }
 
 export fn requestWindowClose(window_id: u32) void {
-    const RequestWindowCloseFn = *const fn (WindowPtr) callconv(.C) void;
+    const RequestWindowCloseFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const request_window_close = lookupNativeSymbol(
         RequestWindowCloseFn,
@@ -2652,28 +2699,28 @@ export fn requestWindowClose(window_id: u32) void {
 }
 
 export fn setWindowPosition(window_id: u32, x: f64, y: f64) void {
-    const SetWindowPositionFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
+    const SetWindowPositionFn = *const fn (WindowPtr, f64, f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_position = lookupNativeSymbol(SetWindowPositionFn, "setWindowPosition") orelse return;
     set_window_position(window, x, y);
 }
 
 export fn centerWindow(window_id: u32) void {
-    const CenterWindowFn = *const fn (WindowPtr) callconv(.C) void;
+    const CenterWindowFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const center_window = lookupNativeSymbol(CenterWindowFn, "centerWindow") orelse return;
     center_window(window);
 }
 
 export fn setWindowSize(window_id: u32, width: f64, height: f64) void {
-    const SetWindowSizeFn = *const fn (WindowPtr, f64, f64) callconv(.C) void;
+    const SetWindowSizeFn = *const fn (WindowPtr, f64, f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_size = lookupNativeSymbol(SetWindowSizeFn, "setWindowSize") orelse return;
     set_window_size(window, width, height);
 }
 
 export fn setWindowFrame(window_id: u32, x: f64, y: f64, width: f64, height: f64) void {
-    const SetWindowFrameFn = *const fn (WindowPtr, f64, f64, f64, f64) callconv(.C) void;
+    const SetWindowFrameFn = *const fn (WindowPtr, f64, f64, f64, f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const set_window_frame = lookupNativeSymbol(SetWindowFrameFn, "setWindowFrame") orelse return;
     set_window_frame(window, x, y, width, height);
@@ -2686,7 +2733,7 @@ export fn getWindowFrame(
     width: *f64,
     height: *f64,
 ) void {
-    const GetWindowFrameFn = *const fn (WindowPtr, *f64, *f64, *f64, *f64) callconv(.C) void;
+    const GetWindowFrameFn = *const fn (WindowPtr, *f64, *f64, *f64, *f64) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const get_window_frame = lookupNativeSymbol(GetWindowFrameFn, "getWindowFrame") orelse return;
     get_window_frame(window, x, y, width, height);
@@ -2694,7 +2741,7 @@ export fn getWindowFrame(
 
 export fn beginWindowMove(window_id: u32) void {
     clearLastError();
-    const StartWindowMoveFn = *const fn (WindowPtr) callconv(.C) void;
+    const StartWindowMoveFn = *const fn (WindowPtr) callconv(.c) void;
     const window = requireWindowPtr(window_id) orelse return;
     const start_window_move = lookupNativeSymbol(StartWindowMoveFn, "startWindowMove") orelse return;
     start_window_move(window);
@@ -2702,7 +2749,7 @@ export fn beginWindowMove(window_id: u32) void {
 
 export fn endWindowMove() void {
     clearLastError();
-    const StopWindowMoveFn = *const fn () callconv(.C) void;
+    const StopWindowMoveFn = *const fn () callconv(.c) void;
     const stop_window_move = lookupNativeSymbol(StopWindowMoveFn, "stopWindowMove") orelse return;
     stop_window_move();
 }
@@ -2739,7 +2786,7 @@ export fn createWebview(
         event_bridge_handler,
     );
 
-    const SetNextWebviewFlagsFn = *const fn (bool, bool) callconv(.C) void;
+    const SetNextWebviewFlagsFn = *const fn (bool, bool) callconv(.c) void;
     const InitWebviewFn = *const fn (
         u32,
         WindowPtr,
@@ -2761,7 +2808,7 @@ export fn createWebview(
         [*:0]const u8,
         bool,
         bool,
-    ) callconv(.C) WebviewPtr;
+    ) callconv(.c) WebviewPtr;
 
     const window_state = lookupWindowState(window_id) orelse {
         setLastError("Window {d} not found", .{window_id});
@@ -2775,7 +2822,7 @@ export fn createWebview(
     const init_webview = lookupNativeSymbol(InitWebviewFn, "initWebview") orelse return 0;
     const parsed_secret_key = parseWebviewSecretKey(secret_key) orelse return 0;
 
-    webview_registry_mutex.lock();
+    webview_registry_mutex.lockUncancelable(coreIo());
     const start_id = next_webview_id;
     var webview_id = next_webview_id;
 
@@ -2785,7 +2832,7 @@ export fn createWebview(
             webview_id = 1;
         }
         if (webview_id == start_id) {
-            webview_registry_mutex.unlock();
+            webview_registry_mutex.unlock(coreIo());
             setLastError("Failed to allocate webview id", .{});
             return 0;
         }
@@ -2809,11 +2856,11 @@ export fn createWebview(
         .transport_ready = false,
         .plaintext_transport = false,
     }) catch |err| {
-        webview_registry_mutex.unlock();
+        webview_registry_mutex.unlock(coreIo());
         setLastError("Failed to store webview state: {s}", .{@errorName(err)});
         return 0;
     };
-    webview_registry_mutex.unlock();
+    webview_registry_mutex.unlock(coreIo());
 
     const electrobun_preload_script = buildElectrobunPreload(
         webview_id,
@@ -2821,9 +2868,9 @@ export fn createWebview(
         secret_key,
         sandbox,
     ) orelse {
-        webview_registry_mutex.lock();
+        webview_registry_mutex.lockUncancelable(coreIo());
         _ = webview_registry.remove(webview_id);
-        webview_registry_mutex.unlock();
+        webview_registry_mutex.unlock(coreIo());
         return 0;
     };
     defer allocator.free(electrobun_preload_script);
@@ -2854,21 +2901,21 @@ export fn createWebview(
     );
 
     if (webview_ptr == null) {
-        webview_registry_mutex.lock();
+        webview_registry_mutex.lockUncancelable(coreIo());
         _ = webview_registry.remove(webview_id);
-        webview_registry_mutex.unlock();
+        webview_registry_mutex.unlock(coreIo());
         setLastError("Failed to create webview", .{});
         return 0;
     }
 
-    webview_registry_mutex.lock();
+    webview_registry_mutex.lockUncancelable(coreIo());
     const state = webview_registry.getPtr(webview_id) orelse {
-        webview_registry_mutex.unlock();
+        webview_registry_mutex.unlock(coreIo());
         setLastError("Webview {d} disappeared during creation", .{webview_id});
         return 0;
     };
     state.ptr = webview_ptr;
-    webview_registry_mutex.unlock();
+    webview_registry_mutex.unlock(coreIo());
 
     // `false` preserves the renderer/platform default. An explicit runtime
     // setter can still be used to disable spell checking after enabling it.
@@ -2893,7 +2940,7 @@ export fn resizeWebview(
     masks_json: [*:0]const u8,
 ) void {
     clearLastError();
-    const ResizeWebviewFn = *const fn (WebviewPtr, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
+    const ResizeWebviewFn = *const fn (WebviewPtr, f64, f64, f64, f64, [*:0]const u8) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const resize_webview = lookupNativeSymbol(ResizeWebviewFn, "resizeWebview") orelse return;
     resize_webview(webview, x, y, width, height, masks_json);
@@ -2901,7 +2948,7 @@ export fn resizeWebview(
 
 export fn loadURLInWebView(webview_id: u32, url: [*:0]const u8) void {
     clearLastError();
-    const LoadURLInWebViewFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.C) void;
+    const LoadURLInWebViewFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const load_url_in_webview = lookupNativeSymbol(LoadURLInWebViewFn, "loadURLInWebView") orelse return;
     load_url_in_webview(webview, url);
@@ -2909,7 +2956,7 @@ export fn loadURLInWebView(webview_id: u32, url: [*:0]const u8) void {
 
 export fn loadHTMLInWebView(webview_id: u32, html: [*:0]const u8) void {
     clearLastError();
-    const LoadHTMLInWebViewFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.C) void;
+    const LoadHTMLInWebViewFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const load_html_in_webview = lookupNativeSymbol(LoadHTMLInWebViewFn, "loadHTMLInWebView") orelse return;
     load_html_in_webview(webview, html);
@@ -2922,7 +2969,7 @@ export fn updatePreloadScriptToWebView(
     all_frames: bool,
 ) void {
     clearLastError();
-    const UpdatePreloadScriptToWebViewFn = *const fn (WebviewPtr, [*:0]const u8, [*:0]const u8, bool) callconv(.C) void;
+    const UpdatePreloadScriptToWebViewFn = *const fn (WebviewPtr, [*:0]const u8, [*:0]const u8, bool) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const update_preload_script_to_webview = lookupNativeSymbol(
         UpdatePreloadScriptToWebViewFn,
@@ -2933,7 +2980,7 @@ export fn updatePreloadScriptToWebView(
 
 export fn webviewCanGoBack(webview_id: u32) bool {
     clearLastError();
-    const WebviewCanGoBackFn = *const fn (WebviewPtr) callconv(.C) bool;
+    const WebviewCanGoBackFn = *const fn (WebviewPtr) callconv(.c) bool;
     const webview = lookupWebviewPtr(webview_id) orelse return false;
     const webview_can_go_back = lookupNativeSymbol(WebviewCanGoBackFn, "webviewCanGoBack") orelse return false;
     return webview_can_go_back(webview);
@@ -2941,7 +2988,7 @@ export fn webviewCanGoBack(webview_id: u32) bool {
 
 export fn webviewCanGoForward(webview_id: u32) bool {
     clearLastError();
-    const WebviewCanGoForwardFn = *const fn (WebviewPtr) callconv(.C) bool;
+    const WebviewCanGoForwardFn = *const fn (WebviewPtr) callconv(.c) bool;
     const webview = lookupWebviewPtr(webview_id) orelse return false;
     const webview_can_go_forward = lookupNativeSymbol(WebviewCanGoForwardFn, "webviewCanGoForward") orelse return false;
     return webview_can_go_forward(webview);
@@ -2949,7 +2996,7 @@ export fn webviewCanGoForward(webview_id: u32) bool {
 
 export fn webviewGoBack(webview_id: u32) void {
     clearLastError();
-    const WebviewGoBackFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewGoBackFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_go_back = lookupNativeSymbol(WebviewGoBackFn, "webviewGoBack") orelse return;
     webview_go_back(webview);
@@ -2957,7 +3004,7 @@ export fn webviewGoBack(webview_id: u32) void {
 
 export fn webviewGoForward(webview_id: u32) void {
     clearLastError();
-    const WebviewGoForwardFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewGoForwardFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_go_forward = lookupNativeSymbol(WebviewGoForwardFn, "webviewGoForward") orelse return;
     webview_go_forward(webview);
@@ -2965,7 +3012,7 @@ export fn webviewGoForward(webview_id: u32) void {
 
 export fn webviewReload(webview_id: u32) void {
     clearLastError();
-    const WebviewReloadFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewReloadFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_reload = lookupNativeSymbol(WebviewReloadFn, "webviewReload") orelse return;
     webview_reload(webview);
@@ -2973,11 +3020,11 @@ export fn webviewReload(webview_id: u32) void {
 
 export fn webviewRemove(webview_id: u32) void {
     clearLastError();
-    const WebviewRemoveFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewRemoveFn = *const fn (WebviewPtr) callconv(.c) void;
 
-    webview_registry_mutex.lock();
+    webview_registry_mutex.lockUncancelable(coreIo());
     const removed = webview_registry.fetchRemove(webview_id);
-    webview_registry_mutex.unlock();
+    webview_registry_mutex.unlock(coreIo());
 
     const webview = if (removed) |entry| entry.value.ptr else null;
     const socket_handle = if (removed) |entry| entry.value.socket_handle else null;
@@ -3001,14 +3048,14 @@ export fn webviewRemove(webview_id: u32) void {
 
 export fn setWebviewHTMLContent(webview_id: u32, html: [*:0]const u8) void {
     clearLastError();
-    const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
+    const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
     const set_webview_html_content = lookupNativeSymbol(SetWebviewHTMLContentFn, "setWebviewHTMLContent") orelse return;
     set_webview_html_content(webview_id, html);
 }
 
 export fn webviewSetTransparent(webview_id: u32, transparent: bool) void {
     clearLastError();
-    const WebviewSetTransparentFn = *const fn (WebviewPtr, bool) callconv(.C) void;
+    const WebviewSetTransparentFn = *const fn (WebviewPtr, bool) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_set_transparent = lookupNativeSymbol(WebviewSetTransparentFn, "webviewSetTransparent") orelse return;
     webview_set_transparent(webview, transparent);
@@ -3016,7 +3063,7 @@ export fn webviewSetTransparent(webview_id: u32, transparent: bool) void {
 
 export fn webviewSetPassthrough(webview_id: u32, passthrough: bool) void {
     clearLastError();
-    const WebviewSetPassthroughFn = *const fn (WebviewPtr, bool) callconv(.C) void;
+    const WebviewSetPassthroughFn = *const fn (WebviewPtr, bool) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_set_passthrough = lookupNativeSymbol(WebviewSetPassthroughFn, "webviewSetPassthrough") orelse return;
     webview_set_passthrough(webview, passthrough);
@@ -3024,7 +3071,7 @@ export fn webviewSetPassthrough(webview_id: u32, passthrough: bool) void {
 
 export fn webviewSetHidden(webview_id: u32, hidden: bool) void {
     clearLastError();
-    const WebviewSetHiddenFn = *const fn (WebviewPtr, bool) callconv(.C) void;
+    const WebviewSetHiddenFn = *const fn (WebviewPtr, bool) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_set_hidden = lookupNativeSymbol(WebviewSetHiddenFn, "webviewSetHidden") orelse return;
     webview_set_hidden(webview, hidden);
@@ -3032,7 +3079,7 @@ export fn webviewSetHidden(webview_id: u32, hidden: bool) void {
 
 export fn webviewSetSpellCheck(webview_id: u32, enabled: bool) bool {
     clearLastError();
-    const WebviewSetSpellCheckFn = *const fn (WebviewPtr, bool) callconv(.C) bool;
+    const WebviewSetSpellCheckFn = *const fn (WebviewPtr, bool) callconv(.c) bool;
     const webview = requireWebviewPtr(webview_id) orelse return false;
     const webview_set_spell_check = lookupNativeSymbol(
         WebviewSetSpellCheckFn,
@@ -3043,7 +3090,7 @@ export fn webviewSetSpellCheck(webview_id: u32, enabled: bool) bool {
 
 export fn setWebviewNavigationRules(webview_id: u32, rules_json: [*:0]const u8) void {
     clearLastError();
-    const SetWebviewNavigationRulesFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.C) void;
+    const SetWebviewNavigationRulesFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const set_webview_navigation_rules = lookupNativeSymbol(
         SetWebviewNavigationRulesFn,
@@ -3059,7 +3106,7 @@ export fn webviewFindInPage(
     match_case: bool,
 ) void {
     clearLastError();
-    const WebviewFindInPageFn = *const fn (WebviewPtr, [*:0]const u8, bool, bool) callconv(.C) void;
+    const WebviewFindInPageFn = *const fn (WebviewPtr, [*:0]const u8, bool, bool) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_find_in_page = lookupNativeSymbol(WebviewFindInPageFn, "webviewFindInPage") orelse return;
     webview_find_in_page(webview, search_text, forward, match_case);
@@ -3067,7 +3114,7 @@ export fn webviewFindInPage(
 
 export fn webviewStopFind(webview_id: u32) void {
     clearLastError();
-    const WebviewStopFindFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewStopFindFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_stop_find = lookupNativeSymbol(WebviewStopFindFn, "webviewStopFind") orelse return;
     webview_stop_find(webview);
@@ -3075,7 +3122,7 @@ export fn webviewStopFind(webview_id: u32) void {
 
 export fn evaluateJavaScriptWithNoCompletion(webview_id: u32, js: [*:0]const u8) void {
     clearLastError();
-    const EvaluateJavaScriptWithNoCompletionFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.C) void;
+    const EvaluateJavaScriptWithNoCompletionFn = *const fn (WebviewPtr, [*:0]const u8) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const evaluate_javascript_with_no_completion = lookupNativeSymbol(
         EvaluateJavaScriptWithNoCompletionFn,
@@ -3106,8 +3153,8 @@ export fn clearWebviewHostTransport(webview_id: u32) void {
 
 export fn setWebviewPlaintextHostTransport(webview_id: u32, enabled: bool) void {
     clearLastError();
-    webview_registry_mutex.lock();
-    defer webview_registry_mutex.unlock();
+    webview_registry_mutex.lockUncancelable(coreIo());
+    defer webview_registry_mutex.unlock(coreIo());
 
     const state = webview_registry.getPtr(webview_id) orelse {
         setLastError("Webview {d} not found", .{webview_id});
@@ -3157,7 +3204,7 @@ export fn sendInternalMessageToWebview(webview_id: u32, message_json: [*:0]const
 
 export fn webviewOpenDevTools(webview_id: u32) void {
     clearLastError();
-    const WebviewOpenDevToolsFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewOpenDevToolsFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_open_devtools = lookupNativeSymbol(WebviewOpenDevToolsFn, "webviewOpenDevTools") orelse return;
     webview_open_devtools(webview);
@@ -3165,7 +3212,7 @@ export fn webviewOpenDevTools(webview_id: u32) void {
 
 export fn webviewCloseDevTools(webview_id: u32) void {
     clearLastError();
-    const WebviewCloseDevToolsFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewCloseDevToolsFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_close_devtools = lookupNativeSymbol(WebviewCloseDevToolsFn, "webviewCloseDevTools") orelse return;
     webview_close_devtools(webview);
@@ -3173,7 +3220,7 @@ export fn webviewCloseDevTools(webview_id: u32) void {
 
 export fn webviewToggleDevTools(webview_id: u32) void {
     clearLastError();
-    const WebviewToggleDevToolsFn = *const fn (WebviewPtr) callconv(.C) void;
+    const WebviewToggleDevToolsFn = *const fn (WebviewPtr) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_toggle_devtools = lookupNativeSymbol(WebviewToggleDevToolsFn, "webviewToggleDevTools") orelse return;
     webview_toggle_devtools(webview);
@@ -3181,7 +3228,7 @@ export fn webviewToggleDevTools(webview_id: u32) void {
 
 export fn webviewSetPageZoom(webview_id: u32, zoom_level: f64) void {
     clearLastError();
-    const WebviewSetPageZoomFn = *const fn (WebviewPtr, f64) callconv(.C) void;
+    const WebviewSetPageZoomFn = *const fn (WebviewPtr, f64) callconv(.c) void;
     const webview = requireWebviewPtr(webview_id) orelse return;
     const webview_set_page_zoom = lookupNativeSymbol(WebviewSetPageZoomFn, "webviewSetPageZoom") orelse return;
     webview_set_page_zoom(webview, zoom_level);
@@ -3189,7 +3236,7 @@ export fn webviewSetPageZoom(webview_id: u32, zoom_level: f64) void {
 
 export fn webviewGetPageZoom(webview_id: u32) f64 {
     clearLastError();
-    const WebviewGetPageZoomFn = *const fn (WebviewPtr) callconv(.C) f64;
+    const WebviewGetPageZoomFn = *const fn (WebviewPtr) callconv(.c) f64;
     const webview = lookupWebviewPtr(webview_id) orelse return 1.0;
     const webview_get_page_zoom = lookupNativeSymbol(WebviewGetPageZoomFn, "webviewGetPageZoom") orelse return 1.0;
     return webview_get_page_zoom(webview);
@@ -3217,12 +3264,12 @@ export fn createWGPUView(
         bool,
         bool,
         bool,
-    ) callconv(.C) WgpuViewPtr;
+    ) callconv(.c) WgpuViewPtr;
 
     const window = requireWindowPtr(window_id) orelse return 0;
     const init_wgpu_view = lookupNativeSymbol(InitWGPUViewFn, "initWGPUView") orelse return 0;
 
-    wgpu_view_registry_mutex.lock();
+    wgpu_view_registry_mutex.lockUncancelable(coreIo());
     const start_id = next_wgpu_view_id;
     var wgpu_view_id = next_wgpu_view_id;
 
@@ -3232,7 +3279,7 @@ export fn createWGPUView(
             wgpu_view_id = 1;
         }
         if (wgpu_view_id == start_id) {
-            wgpu_view_registry_mutex.unlock();
+            wgpu_view_registry_mutex.unlock(coreIo());
             setLastError("Failed to allocate WGPUView id", .{});
             return 0;
         }
@@ -3247,11 +3294,11 @@ export fn createWGPUView(
         .ptr = null,
         .window_id = window_id,
     }) catch |err| {
-        wgpu_view_registry_mutex.unlock();
+        wgpu_view_registry_mutex.unlock(coreIo());
         setLastError("Failed to store WGPUView state: {s}", .{@errorName(err)});
         return 0;
     };
-    wgpu_view_registry_mutex.unlock();
+    wgpu_view_registry_mutex.unlock(coreIo());
 
     const wgpu_view_ptr = init_wgpu_view(
         wgpu_view_id,
@@ -3266,21 +3313,21 @@ export fn createWGPUView(
     );
 
     if (wgpu_view_ptr == null) {
-        wgpu_view_registry_mutex.lock();
+        wgpu_view_registry_mutex.lockUncancelable(coreIo());
         _ = wgpu_view_registry.remove(wgpu_view_id);
-        wgpu_view_registry_mutex.unlock();
+        wgpu_view_registry_mutex.unlock(coreIo());
         setLastError("Failed to create WGPUView", .{});
         return 0;
     }
 
-    wgpu_view_registry_mutex.lock();
+    wgpu_view_registry_mutex.lockUncancelable(coreIo());
     const state = wgpu_view_registry.getPtr(wgpu_view_id) orelse {
-        wgpu_view_registry_mutex.unlock();
+        wgpu_view_registry_mutex.unlock(coreIo());
         setLastError("WGPUView {d} disappeared during creation", .{wgpu_view_id});
         return 0;
     };
     state.ptr = wgpu_view_ptr;
-    wgpu_view_registry_mutex.unlock();
+    wgpu_view_registry_mutex.unlock(coreIo());
 
     return wgpu_view_id;
 }
@@ -3298,7 +3345,7 @@ export fn setWGPUViewFrame(
     height: f64,
 ) void {
     clearLastError();
-    const SetWGPUViewFrameFn = *const fn (WgpuViewPtr, f64, f64, f64, f64) callconv(.C) void;
+    const SetWGPUViewFrameFn = *const fn (WgpuViewPtr, f64, f64, f64, f64) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const set_wgpu_view_frame = lookupNativeSymbol(SetWGPUViewFrameFn, "wgpuViewSetFrame") orelse return;
     set_wgpu_view_frame(wgpu_view, x, y, width, height);
@@ -3313,7 +3360,7 @@ export fn resizeWGPUView(
     masks_json: [*:0]const u8,
 ) void {
     clearLastError();
-    const ResizeWGPUViewFn = *const fn (WgpuViewPtr, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
+    const ResizeWGPUViewFn = *const fn (WgpuViewPtr, f64, f64, f64, f64, [*:0]const u8) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const resize_wgpu_view = lookupNativeSymbol(ResizeWGPUViewFn, "resizeWebview") orelse return;
     resize_wgpu_view(wgpu_view, x, y, width, height, masks_json);
@@ -3321,7 +3368,7 @@ export fn resizeWGPUView(
 
 export fn setWGPUViewTransparent(wgpu_view_id: u32, transparent: bool) void {
     clearLastError();
-    const SetWGPUViewTransparentFn = *const fn (WgpuViewPtr, bool) callconv(.C) void;
+    const SetWGPUViewTransparentFn = *const fn (WgpuViewPtr, bool) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const set_wgpu_view_transparent = lookupNativeSymbol(
         SetWGPUViewTransparentFn,
@@ -3332,7 +3379,7 @@ export fn setWGPUViewTransparent(wgpu_view_id: u32, transparent: bool) void {
 
 export fn setWGPUViewPassthrough(wgpu_view_id: u32, passthrough: bool) void {
     clearLastError();
-    const SetWGPUViewPassthroughFn = *const fn (WgpuViewPtr, bool) callconv(.C) void;
+    const SetWGPUViewPassthroughFn = *const fn (WgpuViewPtr, bool) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const set_wgpu_view_passthrough = lookupNativeSymbol(
         SetWGPUViewPassthroughFn,
@@ -3343,7 +3390,7 @@ export fn setWGPUViewPassthrough(wgpu_view_id: u32, passthrough: bool) void {
 
 export fn setWGPUViewHidden(wgpu_view_id: u32, hidden: bool) void {
     clearLastError();
-    const SetWGPUViewHiddenFn = *const fn (WgpuViewPtr, bool) callconv(.C) void;
+    const SetWGPUViewHiddenFn = *const fn (WgpuViewPtr, bool) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const set_wgpu_view_hidden = lookupNativeSymbol(SetWGPUViewHiddenFn, "wgpuViewSetHidden") orelse return;
     set_wgpu_view_hidden(wgpu_view, hidden);
@@ -3351,11 +3398,11 @@ export fn setWGPUViewHidden(wgpu_view_id: u32, hidden: bool) void {
 
 export fn removeWGPUView(wgpu_view_id: u32) void {
     clearLastError();
-    const RemoveWGPUViewFn = *const fn (WgpuViewPtr) callconv(.C) void;
+    const RemoveWGPUViewFn = *const fn (WgpuViewPtr) callconv(.c) void;
 
-    wgpu_view_registry_mutex.lock();
+    wgpu_view_registry_mutex.lockUncancelable(coreIo());
     const removed = wgpu_view_registry.fetchRemove(wgpu_view_id);
-    wgpu_view_registry_mutex.unlock();
+    wgpu_view_registry_mutex.unlock(coreIo());
 
     const wgpu_view = if (removed) |entry| entry.value.ptr else null;
     if (wgpu_view == null) {
@@ -3368,7 +3415,7 @@ export fn removeWGPUView(wgpu_view_id: u32) void {
 
 export fn getWGPUViewNativeHandle(wgpu_view_id: u32) WgpuViewPtr {
     clearLastError();
-    const GetWGPUViewNativeHandleFn = *const fn (WgpuViewPtr) callconv(.C) WgpuViewPtr;
+    const GetWGPUViewNativeHandleFn = *const fn (WgpuViewPtr) callconv(.c) WgpuViewPtr;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return null;
     const get_wgpu_view_native_handle = lookupNativeSymbol(
         GetWGPUViewNativeHandleFn,
@@ -3379,7 +3426,7 @@ export fn getWGPUViewNativeHandle(wgpu_view_id: u32) WgpuViewPtr {
 
 export fn runWGPUViewTest(wgpu_view_id: u32) void {
     clearLastError();
-    const RunWGPUViewTestFn = *const fn (WgpuViewPtr) callconv(.C) void;
+    const RunWGPUViewTestFn = *const fn (WgpuViewPtr) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const run_wgpu_view_test = lookupNativeSymbol(RunWGPUViewTestFn, "wgpuRunGPUTest") orelse return;
     run_wgpu_view_test(wgpu_view);
@@ -3387,7 +3434,7 @@ export fn runWGPUViewTest(wgpu_view_id: u32) void {
 
 export fn toggleWGPUViewTestShader(wgpu_view_id: u32) void {
     clearLastError();
-    const ToggleWGPUViewTestShaderFn = *const fn (WgpuViewPtr) callconv(.C) void;
+    const ToggleWGPUViewTestShaderFn = *const fn (WgpuViewPtr) callconv(.c) void;
     const wgpu_view = requireWgpuViewPtr(wgpu_view_id) orelse return;
     const toggle_wgpu_view_test_shader = lookupNativeSymbol(
         ToggleWGPUViewTestShaderFn,
@@ -3471,7 +3518,7 @@ export fn hideTray(tray_id: u32) void {
 export fn setTrayTitle(tray_id: u32, title: [*:0]const u8) void {
     clearLastError();
 
-    const SetNativeTrayTitleFn = *const fn (TrayPtr, [*:0]const u8) callconv(.C) void;
+    const SetNativeTrayTitleFn = *const fn (TrayPtr, [*:0]const u8) callconv(.c) void;
     const state = tray_registry.getPtr(tray_id) orelse return;
     if (!replaceOwnedZ(&state.title, title)) {
         return;
@@ -3486,7 +3533,7 @@ export fn setTrayTitle(tray_id: u32, title: [*:0]const u8) void {
 export fn setTrayImage(tray_id: u32, image: [*:0]const u8) void {
     clearLastError();
 
-    const SetNativeTrayImageFn = *const fn (TrayPtr, [*:0]const u8) callconv(.C) void;
+    const SetNativeTrayImageFn = *const fn (TrayPtr, [*:0]const u8) callconv(.c) void;
     const state = tray_registry.getPtr(tray_id) orelse return;
     if (!replaceOwnedZ(&state.image, image)) {
         return;
@@ -3501,7 +3548,7 @@ export fn setTrayImage(tray_id: u32, image: [*:0]const u8) void {
 export fn setTrayMenu(tray_id: u32, menu_config: [*:0]const u8) void {
     clearLastError();
 
-    const SetNativeTrayMenuFn = *const fn (TrayPtr, [*:0]const u8) callconv(.C) void;
+    const SetNativeTrayMenuFn = *const fn (TrayPtr, [*:0]const u8) callconv(.c) void;
     const state = tray_registry.getPtr(tray_id) orelse return;
     if (!replaceOptionalOwnedZ(&state.menu_config, menu_config)) {
         return;
@@ -3524,7 +3571,7 @@ export fn removeTray(tray_id: u32) void {
 export fn getTrayBounds(tray_id: u32) [*:0]const u8 {
     clearLastError();
 
-    const GetNativeTrayBoundsFn = *const fn (TrayPtr) callconv(.C) ?[*:0]const u8;
+    const GetNativeTrayBoundsFn = *const fn (TrayPtr) callconv(.c) ?[*:0]const u8;
     const state = tray_registry.getPtr(tray_id) orelse return empty_rect_json;
     const tray_ptr = state.ptr orelse return empty_rect_json;
 
@@ -3535,7 +3582,7 @@ export fn getTrayBounds(tray_id: u32) [*:0]const u8 {
 }
 
 export fn setApplicationMenu(menu_config: [*:0]const u8, application_menu_handler: ?StatusItemHandler) void {
-    const SetApplicationMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.C) void;
+    const SetApplicationMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.c) void;
     const set_application_menu = lookupNativeSymbol(
         SetApplicationMenuFn,
         "setApplicationMenu",
@@ -3544,7 +3591,7 @@ export fn setApplicationMenu(menu_config: [*:0]const u8, application_menu_handle
 }
 
 export fn showContextMenu(menu_config: [*:0]const u8, context_menu_handler: ?StatusItemHandler) void {
-    const ShowContextMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.C) void;
+    const ShowContextMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.c) void;
     const show_context_menu = lookupNativeSymbol(
         ShowContextMenuFn,
         "showContextMenu",
@@ -3553,25 +3600,25 @@ export fn showContextMenu(menu_config: [*:0]const u8, context_menu_handler: ?Sta
 }
 
 export fn moveToTrash(path: [*:0]const u8) bool {
-    const MoveToTrashFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const MoveToTrashFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const move_to_trash = lookupNativeSymbol(MoveToTrashFn, "moveToTrash") orelse return false;
     return move_to_trash(path);
 }
 
 export fn showItemInFolder(path: [*:0]const u8) void {
-    const ShowItemInFolderFn = *const fn ([*:0]const u8) callconv(.C) void;
+    const ShowItemInFolderFn = *const fn ([*:0]const u8) callconv(.c) void;
     const show_item_in_folder = lookupNativeSymbol(ShowItemInFolderFn, "showItemInFolder") orelse return;
     show_item_in_folder(path);
 }
 
 export fn openExternal(url: [*:0]const u8) bool {
-    const OpenExternalFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const OpenExternalFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const open_external = lookupNativeSymbol(OpenExternalFn, "openExternal") orelse return false;
     return open_external(url);
 }
 
 export fn openPath(path: [*:0]const u8) bool {
-    const OpenPathFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const OpenPathFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const open_path = lookupNativeSymbol(OpenPathFn, "openPath") orelse return false;
     return open_path(path);
 }
@@ -3582,19 +3629,19 @@ export fn showNotification(
     subtitle: [*:0]const u8,
     silent: bool,
 ) void {
-    const ShowNotificationFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, bool) callconv(.C) void;
+    const ShowNotificationFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, bool) callconv(.c) void;
     const show_notification = lookupNativeSymbol(ShowNotificationFn, "showNotification") orelse return;
     show_notification(title, body, subtitle, silent);
 }
 
 export fn setDockIconVisible(visible: bool) void {
-    const SetDockIconVisibleFn = *const fn (bool) callconv(.C) void;
+    const SetDockIconVisibleFn = *const fn (bool) callconv(.c) void;
     const set_dock_icon_visible = lookupNativeSymbol(SetDockIconVisibleFn, "setDockIconVisible") orelse return;
     set_dock_icon_visible(visible);
 }
 
 export fn isDockIconVisible() bool {
-    const IsDockIconVisibleFn = *const fn () callconv(.C) bool;
+    const IsDockIconVisibleFn = *const fn () callconv(.c) bool;
     const is_dock_icon_visible = lookupNativeSymbol(IsDockIconVisibleFn, "isDockIconVisible") orelse return false;
     return is_dock_icon_visible();
 }
@@ -3607,7 +3654,7 @@ export fn openFileDialog(
     allows_multiple_selection: c_int,
 ) ?[*:0]const u8 {
     // The native wrapper returns a JSON array so path contents remain lossless.
-    const OpenFileDialogFn = *const fn ([*:0]const u8, [*:0]const u8, c_int, c_int, c_int) callconv(.C) ?[*:0]const u8;
+    const OpenFileDialogFn = *const fn ([*:0]const u8, [*:0]const u8, c_int, c_int, c_int) callconv(.c) ?[*:0]const u8;
     const open_file_dialog = lookupNativeSymbol(OpenFileDialogFn, "openFileDialog") orelse return null;
     return open_file_dialog(
         starting_folder,
@@ -3635,43 +3682,43 @@ export fn showMessageBox(
         [*:0]const u8,
         c_int,
         c_int,
-    ) callconv(.C) c_int;
+    ) callconv(.c) c_int;
     const show_message_box = lookupNativeSymbol(ShowMessageBoxFn, "showMessageBox") orelse return -1;
     return show_message_box(box_type, title, message, detail, buttons, default_id, cancel_id);
 }
 
 export fn clipboardReadText() ?[*:0]const u8 {
-    const ClipboardReadTextFn = *const fn () callconv(.C) ?[*:0]const u8;
+    const ClipboardReadTextFn = *const fn () callconv(.c) ?[*:0]const u8;
     const clipboard_read_text = lookupNativeSymbol(ClipboardReadTextFn, "clipboardReadText") orelse return null;
     return clipboard_read_text();
 }
 
 export fn clipboardWriteText(text: [*:0]const u8) void {
-    const ClipboardWriteTextFn = *const fn ([*:0]const u8) callconv(.C) void;
+    const ClipboardWriteTextFn = *const fn ([*:0]const u8) callconv(.c) void;
     const clipboard_write_text = lookupNativeSymbol(ClipboardWriteTextFn, "clipboardWriteText") orelse return;
     clipboard_write_text(text);
 }
 
 export fn clipboardReadImage(out_size: *u64) ?*const anyopaque {
-    const ClipboardReadImageFn = *const fn (*u64) callconv(.C) ?*const anyopaque;
+    const ClipboardReadImageFn = *const fn (*u64) callconv(.c) ?*const anyopaque;
     const clipboard_read_image = lookupNativeSymbol(ClipboardReadImageFn, "clipboardReadImage") orelse return null;
     return clipboard_read_image(out_size);
 }
 
 export fn clipboardWriteImage(data: ?*const anyopaque, size: u64) void {
-    const ClipboardWriteImageFn = *const fn (?*const anyopaque, u64) callconv(.C) void;
+    const ClipboardWriteImageFn = *const fn (?*const anyopaque, u64) callconv(.c) void;
     const clipboard_write_image = lookupNativeSymbol(ClipboardWriteImageFn, "clipboardWriteImage") orelse return;
     clipboard_write_image(data, size);
 }
 
 export fn clipboardClear() void {
-    const ClipboardClearFn = *const fn () callconv(.C) void;
+    const ClipboardClearFn = *const fn () callconv(.c) void;
     const clipboard_clear = lookupNativeSymbol(ClipboardClearFn, "clipboardClear") orelse return;
     clipboard_clear();
 }
 
 export fn clipboardAvailableFormats() ?[*:0]const u8 {
-    const ClipboardAvailableFormatsFn = *const fn () callconv(.C) ?[*:0]const u8;
+    const ClipboardAvailableFormatsFn = *const fn () callconv(.c) ?[*:0]const u8;
     const clipboard_available_formats = lookupNativeSymbol(
         ClipboardAvailableFormatsFn,
         "clipboardAvailableFormats",
@@ -3680,19 +3727,19 @@ export fn clipboardAvailableFormats() ?[*:0]const u8 {
 }
 
 export fn getPrimaryDisplay() ?[*:0]const u8 {
-    const GetPrimaryDisplayFn = *const fn () callconv(.C) ?[*:0]const u8;
+    const GetPrimaryDisplayFn = *const fn () callconv(.c) ?[*:0]const u8;
     const get_primary_display = lookupNativeSymbol(GetPrimaryDisplayFn, "getPrimaryDisplay") orelse return null;
     return get_primary_display();
 }
 
 export fn getAllDisplays() ?[*:0]const u8 {
-    const GetAllDisplaysFn = *const fn () callconv(.C) ?[*:0]const u8;
+    const GetAllDisplaysFn = *const fn () callconv(.c) ?[*:0]const u8;
     const get_all_displays = lookupNativeSymbol(GetAllDisplaysFn, "getAllDisplays") orelse return null;
     return get_all_displays();
 }
 
 export fn getCursorScreenPoint() ?[*:0]const u8 {
-    const GetCursorScreenPointFn = *const fn () callconv(.C) ?[*:0]const u8;
+    const GetCursorScreenPointFn = *const fn () callconv(.c) ?[*:0]const u8;
     const get_cursor_screen_point = lookupNativeSymbol(
         GetCursorScreenPointFn,
         "getCursorScreenPoint",
@@ -3701,14 +3748,14 @@ export fn getCursorScreenPoint() ?[*:0]const u8 {
 }
 
 export fn getMouseButtons() u64 {
-    const GetMouseButtonsFn = *const fn () callconv(.C) u64;
+    const GetMouseButtonsFn = *const fn () callconv(.c) u64;
     const get_mouse_buttons = lookupNativeSymbol(GetMouseButtonsFn, "getMouseButtons") orelse return 0;
     return get_mouse_buttons();
 }
 
 export fn setGlobalShortcutCallback(callback: ?GlobalShortcutHandler) void {
     clearLastError();
-    const SetGlobalShortcutCallbackFn = *const fn (?GlobalShortcutHandler) callconv(.C) void;
+    const SetGlobalShortcutCallbackFn = *const fn (?GlobalShortcutHandler) callconv(.c) void;
     const set_global_shortcut_callback = lookupNativeSymbol(
         SetGlobalShortcutCallbackFn,
         "setGlobalShortcutCallback",
@@ -3718,7 +3765,7 @@ export fn setGlobalShortcutCallback(callback: ?GlobalShortcutHandler) void {
 
 export fn registerGlobalShortcut(accelerator: [*:0]const u8) bool {
     clearLastError();
-    const RegisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const RegisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const register_global_shortcut = lookupNativeSymbol(
         RegisterGlobalShortcutFn,
         "registerGlobalShortcut",
@@ -3728,7 +3775,7 @@ export fn registerGlobalShortcut(accelerator: [*:0]const u8) bool {
 
 export fn unregisterGlobalShortcut(accelerator: [*:0]const u8) bool {
     clearLastError();
-    const UnregisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const UnregisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const unregister_global_shortcut = lookupNativeSymbol(
         UnregisterGlobalShortcutFn,
         "unregisterGlobalShortcut",
@@ -3738,7 +3785,7 @@ export fn unregisterGlobalShortcut(accelerator: [*:0]const u8) bool {
 
 export fn unregisterAllGlobalShortcuts() void {
     clearLastError();
-    const UnregisterAllGlobalShortcutsFn = *const fn () callconv(.C) void;
+    const UnregisterAllGlobalShortcutsFn = *const fn () callconv(.c) void;
     const unregister_all_global_shortcuts = lookupNativeSymbol(
         UnregisterAllGlobalShortcutsFn,
         "unregisterAllGlobalShortcuts",
@@ -3748,7 +3795,7 @@ export fn unregisterAllGlobalShortcuts() void {
 
 export fn isGlobalShortcutRegistered(accelerator: [*:0]const u8) bool {
     clearLastError();
-    const IsGlobalShortcutRegisteredFn = *const fn ([*:0]const u8) callconv(.C) bool;
+    const IsGlobalShortcutRegisteredFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const is_global_shortcut_registered = lookupNativeSymbol(
         IsGlobalShortcutRegisteredFn,
         "isGlobalShortcutRegistered",
@@ -3761,7 +3808,7 @@ export fn sessionGetCookies(
     filter_json: [*:0]const u8,
 ) ?[*:0]const u8 {
     clearLastError();
-    const SessionGetCookiesFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) ?[*:0]const u8;
+    const SessionGetCookiesFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) ?[*:0]const u8;
     const session_get_cookies = lookupNativeSymbol(SessionGetCookiesFn, "sessionGetCookies") orelse return null;
     return session_get_cookies(partition_identifier, filter_json);
 }
@@ -3771,7 +3818,7 @@ export fn sessionSetCookie(
     cookie_json: [*:0]const u8,
 ) bool {
     clearLastError();
-    const SessionSetCookieFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) bool;
+    const SessionSetCookieFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) bool;
     const session_set_cookie = lookupNativeSymbol(SessionSetCookieFn, "sessionSetCookie") orelse return false;
     return session_set_cookie(partition_identifier, cookie_json);
 }
@@ -3782,14 +3829,14 @@ export fn sessionRemoveCookie(
     cookie_name: [*:0]const u8,
 ) bool {
     clearLastError();
-    const SessionRemoveCookieFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
+    const SessionRemoveCookieFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) bool;
     const session_remove_cookie = lookupNativeSymbol(SessionRemoveCookieFn, "sessionRemoveCookie") orelse return false;
     return session_remove_cookie(partition_identifier, url, cookie_name);
 }
 
 export fn sessionClearCookies(partition_identifier: [*:0]const u8) void {
     clearLastError();
-    const SessionClearCookiesFn = *const fn ([*:0]const u8) callconv(.C) void;
+    const SessionClearCookiesFn = *const fn ([*:0]const u8) callconv(.c) void;
     const session_clear_cookies = lookupNativeSymbol(
         SessionClearCookiesFn,
         "sessionClearCookies",
@@ -3802,7 +3849,7 @@ export fn sessionClearStorageData(
     storage_types_json: [*:0]const u8,
 ) void {
     clearLastError();
-    const SessionClearStorageDataFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) void;
+    const SessionClearStorageDataFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) void;
     const session_clear_storage_data = lookupNativeSymbol(
         SessionClearStorageDataFn,
         "sessionClearStorageData",
@@ -3812,14 +3859,14 @@ export fn sessionClearStorageData(
 
 export fn setURLOpenHandler(handler: ?URLOpenHandler) void {
     clearLastError();
-    const SetURLOpenHandlerFn = *const fn (?URLOpenHandler) callconv(.C) void;
+    const SetURLOpenHandlerFn = *const fn (?URLOpenHandler) callconv(.c) void;
     const set_url_open_handler = lookupNativeSymbol(SetURLOpenHandlerFn, "setURLOpenHandler") orelse return;
     set_url_open_handler(handler);
 }
 
 export fn setAppReopenHandler(handler: ?AppReopenHandler) void {
     clearLastError();
-    const SetAppReopenHandlerFn = *const fn (?AppReopenHandler) callconv(.C) void;
+    const SetAppReopenHandlerFn = *const fn (?AppReopenHandler) callconv(.c) void;
     const set_app_reopen_handler = lookupNativeSymbol(
         SetAppReopenHandlerFn,
         "setAppReopenHandler",
@@ -3830,7 +3877,7 @@ export fn setAppReopenHandler(handler: ?AppReopenHandler) void {
 export fn setQuitRequestedHandler(handler: ?QuitRequestedHandler) void {
     clearLastError();
     managed_quit_requested_handler = handler;
-    const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.C) void;
+    const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.c) void;
     const set_quit_requested_handler = lookupNativeSymbol(
         SetQuitRequestedHandlerFn,
         "setQuitRequestedHandler",
@@ -3846,8 +3893,8 @@ export fn setExitOnLastWindowClosed(enabled: bool) void {
 export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
     clearLastError();
 
-    const StopEventLoopFn = *const fn () callconv(.C) void;
-    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.C) void;
+    const StopEventLoopFn = *const fn () callconv(.c) void;
+    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;
 
     if (lookupNativeSymbol(StopEventLoopFn, "stopEventLoop")) |stop_event_loop| {
         stop_event_loop();
@@ -3866,14 +3913,14 @@ export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
 
 export fn stopEventLoop() void {
     clearLastError();
-    const StopEventLoopFn = *const fn () callconv(.C) void;
+    const StopEventLoopFn = *const fn () callconv(.c) void;
     const stop_event_loop = lookupNativeSymbol(StopEventLoopFn, "stopEventLoop") orelse return;
     stop_event_loop();
 }
 
 export fn waitForShutdownComplete(timeout_ms: c_int) void {
     clearLastError();
-    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.C) void;
+    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;
     const wait_for_shutdown_complete = lookupNativeSymbol(
         WaitForShutdownCompleteFn,
         "waitForShutdownComplete",
@@ -3891,7 +3938,7 @@ export fn forceExit(code: c_int) void {
 
 export fn wgpuCreateSurfaceForView(instance: ?*anyopaque, view_ptr: ?*anyopaque) ?*anyopaque {
     clearLastError();
-    const WgpuCreateSurfaceForViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
+    const WgpuCreateSurfaceForViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
     const wgpu_create_surface_for_view = lookupNativeSymbol(
         WgpuCreateSurfaceForViewFn,
         "wgpuCreateSurfaceForView",
@@ -3905,7 +3952,7 @@ export fn wgpuCreateAdapterDeviceMainThread(
     out_adapter_device: ?*anyopaque,
 ) void {
     clearLastError();
-    const WgpuCreateAdapterDeviceMainThreadFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.C) void;
+    const WgpuCreateAdapterDeviceMainThreadFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void;
     const wgpu_create_adapter_device_main_thread = lookupNativeSymbol(
         WgpuCreateAdapterDeviceMainThreadFn,
         "wgpuCreateAdapterDeviceMainThread",
@@ -3915,7 +3962,7 @@ export fn wgpuCreateAdapterDeviceMainThread(
 
 export fn wgpuSurfaceConfigureMainThread(surface_ptr: ?*anyopaque, config_ptr: ?*anyopaque) void {
     clearLastError();
-    const WgpuSurfaceConfigureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
+    const WgpuSurfaceConfigureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
     const wgpu_surface_configure_main_thread = lookupNativeSymbol(
         WgpuSurfaceConfigureMainThreadFn,
         "wgpuSurfaceConfigureMainThread",
@@ -3925,7 +3972,7 @@ export fn wgpuSurfaceConfigureMainThread(surface_ptr: ?*anyopaque, config_ptr: ?
 
 export fn wgpuSurfaceGetCurrentTextureMainThread(surface_ptr: ?*anyopaque, surface_texture_ptr: ?*anyopaque) void {
     clearLastError();
-    const WgpuSurfaceGetCurrentTextureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
+    const WgpuSurfaceGetCurrentTextureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
     const wgpu_surface_get_current_texture_main_thread = lookupNativeSymbol(
         WgpuSurfaceGetCurrentTextureMainThreadFn,
         "wgpuSurfaceGetCurrentTextureMainThread",
@@ -3935,7 +3982,7 @@ export fn wgpuSurfaceGetCurrentTextureMainThread(surface_ptr: ?*anyopaque, surfa
 
 export fn wgpuSurfacePresentMainThread(surface_ptr: ?*anyopaque) i32 {
     clearLastError();
-    const WgpuSurfacePresentMainThreadFn = *const fn (?*anyopaque) callconv(.C) i32;
+    const WgpuSurfacePresentMainThreadFn = *const fn (?*anyopaque) callconv(.c) i32;
     const wgpu_surface_present_main_thread = lookupNativeSymbol(
         WgpuSurfacePresentMainThreadFn,
         "wgpuSurfacePresentMainThread",
@@ -3980,7 +4027,7 @@ test "host webview JSON events encode detail as data" {
 
 var captured_runtime_callback_payload: ?[*:0]const u8 = null;
 
-fn captureRuntimeCallbackPayload(_: u32, payload: [*:0]const u8) callconv(.C) void {
+fn captureRuntimeCallbackPayload(_: u32, payload: [*:0]const u8) callconv(.c) void {
     captured_runtime_callback_payload = payload;
 }
 

@@ -98,6 +98,7 @@ pub fn routeLoaderError(output: []const u8) ErrorRoute {
 }
 
 pub fn appendMissingDesktopLibraries(
+    allocator: std.mem.Allocator,
     libraries: *std.ArrayList([]const u8),
     output: []const u8,
 ) !void {
@@ -107,7 +108,7 @@ pub fn appendMissingDesktopLibraries(
         for (libraries.items) |existing| {
             if (std.mem.eql(u8, existing, library)) break;
         } else {
-            try libraries.append(library);
+            try libraries.append(allocator, library);
         }
     }
 }
@@ -117,9 +118,9 @@ pub fn formatDiagnostic(
     native_wrapper_path: []const u8,
     missing_libraries: []const []const u8,
 ) ![]u8 {
-    var output = std.ArrayList(u8).init(allocator);
-    errdefer output.deinit();
-    const writer = output.writer();
+    var output: std.Io.Writer.Allocating = .init(allocator);
+    defer output.deinit();
+    const writer = &output.writer;
 
     try writer.writeAll(
         "[LAUNCHER] Electrobun cannot start because Linux desktop runtime libraries are missing.\n" ++
@@ -140,7 +141,7 @@ pub fn formatDiagnostic(
         .{native_wrapper_path},
     );
 
-    return output.toOwnedSlice();
+    return try output.toOwnedSlice();
 }
 
 pub fn shouldDiagnoseChildExit(exit_code: u8) bool {
@@ -149,33 +150,35 @@ pub fn shouldDiagnoseChildExit(exit_code: u8) bool {
 
 pub fn diagnoseNativeWrapperFailure(
     allocator: std.mem.Allocator,
+    io: std.Io,
+    environ: std.process.Environ,
     native_wrapper_path: []const u8,
     child_ld_library_path: ?[]const u8,
 ) !bool {
-    std.fs.accessAbsolute(native_wrapper_path, .{}) catch return false;
+    std.Io.Dir.accessAbsolute(io, native_wrapper_path, .{}) catch return false;
 
-    var diagnostic_env = try std.process.getEnvMap(allocator);
+    var diagnostic_env = try environ.createMap(allocator);
     defer diagnostic_env.deinit();
-    _ = diagnostic_env.remove("LD_PRELOAD");
+    _ = diagnostic_env.swapRemove("LD_PRELOAD");
     if (child_ld_library_path) |ld_library_path| {
         try diagnostic_env.put("LD_LIBRARY_PATH", ld_library_path);
     } else {
-        _ = diagnostic_env.remove("LD_LIBRARY_PATH");
+        _ = diagnostic_env.swapRemove("LD_LIBRARY_PATH");
     }
 
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
+    const result = std.process.run(allocator, io, .{
         .argv = &.{ "ldd", native_wrapper_path },
-        .env_map = &diagnostic_env,
-        .max_output_bytes = 256 * 1024,
+        .environ_map = &diagnostic_env,
+        .stdout_limit = .limited(256 * 1024),
+        .stderr_limit = .limited(256 * 1024),
     }) catch return false;
     defer allocator.free(result.stdout);
     defer allocator.free(result.stderr);
 
-    var missing_libraries = std.ArrayList([]const u8).init(allocator);
-    defer missing_libraries.deinit();
-    try appendMissingDesktopLibraries(&missing_libraries, result.stdout);
-    try appendMissingDesktopLibraries(&missing_libraries, result.stderr);
+    var missing_libraries: std.ArrayList([]const u8) = .empty;
+    defer missing_libraries.deinit(allocator);
+    try appendMissingDesktopLibraries(allocator, &missing_libraries, result.stdout);
+    try appendMissingDesktopLibraries(allocator, &missing_libraries, result.stderr);
 
     if (missing_libraries.items.len == 0) return false;
 
@@ -232,9 +235,9 @@ test "deduplicates missing libraries and formats package guidance" {
         \\libgtk-3.so.0 => not found
     ;
 
-    var missing_libraries = std.ArrayList([]const u8).init(std.testing.allocator);
-    defer missing_libraries.deinit();
-    try appendMissingDesktopLibraries(&missing_libraries, ldd_output);
+    var missing_libraries: std.ArrayList([]const u8) = .empty;
+    defer missing_libraries.deinit(std.testing.allocator);
+    try appendMissingDesktopLibraries(std.testing.allocator, &missing_libraries, ldd_output);
     try std.testing.expectEqual(@as(usize, 2), missing_libraries.items.len);
 
     const diagnostic = try formatDiagnostic(
