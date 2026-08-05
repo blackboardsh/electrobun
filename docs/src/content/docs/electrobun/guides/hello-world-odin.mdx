@@ -17,22 +17,29 @@ mkdir odin-hello
 cd odin-hello
 ```
 
-Create `package.json`:
+Create `hutch.config.ts` — scripts for non-JavaScript projects live here,
+not in `package.json` (Hutch resolves `hutch.config.ts` scripts first;
+`package.json` scripts are only a fallback):
+
+```ts
+export default {
+  scripts: {
+    dev: "hutch electrobun dev --watch",
+    build: "hutch electrobun build --env=production",
+  },
+};
+```
+
+Create `package.json` — it exists only to declare the `electrobun`
+dependency (the SDK and platform artifacts resolve from
+`node_modules/electrobun`):
 
 ```json
 {
   "name": "odin-hello",
   "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "hutch electrobun dev --watch",
-    "build": "hutch electrobun build --env=production"
-  },
   "dependencies": {
     "electrobun": "latest"
-  },
-  "devDependencies": {
-    "typescript": "^5.9.3"
   }
 }
 ```

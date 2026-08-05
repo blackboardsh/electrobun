@@ -55,7 +55,7 @@ hutch x electrobun init
 # Install dependencies and maintain bun.lock
 hutch install
 
-# Run package.json or dash.config.ts scripts
+# Run hutch.config.ts or package.json scripts
 hutch run dev
 
 # Build and launch an Electrobun app
@@ -72,8 +72,24 @@ hutch electrobun build --env=production
 Hutch's build environments are `dev`, `canary`, and `production`.
 `--env=stable` remains an alias for `--env=production`.
 
-`hutch run <name>` looks in `dash.config.ts` first and then in
-`package.json`. `hutch <name>` is shorthand when the name is unambiguous.
+`hutch run <name>` resolves scripts from the nearest `hutch.config.ts`
+first, then falls back to `package.json` scripts (`dash.config.ts` remains
+supported as the legacy config name). `hutch <name>` is shorthand when the
+name is unambiguous. Non-JavaScript projects don't need a `package.json` for
+scripts at all — a `hutch.config.ts` is enough:
+
+```ts
+// hutch.config.ts
+export default {
+  scripts: {
+    dev: "hutch electrobun dev --watch",
+    build: "hutch electrobun build --env=production",
+  },
+};
+```
+
+Its first line can also carry the [version pragma](#pin-a-project) that pins
+Hutch and Cottontail per project.
 
 An exact package request such as `hutch x electrobun@2.0.0 init` retains normal
 package-runner semantics, but templates always come from the latest matching
@@ -98,7 +114,8 @@ invocations do not prompt.
 
 ## Pin a project
 
-Place an optional pragma on the first line of `dash.config.ts`:
+Place an optional pragma on the first line of `hutch.config.ts` (or the
+legacy `dash.config.ts`):
 
 ```ts
 // @dash cli=production cottontail=production

@@ -47,6 +47,10 @@ Install dependencies:
 hutch install
 ```
 
+`package.json` scripts work as a fallback; if a project also has a
+`hutch.config.ts`, its scripts take precedence — see
+[Hutch](/electrobun/guides/hutch/).
+
 <Aside type="note">
 The `electrobun/main` import path and `@types/bun` package are compatibility
 names. Cottontail executes this main process unless the config explicitly
