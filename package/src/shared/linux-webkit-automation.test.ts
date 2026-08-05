@@ -30,7 +30,7 @@ describe("Linux WebKitGTK automation contract", () => {
 			"automation.private_inspector_server_environment_variable",
 		);
 		expect(launcher).toContain(
-			"env_map.remove(automation.inspector_server_environment_variable)",
+			"env_map.swapRemove(automation.inspector_server_environment_variable)",
 		);
 		expect(launcher).not.toContain("argv = launcher_args");
 	});

@@ -42,7 +42,7 @@ describe("owned build dependency artifacts", () => {
 		);
 
 		expect(artifact.url).toBe(
-			"https://artifacts.example.test/zig-bsdiff/releases/0.1.21/zig-bsdiff-linux-x64.tar.gz",
+			"https://artifacts.example.test/zig-bsdiff/releases/0.1.22/zig-bsdiff-linux-x64.tar.gz",
 		);
 	});
 });

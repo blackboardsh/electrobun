@@ -4,9 +4,9 @@ export const BUILD_DEPENDENCIES_PUBLIC_BASE_URL =
 export const ZIG_VERSION = "0.16.0";
 
 export const OWNED_BUILD_DEPENDENCY_VERSIONS = {
-	"zig-bsdiff": "0.1.21",
-	"zig-zstd": "0.1.6",
-	"zig-asar": "0.2.5",
+	"zig-bsdiff": "0.1.22",
+	"zig-zstd": "0.1.7",
+	"zig-asar": "0.2.6",
 	"electrobun-dawn": "0.2.5",
 } as const;
 
