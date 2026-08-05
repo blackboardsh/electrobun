@@ -8,6 +8,11 @@ import { Aside } from "@astrojs/starlight/components";
 Electrobun UI is experimental and its APIs may change between releases.
 </Aside>
 
+This page documents the **GPU renderer's** element vocabulary
+(`electrobun/main/ui`). The [DOM renderer](/electrobun/apis/ui/browser-dom/)
+(`electrobun/browser/ui`) shares the same reactivity and control flow but
+speaks HTML — any tag works there.
+
 In JSX, elements are the intrinsics `<box>`, `<row>`, `<column>`, `<text>`,
 and `<spacer>`; everything else here (`each`, `dynamic`, `textInput`,
 `webview`, `wgpuSurface`) is a builder function used inside a JSX
@@ -16,7 +21,7 @@ complete JSX-free API for plain `.ts` files — see
 [What the JSX becomes](/electrobun/guides/electrobun-ui/#what-the-jsx-becomes).
 
 ```tsx
-import { _, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
+import { live, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
 ```
 
 Any prop typed `Reactive<T>` accepts a plain value or a `live()` scope:

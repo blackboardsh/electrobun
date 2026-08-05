@@ -15,6 +15,12 @@ apps that never import it pay nothing for it.
 import { live, signal, ui, createUIWindow } from "electrobun/main/ui";
 ```
 
+Warren has two renderers over one core: this page covers the **GPU
+renderer** (main process, Dawn); the same reactivity, JSX, and control flow
+also render into real DOM inside webviews via
+[`electrobun/browser/ui`](/electrobun/apis/ui/browser-dom/). Store and
+model code written against the primitives runs unchanged on both sides.
+
 ## How rendering works
 
 Your components build a **retained tree** of nodes (boxes, text, native-layer

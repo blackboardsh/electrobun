@@ -77,9 +77,13 @@ live(() => {
 
 // 2. JSX position — a binding. the value becomes the node or attribute.
 <text>{live(() => state.user.name)}</text>
+// In the DOM renderer a live child may also return elements — the region
+// remounts on change: <div>{live(() => open() && <Panel/>)}</div>
 
-// 3. nested inside another scope — redundant (the enclosing scope already
+// 3. nested inside another tracked scope — redundant (that scope already
 //    tracks the dynamic extent); Warren warns and passes the value through.
+//    Component bodies are inert, so a live() there is never "nested" — it
+//    is a real binding even when the component mounts inside a region.
 ```
 
 A JSX `live` is disposed when its node unmounts; a body-level `live` when
