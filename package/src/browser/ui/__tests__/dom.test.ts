@@ -293,6 +293,36 @@ describe("DOM renderer", () => {
 		expect(output!.textContent).toBe("5:10");
 	});
 
+	test("live element children become dynamic regions (cond && <el/>)", () => {
+		const [open, setOpen] = signal(false);
+		const { container } = mount(() =>
+			jsx("div", {
+				children: live(() =>
+					open() ? jsx("span", { class: "panel", children: "open" }) : null,
+				),
+			}),
+		);
+		const [div] = container.children;
+		expect(div!.children.length).toBe(0);
+		setOpen(true);
+		expect(div!.children[0]!.className).toBe("panel");
+		setOpen(false);
+		expect(div!.children.length).toBe(0);
+	});
+
+	test("live text children stay fine-grained text nodes", () => {
+		const [n, setN] = signal(1);
+		const { container } = mount(() =>
+			jsx("div", { children: live(() => `v${n()}`) }),
+		);
+		const [div] = container.children;
+		const textNode = div!.childNodes.find((c) => c instanceof StubText);
+		setN(2);
+		// Same text node updated in place — not a rebuilt region.
+		expect(div!.childNodes.find((c) => c instanceof StubText)).toBe(textNode!);
+		expect(div!.textContent).toBe("v2");
+	});
+
 	test("Fragment and array children mount in order", () => {
 		const { container } = mount(() =>
 			Fragment({

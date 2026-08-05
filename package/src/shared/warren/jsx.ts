@@ -17,7 +17,7 @@
 // the result as its jsx-runtime module; JSX.IntrinsicElements typing stays
 // per-package (types only, Solid-style — the runtime never enumerates tags).
 
-import { isLive, memo, type Accessor, type LiveBinding } from "./reactive";
+import { inert, isLive, memo, type Accessor, type LiveBinding } from "./reactive";
 
 export interface UIElement {
 	readonly __electrobunElement: true;
@@ -141,7 +141,22 @@ export function createJsxRuntime(renderer: WarrenRenderer): WarrenJsxRuntime {
 			return;
 		}
 		if (isLive(child)) {
-			renderer.text(child as LiveBinding<string | number>);
+			const binding = child as LiveBinding<unknown>;
+			binding.claimed = true;
+			// A live child can be a text binding or a conditional element
+			// expression ({live(() => open() && <div/>)}). Peek at the first
+			// value: strings/numbers stay fine-grained text bindings; anything
+			// else (elements, arrays, null, booleans) becomes a dynamic region
+			// that mounts whatever the expression returns. A binding should
+			// consistently return one or the other.
+			const first = inert(() => binding.fn());
+			if (typeof first === "string" || typeof first === "number") {
+				renderer.text(child as LiveBinding<string | number>);
+			} else {
+				renderer.dynamic(() => {
+					mountChild(binding.fn() as UIChild);
+				});
+			}
 			return;
 		}
 		if (typeof child === "function") {
