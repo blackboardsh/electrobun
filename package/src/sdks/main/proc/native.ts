@@ -767,6 +767,11 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 
+			setWGPUKeyHandler: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
 				returns: FFIType.void,
@@ -2517,6 +2522,42 @@ const wgpuPointerCallback = new JSCallback(
 		threadsafe: true,
 	},
 );
+
+// Key events from WGPU views carrying the layout-produced characters.
+const wgpuKeyCallback = new JSCallback(
+	(viewId, keyCode, modifiers, isDown, isRepeat, charsPtr) => {
+		const chars = charsPtr ? new CString(charsPtr).toString() : "";
+		electrobunEventEmitter.emit(`wgpu-key-${viewId}`, {
+			keyCode,
+			modifiers,
+			isDown: Boolean(isDown),
+			isRepeat: Boolean(isRepeat),
+			chars,
+		});
+	},
+	{
+		args: ["u32", "u32", "u32", "u32", "u32", FFIType.cstring],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+let wgpuKeyEventsEnabled = false;
+/** Route native key events (with characters) as `wgpu-key-<viewId>`. */
+export function enableWGPUKeyEvents(): boolean {
+	if (wgpuKeyEventsEnabled) return true;
+	if (!hasFFI) return false;
+	try {
+		if (typeof native_.symbols.setWGPUKeyHandler !== "function") {
+			return false;
+		}
+		native_.symbols.setWGPUKeyHandler(wgpuKeyCallback.ptr);
+		wgpuKeyEventsEnabled = true;
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 let wgpuPointerEventsEnabled = false;
 /**

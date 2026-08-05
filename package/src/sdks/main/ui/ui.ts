@@ -34,6 +34,8 @@ export interface KeyEventInfo {
 	keyCode: number;
 	modifiers: number;
 	isRepeat: boolean;
+	/** Characters produced by the keyboard layout (native key events only). */
+	chars?: string;
 }
 
 export interface Handlers {

@@ -3150,6 +3150,21 @@ extern "C" void setWGPUPointerHandler(WGPUPointerHandler handler) {
     g_wgpuPointerHandler = handler;
 }
 
+// Key events with the characters the keyboard layout produced (NSEvent
+// characters), so text input does not need a hardcoded keymap. The cstring
+// is only valid during the callback.
+typedef void (*WGPUKeyHandler)(uint32_t viewId,
+                               uint32_t keyCode,
+                               uint32_t modifiers,
+                               uint32_t isDown,
+                               uint32_t isRepeat,
+                               const char* characters);
+static WGPUKeyHandler g_wgpuKeyHandler = nullptr;
+
+extern "C" void setWGPUKeyHandler(WGPUKeyHandler handler) {
+    g_wgpuKeyHandler = handler;
+}
+
 @interface WGPUInputView : NSView
 @property (nonatomic, assign) uint32_t wgpuViewId;
 @end
@@ -3201,6 +3216,15 @@ extern "C" void setWGPUPointerHandler(WGPUPointerHandler handler) {
         return YES;
     }
     - (void)keyDown:(NSEvent*)event {
+        if (g_wgpuKeyHandler) {
+            const char *chars = [[event characters] UTF8String];
+            g_wgpuKeyHandler(self.wgpuViewId,
+                             (uint32_t)[event keyCode],
+                             [self modifierMaskFromEvent:event],
+                             1,
+                             [event isARepeat] ? 1 : 0,
+                             chars ? chars : "");
+        }
         WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
         if (delegate && delegate.keyHandler) {
             delegate.keyHandler(delegate.windowId,
@@ -3211,6 +3235,14 @@ extern "C" void setWGPUPointerHandler(WGPUPointerHandler handler) {
         }
     }
     - (void)keyUp:(NSEvent*)event {
+        if (g_wgpuKeyHandler) {
+            g_wgpuKeyHandler(self.wgpuViewId,
+                             (uint32_t)[event keyCode],
+                             [self modifierMaskFromEvent:event],
+                             0,
+                             0,
+                             "");
+        }
         WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
         if (delegate && delegate.keyHandler) {
             delegate.keyHandler(delegate.windowId,

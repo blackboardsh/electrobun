@@ -48,6 +48,7 @@ export function textInput(props: TextInputProps): number {
 			{ value, caret: untrack(caret) },
 			e.keyCode,
 			e.modifiers,
+			e.chars,
 		);
 		if (!result.handled) return false;
 		if (result.submit) {

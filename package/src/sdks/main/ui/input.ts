@@ -6,7 +6,7 @@
 //
 // Keyboard arrives via native window key events in both paths.
 
-import { enableWGPUPointerEvents, ffi, Screen } from "../proc/native";
+import { enableWGPUKeyEvents, enableWGPUPointerEvents, ffi, Screen } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import type { KeyEventInfo } from "./ui";
 
@@ -117,6 +117,18 @@ export function attachInput(
 
 	// ---- Keyboard (both paths) ----
 
+	// Prefer view-level key events (they carry the layout's characters);
+	// fall back to window key events otherwise.
+	const hasNativeKeys = enableWGPUKeyEvents();
+	const onViewKey = (e: any) => {
+		if (!e?.isDown) return;
+		sink.dispatchKey({
+			keyCode: e.keyCode ?? 0,
+			modifiers: e.modifiers ?? 0,
+			isRepeat: Boolean(e.isRepeat),
+			chars: typeof e.chars === "string" ? e.chars : undefined,
+		});
+	};
 	const onKeyDown = (event: any) => {
 		const data = event?.data ?? {};
 		sink.dispatchKey({
@@ -125,7 +137,18 @@ export function attachInput(
 			isRepeat: Boolean(data.isRepeat),
 		});
 	};
-	electrobunEventEmitter.on(`keyDown-${windowId}`, onKeyDown);
+	if (hasNativeKeys) {
+		electrobunEventEmitter.on(`wgpu-key-${viewId}`, onViewKey);
+	} else {
+		electrobunEventEmitter.on(`keyDown-${windowId}`, onKeyDown);
+	}
+	const disposeKeys = () => {
+		if (hasNativeKeys) {
+			electrobunEventEmitter.off(`wgpu-key-${viewId}`, onViewKey);
+		} else {
+			electrobunEventEmitter.off(`keyDown-${windowId}`, onKeyDown);
+		}
+	};
 
 	// ---- Native pointer events path ----
 
@@ -181,7 +204,7 @@ export function attachInput(
 			},
 			dispose() {
 				electrobunEventEmitter.off(`wgpu-pointer-${viewId}`, onPointer);
-				electrobunEventEmitter.off(`keyDown-${windowId}`, onKeyDown);
+				disposeKeys();
 			},
 		};
 	}
@@ -239,7 +262,7 @@ export function attachInput(
 		dispose() {
 			electrobunEventEmitter.off(`focus-${windowId}`, onFocus);
 			electrobunEventEmitter.off(`blur-${windowId}`, onBlur);
-			electrobunEventEmitter.off(`keyDown-${windowId}`, onKeyDown);
+			disposeKeys();
 		},
 	};
 }

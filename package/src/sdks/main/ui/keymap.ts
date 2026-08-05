@@ -67,6 +67,7 @@ export function applyEditKey(
 	state: EditState,
 	keyCode: number,
 	modifiers: number,
+	chars?: string,
 ): EditResult {
 	const { value } = state;
 	const caret = Math.max(0, Math.min(state.caret, value.length));
@@ -104,7 +105,21 @@ export function applyEditKey(
 		return { value, caret: to, handled: true, submit: false };
 	}
 
-	const char = charForKey(keyCode, modifiers);
+	// Prefer the keyboard layout's characters when the native event provides
+	// them; fall back to the built-in US map. Control characters and
+	// cmd/ctrl-chorded keys never insert.
+	let char: string | null = null;
+	if (
+		chars &&
+		chars.length > 0 &&
+		!(modifiers & (Mod.Cmd | Mod.Ctrl)) &&
+		// eslint-disable-next-line no-control-regex
+		!/[\u0000-\u001f\u007f\uf700-\uf8ff]/.test(chars)
+	) {
+		char = chars;
+	} else {
+		char = charForKey(keyCode, modifiers);
+	}
 	if (char !== null) {
 		return {
 			value: value.slice(0, caret) + char + value.slice(caret),
