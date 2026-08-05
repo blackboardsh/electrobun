@@ -51,7 +51,7 @@ export default {
 
 ```ts
 // src/main.ts
-import { createSignal, ui, createUIWindow } from "electrobun/main/ui";
+import { $, createSignal, ui, createUIWindow } from "electrobun/main/ui";
 
 const [count, setCount] = createSignal(0);
 
@@ -59,7 +59,7 @@ await createUIWindow(
   { title: "Hello UI", width: 420, height: 240 },
   () => {
     ui.column({ grow: 1, justify: "center", align: "center", gap: 16 }, () => {
-      ui.text(() => `Count: ${count()}`, { size: 32, color: "#e4e4f0" });
+      ui.text($(() => `Count: ${count()}`), { size: 32, color: "#e4e4f0" });
       ui.box(
         {
           pad: 12,
@@ -81,8 +81,10 @@ await createUIWindow(
 Run it with `bun start` (`hutch electrobun dev`). Three things to notice:
 
 - **Children are declared in callbacks**, so code indents like markup.
-- **Any prop can be a thunk.** The reactive text content becomes one
-  fine-grained effect that updates exactly one thing when `count` changes.
+- **Reactivity is explicit.** Anything wrapped in `$(() => ...)` is tracked
+  and becomes one fine-grained effect updating exactly one thing; bare
+  functions in value positions are an error. Search a file for `$(` to find
+  every reactive boundary.
 - **Components are plain functions.** Wrap the button in
   `function Button(label, onClick) { ... }` and you have a component — no
   compiler, no JSX, no registration.

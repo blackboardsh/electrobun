@@ -5,6 +5,7 @@
 import { defineTest, expect } from "../test-framework/types";
 import type { WGPUView, BrowserView } from "electrobun/main";
 import {
+	$,
 	createSignal,
 	createUIWindow,
 	hitChain,
@@ -64,8 +65,8 @@ export const uiRuntimeTests = [
 			const uiWindow = await createUIWindow(
 				{ title: "ui-test-reactive", width: 300, height: 200 },
 				() => {
-					boxId = ui.box({ width: 100, height: 100, bg });
-					textId = ui.text(label, { size: 14 });
+					boxId = ui.box({ width: 100, height: 100, bg: $(bg) });
+					textId = ui.text($(label), { size: 14 });
 				},
 			);
 			try {

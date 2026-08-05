@@ -5,6 +5,7 @@
 import { defineTest } from "../../test-framework/types";
 import { webgpu } from "electrobun/main";
 import {
+	$,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -42,10 +43,10 @@ async function openDemoWindow(): Promise<UIWindow> {
 				pad: 12,
 				radius: 9,
 				justify: "center",
-				bg: () =>
-					active() ? "#2c2c44" : hover() ? "#232336" : "#1b1b28",
+				bg: $(() =>
+					active() ? "#2c2c44" : hover() ? "#232336" : "#1b1b28"),
 				border: 1,
-				borderColor: () => (hover() ? accent() : "#262638"),
+				borderColor: $(() => (hover() ? accent() : "#262638")),
 				onClick,
 				onPointerEnter: () => setHover(true),
 				onPointerLeave: () => {
@@ -75,7 +76,7 @@ async function openDemoWindow(): Promise<UIWindow> {
 						size: 12,
 						color: "#8c8ca8",
 					});
-					ui.text(() => String(count()), { size: 88, color: accent });
+					ui.text($(() => String(count())), { size: 88, color: $(accent) });
 					ui.row({ gap: 10 }, () => {
 						Button("- 1", () => setCount((c) => c - 1));
 						Button("+ 1", () => setCount((c) => c + 1));

@@ -7,6 +7,7 @@
 
 import { webgpu } from "electrobun/main";
 import {
+	$,
 	createMemo,
 	createSignal,
 	createStore,
@@ -92,14 +93,14 @@ function Button(label: string, onClick: () => void, width?: number) {
 			pad: 12,
 			radius: 9,
 			justify: "center",
-			bg: () =>
+			bg: $(() =>
 				active()
 					? theme.surfaceActive
 					: hover()
 						? theme.surfaceHover
-						: theme.surface,
+						: theme.surface),
 			border: 1,
-			borderColor: () => (hover() ? accent() : theme.line),
+			borderColor: $(() => (hover() ? accent() : theme.line)),
 			onClick,
 			onPointerEnter: () => setHover(true),
 			onPointerLeave: () => {
@@ -136,7 +137,7 @@ function Counter() {
 			size: 12,
 			color: theme.textMuted,
 		});
-		ui.text(() => String(count()), { size: 88, color: accent });
+		ui.text($(() => String(count())), { size: 88, color: $(accent) });
 		ui.row({ gap: 10 }, () => {
 			Button("- 1", () => adjust(-1), 92);
 			Button("+ 1", () => adjust(1), 92);
@@ -165,7 +166,7 @@ function EventLog() {
 			}
 			for (const entry of log.entries) {
 				ui.row({ gap: 8 }, () => {
-					ui.text(`#${entry.n}`, { size: 12, color: accent });
+					ui.text(`#${entry.n}`, { size: 12, color: $(accent) });
 					ui.text(entry.label, { size: 12, color: theme.textPrimary });
 				});
 			}
@@ -332,7 +333,7 @@ const uiWindow = await createUIWindow(
 	},
 	() => {
 		ui.column({ grow: 1 }, () => {
-			Header(sizeLabel);
+			Header($(sizeLabel));
 			Divider();
 			ui.row({ grow: 1 }, () => {
 				ui.column({ grow: 3 }, () => {

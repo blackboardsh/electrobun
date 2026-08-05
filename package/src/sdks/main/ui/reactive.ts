@@ -7,6 +7,35 @@
 export type Accessor<T> = () => T;
 export type Setter<T> = (next: T | ((prev: T) => T)) => T;
 
+// ---------------------------------------------------------------------------
+// Reactive marker. Value props accept `T | ReactiveThunk<T>` — a plain value,
+// or a thunk explicitly marked with $()/reactive(). Bare functions in value
+// positions are an error, so every reactive boundary in a component is
+// findable by searching for "$(".
+// ---------------------------------------------------------------------------
+
+export const REACTIVE_BRAND = Symbol.for("electrobun.ui.reactive");
+
+export interface ReactiveThunk<T> {
+	(): T;
+	[REACTIVE_BRAND]: true;
+}
+
+/** Mark a thunk as reactive: its reads are tracked and drive one effect. */
+export function reactive<T>(fn: () => T): ReactiveThunk<T> {
+	(fn as any)[REACTIVE_BRAND] = true;
+	return fn as ReactiveThunk<T>;
+}
+
+/** Short alias for {@link reactive}: `bg: $(() => hover() ? a : b)`. */
+export const $ = reactive;
+
+export function isReactive(value: unknown): value is ReactiveThunk<unknown> {
+	return (
+		typeof value === "function" && (value as any)[REACTIVE_BRAND] === true
+	);
+}
+
 type SubscriberSet = Set<Effect>;
 
 let currentEffect: Effect | null = null;

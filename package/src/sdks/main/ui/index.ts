@@ -1,16 +1,20 @@
 // Public surface of the prototype UI runtime.
 
 export {
+	$,
 	batch,
 	createEffect,
 	createMemo,
 	createRoot,
 	createSignal,
 	createStore,
+	isReactive,
 	onCleanup,
 	produce,
+	reactive,
 	untrack,
 	type Accessor,
+	type ReactiveThunk,
 	type Setter,
 } from "./reactive";
 export { AUTO, NodeKind, Prop, UiTree } from "./tree";

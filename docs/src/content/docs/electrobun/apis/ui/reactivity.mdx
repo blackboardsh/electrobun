@@ -15,6 +15,7 @@ is functions and thunks.
 
 ```ts
 import {
+  $,
   createSignal,
   createEffect,
   createMemo,
@@ -56,13 +57,18 @@ re-runs. `onCleanup(fn)` registers teardown for the current scope —
 `textInput` uses it for its blink timer, elements use it to release native
 views.
 
-In UI code you rarely call `createEffect` for rendering — passing a thunk as
-a prop *is* the effect:
+In UI code you rarely call `createEffect` for rendering — a `$()`-marked
+thunk in a value position *is* the effect:
 
 ```ts
-ui.text(() => `Count: ${count()}`);          // one effect, updates one string
-ui.box({ bg: () => (hot() ? "#f00" : "#333") }); // one effect, one property
+ui.text($(() => `Count: ${count()}`));          // one effect, one string
+ui.box({ bg: $(() => (hot() ? "#f00" : "#333")) }); // one effect, one property
 ```
+
+The marker is mandatory: bare functions in value positions throw. That keeps
+reactivity explicit — cmd+F for `$(` lists every reactive boundary in a
+file, and handlers/builders (plain `() =>`) are never confused with tracked
+expressions.
 
 ## Stores and produce()
 

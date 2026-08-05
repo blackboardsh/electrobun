@@ -3,7 +3,7 @@
 // Editing runs through the pure applyEditKey reducer; the caret blinks only
 // while focused, so idle inputs stay invalidation-free.
 
-import { createEffect, createSignal, onCleanup, untrack } from "./reactive";
+import { createEffect, createSignal, onCleanup, reactive, untrack } from "./reactive";
 import { getUiContext, read, ui, type KeyEventInfo, type Reactive } from "./ui";
 import { applyEditKey } from "./keymap";
 
@@ -73,25 +73,33 @@ export function textInput(props: TextInputProps): number {
 			align: "center",
 			bg: props.bg ?? "#1b1b28",
 			border: props.border ?? 1,
-			borderColor: () =>
+			borderColor: reactive(() =>
 				focused() && props.focusBorderColor !== undefined
 					? read(props.focusBorderColor)
 					: read(props.borderColor ?? "#262638"),
+			),
 		},
 		() => {
 			// Placeholder: an empty text node has zero width, so this only
 			// occupies space while the value is empty.
 			ui.text(
-				() => (props.value().length === 0 ? props.placeholder ?? "" : ""),
+				reactive(() =>
+					props.value().length === 0 ? props.placeholder ?? "" : "",
+				),
 				{ size, color: placeholderColor },
 			);
-			ui.text(() => props.value().slice(0, caret()), { size, color });
+			ui.text(reactive(() => props.value().slice(0, caret())), {
+				size,
+				color,
+			});
 			ui.box({
 				width: Math.max(1.5, size / 9),
 				height: size + 2,
-				bg: () => (focused() && blinkOn() ? caretColor : "#00000000"),
+				bg: reactive(() =>
+					focused() && blinkOn() ? caretColor : "#00000000",
+				),
 			});
-			ui.text(() => props.value().slice(caret()), { size, color });
+			ui.text(reactive(() => props.value().slice(caret())), { size, color });
 		},
 	);
 

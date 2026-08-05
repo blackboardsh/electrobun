@@ -13,12 +13,15 @@ Children are declared in a callback; every element returns its node id
 (a `number`), which advanced code can use with the tree APIs.
 
 ```ts
-import { ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
+import { $, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
 ```
 
-Any prop typed `Reactive<T>` accepts either a value or a thunk. Thunks become
-fine-grained effects: `bg: () => hover() ? "#232336" : "#1b1b28"` re-runs
-only when its signals change and updates only that property.
+Any prop typed `Reactive<T>` accepts a plain value or a thunk explicitly
+marked with `$()` (alias of `reactive()`). Marked thunks become fine-grained
+effects: `bg: $(() => hover() ? "#232336" : "#1b1b28")` re-runs only when
+its signals change and updates only that property. Bare functions in value
+positions throw — so `$(` is a complete, greppable index of a component's
+reactivity. Event handlers and children builders stay plain functions.
 
 ## ui.box(props, children?)
 
@@ -103,7 +106,7 @@ ui.each(
   () => state.todos,          // Accessor<readonly T[]>
   (todo) => todo.id,          // stable key
   (todo, index) => {          // index is a reactive accessor
-    ui.row({ pad: 8, bg: () => (index() % 2 ? "#16161e" : "#1b1b28") }, () => {
+    ui.row({ pad: 8, bg: $(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
       ui.text(todo.title);
     });
   },

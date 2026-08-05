@@ -13,16 +13,28 @@ import {
 	createEffect,
 	createSignal,
 	getOwner,
+	isReactive,
 	onCleanup,
 	runWithOwner,
 	untrack,
 	type Accessor,
+	type ReactiveThunk,
 } from "./reactive";
 import { NodeKind, Prop, UiTree } from "./tree";
 import { Align, Justify } from "./layout";
 import { parseColor } from "./paint";
 
-export type Reactive<T> = T | (() => T);
+/**
+ * A value prop: a plain value, or a thunk marked with `$()` / `reactive()`.
+ * Bare functions are rejected so reactive boundaries stay searchable.
+ */
+export type Reactive<T> = T | ReactiveThunk<T>;
+
+function bareFunctionError(): never {
+	throw new Error(
+		'ui: a value prop received a bare function. Wrap reactive expressions with $(() => ...) from "electrobun/main/ui", or pass a plain value.',
+	);
+}
 
 export interface PointerEventInfo {
 	x: number;
@@ -152,9 +164,11 @@ export function getUiContext(): UiContext {
 	return requireCtx();
 }
 
-/** Unwrap a Reactive<T> — thunk or plain value. */
+/** Unwrap a Reactive<T> — marked thunk or plain value. */
 export function read<T>(value: Reactive<T>): T {
-	return typeof value === "function" ? (value as () => T)() : value;
+	if (isReactive(value)) return (value as () => T)();
+	if (typeof value === "function") bareFunctionError();
+	return value as T;
 }
 
 /** Run `fn` with `parent` as the attachment point for created nodes. */
@@ -188,8 +202,10 @@ function applyNumber(
 	value: Reactive<number> | undefined,
 ): void {
 	if (value === undefined) return;
-	if (typeof value === "function") {
+	if (isReactive(value)) {
 		createEffect(() => ctx.tree.setProp(id, prop, value()));
+	} else if (typeof value === "function") {
+		bareFunctionError();
 	} else {
 		ctx.tree.setProp(id, prop, value);
 	}
@@ -202,8 +218,10 @@ function applyColor(
 	value: Reactive<string | number> | undefined,
 ): void {
 	if (value === undefined) return;
-	if (typeof value === "function") {
+	if (isReactive(value)) {
 		createEffect(() => ctx.tree.setProp(id, prop, parseColor(value())));
+	} else if (typeof value === "function") {
+		bareFunctionError();
 	} else {
 		ctx.tree.setProp(id, prop, parseColor(value));
 	}
@@ -282,8 +300,10 @@ function text(
 ): number {
 	const ctx = requireCtx();
 	const id = ctx.tree.createTextNode("");
-	if (typeof content === "function") {
+	if (isReactive(content)) {
 		createEffect(() => ctx.tree.setText(id, String(content())));
+	} else if (typeof content === "function") {
+		bareFunctionError();
 	} else {
 		ctx.tree.setText(id, String(content));
 	}

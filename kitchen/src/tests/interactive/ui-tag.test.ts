@@ -5,6 +5,7 @@
 import { defineTest } from "../../test-framework/types";
 import { BrowserWindow } from "electrobun/main";
 import {
+	$,
 	createSignal,
 	registerUIRoot,
 	ui,
@@ -48,7 +49,7 @@ export const uiTagTests = [
 								size: 12,
 								color: "#8c8ca8",
 							});
-							ui.text(() => `clicks: ${clicks()}`, {
+							ui.text($(() => `clicks: ${clicks()}`), {
 								size: 22,
 								color: "#e4e4f0",
 							});
