@@ -4,7 +4,7 @@
 
 import electrobunEventEmitter from "../events/eventEmitter";
 import { WGPUView } from "../core/WGPUView";
-import { createUIView, type UIMountOptions, type UIView } from "./uiwindow";
+import { createUIView, type UIApp, type UIMountOptions, type UIView } from "./uiwindow";
 
 export interface UIRootRegistration {
 	/** Stop accepting new mounts and dispose all live ones. */
@@ -19,7 +19,7 @@ export interface UIRootRegistration {
 export function registerUIRoot(
 	name: string,
 	options: UIMountOptions,
-	app: () => void,
+	app: UIApp,
 ): UIRootRegistration {
 	const live = new Set<{ mounted: UIView; watch: ReturnType<typeof setInterval> }>();
 

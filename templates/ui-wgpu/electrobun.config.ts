@@ -9,7 +9,7 @@ export default {
 	build: {
 		mainProcess: "cottontail",
 		cottontail: {
-			entrypoint: "src/main.ts",
+			entrypoint: "src/main.tsx",
 		},
 		mac: {
 			bundleCEF: false,

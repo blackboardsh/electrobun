@@ -13,8 +13,17 @@
 		"noUnusedLocals": true,
 		"noUnusedParameters": true,
 		"noFallthroughCasesInSwitch": true,
-		"moduleResolution": "bundler"
+		"moduleResolution": "bundler",
+		"jsx": "react-jsx",
+		"jsxImportSource": "electrobun/main/ui"
 	},
-	"include": ["src"],
-	"exclude": ["node_modules", "dist", "build", "../../package/dist"]
+	"include": [
+		"src"
+	],
+	"exclude": [
+		"node_modules",
+		"dist",
+		"build",
+		"../../package/dist"
+	]
 }

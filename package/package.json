@@ -27,6 +27,8 @@
 		"./main/socket": "./dist/api/sdks/main/entries/socket.ts",
 		"./main/tray": "./dist/api/sdks/main/entries/tray.ts",
 		"./main/ui": "./dist/api/sdks/main/entries/ui.ts",
+		"./main/ui/jsx-runtime": "./dist/api/sdks/main/ui/jsx-runtime.ts",
+		"./main/ui/jsx-dev-runtime": "./dist/api/sdks/main/ui/jsx-dev-runtime.ts",
 		"./main/updater": "./dist/api/sdks/main/entries/updater.ts",
 		"./main/utils": "./dist/api/sdks/main/entries/utils.ts",
 		"./main/webgpu": "./dist/api/sdks/main/entries/webgpu.ts",

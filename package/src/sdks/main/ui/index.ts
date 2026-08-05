@@ -53,3 +53,12 @@ export {
 	type UIWindowOptions,
 } from "./uiwindow";
 export { registerUIRoot, type UIRootRegistration } from "./uiTagHost";
+export {
+	Fragment,
+	isUIElement,
+	jsx,
+	jsxs,
+	mountChild,
+	type UIChild,
+	type UIElement,
+} from "./jsx-runtime";

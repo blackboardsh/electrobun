@@ -14,16 +14,17 @@ export type Setter<T> = (next: T | ((prev: T) => T)) => T;
 // findable by searching for "$(".
 // ---------------------------------------------------------------------------
 
-export const REACTIVE_BRAND = Symbol.for("electrobun.ui.reactive");
-
+// The brand is a structural string key (not a unique symbol) so the type
+// unifies even when the module is reachable through multiple paths
+// (symlinked installs, realified node_modules).
 export interface ReactiveThunk<T> {
 	(): T;
-	[REACTIVE_BRAND]: true;
+	readonly __electrobunReactive: true;
 }
 
 /** Mark a thunk as reactive: its reads are tracked and drive one effect. */
 export function reactive<T>(fn: () => T): ReactiveThunk<T> {
-	(fn as any)[REACTIVE_BRAND] = true;
+	(fn as any).__electrobunReactive = true;
 	return fn as ReactiveThunk<T>;
 }
 
@@ -32,7 +33,8 @@ export const $ = reactive;
 
 export function isReactive(value: unknown): value is ReactiveThunk<unknown> {
 	return (
-		typeof value === "function" && (value as any)[REACTIVE_BRAND] === true
+		typeof value === "function" &&
+		(value as any).__electrobunReactive === true
 	);
 }
 

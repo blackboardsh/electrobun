@@ -19,6 +19,7 @@ import { paint } from "./paint";
 import { createUiRenderer } from "./renderer";
 import { attachInput } from "./input";
 import { tryEnableNativeText } from "./text";
+import { isUIElement, type UIElement } from "./jsx-runtime";
 import { nativeText } from "../proc/native";
 import {
 	createUiContext,
@@ -79,10 +80,12 @@ interface MountTarget {
 	allowWindowDrag?: boolean;
 }
 
+export type UIApp = () => void | UIElement;
+
 async function mount(
 	target: MountTarget,
 	options: UIMountOptions,
-	app: () => void,
+	app: UIApp,
 ): Promise<{ context: UiContext; stop: () => void }> {
 	const background = options.background ?? "#141420";
 	// System-font text when the native wrapper provides it (macOS); the
@@ -100,7 +103,11 @@ async function mount(
 	let disposeRoot = () => {};
 	createRoot((dispose) => {
 		disposeRoot = dispose;
-		withUiContext(ctx, app);
+		withUiContext(ctx, () => {
+			const result = app();
+			// JSX apps return a lazy element; the builder API returns nothing.
+			if (isUIElement(result)) result.create();
+		});
 	});
 
 	const pointerHandler = (
@@ -240,7 +247,7 @@ async function mount(
 
 export async function createUIWindow(
 	options: UIWindowOptions,
-	app: () => void,
+	app: UIApp,
 ): Promise<UIWindow> {
 	const win = new GpuWindow({
 		title: options.title,
@@ -295,7 +302,7 @@ export async function createUIWindow(
 export async function createUIView(
 	view: WGPUView,
 	options: UIMountOptions,
-	app: () => void,
+	app: UIApp,
 ): Promise<UIView> {
 	const mounted = await mount(
 		{
