@@ -1,23 +1,23 @@
 ---
-title: "Electrobun UI"
+title: "Warren (Electrobun UI)"
 description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no build tooling."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental. APIs may change between releases. See
+Warren — Electrobun's UI framework — is experimental. APIs may change between releases. See
 [current limitations](#current-limitations).
 </Aside>
 
-Electrobun UI is a small, reactive UI runtime that renders through Dawn
+Warren is a small, reactive UI framework that renders through Dawn
 (WebGPU) directly from the main process. There is no webview, no browser
 DOM, and no build tooling: you write `.tsx` against `electrobun/main/ui`,
 and Cottontail's built-in transpiler — the same one that already handles
 your TypeScript — does the rest. Nothing gets added to your toolchain.
 
 ```
-signals / stores (createSignal, createStore + produce)
-        ↓  explicit _() reactive thunks, one effect per expression
+signals / stores (signal, store with mutator setters)
+        ↓  explicit live() scopes, one binding per expression
 retained UI tree
         ↓
 layout + hit testing
@@ -62,13 +62,13 @@ Then write components:
 
 ```tsx
 // src/main.tsx
-import { _, createSignal, createUIWindow } from "electrobun/main/ui";
+import { live, signal, createUIWindow } from "electrobun/main/ui";
 
 function Counter() {
-  const [count, setCount] = createSignal(0);
+  const [count, setCount] = signal(0);
   return (
     <column grow={1} justify="center" align="center" gap={16}>
-      <text size={32} color="#e4e4f0">{_(() => `Count: ${count()}`)}</text>
+      <text size={32} color="#e4e4f0">{live(() => `Count: ${count()}`)}</text>
       <box
         pad={12}
         radius={8}
@@ -89,10 +89,11 @@ await createUIWindow({ title: "Hello UI", width: 420, height: 240 }, () => <Coun
 Run it with `bun start` (`hutch electrobun dev`). Three rules cover
 everything:
 
-- **Reactivity is explicit.** `_(() => ...)` marks a tracked expression —
-  it becomes one fine-grained effect updating exactly one thing. Static
-  values stay bare (`bg="#1b1b28"`), and bare functions in value positions
-  are an error. Search a file for `_(` to find every reactive boundary.
+- **Reactivity is explicit.** `live(() => ...)` creates a reactive scope —
+  one binding updating exactly one thing when its dependencies change.
+  Static values stay bare (`bg="#1b1b28"`), and bare functions in value
+  positions are an error. Search a file for `live(` to find every reactive
+  boundary; see [Warren reactivity](/electrobun/apis/ui/reactivity/).
 - **Components are plain functions** called once with their props — no
   re-rendering, no hooks rules, no registration.
 - **Handlers are plain functions** (`onClick={() => ...}`) — never tracked.
@@ -105,7 +106,7 @@ element, and mounting runs those elements against the retained tree. This:
 
 ```tsx
 <column gap={16}>
-  <text size={32}>{_(() => `Count: ${count()}`)}</text>
+  <text size={32}>{live(() => `Count: ${count()}`)}</text>
 </column>
 ```
 
@@ -114,7 +115,7 @@ is transpiled to (and behaves identically to):
 ```ts
 jsx("column", {
   gap: 16,
-  children: jsx("text", { size: 32, children: _(() => `Count: ${count()}`) }),
+  children: jsx("text", { size: 32, children: live(() => `Count: ${count()}`) }),
 });
 ```
 
@@ -186,7 +187,7 @@ this way.
 - [UI overview](/electrobun/apis/ui/overview/) — windows, mounting, and how
   rendering works.
 - [Components](/electrobun/apis/ui/components/) — every element and its props.
-- [Reactivity](/electrobun/apis/ui/reactivity/) — signals, stores, effects.
+- [Warren reactivity](/electrobun/apis/ui/reactivity/) — signal, store, live, memo.
 - [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/) — layering reactive
   native UI on top of web content.
 - Templates: `ui-wgpu` (JSX counter + embedded webview + Mandelbrot),

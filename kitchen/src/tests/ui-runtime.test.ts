@@ -5,8 +5,8 @@
 import { defineTest, expect } from "../test-framework/types";
 import type { WGPUView, BrowserView } from "electrobun/main";
 import {
-	_,
-	createSignal,
+	live,
+	signal,
 	createUIWindow,
 	hitChain,
 	Prop,
@@ -58,15 +58,15 @@ export const uiRuntimeTests = [
 		description:
 			"A signal-backed prop becomes a fine-grained effect writing one tree prop; text thunks re-render.",
 		async run({ log }) {
-			const [bg, setBg] = createSignal("#111111");
-			const [label, setLabel] = createSignal("before");
+			const [bg, setBg] = signal("#111111");
+			const [label, setLabel] = signal("before");
 			let boxId = 0;
 			let textId = 0;
 			const uiWindow = await createUIWindow(
 				{ title: "ui-test-reactive", width: 300, height: 200 },
 				() => {
-					boxId = ui.box({ width: 100, height: 100, bg: _(bg) });
-					textId = ui.text(_(label), { size: 14 });
+					boxId = ui.box({ width: 100, height: 100, bg: live(bg) });
+					textId = ui.text(live(label), { size: 14 });
 				},
 			);
 			try {

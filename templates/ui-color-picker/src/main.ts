@@ -13,15 +13,15 @@ import { Screen, Tray, Utils, webgpu } from "electrobun/main";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	_,
+	live,
 	batch,
 	charForKey,
-	createMemo,
-	createSignal,
+	memo,
+	signal,
 	getUiContext,
 	onKey,
 	ui,
-	untrack,
+	inert,
 	createUIWindow,
 	Key,
 	Mod,
@@ -50,7 +50,7 @@ const theme = {
 const GRID = 11; // odd, so the cursor pixel is the center cell
 const CENTER = Math.floor((GRID * GRID) / 2);
 
-const [cells, setCells] = createSignal<Uint32Array>(
+const [cells, setCells] = signal<Uint32Array>(
 	new Uint32Array(GRID * GRID).fill(0x101010ff),
 	{ equals: false },
 );
@@ -61,13 +61,13 @@ const [cells, setCells] = createSignal<Uint32Array>(
 //   frozen -> click button -> live (click again to re-arm)
 // Space toggles live <-> frozen while the window is focused.
 type Mode = "live" | "armed" | "frozen";
-const [mode, setMode] = createSignal<Mode>("live");
-const [copied, setCopied] = createSignal("");
-const [hasScreenAccess, setHasScreenAccess] = createSignal(
+const [mode, setMode] = signal<Mode>("live");
+const [copied, setCopied] = signal("");
+const [hasScreenAccess, setHasScreenAccess] = signal(
 	Utils.screenCapture.hasAccess(),
 );
 
-const centerColor = createMemo(() => cells()[CENTER]! >>> 0);
+const centerColor = memo(() => cells()[CENTER]! >>> 0);
 
 const r8 = (c: number) => (c >>> 24) & 0xff;
 const g8 = (c: number) => (c >>> 16) & 0xff;
@@ -124,7 +124,7 @@ function formatColor(c: number, format: Format): string {
 
 // Persistent preference: which format cmd+C copies.
 const prefsPath = join(Utils.paths.userData, "ui-color-picker.json");
-const [copyFormat, setCopyFormatSignal] = createSignal<Format>(
+const [copyFormat, setCopyFormatSignal] = signal<Format>(
 	await (async () => {
 		try {
 			const prefs = JSON.parse(await Bun.file(prefsPath).text());
@@ -226,7 +226,7 @@ function ZoomGrid() {
 						ui.box({
 							width: CELL,
 							height: CELL,
-							bg: _(() => cells()[i]! >>> 0),
+							bg: live(() => cells()[i]! >>> 0),
 							border: isCenter ? 1.5 : 0,
 							borderColor: theme.textPrimary,
 						});
@@ -250,9 +250,9 @@ function ZoomGrid() {
 				width: 8,
 				height: 8,
 				radius: 4,
-				bg: _(() => (!hasScreenAccess() ? "#f7768e" : MODE_COLOR[mode()])),
+				bg: live(() => (!hasScreenAccess() ? "#f7768e" : MODE_COLOR[mode()])),
 			});
-			ui.text(_(() => (!hasScreenAccess() ? "no access - click here" : mode())),
+			ui.text(live(() => (!hasScreenAccess() ? "no access - click here" : mode())),
 				{ size: 9, color: theme.textFaint },
 			);
 			},
@@ -269,15 +269,15 @@ function FormatRow(format: Format) {
 			radius: 6,
 			gap: 8,
 			align: "center",
-			bg: _(() => (ctx.hoveredId() === id ? theme.rowHover : theme.row)),
+			bg: live(() => (ctx.hoveredId() === id ? theme.rowHover : theme.row)),
 			border: 1,
-			borderColor: _(() => (copyFormat() === format ? theme.accent : theme.line)),
+			borderColor: live(() => (copyFormat() === format ? theme.accent : theme.line)),
 			onClick: () => copy(format),
 		},
 		() => {
 			ui.text(format.toUpperCase(), { size: 10, color: theme.textFaint });
 			ui.spacer();
-			ui.text(_(() => formatColor(centerColor(), format)), {
+			ui.text(live(() => formatColor(centerColor(), format)), {
 				size: 11,
 				color: theme.textPrimary,
 			});
@@ -286,7 +286,7 @@ function FormatRow(format: Format) {
 }
 
 function CopyFormatSelector() {
-	const [expanded, setExpanded] = createSignal(false);
+	const [expanded, setExpanded] = signal(false);
 	const ctx = getUiContext();
 	ui.column({ gap: 4 }, () => {
 		let headerId = 0;
@@ -296,17 +296,17 @@ function CopyFormatSelector() {
 				radius: 6,
 				gap: 6,
 				align: "center",
-				bg: _(() => (ctx.hoveredId() === headerId ? theme.rowHover : "#00000000")),
+				bg: live(() => (ctx.hoveredId() === headerId ? theme.rowHover : "#00000000")),
 				onClick: () => setExpanded((v) => !v),
 			},
 			() => {
 				ui.text("cmd+C copies", { size: 10, color: theme.textFaint });
 				ui.spacer();
-				ui.text(_(() => copyFormat().toUpperCase()), {
+				ui.text(live(() => copyFormat().toUpperCase()), {
 					size: 11,
 					color: theme.accent,
 				});
-				ui.text(_(() => (expanded() ? "^" : "v")), {
+				ui.text(live(() => (expanded() ? "^" : "v")), {
 					size: 10,
 					color: theme.textFaint,
 				});
@@ -320,10 +320,10 @@ function CopyFormatSelector() {
 					{
 						pad: 6,
 						radius: 5,
-						bg: _(() =>
+						bg: live(() =>
 							ctx.hoveredId() === chipId ? theme.rowHover : theme.row),
 						border: 1,
-						borderColor: _(() =>
+						borderColor: live(() =>
 							copyFormat() === format ? theme.accent : theme.line),
 						onClick: () => {
 							batch(() => {
@@ -335,7 +335,7 @@ function CopyFormatSelector() {
 					() => {
 						ui.text(format.toUpperCase(), {
 							size: 10,
-							color: _(() =>
+							color: live(() =>
 								copyFormat() === format
 									? theme.accent
 									: theme.textMuted),
@@ -373,20 +373,20 @@ function ModeButtons() {
 				pad: 7,
 				radius: 6,
 				justify: "center",
-				bg: _(() =>
+				bg: live(() =>
 					active()
 						? activeBg
 						: ctx.hoveredId() === id
 							? theme.rowHover
 							: theme.row),
 				border: 1,
-				borderColor: _(() => (active() ? activeColor : theme.line)),
+				borderColor: live(() => (active() ? activeColor : theme.line)),
 				onClick,
 			},
 			() => {
-				ui.text(_(label), {
+				ui.text(live(label), {
 					size: 10,
-					color: _(() => (active() ? activeColor : theme.textMuted)),
+					color: live(() => (active() ? activeColor : theme.textMuted)),
 				});
 			},
 		);
@@ -417,21 +417,21 @@ function ColorPanel() {
 				width: 44,
 				height: 44,
 				radius: 8,
-				bg: _(() => centerColor()),
+				bg: live(() => centerColor()),
 				border: 1,
 				borderColor: theme.line,
 			});
 			ui.column({ gap: 2 }, () => {
-				ui.text(_(() => formatColor(centerColor(), "hex")), {
+				ui.text(live(() => formatColor(centerColor(), "hex")), {
 					size: 16,
 					color: theme.textPrimary,
 				});
-				ui.text(_(() => {
+				ui.text(live(() => {
 					const c = copied();
 					return c ? `copied ${c}` : "click a row to copy";
 				}), {
 					size: 10,
-					color: _(() => (copied() ? "#9ece6a" : theme.textFaint)),
+					color: live(() => (copied() ? "#9ece6a" : theme.textFaint)),
 				});
 			});
 		});
@@ -478,9 +478,9 @@ const uiWindow = await createUIWindow(
 			if (e.modifiers & Mod.Cmd && charForKey(e.keyCode, 0) === "c") {
 				copy(copyFormat());
 			} else if (e.keyCode === Key.Space) {
-				setMode(untrack(mode) === "frozen" ? "live" : "frozen");
+				setMode(inert(mode) === "frozen" ? "live" : "frozen");
 			} else if (e.keyCode === Key.Escape) {
-				if (untrack(mode) === "armed") setMode("live");
+				if (inert(mode) === "armed") setMode("live");
 				else uiWindow.window.hide();
 			}
 		});

@@ -11,7 +11,7 @@
 
 import { GpuWindow } from "../core/GpuWindow";
 import type { WGPUView } from "../core/WGPUView";
-import { batch, createRoot, untrack } from "./reactive";
+import { batch, createRoot, inert } from "./reactive";
 import { Prop } from "./tree";
 import { hitChain, scrollTargetAt } from "./hit";
 import { computeLayout } from "./layout";
@@ -128,7 +128,7 @@ async function mount(
 		} else if (type === "enter") {
 			ctx.setHovered(targetId);
 		} else if (type === "leave") {
-			if (untrack(ctx.hoveredId) === targetId) ctx.setHovered(0);
+			if (inert(ctx.hoveredId) === targetId) ctx.setHovered(0);
 		}
 		const handlers = ctx.handlers.get(targetId);
 		if (!handlers) return;
@@ -173,7 +173,7 @@ async function mount(
 			batch(() => {
 				// Focused node first, bubbling through ancestors; a handler
 				// returning true stops propagation to the window-level handlers.
-				let id = untrack(ctx.focusedId);
+				let id = inert(ctx.focusedId);
 				while (id !== 0 && tree.has(id)) {
 					const handler = ctx.handlers.get(id)?.onKeyDown;
 					if (handler && handler(e) === true) return;

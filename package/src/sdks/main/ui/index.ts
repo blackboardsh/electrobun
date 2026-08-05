@@ -1,21 +1,21 @@
 // Public surface of the prototype UI runtime.
 
 export {
-	_,
 	batch,
-	createEffect,
-	createMemo,
+	cleanup,
 	createRoot,
-	createSignal,
-	createStore,
-	isReactive,
-	onCleanup,
-	produce,
-	reactive,
-	untrack,
+	inert,
+	isLive,
+	live,
+	memo,
+	setDevMode,
+	signal,
+	store,
 	type Accessor,
-	type ReactiveThunk,
+	type LiveBinding,
+	type Reactive,
 	type Setter,
+	type StoreSetter,
 } from "./reactive";
 export { AUTO, NodeKind, Prop, UiTree } from "./tree";
 export { Align, Justify, computeLayout } from "./layout";
@@ -33,7 +33,6 @@ export {
 	type BoxProps,
 	type KeyEventInfo,
 	type PointerEventInfo,
-	type Reactive,
 	type TextProps,
 	type UiContext,
 } from "./ui";
@@ -54,11 +53,19 @@ export {
 } from "./uiwindow";
 export { registerUIRoot, type UIRootRegistration } from "./uiTagHost";
 export {
+	For,
 	Fragment,
+	Match,
+	Show,
+	Switch,
 	isUIElement,
 	jsx,
 	jsxs,
 	mountChild,
+	type ForProps,
+	type MatchProps,
+	type ShowProps,
+	type SwitchProps,
 	type UIChild,
 	type UIElement,
 } from "./jsx-runtime";

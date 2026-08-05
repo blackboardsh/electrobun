@@ -11,14 +11,13 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	_,
-	createEffect,
-	createMemo,
-	createSignal,
+	live,
+	memo,
+	signal,
 	onKey,
 	textInput,
 	ui,
-	untrack,
+	inert,
 	createUIWindow,
 	Key,
 } from "electrobun/main/ui";
@@ -146,11 +145,11 @@ const looksLikeMath = (s: string) => /^[\d\s+\-*/%().]+$/.test(s) && /\d/.test(s
 // State
 // ---------------------------------------------------------------------------
 
-const [query, setQuery] = createSignal("");
-const [selected, setSelected] = createSignal(0);
-const [flash, setFlash] = createSignal("");
+const [query, setQuery] = signal("");
+const [selected, setSelected] = signal(0);
+const [flash, setFlash] = signal("");
 
-const results = createMemo<Entry[]>(() => {
+const results = memo<Entry[]>(() => {
 	const q = query().trim();
 	if (q.length === 0) {
 		return APPS.slice(0, 8).map((app) => APP_ENTRIES.get(app.path)!);
@@ -194,13 +193,13 @@ function appEntry(app: { name: string; path: string }): Entry {
 	};
 }
 
-createEffect(() => {
+live(() => {
 	query();
 	setSelected(0);
 });
 
 function activate(index: number) {
-	const entry = untrack(results)[index];
+	const entry = inert(results)[index];
 	entry?.action();
 }
 
@@ -213,8 +212,8 @@ const ROW_GAP = 2;
 const LIST_H = 5 * (ROW_H + ROW_GAP);
 
 // Follow-scroll: keep the selected row inside the viewport.
-const [listScroll, setListScroll] = createSignal(0);
-createEffect(() => {
+const [listScroll, setListScroll] = signal(0);
+live(() => {
 	// Clamp scroll into [top + ROW_H - LIST_H, top]: selected row stays visible.
 	const top = selected() * (ROW_H + ROW_GAP);
 	setListScroll((s) => Math.min(top, Math.max(s, top + ROW_H - LIST_H)));
@@ -228,7 +227,7 @@ function ResultRow(entry: Entry, index: () => number) {
 			gap: 10,
 			radius: 8,
 			align: "center",
-			bg: _(() => (selected() === index() ? theme.rowSelected : theme.row)),
+			bg: live(() => (selected() === index() ? theme.rowSelected : theme.row)),
 			onClick: () => {
 				setSelected(index());
 				activate(index());
@@ -242,7 +241,7 @@ function ResultRow(entry: Entry, index: () => number) {
 					radius: 7,
 					justify: "center",
 					align: "center",
-					bg: _(() => (selected() === index() ? theme.accent : "#2a2a3e")),
+					bg: live(() => (selected() === index() ? theme.accent : "#2a2a3e")),
 				},
 				() => {
 					ui.text(entry.badge, { size: 14, color: theme.textPrimary });
@@ -266,8 +265,8 @@ const FULL_H = 372;
 const PILL_W = 128;
 const PILL_H = 46;
 
-const [expanded, setExpanded] = createSignal(false);
-const [activeShortcut, setActiveShortcut] = createSignal("");
+const [expanded, setExpanded] = signal(false);
+const [activeShortcut, setActiveShortcut] = signal("");
 
 // Persisted window position (drag the pill anywhere; it comes back there).
 const prefsPath = join(Utils.paths.userData, "ui-launcher.json");
@@ -320,9 +319,9 @@ const uiWindow = await createUIWindow(
 		});
 
 		onKey((e) => {
-			if (!untrack(expanded)) return;
+			if (!inert(expanded)) return;
 			if (e.keyCode === Key.Down) {
-				setSelected((i) => Math.min(untrack(results).length - 1, i + 1));
+				setSelected((i) => Math.min(inert(results).length - 1, i + 1));
 			} else if (e.keyCode === Key.Up) {
 				setSelected((i) => Math.max(0, i - 1));
 			} else if (e.keyCode === Key.Escape) {
@@ -347,7 +346,7 @@ function Palette() {
 				textInput({
 					value: query,
 					onInput: setQuery,
-					onSubmit: () => activate(untrack(selected)),
+					onSubmit: () => activate(inert(selected)),
 					placeholder: "Search apps or type math...",
 					autofocus: true,
 					size: 17,
@@ -360,20 +359,20 @@ function Palette() {
 						dir: "column",
 						height: LIST_H,
 						overflow: "scroll",
-						scroll: _(listScroll),
+						scroll: live(listScroll),
 					},
 					() => {
 						ui.each({ dir: "column", gap: ROW_GAP }, results, (e) => e.key, ResultRow);
 					},
 				);
 				ui.row({ pad: 4, gap: 8, align: "center" }, () => {
-					ui.text(_(() => `enter runs - esc collapses${activeShortcut() ? ` - ${activeShortcut()} toggles` : ""}`), {
+					ui.text(live(() => `enter runs - esc collapses${activeShortcut() ? ` - ${activeShortcut()} toggles` : ""}`), {
 						size: 9,
 						color: theme.textFaint,
 					});
 					ui.spacer();
-					ui.text(_(() => flash()), { size: 10, color: theme.good });
-					ui.text(_(() => `${results().length} results`), {
+					ui.text(live(() => flash()), { size: 10, color: theme.good });
+					ui.text(live(() => `${results().length} results`), {
 						size: 9,
 						color: theme.textFaint,
 					});
@@ -420,7 +419,7 @@ const SHORTCUTS = [
 ] as const;
 for (const [accelerator, label] of SHORTCUTS) {
 	const ok = GlobalShortcut.register(accelerator, () => {
-		if (untrack(expanded)) collapse();
+		if (inert(expanded)) collapse();
 		else expand();
 	});
 	if (ok) {
@@ -431,7 +430,7 @@ for (const [accelerator, label] of SHORTCUTS) {
 
 console.log("[ui-launcher] running (solid-effects-ok)");
 console.log(
-	untrack(activeShortcut)
-		? `[ui-launcher] Toggle with ${untrack(activeShortcut)}`
+	inert(activeShortcut)
+		? `[ui-launcher] Toggle with ${inert(activeShortcut)}`
 		: "[ui-launcher] No global shortcut available; click the pill",
 );

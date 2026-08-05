@@ -8,14 +8,13 @@
 import { defineTest } from "../../test-framework/types";
 import Electrobun from "electrobun/main";
 import {
-	_,
-	createSignal,
-	createStore,
+	live,
+	signal,
+	store,
 	onKey,
-	produce,
 	textInput,
 	ui,
-	untrack,
+	inert,
 	createUIWindow,
 	Mod,
 } from "electrobun/main/ui";
@@ -60,12 +59,12 @@ export const uiInputEventTests = [
 			"Visualizes the raw native pointer/key event stream and UI-level dispatch (hover, click, focus, drag, wheel).",
 		interactive: true,
 		async run({ showInstructions, waitForUserVerification, log }) {
-			const [pos, setPos] = createSignal({ x: 0, y: 0 });
-			const [pathLabel, setPathLabel] = createSignal("waiting for events...");
-			const [query, setQuery] = createSignal("");
-			const [lastChars, setLastChars] = createSignal("");
-			const [clicks, setClicks] = createSignal(0);
-			const [entries, setEntries] = createStore({
+			const [pos, setPos] = signal({ x: 0, y: 0 });
+			const [pathLabel, setPathLabel] = signal("waiting for events...");
+			const [query, setQuery] = signal("");
+			const [lastChars, setLastChars] = signal("");
+			const [clicks, setClicks] = signal(0);
+			const [entries, setEntries] = store({
 				items: [] as LogEntry[],
 				seq: 0,
 			});
@@ -73,7 +72,7 @@ export const uiInputEventTests = [
 			let lastMoveLogged = 0;
 			const push = (kind: LogEntry["kind"], label: string, detail: string) => {
 				setEntries(
-					produce((s) => {
+					((s) => {
 						s.seq += 1;
 						s.items.unshift({ seq: s.seq, kind, label, detail });
 						if (s.items.length > 16) s.items.length = 16;
@@ -95,8 +94,8 @@ export const uiInputEventTests = [
 							ui.box({ width: 58 });
 							ui.text("input event monitor", { size: 14, color: theme.text });
 							ui.spacer();
-							ui.text(_(() => pathLabel()), { size: 11, color: theme.good });
-							ui.text(_(() => `cursor ${pos().x.toFixed(0)},${pos().y.toFixed(0)}`),
+							ui.text(live(() => pathLabel()), { size: 11, color: theme.good });
+							ui.text(live(() => `cursor ${pos().x.toFixed(0)},${pos().y.toFixed(0)}`),
 								{ size: 11, color: theme.faint },
 							);
 						});
@@ -107,18 +106,18 @@ export const uiInputEventTests = [
 							ui.column({ width: 300, gap: 8 }, () => {
 								ui.text("targets", { size: 10, color: theme.muted });
 
-								const [hover, setHover] = createSignal(false);
+								const [hover, setHover] = signal(false);
 								ui.row(
 									{
 										pad: 12,
 										radius: 8,
 										justify: "center",
-										bg: _(() => (hover() ? theme.rowHover : theme.row)),
+										bg: live(() => (hover() ? theme.rowHover : theme.row)),
 										border: 1,
-										borderColor: _(() => (hover() ? theme.accent : theme.line)),
+										borderColor: live(() => (hover() ? theme.accent : theme.line)),
 										onClick: () => {
 											setClicks((c) => c + 1);
-											push("ui", "click", `button (total ${untrack(clicks)})`);
+											push("ui", "click", `button (total ${inert(clicks)})`);
 										},
 										onPointerEnter: () => {
 											setHover(true);
@@ -130,7 +129,7 @@ export const uiInputEventTests = [
 										},
 									},
 									() => {
-										ui.text(_(() => `hover + click me (${clicks()})`), {
+										ui.text(live(() => `hover + click me (${clicks()})`), {
 											size: 12,
 											color: theme.text,
 										});
@@ -164,7 +163,7 @@ export const uiInputEventTests = [
 									placeholder: "type here - chars shown in log",
 									focusBorderColor: theme.accent,
 								});
-								ui.text(_(() =>
+								ui.text(live(() =>
 										lastChars()
 											? `last chars: "${lastChars()}"`
 											: "last chars: -"),

@@ -2,7 +2,7 @@
 // each(), the keymap/edit reducer, focus wiring, and textInput editing.
 
 import { describe, expect, test } from "bun:test";
-import { _, createRoot, createSignal, createStore, produce } from "../reactive";
+import { createRoot, live, signal, store } from "../reactive";
 import { NodeKind, Prop, UiTree } from "../tree";
 import { computeLayout } from "../layout";
 import { FLOATS_PER_INSTANCE, paint } from "../paint";
@@ -169,7 +169,7 @@ describe("keymap and edit reducer", () => {
 
 describe("keyed each", () => {
 	test("rows keep their nodes across reorder and removal", () => {
-		const [items, setItems] = createSignal(["a", "b", "c"]);
+		const [items, setItems] = signal(["a", "b", "c"]);
 		const { ctx } = build(() => {
 			ui.each({ dir: "column" }, items, (s) => s, (s) => {
 				ui.text(s);
@@ -189,12 +189,12 @@ describe("keyed each", () => {
 	});
 
 	test("row-scoped effects are disposed with their row", () => {
-		const [items, setItems] = createSignal(["x", "y"]);
-		const [tick, setTick] = createSignal(0);
+		const [items, setItems] = signal(["x", "y"]);
+		const [tick, setTick] = signal(0);
 		const runs: string[] = [];
 		build(() => {
 			ui.each({}, items, (s) => s, (s) => {
-				ui.text(_(() => {
+				ui.text(live(() => {
 					tick();
 					runs.push(s);
 					return s;
@@ -208,10 +208,10 @@ describe("keyed each", () => {
 	});
 
 	test("index accessor updates in place", () => {
-		const [items, setItems] = createSignal(["a", "b"]);
+		const [items, setItems] = signal(["a", "b"]);
 		const { ctx } = build(() => {
 			ui.each({}, items, (s) => s, (s, index) => {
-				ui.text(_(() => `${s}:${index()}`));
+				ui.text(live(() => `${s}:${index()}`));
 			});
 		});
 		const [region] = ctx.tree.childrenOf(ctx.tree.root);
@@ -224,14 +224,14 @@ describe("keyed each", () => {
 	});
 
 	test("store-backed items work through produce", () => {
-		const [state, setState] = createStore({ items: ["one"] });
+		const [state, setState] = store({ items: ["one"] });
 		const { ctx } = build(() => {
 			ui.each({}, () => state.items, (s) => s, (s) => {
 				ui.text(s);
 			});
 		});
 		const [region] = ctx.tree.childrenOf(ctx.tree.root);
-		setState(produce((st) => st.items.push("two")));
+		setState(((st) => st.items.push("two")));
 		expect(ctx.tree.childrenOf(region!).length).toBe(2);
 	});
 });
@@ -249,7 +249,7 @@ describe("focus and textInput", () => {
 	});
 
 	test("textInput edits through its key handler", () => {
-		const [value, setValue] = createSignal("");
+		const [value, setValue] = signal("");
 		let submitted = "";
 		const { ctx } = build(() => {
 			textInput({
@@ -281,7 +281,7 @@ describe("focus and textInput", () => {
 	});
 
 	test("unfocused input ignores nothing but stays inert visually", () => {
-		const [value, setValue] = createSignal("seed");
+		const [value, setValue] = signal("seed");
 		const { ctx } = build(() => {
 			textInput({ value, onInput: setValue });
 		});

@@ -2,7 +2,7 @@
 // signals — the whole runtime except the GPU and the window.
 
 import { describe, expect, test } from "bun:test";
-import { _, createRoot, createSignal, createStore, produce } from "../reactive";
+import { createRoot, live, signal, store } from "../reactive";
 import { Prop } from "../tree";
 import { computeLayout } from "../layout";
 import { hitChain } from "../hit";
@@ -38,9 +38,9 @@ describe("builder API", () => {
 	});
 
 	test("thunk props become fine-grained effects on one tree prop", () => {
-		const [bg, setBg] = createSignal("#111111");
+		const [bg, setBg] = signal("#111111");
 		const { ctx } = build(() => {
-			ui.box({ bg: _(bg) });
+			ui.box({ bg: live(bg) });
 		});
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getProp(box!, Prop.Bg)).toBe(parseColor("#111111"));
@@ -51,30 +51,34 @@ describe("builder API", () => {
 	});
 
 	test("reactive text updates the text node", () => {
-		const [count, setCount] = createSignal(0);
+		const [count, setCount] = signal(0);
 		const { ctx } = build(() => {
-			ui.text(_(() => `Count: ${count()}`));
+			ui.text(live(() => `Count: ${count()}`));
 		});
+		const [label] = ctx.tree.childrenOf(ctx.tree.root);
+		expect(ctx.tree.getText(label!)).toBe("Count: 0");
+		setCount(5);
+		expect(ctx.tree.getText(label!)).toBe("Count: 5");
 	});
 
 	test("bare functions in value props throw loudly", () => {
-		const [bg] = createSignal("#111111");
+		const [bg] = signal("#111111");
 		expect(() =>
 			build(() => {
 				ui.box({ bg: bg as any });
 			}),
-		).toThrow(/_\(/);
+		).toThrow(/live\(/);
 		expect(() =>
 			build(() => {
 				ui.text((() => "nope") as any);
 			}),
-		).toThrow(/_\(/);
+		).toThrow(/live\(/);
 	});
 
 	test("reactive text updates via marker", () => {
-		const [count, setCount] = createSignal(0);
+		const [count, setCount] = signal(0);
 		const { ctx } = build(() => {
-			ui.text(_(() => `Count: ${count()}`));
+			ui.text(live(() => `Count: ${count()}`));
 		});
 		const [label] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getText(label!)).toBe("Count: 0");
@@ -102,7 +106,7 @@ describe("builder API", () => {
 	});
 
 	test("dynamic regions rebuild when store state changes", () => {
-		const [state, setState] = createStore({
+		const [state, setState] = store({
 			items: [] as string[],
 		});
 		const { ctx } = build(() => {
@@ -115,10 +119,10 @@ describe("builder API", () => {
 		const [region] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.childrenOf(region!).length).toBe(0);
 
-		setState(produce((s) => s.items.push("first")));
+		setState(((s) => s.items.push("first")));
 		expect(ctx.tree.childrenOf(region!).length).toBe(1);
 
-		setState(produce((s) => s.items.push("second")));
+		setState(((s) => s.items.push("second")));
 		const kids = ctx.tree.childrenOf(region!);
 		expect(kids.length).toBe(2);
 		expect(ctx.tree.getText(kids[0]!)).toBe("first");
@@ -126,7 +130,7 @@ describe("builder API", () => {
 	});
 
 	test("dynamic rebuilds dispose stale handlers and nodes", () => {
-		const [show, setShow] = createSignal(true);
+		const [show, setShow] = signal(true);
 		const { ctx } = build(() => {
 			ui.dynamic({}, () => {
 				if (show()) {

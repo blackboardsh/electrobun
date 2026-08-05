@@ -7,7 +7,7 @@
 import { WGPUView } from "../core/WGPUView";
 import { BrowserView } from "../core/BrowserView";
 import { ffi } from "../proc/native";
-import { onCleanup, untrack } from "./reactive";
+import { cleanup, inert } from "./reactive";
 import { getUiContext, ui, type AnchorRect, type Reactive } from "./ui";
 
 export interface WgpuSurfaceProps {
@@ -53,15 +53,15 @@ export function wgpuSurface(props: WgpuSurfaceProps): number {
 					startTransparent: props.transparent ?? false,
 					startPassthrough: false,
 				});
-				untrack(() => props.onReady?.(view!));
+				inert(() => props.onReady?.(view!));
 			} else {
 				view.setFrame(rect.x, rect.y, rect.width, rect.height);
-				untrack(() => props.onFrame?.(view!, rect));
+				inert(() => props.onFrame?.(view!, rect));
 			}
 		},
 	});
 
-	onCleanup(() => {
+	cleanup(() => {
 		view?.remove();
 		view = null;
 	});
@@ -114,7 +114,7 @@ export function webview(props: WebviewElementProps): number {
 						height: rect.height,
 					},
 				});
-				untrack(() => props.onReady?.(view!));
+				inert(() => props.onReady?.(view!));
 			} else {
 				view.frame = {
 					x: rect.x,
@@ -127,7 +127,7 @@ export function webview(props: WebviewElementProps): number {
 		},
 	});
 
-	onCleanup(() => {
+	cleanup(() => {
 		view?.remove();
 		view = null;
 	});

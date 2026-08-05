@@ -1,64 +1,126 @@
-// Fine-grained reactivity for the Cottontail UI runtime, inspired by Solid:
-// synchronous signals, auto-tracked effects, batched writes, and a store with
-// produce()-style draft mutations. No compiler and no dependencies — small
-// enough for Electrobun to own, close enough to Solid that the authoring
-// model transfers directly.
+// Warren — reactivity core.
+//
+// The one-line rule: nothing is reactive unless you can see why. Component
+// bodies, handlers, and helpers are inert; reactivity exists only inside a
+// scope you can see — live() or memo(). Within a scope, tracking follows
+// the dynamic extent: signal calls and store property reads both subscribe,
+// including inside helpers called from the scope.
+//
+// Seven primitives, every one a bare verb taking a function:
+//   signal(v)   reactive value; returns [get, set]
+//   store(obj)  nested reactive state; returns [readonlyProxy, setter];
+//               the setter takes a mutator (draft => { ... })
+//   live(fn)    reactive scope; deferred — runs after commit
+//   memo(fn)    caching reactive scope; dependents never observe it stale
+//   inert(fn)   read without subscribing, inside a scope (no-op outside)
+//   cleanup(fn) teardown for the enclosing scope; runs before each re-run
+//   batch(fn)   defer notification (never mutation) to the outermost exit
+//
+// There is no createEffect — an effect is a live whose return value nobody
+// uses. There is no produce — the store setter mutates a draft directly.
 
 export type Accessor<T> = () => T;
 export type Setter<T> = (next: T | ((prev: T) => T)) => T;
 
-// ---------------------------------------------------------------------------
-// Reactive marker. Value props accept `T | ReactiveThunk<T>` — a plain value,
-// or a thunk explicitly marked with $()/reactive(). Bare functions in value
-// positions are an error, so every reactive boundary in a component is
-// findable by searching for "$(".
-// ---------------------------------------------------------------------------
-
-// The brand is a structural string key (not a unique symbol) so the type
-// unifies even when the module is reachable through multiple paths
-// (symlinked installs, realified node_modules).
-export interface ReactiveThunk<T> {
-	(): T;
-	readonly __electrobunReactive: true;
+// Structural brand (string key, not a unique symbol) so the type unifies
+// across symlinked/realified module paths.
+export interface LiveBinding<T> {
+	readonly __warrenLive: true;
+	/** The wrapped expression. Consumers re-run it inside their own scope. */
+	fn: () => T;
+	/** Set by a consumer (value prop, control flow) to suppress the auto-effect. */
+	claimed: boolean;
 }
 
-/** Mark a thunk as reactive: its reads are tracked and drive one effect. */
-export function reactive<T>(fn: () => T): ReactiveThunk<T> {
-	(fn as any).__electrobunReactive = true;
-	return fn as ReactiveThunk<T>;
-}
+/** What value props accept: a plain value, or a live() binding. */
+export type Reactive<T> = T | LiveBinding<T>;
 
-/** Short alias for {@link reactive}: `bg: _(() => hover() ? a : b)`. */
-export const _ = reactive;
-
-export function isReactive(value: unknown): value is ReactiveThunk<unknown> {
+export function isLive(value: unknown): value is LiveBinding<unknown> {
 	return (
-		typeof value === "function" &&
-		(value as any).__electrobunReactive === true
+		typeof value === "object" &&
+		value !== null &&
+		(value as any).__warrenLive === true
 	);
 }
 
-type SubscriberSet = Set<Effect>;
+let devMode = true;
+/** Toggle dev-mode warnings (default on while Warren is experimental). */
+export function setDevMode(enabled: boolean): void {
+	devMode = enabled;
+}
 
-let currentEffect: Effect | null = null;
-let currentOwner: Owner | null = null;
-let pendingEffects: Set<Effect> | null = null;
-let batchDepth = 0;
+// ---------------------------------------------------------------------------
+// Scopes
+// ---------------------------------------------------------------------------
 
-export class Owner {
-	parent: Owner | null;
-	children: Owner[] = [];
+interface SubscriberSet extends Set<Scope> {
+	/** True for signal subscriber sets (dev warning #3 heuristics). */
+	fromSignal?: boolean;
+}
+
+type ScopeKind = "root" | "live" | "memo";
+
+let currentScope: Scope | null = null;
+/** Non-null only while a tracking scope (live/memo) body executes. */
+let trackingScope: Scope | null = null;
+let inertDepth = 0;
+
+class Scope {
+	kind: ScopeKind;
+	fn: (() => void) | null;
+	parent: Scope | null;
+	children: Scope[] = [];
 	cleanups: Array<() => void> = [];
+	sources: SubscriberSet[] = [];
 	disposed = false;
+	hasRun = false;
 
-	constructor(parent: Owner | null = currentOwner) {
+	constructor(kind: ScopeKind, fn: (() => void) | null, parent: Scope | null) {
+		this.kind = kind;
+		this.fn = fn;
 		this.parent = parent;
 		parent?.children.push(this);
 	}
 
-	dispose() {
+	run(): void {
+		if (this.disposed || !this.fn) return;
+		// A re-run replaces the previous run's scope state.
+		for (let i = this.children.length - 1; i >= 0; i--) {
+			this.children[i]!.dispose();
+		}
+		this.children.length = 0;
+		for (let i = this.cleanups.length - 1; i >= 0; i--) {
+			this.cleanups[i]!();
+		}
+		this.cleanups.length = 0;
+		this.clearSources();
+
+		const prevScope = currentScope;
+		const prevTracking = trackingScope;
+		const prevInert = inertDepth;
+		currentScope = this;
+		trackingScope = this.kind === "root" ? null : this;
+		inertDepth = 0;
+		try {
+			this.fn();
+		} finally {
+			currentScope = prevScope;
+			trackingScope = prevTracking;
+			inertDepth = prevInert;
+			this.hasRun = true;
+		}
+	}
+
+	clearSources(): void {
+		for (const subs of this.sources) subs.delete(this);
+		this.sources.length = 0;
+	}
+
+	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		liveQueue.delete(this);
+		this.clearSources();
 		for (let i = this.children.length - 1; i >= 0; i--) {
 			this.children[i]!.dispose();
 		}
@@ -74,216 +136,372 @@ export class Owner {
 	}
 }
 
-class Effect extends Owner {
-	fn: () => void;
-	sources: SubscriberSet[] = [];
-
-	constructor(fn: () => void) {
-		super();
-		this.fn = fn;
-	}
-
-	run() {
-		if (this.disposed) return;
-		// A re-run replaces the previous run's scope: nested owners, cleanups,
-		// and dependency edges all belong to a single execution.
-		for (let i = this.children.length - 1; i >= 0; i--) {
-			this.children[i]!.dispose();
-		}
-		this.children.length = 0;
-		for (let i = this.cleanups.length - 1; i >= 0; i--) {
-			this.cleanups[i]!();
-		}
-		this.cleanups.length = 0;
-		this.clearSources();
-
-		const prevEffect = currentEffect;
-		const prevOwner = currentOwner;
-		currentEffect = this;
-		currentOwner = this;
-		try {
-			this.fn();
-		} finally {
-			currentEffect = prevEffect;
-			currentOwner = prevOwner;
-		}
-	}
-
-	clearSources() {
-		for (const subs of this.sources) subs.delete(this);
-		this.sources.length = 0;
-	}
-
-	dispose() {
-		this.clearSources();
-		super.dispose();
+function track(subs: SubscriberSet): void {
+	if (!trackingScope || inertDepth > 0) return;
+	if (!subs.has(trackingScope)) {
+		subs.add(trackingScope);
+		trackingScope.sources.push(subs);
 	}
 }
 
-function track(subs: SubscriberSet) {
-	if (!currentEffect) return;
-	if (!subs.has(currentEffect)) {
-		subs.add(currentEffect);
-		currentEffect.sources.push(subs);
-	}
-}
+// ---------------------------------------------------------------------------
+// Propagation. Memos pull-validate so a live never observes a stale memo;
+// lives queue and flush after commit (end of mount pass, end of outermost
+// batch, or immediately after an unbatched write's propagation).
+// ---------------------------------------------------------------------------
 
-function scheduleEffects(subs: SubscriberSet) {
+const liveQueue = new Set<Scope>();
+let batchDepth = 0;
+let commitDepth = 0;
+let flushing = false;
+
+function notify(subs: SubscriberSet): void {
 	if (subs.size === 0) return;
-	const isRootFlush = pendingEffects === null && batchDepth === 0;
-	const queue = (pendingEffects ??= new Set());
-	for (const effect of subs) queue.add(effect);
-	if (isRootFlush) flushEffects();
+	for (const scope of [...subs]) {
+		if (scope.kind === "memo") {
+			(scope as MemoScope).invalidate();
+		} else {
+			liveQueue.add(scope);
+		}
+	}
+	scheduleFlush();
 }
 
-function flushEffects() {
-	const queue = pendingEffects;
-	if (!queue) return;
-	let iterations = 0;
-	while (queue.size) {
-		if (++iterations > 100_000) {
-			pendingEffects = null;
-			throw new Error("Reactive cycle: effects never settled");
-		}
-		const next = queue.values().next().value!;
-		queue.delete(next);
-		next.run();
-	}
-	pendingEffects = null;
+function scheduleFlush(): void {
+	if (batchDepth > 0 || commitDepth > 0 || flushing) return;
+	flushLive();
 }
+
+function flushLive(): void {
+	if (flushing) return;
+	flushing = true;
+	try {
+		let iterations = 0;
+		while (liveQueue.size) {
+			if (++iterations > 100_000) {
+				liveQueue.clear();
+				throw new Error("Warren: reactive cycle — lives never settled");
+			}
+			const next = liveQueue.values().next().value!;
+			liveQueue.delete(next);
+			next.run();
+		}
+	} finally {
+		flushing = false;
+	}
+	if (liveQueue.size && batchDepth === 0 && commitDepth === 0) flushLive();
+}
+
+/**
+ * A commit boundary (mount or rebuild pass). Lives created or notified
+ * inside run when the outermost commit exits.
+ */
+export function commit<T>(fn: () => T): T {
+	commitDepth++;
+	try {
+		return fn();
+	} finally {
+		commitDepth--;
+		if (commitDepth === 0 && batchDepth === 0) flushLive();
+	}
+}
+
+export function batch<T>(fn: () => T): T {
+	batchDepth++;
+	try {
+		return fn();
+	} finally {
+		// Queued notifications flush on the way out even when fn threw: the
+		// mutations already landed, so discarding them would leave the graph
+		// inconsistent with the store.
+		batchDepth--;
+		if (batchDepth === 0 && commitDepth === 0) flushLive();
+	}
+}
+
+// ---------------------------------------------------------------------------
+// signal
+// ---------------------------------------------------------------------------
 
 const defaultEquals = <T>(a: T, b: T) => a === b;
 
-export function createSignal<T>(
+export function signal<T>(
 	value: T,
 	options?: { equals?: false | ((a: T, b: T) => boolean) },
 ): [Accessor<T>, Setter<T>] {
-	const equals = options?.equals === false
-		? () => false
-		: options?.equals ?? defaultEquals;
-	const subs: SubscriberSet = new Set();
+	const equals =
+		options?.equals === false ? () => false : options?.equals ?? defaultEquals;
+	const subs: SubscriberSet = new Set() as SubscriberSet;
+	subs.fromSignal = true;
 	const read: Accessor<T> = () => {
+		if (
+			devMode &&
+			commitDepth > 0 &&
+			!trackingScope &&
+			inertDepth === 0
+		) {
+			console.warn(
+				"Warren: signal read during render with no scope on the stack — this renders once and then freezes. Wrap it: live(() => ...).",
+			);
+		}
 		track(subs);
 		return value;
 	};
 	const write: Setter<T> = (next) => {
-		const resolved = typeof next === "function"
-			? (next as (prev: T) => T)(value)
-			: next;
+		const resolved =
+			typeof next === "function" ? (next as (prev: T) => T)(value) : next;
 		if (equals(value, resolved)) return value;
 		value = resolved;
-		scheduleEffects(subs);
+		notify(subs);
 		return value;
 	};
 	return [read, write];
 }
 
-export function createEffect(fn: () => void): void {
-	const effect = new Effect(fn);
-	effect.run();
+// ---------------------------------------------------------------------------
+// memo
+// ---------------------------------------------------------------------------
+
+class MemoScope extends Scope {
+	value: unknown;
+	stale = true;
+	equals: (a: unknown, b: unknown) => boolean;
+	subs: SubscriberSet = new Set() as SubscriberSet;
+	compute: () => unknown;
+
+	constructor(
+		compute: () => unknown,
+		equals: (a: unknown, b: unknown) => boolean,
+	) {
+		super("memo", null, currentScope);
+		this.compute = compute;
+		this.fn = () => {
+			this.value = this.compute();
+		};
+		this.equals = equals;
+	}
+
+	invalidate(): void {
+		if (this.stale) return;
+		this.stale = true;
+		// Dependent memos invalidate transitively; dependent lives queue. A
+		// queued live pulls fresh values when it runs, so it never observes
+		// this memo stale.
+		notify(this.subs);
+	}
+
+	read(): unknown {
+		track(this.subs);
+		if (this.stale && !this.disposed) {
+			const prev = this.value;
+			const first = !this.hasRun;
+			this.run();
+			this.stale = false;
+			if (!first && this.equals(prev, this.value)) {
+				this.value = prev;
+			}
+		}
+		return this.value;
+	}
 }
 
-export function createMemo<T>(
+export function memo<T>(
 	fn: () => T,
 	options?: { equals?: false | ((a: T, b: T) => boolean) },
 ): Accessor<T> {
-	const [get, set] = createSignal<T>(undefined as T, options);
-	createEffect(() => {
-		const value = fn();
-		set(() => value);
-	});
-	return get;
+	const equals =
+		options?.equals === false
+			? () => false
+			: ((options?.equals as any) ?? defaultEquals);
+	const node = new MemoScope(fn as () => unknown, equals);
+	return () => node.read() as T;
 }
 
-export function batch<T>(fn: () => T): T {
-	batchDepth++;
-	const owns = pendingEffects === null;
-	pendingEffects ??= new Set();
-	try {
-		return fn();
-	} finally {
-		batchDepth--;
-		if (batchDepth === 0 && owns) flushEffects();
+// ---------------------------------------------------------------------------
+// live
+// ---------------------------------------------------------------------------
+
+function warnZeroDeps(scope: Scope): void {
+	if (!devMode || !scope.hasRun) return;
+	if (scope.sources.length === 0) {
+		console.warn(
+			"Warren: live() registered zero dependencies — the wrapped expression is static; drop the marker.",
+		);
+	} else if (scope.sources.every((s) => s.fromSignal)) {
+		// Inside another scope the signal calls would have tracked anyway.
+		// (Only meaningful for nested lives; harmless reminder elsewhere.)
 	}
 }
 
-export function untrack<T>(fn: () => T): T {
-	const prev = currentEffect;
-	currentEffect = null;
+export function live<T>(fn: () => T): Reactive<T> {
+	if (typeof fn !== "function") {
+		throw new Error("Warren: live() takes a function: live(() => ...)");
+	}
+	// Nested inside a running scope: a tracking pass-through. The enclosing
+	// scope already tracks the dynamic extent, so evaluate and return the
+	// value.
+	if (trackingScope) {
+		if (devMode) {
+			console.warn(
+				"Warren: nested live() — the enclosing scope already tracks these reads; the marker is redundant here.",
+			);
+		}
+		return fn();
+	}
+	if (!currentScope) {
+		throw new Error(
+			"Warren: live() outside JSX and outside any scope has no meaning. Create it inside a component, a mount, or another scope.",
+		);
+	}
+	const binding: LiveBinding<T> = {
+		__warrenLive: true,
+		fn,
+		claimed: false,
+	};
+	// Statement-position lives become effects; value-position lives get
+	// claimed by their consumer first. Defer the decision to the flush.
+	const decide = new Scope("live", null, currentScope);
+	decide.fn = () => {
+		if (binding.claimed) {
+			decide.dispose();
+			return;
+		}
+		decide.fn = () => {
+			binding.fn();
+		};
+		decide.run();
+		warnZeroDeps(decide);
+	};
+	liveQueue.add(decide);
+	scheduleFlush();
+	return binding;
+}
+
+/**
+ * Consumer side of live(): claim a binding and run `apply(value)` in a
+ * scope that re-runs (deferred) when the binding's dependencies change.
+ * Used by value props and control-flow components.
+ */
+export function claimLive<T>(
+	binding: LiveBinding<T>,
+	apply: (value: T) => void,
+): void {
+	binding.claimed = true;
+	if (!currentScope) {
+		throw new Error("Warren: internal — claimLive outside a scope");
+	}
+	const scope = new Scope("live", null, currentScope);
+	scope.fn = () => {
+		apply(binding.fn());
+		warnZeroDeps(scope);
+	};
+	liveQueue.add(scope);
+	scheduleFlush();
+}
+
+/** Internal: a deferred reactive scope (regions, prop bindings). */
+export function liveScope(fn: () => void): void {
+	if (!currentScope) {
+		throw new Error("Warren: internal — liveScope outside a scope");
+	}
+	const scope = new Scope("live", fn, currentScope);
+	liveQueue.add(scope);
+	scheduleFlush();
+}
+
+// ---------------------------------------------------------------------------
+// inert / cleanup / roots
+// ---------------------------------------------------------------------------
+
+export function inert<T>(fn: () => T): T {
+	// Outside a scope this is a no-op — inert is already the default there.
+	inertDepth++;
 	try {
 		return fn();
 	} finally {
-		currentEffect = prev;
+		inertDepth--;
 	}
 }
 
-export function onCleanup(fn: () => void): void {
-	currentOwner?.cleanups.push(fn);
+export function cleanup(fn: () => void): void {
+	if (fn === undefined) {
+		throw new Error(
+			'Warren: cleanup() requires a function — it registers teardown, it does not "clean up now".',
+		);
+	}
+	if (typeof fn !== "function") {
+		throw new Error("Warren: cleanup() takes a function");
+	}
+	if (!currentScope) {
+		throw new Error("Warren: cleanup() called outside a scope");
+	}
+	if (currentScope.kind === "memo") {
+		throw new Error(
+			"Warren: cleanup() inside a memo — memos are pure computations; use live() for work that owns resources.",
+		);
+	}
+	currentScope.cleanups.push(fn);
 }
 
+/** Root scope for a mount. Lives created inside flush when fn returns. */
 export function createRoot<T>(fn: (dispose: () => void) => T): T {
-	const owner = new Owner(null);
-	const prevOwner = currentOwner;
-	const prevEffect = currentEffect;
-	currentOwner = owner;
-	currentEffect = null;
+	const scope = new Scope("root", null, null);
+	const prevScope = currentScope;
+	const prevTracking = trackingScope;
+	currentScope = scope;
+	trackingScope = null;
 	try {
-		return fn(() => owner.dispose());
+		return commit(() => fn(() => scope.dispose()));
 	} finally {
-		currentOwner = prevOwner;
-		currentEffect = prevEffect;
+		currentScope = prevScope;
+		trackingScope = prevTracking;
 	}
 }
 
-export function getOwner(): Owner | null {
-	return currentOwner;
+export function getOwner(): unknown {
+	return currentScope;
 }
 
-export function runWithOwner<T>(owner: Owner, fn: () => T): T {
-	const prevOwner = currentOwner;
-	const prevEffect = currentEffect;
-	currentOwner = owner;
-	currentEffect = null;
+export function runWithOwner<T>(owner: unknown, fn: () => T): T {
+	const prevScope = currentScope;
+	const prevTracking = trackingScope;
+	currentScope = owner as Scope | null;
+	trackingScope = null;
 	try {
 		return fn();
 	} finally {
-		currentOwner = prevOwner;
-		currentEffect = prevEffect;
+		currentScope = prevScope;
+		trackingScope = prevTracking;
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Store: nested reactive reads with path-level granularity, written to only
-// through the setter — most ergonomically with produce(), which applies
-// imperative mutations to a draft and notifies exactly the touched paths.
-// ---------------------------------------------------------------------------
-
-const PRODUCE = Symbol("produce");
-
-type ProduceMarker<T> = { [PRODUCE]: (draft: T) => void };
-
-export function produce<T extends object>(
-	mutator: (draft: T) => void,
-): ProduceMarker<T> {
-	return { [PRODUCE]: mutator };
+/** Internal: child scope handle for keyed list rows. */
+export function createChildScope(owner?: unknown): unknown {
+	return new Scope("root", null, (owner as Scope | null) ?? currentScope);
 }
 
-export type StoreSetter<T extends object> = (
-	update: ProduceMarker<T> | Partial<T>,
-) => void;
+export function disposeScope(scope: unknown): void {
+	(scope as Scope).dispose();
+}
 
-export function createStore<T extends object>(
-	initial: T,
-): [T, StoreSetter<T>] {
+// ---------------------------------------------------------------------------
+// store
+// ---------------------------------------------------------------------------
+
+export type StoreSetter<T extends object> = (mutate: (draft: T) => void) => void;
+
+export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 	const raw = initial;
 	const pathSubs = new Map<string, SubscriberSet>();
 	const readProxies = new WeakMap<object, object>();
 
 	const trackPath = (path: string) => {
-		if (!currentEffect) return;
+		// Property reads are inert outside scopes: one flag check, no
+		// bookkeeping — the common case (component bodies, handlers).
+		if (!trackingScope || inertDepth > 0) return;
 		let subs = pathSubs.get(path);
 		if (!subs) {
-			subs = new Set();
+			subs = new Set() as SubscriberSet;
 			pathSubs.set(path, subs);
 		}
 		track(subs);
@@ -299,8 +517,6 @@ export function createStore<T extends object>(
 			get(t: any, key) {
 				if (typeof key === "symbol") return t[key];
 				const value = t[key];
-				// Method lookups (array iteration helpers etc.) should not
-				// register as reads of a "map"/"push" path.
 				if (typeof value === "function" && !Object.hasOwn(t, key)) {
 					return value;
 				}
@@ -313,12 +529,12 @@ export function createStore<T extends object>(
 			},
 			set() {
 				throw new Error(
-					"Store is read-only; write through the setter (see produce()).",
+					"Warren: stores are read-only outside their setter. Write through the setter: setState(draft => { ... }).",
 				);
 			},
 			deleteProperty() {
 				throw new Error(
-					"Store is read-only; write through the setter (see produce()).",
+					"Warren: stores are read-only outside their setter. Write through the setter: setState(draft => { ... }).",
 				);
 			},
 		});
@@ -333,16 +549,11 @@ export function createStore<T extends object>(
 			for (const changedPath of changed) {
 				for (const [path, subs] of pathSubs) {
 					if (notified.has(subs)) continue;
-					// A write at a path invalidates readers of that exact path and
-					// of anything beneath it (a replaced parent changes every
-					// descendant value). Readers of ancestor paths only saw the
-					// still-identical object reference, so they stay quiet —
-					// matching Solid store semantics.
 					const isSelf = path === changedPath;
 					const isDescendant = path.startsWith(changedPath + ".");
 					if (isSelf || isDescendant) {
 						notified.add(subs);
-						scheduleEffects(subs);
+						notify(subs);
 					}
 				}
 			}
@@ -359,8 +570,6 @@ export function createStore<T extends object>(
 				if (typeof key === "symbol") return t[key];
 				const value = t[key];
 				if (typeof value === "function" && !Object.hasOwn(t, key)) {
-					// Bind array/object prototype methods (push, splice, ...) to the
-					// draft so their internal writes are recorded.
 					return value.bind(draftFor(t, path, changed));
 				}
 				if (value !== null && typeof value === "object") {
@@ -371,8 +580,6 @@ export function createStore<T extends object>(
 			set(t: any, key, value) {
 				const p = childPath(path, String(key));
 				if (t[key] !== value) {
-					// Index stores on arrays mutate `length` as a JS side effect;
-					// record it so length readers (iteration) are invalidated.
 					const prevLength = Array.isArray(t) ? t.length : -1;
 					t[key] = value;
 					changed.add(p);
@@ -392,21 +599,19 @@ export function createStore<T extends object>(
 			},
 		});
 
-	const setStore: StoreSetter<T> = (update) => {
-		const changed = new Set<string>();
-		if (update && PRODUCE in (update as object)) {
-			const mutator = (update as ProduceMarker<T>)[PRODUCE];
-			mutator(draftFor(raw, "", changed) as T);
-		} else {
-			for (const [key, value] of Object.entries(update as Partial<T>)) {
-				if ((raw as any)[key] !== value) {
-					(raw as any)[key] = value;
-					changed.add(key);
-				}
-			}
+	// The setter is a mutator scope: the draft is writable, mutation is
+	// direct (no structural sharing), and the store's writes batch into one
+	// propagation.
+	const setter: StoreSetter<T> = (mutate) => {
+		if (typeof mutate !== "function") {
+			throw new Error(
+				"Warren: the store setter takes a mutator: setState(draft => { draft.x = 1 }).",
+			);
 		}
+		const changed = new Set<string>();
+		mutate(draftFor(raw, "", changed) as T);
 		notifyChanged(changed);
 	};
 
-	return [readProxyFor(raw, "") as T, setStore];
+	return [readProxyFor(raw, "") as T, setter];
 }

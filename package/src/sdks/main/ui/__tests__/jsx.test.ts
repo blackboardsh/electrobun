@@ -2,7 +2,7 @@
 // directly (what the transpiler emits for .tsx files).
 
 import { describe, expect, test } from "bun:test";
-import { _, createRoot, createSignal } from "../reactive";
+import { createRoot, live, signal } from "../reactive";
 import { NodeKind, Prop, UiTree } from "../tree";
 import { createUiContext, ui, withUiContext, type UiContext } from "../ui";
 import { Fragment, jsx, isUIElement, type UIElement } from "../jsx-runtime";
@@ -56,9 +56,9 @@ describe("jsx runtime", () => {
 	});
 
 	test("reactive text children via $ update in place", () => {
-		const [count, setCount] = createSignal(0);
+		const [count, setCount] = signal(0);
 		const { ctx } = mountApp(() =>
-			jsx("box", { children: _(() => `n=${count()}`) }),
+			jsx("box", { children: live(() => `n=${count()}`) }),
 		);
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		const [label] = ctx.tree.childrenOf(box!);
@@ -68,8 +68,8 @@ describe("jsx runtime", () => {
 	});
 
 	test("reactive props via $ work in JSX", () => {
-		const [bg, setBg] = createSignal("#111111");
-		const { ctx } = mountApp(() => jsx("box", { bg: _(bg) }));
+		const [bg, setBg] = signal("#111111");
+		const { ctx } = mountApp(() => jsx("box", { bg: live(bg) }));
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getProp(box!, Prop.Bg)).toBe(parseColor("#111111"));
 		setBg("#222222");
@@ -143,5 +143,110 @@ describe("jsx runtime", () => {
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		const [label] = ctx.tree.childrenOf(box!);
 		expect(ctx.tree.getText(label!)).toBe("42");
+	});
+});
+
+describe("control flow", () => {
+	const { For, Show, Switch, Match } = require("../jsx-runtime");
+	const { live, signal, store } = require("../reactive");
+
+	test("<Show when={live(...)}> toggles; static when is frozen", () => {
+		const [on, setOn] = signal(false);
+		const { ctx } = mountApp(() =>
+			jsx("column", {
+				children: [
+					jsx(Show, {
+						when: live(() => on()),
+						children: jsx("text", { children: "live-on" }),
+						fallback: jsx("text", { children: "live-off" }),
+					}),
+					jsx(Show, {
+						when: false,
+						children: jsx("text", { children: "static-on" }),
+						fallback: jsx("text", { children: "static-off" }),
+					}),
+				],
+			}),
+		);
+		const texts = () => {
+			const out: string[] = [];
+			const walk = (id: number) => {
+				if (ctx.tree.isTextNode(id)) out.push(ctx.tree.getText(id));
+				for (const c of ctx.tree.childrenOf(id)) walk(c);
+			};
+			walk(ctx.tree.root);
+			return out;
+		};
+		expect(texts()).toEqual(["live-off", "static-off"]);
+		setOn(true);
+		expect(texts()).toEqual(["live-on", "static-off"]); // static stays frozen
+	});
+
+	test("<For each={live(...)}> reconciles; static each renders once", () => {
+		const [state, setState] = store({ items: ["a", "b"] });
+		const frozen = ["x", "y"];
+		const { ctx } = mountApp(() =>
+			jsx("column", {
+				children: [
+					jsx(For, {
+						each: live(() => state.items),
+						children: (item: string) => jsx("text", { children: item }),
+					}),
+					jsx(For, {
+						each: frozen,
+						children: (item: string) => jsx("text", { children: item }),
+					}),
+				],
+			}),
+		);
+		const count = () => {
+			let n = 0;
+			const walk = (id: number) => {
+				if (ctx.tree.isTextNode(id)) n++;
+				for (const c of ctx.tree.childrenOf(id)) walk(c);
+			};
+			walk(ctx.tree.root);
+			return n;
+		};
+		expect(count()).toBe(4);
+		setState((s: any) => s.items.push("c"));
+		expect(count()).toBe(5); // live grew; static did not
+	});
+
+	test("<Switch>/<Match> picks the first truthy live match", () => {
+		const [status, setStatus] = signal("urgent");
+		const { ctx } = mountApp(() =>
+			jsx("column", {
+				children: jsx(Switch, {
+					fallback: jsx("text", { children: "none" }),
+					children: [
+						jsx(Match, {
+							when: live(() => status() === "urgent"),
+							children: jsx("text", { children: "fire" }),
+						}),
+						jsx(Match, {
+							when: live(() => status() === "waiting"),
+							children: jsx("text", { children: "clock" }),
+						}),
+					],
+				}),
+			}),
+		);
+		const first = () => {
+			const walk = (id: number): string | null => {
+				if (ctx.tree.isTextNode(id)) return ctx.tree.getText(id);
+				for (const c of ctx.tree.childrenOf(id)) {
+					const r = walk(c);
+					if (r) return r;
+				}
+				return null;
+			};
+			return walk(ctx.tree.root);
+		};
+		expect(first()).toBe("fire");
+		setStatus("waiting");
+		expect(first()).toBe("clock");
+		setStatus("done");
+		expect(first()).toBe("none");
 	});
 });

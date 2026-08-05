@@ -5,10 +5,9 @@
 import { defineTest } from "../../test-framework/types";
 import { webgpu } from "electrobun/main";
 import {
-	_,
-	createEffect,
-	createMemo,
-	createSignal,
+	live,
+	memo,
+	signal,
 	onKey,
 	parseColor,
 	ui,
@@ -31,22 +30,22 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 async function openDemoWindow(): Promise<UIWindow> {
-	const [count, setCount] = createSignal(0);
-	const accent = createMemo(() => hslToHex(260 + count() * 14, 0.72, 0.68));
+	const [count, setCount] = signal(0);
+	const accent = memo(() => hslToHex(260 + count() * 14, 0.72, 0.68));
 
 	function Button(label: string, onClick: () => void) {
-		const [hover, setHover] = createSignal(false);
-		const [active, setActive] = createSignal(false);
+		const [hover, setHover] = signal(false);
+		const [active, setActive] = signal(false);
 		ui.box(
 			{
 				width: 90,
 				pad: 12,
 				radius: 9,
 				justify: "center",
-				bg: _(() =>
+				bg: live(() =>
 					active() ? "#2c2c44" : hover() ? "#232336" : "#1b1b28"),
 				border: 1,
-				borderColor: _(() => (hover() ? accent() : "#262638")),
+				borderColor: live(() => (hover() ? accent() : "#262638")),
 				onClick,
 				onPointerEnter: () => setHover(true),
 				onPointerLeave: () => {
@@ -76,7 +75,7 @@ async function openDemoWindow(): Promise<UIWindow> {
 						size: 12,
 						color: "#8c8ca8",
 					});
-					ui.text(_(() => String(count())), { size: 88, color: _(accent) });
+					ui.text(live(() => String(count())), { size: 88, color: live(accent) });
 					ui.row({ gap: 10 }, () => {
 						Button("- 1", () => setCount((c) => c - 1));
 						Button("+ 1", () => setCount((c) => c + 1));
@@ -133,7 +132,7 @@ async function openDemoWindow(): Promise<UIWindow> {
 									pass.end();
 									device.queue.submit([encoder.finish()]);
 								};
-								createEffect(() => repaint!());
+								live(() => repaint!());
 							},
 							onFrame: () => repaint?.(),
 						});

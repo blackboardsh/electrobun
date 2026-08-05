@@ -7,19 +7,14 @@
 // - Elements are lazy values; mounting creates nodes parent-first.
 // - Components are plain functions called once with their props (Solid-style,
 //   no re-render); they return elements.
-// - Reactivity stays explicit: `bg={_(() => ...)}` is reactive, `bg={value}`
+// - Reactivity stays explicit: `bg={live(() => ...)}` is reactive, `bg={value}`
 //   is static, and a bare function child `{() => ui.anything(...)}` is a
 //   builder escape that runs against the current parent — so the whole
 //   builder API (each, dynamic, textInput, webview, wgpuSurface) is usable
 //   inside JSX unchanged.
 
-import { isReactive, type ReactiveThunk } from "./reactive";
-import {
-	ui,
-	type BoxProps,
-	type Reactive,
-	type TextProps,
-} from "./ui";
+import { isLive, type LiveBinding, type Reactive } from "./reactive";
+import { ui, type BoxProps, type TextProps } from "./ui";
 
 export interface UIElement {
 	readonly __electrobunElement: true;
@@ -42,7 +37,7 @@ export type UIChild =
 	| boolean
 	| null
 	| undefined
-	| ReactiveThunk<string | number>
+	| LiveBinding<string | number>
 	| (() => void)
 	| UIChild[];
 
@@ -60,7 +55,7 @@ export function mountChild(child: UIChild): void {
 		child.create();
 		return;
 	}
-	if (isReactive(child)) {
+	if (isLive(child)) {
 		ui.text(child as Reactive<string | number>);
 		return;
 	}
@@ -89,7 +84,7 @@ function createIntrinsic(type: IntrinsicName, props: Record<string, unknown>): v
 		case "text": {
 			if (Array.isArray(children)) {
 				throw new Error(
-					"<text> takes a single child (string, number, or _(() => ...)); compose the string inside one expression.",
+					"<text> takes a single child (string, number, or live(() => ...)); compose the string inside one expression.",
 				);
 			}
 			ui.text(
@@ -116,6 +111,8 @@ export function jsx(
 	if (typeof type === "function") {
 		const result = type(resolved);
 		if (isUIElement(result)) return result;
+		// Match markers pass through raw so Switch can collect them.
+		if (isMatch(result)) return result as unknown as UIElement;
 		// Components may return any child shape (fragment arrays, strings...).
 		return element(() => mountChild(result as UIChild));
 	}
@@ -126,6 +123,134 @@ export const jsxs = jsx;
 
 export function Fragment(props: { children?: UIChild }): UIElement {
 	return element(() => mountChild(props.children));
+}
+
+// ---------------------------------------------------------------------------
+// Control flow — explicit in both directions: a live() prop reconciles on
+// change; a plain value is a snapshot that renders once and never updates.
+// ---------------------------------------------------------------------------
+
+import type { Accessor } from "./reactive";
+
+export interface ShowProps {
+	when: unknown;
+	fallback?: UIChild;
+	children?: UIChild;
+}
+
+export function Show(props: ShowProps): UIElement {
+	const { when } = props;
+	if (isLive(when)) {
+		when.claimed = true;
+		return element(() => {
+			ui.dynamic({}, () => {
+				mountChild(when.fn() ? props.children : props.fallback);
+			});
+		});
+	}
+	// Snapshot: evaluated at mount, frozen.
+	return element(() => mountChild(when ? props.children : props.fallback));
+}
+
+export interface ForProps<T> {
+	each: readonly T[] | LiveBinding<readonly T[]>;
+	/** Row identity for reconciliation; defaults to item identity. */
+	key?: (item: T, index: number) => string | number;
+	fallback?: UIChild;
+	children?: (item: T, index: Accessor<number>) => UIChild;
+}
+
+export function For<T>(props: ForProps<T>): UIElement {
+	const render = props.children;
+	if (typeof render !== "function") {
+		throw new Error("Warren: <For> takes a function child: (item, index) => ...");
+	}
+	const keyOf =
+		props.key ?? ((item: T) => item as unknown as string | number);
+	const { each } = props;
+	if (isLive(each)) {
+		each.claimed = true;
+		const items = () => (each.fn() ?? []) as readonly T[];
+		return element(() => {
+			// Fallback flips in a region; rows reconcile in a keyed each.
+			ui.dynamic({}, () => {
+				if (items().length === 0) {
+					mountChild(props.fallback);
+					return;
+				}
+				ui.each({}, items, keyOf as any, (item, index) => {
+					mountChild(render(item as T, index));
+				});
+			});
+		});
+	}
+	// Snapshot: rendered once, no reconciliation.
+	const list = (each ?? []) as readonly T[];
+	return element(() => {
+		if (list.length === 0) {
+			mountChild(props.fallback);
+			return;
+		}
+		list.forEach((item, i) => mountChild(render(item, () => i)));
+	});
+}
+
+const MATCH_BRAND = "__warrenMatch";
+
+export interface MatchProps {
+	when: unknown;
+	children?: UIChild;
+}
+
+interface MatchMarker {
+	[MATCH_BRAND]: true;
+	when: unknown;
+	children?: UIChild;
+}
+
+export function Match(props: MatchProps): MatchMarker {
+	return { [MATCH_BRAND]: true, when: props.when, children: props.children };
+}
+
+function isMatch(value: unknown): value is MatchMarker {
+	return (
+		typeof value === "object" &&
+		value !== null &&
+		(value as any)[MATCH_BRAND] === true
+	);
+}
+
+export interface SwitchProps {
+	fallback?: UIChild;
+	children?: unknown;
+}
+
+export function Switch(props: SwitchProps): UIElement {
+	const kids = Array.isArray(props.children)
+		? props.children
+		: [props.children];
+	const matches = kids.filter(isMatch);
+	const anyLive = matches.some((m) => isLive(m.when));
+	for (const m of matches) {
+		if (isLive(m.when)) (m.when as LiveBinding<unknown>).claimed = true;
+	}
+	const pick = (): UIChild | undefined => {
+		for (const m of matches) {
+			const truthy = isLive(m.when)
+				? (m.when as LiveBinding<unknown>).fn()
+				: m.when;
+			if (truthy) return m.children;
+		}
+		return props.fallback;
+	};
+	if (anyLive) {
+		return element(() => {
+			ui.dynamic({}, () => {
+				mountChild(pick());
+			});
+		});
+	}
+	return element(() => mountChild(pick()));
 }
 
 // ---------------------------------------------------------------------------
@@ -144,7 +269,7 @@ export declare namespace JSX {
 		row: WithChildren<BoxProps>;
 		column: WithChildren<BoxProps>;
 		text: TextProps & {
-			children?: string | number | ReactiveThunk<string | number>;
+			children?: string | number | LiveBinding<string | number>;
 		};
 		spacer: { grow?: Reactive<number> };
 	}

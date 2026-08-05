@@ -5,7 +5,7 @@ description: "Layer reactive native UI over web content with the <electrobun-ui>
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and its APIs may change between releases.
+Warren is experimental and its APIs may change between releases.
 </Aside>
 
 `<electrobun-ui>` puts a GPU-rendered, reactive UI layer *on top of* web
@@ -30,13 +30,13 @@ attribute selects which registered UI root mounts here.
 ## In the main process
 
 ```tsx
-import { _, createSignal, registerUIRoot } from "electrobun/main/ui";
+import { live, signal, registerUIRoot } from "electrobun/main/ui";
 
 const registration = registerUIRoot("inspector", { background: "#1b1b28" }, () => {
-  const [clicks, setClicks] = createSignal(0);
+  const [clicks, setClicks] = signal(0);
   return (
     <column grow={1} pad={12} gap={8} justify="center" align="center">
-      <text size={18} color="#e4e4f0">{_(() => `clicks: ${clicks()}`)}</text>
+      <text size={18} color="#e4e4f0">{live(() => `clicks: ${clicks()}`)}</text>
       <box pad={8} radius={6} bg="#232336" onClick={() => setClicks((c) => c + 1)}>
         <text size={12} color="#e4e4f0">Click me</text>
       </box>

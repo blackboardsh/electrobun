@@ -19,12 +19,13 @@ complete JSX-free API for plain `.ts` files — see
 import { _, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
 ```
 
-Any prop typed `Reactive<T>` accepts a plain value or a thunk explicitly
-marked with `_()` (alias of `reactive()`). Marked thunks become fine-grained
-effects: `bg={_(() => hover() ? "#232336" : "#1b1b28")}` re-runs only when
-its signals change and updates only that property. Bare functions in value
-positions throw — so `_(` is a complete, greppable index of a component's
+Any prop typed `Reactive<T>` accepts a plain value or a `live()` scope:
+`bg={live(() => hover() ? "#232336" : "#1b1b28")}` re-runs only when its
+dependencies change and updates only that property. Bare functions in value
+positions throw — so `live(` is a complete, greppable index of a component's
 reactivity. Event handlers and builder-escape children stay plain functions.
+Control-flow components (`<Show>`, `<For>`, `<Switch>`/`<Match>`) follow the
+same rule: a `live()` prop reconciles; a plain value is a frozen snapshot.
 
 ## ui.box(props, children?)
 
@@ -115,7 +116,7 @@ disposed with their reactive scope.
       () => state.todos,          // Accessor<readonly T[]>
       (todo) => todo.id,          // stable key
       (todo, index) => {          // index is a reactive accessor
-        ui.row({ pad: 8, bg: _(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
+        ui.row({ pad: 8, bg: live(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
           ui.text(todo.title);
         });
       },
@@ -198,6 +199,23 @@ const [query, setQuery] = createSignal("");
 
 Unhandled keys (arrows up/down, Escape) bubble to window-level `onKey`
 handlers — which is how list navigation under an input works.
+
+## Control flow: Show, For, Switch/Match
+
+```tsx
+<Show when={live(() => state.threads.length > 0)} fallback={<text>empty</text>}>
+  <For each={live(() => state.threads)}>
+    {(thread) => <text size={12}>{thread.subject}</text>}
+  </For>
+</Show>
+```
+
+Both forms are valid on every control-flow prop: `when={live(...)}` /
+`each={live(...)}` reconcile on change, while a plain value —
+`<For each={state.threads}>` — renders a frozen snapshot once and never
+updates. `<For>` accepts `key={(item) => id}` (defaults to item identity) and
+`fallback`; `<Switch fallback={...}>` picks the first `<Match when={...}>`
+whose condition is truthy.
 
 ## Window-level keyboard: onKey(handler)
 

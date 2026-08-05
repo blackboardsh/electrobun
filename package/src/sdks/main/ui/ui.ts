@@ -9,30 +9,29 @@
 //   });
 
 import {
-	Owner,
-	createEffect,
-	createSignal,
+	claimLive,
+	cleanup,
+	createChildScope,
+	disposeScope,
 	getOwner,
-	isReactive,
-	onCleanup,
+	inert,
+	isLive,
+	liveScope,
 	runWithOwner,
-	untrack,
+	signal,
 	type Accessor,
-	type ReactiveThunk,
+	type LiveBinding,
+	type Reactive,
 } from "./reactive";
 import { NodeKind, Prop, UiTree } from "./tree";
 import { Align, Justify } from "./layout";
 import { parseColor } from "./paint";
 
-/**
- * A value prop: a plain value, or a thunk marked with `_()` / `reactive()`.
- * Bare functions are rejected so reactive boundaries stay searchable.
- */
-export type Reactive<T> = T | ReactiveThunk<T>;
+export type { Reactive };
 
 function bareFunctionError(): never {
 	throw new Error(
-		'ui: a value prop received a bare function. Wrap reactive expressions with _(() => ...) from "electrobun/main/ui", or pass a plain value.',
+		'Warren: a value prop received a bare function. Wrap reactive expressions with live(() => ...) from "electrobun/main/ui", or pass a plain value.',
 	);
 }
 
@@ -122,8 +121,8 @@ export interface UiContext {
 }
 
 export function createUiContext(tree = new UiTree()): UiContext {
-	const [focusedId, setFocusedId] = createSignal(0);
-	const [hoveredId, setHoveredId] = createSignal(0);
+	const [focusedId, setFocusedId] = signal(0);
+	const [hoveredId, setHoveredId] = signal(0);
 	return {
 		tree,
 		handlers: new Map(),
@@ -164,9 +163,12 @@ export function getUiContext(): UiContext {
 	return requireCtx();
 }
 
-/** Unwrap a Reactive<T> — marked thunk or plain value. */
+/** Unwrap a Reactive<T> — live binding or plain value. */
 export function read<T>(value: Reactive<T>): T {
-	if (isReactive(value)) return (value as () => T)();
+	if (isLive(value)) {
+		(value as LiveBinding<T>).claimed = true;
+		return (value as LiveBinding<T>).fn();
+	}
 	if (typeof value === "function") bareFunctionError();
 	return value as T;
 }
@@ -202,8 +204,10 @@ function applyNumber(
 	value: Reactive<number> | undefined,
 ): void {
 	if (value === undefined) return;
-	if (isReactive(value)) {
-		createEffect(() => ctx.tree.setProp(id, prop, value()));
+	if (isLive(value)) {
+		claimLive(value as LiveBinding<number>, (v) =>
+			ctx.tree.setProp(id, prop, v),
+		);
 	} else if (typeof value === "function") {
 		bareFunctionError();
 	} else {
@@ -218,8 +222,10 @@ function applyColor(
 	value: Reactive<string | number> | undefined,
 ): void {
 	if (value === undefined) return;
-	if (isReactive(value)) {
-		createEffect(() => ctx.tree.setProp(id, prop, parseColor(value())));
+	if (isLive(value)) {
+		claimLive(value as LiveBinding<string | number>, (v) =>
+			ctx.tree.setProp(id, prop, parseColor(v)),
+		);
 	} else if (typeof value === "function") {
 		bareFunctionError();
 	} else {
@@ -247,7 +253,7 @@ function registerHandlers(ctx: UiContext, id: number, props: Handlers): void {
 	// Handlers is a structural subset of the props object; the map is only
 	// ever read by handler key.
 	ctx.handlers.set(id, props);
-	onCleanup(() => ctx.handlers.delete(id));
+	cleanup(() => ctx.handlers.delete(id));
 }
 
 function box(props: BoxProps, children?: () => void): number {
@@ -276,8 +282,8 @@ function box(props: BoxProps, children?: () => void): number {
 		ctx.tree.setProp(id, Prop.Hittable, 1);
 		// Focus lifecycle belongs with the focusable flag: never leave a
 		// destroyed node focused.
-		onCleanup(() => {
-			if (untrack(ctx.focusedId) === id) ctx.setFocused(0);
+		cleanup(() => {
+			if (inert(ctx.focusedId) === id) ctx.setFocused(0);
 		});
 	}
 	registerHandlers(ctx, id, props);
@@ -300,8 +306,10 @@ function text(
 ): number {
 	const ctx = requireCtx();
 	const id = ctx.tree.createTextNode("");
-	if (isReactive(content)) {
-		createEffect(() => ctx.tree.setText(id, String(content())));
+	if (isLive(content)) {
+		claimLive(content as LiveBinding<string | number>, (v) =>
+			ctx.tree.setText(id, String(v)),
+		);
 	} else if (typeof content === "function") {
 		bareFunctionError();
 	} else {
@@ -329,7 +337,7 @@ function anchor(props: AnchorProps): number {
 	applyNumber(ctx, id, Prop.Height, props.height);
 	applyNumber(ctx, id, Prop.Grow, props.grow);
 	ctx.anchors.set(id, props.onFrame);
-	onCleanup(() => ctx.anchors.delete(id));
+	cleanup(() => ctx.anchors.delete(id));
 	attachToParent(ctx, id);
 	return id;
 }
@@ -342,7 +350,7 @@ function anchor(props: AnchorProps): number {
 function dynamic(props: BoxProps, builder: () => void): number {
 	const ctx = requireCtx();
 	const id = box(props);
-	createEffect(() => {
+	liveScope(() => {
 		ctx.tree.destroyChildren(id);
 		withParent(ctx, id, () => withUiContext(ctx, builder));
 	});
@@ -353,11 +361,11 @@ function dynamic(props: BoxProps, builder: () => void): number {
 export function onKey(handler: (e: KeyEventInfo) => void): void {
 	const ctx = requireCtx();
 	ctx.keyHandlers.add(handler);
-	onCleanup(() => ctx.keyHandlers.delete(handler));
+	cleanup(() => ctx.keyHandlers.delete(handler));
 }
 
 interface EachEntry {
-	owner: Owner;
+	scope: unknown;
 	node: number;
 	setIndex: (i: number) => void;
 }
@@ -380,11 +388,11 @@ function each<T>(
 	if (!hostOwner) {
 		throw new Error("ui.each must be created inside a reactive root");
 	}
-	// Row owners parent under hostOwner (not the diff effect), so rows
-	// survive re-runs and are torn down with the region's scope.
+	// Row scopes parent under the host scope (not the diff scope), so rows
+	// survive re-runs and are torn down with the region.
 	const entries = new Map<string | number, EachEntry>();
 
-	createEffect(() => {
+	liveScope(() => {
 		const list = items();
 		const seen = new Set<string | number>();
 		let prevNode = 0;
@@ -399,16 +407,16 @@ function each<T>(
 
 			let entry = entries.get(k);
 			if (!entry) {
-				const owner = new Owner(hostOwner);
-				const [index, setIndex] = createSignal(i);
-				// runWithOwner nulls the current effect, so the diff effect
-				// never tracks reads made while building a row.
-				const node = runWithOwner(owner, () =>
+				const scope = createChildScope(hostOwner);
+				const [index, setIndex] = signal(i);
+				// runWithOwner suspends tracking, so the diff scope never
+				// tracks reads made while building a row.
+				const node = runWithOwner(scope, () =>
 					withUiContext(ctx, () =>
 						withParent(ctx, regionId, () => box({}, () => render(item, index))),
 					),
 				);
-				entry = { owner, node, setIndex };
+				entry = { scope, node, setIndex };
 				entries.set(k, entry);
 			} else {
 				entry.setIndex(i);
@@ -427,7 +435,7 @@ function each<T>(
 		// Remove rows whose keys are gone.
 		for (const [k, entry] of entries) {
 			if (!seen.has(k)) {
-				entry.owner.dispose();
+				disposeScope(entry.scope);
 				if (ctx.tree.has(entry.node)) ctx.tree.destroy(entry.node);
 				entries.delete(k);
 			}

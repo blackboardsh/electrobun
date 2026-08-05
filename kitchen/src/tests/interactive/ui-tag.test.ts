@@ -5,8 +5,8 @@
 import { defineTest } from "../../test-framework/types";
 import { BrowserWindow } from "electrobun/main";
 import {
-	_,
-	createSignal,
+	live,
+	signal,
 	registerUIRoot,
 	ui,
 } from "electrobun/main/ui";
@@ -41,7 +41,7 @@ export const uiTagTests = [
 				"kitchen-overlay",
 				{ background: "#1b1b28" },
 				() => {
-					const [clicks, setClicks] = createSignal(0);
+					const [clicks, setClicks] = signal(0);
 					ui.column(
 						{ grow: 1, pad: 14, gap: 10, justify: "center", align: "center" },
 						() => {
@@ -49,7 +49,7 @@ export const uiTagTests = [
 								size: 12,
 								color: "#8c8ca8",
 							});
-							ui.text(_(() => `clicks: ${clicks()}`), {
+							ui.text(live(() => `clicks: ${clicks()}`), {
 								size: 22,
 								color: "#e4e4f0",
 							});

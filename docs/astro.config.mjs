@@ -28,7 +28,7 @@ export default defineConfig({
                 { label: "Cottontail", link: "/electrobun/guides/cottontail/" },
                 { label: "Main Process Runtimes", link: "/electrobun/guides/native-main-process/" },
                 { label: "Creating UI", link: "/electrobun/guides/creating-ui/" },
-                { label: "Electrobun UI (Experimental)", link: "/electrobun/guides/electrobun-ui/" },
+                { label: "Warren UI (Experimental)", link: "/electrobun/guides/electrobun-ui/" },
                 { label: "Bundling & Distribution", link: "/electrobun/guides/bundling-and-distribution/" },
                 { label: "Migrate from 1.x", link: "/electrobun/guides/migrating-to-v2/" },
               ],
@@ -62,7 +62,7 @@ export default defineConfig({
               ],
             },
             {
-              label: "Electrobun UI (Experimental)",
+              label: "Warren UI (Experimental)",
               items: [
                 { label: "Overview", link: "/electrobun/apis/ui/overview/" },
                 { label: "Components", link: "/electrobun/apis/ui/components/" },

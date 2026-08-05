@@ -1,21 +1,20 @@
 // Cottontail UI showcase, JSX edition — no compiler beyond the transpiler
 // Cottontail already ships (tsconfig: jsx react-jsx, jsxImportSource
-// electrobun/main/ui). Reactivity stays explicit: _() marks every reactive
+// electrobun/main/ui). Reactivity stays explicit: live() marks every reactive
 // expression; bare function children are builder escapes.
 
 import { webgpu } from "electrobun/main";
 import {
-	_,
-	createMemo,
-	createSignal,
-	createStore,
+	live,
+	memo,
+	signal,
+	store,
 	onKey,
-	produce,
 	ui,
 	webview,
 	wgpuSurface,
 	createUIWindow,
-	untrack,
+	inert,
 	type Reactive,
 	type UIElement,
 } from "electrobun/main/ui";
@@ -51,17 +50,17 @@ function hslToHex(h: number, s: number, l: number): string {
 // State
 // ---------------------------------------------------------------------------
 
-const [count, setCount] = createSignal(0);
-const accent = createMemo(() => hslToHex(260 + count() * 14, 0.72, 0.68));
+const [count, setCount] = signal(0);
+const accent = memo(() => hslToHex(260 + count() * 14, 0.72, 0.68));
 
-const [log, setLog] = createStore({
+const [log, setLog] = store({
 	entries: [] as Array<{ n: number; label: string }>,
 	total: 0,
 });
 
 function record(label: string) {
 	setLog(
-		produce((s) => {
+		((s) => {
 			s.total += 1;
 			s.entries.unshift({ n: s.total, label });
 			if (s.entries.length > 4) s.entries.length = 4;
@@ -88,15 +87,15 @@ function Button(props: {
 	onClick: () => void;
 	width?: number;
 }): UIElement {
-	const [hover, setHover] = createSignal(false);
-	const [active, setActive] = createSignal(false);
+	const [hover, setHover] = signal(false);
+	const [active, setActive] = signal(false);
 	return (
 		<box
 			width={props.width}
 			pad={12}
 			radius={9}
 			justify="center"
-			bg={_(() =>
+			bg={live(() =>
 				active()
 					? theme.surfaceActive
 					: hover()
@@ -104,7 +103,7 @@ function Button(props: {
 						: theme.surface,
 			)}
 			border={1}
-			borderColor={_(() => (hover() ? accent() : theme.line))}
+			borderColor={live(() => (hover() ? accent() : theme.line))}
 			onClick={props.onClick}
 			onPointerEnter={() => setHover(true)}
 			onPointerLeave={() => {
@@ -150,8 +149,8 @@ function Counter(): UIElement {
 			<text size={12} color={theme.textMuted}>
 				A reactive UI runtime without a webview
 			</text>
-			<text size={88} color={_(accent)}>
-				{_(() => String(count()))}
+			<text size={88} color={live(accent)}>
+				{live(() => String(count()))}
 			</text>
 			<row gap={10}>
 				<Button label="- 1" onClick={() => adjust(-1)} width={92} />
@@ -169,7 +168,7 @@ function EventLog(): UIElement {
 	return (
 		<column pad={16} gap={8} bg="#171722">
 			<text size={11} color={theme.textMuted}>
-				Event log - createStore + produce()
+				Event log - store setter
 			</text>
 			{() => {
 				// Builder escape: the full builder API works inside JSX.
@@ -183,7 +182,7 @@ function EventLog(): UIElement {
 					}
 					for (const entry of log.entries) {
 						ui.row({ gap: 8 }, () => {
-							ui.text(`#${entry.n}`, { size: 12, color: _(accent) });
+							ui.text(`#${entry.n}`, { size: 12, color: live(accent) });
 							ui.text(entry.label, { size: 12, color: theme.textPrimary });
 						});
 					}
@@ -296,7 +295,7 @@ function MandelbrotSurface(): UIElement {
 									(Date.now() - start) / 1000,
 									width,
 									height,
-									untrack(count) * 0.08,
+									inert(count) * 0.08,
 								]),
 							);
 							const encoder = device.createCommandEncoder();
@@ -340,7 +339,7 @@ function WebPanel(): UIElement {
 // Window
 // ---------------------------------------------------------------------------
 
-const [sizeLabel, setSizeLabel] = createSignal("");
+const [sizeLabel, setSizeLabel] = signal("");
 
 const uiWindow = await createUIWindow(
 	{
@@ -359,7 +358,7 @@ const uiWindow = await createUIWindow(
 
 		return (
 			<column grow={1}>
-				<Header sizeLabel={_(sizeLabel)} />
+				<Header sizeLabel={live(sizeLabel)} />
 				<Divider />
 				<row grow={1}>
 					<column grow={3}>

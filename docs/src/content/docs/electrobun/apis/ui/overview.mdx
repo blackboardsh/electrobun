@@ -5,14 +5,14 @@ description: "Electrobun UI concepts: windows, mounting, rendering, and input."
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and its APIs may change between releases.
+Warren is experimental and its APIs may change between releases.
 </Aside>
 
 Everything lives in the `electrobun/main/ui` entrypoint. It is import-gated:
 apps that never import it pay nothing for it.
 
 ```ts
-import { _, createSignal, ui, createUIWindow } from "electrobun/main/ui";
+import { live, signal, ui, createUIWindow } from "electrobun/main/ui";
 ```
 
 ## How rendering works
