@@ -47,12 +47,17 @@
 		"./bun/socket": "./dist/api/sdks/main/entries/socket.ts",
 		"./bun/tray": "./dist/api/sdks/main/entries/tray.ts",
 		"./bun/ui": "./dist/api/sdks/main/entries/ui.ts",
+		"./bun/ui/jsx-runtime": "./dist/api/sdks/main/ui/jsx-runtime.ts",
+		"./bun/ui/jsx-dev-runtime": "./dist/api/sdks/main/ui/jsx-dev-runtime.ts",
 		"./bun/updater": "./dist/api/sdks/main/entries/updater.ts",
 		"./bun/utils": "./dist/api/sdks/main/entries/utils.ts",
 		"./bun/webgpu": "./dist/api/sdks/main/entries/webgpu.ts",
 		"./bun/wgpu-view": "./dist/api/sdks/main/entries/wgpu-view.ts",
 		"./rpc": "./dist/api/sdks/main/entries/rpc.ts",
-		"./view": "./dist/api/browser/index.ts"
+		"./view": "./dist/api/browser/index.ts",
+		"./browser/ui": "./dist/api/browser/ui/index.ts",
+		"./browser/ui/jsx-runtime": "./dist/api/browser/ui/jsx-runtime.ts",
+		"./browser/ui/jsx-dev-runtime": "./dist/api/browser/ui/jsx-dev-runtime.ts"
 	},
 	"type": "module",
 	"homepage": "https://electrobun.dev",

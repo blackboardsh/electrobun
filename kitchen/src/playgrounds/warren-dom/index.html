@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>Warren DOM Playground</title>
+	<script src="views://playgrounds/warren-dom/index.js"></script>
+	<style>
+		* { box-sizing: border-box; margin: 0; padding: 0; }
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+			background: #16161e; color: #e4e4f0; padding: 24px;
+		}
+		#app { max-width: 640px; margin: 0 auto; }
+		h1 { font-size: 18px; margin-bottom: 4px; }
+		.hint { color: #8c8ca8; font-size: 12px; margin-bottom: 16px; }
+		section { background: #1b1b28; border: 1px solid #2c2c44; border-radius: 10px;
+		          padding: 14px; margin-bottom: 12px; }
+		section h2 { font-size: 13px; color: #8c8ca8; margin-bottom: 10px; }
+		button { background: #232336; color: #e4e4f0; border: 1px solid #3b3b58;
+		         border-radius: 7px; padding: 6px 14px; font-size: 13px; cursor: pointer;
+		         margin-right: 6px; }
+		button:hover { background: #2c2c44; }
+		input[type="text"] { background: #101018; color: #e4e4f0; border: 1px solid #3b3b58;
+		         border-radius: 7px; padding: 6px 10px; font-size: 13px; width: 240px; }
+		ul { list-style: none; }
+		li { padding: 5px 10px; border-radius: 6px; margin-bottom: 4px; background: #232336;
+		     display: flex; justify-content: space-between; font-size: 13px; }
+		li.hot { background: #3b2440; }
+		.count { font-size: 30px; color: #b18aff; font-weight: 600; }
+		#selftest { font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: 8px; }
+		#selftest.pass { background: #12331f; color: #4ade80; }
+		#selftest.fail { background: #3a1420; color: #f87171; }
+		dialog, .portal-card { position: fixed; top: 20%; left: 50%; transform: translateX(-50%);
+		     background: #232336; border: 1px solid #b18aff; border-radius: 12px;
+		     padding: 20px 28px; color: #e4e4f0; }
+	</style>
+</head>
+<body>
+	<div id="app"></div>
+</body>
+</html>

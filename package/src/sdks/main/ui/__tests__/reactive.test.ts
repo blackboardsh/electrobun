@@ -145,6 +145,23 @@ describe("scopes", () => {
 		expect(observed.length).toBe(3);
 	});
 
+	test("memo equals cut stops propagation: dependents skip equal values", () => {
+		const [items, setItems] = signal<string[]>(["a", "b"]);
+		let runs = 0;
+		createRoot(() => {
+			const empty = memo(() => items().length === 0);
+			effect(() => {
+				empty();
+				runs++;
+			});
+		});
+		expect(runs).toBe(1);
+		setItems(["b", "a"]); // memo recomputes, value unchanged -> no re-run
+		expect(runs).toBe(1);
+		setItems([]); // value flips -> dependent re-runs
+		expect(runs).toBe(2);
+	});
+
 	test("cleanup runs before every re-run, not only at disposal", () => {
 		const [count, setCount] = signal(0);
 		const events: string[] = [];

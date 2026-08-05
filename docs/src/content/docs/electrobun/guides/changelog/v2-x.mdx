@@ -80,6 +80,11 @@ webview, browser DOM, or compile step.
   inside visible `live()`/`memo()` scopes — plus JSX with control-flow
   components (`Show`, `For`, `Switch`/`Match`) and no added build tooling
   (Cottontail's built-in transpiler).
+- A DOM renderer, `electrobun/browser/ui`: the same Warren core and JSX
+  rendered into real DOM inside webviews — any HTML/SVG tag, keyed `For`
+  reconciliation over real nodes, `Portal`, explicit two-way inputs — so
+  main-process GPU chrome and webview documents share one model (and shared
+  store/model code runs unchanged on both sides).
 - A retained tree with flex-style layout, hit testing, and invalidation-only
   rendering — one instanced Dawn draw call per dirty frame, zero work while
   idle or hidden.

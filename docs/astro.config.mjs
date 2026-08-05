@@ -67,6 +67,7 @@ export default defineConfig({
                 { label: "Overview", link: "/electrobun/apis/ui/overview/" },
                 { label: "Components", link: "/electrobun/apis/ui/components/" },
                 { label: "Reactivity", link: "/electrobun/apis/ui/reactivity/" },
+                { label: "Browser (DOM)", link: "/electrobun/apis/ui/browser-dom/" },
                 { label: "UI Tag", link: "/electrobun/apis/ui/ui-tag/" },
               ],
             },

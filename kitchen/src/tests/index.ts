@@ -43,6 +43,7 @@ import { devtoolsLayoutTests } from "./interactive/devtools-layout.test";
 import { cottontailUiTests } from "./interactive/cottontail-ui.test";
 import { uiTagTests } from "./interactive/ui-tag.test";
 import { uiInputEventTests } from "./interactive/ui-input-events.test";
+import { uiDomTests } from "./interactive/ui-dom.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -87,6 +88,7 @@ export const allTests: TestDefinition[] = [
   ...cottontailUiTests,
   ...uiTagTests,
   ...uiInputEventTests,
+  ...uiDomTests,
 ];
 
 // Export by category for selective running

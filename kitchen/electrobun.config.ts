@@ -114,9 +114,14 @@ export default {
 			"playgrounds/wgpu-tag": {
 				entrypoint: "src/playgrounds/wgpu-tag/index.ts",
 			},
+			"playgrounds/warren-dom": {
+				entrypoint: "src/playgrounds/warren-dom/index.tsx",
+			},
 		},
 		copy: {
 			"src/zig-view/index.html": "views/zig/index.html",
+			"src/playgrounds/warren-dom/index.html":
+				"views/playgrounds/warren-dom/index.html",
 			"src/test-runner/index.html": "views/test-runner/index.html",
 			"src/test-runner/index.css": "views/test-runner/index.css",
 			"src/test-harness/index.html": "views/test-harness/index.html",

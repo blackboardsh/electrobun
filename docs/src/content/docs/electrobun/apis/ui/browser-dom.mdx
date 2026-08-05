@@ -1,0 +1,150 @@
+---
+title: "Warren in the Browser (DOM)"
+description: "The DOM renderer: the same Warren reactivity and JSX, rendered into real DOM inside a webview."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Warren is experimental. APIs may change between releases.
+</Aside>
+
+`electrobun/browser/ui` is Warren's DOM renderer. It shares the exact same
+reactivity core and JSX semantics as `electrobun/main/ui` — components run
+once, reactivity is explicit via `live()`, control flow is
+`For`/`Show`/`Switch`/`Match` — but renders into real DOM nodes inside a
+webview (or any web page). One mental model across your whole app: GPU
+chrome in the main process, DOM documents in webviews, the same signals and
+stores in both.
+
+There is still no compiler: Electrobun's view bundler transpiles `.tsx`
+natively. Point TypeScript at the DOM runtime (type-checking configuration
+only):
+
+```json
+// tsconfig.json for your view code
+{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/browser/ui" } }
+```
+
+If the same project also contains main-process Warren code, use a per-file
+pragma instead of the global setting:
+
+```tsx
+/** @jsxImportSource electrobun/browser/ui */
+```
+
+## Mounting
+
+```tsx
+import { live, signal, render } from "electrobun/browser/ui";
+
+function Counter() {
+  const [count, setCount] = signal(0);
+  return (
+    <div class="counter">
+      <output>{live(() => `Count: ${count()}`)}</output>
+      <button onClick={() => setCount((c) => c + 1)}>+1</button>
+    </div>
+  );
+}
+
+const dispose = render(() => <Counter />, document.getElementById("app")!);
+```
+
+`render(app, container)` mounts the app and returns a dispose function that
+removes everything Warren created (the container's other content is left
+alone).
+
+## Elements and props
+
+Any HTML or SVG tag works — the runtime never enumerates elements; a tag
+becomes `document.createElement(tag)` (`createElementNS` inside `<svg>`).
+Prop handling:
+
+| Prop | Behavior |
+| --- | --- |
+| `class` / `className` | sets `className` (attribute on SVG) |
+| `classList` | object of class names to booleans; toggles each |
+| `style` | string (`cssText`) or object (camelCase keys, `--vars` supported) |
+| `value`, `checked`, `innerHTML`, ... | set as element properties |
+| `disabled`, other booleans | boolean attributes (`true` sets, `false`/`null` removes) |
+| `onClick`, `onInput`, `on...` | `addEventListener(name.slice(2).toLowerCase())` |
+| `ref` | `ref={(el) => ...}` called with the created element |
+| anything else | `setAttribute` (name passed through — SVG's `viewBox` works) |
+
+Reactivity is explicit, exactly like the GPU renderer: `class={live(() =>
+...)}` updates in place; `class={value}` is static; a bare function in a
+value position is an error.
+
+```tsx
+<div
+  classList={live(() => ({ active: isActive(), busy: pending() }))}
+  style={{ marginTop: "8px", "--accent": "#b18aff" }}
+/>
+```
+
+Text inputs are explicit two-way:
+
+```tsx
+<input value={live(name)} onInput={(e) => setName(e.target.value)} />
+```
+
+## Control flow
+
+`Show`, `For`, `Switch`/`Match` behave identically to the GPU renderer: a
+`live()` prop reconciles on change, a plain value is a frozen snapshot.
+`For` reconciles keyed rows against real DOM nodes — reordering moves the
+same elements (scroll position, focus, and animation state survive):
+
+```tsx
+<For each={live(() => state.rows.slice())} key={(row) => row.id}
+     fallback={<p>No rows.</p>}>
+  {(row, index) => <li classList={live(() => ({ first: index() === 0 }))}>{row.label}</li>}
+</For>
+```
+
+Regions are delimited by comment nodes, so conditional and keyed content
+works inside any parent (`<tbody>`, flex rows) without wrapper elements.
+
+## Portal
+
+`Portal` renders children into another parent — `document.body` by default,
+or `mount` — while keeping reactive ownership, so they're torn down with the
+owning scope:
+
+```tsx
+<Show when={live(modalOpen)}>
+  <Portal>
+    <div class="modal">...</div>
+  </Portal>
+</Show>
+```
+
+## Escape hatch
+
+A bare function child runs imperatively at that point in the tree;
+`currentParent()` returns the element it would attach into, and a returned
+element mounts. Use it to integrate DOM libraries (editors, terminals) that
+manage their own subtree:
+
+```tsx
+import { cleanup, currentParent } from "electrobun/browser/ui";
+
+<div class="terminal-host">
+  {() => {
+    const host = currentParent() as HTMLElement;
+    const term = attachTerminal(host); // any third-party DOM library
+    cleanup(() => term.dispose());
+  }}
+</div>
+```
+
+## Sharing code with the main process
+
+The reactivity primitives (`signal`, `store`, `live`, `memo`, `inert`,
+`cleanup`, `batch`) are the same implementation in both entries — model and
+store modules written against them run unchanged in the main process and in
+views. Only the element vocabulary differs: `box`/`row`/`column`/`text` on
+the GPU renderer, HTML on the DOM renderer.
+
+See [Warren reactivity](/electrobun/apis/ui/reactivity/) for the full
+semantics — everything there applies verbatim in the browser.
