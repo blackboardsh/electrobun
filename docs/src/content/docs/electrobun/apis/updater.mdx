@@ -4,6 +4,12 @@ description: "Check, download, apply, and observe Electrobun application updates
 ---
 import { Aside } from "@astrojs/starlight/components";
 
+<Aside type="note">
+The Updater API is available in the Cottontail and Bun runtimes only. Native
+main processes (Zig, Rust, Go, Odin) currently ship without an update API —
+see [Native main process](/electrobun/guides/native-main-process/).
+</Aside>
+
 Hutch production and canary builds create update metadata, compressed full
 bundles, and optional delta patches. Publish the artifact directory to a static
 host and configure its public base URL:

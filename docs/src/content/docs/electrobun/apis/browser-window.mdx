@@ -2,10 +2,15 @@
 title: "BrowserWindow"
 description: "Create and control native Electrobun windows."
 ---
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
-`BrowserWindow` creates a native window and its initial `BrowserView`. Import it
-from the main-process SDK:
+Every runtime creates native windows through the same core. In TypeScript
+(Cottontail/Bun), `BrowserWindow` creates a window and its initial
+[`BrowserView`](/electrobun/apis/browser-view/); the native SDKs create
+windows and webviews as two explicit calls.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
@@ -20,8 +25,108 @@ const win = new BrowserWindow({
 });
 ```
 
-Omitting `frame.x` or `frame.y` centers the window. The instance is available
-immediately; `win.webview` is the `BrowserView` created for its content.
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "My app",
+  url: "views://mainview/index.html",
+  frame: {
+    width: 960,
+    height: 640,
+  },
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const window_id = try core.createWindow(.{
+    .title = "My app",
+    .frame = .{ .x = 160, .y = 100, .width = 960, .height = 640 },
+    .callbacks = .{ .resize = onResize, .should_close = onShouldClose },
+});
+
+const webview_id = try core.createWebview(.{
+    .window_id = window_id,
+    .url = "views://mainview/index.html",
+    .frame = .{ .x = 0, .y = 0, .width = 960, .height = 640 },
+    .callbacks = .{ .decide_navigation = electrobun.allowAllNavigation },
+});
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let mut window_options =
+    WindowOptions::new("My app", Rect::new(160.0, 100.0, 960.0, 640.0));
+window_options.callbacks = WindowCallbacks {
+    close: Some(main_window_closed),
+    ..WindowCallbacks::default()
+};
+let window_id = core.create_window(window_options)?;
+
+let webview_options = WebviewOptions::new(
+    window_id,
+    "views://mainview/index.html",
+    Rect::new(0.0, 0.0, 960.0, 640.0),
+);
+let webview_id = core.create_webview(webview_options)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+windowOptions := electrobun.NewWindowOptions(
+    "My app",
+    electrobun.NewRect(160, 100, 960, 640),
+)
+windowOptions.Callbacks = electrobun.WindowCallbacks{
+    Close: func(uint32) { _ = core.StopEventLoop() },
+}
+windowID, err := core.CreateWindow(windowOptions)
+
+webviewOptions := electrobun.NewWebviewOptions(
+    windowID,
+    "views://mainview/index.html",
+    electrobun.NewRect(0, 0, 960, 640),
+)
+webviewID, err := core.CreateWebview(webviewOptions)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+window_options := electrobun.defaultWindowOptions("My app")
+window_options.frame = {x = 160, y = 100, width = 960, height = 640}
+window_id, window_err := electrobun.createWindow(core, window_options)
+
+webview_options := electrobun.defaultWebviewOptions(window_id)
+webview_options.url = "views://mainview/index.html"
+webview_options.frame = {x = 0, y = 0, width = 960, height = 640}
+webview_id, webview_err := electrobun.createWebview(core, webview_options)
+```
+
+</TabItem>
+</Tabs>
+
+In TypeScript, omitting `frame.x` or `frame.y` centers the window, the
+instance is available immediately, and `win.webview` is the `BrowserView`
+created for its content. Native window/webview creation and its required
+lifecycle setup (core loading, the blocking main thread, the webview
+runtime) are covered end to end in the per-runtime
+[Hello World walkthroughs](/electrobun/guides/hello-world/).
+
+The rest of this page documents the TypeScript class. Every window
+operation below also exists in the native SDKs as a `Core` call keyed by
+window id — see [the mapping](#native-sdks) at the end of the page.
 
 ## Constructor options
 
@@ -227,3 +332,28 @@ The current public control surface is:
 - Content: `setPageZoom`, `getPageZoom`, `setSpellCheck`, and the `webview`
   property.
 - Metadata and events: `setTitle`, `on`, `ptr`, and static `getById`.
+
+## Native SDKs
+
+Zig, Rust, Go, and Odin expose the same window operations procedurally on
+`Core`, keyed by the `u32` window id `createWindow` returns. The verb set
+matches the class methods one-to-one; only naming style differs per
+language:
+
+| TypeScript | Zig / Odin | Rust | Go |
+| --- | --- | --- | --- |
+| `win.setTitle(t)` | `setWindowTitle(id, t)` | `set_window_title(id, t)` | `SetWindowTitle(id, t)` |
+| `win.show()` / `hide()` / `isVisible()` | `showWindow(id, activate)` / `hideWindow` / `isWindowVisible` | `show_window` / `hide_window` / `is_window_visible` | `ShowWindow` / `HideWindow` / `IsWindowVisible` |
+| `win.minimize()` ... `isMaximized()` | `minimizeWindow` / `restoreWindow` / `maximizeWindow` / `unmaximizeWindow` + `is...` | snake_case equivalents | CamelCase equivalents |
+| `win.setFullScreen(b)` / `setAlwaysOnTop(b)` / `setVisibleOnAllWorkspaces(b)` | `setWindowFullScreen` etc. | `set_window_full_screen` etc. | `SetWindowFullScreen` etc. |
+| `win.setPosition` / `setSize` / `setFrame` / `getFrame` / `center` | `setWindowPosition` / `setWindowSize` / `setWindowFrame` / `getWindowFrame` / `centerWindow` | snake_case | CamelCase |
+| `win.setWindowButtonPosition` / `get...` | same names (`core`-level) | snake_case | CamelCase |
+| `win.close()` / `requestClose()` | `closeWindow` / `requestWindowClose` | `close_window` / `request_window_close` | `CloseWindow` / `RequestWindowClose` |
+| `win.on("resize", ...)` | `WindowCallbacks` passed to `createWindow` (`close`, `should_close`, `move`, `resize`, `focus`, `blur`, `key`) | `WindowCallbacks` (same slots) | `WindowCallbacks` (same slots) |
+
+Zig and Odin additionally ship an optional `WindowRegistry` /
+`BrowserWindowRef` layer covering `getById`, close/request-close, frame,
+center, and button position. Not available natively: `setPageZoom` /
+`setSpellCheck` live on the webview id instead
+(`setWebviewPageZoom`, `setWebviewSpellCheck`), and there is no event
+emitter — events are the C callbacks registered at creation.

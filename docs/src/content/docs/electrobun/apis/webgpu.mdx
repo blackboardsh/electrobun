@@ -2,10 +2,19 @@
 title: "WebGPU"
 description: "Render and compute with the native Dawn WebGPU implementation."
 ---
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Electrobun can bundle Dawn and expose WebGPU to Bun and Cottontail main
 processes. It supports native GPU windows, WGPU surfaces embedded in webview
 layouts, compute workloads, and direct access to Dawn's C API.
+
+<Aside type="note">
+The TypeScript adapter API on this page — `webgpu.createContext()`,
+`webgpu.navigator.requestAdapter()`, `GpuWindow`, the canvas shim, and the
+three.js/Babylon integrations — is available in the Cottontail and Bun
+runtimes only. Native main processes (Zig, Rust, Go, Odin) use the SDK-level
+path described in [Native WGPU views](#native-wgpu-views).
+</Aside>
 
 ## Enable Dawn
 
@@ -112,7 +121,101 @@ data-oriented particles, fluid simulation, soft-body physics, cellular
 materials, and procedural tree generation. Each demonstrates the correct
 SDK-specific surface bridge and lifecycle.
 
+## Native WGPU views
+
+The native SDKs create a WGPU view directly with `createWGPUView`, load the
+bundled Dawn library, and bootstrap instance, surface, adapter, and device in
+one call keyed by the WGPU view id.
+
+<Tabs syncKey="runtime">
+<TabItem label="Zig">
+
+```zig
+const wgpu_view_id = try core.createWGPUView(.{
+    .window_id = window_id,
+    .frame = .{ .x = 0, .y = 0, .width = 640, .height = 420 },
+});
+
+var native = try electrobun.WgpuNative.load(allocator);
+defer native.close();
+const context = try electrobun.WgpuContext.createForWgpuView(core, &native, wgpu_view_id);
+const queue = context.getQueue(&native);
+
+// Per-frame surface calls are marshaled to the main thread:
+try core.wgpuSurfaceConfigureMainThread(context.surface_ptr, config_ptr);
+try core.wgpuSurfaceGetCurrentTextureMainThread(context.surface_ptr, surface_texture_ptr);
+_ = try core.wgpuSurfacePresentMainThread(context.surface_ptr);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let wgpu_view_id = core.create_wgpu_view(WGPUViewOptions::new(
+    window_id,
+    Rect::new(0.0, 0.0, 640.0, 420.0),
+))?;
+
+let native = WgpuNative::load()?;
+let context = WgpuContext::create_for_wgpu_view(core, &native, wgpu_view_id)?;
+let queue = context.get_queue(&native)?;
+
+// Per-frame surface calls are marshaled to the main thread:
+core.wgpu_surface_configure_main_thread(context.surface_ptr, config_ptr)?;
+core.wgpu_surface_get_current_texture_main_thread(context.surface_ptr, surface_texture_ptr)?;
+core.wgpu_surface_present_main_thread(context.surface_ptr)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+wgpuViewID, err := core.CreateWGPUView(electrobun.NewWGPUViewOptions(
+    windowID,
+    electrobun.NewRect(0, 0, 640, 420),
+))
+
+native, err := electrobun.LoadWgpuNative()
+context, err := electrobun.CreateWgpuContextForWGPUView(core, native, wgpuViewID)
+queue, err := context.GetQueue(native)
+
+// Per-frame surface calls are marshaled to the main thread:
+_ = core.WgpuSurfaceConfigureMainThread(context.Surface, configPtr)
+_ = core.WgpuSurfaceGetCurrentTextureMainThread(context.Surface, surfaceTexturePtr)
+_, _ = core.WgpuSurfacePresentMainThread(context.Surface)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+wgpu_view_options := electrobun.defaultWGPUViewOptions(window_id)
+wgpu_view_options.frame = {x = 0, y = 0, width = 640, height = 420}
+wgpu_view_id, view_err := electrobun.createWGPUView(core, wgpu_view_options)
+
+native, native_err := electrobun.wgpuNativeLoad()
+ctx, ctx_err := electrobun.createForWgpuView(core, &native, wgpu_view_id)
+queue := electrobun.getQueue(ctx, &native)
+
+// Per-frame surface calls are marshaled to the main thread:
+_ = electrobun.wgpuSurfaceConfigureMainThread(core, ctx.surface_ptr, &config)
+_ = electrobun.wgpuSurfaceGetCurrentTextureMainThread(core, ctx.surface_ptr, &surface_texture)
+_, _ = electrobun.wgpuSurfacePresentMainThread(core, ctx.surface_ptr)
+```
+
+</TabItem>
+</Tabs>
+
+Surface configure, texture acquisition, and present must go through the
+`Core`'s main-thread-marshaled calls shown above. All other Dawn functions
+(pipelines, encoders, buffers, queue submission) are resolved by the app
+directly from the loaded Dawn library — the native SDKs do not wrap the full
+`webgpu.h` API. A WGPU view id can also come from an `<electrobun-wgpu>`
+element in a webview, sent to the main process over the bridge.
+
 ## Canvas Shim
+
+<Aside type="note">Cottontail/Bun only.</Aside>
 
 Libraries that expect a browser-like canvas can use Electrobun's maintained
 canvas shim instead of recreating a partial DOM object. Install the WebGPU

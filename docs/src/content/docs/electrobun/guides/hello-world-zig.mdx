@@ -1,0 +1,224 @@
+---
+title: "Hello World (Zig)"
+description: "Build a minimal Electrobun app with a Zig main process from scratch."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+This guide creates a minimal Electrobun app with a **Zig** main process. It
+mirrors the [TypeScript walkthrough](/electrobun/guides/hello-world/) — same
+project shape, same webview, but the window and webview are created from Zig
+instead of Cottontail. The faster path is
+`hutch electrobun init my-app --template=zig-wgpu`.
+
+## 1. Create the project
+
+```bash
+mkdir hello-zig
+cd hello-zig
+```
+
+Create `package.json`:
+
+```json
+{
+  "name": "hello-zig",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build": "hutch electrobun build --env=production"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
+```
+
+Install dependencies:
+
+```bash
+hutch install
+```
+
+## 2. Add a webview
+
+Create `src/mainview/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Hello Electrobun</title>
+  </head>
+  <body>
+    <h1>Hello from Electrobun</h1>
+  </body>
+</html>
+```
+
+## 3. Add the main process
+
+Create `src/zig/main.zig`:
+
+```zig
+const std = @import("std");
+const electrobun = @import("electrobun");
+
+fn createUi(core: *electrobun.Core, bundle_paths: *const electrobun.BundlePaths) void {
+    // Give the native event loop a beat to start before creating UI.
+    std.time.sleep(150 * std.time.ns_per_ms);
+
+    // Required before any createWebview: loads the bundled preload scripts.
+    core.configureWebviewRuntimeFromExecutableDir(bundle_paths, 0) catch |err| {
+        std.debug.print("failed to configure webview runtime: {s}\n", .{@errorName(err)});
+        return;
+    };
+
+    const window_id = core.createWindow(.{
+        .title = "Hello Electrobun",
+        .frame = .{ .x = 160, .y = 100, .width = 800, .height = 600 },
+    }) catch |err| {
+        std.debug.print("failed to create window: {s}\n", .{@errorName(err)});
+        return;
+    };
+
+    _ = core.createWebview(.{
+        .window_id = window_id,
+        .renderer = .native,
+        .url = "views://mainview/index.html",
+        .frame = .{ .x = 0, .y = 0, .width = 800, .height = 600 },
+        .callbacks = .{
+            .decide_navigation = electrobun.allowAllNavigation,
+            .event = electrobun.noopWebviewEvent,
+            .event_bridge = electrobun.noopWebviewPostMessage,
+        },
+        .sandbox = false,
+    }) catch |err| {
+        std.debug.print("failed to create webview: {s}\n", .{@errorName(err)});
+        core.closeWindow(window_id) catch {};
+    };
+}
+
+pub fn main() !void {
+    const allocator = std.heap.c_allocator;
+
+    var core = try electrobun.Core.load(allocator);
+    defer core.close();
+
+    var bundle_paths = try electrobun.resolveBundlePaths(allocator);
+    defer bundle_paths.deinit(allocator);
+
+    var owned_app_info = try electrobun.resolveAppInfoFromBundle(allocator, &bundle_paths);
+    defer owned_app_info.deinit(allocator);
+    const app_info = owned_app_info.borrowed();
+
+    // runMainThread blocks the main thread, so build UI from a worker thread.
+    const ui_thread = try std.Thread.spawn(.{}, createUi, .{ &core, &bundle_paths });
+    ui_thread.detach();
+
+    try core.runMainThread(app_info);
+}
+```
+
+There is no `build.zig` in the project. Hutch generates one at build time that
+wires the SDK up as a module named `electrobun`, so `@import("electrobun")`
+just works. It also links libc, which is why `std.heap.c_allocator` is
+available.
+
+## 4. Configure the build
+
+Create `electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "hello-zig",
+    identifier: "hellozig.example.dev",
+    version: "0.0.1",
+  },
+  build: {
+    mainProcess: "zig",
+    zig: {
+      entrypoint: "src/zig/main.zig",
+    },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+## 5. Run the app
+
+```bash
+hutch run dev
+```
+
+Hutch builds and launches the app, then rebuilds it when watched source files
+change. Press Ctrl+C to stop it.
+
+<Aside type="note">
+The app only works from a hutch-built bundle layout — the SDK loads
+`libElectrobunCore` from the directory next to the executable and reads
+`version.json` and the preload scripts from `Resources/`. Don't try to run the
+binary produced by a plain `zig build` on its own.
+</Aside>
+
+## How this differs from TypeScript
+
+The Zig SDK is a thin, allocator-explicit wrapper over the native core, so the
+main process makes some steps explicit that Cottontail handles for you:
+
+- **Dynamic core loading.** `electrobun.Core.load(allocator)` opens
+  `libElectrobunCore` (`.dylib` / `.so` / `ElectrobunCore.dll`) from the
+  executable's directory at runtime and resolves its symbols. Nothing is
+  linked at build time. Almost every API is a method on the returned `Core`.
+- **App identity comes from the bundle.** `resolveBundlePaths` computes the
+  executable and `Resources/` directories, and `resolveAppInfoFromBundle`
+  parses `Resources/version.json` for the app's `identifier`, `name`, and
+  `channel` — identity is read at runtime, not baked in from config at
+  compile time.
+- **`configureWebviewRuntimeFromExecutableDir` before webviews.** It loads the
+  bundled `preload-full.js` / `preload-sandboxed.js` from `Resources/` and
+  hands them to the core. Skip it and your webviews are missing their preload
+  and bridge scripts.
+- **`runMainThread` blocks.** It runs the native platform event loop on the
+  main thread until the app quits, so windows and webviews are created from a
+  spawned worker thread. The template sleeps ~150ms first to let the loop
+  start; the core marshals UI calls back to the main thread internally.
+- **Error handling is Zig-native.** Every fallible call returns
+  `error.ElectrobunCoreFailure`, with the real message printed to stderr as
+  `[electrobun-zig] core error: ...` — handle it with `catch` as usual.
+- **Some TS APIs have no Zig equivalent.** There is no typed RPC layer (the
+  bridge is raw JSON via `sendHostMessageToWebview` and
+  `popNextQueuedHostMessage`), no updater, and no typed menu builders. See
+  [Native main process](/electrobun/guides/native-main-process/) for the full
+  comparison.
+
+To start from a working Zig project instead of an empty folder:
+
+```bash
+hutch electrobun init my-app --template=zig-wgpu
+```
+
+## Toolchain
+
+Electrobun pins Zig **0.13.0**. Hutch uses a system Zig only on an exact
+version match; otherwise it downloads the pinned toolchain into
+`~/.dash/toolchains/zig/0.13.0/<platform>` and reuses it across projects. The
+compiler is not bundled into the finished app.
+
+Native main processes build for the host OS/arch only — there is no
+cross-compilation, so use native CI runners for a release matrix. Windows
+targets are x64.
+
+Next: [Native main process](/electrobun/guides/native-main-process/) for the
+runtime comparison and deeper build details, and the
+[main process APIs](/electrobun/apis/main/) reference.

@@ -1,17 +1,25 @@
 ---
-title: "Hello World"
-description: "Build a minimal Cottontail-based Electrobun app from scratch."
+title: "Hello World (Bun)"
+description: "Build a minimal Electrobun app with the Bun main-process runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-This guide creates a minimal Electrobun app with **Cottontail** — the
-default TypeScript main process. Every runtime has its own walkthrough:
-[Bun](/electrobun/guides/hello-world-bun/),
-[Zig](/electrobun/guides/hello-world-zig/),
-[Rust](/electrobun/guides/hello-world-rust/),
-[Go](/electrobun/guides/hello-world-go/), and
-[Odin](/electrobun/guides/hello-world-odin/). The faster path is
-`hutch electrobun init my-app --template=hello-world`.
+This guide creates a minimal Electrobun app with **Bun** as the main-process
+runtime. The steps mirror the
+[Cottontail Hello World](/electrobun/guides/hello-world/) — the TypeScript
+SDK is identical for both JavaScript runtimes — only the
+`electrobun.config.ts` selects Bun. See
+[Main Process Runtimes](/electrobun/guides/native-main-process/) for every
+runtime option.
+
+## When to choose Bun
+
+Cottontail is the default main process: it executes TypeScript and supports
+the Node.js and Bun-compatible APIs used by Electrobun applications. Choose
+Bun only when the application intentionally depends on the actual Bun
+runtime — Bun apps get the real Bun API surface, and the two runtimes will
+diverge over time. Hutch still installs packages, bundles source, and
+packages the app in either configuration.
 
 ## 1. Create the project
 
@@ -46,12 +54,6 @@ Install dependencies:
 ```bash
 hutch install
 ```
-
-<Aside type="note">
-The `electrobun/main` import path and `@types/bun` package are compatibility
-names. Cottontail executes this main process unless the config explicitly
-selects Bun.
-</Aside>
 
 ## 2. Add a webview
 
@@ -90,9 +92,17 @@ new BrowserWindow({
 });
 ```
 
+<Aside type="note">
+The `electrobun/main` import path is the same TypeScript Electrobun SDK used
+with Cottontail. The main-process API is documented in the
+[Main API reference](/electrobun/apis/main/).
+</Aside>
+
 ## 4. Configure the build
 
-Create `electrobun.config.ts`:
+Create `electrobun.config.ts`. This is the step that selects the Bun runtime:
+`build.mainProcess` is `"bun"` and the entrypoint moves to the `bun` config
+field.
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -104,8 +114,8 @@ export default {
     version: "0.0.1",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
     copy: {

@@ -2,7 +2,7 @@
 title: "Utils"
 description: "Cross-platform application, dialog, clipboard, and path utilities."
 ---
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Import utilities as the `Utils` namespace from the main-process SDK:
 
@@ -10,7 +10,13 @@ Import utilities as the `Utils` namespace from the main-process SDK:
 import { Utils } from "electrobun/main";
 ```
 
+In the native SDKs (Zig, Rust, Go, Odin), the same operations are exposed
+directly on `Core`. The tabs below show the native calls where they exist.
+
 ## Files and external applications
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Utils } from "electrobun/main";
@@ -25,6 +31,69 @@ void openedUrl;
 void openedPath;
 ```
 
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Utils } from "electrobun/main";
+
+const openedUrl = Utils.openExternal("https://example.com");
+const openedPath = Utils.openPath("/absolute/path/to/report.pdf");
+
+Utils.showItemInFolder("/absolute/path/to/report.pdf");
+Utils.moveToTrash("/absolute/path/to/old-report.pdf");
+
+void openedUrl;
+void openedPath;
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const opened_url = try core.openExternal("https://example.com");
+const opened_path = try core.openPath("/absolute/path/to/report.pdf");
+
+try core.showItemInFolder("/absolute/path/to/report.pdf");
+const trashed = try core.moveToTrash("/absolute/path/to/old-report.pdf");
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let opened_url = core.open_external("https://example.com")?;
+let opened_path = core.open_path("/absolute/path/to/report.pdf")?;
+
+core.show_item_in_folder("/absolute/path/to/report.pdf")?;
+let trashed = core.move_to_trash("/absolute/path/to/old-report.pdf")?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+openedURL, err := core.OpenExternal("https://example.com")
+openedPath, err := core.OpenPath("/absolute/path/to/report.pdf")
+
+err = core.ShowItemInFolder("/absolute/path/to/report.pdf")
+trashed, err := core.MoveToTrash("/absolute/path/to/old-report.pdf")
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+opened_url := electrobun.openExternal(core, "https://example.com")
+opened_path := electrobun.openPath(core, "/absolute/path/to/report.pdf")
+
+_ = electrobun.showItemInFolder(core, "/absolute/path/to/report.pdf")
+trashed := electrobun.moveToTrash(core, "/absolute/path/to/old-report.pdf")
+```
+
+</TabItem>
+</Tabs>
+
 - `openExternal(url)` opens HTTP, HTTPS, mail, and custom-scheme URLs with the
   system handler and returns whether the request succeeded.
 - `openPath(path)` opens a file or directory with its default application and
@@ -37,6 +106,9 @@ Use absolute filesystem paths for filesystem operations. `views://` URLs are
 for webview content, not native file APIs.
 
 ## File dialog
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Utils } from "electrobun/main";
@@ -54,11 +126,102 @@ for (const path of paths) {
 }
 ```
 
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Utils } from "electrobun/main";
+
+const paths = await Utils.openFileDialog({
+  startingFolder: "~/Documents",
+  allowedFileTypes: "png,jpg,jpeg",
+  canChooseFiles: true,
+  canChooseDirectory: false,
+  allowsMultipleSelection: true,
+});
+
+for (const path of paths) {
+  console.log("Selected", path);
+}
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const paths = try core.openFileDialogPaths(.{
+    .starting_folder = "~/Documents",
+    .allowed_file_types = "png,jpg,jpeg",
+    .can_choose_files = true,
+    .can_choose_directory = false,
+    .allows_multiple_selection = true,
+});
+defer core.freeDialogPaths(paths);
+
+for (paths) |path| {
+    std.debug.print("Selected {s}\n", .{path});
+}
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let paths_json = core.open_file_dialog(OpenFileDialogOptions {
+    starting_folder: "~/Documents",
+    allowed_file_types: "png,jpg,jpeg",
+    can_choose_files: true,
+    can_choose_directory: false,
+    allows_multiple_selection: true,
+})?;
+// paths_json is a JSON array string of the selected paths.
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+pathsJSON, err := core.OpenFileDialog(electrobun.OpenFileDialogOptions{
+    StartingFolder:          "~/Documents",
+    AllowedFileTypes:        "png,jpg,jpeg",
+    CanChooseFiles:          true,
+    CanChooseDirectory:      false,
+    AllowsMultipleSelection: true,
+})
+// pathsJSON is a JSON array string of the selected paths.
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+options := electrobun.defaultOpenFileDialogOptions()
+options.starting_folder = "~/Documents"
+options.allowed_file_types = "png,jpg,jpeg"
+options.can_choose_directory = false
+
+paths, err := electrobun.openFileDialogPaths(core, options)
+defer electrobun.freeDialogPaths(core, paths)
+
+for path in paths {
+	fmt.printfln("Selected %s", path)
+}
+```
+
+</TabItem>
+</Tabs>
+
 `openFileDialog()` resolves to `string[]`. An empty array means the user did not
 select a path. Every option is optional; current defaults allow files,
-directories, and multiple selections.
+directories, and multiple selections. In Zig and Odin, `openFileDialogPaths`
+returns a parsed path list (release it with `freeDialogPaths`); Rust and Go
+return the raw JSON array string from `open_file_dialog` / `OpenFileDialog`.
+None of the native SDKs currently exposes a save dialog.
 
 ## Message boxes
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Utils } from "electrobun/main";
@@ -78,10 +241,113 @@ if (response === 0) {
 }
 ```
 
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Utils } from "electrobun/main";
+
+const { response } = await Utils.showMessageBox({
+  type: "question",
+  title: "Delete file?",
+  message: "This action cannot be undone.",
+  detail: "The file will be moved to the system trash.",
+  buttons: ["Delete", "Cancel"],
+  defaultId: 1,
+  cancelId: 1,
+});
+
+if (response === 0) {
+  console.log("Delete confirmed");
+}
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const response = try core.showMessageBox(.{
+    .box_type = "question",
+    .title = "Delete file?",
+    .message = "This action cannot be undone.",
+    .detail = "The file will be moved to the system trash.",
+    .buttons = &.{ "Delete", "Cancel" },
+    .default_id = 1,
+    .cancel_id = 1,
+});
+
+if (response == 0) {
+    // Delete confirmed
+}
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let response = core.show_message_box(MessageBoxOptions {
+    box_type: "question",
+    title: "Delete file?",
+    message: "This action cannot be undone.",
+    detail: "The file will be moved to the system trash.",
+    buttons: &["Delete", "Cancel"],
+    default_id: 1,
+    cancel_id: 1,
+})?;
+
+if response == 0 {
+    // Delete confirmed
+}
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+response, err := core.ShowMessageBox(electrobun.MessageBoxOptions{
+    BoxType:   "question",
+    Title:     "Delete file?",
+    Message:   "This action cannot be undone.",
+    Detail:    "The file will be moved to the system trash.",
+    Buttons:   []string{"Delete", "Cancel"},
+    DefaultID: 1,
+    CancelID:  1,
+})
+
+if response == 0 {
+    // Delete confirmed
+}
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+options := electrobun.defaultMessageBoxOptions()
+options.box_type = "question"
+options.title = "Delete file?"
+options.message = "This action cannot be undone."
+options.detail = "The file will be moved to the system trash."
+options.buttons = {"Delete", "Cancel"}
+options.default_id = 1
+options.cancel_id = 1
+
+response, err := electrobun.showMessageBox(core, options)
+if response == 0 {
+	// Delete confirmed
+}
+```
+
+</TabItem>
+</Tabs>
+
 The response is the zero-based index of the selected button. Supported types
 are `info`, `warning`, `error`, and `question`.
 
 ## Notifications
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Utils } from "electrobun/main";
@@ -94,10 +360,78 @@ Utils.showNotification({
 });
 ```
 
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Utils } from "electrobun/main";
+
+Utils.showNotification({
+  title: "Export complete",
+  subtitle: "Quarterly report",
+  body: "The PDF is ready.",
+  silent: false,
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+try core.showNotification(.{
+    .title = "Export complete",
+    .subtitle = "Quarterly report",
+    .body = "The PDF is ready.",
+    .silent = false,
+});
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+core.show_notification(NotificationOptions {
+    title: "Export complete",
+    subtitle: "Quarterly report",
+    body: "The PDF is ready.",
+    silent: false,
+})?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+err := core.ShowNotification(electrobun.NotificationOptions{
+    Title:    "Export complete",
+    Subtitle: "Quarterly report",
+    Body:     "The PDF is ready.",
+    Silent:   false,
+})
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+err := electrobun.showNotification(core, electrobun.NotificationOptions{
+	title    = "Export complete",
+	subtitle = "Quarterly report",
+	body     = "The PDF is ready.",
+	silent   = false,
+})
+```
+
+</TabItem>
+</Tabs>
+
 `title` is required. `subtitle` uses the platform's closest available
 presentation outside macOS.
 
 ## Clipboard
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Utils } from "electrobun/main";
@@ -117,8 +451,81 @@ void image;
 void formats;
 ```
 
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Utils } from "electrobun/main";
+
+Utils.clipboardWriteText("Hello from Electrobun");
+const text = Utils.clipboardReadText();
+
+const png = new Uint8Array();
+Utils.clipboardWriteImage(png);
+const image = Utils.clipboardReadImage();
+
+const formats = Utils.clipboardAvailableFormats();
+Utils.clipboardClear();
+
+void text;
+void image;
+void formats;
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+try core.clipboardWriteText("Hello from Electrobun");
+const text = try core.clipboardReadText(); // ?[]u8, null when empty
+
+const formats = try core.clipboardAvailableFormatsCsv();
+try core.clipboardClear();
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+core.clipboard_write_text("Hello from Electrobun")?;
+let text = core.clipboard_read_text()?; // Option<String>, None when empty
+
+let formats = core.clipboard_available_formats_csv()?;
+core.clipboard_clear()?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+_ = core.ClipboardWriteText("Hello from Electrobun")
+text, hasText, err := core.ClipboardReadText()
+
+formats, _ := core.ClipboardAvailableFormatsCSV()
+_ = core.ClipboardClear()
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+_ = electrobun.clipboardWriteText(core, "Hello from Electrobun")
+text, has_text := electrobun.clipboardReadText(core)
+
+formats := electrobun.clipboardAvailableFormatsCsv(core)
+_ = electrobun.clipboardClear(core)
+```
+
+</TabItem>
+</Tabs>
+
 Image methods read and write PNG bytes. Reads return `null` when the requested
 clipboard representation is unavailable.
+
+<Aside type="note">
+`clipboardWriteImage` and `clipboardReadImage` are TypeScript-only; the native
+SDKs expose text read/write, clear, and the available-formats list (as CSV).
+</Aside>
 
 ## Dock icon
 
@@ -131,7 +538,10 @@ void visible;
 ```
 
 Dock visibility is a macOS application concept. Unsupported platforms return
-their native backend's no-op result.
+their native backend's no-op result. The native SDKs expose the same pair on
+`Core` (`setDockIconVisible` / `isDockIconVisible` in Zig and Odin,
+`set_dock_icon_visible` / `is_dock_icon_visible` in Rust,
+`SetDockIconVisible` / `IsDockIconVisible` in Go).
 
 ## Paths
 
@@ -176,8 +586,11 @@ void userLogs;
 ```
 
 `userData`, `userCache`, and `userLogs` include the packaged app identifier and
-release channel. In a development run, malformed or missing package metadata can
-produce empty identifier/channel path components.
+release channel (`<base>/<identifier>/<channel>`) — the same layout on every
+runtime. In a development run, malformed or missing package metadata can
+produce empty identifier/channel path components. The native SDKs resolve the
+same fields through their `Paths` type — see the tabbed examples on the
+[Paths page](/electrobun/apis/paths/).
 
 ## Quitting
 
@@ -194,6 +607,12 @@ void finishShutdown;
 `quit()` emits the application `before-quit` event, honors a cancellation, and
 then performs native cleanup. Electrobun also routes `process.exit()` through
 that cleanup path while the native runtime is active.
+
+<Aside type="note">
+The `before-quit` emitter flow is TypeScript-only. Native SDKs shut down with
+`stopEventLoop` (plus `quitGracefully` in Zig and Odin) and observe quit
+requests through the quit-requested handler registered on `Core`.
+</Aside>
 
 <Aside type="caution">
 Do not call `process.reallyExit()` or terminate the process from an external

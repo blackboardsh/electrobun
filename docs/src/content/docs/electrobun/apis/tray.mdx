@@ -2,9 +2,13 @@
 title: "Tray"
 description: "Create a cross-platform system tray item and native menu."
 ---
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Create trays in the main process. Images may be absolute paths or bundled
 `views://` URLs.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { Tray } from "electrobun/main";
@@ -54,6 +58,151 @@ tray.on("tray-clicked", (event: unknown) => {
   }
 });
 ```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { Tray } from "electrobun/main";
+
+const tray = new Tray({
+  title: "My app",
+  image: "views://assets/tray-icon.png",
+  template: true,
+  width: 32,
+  height: 32,
+});
+
+const menuState: Record<string, boolean> = {
+  notifications: true,
+};
+
+function updateTrayMenu() {
+  tray.setMenu([
+    {
+      type: "normal",
+      label: "Notifications",
+      action: "notifications",
+      checked: menuState.notifications,
+    },
+    { type: "separator" },
+    {
+      type: "normal",
+      label: "Quit",
+      action: "quit",
+    },
+  ]);
+}
+
+// Install the menu before listening for interaction. This is required for the
+// supported Linux AppIndicator interaction path and works on every platform.
+updateTrayMenu();
+
+type TrayClickEvent = {
+  data: { id: number; action: string; data?: unknown };
+};
+
+tray.on("tray-clicked", (event: unknown) => {
+  const { action } = (event as TrayClickEvent).data;
+  if (action === "notifications") {
+    menuState.notifications = !menuState.notifications;
+    updateTrayMenu();
+  }
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const tray_id = try core.createTray(.{
+    .title = "My app",
+    .image = "", // absolute path to an icon file, or empty for text-only
+    .is_template = true,
+    .width = 32,
+    .height = 32,
+});
+
+try core.setTrayTitle(tray_id, "Ready");
+const bounds = try core.getTrayBounds(tray_id);
+_ = bounds;
+try core.hideTray(tray_id);
+try core.showTray(tray_id);
+try core.removeTray(tray_id);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let tray_id = core.create_tray(TrayOptions {
+    title: "My app",
+    image: "", // absolute path to an icon file, or empty for text-only
+    is_template: true,
+    width: 32,
+    height: 32,
+})?;
+
+core.set_tray_title(tray_id, "Ready")?;
+let bounds = core.get_tray_bounds(tray_id)?;
+core.hide_tray(tray_id)?;
+core.show_tray(tray_id)?;
+core.remove_tray(tray_id)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+trayID, err := core.CreateTray(electrobun.TrayOptions{
+    Title:      "My app",
+    Image:      "", // absolute path to an icon file, or empty for text-only
+    IsTemplate: true,
+    Width:      32,
+    Height:     32,
+    Handler: func(id uint32, action string) {
+        fmt.Printf("tray %d activated: %s\n", id, action)
+    },
+})
+
+err = core.SetTrayTitle(trayID, "Ready")
+bounds, err := core.GetTrayBounds(trayID)
+err = core.HideTray(trayID)
+err = core.ShowTray(trayID)
+err = core.RemoveTray(trayID)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+tray_options := electrobun.defaultTrayOptions("") // image path, or empty for text-only
+tray_options.title = "My app"
+tray_options.is_template = true
+tray_options.width = 32
+tray_options.height = 32
+tray_id, tray_err := electrobun.createTray(core, tray_options)
+
+_ = electrobun.setTrayTitle(core, tray_id, "Ready")
+bounds, bounds_err := electrobun.getTrayBounds(core, tray_id)
+_ = electrobun.hideTray(core, tray_id)
+_ = electrobun.showTray(core, tray_id)
+_ = electrobun.removeTray(core, tray_id)
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+The native SDKs create and manage tray items — show/hide (`showTray` /
+`hideTray`), title (`setTrayTitle`), bounds (`getTrayBounds`), and removal
+(`removeTray`) — but tray click events are not yet surfaced to native
+handlers in Zig, Rust, or Odin: those `createTray` wrappers currently pass a
+null click handler. The Go SDK's `TrayOptions` does accept a `Handler`
+(`StatusItemHandler`) for tray activation. Tray menus (`setMenu()`) and the
+`tray-clicked` event flow shown above are TypeScript-SDK features and remain
+Cottontail/Bun-only.
+</Aside>
 
 ## Constructor options
 

@@ -2,9 +2,13 @@
 title: "Context Menu"
 description: "Show a native context menu and handle its actions."
 ---
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Call `ContextMenu.showContextMenu()` from the main process. The menu opens at
 the current global pointer position.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { ContextMenu } from "electrobun/main";
@@ -32,6 +36,123 @@ ContextMenu.on("context-menu-clicked", (event: unknown) => {
   console.log("Context menu action", event);
 });
 ```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { ContextMenu } from "electrobun/main";
+
+ContextMenu.showContextMenu([
+  {
+    label: "Open",
+    action: "open",
+    accelerator: "o",
+    data: { source: "context-menu" },
+  },
+  {
+    label: "More",
+    submenu: [
+      { label: "Rename", action: "rename" },
+      { label: "Delete", action: "delete", enabled: false },
+    ],
+  },
+  { type: "separator" },
+  { role: "copy" },
+  { role: "paste" },
+]);
+
+ContextMenu.on("context-menu-clicked", (event: unknown) => {
+  console.log("Context menu action", event);
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+fn onContextMenuAction(item_id: u32, action: [*:0]const u8) callconv(.C) void {
+    std.debug.print("context menu action: {d} {s}\n", .{ item_id, action });
+}
+
+const menu_json =
+    \\[{"label": "Open", "action": "open"},
+    \\ {"label": "Rename", "action": "rename"},
+    \\ {"type": "separator"},
+    \\ {"role": "copy"},
+    \\ {"role": "paste"}]
+;
+
+try core.showContextMenuJson(menu_json, onContextMenuAction);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+extern "C" fn on_context_menu_action(item_id: u32, action: *const c_char) {
+    let action = electrobun::c_string_to_string(action);
+    println!("context menu action: {item_id} {action}");
+}
+
+let menu_json = r#"[
+  {"label": "Open", "action": "open"},
+  {"label": "Rename", "action": "rename"},
+  {"type": "separator"},
+  {"role": "copy"},
+  {"role": "paste"}
+]"#;
+
+core.show_context_menu_json(menu_json, Some(on_context_menu_action))?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+menuJSON := `[
+  {"label": "Open", "action": "open"},
+  {"label": "Rename", "action": "rename"},
+  {"type": "separator"},
+  {"role": "copy"},
+  {"role": "paste"}
+]`
+
+err := core.ShowContextMenuJSON(menuJSON, func(itemID uint32, action string) {
+    fmt.Printf("context menu action: %d %s\n", itemID, action)
+})
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+on_context_menu_action :: proc "c" (item_id: u32, action: cstring) {
+    context = runtime.default_context()
+    fmt.printfln("context menu action: %d %s", item_id, action)
+}
+
+MENU_JSON :: `[
+  {"label": "Open", "action": "open"},
+  {"label": "Rename", "action": "rename"},
+  {"type": "separator"},
+  {"role": "copy"},
+  {"role": "paste"}
+]`
+
+_ = electrobun.showContextMenuJson(core, MENU_JSON, on_context_menu_action)
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+The native SDKs have no typed menu builder: `showContextMenuJson` (Rust
+`show_context_menu_json`, Go `ShowContextMenuJSON`) takes a raw JSON string
+using the same menu schema the TypeScript SDK serializes, so the item fields
+below apply unchanged. Item `action` values arrive in the
+`StatusItemHandler` callback instead of an event emitter.
+</Aside>
 
 Normal items support `label`, `action` or `role`, `data`, `submenu`, `enabled`,
 `checked`, `hidden`, `tooltip`, and `accelerator`. Separators accept either

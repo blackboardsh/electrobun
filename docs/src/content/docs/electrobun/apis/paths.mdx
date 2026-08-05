@@ -2,8 +2,15 @@
 title: "Paths"
 description: "Locate packaged Electrobun resources from the main process."
 ---
+import { Tabs, TabItem } from "@astrojs/starlight/components";
 
-`PATHS` exposes the packaged resource and view directories:
+In TypeScript, `PATHS` exposes the packaged resource and view directories.
+The native SDKs resolve the same bundle locations with `resolveBundlePaths`
+and expose the writable per-user directories through their `Paths` type
+(the `app_info` argument comes from `resolveAppInfoFromBundle`).
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { PATHS } from "electrobun/main";
@@ -12,8 +19,87 @@ console.log(PATHS.RESOURCES_FOLDER);
 console.log(PATHS.VIEWS_FOLDER);
 ```
 
-- `RESOURCES_FOLDER` is the app bundle's `Resources` directory.
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { PATHS } from "electrobun/main";
+
+console.log(PATHS.RESOURCES_FOLDER);
+console.log(PATHS.VIEWS_FOLDER);
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+// Packaged, read-only bundle locations (backs views://):
+var bundle_paths = try electrobun.resolveBundlePaths(allocator);
+defer bundle_paths.deinit(allocator);
+std.debug.print("{s}\n", .{bundle_paths.resources_dir});
+
+// Writable per-user directories, scoped by app identifier + channel:
+var paths = try electrobun.Paths.resolve(allocator, app_info);
+defer paths.deinit(allocator);
+std.debug.print("{s}\n", .{paths.userData});
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+// Packaged, read-only bundle locations (backs views://):
+let bundle_paths = electrobun::resolve_bundle_paths()?;
+println!("{}", bundle_paths.resources_dir.display());
+
+// Writable per-user directories, scoped by app identifier + channel:
+let paths = Paths::resolve(&app_info)?;
+println!("{}", paths.user_data);
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+// Packaged, read-only bundle locations (backs views://):
+bundlePaths, err := electrobun.ResolveBundlePaths()
+fmt.Println(bundlePaths.ResourcesDir)
+
+// Writable per-user directories, scoped by app identifier + channel:
+paths, err := electrobun.ResolvePaths(appInfo)
+fmt.Println(paths.UserData)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+// Packaged, read-only bundle locations (backs views://):
+bundle_paths, bundle_err := electrobun.resolveBundlePaths()
+defer electrobun.deinit(&bundle_paths, context.allocator)
+fmt.println(bundle_paths.resources_dir)
+
+// Writable per-user directories, scoped by app identifier + channel:
+paths, paths_err := electrobun.resolvePaths(context.allocator, app_info)
+defer electrobun.deinit(&paths, context.allocator)
+fmt.println(paths.userData)
+```
+
+</TabItem>
+</Tabs>
+
+- `RESOURCES_FOLDER` is the app bundle's `Resources` directory. The native
+  equivalent is the `resources_dir` / `ResourcesDir` field of the bundle
+  paths.
 - `VIEWS_FOLDER` is `Resources/app/views`, which backs the `views://` protocol.
+
+The native `Paths` type carries the same fields as `Utils.paths` in
+TypeScript: `home`, `appData`, `config`, `cache`, `temp`, `logs`,
+`documents`, `downloads`, `desktop`, `pictures`, `music`, `videos`,
+`userData`, `userCache`, and `userLogs` (snake_case in Rust, CamelCase in
+Go). On every runtime, `userData`, `userCache`, and `userLogs` resolve to
+`<base>/<identifier>/<channel>` using the packaged app identifier and
+release channel.
 
 Packaged resources are read-only application content. Modifying a macOS app
 bundle invalidates its code signature. Use `Utils.paths.userData`,

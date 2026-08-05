@@ -2,12 +2,17 @@
 title: "BrowserView"
 description: "Create, attach, navigate, and communicate with native webviews."
 ---
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 `BrowserView` is Electrobun's main-process wrapper around a native or CEF
 webview. Every `BrowserWindow` creates one initial view, available as
 `window.webview`. Create additional views when a window needs independently
-positioned web content.
+positioned web content. In the native SDKs there is no view class:
+`createWebview` returns a `u32` id and every operation is a `Core` call keyed
+by that id.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { BrowserView, BrowserWindow } from "electrobun/main";
@@ -27,6 +32,133 @@ const view = new BrowserView({
 
 void view;
 ```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { BrowserView, BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "Multiple views",
+  url: "views://shell/index.html",
+  frame: { width: 1000, height: 700 },
+});
+
+const view = new BrowserView({
+  windowId: win.id,
+  url: "views://details/index.html",
+  frame: { x: 320, y: 0, width: 680, height: 700 },
+  autoResize: false,
+});
+
+void view;
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+const webview_id = try core.createWebview(.{
+    .window_id = window_id,
+    .url = "views://details/index.html",
+    .frame = .{ .x = 320, .y = 0, .width = 680, .height = 700 },
+    .auto_resize = false,
+    .callbacks = .{ .decide_navigation = electrobun.allowAllNavigation },
+});
+
+// Navigation and content:
+try core.loadURLInWebview(webview_id, "https://electrobun.dev");
+try core.loadHTMLInWebview(webview_id, "<h1>Inline content</h1>");
+if (core.canWebviewGoBack(webview_id)) try core.webviewGoBack(webview_id);
+if (core.canWebviewGoForward(webview_id)) try core.webviewGoForward(webview_id);
+try core.reloadWebview(webview_id);
+try core.openWebviewDevTools(webview_id);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let mut webview_options = WebviewOptions::new(
+    window_id,
+    "views://details/index.html",
+    Rect::new(320.0, 0.0, 680.0, 700.0),
+);
+webview_options.auto_resize = false;
+webview_options.callbacks = WebviewCallbacks {
+    decide_navigation: Some(electrobun::allow_all_navigation),
+    ..WebviewCallbacks::default()
+};
+let webview_id = core.create_webview(webview_options)?;
+
+// Navigation and content:
+core.load_url_in_webview(webview_id, "https://electrobun.dev")?;
+core.load_html_in_webview(webview_id, "<h1>Inline content</h1>")?;
+if core.can_webview_go_back(webview_id) {
+    core.webview_go_back(webview_id)?;
+}
+if core.can_webview_go_forward(webview_id) {
+    core.webview_go_forward(webview_id)?;
+}
+core.reload_webview(webview_id)?;
+core.open_webview_devtools(webview_id)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+webviewOptions := electrobun.NewWebviewOptions(
+    windowID,
+    "views://details/index.html",
+    electrobun.NewRect(320, 0, 680, 700),
+)
+webviewOptions.AutoResize = false
+webviewID, err := core.CreateWebview(webviewOptions)
+
+// Navigation and content:
+_ = core.LoadURLInWebview(webviewID, "https://electrobun.dev")
+_ = core.LoadHTMLInWebview(webviewID, "<h1>Inline content</h1>")
+if core.CanWebviewGoBack(webviewID) {
+    _ = core.WebviewGoBack(webviewID)
+}
+if core.CanWebviewGoForward(webviewID) {
+    _ = core.WebviewGoForward(webviewID)
+}
+_ = core.ReloadWebview(webviewID)
+_ = core.OpenWebviewDevtools(webviewID)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+webview_options := electrobun.defaultWebviewOptions(window_id)
+webview_options.url = "views://details/index.html"
+webview_options.frame = {x = 320, y = 0, width = 680, height = 700}
+webview_options.auto_resize = false
+webview_id, webview_err := electrobun.createWebview(core, webview_options)
+
+// Navigation and content:
+_ = electrobun.loadURLInWebview(core, webview_id, "https://electrobun.dev")
+_ = electrobun.loadHTMLInWebview(core, webview_id, "<h1>Inline content</h1>")
+if electrobun.canWebviewGoBack(core, webview_id) {
+    _ = electrobun.webviewGoBack(core, webview_id)
+}
+if electrobun.canWebviewGoForward(core, webview_id) {
+    _ = electrobun.webviewGoForward(core, webview_id)
+}
+_ = electrobun.reloadWebview(core, webview_id)
+_ = electrobun.openWebviewDevTools(core, webview_id)
+```
+
+</TabItem>
+</Tabs>
+
+The rest of this page documents the TypeScript class. The native SDKs expose
+the same webview verb set as `Core` calls — see
+[the mapping](#native-sdks) at the end of the page.
 
 ## Constructor options
 
@@ -232,3 +364,34 @@ transport; repeated calls are safe.
 - Lifecycle and events: `on`, `remove`, `ptr`.
 - Static ownership: `getById`, `getAll`, `ensureWrapped`, `adoptExisting`, `on`,
   `off`, and `defineRPC`.
+
+## Native SDKs
+
+Zig, Rust, Go, and Odin expose the webview verb set procedurally on `Core`,
+keyed by the `u32` webview id `createWebview` returns. Only naming style
+differs per language:
+
+| TypeScript | Zig / Odin | Rust | Go |
+| --- | --- | --- | --- |
+| `view.loadURL(url)` | `loadURLInWebview(id, url)` | `load_url_in_webview(id, url)` | `LoadURLInWebview(id, url)` |
+| `view.loadHTML(html)` | `loadHTMLInWebview(id, html)` | `load_html_in_webview(id, html)` | `LoadHTMLInWebview(id, html)` |
+| `frame` / `autoResize` option | `resizeWebview(id, frame, masks_json)` | `resize_webview(id, frame, masks_json)` | `ResizeWebview(id, frame, masksJSON)` |
+| `startTransparent` / `startPassthrough` options | `setWebviewTransparent` / `setWebviewPassthrough` / `setWebviewHidden` | `set_webview_transparent` / `set_webview_passthrough` / `set_webview_hidden` | `SetWebviewTransparent` / `SetWebviewPassthrough` / `SetWebviewHidden` |
+| `view.setSpellCheck(b)` | `setWebviewSpellCheck(id, b)` | `set_webview_spell_check(id, b)` | `SetWebviewSpellCheck(id, b)` |
+| `view.setNavigationRules(rules)` | `setWebviewNavigationRules(id, rules_json)` | `set_webview_navigation_rules(id, rules_json)` | `SetWebviewNavigationRules(id, rulesJSON)` |
+| `view.findInPage` / `stopFindInPage` | `webviewFindInPage` / `webviewStopFind` | `webview_find_in_page` / `webview_stop_find` | `WebviewFindInPage` / `WebviewStopFind` |
+| `view.openDevTools` / `closeDevTools` / `toggleDevTools` | `openWebviewDevTools` / `closeWebviewDevTools` / `toggleWebviewDevTools` | `open_webview_devtools` / `close_webview_devtools` / `toggle_webview_devtools` | `OpenWebviewDevtools` / `CloseWebviewDevtools` / `ToggleWebviewDevtools` |
+| `view.setPageZoom` / `getPageZoom` | `setWebviewPageZoom` / `getWebviewPageZoom` | `set_webview_page_zoom` / `get_webview_page_zoom` | `SetWebviewPageZoom` / `GetWebviewPageZoom` |
+| `view.executeJavascript(js)` | `evaluateJavaScriptWithNoCompletion(id, js)` | `evaluate_javascript_with_no_completion(id, js)` | `EvaluateJavaScriptWithNoCompletion(id, js)` |
+| `view.remove()` | `removeWebview(id)` | `remove_webview(id)` | `RemoveWebview(id)` |
+| — (no TS history methods) | `canWebviewGoBack` / `canWebviewGoForward`, `webviewGoBack` / `webviewGoForward`, `reloadWebview` | `can_webview_go_back` / `can_webview_go_forward`, `webview_go_back` / `webview_go_forward`, `reload_webview` | `CanWebviewGoBack` / `CanWebviewGoForward`, `WebviewGoBack` / `WebviewGoForward`, `ReloadWebview` |
+
+Not available natively: the typed RPC layer (`defineRPC`) — the native SDKs
+provide only the raw JSON bridge primitives, and apps implement the
+request/response envelope themselves; the `.on()` event emitter — native
+webview events arrive through the C callbacks fixed at creation
+(`decide_navigation`, `event`, and the bridge handlers); JavaScript
+evaluation with a returned result — only the fire-and-forget
+`evaluateJavaScriptWithNoCompletion` exists; and the download event stream
+(`download-started` through `download-failed`), which has no native
+equivalent.

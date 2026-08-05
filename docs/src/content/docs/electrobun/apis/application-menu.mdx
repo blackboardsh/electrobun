@@ -2,10 +2,14 @@
 title: "Application Menu"
 description: "Configure the native application menu and handle custom actions."
 ---
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Use `ApplicationMenu.setApplicationMenu()` in the main process. A role invokes
 native operating-system behavior; an action emits an event for application
 code.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import { ApplicationMenu } from "electrobun/main";
@@ -42,6 +46,136 @@ ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
   console.log("Application menu action", event);
 });
 ```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { ApplicationMenu } from "electrobun/main";
+
+ApplicationMenu.setApplicationMenu([
+  {
+    label: "File",
+    submenu: [
+      {
+        label: "New project",
+        action: "new-project",
+        accelerator: "n",
+      },
+      { type: "separator" },
+      { role: "close" },
+      { role: "quit" },
+    ],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "selectAll" },
+    ],
+  },
+]);
+
+ApplicationMenu.on("application-menu-clicked", (event: unknown) => {
+  console.log("Application menu action", event);
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+fn onMenuAction(item_id: u32, action: [*:0]const u8) callconv(.C) void {
+    std.debug.print("application menu action: {d} {s}\n", .{ item_id, action });
+}
+
+const menu_json =
+    \\[{"label": "File", "submenu": [
+    \\  {"label": "New project", "action": "new-project", "accelerator": "n"},
+    \\  {"type": "separator"},
+    \\  {"role": "close"},
+    \\  {"role": "quit"}
+    \\]}]
+;
+
+try core.setApplicationMenuJson(menu_json, onMenuAction);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+extern "C" fn on_menu_action(item_id: u32, action: *const c_char) {
+    let action = electrobun::c_string_to_string(action);
+    println!("application menu action: {item_id} {action}");
+}
+
+let menu_json = r#"[
+  {"label": "File", "submenu": [
+    {"label": "New project", "action": "new-project", "accelerator": "n"},
+    {"type": "separator"},
+    {"role": "close"},
+    {"role": "quit"}
+  ]}
+]"#;
+
+core.set_application_menu_json(menu_json, Some(on_menu_action))?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+menuJSON := `[
+  {"label": "File", "submenu": [
+    {"label": "New project", "action": "new-project", "accelerator": "n"},
+    {"type": "separator"},
+    {"role": "close"},
+    {"role": "quit"}
+  ]}
+]`
+
+err := core.SetApplicationMenuJSON(menuJSON, func(itemID uint32, action string) {
+    fmt.Printf("application menu action: %d %s\n", itemID, action)
+})
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+on_menu_action :: proc "c" (item_id: u32, action: cstring) {
+    context = runtime.default_context()
+    fmt.printfln("application menu action: %d %s", item_id, action)
+}
+
+MENU_JSON :: `[
+  {"label": "File", "submenu": [
+    {"label": "New project", "action": "new-project", "accelerator": "n"},
+    {"type": "separator"},
+    {"role": "close"},
+    {"role": "quit"}
+  ]}
+]`
+
+_ = electrobun.setApplicationMenuJson(core, MENU_JSON, on_menu_action)
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+The native SDKs have no typed menu builder: `setApplicationMenuJson` (Rust
+`set_application_menu_json`, Go `SetApplicationMenuJSON`) takes a raw JSON
+string using the same menu schema the TypeScript SDK serializes, so the item
+fields and roles documented below apply unchanged. Custom `action` values
+arrive in the `StatusItemHandler` callback instead of an event emitter.
+</Aside>
 
 ## Menu items
 

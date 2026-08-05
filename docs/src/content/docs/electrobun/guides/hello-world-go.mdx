@@ -1,0 +1,249 @@
+---
+title: "Hello World (Go)"
+description: "Build a minimal Electrobun app with a Go main process from scratch."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+This guide creates a minimal Electrobun app with a **Go** main process —
+no `go.mod`, no third-party modules, one source file. For the default
+TypeScript runtime see [Hello World](/electrobun/guides/hello-world/). The
+faster path is `hutch electrobun init go-app --template=go-maze-wgpu`,
+which scaffolds a complete WGPU-rendering example.
+
+## 1. Create the project
+
+```bash
+mkdir hello-go
+cd hello-go
+```
+
+Create `package.json`:
+
+```json
+{
+  "name": "hello-go",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build": "hutch electrobun build --env=production"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
+```
+
+The `electrobun` dependency provides the build tooling and the Go SDK;
+your Go code has no modules of its own.
+
+Install dependencies:
+
+```bash
+hutch install
+```
+
+## 2. Add a webview
+
+Create `src/mainview/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Hello Electrobun</title>
+  </head>
+  <body>
+    <h1>Hello from Electrobun</h1>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>
+```
+
+Create `src/mainview/index.ts` — the view's script entrypoint, bundled to
+`views://mainview/index.js`:
+
+```ts
+console.log("Hello from the view");
+```
+
+## 3. Add the main process
+
+Create `src/go/main.go`:
+
+```go
+package main
+
+import (
+	"fmt"
+	"os"
+	"time"
+
+	"electrobun"
+)
+
+func main() {
+	if err := run(); err != nil {
+		fmt.Fprintf(os.Stderr, "[hello-go] %s\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	core, err := electrobun.LoadCore()
+	if err != nil {
+		return err
+	}
+	bundlePaths, err := electrobun.ResolveBundlePaths()
+	if err != nil {
+		return err
+	}
+	appInfo, err := electrobun.ResolveAppInfoFromBundle(bundlePaths)
+	if err != nil {
+		return err
+	}
+
+	go createUI(core, bundlePaths)
+
+	// Blocks on the native event loop; must run on the main goroutine.
+	return core.RunMainThread(appInfo)
+}
+
+func createUI(core *electrobun.Core, bundlePaths electrobun.BundlePaths) {
+	time.Sleep(150 * time.Millisecond)
+	if err := core.ConfigureWebviewRuntimeFromExecutableDir(bundlePaths, 0); err != nil {
+		fmt.Fprintf(os.Stderr, "[hello-go] failed to configure webview runtime: %s\n", err)
+		return
+	}
+
+	windowOptions := electrobun.NewWindowOptions(
+		"Hello Electrobun",
+		electrobun.NewRect(140, 100, 800, 600),
+	)
+	windowOptions.Callbacks = electrobun.WindowCallbacks{
+		Close: func(uint32) { _ = core.StopEventLoop() },
+	}
+	windowID, err := core.CreateWindow(windowOptions)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[hello-go] failed to create window: %s\n", err)
+		return
+	}
+
+	webviewOptions := electrobun.NewWebviewOptions(
+		windowID,
+		"views://mainview/index.html",
+		electrobun.NewRect(0, 0, 800, 600),
+	)
+	if _, err := core.CreateWebview(webviewOptions); err != nil {
+		fmt.Fprintf(os.Stderr, "[hello-go] failed to create webview: %s\n", err)
+		_ = core.CloseWindow(windowID)
+	}
+}
+```
+
+A few things to notice: `RunMainThread` owns the main goroutine, so all UI
+creation happens on a separate goroutine; the window's `Close` callback
+stops the event loop so the process exits when the window closes; and nil
+webview callbacks are fine — a nil `DecideNavigation` allows all
+navigation.
+
+<Aside type="note">
+`import "electrobun"` resolves without any `go.mod` — hutch wires up the
+import path itself; see
+[How this differs from TypeScript](#how-this-differs-from-typescript).
+</Aside>
+
+## 4. Configure the build
+
+Create `electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+	app: {
+		name: "hello-go",
+		identifier: "hellogo.example.dev",
+		version: "0.0.1",
+	},
+	build: {
+		mainProcess: "go",
+		go: {
+			entrypoint: "src/go/main.go",
+		},
+		views: {
+			mainview: {
+				entrypoint: "src/mainview/index.ts",
+			},
+		},
+		copy: {
+			"src/mainview/index.html": "views/mainview/index.html",
+		},
+	},
+} satisfies ElectrobunConfig;
+```
+
+`mainProcess: "go"` selects the Go runtime, and `go.entrypoint` points at
+your source file. Per-platform `bundleCEF` / `bundleWGPU` flags are only
+needed if you use CEF rendering or WGPU views.
+
+## 5. Run the app
+
+```bash
+hutch run dev
+```
+
+Hutch builds and launches the app, then rebuilds it when watched source
+files change. On first run it also downloads the pinned Go toolchain if no
+exact match is installed. Press Ctrl+C to stop it.
+
+## How this differs from TypeScript
+
+- **No `go.mod`.** The build runs in GOPATH mode (`GO111MODULE=off`).
+  Hutch copies the directory containing your entrypoint into a temporary
+  GOPATH as package `electrobun-app` and the SDK as package `electrobun`,
+  so `import "electrobun"` resolves with no module files and no
+  third-party dependencies.
+- **cgo is mandatory.** The SDK is a cgo wrapper, so the build runs with
+  `CGO_ENABLED=1` and needs a host C toolchain.
+- **Dynamic core loading.** `LoadCore()` dlopens `libElectrobunCore` from
+  the executable's directory at runtime and resolves its symbols. Nothing
+  links at build time, and the binary only runs from inside a hutch-built
+  bundle — not via `go run`.
+- **Bundle discovery.** `ResolveBundlePaths()` derives the executable and
+  `Resources/` directories from `os.Executable()`, and
+  `ResolveAppInfoFromBundle()` reads the app identifier, name, and channel
+  from `Resources/version.json`.
+- **Webview runtime setup.** Call
+  `ConfigureWebviewRuntimeFromExecutableDir` once before creating any
+  webview; it registers the preload scripts that power the `views://`
+  scheme and the bridge.
+- **You own the event loop.** `RunMainThread` must be called from the main
+  goroutine and blocks until the loop stops. Create windows and webviews
+  from another goroutine after a short delay (~150 ms) so the loop is
+  running first, and call `StopEventLoop()` from the window close callback
+  or the process keeps running.
+- **Errors are plain `error` values.** Every core call returns an `error`;
+  `core.LastError()` surfaces the core's last error string
+  (`electrobun_core_last_error`).
+- **Template.** `hutch electrobun init go-app --template=go-maze-wgpu`
+  scaffolds a full example with RPC messaging and WGPU rendering.
+
+## Toolchain
+
+Electrobun pins Go 1.26.4 and never uses a system Go; if no exact match is
+installed, hutch downloads the toolchain to `~/.dash/toolchains`. Builds
+target the host OS and architecture only — cross-compilation is not
+supported yet, so use native runners per platform. Because of cgo you need
+a host C toolchain: the Xcode Command Line Tools on macOS, the platform
+compiler and linker on Linux, and on Windows the build uses the vendored
+`zig cc` as the C compiler.
+
+For the full picture of native main processes, see
+[Native main process](/electrobun/guides/native-main-process/) and the
+[main process APIs](/electrobun/apis/main/).

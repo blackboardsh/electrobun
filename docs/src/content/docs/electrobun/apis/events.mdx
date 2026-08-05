@@ -2,10 +2,15 @@
 title: "Events"
 description: "Listen to application, window, webview, menu, and tray events."
 ---
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 The default main-process export exposes the global event emitter. Window,
-webview, menu, and tray objects also expose scoped listeners.
+webview, menu, and tray objects also expose scoped listeners. In the native
+SDKs there is no emitter: window and webview events are C callbacks
+registered at creation time.
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
 import Electrobun, { BrowserWindow } from "electrobun/main";
@@ -23,6 +28,161 @@ win.webview.on("will-navigate", (event: unknown) => {
   console.log("This view will navigate", event);
 });
 ```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import Electrobun, { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "Events",
+  url: "views://mainview/index.html",
+});
+
+Electrobun.events.on("will-navigate", (event) => {
+  console.log("Any view will navigate", event);
+});
+
+win.webview.on("will-navigate", (event: unknown) => {
+  console.log("This view will navigate", event);
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+fn onResize(window_id: u32, x: f64, y: f64, width: f64, height: f64) callconv(.C) void {
+    std.debug.print("window {d} resized to {d}x{d} at ({d},{d})\n", .{ window_id, width, height, x, y });
+}
+
+fn onWebviewEvent(webview_id: u32, event_name: [*:0]const u8, payload: [*:0]const u8) callconv(.C) void {
+    std.debug.print("webview {d}: {s} {s}\n", .{ webview_id, event_name, payload });
+}
+
+const window_id = try core.createWindow(.{
+    .title = "Events",
+    .callbacks = .{ .resize = onResize },
+});
+
+_ = try core.createWebview(.{
+    .window_id = window_id,
+    .url = "views://mainview/index.html",
+    .callbacks = .{
+        .decide_navigation = electrobun.allowAllNavigation,
+        .event = onWebviewEvent,
+    },
+});
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+extern "C" fn on_resize(window_id: u32, x: f64, y: f64, width: f64, height: f64) {
+    println!("window {window_id} resized to {width}x{height} at ({x},{y})");
+}
+
+extern "C" fn on_webview_event(webview_id: u32, event_name: *const c_char, detail: *const c_char) {
+    let name = electrobun::c_string_to_string(event_name);
+    let detail = electrobun::c_string_to_string(detail);
+    println!("webview {webview_id}: {name} {detail}");
+}
+
+let mut window_options = WindowOptions::new("Events", Rect::new(160.0, 100.0, 960.0, 640.0));
+window_options.callbacks = WindowCallbacks {
+    resize: Some(on_resize),
+    ..WindowCallbacks::default()
+};
+let window_id = core.create_window(window_options)?;
+
+let mut webview_options = WebviewOptions::new(
+    window_id,
+    "views://mainview/index.html",
+    Rect::new(0.0, 0.0, 960.0, 640.0),
+);
+webview_options.callbacks = WebviewCallbacks {
+    decide_navigation: Some(electrobun::allow_all_navigation),
+    event: Some(on_webview_event),
+    ..WebviewCallbacks::default()
+};
+core.create_webview(webview_options)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+windowOptions := electrobun.NewWindowOptions(
+    "Events",
+    electrobun.NewRect(160, 100, 960, 640),
+)
+windowOptions.Callbacks = electrobun.WindowCallbacks{
+    Resize: func(windowID uint32, x, y, width, height float64) {
+        fmt.Printf("window %d resized to %.0fx%.0f\n", windowID, width, height)
+    },
+}
+windowID, err := core.CreateWindow(windowOptions)
+
+webviewOptions := electrobun.NewWebviewOptions(
+    windowID,
+    "views://mainview/index.html",
+    electrobun.NewRect(0, 0, 960, 640),
+)
+webviewOptions.Callbacks = electrobun.WebviewCallbacks{
+    DecideNavigation: electrobun.AllowAllNavigation,
+    Event: func(webviewID uint32, eventName, detail string) {
+        fmt.Printf("webview %d: %s %s\n", webviewID, eventName, detail)
+    },
+}
+webviewID, err := core.CreateWebview(webviewOptions)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+import "base:runtime"
+
+on_window_resize :: proc "c" (window_id: u32, x: f64, y: f64, width: f64, height: f64) {
+	context = runtime.default_context()
+	fmt.printfln("window %d resized to %.0fx%.0f", window_id, width, height)
+}
+
+on_webview_event :: proc "c" (webview_id: u32, event_name: cstring, detail: cstring) {
+	context = runtime.default_context()
+	fmt.printfln("webview %d: %s %s", webview_id, event_name, detail)
+}
+
+window_options := electrobun.defaultWindowOptions("Events")
+window_options.callbacks.resize = on_window_resize
+window_id, window_err := electrobun.createWindow(core, window_options)
+
+webview_options := electrobun.defaultWebviewOptions(window_id)
+webview_options.url = "views://mainview/index.html"
+webview_options.callbacks = {
+	decide_navigation = electrobun.allowAllNavigation,
+	event             = on_webview_event,
+}
+webview_id, webview_err := electrobun.createWebview(core, webview_options)
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+The native SDKs have no event emitter. Window events are the
+`WindowCallbacks` slots (`close`, `should_close`, `move`, `resize`, `focus`,
+`blur`, `key`), and webview events arrive through the `WebviewCallbacks`
+slots (`decide_navigation`, `event`, and the bridge callbacks) — all fixed
+at creation time. The only app-level hooks are the four handlers set on
+`Core`: quit-requested (TypeScript `before-quit`), reopen, URL open
+(TypeScript `open-url`), and the global-shortcut callback.
+</Aside>
+
+The rest of this page documents the TypeScript emitter surface used by
+Cottontail and Bun.
 
 ## Event objects
 

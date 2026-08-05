@@ -23,7 +23,17 @@ export default defineConfig({
               items: [
                 { label: "Quick Start", link: "/electrobun/guides/quick-start/" },
                 { label: "What is Electrobun?", link: "/electrobun/guides/what-is-electrobun/" },
-                { label: "Hello World", link: "/electrobun/guides/hello-world/" },
+                {
+                  label: "Hello World",
+                  items: [
+                    { label: "Cottontail", link: "/electrobun/guides/hello-world/" },
+                    { label: "Bun", link: "/electrobun/guides/hello-world-bun/" },
+                    { label: "Zig", link: "/electrobun/guides/hello-world-zig/" },
+                    { label: "Rust", link: "/electrobun/guides/hello-world-rust/" },
+                    { label: "Go", link: "/electrobun/guides/hello-world-go/" },
+                    { label: "Odin", link: "/electrobun/guides/hello-world-odin/" },
+                  ],
+                },
                 { label: "Hutch", link: "/electrobun/guides/hutch/" },
                 { label: "Cottontail", link: "/electrobun/guides/cottontail/" },
                 { label: "Main Process Runtimes", link: "/electrobun/guides/native-main-process/" },

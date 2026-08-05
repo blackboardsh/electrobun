@@ -1,0 +1,259 @@
+---
+title: "Hello World (Rust)"
+description: "Build a minimal Electrobun app with a Rust main process from scratch."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+This guide creates a minimal Electrobun app with a **Rust** main process —
+no Cargo, no crates, one source file. For the default TypeScript runtime see
+[Hello World](/electrobun/guides/hello-world/). The faster path is
+`hutch electrobun init rust-app --template=rust-flock-wgpu`, which scaffolds
+a complete WGPU-rendering example.
+
+## 1. Create the project
+
+```bash
+mkdir my-rust-app
+cd my-rust-app
+```
+
+Create `package.json`:
+
+```json
+{
+  "name": "my-rust-app",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build": "hutch electrobun build --env=production"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
+```
+
+The `electrobun` dependency provides the build tooling and the Rust SDK;
+your Rust code has no dependencies of its own.
+
+Install dependencies:
+
+```bash
+hutch install
+```
+
+## 2. Add a webview
+
+Create `src/mainview/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Hello Electrobun</title>
+  </head>
+  <body>
+    <h1>Hello from Electrobun</h1>
+    <script type="module" src="index.js"></script>
+  </body>
+</html>
+```
+
+Create `src/mainview/index.ts` — the view's script entrypoint, bundled to
+`views://mainview/index.js`:
+
+```ts
+console.log("Hello from the view");
+```
+
+## 3. Add the main process
+
+Create `src/rust/main.rs`:
+
+```rust
+use crate::electrobun::{
+    self, Core, Rect, WebviewCallbacks, WebviewOptions, WindowCallbacks, WindowOptions,
+};
+use std::sync::OnceLock;
+use std::thread;
+use std::time::Duration;
+
+// 32 comma-separated bytes; shared secret for the webview preload bridge.
+const DEFAULT_SECRET_KEY: &str =
+    "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32";
+
+static CORE: OnceLock<&'static Core> = OnceLock::new();
+
+pub fn main() {
+    if let Err(err) = run() {
+        eprintln!("[rust-hello] {err}");
+        std::process::exit(1);
+    }
+}
+
+fn run() -> Result<(), String> {
+    let core = Box::leak(Box::new(Core::load()?));
+    let bundle_paths = electrobun::resolve_bundle_paths()?;
+    let app_info = electrobun::resolve_app_info_from_bundle(&bundle_paths)?;
+    CORE.set(core).map_err(|_| "core already set".to_string())?;
+
+    // UI must be created after the event loop starts, so spawn a thread.
+    let _ui_thread = thread::spawn(move || create_ui(core, &bundle_paths));
+
+    // Blocks on the native event loop; must run on the main thread.
+    core.run_main_thread(&app_info)
+}
+
+fn create_ui(core: &Core, bundle_paths: &electrobun::BundlePaths) {
+    thread::sleep(Duration::from_millis(150)); // let the event loop start
+
+    if let Err(err) = core.configure_webview_runtime_from_executable_dir(bundle_paths, 0) {
+        eprintln!("[rust-hello] failed to configure webview runtime: {err}");
+        return;
+    }
+
+    let mut window_options =
+        WindowOptions::new("Hello Electrobun", Rect::new(140.0, 100.0, 900.0, 640.0));
+    window_options.callbacks = WindowCallbacks {
+        close: Some(main_window_closed),
+        ..WindowCallbacks::default()
+    };
+
+    let window_id = match core.create_window(window_options) {
+        Ok(id) => id,
+        Err(err) => {
+            eprintln!("[rust-hello] failed to create window: {err}");
+            return;
+        }
+    };
+
+    let mut webview_options = WebviewOptions::new(
+        window_id,
+        "views://mainview/index.html",
+        Rect::new(0.0, 0.0, 900.0, 640.0),
+    );
+    webview_options.secret_key = DEFAULT_SECRET_KEY;
+    webview_options.callbacks = WebviewCallbacks {
+        decide_navigation: Some(electrobun::allow_all_navigation),
+        ..WebviewCallbacks::default()
+    };
+
+    if let Err(err) = core.create_webview(webview_options) {
+        eprintln!("[rust-hello] failed to create webview: {err}");
+        let _ = core.close_window(window_id);
+    }
+}
+
+extern "C" fn main_window_closed(_window_id: u32) {
+    if let Some(core) = CORE.get() {
+        let _ = core.stop_event_loop();
+    }
+}
+```
+
+A few things to notice: `Box::leak` produces the `&'static Core` that
+`extern "C"` callbacks need, the secret key is shared with the webview's
+preload bridge, and the window's `close` callback stops the event loop so
+the process exits when the window closes.
+
+<Aside type="note">
+The entry file defines `pub fn main()` — not a bare `fn main()` — and
+imports the SDK with `use crate::electrobun::{...}`. Hutch compiles your
+file inside a generated wrapper crate where the SDK is a sibling module;
+see [How this differs from TypeScript](#how-this-differs-from-typescript).
+</Aside>
+
+## 4. Configure the build
+
+Create `electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+	app: {
+		name: "rust-hello",
+		identifier: "rusthello.electrobun.dev",
+		version: "0.0.1",
+	},
+	build: {
+		mainProcess: "rust",
+		rust: {
+			entrypoint: "src/rust/main.rs",
+		},
+		views: {
+			mainview: {
+				entrypoint: "src/mainview/index.ts",
+			},
+		},
+		copy: {
+			"src/mainview/index.html": "views/mainview/index.html",
+		},
+	},
+} satisfies ElectrobunConfig;
+```
+
+`mainProcess: "rust"` selects the Rust runtime, and `rust.entrypoint`
+points at your source file. Per-platform `bundleCEF` / `bundleWGPU` flags
+are only needed if you use CEF rendering or WGPU views.
+
+## 5. Run the app
+
+```bash
+hutch run dev
+```
+
+Hutch builds and launches the app, then rebuilds it when watched source
+files change. On first run it also downloads the pinned Rust toolchain if
+no exact match is installed. Press Ctrl+C to stop it.
+
+## How this differs from TypeScript
+
+- **No Cargo.** Hutch compiles your app with a single vendored `rustc`
+  invocation (edition 2021). There is no `Cargo.toml` and no crates.io
+  access — the SDK is one dependency-free `.rs` file.
+- **A generated wrapper crate.** Hutch writes a wrapper `main.rs` that
+  declares the SDK as `pub mod electrobun` and your entrypoint as
+  `mod user_main`, then calls `user_main::main()`. That is why your file
+  imports with `use crate::electrobun::{...}` and exposes `pub fn main()`
+  instead of being the binary root.
+- **Dynamic core loading.** `Core::load()` dlopens `libElectrobunCore`
+  from the executable's directory at runtime and resolves its symbols.
+  Nothing links at build time, and the binary only runs from inside a
+  hutch-built bundle — not via `cargo run` or a bare `rustc` build.
+- **Bundle discovery.** `resolve_bundle_paths()` derives the executable
+  and `Resources/` directories from the running executable's path, and
+  `resolve_app_info_from_bundle()` reads the app identifier, name, and
+  channel from `Resources/version.json`.
+- **Webview runtime setup.** Call
+  `configure_webview_runtime_from_executable_dir` once before creating any
+  webview; it registers the preload scripts that power the `views://`
+  scheme and the bridge.
+- **You own the event loop.** `run_main_thread` must be called on the
+  process main thread and blocks until the loop stops. Create windows and
+  webviews from a spawned thread after a short delay (~150 ms) so the loop
+  is running first, and call `stop_event_loop` from the window close
+  callback or the process keeps running.
+- **Errors are `Result<_, String>`.** Every core call returns a `Result`;
+  the error strings come from the core's `electrobun_core_last_error`.
+- **Template.** `hutch electrobun init rust-app --template=rust-flock-wgpu`
+  scaffolds a full example with RPC messaging and WGPU rendering.
+
+## Toolchain
+
+Electrobun pins Rust 1.88.0 and never uses a system Rust; if no exact
+match is installed, hutch downloads the toolchain to `~/.dash/toolchains`.
+Builds target the host OS and architecture only — cross-compilation is not
+supported yet, so use native runners per platform. On Windows, Rust builds
+require Visual Studio Build Tools and the Windows SDK; macOS needs the
+Xcode Command Line Tools.
+
+For the full picture of native main processes, see
+[Native main process](/electrobun/guides/native-main-process/) and the
+[main process APIs](/electrobun/apis/main/).

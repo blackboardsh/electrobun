@@ -1,0 +1,268 @@
+---
+title: "Hello World (Odin)"
+description: "Build a minimal Electrobun app with an Odin main process from scratch."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+This guide creates a minimal Electrobun app with an **Odin** main process. It
+mirrors the [TypeScript walkthrough](/electrobun/guides/hello-world/) — same
+project shape, same webview, but the window and webview are created from Odin
+instead of Cottontail. The faster path is
+`hutch electrobun init odin-app --template=odin-particles-wgpu`.
+
+## 1. Create the project
+
+```bash
+mkdir odin-hello
+cd odin-hello
+```
+
+Create `package.json`:
+
+```json
+{
+  "name": "odin-hello",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "hutch electrobun dev --watch",
+    "build": "hutch electrobun build --env=production"
+  },
+  "dependencies": {
+    "electrobun": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
+```
+
+Install dependencies:
+
+```bash
+hutch install
+```
+
+## 2. Add a webview
+
+Create `src/mainview/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Hello Electrobun</title>
+  </head>
+  <body>
+    <h1>Hello from Electrobun</h1>
+  </body>
+</html>
+```
+
+## 3. Add the main process
+
+Create `src/odin/main.odin`. The SDK is imported as
+`import electrobun "electrobun_sdk:electrobun"` — hutch wires up the
+`electrobun_sdk` collection for you, so there is nothing to vendor or
+configure:
+
+```odin
+package main
+
+import "core:fmt"
+import "core:thread"
+import "core:time"
+
+import electrobun "electrobun_sdk:electrobun"
+
+DEFAULT_SECRET_KEY :: "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32"
+
+g_core: ^electrobun.Core
+g_bundle_paths: ^electrobun.BundlePaths
+
+create_ui :: proc() {
+	time.sleep(150 * time.Millisecond)
+
+	if err := electrobun.configureWebviewRuntimeFromExecutableDir(g_core, g_bundle_paths, 0);
+	   err != .None {
+		fmt.eprintfln("[hello] failed to configure webview runtime: %v", err)
+		return
+	}
+
+	window_options := electrobun.defaultWindowOptions("Hello Electrobun")
+	window_options.frame = {x = 160, y = 100, width = 800, height = 600}
+	window_id, window_err := electrobun.createWindow(g_core, window_options)
+	if window_err != .None {
+		fmt.eprintfln("[hello] failed to create window: %v", window_err)
+		return
+	}
+
+	webview_options := electrobun.defaultWebviewOptions(window_id)
+	webview_options.url = "views://mainview/index.html"
+	webview_options.frame = {x = 0, y = 0, width = 800, height = 600}
+	webview_options.secret_key = DEFAULT_SECRET_KEY
+	webview_options.sandbox = false
+	webview_options.callbacks = {
+		decide_navigation = electrobun.allowAllNavigation,
+		event             = electrobun.noopWebviewEvent,
+		event_bridge      = electrobun.noopWebviewPostMessage,
+	}
+
+	if _, webview_err := electrobun.createWebview(g_core, webview_options); webview_err != .None {
+		fmt.eprintfln("[hello] failed to create webview: %v", webview_err)
+		_ = electrobun.closeWindow(g_core, window_id)
+	}
+}
+
+main :: proc() {
+	core, core_err := electrobun.load()
+	if core_err != .None {
+		fmt.eprintfln("[hello] failed to load Electrobun core: %v", core_err)
+		return
+	}
+	defer electrobun.close(&core)
+
+	bundle_paths, bundle_err := electrobun.resolveBundlePaths()
+	if bundle_err != .None {
+		fmt.eprintfln("[hello] failed to resolve bundle paths: %v", bundle_err)
+		return
+	}
+	defer electrobun.deinit(&bundle_paths, context.allocator)
+
+	owned_app_info, app_info_err := electrobun.resolveAppInfoFromBundle(context.allocator, &bundle_paths)
+	if app_info_err != .None {
+		fmt.eprintfln("[hello] failed to resolve app info: %v", app_info_err)
+		return
+	}
+	defer electrobun.deinit(&owned_app_info, context.allocator)
+	app_info := electrobun.borrowed(owned_app_info)
+
+	g_core = &core
+	g_bundle_paths = &bundle_paths
+	defer g_core = nil
+
+	thread.create_and_start(create_ui, self_cleanup = true)
+
+	// Blocks running the native event loop until the app quits.
+	if err := electrobun.runMainThread(&core, app_info); err != .None {
+		fmt.eprintfln("[hello] main thread exited with error: %v", err)
+	}
+}
+```
+
+## 4. Configure the build
+
+Create `electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "odin-hello",
+    identifier: "odinhello.example.dev",
+    version: "0.0.1",
+  },
+  build: {
+    mainProcess: "odin",
+    odin: {
+      entrypoint: "src/odin/main.odin",
+    },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+## 5. Run the app
+
+```bash
+hutch run dev
+```
+
+Hutch builds and launches the app, then rebuilds it when watched source files
+change. Press Ctrl+C to stop it.
+
+<Aside type="note">
+The app only works from a hutch-built bundle layout — the SDK loads
+`libElectrobunCore` from the directory next to the executable and reads
+`version.json` and the preload scripts from `Resources/`. A bare `odin run`
+won't work.
+</Aside>
+
+## How this differs from TypeScript
+
+The Odin SDK is a faithful port of the Zig SDK: camelCase procs over the
+native core's C ABI, taking `^Core` as the first argument
+(`electrobun.createWindow(&core, options)`). Some steps Cottontail handles
+for you are explicit here:
+
+- **Dynamic core loading.** `electrobun.load()` opens `libElectrobunCore`
+  (`.dylib` / `.so` / `ElectrobunCore.dll`) from the executable's directory
+  at runtime and resolves every C symbol. Nothing is linked at build time.
+- **App identity comes from the bundle.** `resolveBundlePaths` computes the
+  executable and `Resources/` directories, and `resolveAppInfoFromBundle`
+  parses `Resources/version.json` for the app's `identifier`, `name`, and
+  `channel` — identity is read at runtime, not baked in from config at
+  compile time.
+- **`configureWebviewRuntimeFromExecutableDir` before webviews.** It loads
+  the bundled `preload-full.js` / `preload-sandboxed.js` from `Resources/`
+  and configures the webview runtime. Skip it and your webviews are missing
+  their preload and bridge scripts.
+- **`runMainThread` blocks.** It runs the native event loop on the main
+  thread until the app quits, so windows and webviews are created from a
+  worker thread started before it. The template sleeps 150ms first to let
+  the loop start; the core marshals UI calls back to the main thread
+  internally.
+- **Error handling is Odin-native.** Most procs return an
+  `Error` enum (`.None`, `.LibraryLoadFailed`, `.ElectrobunCoreFailure`,
+  ...) as a second return value — check `err != .None` as in the example.
+- **Callbacks are C ABI.** All Electrobun callbacks are `proc "c"`; inside
+  one you must set `context = runtime.default_context()` (from
+  `base:runtime`) before calling into Odin runtime features:
+
+  ```odin
+  import "base:runtime"
+
+  on_window_resize :: proc "c" (window_id: u32, x: f64, y: f64, width: f64, height: f64) {
+  	context = runtime.default_context()
+  	fmt.printfln("window %d resized to %.0fx%.0f", window_id, width, height)
+  }
+  ```
+
+- **Some TS APIs have no Odin equivalent.** There is no typed RPC layer (the
+  bridge is raw JSON via `sendHostMessageToWebview` and
+  `popNextQueuedHostMessage`), no updater, and no typed menu builders. See
+  [Native main process](/electrobun/guides/native-main-process/) for the
+  full comparison.
+
+To start from a working Odin project instead of an empty folder:
+
+```bash
+hutch electrobun init odin-app --template=odin-particles-wgpu
+```
+
+Focused Odin graphics templates also exist: `odin-fluid-wgpu`,
+`odin-jelly-bunny-wgpu`, `odin-alchemy-wgpu`, and `odin-tree-wgpu`.
+
+## Toolchain
+
+Odin is pre-1.0 and ships monthly dev releases with breaking changes;
+Electrobun pins **Odin dev-2026-07a** and guarantees the SDK only against
+that release. Hutch uses a system compiler only on an exact version match;
+otherwise it downloads the pinned toolchain into
+`~/.dash/toolchains/odin/<version>/<platform>` and reuses it across projects.
+The compiler is not bundled into the finished app.
+
+Platform requirements: macOS needs the Xcode Command Line Tools, Linux needs
+`clang`, and Windows needs Visual Studio Build Tools (MSVC `link.exe`) plus
+the Windows SDK. Native main processes build for the host OS/arch only —
+there is no cross-compilation, so use native CI runners for a release matrix.
+Windows is x64 only (Windows-on-ARM runs the x64 build under emulation).
+
+Next: [Native main process](/electrobun/guides/native-main-process/) for the
+runtime comparison and deeper build details, and the
+[main process APIs](/electrobun/apis/main/) reference.

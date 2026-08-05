@@ -1,20 +1,31 @@
 ---
 title: "Main Process API"
-description: "Import Electrobun's TypeScript main-process SDK."
+description: "The Electrobun main-process SDK in Cottontail, Bun, Zig, Rust, Go, and Odin."
 ---
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
-The main-process SDK manages application lifecycle, windows, native menus,
-updates, and communication with webviews. Cottontail is the default runtime;
-`electrobun/main` works with both Cottontail and Bun main processes.
+Electrobun exposes the same native core to **six main-process runtimes**:
+Cottontail (the default), Bun, Zig, Rust, Go, and Odin. The TypeScript SDK
+(`electrobun/main`) serves Cottontail and Bun; each native language has its
+own SDK that loads `ElectrobunCore` directly. Pick your runtime once — code
+snippets across these docs follow your selection.
 
-Named imports are recommended:
+Cottontail and Bun share the TypeScript SDK today, but they are separate
+runtime choices (`build.mainProcess: "cottontail"` vs `"bun"`) and will
+diverge over time — treat the tabs as distinct even where the code currently
+matches. See [Main Process Runtimes](/electrobun/guides/native-main-process/)
+for choosing, and the per-runtime
+[Hello World walkthroughs](/electrobun/guides/hello-world/) for complete
+setup.
+
+## Your first window
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
 
 ```ts
-import {
-  BrowserWindow,
-  ApplicationMenu,
-  Utils,
-} from "electrobun/main";
+// src/bun/index.ts — Cottontail executes TypeScript directly.
+import { BrowserWindow, ApplicationMenu, Utils } from "electrobun/main";
 
 const win = new BrowserWindow({
   title: "My app",
@@ -29,21 +40,165 @@ Utils.showNotification({ title: "Application started" });
 void win;
 ```
 
-A default namespace export is also available:
+</TabItem>
+<TabItem label="Bun">
 
 ```ts
-import Electrobun from "electrobun/main";
+// src/bun/index.ts — same TypeScript SDK, running on the actual Bun runtime.
+import { BrowserWindow, ApplicationMenu, Utils } from "electrobun/main";
 
-const win = new Electrobun.BrowserWindow({
+const win = new BrowserWindow({
   title: "My app",
   url: "views://mainview/index.html",
 });
 
+ApplicationMenu.setApplicationMenu([
+  { label: "File", submenu: [{ role: "quit" }] },
+]);
+
+Utils.showNotification({ title: "Application started" });
 void win;
 ```
 
-The package root, `electrobun`, currently resolves to the same main-process SDK.
-Use `electrobun/view` inside browser bundles.
+</TabItem>
+<TabItem label="Zig">
 
-The former `electrobun/bun` namespace remains available as a deprecated alias
-for `electrobun/main` so existing 1.x applications can migrate incrementally.
+```zig
+// src/zig/main.zig — the core is a dynamic library; windows are created
+// from a worker thread while runMainThread blocks. Full setup in the
+// Zig hello world.
+const electrobun = @import("electrobun");
+
+// ...inside the UI thread, after configureWebviewRuntimeFromExecutableDir:
+const window_id = try core.createWindow(.{
+    .title = "My app",
+    .frame = .{ .x = 160, .y = 100, .width = 800, .height = 600 },
+});
+
+_ = try core.createWebview(.{
+    .window_id = window_id,
+    .url = "views://mainview/index.html",
+    .frame = .{ .x = 0, .y = 0, .width = 800, .height = 600 },
+    .callbacks = .{ .decide_navigation = electrobun.allowAllNavigation },
+});
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+// src/rust/main.rs — hutch wraps your file in a generated crate, so the
+// SDK is `crate::electrobun` and your entry is `pub fn main()`. Full setup
+// in the Rust hello world.
+use crate::electrobun::{Core, Rect, WebviewOptions, WindowOptions};
+
+// ...inside the UI thread, after configure_webview_runtime_from_executable_dir:
+let window_options =
+    WindowOptions::new("My app", Rect::new(160.0, 100.0, 800.0, 600.0));
+let window_id = core.create_window(window_options)?;
+
+let webview_options = WebviewOptions::new(
+    window_id,
+    "views://mainview/index.html",
+    Rect::new(0.0, 0.0, 800.0, 600.0),
+);
+core.create_webview(webview_options)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+// src/go/main.go — import "electrobun" (hutch builds in GOPATH mode; no
+// go.mod needed). Windows are created from a goroutine while
+// RunMainThread blocks. Full setup in the Go hello world.
+import "electrobun"
+
+// ...inside the UI goroutine, after ConfigureWebviewRuntimeFromExecutableDir:
+windowOptions := electrobun.NewWindowOptions(
+    "My app",
+    electrobun.NewRect(160, 100, 800, 600),
+)
+windowID, err := core.CreateWindow(windowOptions)
+
+webviewOptions := electrobun.NewWebviewOptions(
+    windowID,
+    "views://mainview/index.html",
+    electrobun.NewRect(0, 0, 800, 600),
+)
+_, err = core.CreateWebview(webviewOptions)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+// src/odin/main.odin — windows are created from a worker thread while
+// runMainThread blocks. Full setup in the Odin hello world.
+import electrobun "electrobun_sdk:electrobun"
+
+// ...inside the UI thread, after configureWebviewRuntimeFromExecutableDir:
+window_options := electrobun.defaultWindowOptions("My app")
+window_options.frame = {x = 160, y = 100, width = 800, height = 600}
+window_id, _ := electrobun.createWindow(core, window_options)
+
+webview_options := electrobun.defaultWebviewOptions(window_id)
+webview_options.url = "views://mainview/index.html"
+webview_options.frame = {x = 0, y = 0, width = 800, height = 600}
+electrobun.createWebview(core, webview_options)
+```
+
+</TabItem>
+</Tabs>
+
+<Aside type="note">
+Exact native option and callback shapes vary slightly per language — each
+native snippet in these docs is verbatim-compatible with its SDK, and the
+generated templates are the canonical, complete references.
+</Aside>
+
+## The TypeScript SDK (Cottontail and Bun)
+
+Named imports are recommended:
+
+```ts
+import { BrowserWindow, ApplicationMenu, Utils } from "electrobun/main";
+```
+
+A default namespace export is also available (`import Electrobun from
+"electrobun/main"`). The package root, `electrobun`, currently resolves to
+the same main-process SDK; use `electrobun/view` inside browser bundles. The
+former `electrobun/bun` namespace remains a deprecated alias for
+`electrobun/main` so 1.x applications can migrate incrementally.
+
+## Runtime coverage
+
+The TypeScript SDK has the broadest high-level surface. The native SDKs
+mirror the core contract procedurally (ids + callbacks instead of classes).
+What exists where:
+
+| API area | Cottontail | Bun | Zig | Rust | Go | Odin |
+| --- | :-: | :-: | :-: | :-: | :-: | :-: |
+| Windows & webviews | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| WGPU views (native GPU surfaces) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Application & context menus | ✓ typed | ✓ typed | JSON | JSON | JSON | JSON |
+| Tray (create/show/title) | ✓ + events | ✓ + events | ✓ ¹ | ✓ ¹ | ✓ + clicks | ✓ ¹ |
+| Dialogs, message box, notifications | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Clipboard, displays, shell open/reveal/trash | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Sessions & cookies | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Global shortcuts | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| [Paths](/electrobun/apis/paths/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Typed RPC (`createRPC`) | ✓ | ✓ | raw bridge ² | raw bridge ² | raw bridge ² | raw bridge ² |
+| [Updater](/electrobun/apis/updater/) | ✓ | ✓ | — | — | — | — |
+| [Warren UI](/electrobun/apis/ui/overview/) (`main/ui`) | ✓ | ✓ | — | — | — | — |
+| three.js / Babylon WebGPU adapters | ✓ | ✓ | — | — | — | — |
+
+¹ Zig, Rust, and Odin create and manage tray items, but their wrappers do
+not yet surface tray click events; Go's `TrayOptions.Handler` does receive
+them. Tray menus remain TypeScript-only everywhere.
+² Native SDKs exchange raw JSON messages with `Electroview` in the webview
+(the request/response envelope is implemented by hand; the templates show
+the full pattern). The webview-side SDK is identical for every runtime.
+
+Pages for TypeScript-only features say so at the top; everything else shows
+a tab per supported runtime.
