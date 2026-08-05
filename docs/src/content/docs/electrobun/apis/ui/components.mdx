@@ -8,20 +8,23 @@ import { Aside } from "@astrojs/starlight/components";
 Electrobun UI is experimental and its APIs may change between releases.
 </Aside>
 
-Elements are functions on the `ui` object (plus a few standalone imports).
-Children are declared in a callback; every element returns its node id
-(a `number`), which advanced code can use with the tree APIs.
+In JSX, elements are the intrinsics `<box>`, `<row>`, `<column>`, `<text>`,
+and `<spacer>`; everything else here (`each`, `dynamic`, `textInput`,
+`webview`, `wgpuSurface`) is a builder function used inside a JSX
+builder-escape child: `{() => ui.each(...)}`. The same functions are also a
+complete JSX-free API for plain `.ts` files — see
+[What the JSX becomes](/electrobun/guides/electrobun-ui/#what-the-jsx-becomes).
 
-```ts
-import { $, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
+```tsx
+import { _, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
 ```
 
 Any prop typed `Reactive<T>` accepts a plain value or a thunk explicitly
-marked with `$()` (alias of `reactive()`). Marked thunks become fine-grained
-effects: `bg: $(() => hover() ? "#232336" : "#1b1b28")` re-runs only when
+marked with `_()` (alias of `reactive()`). Marked thunks become fine-grained
+effects: `bg={_(() => hover() ? "#232336" : "#1b1b28")}` re-runs only when
 its signals change and updates only that property. Bare functions in value
-positions throw — so `$(` is a complete, greppable index of a component's
-reactivity. Event handlers and children builders stay plain functions.
+positions throw — so `_(` is a complete, greppable index of a component's
+reactivity. Event handlers and builder-escape children stay plain functions.
 
 ## ui.box(props, children?)
 
@@ -87,11 +90,15 @@ A reactive region: `builder` re-runs — and the subtree rebuilds — whenever a
 signal it reads changes. Props are `ui.box` props. Use it for conditionals
 and small lists; prefer `ui.each` for keyed lists.
 
-```ts
-ui.dynamic({}, () => {
-  if (!loggedIn()) ui.text("Sign in");
-  else Profile();
-});
+```tsx
+<column>
+  {() =>
+    ui.dynamic({}, () => {
+      if (!loggedIn()) ui.text("Sign in");
+      else ui.text("Welcome back");
+    })
+  }
+</column>
 ```
 
 ## ui.each(props, items, key, render)
@@ -100,17 +107,21 @@ Keyed list reconciliation. Rows are diffed by key: unchanged rows keep their
 subtree (and any per-row state) across filters and reorders; removed rows are
 disposed with their reactive scope.
 
-```ts
-ui.each(
-  { dir: "column", gap: 4 },
-  () => state.todos,          // Accessor<readonly T[]>
-  (todo) => todo.id,          // stable key
-  (todo, index) => {          // index is a reactive accessor
-    ui.row({ pad: 8, bg: $(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
-      ui.text(todo.title);
-    });
-  },
-);
+```tsx
+<column grow={1}>
+  {() =>
+    ui.each(
+      { dir: "column", gap: 4 },
+      () => state.todos,          // Accessor<readonly T[]>
+      (todo) => todo.id,          // stable key
+      (todo, index) => {          // index is a reactive accessor
+        ui.row({ pad: 8, bg: _(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
+          ui.text(todo.title);
+        });
+      },
+    )
+  }
+</column>
 ```
 
 ## ui.anchor(props)
@@ -157,16 +168,20 @@ Created lazily on first layout, removed with its scope.
 A controlled single-line text input: focus ring, caret with blink, editing
 (insert, backspace, word/line navigation via alt/cmd), placeholder, submit.
 
-```ts
+```tsx
 const [query, setQuery] = createSignal("");
 
-textInput({
-  value: query,
-  onInput: setQuery,
-  onSubmit: (value) => run(value),
-  placeholder: "Search...",
-  autofocus: true,
-});
+<column pad={10}>
+  {() =>
+    textInput({
+      value: query,
+      onInput: setQuery,
+      onSubmit: (value) => run(value),
+      placeholder: "Search...",
+      autofocus: true,
+    })
+  }
+</column>
 ```
 
 | Prop | Type | Purpose |

@@ -25,14 +25,14 @@ import { Align, Justify } from "./layout";
 import { parseColor } from "./paint";
 
 /**
- * A value prop: a plain value, or a thunk marked with `$()` / `reactive()`.
+ * A value prop: a plain value, or a thunk marked with `_()` / `reactive()`.
  * Bare functions are rejected so reactive boundaries stay searchable.
  */
 export type Reactive<T> = T | ReactiveThunk<T>;
 
 function bareFunctionError(): never {
 	throw new Error(
-		'ui: a value prop received a bare function. Wrap reactive expressions with $(() => ...) from "electrobun/main/ui", or pass a plain value.',
+		'ui: a value prop received a bare function. Wrap reactive expressions with _(() => ...) from "electrobun/main/ui", or pass a plain value.',
 	);
 }
 

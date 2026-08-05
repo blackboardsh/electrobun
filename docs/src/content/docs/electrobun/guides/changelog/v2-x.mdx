@@ -76,7 +76,8 @@ Electrobun 2.0 ships an experimental reactive UI runtime at
 webview, browser DOM, or compile step.
 
 - Fine-grained reactivity (signals, memos, effects, and stores with
-  `produce()`), with any element prop accepting a reactive thunk.
+  `produce()`) with explicit `_()`-marked reactive expressions, and JSX
+  support with no added build tooling (Cottontail's built-in transpiler).
 - A retained tree with flex-style layout, hit testing, and invalidation-only
   rendering — one instanced Dawn draw call per dirty frame, zero work while
   idle or hidden.

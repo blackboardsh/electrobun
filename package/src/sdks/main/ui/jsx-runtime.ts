@@ -7,7 +7,7 @@
 // - Elements are lazy values; mounting creates nodes parent-first.
 // - Components are plain functions called once with their props (Solid-style,
 //   no re-render); they return elements.
-// - Reactivity stays explicit: `bg={$(() => ...)}` is reactive, `bg={value}`
+// - Reactivity stays explicit: `bg={_(() => ...)}` is reactive, `bg={value}`
 //   is static, and a bare function child `{() => ui.anything(...)}` is a
 //   builder escape that runs against the current parent — so the whole
 //   builder API (each, dynamic, textInput, webview, wgpuSurface) is usable
@@ -89,7 +89,7 @@ function createIntrinsic(type: IntrinsicName, props: Record<string, unknown>): v
 		case "text": {
 			if (Array.isArray(children)) {
 				throw new Error(
-					"<text> takes a single child (string, number, or $(() => ...)); compose the string inside one expression.",
+					"<text> takes a single child (string, number, or _(() => ...)); compose the string inside one expression.",
 				);
 			}
 			ui.text(

@@ -2,7 +2,7 @@
 // signals — the whole runtime except the GPU and the window.
 
 import { describe, expect, test } from "bun:test";
-import { $, createRoot, createSignal, createStore, produce } from "../reactive";
+import { _, createRoot, createSignal, createStore, produce } from "../reactive";
 import { Prop } from "../tree";
 import { computeLayout } from "../layout";
 import { hitChain } from "../hit";
@@ -40,7 +40,7 @@ describe("builder API", () => {
 	test("thunk props become fine-grained effects on one tree prop", () => {
 		const [bg, setBg] = createSignal("#111111");
 		const { ctx } = build(() => {
-			ui.box({ bg: $(bg) });
+			ui.box({ bg: _(bg) });
 		});
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getProp(box!, Prop.Bg)).toBe(parseColor("#111111"));
@@ -53,7 +53,7 @@ describe("builder API", () => {
 	test("reactive text updates the text node", () => {
 		const [count, setCount] = createSignal(0);
 		const { ctx } = build(() => {
-			ui.text($(() => `Count: ${count()}`));
+			ui.text(_(() => `Count: ${count()}`));
 		});
 	});
 
@@ -63,18 +63,18 @@ describe("builder API", () => {
 			build(() => {
 				ui.box({ bg: bg as any });
 			}),
-		).toThrow(/\$\(/);
+		).toThrow(/_\(/);
 		expect(() =>
 			build(() => {
 				ui.text((() => "nope") as any);
 			}),
-		).toThrow(/\$\(/);
+		).toThrow(/_\(/);
 	});
 
 	test("reactive text updates via marker", () => {
 		const [count, setCount] = createSignal(0);
 		const { ctx } = build(() => {
-			ui.text($(() => `Count: ${count()}`));
+			ui.text(_(() => `Count: ${count()}`));
 		});
 		const [label] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getText(label!)).toBe("Count: 0");

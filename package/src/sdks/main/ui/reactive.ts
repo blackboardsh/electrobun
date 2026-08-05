@@ -28,8 +28,8 @@ export function reactive<T>(fn: () => T): ReactiveThunk<T> {
 	return fn as ReactiveThunk<T>;
 }
 
-/** Short alias for {@link reactive}: `bg: $(() => hover() ? a : b)`. */
-export const $ = reactive;
+/** Short alias for {@link reactive}: `bg: _(() => hover() ? a : b)`. */
+export const _ = reactive;
 
 export function isReactive(value: unknown): value is ReactiveThunk<unknown> {
 	return (

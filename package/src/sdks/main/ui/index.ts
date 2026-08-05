@@ -1,7 +1,7 @@
 // Public surface of the prototype UI runtime.
 
 export {
-	$,
+	_,
 	batch,
 	createEffect,
 	createMemo,

@@ -1,11 +1,11 @@
 // Cottontail UI showcase, JSX edition — no compiler beyond the transpiler
 // Cottontail already ships (tsconfig: jsx react-jsx, jsxImportSource
-// electrobun/main/ui). Reactivity stays explicit: $() marks every reactive
+// electrobun/main/ui). Reactivity stays explicit: _() marks every reactive
 // expression; bare function children are builder escapes.
 
 import { webgpu } from "electrobun/main";
 import {
-	$,
+	_,
 	createMemo,
 	createSignal,
 	createStore,
@@ -96,7 +96,7 @@ function Button(props: {
 			pad={12}
 			radius={9}
 			justify="center"
-			bg={$(() =>
+			bg={_(() =>
 				active()
 					? theme.surfaceActive
 					: hover()
@@ -104,7 +104,7 @@ function Button(props: {
 						: theme.surface,
 			)}
 			border={1}
-			borderColor={$(() => (hover() ? accent() : theme.line))}
+			borderColor={_(() => (hover() ? accent() : theme.line))}
 			onClick={props.onClick}
 			onPointerEnter={() => setHover(true)}
 			onPointerLeave={() => {
@@ -150,8 +150,8 @@ function Counter(): UIElement {
 			<text size={12} color={theme.textMuted}>
 				A reactive UI runtime without a webview
 			</text>
-			<text size={88} color={$(accent)}>
-				{$(() => String(count()))}
+			<text size={88} color={_(accent)}>
+				{_(() => String(count()))}
 			</text>
 			<row gap={10}>
 				<Button label="- 1" onClick={() => adjust(-1)} width={92} />
@@ -183,7 +183,7 @@ function EventLog(): UIElement {
 					}
 					for (const entry of log.entries) {
 						ui.row({ gap: 8 }, () => {
-							ui.text(`#${entry.n}`, { size: 12, color: $(accent) });
+							ui.text(`#${entry.n}`, { size: 12, color: _(accent) });
 							ui.text(entry.label, { size: 12, color: theme.textPrimary });
 						});
 					}
@@ -359,7 +359,7 @@ const uiWindow = await createUIWindow(
 
 		return (
 			<column grow={1}>
-				<Header sizeLabel={$(sizeLabel)} />
+				<Header sizeLabel={_(sizeLabel)} />
 				<Divider />
 				<row grow={1}>
 					<column grow={3}>

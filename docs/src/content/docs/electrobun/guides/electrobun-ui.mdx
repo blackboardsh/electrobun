@@ -1,6 +1,6 @@
 ---
 title: "Electrobun UI"
-description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no compile step."
+description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no build tooling."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
@@ -10,13 +10,14 @@ Electrobun UI is experimental. APIs may change between releases. See
 </Aside>
 
 Electrobun UI is a small, reactive UI runtime that renders through Dawn
-(WebGPU) directly from the main process. There is no webview, no browser DOM,
-and no build step: you write plain TypeScript against `electrobun/main/ui`,
-and the Cottontail bundler handles the rest.
+(WebGPU) directly from the main process. There is no webview, no browser
+DOM, and no build tooling: you write `.tsx` against `electrobun/main/ui`,
+and Cottontail's built-in transpiler — the same one that already handles
+your TypeScript — does the rest. Nothing gets added to your toolchain.
 
 ```
 signals / stores (createSignal, createStore + produce)
-        ↓  fine-grained per-prop effects
+        ↓  explicit _() reactive thunks, one effect per expression
 retained UI tree
         ↓
 layout + hit testing
@@ -30,8 +31,7 @@ window costs literally nothing.
 
 ## Hello world
 
-Create a project with a `bundleWGPU` config and point the Cottontail
-entrypoint at a plain TypeScript file:
+Point the Cottontail entrypoint at a `.tsx` file:
 
 ```ts
 // electrobun.config.ts
@@ -41,7 +41,7 @@ export default {
   app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
   build: {
     mainProcess: "cottontail",
-    cottontail: { entrypoint: "src/main.ts" },
+    cottontail: { entrypoint: "src/main.tsx" },
     mac: { bundleCEF: false, bundleWGPU: true },
     linux: { bundleCEF: false, bundleWGPU: true },
     win: { bundleCEF: false, bundleWGPU: true },
@@ -49,149 +49,137 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-```ts
-// src/main.ts
-import { $, createSignal, ui, createUIWindow } from "electrobun/main/ui";
-
-const [count, setCount] = createSignal(0);
-
-await createUIWindow(
-  { title: "Hello UI", width: 420, height: 240 },
-  () => {
-    ui.column({ grow: 1, justify: "center", align: "center", gap: 16 }, () => {
-      ui.text($(() => `Count: ${count()}`), { size: 32, color: "#e4e4f0" });
-      ui.box(
-        {
-          pad: 12,
-          radius: 8,
-          bg: "#1b1b28",
-          border: 1,
-          borderColor: "#3b3b58",
-          onClick: () => setCount((c) => c + 1),
-        },
-        () => {
-          ui.text("Click me", { size: 14, color: "#e4e4f0" });
-        },
-      );
-    });
-  },
-);
-```
-
-Run it with `bun start` (`hutch electrobun dev`). Three things to notice:
-
-- **Children are declared in callbacks**, so code indents like markup.
-- **Reactivity is explicit.** Anything wrapped in `$(() => ...)` is tracked
-  and becomes one fine-grained effect updating exactly one thing; bare
-  functions in value positions are an error. Search a file for `$(` to find
-  every reactive boundary.
-- **Components are plain functions.** Wrap the button in
-  `function Button(label, onClick) { ... }` and you have a component — no
-  compiler, no JSX, no registration.
-
-## JSX (optional, no compiler)
-
-The same UI can be written as JSX — Cottontail's built-in transpiler handles
-`.tsx` files, so there is still no build step. Point your `tsconfig.json` at
-the runtime:
+Tell TypeScript (your editor and `tsc`) which JSX types to use. This is
+type-checking configuration, not a build step — Cottontail transpiles `.tsx`
+natively either way:
 
 ```json
+// tsconfig.json (for editor/typechecking only)
 { "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/main/ui" } }
 ```
 
+Then write components:
+
 ```tsx
-import { $, createSignal, createUIWindow } from "electrobun/main/ui";
+// src/main.tsx
+import { _, createSignal, createUIWindow } from "electrobun/main/ui";
 
 function Counter() {
   const [count, setCount] = createSignal(0);
   return (
     <column grow={1} justify="center" align="center" gap={16}>
-      <text size={32} color="#e4e4f0">{$(() => `Count: ${count()}`)}</text>
-      <box pad={12} radius={8} bg="#1b1b28" onClick={() => setCount((c) => c + 1)}>
+      <text size={32} color="#e4e4f0">{_(() => `Count: ${count()}`)}</text>
+      <box
+        pad={12}
+        radius={8}
+        bg="#1b1b28"
+        border={1}
+        borderColor="#3b3b58"
+        onClick={() => setCount((c) => c + 1)}
+      >
         <text size={14} color="#e4e4f0">Click me</text>
       </box>
     </column>
   );
 }
 
-await createUIWindow({ title: "Hello", width: 420, height: 240 }, () => <Counter />);
+await createUIWindow({ title: "Hello UI", width: 420, height: 240 }, () => <Counter />);
 ```
 
-The rules carry over exactly: `$()` marks reactivity (`{$(() => ...)}` for
-text, `bg={$(() => ...)}` for props), components are plain functions
-returning elements, and a bare function child — `{() => ui.each(...)}` — is
-a builder escape, so the entire builder API (`each`, `dynamic`, `textInput`,
-`webview`, `wgpuSurface`) works inside JSX unchanged. Intrinsics: `<box>`,
-`<row>`, `<column>`, `<text>`, `<spacer>`. The `ui-wgpu` template ships as
-`.tsx`.
+Run it with `bun start` (`hutch electrobun dev`). Three rules cover
+everything:
 
-## Embedding a webview
+- **Reactivity is explicit.** `_(() => ...)` marks a tracked expression —
+  it becomes one fine-grained effect updating exactly one thing. Static
+  values stay bare (`bg="#1b1b28"`), and bare functions in value positions
+  are an error. Search a file for `_(` to find every reactive boundary.
+- **Components are plain functions** called once with their props — no
+  re-rendering, no hooks rules, no registration.
+- **Handlers are plain functions** (`onClick={() => ...}`) — never tracked.
 
-The UI tree can position real out-of-process webviews. The `webview` element
-occupies layout space like any box; Electrobun's native compositor places the
-actual webview over it:
+## What the JSX becomes
+
+There is exactly one transform, and Cottontail's transpiler applies it
+automatically: each JSX tag becomes a `jsx()` call that returns a lazy
+element, and mounting runs those elements against the retained tree. This:
+
+```tsx
+<column gap={16}>
+  <text size={32}>{_(() => `Count: ${count()}`)}</text>
+</column>
+```
+
+is transpiled to (and behaves identically to):
 
 ```ts
-import { ui, webview, createUIWindow } from "electrobun/main/ui";
-
-await createUIWindow({ title: "Hybrid", width: 900, height: 600 }, () => {
-  ui.row({ grow: 1 }, () => {
-    ui.column({ width: 240, pad: 16, gap: 8, bg: "#16161e" }, () => {
-      ui.text("GPU-rendered sidebar", { size: 13, color: "#e4e4f0" });
-      // ... reactive chrome here ...
-    });
-    webview({
-      grow: 1,
-      url: "https://electrobun.dev",
-    });
-  });
+jsx("column", {
+  gap: 16,
+  children: jsx("text", { size: 32, children: _(() => `Count: ${count()}`) }),
 });
 ```
 
-Resize the window and both panes reflow together: the sidebar is drawn by the
-UI runtime, the page is a real webview, and one layout tree owns both
-rectangles. `webview` also accepts `html` for inline content, plus
-`partition` and `sandbox` like [`BrowserView`](/electrobun/apis/browser-view/).
+which, when mounted, drives the underlying builder API —
+`ui.column(...)` / `ui.text(...)` — the same functions you can call directly
+from plain `.ts` if you prefer no JSX at all. The two styles are one API.
+
+## Embedding a webview
+
+The UI tree can position real out-of-process webviews. A bare function child
+is a *builder escape* — it runs builder-API code (here the `webview`
+element) at that spot in the tree:
+
+```tsx
+import { webview, createUIWindow } from "electrobun/main/ui";
+
+await createUIWindow({ title: "Hybrid", width: 900, height: 600 }, () => (
+  <row grow={1}>
+    <column width={240} pad={16} gap={8} bg="#16161e">
+      <text size={13} color="#e4e4f0">GPU-rendered sidebar</text>
+    </column>
+    {() => webview({ grow: 1, url: "https://electrobun.dev" })}
+  </row>
+));
+```
+
+Resize the window and both panes reflow together: the sidebar is drawn by
+the UI runtime, the page is a real webview, and one layout tree owns both
+rectangles. `webview` also accepts `html`, `partition`, and `sandbox` like
+[`BrowserView`](/electrobun/apis/browser-view/).
 
 ## Embedding a WGPU layer
 
 `wgpuSurface` gives you a raw Dawn view positioned by the layout — your own
 render pipeline inside a UI-managed rectangle:
 
-```ts
+```tsx
 import { webgpu } from "electrobun/main";
-import { ui, wgpuSurface, createUIWindow } from "electrobun/main/ui";
+import { wgpuSurface, createUIWindow } from "electrobun/main/ui";
 
-await createUIWindow({ title: "GPU panel", width: 720, height: 480 }, () => {
-  ui.column({ grow: 1, pad: 12, gap: 8 }, () => {
-    ui.text("Custom WGPU below", { size: 12, color: "#8c8ca8" });
-    wgpuSurface({
-      grow: 1,
-      onReady: async (view) => {
-        const { context } = webgpu.createContext(view);
-        const adapter = await webgpu.navigator.requestAdapter({
-          compatibleSurface: context,
-        });
-        const device = await adapter.requestDevice();
-        context._fallbackSize = {
-          width: view.frame.width,
-          height: view.frame.height,
-        };
-        context.configure({ device, format: "bgra8unorm" });
-        // ...create your pipeline and render into context.getCurrentTexture()...
-      },
-      onFrame: (view, rect) => {
-        // called when layout moves/resizes the surface
-      },
-    });
-  });
-});
+await createUIWindow({ title: "GPU panel", width: 720, height: 480 }, () => (
+  <column grow={1} pad={12} gap={8}>
+    <text size={12} color="#8c8ca8">Custom WGPU below</text>
+    {() =>
+      wgpuSurface({
+        grow: 1,
+        onReady: async (view) => {
+          const { context } = webgpu.createContext(view);
+          const adapter = await webgpu.navigator.requestAdapter({
+            compatibleSurface: context,
+          });
+          const device = await adapter.requestDevice();
+          context.configure({ device, format: "bgra8unorm" });
+          // ...create your pipeline, render into context.getCurrentTexture()...
+        },
+      })
+    }
+  </column>
+));
 ```
 
 The `view` handed to `onReady` is a regular
-[`WGPUView`](/electrobun/apis/webgpu/) — everything from the WebGPU adapter
-API works against it. The `templates/ui-wgpu` template renders an animated
-Mandelbrot this way.
+[`WGPUView`](/electrobun/apis/webgpu/) — everything in the WebGPU adapter
+API works against it. The `ui-wgpu` template renders an animated Mandelbrot
+this way.
 
 ## Where to go next
 
@@ -201,7 +189,7 @@ Mandelbrot this way.
 - [Reactivity](/electrobun/apis/ui/reactivity/) — signals, stores, effects.
 - [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/) — layering reactive
   native UI on top of web content.
-- Templates: `ui-wgpu` (counter + embedded webview + Mandelbrot),
+- Templates: `ui-wgpu` (JSX counter + embedded webview + Mandelbrot),
   `ui-color-picker` (tray eyedropper), `ui-launcher` (command palette).
 
 ## Current limitations

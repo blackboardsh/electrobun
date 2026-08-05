@@ -2,7 +2,7 @@
 // each(), the keymap/edit reducer, focus wiring, and textInput editing.
 
 import { describe, expect, test } from "bun:test";
-import { $, createRoot, createSignal, createStore, produce } from "../reactive";
+import { _, createRoot, createSignal, createStore, produce } from "../reactive";
 import { NodeKind, Prop, UiTree } from "../tree";
 import { computeLayout } from "../layout";
 import { FLOATS_PER_INSTANCE, paint } from "../paint";
@@ -194,7 +194,7 @@ describe("keyed each", () => {
 		const runs: string[] = [];
 		build(() => {
 			ui.each({}, items, (s) => s, (s) => {
-				ui.text($(() => {
+				ui.text(_(() => {
 					tick();
 					runs.push(s);
 					return s;
@@ -211,7 +211,7 @@ describe("keyed each", () => {
 		const [items, setItems] = createSignal(["a", "b"]);
 		const { ctx } = build(() => {
 			ui.each({}, items, (s) => s, (s, index) => {
-				ui.text($(() => `${s}:${index()}`));
+				ui.text(_(() => `${s}:${index()}`));
 			});
 		});
 		const [region] = ctx.tree.childrenOf(ctx.tree.root);

@@ -2,7 +2,7 @@
 // directly (what the transpiler emits for .tsx files).
 
 import { describe, expect, test } from "bun:test";
-import { $, createRoot, createSignal } from "../reactive";
+import { _, createRoot, createSignal } from "../reactive";
 import { NodeKind, Prop, UiTree } from "../tree";
 import { createUiContext, ui, withUiContext, type UiContext } from "../ui";
 import { Fragment, jsx, isUIElement, type UIElement } from "../jsx-runtime";
@@ -58,7 +58,7 @@ describe("jsx runtime", () => {
 	test("reactive text children via $ update in place", () => {
 		const [count, setCount] = createSignal(0);
 		const { ctx } = mountApp(() =>
-			jsx("box", { children: $(() => `n=${count()}`) }),
+			jsx("box", { children: _(() => `n=${count()}`) }),
 		);
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		const [label] = ctx.tree.childrenOf(box!);
@@ -69,7 +69,7 @@ describe("jsx runtime", () => {
 
 	test("reactive props via $ work in JSX", () => {
 		const [bg, setBg] = createSignal("#111111");
-		const { ctx } = mountApp(() => jsx("box", { bg: $(bg) }));
+		const { ctx } = mountApp(() => jsx("box", { bg: _(bg) }));
 		const [box] = ctx.tree.childrenOf(ctx.tree.root);
 		expect(ctx.tree.getProp(box!, Prop.Bg)).toBe(parseColor("#111111"));
 		setBg("#222222");

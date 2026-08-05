@@ -11,7 +11,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	$,
+	_,
 	createEffect,
 	createMemo,
 	createSignal,
@@ -228,7 +228,7 @@ function ResultRow(entry: Entry, index: () => number) {
 			gap: 10,
 			radius: 8,
 			align: "center",
-			bg: $(() => (selected() === index() ? theme.rowSelected : theme.row)),
+			bg: _(() => (selected() === index() ? theme.rowSelected : theme.row)),
 			onClick: () => {
 				setSelected(index());
 				activate(index());
@@ -242,7 +242,7 @@ function ResultRow(entry: Entry, index: () => number) {
 					radius: 7,
 					justify: "center",
 					align: "center",
-					bg: $(() => (selected() === index() ? theme.accent : "#2a2a3e")),
+					bg: _(() => (selected() === index() ? theme.accent : "#2a2a3e")),
 				},
 				() => {
 					ui.text(entry.badge, { size: 14, color: theme.textPrimary });
@@ -360,20 +360,20 @@ function Palette() {
 						dir: "column",
 						height: LIST_H,
 						overflow: "scroll",
-						scroll: $(listScroll),
+						scroll: _(listScroll),
 					},
 					() => {
 						ui.each({ dir: "column", gap: ROW_GAP }, results, (e) => e.key, ResultRow);
 					},
 				);
 				ui.row({ pad: 4, gap: 8, align: "center" }, () => {
-					ui.text($(() => `enter runs - esc collapses${activeShortcut() ? ` - ${activeShortcut()} toggles` : ""}`), {
+					ui.text(_(() => `enter runs - esc collapses${activeShortcut() ? ` - ${activeShortcut()} toggles` : ""}`), {
 						size: 9,
 						color: theme.textFaint,
 					});
 					ui.spacer();
-					ui.text($(() => flash()), { size: 10, color: theme.good });
-					ui.text($(() => `${results().length} results`), {
+					ui.text(_(() => flash()), { size: 10, color: theme.good });
+					ui.text(_(() => `${results().length} results`), {
 						size: 9,
 						color: theme.textFaint,
 					});

@@ -8,7 +8,7 @@
 import { defineTest } from "../../test-framework/types";
 import Electrobun from "electrobun/main";
 import {
-	$,
+	_,
 	createSignal,
 	createStore,
 	onKey,
@@ -95,8 +95,8 @@ export const uiInputEventTests = [
 							ui.box({ width: 58 });
 							ui.text("input event monitor", { size: 14, color: theme.text });
 							ui.spacer();
-							ui.text($(() => pathLabel()), { size: 11, color: theme.good });
-							ui.text($(() => `cursor ${pos().x.toFixed(0)},${pos().y.toFixed(0)}`),
+							ui.text(_(() => pathLabel()), { size: 11, color: theme.good });
+							ui.text(_(() => `cursor ${pos().x.toFixed(0)},${pos().y.toFixed(0)}`),
 								{ size: 11, color: theme.faint },
 							);
 						});
@@ -113,9 +113,9 @@ export const uiInputEventTests = [
 										pad: 12,
 										radius: 8,
 										justify: "center",
-										bg: $(() => (hover() ? theme.rowHover : theme.row)),
+										bg: _(() => (hover() ? theme.rowHover : theme.row)),
 										border: 1,
-										borderColor: $(() => (hover() ? theme.accent : theme.line)),
+										borderColor: _(() => (hover() ? theme.accent : theme.line)),
 										onClick: () => {
 											setClicks((c) => c + 1);
 											push("ui", "click", `button (total ${untrack(clicks)})`);
@@ -130,7 +130,7 @@ export const uiInputEventTests = [
 										},
 									},
 									() => {
-										ui.text($(() => `hover + click me (${clicks()})`), {
+										ui.text(_(() => `hover + click me (${clicks()})`), {
 											size: 12,
 											color: theme.text,
 										});
@@ -164,7 +164,7 @@ export const uiInputEventTests = [
 									placeholder: "type here - chars shown in log",
 									focusBorderColor: theme.accent,
 								});
-								ui.text($(() =>
+								ui.text(_(() =>
 										lastChars()
 											? `last chars: "${lastChars()}"`
 											: "last chars: -"),

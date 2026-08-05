@@ -13,7 +13,7 @@ import { Screen, Tray, Utils, webgpu } from "electrobun/main";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	$,
+	_,
 	batch,
 	charForKey,
 	createMemo,
@@ -226,7 +226,7 @@ function ZoomGrid() {
 						ui.box({
 							width: CELL,
 							height: CELL,
-							bg: $(() => cells()[i]! >>> 0),
+							bg: _(() => cells()[i]! >>> 0),
 							border: isCenter ? 1.5 : 0,
 							borderColor: theme.textPrimary,
 						});
@@ -250,9 +250,9 @@ function ZoomGrid() {
 				width: 8,
 				height: 8,
 				radius: 4,
-				bg: $(() => (!hasScreenAccess() ? "#f7768e" : MODE_COLOR[mode()])),
+				bg: _(() => (!hasScreenAccess() ? "#f7768e" : MODE_COLOR[mode()])),
 			});
-			ui.text($(() => (!hasScreenAccess() ? "no access - click here" : mode())),
+			ui.text(_(() => (!hasScreenAccess() ? "no access - click here" : mode())),
 				{ size: 9, color: theme.textFaint },
 			);
 			},
@@ -269,15 +269,15 @@ function FormatRow(format: Format) {
 			radius: 6,
 			gap: 8,
 			align: "center",
-			bg: $(() => (ctx.hoveredId() === id ? theme.rowHover : theme.row)),
+			bg: _(() => (ctx.hoveredId() === id ? theme.rowHover : theme.row)),
 			border: 1,
-			borderColor: $(() => (copyFormat() === format ? theme.accent : theme.line)),
+			borderColor: _(() => (copyFormat() === format ? theme.accent : theme.line)),
 			onClick: () => copy(format),
 		},
 		() => {
 			ui.text(format.toUpperCase(), { size: 10, color: theme.textFaint });
 			ui.spacer();
-			ui.text($(() => formatColor(centerColor(), format)), {
+			ui.text(_(() => formatColor(centerColor(), format)), {
 				size: 11,
 				color: theme.textPrimary,
 			});
@@ -296,17 +296,17 @@ function CopyFormatSelector() {
 				radius: 6,
 				gap: 6,
 				align: "center",
-				bg: $(() => (ctx.hoveredId() === headerId ? theme.rowHover : "#00000000")),
+				bg: _(() => (ctx.hoveredId() === headerId ? theme.rowHover : "#00000000")),
 				onClick: () => setExpanded((v) => !v),
 			},
 			() => {
 				ui.text("cmd+C copies", { size: 10, color: theme.textFaint });
 				ui.spacer();
-				ui.text($(() => copyFormat().toUpperCase()), {
+				ui.text(_(() => copyFormat().toUpperCase()), {
 					size: 11,
 					color: theme.accent,
 				});
-				ui.text($(() => (expanded() ? "^" : "v")), {
+				ui.text(_(() => (expanded() ? "^" : "v")), {
 					size: 10,
 					color: theme.textFaint,
 				});
@@ -320,10 +320,10 @@ function CopyFormatSelector() {
 					{
 						pad: 6,
 						radius: 5,
-						bg: $(() =>
+						bg: _(() =>
 							ctx.hoveredId() === chipId ? theme.rowHover : theme.row),
 						border: 1,
-						borderColor: $(() =>
+						borderColor: _(() =>
 							copyFormat() === format ? theme.accent : theme.line),
 						onClick: () => {
 							batch(() => {
@@ -335,7 +335,7 @@ function CopyFormatSelector() {
 					() => {
 						ui.text(format.toUpperCase(), {
 							size: 10,
-							color: $(() =>
+							color: _(() =>
 								copyFormat() === format
 									? theme.accent
 									: theme.textMuted),
@@ -373,20 +373,20 @@ function ModeButtons() {
 				pad: 7,
 				radius: 6,
 				justify: "center",
-				bg: $(() =>
+				bg: _(() =>
 					active()
 						? activeBg
 						: ctx.hoveredId() === id
 							? theme.rowHover
 							: theme.row),
 				border: 1,
-				borderColor: $(() => (active() ? activeColor : theme.line)),
+				borderColor: _(() => (active() ? activeColor : theme.line)),
 				onClick,
 			},
 			() => {
-				ui.text($(label), {
+				ui.text(_(label), {
 					size: 10,
-					color: $(() => (active() ? activeColor : theme.textMuted)),
+					color: _(() => (active() ? activeColor : theme.textMuted)),
 				});
 			},
 		);
@@ -417,21 +417,21 @@ function ColorPanel() {
 				width: 44,
 				height: 44,
 				radius: 8,
-				bg: $(() => centerColor()),
+				bg: _(() => centerColor()),
 				border: 1,
 				borderColor: theme.line,
 			});
 			ui.column({ gap: 2 }, () => {
-				ui.text($(() => formatColor(centerColor(), "hex")), {
+				ui.text(_(() => formatColor(centerColor(), "hex")), {
 					size: 16,
 					color: theme.textPrimary,
 				});
-				ui.text($(() => {
+				ui.text(_(() => {
 					const c = copied();
 					return c ? `copied ${c}` : "click a row to copy";
 				}), {
 					size: 10,
-					color: $(() => (copied() ? "#9ece6a" : theme.textFaint)),
+					color: _(() => (copied() ? "#9ece6a" : theme.textFaint)),
 				});
 			});
 		});
