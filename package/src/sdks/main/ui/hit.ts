@@ -32,3 +32,15 @@ export function hitChain(tree: UiTree, x: number, y: number): number[] {
 	}
 	return chain;
 }
+
+/** Innermost scroll container (Overflow=1) under the point, or 0. */
+export function scrollTargetAt(tree: UiTree, x: number, y: number): number {
+	for (
+		let id = deepestAt(tree, tree.root, x, y);
+		id !== 0;
+		id = tree.parentOf(id)
+	) {
+		if (tree.getProp(id, Prop.Overflow) === 1) return id;
+	}
+	return 0;
+}

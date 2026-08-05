@@ -762,6 +762,11 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 
+			setWGPUPointerHandler: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
 				returns: FFIType.void,
@@ -2492,6 +2497,47 @@ const windowBlurCallback = new JSCallback(
 		threadsafe: true,
 	},
 );
+
+// Native pointer events from WGPU views. Type: 0 move, 1 down, 2 up,
+// 3 wheel, 4 enter, 5 exit. Registered lazily by enableWGPUPointerEvents.
+const wgpuPointerCallback = new JSCallback(
+	(viewId, type, x, y, buttonOrDx, dy, modifiers) => {
+		electrobunEventEmitter.emit(`wgpu-pointer-${viewId}`, {
+			type,
+			x,
+			y,
+			buttonOrDx,
+			dy,
+			modifiers,
+		});
+	},
+	{
+		args: ["u32", "u32", "f64", "f64", "f64", "f64", "u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+let wgpuPointerEventsEnabled = false;
+/**
+ * Route native pointer events (move/down/up/wheel/enter/exit) from all WGPU
+ * views onto the event emitter as `wgpu-pointer-<viewId>`. Returns false when
+ * the native wrapper does not support it (older binaries / other platforms).
+ */
+export function enableWGPUPointerEvents(): boolean {
+	if (wgpuPointerEventsEnabled) return true;
+	if (!hasFFI) return false;
+	try {
+		if (typeof native_.symbols.setWGPUPointerHandler !== "function") {
+			return false;
+		}
+		native_.symbols.setWGPUPointerHandler(wgpuPointerCallback.ptr);
+		wgpuPointerEventsEnabled = true;
+		return true;
+	} catch {
+		return false;
+	}
+}
 
 // global event
 const windowKeyCallback = new JSCallback(

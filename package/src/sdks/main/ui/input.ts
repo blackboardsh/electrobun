@@ -1,12 +1,12 @@
-// Input for the prototype: poll the cursor and global mouse-button bitmask,
-// edge-detect presses, and translate window keyboard events. Works against
-// any native window id (GpuWindow or BrowserWindow host), with an optional
-// offset when the UI tree renders inside a child view rather than the whole
-// window. Production work is native pointer/move/button/wheel events on
-// WGPUView — this file is the part that gets replaced, which is why it stays
-// behind a small interface.
+// Input for the UI runtime. Preferred path: native pointer events from the
+// render target's WGPUView (move/down/up/wheel/enter/exit with view-local,
+// top-left coordinates) — no polling, no focus gating, wheel scrolling.
+// Fallback path (older native binaries / platforms without the handler):
+// poll the cursor and global button bitmask as before.
+//
+// Keyboard arrives via native window key events in both paths.
 
-import { ffi, Screen } from "../proc/native";
+import { enableWGPUPointerEvents, ffi, Screen } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import type { KeyEventInfo } from "./ui";
 
@@ -19,6 +19,7 @@ export interface InputSink {
 		x: number,
 		y: number,
 	): void;
+	dispatchWheel(x: number, y: number, dx: number, dy: number): void;
 	dispatchKey(e: KeyEventInfo): void;
 	/** True when pressing this node should drag the host window. */
 	isDragHandle(id: number): boolean;
@@ -29,36 +30,93 @@ export interface InputDriver {
 	dispose(): void;
 }
 
+interface DragState {
+	startX: number;
+	startY: number;
+	frameX: number;
+	frameY: number;
+	targetId: number;
+	moved: boolean;
+}
+
 export function attachInput(
 	windowId: number,
+	viewId: number,
 	viewOffset: () => { x: number; y: number },
 	sink: InputSink,
 ): InputDriver {
-	let focused = true;
 	let hoverId = 0;
 	let downId = 0;
-	let wasDown = false;
-	let drag: {
-		startX: number;
-		startY: number;
-		frameX: number;
-		frameY: number;
-		targetId: number;
-		moved: boolean;
-	} | null = null;
+	let drag: DragState | null = null;
 
-	const onFocus = () => {
-		focused = true;
+	const syncHover = (x: number, y: number): number => {
+		const top = sink.hitChain(x, y)[0] ?? 0;
+		if (top !== hoverId) {
+			if (hoverId !== 0) sink.dispatchPointer("leave", hoverId, x, y);
+			if (top !== 0) sink.dispatchPointer("enter", top, x, y);
+			hoverId = top;
+		}
+		return top;
 	};
-	const onBlur = () => {
-		focused = false;
+
+	const clearHover = () => {
 		if (hoverId !== 0) {
 			sink.dispatchPointer("leave", hoverId, -1, -1);
 			hoverId = 0;
 		}
-		wasDown = false;
+	};
+
+	const beginDragIfHandle = (top: number) => {
+		if (top !== 0 && sink.isDragHandle(top)) {
+			const point = Screen.getCursorScreenPoint();
+			const frame = ffi.request.getWindowFrame({ winId: windowId });
+			drag = {
+				startX: point.x,
+				startY: point.y,
+				frameX: frame.x,
+				frameY: frame.y,
+				targetId: top,
+				moved: false,
+			};
+		}
+	};
+
+	const dragMove = () => {
+		if (!drag) return;
+		const point = Screen.getCursorScreenPoint();
+		const dx = point.x - drag.startX;
+		const dy = point.y - drag.startY;
+		if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
+		if (drag.moved) {
+			ffi.request.setWindowPosition({
+				winId: windowId,
+				x: drag.frameX + dx,
+				y: drag.frameY + dy,
+			});
+		}
+	};
+
+	const endPress = (top: number, x: number, y: number) => {
+		if (drag) {
+			sink.dispatchPointer("up", drag.targetId, x, y);
+			if (!drag.moved) sink.dispatchPointer("click", drag.targetId, x, y);
+			drag = null;
+			downId = 0;
+			return;
+		}
+		if (top !== 0) sink.dispatchPointer("up", top, x, y);
+		if (downId !== 0 && downId !== top) {
+			// Released outside the pressed node: let it reset state.
+			sink.dispatchPointer("up", downId, x, y);
+		}
+		if (downId !== 0 && downId === top) {
+			sink.dispatchPointer("click", top, x, y);
+		}
 		downId = 0;
 	};
+
+	// ---- Keyboard (both paths) ----
+
 	const onKeyDown = (event: any) => {
 		const data = event?.data ?? {};
 		sink.dispatchKey({
@@ -67,10 +125,83 @@ export function attachInput(
 			isRepeat: Boolean(data.isRepeat),
 		});
 	};
+	electrobunEventEmitter.on(`keyDown-${windowId}`, onKeyDown);
 
+	// ---- Native pointer events path ----
+
+	if (enableWGPUPointerEvents()) {
+		const onPointer = (e: {
+			type: number;
+			x: number;
+			y: number;
+			buttonOrDx: number;
+			dy: number;
+		}) => {
+			const { x, y } = e;
+			switch (e.type) {
+				case 0: {
+					// move / drag-move
+					if (drag) {
+						dragMove();
+						return;
+					}
+					syncHover(x, y);
+					break;
+				}
+				case 1: {
+					// down (left button only participates in UI presses)
+					if (e.buttonOrDx !== 0) return;
+					const top = syncHover(x, y);
+					downId = top;
+					sink.dispatchPointer("down", top, x, y);
+					beginDragIfHandle(top);
+					break;
+				}
+				case 2: {
+					if (e.buttonOrDx !== 0) return;
+					const top = drag ? drag.targetId : syncHover(x, y);
+					endPress(top, x, y);
+					break;
+				}
+				case 3: {
+					sink.dispatchWheel(x, y, e.buttonOrDx, e.dy);
+					break;
+				}
+				case 5: {
+					clearHover();
+					break;
+				}
+			}
+		};
+		electrobunEventEmitter.on(`wgpu-pointer-${viewId}`, onPointer);
+
+		return {
+			poll() {
+				// Event-driven: nothing to poll.
+			},
+			dispose() {
+				electrobunEventEmitter.off(`wgpu-pointer-${viewId}`, onPointer);
+				electrobunEventEmitter.off(`keyDown-${windowId}`, onKeyDown);
+			},
+		};
+	}
+
+	// ---- Polling fallback ----
+
+	let focused = true;
+	let wasDown = false;
+
+	const onFocus = () => {
+		focused = true;
+	};
+	const onBlur = () => {
+		focused = false;
+		clearHover();
+		wasDown = false;
+		downId = 0;
+	};
 	electrobunEventEmitter.on(`focus-${windowId}`, onFocus);
 	electrobunEventEmitter.on(`blur-${windowId}`, onBlur);
-	electrobunEventEmitter.on(`keyDown-${windowId}`, onKeyDown);
 
 	return {
 		poll() {
@@ -80,41 +211,16 @@ export function attachInput(
 			const x = point.x - frame.x - offset.x;
 			const y = point.y - frame.y - offset.y;
 
-			// Window drag in progress: move the window with the cursor and
-			// suppress normal dispatch until release. A press that never moved
-			// still delivers a click, so drag handles stay clickable.
 			if (drag) {
 				const stillDown =
 					focused && (Number(Screen.getMouseButtons()) & 1) === 1;
-				if (stillDown) {
-					const dx = point.x - drag.startX;
-					const dy = point.y - drag.startY;
-					if (Math.abs(dx) + Math.abs(dy) > 3) drag.moved = true;
-					if (drag.moved) {
-						ffi.request.setWindowPosition({
-							winId: windowId,
-							x: drag.frameX + dx,
-							y: drag.frameY + dy,
-						});
-					}
-				} else {
-					sink.dispatchPointer("up", drag.targetId, x, y);
-					if (!drag.moved) {
-						sink.dispatchPointer("click", drag.targetId, x, y);
-					}
-					drag = null;
-					downId = 0;
-				}
+				if (stillDown) dragMove();
+				else endPress(drag.targetId, x, y);
 				wasDown = stillDown;
 				return;
 			}
 
-			const top = sink.hitChain(x, y)[0] ?? 0;
-			if (top !== hoverId) {
-				if (hoverId !== 0) sink.dispatchPointer("leave", hoverId, x, y);
-				if (top !== 0) sink.dispatchPointer("enter", top, x, y);
-				hoverId = top;
-			}
+			const top = syncHover(x, y);
 
 			// Gate button state on focus so clicks on other apps or windows
 			// stacked above ours don't register.
@@ -124,26 +230,9 @@ export function attachInput(
 				downId = top;
 				// Dispatched even for target 0: a background press blurs focus.
 				sink.dispatchPointer("down", top, x, y);
-				if (top !== 0 && sink.isDragHandle(top)) {
-					drag = {
-						startX: point.x,
-						startY: point.y,
-						frameX: frame.x,
-						frameY: frame.y,
-						targetId: top,
-						moved: false,
-					};
-				}
+				beginDragIfHandle(top);
 			} else if (!isDown && wasDown) {
-				if (top !== 0) sink.dispatchPointer("up", top, x, y);
-				if (downId !== 0 && downId !== top) {
-					// Released outside the pressed node: let it reset state.
-					sink.dispatchPointer("up", downId, x, y);
-				}
-				if (downId !== 0 && downId === top) {
-					sink.dispatchPointer("click", top, x, y);
-				}
-				downId = 0;
+				endPress(top, x, y);
 			}
 			wasDown = isDown;
 		},

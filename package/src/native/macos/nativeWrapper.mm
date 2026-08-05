@@ -3133,7 +3133,25 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 @end
 
 // ----------------------- WGPUViewImpl -----------------------
+
+// Native pointer events for WGPU views. Event types:
+// 0 move, 1 down, 2 up, 3 wheel, 4 enter, 5 exit.
+// x/y are view-local points with a top-left origin. For down/up, buttonOrDx
+// carries the button number (0 left, 1 right, 2 middle); for wheel,
+// buttonOrDx/dy carry precise scroll deltas.
+typedef void (*WGPUPointerHandler)(uint32_t viewId,
+                                   uint32_t eventType,
+                                   double x, double y,
+                                   double buttonOrDx, double dy,
+                                   uint32_t modifiers);
+static WGPUPointerHandler g_wgpuPointerHandler = nullptr;
+
+extern "C" void setWGPUPointerHandler(WGPUPointerHandler handler) {
+    g_wgpuPointerHandler = handler;
+}
+
 @interface WGPUInputView : NSView
+@property (nonatomic, assign) uint32_t wgpuViewId;
 @end
 
 @implementation WGPUInputView
@@ -3202,6 +3220,53 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                                 0);
         }
     }
+
+    // ---- Pointer events ----
+
+    - (void)updateTrackingAreas {
+        [super updateTrackingAreas];
+        for (NSTrackingArea *area in [self.trackingAreas copy]) {
+            [self removeTrackingArea:area];
+        }
+        NSTrackingArea *area = [[NSTrackingArea alloc]
+            initWithRect:NSZeroRect
+                 options:(NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                          NSTrackingActiveAlways | NSTrackingInVisibleRect)
+                   owner:self
+                userInfo:nil];
+        [self addTrackingArea:area];
+    }
+
+    - (void)emitPointer:(uint32_t)type event:(NSEvent*)event dx:(double)dx dy:(double)dy {
+        if (!g_wgpuPointerHandler) return;
+        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+        double localY = self.isFlipped ? p.y : self.bounds.size.height - p.y;
+        g_wgpuPointerHandler(self.wgpuViewId, type, p.x, localY, dx, dy,
+                             [self modifierMaskFromEvent:event]);
+    }
+
+    - (void)mouseMoved:(NSEvent*)event   { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)mouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)rightMouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)otherMouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)mouseDown:(NSEvent*)event    { [self emitPointer:1 event:event dx:0 dy:0]; }
+    - (void)rightMouseDown:(NSEvent*)event { [self emitPointer:1 event:event dx:1 dy:0]; }
+    - (void)otherMouseDown:(NSEvent*)event { [self emitPointer:1 event:event dx:2 dy:0]; }
+    - (void)mouseUp:(NSEvent*)event      { [self emitPointer:2 event:event dx:0 dy:0]; }
+    - (void)rightMouseUp:(NSEvent*)event { [self emitPointer:2 event:event dx:1 dy:0]; }
+    - (void)otherMouseUp:(NSEvent*)event { [self emitPointer:2 event:event dx:2 dy:0]; }
+    - (void)mouseEntered:(NSEvent*)event { [self emitPointer:4 event:event dx:0 dy:0]; }
+    - (void)mouseExited:(NSEvent*)event  { [self emitPointer:5 event:event dx:0 dy:0]; }
+
+    - (void)scrollWheel:(NSEvent*)event {
+        double dx = [event scrollingDeltaX];
+        double dy = [event scrollingDeltaY];
+        if (![event hasPreciseScrollingDeltas]) {
+            dx *= 10.0;
+            dy *= 10.0;
+        }
+        [self emitPointer:3 event:event dx:dx dy:dy];
+    }
 @end
 
 @implementation WGPUViewImpl
@@ -3216,7 +3281,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-                NSView *view = [[WGPUInputView alloc] initWithFrame:frame];
+                WGPUInputView *view = [[WGPUInputView alloc] initWithFrame:frame];
+                view.wgpuViewId = webviewId;
                 view.wantsLayer = YES;
                 view.layer.backgroundColor = [[NSColor clearColor] CGColor];
 

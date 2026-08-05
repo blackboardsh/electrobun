@@ -13,7 +13,7 @@ import { GpuWindow } from "../core/GpuWindow";
 import type { WGPUView } from "../core/WGPUView";
 import { batch, createRoot, untrack } from "./reactive";
 import { Prop } from "./tree";
-import { hitChain } from "./hit";
+import { hitChain, scrollTargetAt } from "./hit";
 import { computeLayout } from "./layout";
 import { paint } from "./paint";
 import { createUiRenderer } from "./renderer";
@@ -63,6 +63,8 @@ export interface UIView extends UIMount {
 
 interface MountTarget {
 	renderTarget: GpuWindow | WGPUView;
+	/** WGPUView id whose native pointer events drive this mount. */
+	viewId: number;
 	windowId: number;
 	getSize(): { width: number; height: number };
 	/** Offset of the render target inside the window's content area. */
@@ -132,8 +134,21 @@ async function mount(
 		if (fn) batch(() => fn(event));
 	};
 
-	const input = attachInput(target.windowId, target.viewOffset, {
+	const input = attachInput(target.windowId, target.viewId, target.viewOffset, {
 		hitChain: (x, y) => hitChain(tree, x, y),
+		dispatchWheel: (x, y, dx, dy) => {
+			const targetId = scrollTargetAt(tree, x, y);
+			if (targetId === 0) return;
+			const node = tree.get(targetId);
+			const column = tree.getProp(targetId, Prop.Dir) === 1;
+			const delta = column ? dy : dx;
+			const viewport = column ? node.h : node.w;
+			const max = Math.max(0, node.contentMain - viewport);
+			const current = tree.getProp(targetId, Prop.Scroll);
+			// Natural scrolling: positive delta scrolls content down/right.
+			const next = Math.max(0, Math.min(max, current - delta));
+			tree.setProp(targetId, Prop.Scroll, next);
+		},
 		isDragHandle: (id) => {
 			if (!target.allowWindowDrag) return false;
 			for (let n = id; n !== 0 && tree.has(n); n = tree.parentOf(n)) {
@@ -237,6 +252,7 @@ export async function createUIWindow(
 	const mounted = await mount(
 		{
 			renderTarget: win,
+			viewId: win.wgpuViewId,
 			windowId: win.id,
 			getSize: () => win.getSize(),
 			viewOffset: () => ({ x: 0, y: 0 }),
@@ -279,6 +295,7 @@ export async function createUIView(
 	const mounted = await mount(
 		{
 			renderTarget: view,
+			viewId: view.id,
 			windowId: view.windowId,
 			getSize: () => ({
 				width: view.frame.width,
