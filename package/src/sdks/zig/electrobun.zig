@@ -1,21 +1,65 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const WindowCloseHandler = *const fn (u32) callconv(.C) void;
-pub const WindowShouldCloseHandler = *const fn (u32) callconv(.C) void;
-pub const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.C) void;
-pub const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
-pub const WindowFocusHandler = *const fn (u32) callconv(.C) void;
-pub const WindowBlurHandler = *const fn (u32) callconv(.C) void;
-pub const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.C) void;
-pub const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.C) u32;
-pub const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) void;
-pub const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
-pub const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.C) void;
-pub const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.C) void;
-pub const QuitRequestedHandler = *const fn () callconv(.C) void;
-pub const URLOpenHandler = *const fn ([*:0]const u8) callconv(.C) void;
-pub const AppReopenHandler = *const fn () callconv(.C) void;
+// The SDK owns a lazily-initialized event-loop-free Io implementation so its
+// allocator-based public API keeps working without threading `std.Io` through
+// every call site. Apps with their own `Io` can keep using it side by side.
+var io_state: struct {
+    status: std.atomic.Value(u8) = .init(0), // 0 = uninitialized, 1 = initializing, 2 = ready
+    threaded: std.Io.Threaded = undefined,
+} = .{};
+
+/// The `std.Io` instance backing the SDK's filesystem and process helpers.
+pub fn defaultIo() std.Io {
+    while (true) {
+        switch (io_state.status.load(.acquire)) {
+            2 => return io_state.threaded.io(),
+            0 => {
+                if (io_state.status.cmpxchgStrong(0, 1, .acquire, .acquire) == null) {
+                    io_state.threaded = std.Io.Threaded.init(std.heap.page_allocator, .{
+                        .environ = processEnviron(),
+                    });
+                    io_state.status.store(2, .release);
+                    return io_state.threaded.io();
+                }
+            },
+            else => std.atomic.spinLoopHint(),
+        }
+    }
+}
+
+/// The calling process's environment variables.
+pub fn processEnviron() std.process.Environ {
+    return switch (builtin.os.tag) {
+        .windows => .{ .block = .global },
+        else => blk: {
+            const c_environ = std.c.environ;
+            var count: usize = 0;
+            while (c_environ[count] != null) : (count += 1) {}
+            break :blk .{ .block = .{ .slice = @ptrCast(c_environ[0..count :null]) } };
+        },
+    };
+}
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    return processEnviron().getAlloc(allocator, key);
+}
+
+pub const WindowCloseHandler = *const fn (u32) callconv(.c) void;
+pub const WindowShouldCloseHandler = *const fn (u32) callconv(.c) void;
+pub const WindowMoveHandler = *const fn (u32, f64, f64) callconv(.c) void;
+pub const WindowResizeHandler = *const fn (u32, f64, f64, f64, f64) callconv(.c) void;
+pub const WindowFocusHandler = *const fn (u32) callconv(.c) void;
+pub const WindowBlurHandler = *const fn (u32) callconv(.c) void;
+pub const WindowKeyHandler = *const fn (u32, u32, u32, u32, u32) callconv(.c) void;
+pub const DecideNavigationHandler = *const fn (u32, [*:0]const u8) callconv(.c) u32;
+pub const WebviewEventHandler = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.c) void;
+pub const WebviewPostMessageHandler = *const fn (u32, [*:0]const u8) callconv(.c) void;
+pub const StatusItemHandler = *const fn (u32, [*:0]const u8) callconv(.c) void;
+pub const GlobalShortcutHandler = *const fn ([*:0]const u8) callconv(.c) void;
+pub const QuitRequestedHandler = *const fn () callconv(.c) void;
+pub const URLOpenHandler = *const fn ([*:0]const u8) callconv(.c) void;
+pub const AppReopenHandler = *const fn () callconv(.c) void;
 
 pub const Renderer = enum {
     native,
@@ -350,13 +394,13 @@ pub const SessionPartition = struct {
     partition: []const u8,
 
     pub fn getCookies(self: SessionPartition, filter: ?CookieFilter) ![]Cookie {
-        const filter_json = try std.json.stringifyAlloc(self.core.allocator, filter orelse CookieFilter{}, .{});
+        const filter_json = try std.json.Stringify.valueAlloc(self.core.allocator, filter orelse CookieFilter{}, .{});
         defer self.core.allocator.free(filter_json);
         return self.core.sessionGetCookies(self.partition, filter_json);
     }
 
     pub fn setCookie(self: SessionPartition, cookie: Cookie) !bool {
-        const cookie_json = try std.json.stringifyAlloc(self.core.allocator, cookie, .{});
+        const cookie_json = try std.json.Stringify.valueAlloc(self.core.allocator, cookie, .{});
         defer self.core.allocator.free(cookie_json);
         return self.core.sessionSetCookie(self.partition, cookie_json);
     }
@@ -381,7 +425,7 @@ pub const SessionPartition = struct {
             names[index] = @tagName(storage_type);
         }
 
-        const storage_types_json = try std.json.stringifyAlloc(self.core.allocator, names, .{});
+        const storage_types_json = try std.json.Stringify.valueAlloc(self.core.allocator, names, .{});
         defer self.core.allocator.free(storage_types_json);
         try self.core.sessionClearStorageData(self.partition, storage_types_json);
     }
@@ -409,8 +453,8 @@ pub const WgpuNative = struct {
     lib: std.DynLib,
     symbols: Symbols,
 
-    const CreateInstanceFn = *const fn (?*const anyopaque) callconv(.C) ?*anyopaque;
-    const DeviceGetQueueFn = *const fn (?*anyopaque) callconv(.C) ?*anyopaque;
+    const CreateInstanceFn = *const fn (?*const anyopaque) callconv(.c) ?*anyopaque;
+    const DeviceGetQueueFn = *const fn (?*anyopaque) callconv(.c) ?*anyopaque;
 
     const Symbols = struct {
         create_instance: CreateInstanceFn,
@@ -543,7 +587,7 @@ pub const BundlePaths = struct {
 };
 
 pub fn resolveBundlePaths(allocator: std.mem.Allocator) !BundlePaths {
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    const exe_path = try std.process.executablePathAlloc(defaultIo(), allocator);
     defer allocator.free(exe_path);
 
     const exe_dir_name = std.fs.path.dirname(exe_path) orelse return error.InvalidExePath;
@@ -586,122 +630,122 @@ pub const Core = struct {
     lib: std.DynLib,
     symbols: Symbols,
 
-    const LastErrorFn = *const fn () callconv(.C) [*:0]const u8;
-    const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.C) c_int;
-    const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
-    const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.C) u32;
-    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.C) u32;
-    const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool, bool) callconv(.C) u32;
-    const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.C) u32;
-    const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const MinimizeWindowFn = *const fn (u32) callconv(.C) void;
-    const RestoreWindowFn = *const fn (u32) callconv(.C) void;
-    const IsWindowMinimizedFn = *const fn (u32) callconv(.C) bool;
-    const MaximizeWindowFn = *const fn (u32) callconv(.C) void;
-    const UnmaximizeWindowFn = *const fn (u32) callconv(.C) void;
-    const IsWindowMaximizedFn = *const fn (u32) callconv(.C) bool;
-    const SetWindowFullScreenFn = *const fn (u32, bool) callconv(.C) void;
-    const IsWindowFullScreenFn = *const fn (u32) callconv(.C) bool;
-    const SetWindowAlwaysOnTopFn = *const fn (u32, bool) callconv(.C) void;
-    const IsWindowAlwaysOnTopFn = *const fn (u32) callconv(.C) bool;
-    const SetWindowVisibleOnAllWorkspacesFn = *const fn (u32, bool) callconv(.C) void;
-    const IsWindowVisibleOnAllWorkspacesFn = *const fn (u32) callconv(.C) bool;
-    const ShowWindowFn = *const fn (u32, bool) callconv(.C) void;
-    const ActivateWindowFn = *const fn (u32) callconv(.C) void;
-    const HideWindowFn = *const fn (u32) callconv(.C) void;
-    const IsWindowVisibleFn = *const fn (u32) callconv(.C) bool;
-    const SetWindowButtonPositionFn = *const fn (u32, f64, f64) callconv(.C) void;
-    const GetWindowButtonPositionFn = *const fn (u32, *f64, *f64) callconv(.C) void;
-    const CenterWindowFn = *const fn (u32) callconv(.C) void;
-    const SetWindowPositionFn = *const fn (u32, f64, f64) callconv(.C) void;
-    const SetWindowSizeFn = *const fn (u32, f64, f64) callconv(.C) void;
-    const SetWindowFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
-    const GetWindowFrameFn = *const fn (u32, *f64, *f64, *f64, *f64) callconv(.C) void;
-    const CloseWindowFn = *const fn (u32) callconv(.C) void;
-    const RequestWindowCloseFn = *const fn (u32) callconv(.C) void;
-    const ResizeWebviewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
-    const LoadURLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const LoadHTMLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const UpdatePreloadScriptToWebViewFn = *const fn (u32, [*:0]const u8, [*:0]const u8, bool) callconv(.C) void;
-    const WebviewCanGoBackFn = *const fn (u32) callconv(.C) bool;
-    const WebviewCanGoForwardFn = *const fn (u32) callconv(.C) bool;
-    const WebviewGoBackFn = *const fn (u32) callconv(.C) void;
-    const WebviewGoForwardFn = *const fn (u32) callconv(.C) void;
-    const WebviewReloadFn = *const fn (u32) callconv(.C) void;
-    const WebviewRemoveFn = *const fn (u32) callconv(.C) void;
-    const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const WebviewSetTransparentFn = *const fn (u32, bool) callconv(.C) void;
-    const WebviewSetPassthroughFn = *const fn (u32, bool) callconv(.C) void;
-    const WebviewSetHiddenFn = *const fn (u32, bool) callconv(.C) void;
-    const WebviewSetSpellCheckFn = *const fn (u32, bool) callconv(.C) bool;
-    const SetWebviewNavigationRulesFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const WebviewFindInPageFn = *const fn (u32, [*:0]const u8, bool, bool) callconv(.C) void;
-    const WebviewStopFindFn = *const fn (u32) callconv(.C) void;
-    const SendInternalMessageToWebviewFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
-    const SendHostMessageToWebviewViaTransportFn = *const fn (u32, [*:0]const u8) callconv(.C) bool;
-    const PopNextQueuedHostMessageFn = *const fn (*u32) callconv(.C) ?[*:0]u8;
-    const FreeCoreStringFn = *const fn (?[*:0]u8) callconv(.C) void;
-    const WebviewOpenDevToolsFn = *const fn (u32) callconv(.C) void;
-    const WebviewCloseDevToolsFn = *const fn (u32) callconv(.C) void;
-    const WebviewToggleDevToolsFn = *const fn (u32) callconv(.C) void;
-    const WebviewSetPageZoomFn = *const fn (u32, f64) callconv(.C) void;
-    const WebviewGetPageZoomFn = *const fn (u32) callconv(.C) f64;
-    const SetWGPUViewFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.C) void;
-    const ResizeWGPUViewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.C) void;
-    const SetWGPUViewTransparentFn = *const fn (u32, bool) callconv(.C) void;
-    const SetWGPUViewPassthroughFn = *const fn (u32, bool) callconv(.C) void;
-    const SetWGPUViewHiddenFn = *const fn (u32, bool) callconv(.C) void;
-    const RemoveWGPUViewFn = *const fn (u32) callconv(.C) void;
-    const GetWGPUViewPointerFn = *const fn (u32) callconv(.C) ?*anyopaque;
-    const GetWGPUViewNativeHandleFn = *const fn (u32) callconv(.C) ?*anyopaque;
-    const RunWGPUViewTestFn = *const fn (u32) callconv(.C) void;
-    const ToggleWGPUViewTestShaderFn = *const fn (u32) callconv(.C) void;
-    const EvaluateJavaScriptWithNoCompletionFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const CreateTrayFn = *const fn ([*:0]const u8, [*:0]const u8, bool, u32, u32, ?*const fn (u32, [*:0]const u8) callconv(.C) void) callconv(.C) u32;
-    const ShowTrayFn = *const fn (u32) callconv(.C) bool;
-    const HideTrayFn = *const fn (u32) callconv(.C) void;
-    const SetTrayTitleFn = *const fn (u32, [*:0]const u8) callconv(.C) void;
-    const RemoveTrayFn = *const fn (u32) callconv(.C) void;
-    const GetTrayBoundsFn = *const fn (u32) callconv(.C) [*:0]const u8;
-    const SetDockIconVisibleFn = *const fn (bool) callconv(.C) void;
-    const IsDockIconVisibleFn = *const fn () callconv(.C) bool;
-    const GetPrimaryDisplayFn = *const fn () callconv(.C) ?[*:0]const u8;
-    const GetAllDisplaysFn = *const fn () callconv(.C) ?[*:0]const u8;
-    const GetCursorScreenPointFn = *const fn () callconv(.C) ?[*:0]const u8;
-    const MoveToTrashFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const ShowItemInFolderFn = *const fn ([*:0]const u8) callconv(.C) void;
-    const OpenExternalFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const OpenPathFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const ShowNotificationFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, bool) callconv(.C) void;
-    const ClipboardReadTextFn = *const fn () callconv(.C) ?[*:0]const u8;
-    const ClipboardWriteTextFn = *const fn ([*:0]const u8) callconv(.C) void;
-    const ClipboardClearFn = *const fn () callconv(.C) void;
-    const ClipboardAvailableFormatsFn = *const fn () callconv(.C) ?[*:0]const u8;
-    const SetApplicationMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.C) void;
-    const ShowContextMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.C) void;
-    const OpenFileDialogFn = *const fn ([*:0]const u8, [*:0]const u8, c_int, c_int, c_int) callconv(.C) ?[*:0]const u8;
-    const ShowMessageBoxFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8, c_int, c_int) callconv(.C) c_int;
-    const SetGlobalShortcutCallbackFn = *const fn (?GlobalShortcutHandler) callconv(.C) void;
-    const RegisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const UnregisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const UnregisterAllGlobalShortcutsFn = *const fn () callconv(.C) void;
-    const IsGlobalShortcutRegisteredFn = *const fn ([*:0]const u8) callconv(.C) bool;
-    const SessionGetCookiesFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) ?[*:0]const u8;
-    const SessionSetCookieFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) bool;
-    const SessionRemoveCookieFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.C) bool;
-    const SessionClearCookiesFn = *const fn ([*:0]const u8) callconv(.C) void;
-    const SessionClearStorageDataFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.C) void;
-    const SetURLOpenHandlerFn = *const fn (?URLOpenHandler) callconv(.C) void;
-    const SetAppReopenHandlerFn = *const fn (?AppReopenHandler) callconv(.C) void;
-    const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.C) void;
-    const StopEventLoopFn = *const fn () callconv(.C) void;
-    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.C) void;
-    const ForceExitFn = *const fn (c_int) callconv(.C) void;
-    const WgpuCreateSurfaceForViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const WgpuCreateAdapterDeviceMainThreadFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.C) void;
-    const WgpuSurfaceConfigureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
-    const WgpuSurfaceGetCurrentTextureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
-    const WgpuSurfacePresentMainThreadFn = *const fn (?*anyopaque) callconv(.C) i32;
+    const LastErrorFn = *const fn () callconv(.c) [*:0]const u8;
+    const RunMainThreadFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, c_int) callconv(.c) c_int;
+    const ConfigureWebviewRuntimeFn = *const fn (u32, [*:0]const u8, [*:0]const u8) callconv(.c) bool;
+    const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.c) u32;
+    const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.c) u32;
+    const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool, bool) callconv(.c) u32;
+    const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.c) u32;
+    const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const MinimizeWindowFn = *const fn (u32) callconv(.c) void;
+    const RestoreWindowFn = *const fn (u32) callconv(.c) void;
+    const IsWindowMinimizedFn = *const fn (u32) callconv(.c) bool;
+    const MaximizeWindowFn = *const fn (u32) callconv(.c) void;
+    const UnmaximizeWindowFn = *const fn (u32) callconv(.c) void;
+    const IsWindowMaximizedFn = *const fn (u32) callconv(.c) bool;
+    const SetWindowFullScreenFn = *const fn (u32, bool) callconv(.c) void;
+    const IsWindowFullScreenFn = *const fn (u32) callconv(.c) bool;
+    const SetWindowAlwaysOnTopFn = *const fn (u32, bool) callconv(.c) void;
+    const IsWindowAlwaysOnTopFn = *const fn (u32) callconv(.c) bool;
+    const SetWindowVisibleOnAllWorkspacesFn = *const fn (u32, bool) callconv(.c) void;
+    const IsWindowVisibleOnAllWorkspacesFn = *const fn (u32) callconv(.c) bool;
+    const ShowWindowFn = *const fn (u32, bool) callconv(.c) void;
+    const ActivateWindowFn = *const fn (u32) callconv(.c) void;
+    const HideWindowFn = *const fn (u32) callconv(.c) void;
+    const IsWindowVisibleFn = *const fn (u32) callconv(.c) bool;
+    const SetWindowButtonPositionFn = *const fn (u32, f64, f64) callconv(.c) void;
+    const GetWindowButtonPositionFn = *const fn (u32, *f64, *f64) callconv(.c) void;
+    const CenterWindowFn = *const fn (u32) callconv(.c) void;
+    const SetWindowPositionFn = *const fn (u32, f64, f64) callconv(.c) void;
+    const SetWindowSizeFn = *const fn (u32, f64, f64) callconv(.c) void;
+    const SetWindowFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.c) void;
+    const GetWindowFrameFn = *const fn (u32, *f64, *f64, *f64, *f64) callconv(.c) void;
+    const CloseWindowFn = *const fn (u32) callconv(.c) void;
+    const RequestWindowCloseFn = *const fn (u32) callconv(.c) void;
+    const ResizeWebviewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.c) void;
+    const LoadURLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const LoadHTMLInWebViewFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const UpdatePreloadScriptToWebViewFn = *const fn (u32, [*:0]const u8, [*:0]const u8, bool) callconv(.c) void;
+    const WebviewCanGoBackFn = *const fn (u32) callconv(.c) bool;
+    const WebviewCanGoForwardFn = *const fn (u32) callconv(.c) bool;
+    const WebviewGoBackFn = *const fn (u32) callconv(.c) void;
+    const WebviewGoForwardFn = *const fn (u32) callconv(.c) void;
+    const WebviewReloadFn = *const fn (u32) callconv(.c) void;
+    const WebviewRemoveFn = *const fn (u32) callconv(.c) void;
+    const SetWebviewHTMLContentFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const WebviewSetTransparentFn = *const fn (u32, bool) callconv(.c) void;
+    const WebviewSetPassthroughFn = *const fn (u32, bool) callconv(.c) void;
+    const WebviewSetHiddenFn = *const fn (u32, bool) callconv(.c) void;
+    const WebviewSetSpellCheckFn = *const fn (u32, bool) callconv(.c) bool;
+    const SetWebviewNavigationRulesFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const WebviewFindInPageFn = *const fn (u32, [*:0]const u8, bool, bool) callconv(.c) void;
+    const WebviewStopFindFn = *const fn (u32) callconv(.c) void;
+    const SendInternalMessageToWebviewFn = *const fn (u32, [*:0]const u8) callconv(.c) bool;
+    const SendHostMessageToWebviewViaTransportFn = *const fn (u32, [*:0]const u8) callconv(.c) bool;
+    const PopNextQueuedHostMessageFn = *const fn (*u32) callconv(.c) ?[*:0]u8;
+    const FreeCoreStringFn = *const fn (?[*:0]u8) callconv(.c) void;
+    const WebviewOpenDevToolsFn = *const fn (u32) callconv(.c) void;
+    const WebviewCloseDevToolsFn = *const fn (u32) callconv(.c) void;
+    const WebviewToggleDevToolsFn = *const fn (u32) callconv(.c) void;
+    const WebviewSetPageZoomFn = *const fn (u32, f64) callconv(.c) void;
+    const WebviewGetPageZoomFn = *const fn (u32) callconv(.c) f64;
+    const SetWGPUViewFrameFn = *const fn (u32, f64, f64, f64, f64) callconv(.c) void;
+    const ResizeWGPUViewFn = *const fn (u32, f64, f64, f64, f64, [*:0]const u8) callconv(.c) void;
+    const SetWGPUViewTransparentFn = *const fn (u32, bool) callconv(.c) void;
+    const SetWGPUViewPassthroughFn = *const fn (u32, bool) callconv(.c) void;
+    const SetWGPUViewHiddenFn = *const fn (u32, bool) callconv(.c) void;
+    const RemoveWGPUViewFn = *const fn (u32) callconv(.c) void;
+    const GetWGPUViewPointerFn = *const fn (u32) callconv(.c) ?*anyopaque;
+    const GetWGPUViewNativeHandleFn = *const fn (u32) callconv(.c) ?*anyopaque;
+    const RunWGPUViewTestFn = *const fn (u32) callconv(.c) void;
+    const ToggleWGPUViewTestShaderFn = *const fn (u32) callconv(.c) void;
+    const EvaluateJavaScriptWithNoCompletionFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const CreateTrayFn = *const fn ([*:0]const u8, [*:0]const u8, bool, u32, u32, ?*const fn (u32, [*:0]const u8) callconv(.c) void) callconv(.c) u32;
+    const ShowTrayFn = *const fn (u32) callconv(.c) bool;
+    const HideTrayFn = *const fn (u32) callconv(.c) void;
+    const SetTrayTitleFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
+    const RemoveTrayFn = *const fn (u32) callconv(.c) void;
+    const GetTrayBoundsFn = *const fn (u32) callconv(.c) [*:0]const u8;
+    const SetDockIconVisibleFn = *const fn (bool) callconv(.c) void;
+    const IsDockIconVisibleFn = *const fn () callconv(.c) bool;
+    const GetPrimaryDisplayFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const GetAllDisplaysFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const GetCursorScreenPointFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const MoveToTrashFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const ShowItemInFolderFn = *const fn ([*:0]const u8) callconv(.c) void;
+    const OpenExternalFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const OpenPathFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const ShowNotificationFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, bool) callconv(.c) void;
+    const ClipboardReadTextFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const ClipboardWriteTextFn = *const fn ([*:0]const u8) callconv(.c) void;
+    const ClipboardClearFn = *const fn () callconv(.c) void;
+    const ClipboardAvailableFormatsFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const SetApplicationMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.c) void;
+    const ShowContextMenuFn = *const fn ([*:0]const u8, ?StatusItemHandler) callconv(.c) void;
+    const OpenFileDialogFn = *const fn ([*:0]const u8, [*:0]const u8, c_int, c_int, c_int) callconv(.c) ?[*:0]const u8;
+    const ShowMessageBoxFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8, [*:0]const u8, c_int, c_int) callconv(.c) c_int;
+    const SetGlobalShortcutCallbackFn = *const fn (?GlobalShortcutHandler) callconv(.c) void;
+    const RegisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const UnregisterGlobalShortcutFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const UnregisterAllGlobalShortcutsFn = *const fn () callconv(.c) void;
+    const IsGlobalShortcutRegisteredFn = *const fn ([*:0]const u8) callconv(.c) bool;
+    const SessionGetCookiesFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) ?[*:0]const u8;
+    const SessionSetCookieFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) bool;
+    const SessionRemoveCookieFn = *const fn ([*:0]const u8, [*:0]const u8, [*:0]const u8) callconv(.c) bool;
+    const SessionClearCookiesFn = *const fn ([*:0]const u8) callconv(.c) void;
+    const SessionClearStorageDataFn = *const fn ([*:0]const u8, [*:0]const u8) callconv(.c) void;
+    const SetURLOpenHandlerFn = *const fn (?URLOpenHandler) callconv(.c) void;
+    const SetAppReopenHandlerFn = *const fn (?AppReopenHandler) callconv(.c) void;
+    const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.c) void;
+    const StopEventLoopFn = *const fn () callconv(.c) void;
+    const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;
+    const ForceExitFn = *const fn (c_int) callconv(.c) void;
+    const WgpuCreateSurfaceForViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const WgpuCreateAdapterDeviceMainThreadFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void;
+    const WgpuSurfaceConfigureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
+    const WgpuSurfaceGetCurrentTextureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
+    const WgpuSurfacePresentMainThreadFn = *const fn (?*anyopaque) callconv(.c) i32;
 
     const Symbols = struct {
         last_error: LastErrorFn,
@@ -1488,7 +1532,7 @@ pub const Core = struct {
     }
 
     pub fn sendHostMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
-        const message_json = try std.json.stringifyAlloc(self.allocator, message, .{});
+        const message_json = try std.json.Stringify.valueAlloc(self.allocator, message, .{});
         defer self.allocator.free(message_json);
         const message_json_z = try self.dupeZ(message_json);
         defer self.allocator.free(message_json_z);
@@ -1520,7 +1564,7 @@ pub const Core = struct {
     }
 
     pub fn sendInternalMessageToWebview(self: *Core, webview_id: u32, message: anytype) !void {
-        const message_json = try std.json.stringifyAlloc(self.allocator, message, .{});
+        const message_json = try std.json.Stringify.valueAlloc(self.allocator, message, .{});
         defer self.allocator.free(message_json);
         const message_json_z = try self.dupeZ(message_json);
         defer self.allocator.free(message_json_z);
@@ -1902,9 +1946,9 @@ pub fn quit(code: u8) noreturn {
 
 fn getHomeDirOwned(allocator: std.mem.Allocator) ![]u8 {
     return switch (builtin.os.tag) {
-        .windows => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch
-            std.process.getEnvVarOwned(allocator, "HOME"),
-        else => std.process.getEnvVarOwned(allocator, "HOME"),
+        .windows => getEnvVarOwned(allocator, "USERPROFILE") catch
+            getEnvVarOwned(allocator, "HOME"),
+        else => getEnvVarOwned(allocator, "HOME"),
     };
 }
 
@@ -1943,11 +1987,11 @@ fn getConfigDirOwned(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
 fn getTempDirOwned(allocator: std.mem.Allocator, home: []const u8) ![]u8 {
     return switch (builtin.os.tag) {
         .windows => blk: {
-            break :blk std.process.getEnvVarOwned(allocator, "TEMP") catch
-                std.process.getEnvVarOwned(allocator, "TMP") catch
+            break :blk getEnvVarOwned(allocator, "TEMP") catch
+                getEnvVarOwned(allocator, "TMP") catch
                 std.fs.path.join(allocator, &.{ home, "AppData", "Local", "Temp" });
         },
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch allocator.dupe(u8, "/tmp"),
+        else => getEnvVarOwned(allocator, "TMPDIR") catch allocator.dupe(u8, "/tmp"),
     };
 }
 
@@ -1967,8 +2011,8 @@ fn getUserDirOwned(
 }
 
 fn envOrJoin(allocator: std.mem.Allocator, env_name: []const u8, fallback_parts: []const []const u8) ![]u8 {
-    return std.process.getEnvVarOwned(allocator, env_name) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => std.fs.path.join(allocator, fallback_parts),
+    return getEnvVarOwned(allocator, env_name) catch |err| switch (err) {
+        error.EnvironmentVariableMissing => std.fs.path.join(allocator, fallback_parts),
         else => err,
     };
 }
@@ -1985,10 +2029,7 @@ fn linuxXdgUserDirOwned(
     const fallback = try std.fs.path.join(allocator, &.{ home, fallback_name });
     errdefer allocator.free(fallback);
 
-    const file = std.fs.openFileAbsolute(config_path, .{}) catch return fallback;
-    defer file.close();
-
-    const content = file.readToEndAlloc(allocator, 64 * 1024) catch return fallback;
+    const content = std.Io.Dir.cwd().readFileAlloc(defaultIo(), config_path, allocator, .limited(64 * 1024)) catch return fallback;
     defer allocator.free(content);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -2022,19 +2063,13 @@ fn buildAppScopedDir(allocator: std.mem.Allocator, base: []const u8, app_info: A
 }
 
 fn readFileZ(allocator: std.mem.Allocator, path: []const u8) ![:0]u8 {
-    const file = try std.fs.openFileAbsolute(path, .{});
-    defer file.close();
-
-    const content = try file.readToEndAlloc(allocator, 1024 * 1024);
+    const content = try readFileAlloc(allocator, path);
     defer allocator.free(content);
     return try allocator.dupeZ(u8, content);
 }
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    const file = try std.fs.openFileAbsolute(path, .{});
-    defer file.close();
-
-    return try file.readToEndAlloc(allocator, 1024 * 1024);
+    return try std.Io.Dir.cwd().readFileAlloc(defaultIo(), path, allocator, .limited(1024 * 1024));
 }
 
 fn parseRectJson(allocator: std.mem.Allocator, json: []const u8) !Rect {
@@ -2114,13 +2149,13 @@ fn errorFromLastError(message: []const u8) anyerror {
     return error.ElectrobunCoreFailure;
 }
 
-pub fn allowAllNavigation(_: u32, _: [*:0]const u8) callconv(.C) u32 {
+pub fn allowAllNavigation(_: u32, _: [*:0]const u8) callconv(.c) u32 {
     return 1;
 }
 
-pub fn noopWebviewEvent(_: u32, _: [*:0]const u8, _: [*:0]const u8) callconv(.C) void {}
+pub fn noopWebviewEvent(_: u32, _: [*:0]const u8, _: [*:0]const u8) callconv(.c) void {}
 
-pub fn noopWebviewPostMessage(_: u32, _: [*:0]const u8) callconv(.C) void {}
+pub fn noopWebviewPostMessage(_: u32, _: [*:0]const u8) callconv(.c) void {}
 
 test "dialog path JSON preserves commas and escaped characters" {
     const allocator = std.testing.allocator;

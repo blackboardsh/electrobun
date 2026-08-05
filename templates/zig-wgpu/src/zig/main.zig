@@ -3,6 +3,25 @@ const electrobun = @import("electrobun");
 
 const default_secret_key = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32";
 
+// Zig 0.16 moved Mutex to std.Io.Mutex, whose lock/unlock take an Io
+// instance. Wrap it so the argument-free lock()/unlock() call sites keep
+// working unchanged.
+const Mutex = struct {
+    inner: std.Io.Mutex = .init,
+
+    fn lock(self: *Mutex) void {
+        self.inner.lockUncancelable(electrobun.defaultIo());
+    }
+
+    fn unlock(self: *Mutex) void {
+        self.inner.unlock(electrobun.defaultIo());
+    }
+};
+
+fn sleepMs(ms: u64) void {
+    electrobun.defaultIo().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
+}
+
 const GpuConfig = struct {
     view_id: u32 = 0,
     host_webview_id: u32 = 0,
@@ -11,7 +30,7 @@ const GpuConfig = struct {
     mode: u32 = 0,
     motion: u32 = 4,
     running: bool = false,
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
 };
 
 const AppState = struct {
@@ -20,7 +39,7 @@ const AppState = struct {
     bundle_paths: *const electrobun.BundlePaths,
     webview_id: u32 = 0,
     gpu: GpuConfig = .{},
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
 };
 
 const surface_format = 0x0000001c;
@@ -148,21 +167,21 @@ const WgpuApi = struct {
     command_buffer_release: ReleaseFn,
     command_encoder_release: ReleaseFn,
 
-    const DeviceCreateShaderModuleFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const DeviceCreateRenderPipelineFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const DeviceCreateBufferFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const DeviceCreateCommandEncoderFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const TextureCreateViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const CommandEncoderBeginRenderPassFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const RenderPassEncoderSetPipelineFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) void;
-    const RenderPassEncoderSetVertexBufferFn = *const fn (?*anyopaque, u32, ?*anyopaque, u64, u64) callconv(.C) void;
-    const RenderPassEncoderDrawFn = *const fn (?*anyopaque, u32, u32, u32, u32) callconv(.C) void;
-    const RenderPassEncoderEndFn = *const fn (?*anyopaque) callconv(.C) void;
-    const CommandEncoderFinishFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.C) ?*anyopaque;
-    const QueueWriteBufferFn = *const fn (?*anyopaque, ?*anyopaque, u64, ?*anyopaque, u64) callconv(.C) void;
-    const QueueSubmitFn = *const fn (?*anyopaque, u64, ?*anyopaque) callconv(.C) void;
-    const InstanceProcessEventsFn = *const fn (?*anyopaque) callconv(.C) void;
-    const ReleaseFn = *const fn (?*anyopaque) callconv(.C) void;
+    const DeviceCreateShaderModuleFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const DeviceCreateRenderPipelineFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const DeviceCreateBufferFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const DeviceCreateCommandEncoderFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const TextureCreateViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const CommandEncoderBeginRenderPassFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const RenderPassEncoderSetPipelineFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
+    const RenderPassEncoderSetVertexBufferFn = *const fn (?*anyopaque, u32, ?*anyopaque, u64, u64) callconv(.c) void;
+    const RenderPassEncoderDrawFn = *const fn (?*anyopaque, u32, u32, u32, u32) callconv(.c) void;
+    const RenderPassEncoderEndFn = *const fn (?*anyopaque) callconv(.c) void;
+    const CommandEncoderFinishFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
+    const QueueWriteBufferFn = *const fn (?*anyopaque, ?*anyopaque, u64, ?*anyopaque, u64) callconv(.c) void;
+    const QueueSubmitFn = *const fn (?*anyopaque, u64, ?*anyopaque) callconv(.c) void;
+    const InstanceProcessEventsFn = *const fn (?*anyopaque) callconv(.c) void;
+    const ReleaseFn = *const fn (?*anyopaque) callconv(.c) void;
 
     fn load(lib: *std.DynLib) !WgpuApi {
         return .{
@@ -613,21 +632,21 @@ fn gpuRenderLoop() void {
         current_state.gpu.mutex.unlock();
 
         if (!running or view_id == 0) {
-            std.time.sleep(16 * std.time.ns_per_ms);
+            sleepMs(16);
             continue;
         }
 
         if (context == null or active_view_id != view_id) {
             context = electrobun.WgpuContext.createForWgpuView(current_state.core, &native, view_id) catch |err| {
                 std.debug.print("[zig-wgpu] failed to create WGPU context: {s}\n", .{@errorName(err)});
-                std.time.sleep(250 * std.time.ns_per_ms);
+                sleepMs(250);
                 continue;
             };
             queue = context.?.getQueue(&native);
             if (queue == null) {
                 std.debug.print("[zig-wgpu] failed to get WGPU queue\n", .{});
                 context = null;
-                std.time.sleep(250 * std.time.ns_per_ms);
+                sleepMs(250);
                 continue;
             }
             active_view_id = view_id;
@@ -635,7 +654,7 @@ fn gpuRenderLoop() void {
                 std.debug.print("[zig-wgpu] failed to create Mandelbrot pipeline: {s}\n", .{@errorName(err)});
                 context = null;
                 queue = null;
-                std.time.sleep(250 * std.time.ns_per_ms);
+                sleepMs(250);
                 continue;
             };
             configured_width = 0;
@@ -646,7 +665,7 @@ fn gpuRenderLoop() void {
         if (configured_width != width or configured_height != height) {
             configureSurface(current_state.core, context.?, width, height) catch |err| {
                 std.debug.print("[zig-wgpu] failed to configure surface: {s}\n", .{@errorName(err)});
-                std.time.sleep(250 * std.time.ns_per_ms);
+                sleepMs(250);
                 continue;
             };
             configured_width = width;
@@ -655,7 +674,7 @@ fn gpuRenderLoop() void {
 
         renderFrame(current_state.core, api, context.?, pipeline.?, queue, frame, width, height, mode, motion) catch |err| {
             std.debug.print("[zig-wgpu] failed to render frame: {s}\n", .{@errorName(err)});
-            std.time.sleep(100 * std.time.ns_per_ms);
+            sleepMs(100);
             continue;
         };
 
@@ -664,7 +683,7 @@ fn gpuRenderLoop() void {
         }
 
         frame += 1;
-        std.time.sleep(16 * std.time.ns_per_ms);
+        sleepMs(16);
     }
 }
 
@@ -739,7 +758,7 @@ fn handleHostMessage(webview_id: u32, message: [*:0]const u8) void {
 fn drainHostMessageQueue() void {
     while (host_queue_running.load(.acquire)) {
         const state = g_state orelse {
-            std.time.sleep(10 * std.time.ns_per_ms);
+            sleepMs(10);
             continue;
         };
 
@@ -753,17 +772,17 @@ fn drainHostMessageQueue() void {
         }
 
         if (!drained_any) {
-            std.time.sleep(10 * std.time.ns_per_ms);
+            sleepMs(10);
         }
     }
 }
 
-fn hostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn hostBridge(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     handleHostMessage(webview_id, message);
 }
 
 fn createUi(state: *AppState) void {
-    std.time.sleep(150 * std.time.ns_per_ms);
+    sleepMs(150);
 
     state.core.configureWebviewRuntimeFromExecutableDir(state.bundle_paths, 0) catch |err| {
         std.debug.print("[zig-wgpu] failed to configure webview runtime: {s}\n", .{@errorName(err)});

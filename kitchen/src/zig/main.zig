@@ -2,6 +2,30 @@ const std = @import("std");
 const builtin = @import("builtin");
 const electrobun = @import("electrobun");
 
+// Zig 0.16 moved Mutex to std.Io.Mutex, whose lock/unlock take an Io
+// instance. Wrap it so the argument-free lock()/unlock() call sites keep
+// working unchanged.
+const Mutex = struct {
+    inner: std.Io.Mutex = .init,
+
+    fn lock(self: *Mutex) void {
+        self.inner.lockUncancelable(electrobun.defaultIo());
+    }
+
+    fn unlock(self: *Mutex) void {
+        self.inner.unlock(electrobun.defaultIo());
+    }
+};
+
+fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    return electrobun.processEnviron().getAlloc(allocator, key);
+}
+
+fn nowMs() i64 {
+    const ts = std.Io.Clock.now(.real, electrobun.defaultIo());
+    return @intCast(@divTrunc(ts.nanoseconds, std.time.ns_per_ms));
+}
+
 const app_version = "1.18.1";
 const default_secret_key = "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32";
 const available_renderers_native = [_][]const u8{"native"};
@@ -770,7 +794,7 @@ const AppState = struct {
     before_quit_should_cancel: bool = false,
     menu_data_counter: u32 = 0,
     menu_data_registry: std.StringHashMap([]u8),
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
 
     fn deinit(self: *AppState) void {
         self.mutex.lock();
@@ -828,7 +852,7 @@ fn appState() *AppState {
 fn drainHostMessageQueue() void {
     while (host_queue_running.load(.acquire)) {
         const state = g_state orelse {
-            std.time.sleep(10 * std.time.ns_per_ms);
+            sleepMs(10);
             continue;
         };
 
@@ -842,7 +866,7 @@ fn drainHostMessageQueue() void {
         }
 
         if (!drained_any) {
-            std.time.sleep(10 * std.time.ns_per_ms);
+            sleepMs(10);
         }
     }
 }
@@ -851,7 +875,7 @@ fn configureRuntimeBuildConfig(state: *AppState) !void {
     const build_json_path = try std.fs.path.join(state.allocator, &.{ state.bundle_paths.resources_dir, "build.json" });
     defer state.allocator.free(build_json_path);
 
-    const build_json = try std.fs.cwd().readFileAlloc(state.allocator, build_json_path, 1024 * 1024);
+    const build_json = try std.Io.Dir.cwd().readFileAlloc(electrobun.defaultIo(), build_json_path, state.allocator, .limited(1024 * 1024));
     defer state.allocator.free(build_json);
 
     var parsed = try std.json.parseFromSlice(std.json.Value, state.allocator, build_json, .{});
@@ -1045,7 +1069,7 @@ fn getJsonU32Field(object: *const std.json.ObjectMap, key: []const u8, default_v
 
 fn runZigTest(zig_test: ZigTest) TestResult {
     const state = appState();
-    const started_ns = std.time.nanoTimestamp();
+    const started_ts = std.Io.Clock.now(.awake, electrobun.defaultIo());
 
     const run_result = switch (zig_test.kind) {
         .smoke => runSmokeTest(),
@@ -1125,8 +1149,8 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .screen_bounds_vs_workarea => runScreenBoundsVsWorkAreaTest(state),
     };
 
-    const elapsed_ns = std.time.nanoTimestamp() - started_ns;
-    const elapsed_ms: u64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
+    const ended_ts = std.Io.Clock.now(.awake, electrobun.defaultIo());
+    const elapsed_ms: u64 = @intCast(started_ts.durationTo(ended_ts).toMilliseconds());
 
     if (run_result) {
         return .{
@@ -1168,7 +1192,7 @@ const WindowWithWebview = struct {
 };
 
 const CallbackState = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: Mutex = .{},
     window_close_count: u32 = 0,
     window_should_close_count: u32 = 0,
     window_resize_count: u32 = 0,
@@ -1217,7 +1241,7 @@ const CallbackState = struct {
 var g_callback_state = CallbackState{};
 
 fn sleepMs(ms: u64) void {
-    std.time.sleep(ms * std.time.ns_per_ms);
+    electrobun.defaultIo().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
 }
 
 fn approxEq(a: f64, b: f64, tolerance: f64) bool {
@@ -1337,13 +1361,13 @@ fn lastWebviewDetailContains(needle: []const u8) bool {
     ) != null;
 }
 
-fn observedWindowClose(_: u32) callconv(.C) void {
+fn observedWindowClose(_: u32) callconv(.c) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
     g_callback_state.window_close_count += 1;
 }
 
-fn observedWindowShouldClose(window_id: u32) callconv(.C) void {
+fn observedWindowShouldClose(window_id: u32) callconv(.c) void {
     g_callback_state.mutex.lock();
     g_callback_state.window_should_close_count += 1;
     const should_allow = g_callback_state.window_should_close_count > 1;
@@ -1354,7 +1378,7 @@ fn observedWindowShouldClose(window_id: u32) callconv(.C) void {
     }
 }
 
-fn observedWindowResize(_: u32, _: f64, _: f64, width: f64, height: f64) callconv(.C) void {
+fn observedWindowResize(_: u32, _: f64, _: f64, width: f64, height: f64) callconv(.c) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
     g_callback_state.window_resize_count += 1;
@@ -1362,7 +1386,7 @@ fn observedWindowResize(_: u32, _: f64, _: f64, width: f64, height: f64) callcon
     g_callback_state.last_resize_height = height;
 }
 
-fn observedWindowFocus(_: u32) callconv(.C) void {
+fn observedWindowFocus(_: u32) callconv(.c) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
     g_callback_state.window_focus_count += 1;
@@ -1432,11 +1456,11 @@ fn recordUrlOpen(url: []const u8) void {
     }
 }
 
-fn observedWebviewEvent(_: u32, event_name: [*:0]const u8, detail: [*:0]const u8) callconv(.C) void {
+fn observedWebviewEvent(_: u32, event_name: [*:0]const u8, detail: [*:0]const u8) callconv(.c) void {
     recordObservedWebviewEvent(std.mem.span(event_name), std.mem.span(detail));
 }
 
-fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.C) void {
+fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.c) void {
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
         return;
@@ -1633,7 +1657,7 @@ fn beforeQuitShouldCancel() bool {
 
 fn storeMenuData(value: std.json.Value) ![]const u8 {
     const state = appState();
-    const data_json = try std.json.stringifyAlloc(state.allocator, value, .{});
+    const data_json = try std.json.Stringify.valueAlloc(state.allocator, value, .{});
     errdefer state.allocator.free(data_json);
 
     state.mutex.lock();
@@ -1656,32 +1680,32 @@ fn rewriteMenuActions(value: *std.json.Value, arena_allocator: std.mem.Allocator
         },
         .object => |*object| {
             if (!object.contains("enabled")) {
-                try object.put("enabled", .{ .bool = true });
+                try object.put(arena_allocator, "enabled", .{ .bool = true });
             }
             if (!object.contains("checked")) {
-                try object.put("checked", .{ .bool = false });
+                try object.put(arena_allocator, "checked", .{ .bool = false });
             }
             if (!object.contains("hidden")) {
-                try object.put("hidden", .{ .bool = false });
+                try object.put(arena_allocator, "hidden", .{ .bool = false });
             }
             if (!object.contains("type")) {
                 if (object.get("submenu") != null) {
-                    try object.put("type", .{ .string = "submenu" });
+                    try object.put(arena_allocator, "type", .{ .string = "submenu" });
                 } else if (object.get("label")) |label_value| {
                     if (label_value == .string and (label_value.string.len == 0 or std.mem.eql(u8, label_value.string, "-"))) {
-                        try object.put("type", .{ .string = "divider" });
+                        try object.put(arena_allocator, "type", .{ .string = "divider" });
                     } else {
-                        try object.put("type", .{ .string = "normal" });
+                        try object.put(arena_allocator, "type", .{ .string = "normal" });
                     }
                 } else {
-                    try object.put("type", .{ .string = "normal" });
+                    try object.put(arena_allocator, "type", .{ .string = "normal" });
                 }
             }
             if (!object.contains("label")) {
                 if (object.get("role")) |role_value| {
                     if (role_value == .string) {
                         if (defaultMenuRoleLabel(role_value.string)) |label| {
-                            try object.put("label", .{ .string = label });
+                            try object.put(arena_allocator, "label", .{ .string = label });
                         }
                     }
                 }
@@ -1713,7 +1737,7 @@ fn prepareMenuJson(menu_value: std.json.Value) ![]u8 {
 
     var mutable_menu = menu_value;
     try rewriteMenuActions(&mutable_menu, arena.allocator());
-    return try std.json.stringifyAlloc(appState().allocator, mutable_menu, .{});
+    return try std.json.Stringify.valueAlloc(appState().allocator, mutable_menu, .{});
 }
 
 fn sendMenuClick(webview_id: u32, message_id: []const u8, encoded_action: []const u8) void {
@@ -1768,15 +1792,15 @@ fn sendMenuClick(webview_id: u32, message_id: []const u8, encoded_action: []cons
     });
 }
 
-fn applicationMenuHandler(_: u32, encoded_action: [*:0]const u8) callconv(.C) void {
+fn applicationMenuHandler(_: u32, encoded_action: [*:0]const u8) callconv(.c) void {
     sendMenuClick(applicationMenuTargetWebview(), "menuClicked", std.mem.span(encoded_action));
 }
 
-fn contextMenuHandler(_: u32, encoded_action: [*:0]const u8) callconv(.C) void {
+fn contextMenuHandler(_: u32, encoded_action: [*:0]const u8) callconv(.c) void {
     sendMenuClick(contextMenuTargetWebview(), "contextMenuClicked", std.mem.span(encoded_action));
 }
 
-fn shortcutTriggeredHandler(accelerator: [*:0]const u8) callconv(.C) void {
+fn shortcutTriggeredHandler(accelerator: [*:0]const u8) callconv(.c) void {
     const webview_id = shortcutTargetWebview();
     if (webview_id == 0) {
         return;
@@ -1786,7 +1810,7 @@ fn shortcutTriggeredHandler(accelerator: [*:0]const u8) callconv(.C) void {
     });
 }
 
-fn quitRequestedHandler() callconv(.C) void {
+fn quitRequestedHandler() callconv(.c) void {
     recordBeforeQuit();
     const webview_id = quitTargetWebview();
     if (webview_id != 0) {
@@ -1811,11 +1835,11 @@ fn quitRequestedHandler() callconv(.C) void {
     }
 }
 
-fn urlOpenHandler(url: [*:0]const u8) callconv(.C) void {
+fn urlOpenHandler(url: [*:0]const u8) callconv(.c) void {
     recordUrlOpen(std.mem.span(url));
 }
 
-fn appReopenHandler() callconv(.C) void {
+fn appReopenHandler() callconv(.c) void {
     if (builtin.os.tag == .macos) {
         appState().core.setDockIconVisible(true) catch {};
     }
@@ -1827,7 +1851,7 @@ fn expandTildePathAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
         return allocator.dupe(u8, path);
     }
 
-    const home = try std.process.getEnvVarOwned(allocator, "HOME");
+    const home = try getEnvVarOwned(allocator, "HOME");
     defer allocator.free(home);
 
     if (path.len == 1) {
@@ -2074,7 +2098,7 @@ fn handleInternalBridgeMessage(message_id: []const u8, params_object: *const std
 
     if (std.mem.eql(u8, message_id, "webviewTagSetNavigationRules")) {
         const rules_value = getJsonField(params_object, "rules") orelse return;
-        const rules_json = std.json.stringifyAlloc(appState().allocator, rules_value, .{}) catch return;
+        const rules_json = std.json.Stringify.valueAlloc(appState().allocator, rules_value, .{}) catch return;
         defer appState().allocator.free(rules_json);
         appState().core.setWebviewNavigationRules(webview_id, rules_json) catch {};
         return;
@@ -2156,7 +2180,7 @@ fn handleInternalBridgeMessage(message_id: []const u8, params_object: *const std
     }
 }
 
-fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
         return;
@@ -3127,8 +3151,8 @@ fn runWebviewTagPlaygroundIntegrationTest(state: *AppState) !void {
         .sandbox = false,
     });
 
-    const deadline_ms = std.time.milliTimestamp() + 8000;
-    while (std.time.milliTimestamp() < deadline_ms) {
+    const deadline_ms = nowMs() + 8000;
+    while (nowMs() < deadline_ms) {
         if (getWebviewDomReadyCount() > 0 and getWebviewTagInitCount() >= 2) {
             sleepMs(medium_wait_ms);
             return;
@@ -3171,8 +3195,8 @@ fn runWgpuTagPlaygroundIntegrationTest(state: *AppState) !void {
         .sandbox = false,
     });
 
-    const deadline_ms = std.time.milliTimestamp() + 8000;
-    while (std.time.milliTimestamp() < deadline_ms) {
+    const deadline_ms = nowMs() + 8000;
+    while (nowMs() < deadline_ms) {
         if (getWebviewDomReadyCount() > 0 and getWgpuTagInitCount() > 0 and getWgpuTagReadyCount() > 0) {
             sleepMs(medium_wait_ms);
             return;
@@ -3607,12 +3631,12 @@ fn runGlobalShortcutUnregisterAllApiTest(state: *AppState) !void {
         "CommandOrControl+Alt+Super+F10",
     };
 
-    var registered = std.ArrayList([]const u8).init(state.allocator);
-    defer registered.deinit();
+    var registered: std.ArrayList([]const u8) = .empty;
+    defer registered.deinit(state.allocator);
 
     for (candidates) |candidate| {
         if (try state.core.registerGlobalShortcut(candidate)) {
-            try registered.append(candidate);
+            try registered.append(state.allocator, candidate);
             if (registered.items.len >= 3) break;
         }
     }
@@ -3710,7 +3734,7 @@ fn runDockIconVisibilityContractTest(state: *AppState) !void {
 }
 
 fn runUtilsClipboardRoundTripTest(state: *AppState) !void {
-    const test_text = try std.fmt.allocPrint(state.allocator, "Test clipboard {d}", .{std.time.milliTimestamp()});
+    const test_text = try std.fmt.allocPrint(state.allocator, "Test clipboard {d}", .{nowMs()});
     defer state.allocator.free(test_text);
 
     try state.core.clipboardWriteText(test_text);
@@ -3877,14 +3901,14 @@ fn runUtilsMoveToTrashTest(state: *AppState) !void {
     const test_file = try std.fmt.allocPrint(
         state.allocator,
         "/tmp/electrobun-zig-trash-{d}.txt",
-        .{std.time.milliTimestamp()},
+        .{std.Io.Clock.now(.real, electrobun.defaultIo()).nanoseconds},
     );
     defer state.allocator.free(test_file);
 
     {
-        const file = try std.fs.createFileAbsolute(test_file, .{});
-        defer file.close();
-        try file.writeAll("This file will be moved to trash");
+        const file = try std.Io.Dir.createFileAbsolute(electrobun.defaultIo(), test_file, .{});
+        defer file.close(electrobun.defaultIo());
+        try file.writeStreamingAll(electrobun.defaultIo(), "This file will be moved to trash");
     }
 
     const moved = try state.core.moveToTrash(test_file);
@@ -3892,8 +3916,8 @@ fn runUtilsMoveToTrashTest(state: *AppState) !void {
         return error.MoveToTrashFailed;
     }
 
-    if (std.fs.openFileAbsolute(test_file, .{})) |still_exists| {
-        still_exists.close();
+    if (std.Io.Dir.openFileAbsolute(electrobun.defaultIo(), test_file, .{})) |still_exists| {
+        still_exists.close(electrobun.defaultIo());
         return error.FileStillExistsAfterMoveToTrash;
     } else |err| switch (err) {
         error.FileNotFound => {},
@@ -3950,20 +3974,20 @@ fn runScreenBoundsVsWorkAreaTest(state: *AppState) !void {
 
 fn expectedHomePath(allocator: std.mem.Allocator) ![]u8 {
     return switch (builtin.os.tag) {
-        .windows => std.process.getEnvVarOwned(allocator, "USERPROFILE") catch
-            std.process.getEnvVarOwned(allocator, "HOME"),
-        else => std.process.getEnvVarOwned(allocator, "HOME"),
+        .windows => getEnvVarOwned(allocator, "USERPROFILE") catch
+            getEnvVarOwned(allocator, "HOME"),
+        else => getEnvVarOwned(allocator, "HOME"),
     };
 }
 
 fn expectedTempPath(allocator: std.mem.Allocator) ![]u8 {
     return switch (builtin.os.tag) {
         .windows => blk: {
-            break :blk std.process.getEnvVarOwned(allocator, "TEMP") catch
-                std.process.getEnvVarOwned(allocator, "TMP") catch
+            break :blk getEnvVarOwned(allocator, "TEMP") catch
+                getEnvVarOwned(allocator, "TMP") catch
                 std.fs.path.join(allocator, &.{ "C:\\", "Temp" });
         },
-        else => std.process.getEnvVarOwned(allocator, "TMPDIR") catch allocator.dupe(u8, "/tmp"),
+        else => getEnvVarOwned(allocator, "TMPDIR") catch allocator.dupe(u8, "/tmp"),
     };
 }
 
@@ -4472,7 +4496,7 @@ fn handleRpcMessage(message_id: []const u8, payload: ?std.json.Value) void {
     }
 }
 
-fn testRunnerWebviewEvent(webview_id: u32, event_name: [*:0]const u8, _: [*:0]const u8) callconv(.C) void {
+fn testRunnerWebviewEvent(webview_id: u32, event_name: [*:0]const u8, _: [*:0]const u8) callconv(.c) void {
     const event_name_slice = std.mem.span(event_name);
     const state = appState();
 
@@ -4491,7 +4515,7 @@ fn testRunnerWebviewEvent(webview_id: u32, event_name: [*:0]const u8, _: [*:0]co
     }
 }
 
-fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) void {
+fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     const state = appState();
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
@@ -4546,7 +4570,7 @@ fn testRunnerHostBridge(webview_id: u32, message: [*:0]const u8) callconv(.C) vo
 }
 
 fn createUi(context: *CreateUiContext) void {
-    std.time.sleep(150 * std.time.ns_per_ms);
+    sleepMs(150);
 
     context.state.core.configureWebviewRuntimeFromExecutableDir(context.state.bundle_paths, 0) catch |err| {
         std.debug.print("[kitchen zig] failed to configure webview runtime: {s}\n", .{@errorName(err)});
@@ -4610,9 +4634,9 @@ pub fn main() !void {
     defer owned_app_info.deinit(allocator);
     const app_info = owned_app_info.borrowed();
 
-    const auto_run_test_name = std.process.getEnvVarOwned(allocator, "AUTO_RUN_TEST_NAME") catch null;
+    const auto_run_test_name = getEnvVarOwned(allocator, "AUTO_RUN_TEST_NAME") catch null;
     const auto_run_all = blk: {
-        const value = std.process.getEnvVarOwned(allocator, "AUTO_RUN") catch break :blk false;
+        const value = getEnvVarOwned(allocator, "AUTO_RUN") catch break :blk false;
         allocator.free(value);
         break :blk true;
     };

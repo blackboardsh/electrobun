@@ -2,6 +2,15 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zstd = std.compress.zstd;
 
+// Initialized at the top of main(). Test-only helpers do not touch these.
+var g_io: std.Io = undefined;
+var g_environ_map: *std.process.Environ.Map = undefined;
+
+fn getEnvOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
+    const value = g_environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
+    return allocator.dupe(u8, value);
+}
+
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "/Users/yoav/code/electrobun/example/build/canary/ElectrobunPlayground-0-0-1-canary.app/Contents/Resources/compressed.tar.zst";
 // const COMPRESSED_APP_BUNDLE_REL_PATH = "../Resources/compressed.tar.zst";
 const BUNLE_RESOURCES_REL_PATH = "../Resources/";
@@ -57,12 +66,12 @@ const ProgressIndicator = struct {
             "--title=Electrobun Installer", extract_text, "--auto-close",
         };
 
-        var child = std.process.Child.init(&zenity_args, self.allocator);
-        child.stdin_behavior = .Pipe;
-        child.stdout_behavior = .Ignore;
-        child.stderr_behavior = .Ignore;
-
-        child.spawn() catch |err| {
+        const child = std.process.spawn(g_io, .{
+            .argv = &zenity_args,
+            .stdin = .pipe,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        }) catch |err| {
             // Try kdialog for KDE
             if (err == error.FileNotFound) {
                 const kdialog_text = try std.fmt.allocPrint(self.allocator, "Extracting {s}...", .{metadata.name});
@@ -73,12 +82,12 @@ const ProgressIndicator = struct {
                     "--title", "Electrobun Installer",
                 };
 
-                var kde_child = std.process.Child.init(&kdialog_args, self.allocator);
-                kde_child.stdin_behavior = .Ignore;
-                kde_child.stdout_behavior = .Ignore;
-                kde_child.stderr_behavior = .Ignore;
-
-                kde_child.spawn() catch {
+                const kde_child = std.process.spawn(g_io, .{
+                    .argv = &kdialog_args,
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .ignore,
+                }) catch {
                     return error.NoProgressDialog;
                 };
 
@@ -95,16 +104,15 @@ const ProgressIndicator = struct {
         if (self.child_process) |*child| {
             // Close stdin to signal completion for zenity
             if (child.stdin) |stdin| {
-                stdin.close();
+                stdin.close(g_io);
                 child.stdin = null;
             }
 
             // Wait a moment for the dialog to close gracefully
-            std.time.sleep(500 * std.time.ns_per_ms);
+            g_io.sleep(.fromMilliseconds(500), .awake) catch {};
 
-            // Terminate if still running
-            _ = child.kill() catch {};
-            _ = child.wait() catch {};
+            // Terminate if still running; kill() also reaps the child.
+            child.kill(g_io);
         }
     }
 };
@@ -132,13 +140,10 @@ fn extractAdjacentArchive(
     metadata_path: []const u8,
     explicit_archive_path: ?[]const u8,
 ) !?bool {
-    const metadata_file = std.fs.openFileAbsolute(metadata_path, .{}) catch |err| switch (err) {
+    const metadata_contents = std.Io.Dir.cwd().readFileAlloc(g_io, metadata_path, allocator, .limited(4096)) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
-    defer metadata_file.close();
-
-    const metadata_contents = try metadata_file.readToEndAlloc(allocator, 4096);
     defer allocator.free(metadata_contents);
     const parsed = try std.json.parseFromSlice(
         AppMetadata,
@@ -160,11 +165,11 @@ fn extractAdjacentArchive(
     defer if (generated_archive_path) |path| allocator.free(path);
     const archive_path = explicit_archive_path orelse generated_archive_path.?;
 
-    const archive_file = std.fs.openFileAbsolute(archive_path, .{}) catch |err| switch (err) {
+    const compressed_data = std.Io.Dir.cwd().readFileAlloc(g_io, archive_path, allocator, .unlimited) catch |err| switch (err) {
         error.FileNotFound, error.NotDir => return null,
         else => return err,
     };
-    defer archive_file.close();
+    defer allocator.free(compressed_data);
 
     std.debug.print("Found adjacent archive file: {s}\n", .{archive_path});
     std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{
@@ -185,19 +190,12 @@ fn extractAdjacentArchive(
     std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
     std.debug.print("App will be installed to: {s}\n", .{app_dir});
 
-    const file_size = try archive_file.getEndPos();
-    const compressed_data = try allocator.alloc(u8, file_size);
-    defer allocator.free(compressed_data);
-    try archive_file.seekTo(0);
-    const bytes_read = try archive_file.readAll(compressed_data);
-    if (bytes_read != file_size) return error.UnexpectedEndOfStream;
-
     return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
 }
 
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Get path to self
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    const exe_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(exe_path);
 
     // Normal Linux bundles keep their payload and metadata in ../Resources.
@@ -222,7 +220,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         defer allocator.free(installer_archive_path);
         const archive_path = try std.fs.path.join(allocator, &.{ exe_dir, archive_name });
         defer allocator.free(archive_path);
-        const final_archive_path = if (std.fs.accessAbsolute(installer_archive_path, .{})) |_|
+        const final_archive_path = if (std.Io.Dir.accessAbsolute(g_io, installer_archive_path, .{})) |_|
             installer_archive_path
         else |_|
             archive_path;
@@ -231,7 +229,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         defer allocator.free(installer_metadata_path);
         const metadata_path = try std.fs.path.join(allocator, &.{ exe_dir, metadata_name });
         defer allocator.free(metadata_path);
-        const final_metadata_path = if (std.fs.accessAbsolute(installer_metadata_path, .{})) |_|
+        const final_metadata_path = if (std.Io.Dir.accessAbsolute(g_io, installer_metadata_path, .{})) |_|
             installer_metadata_path
         else |_|
             metadata_path;
@@ -240,20 +238,10 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     }
 
     // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows)
-    // Open self for reading
-    const self_file = try std.fs.openFileAbsolute(exe_path, .{});
-    defer self_file.close();
-
-    // Get file size
-    const file_size = try self_file.getEndPos();
-
-    // Read file to find the SECOND occurrence of the metadata marker
+    // Read self entirely to find the SECOND occurrence of the metadata marker.
     // This avoids false positives if markers appear in the extractor binary or user code
-    const search_buffer = try allocator.alloc(u8, file_size);
+    const search_buffer = try std.Io.Dir.cwd().readFileAlloc(g_io, exe_path, allocator, .unlimited);
     defer allocator.free(search_buffer);
-
-    try self_file.seekTo(0);
-    _ = try self_file.readAll(search_buffer);
 
     // Find first occurrence
     const first_metadata_pos = std.mem.indexOf(u8, search_buffer, METADATA_MARKER);
@@ -284,7 +272,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     const archive_offset = metadata_start + archive_marker_offset.?;
 
     // Read metadata
-    const metadata = try readEmbeddedMetadata(allocator, self_file, metadata_start, archive_offset);
+    const metadata = try readEmbeddedMetadata(allocator, search_buffer[metadata_start..archive_offset]);
 
     // Create a completely independent copy of the hash to prevent corruption
     const backup_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
@@ -308,8 +296,6 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         }
     }
 
-    try self_file.seekTo(archive_offset + ARCHIVE_MARKER.len);
-
     // Build application support directory path
     const app_data_dir = try getAppDataDir(allocator);
     defer allocator.free(app_data_dir);
@@ -329,12 +315,8 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     std.debug.print("Self-extracting archive found at offset {d}\n", .{archive_offset});
     std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
 
-    // Read and decompress archive (to end of file)
-    const archive_size = file_size - (archive_offset + ARCHIVE_MARKER.len);
-    const compressed_data = try allocator.alloc(u8, archive_size);
-    defer allocator.free(compressed_data);
-
-    _ = try self_file.read(compressed_data);
+    // Archive runs from just past the marker to the end of the file
+    const compressed_data = search_buffer[archive_offset + ARCHIVE_MARKER.len ..];
 
     // Continue with decompression (shared code path)
     return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
@@ -347,39 +329,20 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     defer progress.deinit();
 
     // Get exe path for shortcuts
-    const exe_path = try std.fs.selfExePathAlloc(allocator);
+    const exe_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(exe_path);
 
     // Decompress using zstd
-    // Note: because it's a big boy we need to allocate it on the heap (like macOS does)
-    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
+    // Note: the sliding window is a big boy so we allocate it on the heap
+    const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
     defer allocator.free(window_buffer);
 
-    var stream = std.io.fixedBufferStream(compressed_data);
-    var decompressor = zstd.decompressor(stream.reader(), .{
-        .window_buffer = window_buffer,
-    });
+    var input_reader: std.Io.Reader = .fixed(compressed_data);
+    var decompress: zstd.Decompress = .init(&input_reader, window_buffer, .{ .verify_checksum = false });
 
-    var decompressed_data = std.ArrayList(u8).init(allocator);
-    defer decompressed_data.deinit();
-
-    // Decompress in chunks with progress dots
     std.debug.print("Decompressing", .{});
-    var buffer: [4096]u8 = undefined;
-    var bytes_processed: usize = 0;
-    const dot_interval = 10 * 1024 * 1024; // Print dot every 10MB
-
-    while (true) {
-        const read_size = try decompressor.reader().read(&buffer);
-        if (read_size == 0) break;
-        try decompressed_data.appendSlice(buffer[0..read_size]);
-
-        bytes_processed += read_size;
-        if (bytes_processed >= dot_interval) {
-            std.debug.print(".", .{});
-            bytes_processed = 0;
-        }
-    }
+    const decompressed_data = try decompress.reader.allocRemaining(allocator, .unlimited);
+    defer allocator.free(decompressed_data);
     std.debug.print(" Done!\n", .{});
 
     // For Linux: Save the compressed archive to self-extraction directory (for future updates)
@@ -389,7 +352,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     // Extract tar archive to self-extraction directory first
     std.debug.print("Extracting files", .{});
 
-    try extractTar(allocator, decompressed_data.items, self_extraction_dir);
+    try extractTar(allocator, decompressed_data, self_extraction_dir);
     std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
@@ -408,7 +371,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     std.debug.print("DEBUG: extracted_app_path = '{s}'\n", .{extracted_app_path});
 
     // Remove existing app directory before installing the new one
-    std.fs.cwd().deleteTree(app_dir) catch {};
+    std.Io.Dir.cwd().deleteTree(g_io, app_dir) catch {};
 
     // Move the extracted app to the app directory
     std.debug.print("\nDEBUG: Preparing to move app...\n", .{});
@@ -416,14 +379,14 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     std.debug.print("DEBUG: Destination (app_dir) = '{s}'\n", .{app_dir});
 
     // Check if source exists
-    std.fs.cwd().access(extracted_app_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(g_io, extracted_app_path, .{}) catch |err| {
         std.debug.print("ERROR: Source directory does not exist: '{s}' - {}\n", .{ extracted_app_path, err });
         // List what's actually in the extraction directory
         std.debug.print("DEBUG: Listing contents of extraction directory '{s}':\n", .{self_extraction_dir});
-        var iter_dir = try std.fs.cwd().openDir(self_extraction_dir, .{ .iterate = true });
-        defer iter_dir.close();
+        var iter_dir = try std.Io.Dir.cwd().openDir(g_io, self_extraction_dir, .{ .iterate = true });
+        defer iter_dir.close(g_io);
         var iterator = iter_dir.iterate();
-        while (try iterator.next()) |entry| {
+        while (try iterator.next(g_io)) |entry| {
             std.debug.print("  - {s} ({s})\n", .{ entry.name, @tagName(entry.kind) });
         }
         return err;
@@ -434,14 +397,14 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     if (builtin.os.tag == .windows) {
         // Create the app directory and all parent directories
         std.debug.print("\nDEBUG: Windows directory creation...\n", .{});
-        std.debug.print("DEBUG: Current working directory = {s}\n", .{try std.fs.cwd().realpathAlloc(allocator, ".")});
+        std.debug.print("DEBUG: Current working directory = {s}\n", .{try std.process.currentPathAlloc(g_io, allocator)});
         std.debug.print("DEBUG: About to create Windows app directory: '{s}'\n", .{app_dir});
         std.debug.print("DEBUG: app_dir length = {}\n", .{app_dir.len});
 
         // Check if parent directory exists
         if (std.fs.path.dirname(app_dir)) |parent| {
             std.debug.print("DEBUG: Parent directory = '{s}'\n", .{parent});
-            std.fs.cwd().access(parent, .{}) catch |err| {
+            std.Io.Dir.cwd().access(g_io, parent, .{}) catch |err| {
                 std.debug.print("DEBUG: Parent directory does not exist, will create it. Error: {}\n", .{err});
             };
         }
@@ -457,14 +420,14 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         }
         std.debug.print("\n", .{});
 
-        std.debug.print("DEBUG: Calling makePath...\n", .{});
-        std.fs.cwd().makePath(app_dir) catch |err| {
+        std.debug.print("DEBUG: Calling createDirPath...\n", .{});
+        std.Io.Dir.cwd().createDirPath(g_io, app_dir) catch |err| {
             std.debug.print("ERROR: Failed to create app directory '{s}': {}\n", .{ app_dir, err });
 
             // Try to create parent directory first
             if (std.fs.path.dirname(app_dir)) |parent| {
                 std.debug.print("DEBUG: Trying to create parent directory first: '{s}'\n", .{parent});
-                std.fs.cwd().makePath(parent) catch |parent_err| {
+                std.Io.Dir.cwd().createDirPath(g_io, parent) catch |parent_err| {
                     std.debug.print("ERROR: Failed to create parent directory: {}\n", .{parent_err});
                 };
             }
@@ -477,10 +440,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         try copyDirectory(allocator, extracted_app_path, app_dir);
 
         // Remove the extracted directory after successful copy
-        std.fs.cwd().deleteTree(extracted_app_path) catch {};
+        std.Io.Dir.cwd().deleteTree(g_io, extracted_app_path) catch {};
     } else {
         // On Unix systems, rename works across directories
-        std.fs.cwd().rename(extracted_app_path, app_dir) catch |err| {
+        std.Io.Dir.cwd().rename(extracted_app_path, std.Io.Dir.cwd(), app_dir, g_io) catch |err| {
             return err;
         };
     }
@@ -529,20 +492,20 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         defer allocator.free(tar_path);
 
         // Ensure self-extraction directory exists
-        try std.fs.cwd().makePath(self_extraction_dir);
+        try std.Io.Dir.cwd().createDirPath(g_io, self_extraction_dir);
 
         std.debug.print("DEBUG: Creating tar file at: {s}\n", .{tar_path});
-        const tar_file = try std.fs.cwd().createFile(tar_path, .{});
-        defer tar_file.close();
-        try tar_file.writeAll(decompressed_data.items);
-        std.debug.print("✓ Saved tar file ({} bytes)\n", .{decompressed_data.items.len});
+        const tar_file = try std.Io.Dir.cwd().createFile(g_io, tar_path, .{});
+        defer tar_file.close(g_io);
+        try tar_file.writeStreamingAll(g_io, decompressed_data);
+        std.debug.print("✓ Saved tar file ({} bytes)\n", .{decompressed_data.len});
 
         // List files to confirm they're saved
         std.debug.print("\nDEBUG: Final files in self-extraction dir:\n", .{});
-        var dir = try std.fs.cwd().openDir(self_extraction_dir, .{ .iterate = true });
-        defer dir.close();
+        var dir = try std.Io.Dir.cwd().openDir(g_io, self_extraction_dir, .{ .iterate = true });
+        defer dir.close(g_io);
         var iter = dir.iterate();
-        while (try iter.next()) |entry| {
+        while (try iter.next(g_io)) |entry| {
             std.debug.print("  - {s} ({s})\n", .{ entry.name, @tagName(entry.kind) });
         }
     }
@@ -559,31 +522,31 @@ fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: [
     std.debug.print("DEBUG: Tar data size: {} bytes\n", .{tar_data.len});
 
     // Clean up existing directory if it exists to ensure no old files remain
-    std.fs.cwd().deleteTree(extract_dir) catch |err| switch (err) {
+    std.Io.Dir.cwd().deleteTree(g_io, extract_dir) catch |err| switch (err) {
         error.NotDir => {
             // Path exists but is not a directory, try to delete as file
-            std.fs.cwd().deleteFile(extract_dir) catch {
+            std.Io.Dir.cwd().deleteFile(g_io, extract_dir) catch {
                 // If that fails too, just continue - we'll overwrite
             };
         },
         else => {
             // For any other error (including if directory doesn't exist), just continue
-            // The makePath call below will create the directory as needed
+            // The createDirPath call below will create the directory as needed
         },
     };
 
     // Create extraction directory
-    try std.fs.cwd().makePath(extract_dir);
+    try std.Io.Dir.cwd().createDirPath(g_io, extract_dir);
 
     // Open extraction directory
-    const dir = try std.fs.cwd().openDir(extract_dir, .{});
+    var dir = try std.Io.Dir.cwd().openDir(g_io, extract_dir, .{});
+    defer dir.close(g_io);
 
     // Create a memory stream from the tar data
-    var stream = std.io.fixedBufferStream(tar_data);
-    const reader = stream.reader();
+    var reader: std.Io.Reader = .fixed(tar_data);
 
     // Use existing pipeToFileSystem function which handles file modes
-    try pipeToFileSystem(dir, reader);
+    try pipeToFileSystem(g_io, dir, &reader);
 }
 
 fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !void {
@@ -606,8 +569,8 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
         defer allocator.free(exe_path);
 
         // Set executable permissions (ignore errors if file doesn't exist)
-        const file = std.fs.cwd().openFile(exe_path, .{}) catch continue;
-        file.close();
+        const file = std.Io.Dir.cwd().openFile(g_io, exe_path, .{}) catch continue;
+        file.close(g_io);
 
         // Use chmod to set executable (skip on macOS app bundles to preserve code signatures)
         if (builtin.os.tag != .windows) {
@@ -617,7 +580,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
                 continue;
             }
 
-            const exe_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{exe_path});
+            const exe_path_z = try allocator.dupeZ(u8, exe_path);
             defer allocator.free(exe_path_z);
 
             const result = std.c.chmod(exe_path_z.ptr, 0o755);
@@ -633,15 +596,15 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
     // TEMPORARILY DISABLED - causing panic
     if (false and builtin.os.tag != .windows) {
         std.debug.print("DEBUG: Looking for .sh scripts...\n", .{});
-        var dir = std.fs.cwd().openDir(app_dir, .{}) catch |err| {
+        var dir = std.Io.Dir.cwd().openDir(g_io, app_dir, .{ .iterate = true }) catch |err| {
             std.debug.print("DEBUG: Could not open directory {s}: {}\n", .{ app_dir, err });
             return;
         };
-        defer dir.close();
+        defer dir.close(g_io);
 
         std.debug.print("DEBUG: Directory opened successfully, starting iteration...\n", .{});
         var iterator = dir.iterate();
-        while (try iterator.next()) |entry| {
+        while (try iterator.next(g_io)) |entry| {
             std.debug.print("DEBUG: Found entry: {s} kind: {}\n", .{ entry.name, entry.kind });
             // Only process regular files (not directories, symlinks, etc.)
             switch (entry.kind) {
@@ -650,7 +613,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
                         const script_path = try std.fs.path.join(allocator, &.{ app_dir, entry.name });
                         defer allocator.free(script_path);
 
-                        const script_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{script_path});
+                        const script_path_z = try allocator.dupeZ(u8, script_path);
                         defer allocator.free(script_path_z);
 
                         const result = std.c.chmod(script_path_z.ptr, 0o755);
@@ -684,7 +647,7 @@ fn fixCefSymlinks(allocator: std.mem.Allocator, app_dir: []const u8) !void {
     defer allocator.free(cef_dir);
 
     // Check if cef directory exists
-    std.fs.cwd().access(cef_dir, .{}) catch {
+    std.Io.Dir.cwd().access(g_io, cef_dir, .{}) catch {
         std.debug.print("CEF directory not found, skipping symlink creation\n", .{});
         return;
     };
@@ -708,10 +671,10 @@ fn fixCefSymlinks(allocator: std.mem.Allocator, app_dir: []const u8) !void {
         defer allocator.free(target_path);
 
         // Remove existing symlink/file if it exists
-        std.fs.cwd().deleteFile(symlink_path) catch {};
+        std.Io.Dir.cwd().deleteFile(g_io, symlink_path) catch {};
 
         // Create the symlink
-        std.fs.cwd().symLink(target_path, symlink_path, .{}) catch |err| {
+        std.Io.Dir.cwd().symLink(g_io, target_path, symlink_path, .{}) catch |err| {
             std.debug.print("Warning: Could not create symlink for {s}: {}\n", .{ lib, err });
             continue;
         };
@@ -723,20 +686,27 @@ fn fixCefSymlinks(allocator: std.mem.Allocator, app_dir: []const u8) !void {
 fn removeQuarantine(allocator: std.mem.Allocator, app_dir: []const u8) !void {
     std.debug.print("Removing quarantine attributes from: {s}\n", .{app_dir});
 
+    _ = allocator;
+
     // Use xattr to remove com.apple.quarantine from the entire app bundle
     const args = [_][]const u8{ "xattr", "-r", "-d", "com.apple.quarantine", app_dir };
 
-    var child_process = std.process.Child.init(&args, allocator);
-    child_process.stdout_behavior = .Ignore;
-    child_process.stderr_behavior = .Ignore;
-
-    const result = child_process.spawnAndWait() catch |err| {
+    var child_process = std.process.spawn(g_io, .{
+        .argv = &args,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch |err| {
         std.debug.print("Warning: Failed to run xattr to remove quarantine: {}\n", .{err});
         return;
     };
 
+    const result = child_process.wait(g_io) catch |err| {
+        std.debug.print("Warning: Failed to wait for xattr: {}\n", .{err});
+        return;
+    };
+
     switch (result) {
-        .Exited => |code| {
+        .exited => |code| {
             if (code == 0) {
                 std.debug.print("Successfully removed quarantine attributes\n", .{});
             } else {
@@ -749,23 +719,15 @@ fn removeQuarantine(allocator: std.mem.Allocator, app_dir: []const u8) !void {
     }
 }
 
-fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadata_start: u64, archive_start: u64) !AppMetadata {
-    std.debug.print("DEBUG: metadata_start={d}, archive_start={d}\n", .{ metadata_start, archive_start });
-    const metadata_size = archive_start - metadata_start;
-    std.debug.print("DEBUG: calculated metadata_size={d}\n", .{metadata_size});
-    if (metadata_size > 4096) return error.MetadataTooLarge; // Sanity check
-
-    try file.seekTo(metadata_start);
-    const metadata_bytes = try allocator.alloc(u8, metadata_size);
-    defer allocator.free(metadata_bytes);
-
-    _ = try file.read(metadata_bytes);
+fn readEmbeddedMetadata(allocator: std.mem.Allocator, metadata_bytes: []const u8) !AppMetadata {
+    std.debug.print("DEBUG: metadata_size={d}\n", .{metadata_bytes.len});
+    if (metadata_bytes.len > 4096) return error.MetadataTooLarge; // Sanity check
 
     // Debug: print the raw metadata before parsing
-    std.debug.print("DEBUG: Raw metadata bytes (size={d})\n", .{metadata_size});
+    std.debug.print("DEBUG: Raw metadata bytes (size={d})\n", .{metadata_bytes.len});
     std.debug.print("DEBUG: Raw metadata as hex: ", .{});
     for (metadata_bytes) |byte| {
-        std.debug.print("{x:02} ", .{byte});
+        std.debug.print("{x:0>2} ", .{byte});
     }
     std.debug.print("\n", .{});
     std.debug.print("DEBUG: Raw metadata as string: '", .{});
@@ -773,7 +735,7 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, file: std.fs.File, metadat
         if (byte >= 32 and byte <= 126) {
             std.debug.print("{c}", .{byte});
         } else {
-            std.debug.print("\\x{x:02}", .{byte});
+            std.debug.print("\\x{x:0>2}", .{byte});
         }
     }
     std.debug.print("'\n", .{});
@@ -799,10 +761,10 @@ fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
     return switch (builtin.os.tag) {
         .windows => blk: {
             // Use %LOCALAPPDATA% on Windows
-            const local_appdata = std.process.getEnvVarOwned(allocator, "LOCALAPPDATA") catch
-                std.process.getEnvVarOwned(allocator, "APPDATA") catch {
+            const local_appdata = getEnvOwned(allocator, "LOCALAPPDATA") catch
+                getEnvOwned(allocator, "APPDATA") catch {
                 // Fallback to user profile
-                const userprofile = try std.process.getEnvVarOwned(allocator, "USERPROFILE");
+                const userprofile = try getEnvOwned(allocator, "USERPROFILE");
                 defer allocator.free(userprofile);
                 break :blk try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Local" });
             };
@@ -810,8 +772,8 @@ fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
         },
         .linux => blk: {
             // Use XDG_DATA_HOME or ~/.local/share on Linux
-            const xdg_data_home = std.process.getEnvVarOwned(allocator, "XDG_DATA_HOME") catch {
-                const home = try std.process.getEnvVarOwned(allocator, "HOME");
+            const xdg_data_home = getEnvOwned(allocator, "XDG_DATA_HOME") catch {
+                const home = try getEnvOwned(allocator, "HOME");
                 defer allocator.free(home);
                 break :blk try std.fs.path.join(allocator, &.{ home, ".local", "share" });
             };
@@ -827,14 +789,14 @@ fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, a
     defer allocator.free(launcher_path);
 
     // Check if launcher exists
-    const launcher_file = std.fs.cwd().openFile(launcher_path, .{}) catch |err| {
+    const launcher_file = std.Io.Dir.cwd().openFile(g_io, launcher_path, .{}) catch |err| {
         std.debug.print("Warning: Could not find launcher at {s}: {}\n", .{ launcher_path, err });
         return;
     };
-    launcher_file.close();
+    launcher_file.close(g_io);
 
     // Copy launcher to replace self
-    try std.fs.copyFileAbsolute(launcher_path, exe_path, .{});
+    try std.Io.Dir.copyFileAbsolute(launcher_path, exe_path, g_io, .{});
 
     std.debug.print("Replaced self with launcher shortcut from: {s}\n", .{launcher_path});
 }
@@ -901,40 +863,40 @@ fn rewriteDesktopEntry(
     icon_path: ?[]const u8,
 ) ![]u8 {
     var lines = std.mem.tokenizeScalar(u8, desktop_content, '\n');
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(allocator);
 
     while (lines.next()) |line| {
         if (std.mem.startsWith(u8, line, "Exec=")) {
-            try result.appendSlice("Exec=\"");
-            try result.appendSlice(launcher_path);
-            try result.appendSlice("\"\n");
+            try result.appendSlice(allocator, "Exec=\"");
+            try result.appendSlice(allocator, launcher_path);
+            try result.appendSlice(allocator, "\"\n");
         } else if (std.mem.startsWith(u8, line, "Icon=")) {
             if (icon_path) |path| {
-                try result.appendSlice("Icon=");
-                try result.appendSlice(path);
-                try result.appendSlice("\n");
+                try result.appendSlice(allocator, "Icon=");
+                try result.appendSlice(allocator, path);
+                try result.appendSlice(allocator, "\n");
             } else if (!std.mem.eql(u8, line, "Icon=appIcon") and
                 !std.mem.eql(u8, line, "Icon=appIcon.png"))
             {
                 // Keep explicit freedesktop theme icon names. Only remove the
                 // generated bundle-relative placeholder when no bundled icon
                 // was actually installed.
-                try result.appendSlice(line);
-                try result.appendSlice("\n");
+                try result.appendSlice(allocator, line);
+                try result.appendSlice(allocator, "\n");
             }
         } else {
-            try result.appendSlice(line);
-            try result.appendSlice("\n");
+            try result.appendSlice(allocator, line);
+            try result.appendSlice(allocator, "\n");
         }
     }
 
-    return result.toOwnedSlice();
+    return result.toOwnedSlice(allocator);
 }
 
 fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !void {
     // Get home directory for desktop path
-    const home = std.process.getEnvVarOwned(allocator, "HOME") catch {
+    const home = getEnvOwned(allocator, "HOME") catch {
         std.debug.print("Warning: Could not get HOME directory\n", .{});
         return;
     };
@@ -945,7 +907,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
     defer allocator.free(desktop_dir);
 
     const desktop_dir_available = blk: {
-        std.fs.cwd().access(desktop_dir, .{}) catch {
+        std.Io.Dir.cwd().access(g_io, desktop_dir, .{}) catch {
             std.debug.print("Note: Desktop directory not found at {s}; skipping Desktop shortcut creation\n", .{desktop_dir});
             break :blk false;
         };
@@ -957,20 +919,20 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
     defer allocator.free(launcher_path);
 
     // Check if launcher exists
-    std.fs.cwd().access(launcher_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(g_io, launcher_path, .{}) catch |err| {
         std.debug.print("Warning: launcher binary not found at {s}: {}\n", .{ launcher_path, err });
         return;
     };
 
     // Look for the desktop file in the extracted app directory and copy it
-    var app_dir_handle = try std.fs.cwd().openDir(app_dir, .{ .iterate = true });
-    defer app_dir_handle.close();
+    var app_dir_handle = try std.Io.Dir.cwd().openDir(g_io, app_dir, .{ .iterate = true });
+    defer app_dir_handle.close(g_io);
 
     var found_desktop_file = false;
     var desktop_shortcut_created = false;
     var applications_entry_created = false;
     var iterator = app_dir_handle.iterate();
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(g_io)) |entry| {
         if (entry.kind == .file) {
             const desktop_filename = desktopEntryInstallName(entry.name) orelse continue;
             const desktop_file_path = try std.fs.path.join(allocator, &.{ desktop_dir, desktop_filename });
@@ -981,7 +943,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
             defer allocator.free(source_desktop);
 
             // Read the desktop file content
-            const desktop_content = try std.fs.cwd().readFileAlloc(allocator, source_desktop, 4096);
+            const desktop_content = try std.Io.Dir.cwd().readFileAlloc(g_io, source_desktop, allocator, .limited(4096));
             defer allocator.free(desktop_content);
 
             // Find icon file in app directory (first try root, then Resources subdirectory)
@@ -990,7 +952,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 
             // First, try to find icon in the app root directory
             var icon_iterator = app_dir_handle.iterate();
-            while (try icon_iterator.next()) |icon_entry| {
+            while (try icon_iterator.next(g_io)) |icon_entry| {
                 if (icon_entry.kind == .file and std.mem.endsWith(u8, icon_entry.name, ".png")) {
                     icon_path = try std.fs.path.join(allocator, &.{ app_dir, icon_entry.name });
                     icon_path_allocated = true;
@@ -1003,16 +965,16 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
                 const resources_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources" });
                 defer allocator.free(resources_path);
 
-                var resources_dir_handle = std.fs.cwd().openDir(resources_path, .{ .iterate = true }) catch |err| blk: {
+                var resources_dir_handle = std.Io.Dir.cwd().openDir(g_io, resources_path, .{ .iterate = true }) catch |err| blk: {
                     // Resources directory doesn't exist, that's okay
                     if (err == error.FileNotFound) break :blk null;
                     return err;
                 };
 
                 if (resources_dir_handle) |*res_handle| {
-                    defer res_handle.close();
+                    defer res_handle.close(g_io);
                     var res_icon_iterator = res_handle.iterate();
-                    while (try res_icon_iterator.next()) |icon_entry| {
+                    while (try res_icon_iterator.next(g_io)) |icon_entry| {
                         if (icon_entry.kind == .file and std.mem.endsWith(u8, icon_entry.name, ".png")) {
                             icon_path = try std.fs.path.join(allocator, &.{ resources_path, icon_entry.name });
                             icon_path_allocated = true;
@@ -1034,12 +996,12 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
             // Write the updated desktop file to Desktop (optional)
             if (desktop_dir_available) {
                 desktop_shortcut: {
-                    const desktop_file = std.fs.cwd().createFile(desktop_file_path, .{}) catch |err| {
+                    const desktop_file = std.Io.Dir.cwd().createFile(g_io, desktop_file_path, .{}) catch |err| {
                         std.debug.print("Warning: Could not create Desktop shortcut file: {}\n", .{err});
                         break :desktop_shortcut;
                     };
-                    defer desktop_file.close();
-                    desktop_file.writeAll(rewritten_desktop) catch |err| {
+                    defer desktop_file.close(g_io);
+                    desktop_file.writeStreamingAll(g_io, rewritten_desktop) catch |err| {
                         std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
                         break :desktop_shortcut;
                     };
@@ -1064,7 +1026,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
                 defer allocator.free(applications_dir);
 
                 // Create applications directory if it doesn't exist
-                std.fs.cwd().makePath(applications_dir) catch |err| {
+                std.Io.Dir.cwd().createDirPath(g_io, applications_dir) catch |err| {
                     std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
                     // Continue anyway - createFile will fail gracefully
                 };
@@ -1075,13 +1037,13 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
                 };
                 defer allocator.free(applications_file_path);
 
-                const applications_file = std.fs.cwd().createFile(applications_file_path, .{}) catch |err| {
+                const applications_file = std.Io.Dir.cwd().createFile(g_io, applications_file_path, .{}) catch |err| {
                     std.debug.print("Warning: Could not create applications desktop file: {}\n", .{err});
                     break :write_applications_dir;
                 };
-                defer applications_file.close();
+                defer applications_file.close(g_io);
 
-                applications_file.writeAll(rewritten_desktop) catch |err| {
+                applications_file.writeStreamingAll(g_io, rewritten_desktop) catch |err| {
                     std.debug.print("Warning: Could not write applications desktop file: {}\n", .{err});
                     break :write_applications_dir;
                 };
@@ -1089,7 +1051,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
                 // Set permissions on the desktop file (0o644 - readable, not executable)
                 // Desktop files in ~/.local/share/applications/ don't need execute bit
                 // (execute bit is only needed for Desktop surface, not application menus)
-                const applications_file_path_z = std.fmt.allocPrintZ(allocator, "{s}", .{applications_file_path}) catch |err| {
+                const applications_file_path_z = allocator.dupeZ(u8, applications_file_path) catch |err| {
                     std.debug.print("Warning: Could not format applications file path: {}\n", .{err});
                     break :write_applications_dir;
                 };
@@ -1104,13 +1066,17 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 
                 // Update desktop database for legacy desktop environments (Xfce, LXDE, etc.)
                 const update_db_argv = [_][]const u8{ "update-desktop-database", applications_dir };
-                var update_db_child = std.process.Child.init(&update_db_argv, allocator);
-                update_db_child.stdin_behavior = .Ignore;
-                update_db_child.stdout_behavior = .Ignore;
-                update_db_child.stderr_behavior = .Inherit;
-                _ = update_db_child.spawnAndWait() catch |err| {
+                if (std.process.spawn(g_io, .{
+                    .argv = &update_db_argv,
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .inherit,
+                })) |spawned| {
+                    var update_db_child = spawned;
+                    _ = update_db_child.wait(g_io) catch {};
+                } else |err| {
                     std.debug.print("Note: Could not update desktop database: {}\n", .{err});
-                };
+                }
 
                 applications_entry_created = true;
                 std.debug.print("Copied desktop shortcut to applications dir: {s}\n", .{applications_file_path});
@@ -1126,7 +1092,7 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 
             if (desktop_shortcut_created) {
                 // Make desktop file executable (required for some desktop environments)
-                const desktop_file_path_z = try std.fmt.allocPrintZ(allocator, "{s}", .{desktop_file_path});
+                const desktop_file_path_z = try allocator.dupeZ(u8, desktop_file_path);
                 defer allocator.free(desktop_file_path_z);
 
                 const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
@@ -1136,13 +1102,17 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
 
                 // Try to mark as trusted for GNOME/Ubuntu using gio
                 const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
-                var gio_child = std.process.Child.init(&gio_argv, allocator);
-                gio_child.stdin_behavior = .Ignore;
-                gio_child.stdout_behavior = .Ignore;
-                gio_child.stderr_behavior = .Inherit;
-                _ = gio_child.spawnAndWait() catch |err| {
+                if (std.process.spawn(g_io, .{
+                    .argv = &gio_argv,
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .inherit,
+                })) |spawned| {
+                    var gio_child = spawned;
+                    _ = gio_child.wait(g_io) catch {};
+                } else |err| {
                     std.debug.print("Note: Could not mark desktop file as trusted with gio: {}\n", .{err});
-                };
+                }
 
                 std.debug.print("Created desktop shortcut: {s}\n", .{desktop_file_path});
                 std.debug.print("Note: If the desktop icon opens as text, right-click it and select 'Allow Launching' or 'Trust and Launch'\n", .{});
@@ -1188,16 +1158,16 @@ fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const
         ps_content,
     };
 
-    var child = std.process.Child.init(&ps_args, allocator);
-    child.stdout_behavior = .Ignore;
-    child.stderr_behavior = .Ignore;
-
-    _ = child.spawn() catch |err| {
+    var child = std.process.spawn(g_io, .{
+        .argv = &ps_args,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch |err| {
         std.debug.print("Warning: Could not spawn PowerShell to create shortcut: {}\n", .{err});
         return;
     };
 
-    _ = child.wait() catch |err| {
+    _ = child.wait(g_io) catch |err| {
         std.debug.print("Warning: PowerShell shortcut creation failed: {}\n", .{err});
         return;
     };
@@ -1207,7 +1177,7 @@ fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const
 
 fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
     // Get user directories
-    const userprofile = std.process.getEnvVarOwned(allocator, "USERPROFILE") catch {
+    const userprofile = getEnvOwned(allocator, "USERPROFILE") catch {
         std.debug.print("Warning: Could not get USERPROFILE directory\n", .{});
         return;
     };
@@ -1220,7 +1190,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer allocator.free(start_menu_dir);
 
     // Check if Desktop directory exists
-    std.fs.cwd().access(desktop_dir, .{}) catch {
+    std.Io.Dir.cwd().access(g_io, desktop_dir, .{}) catch {
         std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
         // Continue anyway, might work
     };
@@ -1230,7 +1200,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
     defer allocator.free(target_path);
 
     // Check if target exists
-    std.fs.cwd().access(target_path, .{}) catch |err| {
+    std.Io.Dir.cwd().access(g_io, target_path, .{}) catch |err| {
         std.debug.print("Warning: Could not find launcher.exe at {s}: {}\n", .{ target_path, err });
         return;
     };
@@ -1247,7 +1217,7 @@ fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, meta
 
     // Create Start Menu shortcut
     // Make sure Start Menu directory exists
-    std.fs.cwd().makePath(start_menu_dir) catch {
+    std.Io.Dir.cwd().createDirPath(g_io, start_menu_dir) catch {
         std.debug.print("Warning: Could not create Start Menu directory\n", .{});
     };
     try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use);
@@ -1288,13 +1258,13 @@ fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata,
     defer allocator.free(reg_content);
 
     // Create and write registry file
-    const reg_file = std.fs.cwd().createFile(reg_path, .{}) catch |err| {
+    const reg_file = std.Io.Dir.cwd().createFile(g_io, reg_path, .{}) catch |err| {
         std.debug.print("Warning: Could not create uninstall registry file: {}\n", .{err});
         return;
     };
-    defer reg_file.close();
+    defer reg_file.close(g_io);
 
-    reg_file.writeAll(reg_content) catch |err| {
+    reg_file.writeStreamingAll(g_io, reg_content) catch |err| {
         std.debug.print("Warning: Could not write registry content: {}\n", .{err});
         return;
     };
@@ -1303,20 +1273,21 @@ fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata,
     std.debug.print("Note: Users can double-click {s} to add uninstall info to Windows\n", .{reg_name});
 }
 
-pub fn main() !void {
-    std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
-    var allocator = std.heap.page_allocator;
+pub fn main(init: std.process.Init) !void {
+    g_io = init.io;
+    g_environ_map = init.environ_map;
 
-    var startTime = std.time.nanoTimestamp();
+    std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
+    const allocator = init.gpa;
+
+    var startTime = std.Io.Clock.now(.awake, g_io);
 
     // try get the absolute path to the executable inside the app bundle
     // to set the cwd. Otherwise it's likely to be / or ~/ depending on how the app was launched
-    // const args = try std.process.argsAlloc(allocator);
-    // defer std.process.argsFree(allocator, args);
-    // const cwd = std.fs.path.dirname(args[0]).?;
 
     var exePathBuffer: [1024]u8 = undefined;
-    const APPBUNDLE_MACOS_PATH = try std.fs.selfExeDirPath(exePathBuffer[0..]);
+    const exe_dir_len = try std.process.executableDirPath(g_io, exePathBuffer[0..]);
+    const APPBUNDLE_MACOS_PATH = exePathBuffer[0..exe_dir_len];
 
     // Platform-specific extraction
     if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
@@ -1337,7 +1308,7 @@ pub fn main() !void {
     const metadataJsonPath = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "Contents/Resources/metadata.json" });
     defer allocator.free(metadataJsonPath);
 
-    const metadataJsonContents = std.fs.cwd().readFileAlloc(allocator, metadataJsonPath, std.math.maxInt(usize)) catch |err| {
+    const metadataJsonContents = std.Io.Dir.cwd().readFileAlloc(g_io, metadataJsonPath, allocator, .unlimited) catch |err| {
         std.debug.print("Failed to read metadata.json at {s}: {}\n", .{ metadataJsonPath, err });
         return err;
     };
@@ -1365,7 +1336,10 @@ pub fn main() !void {
 
     const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, channelName });
 
-    const APPDATA_PATH = try std.fs.getAppDataDir(allocator, appDataPathSegment);
+    // macOS application data lives in ~/Library/Application Support/<identifier>/<channel>
+    const home_dir = try getEnvOwned(allocator, "HOME");
+    defer allocator.free(home_dir);
+    const APPDATA_PATH = try std.fs.path.join(allocator, &.{ home_dir, "Library", "Application Support", appDataPathSegment });
     defer allocator.free(APPDATA_PATH);
 
     const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
@@ -1377,28 +1351,26 @@ pub fn main() !void {
 
     const compressedTarballPath = try std.fs.path.join(allocator, &.{ appBundleResourcesPath, compressedBundleFileName });
 
-    const compressedAppBundle = try std.fs.cwd().openFile(compressedTarballPath, .{}); //|compressedAppBundle| {
+    const compressedAppBundle = try std.Io.Dir.cwd().openFile(g_io, compressedTarballPath, .{}); //|compressedAppBundle| {
     const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ APPDATA_PATH, "self-extraction" });
 
-    if (std.fs.openDirAbsolute(SELF_EXTRACTION_PATH, .{})) |_| {
-        try std.fs.deleteTreeAbsolute(SELF_EXTRACTION_PATH);
-    } else |_| {
-        // do nothing
-    }
+    // Remove any previous extraction directory before starting fresh
+    std.Io.Dir.cwd().deleteTree(g_io, SELF_EXTRACTION_PATH) catch {};
 
-    try std.fs.cwd().makePath(SELF_EXTRACTION_PATH);
+    try std.Io.Dir.cwd().createDirPath(g_io, SELF_EXTRACTION_PATH);
 
     // compressed file found, assume I'm the self-extractor
-    defer compressedAppBundle.close();
+    defer compressedAppBundle.close(g_io);
 
-    const src_reader = compressedAppBundle.reader();
+    var src_reader_buffer: [64 * 1024]u8 = undefined;
+    var src_file_reader = compressedAppBundle.reader(g_io, src_reader_buffer[0..]);
 
     // Initialize the decompressor
-    // Note: because it's a big boy we need to allocate it on the heap
-    const window_buffer = try allocator.alloc(u8, 128 * 1024 * 1024); // 128MB Buffer
+    // Note: the sliding window is a big boy so we allocate it on the heap
+    const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
     defer allocator.free(window_buffer);
 
-    var zstd_stream = zstd.decompressor(src_reader, .{ .verify_checksum = false, .window_buffer = window_buffer });
+    var zstd_stream: zstd.Decompress = .init(&src_file_reader.interface, window_buffer, .{ .verify_checksum = false });
 
     // compressedTarballPath replace extension
     // remove the .zst extension from filename.tar.zst
@@ -1408,41 +1380,34 @@ pub fn main() !void {
     std.debug.print("tarPath: {s}\n", .{tarPath});
     // Open the destination file for writing
 
-    const dst_file = try std.fs.cwd().createFile(tarPath, .{ .truncate = true });
-    defer dst_file.close();
+    const dst_file = try std.Io.Dir.cwd().createFile(g_io, tarPath, .{ .truncate = true });
+    defer dst_file.close(g_io);
 
     // Create a writer for the destination file
-    var dst_writer = dst_file.writer();
+    var dst_writer_buffer: [64 * 1024]u8 = undefined;
+    var dst_file_writer = dst_file.writer(g_io, dst_writer_buffer[0..]);
 
-    // Allocate a buffer for reading decompressed data chunks
-    var decompressed_buffer: [4096]u8 = undefined;
+    // Stream from the decompressor into the destination file
+    _ = try zstd_stream.reader.streamRemaining(&dst_file_writer.interface);
+    try dst_file_writer.interface.flush();
 
-    // Read from the decompressor and write to the destination file
-    while (true) {
-        // Read a chunk of decompressed data into the buffer
-        const read_bytes = try zstd_stream.reader().read(&decompressed_buffer);
+    const decompress_done = std.Io.Clock.now(.awake, g_io);
+    std.debug.print("Time taken to decompress: {} ns\n", .{startTime.durationTo(decompress_done).toNanoseconds()});
 
-        if (read_bytes == 0) break; // Check for end of the decompressed stream
+    startTime = decompress_done;
 
-        // Write the decompressed chunk to the destination file
-        try dst_writer.writeAll(decompressed_buffer[0..read_bytes]);
-    }
+    var extractionFolder = try std.Io.Dir.cwd().openDir(g_io, SELF_EXTRACTION_PATH, .{});
+    defer extractionFolder.close(g_io);
 
-    std.debug.print("Time taken to decompress: {} ns\n", .{std.time.nanoTimestamp() - startTime});
+    const tarfile = try std.Io.Dir.cwd().openFile(g_io, tarPath, .{});
+    defer tarfile.close(g_io);
 
-    startTime = std.time.nanoTimestamp();
+    var tar_reader_buffer: [64 * 1024]u8 = undefined;
+    var tar_file_reader = tarfile.reader(g_io, tar_reader_buffer[0..]);
+    try pipeToFileSystem(g_io, extractionFolder, &tar_file_reader.interface);
 
-    // const unpackedBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, "unpacked" });
-    // try std.fs.cwd().makeDir(unpackedBundlePath);
-
-    const extractionFolder = try std.fs.cwd().openDir(SELF_EXTRACTION_PATH, .{});
-
-    const tarfile = try std.fs.cwd().openFile(tarPath, .{});
-    defer tarfile.close();
-
-    try pipeToFileSystem(extractionFolder, tarfile.reader());
-
-    std.debug.print("Time taken to untar: {} ns\n", .{std.time.nanoTimestamp() - startTime});
+    const untar_done = std.Io.Clock.now(.awake, g_io);
+    std.debug.print("Time taken to untar: {} ns\n", .{startTime.durationTo(untar_done).toNanoseconds()});
 
     const bundleBaseName = if (isProductionChannel(channelName))
         appDisplayName
@@ -1473,8 +1438,8 @@ pub fn main() !void {
     // todo: get the basename of the newBundlePath and join a new path with it
     // in case the name changed.
 
-    std.fs.deleteTreeAbsolute(APPBUNDLE_PATH) catch {};
-    try std.fs.renameAbsolute(newBundlePath, APPBUNDLE_PATH);
+    std.Io.Dir.cwd().deleteTree(g_io, APPBUNDLE_PATH) catch {};
+    try std.Io.Dir.renameAbsolute(newBundlePath, APPBUNDLE_PATH, g_io);
 
     // Platform-specific app launching
     const argv = switch (builtin.os.tag) {
@@ -1488,11 +1453,9 @@ pub fn main() !void {
         else => @compileError("Unsupported platform for app launching"),
     };
 
-    var child_process = std.process.Child.init(argv, allocator);
-
     // The command will exit and run the opened app (the unpacked/updated app bundle in a separate process)
     // so we want to just spawn (so it detaches) and exit as soon as possible
-    _ = child_process.spawn() catch |err| {
+    _ = std.process.spawn(g_io, .{ .argv = argv }) catch |err| {
         std.debug.print("Failed to spawn child process: {}\n", .{err});
         return;
     };
@@ -1605,7 +1568,7 @@ test "Linux desktop entries preserve channel-specific names and omit missing ico
 // or at least not for windows in the near future which we expect to support in the future. In the meantime this is a patched
 // version of std.tar.pipeToFileSystem from the stdlib that supports file modes on unix systems.
 // todo: when we add windows support we can revisit
-pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
+pub fn pipeToFileSystem(io: std.Io, dir: std.Io.Dir, reader: *std.Io.Reader) !void {
     var file_name_buffer: [255]u8 = undefined;
     var buffer: [512 * 8]u8 = undefined;
     var start: usize = 0;
@@ -1617,8 +1580,7 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
             end = dest_end;
             start = 0;
         }
-        const ask_header = @min(buffer.len - end, 1024 -| (end - start));
-        end += try reader.readAtLeast(buffer[end..], ask_header);
+        end += try reader.readSliceShort(buffer[end..]);
         switch (end - start) {
             0 => return,
             1...511 => return error.UnexpectedEndOfStream,
@@ -1637,7 +1599,7 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                     if (builtin.os.tag == .windows) {
                         std.debug.print("DEBUG: Creating directory: '{s}'\n", .{file_name});
                     }
-                    dir.makePath(file_name) catch |err| {
+                    dir.createDirPath(io, file_name) catch |err| {
                         if (builtin.os.tag == .windows) {
                             std.debug.print("ERROR: Failed to create directory '{s}': {}\n", .{ file_name, err });
                         }
@@ -1653,7 +1615,7 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                     if (builtin.os.tag == .windows) {
                         std.debug.print("DEBUG: Creating parent dir: '{s}'\n", .{dir_name});
                     }
-                    dir.makePath(dir_name) catch |err| {
+                    dir.createDirPath(io, dir_name) catch |err| {
                         if (builtin.os.tag == .windows) {
                             std.debug.print("ERROR: Failed to create parent dir '{s}': {}\n", .{ dir_name, err });
                         }
@@ -1661,18 +1623,23 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                     };
                 }
 
-                const mode = if (builtin.os.tag == .windows) 0 else header.mode() catch undefined;
+                const permissions: std.Io.File.Permissions = if (builtin.os.tag == .windows)
+                    .default_file
+                else blk: {
+                    const mode = header.mode() catch 0;
+                    break :blk if (mode == 0) .default_file else .fromMode(@intCast(mode));
+                };
 
                 if (builtin.os.tag == .windows) {
                     std.debug.print("DEBUG: Creating file: '{s}'\n", .{file_name});
                 }
-                var file = dir.createFile(file_name, .{ .mode = mode }) catch |err| {
+                const file = dir.createFile(io, file_name, .{ .permissions = permissions }) catch |err| {
                     if (builtin.os.tag == .windows) {
                         std.debug.print("ERROR: Failed to create file '{s}': {}\n", .{ file_name, err });
                     }
                     return err;
                 };
-                defer file.close();
+                defer file.close(io);
 
                 var file_off: usize = 0;
                 while (true) {
@@ -1688,11 +1655,11 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                         buffer.len - end,
                         rounded_file_size + 512 - file_off -| (end - start),
                     )));
-                    end += try reader.readAtLeast(buffer[end..], ask);
+                    end += try reader.readSliceShort(buffer[end..]);
                     if (end - start < ask) return error.UnexpectedEndOfStream;
                     // TODO: https://github.com/ziglang/zig/issues/14039
                     const slice = buffer[start..@as(usize, @intCast(@min(file_size - file_off + start, end)))];
-                    try file.writeAll(slice);
+                    try file.writeStreamingAll(io, slice);
 
                     file_off += slice.len;
                     start += slice.len;
@@ -1723,8 +1690,9 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                         @memcpy(buffer[0..dest_end], buffer[start..end]);
                         end = dest_end;
                         start = 0;
-                        const ask = @min(buffer.len - end, 512);
-                        end += try reader.readAtLeast(buffer[end..], ask);
+                        const read_n = try reader.readSliceShort(buffer[end..]);
+                        if (read_n == 0) return error.UnexpectedEndOfStream;
+                        end += read_n;
                     }
 
                     @memcpy(link_target_buffer[0..bytes_to_read], buffer[start .. start + bytes_to_read]);
@@ -1739,7 +1707,7 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
 
                     // Create parent directory if needed
                     if (std.fs.path.dirname(link_name)) |dir_name| {
-                        try dir.makePath(dir_name);
+                        try dir.createDirPath(io, dir_name);
                     }
 
                     // Create the symbolic link
@@ -1748,10 +1716,10 @@ pub fn pipeToFileSystem(dir: std.fs.Dir, reader: anytype) !void {
                         // TODO: Consider copying the target file instead for Windows
                         std.debug.print("Skipping symlink creation on Windows: {s} -> {s}\n", .{ link_name, link_target });
                     } else {
-                        dir.symLink(link_target, link_name, .{}) catch {
+                        dir.symLink(io, link_target, link_name, .{}) catch {
                             // On error, try to remove existing file/link and retry
-                            dir.deleteFile(link_name) catch {};
-                            dir.symLink(link_target, link_name, .{}) catch |err| {
+                            dir.deleteFile(io, link_name) catch {};
+                            dir.symLink(io, link_target, link_name, .{}) catch |err| {
                                 std.debug.print("Warning: Could not create symlink {s} -> {s}: {}\n", .{ link_name, link_target, err });
                                 // Continue extraction even if symlink fails
                             };
@@ -1784,8 +1752,8 @@ pub const Header = struct {
 
     pub fn fileSize(header: Header) !u64 {
         const raw = header.bytes[124..][0..12];
-        const ltrimmed = std.mem.trimLeft(u8, raw, "0");
-        const rtrimmed = std.mem.trimRight(u8, ltrimmed, " \x00");
+        const ltrimmed = std.mem.trimStart(u8, raw, "0");
+        const rtrimmed = std.mem.trimEnd(u8, ltrimmed, " \x00");
         if (rtrimmed.len == 0) return 0;
         return std.fmt.parseInt(u64, rtrimmed, 8);
     }
@@ -1844,8 +1812,8 @@ pub const Header = struct {
 
     pub fn mode(header: Header) !u32 {
         const raw = header.bytes[100..][0..8];
-        const ltrimmed = std.mem.trimLeft(u8, raw, "0");
-        const rtrimmed = std.mem.trimRight(u8, ltrimmed, " \x00");
+        const ltrimmed = std.mem.trimStart(u8, raw, "0");
+        const rtrimmed = std.mem.trimEnd(u8, ltrimmed, " \x00");
         if (rtrimmed.len == 0) return 0;
         return std.fmt.parseInt(u32, rtrimmed, 8);
     }
@@ -1927,23 +1895,23 @@ fn createWindowsLauncherScript(allocator: std.mem.Allocator, app_dir: []const u8
     defer allocator.free(launcher_content);
 
     // Write the launcher batch file
-    const run_bat_file = try std.fs.cwd().createFile(run_bat_path, .{});
-    defer run_bat_file.close();
-    try run_bat_file.writeAll(launcher_content);
+    const run_bat_file = try std.Io.Dir.cwd().createFile(g_io, run_bat_path, .{});
+    defer run_bat_file.close(g_io);
+    try run_bat_file.writeStreamingAll(g_io, launcher_content);
 
     std.debug.print("Created Windows launcher script: {s}\n", .{run_bat_path});
 }
 fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: []const u8) !void {
     std.debug.print("\nDEBUG copyDirectory: src='{s}' dest='{s}'\n", .{ src_path, dest_path });
 
-    var src_dir = std.fs.cwd().openDir(src_path, .{ .iterate = true }) catch |err| {
+    var src_dir = std.Io.Dir.cwd().openDir(g_io, src_path, .{ .iterate = true }) catch |err| {
         std.debug.print("ERROR: Failed to open source directory '{s}': {}\n", .{ src_path, err });
         return err;
     };
-    defer src_dir.close();
+    defer src_dir.close(g_io);
 
     var iterator = src_dir.iterate();
-    while (try iterator.next()) |entry| {
+    while (try iterator.next(g_io)) |entry| {
         const src_item_path = try std.fs.path.join(allocator, &.{ src_path, entry.name });
         defer allocator.free(src_item_path);
 
@@ -1953,7 +1921,7 @@ fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: 
         switch (entry.kind) {
             .directory => {
                 // Create directory and recursively copy contents
-                std.fs.cwd().makeDir(dest_item_path) catch |err| switch (err) {
+                std.Io.Dir.cwd().createDir(g_io, dest_item_path, .default_dir) catch |err| switch (err) {
                     error.PathAlreadyExists => {},
                     else => return err,
                 };
@@ -1961,7 +1929,7 @@ fn copyDirectory(allocator: std.mem.Allocator, src_path: []const u8, dest_path: 
             },
             .file => {
                 // Copy file
-                try std.fs.cwd().copyFile(src_item_path, std.fs.cwd(), dest_item_path, .{});
+                try std.Io.Dir.cwd().copyFile(src_item_path, std.Io.Dir.cwd(), dest_item_path, g_io, .{});
             },
             else => {
                 // Skip other file types (symlinks, etc.)

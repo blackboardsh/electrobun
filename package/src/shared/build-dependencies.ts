@@ -1,7 +1,7 @@
 export const BUILD_DEPENDENCIES_PUBLIC_BASE_URL =
 	"https://electrobun-artifacts.blackboard.sh";
 
-export const ZIG_VERSION = "0.13.0";
+export const ZIG_VERSION = "0.16.0";
 
 export const OWNED_BUILD_DEPENDENCY_VERSIONS = {
 	"zig-bsdiff": "0.1.21",

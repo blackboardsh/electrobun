@@ -290,17 +290,23 @@ pub fn build(b: *std.Build) void {
 
     const electrobun = b.createModule(.{
         .root_source_file = b.path(${JSON.stringify(relativeZigSdkPath)}),
-    });
-
-    const exe = b.addExecutable(.{
-        .name = "main",
-        .root_source_file = b.path(${JSON.stringify(relativeEntrypointPath)}),
         .target = target,
         .optimize = optimize,
     });
 
-    exe.root_module.addImport("electrobun", electrobun);
-    exe.linkLibC();
+    const exe = b.addExecutable(.{
+        .name = "main",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path(${JSON.stringify(relativeEntrypointPath)}),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "electrobun", .module = electrobun },
+            },
+        }),
+    });
+
     b.installArtifact(exe);
 }
 `;

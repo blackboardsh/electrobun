@@ -23,9 +23,13 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "extractor",
-        .root_source_file = b.path("main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+            // Link with libc for chmod and other system calls
+            .link_libc = true,
+        }),
     });
 
     if (target.result.os.tag == .windows) {
@@ -41,23 +45,24 @@ pub fn build(b: *std.Build) void {
         exe.headerpad_size = 0x1000;
     }
 
-    // Link with libc for chmod and other system calls
-    exe.linkLibC();
-
     b.installArtifact(exe);
 
     const unit_tests = b.addTest(.{
-        .root_source_file = b.path("main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+        }),
     });
-    unit_tests.linkLibC();
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const subsystem_parser_tests = b.addTest(.{
-        .root_source_file = b.path("windows_subsystem_check.zig"),
-        .target = b.graph.host,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("windows_subsystem_check.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
     });
     const run_subsystem_parser_tests = b.addRunArtifact(subsystem_parser_tests);
 
@@ -68,9 +73,11 @@ pub fn build(b: *std.Build) void {
     if (target.result.os.tag == .windows) {
         const subsystem_checker = b.addExecutable(.{
             .name = "windows-subsystem-check",
-            .root_source_file = b.path("windows_subsystem_check.zig"),
-            .target = b.graph.host,
-            .optimize = optimize,
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("windows_subsystem_check.zig"),
+                .target = b.graph.host,
+                .optimize = optimize,
+            }),
         });
         const run_subsystem_checker = b.addRunArtifact(subsystem_checker);
         run_subsystem_checker.addArtifactArg(exe);

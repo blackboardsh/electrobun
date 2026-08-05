@@ -35,17 +35,22 @@ fn peSubsystem(bytes: []const u8) !u16 {
     return readU16Little(bytes, optional_header + 68);
 }
 
-pub fn main() !void {
-    const allocator = std.heap.page_allocator;
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
-    if (args.len != 3) return error.InvalidArguments;
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+    defer args.deinit();
 
-    const expected = try std.fmt.parseInt(u16, args[2], 10);
-    const executable = try std.fs.cwd().readFileAlloc(
+    _ = args.next() orelse return error.InvalidArguments;
+    const executable_path = args.next() orelse return error.InvalidArguments;
+    const expected_arg = args.next() orelse return error.InvalidArguments;
+    if (args.next() != null) return error.InvalidArguments;
+
+    const expected = try std.fmt.parseInt(u16, expected_arg, 10);
+    const executable = try std.Io.Dir.cwd().readFileAlloc(
+        init.io,
+        executable_path,
         allocator,
-        args[1],
-        512 * 1024 * 1024,
+        .limited(512 * 1024 * 1024),
     );
     defer allocator.free(executable);
 
@@ -53,7 +58,7 @@ pub fn main() !void {
     if (actual != expected) {
         std.debug.print(
             "extractor PE subsystem mismatch: expected {d}, found {d} in {s}\n",
-            .{ expected, actual, args[1] },
+            .{ expected, actual, executable_path },
         );
         return error.UnexpectedPeSubsystem;
     }
