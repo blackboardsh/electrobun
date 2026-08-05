@@ -89,6 +89,42 @@ Run it with `bun start` (`hutch electrobun dev`). Three things to notice:
   `function Button(label, onClick) { ... }` and you have a component — no
   compiler, no JSX, no registration.
 
+## JSX (optional, no compiler)
+
+The same UI can be written as JSX — Cottontail's built-in transpiler handles
+`.tsx` files, so there is still no build step. Point your `tsconfig.json` at
+the runtime:
+
+```json
+{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/main/ui" } }
+```
+
+```tsx
+import { $, createSignal, createUIWindow } from "electrobun/main/ui";
+
+function Counter() {
+  const [count, setCount] = createSignal(0);
+  return (
+    <column grow={1} justify="center" align="center" gap={16}>
+      <text size={32} color="#e4e4f0">{$(() => `Count: ${count()}`)}</text>
+      <box pad={12} radius={8} bg="#1b1b28" onClick={() => setCount((c) => c + 1)}>
+        <text size={14} color="#e4e4f0">Click me</text>
+      </box>
+    </column>
+  );
+}
+
+await createUIWindow({ title: "Hello", width: 420, height: 240 }, () => <Counter />);
+```
+
+The rules carry over exactly: `$()` marks reactivity (`{$(() => ...)}` for
+text, `bg={$(() => ...)}` for props), components are plain functions
+returning elements, and a bare function child — `{() => ui.each(...)}` — is
+a builder escape, so the entire builder API (`each`, `dynamic`, `textInput`,
+`webview`, `wgpuSurface`) works inside JSX unchanged. Intrinsics: `<box>`,
+`<row>`, `<column>`, `<text>`, `<spacer>`. The `ui-wgpu` template ships as
+`.tsx`.
+
 ## Embedding a webview
 
 The UI tree can position real out-of-process webviews. The `webview` element
