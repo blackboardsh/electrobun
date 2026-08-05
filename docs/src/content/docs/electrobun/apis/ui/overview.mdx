@@ -82,13 +82,16 @@ by the page are detected and disposed. Call `registration.dispose()` to stop.
 
 ## Input model
 
-- **Pointer** — polled each tick: hover enter/leave, press, release, click.
-  A press outside any hittable node blurs focus. Nodes opt in via handlers
-  (`onClick`, `onPointerDown`, `onPointerUp`, `onPointerEnter`,
-  `onPointerLeave`).
-- **Keyboard** — native window key events route to the focused node's
-  `onKeyDown` first (bubbling through ancestors; return `true` to stop),
-  then to window-level handlers registered with `onKey(handler)`.
+- **Pointer** — native view events on macOS (move, press, release, wheel,
+  enter/exit), with a polling fallback elsewhere: hover enter/leave, press,
+  release, click. Mouse wheel scrolls the innermost `overflow: "scroll"`
+  container. A press outside any hittable node blurs focus. Nodes opt in
+  via handlers (`onClick`, `onPointerDown`, `onPointerUp`,
+  `onPointerEnter`, `onPointerLeave`).
+- **Keyboard** — native key events route to the focused node's `onKeyDown`
+  first (bubbling through ancestors; return `true` to stop), then to
+  window-level handlers registered with `onKey(handler)`. On macOS, events
+  carry the keyboard layout's characters (`e.chars`).
 - **Focus** — `focusable: true` nodes take focus on click; `textInput`
   autofocuses when asked. `ctx.focusedId()` is reactive.
 - **Window dragging** — `windowDrag: true` nodes move the window when

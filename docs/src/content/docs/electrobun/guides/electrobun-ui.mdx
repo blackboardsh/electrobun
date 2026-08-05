@@ -169,12 +169,13 @@ Mandelbrot this way.
 
 ## Current limitations
 
-- Typography uses a built-in 5x7 bitmap font: no system fonts, wrapping,
-  or text truncation yet. Long strings widen layout instead of clipping.
-- Pointer input is polled (no mouse-wheel scrolling yet; scroll containers
-  are driven programmatically), and keyboard mapping assumes a US layout
-  with macOS virtual key codes.
+- On macOS, text renders with system fonts (CoreText) and input is native
+  events (pointer, wheel scrolling, keyboard-layout characters). Other
+  platforms currently fall back to a built-in 5x7 bitmap font and polled
+  input with a US-layout keymap.
+- No text wrapping or truncation yet: long strings widen layout instead of
+  clipping. Size strings to their containers.
 - Layout is a flex subset: row/column, gap, padding, fixed/auto sizes,
-  grow, justify, align, and vertical scroll containers.
+  grow, justify, align, and scroll containers (wheel-scrollable on macOS).
 - Electrobun UI runs in the privileged main process — use it for trusted
   application UI, not untrusted content (that's what webviews are for).
