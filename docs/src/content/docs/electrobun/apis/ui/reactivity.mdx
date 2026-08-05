@@ -1,0 +1,115 @@
+---
+title: "UI Reactivity"
+description: "Signals, effects, memos, and stores in Electrobun UI."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and its APIs may change between releases.
+</Aside>
+
+Electrobun UI ships its own fine-grained reactive core, inspired by Solid:
+synchronous signals, auto-tracked effects, batched writes, and a store with
+`produce()`-style draft mutations. There is no compiler — the authoring model
+is functions and thunks.
+
+```ts
+import {
+  createSignal,
+  createEffect,
+  createMemo,
+  createStore,
+  produce,
+  batch,
+  untrack,
+  onCleanup,
+} from "electrobun/main/ui";
+```
+
+## Signals
+
+```ts
+const [count, setCount] = createSignal(0);
+
+count();               // read (tracked inside effects)
+setCount(5);           // write
+setCount((c) => c + 1); // functional update
+```
+
+Writes with an unchanged value are no-ops. Pass
+`createSignal(v, { equals: false })` to always notify, or a custom
+`equals(a, b)` comparator.
+
+## Effects and memos
+
+```ts
+createEffect(() => {
+  console.log("count is", count()); // re-runs when count changes
+});
+
+const doubled = createMemo(() => count() * 2); // cached derived value
+```
+
+Dependencies re-track on every run, so conditional reads work naturally.
+Effects created inside other effects are disposed when the outer effect
+re-runs. `onCleanup(fn)` registers teardown for the current scope —
+`textInput` uses it for its blink timer, elements use it to release native
+views.
+
+In UI code you rarely call `createEffect` for rendering — passing a thunk as
+a prop *is* the effect:
+
+```ts
+ui.text(() => `Count: ${count()}`);          // one effect, updates one string
+ui.box({ bg: () => (hot() ? "#f00" : "#333") }); // one effect, one property
+```
+
+## Stores and produce()
+
+For nested state, `createStore` gives path-level granularity: an effect that
+reads `state.profile.name` does not re-run when `state.profile.age` changes.
+
+```ts
+const [state, setState] = createStore({
+  profile: { name: "ada", age: 36 },
+  todos: [] as Todo[],
+});
+
+// Imperative-feeling batch updates via a draft:
+setState(
+  produce((s) => {
+    s.todos.unshift({ id: nextId(), title: "write docs" });
+    if (s.todos.length > 100) s.todos.length = 100;
+    s.profile.age += 1;
+  }),
+);
+
+// Or a shallow merge:
+setState({ profile: { ...state.profile, name: "grace" } });
+```
+
+Reads through the store proxy are tracked per path; writes through `produce`
+record exactly the touched paths (including array `length` side effects) and
+notify only their readers. The store is read-only outside the setter.
+
+## batch and untrack
+
+```ts
+batch(() => {   // coalesce multiple writes into one effect flush
+  setA(1);
+  setB(2);
+});
+
+const now = untrack(count); // read without subscribing
+```
+
+Pointer and key handlers already run inside `batch`, so multiple writes from
+one event settle in a single pass.
+
+## Scopes
+
+`createUIWindow` runs your app inside a reactive root; disposing the window
+disposes every effect, cleanup, and native-layer element created under it.
+`ui.dynamic` regions and `ui.each` rows are nested scopes with the same
+guarantee — remove a row and its effects, handlers, and native views go
+with it.

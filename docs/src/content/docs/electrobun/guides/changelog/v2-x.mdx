@@ -69,6 +69,33 @@ sandbox, and procedural tree generation. Windows Odin builds are currently
 x64-only and require Visual Studio Build Tools; the pinned compiler is pre-1.0,
 and cross-compilation is not yet supported.
 
+## Electrobun UI (experimental)
+
+Electrobun 2.0 ships an experimental reactive UI runtime at
+`electrobun/main/ui`: GPU-rendered application UI in plain TypeScript with no
+webview, browser DOM, or compile step.
+
+- Fine-grained reactivity (signals, memos, effects, and stores with
+  `produce()`), with any element prop accepting a reactive thunk.
+- A retained tree with flex-style layout, hit testing, and invalidation-only
+  rendering — one instanced Dawn draw call per dirty frame, zero work while
+  idle or hidden.
+- Elements: `box`/`row`/`column`, `text`, `spacer`, `dynamic` regions, keyed
+  `each` lists, scroll containers, a controlled `textInput`, and native-layer
+  elements that position real webviews and WGPU views from the same layout
+  tree.
+- `createUIWindow` for full-window chrome (including transparent,
+  always-on-top, draggable frameless panels), `createUIView` for rendering
+  into any WGPU view, and a new `<electrobun-ui>` browser tag that layers
+  main-process UI over web content via `registerUIRoot`.
+- Three new templates showcase it: `ui-wgpu` (reactive counter with embedded
+  webview and Mandelbrot surface), `ui-color-picker` (tray eyedropper with a
+  live pixel loupe), and `ui-launcher` (always-on-top command palette with
+  fuzzy app search and an inline calculator).
+
+See the [Electrobun UI guide](/electrobun/guides/electrobun-ui/) for a hello
+world and current limitations.
+
 ## App and platform fixes
 
 Highlights from the 2.0 reconciliation include:

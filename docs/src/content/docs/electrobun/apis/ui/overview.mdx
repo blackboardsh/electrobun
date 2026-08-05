@@ -1,0 +1,100 @@
+---
+title: "UI Overview"
+description: "Electrobun UI concepts: windows, mounting, rendering, and input."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and its APIs may change between releases.
+</Aside>
+
+Everything lives in the `electrobun/main/ui` entrypoint. It is import-gated:
+apps that never import it pay nothing for it.
+
+```ts
+import { createSignal, ui, createUIWindow } from "electrobun/main/ui";
+```
+
+## How rendering works
+
+Your components build a **retained tree** of nodes (boxes, text, native-layer
+anchors). Reactive props are fine-grained: each thunk prop becomes one effect
+that writes one tree property. A frame tick polls input and — only when
+something marked the tree dirty — runs layout, flattens the tree into an
+instance buffer, and issues **one instanced draw call** to the window's Dawn
+surface. Idle UI does no layout, paint, or GPU work; hidden windows skip the
+tick entirely.
+
+UIWindows are regular [`GpuWindow`](/electrobun/apis/webgpu/)s underneath —
+same native window, same full-window `WGPUView`, same surface. The UI runtime
+is a layer on top, not a different GPU stack.
+
+## createUIWindow
+
+```ts
+const uiWindow = await createUIWindow(options, app);
+```
+
+Creates a `GpuWindow`, mounts the tree, and starts the frame tick. The `app`
+callback builds the UI with the [element API](/electrobun/apis/ui/components/).
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `title` | `string` | — | Window title. |
+| `width`, `height` | `number` | — | Initial content size. |
+| `titleBarStyle` | `"hidden" \| "hiddenInset" \| "default"` | `"hiddenInset"` | `hiddenInset` keeps the window frame equal to the content area. |
+| `transparent` | `boolean` | `false` | Alpha-composited window. Pair with an alpha `background` and a rounded root box for floating panels. |
+| `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
+| `background` | `string` | `"#141420"` | Clear color behind the tree. Accepts `#rgb`, `#rrggbb`, `#rrggbbaa`. |
+| `tickMs` | `number` | `8` | Frame tick interval. Input polls every tick; rendering only on dirty ticks. |
+
+Returns `{ window, context, dispose }`:
+
+- `window` — the underlying `GpuWindow` (`show()`, `hide()`, `isVisible()`,
+  `setPosition()`, `setSize()`, `setAlwaysOnTop()`, ...). Hiding the window
+  suspends all UI work until it is shown again.
+- `context` — the mount's `UiContext` (tree, reactive `focusedId` /
+  `hoveredId`, handler registries). Mostly useful for advanced integrations
+  and tests.
+- `dispose()` — tears down the reactive scope and closes the window.
+
+## createUIView
+
+```ts
+const uiView = await createUIView(view, options, app);
+```
+
+Mounts a tree into an existing [`WGPUView`](/electrobun/apis/webgpu/) instead
+of a whole window — the mechanism behind
+[`<electrobun-ui>`](/electrobun/apis/ui/ui-tag/) overlays. `options` accepts
+`background` and `tickMs`. The view's frame supplies size and pointer offset.
+
+## registerUIRoot
+
+```ts
+const registration = registerUIRoot("overlay-name", { background: "#1b1b28" }, app);
+```
+
+Mounts `app` into every
+[`<electrobun-ui name="overlay-name">`](/electrobun/apis/ui/ui-tag/) tag that
+appears in your webviews. Each tag instance gets its own tree. Views removed
+by the page are detected and disposed. Call `registration.dispose()` to stop.
+
+## Input model
+
+- **Pointer** — polled each tick: hover enter/leave, press, release, click.
+  A press outside any hittable node blurs focus. Nodes opt in via handlers
+  (`onClick`, `onPointerDown`, `onPointerUp`, `onPointerEnter`,
+  `onPointerLeave`).
+- **Keyboard** — native window key events route to the focused node's
+  `onKeyDown` first (bubbling through ancestors; return `true` to stop),
+  then to window-level handlers registered with `onKey(handler)`.
+- **Focus** — `focusable: true` nodes take focus on click; `textInput`
+  autofocuses when asked. `ctx.focusedId()` is reactive.
+- **Window dragging** — `windowDrag: true` nodes move the window when
+  dragged; a press without movement still delivers `onClick`.
+
+## Coordinates and units
+
+All sizes and positions are logical points with the origin at the window
+content's top-left. Colors are hex strings (or `0xRRGGBBAA` numbers).

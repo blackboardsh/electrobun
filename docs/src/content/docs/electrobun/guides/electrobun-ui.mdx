@@ -1,0 +1,180 @@
+---
+title: "Electrobun UI"
+description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no compile step."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental. APIs may change between releases. It renders
+with a built-in bitmap font and polled pointer input today — see
+[limitations](#current-limitations).
+</Aside>
+
+Electrobun UI is a small, reactive UI runtime that renders through Dawn
+(WebGPU) directly from the main process. There is no webview, no browser DOM,
+and no build step: you write plain TypeScript against `electrobun/main/ui`,
+and the Cottontail bundler handles the rest.
+
+```
+signals / stores (createSignal, createStore + produce)
+        ↓  fine-grained per-prop effects
+retained UI tree
+        ↓
+layout + hit testing
+        ↓
+one instanced draw call → Dawn surface
+```
+
+Rendering is invalidation-driven: layout, paint, and the GPU draw only run
+when something changed. An idle window costs almost nothing, and a hidden
+window costs literally nothing.
+
+## Hello world
+
+Create a project with a `bundleWGPU` config and point the Cottontail
+entrypoint at a plain TypeScript file:
+
+```ts
+// electrobun.config.ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: { entrypoint: "src/main.ts" },
+    mac: { bundleCEF: false, bundleWGPU: true },
+    linux: { bundleCEF: false, bundleWGPU: true },
+    win: { bundleCEF: false, bundleWGPU: true },
+  },
+} satisfies ElectrobunConfig;
+```
+
+```ts
+// src/main.ts
+import { createSignal, ui, createUIWindow } from "electrobun/main/ui";
+
+const [count, setCount] = createSignal(0);
+
+await createUIWindow(
+  { title: "Hello UI", width: 420, height: 240 },
+  () => {
+    ui.column({ grow: 1, justify: "center", align: "center", gap: 16 }, () => {
+      ui.text(() => `Count: ${count()}`, { size: 32, color: "#e4e4f0" });
+      ui.box(
+        {
+          pad: 12,
+          radius: 8,
+          bg: "#1b1b28",
+          border: 1,
+          borderColor: "#3b3b58",
+          onClick: () => setCount((c) => c + 1),
+        },
+        () => {
+          ui.text("Click me", { size: 14, color: "#e4e4f0" });
+        },
+      );
+    });
+  },
+);
+```
+
+Run it with `bun start` (`hutch electrobun dev`). Three things to notice:
+
+- **Children are declared in callbacks**, so code indents like markup.
+- **Any prop can be a thunk.** The reactive text content becomes one
+  fine-grained effect that updates exactly one thing when `count` changes.
+- **Components are plain functions.** Wrap the button in
+  `function Button(label, onClick) { ... }` and you have a component — no
+  compiler, no JSX, no registration.
+
+## Embedding a webview
+
+The UI tree can position real out-of-process webviews. The `webview` element
+occupies layout space like any box; Electrobun's native compositor places the
+actual webview over it:
+
+```ts
+import { ui, webview, createUIWindow } from "electrobun/main/ui";
+
+await createUIWindow({ title: "Hybrid", width: 900, height: 600 }, () => {
+  ui.row({ grow: 1 }, () => {
+    ui.column({ width: 240, pad: 16, gap: 8, bg: "#16161e" }, () => {
+      ui.text("GPU-rendered sidebar", { size: 13, color: "#e4e4f0" });
+      // ... reactive chrome here ...
+    });
+    webview({
+      grow: 1,
+      url: "https://electrobun.dev",
+    });
+  });
+});
+```
+
+Resize the window and both panes reflow together: the sidebar is drawn by the
+UI runtime, the page is a real webview, and one layout tree owns both
+rectangles. `webview` also accepts `html` for inline content, plus
+`partition` and `sandbox` like [`BrowserView`](/electrobun/apis/browser-view/).
+
+## Embedding a WGPU layer
+
+`wgpuSurface` gives you a raw Dawn view positioned by the layout — your own
+render pipeline inside a UI-managed rectangle:
+
+```ts
+import { webgpu } from "electrobun/main";
+import { ui, wgpuSurface, createUIWindow } from "electrobun/main/ui";
+
+await createUIWindow({ title: "GPU panel", width: 720, height: 480 }, () => {
+  ui.column({ grow: 1, pad: 12, gap: 8 }, () => {
+    ui.text("Custom WGPU below", { size: 12, color: "#8c8ca8" });
+    wgpuSurface({
+      grow: 1,
+      onReady: async (view) => {
+        const { context } = webgpu.createContext(view);
+        const adapter = await webgpu.navigator.requestAdapter({
+          compatibleSurface: context,
+        });
+        const device = await adapter.requestDevice();
+        context._fallbackSize = {
+          width: view.frame.width,
+          height: view.frame.height,
+        };
+        context.configure({ device, format: "bgra8unorm" });
+        // ...create your pipeline and render into context.getCurrentTexture()...
+      },
+      onFrame: (view, rect) => {
+        // called when layout moves/resizes the surface
+      },
+    });
+  });
+});
+```
+
+The `view` handed to `onReady` is a regular
+[`WGPUView`](/electrobun/apis/webgpu/) — everything from the WebGPU adapter
+API works against it. The `templates/ui-wgpu` template renders an animated
+Mandelbrot this way.
+
+## Where to go next
+
+- [UI overview](/electrobun/apis/ui/overview/) — windows, mounting, and how
+  rendering works.
+- [Components](/electrobun/apis/ui/components/) — every element and its props.
+- [Reactivity](/electrobun/apis/ui/reactivity/) — signals, stores, effects.
+- [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/) — layering reactive
+  native UI on top of web content.
+- Templates: `ui-wgpu` (counter + embedded webview + Mandelbrot),
+  `ui-color-picker` (tray eyedropper), `ui-launcher` (command palette).
+
+## Current limitations
+
+- Typography uses a built-in 5x7 bitmap font: no system fonts, wrapping,
+  or text truncation yet. Long strings widen layout instead of clipping.
+- Pointer input is polled (no mouse-wheel scrolling yet; scroll containers
+  are driven programmatically), and keyboard mapping assumes a US layout
+  with macOS virtual key codes.
+- Layout is a flex subset: row/column, gap, padding, fixed/auto sizes,
+  grow, justify, align, and vertical scroll containers.
+- Electrobun UI runs in the privileged main process — use it for trusted
+  application UI, not untrusted content (that's what webviews are for).

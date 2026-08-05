@@ -1,0 +1,65 @@
+---
+title: "UI Tag (<electrobun-ui>)"
+description: "Layer reactive native UI over web content with the <electrobun-ui> custom element."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and its APIs may change between releases.
+</Aside>
+
+`<electrobun-ui>` puts a GPU-rendered, reactive UI layer *on top of* web
+content. The custom element is only an anchor: it reserves space in the page,
+Electrobun's native compositor places a Dawn view over it (exactly like
+[`<electrobun-wgpu>`](/electrobun/apis/browser/electrobun-wgpu-tag/)), and
+the trusted main process renders a UI tree into that view.
+
+Use it when a webview-based app needs chrome the page shouldn't own —
+overlays, HUDs, privileged controls — without giving the page access to them.
+
+## In the page
+
+```html
+<electrobun-ui name="inspector"></electrobun-ui>
+```
+
+The element behaves like a block element; size and position it with CSS. The
+overlay tracks the element through scrolling and layout changes. The `name`
+attribute selects which registered UI root mounts here.
+
+## In the main process
+
+```ts
+import { createSignal, registerUIRoot, ui } from "electrobun/main/ui";
+
+const registration = registerUIRoot(
+  "inspector",
+  { background: "#1b1b28" },
+  () => {
+    const [clicks, setClicks] = createSignal(0);
+    ui.column({ grow: 1, pad: 12, gap: 8, justify: "center", align: "center" }, () => {
+      ui.text(() => `clicks: ${clicks()}`, { size: 18, color: "#e4e4f0" });
+      ui.box(
+        { pad: 8, radius: 6, bg: "#232336", onClick: () => setClicks((c) => c + 1) },
+        () => ui.text("Click me", { size: 12, color: "#e4e4f0" }),
+      );
+    });
+  },
+);
+
+// later: registration.dispose()
+```
+
+Every `<electrobun-ui name="inspector">` instance — across webviews and
+windows — gets its own tree (the builder runs per mount). When the element is
+removed from the DOM, its native view and reactive scope are disposed.
+
+## Notes
+
+- The UI tree runs in the **main process** with full privileges; the page
+  can position the anchor but cannot reach into the overlay.
+- Pointer input works over the overlay; keyboard events go to the host
+  window, so window-level `onKey` handlers apply.
+- Under the hood this is [`createUIView`](/electrobun/apis/ui/overview/#createuiview)
+  mounted into the tag's `WGPUView` — you can use that API directly for
+  views you create yourself.
