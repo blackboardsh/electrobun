@@ -3165,6 +3165,100 @@ extern "C" void setWGPUKeyHandler(WGPUKeyHandler handler) {
     g_wgpuKeyHandler = handler;
 }
 
+// ----------------------- Text measurement & rasterization -----------------
+// CoreText-backed text for the UI runtime: measure a single-line string and
+// rasterize it (white glyphs on transparent, alpha = coverage) at a given
+// scale so the GPU can tint it with the text color.
+
+static CTFontRef uiCreateFont(const char* fontName, double size) {
+    if (fontName && fontName[0] != '\0') {
+        CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, fontName, kCFStringEncodingUTF8);
+        if (name) {
+            CTFontRef font = CTFontCreateWithName(name, size, NULL);
+            CFRelease(name);
+            if (font) return font;
+        }
+    }
+    return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, NULL);
+}
+
+static CTLineRef uiCreateLine(const char* text, CTFontRef font) {
+    CFStringRef string = CFStringCreateWithCString(kCFAllocatorDefault, text ? text : "", kCFStringEncodingUTF8);
+    if (!string) return NULL;
+    CGColorRef white = CGColorCreateGenericRGB(1, 1, 1, 1);
+    const void* keys[] = { kCTFontAttributeName, kCTForegroundColorAttributeName };
+    const void* values[] = { font, white };
+    CFDictionaryRef attrs = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFAttributedStringRef attributed = CFAttributedStringCreate(kCFAllocatorDefault, string, attrs);
+    CTLineRef line = CTLineCreateWithAttributedString(attributed);
+    CFRelease(attributed);
+    CFRelease(attrs);
+    CGColorRelease(white);
+    CFRelease(string);
+    return line;
+}
+
+extern "C" void uiMeasureText(const char* text, const char* fontName, double size,
+                              double* outWidth, double* outHeight, double* outAscent) {
+    CTFontRef font = uiCreateFont(fontName, size);
+    CTLineRef line = uiCreateLine(text, font);
+    CGFloat ascent = 0, descent = 0, leading = 0;
+    double width = 0;
+    if (line) {
+        width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+        CFRelease(line);
+    } else {
+        ascent = CTFontGetAscent(font);
+        descent = CTFontGetDescent(font);
+    }
+    if (outWidth) *outWidth = width;
+    if (outHeight) *outHeight = (double)(ascent + descent);
+    if (outAscent) *outAscent = (double)ascent;
+    CFRelease(font);
+}
+
+// Rasterize at `scale` device pixels per point. Returns a malloc'd RGBA
+// buffer (premultiplied white-on-transparent); caller frees with uiFreeTextBitmap.
+extern "C" uint8_t* uiRasterizeText(const char* text, const char* fontName, double size,
+                                    double scale,
+                                    int32_t* outWidth, int32_t* outHeight) {
+    CTFontRef font = uiCreateFont(fontName, size);
+    CTLineRef line = uiCreateLine(text, font);
+    if (!line) {
+        CFRelease(font);
+        if (outWidth) *outWidth = 0;
+        if (outHeight) *outHeight = 0;
+        return NULL;
+    }
+    CGFloat ascent = 0, descent = 0, leading = 0;
+    double width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+    int32_t w = (int32_t)ceil(width * scale);
+    int32_t h = (int32_t)ceil((ascent + descent) * scale);
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+    uint8_t* pixels = (uint8_t*)calloc((size_t)w * (size_t)h * 4, 1);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(pixels, w, h, 8, (size_t)w * 4, colorSpace,
+        kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(colorSpace);
+    if (ctx) {
+        CGContextScaleCTM(ctx, scale, scale);
+        CGContextSetTextPosition(ctx, 0, descent);
+        CTLineDraw(line, ctx);
+        CGContextRelease(ctx);
+    }
+    CFRelease(line);
+    CFRelease(font);
+    if (outWidth) *outWidth = w;
+    if (outHeight) *outHeight = h;
+    return pixels;
+}
+
+extern "C" void uiFreeTextBitmap(uint8_t* pixels) {
+    free(pixels);
+}
+
 @interface WGPUInputView : NSView
 @property (nonatomic, assign) uint32_t wgpuViewId;
 @end

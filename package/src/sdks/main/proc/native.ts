@@ -772,6 +772,33 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 
+			uiMeasureText: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.f64,
+					FFIType.ptr,
+					FFIType.ptr,
+					FFIType.ptr,
+				],
+				returns: FFIType.void,
+			},
+			uiRasterizeText: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.ptr,
+					FFIType.ptr,
+				],
+				returns: FFIType.ptr,
+			},
+			uiFreeTextBitmap: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
 				returns: FFIType.void,
@@ -2541,6 +2568,57 @@ const wgpuKeyCallback = new JSCallback(
 		threadsafe: true,
 	},
 );
+
+// CoreText-backed text for the UI runtime (macOS native wrapper).
+export const nativeText = {
+	available(): boolean {
+		return Boolean(
+			hasFFI && typeof native_.symbols.uiMeasureText === "function",
+		);
+	},
+	measure(
+		text: string,
+		fontName: string,
+		size: number,
+	): { w: number; h: number; ascent: number } {
+		const w = new Float64Array(1);
+		const h = new Float64Array(1);
+		const ascent = new Float64Array(1);
+		native_.symbols.uiMeasureText(
+			toCString(text),
+			toCString(fontName),
+			size,
+			ptr(w),
+			ptr(h),
+			ptr(ascent),
+		);
+		return { w: w[0]!, h: h[0]!, ascent: ascent[0]! };
+	},
+	rasterize(
+		text: string,
+		fontName: string,
+		size: number,
+		scale: number,
+	): { width: number; height: number; data: Uint8Array } | null {
+		const dims = new Int32Array(2);
+		const pixelsPtr = native_.symbols.uiRasterizeText(
+			toCString(text),
+			toCString(fontName),
+			size,
+			scale,
+			ptr(dims),
+			ptr(dims.subarray(1)),
+		);
+		if (!pixelsPtr) return null;
+		const width = dims[0]!;
+		const height = dims[1]!;
+		const data = new Uint8Array(
+			toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4).slice(0),
+		);
+		native_.symbols.uiFreeTextBitmap(pixelsPtr);
+		return { width, height, data };
+	},
+};
 
 let wgpuKeyEventsEnabled = false;
 /** Route native key events (with characters) as `wgpu-key-<viewId>`. */

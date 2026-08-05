@@ -6,8 +6,9 @@
 
 import { NodeKind, Prop, type UiTree } from "./tree";
 import { GLYPH_ADVANCE, GLYPH_H, glyphRuns } from "./font";
+import { atlasEntry, isNativeTextActive } from "./text";
 
-export const FLOATS_PER_INSTANCE = 16;
+export const FLOATS_PER_INSTANCE = 20;
 
 // "No clip" sentinel large enough to cover any window.
 const OPEN_CLIP: Clip = { x: -1e7, y: -1e7, w: 2e7, h: 2e7 };
@@ -62,6 +63,7 @@ class InstanceWriter {
 		rgba: number,
 		radius: number,
 		clip: Clip,
+		uv?: { u0: number; v0: number; u1: number; v1: number },
 	): void {
 		const a = (rgba & 0xff) / 255;
 		if (a === 0 || w <= 0 || h <= 0 || clip.w <= 0 || clip.h <= 0) return;
@@ -89,13 +91,17 @@ class InstanceWriter {
 		this.data[o + 6] = ((rgba >>> 8) & 0xff) / 255;
 		this.data[o + 7] = a;
 		this.data[o + 8] = radius;
-		this.data[o + 9] = 0;
+		this.data[o + 9] = uv ? 1 : 0; // textured flag
 		this.data[o + 10] = 0;
 		this.data[o + 11] = 0;
 		this.data[o + 12] = clip.x;
 		this.data[o + 13] = clip.y;
 		this.data[o + 14] = clip.w;
 		this.data[o + 15] = clip.h;
+		this.data[o + 16] = uv ? uv.u0 : 0;
+		this.data[o + 17] = uv ? uv.v0 : 0;
+		this.data[o + 18] = uv ? uv.u1 : 0;
+		this.data[o + 19] = uv ? uv.v1 : 0;
 		this.count++;
 	}
 }
@@ -109,6 +115,17 @@ function paintText(
 	const node = tree.get(id);
 	const size = node.props[Prop.FontSize]!;
 	const color = node.props[Prop.TextColor]! >>> 0;
+
+	// Native backend: one textured quad sampled from the glyph atlas.
+	if (isNativeTextActive()) {
+		const entry = atlasEntry(node.text, size);
+		if (entry) {
+			writer.emit(node.x, node.y, entry.w, entry.h, color, 0, clip, entry);
+		}
+		return;
+	}
+
+	// Bitmap fallback: glyph runs as rects.
 	const cell = size / GLYPH_H;
 	let penX = node.x;
 	for (const char of node.text) {

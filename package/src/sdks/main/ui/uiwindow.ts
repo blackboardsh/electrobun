@@ -18,6 +18,8 @@ import { computeLayout } from "./layout";
 import { paint } from "./paint";
 import { createUiRenderer } from "./renderer";
 import { attachInput } from "./input";
+import { tryEnableNativeText } from "./text";
+import { nativeText } from "../proc/native";
 import {
 	createUiContext,
 	withUiContext,
@@ -83,6 +85,9 @@ async function mount(
 	app: () => void,
 ): Promise<{ context: UiContext; stop: () => void }> {
 	const background = options.background ?? "#141420";
+	// System-font text when the native wrapper provides it (macOS); the
+	// built-in bitmap font otherwise.
+	tryEnableNativeText(nativeText.available() ? nativeText : null);
 	const renderer = await createUiRenderer(
 		target.renderTarget,
 		background,

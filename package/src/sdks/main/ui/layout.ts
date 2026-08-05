@@ -3,7 +3,7 @@
 // Pure — no Electrobun imports — so it runs under plain `bun test`.
 
 import { Align, Justify, NodeKind, Prop, type UiTree } from "./tree";
-import { measureText } from "./font";
+import { measure as measureText } from "./text";
 
 export { Align, Justify };
 
