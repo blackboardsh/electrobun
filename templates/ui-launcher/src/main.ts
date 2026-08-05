@@ -11,6 +11,7 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
+	createRoot,
 	live,
 	memo,
 	signal,
@@ -193,9 +194,11 @@ function appEntry(app: { name: string; path: string }): Entry {
 	};
 }
 
-live(() => {
-	query();
-	setSelected(0);
+createRoot(() => {
+	live(() => {
+		query();
+		setSelected(0);
+	});
 });
 
 function activate(index: number) {
@@ -213,10 +216,12 @@ const LIST_H = 5 * (ROW_H + ROW_GAP);
 
 // Follow-scroll: keep the selected row inside the viewport.
 const [listScroll, setListScroll] = signal(0);
-live(() => {
-	// Clamp scroll into [top + ROW_H - LIST_H, top]: selected row stays visible.
-	const top = selected() * (ROW_H + ROW_GAP);
-	setListScroll((s) => Math.min(top, Math.max(s, top + ROW_H - LIST_H)));
+createRoot(() => {
+	live(() => {
+		// Clamp scroll into [top + ROW_H - LIST_H, top]: selected row stays visible.
+		const top = selected() * (ROW_H + ROW_GAP);
+		setListScroll((s) => Math.min(top, Math.max(s, top + ROW_H - LIST_H)));
+	});
 });
 
 function ResultRow(entry: Entry, index: () => number) {
