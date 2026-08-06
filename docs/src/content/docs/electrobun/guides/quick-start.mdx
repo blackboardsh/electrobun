@@ -3,6 +3,10 @@ title: "Quick Start"
 description: "Create and run an Electrobun 2.x app with Hutch."
 ---
 
+This page takes you from nothing to a running desktop app. You'll install
+Hutch — the one CLI Electrobun uses for everything — scaffold a project from a
+template, and run it. A couple of minutes, start to finish.
+
 ## Install Hutch
 
 On macOS or Linux:
@@ -17,30 +21,36 @@ On Windows PowerShell:
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-Restart the terminal if needed, then verify the installation:
+Restart the terminal if needed, then check that it's on your path:
 
 ```bash
 hutch --version
 ```
 
-## Create a project
+That's the only global install you need. Hutch handles packages, scripts,
+builds, and releases — there's no separate npm, Bun, or framework CLI to set
+up, and when a project needs a compiler toolchain, Hutch fetches the right
+pinned version itself.
 
-Open the interactive template picker:
+## Create a project
 
 ```bash
 hutch electrobun init
 ```
 
-Use the arrow keys to select a template and press Enter. Hutch downloads the
-current production template catalog and creates the project.
+This opens an interactive picker: arrow keys to browse templates, Enter to
+choose. Hutch downloads the current production template catalog and creates
+the project. Templates range from a minimal hello-world to full app skeletons
+with React, Solid, Vue, Svelte, or GPU-rendered UI — the picker is a nice way
+to browse what exists.
 
-To skip the picker, provide a project name and template:
+Already know what you want? Skip the picker:
 
 ```bash
 hutch electrobun init my-app --template=hello-world
 ```
 
-Use `--channel=canary` to scaffold from the canary template catalog.
+Use `--channel=canary` to scaffold from the canary template catalog instead.
 
 ## Run the app
 
@@ -50,8 +60,14 @@ hutch install
 hutch run dev
 ```
 
-The generated `dev` script builds the app, launches it, and watches source files
-for changes. A typical project contains:
+A window should open on your desktop. That's your app.
+
+Here's what those two commands did: `hutch install` installed the project's
+dependencies and wrote `bun.lock`. `hutch run dev` ran the project's `dev`
+script, which builds the app, launches it, and rebuilds when you edit source
+files. Try changing some markup and watch it pick the change up.
+
+A typical project looks like this:
 
 ```text
 my-app/
@@ -68,24 +84,35 @@ my-app/
 `-- tsconfig.json
 ```
 
-Hutch installs packages, runs scripts, bundles source, and prepares Electrobun's
-native files. Cottontail executes the bundled TypeScript main process inside the
-finished application.
+The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
+is the **main process** — it runs on Cottontail, owns windows and native
+state, and is where the privileged side of your app lives. `src/mainview/` is
+the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
+webview. `electrobun.config.ts` tells Hutch how to put the two together into
+an app bundle.
 
 ## Build a release
+
+When you're ready to share it:
 
 ```bash
 hutch electrobun build --env=canary
 hutch electrobun build --env=production
 ```
 
-Hutch builds for the current operating system and architecture. Use native CI
-runners to produce a complete cross-platform release.
+This produces a signed, distributable build — installer, self-extracting
+wrapper, and update metadata included. Canary and production are independent
+channels, so you can ship prerelease builds to testers without touching your
+production line.
+
+Hutch builds for the operating system and architecture it's running on, so a
+complete cross-platform release means running the build on native CI runners
+for each target.
 
 ## Next steps
 
 - [Hello World](/electrobun/guides/hello-world/) builds the smallest app from
-  scratch.
+  scratch, so you see what every file is for.
 - [Hutch](/electrobun/guides/hutch/) explains commands, channels, and project
   pins.
 - [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.

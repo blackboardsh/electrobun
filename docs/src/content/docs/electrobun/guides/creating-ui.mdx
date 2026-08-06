@@ -4,12 +4,18 @@ description: "Bundle a browser view and embed isolated web content."
 ---
 
 This guide extends [Hello World](/electrobun/guides/hello-world) into a small
-browser. It uses a host page for controls and an `<electrobun-webview>` for the
-isolated remote page.
+working web browser, and in doing so teaches the UI pattern you'll use
+constantly in Electrobun: a **host page** you own — plain HTML, CSS, and
+TypeScript — with isolated content embedded inside it through
+`<electrobun-webview>`. The host page renders the toolbar and controls; the
+webview tag holds the untrusted remote page, composited into your layout like
+any other element but fully isolated from it.
 
 ## Browser Code
 
-Create `src/main-ui/index.ts`:
+The host page's script wires the toolbar to the embedded view: navigate on
+Go or Enter, move through history with Back and Forward, and keep the URL bar
+in sync as the page navigates. Create `src/main-ui/index.ts`:
 
 ```typescript
 import "electrobun/view";
@@ -109,7 +115,9 @@ the obsolete HTML `width` and `height` attributes.
 
 ## Build Configuration
 
-Bundle the TypeScript view and copy its HTML and CSS:
+Two new things appear in the config compared to Hello World: a `views` entry,
+which tells Hutch to bundle the TypeScript for this view, and additional
+`copy` lines for its HTML and CSS:
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -182,6 +190,9 @@ selection shortcuts in editable web content.
 hutch run dev
 ```
 
-For multiple tabs, partitions, navigation rules, and persistent bookmarks,
-start from the `multitab-browser` template rather than extending this minimal
-example ad hoc.
+You now have a working browser: type a URL, hit Enter, navigate back and
+forward. Not bad for two source files and a config.
+
+If you want to take the browser idea further — multiple tabs, partitions,
+navigation rules, persistent bookmarks — start from the `multitab-browser`
+template rather than extending this minimal example ad hoc.

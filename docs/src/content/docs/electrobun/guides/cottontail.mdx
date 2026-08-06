@@ -4,17 +4,25 @@ description: "Understand Electrobun's default JavaScript runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Cottontail is Electrobun's default JavaScript and TypeScript main-process
-runtime. It is built with Zig and JavaScriptCore and provides the Node.js and
-Bun-compatible APIs needed by Electrobun applications.
+Cottontail is the runtime your TypeScript main process runs on. It's built
+with Zig on JavaScriptCore and provides the Node.js and Bun-compatible APIs
+Electrobun applications need — which means your existing code and the npm
+packages it depends on work, without your app shipping Node or Bun.
 
-Hutch resolves a pinned Cottontail release while building and places that
-runtime in the application bundle. End users do not install Cottontail
-separately.
+Why a separate runtime at all? Because a desktop app's runtime has a
+different job than a general-purpose server runtime. Cottontail carries the
+APIs applications actually use and leaves out the rest — package management,
+bundling, and build machinery live in Hutch instead — so the runtime that
+ships inside every app stays small.
+
+You never manage Cottontail directly. Hutch resolves a pinned Cottontail
+release at build time and places it in the application bundle; end users
+don't install anything.
 
 ## Select Cottontail
 
-New projects use Cottontail by default. The explicit configuration is:
+New projects use Cottontail by default. Spelled out explicitly, the
+configuration is:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -34,9 +42,9 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-The `src/bun` directory and `electrobun/main` import path are retained as
-compatibility names. They do not mean the application is running the Bun
-binary:
+One naming note: the `src/bun` directory and the `electrobun/main` import
+path are compatibility names carried over from 1.x. They don't mean your app
+is running the Bun binary — Cottontail executes this code:
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
@@ -49,6 +57,9 @@ new BrowserWindow({
 
 ## Runtime and build ownership
 
+The clean split between Cottontail and Hutch is worth internalizing, because
+it explains where every capability lives:
+
 | Concern | Owner |
 | --- | --- |
 | Execute the bundled TypeScript main process | Cottontail |
@@ -59,30 +70,30 @@ new BrowserWindow({
 | Acquire compilers and native platform artifacts | Hutch |
 | Sign, notarize, wrap, and package releases | Hutch |
 
-This separation keeps package management and distribution machinery out of the
-runtime shipped to every application.
+Everything build-related stays out of the runtime shipped to every user.
 
 ## Runtime compatibility
 
-Cottontail is intended to run existing Node.js and Bun-oriented application
-code, but compatibility does not make the two runtimes interchangeable in every
-case. Native addons, runtime-specific implementation details, and uncommon APIs
-can expose differences. Keep `bun.lock` committed and exercise your application
-on every target platform before release.
+Cottontail is built to run existing Node.js and Bun-oriented application
+code, and for typical application code it does. But compatibility isn't the
+same as being interchangeable in every case: native addons, runtime-specific
+implementation details, and uncommon APIs can expose differences. The
+practical advice is the same as for any runtime: keep `bun.lock` committed
+and exercise your application on every target platform before release.
 
 <Aside type="tip">
-Use the Bun main-process option when an application intentionally depends on the
-actual Bun runtime. Hutch remains the build tool in that configuration.
+If your application intentionally depends on the actual Bun runtime, use the
+Bun main-process option — Hutch remains the build tool in that configuration.
 </Aside>
 
 ## Pin Cottontail
 
-Pin only when reproducibility requires it:
+Most projects don't need a pin: without one, production Hutch selects
+production Cottontail and `hutch-canary` selects canary Cottontail. Pin only
+when reproducibility requires an exact version:
 
 ```ts
 // @dash cottontail=0.2.3
 ```
 
-Without a pin, production Hutch selects production Cottontail and
-`hutch-canary` selects canary Cottontail. Inspect the active version with
-`hutch cottontail version`.
+Inspect the active version with `hutch cottontail version`.

@@ -4,11 +4,15 @@ description: "Install and use Electrobun's native build and workspace CLI."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Hutch is the build and workspace CLI for Electrobun 2.x. It installs packages,
-runs project scripts, bundles TypeScript, acquires pinned toolchains and
-Electrobun platform artifacts, and packages applications for distribution.
-Cottontail is a separate runtime selected by Hutch when JavaScript execution is
-needed.
+Hutch is the one CLI you use for everything in Electrobun 2.x. It installs
+packages, runs project scripts, bundles TypeScript, downloads pinned
+toolchains and Electrobun platform artifacts, and packages applications for
+distribution. Where a 1.x workflow juggled Bun, npm, and a separate
+Electrobun CLI, 2.x is just `hutch`.
+
+Hutch is build-time tooling — it's what *you* run. Cottontail is the runtime
+that ships inside your app; Hutch selects it whenever JavaScript execution is
+needed and otherwise stays out of the finished bundle.
 
 ## Install Hutch
 
@@ -18,7 +22,8 @@ Install the current production channel on macOS or Linux:
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 ```
 
-Install the canary channel alongside it as `hutch-canary`:
+Want to try prerelease builds without touching your daily setup? Install the
+canary channel alongside it as `hutch-canary`:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh |
@@ -32,16 +37,16 @@ On Windows PowerShell:
 ```
 
 Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
-accept an exact semantic version or build revision. Production and canary are
-installed side by side under `~/.dash/products`, with launchers in
-`~/.dash/bin`. `stable` is accepted as an alias for the production channel.
+accept an exact semantic version or build revision. Production and canary
+live side by side under `~/.dash/products`, with launchers in `~/.dash/bin`.
+`stable` is accepted as an alias for the production channel.
 
-Developers starting from npm or Bun can run `npx electrobun init` or
-`bunx electrobun init`. The published package installs Hutch when necessary and
-delegates to the same native initializer. Prerelease Electrobun packages select
-Hutch's canary channel; production packages select production. This bootstrap
-is intentionally limited to `init`; development and build commands run through
-Hutch directly.
+Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
+work: the published package installs Hutch when necessary and hands off to
+the same native initializer. Prerelease Electrobun packages select Hutch's
+canary channel; production packages select production. This bootstrap is
+deliberately limited to `init` — day-to-day development and build commands
+run through Hutch directly.
 
 ## Everyday commands
 
@@ -72,11 +77,12 @@ hutch electrobun build --env=production
 Hutch's build environments are `dev`, `canary`, and `production`.
 `--env=stable` remains an alias for `--env=production`.
 
-`hutch run <name>` resolves scripts from the nearest `hutch.config.ts`
-first, then falls back to `package.json` scripts (`dash.config.ts` remains
-supported as the legacy config name). `hutch <name>` is shorthand when the
-name is unambiguous. Non-JavaScript projects don't need a `package.json` for
-scripts at all — a `hutch.config.ts` is enough:
+Scripts resolve in a predictable order: `hutch run <name>` checks the nearest
+`hutch.config.ts` first, then falls back to `package.json` scripts
+(`dash.config.ts` remains supported as the legacy config name). When the name
+is unambiguous, `hutch <name>` works as shorthand. And since scripts don't
+have to live in `package.json`, non-JavaScript projects don't need one at all
+— a `hutch.config.ts` is enough:
 
 ```ts
 // hutch.config.ts
@@ -91,16 +97,16 @@ export default {
 Its first line can also carry the [version pragma](#pin-a-project) that pins
 Hutch and Cottontail per project.
 
-An exact package request such as `hutch x electrobun@2.0.0 init` retains normal
-package-runner semantics, but templates always come from the latest matching
-production or canary catalog. Pinning an old npm package does not pin an old
-starter template.
+One subtlety worth knowing: an exact package request such as
+`hutch x electrobun@2.0.0 init` keeps normal package-runner semantics, but
+templates always come from the latest matching production or canary catalog.
+Pinning an old npm package does not pin an old starter template.
 
 ## Versions and updates
 
 The global launchers track independent production and canary channels. Hutch
-engines and Cottontail runtimes are stored side by side, so one project can pin
-an older release without replacing your global selection.
+engines and Cottontail runtimes are stored side by side, so one project can
+pin an older release without replacing your global selection.
 
 ```bash
 hutch self version
@@ -110,12 +116,13 @@ hutch cottontail update
 ```
 
 Interactive use checks for updates periodically. CI and other non-interactive
-invocations do not prompt.
+invocations never prompt.
 
 ## Pin a project
 
-Place an optional pragma on the first line of `hutch.config.ts` (or the
-legacy `dash.config.ts`):
+Need a project to build the same way for everyone, regardless of what's
+installed globally? Place an optional pragma on the first line of
+`hutch.config.ts` (or the legacy `dash.config.ts`):
 
 ```ts
 // @dash cli=production cottontail=production
@@ -133,14 +140,14 @@ globally installed channel.
 
 ## Toolchains and caches
 
-For Zig, Rust, Go, and Odin main processes, Hutch first accepts a compatible
-system compiler at Electrobun's pinned version. Otherwise it downloads that
-exact toolchain into `~/.dash/toolchains` and shares it across projects.
-Electrobun native platform artifacts are cached under
-`~/.dash/products/electrobun`.
+For Zig, Rust, Go, and Odin main processes, you don't need to install the
+compiler yourself. Hutch first accepts a compatible system compiler at
+Electrobun's pinned version; otherwise it downloads that exact toolchain into
+`~/.dash/toolchains` and shares it across projects. Electrobun native
+platform artifacts are cached under `~/.dash/products/electrobun`.
 
 <Aside type="note">
 Hutch is build-time tooling. The resulting application contains its selected
-main process and Electrobun runtime files; it does not require the user's global
-Hutch installation.
+main process and Electrobun runtime files; it does not require the user's
+global Hutch installation.
 </Aside>

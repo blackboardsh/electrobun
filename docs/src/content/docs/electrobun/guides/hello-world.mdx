@@ -4,14 +4,19 @@ description: "Build a minimal Cottontail-based Electrobun app from scratch."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-This guide creates a minimal Electrobun app with **Cottontail** — the
-default TypeScript main process. Every runtime has its own walkthrough:
+This guide builds the smallest possible Electrobun app by hand — five files,
+no template — so you can see exactly what each piece is for. The main process
+runs on **Cottontail**, the default TypeScript runtime. Every runtime has its
+own version of this walkthrough:
 [Bun](/electrobun/guides/hello-world-bun/),
 [Zig](/electrobun/guides/hello-world-zig/),
 [Rust](/electrobun/guides/hello-world-rust/),
 [Go](/electrobun/guides/hello-world-go/), and
-[Odin](/electrobun/guides/hello-world-odin/). The faster path is
-`hutch electrobun init my-app --template=hello-world`.
+[Odin](/electrobun/guides/hello-world-odin/).
+
+If you just want a running app, `hutch electrobun init my-app
+--template=hello-world` gets you the same result in one command — this guide
+is for understanding what that command sets up.
 
 ## 1. Create the project
 
@@ -41,7 +46,9 @@ Create `package.json`:
 }
 ```
 
-Install dependencies:
+The one dependency that matters is `electrobun` — it provides the config
+types, the SDK your main process imports, and the browser-side code. Install
+it:
 
 ```bash
 hutch install
@@ -59,7 +66,8 @@ selects Bun.
 
 ## 2. Add a webview
 
-Create `src/mainview/index.html`:
+This is your app's UI — plain HTML, rendered in a native webview. Create
+`src/mainview/index.html`:
 
 ```html
 <!doctype html>
@@ -75,9 +83,13 @@ Create `src/mainview/index.html`:
 </html>
 ```
 
+Anything you'd put in a web page works here: CSS, TypeScript, React, whatever
+you like. For hello world, a heading is plenty.
+
 ## 3. Add the main process
 
-Create `src/bun/index.ts`:
+The main process is the privileged side of your app — it runs on Cottontail,
+not in the webview, and it's what creates windows. Create `src/bun/index.ts`:
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
@@ -94,9 +106,14 @@ new BrowserWindow({
 });
 ```
 
+The `views://` URL is Electrobun's scheme for assets bundled into the app —
+this one points at the HTML file from the previous step, wherever the bundle
+ends up on disk.
+
 ## 4. Configure the build
 
-Create `electrobun.config.ts`:
+The last piece is telling Hutch how these files become an app. Create
+`electrobun.config.ts`:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -119,11 +136,23 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
+Reading it top to bottom: `app` names and identifies the application,
+`mainProcess` selects Cottontail as the runtime, `entrypoint` points at the
+main process you just wrote, and `copy` places the HTML file into the bundle
+at the path the `views://` URL expects.
+
 ## 5. Run the app
 
 ```bash
 hutch run dev
 ```
 
-Hutch builds and launches the app, then rebuilds it when watched source files
-change. Press Ctrl+C to stop it.
+Hutch builds the app, launches it, and a window titled "Hello Electrobun"
+opens with your heading in it. Leave it running — edits to watched source
+files trigger a rebuild. Press Ctrl+C to stop.
+
+That's the whole loop: a main process that opens windows, HTML that fills
+them, and a config that binds the two. From here, the natural next steps are
+talking between the two sides with RPC ([Main Process
+API](/electrobun/apis/main/)) and building real UI
+([Creating UI](/electrobun/guides/creating-ui/)).

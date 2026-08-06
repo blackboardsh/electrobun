@@ -3,10 +3,15 @@ title: "Updates"
 description: "Publish update artifacts and automate cross-platform releases."
 ---
 
-Electrobun updates are static files. Hutch creates the update metadata, full
-bundle, and optional delta patch; the application-side `Updater` checks and
-installs them. R2, S3, GitHub Releases, or another static HTTPS host can serve
-the files.
+Shipping updates in Electrobun doesn't require an update server — updates are
+just static files. Hutch creates the update metadata, full bundle, and
+optional delta patch at build time; the application-side `Updater` checks for
+them and installs them. Anything that serves files over HTTPS works as the
+host: R2, S3, GitHub Releases, or a plain static server.
+
+This page covers the publishing side — where artifacts go and how to automate
+building them for every platform. The application-side API lives in the
+[Updater](/electrobun/apis/updater/) reference.
 
 ## Configure The Release Host
 

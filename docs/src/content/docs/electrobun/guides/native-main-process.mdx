@@ -4,8 +4,17 @@ description: "Choose Cottontail, Bun, Zig, Rust, Go, or Odin for an Electrobun m
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Electrobun exposes the same native core to six main-process runtimes. Hutch is
-the build tool for every option. Each runtime has a dedicated walkthrough:
+The main process doesn't have to be JavaScript. Electrobun exposes the same
+native core to six runtimes — so a team that thinks in Rust, or an app whose
+main process is really a simulation loop, can skip the JS layer entirely and
+still get Electrobun's windows, webviews, RPC, and packaging. Hutch is the
+build tool for every option, and switching runtimes is a config change, not a
+different framework.
+
+The practical decision is simpler than six options suggests: use Cottontail
+(the default) unless you specifically need the Bun binary, and reach for a
+native language when you want compiled performance or a
+smaller-than-JavaScript footprint. Each runtime has a dedicated walkthrough:
 [Cottontail](/electrobun/guides/hello-world/),
 [Bun](/electrobun/guides/hello-world-bun/),
 [Zig](/electrobun/guides/hello-world-zig/),
@@ -104,11 +113,11 @@ export default {
 ```
 
 For another language, change `mainProcess` and use its matching config field
-and default entrypoint from the table above. The generated templates are the
-copyable source for complete native SDK initialization and lifecycle code.
+and default entrypoint from the table above.
 
-The generated native templates contain complete SDK initialization, window,
-webview, RPC, and event-loop examples:
+The fastest way to see real native SDK code is to generate a template — each
+one contains complete SDK initialization, window, webview, RPC, and
+event-loop examples you can copy from:
 
 ```bash
 hutch electrobun init zig-app --template=zig-wgpu

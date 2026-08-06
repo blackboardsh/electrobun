@@ -3,8 +3,16 @@ title: "Bundling And Distribution"
 description: "Create canary and production installers, update archives, and patches."
 ---
 
-Hutch produces release artifacts for the current host platform. Use canary
-builds for testing and production builds for user-facing releases.
+When your app is ready to leave your machine, one command produces everything
+distribution needs: the application bundle, a compressed update archive, a
+platform installer, update metadata, and optionally a delta patch from your
+previous release. This page explains what those artifacts are, what they're
+named, and where to put them.
+
+Hutch builds for the current host platform. Use canary builds for testing and
+production builds for user-facing releases — the two channels are
+independent, so testers can run prerelease builds alongside the production
+app. A typical project wires both into its scripts:
 
 ```json
 {
@@ -31,10 +39,6 @@ hutch install
 hutch run build:canary
 hutch run build:production
 ```
-
-Each non-dev build creates an application bundle, a Zstandard-compressed
-update archive, platform installer output, update metadata, and optionally a
-delta patch from the previous release.
 
 ## Release Host
 

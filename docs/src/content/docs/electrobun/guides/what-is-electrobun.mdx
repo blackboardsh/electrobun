@@ -3,66 +3,83 @@ title: "What is Electrobun?"
 description: "A compact cross-platform desktop framework built around native views and a small runtime."
 ---
 
-Electrobun is a desktop application framework for macOS, Windows, and Linux. It
-combines web-based user interfaces with native windows, menus, trays, updates,
-WebGPU surfaces, and platform integration.
+Electrobun is a framework for building desktop apps for macOS, Windows, and
+Linux. You write your UI with HTML, CSS, and TypeScript — the same way you'd
+build for the web — and Electrobun gives you the native side: real windows,
+menus, trays, auto-updates, WebGPU surfaces, and platform integration.
+
+The trade most desktop web frameworks make is size and speed: they ship a full
+copy of Chromium and Node with every app. Electrobun doesn't. By default your
+app renders with the webview already on the user's machine and runs its main
+process on Cottontail, a small runtime built for exactly this job. The result
+is an app measured in megabytes, not hundreds of them — with the option to
+bundle Chromium when you genuinely want it.
 
 ## The 2.x stack
 
-Electrobun 2.x separates development tooling from application runtime:
+Electrobun 2.x is a few focused pieces, each doing one job:
 
-- **Hutch** installs dependencies, runs scripts, bundles code, acquires pinned
-  toolchains, and creates signed distribution artifacts.
-- **Cottontail** is the default JavaScript and TypeScript main-process runtime.
-  It provides Node.js and Bun-compatible APIs on JavaScriptCore.
-- **Electrobun Core** implements cross-platform windows, views, RPC, menus,
-  trays, updates, and native integration.
-- **System webviews** render UI by default: WKWebView on macOS, WebView2 on
-  Windows, and WebKitGTK on Linux.
-- **CEF** is an optional pinned Chromium renderer for applications that prefer
-  browser consistency over bundle size.
+- **Hutch** is the CLI you interact with. It installs dependencies, runs
+  scripts, bundles code, downloads pinned toolchains, and produces signed,
+  distributable builds. If you're used to reaching for npm, bunx, and a
+  separate framework CLI, Hutch replaces all three.
+- **Cottontail** is the default main-process runtime for JavaScript and
+  TypeScript. It's built with Zig on JavaScriptCore and provides the Node.js
+  and Bun-compatible APIs desktop apps actually use — so your existing code
+  and dependencies work, in a runtime that's smaller than either.
+- **Electrobun Core** is the native layer: cross-platform windows, views, RPC,
+  menus, trays, updates, and OS integration.
+- **System webviews** render your UI by default — WKWebView on macOS, WebView2
+  on Windows, WebKitGTK on Linux. They're already installed and kept updated
+  by the OS, which is why your app stays small.
+- **CEF** is an optional pinned Chromium renderer, for apps that want the same
+  browser engine everywhere more than they want a small download.
 
-Applications may replace Cottontail with Bun, Zig, Rust, Go, or Odin as their
-main process while using the same Hutch build and packaging workflow.
+You're not locked into TypeScript for the main process, either. Swap in Bun,
+Zig, Rust, Go, or Odin and keep the same Hutch build and packaging workflow.
 
 ## Why Electrobun
 
-- Use TypeScript and existing web frameworks for application UI.
-- Keep privileged native APIs out of page JavaScript and communicate through
-  typed RPC.
-- Use native windows and platform APIs without shipping Chromium by default.
-- Embed independent `<electrobun-webview>` and `<electrobun-wgpu>` surfaces in
-  an application's HTML layout.
-- Produce self-extracting Zstandard-compressed installers.
-- Generate binary-diff updates with a full-download fallback.
-- Build production and canary channels independently.
+- Build your UI in TypeScript with whatever web framework you already use.
+- Keep privileged native APIs out of page JavaScript — the main process owns
+  them, and your UI talks to it over typed RPC.
+- Ship native windows and platform APIs without bundling Chromium by default.
+- Embed independent `<electrobun-webview>` and `<electrobun-wgpu>` surfaces
+  right in your HTML layout, like any other element.
+- Distribute self-extracting Zstandard-compressed installers.
+- Ship updates as binary diffs — users download only what changed, with a
+  full-download fallback when no patch path exists.
+- Run production and canary channels side by side, built independently.
 
 ## Process model
 
-The main process owns application state and native objects. Each browser view is
-isolated from it and communicates through Electrobun's RPC and event bridges.
-This gives an application the convenience of web UI without placing privileged
-main-process APIs directly in page JavaScript.
+The main process owns application state and native objects. Each browser view
+runs isolated from it and communicates through Electrobun's RPC and event
+bridges. You get the convenience of web UI without handing privileged
+main-process APIs to page JavaScript — a compromised or buggy view can't reach
+what it was never given.
 
 ## Distribution model
 
-Hutch creates a runnable inner application, an outer self-extracting wrapper,
-update metadata, a compressed full-update archive, and platform installer
-artifacts. Code signing and notarization are integrated into the release build.
-Artifacts can be hosted on static storage such as R2, S3, or GitHub Releases.
+When you build for release, Hutch produces everything distribution needs in
+one pass: the runnable app, a small self-extracting wrapper around it, update
+metadata, a compressed full-update archive, and platform installer artifacts.
+Code signing and notarization are part of the release build, not a separate
+chore. Host the artifacts on any static storage — R2, S3, GitHub Releases —
+and the built-in updater takes it from there.
 
 ## Start building
 
-Install Hutch and choose a template:
+Install Hutch and pick a template:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
-If Hutch is not installed yet, the npm package provides equivalent bootstrap
-entry points. They install the matching Hutch channel and open the same
-template and project-name prompts:
+If you don't have Hutch yet, the npm package will bootstrap it for you —
+these commands install the matching Hutch channel and open the same template
+picker:
 
 ```bash
 npx electrobun init
@@ -70,5 +87,6 @@ npx electrobun init
 bunx electrobun init
 ```
 
-Continue with the [Quick Start](/electrobun/guides/quick-start/) or build the
-minimal app in [Hello World](/electrobun/guides/hello-world/).
+From here, the [Quick Start](/electrobun/guides/quick-start/) gets a template
+running in a couple of minutes, or [Hello World](/electrobun/guides/hello-world/)
+builds the smallest possible app from scratch so you can see every moving part.

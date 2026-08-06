@@ -3,9 +3,19 @@ title: "Architecture Overview"
 description: "How Hutch, main-process runtimes, Electrobun Core, and webviews fit together."
 ---
 
+This page is the mental model for how an Electrobun app is built, what's
+inside it, and what happens when it runs. Nothing here is required reading to
+ship an app — but when you want to know *why* the framework is shaped the way
+it is, this is the place.
+
+The short version: Hutch does everything at build time and ships nothing;
+your main process owns the app at runtime; webviews render UI in isolation
+and talk to the main process over bridges; and distribution is a small
+self-extractor plus binary-diff updates served from static storage.
+
 ## Build-time architecture
 
-Hutch is the only build orchestrator. It:
+Hutch is the only build orchestrator. When you run a build, it:
 
 1. Loads `electrobun.config.ts`.
 2. Resolves the selected Electrobun release and native platform artifact.
@@ -14,10 +24,12 @@ Hutch is the only build orchestrator. It:
    Odin main process.
 5. Assembles the platform application bundle.
 6. For canary and production builds, creates the self-extracting wrapper,
-   compressed update archive, metadata, optional patch, and platform installer.
+   compressed update archive, metadata, optional patch, and platform
+   installer.
 7. Applies configured code signing and notarization.
 
-Hutch and its compiler toolchains are not shipped inside the finished app.
+Hutch and its compiler toolchains are not shipped inside the finished app —
+what your users download contains only what the app needs to run.
 
 ## Runtime architecture
 
@@ -30,19 +42,22 @@ Every Electrobun application contains:
 - optional CEF and WGPU libraries
 - updater metadata and patch tooling
 
-The main process owns application state and privileged native objects. It opens
-windows, views, menus, trays, and GPU surfaces through Electrobun Core. Each
-webview is a separate native browsing context and communicates with the main
-process through Electrobun's event and RPC bridges. The renderer controls its
-exact operating-system process model.
+At runtime there's a clear division of authority. The main process owns
+application state and privileged native objects; it opens windows, views,
+menus, trays, and GPU surfaces through Electrobun Core. Each webview is a
+separate native browsing context that communicates with the main process only
+through Electrobun's event and RPC bridges — page JavaScript never holds
+privileged APIs directly. The renderer controls its exact operating-system
+process model.
 
 ## Main-thread model
 
-Native GUI frameworks require their event loop on the process main thread.
-Cottontail and Bun run application JavaScript on a worker while Electrobun Core
-owns that main-thread event loop. Native SDKs expose the same arrangement
-directly: application code initializes the core, starts its work on another
-thread where needed, and enters `runMainThread`.
+Native GUI frameworks require their event loop on the process main thread,
+and Electrobun respects that instead of fighting it. Cottontail and Bun run
+your application JavaScript on a worker while Electrobun Core owns the
+main-thread event loop. Native SDKs expose the same arrangement directly:
+application code initializes the core, starts its work on another thread
+where needed, and enters `runMainThread`.
 
 ## Application resources
 
@@ -56,57 +71,63 @@ Resources/
 `-- version.json         # Installed version and update metadata
 ```
 
-Use the `views://` URL scheme to load files under `Resources/app/views` without
-constructing platform filesystem paths.
+Use the `views://` URL scheme to load files under `Resources/app/views` —
+it resolves to the right place on every platform, so you never construct
+filesystem paths to your own assets.
 
-On macOS, executables and dynamic libraries live under `Contents/MacOS`, assets
-under `Contents/Resources`, and optional frameworks under
+On macOS, executables and dynamic libraries live under `Contents/MacOS`,
+assets under `Contents/Resources`, and optional frameworks under
 `Contents/Frameworks`. Windows and Linux bundles use equivalent `bin` and
 `Resources` directories.
 
 ## Webview engines
 
-System views are the default:
+System views are the default, which is a big part of why Electrobun apps stay
+small — the browser engine is already on the user's machine:
 
 - macOS: WKWebView
 - Windows: WebView2
 - Linux: WebKitGTK 4.1
 
-CEF can be bundled when a pinned Chromium engine is more important than
-download size. macOS and Windows applications can select the renderer per
-view. A Linux process uses its CEF wrapper when CEF is bundled and GTK WebKit
-otherwise.
+When a pinned Chromium engine matters more than download size, bundle CEF.
+macOS and Windows applications can select the renderer per view. A Linux
+process uses its CEF wrapper when CEF is bundled and GTK WebKit otherwise.
 
-`<electrobun-webview>` creates a separately composited native browser view, not
-an iframe. `<electrobun-wgpu>` places a native GPU surface in the same layout.
-Electrobun synchronizes their bounds, visibility, masking, and input behavior
-with the host document.
+Two custom elements extend what a webview can hold. `<electrobun-webview>`
+creates a separately composited native browser view — a real independent
+browsing context, not an iframe. `<electrobun-wgpu>` places a native GPU
+surface in the same layout. Electrobun synchronizes their bounds, visibility,
+masking, and input behavior with the host document, so they behave like
+ordinary elements on the page.
 
 ## Distribution wrapper
 
 A canary or production release wraps the full runnable app in a small native
-self-extractor. The payload is a Zstandard-compressed archive. On first launch,
-the wrapper verifies and extracts the application to its managed location, then
-starts the inner app.
+self-extractor whose payload is a Zstandard-compressed archive. On first
+launch, the wrapper verifies and extracts the application to its managed
+location, then starts the inner app — from the user's perspective, the app
+just opens.
 
-Hutch emits a DMG on macOS, a Setup ZIP on Windows, and a self-extracting setup
-archive on Linux. See
-[Bundling and Distribution](/electrobun/guides/bundling-and-distribution/) for
-the artifact layout.
+Hutch emits a DMG on macOS, a Setup ZIP on Windows, and a self-extracting
+setup archive on Linux. See
+[Bundling and Distribution](/electrobun/guides/bundling-and-distribution/)
+for the artifact layout.
 
 ## Updates
 
-The installed app compares its local hash with hosted update metadata. It first
-tries a binary patch from the installed hash to the current release, verifies
-the result, and replaces the bundle. If no valid patch path exists, it downloads
-the compressed full archive instead.
+Updates are designed around a simple idea: users should download only what
+changed. The installed app compares its local hash with hosted update
+metadata, tries a binary patch from the installed hash to the current
+release, verifies the result, and replaces the bundle. If no valid patch path
+exists, it falls back to downloading the compressed full archive.
 
-Static object storage is sufficient for update hosting. The application decides
-when to check, download, install, and relaunch through the
-[Updater API](/electrobun/apis/updater/).
+There's no update server to run — static object storage is sufficient. The
+application decides when to check, download, install, and relaunch through
+the [Updater API](/electrobun/apis/updater/).
 
 ## Development output
 
-Dev builds skip distribution artifacts and route main-process, webview, and
-native diagnostics to the invoking terminal. System webviews and CEF both
-forward browser console output in development mode.
+Dev builds skip the distribution artifacts and route main-process, webview,
+and native diagnostics to the invoking terminal. System webviews and CEF both
+forward browser console output in development mode, so `console.log` in a
+view shows up next to your main-process logs.

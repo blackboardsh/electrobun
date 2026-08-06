@@ -4,16 +4,21 @@ description: "Move an Electrobun 1.x project to the 2.x Hutch and Cottontail too
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Electrobun 2.x separates build tooling from the JavaScript runtime. Hutch
-replaces Bun, npm, and the old Electrobun CLI for Electrobun project workflows.
-It owns package management, scripts, builds, native toolchains, and
-distribution, and uses Cottontail to execute JavaScript and TypeScript lifecycle
-scripts.
+The 2.x migration is smaller than it looks. Your application code — main
+process, views, RPC — should usually run unchanged. What changes is the
+tooling around it: the commands you type, and the runtime your TypeScript
+executes on.
 
-Cottontail is the default JavaScript main-process runtime bundled into finished
-applications. It provides Node.js and Bun compatibility where Electrobun apps
-and their packages need it, so existing TypeScript main processes should
-usually run without source changes.
+Two ideas drive the release. First, one tool: **Hutch** replaces Bun, npm,
+and the old Electrobun CLI for project workflows, owning package management,
+scripts, builds, native toolchains, and distribution. Second, a runtime built
+for apps: **Cottontail** is the default main-process runtime bundled into
+finished applications, providing Node.js and Bun compatibility where
+Electrobun apps and their packages need it.
+
+The migration is mostly mechanical: install Hutch, swap the commands in your
+scripts, and update one import path. Everything else on this page is detail
+and edge cases.
 
 ## 1. Install Hutch
 
@@ -44,8 +49,9 @@ second CLI implementation.
 
 ## 2. Keep Electrobun as a project dependency
 
-The `electrobun` package still provides configuration types, browser code,
-preloads, and SDK source. Install it through Hutch:
+Nothing to migrate here — the `electrobun` package still provides
+configuration types, browser code, preloads, and SDK source. Just install it
+through Hutch now:
 
 ```bash
 hutch install
@@ -55,7 +61,7 @@ Existing `bun.lock` files remain supported. Commit the lockfile as before.
 
 ## 3. Replace build commands
 
-Typical command migrations are:
+This is the bulk of the migration, and it's a find-and-replace:
 
 | Electrobun 1.x | Electrobun 2.x |
 | --- | --- |
@@ -78,9 +84,10 @@ For example:
 }
 ```
 
-Hutch can vendor and build every supported main process: Cottontail, Bun, Zig,
-Rust, Go, and Odin. A separate global installation of each native toolchain is
-not required when Hutch has a pinned toolchain for the host.
+A nice side effect of the switch: Hutch can vendor and build every supported
+main process — Cottontail, Bun, Zig, Rust, Go, and Odin — so you no longer
+need a separate global installation of each native toolchain when Hutch has a
+pinned toolchain for the host.
 
 ## 4. Use the runtime-neutral SDK namespace
 
@@ -97,14 +104,16 @@ const win = new BrowserWindow({
 void win;
 ```
 
-`electrobun/bun` and its focused subpaths remain supported as deprecated aliases
-for incremental migration. The source directory can remain `src/bun`; the SDK
+The rename reflects what the namespace actually is: the main-process SDK,
+independent of which runtime executes it. `electrobun/bun` and its focused
+subpaths remain supported as deprecated aliases, so you can migrate imports
+incrementally. The source directory can also remain `src/bun` — the SDK
 namespace does not determine the selected runtime.
 
 ## 5. Choose the main process
 
-To move an existing TypeScript main process to Cottontail, change the config
-block while keeping the entrypoint itself:
+Your existing TypeScript main process moves to Cottontail with a config
+change — the entrypoint itself stays put:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -124,7 +133,8 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-To switch back to the actual Bun runtime, configure it explicitly:
+Prefer to stay on the actual Bun runtime? That's fully supported — configure
+it explicitly:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -149,20 +159,22 @@ the selected application runtime.
 
 ## 6. Use the release channels
 
-Hutch defaults to `dev`, `canary`, and `production` build environments. The
-name `stable` continues to work as an alias for `production`, including
-`--env=stable`, installer channel selection, and Hutch/Cottontail version
-selectors. New scripts and CI configuration should use `production`.
+Hutch defaults to `dev`, `canary`, and `production` build environments. If
+your scripts and CI say `stable`, they keep working — the name continues as
+an alias for `production`, including `--env=stable`, installer channel
+selection, and Hutch/Cottontail version selectors. New scripts and CI
+configuration should use `production`.
 
 Production application names are unsuffixed; canary application names include
-`-canary`. Lifecycle hooks receive the canonical `ELECTROBUN_BUILD_ENV` value:
-`dev`, `canary`, or `production`.
+`-canary`. Lifecycle hooks receive the canonical `ELECTROBUN_BUILD_ENV`
+value: `dev`, `canary`, or `production`.
 
 ## 7. Review build automation
 
-Hutch builds for the current host. Keep one native CI runner for every OS and
-architecture you release. Review signing, notarization, artifact upload, and
-update metadata configuration when replacing old `bunx electrobun` commands.
+Hutch builds for the current host, so keep one native CI runner for every OS
+and architecture you release. While you're replacing old `bunx electrobun`
+commands, give signing, notarization, artifact upload, and update metadata
+configuration a once-over.
 
 ## 8. Test the migration
 
@@ -177,7 +189,7 @@ Verify application startup, RPC, webviews, updater metadata, signing, and any
 native dependencies on macOS, Windows, and Linux.
 
 <Aside type="note">
-Electrobun 2.x also supports Zig, Rust, Go, and Odin main processes. Migrating
-to a native main process is optional and should be treated as a separate change
-after the 2.x toolchain migration is working.
+Electrobun 2.x also supports Zig, Rust, Go, and Odin main processes.
+Migrating to a native main process is optional and best treated as a separate
+change after the 2.x toolchain migration is working.
 </Aside>
