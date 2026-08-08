@@ -156,6 +156,74 @@ export default {
 Hutch builds for the current host platform and architecture. Use native CI
 runners when producing the macOS, Windows, and Linux release matrix.
 
+## Bytecode And Obfuscation
+
+When the main process runs on Cottontail, `build.cottontail.bytecode` can ship
+it as precompiled JavaScriptCore bytecode instead of source. This is a
+Cottontail-only option — Bun main processes are unaffected.
+
+There are three levels, and the two "on" levels are deliberately distinct
+because they carry different trade-offs:
+
+| `bytecode` | Ships | Startup | Source protection | Debuggable | Risk |
+| --- | --- | --- | --- | --- | --- |
+| `false` (default) | `.js` | normal | none | yes | — |
+| `true` | `.jsc` + `.js` | faster (skips parsing) | none | yes | low — falls back to parsing the source |
+| `"obfuscate"` | `.jsc` only | faster | source not shipped | no | see below |
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "com.example.my-app",
+    version: "1.0.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+      // Faster startup, source still shipped and debuggable:
+      bytecode: true,
+      // Or protect your source (accept the trade-offs below):
+      // bytecode: "obfuscate",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+**`bytecode: true`** compiles the main process to bytecode so the runtime skips
+parsing at launch. Your source is still shipped alongside the bytecode as a
+fallback, so `Function.prototype.toString` returns real source, error stacks
+show source frames, and a version mismatch simply reparses the source. This is
+the safe "just make my app start faster" choice.
+
+**`bytecode: "obfuscate"`** additionally strips the source, so only bytecode is
+distributed. Consider the trade-offs before enabling it:
+
+- `Function.prototype.toString` returns `[native code]` for your functions. Some
+  libraries introspect function source (certain dependency-injection, ORM, and
+  validation frameworks) and can break.
+- Error stacks keep line and column numbers but lose source frames, and no
+  sourcemaps are emitted — shipped-app debugging is degraded.
+- There is no source fallback, so a runtime/version mismatch is a hard error
+  rather than a silent reparse.
+
+This is source *obfuscation*, not encryption: the bytecode ships without your
+source text, comments, or original identifiers, which makes it materially
+harder to read than minified JavaScript, but a determined party with the
+matching Cottontail binary can still disassemble it.
+
+Two things hold regardless of the setting:
+
+- **Dev builds ignore `bytecode`** (`hutch electrobun dev` / `--env=dev`) and
+  always ship source, so sourcemaps, the debugger, and hot reload keep working.
+  Bytecode applies to canary and production builds.
+- The bytecode is generated against the **exact Cottontail bundled into your
+  app** and regenerated on every build, so it never drifts from the runtime
+  that will execute it.
+
 ## JavaScript Bundling
 
 Hutch owns the output path, platform, and base format for Cottontail, Bun, and

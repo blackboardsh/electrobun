@@ -173,6 +173,33 @@ export interface ElectrobunConfig {
 			 * @default "src/bun/index.ts"
 			 */
 			entrypoint?: string;
+
+			/**
+			 * Ship the main process as precompiled JavaScriptCore bytecode
+			 * instead of (or alongside) source. Cottontail-only.
+			 *
+			 * - `false` (default): ship JavaScript source. Normal builds.
+			 * - `true`: compile the main process to bytecode for faster startup
+			 *   (skips parsing at launch). Source is still shipped as a fallback,
+			 *   so the app stays fully debuggable and `Function.prototype.toString`
+			 *   returns real source. Low risk — a version mismatch falls back to
+			 *   parsing the source.
+			 * - `"obfuscate"`: bytecode **and** strip the source. Ships only
+			 *   bytecode, so the app's source is not distributed. Tradeoffs:
+			 *   `Function.prototype.toString` returns `[native code]` (can break
+			 *   libraries that introspect function source), error stacks lose
+			 *   source frames, no sourcemaps, and there is no source fallback
+			 *   (a runtime/version mismatch is a hard error rather than a reparse).
+			 *   This is source obfuscation, not encryption.
+			 *
+			 * Dev builds (`--env=dev`) ignore this and always ship source so
+			 * sourcemaps, the debugger, and hot reload keep working. The
+			 * bytecode is generated against the exact Cottontail bundled into
+			 * this app and regenerated on every build.
+			 *
+			 * @default false
+			 */
+			bytecode?: boolean | "obfuscate";
 		} & BundlerOptions;
 
 		/**
