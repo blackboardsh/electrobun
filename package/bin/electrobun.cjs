@@ -17,12 +17,22 @@ function normalizeChannel(value) {
 	return null;
 }
 
-function channelForVersion(version, environment) {
+// Electrobun (beta or stable) always runs on STABLE Hutch. Only an explicit
+// ELECTROBUN_HUTCH_CHANNEL / HUTCH_ACTIVE_CHANNEL override changes that (e.g. to
+// test against a hutch-canary build) — the electrobun version never does.
+function hutchChannel(environment) {
 	for (const key of ["ELECTROBUN_HUTCH_CHANNEL", "HUTCH_ACTIVE_CHANNEL"]) {
 		const selected = normalizeChannel(environment[key]);
 		if (selected) return selected;
 	}
-	return version.includes("-") ? "canary" : "production";
+	return "production";
+}
+
+// The Electrobun template channel: "beta" for prerelease builds or an explicit
+// --beta, else "stable". Forwarded to `hutch electrobun` as the --beta flag.
+function electrobunChannel(version, args) {
+	if (Array.isArray(args) && args.includes("--beta")) return "beta";
+	return version.includes("-") ? "beta" : "stable";
 }
 
 function hutchBinaryPath(channel, environment, platform, userHome) {
@@ -133,8 +143,13 @@ async function main(options = {}) {
 	const fileExists = options.existsSync || existsSync;
 	const install = options.installHutch || installHutch;
 	const run = options.runHutch || runHutch;
-	const channel = channelForVersion(version, environment);
+	const channel = hutchChannel(environment);
 	const binary = hutchBinaryPath(channel, environment, platform, userHome);
+
+	// Forward the electrobun template channel as --beta to `hutch electrobun`.
+	const templateChannel = electrobunChannel(version, args);
+	const hutchArgs =
+		templateChannel === "beta" && !args.includes("--beta") ? [...args, "--beta"] : args;
 
 	if (!fileExists(binary)) {
 		if (environment.ELECTROBUN_HUTCH_BINARY) {
@@ -144,7 +159,7 @@ async function main(options = {}) {
 		await install({ channel, environment, platform });
 	}
 	if (!fileExists(binary)) throw new Error(`Hutch was not installed at ${binary}`);
-	return run({ binary, args, environment });
+	return run({ binary, args: hutchArgs, environment });
 }
 
 if (require.main === module) {
@@ -159,7 +174,8 @@ if (require.main === module) {
 }
 
 module.exports = {
-	channelForVersion,
+	hutchChannel,
+	electrobunChannel,
 	hutchBinaryPath,
 	main,
 };

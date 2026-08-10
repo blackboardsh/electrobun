@@ -39,7 +39,7 @@ hutch electrobun init
 ```
 
 This opens an interactive picker: arrow keys to browse templates, Enter to
-choose. Hutch downloads the current production template catalog and creates
+choose. Hutch downloads the current stable template catalog and creates
 the project. Templates range from a minimal hello-world to full app skeletons
 with React, Solid, Vue, Svelte, or GPU-rendered UI — the picker is a nice way
 to browse what exists.
@@ -50,7 +50,20 @@ Already know what you want? Skip the picker:
 hutch electrobun init my-app --template=hello-world
 ```
 
-Use `--channel=canary` to scaffold from the canary template catalog instead.
+Add `--beta` to scaffold from the latest **beta** templates instead of stable:
+
+```bash
+hutch electrobun init my-app --beta
+```
+
+:::note
+`bunx electrobun init` and `npx electrobun init` work too — the npm `electrobun`
+package is a thin shim that downloads Hutch (the real Electrobun 2.0 CLI) and
+delegates. A consequence: `bunx electrobun@<older-version> init` still gives you
+the **latest** stable (or `--beta`) toolchain and templates, not the pinned
+version — npm is no longer central to Electrobun 2.0. During the 2.0 beta only
+beta templates are published, so pass `--beta` until 2.0 ships.
+:::
 
 ## Run the app
 

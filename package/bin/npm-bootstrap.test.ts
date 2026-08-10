@@ -10,10 +10,10 @@ type PackageManifest = {
 };
 
 type Bootstrap = {
-	channelForVersion(
-		version: string,
+	hutchChannel(
 		environment: Record<string, string | undefined>,
 	): "production" | "canary";
+	electrobunChannel(version: string, args: string[]): "stable" | "beta";
 	hutchBinaryPath(
 		channel: "production" | "canary",
 		environment: Record<string, string | undefined>,
@@ -59,17 +59,21 @@ describe("npm and bunx Hutch bootstrap", () => {
 		).toBe(false);
 	});
 
-	test("selects the active Hutch channel, then the Electrobun release channel", () => {
-		expect(bootstrap.channelForVersion("2.0.0", {})).toBe("production");
-		expect(bootstrap.channelForVersion("2.0.0-beta.4", {})).toBe("canary");
+	test("always runs on stable Hutch; the version only selects the template channel", () => {
+		// Hutch channel is stable regardless of the electrobun version.
+		expect(bootstrap.hutchChannel({})).toBe("production");
 		expect(
-			bootstrap.channelForVersion("2.0.0", { HUTCH_ACTIVE_CHANNEL: "canary" }),
-		).toBe("canary");
-		expect(
-			bootstrap.channelForVersion("2.0.0-beta.4", {
-				ELECTROBUN_HUTCH_CHANNEL: "stable",
-			}),
+			bootstrap.hutchChannel({ ELECTROBUN_HUTCH_CHANNEL: "stable" }),
 		).toBe("production");
+		// Only an explicit override selects a non-stable Hutch.
+		expect(bootstrap.hutchChannel({ HUTCH_ACTIVE_CHANNEL: "canary" })).toBe(
+			"canary",
+		);
+
+		// The electrobun template channel follows the version / --beta.
+		expect(bootstrap.electrobunChannel("2.0.0", [])).toBe("stable");
+		expect(bootstrap.electrobunChannel("2.0.0-beta.4", [])).toBe("beta");
+		expect(bootstrap.electrobunChannel("2.0.0", ["init", "--beta"])).toBe("beta");
 	});
 
 	test("delegates every argument to the canonical Hutch command", async () => {
@@ -110,9 +114,10 @@ describe("npm and bunx Hutch bootstrap", () => {
 		).rejects.toThrow("supports only `electrobun init`");
 	});
 
-	test("installs a missing channel once before delegation", async () => {
+	test("a beta electrobun installs STABLE hutch and forwards --beta", async () => {
 		let installed = false;
 		const calls: string[] = [];
+		let forwardedArgs: string[] = [];
 		const status = await bootstrap.main({
 			args: ["init"],
 			environment: {},
@@ -122,8 +127,9 @@ describe("npm and bunx Hutch bootstrap", () => {
 				installed = true;
 			},
 			platform: "linux",
-			runHutch: ({ binary }: { binary: string }) => {
+			runHutch: ({ binary, args }: { binary: string; args: string[] }) => {
 				calls.push(`run:${binary}`);
+				forwardedArgs = args;
 				return 0;
 			},
 			userHome: "/home/dev",
@@ -132,20 +138,21 @@ describe("npm and bunx Hutch bootstrap", () => {
 
 		expect(status).toBe(0);
 		expect(calls).toEqual([
-			"install:canary",
-			"run:/home/dev/.dash/bin/hutch-canary",
+			"install:production",
+			"run:/home/dev/.dash/bin/hutch",
 		]);
+		expect(forwardedArgs).toEqual(["init", "--beta"]);
 	});
 
 	test("uses the canonical Windows installation path", () => {
 		expect(
 			bootstrap.hutchBinaryPath(
-				"canary",
+				"production",
 				{ DASH_HOME: "C:\\Users\\dev\\.dash" },
 				"win32",
 				"C:\\Users\\dev",
 			),
-		).toBe("C:\\Users\\dev\\.dash\\bin\\hutch-canary.exe");
+		).toBe("C:\\Users\\dev\\.dash\\bin\\hutch.exe");
 	});
 
 	test("keeps the retired embedded CLI and templates out of npm", () => {

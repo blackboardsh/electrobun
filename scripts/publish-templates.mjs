@@ -44,7 +44,7 @@ export function releaseChannel(version) {
 	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
 		fail(`invalid release version ${JSON.stringify(version)}`);
 	}
-	return version.includes("-") ? "canary" : "production";
+	return version.includes("-") ? "beta" : "stable";
 }
 
 export function templateArtifactKey(checksum) {
@@ -53,7 +53,7 @@ export function templateArtifactKey(checksum) {
 }
 
 export function templateChannelKey(channel) {
-	if (channel !== "production" && channel !== "canary") {
+	if (channel !== "stable" && channel !== "beta") {
 		fail(`invalid template channel ${JSON.stringify(channel)}`);
 	}
 	return `${TEMPLATE_PREFIX}/channels/${channel}.json`;

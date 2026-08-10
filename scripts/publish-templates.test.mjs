@@ -10,10 +10,10 @@ import {
 } from "./publish-templates.mjs";
 
 test("template releases map stable and prerelease versions to independent channels", () => {
-	assert.equal(releaseChannel("2.0.0"), "production");
-	assert.equal(releaseChannel("2.0.0-beta.3"), "canary");
-	assert.equal(templateChannelKey("production"), "electrobun/templates/channels/production.json");
-	assert.equal(templateChannelKey("canary"), "electrobun/templates/channels/canary.json");
+	assert.equal(releaseChannel("2.0.0"), "stable");
+	assert.equal(releaseChannel("2.0.0-beta.3"), "beta");
+	assert.equal(templateChannelKey("stable"), "electrobun/templates/channels/stable.json");
+	assert.equal(templateChannelKey("beta"), "electrobun/templates/channels/beta.json");
 });
 
 test("template archive keys are immutable and content addressed", () => {
