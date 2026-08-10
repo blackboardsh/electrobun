@@ -1,4 +1,4 @@
-// @hutch cli=0.5.0 cottontail=0.3.0
+// @hutch cli=0.5.1 cottontail=0.3.0
 export default {
 	scripts: {
 		start: "hutch src/sdks/main/index.ts",
