@@ -178,6 +178,12 @@ export interface ElectrobunConfig {
 			 * Ship the main process as precompiled JavaScriptCore bytecode
 			 * instead of (or alongside) source. Cottontail-only.
 			 *
+			 * > **Coming soon.** This option is declared but not yet wired —
+			 * > setting it is currently a no-op (the app ships normal source).
+			 * > Build-time bytecode/obfuscation lands as a fast-follow after
+			 * > Electrobun 2.0; the underlying Cottontail/JSC support is already
+			 * > in place.
+			 *
 			 * - `false` (default): ship JavaScript source. Normal builds.
 			 * - `true`: compile the main process to bytecode for faster startup
 			 *   (skips parsing at launch). Source is still shipped as a fallback,

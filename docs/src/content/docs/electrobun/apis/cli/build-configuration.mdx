@@ -158,6 +158,13 @@ runners when producing the macOS, Windows, and Linux release matrix.
 
 ## Bytecode And Obfuscation
 
+:::caution[Coming soon]
+This option is declared but **not yet wired** — setting `build.cottontail.bytecode`
+is currently a no-op (your app ships normal source). Build-time bytecode and
+obfuscation land as a fast-follow after Electrobun 2.0; the underlying
+Cottontail/JSC support is already in place.
+:::
+
 When the main process runs on Cottontail, `build.cottontail.bytecode` can ship
 it as precompiled JavaScriptCore bytecode instead of source. This is a
 Cottontail-only option — Bun main processes are unaffected.
