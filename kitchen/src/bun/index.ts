@@ -10,6 +10,10 @@ import Electrobun, {
 	Updater,
 } from "electrobun/main";
 import { executor } from "../test-framework/executor";
+import {
+	autoRunExitCode,
+	scheduleAutoRunExit,
+} from "../test-framework/auto-run-exit";
 import { allTests } from "../tests";
 import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";
 import { mkdir, readFile, writeFile } from "fs/promises";
@@ -376,18 +380,17 @@ const autoRun = !!process.env["AUTO_RUN"];
 if (autoRun) {
 	console.log("Auto-running automated tests in 3 seconds...\n");
 	setTimeout(async () => {
-		const results = await executor.runAllAutomated();
+		let exitCode = 1;
+		try {
+			const results = await executor.runAllAutomated();
+			exitCode = autoRunExitCode(results);
+		} catch (error) {
+			console.error("Auto-run failed unexpectedly:", error);
+		}
 
-		// Exit with appropriate code when auto-run is complete
-		const failedCount = results.filter((r) => r.status === "failed").length;
-		const exitCode = failedCount > 0 ? 1 : 0;
 		console.log(`\nAuto-run complete. Exiting with code ${exitCode}...`);
-
-		// Give a moment for final logs to flush
-		setTimeout(() => {
-			// Use Utils.quit() for graceful shutdown with proper CEF cleanup
-			Utils.quit();
-		}, 500);
+		// Give final logs time to flush, then use graceful native cleanup.
+		scheduleAutoRunExit(exitCode, Utils.quit);
 	}, 3000);
 }
 
@@ -400,14 +403,18 @@ if (autoRunTestName) {
 			.find((candidate) => candidate.name === autoRunTestName);
 		if (!test) {
 			console.error(`Failed to find test "${autoRunTestName}"`);
+			scheduleAutoRunExit(1, Utils.quit);
 			return;
 		}
-		const result = await executor.runTest(test);
-		const exitCode = result.status === "failed" ? 1 : 0;
+		let exitCode = 1;
+		try {
+			const result = await executor.runTest(test);
+			exitCode = autoRunExitCode([result]);
+		} catch (error) {
+			console.error("Auto-run test failed unexpectedly:", error);
+		}
 		console.log(`\nAuto-run test complete. Exiting with code ${exitCode}...`);
-		setTimeout(() => {
-			Utils.quit();
-		}, 500);
+		scheduleAutoRunExit(exitCode, Utils.quit);
 	}, 2000);
 }
 

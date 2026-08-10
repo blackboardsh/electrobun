@@ -42,6 +42,10 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    env:
+      EXPECTED_HUTCH_VERSION: '0.5.0'
+      EXPECTED_COTTONTAIL_VERSION: '0.3.0'
+
     steps:
       - uses: actions/checkout@v6
         with:
@@ -67,6 +71,8 @@ jobs:
 
       - name: Install Hutch
         uses: ./.github/actions/install-hutch
+        with:
+          channel: production
 
       - name: Install dependencies
         run: hutch install
@@ -248,10 +254,27 @@ jobs:
           security find-identity -v -p codesigning build.keychain
           rm certificate.p12
 
+      - name: Install Kitchen dependencies
+        run: hutch install
+        working-directory: kitchen
+
+      - name: Test Kitchen AUTO_RUN exit propagation
+        run: >-
+          hutch test
+          src/test-framework/auto-run-exit.test.ts
+          ../package/src/sdks/main/__tests__/utils-quit-exit-code.test.ts
+        working-directory: kitchen
+
+      - name: Test release toolchain provenance contract
+        run: node --test ../package/scripts/verify-release-toolchain.test.mjs
+        working-directory: kitchen
+
+      - name: Verify production Hutch and Cottontail provenance
+        run: node ../package/scripts/verify-release-toolchain.mjs
+        working-directory: kitchen
+
       - name: Build Kitchen
-        run: |
-          hutch install
-          hutch electrobun build --env=${{ steps.release-type.outputs.env }}
+        run: hutch electrobun build --env=${{ steps.release-type.outputs.env }}
         working-directory: kitchen
         env:
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}

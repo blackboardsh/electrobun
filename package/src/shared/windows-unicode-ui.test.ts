@@ -14,8 +14,8 @@ const packageBuild = readFileSync(
 	join(import.meta.dirname, "../../build.ts"),
 	"utf8",
 );
-const dashConfig = readFileSync(
-	join(import.meta.dirname, "../../dash.config.ts"),
+const hutchConfig = readFileSync(
+	join(import.meta.dirname, "../../hutch.config.ts"),
 	"utf8",
 );
 const nativeUiTestScript = readFileSync(
@@ -86,10 +86,10 @@ describe("Windows Unicode native UI source contract", () => {
 	});
 
 	test("wires native Unicode UI coverage without compiling it off Windows", () => {
-		expect(dashConfig).toContain(
+		expect(hutchConfig).toContain(
 			'"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js"',
 		);
-		expect(dashConfig).toContain("hutch test:windows-ui-native");
+		expect(hutchConfig).toContain("hutch test:windows-ui-native");
 		expect(nativeUiTestScript).toContain(
 			'if (process.platform !== "win32")',
 		);

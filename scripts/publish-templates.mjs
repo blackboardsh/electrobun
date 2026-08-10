@@ -59,9 +59,9 @@ export function templateChannelKey(channel) {
 	return `${TEMPLATE_PREFIX}/channels/${channel}.json`;
 }
 
-export function parseDashPragma(source) {
-	const line = source.match(/^\/\/\s*@dash\s+([^\r\n]+)$/m)?.[1];
-	if (!line) fail("package/dash.config.ts is missing its // @dash pragma");
+export function parseHutchPragma(source) {
+	const line = source.match(/^\/\/\s*@hutch\s+([^\r\n]+)$/m)?.[1];
+	if (!line) fail("package/hutch.config.ts is missing its // @hutch pragma");
 	const values = Object.fromEntries(
 		line
 			.trim()
@@ -69,7 +69,7 @@ export function parseDashPragma(source) {
 			.map((entry) => entry.split("=", 2)),
 	);
 	if (!values.cli || !values.cottontail) {
-		fail("package/dash.config.ts must pin cli and cottontail");
+		fail("package/hutch.config.ts must pin cli and cottontail");
 	}
 	return { hutch: values.cli, cottontail: values.cottontail };
 }
@@ -181,18 +181,18 @@ function stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }) {
 	const configPath = join(destination, "electrobun.config.ts");
 	if (!existsSync(configPath)) fail(`${templateId} is missing electrobun.config.ts`);
 	const mainProcess = templateMainProcess(readFileSync(configPath, "utf8"));
-	const dashConfigPath = join(destination, "dash.config.ts");
-	if (existsSync(dashConfigPath)) {
-		const source = readFileSync(dashConfigPath, "utf8");
-		const pragma = `// @dash cli=${pins.hutch} cottontail=${pins.cottontail}`;
-		const updated = /^\/\/\s*@dash[^\r\n]*$/m.test(source)
-			? source.replace(/^\/\/\s*@dash[^\r\n]*$/m, pragma)
+	const hutchConfigPath = join(destination, "hutch.config.ts");
+	if (existsSync(hutchConfigPath)) {
+		const source = readFileSync(hutchConfigPath, "utf8");
+		const pragma = `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}`;
+		const updated = /^\/\/\s*@hutch[^\r\n]*$/m.test(source)
+			? source.replace(/^\/\/\s*@hutch[^\r\n]*$/m, pragma)
 			: `${pragma}\n${source}`;
-		writeFileSync(dashConfigPath, updated);
+		writeFileSync(hutchConfigPath, updated);
 	} else {
 		writeFileSync(
-			dashConfigPath,
-			`// @dash cli=${pins.hutch} cottontail=${pins.cottontail}\nexport default {};\n`,
+			hutchConfigPath,
+			`// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\nexport default {};\n`,
 		);
 	}
 
@@ -319,8 +319,8 @@ export async function publishTemplates({ dryRun = false, channel: requestedChann
 		fail(`release ${version} belongs to ${channel}, not ${requestedChannel}`);
 	}
 	const revision = gitRevision();
-	const pins = parseDashPragma(
-		readFileSync(join(packageRoot, "dash.config.ts"), "utf8"),
+	const pins = parseHutchPragma(
+		readFileSync(join(packageRoot, "hutch.config.ts"), "utf8"),
 	);
 
 	rmSync(outputRoot, { recursive: true, force: true });

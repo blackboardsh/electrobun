@@ -82,7 +82,7 @@ hutch build.ts --ci
 ## Hutch and Cottontail
 
 Hutch and Cottontail are installed and released independently of Electrobun.
-The first-line `// @dash` pragma in `package/dash.config.ts` pins the exact
+The first-line `// @hutch` pragma in `package/hutch.config.ts` pins the exact
 versions used for reproducible Electrobun builds. Hutch resolves and verifies
 Cottontail, then bundles the selected runtime into each application.
 

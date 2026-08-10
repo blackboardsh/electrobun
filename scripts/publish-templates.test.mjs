@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-	parseDashPragma,
+	parseHutchPragma,
 	pinElectrobunDependency,
 	releaseChannel,
 	templateArtifactKey,
@@ -27,8 +27,12 @@ test("template archive keys are immutable and content addressed", () => {
 
 test("the release toolchain pins come from the package pragma", () => {
 	assert.deepEqual(
-		parseDashPragma("// @dash cli=0.5.0-canary.1 cottontail=0.2.3\nexport default {};\n"),
-		{ hutch: "0.5.0-canary.1", cottontail: "0.2.3" },
+		parseHutchPragma("// @hutch cli=0.5.0 cottontail=0.3.0\nexport default {};\n"),
+		{ hutch: "0.5.0", cottontail: "0.3.0" },
+	);
+	assert.throws(
+		() => parseHutchPragma("// @dash cli=0.5.0 cottontail=0.3.0\n"),
+		/missing its \/\/ @hutch pragma/,
 	);
 });
 

@@ -597,16 +597,17 @@ same fields through their `Paths` type — see the tabbed examples on the
 ```ts
 import { Utils } from "electrobun/main";
 
-function finishShutdown() {
-  Utils.quit();
+function finishShutdown(exitCode = 0) {
+  Utils.quit(exitCode);
 }
 
 void finishShutdown;
 ```
 
-`quit()` emits the application `before-quit` event, honors a cancellation, and
-then performs native cleanup. Electrobun also routes `process.exit()` through
-that cleanup path while the native runtime is active.
+`quit(exitCode)` emits the application `before-quit` event, honors a
+cancellation, and then performs native cleanup before exiting with the requested
+status. The exit code defaults to `0`. Electrobun also routes `process.exit()`
+through that cleanup path while the native runtime is active.
 
 <Aside type="note">
 The `before-quit` emitter flow is TypeScript-only. Native SDKs shut down with

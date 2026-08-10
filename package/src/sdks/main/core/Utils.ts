@@ -122,7 +122,7 @@ export const showNotification = (options: NotificationOptions): void => {
 
 let isQuitting = false;
 
-export const quit = () => {
+export const quit = (code = 0) => {
 	if (isQuitting) return;
 	isQuitting = true;
 
@@ -138,9 +138,9 @@ export const quit = () => {
 	}
 
 	if (native) {
-		ffi.request.quitGracefully({ code: 0, timeoutMs: 5000 });
+		ffi.request.quitGracefully({ code, timeoutMs: 5000 });
 	} else {
-		process.exit(0);
+		process.exit(code);
 	}
 };
 
@@ -152,7 +152,7 @@ process.exit = ((code?: number) => {
 			ffi.request.quitGracefully({ code: code ?? 0, timeoutMs: 0 });
 			return;
 		}
-		quit();
+		quit(code ?? 0);
 	} else {
 		_originalProcessExit(code ?? 0);
 	}

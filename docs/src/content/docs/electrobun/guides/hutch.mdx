@@ -78,8 +78,7 @@ Hutch's build environments are `dev`, `canary`, and `production`.
 `--env=stable` remains an alias for `--env=production`.
 
 Scripts resolve in a predictable order: `hutch run <name>` checks the nearest
-`hutch.config.ts` first, then falls back to `package.json` scripts
-(`dash.config.ts` remains supported as the legacy config name). When the name
+`hutch.config.ts` first, then falls back to `package.json` scripts. When the name
 is unambiguous, `hutch <name>` works as shorthand. And since scripts don't
 have to live in `package.json`, non-JavaScript projects don't need one at all
 — a `hutch.config.ts` is enough:
@@ -122,17 +121,17 @@ invocations never prompt.
 
 Need a project to build the same way for everyone, regardless of what's
 installed globally? Place an optional pragma on the first line of
-`hutch.config.ts` (or the legacy `dash.config.ts`):
+`hutch.config.ts`:
 
 ```ts
-// @dash cli=production cottontail=production
+// @hutch cli=production cottontail=production
 ```
 
 Selectors may be `production`, `stable`, `canary`, an exact semantic version,
 or `build:<full-git-revision>`. `stable` resolves to `production`:
 
 ```ts
-// @dash cli=0.5.0-canary.9 cottontail=0.2.3
+// @hutch cli=0.5.0 cottontail=0.3.0
 ```
 
 The pragma selects versions only for that project. It never rewrites the
