@@ -20,10 +20,12 @@ test("release provenance accepts only the exact Hutch pragma format", () => {
 });
 
 test("release CI verifies provenance before all four Kitchen builds", () => {
+	// Normalize CRLF -> LF: on Windows runners Git checks the workflow out with
+	// CRLF, which breaks the explicit `\n` line separators in the regexes below.
 	const workflow = readFileSync(
 		new URL("../../.github/workflows/release.yml", import.meta.url),
 		"utf8",
-	);
+	).replace(/\r\n/g, "\n");
 	const matrix = workflow.slice(
 		workflow.indexOf("        include:"),
 		workflow.indexOf("    runs-on:", workflow.indexOf("        include:")),
