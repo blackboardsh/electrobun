@@ -84,8 +84,10 @@ Hutch's build environments are `dev`, `canary`, and `production`.
 
 After extracting a template, `init` syncs its exact Electrobun release and
 required native toolchain, then runs the template's configured `install` task
-when one exists. Pass `--skip-install` to defer that task. Offline init also
-skips it so Hutch does not start a package manager that might use the network.
+when one exists. Pass `--skip-install` to defer that task. `--offline` only
+disables network access for Dash-managed assets; it does not suppress the
+external install task or govern that package manager's network access. Combine
+both flags when initialization must not start it.
 
 Scripts come only from the nearest `hutch.config.ts`. Hutch does not inspect
 `package.json`, resolve npm packages, add `node_modules/.bin` to `PATH`, or

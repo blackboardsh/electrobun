@@ -77,8 +77,9 @@ A window should open on your desktop. That's your app.
 `init` already ran the template's explicit `install` task after extraction and
 devkit preparation. For the default JavaScript templates that task delegates
 `ci` to npm; native-only templates do not define it. If you initialized with
-`--skip-install` or `--offline`, run `hutch run install` before `dev` when the
-selected template provides that task.
+`--skip-install`, run `hutch run install` before `dev` when the selected
+template provides that task. `--offline` alone still runs the task: it disables
+Dash-managed network access, not the external package manager's network access.
 
 The `dev` task builds the app, launches it, and rebuilds when you edit source
 files. Hutch resolves both tasks only from `hutch.config.ts`; the configured

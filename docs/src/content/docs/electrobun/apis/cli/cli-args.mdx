@@ -47,8 +47,10 @@ accepted as aliases.
 After extracting a template, `init` prepares its exact Electrobun core, devkit,
 and required native toolchain. If the template defines an `install` task in
 `hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
-later; `--offline` also skips it so initialization never invokes a package
-manager that might access the network.
+later. `--offline` only disables network access for Dash-managed catalogs,
+templates, products, SDKs, runtimes, and toolchains; it does not suppress the
+external install task or govern that package manager's network access. Combine
+`--offline` with `--skip-install` when initialization must not start it.
 
 ## `hutch electrobun config`
 
