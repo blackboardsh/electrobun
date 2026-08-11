@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -100,4 +100,9 @@ test("publishes on its own tag lane, outside product releases", () => {
 test("the product source tree cannot be published in place", () => {
 	assert.equal(productSourceManifest.private, true);
 	assert.equal(productSourceManifest.bin, undefined);
+	assert.equal(
+		existsSync(join(repositoryRoot, "package", "src", "cli")),
+		false,
+		"the retired product CLI must not coexist with the thin Hutch bootstrap",
+	);
 });
