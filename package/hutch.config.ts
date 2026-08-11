@@ -1,6 +1,7 @@
 // @hutch cli=0.5.1 cottontail=0.3.0
 export default {
 	scripts: {
+		install: ["npm", "ci"],
 		start: "hutch src/sdks/main/index.ts",
 		"check-zig-version": "vendors/zig/zig version",
 		"check-rust-version": "vendors/rust/bin/rustc --version",

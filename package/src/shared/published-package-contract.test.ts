@@ -14,13 +14,32 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 type PackageManifest = {
+	private: boolean;
+	bin?: unknown;
 	exports: Record<string, string>;
+	dependencies?: Record<string, string>;
+	devDependencies?: Record<string, string>;
 };
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(
 	readFileSync(join(packageDir, "package.json"), "utf8"),
 ) as PackageManifest;
+const lockfile = JSON.parse(
+	readFileSync(join(packageDir, "package-lock.json"), "utf8"),
+) as {
+	packages: Record<
+		string,
+		{
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+		}
+	>;
+};
+const hutchConfigSource = readFileSync(
+	join(packageDir, "hutch.config.ts"),
+	"utf8",
+);
 
 function linkPackage(source: string, destination: string) {
 	mkdirSync(dirname(destination), { recursive: true });
@@ -32,6 +51,29 @@ function linkPackage(source: string, destination: string) {
 }
 
 describe("published package SDK contract", () => {
+	test("keeps project installation explicit and the product package toolchain-only", () => {
+		expect(hutchConfigSource).toMatch(
+		/\binstall:\s*\[\s*"npm"\s*,\s*"ci"\s*\]/,
+		);
+		expect(manifest.private).toBe(true);
+		expect(manifest.bin).toBeUndefined();
+		expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
+			"@types/bun",
+			"png-to-ico",
+			"proxy-agent",
+			"rcedit",
+		]);
+		expect(Object.keys(manifest.devDependencies ?? {})).toEqual(["typescript"]);
+
+		const lockRoot = lockfile.packages[""];
+		expect(lockRoot?.dependencies).toEqual(manifest.dependencies);
+		expect(lockRoot?.devDependencies).toEqual(manifest.devDependencies);
+		for (const packageName of ["@babylonjs/core", "@types/three", "three"]) {
+			expect(manifest.dependencies?.[packageName]).toBeUndefined();
+			expect(lockfile.packages[`node_modules/${packageName}`]).toBeUndefined();
+		}
+	});
+
 	test("a strict consumer cannot import graphics libraries through Electrobun", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "electrobun-package-contract-"));
 
@@ -89,6 +131,7 @@ describe("published package SDK contract", () => {
 					"const legacyWindow: LegacyBrowserWindow = mainWindow;",
 					"void legacyWindow;",
 					"const config = {",
+					'  electrobun: { version: "2.0.0-beta.1" },',
 					'  app: { name: "Flatpak app", identifier: "dev.electrobun.flatpak", version: "1.0.0" },',
 					"  build: { linux: { flatpak: {",
 					"    enabled: true,",
