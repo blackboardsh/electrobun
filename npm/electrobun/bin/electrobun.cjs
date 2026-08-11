@@ -25,6 +25,15 @@ function hutchChannel(environment) {
 	return "production";
 }
 
+function environmentFlagEnabled(environment, name) {
+	const value = environment[name];
+	return (
+		value === "1" ||
+		(typeof value === "string" &&
+			["true", "yes"].includes(value.toLowerCase()))
+	);
+}
+
 function hutchBinaryPath(channel, environment, platform, userHome) {
 	if (environment.ELECTROBUN_HUTCH_BINARY) {
 		return environment.ELECTROBUN_HUTCH_BINARY;
@@ -195,6 +204,11 @@ async function main(options = {}) {
 	if (!fileExists(binary)) {
 		if (environment.ELECTROBUN_HUTCH_BINARY) {
 			throw new Error(`ELECTROBUN_HUTCH_BINARY does not exist: ${binary}`);
+		}
+		if (environmentFlagEnabled(environment, "DASH_RELEASE_OFFLINE")) {
+			throw new Error(
+				`Hutch is not installed at ${binary}; DASH_RELEASE_OFFLINE prevents downloading it`,
+			);
 		}
 		console.error(
 			`Electrobun requires Hutch; installing the latest ${channel} release...`,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
+	existsSync,
 	mkdtempSync,
 	readFileSync,
 	rmSync,
@@ -157,6 +158,66 @@ test("installs a missing stable Hutch before delegation", async () => {
 	]);
 });
 
+test("cold offline bootstrap fails before installing Hutch", async () => {
+	let installCalls = 0;
+	let runCalls = 0;
+
+	await assert.rejects(
+		bootstrap.main({
+			args: ["build"],
+			environment: { DASH_RELEASE_OFFLINE: "1" },
+			existsSync: () => false,
+			installHutch: async () => {
+				installCalls += 1;
+			},
+			platform: "linux",
+			runHutch: () => {
+				runCalls += 1;
+				return 0;
+			},
+			userHome: "/home/dev",
+		}),
+		/Hutch is not installed.*DASH_RELEASE_OFFLINE prevents downloading it/,
+	);
+
+	assert.equal(installCalls, 0);
+	assert.equal(runCalls, 0);
+});
+
+test("warm offline bootstrap still delegates to Hutch", async () => {
+	let installCalls = 0;
+	const calls = [];
+	const environment = {
+		DASH_HOME: "/home/dev/.dash",
+		DASH_RELEASE_OFFLINE: "yes",
+	};
+
+	const status = await bootstrap.main({
+		args: ["build", "--env=production"],
+		environment,
+		existsSync: () => true,
+		installHutch: async () => {
+			installCalls += 1;
+		},
+		platform: "linux",
+		runHutch: (call) => {
+			calls.push(call);
+			return 29;
+		},
+		userHome: "/home/dev",
+	});
+
+	assert.equal(status, 29);
+	assert.equal(installCalls, 0);
+	assert.deepEqual(calls, [
+		{
+			args: ["build", "--env=production"],
+			binary: "/home/dev/.dash/bin/hutch",
+			environment,
+		},
+	]);
+});
+
 test("supports an explicit canary Hutch without changing template policy", () => {
 	assert.equal(
 		bootstrap.hutchChannel({ ELECTROBUN_HUTCH_CHANNEL: "canary" }),
@@ -193,13 +254,65 @@ test("does not replace a missing explicit Hutch binary", async () => {
 	await assert.rejects(
 		bootstrap.main({
 			args: ["dev"],
-			environment: { ELECTROBUN_HUTCH_BINARY: "/custom/hutch" },
+			environment: {
+				DASH_RELEASE_OFFLINE: "1",
+				ELECTROBUN_HUTCH_BINARY: "/custom/hutch",
+			},
 			existsSync: () => false,
 			platform: "linux",
 			userHome: "/home/dev",
 		}),
 		/ELECTROBUN_HUTCH_BINARY does not exist/,
 	);
+});
+
+test("the cold offline executable performs no HTTPS request", () => {
+	const fixture = mkdtempSync(join(tmpdir(), "electrobun-npm-offline-"));
+	try {
+		const networkSentinel = join(fixture, "https-called");
+		const blocker = join(fixture, "block-https.cjs");
+		writeFileSync(
+			blocker,
+			[
+				'const https = require("node:https");',
+				'const { writeFileSync } = require("node:fs");',
+				"https.get = () => {",
+				'  writeFileSync(process.env.NETWORK_SENTINEL, "called");',
+				'  throw new Error("unexpected HTTPS request");',
+				"};",
+				"",
+			].join("\n"),
+		);
+
+		const result = spawnSync(
+			process.execPath,
+			[
+				"--require",
+				blocker,
+				join(testRoot, "..", "bin", "electrobun.cjs"),
+				"build",
+			],
+			{
+				env: {
+					...process.env,
+					DASH_HOME: join(fixture, "dash-home"),
+					DASH_RELEASE_OFFLINE: "true",
+					NETWORK_SENTINEL: networkSentinel,
+				},
+				encoding: "utf8",
+			},
+		);
+
+		if (result.error) throw result.error;
+		assert.equal(result.status, 1, result.stderr || result.stdout);
+		assert.match(
+			result.stderr,
+			/Hutch is not installed.*DASH_RELEASE_OFFLINE prevents downloading it/,
+		);
+		assert.equal(existsSync(networkSentinel), false);
+	} finally {
+		rmSync(fixture, { force: true, recursive: true });
+	}
 });
 
 test(

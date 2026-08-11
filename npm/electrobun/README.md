@@ -22,6 +22,11 @@ An application's exact Electrobun version is selected in
 `electrobun.config.ts`; Hutch downloads the matching runtime and SDK into the
 shared `~/.dash` store.
 
+`DASH_RELEASE_OFFLINE=1` prevents this bootstrap from downloading a missing
+Hutch installation. An already installed Hutch is still invoked, and the flag
+continues to prevent network access for Dash-managed releases and artifacts.
+It does not put npm or another project package manager into offline mode.
+
 You can install Hutch directly from <https://hutch.blackboard.sh> and run the
 same commands without npm:
 
