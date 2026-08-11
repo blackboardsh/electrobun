@@ -58,7 +58,7 @@ jobs:
         uses: ./.github/actions/install-hutch
 
       - name: Install docs dependencies
-        run: hutch install --frozen-lockfile
+        run: hutch install
         working-directory: docs
 
       - name: Check docs

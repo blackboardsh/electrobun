@@ -3,16 +3,6 @@
   "type": "module",
   "version": "0.0.1",
   "private": true,
-  "scripts": {
-    "dev": "astro dev",
-    "start": "astro dev",
-    "build": "astro build",
-    "preview": "astro preview",
-    "astro": "astro",
-    "check": "astro check && node scripts/check-code-examples.mjs",
-    "check:examples": "node scripts/check-code-examples.mjs",
-    "clean": "rm -rf dist .astro"
-  },
   "dependencies": {
     "@astrojs/starlight": "^0.30.0",
     "astro": "^5.15.4",
