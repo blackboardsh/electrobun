@@ -3,6 +3,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
 	ELECTROBUN_CORE_ABI,
+	ELECTROBUN_GO_SDK_MODULE,
 	ELECTROBUN_JAVASCRIPT_SDK_EXPORTS,
 	ELECTROBUN_SDK_ABI,
 	NATIVE_DEVKIT_MANIFEST_FILENAME,
@@ -177,13 +178,42 @@ describe("native devkit manifest", () => {
 		expect(manifest.layout.sdks.go).toEqual({
 			root: "go-sdk",
 			manifest: "go-sdk/go.mod",
-			module: "electrobun",
+			module: ELECTROBUN_GO_SDK_MODULE,
 		});
 		expect(manifest.layout.sdks.odin).toMatchObject({
 			entrypoint: "odin-sdk/electrobun/electrobun.odin",
 			collection: "odin-sdk",
 			collectionName: "electrobun_sdk",
 		});
+	});
+
+	it("matches the checked-in Go SDK module and default toolchain", () => {
+		const manifest = createNativeDevkitManifest({
+			productVersion: "2.0.0",
+			target: { os: "macos", arch: "arm64" },
+		});
+		const goMod = readFileSync(
+			join(import.meta.dirname, "../sdks/go/go.mod"),
+			"utf8",
+		);
+		const module = goMod.match(/^[\t ]*module[\t ]+([^\s]+)[\t ]*$/m)?.[1];
+		const language = goMod.match(
+			/^[\t ]*go[\t ]+(\d+)\.(\d+)(?:\.(\d+))?[\t ]*$/m,
+		);
+		expect(module).toBe(ELECTROBUN_GO_SDK_MODULE);
+		expect(language).toBeDefined();
+		const baseline = language!.slice(1).map((part) => Number(part ?? "0"));
+		const compiler = manifest.toolchains.go.defaultVersion
+			.match(/^(\d+)\.(\d+)\.(\d+)/)!
+			.slice(1)
+			.map(Number);
+		expect(
+			baseline[0] < compiler[0] ||
+				(baseline[0] === compiler[0] && baseline[1] < compiler[1]) ||
+				(baseline[0] === compiler[0] &&
+					baseline[1] === compiler[1] &&
+					baseline[2] <= compiler[2]),
+		).toBe(true);
 	});
 
 	it("uses only portable, core-root-relative paths", () => {

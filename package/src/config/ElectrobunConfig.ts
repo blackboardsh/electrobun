@@ -288,12 +288,6 @@ export interface ElectrobunConfig {
 			 */
 			package?: string;
 
-			/**
-			 * Legacy source hint retained temporarily for file watching. It is not
-			 * a Go build input in the v2 module contract.
-			 * @deprecated Use `package` to select the main package.
-			 */
-			entrypoint?: string;
 		};
 
 		/**

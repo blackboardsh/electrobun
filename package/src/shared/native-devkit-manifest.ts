@@ -5,6 +5,7 @@ import { ZIG_VERSION } from "./build-dependencies";
 
 export const NATIVE_DEVKIT_MANIFEST_FILENAME = "native-devkit.json";
 export const NATIVE_DEVKIT_SCHEMA_VERSION = 1 as const;
+export const ELECTROBUN_GO_SDK_MODULE = "electrobun" as const;
 
 /**
  * These identities version the two compatibility boundaries independently of
@@ -130,7 +131,7 @@ export interface NativeDevkitManifest {
 			go: {
 				root: string;
 				manifest: string;
-				module: string;
+				module: typeof ELECTROBUN_GO_SDK_MODULE;
 			};
 			odin: {
 				root: string;
@@ -243,7 +244,7 @@ export function createNativeDevkitManifest(options: {
 				go: {
 					root: "go-sdk",
 					manifest: "go-sdk/go.mod",
-					module: "electrobun",
+					module: ELECTROBUN_GO_SDK_MODULE,
 				},
 				odin: {
 					root: "odin-sdk/electrobun",

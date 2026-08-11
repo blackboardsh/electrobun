@@ -202,6 +202,52 @@ test("rejects a Go SDK whose module identity drifts", () => {
 	}
 });
 
+test("rejects simultaneous Go manifest and module drift", () => {
+	const manifest = fixture();
+	manifest.layout.sdks.go.module = "wrong-sdk";
+	const coreRoot = makeCore(manifest);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot, ...expected }),
+			/layout\.sdks\.go\.module must be "electrobun"/,
+		);
+	} finally {
+		rmSync(coreRoot, { recursive: true, force: true });
+	}
+});
+
+test("rejects malformed or unsupported Go SDK language baselines", () => {
+	const malformed = fixture();
+	const malformedRoot = makeCore(malformed);
+	writeFileSync(
+		join(malformedRoot, malformed.layout.sdks.go.manifest),
+		"module electrobun\n\ngo next\n",
+	);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot: malformedRoot, ...expected }),
+			/must declare a valid Go language version/,
+		);
+	} finally {
+		rmSync(malformedRoot, { recursive: true, force: true });
+	}
+
+	const tooNew = fixture();
+	const tooNewRoot = makeCore(tooNew);
+	writeFileSync(
+		join(tooNewRoot, tooNew.layout.sdks.go.manifest),
+		"module electrobun\n\ngo 1.27.0\n",
+	);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot: tooNewRoot, ...expected }),
+			/requires Go 1\.27\.0, newer than toolchains\.go\.defaultVersion 1\.26\.4/,
+		);
+	} finally {
+		rmSync(tooNewRoot, { recursive: true, force: true });
+	}
+});
+
 test("rejects missing ABI and compiler-default metadata", () => {
 	const missingAbi = fixture();
 	delete missingAbi.abi.sdk;

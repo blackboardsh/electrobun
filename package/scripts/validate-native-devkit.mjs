@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 
 export const NATIVE_DEVKIT_MANIFEST_FILENAME = "native-devkit.json";
+export const ELECTROBUN_GO_SDK_MODULE = "electrobun";
 
 const runtimePathKeys = [
 	"main",
@@ -127,6 +128,11 @@ function collectSdkPaths(sdks) {
 	if (goModule.trim() !== goModule || /\s/.test(goModule)) {
 		fail("layout.sdks.go.module must be a Go module import path");
 	}
+	if (goModule !== ELECTROBUN_GO_SDK_MODULE) {
+		fail(
+			`layout.sdks.go.module must be ${JSON.stringify(ELECTROBUN_GO_SDK_MODULE)}`,
+		);
+	}
 
 	const rust = object(sdks.rust, "layout.sdks.rust");
 	const rustRoot = relativePath(rust.root, "layout.sdks.rust.root");
@@ -237,6 +243,28 @@ export function validateNativeDevkitManifest(options) {
 		fail(
 			`layout.sdks.go.module ${JSON.stringify(go.module)} does not match ${JSON.stringify(moduleDirective)} in ${JSON.stringify(go.manifest)}`,
 		);
+	}
+	const goSource = readFileSync(goManifest, "utf8");
+	const languageDirective = goSource.match(
+		/^[\t ]*go[\t ]+(\d+)\.(\d+)(?:\.(\d+))?[\t ]*(?:\/\/.*)?$/m,
+	);
+	if (!languageDirective) {
+		fail(`${JSON.stringify(go.manifest)} must declare a valid Go language version`);
+	}
+	const languageVersion = languageDirective
+		.slice(1)
+		.map((part) => Number(part ?? "0"));
+	const compilerVersion = toolchains.go.defaultVersion
+		.match(/^(\d+)\.(\d+)\.(\d+)/)
+		.slice(1)
+		.map(Number);
+	for (let index = 0; index < languageVersion.length; index++) {
+		if (languageVersion[index] < compilerVersion[index]) break;
+		if (languageVersion[index] > compilerVersion[index]) {
+			fail(
+				`${JSON.stringify(go.manifest)} requires Go ${languageDirective[0].trim().slice(3)}, newer than toolchains.go.defaultVersion ${toolchains.go.defaultVersion}`,
+			);
+		}
 	}
 
 	return manifest;
