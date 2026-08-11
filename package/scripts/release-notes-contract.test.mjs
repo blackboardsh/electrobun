@@ -50,7 +50,8 @@ function validateReleaseWorkflow(source) {
 			releaseJob.indexOf("- name: Create Release"),
 		"release notes verification must run before release creation",
 	);
-	assert.match(job(source, "npm-publish"), /^    needs: \[release\]$/m);
+	assert.match(job(source, "publish-templates"), /^    needs: \[release\]$/m);
+	assert.doesNotMatch(source, /^  npm-publish:\s*$/m);
 }
 
 validateReleaseWorkflow(workflow);

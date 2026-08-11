@@ -1,0 +1,63 @@
+name: Publish Electrobun npm bootstrap
+
+on:
+  push:
+    tags:
+      - 'npm-v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Bootstrap tag to publish (for example npm-v2.0.0)'
+        required: true
+
+concurrency:
+  group: electrobun-npm-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify independent bootstrap version
+        id: release
+        shell: bash
+        working-directory: npm/electrobun
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="npm-v${VERSION}"
+          REQUESTED_TAG="${{ github.event.inputs.tag || github.ref_name }}"
+
+          if [[ "$REQUESTED_TAG" != "$EXPECTED_TAG" ]]; then
+            echo "Expected tag $EXPECTED_TAG for package version $VERSION, got $REQUESTED_TAG" >&2
+            exit 1
+          fi
+
+          if [[ "$VERSION" == *-* ]]; then
+            echo "dist-tag=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "dist-tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test and inspect npm package
+        working-directory: npm/electrobun
+        run: |
+          node --test test/bootstrap.test.mjs test/package.test.mjs
+          npm pack --dry-run --ignore-scripts
+
+      - name: Publish npm bootstrap
+        working-directory: npm/electrobun
+        run: npm publish --access public --tag "${{ steps.release.outputs.dist-tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

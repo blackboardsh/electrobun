@@ -1,6 +1,7 @@
 {
 	"name": "electrobun",
 	"version": "1.18.4-beta.25",
+	"private": true,
 	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
 	"license": "MIT",
 	"author": "Blackboard Technologies Inc.",
@@ -64,9 +65,6 @@
 	"repository": {
 		"type": "git",
 		"url": "git+https://github.com/blackboardsh/electrobun.git"
-	},
-	"bin": {
-		"electrobun": "./bin/electrobun.cjs"
 	},
 	"scripts": {
 		"build:local": "node scripts/build-local.js"

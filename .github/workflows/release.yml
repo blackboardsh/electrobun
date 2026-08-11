@@ -378,51 +378,8 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
 
-  npm-publish:
-    needs: [release]
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '18'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install Hutch
-        uses: ./.github/actions/install-hutch
-
-      - name: Install dependencies
-        run: hutch install
-        working-directory: package
-
-      - name: Build for npm (JS/TS files only)
-        run: |
-          hutch build.ts --npm --release
-
-          echo "Contents of dist/ for npm (should only be main.js and api/):"
-          find dist/ -type f | sort
-        working-directory: package
-
-      - name: Copy README for npm
-        run: cp README.md package/README.md
-
-      - name: Publish to npm
-        run: |
-          if [[ "${{ github.event.inputs.tag || github.ref_name }}" == *"beta"* ]]; then
-            echo "Publishing beta release to npm..."
-            npm publish --tag beta
-          else
-            echo "Publishing stable release to npm..."
-            npm publish
-          fi
-        working-directory: package
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
   publish-templates:
-    needs: [release, npm-publish]
+    needs: [release]
     runs-on: ubuntu-latest
 
     steps:

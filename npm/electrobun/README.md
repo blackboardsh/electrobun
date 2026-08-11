@@ -1,0 +1,30 @@
+# Electrobun npm bootstrap
+
+The `electrobun` npm package is a small compatibility entry point for npm,
+pnpm, Yarn, and Bun users. It contains no Electrobun runtime or SDK. The
+`electrobun` command installs Hutch into `~/.dash` when necessary and delegates
+all commands to `hutch electrobun`.
+
+Create a project from the current stable template catalog:
+
+```sh
+npx electrobun init
+```
+
+Use the beta catalog only when you ask for it:
+
+```sh
+npx electrobun init --beta
+```
+
+The npm package version describes this bootstrap, not the Electrobun runtime.
+An application's exact Electrobun version is selected in
+`electrobun.config.ts`; Hutch downloads the matching runtime and SDK into the
+shared `~/.dash` store.
+
+You can install Hutch directly from <https://hutch.blackboard.sh> and run the
+same commands without npm:
+
+```sh
+hutch electrobun init
+```

@@ -1,67 +1,41 @@
-# Electrobun Beta Releases
+# Electrobun release channels
 
-## For Users
+Electrobun product releases and the npm bootstrap have independent versions
+and independent publishing workflows.
 
-### Installing Beta Versions
+## Electrobun product releases
 
-```bash
-# Install latest beta
-npm install electrobun@beta
+Product tags use `v<version>`, for example `v2.1.0-beta.3`. They publish the
+platform runtime, SDK/devkit artifacts, Kitchen builds, and the matching
+stable or beta template catalog. They do not publish to npm.
 
-# Install specific beta version
-npm install electrobun@0.0.19-beta.1
+An application's product version belongs in `electrobun.config.ts`. Selecting
+an npm package version never selects an Electrobun runtime version.
 
-# View available versions
-npm view electrobun versions --json
-```
+## npm bootstrap releases
 
-### Switching Between Stable and Beta
+The npm package contains only the small `electrobun` command that installs and
+invokes Hutch. Its semantic version changes only when that bootstrap contract
+changes.
 
-```bash
-# Switch to stable
-npm install electrobun@latest
+1. Update `npm/electrobun/package.json`.
+2. Run its contract tests:
 
-# Switch to beta
-npm install electrobun@beta
-```
-
-## For Maintainers
-
-### Publishing Beta Releases
-
-1. **Update version:**
-   ```bash
-   # First beta of a new version
-   npm version 0.0.19-beta.1
-   
-   # Increment beta number
-   bun npm:version:beta
+   ```sh
+   cd npm/electrobun
+   node --test test/bootstrap.test.mjs test/package.test.mjs
+   npm pack --dry-run --ignore-scripts
    ```
 
-2. **Create GitHub Release:**
-   ```bash
-   git push origin v0.0.19-beta.1
-   ```
-   Or manually trigger the workflow with the beta tag.
+3. Commit the change and create a matching `npm-v<version>` tag, such as
+   `npm-v2.0.0`.
+4. Push the tag. `.github/workflows/npm-bootstrap.yml` verifies the tag and
+   publishes from `npm/electrobun` only.
 
-3. **Publish to npm:**
-   ```bash
-   bun npm:publish:beta
-   ```
+A prerelease bootstrap version such as `2.0.1-beta.1` is published under npm's
+`beta` dist-tag. That dist-tag still does not select beta Electrobun templates:
 
-### Beta Release Workflow
-
-1. Beta versions use semantic versioning: `MAJOR.MINOR.PATCH-beta.NUMBER`
-2. GitHub Actions automatically marks releases with `-beta` as pre-releases
-3. npm publishes to the `beta` dist-tag (not `latest`)
-4. Users on stable versions won't get beta updates
-
-### Promoting Beta to Stable
-
-```bash
-# Update version to stable
-npm version 0.0.19
-
-# Publish as latest
-bun npm:publish
+```sh
+npx electrobun init          # stable templates
+npx electrobun init --beta   # beta templates
 ```

@@ -14,8 +14,6 @@ export default {
 		"dev:canary": "hutch install && hutch build:release && cd ../kitchen && hutch install && hutch electrobun build --env=canary",
 		"dev:production": "hutch install && hutch build:release && cd ../kitchen && hutch install && hutch electrobun build --env=production",
 		"build:docs:release": "cd ../docs && hutch run build",
-		"npm:publish": "hutch build:release && npm publish",
-		"npm:publish:beta": "hutch build:release && npm publish --tag beta",
 		typecheck:
 			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
 		"check:release": "hutch typecheck && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
@@ -49,7 +47,8 @@ export default {
 		"test:deployment-target": "node scripts/run-cottontail-test.js scripts/verify-macho-deployment-target.test.ts",
 		"test:linux-abi": "node scripts/run-cottontail-test.js scripts/verify-linux-elf-abi.test.ts",
 		"test:linux-extractor": "node scripts/test-linux-adjacent-extractor.mjs",
-		"test:npm-bootstrap": "node scripts/run-cottontail-test.js bin/npm-bootstrap.test.ts",
+		"test:npm-bootstrap":
+			"node --test ../npm/electrobun/test/bootstrap.test.mjs ../npm/electrobun/test/package.test.mjs",
 		"test:release-notes": "node scripts/release-notes-contract.test.mjs",
 		"test:spell-check": "node --test src/shared/spell-check.test.js",
 		"test:macos-spell-check": "scripts/test-macos-spell-check.sh",
