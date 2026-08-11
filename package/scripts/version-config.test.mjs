@@ -6,6 +6,7 @@ import test from "node:test";
 import {
 	createTemplateVersionUpdates,
 	updateKitchenVersions,
+	updateNpmBootstrapVersion,
 } from "./version-config.mjs";
 
 const repositoryRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -89,6 +90,36 @@ test("release bumps reject values outside exact SemVer 2.0.0", () => {
 	}
 });
 
+test("release bumps keep the thin npm bootstrap on the product version", () => {
+	const source = readFileSync(
+		join(repositoryRoot, "npm", "electrobun", "package.json"),
+		"utf8",
+	);
+	const original = JSON.parse(source);
+	const updated = JSON.parse(updateNpmBootstrapVersion(source, "2.3.4-beta.5"));
+	assert.equal(updated.name, "electrobun");
+	assert.equal(updated.version, "2.3.4-beta.5");
+	const { version: originalVersion, ...originalRest } = original;
+	const { version: updatedVersion, ...updatedRest } = updated;
+	assert.notEqual(originalVersion, updatedVersion);
+	assert.deepEqual(updatedRest, originalRest);
+	assert.throws(
+		() => updateNpmBootstrapVersion(source, "beta"),
+		/exact SemVer 2\.0\.0/,
+	);
+});
+
+test("push:beta writes and stages the synchronized npm bootstrap identity", () => {
+	const source = readFileSync(
+		join(repositoryRoot, "package", "scripts", "push-version.js"),
+		"utf8",
+	);
+	assert.match(source, /updateNpmBootstrapVersion\(/);
+	assert.match(source, /writeFileSync\(npmBootstrapPath, npmBootstrap\)/);
+	assert.match(source, /"npm\/electrobun\/package\.json"/);
+	assert.doesNotMatch(source, /npm-v\$\{newVersion\}/);
+});
+
 test("release bump plan stamps every template Hutch product pin", () => {
 	const templatesRoot = fileURLToPath(
 		new URL("../../templates/", import.meta.url),
@@ -130,6 +161,13 @@ test("checked-in package, lock, Kitchen, and template product identities agree",
 	const version = packageManifest.version;
 	assert.equal(packageLock.version, version);
 	assert.equal(packageLock.packages?.[""]?.version, version);
+	const npmBootstrapManifest = JSON.parse(
+		readFileSync(
+			join(repositoryRoot, "npm", "electrobun", "package.json"),
+			"utf8",
+		),
+	);
+	assert.equal(npmBootstrapManifest.version, version);
 
 	const kitchenHutchPath = join(repositoryRoot, "kitchen", "hutch.config.ts");
 	const kitchenPath = join(repositoryRoot, "kitchen", "electrobun.config.ts");

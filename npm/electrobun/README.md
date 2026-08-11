@@ -17,10 +17,12 @@ Use the beta catalog only when you ask for it:
 npx electrobun init --beta
 ```
 
-The npm package version describes this bootstrap, not the Electrobun runtime.
-An application's exact Electrobun version is selected in
-`hutch.config.ts`; Hutch downloads the matching runtime and SDK into the shared
-`~/.dash` store and copies the SDKs into the project's `.hutch/devkit` sysroot.
+The npm bootstrap ships under the same release version as Electrobun, but it
+does not contain or select the runtime by itself. An application's exact
+Electrobun version is selected in `hutch.config.ts`; Hutch downloads the
+matching runtime and SDK into the shared `~/.dash` store and projects the SDKs
+into the project's `.hutch/devkit` sysroot. Installing a beta bootstrap still
+uses stable templates unless `init` receives `--beta`.
 
 `DASH_RELEASE_OFFLINE=1` prevents this bootstrap from downloading a missing
 Hutch installation. An already installed Hutch is still invoked, and the flag

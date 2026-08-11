@@ -385,8 +385,44 @@ jobs:
           generate_release_notes: true
           prerelease: ${{ steps.release-type.outputs.prerelease == 'true' }}
 
-  publish-templates:
+  npm-publish:
     needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify matching npm bootstrap version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: npm/electrobun/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
+
+      - name: Test and inspect npm bootstrap
+        working-directory: npm/electrobun
+        run: |
+          node --test test/bootstrap.test.mjs test/package.test.mjs
+          npm pack --dry-run --ignore-scripts
+
+      - name: Publish npm bootstrap
+        working-directory: npm/electrobun
+        run: npm publish --access public --tag "${{ steps.release-type.outputs.dist-tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-templates:
+    needs: [npm-publish]
     runs-on: ubuntu-latest
 
     steps:

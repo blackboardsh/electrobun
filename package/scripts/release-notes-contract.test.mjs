@@ -27,12 +27,17 @@ function namedStep(jobSource, name) {
 function validateReleaseWorkflow(source) {
 	const buildJob = job(source, "build");
 	const releaseJob = job(source, "release");
+	const npmPublishJob = job(source, "npm-publish");
 	const publishTemplatesJob = job(source, "publish-templates");
 	const createRelease = namedStep(releaseJob, "Create Release");
 	const buildVersionCheck = namedStep(buildJob, "Verify release tag and version");
 	const releaseVersionCheck = namedStep(
 		releaseJob,
 		"Verify release tag and version",
+	);
+	const npmVersionCheck = namedStep(
+		npmPublishJob,
+		"Verify matching npm bootstrap version",
 	);
 
 	for (const versionCheck of [buildVersionCheck, releaseVersionCheck]) {
@@ -50,6 +55,19 @@ function validateReleaseWorkflow(source) {
 			/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
 		);
 	}
+	assert.match(npmVersionCheck, /^        id: release-type$/m);
+	assert.match(
+		npmVersionCheck,
+		/^          RELEASE_TAG: \$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}$/m,
+	);
+	assert.match(
+		npmVersionCheck,
+		/^          RELEASE_PACKAGE_JSON: npm\/electrobun\/package\.json$/m,
+	);
+	assert.match(
+		npmVersionCheck,
+		/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
+	);
 	assert.ok(
 		buildJob.indexOf("- name: Verify release tag and version") <
 			buildJob.indexOf("- name: Install Hutch"),
@@ -61,7 +79,12 @@ function validateReleaseWorkflow(source) {
 		"release version verification must run before release assembly",
 	);
 	assert.doesNotMatch(source, /Determine release type/);
-	for (const releasePath of [buildJob, releaseJob, publishTemplatesJob]) {
+	for (const releasePath of [
+		buildJob,
+		releaseJob,
+		npmPublishJob,
+		publishTemplatesJob,
+	]) {
 		assert.match(
 			releasePath,
 			/^          ref: \$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', github\.event\.inputs\.tag\) \|\| github\.ref \}\}$/m,
@@ -91,8 +114,16 @@ function validateReleaseWorkflow(source) {
 			releaseJob.indexOf("- name: Create Release"),
 		"release notes verification must run before release creation",
 	);
-	assert.match(publishTemplatesJob, /^    needs: \[release\]$/m);
-	assert.doesNotMatch(source, /^  npm-publish:\s*$/m);
+	assert.match(npmPublishJob, /^    needs: \[release\]$/m);
+	assert.match(publishTemplatesJob, /^    needs: \[npm-publish\]$/m);
+	assert.match(
+		npmPublishJob,
+		/^        working-directory: npm\/electrobun$/m,
+	);
+	assert.match(
+		npmPublishJob,
+		/^        run: npm publish --access public --tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"$/m,
+	);
 }
 
 validateReleaseWorkflow(workflow);

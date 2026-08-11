@@ -46,9 +46,9 @@ sizes.
   per Electrobun channel and are downloaded on demand instead of increasing the
   Hutch executable size.
 - `npx electrobun init` and `bunx electrobun init` converge on that same
-  initializer. The independent npm bootstrap forwards all arguments and
-  installs Hutch when needed; it carries no Electrobun core or SDK and its
-  package version does not select the product version.
+  initializer. The thin npm bootstrap shares the Electrobun release version,
+  forwards all arguments, and installs Hutch when needed; it carries no
+  Electrobun core or SDK, and the generated Hutch pin remains authoritative.
 
 ## Cottontail runtime
 

@@ -70,17 +70,6 @@ test("rejects an explicit prerelease input for a stable version", () => {
 	);
 });
 
-test("supports the independent npm bootstrap tag prefix", () => {
-	assert.equal(
-		verifyReleaseVersion({
-			tag: "npm-v2.0.0",
-			version: "2.0.0",
-			prefix: "npm-v",
-		}).npmDistTag,
-		"latest",
-	);
-});
-
 test("rejects loose versions, ranges, channels, aliases, paths, and whitespace", () => {
 	for (const version of [
 		"02.0.0",
@@ -131,8 +120,7 @@ test("reads the package manifest and validates environment booleans", () => {
 		assert.equal(
 			verifyReleaseVersionFromEnvironment(
 				{
-					RELEASE_TAG: "npm-v2.0.0-rc.1",
-					RELEASE_TAG_PREFIX: "npm-v",
+					RELEASE_TAG: "v2.0.0-rc.1",
 					RELEASE_PACKAGE_JSON: "package.json",
 					EXPLICIT_PRERELEASE: "false",
 				},
@@ -144,8 +132,7 @@ test("reads the package manifest and validates environment booleans", () => {
 			() =>
 				verifyReleaseVersionFromEnvironment(
 					{
-						RELEASE_TAG: "npm-v2.0.0-rc.1",
-						RELEASE_TAG_PREFIX: "npm-v",
+						RELEASE_TAG: "v2.0.0-rc.1",
 						RELEASE_PACKAGE_JSON: "package.json",
 						EXPLICIT_PRERELEASE: "yes",
 					},

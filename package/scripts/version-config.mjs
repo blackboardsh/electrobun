@@ -17,6 +17,21 @@ export function updateHutchProductVersion(source, version) {
 	return replaceBlockVersion(source, "electrobun", version);
 }
 
+export function updateNpmBootstrapVersion(source, version) {
+	assertStrictSemVer(version, "Electrobun npm bootstrap version");
+	let manifest;
+	try {
+		manifest = JSON.parse(source);
+	} catch (error) {
+		throw new Error(`Could not parse npm bootstrap package.json: ${error.message}`);
+	}
+	if (manifest?.name !== "electrobun") {
+		throw new Error("npm bootstrap package name must be electrobun");
+	}
+	manifest.version = version;
+	return `${JSON.stringify(manifest, null, "\t")}\n`;
+}
+
 export function updateKitchenVersions(hutchSource, electrobunSource, version) {
 	assertStrictSemVer(version, "Kitchen release version");
 	return {

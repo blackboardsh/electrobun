@@ -20,6 +20,7 @@ import { assertStrictSemVer } from "../src/shared/strict-semver.js";
 import {
 	createTemplateVersionUpdates,
 	updateKitchenVersions,
+	updateNpmBootstrapVersion,
 } from "./version-config.mjs";
 
 const type = process.argv[2];
@@ -35,6 +36,7 @@ const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = join(packageDir, "..");
 const packageJsonPath = join(packageDir, "package.json");
 const templatesDir = join(repoRoot, "templates");
+const npmBootstrapPath = join(repoRoot, "npm", "electrobun", "package.json");
 
 // Read current version
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
@@ -80,14 +82,19 @@ const kitchenVersions = updateKitchenVersions(
 	newVersion,
 );
 const templateConfigs = createTemplateVersionUpdates(templatesDir, newVersion);
+const npmBootstrap = updateNpmBootstrapVersion(
+	readFileSync(npmBootstrapPath, "utf-8"),
+	newVersion,
+);
 
 writeFileSync(kitchenHutchConfigPath, kitchenVersions.hutchConfig);
 writeFileSync(kitchenConfigPath, kitchenVersions.electrobunConfig);
+writeFileSync(npmBootstrapPath, npmBootstrap);
 for (const templateConfig of templateConfigs) {
 	writeFileSync(templateConfig.path, templateConfig.source);
 }
 console.log(
-	`Updated Kitchen and ${templateConfigs.length} template product versions to ${newVersion}`,
+	`Updated Kitchen, npm bootstrap, and ${templateConfigs.length} template product versions to ${newVersion}`,
 );
 
 // Git operations from repo root
@@ -101,6 +108,7 @@ execFileSync(
 		"package/package-lock.json",
 		"kitchen/hutch.config.ts",
 		"kitchen/electrobun.config.ts",
+		"npm/electrobun/package.json",
 		...templateConfigs.map(({ path }) => relative(repoRoot, path)),
 	],
 	{ cwd: repoRoot, stdio: "inherit" },

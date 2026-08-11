@@ -44,11 +44,11 @@ live side by side under `~/.dash/products`, with launchers in `~/.dash/bin`.
 `stable` is accepted as an alias for the production channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
-work. The published package is an independent, tiny bootstrap: it installs
-Hutch when necessary and forwards every argument to `hutch electrobun`. It
-defaults `init` to stable templates; pass `--beta` explicitly for beta
-templates. The npm package's own version never selects an Electrobun product,
-SDK, runtime, or template version.
+work. The published package is a tiny bootstrap released at the same version
+as Electrobun: it installs Hutch when necessary and forwards every argument to
+`hutch electrobun`. It defaults `init` to stable templates; pass `--beta`
+explicitly for beta templates. The generated project's `hutch.config.ts` pin
+still selects the exact product, SDK, and runtime.
 
 ## Everyday commands
 
@@ -97,7 +97,7 @@ chosen:
 // hutch.config.ts
 export default {
   electrobun: {
-    version: "2.0.0",
+    version: "2.0.1-beta.0",
   },
   packageManager: "npm",
   scripts: {
@@ -174,7 +174,7 @@ Every Electrobun 2.x project separately pins the exact product release in
 ```ts docs=syntax
 export default {
   electrobun: {
-    version: "2.0.0",
+    version: "2.0.1-beta.0",
   },
   packageManager: "npm",
   scripts: {

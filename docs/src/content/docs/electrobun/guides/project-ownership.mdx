@@ -32,7 +32,7 @@ A minimal project makes the boundary visible:
 // hutch.config.ts
 export default {
   electrobun: {
-    version: "2.0.0",
+    version: "2.0.1-beta.0",
   },
   packageManager: "npm",
   scripts: {
@@ -62,8 +62,9 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-The Electrobun version must be exact. npm tags, semver ranges, and the version
-of the optional `electrobun` npm bootstrap do not select an Electrobun product.
+The Electrobun version must be exact. The optional npm bootstrap shares that
+release version, but installing it by npm tag or range does not select a
+product for an existing project; the Hutch pin remains authoritative.
 
 ## Where the SDK comes from
 

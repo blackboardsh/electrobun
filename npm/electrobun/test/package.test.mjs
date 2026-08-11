@@ -14,9 +14,9 @@ const productSourceManifest = JSON.parse(
 	readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
 );
 
-test("is an independently versioned, dependency-free command package", () => {
+test("shares the product release version and remains dependency-free", () => {
 	assert.equal(manifest.name, "electrobun");
-	assert.equal(manifest.version, "2.0.0");
+	assert.equal(manifest.version, productSourceManifest.version);
 	assert.deepEqual(manifest.bin, {
 		electrobun: "bin/electrobun.cjs",
 	});
@@ -79,34 +79,44 @@ test("ships an executable CommonJS entry point", () => {
 	assert.doesNotMatch(bootstrapSource, /package\.json|packageVersion/);
 });
 
-test("publishes on its own tag lane, outside product releases", () => {
+test("publishes from the unified product release lane before templates", () => {
 	const productWorkflow = readFileSync(
 		join(repositoryRoot, ".github", "workflows", "release.yml"),
 		"utf8",
 	);
-	const npmWorkflow = readFileSync(
-		join(repositoryRoot, ".github", "workflows", "npm-bootstrap.yml"),
-		"utf8",
-	);
 
-	assert.doesNotMatch(productWorkflow, /^  npm-publish:\s*$/m);
-	assert.match(productWorkflow, /^  publish-templates:\n    needs: \[release\]$/m);
-	assert.match(npmWorkflow, /^      - 'npm-v\*'$/m);
+	assert.equal(
+		existsSync(
+			join(repositoryRoot, ".github", "workflows", "npm-bootstrap.yml"),
+		),
+		false,
+	);
+	assert.match(productWorkflow, /^  npm-publish:\n    needs: \[release\]$/m);
 	assert.match(
-		npmWorkflow,
+		productWorkflow,
+		/^  publish-templates:\n    needs: \[npm-publish\]$/m,
+	);
+	assert.match(
+		productWorkflow,
 		/^          ref: \$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', github\.event\.inputs\.tag\) \|\| github\.ref \}\}$/m,
 	);
-	assert.match(npmWorkflow, /^          RELEASE_TAG_PREFIX: npm-v$/m);
 	assert.match(
-		npmWorkflow,
+		productWorkflow,
 		/^          RELEASE_PACKAGE_JSON: npm\/electrobun\/package\.json$/m,
 	);
 	assert.match(
-		npmWorkflow,
+		productWorkflow,
 		/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
 	);
-	assert.match(npmWorkflow, /working-directory: npm\/electrobun/g);
-	assert.doesNotMatch(npmWorkflow, /hutch install|build\.ts|working-directory: package$/m);
+	assert.match(productWorkflow, /working-directory: npm\/electrobun/g);
+	assert.match(
+		productWorkflow,
+		/npm publish --access public --tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"/,
+	);
+	assert.doesNotMatch(
+		productWorkflow,
+		/^  npm-publish:[\s\S]*?hutch install|^  npm-publish:[\s\S]*?build\.ts/m,
+	);
 });
 
 test("the product source tree cannot be published in place", () => {

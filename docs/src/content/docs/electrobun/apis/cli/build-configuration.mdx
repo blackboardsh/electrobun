@@ -46,8 +46,8 @@ that Hutch will use.
 ## Electrobun Devkit
 
 `hutch.config.ts` must set `electrobun.version` to an exact release such as
-`2.0.0` or `2.1.0-beta.3`. It is independent of the thin npm bootstrap version
-and the application version in `app.version`.
+`2.0.0` or `2.1.0-beta.3`. The thin npm bootstrap carries the same release
+version, while the application version in `app.version` remains independent.
 
 Hutch resolves and verifies that release under
 `~/.dash/products/electrobun`, then copies its config types and language SDKs

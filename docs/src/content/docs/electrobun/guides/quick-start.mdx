@@ -60,9 +60,9 @@ hutch electrobun init my-app --beta
 :::note
 `bunx electrobun init` and `npx electrobun init` work too. The npm package is a
 thin bootstrap that installs/executes Hutch and forwards every argument. It
-defaults to stable templates unless you pass `--beta`. Its npm version is
-independent and never chooses the project's Electrobun product, SDK, runtime,
-or template version.
+ships under the same Electrobun release version, but defaults to stable
+templates unless you pass `--beta`. The exact product, SDK, and runtime remain
+selected by the generated project's `hutch.config.ts` pin.
 :::
 
 ## Run the app
@@ -90,7 +90,7 @@ The template's `hutch.config.ts` contains an exact product pin:
 ```ts docs=syntax
 export default {
   electrobun: {
-    version: "2.0.0",
+    version: "2.0.1-beta.0",
   },
   // package manager and project tasks...
 };
