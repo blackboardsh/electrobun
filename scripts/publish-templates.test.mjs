@@ -112,15 +112,15 @@ test("published templates stamp only the Electrobun product version", () => {
 		"",
 		"export default {",
 		"\telectrobun: {",
-		'\t\tversion: "1.18.4-beta.25",',
+		'\t\tversion: "2.0.0-rc.1",',
 		"\t},",
 		'\tapp: { name: "example", version: "0.0.1" },',
 		"} satisfies ElectrobunConfig;",
 		"",
 	].join("\n");
 	assert.equal(
-		pinElectrobunVersion(source, "2.0.0-beta.1"),
-		source.replace("1.18.4-beta.25", "2.0.0-beta.1"),
+		pinElectrobunVersion(source, "2.0.0"),
+		source.replace("2.0.0-rc.1", "2.0.0"),
 	);
 	assert.throws(
 		() => pinElectrobunVersion("export default {};\n", "2.0.0"),

@@ -2,7 +2,7 @@ import type { ElectrobunConfig } from "electrobun";
 
 export default {
 	electrobun: {
-		version: "1.18.4-beta.25",
+		version: "2.0.0",
 	},
 	app: {
 		name: "ui-launcher",

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
 	createTemplateVersionUpdates,
 	updateKitchenVersions,
 } from "./version-config.mjs";
+
+const repositoryRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 test("release bumps update both Kitchen product and app versions", () => {
 	const source = readFileSync(
@@ -93,5 +96,28 @@ test("release bump plan stamps every template product pin", () => {
 			1,
 			templateName,
 		);
+	}
+});
+
+test("checked-in package, lock, Kitchen, and template product identities agree", () => {
+	const packageManifest = JSON.parse(
+		readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
+	);
+	const packageLock = JSON.parse(
+		readFileSync(join(repositoryRoot, "package", "package-lock.json"), "utf8"),
+	);
+	const version = packageManifest.version;
+	assert.equal(packageLock.version, version);
+	assert.equal(packageLock.packages?.[""]?.version, version);
+
+	const kitchenPath = join(repositoryRoot, "kitchen", "electrobun.config.ts");
+	const kitchenSource = readFileSync(kitchenPath, "utf8");
+	assert.equal(updateKitchenVersions(kitchenSource, version), kitchenSource);
+
+	for (const update of createTemplateVersionUpdates(
+		join(repositoryRoot, "templates"),
+		version,
+	)) {
+		assert.equal(update.source, readFileSync(update.path, "utf8"), update.path);
 	}
 });

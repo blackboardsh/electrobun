@@ -18,12 +18,12 @@ const appIdentifier = variantKey
 
 export default {
 	electrobun: {
-		version: "1.18.4-beta.25",
+		version: "2.0.0",
 	},
 	app: {
 		name: appName,
 		identifier: appIdentifier,
-		version: "1.18.4-beta.25",
+		version: "2.0.0",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
