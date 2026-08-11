@@ -144,9 +144,18 @@ function titleFromId(id) {
 
 export function templateMetadata(templateId, manifest = {}) {
 	const name = titleFromId(templateId);
+	const descriptions = new Map([
+		[
+			"all",
+			"Install, build, and launch every other Electrobun beta template from one QA dashboard",
+		],
+	]);
 	return {
 		name,
-		description: manifest.description ?? `${name} Electrobun template`,
+		description:
+			manifest.description ??
+			descriptions.get(templateId) ??
+			`${name} Electrobun template`,
 	};
 }
 

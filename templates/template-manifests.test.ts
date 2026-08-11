@@ -29,7 +29,8 @@ const odinWgpuTemplates = [
 	"odin-particles-wgpu",
 	"odin-tree-wgpu",
 ] as const;
-const packageFreeNativeTemplates = [
+const expectedPackageFreeTemplates = [
+	"all",
 	"go-maze-wgpu",
 	...odinWgpuTemplates,
 	"rust-flock-wgpu",
@@ -141,7 +142,7 @@ describe("Electrobun template package boundaries", () => {
 		}
 
 		expect(invalidManifests).toEqual([]);
-		expect(packageFreeTemplates).toEqual([...packageFreeNativeTemplates].sort());
+		expect(packageFreeTemplates).toEqual([...expectedPackageFreeTemplates].sort());
 	});
 
 	test("Hutch owns template tasks and release metadata", () => {

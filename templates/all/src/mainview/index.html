@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<meta name="color-scheme" content="dark" />
+		<title>Template QA</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<a class="skip-link" href="#template-list">Skip to templates</a>
+
+		<div class="app-shell">
+			<header class="topbar electrobun-webkit-app-region-drag">
+				<div class="brand-block">
+					<div class="brand-mark" aria-hidden="true">EB</div>
+					<div>
+						<div class="eyebrow">
+							<span>Electrobun</span>
+							<span class="eyebrow-separator" aria-hidden="true">/</span>
+							<span id="release-label">Loading catalog…</span>
+						</div>
+						<h1>Template QA</h1>
+					</div>
+				</div>
+
+				<div class="global-actions no-drag" aria-label="All template controls">
+					<div class="connection-badge" id="connection-badge" data-state="connecting">
+						<span class="connection-dot" aria-hidden="true"></span>
+						<span id="connection-label">Connecting</span>
+					</div>
+					<button class="button button-secondary" id="stop-all" type="button">
+						<span aria-hidden="true">■</span>
+						Stop all
+					</button>
+					<button class="button button-primary" id="start-all" type="button">
+						<span aria-hidden="true">▶</span>
+						Start all
+					</button>
+				</div>
+			</header>
+
+			<section class="summary" aria-label="Template run summary">
+				<div class="metric">
+					<span class="metric-value" id="total-count">0</span>
+					<span class="metric-label">Templates</span>
+				</div>
+				<div class="metric metric-ready">
+					<span class="metric-value" id="ready-count">0</span>
+					<span class="metric-label">Ready</span>
+				</div>
+				<div class="metric metric-active">
+					<span class="metric-value" id="active-count">0</span>
+					<span class="metric-label">In progress</span>
+				</div>
+				<div class="metric metric-failed">
+					<span class="metric-value" id="failed-count">0</span>
+					<span class="metric-label">Failed</span>
+				</div>
+				<div class="metric metric-stopped">
+					<span class="metric-value" id="stopped-count">0</span>
+					<span class="metric-label">Stopped</span>
+				</div>
+				<div class="metric metric-retried">
+					<span class="metric-value" id="retry-count">0</span>
+					<span class="metric-label">Passed on retry</span>
+				</div>
+				<div class="summary-progress" aria-hidden="true">
+					<span id="summary-progress-bar"></span>
+				</div>
+			</section>
+
+			<main class="workspace">
+				<section class="templates-pane" aria-labelledby="templates-heading">
+					<div class="pane-header">
+						<div>
+							<h2 id="templates-heading">Templates</h2>
+							<p id="template-summary">Waiting for the template catalog.</p>
+						</div>
+						<label class="search-field">
+							<span class="visually-hidden">Filter templates</span>
+							<span class="search-icon" aria-hidden="true">⌕</span>
+							<input id="template-search" type="search" placeholder="Filter templates" autocomplete="off" />
+						</label>
+					</div>
+
+					<div class="template-list" id="template-list" tabindex="-1" aria-live="polite">
+						<div class="empty-state" id="templates-empty">
+							<div class="empty-state-mark" aria-hidden="true">…</div>
+							<strong>Loading templates</strong>
+							<span>The beta catalog and local project state will appear here.</span>
+						</div>
+					</div>
+				</section>
+
+				<section class="logs-pane" aria-labelledby="logs-heading">
+					<div class="pane-header logs-title-row">
+						<div>
+							<h2 id="logs-heading">Output</h2>
+							<p><span id="visible-log-count">0</span> visible entries</p>
+						</div>
+						<div class="log-actions" aria-label="Output actions">
+							<button class="button button-quiet" id="copy-logs" type="button" disabled>Copy all</button>
+							<button class="button button-quiet" id="export-logs" type="button" disabled>Export all</button>
+							<button class="button button-quiet" id="clear-logs" type="button" disabled>Clear locally</button>
+						</div>
+					</div>
+
+					<div class="log-filters" aria-label="Output filters">
+						<label>
+							<span>Template</span>
+							<select id="template-filter">
+								<option value="all">All templates</option>
+							</select>
+						</label>
+						<label>
+							<span>Stream</span>
+							<select id="stream-filter">
+								<option value="all">All output</option>
+								<option value="stdout">stdout</option>
+								<option value="stderr">stderr</option>
+								<option value="system">system</option>
+							</select>
+						</label>
+						<label class="log-search-field">
+							<span>Contains</span>
+							<input id="log-search" type="search" placeholder="Filter text" autocomplete="off" />
+						</label>
+						<label class="follow-toggle">
+							<input id="follow-logs" type="checkbox" checked />
+							<span>Follow</span>
+						</label>
+					</div>
+
+					<div class="log-output" id="log-output" role="log" aria-label="Template process output" aria-live="off">
+						<div class="log-empty" id="logs-empty">
+							<span aria-hidden="true">›_</span>
+							No output yet
+						</div>
+					</div>
+				</section>
+			</main>
+
+			<footer class="footer">
+				<span class="footer-label">Install root</span>
+				<code id="install-root">Waiting for snapshot…</code>
+			</footer>
+		</div>
+
+		<div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+		<script src="views://mainview/index.js"></script>
+	</body>
+</html>

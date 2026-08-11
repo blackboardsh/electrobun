@@ -96,6 +96,11 @@ test("package-free templates receive catalog metadata", () => {
 		name: "Go Maze WGPU",
 		description: "Go Maze WGPU Electrobun template",
 	});
+	assert.deepEqual(templateMetadata("all"), {
+		name: "All",
+		description:
+			"Install, build, and launch every other Electrobun beta template from one QA dashboard",
+	});
 });
 
 test("dry-run archives preserve package and package-free template inputs", async () => {
@@ -114,7 +119,12 @@ test("dry-run archives preserve package and package-free template inputs", async
 		console.log = originalLog;
 	}
 
-	assert.equal(catalog.templates.length, 30);
+	assert.equal(catalog.templates.length, 31);
+	assert.equal(
+		catalog.templates.filter(({ id }) => id === "all").length,
+		1,
+		"the all meta-template must remain a selectable catalog entry",
+	);
 	const stageRoot = join(repositoryRoot, ".template-release", "stage");
 	for (const template of catalog.templates) {
 		const sourceRoot = join(repositoryRoot, "templates", template.id);

@@ -40,7 +40,7 @@ export default {
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",
 		"test:webview2-permissions": "scripts/test-webview2-permissions.ts",
 		"test:macos-inspector-layout": "scripts/test-macos-inspector-layout.sh",
-		"test:templates": "node scripts/run-cottontail-test.js ../templates/template-manifests.test.ts",
+		"test:templates": "node scripts/run-cottontail-test.js ../templates/template-manifests.test.ts ../templates/all-template-orchestrator.test.ts",
 		"test:odin-templates": "node scripts/test-odin-templates.mjs",
 		"test:template-publisher": "node --test ../scripts/publish-templates.test.mjs",
 		"test:signing": "node scripts/run-cottontail-test.js scripts/verify-macho-code-signing.test.ts",
