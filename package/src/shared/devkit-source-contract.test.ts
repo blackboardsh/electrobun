@@ -134,7 +134,6 @@ describe("private devkit source contract", () => {
 					"const legacyWindow: LegacyBrowserWindow = mainWindow;",
 					"void legacyWindow;",
 					"const config = {",
-					'  electrobun: { version: "2.0.0-beta.1" },',
 					'  app: { name: "Flatpak app", identifier: "dev.electrobun.flatpak", version: "1.0.0" },',
 					"  build: { linux: { flatpak: {",
 					"    enabled: true,",
@@ -146,6 +145,12 @@ describe("private devkit source contract", () => {
 					"  } } },",
 					"} satisfies ElectrobunConfig;",
 					"void config;",
+					"const legacyProductSelection = {",
+					'  // @ts-expect-error Product selection belongs in hutch.config.ts.',
+					'  electrobun: { version: "2.0.0-beta.1" },',
+					'  app: { name: "Legacy", identifier: "dev.electrobun.legacy", version: "1.0.0" },',
+					"} satisfies ElectrobunConfig;",
+					"void legacyProductSelection;",
 				].join("\n"),
 			);
 

@@ -7,31 +7,35 @@ function replaceBlockVersion(source, blockName, version) {
 		`(${blockName}:\\s*\\{[\\s\\S]*?\\bversion:\\s*)["'][^"']+["']`,
 	);
 	if (!pattern.test(source)) {
-		throw new Error(`Could not find ${blockName}.version in Electrobun config`);
+		throw new Error(`Could not find ${blockName}.version in config`);
 	}
 	return source.replace(pattern, `$1"${version}"`);
 }
 
-export function updateKitchenVersions(source, version) {
-	assertStrictSemVer(version, "Kitchen release version");
-	let updated = replaceBlockVersion(source, "electrobun", version);
-	updated = replaceBlockVersion(updated, "app", version);
-	return updated;
+export function updateHutchProductVersion(source, version) {
+	assertStrictSemVer(version, "Electrobun product version");
+	return replaceBlockVersion(source, "electrobun", version);
 }
 
-export function updateTemplateVersion(source, version) {
-	assertStrictSemVer(version, "Template release version");
-	return replaceBlockVersion(source, "electrobun", version);
+export function updateKitchenVersions(hutchSource, electrobunSource, version) {
+	assertStrictSemVer(version, "Kitchen release version");
+	return {
+		hutchConfig: replaceBlockVersion(hutchSource, "electrobun", version),
+		electrobunConfig: replaceBlockVersion(electrobunSource, "app", version),
+	};
 }
 
 export function createTemplateVersionUpdates(templatesDir, version) {
 	return readdirSync(templatesDir, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory())
 		.map((entry) => {
-			const path = join(templatesDir, entry.name, "electrobun.config.ts");
+			const path = join(templatesDir, entry.name, "hutch.config.ts");
 			return {
 				path,
-				source: updateTemplateVersion(readFileSync(path, "utf8"), version),
+				source: updateHutchProductVersion(
+					readFileSync(path, "utf8"),
+					version,
+				),
 			};
 		})
 		.sort((left, right) => left.path.localeCompare(right.path));

@@ -1,9 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-	electrobun: {
-		version: "2.0.0",
-	},
 	app: {
 		name: "odin-alchemy-wgpu",
 		identifier: "odinalchemywgpu.electrobun.dev",

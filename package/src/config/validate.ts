@@ -39,30 +39,17 @@ export function assertNoLegacyBunVersionConfig(config: unknown): void {
 	}
 }
 
-/**
- * Validate the version fields introduced by the Hutch v2 devkit contract.
- * V2 always requires an exact Electrobun release pin; v1 projects use the
- * separately published Electrobun 1.x package and loader.
- */
+/** Validate application-owned native toolchain overrides. */
 export function assertValidVersionPins(config: unknown): void {
 	const configRecord = record(config);
 	if (!configRecord) {
+		throw new Error("electrobun.config.ts must export a configuration object.");
+	}
+	if (Object.hasOwn(configRecord, "electrobun")) {
 		throw new Error(
-			'electrobun.version must be an exact version, for example "2.0.0".',
+			"electrobun.config.ts does not select the Electrobun product version. Move electrobun.version to hutch.config.ts.",
 		);
 	}
-
-	const electrobun = record(configRecord["electrobun"]);
-	if (!electrobun || !Object.hasOwn(electrobun, "version")) {
-		throw new Error(
-			'electrobun.version must be an exact version, for example "2.0.0".',
-		);
-	}
-	assertExactVersion(
-		electrobun["version"],
-		"electrobun.version",
-		isStrictSemVer,
-	);
 
 	const build = record(configRecord["build"]);
 	if (!build) return;

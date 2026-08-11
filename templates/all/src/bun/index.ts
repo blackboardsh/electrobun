@@ -198,7 +198,7 @@ const projectRoot = findTemplateQaProjectRoot();
 const projectVersion = inspectTemplateProject(projectRoot).configuredElectrobunVersion;
 if (!projectVersion) {
 	throw new Error(
-		"Template QA requires one exact electrobun.version in electrobun.config.ts",
+		"Template QA requires one exact electrobun.version in hutch.config.ts",
 	);
 }
 const channel = catalogChannelForVersion(projectVersion);

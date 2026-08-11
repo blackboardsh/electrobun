@@ -106,16 +106,15 @@ test("published templates stamp only Hutch release metadata", () => {
 	);
 });
 
-test("published templates stamp only the Electrobun product version", () => {
+test("published templates stamp the Electrobun product version in Hutch config", () => {
 	const source = [
-		'import type { ElectrobunConfig } from "electrobun";',
-		"",
+		"// @hutch cli=0.5.1 cottontail=0.3.0",
 		"export default {",
 		"\telectrobun: {",
 		'\t\tversion: "2.0.0-rc.1",',
 		"\t},",
-		'\tapp: { name: "example", version: "0.0.1" },',
-		"} satisfies ElectrobunConfig;",
+		"\tscripts: {},",
+		"};",
 		"",
 	].join("\n");
 	assert.equal(
@@ -124,7 +123,7 @@ test("published templates stamp only the Electrobun product version", () => {
 	);
 	assert.throws(
 		() => pinElectrobunVersion("export default {};\n", "2.0.0"),
-		/expected exactly one top-level electrobun.version/,
+		/expected exactly one hutch\.config\.ts electrobun.version/,
 	);
 });
 
@@ -174,5 +173,19 @@ test("dry-run archives preserve package and package-free template inputs", async
 				assert.deepEqual(readFileSync(stagedPath), readFileSync(sourcePath));
 			}
 		}
+		const stagedHutch = readFileSync(
+			join(stagedRoot, "hutch.config.ts"),
+			"utf8",
+		);
+		assert.equal(
+			stagedHutch.match(
+				/\belectrobun\s*:\s*\{\s*version\s*:\s*["']([^"']+)["']/,
+			)?.[1],
+			packageVersion,
+		);
+		assert.doesNotMatch(
+			readFileSync(join(stagedRoot, "electrobun.config.ts"), "utf8"),
+			/\belectrobun\s*:\s*\{\s*version\s*:/s,
+		);
 	}
 });

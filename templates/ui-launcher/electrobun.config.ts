@@ -1,9 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-	electrobun: {
-		version: "2.0.0",
-	},
 	app: {
 		name: "ui-launcher",
 		identifier: "ui-launcher.electrobun.dev",

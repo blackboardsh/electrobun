@@ -40,10 +40,9 @@ describe("assertNoLegacyBunVersionConfig", () => {
 });
 
 describe("assertValidVersionPins", () => {
-	it("accepts exact product and native toolchain versions", () => {
+	it("accepts exact native toolchain versions", () => {
 		expect(() =>
 			assertValidVersionPins({
-				electrobun: { version: "2.1.0-beta.3+build.7" },
 				build: {
 					zig: { version: "0.16.0" },
 					rust: { version: "1.88.0" },
@@ -54,41 +53,30 @@ describe("assertValidVersionPins", () => {
 		).not.toThrow();
 	});
 
-	it("rejects a config without a v2 devkit pin", () => {
+	it("accepts an application config without product selection", () => {
 		expect(() =>
 			assertValidVersionPins({
+				app: { name: "Example" },
 				build: { mainProcess: "cottontail" },
 			}),
-		).toThrow("electrobun.version must be an exact version");
+		).not.toThrow();
 	});
 
-	it.each([
-		"",
-		"2",
-		"02.0.0",
-		"2.0.0-beta.01",
-		"v2.0.0",
-		"^2.0.0",
-		"latest",
-		"file:../core",
-		".",
-		"..",
-	])(
-		"rejects a non-exact Electrobun version: %s",
-		(version) => {
-			expect(() =>
-				assertValidVersionPins({ electrobun: { version } }),
-			).toThrow("electrobun.version must be an exact version");
-		},
-	);
+	it("rejects a non-object application configuration", () => {
+		for (const config of [null, [], "config"]) {
+			expect(() => assertValidVersionPins(config)).toThrow(
+				"must export a configuration object",
+			);
+		}
+	});
 
-	it("requires a version inside an explicit Electrobun selection", () => {
+	it("rejects product selection in application configuration", () => {
 		expect(() => assertValidVersionPins({ electrobun: {} })).toThrow(
-			"electrobun.version must be an exact version",
+			"Move electrobun.version to hutch.config.ts",
 		);
 		expect(() =>
-			assertValidVersionPins({ electrobun: { version: 2 } }),
-		).toThrow("electrobun.version must be an exact version");
+			assertValidVersionPins({ electrobun: { version: "2.0.0" } }),
+		).toThrow("Move electrobun.version to hutch.config.ts");
 	});
 
 	it.each([
@@ -102,7 +90,6 @@ describe("assertValidVersionPins", () => {
 	] as const)("rejects a non-exact %s toolchain version", (language, version) => {
 		expect(() =>
 			assertValidVersionPins({
-				electrobun: { version: "2.0.0" },
 				build: { [language]: { version } },
 			}),
 		).toThrow(`build.${language}.version must be an exact version`);

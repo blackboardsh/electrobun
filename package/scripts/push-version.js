@@ -73,11 +73,16 @@ console.log(`New version: ${newVersion}`);
 
 // Update kitchen sink version to match
 const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
-let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
-kitchenConfig = updateKitchenVersions(kitchenConfig, newVersion);
+const kitchenHutchConfigPath = join(repoRoot, "kitchen", "hutch.config.ts");
+const kitchenVersions = updateKitchenVersions(
+	readFileSync(kitchenHutchConfigPath, "utf-8"),
+	readFileSync(kitchenConfigPath, "utf-8"),
+	newVersion,
+);
 const templateConfigs = createTemplateVersionUpdates(templatesDir, newVersion);
 
-writeFileSync(kitchenConfigPath, kitchenConfig);
+writeFileSync(kitchenHutchConfigPath, kitchenVersions.hutchConfig);
+writeFileSync(kitchenConfigPath, kitchenVersions.electrobunConfig);
 for (const templateConfig of templateConfigs) {
 	writeFileSync(templateConfig.path, templateConfig.source);
 }
@@ -94,6 +99,7 @@ execFileSync(
 		"add",
 		"package/package.json",
 		"package/package-lock.json",
+		"kitchen/hutch.config.ts",
 		"kitchen/electrobun.config.ts",
 		...templateConfigs.map(({ path }) => relative(repoRoot, path)),
 	],

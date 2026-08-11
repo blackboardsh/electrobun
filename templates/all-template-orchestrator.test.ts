@@ -315,12 +315,8 @@ describe("Template QA catalog and readiness contracts", () => {
 			mkdirSync(devkit, { recursive: true });
 			expect(existsSync(join(root, "package.json"))).toBe(false);
 			writeFileSync(
-				join(root, "electrobun.config.ts"),
-				'export default { electrobun: { version: "2.0.0-beta.7" } };\n',
-			);
-			writeFileSync(
 				join(root, "hutch.config.ts"),
-				'export default {\n\tscripts: {\n\t\tinstall: ["npm", "ci"],\n\t},\n};\n',
+				'export default {\n\telectrobun: { version: "2.0.0-beta.7" },\n\tscripts: {\n\t\tinstall: ["npm", "ci"],\n\t},\n};\n',
 			);
 			writeFileSync(
 				join(devkit, "projection.json"),

@@ -56,26 +56,16 @@ function validProjectedVersion(devkitRoot: string): string | null {
 
 export function inspectTemplateProject(directory: string): ProjectInspection {
 	const hutchConfigPath = join(directory, "hutch.config.ts");
-	const electrobunConfigPath = join(directory, "electrobun.config.ts");
 	const devkitProjectionPath = join(directory, ".hutch", "devkit");
 
 	let productVersion: string | null = null;
-	try {
-		productVersion = configuredElectrobunVersion(
-			readFileSync(electrobunConfigPath, "utf8"),
-		);
-	} catch {
-		// The orchestrator reports the missing or malformed exact product pin.
-	}
-
 	let hasInstallTask = false;
 	try {
-		hasInstallTask = hutchConfigDefinesScript(
-			readFileSync(hutchConfigPath, "utf8"),
-			"install",
-		);
+		const hutchConfig = readFileSync(hutchConfigPath, "utf8");
+		productVersion = configuredElectrobunVersion(hutchConfig);
+		hasInstallTask = hutchConfigDefinesScript(hutchConfig, "install");
 	} catch {
-		// A project without an explicit install task is intentionally not installed.
+		// The orchestrator reports a missing pin; install remains explicit.
 	}
 
 	return {

@@ -17,9 +17,6 @@ const appIdentifier = variantKey
 	: "sh.blackboard.electrobun-kitchen";
 
 export default {
-	electrobun: {
-		version: "2.0.0",
-	},
 	app: {
 		name: appName,
 		identifier: appIdentifier,

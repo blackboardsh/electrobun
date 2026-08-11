@@ -151,7 +151,7 @@ export function catalogChannelForVersion(version: string): CatalogChannel {
 	const parsed = STRICT_SEMVER.exec(version);
 	if (!parsed || parsed[0].length !== version.length) {
 		throw new Error(
-			"electrobun.version must be an exact version using strict SemVer 2.0.0",
+			"Electrobun product version must be an exact version using strict SemVer 2.0.0",
 		);
 	}
 	return parsed[4] === undefined ? "stable" : "beta";
@@ -516,7 +516,7 @@ export class TemplateQaOrchestrator {
 		if (inspection.configuredElectrobunVersion !== this.catalog!.version) {
 			this.fail(
 				state,
-				`Expected the project product pin to be Electrobun ${this.catalog!.version}, found ${inspection.configuredElectrobunVersion ?? "no exact electrobun.version"}`,
+				`Expected the hutch.config.ts product pin to be Electrobun ${this.catalog!.version}, found ${inspection.configuredElectrobunVersion ?? "no exact electrobun.version"}`,
 			);
 			return false;
 		}

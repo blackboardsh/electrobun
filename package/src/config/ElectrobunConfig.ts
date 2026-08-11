@@ -42,17 +42,6 @@ type CarrotUIDefinition = {
 
 export interface ElectrobunConfig {
 	/**
-	 * Electrobun devkit selection.
-	 *
-	 * Hutch resolves this exact release into the shared core and SDK store. V1
-	 * projects that do not use this model remain on an Electrobun 1.x release.
-	 */
-	electrobun: {
-		/** Exact Electrobun release (for example, "2.0.0" or "2.1.0-beta.3"). */
-		version: string;
-	};
-
-	/**
 	 * Application metadata configuration
 	 */
 	app: {

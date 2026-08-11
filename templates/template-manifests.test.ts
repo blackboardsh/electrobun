@@ -290,13 +290,18 @@ describe("Electrobun template package boundaries", () => {
 
 			const electrobun = readFileSync(electrobunPath, "utf8");
 			const versions = [
-				...electrobun.matchAll(
+				...hutch.matchAll(
 					/\belectrobun\s*:\s*\{\s*version\s*:\s*["']([^"']+)["']/g,
 				),
 			];
 			if (versions.length !== 1 || versions[0]?.[1] !== packageVersion) {
 				invalidConfigs.push(
-					`${templateName}: electrobun.version must equal ${packageVersion}`,
+					`${templateName}: hutch.config.ts electrobun.version must equal ${packageVersion}`,
+				);
+			}
+			if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(electrobun)) {
+				invalidConfigs.push(
+					`${templateName}: electrobun.config.ts contains product selection`,
 				);
 			}
 

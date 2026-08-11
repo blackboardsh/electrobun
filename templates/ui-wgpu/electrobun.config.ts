@@ -1,9 +1,6 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-	electrobun: {
-		version: "2.0.0",
-	},
 	app: {
 		name: "ui-wgpu",
 		identifier: "ui-wgpu.electrobun.dev",

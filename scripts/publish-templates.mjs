@@ -98,7 +98,7 @@ export function pinElectrobunVersion(source, version) {
 	const matches = [...source.matchAll(pattern)];
 	if (matches.length !== 1) {
 		fail(
-			`expected exactly one top-level electrobun.version, found ${matches.length}`,
+			`expected exactly one hutch.config.ts electrobun.version, found ${matches.length}`,
 		);
 	}
 	releaseChannel(matches[0][3]);
@@ -216,12 +216,17 @@ function stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }) {
 	if (!existsSync(configPath)) fail(`${templateId} is missing electrobun.config.ts`);
 	const configSource = readFileSync(configPath, "utf8");
 	const mainProcess = templateMainProcess(configSource);
-	writeFileSync(configPath, pinElectrobunVersion(configSource, version));
+	if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(configSource)) {
+		fail(`${templateId} electrobun.config.ts must not select the product version`);
+	}
 
 	const hutchConfigPath = join(destination, "hutch.config.ts");
 	if (!existsSync(hutchConfigPath)) fail(`${templateId} is missing hutch.config.ts`);
 	const hutchSource = readFileSync(hutchConfigPath, "utf8");
-	writeFileSync(hutchConfigPath, pinHutchPragma(hutchSource, pins));
+	writeFileSync(
+		hutchConfigPath,
+		pinElectrobunVersion(pinHutchPragma(hutchSource, pins), version),
+	);
 
 	const archivePath = join(archiveRoot, `${templateId}.tar.gz`);
 	createTemplateArchive(templateId, stageRoot, archivePath);

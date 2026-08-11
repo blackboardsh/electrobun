@@ -29,7 +29,19 @@ test("Kitchen keeps npm dependencies separate from Hutch tasks", () => {
 
 test("Kitchen resolves tasks and SDK types through Hutch", () => {
 	const hutch = readFileSync(join(kitchenRoot, "hutch.config.ts"), "utf8");
+	const electrobun = readFileSync(
+		join(kitchenRoot, "electrobun.config.ts"),
+		"utf8",
+	);
+	const packageVersion = JSON.parse(
+		readFileSync(join(kitchenRoot, "..", "package", "package.json"), "utf8"),
+	).version;
 	assert.match(hutch, /\bpackageManager:\s*"npm"/);
+	assert.equal(
+		hutch.match(/\belectrobun:\s*\{\s*version:\s*"([^"]+)"/)?.[1],
+		packageVersion,
+	);
+	assert.doesNotMatch(electrobun, /\belectrobun\s*:\s*\{/);
 	const scriptBody = hutch.match(/\bscripts:\s*\{([\s\S]*?)\n\t\},/)?.[1] ?? "";
 	const scriptNames = [...scriptBody.matchAll(/^\t\t(?:"([^"]+)"|([A-Za-z]+)):/gm)]
 		.map((match) => match[1] ?? match[2])
