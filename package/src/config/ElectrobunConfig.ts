@@ -42,6 +42,17 @@ type CarrotUIDefinition = {
 
 export interface ElectrobunConfig {
 	/**
+	 * Electrobun devkit selection.
+	 *
+	 * Hutch resolves this exact release into the shared core and SDK store. V1
+	 * projects that do not use this model remain on an Electrobun 1.x release.
+	 */
+	electrobun: {
+		/** Exact Electrobun release (for example, "2.0.0" or "2.1.0-beta.3"). */
+		version: string;
+	};
+
+	/**
 	 * Application metadata configuration
 	 */
 	app: {
@@ -214,6 +225,12 @@ export interface ElectrobunConfig {
 		 */
 		zig?: {
 			/**
+			 * Exact Zig toolchain override. When omitted, Hutch uses the default
+			 * declared by the selected Electrobun devkit.
+			 */
+			version?: string;
+
+			/**
 			 * Entry point for the main Zig process
 			 * @default "src/zig/main.zig"
 			 */
@@ -226,6 +243,12 @@ export interface ElectrobunConfig {
 		 */
 		rust?: {
 			/**
+			 * Exact Rust toolchain override. When omitted, Hutch uses the default
+			 * declared by the selected Electrobun devkit.
+			 */
+			version?: string;
+
+			/**
 			 * Entry point for the main Rust process
 			 * @default "src/rust/main.rs"
 			 */
@@ -237,6 +260,12 @@ export interface ElectrobunConfig {
 		 * Used when `build.mainProcess` is set to `"go"`.
 		 */
 		go?: {
+			/**
+			 * Exact Go toolchain override. When omitted, Hutch uses the default
+			 * declared by the selected Electrobun devkit.
+			 */
+			version?: string;
+
 			/**
 			 * Entry point for the main Go process
 			 * @default "src/go/main.go"
@@ -252,6 +281,12 @@ export interface ElectrobunConfig {
 		 * Build Tools required on Windows). See docs for details.
 		 */
 		odin?: {
+			/**
+			 * Exact Odin toolchain release override. When omitted, Hutch uses the
+			 * default declared by the selected Electrobun devkit.
+			 */
+			version?: string;
+
 			/**
 			 * Entry point for the main Odin process. May be a .odin file or a
 			 * package directory; a file entrypoint compiles its containing

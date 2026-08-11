@@ -6,6 +6,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import process from "process";
 import { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
+import { validateNativeDevkitManifest } from "./validate-native-devkit.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,13 @@ const archMap = {
 const platformName = platformMap[platform] || platform;
 // Always use x64 for Windows since we only build x64 Windows binaries
 const archName = platform === "win32" ? "x64" : archMap[arch] || arch;
+const devkitTarget = {
+	os: platform === "darwin" ? "macos" : platform === "win32" ? "win" : "linux",
+	arch: archName,
+};
+const packageMetadata = JSON.parse(
+	fs.readFileSync(path.join(__dirname, "..", "package.json"), "utf8"),
+);
 
 console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 
@@ -127,6 +135,12 @@ async function createTarballs() {
 	}
 
 	console.log("Validation passed: Found expected platform binaries in dist/");
+	validateNativeDevkitManifest({
+		coreRoot: distPath,
+		expectedVersion: packageMetadata.version,
+		expectedTarget: devkitTarget,
+	});
+	console.log("Validation passed: native devkit manifest matches release contents");
 
 	// 1. Create the Electrobun platform runtime tarball. Hutch and Cottontail
 	// are versioned and distributed independently.

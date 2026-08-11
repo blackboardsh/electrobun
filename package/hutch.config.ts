@@ -18,7 +18,7 @@ export default {
 		"npm:publish:beta": "hutch build:release && npm publish --tag beta",
 		typecheck:
 			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
@@ -35,6 +35,9 @@ export default {
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:devkit-manifest":
+			"node --test scripts/validate-native-devkit.test.mjs",
+		"test:version-bump": "node --test scripts/version-config.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",

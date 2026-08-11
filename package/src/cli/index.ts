@@ -23,7 +23,10 @@ import { RUST_VERSION } from "../shared/rust-version";
 import { GO_VERSION } from "../shared/go-version";
 import { ODIN_VERSION } from "../shared/odin-version";
 import { ELECTROBUN_VERSION } from "../shared/electrobun-version";
-import { assertNoLegacyBunVersionConfig } from "../config/validate";
+import {
+	assertNoLegacyBunVersionConfig,
+	assertValidVersionPins,
+} from "../config/validate";
 import {
 	getWindowsPermissionBuildConfig,
 	type WindowsWebView2Permission,
@@ -5002,6 +5005,7 @@ usageDescriptions : ""}${urlTypes ? "\n" + urlTypes : ""}${documentTypes ?
 		}
 
 		assertNoLegacyBunVersionConfig(loadedConfig);
+		assertValidVersionPins(loadedConfig);
 
 		// todo (yoav): write a deep clone fn
 		return {

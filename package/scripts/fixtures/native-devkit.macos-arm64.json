@@ -1,0 +1,130 @@
+{
+	"schemaVersion": 1,
+	"product": {
+		"name": "electrobun",
+		"version": "2.0.0-beta.1"
+	},
+	"target": {
+		"os": "macos",
+		"arch": "arm64"
+	},
+	"abi": {
+		"core": {
+			"name": "electrobun-core",
+			"version": 1
+		},
+		"sdk": {
+			"name": "electrobun-sdk",
+			"version": 1
+		}
+	},
+	"toolchains": {
+		"zig": {
+			"defaultVersion": "0.16.0"
+		},
+		"rust": {
+			"defaultVersion": "1.88.0"
+		},
+		"go": {
+			"defaultVersion": "1.26.4"
+		},
+		"odin": {
+			"defaultVersion": "dev-2026-07a"
+		}
+	},
+	"layout": {
+		"runtime": {
+			"main": "main.js",
+			"preloadFull": "preload-full.js",
+			"preloadSandboxed": "preload-sandboxed.js",
+			"bun": "bun",
+			"launcher": "launcher",
+			"extractor": "extractor",
+			"coreLibrary": "libElectrobunCore.dylib",
+			"nativeWrapper": "libNativeWrapper.dylib",
+			"nativeWrapperCef": "libNativeWrapper.dylib",
+			"asarLibrary": "libasar.dylib",
+			"wgpuLibrary": "libwebgpu_dawn.dylib",
+			"processHelper": "process_helper",
+			"bsdiff": "bsdiff",
+			"bspatch": "bspatch",
+			"zigAsar": "zig-asar",
+			"zigZstd": "zig-zstd"
+		},
+		"sdks": {
+			"javascript": {
+				"root": "api",
+				"main": "api/sdks/main/index.ts",
+				"browser": "api/browser/index.ts",
+				"config": "api/config/ElectrobunConfig.ts",
+				"preload": "api/preload",
+				"exports": {
+					".": "api/sdks/main/index.ts",
+					"./main": "api/sdks/main/index.ts",
+					"./main/app-menu": "api/sdks/main/entries/app-menu.ts",
+					"./main/browser-view": "api/sdks/main/entries/browser-view.ts",
+					"./main/browser-window": "api/sdks/main/entries/browser-window.ts",
+					"./main/build-config": "api/sdks/main/entries/build-config.ts",
+					"./main/context-menu": "api/sdks/main/entries/context-menu.ts",
+					"./main/events": "api/sdks/main/entries/events.ts",
+					"./main/gpu-window": "api/sdks/main/entries/gpu-window.ts",
+					"./main/native": "api/sdks/main/entries/native.ts",
+					"./main/paths": "api/sdks/main/entries/paths.ts",
+					"./main/rpc": "api/sdks/main/entries/rpc.ts",
+					"./main/socket": "api/sdks/main/entries/socket.ts",
+					"./main/tray": "api/sdks/main/entries/tray.ts",
+					"./main/ui": "api/sdks/main/entries/ui.ts",
+					"./main/ui/jsx-runtime": "api/sdks/main/ui/jsx-runtime.ts",
+					"./main/ui/jsx-dev-runtime": "api/sdks/main/ui/jsx-dev-runtime.ts",
+					"./main/updater": "api/sdks/main/entries/updater.ts",
+					"./main/utils": "api/sdks/main/entries/utils.ts",
+					"./main/webgpu": "api/sdks/main/entries/webgpu.ts",
+					"./main/wgpu-view": "api/sdks/main/entries/wgpu-view.ts",
+					"./bun": "api/sdks/main/index.ts",
+					"./bun/app-menu": "api/sdks/main/entries/app-menu.ts",
+					"./bun/browser-view": "api/sdks/main/entries/browser-view.ts",
+					"./bun/browser-window": "api/sdks/main/entries/browser-window.ts",
+					"./bun/build-config": "api/sdks/main/entries/build-config.ts",
+					"./bun/context-menu": "api/sdks/main/entries/context-menu.ts",
+					"./bun/events": "api/sdks/main/entries/events.ts",
+					"./bun/gpu-window": "api/sdks/main/entries/gpu-window.ts",
+					"./bun/native": "api/sdks/main/entries/native.ts",
+					"./bun/paths": "api/sdks/main/entries/paths.ts",
+					"./bun/rpc": "api/sdks/main/entries/rpc.ts",
+					"./bun/socket": "api/sdks/main/entries/socket.ts",
+					"./bun/tray": "api/sdks/main/entries/tray.ts",
+					"./bun/ui": "api/sdks/main/entries/ui.ts",
+					"./bun/ui/jsx-runtime": "api/sdks/main/ui/jsx-runtime.ts",
+					"./bun/ui/jsx-dev-runtime": "api/sdks/main/ui/jsx-dev-runtime.ts",
+					"./bun/updater": "api/sdks/main/entries/updater.ts",
+					"./bun/utils": "api/sdks/main/entries/utils.ts",
+					"./bun/webgpu": "api/sdks/main/entries/webgpu.ts",
+					"./bun/wgpu-view": "api/sdks/main/entries/wgpu-view.ts",
+					"./rpc": "api/sdks/main/entries/rpc.ts",
+					"./view": "api/browser/index.ts",
+					"./browser/ui": "api/browser/ui/index.ts",
+					"./browser/ui/jsx-runtime": "api/browser/ui/jsx-runtime.ts",
+					"./browser/ui/jsx-dev-runtime": "api/browser/ui/jsx-dev-runtime.ts"
+				}
+			},
+			"zig": {
+				"root": "zig-sdk",
+				"entrypoint": "zig-sdk/electrobun.zig"
+			},
+			"rust": {
+				"root": "rust-sdk",
+				"entrypoint": "rust-sdk/electrobun.rs"
+			},
+			"go": {
+				"root": "go-sdk",
+				"entrypoint": "go-sdk/electrobun.go"
+			},
+			"odin": {
+				"root": "odin-sdk/electrobun",
+				"entrypoint": "odin-sdk/electrobun/electrobun.odin",
+				"collection": "odin-sdk",
+				"collectionName": "electrobun_sdk"
+			}
+		}
+	}
+}

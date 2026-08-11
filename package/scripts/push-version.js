@@ -16,6 +16,7 @@ import { execSync } from "child_process";
 import { readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
+import { updateKitchenVersions } from "./version-config.mjs";
 
 const type = process.argv[2];
 
@@ -62,12 +63,11 @@ console.log(`New version: ${newVersion}`);
 // Update kitchen sink version to match
 const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
 let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
-kitchenConfig = kitchenConfig.replace(
-	/version:\s*["'].*["']/,
-	`version: "${newVersion}"`,
-);
+kitchenConfig = updateKitchenVersions(kitchenConfig, newVersion);
 writeFileSync(kitchenConfigPath, kitchenConfig);
-console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
+console.log(
+	`Updated kitchen/electrobun.config.ts product and app versions to ${newVersion}`,
+);
 
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);

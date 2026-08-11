@@ -38,6 +38,13 @@ import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
+import { ELECTROBUN_VERSION } from "./src/shared/electrobun-version";
+import {
+	NATIVE_DEVKIT_MANIFEST_FILENAME,
+	createNativeDevkitManifest,
+	nativeDevkitTarget,
+	serializeNativeDevkitManifest,
+} from "./src/shared/native-devkit-manifest";
 import {
 	MACOS_DEPLOYMENT_TARGET,
 	macosZigTarget,
@@ -977,6 +984,15 @@ async function copyToDist() {
 		}
 		console.log("[done]Copying CEF files for Linux...");
 	}
+
+	const nativeDevkitManifest = createNativeDevkitManifest({
+		productVersion: ELECTROBUN_VERSION,
+		target: nativeDevkitTarget(OS, ARCH),
+	});
+	writeFileSync(
+		join("dist", NATIVE_DEVKIT_MANIFEST_FILENAME),
+		serializeNativeDevkitManifest(nativeDevkitManifest),
+	);
 
 	normalizeDistExecutableModes("dist");
 	// Create platform-specific dist folder and copy all files
