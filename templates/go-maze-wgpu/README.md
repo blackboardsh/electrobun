@@ -9,4 +9,8 @@ hutch run dev
 `hutch run dev` builds the app, launches it, and rebuilds when source files
 change. This native template has no npm dependencies.
 
-The renderer uses no Go modules. It builds with Electrobun's vendored Go toolchain and links to Electrobun's Go SDK plus the bundled Dawn WebGPU library.
+The Go app is a standard project-owned module. Its `go.mod` keeps the SDK import
+local to `.hutch/devkit/go-sdk`; Hutch projects the exact SDK selected by
+`electrobun.version`, resolves the configured Go toolchain, and runs `go build`
+from this project root. The resulting binary dynamically loads the bundled
+Electrobun core and Dawn WebGPU libraries at runtime.
