@@ -1,0 +1,12 @@
+[package]
+name = "rust-flock-wgpu"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dependencies]
+electrobun = { path = ".hutch/devkit/rust-sdk" }

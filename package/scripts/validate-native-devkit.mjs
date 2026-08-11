@@ -108,7 +108,7 @@ function collectSdkPaths(sdks) {
 		);
 	}
 
-	for (const language of ["zig", "rust"]) {
+	for (const language of ["zig"]) {
 		const sdk = object(sdks[language], `layout.sdks.${language}`);
 		paths.push(relativePath(sdk.root, `layout.sdks.${language}.root`));
 		paths.push(
@@ -127,6 +127,17 @@ function collectSdkPaths(sdks) {
 	if (goModule.trim() !== goModule || /\s/.test(goModule)) {
 		fail("layout.sdks.go.module must be a Go module import path");
 	}
+
+	const rust = object(sdks.rust, "layout.sdks.rust");
+	const rustRoot = relativePath(rust.root, "layout.sdks.rust.root");
+	const rustManifest = relativePath(
+		rust.manifest,
+		"layout.sdks.rust.manifest",
+	);
+	if (rustManifest !== `${rustRoot}/Cargo.toml`) {
+		fail("layout.sdks.rust.manifest must be Cargo.toml at layout.sdks.rust.root");
+	}
+	paths.push(rustRoot, rustManifest);
 
 	const odin = object(sdks.odin, "layout.sdks.odin");
 	paths.push(relativePath(odin.root, "layout.sdks.odin.root"));

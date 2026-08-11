@@ -113,7 +113,7 @@
 			},
 			"rust": {
 				"root": "rust-sdk",
-				"entrypoint": "rust-sdk/electrobun.rs"
+				"manifest": "rust-sdk/Cargo.toml"
 			},
 			"go": {
 				"root": "go-sdk",

@@ -1,4 +1,4 @@
-use crate::electrobun::{
+use electrobun::{
     self, BundlePaths, Core, Rect, WebviewCallbacks, WebviewOptions, WgpuContext, WgpuNative,
     WindowCallbacks, WindowOptions,
 };

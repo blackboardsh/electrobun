@@ -249,8 +249,22 @@ export interface ElectrobunConfig {
 			version?: string;
 
 			/**
-			 * Entry point for the main Rust process
+			 * Project-owned Cargo manifest for the Rust main process.
+			 * @default "Cargo.toml"
+			 */
+			manifest?: string;
+
+			/**
+			 * Cargo binary target staged as the Electrobun main process.
+			 * @default "main"
+			 */
+			binary?: string;
+
+			/**
+			 * Legacy v1 raw-rustc entrypoint. Hutch v2 ignores this field and builds
+			 * the project-owned Cargo manifest instead.
 			 * @default "src/rust/main.rs"
+			 * @deprecated Use `manifest` with a normal Cargo `src/main.rs` target.
 			 */
 			entrypoint?: string;
 		};

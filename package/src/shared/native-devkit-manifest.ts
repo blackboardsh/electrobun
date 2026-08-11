@@ -126,7 +126,7 @@ export interface NativeDevkitManifest {
 				exports: Record<string, string>;
 			};
 			zig: { root: string; entrypoint: string };
-			rust: { root: string; entrypoint: string };
+			rust: { root: string; manifest: string };
 			go: {
 				root: string;
 				manifest: string;
@@ -238,7 +238,7 @@ export function createNativeDevkitManifest(options: {
 				},
 				rust: {
 					root: "rust-sdk",
-					entrypoint: "rust-sdk/electrobun.rs",
+					manifest: "rust-sdk/Cargo.toml",
 				},
 				go: {
 					root: "go-sdk",

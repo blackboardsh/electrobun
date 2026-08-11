@@ -68,7 +68,7 @@ function manifestPaths(manifest: NativeDevkitManifest): string[] {
 		sdk.zig.root,
 		sdk.zig.entrypoint,
 		sdk.rust.root,
-		sdk.rust.entrypoint,
+		sdk.rust.manifest,
 		sdk.go.root,
 		sdk.go.manifest,
 		sdk.odin.root,
@@ -156,7 +156,7 @@ describe("native devkit manifest", () => {
 		});
 	}
 
-	it("owns JS module exports and all native SDK entrypoints", () => {
+	it("owns JS module exports and all native SDK build contracts", () => {
 		const manifest = createNativeDevkitManifest({
 			productVersion: "2.0.0",
 			target: { os: "macos", arch: "x64" },
@@ -171,8 +171,8 @@ describe("native devkit manifest", () => {
 		expect(manifest.layout.sdks.zig.entrypoint).toBe(
 			"zig-sdk/electrobun.zig",
 		);
-		expect(manifest.layout.sdks.rust.entrypoint).toBe(
-			"rust-sdk/electrobun.rs",
+		expect(manifest.layout.sdks.rust.manifest).toBe(
+			"rust-sdk/Cargo.toml",
 		);
 		expect(manifest.layout.sdks.go).toEqual({
 			root: "go-sdk",

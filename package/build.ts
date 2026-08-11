@@ -724,6 +724,9 @@ async function copyApiFiles() {
 	cpSync("src/sdks/rust/electrobun.rs", "dist/rust-sdk/electrobun.rs", {
 		force: true,
 	});
+	cpSync("src/sdks/rust/Cargo.toml", "dist/rust-sdk/Cargo.toml", {
+		force: true,
+	});
 	mkdirSync("dist/go-sdk", { recursive: true });
 	cpSync("src/sdks/go", "dist/go-sdk", { recursive: true, force: true });
 

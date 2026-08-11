@@ -36,7 +36,7 @@ function declaredPaths(manifest) {
 		sdks.zig.root,
 		sdks.zig.entrypoint,
 		sdks.rust.root,
-		sdks.rust.entrypoint,
+		sdks.rust.manifest,
 		sdks.go.root,
 		sdks.go.manifest,
 		sdks.odin.root,
@@ -148,6 +148,40 @@ test("rejects unsafe or missing declared paths", () => {
 		);
 	} finally {
 		rmSync(missingRoot, { recursive: true, force: true });
+	}
+
+	const legacyRust = fixture();
+	legacyRust.layout.sdks.rust.entrypoint = "rust-sdk/electrobun.rs";
+	delete legacyRust.layout.sdks.rust.manifest;
+	const legacyRustRoot = makeCore();
+	writeFileSync(
+		join(legacyRustRoot, NATIVE_DEVKIT_MANIFEST_FILENAME),
+		`${JSON.stringify(legacyRust, null, "\t")}\n`,
+	);
+	try {
+		assert.throws(
+			() =>
+				validateNativeDevkitManifest({ coreRoot: legacyRustRoot, ...expected }),
+			/layout\.sdks\.rust\.manifest must be a non-empty string/,
+		);
+	} finally {
+		rmSync(legacyRustRoot, { recursive: true, force: true });
+	}
+
+	const misplacedRust = fixture();
+	misplacedRust.layout.sdks.rust.manifest = "rust-sdk/sdk.Cargo.toml";
+	const misplacedRustRoot = makeCore(misplacedRust);
+	try {
+		assert.throws(
+			() =>
+				validateNativeDevkitManifest({
+					coreRoot: misplacedRustRoot,
+					...expected,
+				}),
+			/layout\.sdks\.rust\.manifest must be Cargo\.toml at layout\.sdks\.rust\.root/,
+		);
+	} finally {
+		rmSync(misplacedRustRoot, { recursive: true, force: true });
 	}
 });
 
