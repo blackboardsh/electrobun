@@ -240,6 +240,26 @@ describe("Electrobun template package boundaries", () => {
 		expect(invalidScripts).toEqual([]);
 	});
 
+	test("the Rust template owns its Cargo build and release profiles", () => {
+		const cargo = readFileSync(
+			join(templatesRoot, "rust-flock-wgpu", "Cargo.toml"),
+			"utf8",
+		);
+		const config = readFileSync(
+			join(templatesRoot, "rust-flock-wgpu", "electrobun.config.ts"),
+			"utf8",
+		);
+
+		expect(cargo).toContain('[dependencies]\nelectrobun = { path = ".hutch/devkit/rust-sdk" }');
+		expect(cargo).toContain("[profile.dev]\nopt-level = 2\ndebug = 0");
+		expect(cargo).toContain('[profile.release]\nopt-level = "z"\nstrip = "symbols"');
+		expect(config).toContain('manifest: "Cargo.toml"');
+		expect(config).toContain('binary: "main"');
+		const rustConfig = config.match(/\brust:\s*\{[\s\S]*?\n\t\t\},/)?.[0];
+		expect(rustConfig).toBeDefined();
+		expect(rustConfig).not.toContain("entrypoint:");
+	});
+
 	test("template READMEs do not bypass the production build script", () => {
 		const invalidDocs: string[] = [];
 

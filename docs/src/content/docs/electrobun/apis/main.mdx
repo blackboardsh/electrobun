@@ -87,10 +87,9 @@ _ = try core.createWebview(.{
 <TabItem label="Rust">
 
 ```rust
-// src/rust/main.rs — hutch wraps your file in a generated crate, so the
-// SDK is `crate::electrobun` and your entry is `pub fn main()`. Full setup
-// in the Rust hello world.
-use crate::electrobun::{Core, Rect, WebviewOptions, WindowOptions};
+// src/main.rs — Cargo resolves the SDK from the selected devkit's projected
+// Rust crate. Full setup is in the Rust hello world.
+use electrobun::{Core, Rect, WebviewOptions, WindowOptions};
 
 // ...inside the UI thread, after configure_webview_runtime_from_executable_dir:
 let window_options =

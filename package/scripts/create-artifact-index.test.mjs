@@ -60,6 +60,16 @@ function create(root) {
 	});
 }
 
+function createWithVersion(root, candidate) {
+	return createArtifactIndex({
+		artifactRoot: root,
+		repository: "blackboardsh/electrobun",
+		tag: `v${candidate}`,
+		version: candidate,
+		expectedPlatforms: ["macos-arm64", "linux-x64"],
+	});
+}
+
 test("indexes exact-version core and optional CEF assets by devkit target", () => {
 	const root = fixture();
 	try {
@@ -143,6 +153,47 @@ test("rejects missing release-matrix targets and tag/version mismatches", () => 
 				}),
 			/release tag must be/,
 		);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects non-exact and malformed release versions", () => {
+	const root = fixture();
+	try {
+		for (const candidate of [
+			"02.0.0",
+			"2.0.0-beta.01",
+			"^2.0.0",
+			"latest",
+			"file:../electrobun",
+			"../2.0.0",
+			"2.0.0\n",
+		]) {
+			assert.throws(
+				() => createWithVersion(root, candidate),
+				/invalid product\.version/,
+				candidate,
+			);
+		}
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("rejects malformed versions embedded in native devkit manifests", () => {
+	const root = fixture();
+	try {
+		for (const embeddedVersion of ["2.0.0-beta.01", "02.0.0", "latest", "../2.0.0"]) {
+			writeCore(root, "linux-x64", { os: "linux", arch: "x64" }, {
+				product: { name: "electrobun", version: embeddedVersion },
+			});
+			assert.throws(
+				() => create(root),
+				/invalid product\.version/,
+				embeddedVersion,
+			);
+		}
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

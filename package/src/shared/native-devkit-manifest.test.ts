@@ -16,6 +16,7 @@ import { GO_VERSION } from "./go-version";
 import { ODIN_VERSION } from "./odin-version";
 import { RUST_VERSION } from "./rust-version";
 import { ZIG_VERSION } from "./build-dependencies";
+import { BUN_VERSION } from "./bun-version";
 
 const targets: Array<{
 	target: NativeDevkitManifest["target"];
@@ -79,6 +80,22 @@ function manifestPaths(manifest: NativeDevkitManifest): string[] {
 }
 
 describe("native devkit manifest", () => {
+	it.each([
+		"02.0.0",
+		"2.0.0-beta.01",
+		"^2.0.0",
+		"latest",
+		"file:../electrobun",
+		"2.0.0\n",
+	])("rejects non-exact product version %s", (productVersion) => {
+		expect(() =>
+			createNativeDevkitManifest({
+				productVersion,
+				target: { os: "macos", arch: "arm64" },
+			}),
+		).toThrow("must be an exact SemVer 2.0.0 version");
+	});
+
 	it("matches the cross-consumer contract fixture", () => {
 		const fixture = JSON.parse(
 			readFileSync(
@@ -133,6 +150,19 @@ describe("native devkit manifest", () => {
 			"go",
 			"odin",
 		]);
+	});
+
+	it("records the exact bundled Bun runtime independently of toolchains", () => {
+		const manifest = createNativeDevkitManifest({
+			productVersion: "2.0.0",
+			target: { os: "linux", arch: "x64" },
+		});
+
+		expect(manifest.runtimes).toEqual({
+			bun: { version: BUN_VERSION },
+		});
+		expect(manifest.toolchains).not.toHaveProperty("bun");
+		expect(manifest.layout.runtime.bun).toBe("bun");
 	});
 
 	it("normalizes every Windows host to the shipped x64 runtime", () => {

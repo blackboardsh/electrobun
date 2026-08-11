@@ -24,12 +24,12 @@ smaller-than-JavaScript footprint. Each runtime has a dedicated walkthrough:
 [Main Process API](/electrobun/apis/main/) page shows what the SDK looks like
 in every language, including a per-feature coverage matrix.
 
-| Runtime | `build.mainProcess` | Default entrypoint | Toolchain |
+| Runtime | `build.mainProcess` | Default build input | Toolchain |
 | --- | --- | --- | --- |
 | Cottontail | `"cottontail"` | `src/bun/index.ts` | Downloaded runtime |
 | Bun | `"bun"` | `src/bun/index.ts` | Downloaded runtime |
 | Zig | `"zig"` | `src/zig/main.zig` | Zig 0.16.0 |
-| Rust | `"rust"` | `src/rust/main.rs` | Rust 1.88.0 |
+| Rust | `"rust"` | `Cargo.toml`, binary `main` | Rust 1.88.0 |
 | Go | `"go"` | `src/go/main.go` | Go 1.26.4 |
 | Odin | `"odin"` | `src/odin/main.odin` | Odin dev-2026-07a |
 
@@ -91,7 +91,7 @@ runtimes.
 
 Zig, Rust, Go, and Odin applications load `ElectrobunCore` through their SDK,
 create native windows and views, and run the platform event loop. Their config
-only changes the runtime and entrypoint:
+selects the runtime and its project-owned build input:
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -102,9 +102,9 @@ export default {
     identifier: "dev.example.native-app",
     version: "0.0.1",
   },
-  build: {
-    mainProcess: "zig",
-    zig: { entrypoint: "src/zig/main.zig" },
+	build: {
+		mainProcess: "zig",
+		zig: {},
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
     },
@@ -112,8 +112,19 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-For another language, change `mainProcess` and use its matching config field
-and default entrypoint from the table above.
+For Rust, use a normal Cargo project and optionally select its manifest and
+binary target:
+
+```typescript
+build: {
+  mainProcess: "rust",
+  rust: { manifest: "Cargo.toml", binary: "main" },
+}
+```
+
+The Cargo manifest declares the matching SDK as
+`electrobun = { path = ".hutch/devkit/rust-sdk" }`. For another language,
+change `mainProcess` and use its matching build input from the table above.
 
 The fastest way to see real native SDK code is to generate a template — each
 one contains complete SDK initialization, window, webview, RPC, and

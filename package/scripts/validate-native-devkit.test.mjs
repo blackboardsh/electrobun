@@ -125,6 +125,49 @@ test("rejects product or target drift", () => {
 	}
 });
 
+test("rejects non-exact product versions at both manifest and release boundaries", () => {
+	for (const invalidVersion of [
+		"02.0.0",
+		"2.0.0-beta.01",
+		"^2.0.0",
+		"latest",
+		"file:../electrobun",
+		"2.0.0\n",
+	]) {
+		const manifest = fixture();
+		manifest.product.version = invalidVersion;
+		const coreRoot = makeCore(manifest);
+		try {
+			assert.throws(
+				() =>
+					validateNativeDevkitManifest({
+						coreRoot,
+						...expected,
+						expectedVersion: invalidVersion,
+					}),
+				/product\.version must be an exact version using strict SemVer 2\.0\.0/,
+			);
+		} finally {
+			rmSync(coreRoot, { recursive: true, force: true });
+		}
+	}
+
+	const coreRoot = makeCore();
+	try {
+		assert.throws(
+			() =>
+				validateNativeDevkitManifest({
+					coreRoot,
+					...expected,
+					expectedVersion: "2.0.0-beta.01",
+				}),
+			/expected product version must be an exact version using strict SemVer 2\.0\.0/,
+		);
+	} finally {
+		rmSync(coreRoot, { recursive: true, force: true });
+	}
+});
+
 test("rejects unsafe or missing declared paths", () => {
 	const unsafe = fixture();
 	unsafe.layout.sdks.zig.entrypoint = "../electrobun.zig";
@@ -275,6 +318,29 @@ test("rejects missing ABI and compiler-default metadata", () => {
 	}
 });
 
+test("requires exact bundled Bun runtime provenance", () => {
+	for (const version of [
+		undefined,
+		"1.3.13-01",
+		"^1.3.13",
+		"latest",
+		"file:../bun",
+	]) {
+		const manifest = fixture();
+		if (version === undefined) delete manifest.runtimes.bun.version;
+		else manifest.runtimes.bun.version = version;
+		const coreRoot = makeCore(manifest);
+		try {
+			assert.throws(
+				() => validateNativeDevkitManifest({ coreRoot, ...expected }),
+				/runtimes\.bun\.version/,
+			);
+		} finally {
+			rmSync(coreRoot, { recursive: true, force: true });
+		}
+	}
+});
+
 test("rejects compiler channels and ranges in release metadata", () => {
 	const channel = fixture();
 	channel.toolchains.rust.defaultVersion = "stable";
@@ -299,5 +365,21 @@ test("rejects compiler channels and ranges in release metadata", () => {
 		);
 	} finally {
 		rmSync(rangeRoot, { recursive: true, force: true });
+	}
+
+	const leadingZero = fixture();
+	leadingZero.toolchains.go.defaultVersion = "1.26.4-01";
+	const leadingZeroRoot = makeCore(leadingZero);
+	try {
+		assert.throws(
+			() =>
+				validateNativeDevkitManifest({
+					coreRoot: leadingZeroRoot,
+					...expected,
+				}),
+			/toolchains\.go\.defaultVersion must be an exact version/,
+		);
+	} finally {
+		rmSync(leadingZeroRoot, { recursive: true, force: true });
 	}
 });

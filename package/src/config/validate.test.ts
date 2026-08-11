@@ -65,6 +65,8 @@ describe("assertValidVersionPins", () => {
 	it.each([
 		"",
 		"2",
+		"02.0.0",
+		"2.0.0-beta.01",
 		"v2.0.0",
 		"^2.0.0",
 		"latest",
@@ -91,7 +93,9 @@ describe("assertValidVersionPins", () => {
 
 	it.each([
 		["zig", "master"],
+		["zig", "0.16.0-dev.01"],
 		["rust", "stable"],
+		["rust", "1.88.0-01"],
 		["go", ">=1.24"],
 		["odin", "dev-latest"],
 		["odin", "../dev-2026-07a"],

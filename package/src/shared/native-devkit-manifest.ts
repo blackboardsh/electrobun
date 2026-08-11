@@ -2,6 +2,11 @@ import { GO_VERSION } from "./go-version";
 import { ODIN_VERSION } from "./odin-version";
 import { RUST_VERSION } from "./rust-version";
 import { ZIG_VERSION } from "./build-dependencies";
+import { BUN_VERSION } from "./bun-version";
+import {
+	assertExactOdinRelease,
+	assertStrictSemVer,
+} from "./strict-semver.js";
 
 export const NATIVE_DEVKIT_MANIFEST_FILENAME = "native-devkit.json";
 export const NATIVE_DEVKIT_SCHEMA_VERSION = 1 as const;
@@ -97,6 +102,9 @@ export interface NativeDevkitManifest {
 		rust: { defaultVersion: string };
 		go: { defaultVersion: string };
 		odin: { defaultVersion: string };
+	};
+	runtimes: {
+		bun: { version: string };
 	};
 	layout: {
 		runtime: {
@@ -205,11 +213,24 @@ export function createNativeDevkitManifest(options: {
 	productVersion: string;
 	target: NativeDevkitManifest["target"];
 }): NativeDevkitManifest {
+	const productVersion = assertStrictSemVer(
+		options.productVersion,
+		"Electrobun product version",
+	);
+	const zigVersion = assertStrictSemVer(ZIG_VERSION, "Zig default version");
+	const rustVersion = assertStrictSemVer(RUST_VERSION, "Rust default version");
+	const goVersion = assertStrictSemVer(GO_VERSION, "Go default version");
+	const bunVersion = assertStrictSemVer(BUN_VERSION, "Bun runtime version");
+	const odinVersion = assertExactOdinRelease(
+		ODIN_VERSION,
+		"Odin default version",
+	);
+
 	return {
 		schemaVersion: NATIVE_DEVKIT_SCHEMA_VERSION,
 		product: {
 			name: "electrobun",
-			version: options.productVersion,
+			version: productVersion,
 		},
 		target: options.target,
 		abi: {
@@ -217,10 +238,13 @@ export function createNativeDevkitManifest(options: {
 			sdk: ELECTROBUN_SDK_ABI,
 		},
 		toolchains: {
-			zig: { defaultVersion: ZIG_VERSION },
-			rust: { defaultVersion: RUST_VERSION },
-			go: { defaultVersion: GO_VERSION },
-			odin: { defaultVersion: ODIN_VERSION },
+			zig: { defaultVersion: zigVersion },
+			rust: { defaultVersion: rustVersion },
+			go: { defaultVersion: goVersion },
+			odin: { defaultVersion: odinVersion },
+		},
+		runtimes: {
+			bun: { version: bunVersion },
 		},
 		layout: {
 			runtime: targetRuntimeLayout(options.target),

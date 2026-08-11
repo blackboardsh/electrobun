@@ -128,12 +128,12 @@ Windows and Linux URL schemes and file associations are not yet implemented.
 `build.mainProcess` selects the runtime and compiler. It defaults to
 `"cottontail"`.
 
-| Value | Configuration | Default entrypoint |
+| Value | Configuration | Default build input |
 | --- | --- | --- |
 | `cottontail` | `build.cottontail` | `src/bun/index.ts` |
 | `bun` | `build.bun` | `src/bun/index.ts` |
 | `zig` | `build.zig` | `src/zig/main.zig` |
-| `rust` | `build.rust` | `src/rust/main.rs` |
+| `rust` | `build.rust` | `Cargo.toml`, binary `main` |
 | `go` | `build.go` | `src/go/main.go` |
 | `odin` | `build.odin` | `src/odin/main.odin` |
 

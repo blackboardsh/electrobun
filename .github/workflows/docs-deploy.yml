@@ -20,23 +20,26 @@ permissions:
 
 jobs:
   deploy:
-    if: >-
-      ${{
-        github.event_name == 'workflow_dispatch' ||
-        (
-          startsWith(github.ref, 'refs/tags/v') &&
-          !contains(github.ref_name, '-beta') &&
-          !contains(github.ref_name, '-alpha') &&
-          !contains(github.ref_name, '-rc')
-        )
-      }}
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout electrobun
         uses: actions/checkout@v6
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Verify release tag and version
+        if: github.event_name == 'push'
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_PACKAGE_JSON: package/package.json
+        run: node package/scripts/verify-release-version.mjs
+
       - name: Resolve Cloudflare Pages branch
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         id: deploy-branch
         shell: bash
         env:
@@ -50,26 +53,27 @@ jobs:
             echo "branch=preview" >> $GITHUB_OUTPUT
           fi
 
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-
       - name: Install Hutch
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         uses: ./.github/actions/install-hutch
 
       - name: Install docs dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         run: hutch install
         working-directory: docs
 
       - name: Check docs
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         run: hutch run check
         working-directory: docs
 
       - name: Build docs
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         run: hutch run build
         working-directory: docs
 
       - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

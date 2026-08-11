@@ -92,7 +92,19 @@ test("publishes on its own tag lane, outside product releases", () => {
 	assert.doesNotMatch(productWorkflow, /^  npm-publish:\s*$/m);
 	assert.match(productWorkflow, /^  publish-templates:\n    needs: \[release\]$/m);
 	assert.match(npmWorkflow, /^      - 'npm-v\*'$/m);
-	assert.match(npmWorkflow, /EXPECTED_TAG="npm-v\$\{VERSION\}"/);
+	assert.match(
+		npmWorkflow,
+		/^          ref: \$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', github\.event\.inputs\.tag\) \|\| github\.ref \}\}$/m,
+	);
+	assert.match(npmWorkflow, /^          RELEASE_TAG_PREFIX: npm-v$/m);
+	assert.match(
+		npmWorkflow,
+		/^          RELEASE_PACKAGE_JSON: npm\/electrobun\/package\.json$/m,
+	);
+	assert.match(
+		npmWorkflow,
+		/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
+	);
 	assert.match(npmWorkflow, /working-directory: npm\/electrobun/g);
 	assert.doesNotMatch(npmWorkflow, /hutch install|build\.ts|working-directory: package$/m);
 });

@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { parseStrictSemVer } from "../package/src/shared/strict-semver.js";
 
 export const TEMPLATE_SCHEMA = 1;
 export const TEMPLATE_BUCKET = "electrobun-artifacts";
@@ -33,11 +34,17 @@ function fail(message) {
 	throw new Error(`Electrobun templates: ${message}`);
 }
 
-export function releaseChannel(version) {
-	if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-		fail(`invalid release version ${JSON.stringify(version)}`);
+function exactSemVer(value, label) {
+	const parsed = parseStrictSemVer(value);
+	if (!parsed) {
+		fail(`${label} must be an exact SemVer 2.0.0 version, got ${JSON.stringify(value)}`);
 	}
-	return version.includes("-") ? "beta" : "stable";
+	return { version: value, parsed };
+}
+
+export function releaseChannel(version) {
+	const { parsed } = exactSemVer(version, "invalid release version");
+	return parsed.prerelease === null ? "stable" : "beta";
 }
 
 export function templateArtifactKey(checksum) {
@@ -64,6 +71,8 @@ export function parseHutchPragma(source) {
 	if (!values.cli || !values.cottontail) {
 		fail("package/hutch.config.ts must pin cli and cottontail");
 	}
+	exactSemVer(values.cli, "Hutch CLI pin");
+	exactSemVer(values.cottontail, "Cottontail pin");
 	return { hutch: values.cli, cottontail: values.cottontail };
 }
 
@@ -74,6 +83,8 @@ export function pinHutchPragma(source, pins) {
 	}
 	parseHutchPragma(pragmas[0]);
 	if (!pins?.hutch || !pins?.cottontail) fail("release toolchain pins are missing");
+	exactSemVer(pins.hutch, "Hutch CLI release pin");
+	exactSemVer(pins.cottontail, "Cottontail release pin");
 
 	const updated = pragmas[0]
 		.replace(/(\bcli=)[^\s]+/, `$1${pins.hutch}`)

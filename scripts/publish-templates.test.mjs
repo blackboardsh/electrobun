@@ -19,9 +19,31 @@ const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test("template releases map stable and prerelease versions to independent channels", () => {
 	assert.equal(releaseChannel("2.0.0"), "stable");
+	assert.equal(releaseChannel("2.0.0+build-with-hyphen"), "stable");
 	assert.equal(releaseChannel("2.0.0-beta.3"), "beta");
+	assert.equal(releaseChannel("2.0.0-rc.1+build-with-hyphen"), "beta");
 	assert.equal(templateChannelKey("stable"), "electrobun/templates/channels/stable.json");
 	assert.equal(templateChannelKey("beta"), "electrobun/templates/channels/beta.json");
+});
+
+test("template releases reject values outside exact SemVer 2.0.0", () => {
+	for (const version of [
+		"02.0.0",
+		"2.0.0-beta.01",
+		"^2.0.0",
+		"latest",
+		"file:../electrobun",
+		"../electrobun",
+		" 2.0.0",
+		"2.0.0 ",
+		"2.0.0\n",
+	]) {
+		assert.throws(
+			() => releaseChannel(version),
+			/invalid release version/,
+			version,
+		);
+	}
 });
 
 test("template archive keys are immutable and content addressed", () => {
@@ -42,6 +64,13 @@ test("the release toolchain pins come from the package pragma", () => {
 		() => parseHutchPragma("// @dash cli=0.5.0 cottontail=0.3.0\n"),
 		/missing its \/\/ @hutch pragma/,
 	);
+	for (const source of [
+		"// @hutch cli=0.5.0-beta.01 cottontail=0.3.0\n",
+		"// @hutch cli=latest cottontail=0.3.0\n",
+		"// @hutch cli=0.5.0 cottontail=../cottontail\n",
+	]) {
+		assert.throws(() => parseHutchPragma(source), /exact SemVer 2\.0\.0/);
+	}
 });
 
 test("published templates stamp only Hutch release metadata", () => {
@@ -66,6 +95,14 @@ test("published templates stamp only Hutch release metadata", () => {
 				cottontail: "0.4.0",
 			}),
 		/expected exactly one \/\/ @hutch pragma/,
+	);
+	assert.throws(
+		() =>
+			pinHutchPragma(source, {
+				hutch: "^0.6.0",
+				cottontail: "0.4.0",
+			}),
+		/Hutch CLI release pin must be an exact SemVer 2\.0\.0/,
 	);
 });
 

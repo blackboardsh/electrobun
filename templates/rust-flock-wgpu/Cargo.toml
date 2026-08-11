@@ -10,3 +10,11 @@ path = "src/main.rs"
 
 [dependencies]
 electrobun = { path = ".hutch/devkit/rust-sdk" }
+
+[profile.dev]
+opt-level = 2
+debug = 0
+
+[profile.release]
+opt-level = "z"
+strip = "symbols"

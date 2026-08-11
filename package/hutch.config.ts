@@ -35,7 +35,8 @@ export default {
 		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:devkit-manifest":
 			"node --test scripts/validate-native-devkit.test.mjs",
-		"test:version-bump": "node --test scripts/version-config.test.mjs",
+		"test:version-bump":
+			"node --test scripts/version-config.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",

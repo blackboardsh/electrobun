@@ -12,11 +12,15 @@
  *   stable - patch bump without beta (0.5.0 -> 0.5.1)
  */
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join, relative } from "path";
 import { fileURLToPath } from "url";
-import { updateKitchenVersions } from "./version-config.mjs";
+import { assertStrictSemVer } from "../src/shared/strict-semver.js";
+import {
+	createTemplateVersionUpdates,
+	updateKitchenVersions,
+} from "./version-config.mjs";
 
 const type = process.argv[2];
 
@@ -30,10 +34,14 @@ if (!type || !["beta", "patch", "minor", "major", "stable"].includes(type)) {
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = join(packageDir, "..");
 const packageJsonPath = join(packageDir, "package.json");
+const templatesDir = join(repoRoot, "templates");
 
 // Read current version
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-const currentVersion = packageJson.version;
+const currentVersion = assertStrictSemVer(
+	packageJson.version,
+	"package/package.json version",
+);
 
 // Determine npm version command
 const versionCmd = {
@@ -55,7 +63,10 @@ execSync(`npm version ${versionCmd} --no-git-tag-version`, {
 
 // Read new version
 const updatedPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-const newVersion = updatedPackageJson.version;
+const newVersion = assertStrictSemVer(
+	updatedPackageJson.version,
+	"npm version result",
+);
 const tagName = `v${newVersion}`;
 
 console.log(`New version: ${newVersion}`);
@@ -64,20 +75,29 @@ console.log(`New version: ${newVersion}`);
 const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
 let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
 kitchenConfig = updateKitchenVersions(kitchenConfig, newVersion);
+const templateConfigs = createTemplateVersionUpdates(templatesDir, newVersion);
+
 writeFileSync(kitchenConfigPath, kitchenConfig);
+for (const templateConfig of templateConfigs) {
+	writeFileSync(templateConfig.path, templateConfig.source);
+}
 console.log(
-	`Updated kitchen/electrobun.config.ts product and app versions to ${newVersion}`,
+	`Updated Kitchen and ${templateConfigs.length} template product versions to ${newVersion}`,
 );
 
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);
 
-execSync(
-	`git add package/package.json package/package-lock.json kitchen/electrobun.config.ts`,
-	{
-		cwd: repoRoot,
-		stdio: "inherit",
-	},
+execFileSync(
+	"git",
+	[
+		"add",
+		"package/package.json",
+		"package/package-lock.json",
+		"kitchen/electrobun.config.ts",
+		...templateConfigs.map(({ path }) => relative(repoRoot, path)),
+	],
+	{ cwd: repoRoot, stdio: "inherit" },
 );
 execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
 execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });

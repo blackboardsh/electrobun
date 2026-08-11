@@ -1,10 +1,10 @@
+import {
+	isExactOdinRelease,
+	isStrictSemVer,
+} from "../shared/strict-semver.js";
+
 const LEGACY_BUN_VERSION_CONFIG_ERROR =
 	"Per-project Bun runtime version selection is not supported. Electrobun ships one pinned Bun runtime version.";
-
-const EXACT_SEMVER =
-	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const EXACT_ODIN_RELEASE =
-	/^(?:dev-\d{4}-(?:0[1-9]|1[0-2])[a-z]?|(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/;
 
 function record(value: unknown): Record<string, unknown> | undefined {
 	return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -15,11 +15,11 @@ function record(value: unknown): Record<string, unknown> | undefined {
 function assertExactVersion(
 	value: unknown,
 	label: string,
-	pattern: RegExp,
+	isValid: (value: unknown) => boolean,
 ): void {
-	if (typeof value !== "string" || !pattern.test(value)) {
+	if (!isValid(value)) {
 		throw new Error(
-			`${label} must be an exact version, got ${JSON.stringify(value)}. Version ranges, channels, paths, and aliases are not supported.`,
+			`${label} must be an exact version, got ${JSON.stringify(value)}. Versions must use strict SemVer 2.0.0${label === "build.odin.version" ? " or an Odin dev-YYYY-MM[a-z] release" : ""}; ranges, channels, paths, and aliases are not supported.`,
 		);
 	}
 }
@@ -61,7 +61,7 @@ export function assertValidVersionPins(config: unknown): void {
 	assertExactVersion(
 		electrobun["version"],
 		"electrobun.version",
-		EXACT_SEMVER,
+		isStrictSemVer,
 	);
 
 	const build = record(configRecord["build"]);
@@ -73,7 +73,7 @@ export function assertValidVersionPins(config: unknown): void {
 		assertExactVersion(
 			languageConfig["version"],
 			`build.${language}.version`,
-			EXACT_SEMVER,
+			isStrictSemVer,
 		);
 	}
 
@@ -82,7 +82,7 @@ export function assertValidVersionPins(config: unknown): void {
 		assertExactVersion(
 			odin["version"],
 			"build.odin.version",
-			EXACT_ODIN_RELEASE,
+			isExactOdinRelease,
 		);
 	}
 }

@@ -33,6 +33,43 @@ test("Hutch owns the reproducible docs install", () => {
   assert.doesNotMatch(deployWorkflow, /hutch install --frozen-lockfile/);
 });
 
+test("tag deployments use the canonical strict release version gate", () => {
+  assert.match(
+    deployWorkflow,
+    /^      - name: Verify release tag and version\n        if: github\.event_name == 'push'\n        id: release-type$/m,
+  );
+  assert.match(
+    deployWorkflow,
+    /^        run: node package\/scripts\/verify-release-version\.mjs$/m,
+  );
+  assert.ok(
+    deployWorkflow.indexOf("- name: Verify release tag and version") <
+      deployWorkflow.indexOf("- name: Install docs dependencies"),
+  );
+
+  const stableOrManual =
+    "if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'";
+  for (const step of [
+    "Install docs dependencies",
+    "Check docs",
+    "Build docs",
+    "Deploy to Cloudflare Pages",
+  ]) {
+    const start = deployWorkflow.indexOf(`      - name: ${step}\n`);
+    assert.notEqual(start, -1, `missing ${step}`);
+    const next = deployWorkflow.indexOf("\n      - ", start + 1);
+    const stepSource = deployWorkflow.slice(
+      start,
+      next === -1 ? undefined : next,
+    );
+    assert.ok(
+      stepSource.includes(stableOrManual),
+      `${step} must skip SemVer prereleases but run for manual dispatches`,
+    );
+  }
+  assert.doesNotMatch(deployWorkflow, /contains\(github\.ref_name/);
+});
+
 test("docs tools resolve explicitly through npm", () => {
   for (const command of [
     "npm exec -- astro dev",

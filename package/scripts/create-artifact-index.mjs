@@ -14,6 +14,8 @@ import {
 import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isStrictSemVer } from "../src/shared/strict-semver.js";
+
 export const ARTIFACT_INDEX_FILENAME = "electrobun-artifacts.json";
 export const ARTIFACT_INDEX_SCHEMA_VERSION = 1;
 
@@ -52,8 +54,7 @@ function positiveInteger(value, label) {
 }
 
 function validateVersion(version) {
-	nonEmptyString(version, "product.version");
-	if (version.length > 128 || !/^[0-9A-Za-z.+-]+$/.test(version)) {
+	if (!isStrictSemVer(version)) {
 		fail(`invalid product.version ${JSON.stringify(version)}`);
 	}
 	return version;

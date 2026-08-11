@@ -14,7 +14,7 @@ on:
         description: 'Tag to release (e.g., v0.0.19 or v0.0.19-beta.1)'
         required: true
       prerelease:
-        description: 'Is this a pre-release?'
+        description: 'Assert that the tag is a pre-release'
         type: boolean
         default: false
 
@@ -53,6 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
           submodules: recursive
 
       - name: Log disk space (job start)
@@ -66,6 +67,14 @@ jobs:
           node-version: '18'
           cache: npm
           cache-dependency-path: package/package-lock.json
+
+      - name: Verify release tag and version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: package/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
 
       - name: Log disk space (job start - Windows)
         if: matrix.platform == 'win32'
@@ -226,19 +235,6 @@ jobs:
           echo "Disk space after cleanup:"
           df -h . || true
 
-      - name: Determine release type
-        id: release-type
-        shell: bash
-        run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if [[ "$TAG" == *"-beta"* ]] || [[ "$TAG" == *"-alpha"* ]] || [[ "$TAG" == *"-rc"* ]] || [[ "${{ github.event.inputs.prerelease }}" == "true" ]]; then
-            echo "env=canary" >> $GITHUB_OUTPUT
-          else
-            echo "env=production" >> $GITHUB_OUTPUT
-          fi
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-
       - name: Install Apple Certificate
         if: matrix.platform == 'darwin'
         env:
@@ -281,6 +277,7 @@ jobs:
         run: hutch electrobun build --env=${{ steps.release-type.outputs.env }}
         working-directory: kitchen
         env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
           ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
           ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
           ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
@@ -316,6 +313,16 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
+      - name: Verify release tag and version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: package/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
 
       - name: Verify release notes configuration
         run: node package/scripts/release-notes-contract.test.mjs
@@ -376,7 +383,7 @@ jobs:
             artifacts/**/*.tar.gz
             artifacts/electrobun-artifacts.json
           generate_release_notes: true
-          prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
+          prerelease: ${{ steps.release-type.outputs.prerelease == 'true' }}
 
   publish-templates:
     needs: [release]
@@ -384,6 +391,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
       - uses: actions/setup-node@v6
         with:

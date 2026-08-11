@@ -25,8 +25,49 @@ function namedStep(jobSource, name) {
 }
 
 function validateReleaseWorkflow(source) {
+	const buildJob = job(source, "build");
 	const releaseJob = job(source, "release");
+	const publishTemplatesJob = job(source, "publish-templates");
 	const createRelease = namedStep(releaseJob, "Create Release");
+	const buildVersionCheck = namedStep(buildJob, "Verify release tag and version");
+	const releaseVersionCheck = namedStep(
+		releaseJob,
+		"Verify release tag and version",
+	);
+
+	for (const versionCheck of [buildVersionCheck, releaseVersionCheck]) {
+		assert.match(versionCheck, /^        id: release-type$/m);
+		assert.match(
+			versionCheck,
+			/^          RELEASE_TAG: \$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}$/m,
+		);
+		assert.match(
+			versionCheck,
+			/^          RELEASE_PACKAGE_JSON: package\/package\.json$/m,
+		);
+		assert.match(
+			versionCheck,
+			/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
+		);
+	}
+	assert.ok(
+		buildJob.indexOf("- name: Verify release tag and version") <
+			buildJob.indexOf("- name: Install Hutch"),
+		"release version verification must run before build setup",
+	);
+	assert.ok(
+		releaseJob.indexOf("- name: Verify release tag and version") <
+			releaseJob.indexOf("- name: Download Electrobun release artifacts"),
+		"release version verification must run before release assembly",
+	);
+	assert.doesNotMatch(source, /Determine release type/);
+	for (const releasePath of [buildJob, releaseJob, publishTemplatesJob]) {
+		assert.match(
+			releasePath,
+			/^          ref: \$\{\{ github\.event_name == 'workflow_dispatch' && format\('refs\/tags\/\{0\}', github\.event\.inputs\.tag\) \|\| github\.ref \}\}$/m,
+			"manual releases must check out the exact requested tag",
+		);
+	}
 
 	assert.match(createRelease, /^        uses: softprops\/action-gh-release@v2$/m);
 	assert.match(createRelease, /^          generate_release_notes: true$/m);
@@ -38,7 +79,7 @@ function validateReleaseWorkflow(source) {
 	assert.match(createRelease, /^            artifacts\/\*\*\/\*\.tar\.gz$/m);
 	assert.match(
 		createRelease,
-		/^          prerelease: \$\{\{ github\.event\.inputs\.prerelease \|\| contains\(github\.ref_name, '-beta'\) \|\| contains\(github\.event\.inputs\.tag, '-beta'\) \}\}$/m,
+		/^          prerelease: \$\{\{ steps\.release-type\.outputs\.prerelease == 'true' \}\}$/m,
 	);
 
 	assert.match(
@@ -50,7 +91,7 @@ function validateReleaseWorkflow(source) {
 			releaseJob.indexOf("- name: Create Release"),
 		"release notes verification must run before release creation",
 	);
-	assert.match(job(source, "publish-templates"), /^    needs: \[release\]$/m);
+	assert.match(publishTemplatesJob, /^    needs: \[release\]$/m);
 	assert.doesNotMatch(source, /^  npm-publish:\s*$/m);
 }
 

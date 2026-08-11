@@ -1,5 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
+import {
+	isExactOdinRelease,
+	isStrictSemVer,
+} from "../src/shared/strict-semver.js";
 
 export const NATIVE_DEVKIT_MANIFEST_FILENAME = "native-devkit.json";
 export const ELECTROBUN_GO_SDK_MODULE = "electrobun";
@@ -22,11 +26,6 @@ const runtimePathKeys = [
 	"zigAsar",
 	"zigZstd",
 ];
-const exactSemver =
-	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const exactOdinRelease =
-	/^(?:dev-\d{4}-(?:0[1-9]|1[0-2])[a-z]?|(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/;
-
 function fail(message) {
 	throw new Error(`Invalid ${NATIVE_DEVKIT_MANIFEST_FILENAME}: ${message}`);
 }
@@ -52,10 +51,10 @@ function positiveInteger(value, label) {
 	return value;
 }
 
-function exactVersion(value, label, pattern) {
+function exactVersion(value, label, isValid = isStrictSemVer) {
 	const version = string(value, label);
-	if (!pattern.test(version)) {
-		fail(`${label} must be an exact version`);
+	if (!isValid(version)) {
+		fail(`${label} must be an exact version using strict SemVer 2.0.0`);
 	}
 	return version;
 }
@@ -177,9 +176,14 @@ export function validateNativeDevkitManifest(options) {
 
 	const product = object(manifest.product, "product");
 	if (product.name !== "electrobun") fail('product.name must be "electrobun"');
-	if (product.version !== options.expectedVersion) {
+	const productVersion = exactVersion(product.version, "product.version");
+	const expectedVersion = exactVersion(
+		options.expectedVersion,
+		"expected product version",
+	);
+	if (productVersion !== expectedVersion) {
 		fail(
-			`product.version ${JSON.stringify(product.version)} does not match package version ${JSON.stringify(options.expectedVersion)}`,
+			`product.version ${JSON.stringify(productVersion)} does not match package version ${JSON.stringify(expectedVersion)}`,
 		);
 	}
 
@@ -203,15 +207,17 @@ export function validateNativeDevkitManifest(options) {
 		exactVersion(
 			toolchain.defaultVersion,
 			`toolchains.${language}.defaultVersion`,
-			exactSemver,
 		);
 	}
 	const odinToolchain = object(toolchains.odin, "toolchains.odin");
 	exactVersion(
 		odinToolchain.defaultVersion,
 		"toolchains.odin.defaultVersion",
-		exactOdinRelease,
+		isExactOdinRelease,
 	);
+	const runtimes = object(manifest.runtimes, "runtimes");
+	const bunRuntime = object(runtimes.bun, "runtimes.bun");
+	exactVersion(bunRuntime.version, "runtimes.bun.version");
 
 	const layout = object(manifest.layout, "layout");
 	const runtime = object(layout.runtime, "layout.runtime");

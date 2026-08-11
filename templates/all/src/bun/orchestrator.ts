@@ -4,6 +4,9 @@ export const META_TEMPLATE_ID = "all";
 export const BUILD_READY_MARKER = "electrobun build complete:";
 export const PROCESS_SPAWNED_MARKER = "Child process spawned with PID";
 
+const STRICT_SEMVER =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
 export type TemplateStatus =
 	| "pending"
 	| "downloading"
@@ -150,6 +153,16 @@ export function parseBetaCatalog(value: unknown): BetaCatalog {
 		throw new Error(`expected beta catalog, received ${String(root.channel)}`);
 	}
 	const version = requireString(root, "version", "catalog");
+	const parsedVersion = STRICT_SEMVER.exec(version);
+	if (
+		!parsedVersion ||
+		parsedVersion[0].length !== version.length ||
+		parsedVersion[4] === undefined
+	) {
+		throw new Error(
+			"catalog.version must be an exact prerelease using strict SemVer 2.0.0",
+		);
+	}
 	const revision = requireString(root, "revision", "catalog");
 	if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(revision)) {
 		throw new Error("catalog.revision must be a lowercase Git revision");

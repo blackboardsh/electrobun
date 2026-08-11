@@ -156,7 +156,7 @@ export interface ElectrobunConfig {
 		 * - "cottontail": bundle and run the Cottontail main process entrypoint
 		 * - "zig": run the project-owned root `build.zig` and package its
 		 *   `main` artifact
-		 * - "rust": compile and run the Rust main process entrypoint
+		 * - "rust": build and run a Cargo binary target
 		 * - "go": compile and run the Go main process entrypoint
 		 * - "odin": compile and run the Odin main process entrypoint
 		 * @default "cottontail"
@@ -255,13 +255,6 @@ export interface ElectrobunConfig {
 			 */
 			binary?: string;
 
-			/**
-			 * Legacy v1 raw-rustc entrypoint. Hutch v2 ignores this field and builds
-			 * the project-owned Cargo manifest instead.
-			 * @default "src/rust/main.rs"
-			 * @deprecated Use `manifest` with a normal Cargo `src/main.rs` target.
-			 */
-			entrypoint?: string;
 		};
 
 		/**

@@ -4,8 +4,8 @@ description: "Build a minimal Electrobun app with a Rust main process from scrat
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-This guide creates a minimal Electrobun app with a **Rust** main process —
-no Cargo, no crates, one source file. For the default TypeScript runtime see
+This guide creates a minimal Electrobun app with a **Rust** main process in a
+project-owned Cargo package. For the default TypeScript runtime see
 [Hello World](/electrobun/guides/hello-world/). The faster path is
 `hutch electrobun init rust-app --template=rust-flock-wgpu`, which scaffolds
 a complete WGPU-rendering example.
@@ -30,28 +30,9 @@ export default {
 };
 ```
 
-Create `package.json` — it exists only to declare the `electrobun`
-dependency (the SDK and platform artifacts resolve from
-`node_modules/electrobun`):
-
-```json
-{
-  "name": "my-rust-app",
-  "private": true,
-  "dependencies": {
-    "electrobun": "latest"
-  }
-}
-```
-
-The `electrobun` dependency provides the build tooling and the Rust SDK;
-your Rust code has no dependencies of its own.
-
-Install dependencies:
-
-```bash
-hutch install
-```
+This project does not need `package.json`. The exact Electrobun release in
+`electrobun.config.ts` selects a cached devkit, and Hutch projects its Rust SDK
+at `.hutch/devkit/rust-sdk`.
 
 ## 2. Add a webview
 
@@ -81,10 +62,35 @@ console.log("Hello from the view");
 
 ## 3. Add the main process
 
-Create `src/rust/main.rs`:
+Create `Cargo.toml`:
+
+```toml
+[package]
+name = "rust-hello"
+version = "0.0.1"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[dependencies]
+electrobun = { path = ".hutch/devkit/rust-sdk" }
+
+[profile.dev]
+opt-level = 2
+debug = 0
+
+[profile.release]
+opt-level = "z"
+strip = "symbols"
+```
+
+Create `src/main.rs`:
 
 ```rust
-use crate::electrobun::{
+use electrobun::{
     self, Core, Rect, WebviewCallbacks, WebviewOptions, WindowCallbacks, WindowOptions,
 };
 use std::sync::OnceLock;
@@ -97,7 +103,7 @@ const DEFAULT_SECRET_KEY: &str =
 
 static CORE: OnceLock<&'static Core> = OnceLock::new();
 
-pub fn main() {
+fn main() {
     if let Err(err) = run() {
         eprintln!("[rust-hello] {err}");
         std::process::exit(1);
@@ -170,10 +176,8 @@ preload bridge, and the window's `close` callback stops the event loop so
 the process exits when the window closes.
 
 <Aside type="note">
-The entry file defines `pub fn main()` — not a bare `fn main()` — and
-imports the SDK with `use crate::electrobun::{...}`. Hutch compiles your
-file inside a generated wrapper crate where the SDK is a sibling module;
-see [How this differs from TypeScript](#how-this-differs-from-typescript).
+The Electrobun SDK is an ordinary path dependency supplied by the selected
+devkit. Your Cargo manifest and lockfile remain project-owned.
 </Aside>
 
 ## 4. Configure the build
@@ -184,6 +188,9 @@ Create `electrobun.config.ts`:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+	electrobun: {
+		version: "2.0.0",
+	},
 	app: {
 		name: "rust-hello",
 		identifier: "rusthello.electrobun.dev",
@@ -192,7 +199,8 @@ export default {
 	build: {
 		mainProcess: "rust",
 		rust: {
-			entrypoint: "src/rust/main.rs",
+			manifest: "Cargo.toml",
+			binary: "main",
 		},
 		views: {
 			mainview: {
@@ -206,8 +214,8 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-`mainProcess: "rust"` selects the Rust runtime, and `rust.entrypoint`
-points at your source file. Per-platform `bundleCEF` / `bundleWGPU` flags
+`mainProcess: "rust"` selects the Rust runtime. Hutch invokes the selected
+Cargo manifest and stages its `main` binary target. Per-platform `bundleCEF` / `bundleWGPU` flags
 are only needed if you use CEF rendering or WGPU views.
 
 ## 5. Run the app
@@ -222,18 +230,17 @@ no exact match is installed. Press Ctrl+C to stop it.
 
 ## How this differs from TypeScript
 
-- **No Cargo.** Hutch compiles your app with a single vendored `rustc`
-  invocation (edition 2021). There is no `Cargo.toml` and no crates.io
-  access — the SDK is one dependency-free `.rs` file.
-- **A generated wrapper crate.** Hutch writes a wrapper `main.rs` that
-  declares the SDK as `pub mod electrobun` and your entrypoint as
-  `mod user_main`, then calls `user_main::main()`. That is why your file
-  imports with `use crate::electrobun::{...}` and exposes `pub fn main()`
-  instead of being the binary root.
+- **Cargo owns the Rust build.** Hutch selects the exact Rust toolchain and
+  runs Cargo against your manifest. Normal Cargo dependencies, targets,
+  profiles, and lockfiles work as expected.
+- **The devkit supplies the SDK.** The `electrobun` dependency points at the
+  selected devkit's projected Rust crate, so it always matches the native core
+  packaged with the app.
 - **Dynamic core loading.** `Core::load()` dlopens `libElectrobunCore`
   from the executable's directory at runtime and resolves its symbols.
   Nothing links at build time, and the binary only runs from inside a
-  hutch-built bundle — not via `cargo run` or a bare `rustc` build.
+  Hutch-built bundle — a bare `cargo run` does not contain the adjacent
+  Electrobun runtime libraries and resources.
 - **Bundle discovery.** `resolve_bundle_paths()` derives the executable
   and `Resources/` directories from the running executable's path, and
   `resolve_app_info_from_bundle()` reads the app identifier, name, and
@@ -254,8 +261,8 @@ no exact match is installed. Press Ctrl+C to stop it.
 
 ## Toolchain
 
-Electrobun pins Rust 1.88.0 and never uses a system Rust; if no exact
-match is installed, hutch downloads the toolchain to `~/.dash/toolchains`.
+Electrobun pins Rust 1.88.0. Hutch uses an exact matching system compiler or
+downloads the toolchain to `~/.dash/toolchains`.
 Builds target the host OS and architecture only — cross-compilation is not
 supported yet, so use native runners per platform. On Windows, Rust builds
 require Visual Studio Build Tools and the Windows SDK; macOS needs the

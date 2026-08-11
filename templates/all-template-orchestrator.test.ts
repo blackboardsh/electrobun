@@ -210,6 +210,29 @@ describe("Template QA catalog and readiness contracts", () => {
 		).toThrow(/expected beta catalog/);
 	});
 
+	test("requires an exact SemVer prerelease for the beta catalog", () => {
+		for (const version of [
+			"2.0.0",
+			"02.0.0-beta.1",
+			"2.0.0-beta.01",
+			"^2.0.0-beta.1",
+			"latest",
+			"file:../catalog",
+			"2.0.0-beta.1\n",
+		]) {
+			expect(() =>
+				parseBetaCatalog({ ...(catalog() as object), version }),
+			).toThrow(/exact prerelease using strict SemVer 2\.0\.0/);
+		}
+
+		expect(
+			parseBetaCatalog({
+				...(catalog() as object),
+				version: "2.0.0-preview.7+qa.001",
+			}).version,
+		).toBe("2.0.0-preview.7+qa.001");
+	});
+
 	test("recognizes build and launcher markers split across output chunks", () => {
 		expect(outputContainsBuildReady("electrobun build comp", "lete: path"))
 			.toBe(true);

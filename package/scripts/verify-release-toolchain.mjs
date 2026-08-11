@@ -6,6 +6,8 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
+import { parseStrictSemVer } from "../src/shared/strict-semver.js";
+
 const scriptPath = fileURLToPath(import.meta.url);
 const repositoryRoot = dirname(dirname(dirname(scriptPath)));
 const runtimeProbePath = join(
@@ -14,7 +16,6 @@ const runtimeProbePath = join(
 	"scripts",
 	"release-runtime-probe.mjs",
 );
-const stableVersionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
 const forbiddenOverrides = [
 	"HUTCH_ENGINE_BINARY",
 	"HUTCH_ACTIVE_CHANNEL",
@@ -36,6 +37,16 @@ function assertEqual(actual, expected, label) {
 	}
 }
 
+function assertStableVersion(value, label) {
+	const parsed = parseStrictSemVer(value);
+	if (!parsed || parsed.prerelease !== null) {
+		fail(
+			`${label} must be an exact stable SemVer 2.0.0 version, got ${JSON.stringify(value)}`,
+		);
+	}
+	return value;
+}
+
 export function parseHutchPragma(source, label = "hutch.config.ts") {
 	const firstLine = source.split(/\r?\n/, 1)[0];
 	const match = firstLine.match(
@@ -44,7 +55,10 @@ export function parseHutchPragma(source, label = "hutch.config.ts") {
 	if (!match) {
 		fail(`${label} must start with an exact // @hutch cli=... cottontail=... pragma`);
 	}
-	return { hutch: match[1], cottontail: match[2] };
+	return {
+		hutch: assertStableVersion(match[1], `${label} Hutch pin`),
+		cottontail: assertStableVersion(match[2], `${label} Cottontail pin`),
+	};
 }
 
 function run(command, args, cwd, environment = {}) {
@@ -164,14 +178,8 @@ function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }
 export function verifyReleaseToolchain(environment = process.env) {
 	const expectedHutch = environment.EXPECTED_HUTCH_VERSION;
 	const expectedCottontail = environment.EXPECTED_COTTONTAIL_VERSION;
-	if (!expectedHutch || !stableVersionPattern.test(expectedHutch)) {
-		fail(`EXPECTED_HUTCH_VERSION must be an exact stable version, got ${JSON.stringify(expectedHutch)}`);
-	}
-	if (!expectedCottontail || !stableVersionPattern.test(expectedCottontail)) {
-		fail(
-			`EXPECTED_COTTONTAIL_VERSION must be an exact stable version, got ${JSON.stringify(expectedCottontail)}`,
-		);
-	}
+	assertStableVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
+	assertStableVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
 
 	for (const name of forbiddenOverrides) {
 		if (environment[name] !== undefined) {
