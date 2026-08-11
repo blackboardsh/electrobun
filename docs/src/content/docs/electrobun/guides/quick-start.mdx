@@ -85,32 +85,22 @@ files. Hutch resolves both tasks only from `hutch.config.ts`; the configured
 external package manager still owns `package.json`, dependency resolution, and
 its lockfile.
 
-The template's `hutch.config.ts` contains an exact product pin alongside its
-tasks and optional package-manager selection:
+The template's `hutch.config.ts` contains an exact product pin:
 
-```ts
+```ts docs=syntax
 export default {
   electrobun: {
     version: "2.0.0",
   },
-  // packageManager and scripts...
-};
-```
-
-`electrobun.config.ts` is only application, build, and distribution
-configuration:
-
-```ts
-export default {
-  // app and build configuration...
+  // package manager and project tasks...
 };
 ```
 
 During `init`, Hutch syncs that exact core and SDK release into the shared
-`~/.dash` store, projects `.hutch/devkit` into the project, and resolves any
-required native compiler under `~/.dash/toolchains`. `dev`, `run`, and `build`
-refresh that preparation automatically; `hutch electrobun sync` does the same
-work without building.
+`~/.dash` store, copies its SDKs into the writable project `.hutch/devkit`
+sysroot, and resolves any required native compiler under `~/.dash/toolchains`.
+`dev`, `run`, and `build` refresh that preparation automatically;
+`hutch electrobun sync` does the same work without building.
 
 A typical project looks like this:
 
@@ -134,8 +124,10 @@ The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
 is the **main process** — it runs on Cottontail, owns windows and native
 state, and is where the privileged side of your app lives. `src/mainview/` is
 the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
-webview. `electrobun.config.ts` tells Hutch how to put the two together into
-an app bundle.
+webview. `hutch.config.ts` selects the exact product, tasks, and package
+manager. `electrobun.config.ts` tells Hutch how to put the two processes
+together into an app bundle. The full split is in
+[Project Ownership and the Devkit](/electrobun/guides/project-ownership/).
 
 ## Build a release
 
@@ -161,6 +153,8 @@ for each target.
   scratch, so you see what every file is for.
 - [Hutch](/electrobun/guides/hutch/) explains commands, channels, and project
   pins.
+- [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
+  explains the config split, editable SDK copies, and external bundlers.
 - [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.
 - [Main Process Runtimes](/electrobun/guides/native-main-process/) covers
   Cottontail, Bun, Zig, Rust, Go, and Odin.

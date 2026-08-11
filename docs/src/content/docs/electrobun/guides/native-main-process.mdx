@@ -144,17 +144,18 @@ hutch electrobun init tree-studio --template=odin-tree-wgpu
 
 ## Toolchain resolution
 
-Each exact `hutch.config.ts` `electrobun.version` declares default compiler versions. A project
-may override one with the matching `build.<language>.version` field. Hutch
-checks for an exact matching system compiler where supported; otherwise it
-downloads that toolchain into
+Each exact `electrobun.version` in `hutch.config.ts` declares default compiler
+versions. A project may override one with the matching
+`build.<language>.version` field in `electrobun.config.ts`. Hutch checks for an
+exact matching system compiler where supported; otherwise it downloads that
+toolchain into
 `~/.dash/toolchains/<language>/<version>/<platform>` and reuses it across
 projects. The compiler is not bundled into the finished application.
 
 `hutch electrobun sync` downloads and verifies the matching Electrobun core and
-SDK release under `~/.dash/products/electrobun`, projects `.hutch/devkit` into
-the project, and resolves the configured native toolchain under
-`~/.dash/toolchains`. Go builds on Windows also resolve Zig for cgo. `init`,
+SDK release under `~/.dash/products/electrobun`, copies its SDKs into the
+project's writable `.hutch/devkit` sysroot, and resolves the native toolchain
+under `~/.dash/toolchains`. Go builds on Windows also resolve Zig for cgo. `init`,
 `build`, `run`, and `dev` call the same preparation automatically.
 
 ## Native limitations

@@ -168,14 +168,15 @@ globally installed channel.
 
 ## Select and sync Electrobun
 
-Every Electrobun 2.x project pins the exact product release in
-`hutch.config.ts`:
+Every Electrobun 2.x project separately pins the exact product release in
+`hutch.config.ts`, alongside its tasks and package-manager selection:
 
-```ts
+```ts docs=syntax
 export default {
   electrobun: {
     version: "2.0.0",
   },
+  packageManager: "npm",
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
   },
@@ -184,24 +185,20 @@ export default {
 
 The version must be exact; npm tags and semver ranges are not product
 selectors. `hutch electrobun sync` resolves and verifies that release in the
-global `~/.dash/products/electrobun` store, atomically projects its SDKs,
-config types, and editor facade into `.hutch/devkit`, and resolves the selected
-native compiler under `~/.dash/toolchains` when the project needs one.
-
-The project copy under `.hutch/devkit` is deliberately writable. Templates
-ignore `.hutch/` by default, but you can change `.gitignore` and commit the
-project's devkit when you want to inspect, patch, or retain it. A sync that
-changes the selected Electrobun version, target, or manifest can replace that
-projection, so commit or merge local SDK changes before refreshing it.
-
-`electrobun.config.ts` has a different job: it contains application metadata,
-build inputs, runtime behavior, signing, and distribution settings. npm and
-other language package managers own optional application dependencies; they
-do not install or select the Electrobun SDK.
+global `~/.dash/products/electrobun` store, then copies its SDKs and editor
+facade into the project's writable `.hutch/devkit` sysroot. It also resolves
+the selected native compiler under `~/.dash/toolchains` when the project needs
+one.
 
 `init` performs this sync before it finishes. `build`, `run`, and `dev` also
 sync implicitly, so the explicit command is mainly useful after changing the
 version pin, for editor setup, or for preparing an offline build.
+
+Templates ignore `.hutch/` by default. You may change that rule and commit an
+edited SDK copy, but a version, target, or release-manifest refresh can replace
+the project devkit. Commit or merge edits before upgrading. See
+[Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
+the complete boundary and external-bundler recipe.
 
 ## Toolchains and caches
 
@@ -216,8 +213,8 @@ projects.
 
 The project still owns its build description and language dependencies:
 `build.zig` for Zig, `Cargo.toml`/`Cargo.lock` for Rust, and `go.mod`/`go.sum`
-for Go. Odin builds the configured project package directory. Hutch projects
-the matching SDK into `.hutch/devkit` and passes its path to those normal build
+for Go. Odin builds the configured project package directory. Hutch uses the
+matching SDK copy in `.hutch/devkit` and passes its path to those normal build
 tools; it does not generate build files or synthesize a GOPATH.
 
 <Aside type="note">

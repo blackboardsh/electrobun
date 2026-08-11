@@ -22,9 +22,7 @@ project does not need a `package.json`:
 
 ```ts docs=syntax
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
+  electrobun: { version: "2.0.0" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=production"],
@@ -53,7 +51,7 @@ require electrobun v0.0.0
 replace electrobun => ./.hutch/devkit/go-sdk
 ```
 
-The replacement is the Go SDK projected from the exact Electrobun devkit.
+The replacement is the Go SDK copied from the exact Electrobun devkit.
 Hutch does not generate this module or resolve other Go dependencies; add them
 normally and let Go own `go.mod` and `go.sum`.
 

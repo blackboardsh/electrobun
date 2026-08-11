@@ -1,103 +1,31 @@
 ---
-title: "Migrate from Electrobun 1.x"
-description: "Move an Electrobun 1.x project to the 2.x Hutch and Cottontail toolchain."
+title: "Migrate to Electrobun 2.x"
+description: "A concise checklist for moving an existing project to Hutch and Cottontail."
 ---
-import { Aside } from "@astrojs/starlight/components";
 
-The 2.x migration is smaller than it looks. Your application code — main
-process, views, RPC — should usually run unchanged. What changes is the
-tooling around it: the commands you type, and the runtime your TypeScript
-executes on.
-
-Two ideas drive the release. First, **Hutch** replaces the old Electrobun CLI
-and owns project scripts, builds, devkit synchronization, native toolchains,
-and distribution. It deliberately does not replace npm, Cargo, Go modules, or
-another language's package manager. Second, **Cottontail** is the default
-main-process runtime bundled into finished applications, providing Node.js and
-Bun compatibility where Electrobun apps and their packages need it.
-
-The migration is mostly mechanical: install Hutch, swap the commands in your
-scripts, and update one import path. Everything else on this page is detail
-and edge cases.
+Electrobun 2.x moves build orchestration to Hutch and makes Cottontail the
+default JavaScript main process. Application code and RPC schemas usually need
+little or no change; the important migration is the project boundary.
 
 ## 1. Install Hutch
-
-macOS or Linux:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 ```
 
-Windows PowerShell:
+On Windows PowerShell:
 
 ```powershell
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-Restart the terminal if the installer added `~/.dash/bin` to your shell path.
+## 2. Move product and task selection to Hutch
 
-For a new project, run the interactive template chooser:
+Remove `electrobun` from application dependencies. The npm package is now an
+optional thin Hutch bootstrap and never contains the runtime or SDK.
 
-```bash
-hutch electrobun init
-```
-
-Existing `npx electrobun init` and `bunx electrobun init` entry points remain
-available. The npm package is now an independent bootstrap that installs Hutch
-when it is missing and forwards every argument. It defaults to stable templates
-unless `--beta` is explicit. Its npm version does not select the Electrobun
-product version.
-
-## 2. Move the Electrobun version into Hutch config
-
-Remove `electrobun` from `dependencies` and `devDependencies`. The npm package
-now carries only its tiny Hutch-forwarding command—not the Electrobun CLI
-implementation, core, config types, browser code, or SDK source.
-Instead, add the required exact product pin to `hutch.config.ts`:
-
-```ts
-export default {
-  electrobun: {
-    version: "2.0.0",
-  },
-  scripts: {},
-};
-```
-
-Remove the old product-selection field from `electrobun.config.ts`. That file
-now describes the application, build, runtime, signing, and distribution only.
-
-Then prepare the matching core and SDKs:
-
-```bash
-hutch electrobun sync
-```
-
-Hutch caches the verified release under `~/.dash/products/electrobun`, projects
-its language SDKs and editor facade into `.hutch/devkit`, and resolves any
-configured native compiler under `~/.dash/toolchains`. Templates ignore
-`.hutch/` by default, but the projection is writable: remove or narrow that
-ignore rule if your team wants to modify and commit its project copy. A version,
-target, or manifest change can replace the projection, so preserve local SDK
-changes before syncing. `init`, `build`, `run`, and `dev` also sync implicitly.
-
-## 3. Move project scripts to `hutch.config.ts`
-
-Hutch no longer reads `package.json` scripts or resolves npm packages. Move the
-Electrobun workflow and package-manager selection into `hutch.config.ts`.
-Hutch's package commands only delegate to that external executable:
-
-| Electrobun 1.x | Electrobun 2.x |
-| --- | --- |
-| `bun install` | `packageManager: "bun"` plus `hutch install` |
-| `npm ci` | `packageManager: "npm"` plus `hutch pm ci` or a named task |
-| `bun run dev` | `hutch run dev` |
-| `bunx electrobun dev` | `hutch electrobun dev` |
-| `bunx electrobun build --env=canary` | `hutch electrobun build --env=canary` |
-| `bunx electrobun build --env=stable` | `hutch electrobun build --env=production` |
-| `bunx <package>` | `hutch pm x <package>` with Bun selected, or the chosen manager's equivalent |
-
-For example:
+Create `hutch.config.ts` with the exact product pin, external package manager,
+and project tasks:
 
 ```ts docs=syntax
 export default {
@@ -107,29 +35,38 @@ export default {
   packageManager: "npm",
   scripts: {
     install: ["hutch", "pm", "ci"],
-    "ui:build": ["hutch", "pm", "exec", "--", "vite", "build"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
-    "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
     build: ["hutch", "electrobun", "build", "--env=production"],
   },
 };
 ```
 
-Run `hutch run install` for that named task. `hutch install` is also available
-for the selected manager's normal install operation. Both commands ultimately
-spawn the external package manager; it—not Hutch—owns `package.json`,
-dependency resolution, `node_modules`, and its lockfile. Setting
-`packageManager: "bun"` is fully supported and does not require a Bun main
-process.
+Keep application and distribution settings in `electrobun.config.ts`:
 
-A nice side effect of the switch: Hutch resolves and builds every supported
-main process — Cottontail, Bun, Zig, Rust, Go, and Odin — so you no longer need
-a separate global installation of each native toolchain when Hutch has an exact
-toolchain for the host.
+```ts
+import type { ElectrobunConfig } from "electrobun";
 
-## 4. Use the runtime-neutral SDK namespace
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.example.my-app",
+    version: "2.0.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
 
-Change main-process imports from `electrobun/bun` to `electrobun/main`:
+See [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
+for the full responsibility table.
+
+## 3. Use the runtime-neutral SDK import
+
+Main-process code should import from `electrobun/main`:
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
@@ -142,94 +79,25 @@ const win = new BrowserWindow({
 void win;
 ```
 
-The rename reflects what the namespace actually is: the main-process SDK,
-independent of which runtime executes it. `electrobun/bun` and its focused
-subpaths remain supported as deprecated aliases, so you can migrate imports
-incrementally. The source directory can also remain `src/bun` — the SDK
-namespace does not determine the selected runtime.
+The directory may remain `src/bun`; its name does not select the runtime.
+Cottontail is the default architectural path. `build.mainProcess: "bun"`
+remains a first-class option, and `packageManager: "bun"` independently keeps
+Bun as the external dependency manager.
 
-## 5. Choose the main process
-
-Your existing TypeScript main process moves to Cottontail with a config
-change — the entrypoint itself stays put:
-
-```ts
-import type { ElectrobunConfig } from "electrobun";
-
-export default {
-  app: {
-    name: "My App",
-    identifier: "com.example.my-app",
-    version: "2.0.0",
-  },
-  build: {
-    mainProcess: "cottontail",
-    cottontail: {
-      entrypoint: "src/bun/index.ts",
-    },
-  },
-} satisfies ElectrobunConfig;
-```
-
-Prefer to stay on the actual Bun runtime? That's fully supported — configure
-it explicitly:
-
-```ts
-import type { ElectrobunConfig } from "electrobun";
-
-export default {
-  app: {
-    name: "My App",
-    identifier: "com.example.my-app",
-    version: "2.0.0",
-  },
-  build: {
-    mainProcess: "bun",
-    bun: {
-      entrypoint: "src/bun/index.ts",
-    },
-  },
-} satisfies ElectrobunConfig;
-```
-
-Hutch still performs Electrobun builds and packaging when Bun is the selected
-application runtime. Use Bun or another package manager directly for project
-dependencies.
-
-## 6. Use the release channels
-
-Hutch defaults to `dev`, `canary`, and `production` build environments. If
-your scripts and CI say `stable`, they keep working — the name continues as
-an alias for `production`, including `--env=stable`, installer channel
-selection, and Hutch/Cottontail version selectors. New scripts and CI
-configuration should use `production`.
-
-Production application names are unsuffixed; canary application names include
-`-canary`. Lifecycle hooks receive the canonical `ELECTROBUN_BUILD_ENV`
-value: `dev`, `canary`, or `production`.
-
-## 7. Review build automation
-
-Hutch builds for the current host, so keep one native CI runner for every OS
-and architecture you release. While you're replacing old `bunx electrobun`
-commands, give signing, notarization, artifact upload, and update metadata
-configuration a once-over.
-
-## 8. Test the migration
+## 4. Sync and verify
 
 ```bash
 hutch electrobun sync
 hutch run install
 hutch electrobun dev
 hutch electrobun build --env=canary
-hutch electrobun build --env=production
 ```
 
-Verify application startup, RPC, webviews, updater metadata, signing, and any
-native dependencies on macOS, Windows, and Linux.
+Sync verifies the selected per-platform core archive from the Electrobun GitHub
+Release, caches it globally, and copies its SDKs into the writable project
+`.hutch/devkit` sysroot. Templates ignore `.hutch/` by default. If you choose
+to commit an edited devkit, commit or merge those edits before changing the
+product version or target because refresh can replace the project copy.
 
-<Aside type="note">
-Electrobun 2.x also supports Zig, Rust, Go, and Odin main processes.
-Migrating to a native main process is optional and best treated as a separate
-change after the 2.x toolchain migration is working.
-</Aside>
+Hutch builds for the current host. Verify startup, RPC, webviews, signing, and
+updates on native runners for every platform you distribute.

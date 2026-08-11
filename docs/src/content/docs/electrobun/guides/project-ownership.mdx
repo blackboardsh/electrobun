@@ -1,0 +1,154 @@
+---
+title: "Project Ownership and the Devkit"
+description: "Where Electrobun configuration, SDKs, tasks, and dependencies live."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+Electrobun keeps workspace orchestration separate from application
+configuration. The split is intentional: `hutch.config.ts` selects the product,
+tasks, and package manager, while `electrobun.config.ts` describes the
+application and build that Hutch produces.
+
+## Responsibility map
+
+| Concern | Owner |
+| --- | --- |
+| Exact Electrobun product version | `hutch.config.ts` → `electrobun.version` |
+| Hutch and Cottontail versions | First-line `// @hutch` pragma in `hutch.config.ts` |
+| Project tasks | `hutch.config.ts` → `scripts` |
+| External JavaScript package manager | `hutch.config.ts` → `packageManager` |
+| Native toolchain resolution and global cache | Hutch |
+| Native compiler version overrides | `electrobun.config.ts` → `build.<language>.version` |
+| App identity and app version | `electrobun.config.ts` → `app` |
+| Main-process choice and build inputs | `electrobun.config.ts` → `build` |
+| Views, copied assets, signing, updates, and distribution | `electrobun.config.ts` |
+| JavaScript dependency graph and lockfile | The selected external package manager |
+| Rust and Go dependencies | Cargo and Go modules |
+| Electrobun runtime and language SDKs | The selected Electrobun GitHub Release |
+
+A minimal project makes the boundary visible:
+
+```ts docs=syntax
+// hutch.config.ts
+export default {
+  electrobun: {
+    version: "2.0.0",
+  },
+  packageManager: "npm",
+  scripts: {
+    install: ["hutch", "pm", "ci"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
+  },
+};
+```
+
+```ts
+// electrobun.config.ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.example.my-app",
+    version: "0.1.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+The Electrobun version must be exact. npm tags, semver ranges, and the version
+of the optional `electrobun` npm bootstrap do not select an Electrobun product.
+
+## Where the SDK comes from
+
+Each platform-specific `electrobun-core-*.tar.gz` archive on the selected
+Electrobun GitHub Release contains that platform's runtime, devkit manifest,
+JavaScript API, and Zig, Rust, Go, and Odin SDKs. There is no separate SDK npm
+package. The `electrobun` package on npm is only a thin command that installs
+or invokes Hutch; it never owns or supplies the SDK.
+
+When Hutch prepares a project, it verifies and stores the selected platform
+archive in its global `~/.dash/products/electrobun` cache. It then **copies**
+the SDK trees into the project as a writable sysroot:
+
+```text
+.hutch/devkit/
+|-- api/                  # JavaScript/TypeScript SDK source and config types
+|-- zig-sdk/
+|-- rust-sdk/
+|-- go-sdk/
+|-- odin-sdk/
+|-- package.json          # electrobun/* export map for this release
+|-- tsconfig.json         # TypeScript paths into api/
+`-- projection.json       # version, platform, and manifest identity
+```
+
+All Electrobun SDK imports resolve to this project copy. TypeScript projects
+normally extend `.hutch/devkit/tsconfig.json`; native builds point Cargo, Go,
+Zig, or Odin at their matching directory under `.hutch/devkit`.
+
+Templates ignore `.hutch/` by default. Because the devkit is a normal writable
+copy, you may remove that ignore rule and commit it when your project needs to
+modify or vendor an SDK. Do not edit the shared global cache.
+
+<Aside type="caution" title="Commit SDK changes before refreshing">
+A sync for a different Electrobun version or target, or for a changed release
+manifest, can replace the entire project `.hutch/devkit` copy. Commit, stash,
+or merge local SDK changes before upgrading or switching targets. Normal
+builds keep a matching project copy, but the current refresh mechanism does
+not merge SDK edits.
+</Aside>
+
+## External bundlers
+
+Hutch injects exact aliases for the project devkit into its Electrobun bundles.
+An external bundler such as Vite has its own resolver, so use the helper shipped
+inside the projected SDK instead of installing `electrobun` as an application
+dependency.
+
+Run `hutch electrobun sync` before Vite loads its config, then install every
+project-SDK alias with `electrobunViteAliases()`:
+
+```ts docs=syntax
+// vite.config.ts
+import { resolve } from "node:path";
+import { defineConfig } from "vite";
+import { electrobunViteAliases } from "./.hutch/devkit/api/config/electrobun-vite";
+
+export default defineConfig({
+  resolve: {
+    alias: electrobunViteAliases(resolve(__dirname, ".hutch/devkit")),
+  },
+});
+```
+
+An explicit Hutch task keeps sync and the compatibility build together:
+
+```ts docs=syntax
+// hutch.config.ts (excerpt)
+export default {
+  scripts: {
+    "build:view":
+      "hutch electrobun sync && hutch pm exec -- vite build",
+  },
+};
+```
+
+The helper reads the selected devkit's export map, creates exact aliases for
+every `electrobun/*` entry, and rejects targets outside the projected `api`
+tree. `node_modules` remains outside the SDK path.
+
+## Default path and compatibility edge
+
+The architectural center of Electrobun is Cottontail-native: Hutch runs project
+TypeScript and shell tasks with Cottontail, and Cottontail is the default
+JavaScript main process. Bun remains a first-class `build.mainProcess` option
+and a separate first-class `packageManager` choice; neither is a legacy mode.
+Node-compatible packages, npm, and Vite are supported integration edges, but
+none of them becomes the owner or source of Electrobun's SDK.

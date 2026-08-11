@@ -19,8 +19,8 @@ npx electrobun init --beta
 
 The npm package version describes this bootstrap, not the Electrobun runtime.
 An application's exact Electrobun version is selected in
-`electrobun.config.ts`; Hutch downloads the matching runtime and SDK into the
-shared `~/.dash` store.
+`hutch.config.ts`; Hutch downloads the matching runtime and SDK into the shared
+`~/.dash` store and copies the SDKs into the project's `.hutch/devkit` sysroot.
 
 `DASH_RELEASE_OFFLINE=1` prevents this bootstrap from downloading a missing
 Hutch installation. An already installed Hutch is still invoked, and the flag

@@ -6,8 +6,9 @@ description: "Reference for electrobun.config.ts and Hutch's build lifecycle."
 `electrobun.config.ts` is a TypeScript module in the project root. Hutch loads
 its default export with Cottontail and merges it with Electrobun's defaults.
 Use `satisfies ElectrobunConfig` so unsupported fields and values fail during
-development. It contains application, build, runtime, signing, and distribution
-settings; product selection belongs in `hutch.config.ts`.
+development. Product, task, and package-manager selection belongs in
+`hutch.config.ts`; this file owns the app, build, tool overrides, and
+distribution description.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -44,27 +45,17 @@ that Hutch will use.
 
 ## Electrobun Devkit
 
-`hutch.config.ts` requires an exact `electrobun.version` such as `2.0.0` or
-`2.1.0-beta.3` for an Electrobun project:
-
-```typescript docs=syntax
-export default {
-  electrobun: {
-    version: "2.0.0",
-  },
-  scripts: {
-    build: ["hutch", "electrobun", "build", "--env=production"],
-  },
-};
-```
-
-That product version is independent of the thin npm bootstrap version and the
-application version in `app.version`.
+`hutch.config.ts` must set `electrobun.version` to an exact release such as
+`2.0.0` or `2.1.0-beta.3`. It is independent of the thin npm bootstrap version
+and the application version in `app.version`.
 
 Hutch resolves and verifies that release under
-`~/.dash/products/electrobun`, then projects its config types and language SDKs
-into `.hutch/devkit`. Run `hutch electrobun sync` to refresh that projection
-without building. `init`, `build`, `run`, and `dev` sync implicitly.
+`~/.dash/products/electrobun`, then copies its config types and language SDKs
+into the writable project `.hutch/devkit` sysroot. Run
+`hutch electrobun sync` to refresh that project copy without building. `init`,
+`build`, `run`, and `dev` sync implicitly. See
+[Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
+the config responsibility table, refresh caveat, and external-bundler aliases.
 
 ## Application Metadata
 

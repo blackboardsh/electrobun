@@ -6,8 +6,9 @@ and independent publishing workflows.
 ## Electrobun product releases
 
 Product tags use `v<version>`, for example `v2.1.0-beta.3`. They publish the
-platform runtime, SDK/devkit artifacts, Kitchen builds, and the matching
-stable or beta template catalog. They do not publish to npm.
+per-platform core archives, each containing its runtime and SDK/devkit, plus
+Kitchen builds and the matching stable or beta template catalog. They do not
+publish to npm.
 
 An application's product version belongs in `hutch.config.ts`. Selecting
 an npm package version never selects an Electrobun runtime version.

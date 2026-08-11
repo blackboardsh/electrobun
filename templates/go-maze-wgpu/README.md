@@ -10,7 +10,7 @@ hutch run dev
 change. This native template has no npm dependencies.
 
 The Go app is a standard project-owned module. Its `go.mod` keeps the SDK import
-local to `.hutch/devkit/go-sdk`; Hutch projects the exact SDK selected by
-`electrobun.version` in `hutch.config.ts`, resolves the configured Go toolchain, and runs `go build`
-from this project root. The resulting binary dynamically loads the bundled
-Electrobun core and Dawn WebGPU libraries at runtime.
+local to `.hutch/devkit/go-sdk`; Hutch copies the exact SDK selected by
+`electrobun.version` in `hutch.config.ts`, resolves the configured Go toolchain,
+and runs `go build` from this project root. The resulting binary dynamically
+loads the bundled Electrobun core and Dawn WebGPU libraries at runtime.

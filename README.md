@@ -19,9 +19,9 @@ Hutch is the native build and workspace CLI. Cottontail is Electrobun's JSC-base
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
 Install Hutch globally, then use it to create and build a project. Each project
-pins an exact Electrobun release in `hutch.config.ts`; Hutch syncs that
-release's core and SDKs into the shared `~/.dash` store and the project's
-writable `.hutch/devkit` facade:
+pins an exact Electrobun release in `hutch.config.ts`; Hutch caches that
+release's platform archive from GitHub Releases and copies its SDKs into the
+project's writable `.hutch/devkit` sysroot:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
@@ -30,7 +30,7 @@ hutch electrobun init
 
 Or bootstrap the same interactive initializer from npm or Bun. The tiny npm
 package only installs/executes Hutch and forwards the command; it does not carry
-the Electrobun runtime or SDKs:
+or own the Electrobun runtime or SDKs:
 
 ```bash
 npx electrobun init

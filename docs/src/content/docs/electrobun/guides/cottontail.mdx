@@ -49,9 +49,9 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-One naming note: the `src/bun` directory and the `electrobun/main` import
-path are compatibility names carried over from 1.x. They don't mean your app
-is running the Bun binary — Cottontail executes this code:
+One naming note: the conventional `src/bun` directory does not select the
+runtime. `electrobun/main` is the canonical, runtime-neutral SDK import. With
+the configuration above, Cottontail executes this code:
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
