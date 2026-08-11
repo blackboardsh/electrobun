@@ -1,4 +1,5 @@
 {
+  "extends": "./.hutch/devkit/tsconfig.json",
   "compilerOptions": {
     "lib": ["ESNext", "DOM"],
     "target": "ESNext",
