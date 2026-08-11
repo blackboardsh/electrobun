@@ -21,6 +21,21 @@ type PackageLock = {
 	>;
 };
 
+type BuiltInPackageManager = "npm" | "bun" | "pnpm" | "yarn";
+
+const packageManagerLockfiles: Record<
+	BuiltInPackageManager,
+	readonly string[]
+> = {
+	npm: ["package-lock.json"],
+	bun: ["bun.lock", "bun.lockb"],
+	pnpm: ["pnpm-lock.yaml"],
+	yarn: ["yarn.lock"],
+};
+const knownPackageManagerLockfiles = [
+	...new Set(Object.values(packageManagerLockfiles).flat()),
+];
+
 const templatesRoot = import.meta.dirname;
 const odinWgpuTemplates = [
 	"odin-alchemy-wgpu",
@@ -57,6 +72,39 @@ function pragmaPins(source: string): string {
 	return source.match(/^\/\/\s*@hutch\s+([^\r\n]+)$/m)?.[1] ?? "";
 }
 
+function configuredPackageManager(source: string): string | undefined {
+	const selection = source.match(
+		/\bpackageManager\s*:\s*(?:["']([^"']+)["']|\{[\s\S]*?\bname\s*:\s*["']([^"']+)["'])/,
+	);
+	return selection?.[1] ?? selection?.[2];
+}
+
+function isBuiltInPackageManager(
+	name: string,
+): name is BuiltInPackageManager {
+	return Object.hasOwn(packageManagerLockfiles, name);
+}
+
+function lockfileSelectionIssues(
+	manager: BuiltInPackageManager,
+	existingLockfiles: readonly string[],
+): string[] {
+	const ownedLockfiles = packageManagerLockfiles[manager];
+	const selectedLockfiles = existingLockfiles.filter((lockfile) =>
+		ownedLockfiles.includes(lockfile),
+	);
+	const issues = existingLockfiles
+		.filter((lockfile) => !ownedLockfiles.includes(lockfile))
+		.map((lockfile) => `${lockfile} belongs to a different package manager`);
+
+	if (selectedLockfiles.length === 0) {
+		issues.push(`missing ${ownedLockfiles.join(" or ")}`);
+	} else if (selectedLockfiles.length > 1) {
+		issues.push(`contains multiple ${manager} lockfiles`);
+	}
+	return issues;
+}
+
 function collectTemplateTextFiles(directory: string): string[] {
 	const files: string[] = [];
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
@@ -74,32 +122,50 @@ function collectTemplateTextFiles(directory: string): string[] {
 }
 
 describe("Electrobun template package boundaries", () => {
-	test("npm manifests and locks contain only application dependencies", () => {
+	test("package manifests and selected lockfiles contain only application dependencies", () => {
 		const invalidManifests: string[] = [];
 		const packageFreeTemplates: string[] = [];
 
 		for (const templateName of templateNames) {
 			const templateRoot = join(templatesRoot, templateName);
 			const manifest = readManifest(templateName);
-			const lockPath = join(templateRoot, "package-lock.json");
-			for (const obsoleteLock of [
-				"bun.lock",
-				"bun.lockb",
-				"pnpm-lock.yaml",
-				"yarn.lock",
-			]) {
-				if (existsSync(join(templateRoot, obsoleteLock))) {
-					invalidManifests.push(`${templateName}: contains ${obsoleteLock}`);
-				}
-			}
+			const hutchPath = join(templateRoot, "hutch.config.ts");
+			const hutch = existsSync(hutchPath) ? readFileSync(hutchPath, "utf8") : "";
+			const selectedManager = configuredPackageManager(hutch);
+			const existingLockfiles = knownPackageManagerLockfiles.filter((lockfile) =>
+				existsSync(join(templateRoot, lockfile)),
+			);
 			if (!manifest) {
 				packageFreeTemplates.push(templateName);
-				if (existsSync(lockPath)) {
+				if (selectedManager !== undefined) {
 					invalidManifests.push(
-						`${templateName}: package-free template contains package-lock.json`,
+						`${templateName}: package-free template selects ${selectedManager}`,
+					);
+				}
+				for (const lockfile of existingLockfiles) {
+					invalidManifests.push(
+						`${templateName}: package-free template contains ${lockfile}`,
 					);
 				}
 				continue;
+			}
+			if (selectedManager === undefined) {
+				invalidManifests.push(
+					`${templateName}: package-backed template does not select a package manager`,
+				);
+				continue;
+			}
+			if (!isBuiltInPackageManager(selectedManager)) {
+				invalidManifests.push(
+					`${templateName}: release template uses unsupported package manager ${selectedManager}`,
+				);
+				continue;
+			}
+			for (const issue of lockfileSelectionIssues(
+				selectedManager,
+				existingLockfiles,
+			)) {
+				invalidManifests.push(`${templateName}: ${issue}`);
 			}
 			if (manifest.scripts !== undefined) {
 				invalidManifests.push(`${templateName}: package.json contains scripts`);
@@ -116,10 +182,11 @@ describe("Electrobun template package boundaries", () => {
 				}
 			}
 
-			if (!existsSync(lockPath)) {
-				invalidManifests.push(`${templateName}: missing package-lock.json`);
+			if (selectedManager !== "npm") {
 				continue;
 			}
+			const lockPath = join(templateRoot, "package-lock.json");
+			if (!existsSync(lockPath)) continue;
 			const lock = JSON.parse(readFileSync(lockPath, "utf8")) as PackageLock;
 			if (lock.lockfileVersion !== 3) {
 				invalidManifests.push(
@@ -138,11 +205,22 @@ describe("Electrobun template package boundaries", () => {
 					);
 				}
 			}
-
 		}
 
 		expect(invalidManifests).toEqual([]);
 		expect(packageFreeTemplates).toEqual([...expectedPackageFreeTemplates].sort());
+	});
+
+	test("Bun is a first-class package-manager and lockfile selection", () => {
+		expect(
+			configuredPackageManager('export default { packageManager: "bun" };'),
+		).toBe("bun");
+		expect(lockfileSelectionIssues("bun", ["bun.lock"])).toEqual([]);
+		expect(lockfileSelectionIssues("bun", ["bun.lockb"])).toEqual([]);
+		expect(lockfileSelectionIssues("bun", ["package-lock.json"])).toEqual([
+			"package-lock.json belongs to a different package manager",
+			"missing bun.lock or bun.lockb",
+		]);
 	});
 
 	test("Hutch owns template tasks and release metadata", () => {
@@ -171,13 +249,43 @@ describe("Electrobun template package boundaries", () => {
 			if (pragmaPins(hutch) !== packagePins) {
 				invalidConfigs.push(`${templateName}: Hutch pins do not match package pins`);
 			}
-			const hasNpmInstall = /\binstall:\s*\["npm", "ci"\]/.test(hutch);
-			if (hasNpmInstall !== hasManifest) {
-				invalidConfigs.push(
-					hasManifest
-						? `${templateName}: install does not run npm ci`
-						: `${templateName}: package-free template contains an install task`,
+			const selectedManager = configuredPackageManager(hutch);
+			const hasInstallTask = /\binstall\s*:/.test(hutch);
+			const hasDelegatedCi = /\binstall\s*:\s*\["hutch", "pm", "ci"\]/.test(
+				hutch,
+			);
+			const hardcodedPackageManagerCommand =
+				/\[\s*["'](?:npm|bun|pnpm|yarn)["']\s*,/.test(hutch) ||
+				/:\s*["'](?:npm|bun|pnpm|yarn)\s+(?:ci|install|exec|x|run)\b/.test(
+					hutch,
 				);
+			if (hasManifest) {
+				if (selectedManager === undefined) {
+					invalidConfigs.push(
+						`${templateName}: package-backed template does not select a package manager`,
+					);
+				}
+				if (!hasDelegatedCi) {
+					invalidConfigs.push(
+						`${templateName}: install does not delegate a frozen install through hutch pm ci`,
+					);
+				}
+				if (hardcodedPackageManagerCommand) {
+					invalidConfigs.push(
+						`${templateName}: task hardcodes a package-manager executable`,
+					);
+				}
+			} else {
+				if (selectedManager !== undefined) {
+					invalidConfigs.push(
+						`${templateName}: package-free template selects ${selectedManager}`,
+					);
+				}
+				if (hasInstallTask) {
+					invalidConfigs.push(
+						`${templateName}: package-free template contains an install task`,
+					);
+				}
 			}
 
 			const electrobun = readFileSync(electrobunPath, "utf8");
@@ -227,7 +335,7 @@ describe("Electrobun template package boundaries", () => {
 				manifest.dependencies?.vite ?? manifest.devDependencies?.vite,
 			);
 			const expected = usesVite
-				? 'build: "npm exec -- vite build && hutch electrobun build --env=production"'
+				? 'build: "hutch pm exec -- vite build && hutch electrobun build --env=production"'
 				: 'build: ["hutch", "electrobun", "build", "--env=production"]';
 
 			if (!hutch.includes(expected)) {
@@ -268,11 +376,13 @@ describe("Electrobun template package boundaries", () => {
 			if (!existsSync(readmePath)) continue;
 
 			const readme = readFileSync(readmePath, "utf8");
-			if (readme.includes("bun run build")) {
-				invalidDocs.push(`${templateName}: uses bun run build`);
+			if (/\b(?:npm|bun|pnpm|yarn)\s+run\s+build\b/.test(readme)) {
+				invalidDocs.push(`${templateName}: bypasses hutch run build`);
 			}
-			if (/\bbun (?:install|start)\b/.test(readme)) {
-				invalidDocs.push(`${templateName}: invokes Bun as a package manager`);
+			if (/\b(?:npm|bun|pnpm|yarn)\s+(?:ci|install|start)\b/.test(readme)) {
+				invalidDocs.push(
+					`${templateName}: bypasses the Hutch package-manager boundary`,
+				);
 			}
 			if (readme.includes("hutch install")) {
 				invalidDocs.push(`${templateName}: bypasses the explicit install script`);
