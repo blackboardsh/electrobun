@@ -75,7 +75,7 @@ or invokes Hutch; it never owns or supplies the SDK.
 
 When Hutch prepares a project, it verifies and stores the selected platform
 archive in its global `~/.dash/products/electrobun` cache. It then **copies**
-the SDK trees into the project as a writable sysroot:
+the SDK trees into the project as a generated sysroot:
 
 ```text
 .hutch/devkit/
@@ -93,16 +93,19 @@ All Electrobun SDK imports resolve to this project copy. TypeScript projects
 normally extend `.hutch/devkit/tsconfig.json`; native builds point Cargo, Go,
 Zig, or Odin at their matching directory under `.hutch/devkit`.
 
-Templates ignore `.hutch/` by default. Because the devkit is a normal writable
-copy, you may remove that ignore rule and commit it when your project needs to
-modify or vendor an SDK. Do not edit the shared global cache.
+Templates ignore `.hutch/` by default. Hutch owns this generated projection and
+may replace it during synchronization. Directly editing SDK files or committing
+the projection is not a supported customization or dependency-management
+workflow. Do not edit the shared global cache either.
 
-<Aside type="caution" title="Commit SDK changes before refreshing">
-A sync for a different Electrobun version or target, or for a changed release
-manifest, can replace the entire project `.hutch/devkit` copy. Commit, stash,
-or merge local SDK changes before upgrading or switching targets. Normal
-builds keep a matching project copy, but the current refresh mechanism does
-not merge SDK edits.
+<Aside type="note" title="Stable artifacts remain available">
+The current distribution policy keeps published stable Electrobun core
+archives on GitHub Releases and stable Hutch and Cottontail binaries on their
+existing release hosts. The global store is a local cache, and the project
+devkit is regenerated from those published artifacts when needed. Projects do
+not need to vendor `.hutch/devkit` to preserve a supported stable build. CI
+runners may cache `~/.dash` to avoid repeated downloads, but correctness does
+not depend on that cache surviving between runs.
 </Aside>
 
 ## External bundlers

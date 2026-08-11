@@ -186,7 +186,7 @@ export default {
 The version must be exact; npm tags and semver ranges are not product
 selectors. `hutch electrobun sync` resolves and verifies that release in the
 global `~/.dash/products/electrobun` store, then copies its SDKs and editor
-facade into the project's writable `.hutch/devkit` sysroot. It also resolves
+facade into the project's generated `.hutch/devkit` sysroot. It also resolves
 the selected native compiler under `~/.dash/toolchains` when the project needs
 one.
 
@@ -194,9 +194,9 @@ one.
 sync implicitly, so the explicit command is mainly useful after changing the
 version pin, for editor setup, or for preparing an offline build.
 
-Templates ignore `.hutch/` by default. You may change that rule and commit an
-edited SDK copy, but a version, target, or release-manifest refresh can replace
-the project devkit. Commit or merge edits before upgrading. See
+Templates ignore `.hutch/` by default. Hutch owns this generated state and may
+replace it during sync; direct SDK edits and committing the projection are not
+supported workflows. See
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
 the complete boundary and external-bundler recipe.
 

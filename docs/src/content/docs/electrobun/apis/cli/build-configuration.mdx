@@ -51,11 +51,12 @@ and the application version in `app.version`.
 
 Hutch resolves and verifies that release under
 `~/.dash/products/electrobun`, then copies its config types and language SDKs
-into the writable project `.hutch/devkit` sysroot. Run
+into the generated project `.hutch/devkit` sysroot. Run
 `hutch electrobun sync` to refresh that project copy without building. `init`,
 `build`, `run`, and `dev` sync implicitly. See
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
-the config responsibility table, refresh caveat, and external-bundler aliases.
+the config responsibility table, generated-state lifecycle, and
+external-bundler aliases.
 
 ## Application Metadata
 

@@ -94,10 +94,10 @@ hutch electrobun build --env=canary
 ```
 
 Sync verifies the selected per-platform core archive from the Electrobun GitHub
-Release, caches it globally, and copies its SDKs into the writable project
-`.hutch/devkit` sysroot. Templates ignore `.hutch/` by default. If you choose
-to commit an edited devkit, commit or merge those edits before changing the
-product version or target because refresh can replace the project copy.
+Release, caches it globally, and copies its SDKs into the generated project
+`.hutch/devkit` sysroot. Templates ignore `.hutch/` by default. Hutch owns this
+projection and can replace it when the selected product, target, or release
+manifest changes; direct edits are not a supported customization mechanism.
 
 Hutch builds for the current host. Verify startup, RPC, webviews, signing, and
 updates on native runners for every platform you distribute.

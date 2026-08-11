@@ -97,7 +97,7 @@ export default {
 ```
 
 During `init`, Hutch syncs that exact core and SDK release into the shared
-`~/.dash` store, copies its SDKs into the writable project `.hutch/devkit`
+`~/.dash` store, copies its SDKs into the generated project `.hutch/devkit`
 sysroot, and resolves any required native compiler under `~/.dash/toolchains`.
 `dev`, `run`, and `build` refresh that preparation automatically;
 `hutch electrobun sync` does the same work without building.
@@ -154,7 +154,7 @@ for each target.
 - [Hutch](/electrobun/guides/hutch/) explains commands, channels, and project
   pins.
 - [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
-  explains the config split, editable SDK copies, and external bundlers.
+  explains the config split, generated SDK projection, and external bundlers.
 - [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.
 - [Main Process Runtimes](/electrobun/guides/native-main-process/) covers
   Cottontail, Bun, Zig, Rust, Go, and Odin.

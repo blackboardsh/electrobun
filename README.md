@@ -21,7 +21,7 @@ Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.bl
 Install Hutch globally, then use it to create and build a project. Each project
 pins an exact Electrobun release in `hutch.config.ts`; Hutch caches that
 release's platform archive from GitHub Releases and copies its SDKs into the
-project's writable `.hutch/devkit` sysroot:
+project's generated `.hutch/devkit` sysroot:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh

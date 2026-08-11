@@ -154,7 +154,7 @@ projects. The compiler is not bundled into the finished application.
 
 `hutch electrobun sync` downloads and verifies the matching Electrobun core and
 SDK release under `~/.dash/products/electrobun`, copies its SDKs into the
-project's writable `.hutch/devkit` sysroot, and resolves the native toolchain
+project's generated `.hutch/devkit` sysroot, and resolves the native toolchain
 under `~/.dash/toolchains`. Go builds on Windows also resolve Zig for cgo. `init`,
 `build`, `run`, and `dev` call the same preparation automatically.
 
