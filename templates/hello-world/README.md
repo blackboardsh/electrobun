@@ -13,7 +13,7 @@ This hello world app demonstrates:
 
 1. Install dependencies:
    ```bash
-   hutch install
+   hutch run install
    ```
 
 2. Run in development mode:

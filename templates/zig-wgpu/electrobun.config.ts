@@ -1,6 +1,9 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+	electrobun: {
+		version: "1.18.4-beta.25",
+	},
 	app: {
 		name: "zig-wgpu",
 		identifier: "zigwgpu.electrobun.dev",
@@ -10,6 +13,7 @@ export default {
 		mainProcess: "zig",
 		zig: {
 			entrypoint: "src/zig/main.zig",
+			version: "0.16.0",
 		},
 		views: {
 			mainview: {

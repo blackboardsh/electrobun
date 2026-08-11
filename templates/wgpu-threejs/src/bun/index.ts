@@ -5,13 +5,13 @@ import {
 	Screen,
 	WGPU,
 	WGPUBridge,
-	three,
 } from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
 import { existsSync } from "fs";
 import { join, resolve } from "path";
 import * as CANNON from "cannon-es";
+import * as three from "three";
 
 const WGPUNative = WGPU.native;
 const WGPU_KEEPALIVE: any[] = [];

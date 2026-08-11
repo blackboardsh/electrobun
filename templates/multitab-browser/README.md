@@ -15,7 +15,7 @@ A demonstration of building a multi-tab browser using Electrobun framework.
 
 ```bash
 # Install dependencies
-hutch install
+hutch run install
 
 # Run in development mode
 hutch run dev

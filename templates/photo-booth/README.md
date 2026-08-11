@@ -27,6 +27,11 @@ src/
 
 ## Getting Started
 
+### Install Dependencies
+```bash
+hutch run install
+```
+
 ### Development Mode
 ```bash
 hutch run dev
@@ -34,10 +39,10 @@ hutch run dev
 
 ### Build for Production
 ```bash
-hutch run build:canary
+hutch run build
 ```
 
-### Run the Built App
+### Start without File Watching
 ```bash
 hutch run start
 ```

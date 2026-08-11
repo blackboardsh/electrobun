@@ -1,6 +1,9 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+	electrobun: {
+		version: "1.18.4-beta.25",
+	},
 	app: {
 		name: "go-maze-wgpu",
 		identifier: "gomazewgpu.electrobun.dev",
@@ -9,7 +12,7 @@ export default {
 	build: {
 		mainProcess: "go",
 		go: {
-			entrypoint: "src/go/main.go",
+			package: "./src/go",
 		},
 		views: {
 			mainview: {

@@ -1,6 +1,9 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+	electrobun: {
+		version: "1.18.4-beta.25",
+	},
 	app: {
 		name: "angular-app",
 		identifier: "angularapp.electrobun.dev",

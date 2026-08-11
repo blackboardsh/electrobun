@@ -5,7 +5,20 @@ import { join } from "node:path";
 type TemplateManifest = {
 	dependencies?: Record<string, string>;
 	devDependencies?: Record<string, string>;
-	scripts?: Record<string, string>;
+	optionalDependencies?: Record<string, string>;
+	scripts?: unknown;
+};
+
+type PackageLock = {
+	lockfileVersion?: number;
+	packages?: Record<
+		string,
+		{
+			dependencies?: Record<string, string>;
+			devDependencies?: Record<string, string>;
+			optionalDependencies?: Record<string, string>;
+		}
+	>;
 };
 
 const templatesRoot = import.meta.dirname;
@@ -16,19 +29,31 @@ const odinWgpuTemplates = [
 	"odin-particles-wgpu",
 	"odin-tree-wgpu",
 ] as const;
+const packageFreeNativeTemplates = [
+	"go-maze-wgpu",
+	...odinWgpuTemplates,
+	"rust-flock-wgpu",
+	"zig-wgpu",
+] as const;
 const templateNames = readdirSync(templatesRoot, { withFileTypes: true })
 	.filter(
 		(entry) =>
 			entry.isDirectory() &&
-			existsSync(join(templatesRoot, entry.name, "package.json")),
+			existsSync(join(templatesRoot, entry.name, "electrobun.config.ts")),
 	)
 	.map((entry) => entry.name)
 	.sort();
 
-function readManifest(templateName: string): TemplateManifest {
+function readManifest(templateName: string): TemplateManifest | undefined {
+	const path = join(templatesRoot, templateName, "package.json");
+	if (!existsSync(path)) return undefined;
 	return JSON.parse(
-		readFileSync(join(templatesRoot, templateName, "package.json"), "utf8"),
+		readFileSync(path, "utf8"),
 	) as TemplateManifest;
+}
+
+function pragmaPins(source: string): string {
+	return source.match(/^\/\/\s*@hutch\s+([^\r\n]+)$/m)?.[1] ?? "";
 }
 
 function collectTemplateTextFiles(directory: string): string[] {
@@ -47,22 +72,166 @@ function collectTemplateTextFiles(directory: string): string[] {
 	return files;
 }
 
-describe("Electrobun template build scripts", () => {
+describe("Electrobun template package boundaries", () => {
+	test("npm manifests and locks contain only application dependencies", () => {
+		const invalidManifests: string[] = [];
+		const packageFreeTemplates: string[] = [];
+
+		for (const templateName of templateNames) {
+			const templateRoot = join(templatesRoot, templateName);
+			const manifest = readManifest(templateName);
+			const lockPath = join(templateRoot, "package-lock.json");
+			for (const obsoleteLock of [
+				"bun.lock",
+				"bun.lockb",
+				"pnpm-lock.yaml",
+				"yarn.lock",
+			]) {
+				if (existsSync(join(templateRoot, obsoleteLock))) {
+					invalidManifests.push(`${templateName}: contains ${obsoleteLock}`);
+				}
+			}
+			if (!manifest) {
+				packageFreeTemplates.push(templateName);
+				if (existsSync(lockPath)) {
+					invalidManifests.push(
+						`${templateName}: package-free template contains package-lock.json`,
+					);
+				}
+				continue;
+			}
+			if (manifest.scripts !== undefined) {
+				invalidManifests.push(`${templateName}: package.json contains scripts`);
+			}
+			for (const field of [
+				"dependencies",
+				"devDependencies",
+				"optionalDependencies",
+			] as const) {
+				if (manifest[field]?.electrobun !== undefined) {
+					invalidManifests.push(
+						`${templateName}: package.json ${field} contains electrobun`,
+					);
+				}
+			}
+
+			if (!existsSync(lockPath)) {
+				invalidManifests.push(`${templateName}: missing package-lock.json`);
+				continue;
+			}
+			const lock = JSON.parse(readFileSync(lockPath, "utf8")) as PackageLock;
+			if (lock.lockfileVersion !== 3) {
+				invalidManifests.push(
+					`${templateName}: expected package-lock v3, received ${lock.lockfileVersion}`,
+				);
+			}
+			const lockRoot = lock.packages?.[""];
+			for (const field of [
+				"dependencies",
+				"devDependencies",
+				"optionalDependencies",
+			] as const) {
+				if (JSON.stringify(lockRoot?.[field] ?? {}) !== JSON.stringify(manifest[field] ?? {})) {
+					invalidManifests.push(
+						`${templateName}: package-lock ${field} does not match package.json`,
+					);
+				}
+			}
+
+		}
+
+		expect(invalidManifests).toEqual([]);
+		expect(packageFreeTemplates).toEqual([...packageFreeNativeTemplates].sort());
+	});
+
+	test("Hutch owns template tasks and release metadata", () => {
+		const invalidConfigs: string[] = [];
+		const packageVersion = (
+			JSON.parse(
+				readFileSync(join(templatesRoot, "..", "package", "package.json"), "utf8"),
+			) as { version: string }
+		).version;
+		const packagePins = pragmaPins(
+			readFileSync(join(templatesRoot, "..", "package", "hutch.config.ts"), "utf8"),
+		);
+
+		for (const templateName of templateNames) {
+			const templateRoot = join(templatesRoot, templateName);
+			const hasManifest = existsSync(join(templateRoot, "package.json"));
+			const hutchPath = join(templateRoot, "hutch.config.ts");
+			const electrobunPath = join(templateRoot, "electrobun.config.ts");
+			const tsconfigPath = join(templateRoot, "tsconfig.json");
+			const gitignorePath = join(templateRoot, ".gitignore");
+			if (!existsSync(hutchPath)) {
+				invalidConfigs.push(`${templateName}: missing hutch.config.ts`);
+				continue;
+			}
+			const hutch = readFileSync(hutchPath, "utf8");
+			if (pragmaPins(hutch) !== packagePins) {
+				invalidConfigs.push(`${templateName}: Hutch pins do not match package pins`);
+			}
+			const hasNpmInstall = /\binstall:\s*\["npm", "ci"\]/.test(hutch);
+			if (hasNpmInstall !== hasManifest) {
+				invalidConfigs.push(
+					hasManifest
+						? `${templateName}: install does not run npm ci`
+						: `${templateName}: package-free template contains an install task`,
+				);
+			}
+
+			const electrobun = readFileSync(electrobunPath, "utf8");
+			const versions = [
+				...electrobun.matchAll(
+					/\belectrobun\s*:\s*\{\s*version\s*:\s*["']([^"']+)["']/g,
+				),
+			];
+			if (versions.length !== 1 || versions[0]?.[1] !== packageVersion) {
+				invalidConfigs.push(
+					`${templateName}: electrobun.version must equal ${packageVersion}`,
+				);
+			}
+
+			if (!existsSync(tsconfigPath)) {
+				invalidConfigs.push(`${templateName}: missing tsconfig.json`);
+			} else {
+				const tsconfig = JSON.parse(readFileSync(tsconfigPath, "utf8")) as {
+					extends?: string;
+				};
+				if (tsconfig.extends !== "./.hutch/devkit/tsconfig.json") {
+					invalidConfigs.push(`${templateName}: tsconfig does not extend the devkit`);
+				}
+			}
+
+			if (
+				!existsSync(gitignorePath) ||
+				!readFileSync(gitignorePath, "utf8").split(/\r?\n/).includes(".hutch/")
+			) {
+				invalidConfigs.push(`${templateName}: .hutch is not ignored`);
+			}
+		}
+
+		expect(invalidConfigs).toEqual([]);
+	});
+
 	test("every template exposes a production build through hutch run build", () => {
 		const invalidScripts: string[] = [];
 
 		for (const templateName of templateNames) {
-			const manifest = readManifest(templateName);
+			const manifest = readManifest(templateName) ?? {};
+			const hutch = readFileSync(
+				join(templatesRoot, templateName, "hutch.config.ts"),
+				"utf8",
+			);
 			const usesVite = Boolean(
 				manifest.dependencies?.vite ?? manifest.devDependencies?.vite,
 			);
 			const expected = usesVite
-				? "vite build && hutch electrobun build --env=production"
-				: "hutch electrobun build --env=production";
+				? 'build: "npm exec -- vite build && hutch electrobun build --env=production"'
+				: 'build: ["hutch", "electrobun", "build", "--env=production"]';
 
-			if (manifest.scripts?.build !== expected) {
+			if (!hutch.includes(expected)) {
 				invalidScripts.push(
-					`${templateName}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(manifest.scripts?.build)}`,
+					`${templateName}: hutch.config.ts is missing ${JSON.stringify(expected)}`,
 				);
 			}
 		}
@@ -80,6 +249,15 @@ describe("Electrobun template build scripts", () => {
 			const readme = readFileSync(readmePath, "utf8");
 			if (readme.includes("bun run build")) {
 				invalidDocs.push(`${templateName}: uses bun run build`);
+			}
+			if (/\bbun (?:install|start)\b/.test(readme)) {
+				invalidDocs.push(`${templateName}: invokes Bun as a package manager`);
+			}
+			if (readme.includes("hutch install")) {
+				invalidDocs.push(`${templateName}: bypasses the explicit install script`);
+			}
+			if (readme.includes("installs dependencies on the first run")) {
+				invalidDocs.push(`${templateName}: promises implicit dependency installation`);
 			}
 			if (readme.includes("hutch electrobun build --env=stable")) {
 				invalidDocs.push(`${templateName}: uses the non-canonical stable alias`);
@@ -104,6 +282,31 @@ describe("Electrobun template build scripts", () => {
 		expect(legacyImports).toEqual([]);
 	});
 
+	test("graphics showcases own their third-party JavaScript libraries", () => {
+		const babylonManifest = readManifest("wgpu-babylon");
+		const threeManifest = readManifest("wgpu-threejs");
+		const babylonSource = readFileSync(
+			join(templatesRoot, "wgpu-babylon", "src", "bun", "index.ts"),
+			"utf8",
+		);
+		const threeSource = readFileSync(
+			join(templatesRoot, "wgpu-threejs", "src", "bun", "index.ts"),
+			"utf8",
+		);
+
+		expect(babylonManifest?.dependencies?.["@babylonjs/core"]).toBe(
+			"^7.45.0",
+		);
+		expect(babylonSource).toContain(
+			'import * as babylon from "@babylonjs/core";',
+		);
+		expect(threeManifest?.dependencies?.three).toBe("^0.165.0");
+		expect(threeManifest?.devDependencies?.["@types/three"]).toBe(
+			"^0.165.0",
+		);
+		expect(threeSource).toContain('import * as three from "three";');
+	});
+
 	test("Odin WGPU showcases keep the native cross-platform template contract", () => {
 		const invalidTemplates: string[] = [];
 
@@ -112,7 +315,7 @@ describe("Electrobun template build scripts", () => {
 			const configPath = join(templateRoot, "electrobun.config.ts");
 			const requiredFiles = [
 				"README.md",
-				"package.json",
+				"hutch.config.ts",
 				"src/mainview/index.css",
 				"src/mainview/index.html",
 				"src/mainview/index.ts",

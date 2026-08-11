@@ -6,7 +6,8 @@ An Electrobun template with an Odin main process driving a real-time stable-flui
 hutch run dev
 ```
 
-`hutch run dev` installs dependencies on the first run, builds the app, launches it, and rebuilds when source files change.
+`hutch run dev` builds the app, launches it, and rebuilds when source files
+change. This native template has no npm dependencies.
 
 The Odin main process lives in `src/odin/main.odin`; the webview UI lives in `src/mainview`.
 

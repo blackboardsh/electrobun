@@ -16,11 +16,11 @@ runtime — no webview.
 ## Run it
 
 ```
-bun install
-bun start
+hutch run install
+hutch run start
 ```
 
-Production packaging: `hutch electrobun build --env=production`.
+Production packaging: `hutch run build`.
 
 **Permission:** reading screen pixels requires macOS Screen Recording
 permission. The app requests it at startup (system prompt via

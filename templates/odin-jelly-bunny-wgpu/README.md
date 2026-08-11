@@ -9,8 +9,8 @@ panel and pointer forwarding; Odin owns simulation, hit testing, and rendering.
 hutch run dev
 ```
 
-`hutch run dev` installs dependencies on the first run, builds the app,
-launches it, and rebuilds when source files change. A production bundle uses:
+`hutch run dev` builds the app, launches it, and rebuilds when source files
+change. This native template has no npm dependencies. A production bundle uses:
 
 ```sh
 hutch run build

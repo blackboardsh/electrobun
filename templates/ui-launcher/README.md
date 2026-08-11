@@ -20,11 +20,11 @@ What it exercises:
 ## Run it
 
 ```
-bun install
-bun start
+hutch run install
+hutch run start
 ```
 
-Production packaging: `hutch electrobun build --env=production`.
+Production packaging: `hutch run build`.
 
 Keys: type to filter, `up`/`down` to navigate, `enter` to launch/copy,
 `esc` to collapse back to the pill. Drag the pill to reposition.

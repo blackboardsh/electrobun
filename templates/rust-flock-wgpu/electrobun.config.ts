@@ -1,6 +1,9 @@
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+	electrobun: {
+		version: "1.18.4-beta.25",
+	},
 	app: {
 		name: "rust-flock-wgpu",
 		identifier: "rustflockwgpu.electrobun.dev",
@@ -9,7 +12,8 @@ export default {
 	build: {
 		mainProcess: "rust",
 		rust: {
-			entrypoint: "src/rust/main.rs",
+			manifest: "Cargo.toml",
+			binary: "main",
 		},
 		views: {
 			mainview: {

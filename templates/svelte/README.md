@@ -6,7 +6,7 @@ A fast Electrobun desktop app template with Svelte 5 and Vite for hot module rep
 
 ```bash
 # Install dependencies
-hutch install
+hutch run install
 
 # Development without HMR (uses bundled assets)
 hutch run dev

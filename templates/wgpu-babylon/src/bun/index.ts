@@ -1,4 +1,5 @@
-import { GpuWindow, Screen, babylon, webgpu } from "electrobun/main";
+import { GpuWindow, Screen, webgpu } from "electrobun/main";
+import * as babylon from "@babylonjs/core";
 import { readFileSync } from "fs";
 import { resolve } from "path";
 

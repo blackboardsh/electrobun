@@ -3,21 +3,12 @@
 	"version": "1.0.0",
 	"type": "module",
 	"description": "Electrobun app with Angular and Vite HMR",
-	"scripts": {
-		"start": "vite build && hutch electrobun dev",
-		"dev": "vite build && hutch electrobun dev --watch",
-		"dev:hmr": "concurrently \"hutch run hmr\" \"hutch run start\"",
-		"hmr": "vite --port 5173",
-		"build": "vite build && hutch electrobun build --env=production",
-		"build:canary": "vite build && hutch electrobun build --env=canary"
-	},
 	"dependencies": {
 		"@angular/common": "^19.0.0",
 		"@angular/compiler": "^19.0.0",
 		"@angular/core": "^19.0.0",
 		"@angular/platform-browser": "^19.0.0",
 		"@angular/platform-browser-dynamic": "^19.0.0",
-		"electrobun": "file:../../package",
 		"rxjs": "^7.8.1",
 		"zone.js": "^0.15.0"
 	},

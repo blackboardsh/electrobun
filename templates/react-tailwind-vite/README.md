@@ -6,7 +6,7 @@ A fast Electrobun desktop app template with React, Tailwind CSS, and Vite for ho
 
 ```bash
 # Install dependencies
-hutch install
+hutch run install
 
 # Development without HMR (uses bundled assets)
 hutch run dev

@@ -7,15 +7,16 @@ native `<electrobun-wgpu>` surface.
 hutch run dev
 ```
 
-`hutch run dev` installs dependencies on the first run, builds the app,
-launches it, and rebuilds when source files change. The production contract is:
+`hutch run dev` builds the app, launches it, and rebuilds when source files
+change. This native template has no npm dependencies. The production contract
+is:
 
 ```sh
 hutch run build
 ```
 
-That invokes `hutch electrobun build --env=production`. WGPU is bundled and
-CEF is disabled on macOS, Linux, and Windows.
+The `build` Hutch script creates a production bundle. WGPU is bundled and CEF
+is disabled on macOS, Linux, and Windows.
 
 ## The simulation
 

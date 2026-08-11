@@ -1,11 +1,11 @@
 {
+	"extends": "./.hutch/devkit/tsconfig.json",
 	"compilerOptions": {
 		"target": "ES2021",
 		"module": "ESNext",
 		"moduleResolution": "bundler",
 		"strict": true,
 		"skipLibCheck": true,
-		"types": ["bun-types"],
 		"allowSyntheticDefaultImports": true
 	}
 }

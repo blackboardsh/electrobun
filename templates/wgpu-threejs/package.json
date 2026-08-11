@@ -3,18 +3,13 @@
 	"version": "1.0.0",
 	"type": "module",
 	"description": "Three.js + cannon-es physics playground on WebGPU",
-	"scripts": {
-		"start": "hutch electrobun dev",
-		"dev": "hutch electrobun dev --watch",
-		"build": "hutch electrobun build --env=production",
-		"build:canary": "hutch electrobun build --env=canary"
-	},
 	"dependencies": {
-		"electrobun": "file:../../package",
-		"cannon-es": "^0.20.0"
+		"cannon-es": "^0.20.0",
+		"three": "^0.165.0"
 	},
 	"devDependencies": {
 		"@types/bun": "latest",
+		"@types/three": "^0.165.0",
 		"typescript": "^5.7.2"
 	}
 }

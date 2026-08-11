@@ -20,11 +20,11 @@ one instanced draw call → Dawn surface in a GpuWindow
 ## Run it
 
 ```
-bun install
-bun start
+hutch run install
+hutch run start
 ```
 
-Production packaging: `hutch electrobun build --env=production`.
+Production packaging: `hutch run build`.
 
 ## What it demonstrates
 

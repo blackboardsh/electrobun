@@ -6,7 +6,7 @@ A native Go main-process template for Electrobun. Go generates a maze with adjus
 hutch run dev
 ```
 
-`hutch run dev` installs dependencies on the first run, builds the app, launches
-it, and rebuilds when source files change.
+`hutch run dev` builds the app, launches it, and rebuilds when source files
+change. This native template has no npm dependencies.
 
 The renderer uses no Go modules. It builds with Electrobun's vendored Go toolchain and links to Electrobun's Go SDK plus the bundled Dawn WebGPU library.
