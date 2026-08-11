@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	rmSync,
@@ -20,11 +21,12 @@ import {
 	type QaRuntime,
 } from "./all/src/bun/orchestrator";
 import { inspectTemplateProject } from "./all/src/bun/project-inspection";
-import { findTemplateQaProjectRoot } from "./all/src/bun/project-root";
+import {
+	findTemplateQaProjectRoot,
+	resolveTemplateQaHutchExecutable,
+} from "./all/src/bun/project-root";
 
-function catalog(
-	ids = ["all", "package-free", "npm-app", "package-no-install"],
-): unknown {
+function catalog(ids = ["all", "install-task", "no-install-task"]): unknown {
 	return {
 		schema: 1,
 		kind: "electrobun-template-channel",
@@ -125,8 +127,7 @@ function fakeHarness(
 		inspectProject(path) {
 			const id = path.split(/[\\/]/).at(-1)!;
 			return {
-				hasPackageManifest: id !== "package-free",
-				hasInstallTask: id === "npm-app",
+				hasInstallTask: id === "install-task",
 				configuredElectrobunVersion:
 					options.configuredVersion ?? "2.0.0-beta.7",
 				projectedElectrobunVersion: projected.has(path)
@@ -201,9 +202,8 @@ describe("Template QA catalog and readiness contracts", () => {
 		const parsed = parseBetaCatalog(catalog());
 		expect(parsed.channel).toBe("beta");
 		expect(parsed.templates.map(({ id }) => id)).toEqual([
-			"package-free",
-			"npm-app",
-			"package-no-install",
+			"install-task",
+			"no-install-task",
 		]);
 		expect(() =>
 			parseBetaCatalog({ ...(catalog() as object), channel: "stable" }),
@@ -233,12 +233,30 @@ describe("Template QA catalog and readiness contracts", () => {
 		}
 	});
 
+	test("inherits the pinned Hutch launcher without splitting paths with spaces", () => {
+		const launcher = join(
+			"/tmp",
+			"Pinned Hutch Runtime",
+			"hutch launcher with spaces",
+		);
+		expect(
+			resolveTemplateQaHutchExecutable({ HUTCH_LAUNCHER_PATH: launcher }),
+		).toBe(launcher);
+		expect(
+			resolveTemplateQaHutchExecutable({
+				HUTCH_TEMPLATE_QA_EXECUTABLE: "explicit-hutch",
+				HUTCH_LAUNCHER_PATH: launcher,
+			}),
+		).toBe("explicit-hutch");
+		expect(resolveTemplateQaHutchExecutable({})).toBe("hutch");
+	});
+
 	test("inspects the exact product pin and project-local devkit facade", () => {
 		const root = mkdtempSync(join(tmpdir(), "template qa inspection "));
 		const devkit = join(root, ".hutch", "devkit");
 		try {
 			mkdirSync(devkit, { recursive: true });
-			writeFileSync(join(root, "package.json"), '{"name":"example"}\n');
+			expect(existsSync(join(root, "package.json"))).toBe(false);
 			writeFileSync(
 				join(root, "electrobun.config.ts"),
 				'export default { electrobun: { version: "2.0.0-beta.7" } };\n',
@@ -262,7 +280,6 @@ describe("Template QA catalog and readiness contracts", () => {
 			writeFileSync(join(devkit, "tsconfig.json"), "{}\n");
 
 			expect(inspectTemplateProject(root)).toEqual({
-				hasPackageManifest: true,
 				hasInstallTask: true,
 				configuredElectrobunVersion: "2.0.0-beta.7",
 				projectedElectrobunVersion: "2.0.0-beta.7",
@@ -281,10 +298,16 @@ describe("Template QA catalog and readiness contracts", () => {
 });
 
 describe("Template QA orchestration", () => {
-	test("installs only configured npm projects, builds serially, then launches", async () => {
+	test("runs configured installs and builds serially before launching", async () => {
 		const harness = fakeHarness();
+		const pinnedHutch = join(
+			"/tmp",
+			"Pinned Hutch Runtime",
+			"hutch launcher with spaces",
+		);
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/Template QA with spaces",
+			hutchExecutable: pinnedHutch,
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});
@@ -294,19 +317,29 @@ describe("Template QA orchestration", () => {
 			`${kind}:${templateId}`,
 		);
 		expect(kinds).toEqual([
-			"init:package-free",
-			"build:package-free",
-			"init:npm-app",
-			"install:npm-app",
-			"build:npm-app",
-			"init:package-no-install",
-			"build:package-no-install",
-			"run:package-free",
-			"run:npm-app",
-			"run:package-no-install",
+			"init:install-task",
+			"install:install-task",
+			"build:install-task",
+			"init:no-install-task",
+			"build:no-install-task",
+			"run:install-task",
+			"run:no-install-task",
 		]);
 		expect(harness.commands.every(({ cwd }) => cwd.includes("Template QA with spaces")))
 			.toBe(true);
+		expect(harness.commands.every(({ command }) => command === pinnedHutch)).toBe(
+			true,
+		);
+		for (const command of harness.commands.filter(({ kind }) => kind === "init")) {
+			expect(command.args).toEqual([
+				"electrobun",
+				"init",
+				command.templateId,
+				`--template=${command.templateId}`,
+				"--channel=beta",
+				"--skip-install",
+			]);
+		}
 		for (const command of harness.commands.filter(({ kind }) => kind === "build")) {
 			expect(command.args).toEqual(["run", "build"]);
 			expect(command.env).toBeUndefined();
@@ -320,7 +353,7 @@ describe("Template QA orchestration", () => {
 			expect(command.env).toBeUndefined();
 		}
 		expect(orchestrator.getSnapshot().templates.map(({ status }) => status))
-			.toEqual(["ready", "ready", "ready"]);
+			.toEqual(["ready", "ready"]);
 
 		await orchestrator.stopAll();
 		const runProcesses = harness.processes.filter(({ spec }) => spec.kind === "run");
@@ -328,7 +361,7 @@ describe("Template QA orchestration", () => {
 	});
 
 	test("continues after a cold failure and records passed-after-retry history", async () => {
-		const harness = fakeHarness({ failFirstBuildFor: "package-free" });
+		const harness = fakeHarness({ failFirstBuildFor: "no-install-task" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
 			readinessTimeoutMs: 1_000,
@@ -337,35 +370,35 @@ describe("Template QA orchestration", () => {
 
 		await orchestrator.startAll();
 		let snapshot = orchestrator.getSnapshot();
-		expect(snapshot.templates.find(({ id }) => id === "package-free")?.status)
+		expect(snapshot.templates.find(({ id }) => id === "no-install-task")?.status)
 			.toBe("failed");
-		expect(snapshot.templates.find(({ id }) => id === "npm-app")?.status)
+		expect(snapshot.templates.find(({ id }) => id === "install-task")?.status)
 			.toBe("ready");
 
-		await orchestrator.startTemplate("package-free");
+		await orchestrator.startTemplate("no-install-task");
 		snapshot = orchestrator.getSnapshot();
-		const packageFree = snapshot.templates.find(
-			({ id }) => id === "package-free",
+		const noInstall = snapshot.templates.find(
+			({ id }) => id === "no-install-task",
 		)!;
-		expect(packageFree.status).toBe("ready");
-		expect(packageFree.readyAfterRetry).toBe(true);
-		expect(packageFree.attempts.map(({ outcome }) => outcome)).toEqual([
+		expect(noInstall.status).toBe("ready");
+		expect(noInstall.readyAfterRetry).toBe(true);
+		expect(noInstall.attempts.map(({ outcome }) => outcome)).toEqual([
 			"failed",
 			"ready",
 		]);
 		expect(
-			snapshot.logs.filter(({ templateId }) => templateId === "package-free")
+			snapshot.logs.filter(({ templateId }) => templateId === "no-install-task")
 				.some(({ attempt }) => attempt === 1),
 		).toBe(true);
 		expect(
-			snapshot.logs.filter(({ templateId }) => templateId === "package-free")
+			snapshot.logs.filter(({ templateId }) => templateId === "no-install-task")
 				.some(({ attempt }) => attempt === 2),
 		).toBe(true);
 	});
 
 	test("times out a launch without the PID marker and still launches the rest", async () => {
 		const harness = fakeHarness({
-			omitRunMarkerFor: "package-free",
+			omitRunMarkerFor: "no-install-task",
 			enableTimeouts: true,
 		});
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
@@ -378,13 +411,13 @@ describe("Template QA orchestration", () => {
 		const states = Object.fromEntries(
 			orchestrator.getSnapshot().templates.map((state) => [state.id, state]),
 		);
-		expect(states["package-free"]?.status).toBe("failed");
-		expect(states["package-free"]?.lastError).toMatch(/Timed out waiting/);
-		expect(states["npm-app"]?.status).toBe("ready");
-		const packageFreeRun = harness.processes.find(
-			({ spec }) => spec.kind === "run" && spec.templateId === "package-free",
+		expect(states["no-install-task"]?.status).toBe("failed");
+		expect(states["no-install-task"]?.lastError).toMatch(/Timed out waiting/);
+		expect(states["install-task"]?.status).toBe("ready");
+		const noInstallRun = harness.processes.find(
+			({ spec }) => spec.kind === "run" && spec.templateId === "no-install-task",
 		);
-		expect(packageFreeRun?.process.terminated).toBe(true);
+		expect(noInstallRun?.process.terminated).toBe(true);
 	});
 
 	test("refuses a child whose exact product pin drifted", async () => {
@@ -406,7 +439,7 @@ describe("Template QA orchestration", () => {
 	});
 
 	test("refuses init output without the synchronous project devkit projection", async () => {
-		const harness = fakeHarness({ omitProjectionFor: "package-free" });
+		const harness = fakeHarness({ omitProjectionFor: "no-install-task" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
 			readinessTimeoutMs: 1_000,
@@ -416,7 +449,7 @@ describe("Template QA orchestration", () => {
 		await orchestrator.startAll();
 		const state = orchestrator
 			.getSnapshot()
-			.templates.find(({ id }) => id === "package-free");
+			.templates.find(({ id }) => id === "no-install-task");
 		expect(state?.status).toBe("failed");
 		expect(state?.lastError).toMatch(
 			/project-local Electrobun 2\.0\.0-beta\.7 devkit projection/,
@@ -424,12 +457,12 @@ describe("Template QA orchestration", () => {
 		expect(
 			harness.commands.some(
 				({ kind, templateId }) =>
-					kind === "build" && templateId === "package-free",
+					kind === "build" && templateId === "no-install-task",
 			),
 		).toBe(false);
 		expect(
 			harness.commands.some(
-				({ kind, templateId }) => kind === "run" && templateId === "npm-app",
+				({ kind, templateId }) => kind === "run" && templateId === "install-task",
 			),
 		).toBe(true);
 	});

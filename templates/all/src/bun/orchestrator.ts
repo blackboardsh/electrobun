@@ -83,7 +83,6 @@ export type CommandSpec = {
 };
 
 export type ProjectInspection = {
-	hasPackageManifest: boolean;
 	hasInstallTask: boolean;
 	configuredElectrobunVersion: string | null;
 	projectedElectrobunVersion: string | null;
@@ -417,6 +416,7 @@ export class TemplateQaOrchestrator {
 						id,
 						`--template=${id}`,
 						"--channel=beta",
+						"--skip-install",
 					],
 					cwd: this.runRoot,
 				});
@@ -491,8 +491,8 @@ export class TemplateQaOrchestrator {
 			`Verified project-local Electrobun ${inspection.projectedElectrobunVersion} devkit projection`,
 		);
 
-		if (inspection.hasPackageManifest && inspection.hasInstallTask) {
-			this.update(state, "installing", "Installing project dependencies");
+		if (inspection.hasInstallTask) {
+			this.update(state, "installing", "Running configured install task");
 			const installResult = await this.runFiniteCommand(state, epoch, {
 				kind: "install",
 				templateId: id,

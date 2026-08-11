@@ -12,7 +12,10 @@ import {
 	type QaSnapshot,
 } from "./orchestrator";
 import { inspectTemplateProject } from "./project-inspection";
-import { findTemplateQaProjectRoot } from "./project-root";
+import {
+	findTemplateQaProjectRoot,
+	resolveTemplateQaHutchExecutable,
+} from "./project-root";
 
 const DEFAULT_TEMPLATE_BASE_URL =
 	"https://electrobun-artifacts.blackboard.sh/electrobun/templates";
@@ -190,7 +193,7 @@ let autoStarted = false;
 const projectRoot = findTemplateQaProjectRoot();
 const orchestrator = new TemplateQaOrchestrator(runtime, {
 	projectRoot,
-	hutchExecutable: process.env.HUTCH_TEMPLATE_QA_EXECUTABLE ?? "hutch",
+	hutchExecutable: resolveTemplateQaHutchExecutable(),
 	onSnapshot(snapshot) {
 		// Live log entries use their own append-only message. Avoid repeatedly
 		// serializing the complete history on every phase transition.

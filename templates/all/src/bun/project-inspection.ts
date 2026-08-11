@@ -55,7 +55,6 @@ function validProjectedVersion(devkitRoot: string): string | null {
 }
 
 export function inspectTemplateProject(directory: string): ProjectInspection {
-	const packagePath = join(directory, "package.json");
 	const hutchConfigPath = join(directory, "hutch.config.ts");
 	const electrobunConfigPath = join(directory, "electrobun.config.ts");
 	const devkitProjectionPath = join(directory, ".hutch", "devkit");
@@ -76,11 +75,10 @@ export function inspectTemplateProject(directory: string): ProjectInspection {
 			"install",
 		);
 	} catch {
-		// A package without an explicit install task is intentionally not installed.
+		// A project without an explicit install task is intentionally not installed.
 	}
 
 	return {
-		hasPackageManifest: existsSync(packagePath),
 		hasInstallTask,
 		configuredElectrobunVersion: productVersion,
 		projectedElectrobunVersion: validProjectedVersion(devkitProjectionPath),

@@ -3,6 +3,16 @@ import { dirname, join, parse, resolve } from "node:path";
 
 export const TEMPLATE_QA_IDENTIFIER = "template-qa.electrobun.dev";
 
+export function resolveTemplateQaHutchExecutable(
+	environment: Record<string, string | undefined> = process.env,
+): string {
+	return (
+		environment.HUTCH_TEMPLATE_QA_EXECUTABLE ??
+		environment.HUTCH_LAUNCHER_PATH ??
+		"hutch"
+	);
+}
+
 export function findTemplateQaProjectRoot(
 	start = process.cwd(),
 	configured = process.env.ELECTROBUN_TEMPLATE_QA_ROOT,
