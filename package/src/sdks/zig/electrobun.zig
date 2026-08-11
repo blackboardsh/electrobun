@@ -1,6 +1,43 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+// Zig 0.16's std.DynLib does not support Windows. Keep the SDK's loader
+// surface consistent there by using the equivalent Win32 APIs directly.
+const WindowsDynamicLibrary = struct {
+    const win = std.os.windows;
+
+    extern "kernel32" fn LoadLibraryW(lpLibFileName: [*:0]const u16) callconv(.winapi) ?win.HMODULE;
+    extern "kernel32" fn FreeLibrary(hModule: win.HMODULE) callconv(.winapi) win.BOOL;
+    extern "kernel32" fn GetProcAddress(hModule: win.HMODULE, lpProcName: [*:0]const u8) callconv(.winapi) ?win.FARPROC;
+
+    module: win.HMODULE,
+
+    fn open(allocator: std.mem.Allocator, path: []const u8) !WindowsDynamicLibrary {
+        const path_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, path);
+        defer allocator.free(path_w);
+        const module = LoadLibraryW(path_w.ptr) orelse return error.FileNotFound;
+        return .{ .module = module };
+    }
+
+    fn close(self: *WindowsDynamicLibrary) void {
+        _ = FreeLibrary(self.module);
+    }
+
+    fn lookup(self: *WindowsDynamicLibrary, comptime T: type, name: [:0]const u8) ?T {
+        const address = GetProcAddress(self.module, name.ptr) orelse return null;
+        return @ptrCast(@alignCast(address));
+    }
+};
+
+const DynamicLibrary = if (builtin.os.tag == .windows) WindowsDynamicLibrary else std.DynLib;
+
+fn openDynamicLibrary(allocator: std.mem.Allocator, path: []const u8) !DynamicLibrary {
+    if (builtin.os.tag == .windows) {
+        return DynamicLibrary.open(allocator, path);
+    }
+    return DynamicLibrary.open(path);
+}
+
 // The SDK owns a lazily-initialized event-loop-free Io implementation so its
 // allocator-based public API keeps working without threading `std.Io` through
 // every call site. Apps with their own `Io` can keep using it side by side.
@@ -450,7 +487,7 @@ pub const WgpuAdapterDevice = struct {
 };
 
 pub const WgpuNative = struct {
-    lib: std.DynLib,
+    lib: DynamicLibrary,
     symbols: Symbols,
 
     const CreateInstanceFn = *const fn (?*const anyopaque) callconv(.c) ?*anyopaque;
@@ -473,7 +510,8 @@ pub const WgpuNative = struct {
         const lib_path = try std.fs.path.join(allocator, &.{ bundle_paths.exe_dir, lib_name });
         defer allocator.free(lib_path);
 
-        var lib = try std.DynLib.open(lib_path);
+        var lib = try openDynamicLibrary(allocator, lib_path);
+        errdefer lib.close();
         return .{
             .lib = lib,
             .symbols = .{
@@ -485,6 +523,10 @@ pub const WgpuNative = struct {
 
     pub fn close(self: *WgpuNative) void {
         self.lib.close();
+    }
+
+    pub fn lookup(self: *WgpuNative, comptime T: type, name: [:0]const u8) ?T {
+        return self.lib.lookup(T, name);
     }
 
     pub fn createInstance(self: *WgpuNative) ?*anyopaque {
@@ -627,7 +669,7 @@ pub fn resolveAppInfoFromBundle(allocator: std.mem.Allocator, bundle_paths: *con
 
 pub const Core = struct {
     allocator: std.mem.Allocator,
-    lib: std.DynLib,
+    lib: DynamicLibrary,
     symbols: Symbols,
 
     const LastErrorFn = *const fn () callconv(.c) [*:0]const u8;
@@ -878,7 +920,8 @@ pub const Core = struct {
         const lib_path = try std.fs.path.join(allocator, &.{ bundle_paths.exe_dir, lib_name });
         defer allocator.free(lib_path);
 
-        var lib = try std.DynLib.open(lib_path);
+        var lib = try openDynamicLibrary(allocator, lib_path);
+        errdefer lib.close();
 
         return .{
             .allocator = allocator,
