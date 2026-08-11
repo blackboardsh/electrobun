@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
 import {
 	parseHutchPragma,
-	pinElectrobunDependency,
+	pinElectrobunVersion,
+	pinHutchPragma,
+	publishTemplates,
 	releaseChannel,
 	templateArtifactKey,
 	templateChannelKey,
+	templateMetadata,
 } from "./publish-templates.mjs";
+
+const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 test("template releases map stable and prerelease versions to independent channels", () => {
 	assert.equal(releaseChannel("2.0.0"), "stable");
@@ -36,14 +44,88 @@ test("the release toolchain pins come from the package pragma", () => {
 	);
 });
 
-test("published templates replace repository-local Electrobun dependencies", () => {
-	const manifest = {
-		name: "example",
-		dependencies: { electrobun: "file:../../package", react: "^19.0.0" },
-	};
-	pinElectrobunDependency(manifest, "2.0.0-beta.1");
-	assert.deepEqual(manifest.dependencies, {
-		electrobun: "2.0.0-beta.1",
-		react: "^19.0.0",
+test("published templates stamp only Hutch release metadata", () => {
+	const source = [
+		"// @hutch cli=0.5.1 cottontail=0.3.0",
+		"export default {",
+		'\tscripts: { install: ["npm", "ci"] },',
+		"};",
+		"",
+	].join("\n");
+	assert.equal(
+		pinHutchPragma(source, { hutch: "0.6.0", cottontail: "0.4.0" }),
+		source.replace(
+			"cli=0.5.1 cottontail=0.3.0",
+			"cli=0.6.0 cottontail=0.4.0",
+		),
+	);
+	assert.throws(
+		() =>
+			pinHutchPragma("export default {};\n", {
+				hutch: "0.6.0",
+				cottontail: "0.4.0",
+			}),
+		/expected exactly one \/\/ @hutch pragma/,
+	);
+});
+
+test("published templates stamp only the Electrobun product version", () => {
+	const source = [
+		'import type { ElectrobunConfig } from "electrobun";',
+		"",
+		"export default {",
+		"\telectrobun: {",
+		'\t\tversion: "1.18.4-beta.25",',
+		"\t},",
+		'\tapp: { name: "example", version: "0.0.1" },',
+		"} satisfies ElectrobunConfig;",
+		"",
+	].join("\n");
+	assert.equal(
+		pinElectrobunVersion(source, "2.0.0-beta.1"),
+		source.replace("1.18.4-beta.25", "2.0.0-beta.1"),
+	);
+	assert.throws(
+		() => pinElectrobunVersion("export default {};\n", "2.0.0"),
+		/expected exactly one top-level electrobun.version/,
+	);
+});
+
+test("package-free templates receive catalog metadata", () => {
+	assert.deepEqual(templateMetadata("go-maze-wgpu"), {
+		name: "Go Maze WGPU",
+		description: "Go Maze WGPU Electrobun template",
 	});
+});
+
+test("dry-run archives preserve package and package-free template inputs", async () => {
+	const packageVersion = JSON.parse(
+		readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
+	).version;
+	const originalLog = console.log;
+	console.log = () => {};
+	let catalog;
+	try {
+		catalog = await publishTemplates({
+			dryRun: true,
+			channel: releaseChannel(packageVersion),
+		});
+	} finally {
+		console.log = originalLog;
+	}
+
+	assert.equal(catalog.templates.length, 30);
+	const stageRoot = join(repositoryRoot, ".template-release", "stage");
+	for (const template of catalog.templates) {
+		const sourceRoot = join(repositoryRoot, "templates", template.id);
+		const stagedRoot = join(stageRoot, template.id);
+		for (const file of ["package.json", "package-lock.json", "hutch.config.ts"]) {
+			const sourcePath = join(sourceRoot, file);
+			const stagedPath = join(stagedRoot, file);
+			assert.equal(existsSync(stagedPath), existsSync(sourcePath));
+			if (existsSync(sourcePath)) {
+				assert.deepEqual(readFileSync(stagedPath), readFileSync(sourcePath));
+			}
+		}
+	}
 });

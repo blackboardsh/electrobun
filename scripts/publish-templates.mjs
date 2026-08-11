@@ -27,14 +27,7 @@ const repositoryRoot = dirname(dirname(scriptPath));
 const templatesRoot = join(repositoryRoot, "templates");
 const packageRoot = join(repositoryRoot, "package");
 const outputRoot = join(repositoryRoot, ".template-release");
-const skippedFiles = new Set([
-	"bun.lock",
-	"bun.lockb",
-	"package-lock.json",
-	"pnpm-lock.yaml",
-	"yarn.lock",
-	".DS_Store",
-]);
+const skippedFiles = new Set([".DS_Store"]);
 
 function fail(message) {
 	throw new Error(`Electrobun templates: ${message}`);
@@ -74,20 +67,36 @@ export function parseHutchPragma(source) {
 	return { hutch: values.cli, cottontail: values.cottontail };
 }
 
-export function pinElectrobunDependency(manifest, version) {
-	let found = false;
-	for (const field of [
-		"dependencies",
-		"devDependencies",
-		"optionalDependencies",
-	]) {
-		if (manifest[field]?.electrobun !== undefined) {
-			manifest[field].electrobun = version;
-			found = true;
-		}
+export function pinHutchPragma(source, pins) {
+	const pragmas = source.match(/^\/\/\s*@hutch[^\r\n]*$/gm) ?? [];
+	if (pragmas.length !== 1) {
+		fail(`expected exactly one // @hutch pragma, found ${pragmas.length}`);
 	}
-	if (!found) fail(`${manifest.name ?? "template"} does not depend on electrobun`);
-	return manifest;
+	parseHutchPragma(pragmas[0]);
+	if (!pins?.hutch || !pins?.cottontail) fail("release toolchain pins are missing");
+
+	const updated = pragmas[0]
+		.replace(/(\bcli=)[^\s]+/, `$1${pins.hutch}`)
+		.replace(/(\bcottontail=)[^\s]+/, `$1${pins.cottontail}`);
+	return source.replace(pragmas[0], updated);
+}
+
+export function pinElectrobunVersion(source, version) {
+	releaseChannel(version);
+	const pattern = /(\belectrobun\s*:\s*\{\s*version\s*:\s*)(["'])([^"'\r\n]+)\2/g;
+	const matches = [...source.matchAll(pattern)];
+	if (matches.length !== 1) {
+		fail(
+			`expected exactly one top-level electrobun.version, found ${matches.length}`,
+		);
+	}
+	releaseChannel(matches[0][3]);
+
+	const match = matches[0];
+	const start = match.index;
+	const end = start + match[0].length;
+	const replacement = `${match[1]}${match[2]}${version}${match[2]}`;
+	return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
 }
 
 function sha256(value) {
@@ -133,6 +142,14 @@ function titleFromId(id) {
 		.join(" ");
 }
 
+export function templateMetadata(templateId, manifest = {}) {
+	const name = titleFromId(templateId);
+	return {
+		name,
+		description: manifest.description ?? `${name} Electrobun template`,
+	};
+}
+
 function templateMainProcess(source) {
 	return source.match(/\bmainProcess\s*:\s*["']([^"']+)["']/)?.[1] ??
 		"cottontail";
@@ -171,43 +188,32 @@ function stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }) {
 	copyTrackedTemplate(templateId, destination);
 
 	const manifestPath = join(destination, "package.json");
-	if (!existsSync(manifestPath)) fail(`${templateId} is missing package.json`);
-	const manifest = pinElectrobunDependency(
-		JSON.parse(readFileSync(manifestPath, "utf8")),
-		version,
-	);
-	writeFileSync(manifestPath, `${JSON.stringify(manifest, null, "\t")}\n`);
+	const manifest = existsSync(manifestPath)
+		? JSON.parse(readFileSync(manifestPath, "utf8"))
+		: {};
 
 	const configPath = join(destination, "electrobun.config.ts");
 	if (!existsSync(configPath)) fail(`${templateId} is missing electrobun.config.ts`);
-	const mainProcess = templateMainProcess(readFileSync(configPath, "utf8"));
+	const configSource = readFileSync(configPath, "utf8");
+	const mainProcess = templateMainProcess(configSource);
+	writeFileSync(configPath, pinElectrobunVersion(configSource, version));
+
 	const hutchConfigPath = join(destination, "hutch.config.ts");
-	if (existsSync(hutchConfigPath)) {
-		const source = readFileSync(hutchConfigPath, "utf8");
-		const pragma = `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}`;
-		const updated = /^\/\/\s*@hutch[^\r\n]*$/m.test(source)
-			? source.replace(/^\/\/\s*@hutch[^\r\n]*$/m, pragma)
-			: `${pragma}\n${source}`;
-		writeFileSync(hutchConfigPath, updated);
-	} else {
-		writeFileSync(
-			hutchConfigPath,
-			`// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\nexport default {};\n`,
-		);
-	}
+	if (!existsSync(hutchConfigPath)) fail(`${templateId} is missing hutch.config.ts`);
+	const hutchSource = readFileSync(hutchConfigPath, "utf8");
+	writeFileSync(hutchConfigPath, pinHutchPragma(hutchSource, pins));
 
 	const archivePath = join(archiveRoot, `${templateId}.tar.gz`);
 	createTemplateArchive(templateId, stageRoot, archivePath);
 	const archive = readFileSync(archivePath);
 	const checksum = sha256(archive);
 	const artifactKey = templateArtifactKey(checksum);
+	const metadata = templateMetadata(templateId, manifest);
 
 	return {
 		catalogEntry: {
 			id: templateId,
-			name: titleFromId(templateId),
-			description:
-				manifest.description ?? `${titleFromId(templateId)} Electrobun template`,
+			...metadata,
 			mainProcess,
 			archive: {
 				url: `${TEMPLATE_PUBLIC_BASE_URL}/${artifactKey}`,
@@ -225,7 +231,7 @@ function templateIds() {
 		.filter(
 			(entry) =>
 				entry.isDirectory() &&
-				existsSync(join(templatesRoot, entry.name, "package.json")),
+				existsSync(join(templatesRoot, entry.name, "electrobun.config.ts")),
 		)
 		.map((entry) => entry.name)
 		.sort();
