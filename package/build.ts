@@ -54,6 +54,11 @@ import {
 	serializeNativeCompileFlags,
 	type NativeCompilePlatform,
 } from "./src/shared/native-compile-flags";
+import {
+	acceptExistingBunVendor,
+	verifyAndRecordBunVendor,
+	verifyBunExecutableVersion,
+} from "./scripts/bun-vendor.mjs";
 
 console.log("building...", platform(), arch());
 
@@ -988,6 +993,9 @@ async function copyToDist() {
 		console.log("[done]Copying CEF files for Linux...");
 	}
 
+	// The manifest declares exact Bun runtime provenance, so verify the staged
+	// executable it describes rather than trusting the vendor marker or copy.
+	verifyBunExecutableVersion(PATH.bun.DIST, BUN_VERSION);
 	const nativeDevkitManifest = createNativeDevkitManifest({
 		productVersion: ELECTROBUN_VERSION,
 		target: nativeDevkitTarget(OS, ARCH),
@@ -1104,20 +1112,23 @@ async function installPackageDependencies() {
 async function vendorBun() {
 	const bunDir = join(process.cwd(), "vendors", "bun");
 	const bunVersionFile = join(bunDir, ".bun-version");
-
-	if (existsSync(PATH.bun.RUNTIME)) {
-		if (existsSync(bunVersionFile)) {
-			const vendoredVersion = readFileSync(bunVersionFile, "utf-8").trim();
-			if (vendoredVersion === BUN_VERSION) return;
-			console.log(
-				`Bun version mismatch: vendored "${vendoredVersion}" vs expected "${BUN_VERSION}"`,
-			);
-			unlinkSync(PATH.bun.RUNTIME);
-		} else {
-			mkdirSync(bunDir, { recursive: true });
-			writeFileSync(bunVersionFile, BUN_VERSION);
-			return;
-		}
+	let rejectedExistingBun: unknown;
+	if (
+		acceptExistingBunVendor({
+			executable: PATH.bun.RUNTIME,
+			marker: bunVersionFile,
+			expectedVersion: BUN_VERSION,
+			onRejected(error) {
+				rejectedExistingBun = error;
+			},
+		})
+	) {
+		return;
+	}
+	if (rejectedExistingBun) {
+		console.log(
+			`Existing Bun runtime failed exact-version verification and will be replaced: ${rejectedExistingBun instanceof Error ? rejectedExistingBun.message : String(rejectedExistingBun)}`,
+		);
 	}
 
 	let assetName: string;
@@ -1134,28 +1145,66 @@ async function vendorBun() {
 		archiveDirectory = ARCH === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
 	}
 
-	const tempZipPath = join(bunDir, "temp.zip");
 	mkdirSync(bunDir, { recursive: true });
-	await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${assetName}`;
-	validateDownload(tempZipPath, "bun");
+	// Stage each download separately so a failed or concurrent extraction cannot
+	// leave partial files that a later run mistakes for the pinned runtime.
+	const stagingDir = mkdtempSync(join(bunDir, ".bun-download-"));
+	const tempZipPath = join(stagingDir, "bun.zip");
+	let installedCandidate = false;
+	try {
+		await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${assetName}`;
+		validateDownload(tempZipPath, "bun");
 
-	if (isWindows) {
-		await $`powershell -NoProfile -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${bunDir}' -Force"`;
-	} else {
-		await $`unzip -o ${tempZipPath} -d ${bunDir}`;
+		if (isWindows) {
+			await $`powershell -NoProfile -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${stagingDir}' -Force"`;
+		} else {
+			await $`unzip -o ${tempZipPath} -d ${stagingDir}`;
+		}
+
+		const extractedBinary = join(
+			stagingDir,
+			archiveDirectory,
+			isWindows ? "bun.exe" : "bun",
+		);
+		if (!isWindows) chmodSync(extractedBinary, 0o755);
+
+		// Never expose a downloaded binary in the shared vendor cache until it has
+		// executed and reported the exact pinned version.
+		verifyBunExecutableVersion(extractedBinary, BUN_VERSION);
+		try {
+			renameSync(extractedBinary, PATH.bun.RUNTIME);
+			installedCandidate = true;
+		} catch (installError) {
+			// Windows cannot rename over a file. A concurrent build may have won the
+			// race; accept its runtime only after performing the same exact check.
+			if (
+				acceptExistingBunVendor({
+					executable: PATH.bun.RUNTIME,
+					marker: bunVersionFile,
+					expectedVersion: BUN_VERSION,
+				})
+			) {
+				return;
+			}
+			throw installError;
+		}
+
+		// Re-execute the canonical path, then publish its marker last. This closes
+		// the gap between staging verification and manifest/copy consumers.
+		verifyAndRecordBunVendor({
+			executable: PATH.bun.RUNTIME,
+			marker: bunVersionFile,
+			expectedVersion: BUN_VERSION,
+		});
+	} catch (error) {
+		if (installedCandidate) {
+			rmSync(PATH.bun.RUNTIME, { force: true });
+			rmSync(bunVersionFile, { force: true });
+		}
+		throw error;
+	} finally {
+		rmSync(stagingDir, { recursive: true, force: true });
 	}
-
-	const extractedBinary = join(
-		bunDir,
-		archiveDirectory,
-		isWindows ? "bun.exe" : "bun",
-	);
-	cpSync(extractedBinary, PATH.bun.RUNTIME, { force: true });
-	if (!isWindows) chmodSync(PATH.bun.RUNTIME, 0o755);
-
-	rmSync(tempZipPath, { force: true });
-	rmSync(join(bunDir, archiveDirectory), { recursive: true, force: true });
-	writeFileSync(bunVersionFile, BUN_VERSION);
 }
 
 function verifyVendoredZig() {
