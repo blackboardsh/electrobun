@@ -307,6 +307,28 @@ describe("Electrobun template package boundaries", () => {
 		expect(threeSource).toContain('import * as three from "three";');
 	});
 
+	test("Zig WGPU owns its Zig 0.16 build graph", () => {
+		const templateRoot = join(templatesRoot, "zig-wgpu");
+		const buildPath = join(templateRoot, "build.zig");
+		expect(existsSync(buildPath)).toBe(true);
+		const build = readFileSync(buildPath, "utf8");
+		for (const contract of [
+			'"electrobun-sdk"',
+			"standardTargetOptions",
+			"standardOptimizeOption",
+			'.name = "main"',
+			"installArtifact",
+		]) {
+			expect(build).toContain(contract);
+		}
+
+		const config = readFileSync(
+			join(templateRoot, "electrobun.config.ts"),
+			"utf8",
+		);
+		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.16\.0"/);
+	});
+
 	test("Odin WGPU showcases keep the native cross-platform template contract", () => {
 		const invalidTemplates: string[] = [];
 
