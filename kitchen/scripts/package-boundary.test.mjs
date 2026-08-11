@@ -65,3 +65,26 @@ test("Kitchen resolves tasks and SDK types through Hutch", () => {
 	assert.equal(tsconfig.extends, "./.hutch/devkit/tsconfig.json");
 	assert.match(readFileSync(join(kitchenRoot, ".gitignore"), "utf8"), /^\.hutch\/$/m);
 });
+
+test("Kitchen matrix uses the projected devkit without an npm package bridge", () => {
+	const matrix = readFileSync(
+		join(kitchenRoot, "scripts", "kitchen-matrix.ts"),
+		"utf8",
+	);
+	assert.doesNotMatch(matrix, /COTTONTAIL_ELECTROBUN_PACKAGE/);
+	assert.doesNotMatch(matrix, /node_modules["'],\s*["']electrobun/);
+	assert.doesNotMatch(matrix, /HUTCH_ELECTROBUN_DEVKIT_ROOT/);
+
+	const releaseWorkflow = readFileSync(
+		join(kitchenRoot, "..", ".github", "workflows", "release.yml"),
+		"utf8",
+	);
+	assert.equal(
+		(releaseWorkflow.match(/HUTCH_ELECTROBUN_DEVKIT_ROOT/g) ?? []).length,
+		1,
+	);
+	assert.match(
+		releaseWorkflow,
+		/HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist/,
+	);
+});

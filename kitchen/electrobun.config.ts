@@ -38,10 +38,11 @@ export default {
 			entrypoint: "src/bun/index.ts",
 		},
 		rust: {
-			entrypoint: "src/rust/main.rs",
+			manifest: "Cargo.toml",
+			binary: "main",
 		},
 		go: {
-			entrypoint: "src/go/main.go",
+			package: "./src/go",
 		},
 		odin: {
 			entrypoint: "src/odin/main.odin",

@@ -6,7 +6,6 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readdirSync,
-	realpathSync,
 	renameSync,
 	rmSync,
 	statSync,
@@ -38,6 +37,7 @@ export type KitchenMatrixOptions = {
 
 const activeChildren = new Set<ChildProcess>();
 const workspaceExcludedEntries = new Set([
+	".hutch",
 	".cottontail-tmp",
 	"artifacts",
 	"build",
@@ -267,7 +267,6 @@ function pipePrefixed(stream: Readable, prefix: string, target: NodeJS.WriteStre
 function runHutchForVariant(
 	hutchBinary: string,
 	workingRoot: string,
-	electrobunPackageRoot: string,
 	variant: KitchenVariant,
 	command: "build" | "run",
 ): Promise<void> {
@@ -275,10 +274,7 @@ function runHutchForVariant(
 	return new Promise((resolvePromise, rejectPromise) => {
 		const child = spawn(hutchBinary, ["electrobun", command], {
 			cwd: workingRoot,
-			env: {
-				...kitchenVariantEnvironment(process.env, variant),
-				COTTONTAIL_ELECTROBUN_PACKAGE: electrobunPackageRoot,
-			},
+			env: kitchenVariantEnvironment(process.env, variant),
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: false,
 		});
@@ -365,9 +361,6 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 
 	const kitchenRoot = resolve(import.meta.dirname, "..");
 	const hutchBinary = process.env["HUTCH_BINARY"] || "hutch";
-	const electrobunPackageRoot = realpathSync(
-		join(kitchenRoot, "node_modules", "electrobun"),
-	);
 	const interrupt = () => stopChildren();
 	process.once("SIGINT", interrupt);
 	process.once("SIGTERM", interrupt);
@@ -391,7 +384,6 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 				await runHutchForVariant(
 					hutchBinary,
 					workspace.root,
-					electrobunPackageRoot,
 					variant,
 					"build",
 				);
@@ -410,7 +402,6 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 					await runHutchForVariant(
 						hutchBinary,
 						kitchenRoot,
-						electrobunPackageRoot,
 						variant,
 						"run",
 					);

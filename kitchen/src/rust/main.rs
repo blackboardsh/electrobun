@@ -1,4 +1,4 @@
-use crate::electrobun::{
+use electrobun::{
     self, BundlePaths, Core, NotificationOptions, Paths, Rect, Renderer, TrafficLightOffset,
     TrayOptions, WGPUViewOptions, WebviewCallbacks, WebviewOptions, WindowOptions,
 };
