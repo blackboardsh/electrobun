@@ -408,4 +408,14 @@ describe("Electrobun template package boundaries", () => {
 
 		expect(invalidTemplates).toEqual([]);
 	});
+
+	test("Bunny keeps its native transparent webview onscreen on macOS", () => {
+		const bunnyMain = readFileSync(
+			join(templatesRoot, "bunny", "src", "bun", "index.ts"),
+			"utf8",
+		);
+
+		expect(bunnyMain).toMatch(/\btransparent:\s*true\b/);
+		expect(bunnyMain).not.toMatch(/\bpassthrough:\s*true\b/);
+	});
 });

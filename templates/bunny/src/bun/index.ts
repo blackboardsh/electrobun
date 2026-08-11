@@ -54,7 +54,6 @@ const win = new BrowserWindow({
 	url: "views://mainview/index.html",
 	titleBarStyle: "hidden",
 	transparent: true,
-	passthrough: true,
 	frame: { width: size, height: size, x, y },
 	rpc,
 });
