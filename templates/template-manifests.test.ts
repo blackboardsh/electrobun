@@ -335,7 +335,7 @@ describe("Electrobun template package boundaries", () => {
 				manifest.dependencies?.vite ?? manifest.devDependencies?.vite,
 			);
 			const expected = usesVite
-				? 'build: "hutch pm exec -- vite build && hutch electrobun build --env=production"'
+				? 'build: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun build --env=production"'
 				: 'build: ["hutch", "electrobun", "build", "--env=production"]';
 
 			if (!hutch.includes(expected)) {
@@ -346,6 +346,44 @@ describe("Electrobun template package boundaries", () => {
 		}
 
 		expect(invalidScripts).toEqual([]);
+	});
+
+	test("every Vite template resolves Electrobun from the projected devkit", () => {
+		const invalidConfigs: string[] = [];
+		for (const templateName of templateNames) {
+			const manifest = readManifest(templateName);
+			if (manifest?.devDependencies?.vite === undefined) continue;
+			const configPath = join(templatesRoot, templateName, "vite.config.ts");
+			if (!existsSync(configPath)) {
+				invalidConfigs.push(`${templateName}: missing vite.config.ts`);
+				continue;
+			}
+			const config = readFileSync(configPath, "utf8");
+			if (
+				!config.includes(
+					'from "./.hutch/devkit/api/config/electrobun-vite"',
+				) ||
+				!config.includes("alias: electrobunViteAliases(")
+			) {
+				invalidConfigs.push(
+					`${templateName}: Vite does not use the projected Electrobun SDK`,
+				);
+			}
+
+			const hutch = readFileSync(
+				join(templatesRoot, templateName, "hutch.config.ts"),
+				"utf8",
+			);
+			for (const task of ["start", "dev", "hmr", "build", '"build:canary"']) {
+				if (!hutch.includes(`${task}: "hutch electrobun sync && hutch pm exec -- vite`)) {
+					invalidConfigs.push(
+						`${templateName}: ${task} loads Vite before syncing the devkit`,
+					);
+				}
+			}
+		}
+
+		expect(invalidConfigs).toEqual([]);
 	});
 
 	test("the Rust template owns its Cargo build and release profiles", () => {
