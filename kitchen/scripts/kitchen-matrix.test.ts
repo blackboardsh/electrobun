@@ -23,6 +23,21 @@ import {
 } from "./kitchen-matrix";
 
 describe("kitchen matrix", () => {
+	it("owns the Zig build graph used by Hutch", () => {
+		const build = readFileSync(
+			join(import.meta.dirname, "..", "build.zig"),
+			"utf8",
+		);
+		for (const contract of [
+			'"electrobun-sdk"',
+			'b.path("src/zig/main.zig")',
+			'.name = "main"',
+			"installArtifact",
+		]) {
+			expect(build).toContain(contract);
+		}
+	});
+
 	it("uses the reduced seven-variant interactive matrix by default", () => {
 		const matrix = createKitchenMatrix(false);
 		expect(matrix).toHaveLength(7);

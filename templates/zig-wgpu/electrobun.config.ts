@@ -12,7 +12,6 @@ export default {
 	build: {
 		mainProcess: "zig",
 		zig: {
-			entrypoint: "src/zig/main.zig",
 			version: "0.16.0",
 		},
 		views: {

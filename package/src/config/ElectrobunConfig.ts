@@ -154,7 +154,8 @@ export interface ElectrobunConfig {
 		 * Main process implementation to build and package.
 		 * - "bun": bundle and run the Bun main process entrypoint
 		 * - "cottontail": bundle and run the Cottontail main process entrypoint
-		 * - "zig": compile and run the Zig main process entrypoint
+		 * - "zig": run the project-owned root `build.zig` and package its
+		 *   `main` artifact
 		 * - "rust": compile and run the Rust main process entrypoint
 		 * - "go": compile and run the Go main process entrypoint
 		 * - "odin": compile and run the Odin main process entrypoint
@@ -229,12 +230,6 @@ export interface ElectrobunConfig {
 			 * declared by the selected Electrobun devkit.
 			 */
 			version?: string;
-
-			/**
-			 * Entry point for the main Zig process
-			 * @default "src/zig/main.zig"
-			 */
-			entrypoint?: string;
 		};
 
 		/**

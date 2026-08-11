@@ -328,6 +328,7 @@ describe("Electrobun template package boundaries", () => {
 			"utf8",
 		);
 		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.16\.0"/);
+		expect(config).not.toContain('entrypoint: "src/zig/main.zig"');
 	});
 
 	test("Odin WGPU showcases keep the native cross-platform template contract", () => {
