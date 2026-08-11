@@ -46,6 +46,9 @@ Create `hutch.config.ts` for project tasks:
 
 ```ts docs=syntax
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   packageManager: "npm",
   scripts: {
     install: ["hutch", "pm", "ci"],
@@ -130,9 +133,6 @@ The last piece is telling Hutch how these files become an app. Create
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
   app: {
     name: "My App",
     identifier: "dev.example.my-app",
@@ -150,11 +150,11 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-Reading it top to bottom: `electrobun.version` selects one exact core and SDK
-release, `app` names and identifies the application, `mainProcess` selects
-Cottontail as the runtime, `entrypoint` points at the main process you just
-wrote, and `copy` places the HTML file into the bundle at the path the
-`views://` URL expects.
+The `electrobun.version` in `hutch.config.ts` selects one exact core and SDK
+release. In this application config, `app` names and identifies the application,
+`mainProcess` selects Cottontail as the runtime, `entrypoint` points at the main
+process you just wrote, and `copy` places the HTML file into the bundle at the
+path the `views://` URL expects.
 
 ## 5. Run the app
 

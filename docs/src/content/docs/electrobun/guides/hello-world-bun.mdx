@@ -46,6 +46,9 @@ Create `hutch.config.ts`:
 
 ```ts docs=syntax
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   packageManager: "bun",
   scripts: {
     install: ["hutch", "pm", "install", "--frozen-lockfile"],
@@ -122,9 +125,6 @@ field.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
   app: {
     name: "My App",
     identifier: "dev.example.my-app",

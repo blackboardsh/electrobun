@@ -42,7 +42,6 @@ Bun-compatible APIs used by Electrobun applications.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Cottontail App",
     identifier: "dev.example.cottontail-app",
@@ -74,7 +73,6 @@ package manager still owns JavaScript dependencies.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Bun App",
     identifier: "dev.example.bun-app",
@@ -101,7 +99,6 @@ Hutch:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Native App",
     identifier: "dev.example.native-app",
@@ -147,7 +144,7 @@ hutch electrobun init tree-studio --template=odin-tree-wgpu
 
 ## Toolchain resolution
 
-Each exact `electrobun.version` declares default compiler versions. A project
+Each exact `hutch.config.ts` `electrobun.version` declares default compiler versions. A project
 may override one with the matching `build.<language>.version` field. Hutch
 checks for an exact matching system compiler where supported; otherwise it
 downloads that toolchain into

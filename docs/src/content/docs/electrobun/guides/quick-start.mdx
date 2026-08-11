@@ -85,13 +85,23 @@ files. Hutch resolves both tasks only from `hutch.config.ts`; the configured
 external package manager still owns `package.json`, dependency resolution, and
 its lockfile.
 
-The template's `electrobun.config.ts` contains an exact product pin:
+The template's `hutch.config.ts` contains an exact product pin alongside its
+tasks and optional package-manager selection:
 
 ```ts
 export default {
   electrobun: {
     version: "2.0.0",
   },
+  // packageManager and scripts...
+};
+```
+
+`electrobun.config.ts` is only application, build, and distribution
+configuration:
+
+```ts
+export default {
   // app and build configuration...
 };
 ```

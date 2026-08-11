@@ -96,6 +96,9 @@ chosen:
 ```ts docs=syntax
 // hutch.config.ts
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   packageManager: "npm",
   scripts: {
     install: ["hutch", "pm", "ci"],
@@ -165,30 +168,36 @@ globally installed channel.
 
 ## Select and sync Electrobun
 
-Every Electrobun 2.x project separately pins the exact product release in
-`electrobun.config.ts`:
+Every Electrobun 2.x project pins the exact product release in
+`hutch.config.ts`:
 
 ```ts
-import type { ElectrobunConfig } from "electrobun";
-
 export default {
   electrobun: {
     version: "2.0.0",
   },
-  app: {
-    name: "My App",
-    identifier: "dev.example.my-app",
-    version: "0.1.0",
+  scripts: {
+    dev: ["hutch", "electrobun", "dev", "--watch"],
   },
-} satisfies ElectrobunConfig;
+};
 ```
 
 The version must be exact; npm tags and semver ranges are not product
 selectors. `hutch electrobun sync` resolves and verifies that release in the
 global `~/.dash/products/electrobun` store, atomically projects its SDKs,
 config types, and editor facade into `.hutch/devkit`, and resolves the selected
-native compiler under `~/.dash/toolchains` when the project needs one. Commit
-the config, but ignore `.hutch/`.
+native compiler under `~/.dash/toolchains` when the project needs one.
+
+The project copy under `.hutch/devkit` is deliberately writable. Templates
+ignore `.hutch/` by default, but you can change `.gitignore` and commit the
+project's devkit when you want to inspect, patch, or retain it. A sync that
+changes the selected Electrobun version, target, or manifest can replace that
+projection, so commit or merge local SDK changes before refreshing it.
+
+`electrobun.config.ts` has a different job: it contains application metadata,
+build inputs, runtime behavior, signing, and distribution settings. npm and
+other language package managers own optional application dependencies; they
+do not install or select the Electrobun SDK.
 
 `init` performs this sync before it finishes. `build`, `run`, and `dev` also
 sync implicitly, so the explicit command is mainly useful after changing the

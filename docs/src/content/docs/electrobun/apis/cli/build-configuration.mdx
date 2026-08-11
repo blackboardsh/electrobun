@@ -6,15 +6,13 @@ description: "Reference for electrobun.config.ts and Hutch's build lifecycle."
 `electrobun.config.ts` is a TypeScript module in the project root. Hutch loads
 its default export with Cottontail and merges it with Electrobun's defaults.
 Use `satisfies ElectrobunConfig` so unsupported fields and values fail during
-development.
+development. It contains application, build, runtime, signing, and distribution
+settings; product selection belongs in `hutch.config.ts`.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -46,8 +44,21 @@ that Hutch will use.
 
 ## Electrobun Devkit
 
-`electrobun.version` is required and must be an exact release such as `2.0.0`
-or `2.1.0-beta.3`. It is independent of the thin npm bootstrap version and the
+`hutch.config.ts` requires an exact `electrobun.version` such as `2.0.0` or
+`2.1.0-beta.3` for an Electrobun project:
+
+```typescript docs=syntax
+export default {
+  electrobun: {
+    version: "2.0.0",
+  },
+  scripts: {
+    build: ["hutch", "electrobun", "build", "--env=production"],
+  },
+};
+```
+
+That product version is independent of the thin npm bootstrap version and the
 application version in `app.version`.
 
 Hutch resolves and verifies that release under
@@ -77,7 +88,6 @@ in `/Applications` or `~/Applications` so Launch Services can register it.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Link Receiver",
     identifier: "com.example.link-receiver",
@@ -107,7 +117,6 @@ the leading dot. An optional icon must be an `.icns` source file.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Document Editor",
     identifier: "com.example.document-editor",
@@ -157,7 +166,6 @@ Windows and Linux URL schemes and file associations are not yet implemented.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Native Example",
     identifier: "com.example.native",
@@ -222,7 +230,6 @@ because they carry different trade-offs:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -297,7 +304,6 @@ their own Vite build and copy its output.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Bundled App",
     identifier: "com.example.bundled-app",
@@ -346,7 +352,6 @@ copies, or removes output files.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Packaged App",
     identifier: "com.example.packaged-app",
@@ -375,7 +380,6 @@ locations with `build.watch`; suppress generated or high-churn paths with
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Watched App",
     identifier: "com.example.watched-app",
@@ -441,7 +445,6 @@ Hutch does not invoke `flatpak-builder` itself.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Cross Platform App",
     identifier: "com.example.cross-platform",
@@ -487,7 +490,6 @@ Electrobun default with the same name.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "CEF App",
     identifier: "com.example.cef-app",
@@ -524,7 +526,6 @@ Additional JSON-compatible values are available through `BuildConfig`.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Background App",
     identifier: "com.example.background-app",
@@ -560,7 +561,6 @@ or JavaScript file and executes it with the host-platform Cottontail binary.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Hooked App",
     identifier: "com.example.hooked-app",
@@ -617,7 +617,6 @@ production build should skip downloading and diffing the previous release.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "Released App",
     identifier: "com.example.released-app",

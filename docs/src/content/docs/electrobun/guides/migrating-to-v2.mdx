@@ -48,27 +48,24 @@ when it is missing and forwards every argument. It defaults to stable templates
 unless `--beta` is explicit. Its npm version does not select the Electrobun
 product version.
 
-## 2. Move the Electrobun version into config
+## 2. Move the Electrobun version into Hutch config
 
 Remove `electrobun` from `dependencies` and `devDependencies`. The npm package
 now carries only its tiny Hutch-forwarding command—not the Electrobun CLI
 implementation, core, config types, browser code, or SDK source.
-Instead, add the required exact product pin to `electrobun.config.ts`:
+Instead, add the required exact product pin to `hutch.config.ts`:
 
 ```ts
-import type { ElectrobunConfig } from "electrobun";
-
 export default {
   electrobun: {
     version: "2.0.0",
   },
-  app: {
-    name: "My App",
-    identifier: "com.example.my-app",
-    version: "2.0.0",
-  },
-} satisfies ElectrobunConfig;
+  scripts: {},
+};
 ```
+
+Remove the old product-selection field from `electrobun.config.ts`. That file
+now describes the application, build, runtime, signing, and distribution only.
 
 Then prepare the matching core and SDKs:
 
@@ -78,9 +75,11 @@ hutch electrobun sync
 
 Hutch caches the verified release under `~/.dash/products/electrobun`, projects
 its language SDKs and editor facade into `.hutch/devkit`, and resolves any
-configured native compiler under `~/.dash/toolchains`. Ignore `.hutch/`; commit
-`electrobun.config.ts` and your language package-manager lockfiles. `init`,
-`build`, `run`, and `dev` also sync implicitly.
+configured native compiler under `~/.dash/toolchains`. Templates ignore
+`.hutch/` by default, but the projection is writable: remove or narrow that
+ignore rule if your team wants to modify and commit its project copy. A version,
+target, or manifest change can replace the projection, so preserve local SDK
+changes before syncing. `init`, `build`, `run`, and `dev` also sync implicitly.
 
 ## 3. Move project scripts to `hutch.config.ts`
 
@@ -102,6 +101,9 @@ For example:
 
 ```ts docs=syntax
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   packageManager: "npm",
   scripts: {
     install: ["hutch", "pm", "ci"],
@@ -155,9 +157,6 @@ change — the entrypoint itself stays put:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -179,9 +178,6 @@ it explicitly:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: {
-    version: "2.0.0",
-  },
   app: {
     name: "My App",
     identifier: "com.example.my-app",

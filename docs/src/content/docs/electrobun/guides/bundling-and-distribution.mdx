@@ -16,6 +16,9 @@ app. A typical project wires both into `hutch.config.ts`:
 
 ```ts docs=syntax
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   packageManager: "npm",
   scripts: {
     install: ["hutch", "pm", "ci"],
@@ -41,7 +44,6 @@ or any static HTTP host. Configure the public folder URL:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-  electrobun: { version: "2.0.0" },
   app: {
     name: "My Cool App",
     identifier: "com.example.my-cool-app",
