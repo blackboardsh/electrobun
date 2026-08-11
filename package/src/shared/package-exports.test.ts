@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	cpSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -58,6 +59,14 @@ function copyApiDirectory(sourcePath: string, destinationPath: string) {
 	});
 }
 
+function resolveBundleInput(input: string) {
+	for (const base of [packageRoot, consumerRoot]) {
+		const candidate = resolve(base, input);
+		if (existsSync(candidate)) return realpathSync(candidate);
+	}
+	throw new Error(`Could not resolve bundle input ${input}`);
+}
+
 beforeAll(() => {
 	mkdirSync(join(stagedPackageRoot, "dist", "api"), { recursive: true });
 	writeFileSync(
@@ -103,7 +112,6 @@ async function bundleImport(
 
 	const result = await Bun.build({
 		entrypoints: [entrypoint],
-		external: ["three", "@babylonjs/core"],
 		metafile: true,
 		minify: true,
 		target: "bun",
@@ -113,7 +121,7 @@ async function bundleImport(
 	}
 
 	const inputs = Object.keys(result.metafile.inputs).map((input) =>
-		relative(stagedPackageRoot, resolve(consumerRoot, input)).replaceAll("\\", "/"),
+		relative(stagedPackageRoot, resolveBundleInput(input)).replaceAll("\\", "/"),
 	);
 	return {
 		bytes: result.outputs.reduce((total, output) => total + output.size, 0),

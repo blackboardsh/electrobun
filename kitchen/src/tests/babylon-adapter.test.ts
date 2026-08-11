@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, babylon, webgpu } from "electrobun/main";
+import * as babylon from "@babylonjs/core";
+import { GpuWindow, webgpu } from "electrobun/main";
 
 const TextureUsage = {
   RenderAttachment: 0x10,

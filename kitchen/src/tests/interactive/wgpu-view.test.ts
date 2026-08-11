@@ -2,13 +2,13 @@
 // Interactive WGPUView tests
 
 import { defineTest } from "../../test-framework/types";
+import * as babylon from "@babylonjs/core";
+import * as three from "three";
 import {
 	GpuWindow,
 	Screen,
 	WGPU,
 	WGPUBridge,
-	three,
-	babylon,
 	webgpu,
 } from "electrobun/main";
 import { ptr, toArrayBuffer } from "bun:ffi";

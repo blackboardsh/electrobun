@@ -11,10 +11,13 @@
 		"start:canary": "hutch electrobun dev --env=canary"
 	},
 	"dependencies": {
-		"electrobun": "file:../package"
+		"@babylonjs/core": "^7.45.0",
+		"electrobun": "file:../package",
+		"three": "^0.165.0"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.3.8",
+		"@types/three": "^0.165.0",
 		"typescript": "^5.9.3"
 	}
 }

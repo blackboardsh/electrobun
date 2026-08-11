@@ -15,8 +15,6 @@ import { fileURLToPath } from "node:url";
 
 type PackageManifest = {
 	exports: Record<string, string>;
-	dependencies?: Record<string, string>;
-	devDependencies?: Record<string, string>;
 };
 
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -24,14 +22,17 @@ const manifest = JSON.parse(
 	readFileSync(join(packageDir, "package.json"), "utf8"),
 ) as PackageManifest;
 
-describe("published package dependency contract", () => {
-	test("ships Three.js declarations as a production dependency", () => {
-		expect(manifest.dependencies?.["three"]).toBe("^0.165.0");
-		expect(manifest.dependencies?.["@types/three"]).toBe("^0.165.0");
-		expect(manifest.devDependencies?.["@types/three"]).toBeUndefined();
-	});
+function linkPackage(source: string, destination: string) {
+	mkdirSync(dirname(destination), { recursive: true });
+	symlinkSync(
+		source,
+		destination,
+		process.platform === "win32" ? "junction" : "dir",
+	);
+}
 
-	test("a strict consumer can resolve the published Three.js export", () => {
+describe("published package SDK contract", () => {
+	test("a strict consumer cannot import graphics libraries through Electrobun", () => {
 		const tempDir = mkdtempSync(join(tmpdir(), "electrobun-package-contract-"));
 
 		try {
@@ -60,26 +61,33 @@ describe("published package dependency contract", () => {
 				{ recursive: true },
 			);
 
-			// npm may hoist these packages, but resolving them from Electrobun's own
-			// node_modules is also valid and keeps this regression test offline.
-			symlinkSync(
-				join(packageDir, "node_modules"),
-				join(installedPackage, "node_modules"),
-				process.platform === "win32" ? "junction" : "dir",
+			// Electrobun's published TypeScript references Bun's declarations. Stage
+			// only those declarations so an accidental graphics import cannot resolve.
+			linkPackage(
+				join(packageDir, "node_modules", "@types", "bun"),
+				join(tempDir, "node_modules", "@types", "bun"),
 			);
 
 			const consumerPath = join(tempDir, "consumer.ts");
 			writeFileSync(
 				consumerPath,
 				[
-					'import { three, type ElectrobunConfig } from "electrobun";',
+					'import Electrobun, { type ElectrobunConfig } from "electrobun";',
+					'// @ts-expect-error Three.js is not part of the Electrobun SDK.',
+					'import { three as electrobunThree } from "electrobun";',
+					'// @ts-expect-error Babylon.js is not part of the Electrobun SDK.',
+					'import { babylon as electrobunBabylon } from "electrobun";',
+					'void electrobunThree;',
+					'void electrobunBabylon;',
+					'// @ts-expect-error Three.js is not part of the default SDK object.',
+					'void Electrobun.three;',
+					'// @ts-expect-error Babylon.js is not part of the default SDK object.',
+					'void Electrobun.babylon;',
 					'import type { BrowserWindow as MainBrowserWindow } from "electrobun/main";',
 					'import type { BrowserWindow as LegacyBrowserWindow } from "electrobun/bun";',
 					"declare const mainWindow: MainBrowserWindow;",
 					"const legacyWindow: LegacyBrowserWindow = mainWindow;",
 					"void legacyWindow;",
-					"const scene: three.Scene = new three.Scene();",
-					"scene.add(new three.Object3D());",
 					"const config = {",
 					'  app: { name: "Flatpak app", identifier: "dev.electrobun.flatpak", version: "1.0.0" },',
 					"  build: { linux: { flatpak: {",
