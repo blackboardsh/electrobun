@@ -680,6 +680,57 @@ const core = (() => {
 	}
 })();
 
+// These exports currently exist only in the macOS native wrapper. Keep them in
+// a separate optional handle because Bun's dlopen resolves the whole symbol
+// table eagerly. A missing platform extension must not disable core native APIs.
+const macOSNative = (() => {
+	if (process.platform !== "darwin") return null;
+	try {
+		return tryDlopenCandidates(`libNativeWrapper.${suffix}`, {
+			wgpuViewSetAlphaBlending: {
+				args: [FFIType.ptr, FFIType.bool],
+				returns: FFIType.void,
+			},
+			setWGPUPointerHandler: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			setWGPUKeyHandler: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+			uiMeasureText: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.f64,
+					FFIType.ptr,
+					FFIType.ptr,
+					FFIType.ptr,
+				],
+				returns: FFIType.void,
+			},
+			uiRasterizeText: {
+				args: [
+					FFIType.cstring,
+					FFIType.cstring,
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.ptr,
+					FFIType.ptr,
+				],
+				returns: FFIType.ptr,
+			},
+			uiFreeTextBitmap: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
+		});
+	} catch {
+		return null;
+	}
+})();
+
 export const native = (() => {
 	try {
 		const nativeWrapperFileName = `libNativeWrapper.${suffix}`;
@@ -754,48 +805,6 @@ export const native = (() => {
 					FFIType.f64, // height
 					FFIType.cstring, // maskJson
 				],
-				returns: FFIType.void,
-			},
-
-			wgpuViewSetAlphaBlending: {
-				args: [FFIType.ptr, FFIType.bool],
-				returns: FFIType.void,
-			},
-
-			setWGPUPointerHandler: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-
-			setWGPUKeyHandler: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-
-			uiMeasureText: {
-				args: [
-					FFIType.cstring,
-					FFIType.cstring,
-					FFIType.f64,
-					FFIType.ptr,
-					FFIType.ptr,
-					FFIType.ptr,
-				],
-				returns: FFIType.void,
-			},
-			uiRasterizeText: {
-				args: [
-					FFIType.cstring,
-					FFIType.cstring,
-					FFIType.f64,
-					FFIType.f64,
-					FFIType.ptr,
-					FFIType.ptr,
-				],
-				returns: FFIType.ptr,
-			},
-			uiFreeTextBitmap: {
-				args: [FFIType.ptr],
 				returns: FFIType.void,
 			},
 
@@ -1941,9 +1950,12 @@ const _ffiImpl = {
 		},
 
 		wgpuViewSetAlphaBlending: (params: { id: number; enabled: boolean }) => {
+			const setAlphaBlending =
+				macOSNative?.symbols.wgpuViewSetAlphaBlending;
+			if (typeof setAlphaBlending !== "function") return;
 			const ptr = core_.symbols.getWGPUViewPointer(params.id);
 			if (!ptr) return;
-			native_.symbols.wgpuViewSetAlphaBlending(ptr, params.enabled);
+			setAlphaBlending(ptr, params.enabled);
 		},
 
 		wgpuViewSetPassthrough: (params: {
@@ -2573,7 +2585,7 @@ const wgpuKeyCallback = new JSCallback(
 export const nativeText = {
 	available(): boolean {
 		return Boolean(
-			hasFFI && typeof native_.symbols.uiMeasureText === "function",
+			hasFFI && typeof macOSNative?.symbols.uiMeasureText === "function",
 		);
 	},
 	measure(
@@ -2581,10 +2593,14 @@ export const nativeText = {
 		fontName: string,
 		size: number,
 	): { w: number; h: number; ascent: number } {
+		const measureText = macOSNative?.symbols.uiMeasureText;
+		if (typeof measureText !== "function") {
+			return { w: 0, h: 0, ascent: 0 };
+		}
 		const w = new Float64Array(1);
 		const h = new Float64Array(1);
 		const ascent = new Float64Array(1);
-		native_.symbols.uiMeasureText(
+		measureText(
 			toCString(text),
 			toCString(fontName),
 			size,
@@ -2600,8 +2616,16 @@ export const nativeText = {
 		size: number,
 		scale: number,
 	): { width: number; height: number; data: Uint8Array } | null {
+		const rasterizeText = macOSNative?.symbols.uiRasterizeText;
+		const freeTextBitmap = macOSNative?.symbols.uiFreeTextBitmap;
+		if (
+			typeof rasterizeText !== "function" ||
+			typeof freeTextBitmap !== "function"
+		) {
+			return null;
+		}
 		const dims = new Int32Array(2);
-		const pixelsPtr = native_.symbols.uiRasterizeText(
+		const pixelsPtr = rasterizeText(
 			toCString(text),
 			toCString(fontName),
 			size,
@@ -2615,7 +2639,7 @@ export const nativeText = {
 		const data = new Uint8Array(
 			toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4).slice(0),
 		);
-		native_.symbols.uiFreeTextBitmap(pixelsPtr);
+		freeTextBitmap(pixelsPtr);
 		return { width, height, data };
 	},
 };
@@ -2626,10 +2650,11 @@ export function enableWGPUKeyEvents(): boolean {
 	if (wgpuKeyEventsEnabled) return true;
 	if (!hasFFI) return false;
 	try {
-		if (typeof native_.symbols.setWGPUKeyHandler !== "function") {
+		const setKeyHandler = macOSNative?.symbols.setWGPUKeyHandler;
+		if (typeof setKeyHandler !== "function") {
 			return false;
 		}
-		native_.symbols.setWGPUKeyHandler(wgpuKeyCallback.ptr);
+		setKeyHandler(wgpuKeyCallback.ptr);
 		wgpuKeyEventsEnabled = true;
 		return true;
 	} catch {
@@ -2647,10 +2672,11 @@ export function enableWGPUPointerEvents(): boolean {
 	if (wgpuPointerEventsEnabled) return true;
 	if (!hasFFI) return false;
 	try {
-		if (typeof native_.symbols.setWGPUPointerHandler !== "function") {
+		const setPointerHandler = macOSNative?.symbols.setWGPUPointerHandler;
+		if (typeof setPointerHandler !== "function") {
 			return false;
 		}
-		native_.symbols.setWGPUPointerHandler(wgpuPointerCallback.ptr);
+		setPointerHandler(wgpuPointerCallback.ptr);
 		wgpuPointerEventsEnabled = true;
 		return true;
 	} catch {
