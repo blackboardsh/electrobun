@@ -24,7 +24,6 @@ export default {
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
 		"push:major": "hutch check:release && node scripts/push-version.js major",
 		"push:stable": "hutch check:release && node scripts/push-version.js stable",
-		"build:push:artifacts": "node scripts/build-and-upload-artifacts.js",
 		"test:dialog-paths-native": "hutch scripts/test-dialog-paths-native.js",
 		"test:linux-cef-idle": "node scripts/test-linux-cef-idle.js",
 		"test:linux-dpi-native": "hutch scripts/test-linux-dpi-native.js",

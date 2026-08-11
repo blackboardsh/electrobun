@@ -1,5 +1,9 @@
 name: Build and Release
 
+concurrency:
+  group: electrobun-release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
 on:
   push:
     tags:
@@ -316,6 +320,9 @@ jobs:
       - name: Verify release notes configuration
         run: node package/scripts/release-notes-contract.test.mjs
 
+      - name: Verify artifact index publisher
+        run: node --test package/scripts/create-artifact-index.test.mjs
+
       - name: Download Electrobun release artifacts
         uses: actions/download-artifact@v7
         with:
@@ -328,6 +335,28 @@ jobs:
           pattern: kitchen-*
           path: kitchen-artifacts
           merge-multiple: true
+
+      - name: Create immutable Electrobun artifact index
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: >-
+          node package/scripts/create-artifact-index.mjs
+          --artifacts artifacts
+          --output artifacts/electrobun-artifacts.json
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$RELEASE_TAG"
+          --expect macos-arm64,linux-arm64,linux-x64,windows-x64
+
+      - name: Refuse to mutate an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; Electrobun release assets are immutable." >&2
+            exit 1
+          fi
 
       - name: Install Hutch
         uses: ./.github/actions/install-hutch
@@ -345,6 +374,7 @@ jobs:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
+            artifacts/electrobun-artifacts.json
           generate_release_notes: true
           prerelease: ${{ github.event.inputs.prerelease || contains(github.ref_name, '-beta') || contains(github.event.inputs.tag, '-beta') }}
 
