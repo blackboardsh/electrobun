@@ -330,8 +330,11 @@ export default {
 
 ## Static Files And Output
 
-`build.copy` maps project-relative source paths to paths inside the packaged
-application resources.
+`build.copy` maps project-relative source paths to safe relative paths inside
+the packaged application resources. `buildFolder` and `artifactFolder` are
+also project-relative. Nested paths are supported, but absolute paths, empty
+paths, and `.` or `..` path components are rejected before Hutch creates,
+copies, or removes output files.
 
 | Field | Type | Default |
 | --- | --- | --- |

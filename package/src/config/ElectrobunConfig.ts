@@ -317,19 +317,23 @@ export interface ElectrobunConfig {
 
 		/**
 		 * Files to copy directly to the build output
-		 * Key is source path, value is destination path
+		 * Key is a project source path. The value is a safe relative path inside
+		 * the packaged application; absolute paths and `.` / `..` components are
+		 * rejected.
 		 */
 		copy?: {
 			[sourcePath: string]: string;
 		};
 		/**
-		 * Output folder for built application
+		 * Project-relative output folder for the built application. Nested paths
+		 * are allowed; absolute paths and `.` / `..` components are rejected.
 		 * @default "build"
 		 */
 		buildFolder?: string;
 
 		/**
-		 * Output folder for distribution artifacts
+		 * Project-relative output folder for distribution artifacts. Nested paths
+		 * are allowed; absolute paths and `.` / `..` components are rejected.
 		 * @default "artifacts"
 		 */
 		artifactFolder?: string;
