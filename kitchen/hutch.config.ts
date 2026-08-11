@@ -1,4 +1,4 @@
-// @hutch cli=0.5.1 cottontail=0.3.0
+// @hutch cli=0.6.0 cottontail=0.4.0
 export default {
 	electrobun: {
 		version: "2.0.1-beta.0",
