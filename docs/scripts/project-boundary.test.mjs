@@ -19,7 +19,11 @@ const deployWorkflow = readFileSync(
 );
 
 test("Hutch owns the reproducible docs install", () => {
-  assert.match(configSource, /\binstall:\s*\[\s*"npm"\s*,\s*"ci"\s*\]/);
+  assert.match(configSource, /\bpackageManager:\s*"npm"/);
+  assert.match(
+    configSource,
+    /\binstall:\s*\[\s*"hutch"\s*,\s*"pm"\s*,\s*"ci"\s*\]/,
+  );
   assert.equal(manifest.private, true);
   assert.equal(manifest.scripts, undefined);
   assert.equal(lockfile.lockfileVersion, 3);
@@ -29,8 +33,7 @@ test("Hutch owns the reproducible docs install", () => {
     manifest.devDependencies,
   );
   assert.equal(existsSync(new URL("bun.lock", projectRoot)), false);
-  assert.match(deployWorkflow, /run:\s*hutch install\s*\n/);
-  assert.doesNotMatch(deployWorkflow, /hutch install --frozen-lockfile/);
+  assert.match(deployWorkflow, /run:\s*hutch run install\s*\n/);
 });
 
 test("tag deployments use the canonical strict release version gate", () => {
@@ -70,13 +73,13 @@ test("tag deployments use the canonical strict release version gate", () => {
   assert.doesNotMatch(deployWorkflow, /contains\(github\.ref_name/);
 });
 
-test("docs tools resolve explicitly through npm", () => {
+test("docs tools delegate explicitly to the selected npm executable", () => {
   for (const command of [
-    "npm exec -- astro dev",
-    "npm exec -- astro build",
-    "npm exec -- astro preview",
-    "npm exec -- astro check",
-    "npm exec -- wrangler pages deploy",
+    "hutch pm exec -- astro dev",
+    "hutch pm exec -- astro build",
+    "hutch pm exec -- astro preview",
+    "hutch pm exec -- astro check",
+    "hutch pm exec -- wrangler pages deploy",
   ]) {
     assert.match(configSource, new RegExp(command.replaceAll(" ", "\\s+")));
   }

@@ -6,7 +6,7 @@ This document describes Electrobun's build system and cross-platform compilation
 
 Electrobun uses a custom build system (`build.ts`) that handles:
 - Resolving the globally installed Hutch and its selected Cottontail runtime
-- Vendoring application build dependencies such as Zig, CEF, and WebView2
+- Resolving application toolchains and platform artifacts such as Zig, CEF, and WebView2
 - Building native wrappers for each platform
 - Creating distribution packages
 
@@ -45,18 +45,17 @@ Unlike macOS and Windows, Linux doesn't have reliable weak linking for shared li
 2. **Flexibility** - Same codebase supports both system WebKitGTK and CEF rendering
 3. **Reliability** - No runtime linking failures or undefined symbols
 
-#### CLI Binary Selection
+#### Build-Time Binary Selection
 
-The Electrobun CLI automatically copies the appropriate binary based on the `bundleCEF` setting:
+The native devkit manifest identifies both wrappers. Hutch selects and stages
+the CEF-enabled wrapper only when `build.linux.bundleCEF` is true; otherwise it
+uses the GTK-only wrapper. This selection is part of application packaging,
+not the thin npm bootstrap.
 
-```typescript
-const useCEF = config.build.linux?.bundleCEF;
-const nativeWrapperSource = useCEF 
-  ? PATHS.NATIVE_WRAPPER_LINUX_CEF 
-  : PATHS.NATIVE_WRAPPER_LINUX;
-```
-
-Both binaries are included in the distributed `electrobun` npm package, ensuring developers can toggle CEF support without recompilation.
+Both binaries are published with the versioned Electrobun devkit. Hutch resolves
+the exact `electrobun.version` selected by the project, verifies its artifacts,
+and caches them under `~/.dash/products/electrobun`. The thin `electrobun` npm
+bootstrap contains no runtime binaries or SDK source.
 
 ## Build Commands
 
@@ -64,7 +63,7 @@ All commands are run from the `/package` directory:
 
 ```bash
 cd electrobun/package
-hutch install
+npm ci
 
 # Full build with all platforms
 hutch build.ts

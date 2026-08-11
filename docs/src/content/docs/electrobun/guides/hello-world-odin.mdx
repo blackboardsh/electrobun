@@ -17,37 +17,25 @@ mkdir odin-hello
 cd odin-hello
 ```
 
-Create `hutch.config.ts` — scripts for non-JavaScript projects live here,
-not in `package.json` (Hutch resolves `hutch.config.ts` scripts first;
-`package.json` scripts are only a fallback):
+Create `hutch.config.ts`. Hutch resolves scripts only from this file; this
+project does not need a `package.json`:
 
-```ts
+```ts docs=syntax
 export default {
   scripts: {
-    dev: "hutch electrobun dev --watch",
-    build: "hutch electrobun build --env=production",
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
   },
 };
 ```
 
-Create `package.json` — it exists only to declare the `electrobun`
-dependency (the SDK and platform artifacts resolve from
-`node_modules/electrobun`):
+Create `tsconfig.json` so editors and TypeScript resolve the config types
+projected during sync:
 
 ```json
 {
-  "name": "odin-hello",
-  "private": true,
-  "dependencies": {
-    "electrobun": "latest"
-  }
+  "extends": "./.hutch/devkit/tsconfig.json"
 }
-```
-
-Install dependencies:
-
-```bash
-hutch install
 ```
 
 ## 2. Add a webview
@@ -71,9 +59,9 @@ Create `src/mainview/index.html`:
 ## 3. Add the main process
 
 Create `src/odin/main.odin`. The SDK is imported as
-`import electrobun "electrobun_sdk:electrobun"` — hutch wires up the
-`electrobun_sdk` collection for you, so there is nothing to vendor or
-configure:
+`import electrobun "electrobun_sdk:electrobun"`. Hutch projects the exact
+versioned SDK into `.hutch/devkit/odin-sdk` and passes that directory as the
+`electrobun_sdk` collection when it invokes Odin:
 
 ```odin
 package main
@@ -167,6 +155,9 @@ Create `electrobun.config.ts`:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   app: {
     name: "odin-hello",
     identifier: "odinhello.example.dev",
@@ -184,9 +175,14 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
+The project owns its Odin source package. Hutch builds the directory containing
+the configured entrypoint and passes the projected SDK collection; it does not
+generate or require a `build.odin` file.
+
 ## 5. Run the app
 
 ```bash
+hutch electrobun sync
 hutch run dev
 ```
 
@@ -258,9 +254,10 @@ Focused Odin graphics templates also exist: `odin-fluid-wgpu`,
 ## Toolchain
 
 Odin is pre-1.0 and ships monthly dev releases with breaking changes;
-Electrobun pins **Odin dev-2026-07a** and guarantees the SDK only against
-that release. Hutch uses a system compiler only on an exact version match;
-otherwise it downloads the pinned toolchain into
+Electrobun 2.0.0 defaults to **Odin dev-2026-07a** and guarantees the SDK only
+against that release. Override it exactly with `build.odin.version`. Hutch uses
+a system compiler only on an exact version match; otherwise it downloads the
+selected toolchain into
 `~/.dash/toolchains/odin/<version>/<platform>` and reuses it across projects.
 The compiler is not bundled into the finished app.
 

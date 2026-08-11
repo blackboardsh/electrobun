@@ -99,7 +99,7 @@ They run in different phases, and that is the load-bearing difference:
 - **`live`** owns resources and side effects. It is deferred — it runs after
   commit, observing a settled graph.
 
-```ts
+```ts docs=syntax
 const socketUrl = memo(() => `wss://${region()}/feed`);   // pure. just a value.
 
 live(() => {
@@ -112,7 +112,7 @@ live(() => {
 
 Suppresses subscription for a read inside a scope:
 
-```ts
+```ts docs=syntax
 live(() => {
   const plan = inert(() => state.user.plan);   // read, don't subscribe
   log(`${state.user.name} · ${plan}`);         // subscribes to .name only
@@ -127,7 +127,7 @@ there is no need to sprinkle it at component top level.
 A signal is one independent value; a store is a group of related values.
 Both return tuples, so read and write access separate at the import site:
 
-```ts
+```ts docs=syntax
 export const [state, setState] = store({ user: null, threads: [] });
 ```
 
@@ -136,7 +136,7 @@ The setter passes a writable draft and batches that store's writes into one
 propagation. Mutation is direct: no immutability, no structural sharing, no
 tree copying.
 
-```ts
+```ts docs=syntax
 setState((s) => {
   s.user.name = "ada";
   s.unread = 0;
@@ -151,7 +151,7 @@ outermost exit. `batch` is a rare escape hatch: store setters already batch
 their own store, and repeatedly reaching for `batch` to coordinate multiple
 stores is a sign those stores want to be one store.
 
-```ts
+```ts docs=syntax
 batch(() => {
   for (const item of items) {
     setTotal((t) => t + item.price);   // each read sees the last write

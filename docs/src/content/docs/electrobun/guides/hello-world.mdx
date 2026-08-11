@@ -4,8 +4,8 @@ description: "Build a minimal Cottontail-based Electrobun app from scratch."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-This guide builds the smallest possible Electrobun app by hand — five files,
-no template — so you can see exactly what each piece is for. The main process
+This guide builds a minimal Electrobun app by hand, without a template, so you
+can see exactly what each piece is for. The main process
 runs on **Cottontail**, the default TypeScript runtime. Every runtime has its
 own version of this walkthrough:
 [Bun](/electrobun/guides/hello-world-bun/),
@@ -32,31 +32,42 @@ Create `package.json`:
   "name": "my-app",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "hutch electrobun dev --watch",
-    "build": "hutch electrobun build --env=production"
-  },
-  "dependencies": {
-    "electrobun": "latest"
-  },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.9.3"
+    "@types/bun": "latest"
   }
 }
 ```
 
-The one dependency that matters is `electrobun` — it provides the config
-types, the SDK your main process imports, and the browser-side code. Install
-it:
+There is deliberately no `electrobun` npm dependency. npm owns ordinary
+JavaScript dependencies and its lockfile; Hutch supplies the versioned
+Electrobun SDK through `.hutch/devkit`.
 
-```bash
-hutch install
+Create `hutch.config.ts` for project tasks:
+
+```ts docs=syntax
+export default {
+  packageManager: "npm",
+  scripts: {
+    install: ["hutch", "pm", "ci"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
+  },
+};
 ```
 
-`package.json` scripts work as a fallback; if a project also has a
-`hutch.config.ts`, its scripts take precedence — see
-[Hutch](/electrobun/guides/hutch/).
+Hutch reads scripts and the package-manager selection only from this file. The
+`install` task delegates `ci` to npm; npm still interprets `package.json`,
+resolves packages, and owns the lockfile. See
+[Hutch](/electrobun/guides/hutch/) for the boundary.
+
+Create `tsconfig.json` so editors and TypeScript resolve the package-free SDK
+facade that Hutch projects during sync:
+
+```json
+{
+  "extends": "./.hutch/devkit/tsconfig.json"
+}
+```
 
 <Aside type="note">
 The `electrobun/main` import path and `@types/bun` package are compatibility
@@ -119,6 +130,9 @@ The last piece is telling Hutch how these files become an app. Create
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   app: {
     name: "My App",
     identifier: "dev.example.my-app",
@@ -136,18 +150,25 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-Reading it top to bottom: `app` names and identifies the application,
-`mainProcess` selects Cottontail as the runtime, `entrypoint` points at the
-main process you just wrote, and `copy` places the HTML file into the bundle
-at the path the `views://` URL expects.
+Reading it top to bottom: `electrobun.version` selects one exact core and SDK
+release, `app` names and identifies the application, `mainProcess` selects
+Cottontail as the runtime, `entrypoint` points at the main process you just
+wrote, and `copy` places the HTML file into the bundle at the path the
+`views://` URL expects.
 
 ## 5. Run the app
 
 ```bash
+hutch install
+hutch electrobun sync
 hutch run dev
 ```
 
-Hutch builds the app, launches it, and a window titled "Hello Electrobun"
+The first command delegates to npm and creates the project lockfile. Sync
+resolves the exact
+Electrobun release under `~/.dash` and creates `.hutch/devkit`; future clean
+checkouts can use `hutch run install` to delegate `npm ci`. Hutch then builds the
+app, launches it, and a window titled "Hello Electrobun"
 opens with your heading in it. Leave it running — edits to watched source
 files trigger a rebuild. Press Ctrl+C to stop.
 

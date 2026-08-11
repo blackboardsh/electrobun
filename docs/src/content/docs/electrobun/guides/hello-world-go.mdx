@@ -4,8 +4,8 @@ description: "Build a minimal Electrobun app with a Go main process from scratch
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-This guide creates a minimal Electrobun app with a **Go** main process —
-no `go.mod`, no third-party modules, one source file. For the default
+This guide creates a minimal Electrobun app with a **Go** main process and a
+normal project-owned Go module. For the default
 TypeScript runtime see [Hello World](/electrobun/guides/hello-world/). The
 faster path is `hutch electrobun init go-app --template=go-maze-wgpu`,
 which scaffolds a complete WGPU-rendering example.
@@ -17,41 +17,42 @@ mkdir hello-go
 cd hello-go
 ```
 
-Create `hutch.config.ts` — scripts for non-JavaScript projects live here,
-not in `package.json` (Hutch resolves `hutch.config.ts` scripts first;
-`package.json` scripts are only a fallback):
+Create `hutch.config.ts`. Hutch resolves scripts only from this file; this
+project does not need a `package.json`:
 
-```ts
+```ts docs=syntax
 export default {
   scripts: {
-    dev: "hutch electrobun dev --watch",
-    build: "hutch electrobun build --env=production",
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
   },
 };
 ```
 
-Create `package.json` — it exists only to declare the `electrobun`
-dependency (the SDK and platform artifacts resolve from
-`node_modules/electrobun`):
+Create `tsconfig.json` so editors and TypeScript resolve the config types and
+view SDK projected during sync:
 
 ```json
 {
-  "name": "hello-go",
-  "private": true,
-  "dependencies": {
-    "electrobun": "latest"
-  }
+  "extends": "./.hutch/devkit/tsconfig.json"
 }
 ```
 
-The `electrobun` dependency provides the build tooling and the Go SDK;
-your Go code has no modules of its own.
+Create `go.mod`:
 
-Install dependencies:
+```go
+module hellogo.example.dev
 
-```bash
-hutch install
+go 1.26.0
+
+require electrobun v0.0.0
+
+replace electrobun => ./.hutch/devkit/go-sdk
 ```
+
+The replacement is the Go SDK projected from the exact Electrobun devkit.
+Hutch does not generate this module or resolve other Go dependencies; add them
+normally and let Go own `go.mod` and `go.sum`.
 
 ## 2. Add a webview
 
@@ -160,9 +161,9 @@ webview callbacks are fine — a nil `DecideNavigation` allows all
 navigation.
 
 <Aside type="note">
-`import "electrobun"` resolves without any `go.mod` — hutch wires up the
-import path itself; see
-[How this differs from TypeScript](#how-this-differs-from-typescript).
+`import "electrobun"` resolves through the explicit local replacement in
+`go.mod`. Run `hutch electrobun sync` before standalone Go tooling so that path
+exists.
 </Aside>
 
 ## 4. Configure the build
@@ -173,49 +174,56 @@ Create `electrobun.config.ts`:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
-	app: {
-		name: "hello-go",
-		identifier: "hellogo.example.dev",
-		version: "0.0.1",
-	},
-	build: {
-		mainProcess: "go",
-		go: {
-			entrypoint: "src/go/main.go",
-		},
-		views: {
-			mainview: {
-				entrypoint: "src/mainview/index.ts",
-			},
-		},
-		copy: {
-			"src/mainview/index.html": "views/mainview/index.html",
-		},
-	},
+  electrobun: {
+    version: "2.0.0",
+  },
+  app: {
+    name: "hello-go",
+    identifier: "hellogo.example.dev",
+    version: "0.0.1",
+  },
+  build: {
+    mainProcess: "go",
+    go: {
+      package: "./src/go",
+    },
+    views: {
+      mainview: {
+        entrypoint: "src/mainview/index.ts",
+      },
+    },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+    },
+  },
 } satisfies ElectrobunConfig;
 ```
 
-`mainProcess: "go"` selects the Go runtime, and `go.entrypoint` points at
-your source file. Per-platform `bundleCEF` / `bundleWGPU` flags are only
-needed if you use CEF rendering or WGPU views.
+`mainProcess: "go"` selects the Go runtime, and `go.package` selects the main
+package within the project module. Per-platform `bundleCEF` / `bundleWGPU`
+flags are only needed if you use CEF rendering or WGPU views.
 
 ## 5. Run the app
 
 ```bash
+hutch electrobun sync
 hutch run dev
 ```
 
-Hutch builds and launches the app, then rebuilds it when watched source
-files change. On first run it also downloads the pinned Go toolchain if no
-exact match is installed. Press Ctrl+C to stop it.
+The explicit sync projects the Go SDK and resolves the selected Go toolchain
+when no exact match is installed. On Windows it also prepares the Zig C
+compiler required by cgo. `hutch run dev` then builds and launches the app and
+rebuilds it when watched source files change. Press Ctrl+C to stop it.
 
 ## How this differs from TypeScript
 
-- **No `go.mod`.** The build runs in GOPATH mode (`GO111MODULE=off`).
-  Hutch copies the directory containing your entrypoint into a temporary
-  GOPATH as package `electrobun-app` and the SDK as package `electrobun`,
-  so `import "electrobun"` resolves with no module files and no
-  third-party dependencies.
+- **Normal module ownership.** Hutch runs `go build` from the project module
+  with `-mod=readonly`. It does not copy source or synthesize a GOPATH. The
+  project owns `go.mod`, `go.sum`, module replacements, and third-party
+  dependencies.
+- **Version-matched SDK.** `hutch electrobun sync` projects the selected
+  release's module into `.hutch/devkit/go-sdk`; the explicit `replace` directive
+  makes the SDK import deterministic.
 - **cgo is mandatory.** The SDK is a cgo wrapper, so the build runs with
   `CGO_ENABLED=1` and needs a host C toolchain.
 - **Dynamic core loading.** `LoadCore()` dlopens `libElectrobunCore` from
@@ -243,8 +251,9 @@ exact match is installed. Press Ctrl+C to stop it.
 
 ## Toolchain
 
-Electrobun pins Go 1.26.4 and never uses a system Go; if no exact match is
-installed, hutch downloads the toolchain to `~/.dash/toolchains`. Builds
+Electrobun 2.0.0 defaults to Go 1.26.4. Override it exactly with
+`build.go.version`; Hutch uses an exact matching system compiler when supported
+or downloads it under `~/.dash/toolchains/go/<version>/<platform>`. Builds
 target the host OS and architecture only — cross-compilation is not
 supported yet, so use native runners per platform. Because of cgo you need
 a host C toolchain: the Xcode Command Line Tools on macOS, the platform

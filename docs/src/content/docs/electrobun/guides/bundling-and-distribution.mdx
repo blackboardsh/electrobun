@@ -12,30 +12,22 @@ named, and where to put them.
 Hutch builds for the current host platform. Use canary builds for testing and
 production builds for user-facing releases — the two channels are
 independent, so testers can run prerelease builds alongside the production
-app. A typical project wires both into its scripts:
+app. A typical project wires both into `hutch.config.ts`:
 
-```json
-{
-  "name": "my-app",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "hutch electrobun dev --watch",
-    "build:canary": "hutch electrobun build --env=canary",
-    "build:production": "hutch electrobun build --env=production"
+```ts docs=syntax
+export default {
+  packageManager: "npm",
+  scripts: {
+    install: ["hutch", "pm", "ci"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
+    "build:production": ["hutch", "electrobun", "build", "--env=production"],
   },
-  "dependencies": {
-    "electrobun": "latest"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.9.3"
-  }
-}
+};
 ```
 
 ```bash
-hutch install
+hutch run install
 hutch run build:canary
 hutch run build:production
 ```
@@ -49,6 +41,7 @@ or any static HTTP host. Configure the public folder URL:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "My Cool App",
     identifier: "com.example.my-cool-app",

@@ -31,12 +31,19 @@ const languageAliases = new Map([
 	["javascript", "javascript"],
 	["ts", "typescript"],
 	["typescript", "typescript"],
+	["tsx", "tsx"],
+	["go", "go"],
+	["odin", "odin"],
+	["rust", "rust"],
+	["toml", "toml"],
+	["zig", "zig"],
 	["sh", "bash"],
 	["shell", "bash"],
 	["bash", "bash"],
 	["html", "html"],
 	["css", "css"],
 	["json", "json"],
+	["jsonc", "jsonc"],
 	["yaml", "yaml"],
 	["yml", "yaml"],
 	["powershell", "powershell"],
@@ -151,14 +158,18 @@ function parseMeta(meta) {
 }
 
 function validateJavascriptSyntax(file, line, code, language, mode) {
-	const scriptKind = language === "typescript" ? ts.ScriptKind.TS : ts.ScriptKind.JS;
+	const scriptKind = language === "tsx"
+		? ts.ScriptKind.TSX
+		: language === "typescript"
+			? ts.ScriptKind.TS
+			: ts.ScriptKind.JS;
 	const candidates = mode === "fragment"
 		? [code, `const __value = (${code});`, `const __value = {${code}};`]
 		: [code];
 	let diagnostics = [];
 	for (const candidate of candidates) {
 		const source = ts.createSourceFile(
-			`${file}.${language === "typescript" ? "ts" : "js"}`,
+			`${file}.${language === "tsx" ? "tsx" : language === "typescript" ? "ts" : "js"}`,
 			candidate,
 			ts.ScriptTarget.Latest,
 			true,
@@ -221,7 +232,7 @@ function validateBlock(file, node, historicalFile) {
 		addError(file, line, "code contains an HTML entity; use the literal source character");
 	}
 
-	if (["javascript", "typescript"].includes(language)) {
+	if (["javascript", "typescript", "tsx"].includes(language)) {
 		validateJavascriptSyntax(file, line, node.value, language, mode);
 		if (
 			mode === "typecheck" &&

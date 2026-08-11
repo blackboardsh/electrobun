@@ -22,6 +22,7 @@ be uploaded:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -120,7 +121,7 @@ jobs:
           fi
 
       - name: Install dependencies
-        run: hutch install --frozen-lockfile
+        run: npm ci
 
       - name: Build release
         env:
@@ -171,6 +172,7 @@ redirect:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "My App",
     identifier: "com.example.my-app",

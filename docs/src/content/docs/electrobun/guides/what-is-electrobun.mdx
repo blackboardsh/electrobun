@@ -19,10 +19,11 @@ bundle Chromium when you genuinely want it.
 
 Electrobun 2.x is a few focused pieces, each doing one job:
 
-- **Hutch** is the CLI you interact with. It installs dependencies, runs
-  scripts, bundles code, downloads pinned toolchains, and produces signed,
-  distributable builds. If you're used to reaching for npm, bunx, and a
-  separate framework CLI, Hutch replaces all three.
+- **Hutch** is the build and workspace CLI. It runs project-defined scripts,
+  bundles code, synchronizes exact Electrobun devkits, downloads pinned
+  toolchains, and produces signed distributable builds. npm, Bun, pnpm, Yarn,
+  Cargo, Go modules, and other language package managers remain authoritative
+  for dependencies.
 - **Cottontail** is the default main-process runtime for JavaScript and
   TypeScript. It's built with Zig on JavaScriptCore and provides the Node.js
   and Bun-compatible APIs desktop apps actually use — so your existing code
@@ -77,9 +78,10 @@ curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
-If you don't have Hutch yet, the npm package will bootstrap it for you —
-these commands install the matching Hutch channel and open the same template
-picker:
+If you don't have Hutch yet, the thin npm package will bootstrap it and forward
+all arguments. It defaults to stable templates; pass `--beta` explicitly for
+the beta catalog. The npm package contains no Electrobun core or SDK, and its
+version does not select the product version:
 
 ```bash
 npx electrobun init

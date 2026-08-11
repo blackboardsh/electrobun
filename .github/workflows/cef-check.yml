@@ -33,7 +33,7 @@ jobs:
 
       - name: Install package dependencies
         working-directory: package
-        run: hutch install
+        run: hutch run install
 
       - name: Check latest stable CEF version
         id: check

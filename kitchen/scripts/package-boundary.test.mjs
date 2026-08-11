@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -24,10 +24,12 @@ test("Kitchen keeps npm dependencies separate from Hutch tasks", () => {
 		Object.values(lock.packages).some((entry) => entry?.name === "electrobun"),
 		false,
 	);
+	assert.equal(existsSync(join(kitchenRoot, "bun.lock")), false);
 });
 
 test("Kitchen resolves tasks and SDK types through Hutch", () => {
 	const hutch = readFileSync(join(kitchenRoot, "hutch.config.ts"), "utf8");
+	assert.match(hutch, /\bpackageManager:\s*"npm"/);
 	const scriptBody = hutch.match(/\bscripts:\s*\{([\s\S]*?)\n\t\},/)?.[1] ?? "";
 	const scriptNames = [...scriptBody.matchAll(/^\t\t(?:"([^"]+)"|([A-Za-z]+)):/gm)]
 		.map((match) => match[1] ?? match[2])
@@ -47,7 +49,7 @@ test("Kitchen resolves tasks and SDK types through Hutch", () => {
 		"start:canary",
 	]);
 	for (const command of [
-		'install: ["npm", "ci"]',
+		'install: ["hutch", "pm", "ci"]',
 		'start: ["hutch", "electrobun", "run"]',
 		'dev: ["hutch", "electrobun", "dev"]',
 		'matrix: ["hutch", "scripts/kitchen-matrix.ts"]',

@@ -87,8 +87,8 @@ _ = try core.createWebview(.{
 <TabItem label="Rust">
 
 ```rust
-// src/main.rs — Cargo resolves the SDK from the selected devkit's projected
-// Rust crate. Full setup is in the Rust hello world.
+// src/main.rs — the project Cargo.toml points `electrobun` at the Rust crate
+// projected under .hutch/devkit. Full setup is in the Rust hello world.
 use electrobun::{Core, Rect, WebviewOptions, WindowOptions};
 
 // ...inside the UI thread, after configure_webview_runtime_from_executable_dir:
@@ -108,8 +108,8 @@ core.create_webview(webview_options)?;
 <TabItem label="Go">
 
 ```go
-// src/go/main.go — import "electrobun" (hutch builds in GOPATH mode; no
-// go.mod needed). Windows are created from a goroutine while
+// src/go/main.go — import "electrobun" through the project go.mod replacement
+// to .hutch/devkit/go-sdk. Windows are created from a goroutine while
 // RunMainThread blocks. Full setup in the Go hello world.
 import "electrobun"
 

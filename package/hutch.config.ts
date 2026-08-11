@@ -1,19 +1,20 @@
 // @hutch cli=0.5.1 cottontail=0.3.0
 export default {
+	packageManager: "npm",
 	scripts: {
-		install: ["npm", "ci"],
+		install: ["hutch", "pm", "ci"],
 		start: "hutch src/sdks/main/index.ts",
 		"check-zig-version": "vendors/zig/zig version",
 		"check-rust-version": "vendors/rust/bin/rustc --version",
 		"build:dev": "hutch build.ts",
-		"build:local": "scripts/build-local.js",
+		"build:local": ["node", "scripts/build-local.js"],
 		"build:release": "hutch build.ts --release",
-		dev: "scripts/dev.ts",
-		"dev:matrix": "scripts/dev-matrix.ts",
-		"dev:test": "scripts/dev.test.ts",
+		dev: ["hutch", "scripts/dev.ts"],
+		"dev:matrix": ["hutch", "scripts/dev-matrix.ts"],
+		"dev:test": ["hutch", "scripts/dev.test.ts"],
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && hutch dev",
-		"dev:canary": "hutch install && hutch build:release && cd ../kitchen && hutch install && hutch electrobun build --env=canary",
-		"dev:production": "hutch install && hutch build:release && cd ../kitchen && hutch install && hutch electrobun build --env=production",
+		"dev:canary": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=canary",
+		"dev:production": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=production",
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
@@ -39,8 +40,11 @@ export default {
 			"node --test scripts/version-config.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
-		"test:cef-debug": "scripts/test-cef-remote-debugging.ts",
-		"test:webview2-permissions": "scripts/test-webview2-permissions.ts",
+		"test:cef-debug": ["hutch", "scripts/test-cef-remote-debugging.ts"],
+		"test:webview2-permissions": [
+			"hutch",
+			"scripts/test-webview2-permissions.ts",
+		],
 		"test:macos-inspector-layout": "scripts/test-macos-inspector-layout.sh",
 		"test:templates": "node scripts/run-cottontail-test.js ../templates/template-manifests.test.ts ../templates/all-template-orchestrator.test.ts",
 		"test:odin-templates": "node scripts/test-odin-templates.mjs",

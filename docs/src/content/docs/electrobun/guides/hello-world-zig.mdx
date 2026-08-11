@@ -17,37 +17,25 @@ mkdir hello-zig
 cd hello-zig
 ```
 
-Create `hutch.config.ts` — scripts for non-JavaScript projects live here,
-not in `package.json` (Hutch resolves `hutch.config.ts` scripts first;
-`package.json` scripts are only a fallback):
+Create `hutch.config.ts`. Hutch resolves scripts only from this file; this
+project does not need a `package.json`:
 
-```ts
+```ts docs=syntax
 export default {
   scripts: {
-    dev: "hutch electrobun dev --watch",
-    build: "hutch electrobun build --env=production",
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
   },
 };
 ```
 
-Create `package.json` — it exists only to declare the `electrobun`
-dependency (the SDK and platform artifacts resolve from
-`node_modules/electrobun`):
+Create `tsconfig.json` so editors and TypeScript resolve the config types and
+view SDK projected during sync:
 
 ```json
 {
-  "name": "hello-zig",
-  "private": true,
-  "dependencies": {
-    "electrobun": "latest"
-  }
+  "extends": "./.hutch/devkit/tsconfig.json"
 }
-```
-
-Install dependencies:
-
-```bash
-hutch install
 ```
 
 ## 2. Add a webview
@@ -76,9 +64,13 @@ Create `src/zig/main.zig`:
 const std = @import("std");
 const electrobun = @import("electrobun");
 
+fn sleepMs(ms: u64) void {
+    electrobun.defaultIo().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
+}
+
 fn createUi(core: *electrobun.Core, bundle_paths: *const electrobun.BundlePaths) void {
     // Give the native event loop a beat to start before creating UI.
-    std.time.sleep(150 * std.time.ns_per_ms);
+    sleepMs(150);
 
     // Required before any createWebview: loads the bundled preload scripts.
     core.configureWebviewRuntimeFromExecutableDir(bundle_paths, 0) catch |err| {
@@ -132,10 +124,47 @@ pub fn main() !void {
 }
 ```
 
-There is no `build.zig` in the project. Hutch generates one at build time that
-wires the SDK up as a module named `electrobun`, so `@import("electrobun")`
-just works. It also links libc, which is why `std.heap.c_allocator` is
-available.
+Create the project-owned `build.zig`:
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+    const electrobun_sdk = b.option(
+        []const u8,
+        "electrobun-sdk",
+        "Absolute path to the Electrobun Zig SDK projected by Hutch",
+    ) orelse @panic("missing -Delectrobun-sdk; build this project through Hutch");
+
+    const electrobun = b.createModule(.{
+        .root_source_file = .{ .cwd_relative = electrobun_sdk },
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const exe = b.addExecutable(.{
+        .name = "main",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/zig/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "electrobun", .module = electrobun },
+            },
+        }),
+    });
+
+    b.installArtifact(exe);
+}
+```
+
+The build owns its source root, output name, modules, and linker settings.
+Hutch invokes it with
+`-Delectrobun-sdk=<project>/.hutch/devkit/zig-sdk/electrobun.zig`; it never
+generates or rewrites `build.zig`.
 
 ## 4. Configure the build
 
@@ -145,6 +174,9 @@ Create `electrobun.config.ts`:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   app: {
     name: "hello-zig",
     identifier: "hellozig.example.dev",
@@ -153,7 +185,7 @@ export default {
   build: {
     mainProcess: "zig",
     zig: {
-      entrypoint: "src/zig/main.zig",
+      version: "0.16.0",
     },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
@@ -165,6 +197,7 @@ export default {
 ## 5. Run the app
 
 ```bash
+hutch electrobun sync
 hutch run dev
 ```
 
@@ -217,9 +250,10 @@ hutch electrobun init my-app --template=zig-wgpu
 
 ## Toolchain
 
-Electrobun pins Zig **0.16.0**. Hutch uses a system Zig only on an exact
-version match; otherwise it downloads the pinned toolchain into
-`~/.dash/toolchains/zig/0.16.0/<platform>` and reuses it across projects. The
+Electrobun 2.0.0 defaults to Zig **0.16.0**. Override it exactly with
+`build.zig.version`. Hutch uses a system Zig only on an exact version match;
+otherwise it downloads the selected toolchain into
+`~/.dash/toolchains/zig/<version>/<platform>` and reuses it across projects. The
 compiler is not bundled into the finished app.
 
 Native main processes build for the host OS/arch only — there is no

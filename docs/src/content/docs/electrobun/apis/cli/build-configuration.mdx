@@ -12,6 +12,9 @@ development.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -41,6 +44,17 @@ export default {
 Run `hutch electrobun config --env=dev` to inspect the merged configuration
 that Hutch will use.
 
+## Electrobun Devkit
+
+`electrobun.version` is required and must be an exact release such as `2.0.0`
+or `2.1.0-beta.3`. It is independent of the thin npm bootstrap version and the
+application version in `app.version`.
+
+Hutch resolves and verifies that release under
+`~/.dash/products/electrobun`, then projects its config types and language SDKs
+into `.hutch/devkit`. Run `hutch electrobun sync` to refresh that projection
+without building. `init`, `build`, `run`, and `dev` sync implicitly.
+
 ## Application Metadata
 
 `app` is required.
@@ -63,6 +77,7 @@ in `/Applications` or `~/Applications` so Launch Services can register it.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Link Receiver",
     identifier: "com.example.link-receiver",
@@ -92,6 +107,7 @@ the leading dot. An optional icon must be an `.icns` source file.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Document Editor",
     identifier: "com.example.document-editor",
@@ -128,19 +144,20 @@ Windows and Linux URL schemes and file associations are not yet implemented.
 `build.mainProcess` selects the runtime and compiler. It defaults to
 `"cottontail"`.
 
-| Value | Configuration | Default build input |
+| Value | Configuration | Project build input |
 | --- | --- | --- |
 | `cottontail` | `build.cottontail` | `src/bun/index.ts` |
 | `bun` | `build.bun` | `src/bun/index.ts` |
-| `zig` | `build.zig` | `src/zig/main.zig` |
-| `rust` | `build.rust` | `Cargo.toml`, binary `main` |
-| `go` | `build.go` | `src/go/main.go` |
-| `odin` | `build.odin` | `src/odin/main.odin` |
+| `zig` | `build.zig` | project `build.zig` |
+| `rust` | `build.rust` | `Cargo.toml`, binary target `main` |
+| `go` | `build.go` | `go.mod`, package `./src/go` |
+| `odin` | `build.odin` | package containing `src/odin/main.odin` |
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Native Example",
     identifier: "com.example.native",
@@ -148,10 +165,33 @@ export default {
   },
   build: {
     mainProcess: "zig",
-    zig: { entrypoint: "src/zig/main.zig" },
+    zig: { version: "0.16.0" },
   },
 } satisfies ElectrobunConfig;
 ```
+
+Each selected Electrobun release declares default Zig, Rust, Go, and Odin
+versions. The matching `build.zig.version`, `build.rust.version`,
+`build.go.version`, or `build.odin.version` field is an exact per-project
+override. Hutch reuses exact matching system compilers where supported, or
+stores the selected compiler under
+`~/.dash/toolchains/<language>/<version>/<platform>`.
+
+Native build descriptions remain project-owned:
+
+- Zig: `build.zig`; Hutch passes `-Delectrobun-sdk=<project>/.hutch/devkit/zig-sdk/electrobun.zig`.
+- Rust: `Cargo.toml` and `Cargo.lock`; configure `manifest` (default
+  `Cargo.toml`) and `binary` (default `main`). A local dependency may point to
+  `.hutch/devkit/rust-sdk`.
+- Go: `go.mod` and `go.sum`; configure `package` (default `./src/go`). Use
+  `require electrobun v0.0.0` and
+  `replace electrobun => ./.hutch/devkit/go-sdk` in the module root.
+- Odin: normal source package; `entrypoint` defaults to
+  `src/odin/main.odin`, and Hutch passes the projected `electrobun_sdk`
+  collection. No `build.odin` is generated or required.
+
+Hutch invokes the normal project build tool. It does not generate `build.zig`,
+Cargo manifests, Go modules, or a temporary GOPATH.
 
 Hutch builds for the current host platform and architecture. Use native CI
 runners when producing the macOS, Windows, and Linux release matrix.
@@ -182,6 +222,7 @@ because they carry different trade-offs:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "My App",
     identifier: "com.example.my-app",
@@ -256,6 +297,7 @@ their own Vite build and copy its output.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Bundled App",
     identifier: "com.example.bundled-app",
@@ -301,6 +343,7 @@ application resources.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Packaged App",
     identifier: "com.example.packaged-app",
@@ -319,15 +362,17 @@ export default {
 
 ## Watch Mode
 
-`hutch electrobun dev --watch` derives watch roots from entrypoints and copy
-sources. Add other source locations with `build.watch`; suppress generated or
-high-churn paths with `build.watchIgnore`. `build`, `artifacts`, and
+`hutch electrobun dev --watch` derives watch roots from configured source and
+native build inputs, view entrypoints, and copy sources. Add other source
+locations with `build.watch`; suppress generated or high-churn paths with
+`build.watchIgnore`. `build`, `artifacts`, and
 `node_modules` are always ignored.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Watched App",
     identifier: "com.example.watched-app",
@@ -393,6 +438,7 @@ Hutch does not invoke `flatpak-builder` itself.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Cross Platform App",
     identifier: "com.example.cross-platform",
@@ -438,6 +484,7 @@ Electrobun default with the same name.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "CEF App",
     identifier: "com.example.cef-app",
@@ -474,6 +521,7 @@ Additional JSON-compatible values are available through `BuildConfig`.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Background App",
     identifier: "com.example.background-app",
@@ -509,6 +557,7 @@ or JavaScript file and executes it with the host-platform Cottontail binary.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Hooked App",
     identifier: "com.example.hooked-app",
@@ -565,6 +614,7 @@ production build should skip downloading and diffing the previous release.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Released App",
     identifier: "com.example.released-app",

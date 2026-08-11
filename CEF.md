@@ -11,15 +11,19 @@ Electrobun releases ship 2 tarballs per platform:
 | `electrobun-core-*` | Platform binaries including `process_helper` | `dist/` (excluding `cef/`) |
 | `electrobun-cef-*` | CEF runtime files only (no electrobun code) | `dist/cef/` |
 
-`process_helper` ships in the **core** tarball, not the CEF tarball. This means the CEF tarball contains only upstream CEF distribution files and can be swapped independently.
+`process_helper` ships in the **core** tarball, not the CEF tarball. The CEF
+tarball therefore contains only upstream runtime files and can be downloaded
+and cached independently; the Electrobun release's artifact index still pins
+its exact digest.
 
 ## How CEF Gets Built
 
-The default CEF version is hardcoded in `package/build.ts`:
+The default CEF version is declared once in
+`package/src/shared/cef-version.ts`:
 
 ```typescript
-const CEF_VERSION = `144.0.11+ge135be2`;
-const CHROMIUM_VERSION = `144.0.7559.97`;
+export const CEF_VERSION = `147.0.10+gd58e84d`;
+export const CHROMIUM_VERSION = `147.0.7727.118`;
 ```
 
 When `hutch build.ts` runs, `vendorCEF()` does the following:
@@ -68,44 +72,35 @@ path: package/src/native/build/process_helper[.exe]
 
 `libNativeWrapper` is NOT cached because it changes frequently.
 
-## Custom CEF Versions (End-User Flow)
+## Application Artifact Resolution
 
-Developers using electrobun via npm can override the CEF version in their `electrobun.config.ts`:
+CEF is owned by the exact Electrobun release selected in
+`electrobun.config.ts`; there is no per-project CEF version override. The
+release publishes a verified CEF tarball separately from the core tarball so
+projects that do not enable CEF do not download it. When CEF is enabled, Hutch
+resolves the selected release's artifact index, verifies the CEF archive, and
+caches it under `~/.dash/products/electrobun` before packaging the app.
 
-```typescript
-export default {
-  build: {
-    cefVersion: "145.0.1+gabcdef0+chromium-145.0.7600.50",
-    // ...
-  },
-} satisfies ElectrobunConfig;
-```
-
-When set, the CLI's `downloadAndExtractCustomCEF()` function:
-
-1. Downloads the minimal distribution from Spotify CDN
-2. Extracts it
-3. Copies runtime files from `Release/` and `Resources/` to the flat `cef/` layout
-4. Writes a `.cef-version` stamp for cache detection
-
-No compilation happens. `process_helper` is already in the core tarball and works with the swapped CEF runtime via the stable C API.
-
-### C API Compatibility
-
-CEF's C API is designed for ABI stability within the same major version line. `process_helper` statically links `libcef_dll_wrapper.a` compiled against the release's default CEF headers. When a developer uses a different CEF version, the C API must be compatible. Across major versions, breaking changes are possible.
+The core tarball's native devkit manifest describes the CEF-capable wrapper and
+`process_helper` runtime paths. The artifact index—not the npm bootstrap or the
+devkit manifest—owns the CEF download URL, size, and SHA-256 digest.
 
 ## Weekly CEF Version Check
 
-`.github/workflows/cef-check.yml` runs weekly (Monday 09:00 UTC) and can be triggered manually. It runs `package/scripts/check-latest-cef.ts` which:
+`.github/workflows/cef-check.yml` runs weekly (Monday 09:00 UTC) and can be
+triggered manually. It runs `package/scripts/update-cef-version.ts`, which:
 
-1. Fetches `https://cef-builds.spotifycdn.com/linux64_builds_index.json`
+1. Fetches the Spotify CEF build index
 2. Finds the latest stable version
-3. Compares with `CEF_VERSION` in `build.ts`
-4. Emits a `::notice` annotation if they differ
+3. Compares it with `package/src/shared/cef-version.ts`
+4. Updates that file in the CI checkout and reports `has_update=true` when they differ
+
+The workflow then builds against the candidate version and records whether it
+is compatible; the scheduled job does not commit the update.
 
 ## Bumping the CEF Version
 
-1. Update `CEF_VERSION` and `CHROMIUM_VERSION` in `package/build.ts`
+1. Update `CEF_VERSION` and `CHROMIUM_VERSION` in `package/src/shared/cef-version.ts`
 2. Delete `vendors/cef/` locally (or the `.cef-version` stamp -- staleness detection will clean it automatically)
 3. Run `hutch build.ts` -- it will download the new CEF, rebuild `libcef_dll_wrapper.a` and `process_helper`
 4. Test with the kitchen app (`hutch dev` from `package/`)
@@ -115,10 +110,11 @@ CEF's C API is designed for ABI stability within the same major version line. `p
 
 | File | Role |
 |------|------|
-| `package/build.ts` | `CEF_VERSION`/`CHROMIUM_VERSION` constants, `vendorCEF()`, `copyToDist()` |
-| `package/src/cli/index.ts` | `CEF_HELPER_*` path constants, `downloadAndExtractCustomCEF()`, `ensureCEFDependencies()` |
-| `package/scripts/package-release.js` | Creates the 3 tarballs from `dist/` and `bin/` |
-| `package/scripts/check-latest-cef.ts` | Queries Spotify CDN for latest stable CEF version |
+| `package/build.ts` | `vendorCEF()` and `copyToDist()` build/staging implementation |
+| `package/src/shared/cef-version.ts` | Authoritative CEF and Chromium version pair |
+| `package/src/shared/native-devkit-manifest.ts` | Describes CEF-capable runtime paths exposed to Hutch |
+| `package/scripts/package-release.js` | Creates the core and optional CEF tarballs from `dist/` |
+| `package/scripts/update-cef-version.ts` | Checks the latest stable CEF version and updates the source pair in its checkout |
 | `.github/workflows/release.yml` | Build + release workflow with CEF and process_helper caches |
 | `.github/workflows/cef-check.yml` | Weekly CEF version check |
 | `package/src/native/macos/cef_process_helper_mac.cc` | macOS process_helper source |

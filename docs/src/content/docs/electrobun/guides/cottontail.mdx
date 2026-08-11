@@ -4,20 +4,27 @@ description: "Understand Electrobun's default JavaScript runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Cottontail is the runtime your TypeScript main process runs on. It's built
+Cottontail is the default runtime for a TypeScript main process. It's built
 with Zig on JavaScriptCore and provides the Node.js and Bun-compatible APIs
-Electrobun applications need — which means your existing code and the npm
-packages it depends on work, without your app shipping Node or Bun.
+Electrobun applications need — which means existing code and npm packages can
+work without a Cottontail-based app shipping Node or Bun.
 
 Why a separate runtime at all? Because a desktop app's runtime has a
 different job than a general-purpose server runtime. Cottontail carries the
-APIs applications actually use and leaves out the rest — package management,
-bundling, and build machinery live in Hutch instead — so the runtime that
-ships inside every app stays small.
+APIs applications actually use and leaves out the rest. Project dependencies
+remain with npm or another package manager, while bundling and native build
+machinery live in Hutch, so the runtime that ships inside every app stays
+small.
 
-You never manage Cottontail directly. Hutch resolves a pinned Cottontail
-release at build time and places it in the application bundle; end users
-don't install anything.
+Bun is also a first-class package-manager choice for a Cottontail project: set
+`packageManager: "bun"` in `hutch.config.ts`. That only selects the external
+dependency tool. Separately, Cottontail implements Bun-compatible application
+APIs including the `Bun.$` shell interface.
+
+You never manage Cottontail directly. For a Cottontail main process, Hutch
+resolves a pinned release at build time and places it in the application
+bundle; end users don't install anything. A Bun main process bundles Bun
+instead.
 
 ## Select Cottontail
 
@@ -28,6 +35,7 @@ configuration is:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Cottontail App",
     identifier: "dev.example.cottontail-app",
@@ -64,8 +72,7 @@ it explains where every capability lives:
 | --- | --- |
 | Execute the bundled TypeScript main process | Cottontail |
 | Node.js and Bun-compatible runtime APIs | Cottontail |
-| Install packages and maintain the lockfile | Hutch |
-| Execute package binaries with `hutch x` | Hutch |
+| Install packages, execute their binaries, and maintain their lockfile | Project package manager |
 | Bundle main-process and webview source | Hutch |
 | Acquire compilers and native platform artifacts | Hutch |
 | Sign, notarize, wrap, and package releases | Hutch |
@@ -78,8 +85,9 @@ Cottontail is built to run existing Node.js and Bun-oriented application
 code, and for typical application code it does. But compatibility isn't the
 same as being interchangeable in every case: native addons, runtime-specific
 implementation details, and uncommon APIs can expose differences. The
-practical advice is the same as for any runtime: keep `bun.lock` committed
-and exercise your application on every target platform before release.
+practical advice is the same as for any runtime: commit the lockfile owned by
+your selected package manager and exercise your application on every target
+platform before release.
 
 <Aside type="tip">
 If your application intentionally depends on the actual Bun runtime, use the

@@ -4,15 +4,17 @@ description: "Install and use Electrobun's native build and workspace CLI."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Hutch is the one CLI you use for everything in Electrobun 2.x. It installs
-packages, runs project scripts, bundles TypeScript, downloads pinned
-toolchains and Electrobun platform artifacts, and packages applications for
-distribution. Where a 1.x workflow juggled Bun, npm, and a separate
-Electrobun CLI, 2.x is just `hutch`.
+Hutch is Electrobun 2.x's native build and workspace CLI. It runs project
+scripts, bundles TypeScript, resolves exact Electrobun devkits and compiler
+toolchains, and packages applications for distribution. Your normal language
+package manager still owns application dependencies: npm, Bun, pnpm, or Yarn
+for a JavaScript project; Cargo for Rust; Go modules for Go; and so on.
 
-Hutch is build-time tooling — it's what *you* run. Cottontail is the runtime
-that ships inside your app; Hutch selects it whenever JavaScript execution is
-needed and otherwise stays out of the finished bundle.
+Hutch is build-time tooling — it's what *you* run. It uses Cottontail for
+TypeScript and shell execution during builds, but that does not select the
+application runtime. Cottontail ships as the default JavaScript main process;
+when `build.mainProcess` selects Bun, the actual Bun runtime ships instead.
+Hutch itself stays out of the finished bundle.
 
 ## Install Hutch
 
@@ -42,32 +44,35 @@ live side by side under `~/.dash/products`, with launchers in `~/.dash/bin`.
 `stable` is accepted as an alias for the production channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
-work: the published package installs Hutch when necessary and hands off to
-the same native initializer. Prerelease Electrobun packages select Hutch's
-canary channel; production packages select production. This bootstrap is
-deliberately limited to `init` — day-to-day development and build commands
-run through Hutch directly.
+work. The published package is an independent, tiny bootstrap: it installs
+Hutch when necessary and forwards every argument to `hutch electrobun`. It
+defaults `init` to stable templates; pass `--beta` explicitly for beta
+templates. The npm package's own version never selects an Electrobun product,
+SDK, runtime, or template version.
 
 ## Everyday commands
 
 ```bash
-# Choose a template, edit the suggested project name, and create the project
+# Choose a template from the active Hutch channel and create the project
 hutch electrobun init
 
-# The package-runner spelling is a direct alias
-hutch x electrobun init
+# Opt into the current beta template catalog
+hutch electrobun init --beta
 
-# Install dependencies and maintain bun.lock
+# Run the project's reproducible install task, if it has one
+hutch run install
+
+# Or delegate a normal install to the configured package manager
 hutch install
 
-# Run hutch.config.ts or package.json scripts
+# Run a script declared in hutch.config.ts
 hutch run dev
 
 # Build and launch an Electrobun app
 hutch electrobun dev --watch
 
-# Execute a package binary, like npx or bunx
-hutch x --package=typescript tsc --version
+# Refresh the exact Electrobun devkit and toolchain without building
+hutch electrobun sync
 
 # Create distributable builds
 hutch electrobun build --env=canary
@@ -77,29 +82,50 @@ hutch electrobun build --env=production
 Hutch's build environments are `dev`, `canary`, and `production`.
 `--env=stable` remains an alias for `--env=production`.
 
-Scripts resolve in a predictable order: `hutch run <name>` checks the nearest
-`hutch.config.ts` first, then falls back to `package.json` scripts. When the name
-is unambiguous, `hutch <name>` works as shorthand. And since scripts don't
-have to live in `package.json`, non-JavaScript projects don't need one at all
-— a `hutch.config.ts` is enough:
+After extracting a template, `init` syncs its exact Electrobun release and
+required native toolchain, then runs the template's configured `install` task
+when one exists. Pass `--skip-install` to defer that task. Offline init also
+skips it so Hutch does not start a package manager that might use the network.
 
-```ts
+Scripts come only from the nearest `hutch.config.ts`. Hutch does not inspect
+`package.json`, resolve npm packages, add `node_modules/.bin` to `PATH`, or
+emulate npm lifecycle hooks. When a name is unambiguous, `hutch <name>` works
+as shorthand. A task can explicitly invoke the package manager a project has
+chosen:
+
+```ts docs=syntax
 // hutch.config.ts
 export default {
+  packageManager: "npm",
   scripts: {
-    dev: "hutch electrobun dev --watch",
-    build: "hutch electrobun build --env=production",
+    install: ["hutch", "pm", "ci"],
+    ui: ["hutch", "pm", "exec", "--", "vite", "build"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
   },
 };
 ```
 
+String values are shell expressions: pipelines, redirects, environment
+expansion, and operators such as `&&` are interpreted, as in
+`"hutch pm exec -- vite build && hutch electrobun dev"`. Argument arrays spawn
+the first element with the remaining elements as exact arguments—there is no
+shell parsing or implicit quoting—and are preferable for a single command.
+Non-JavaScript projects do not need a `package.json` at all.
+
 Its first line can also carry the [version pragma](#pin-a-project) that pins
 Hutch and Cottontail per project.
 
-One subtlety worth knowing: an exact package request such as
-`hutch x electrobun@2.0.0 init` keeps normal package-runner semantics, but
-templates always come from the latest matching production or canary catalog.
-Pinning an old npm package does not pin an old starter template.
+The top-level `packageManager` may be `"npm"` (the default), `"bun"`,
+`"pnpm"`, `"yarn"`, or a custom `{ name, executable? }` selection. Bun is a
+first-class package manager, independent of whether the app's main process runs
+on Cottontail or Bun.
+
+`hutch install` spawns the selected external manager's `install` command;
+`hutch pm ...` forwards raw arguments to it. For example, with npm selected,
+`hutch pm install zod` and `hutch pm exec -- tsc --version` delegate those
+operations to npm. Hutch provides no resolver of its own: it does not interpret
+`package.json`, calculate dependency graphs, or maintain the manager's lockfile.
 
 ## Versions and updates
 
@@ -137,13 +163,53 @@ or `build:<full-git-revision>`. `stable` resolves to `production`:
 The pragma selects versions only for that project. It never rewrites the
 globally installed channel.
 
+## Select and sync Electrobun
+
+Every Electrobun 2.x project separately pins the exact product release in
+`electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  electrobun: {
+    version: "2.0.0",
+  },
+  app: {
+    name: "My App",
+    identifier: "dev.example.my-app",
+    version: "0.1.0",
+  },
+} satisfies ElectrobunConfig;
+```
+
+The version must be exact; npm tags and semver ranges are not product
+selectors. `hutch electrobun sync` resolves and verifies that release in the
+global `~/.dash/products/electrobun` store, atomically projects its SDKs,
+config types, and editor facade into `.hutch/devkit`, and resolves the selected
+native compiler under `~/.dash/toolchains` when the project needs one. Commit
+the config, but ignore `.hutch/`.
+
+`init` performs this sync before it finishes. `build`, `run`, and `dev` also
+sync implicitly, so the explicit command is mainly useful after changing the
+version pin, for editor setup, or for preparing an offline build.
+
 ## Toolchains and caches
 
 For Zig, Rust, Go, and Odin main processes, you don't need to install the
-compiler yourself. Hutch first accepts a compatible system compiler at
-Electrobun's pinned version; otherwise it downloads that exact toolchain into
-`~/.dash/toolchains` and shares it across projects. Electrobun native
-platform artifacts are cached under `~/.dash/products/electrobun`.
+compiler yourself. The selected Electrobun devkit declares a default exact
+version for each language; `build.zig.version`, `build.rust.version`,
+`build.go.version`, and `build.odin.version` can override it per project. Hutch
+accepts an exact matching system compiler when supported, otherwise downloads
+the selected toolchain into
+`~/.dash/toolchains/<language>/<version>/<platform>` and shares it across
+projects.
+
+The project still owns its build description and language dependencies:
+`build.zig` for Zig, `Cargo.toml`/`Cargo.lock` for Rust, and `go.mod`/`go.sum`
+for Go. Odin builds the configured project package directory. Hutch projects
+the matching SDK into `.hutch/devkit` and passes its path to those normal build
+tools; it does not generate build files or synthesize a GOPATH.
 
 <Aside type="note">
 Hutch is build-time tooling. The resulting application contains its selected

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
 	cpSync,
+	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-type PackageManifest = {
+type DevkitSourceManifest = {
 	private: boolean;
 	bin?: unknown;
 	exports: Record<string, string>;
@@ -24,7 +25,7 @@ type PackageManifest = {
 const packageDir = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const manifest = JSON.parse(
 	readFileSync(join(packageDir, "package.json"), "utf8"),
-) as PackageManifest;
+) as DevkitSourceManifest;
 const lockfile = JSON.parse(
 	readFileSync(join(packageDir, "package-lock.json"), "utf8"),
 ) as {
@@ -50,13 +51,15 @@ function linkPackage(source: string, destination: string) {
 	);
 }
 
-describe("published package SDK contract", () => {
-	test("keeps project installation explicit and the product package toolchain-only", () => {
+describe("private devkit source contract", () => {
+	test("keeps project installation explicit and the source package private", () => {
+		expect(hutchConfigSource).toMatch(/\bpackageManager:\s*"npm"/);
 		expect(hutchConfigSource).toMatch(
-		/\binstall:\s*\[\s*"npm"\s*,\s*"ci"\s*\]/,
+			/\binstall:\s*\[\s*"hutch"\s*,\s*"pm"\s*,\s*"ci"\s*\]/,
 		);
 		expect(manifest.private).toBe(true);
 		expect(manifest.bin).toBeUndefined();
+		expect(existsSync(join(packageDir, "bun.lock"))).toBe(false);
 		expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
 			"@types/bun",
 			"png-to-ico",
@@ -74,24 +77,24 @@ describe("published package SDK contract", () => {
 		}
 	});
 
-	test("a strict consumer cannot import graphics libraries through Electrobun", () => {
-		const tempDir = mkdtempSync(join(tmpdir(), "electrobun-package-contract-"));
+	test("a strict devkit consumer cannot import unrelated graphics libraries", () => {
+		const tempDir = mkdtempSync(join(tmpdir(), "electrobun-devkit-contract-"));
 
 		try {
-			const installedPackage = join(tempDir, "node_modules", "electrobun");
-			const publishedApi = join(installedPackage, "dist", "api");
-			mkdirSync(publishedApi, { recursive: true });
+			const projectedFacade = join(tempDir, "node_modules", "electrobun");
+			const projectedApi = join(projectedFacade, "dist", "api");
+			mkdirSync(projectedApi, { recursive: true });
 			writeFileSync(
-				join(installedPackage, "package.json"),
+				join(projectedFacade, "package.json"),
 				JSON.stringify(manifest),
 			);
 
 			for (const directory of ["browser", "config", "preload", "shared"]) {
-				cpSync(join(packageDir, "src", directory), join(publishedApi, directory), {
+				cpSync(join(packageDir, "src", directory), join(projectedApi, directory), {
 					recursive: true,
 				});
 			}
-			const generatedPreloadDir = join(publishedApi, "preload", ".generated");
+			const generatedPreloadDir = join(projectedApi, "preload", ".generated");
 			mkdirSync(generatedPreloadDir, { recursive: true });
 			writeFileSync(
 				join(generatedPreloadDir, "compiled.ts"),
@@ -99,11 +102,11 @@ describe("published package SDK contract", () => {
 			);
 			cpSync(
 				join(packageDir, "src", "sdks", "main"),
-				join(publishedApi, "sdks", "main"),
+				join(projectedApi, "sdks", "main"),
 				{ recursive: true },
 			);
 
-			// Electrobun's published TypeScript references Bun's declarations. Stage
+			// Electrobun's projected TypeScript references Bun's declarations. Stage
 			// only those declarations so an accidental graphics import cannot resolve.
 			linkPackage(
 				join(packageDir, "node_modules", "@types", "bun"),
@@ -161,7 +164,7 @@ describe("published package SDK contract", () => {
 					"Bundler",
 					"--noEmit",
 					"--resolveJsonModule",
-					// Electrobun ships TypeScript, so missing declarations in its source
+					// The devkit projects TypeScript, so missing declarations in its source
 					// remain visible even when consumers skip dependency declaration checks.
 					"--skipLibCheck",
 					"--strict",

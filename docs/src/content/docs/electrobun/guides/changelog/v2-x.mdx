@@ -30,22 +30,24 @@ sizes.
 
 ## Hutch build tooling
 
-- Hutch replaces Bun, npm, and the old project-vendored Electrobun CLI for
-  Electrobun project workflows.
-- Hutch installs packages, executes package binaries, runs lifecycle scripts,
-  bundles source, acquires pinned native toolchains, and creates signed release
-  artifacts.
-- Cottontail executes TypeScript and JavaScript lifecycle scripts while Hutch
-  owns build-time package management and orchestration.
+- Hutch replaces the old project-vendored Electrobun CLI for project scripts,
+  devkit synchronization, builds, native toolchains, and distribution.
+- npm, pnpm, Yarn, Bun, Cargo, and Go modules remain authoritative for their
+  own dependency graphs and lockfiles. Hutch invokes them only when a project
+  names an explicit `hutch.config.ts` task.
+- Every project pins an exact `electrobun.version`. Hutch verifies the matching
+  core and SDK release in `~/.dash`, then projects `.hutch/devkit` for builds
+  and editor tooling.
 - Production and canary Hutch installations can coexist globally. Projects can
   pin Hutch and Cottontail independently with a first-line pragma.
 - `hutch electrobun init` now opens an interactive, keyboard-navigable template
   chooser followed by an editable project-name prompt. Template catalogs ship
   per Electrobun channel and are downloaded on demand instead of increasing the
   Hutch executable size.
-- `hutch x electrobun init`, `npx electrobun init`, and `bunx electrobun init`
-  converge on that same initializer. The npm entry point installs Hutch when it
-  is not already present rather than embedding another build CLI.
+- `npx electrobun init` and `bunx electrobun init` converge on that same
+  initializer. The independent npm bootstrap forwards all arguments and
+  installs Hutch when needed; it carries no Electrobun core or SDK and its
+  package version does not select the product version.
 
 ## Cottontail runtime
 

@@ -14,25 +14,35 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping fast, compact, cross-platform desktop applications written in TypeScript.
-Hutch is the native build and package-management CLI. Cottontail is Electrobun's JSC-based default JavaScript runtime. Electrobun's platform layer combines Zig, Objective-C, and C++.
+Hutch is the native build and workspace CLI. Cottontail is Electrobun's JSC-based default JavaScript runtime. Electrobun's platform layer combines Zig, Objective-C, and C++.
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
-Install Hutch globally, then use it to create a project, install the npm package that provides Electrobun's SDKs, and build the application:
+Install Hutch globally, then use it to create and build a project. Each project
+pins an exact Electrobun release in `electrobun.config.ts`; Hutch syncs that
+release's core and SDKs into the shared `~/.dash` store and the project's
+generated `.hutch/devkit` facade:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
-Or bootstrap the same interactive initializer from npm or Bun. This installs
-Hutch when it is not already available:
+Or bootstrap the same interactive initializer from npm or Bun. The tiny npm
+package only installs/executes Hutch and forwards the command; it does not carry
+the Electrobun runtime or SDKs:
 
 ```bash
 npx electrobun init
 # or
 bunx electrobun init
 ```
+
+Application dependencies remain with an external package manager. A project's
+`hutch.config.ts` may select npm (the default), Bun, pnpm, Yarn, or a custom
+executable; `hutch install` and `hutch pm ...` delegate to that tool without
+implementing dependency resolution themselves. This choice is independent of
+whether the app's main process runs on Cottontail or Bun.
 
 Don't miss our:
 - self-extracting bundles that use Zstandard compression for compact distributables
@@ -169,7 +179,7 @@ shared library when these dependencies are unavailable.
 ```bash
 git clone --recurse-submodules https://github.com/blackboardsh/electrobun.git
 cd electrobun/package
-hutch install
+npm ci
 hutch dev:clean
 ```
 

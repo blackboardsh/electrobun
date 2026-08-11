@@ -1,7 +1,8 @@
 // @hutch cli=0.5.1 cottontail=0.3.0
 export default {
+	packageManager: "npm",
 	scripts: {
-		install: ["npm", "ci"],
+		install: ["hutch", "pm", "ci"],
 		start: ["hutch", "electrobun", "run"],
 		dev: ["hutch", "electrobun", "dev"],
 		matrix: ["hutch", "scripts/kitchen-matrix.ts"],

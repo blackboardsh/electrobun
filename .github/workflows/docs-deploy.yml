@@ -59,7 +59,7 @@ jobs:
 
       - name: Install docs dependencies
         if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
-        run: hutch install
+        run: hutch run install
         working-directory: docs
 
       - name: Check docs

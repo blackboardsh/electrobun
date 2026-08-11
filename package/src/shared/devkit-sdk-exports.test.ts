@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 
-type PackageManifest = {
+type DevkitFacadeManifest = {
 	exports: Record<string, string>;
 };
 
@@ -25,12 +25,12 @@ type BundleGraph = {
 const packageRoot = resolve(import.meta.dir, "../..");
 const manifest = JSON.parse(
 	readFileSync(join(packageRoot, "package.json"), "utf8"),
-) as PackageManifest;
+) as DevkitFacadeManifest;
 const tempRoot = realpathSync(
-	mkdtempSync(join(tmpdir(), "electrobun-package-exports-")),
+	mkdtempSync(join(tmpdir(), "electrobun-devkit-exports-")),
 );
 const consumerRoot = join(tempRoot, "consumer");
-const stagedPackageRoot = join(consumerRoot, "node_modules", "electrobun");
+const stagedFacadeRoot = join(consumerRoot, "node_modules", "electrobun");
 
 const focusedImports = {
 	"electrobun/main/app-menu": "setApplicationMenu",
@@ -68,9 +68,9 @@ function resolveBundleInput(input: string) {
 }
 
 beforeAll(() => {
-	mkdirSync(join(stagedPackageRoot, "dist", "api"), { recursive: true });
+	mkdirSync(join(stagedFacadeRoot, "dist", "api"), { recursive: true });
 	writeFileSync(
-		join(stagedPackageRoot, "package.json"),
+		join(stagedFacadeRoot, "package.json"),
 		JSON.stringify({
 			name: "electrobun",
 			type: "module",
@@ -78,14 +78,14 @@ beforeAll(() => {
 		}),
 	);
 
-	copyApiDirectory("sdks/main", join(stagedPackageRoot, "dist/api/sdks/main"));
-	copyApiDirectory("browser", join(stagedPackageRoot, "dist/api/browser"));
-	copyApiDirectory("shared", join(stagedPackageRoot, "dist/api/shared"));
-	copyApiDirectory("config", join(stagedPackageRoot, "dist/api/config"));
-	copyApiDirectory("preload", join(stagedPackageRoot, "dist/api/preload"));
+	copyApiDirectory("sdks/main", join(stagedFacadeRoot, "dist/api/sdks/main"));
+	copyApiDirectory("browser", join(stagedFacadeRoot, "dist/api/browser"));
+	copyApiDirectory("shared", join(stagedFacadeRoot, "dist/api/shared"));
+	copyApiDirectory("config", join(stagedFacadeRoot, "dist/api/config"));
+	copyApiDirectory("preload", join(stagedFacadeRoot, "dist/api/preload"));
 
 	const generatedPreload = join(
-		stagedPackageRoot,
+		stagedFacadeRoot,
 		"dist/api/preload/.generated/compiled.ts",
 	);
 	mkdirSync(dirname(generatedPreload), { recursive: true });
@@ -121,7 +121,7 @@ async function bundleImport(
 	}
 
 	const inputs = Object.keys(result.metafile.inputs).map((input) =>
-		relative(stagedPackageRoot, resolveBundleInput(input)).replaceAll("\\", "/"),
+		relative(stagedFacadeRoot, resolveBundleInput(input)).replaceAll("\\", "/"),
 	);
 	return {
 		bytes: result.outputs.reduce((total, output) => total + output.size, 0),
@@ -135,15 +135,15 @@ function reportComparison(
 	legacyRoot: BundleGraph,
 	focused: BundleGraph,
 ) {
-	if (process.env["ELECTROBUN_REPORT_PACKAGE_EXPORT_METRICS"] !== "1") return;
+	if (process.env["ELECTROBUN_REPORT_DEVKIT_EXPORT_METRICS"] !== "1") return;
 	console.info(
 		`${label}: root ${legacyRoot.modules} modules/${legacyRoot.bytes} bytes; ` +
 			`focused ${focused.modules} modules/${focused.bytes} bytes`,
 	);
 }
 
-describe("published package exports", () => {
-	test("publishes the canonical main SDK and preserves legacy entry points", () => {
+describe("private devkit SDK exports", () => {
+	test("exposes the canonical main SDK and preserves legacy entry points", () => {
 		expect(manifest.exports["."]).toBe("./dist/api/sdks/main/index.ts");
 		expect(manifest.exports["./main"]).toBe("./dist/api/sdks/main/index.ts");
 		expect(manifest.exports["./bun"]).toBe("./dist/api/sdks/main/index.ts");
@@ -158,11 +158,11 @@ describe("published package exports", () => {
 		}
 	});
 
-	test("maps every focused entry to a published, re-export-only module", () => {
+	test("maps every focused entry to a devkit re-export-only module", () => {
 		for (const specifier of Object.keys(focusedImports)) {
 			const exportKey = `.${specifier.slice("electrobun".length)}`;
 			const target = manifest.exports[exportKey];
-			if (!target) throw new Error(`Missing package export ${exportKey}`);
+			if (!target) throw new Error(`Missing devkit facade export ${exportKey}`);
 			expect(target).toMatch(/^\.\/dist\/api\/sdks\/main\/entries\/.+\.ts$/);
 
 			const sourcePath = join(
@@ -175,7 +175,7 @@ describe("published package exports", () => {
 		}
 	});
 
-	test("all focused package imports resolve and bundle independently", async () => {
+	test("all focused facade imports resolve and bundle independently", async () => {
 		for (const [index, [specifier, exportName]] of Object.entries(
 			focusedImports,
 		).entries()) {

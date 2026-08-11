@@ -1,12 +1,13 @@
 // @hutch cli=0.5.1 cottontail=0.3.0
 export default {
+  packageManager: "npm",
   scripts: {
-    install: ["npm", "ci"],
-    dev: "npm exec -- astro dev",
-    start: "npm exec -- astro dev",
-    build: "npm exec -- astro build",
-    preview: "npm exec -- astro preview",
-    check: "npm exec -- astro check && node scripts/check-code-examples.mjs",
+    install: ["hutch", "pm", "ci"],
+    dev: "hutch pm exec -- astro dev",
+    start: "hutch pm exec -- astro dev",
+    build: "hutch pm exec -- astro build",
+    preview: "hutch pm exec -- astro preview",
+    check: "hutch pm exec -- astro check && node scripts/check-code-examples.mjs",
     "check:examples": "node scripts/check-code-examples.mjs",
     "test:project-boundary": [
       "node",
@@ -15,6 +16,6 @@ export default {
     ],
     clean: "rm -rf dist .astro",
     deploy:
-      'npm exec -- wrangler pages deploy dist --project-name=framework-docs --branch="$PAGES_BRANCH"',
+      'hutch pm exec -- wrangler pages deploy dist --project-name=framework-docs --branch="$PAGES_BRANCH"',
   },
 };

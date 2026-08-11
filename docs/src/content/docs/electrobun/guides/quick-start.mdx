@@ -4,7 +4,7 @@ description: "Create and run an Electrobun 2.x app with Hutch."
 ---
 
 This page takes you from nothing to a running desktop app. You'll install
-Hutch — the one CLI Electrobun uses for everything — scaffold a project from a
+Hutch — Electrobun's build and workspace CLI — scaffold a project from a
 template, and run it. A couple of minutes, start to finish.
 
 ## Install Hutch
@@ -27,10 +27,11 @@ Restart the terminal if needed, then check that it's on your path:
 hutch --version
 ```
 
-That's the only global install you need. Hutch handles packages, scripts,
-builds, and releases — there's no separate npm, Bun, or framework CLI to set
-up, and when a project needs a compiler toolchain, Hutch fetches the right
-pinned version itself.
+That's the only Electrobun-specific global install you need. Hutch handles
+scripts, builds, devkits, toolchains, and releases. A JavaScript project still
+uses its chosen package manager for ordinary dependencies; a Rust or Go project
+uses Cargo or Go modules. When a project needs a compiler, Hutch fetches its
+exact configured version.
 
 ## Create a project
 
@@ -57,28 +58,49 @@ hutch electrobun init my-app --beta
 ```
 
 :::note
-`bunx electrobun init` and `npx electrobun init` work too — the npm `electrobun`
-package is a thin shim that downloads Hutch (the real Electrobun 2.0 CLI) and
-delegates. A consequence: `bunx electrobun@<older-version> init` still gives you
-the **latest** stable (or `--beta`) toolchain and templates, not the pinned
-version — npm is no longer central to Electrobun 2.0. During the 2.0 beta only
-beta templates are published, so pass `--beta` until 2.0 ships.
+`bunx electrobun init` and `npx electrobun init` work too. The npm package is a
+thin bootstrap that installs/executes Hutch and forwards every argument. It
+defaults to stable templates unless you pass `--beta`. Its npm version is
+independent and never chooses the project's Electrobun product, SDK, runtime,
+or template version.
 :::
 
 ## Run the app
 
 ```bash
 cd my-app
-hutch install
 hutch run dev
 ```
 
 A window should open on your desktop. That's your app.
 
-Here's what those two commands did: `hutch install` installed the project's
-dependencies and wrote `bun.lock`. `hutch run dev` ran the project's `dev`
-script, which builds the app, launches it, and rebuilds when you edit source
-files. Try changing some markup and watch it pick the change up.
+`init` already ran the template's explicit `install` task after extraction and
+devkit preparation. For the default JavaScript templates that task delegates
+`ci` to npm; native-only templates do not define it. If you initialized with
+`--skip-install` or `--offline`, run `hutch run install` before `dev` when the
+selected template provides that task.
+
+The `dev` task builds the app, launches it, and rebuilds when you edit source
+files. Hutch resolves both tasks only from `hutch.config.ts`; the configured
+external package manager still owns `package.json`, dependency resolution, and
+its lockfile.
+
+The template's `electrobun.config.ts` contains an exact product pin:
+
+```ts
+export default {
+  electrobun: {
+    version: "2.0.0",
+  },
+  // app and build configuration...
+};
+```
+
+During `init`, Hutch syncs that exact core and SDK release into the shared
+`~/.dash` store, projects `.hutch/devkit` into the project, and resolves any
+required native compiler under `~/.dash/toolchains`. `dev`, `run`, and `build`
+refresh that preparation automatically; `hutch electrobun sync` does the same
+work without building.
 
 A typical project looks like this:
 
@@ -92,8 +114,9 @@ my-app/
 |       |-- index.css
 |       `-- index.ts
 |-- electrobun.config.ts
+|-- hutch.config.ts
 |-- package.json
-|-- bun.lock
+|-- package-lock.json
 `-- tsconfig.json
 ```
 

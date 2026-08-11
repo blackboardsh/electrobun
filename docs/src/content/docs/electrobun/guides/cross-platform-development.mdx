@@ -21,9 +21,14 @@ Electrobun release workflow does not publish a macOS x64 core artifact.
 On each runner, install Hutch and execute the same production command:
 
 ```bash
-hutch install
+hutch run install
 hutch electrobun build --env=production
 ```
+
+Here `install` is a project task such as `["hutch", "pm", "ci"]` with
+`packageManager: "npm"`; native-only projects without JavaScript dependencies
+can omit it. Hutch delegates package commands to the configured external
+manager and does not implement dependency resolution itself.
 
 macOS signing and notarization must run on macOS. Native main-process builds
 also require that language's host toolchain and platform linker.
@@ -37,6 +42,7 @@ package rather than branching application code:
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: { version: "2.0.0" },
   app: {
     name: "Cross Platform App",
     identifier: "com.example.cross-platform-app",

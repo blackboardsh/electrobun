@@ -18,8 +18,10 @@ self-extractor plus binary-diff updates served from static storage.
 Hutch is the only build orchestrator. When you run a build, it:
 
 1. Loads `electrobun.config.ts`.
-2. Resolves the selected Electrobun release and native platform artifact.
-3. Installs project dependencies and bundles TypeScript views.
+2. Resolves the exact `electrobun.version`, verifies its core and SDK artifacts
+   in `~/.dash`, and refreshes `.hutch/devkit`.
+3. Bundles TypeScript views using dependencies already installed by the
+   project's external package manager.
 4. Bundles a Cottontail or Bun main process, or compiles a Zig, Rust, Go, or
    Odin main process.
 5. Assembles the platform application bundle.
@@ -30,6 +32,12 @@ Hutch is the only build orchestrator. When you run a build, it:
 
 Hutch and its compiler toolchains are not shipped inside the finished app —
 what your users download contains only what the app needs to run.
+
+Hutch does not inspect `package.json` or replace a language package manager.
+The top-level `hutch.config.ts` `packageManager` selection may name npm, Bun,
+pnpm, Yarn, or a custom executable. `hutch install` and `hutch pm ...` only
+delegate to that external tool; project tasks may compose those commands,
+Cargo, or another tool explicitly before the Electrobun build.
 
 ## Runtime architecture
 

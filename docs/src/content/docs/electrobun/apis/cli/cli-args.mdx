@@ -17,8 +17,14 @@ hutch electrobun init
 # Select a template directly
 hutch electrobun init my-app --template=hello-world
 
-# Use the canary template catalog
-hutch electrobun init my-app --template=solid --channel=canary
+# Use the beta template catalog
+hutch electrobun init my-app --template=solid --beta
+
+# Select stable regardless of the active Hutch channel
+hutch electrobun init my-app --template=solid --channel=stable
+
+# Leave the template's install task for later
+hutch electrobun init my-app --template=solid --skip-install
 
 # Require an already cached catalog and template
 hutch electrobun init my-app --template=solid --offline
@@ -28,12 +34,21 @@ Usage:
 
 ```text
 hutch electrobun init [project-name] [--template=name]
-  [--channel=production|stable|canary] [--offline]
+  [--channel=stable|beta] [--beta] [--offline] [--skip-install]
 ```
 
 Without `--template`, Hutch displays an interactive arrow-key selector. The
-production and canary catalogs are published with their corresponding
-Electrobun releases. `stable` selects the production catalog.
+stable and beta catalogs are published independently. Direct Hutch invocation
+uses the active Hutch channel unless `--channel` or the `--beta` shorthand
+selects one explicitly. The thin npm bootstrap adds `--channel=stable` when no
+template channel was requested. Legacy production/canary channel names remain
+accepted as aliases.
+
+After extracting a template, `init` prepares its exact Electrobun core, devkit,
+and required native toolchain. If the template defines an `install` task in
+`hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
+later; `--offline` also skips it so initialization never invokes a package
+manager that might access the network.
 
 ## `hutch electrobun config`
 
@@ -44,6 +59,22 @@ is useful for validating a dynamically constructed config without building.
 hutch electrobun config --env=dev
 hutch electrobun config --env=production
 ```
+
+## `hutch electrobun sync`
+
+Resolve the exact `electrobun.version` from `electrobun.config.ts`, verify and
+cache its platform artifacts under `~/.dash`, atomically refresh the project's
+generated `.hutch/devkit` SDK/editor facade, and resolve the configured native
+compiler toolchain without building the application:
+
+```bash
+hutch electrobun sync
+hutch electrobun sync --env=production
+```
+
+`init`, `build`, `run`, and `dev` perform the same preparation implicitly. Use
+the explicit command after changing the product pin, to prepare editor types,
+or before an offline build.
 
 ## `hutch electrobun build`
 
@@ -104,7 +135,8 @@ hutch electrobun dev --watch
 
 With `--watch`, Hutch rebuilds and relaunches after changes to:
 
-- the selected main-process entrypoint directory
+- configured main-process source and native build inputs, such as `build.zig`,
+  Cargo manifests/project source, Go module/package files, or the Odin package
 - view entrypoint directories
 - sources in `build.copy`
 - additional paths in `build.watch`
@@ -114,17 +146,21 @@ a failed build leaves the watcher running for the next edit.
 
 ## Project scripts
 
-A generated `package.json` generally exposes the common commands:
+A generated `hutch.config.ts` exposes the common commands and can explicitly
+invoke an external package manager:
 
-```json
-{
-  "scripts": {
-    "start": "hutch electrobun dev",
-    "dev": "hutch electrobun dev --watch",
-    "build:canary": "hutch electrobun build --env=canary",
-    "build": "hutch electrobun build --env=production"
-  }
-}
+```ts docs=syntax
+export default {
+  packageManager: "npm",
+  scripts: {
+    install: ["hutch", "pm", "ci"],
+    "ui:build": ["hutch", "pm", "exec", "--", "vite", "build"],
+    start: ["hutch", "electrobun", "dev"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
+  },
+};
 ```
 
 Run them through Hutch:
@@ -135,22 +171,36 @@ hutch run build:canary
 hutch run build
 ```
 
-Hutch resolves scripts from `hutch.config.ts` first, then `package.json`.
+Hutch resolves scripts only from `hutch.config.ts`. A string is interpreted as
+a shell expression, including operators, expansion, and redirects. An array
+spawns its first element with the rest as exact arguments and performs no shell
+parsing. Hutch does not inspect `package.json`, add `node_modules/.bin` to
+`PATH` itself, or emulate package-manager lifecycle hooks.
 
-## Package commands
+## Package managers
 
-Hutch also owns the package-manager commands used by Electrobun projects:
+`hutch.config.ts` may select `"npm"`, `"bun"`, `"pnpm"`, `"yarn"`, or a
+custom `{ name, executable? }` package manager. npm is the default. Bun is a
+first-class choice; this setting is independent of `build.mainProcess`, so a
+Cottontail app may use Bun for packages and a Bun main process may use npm.
+
+`hutch install` delegates to the selected external manager's `install`
+command. `hutch pm ...` forwards the remaining arguments unchanged, which lets
+a reproducible npm project name `hutch pm ci` in its install task:
 
 ```bash
 hutch install
-hutch add zod
-hutch remove zod
-hutch update
-hutch x --package=typescript tsc --version
+hutch pm ci
+hutch pm install zod
+hutch pm exec -- tsc --version
 ```
 
-`hutch x` runs a local package binary when available and otherwise installs it
-into Hutch's package cache for the invocation.
+These commands are process delegation, not a package-manager implementation.
+Hutch does not resolve dependencies, interpret the package manifest, or
+maintain lockfiles. The selected external manager owns that behavior. The same
+boundary applies to Cargo, Go modules, and other language ecosystems: they own
+dependency graphs while Hutch owns Electrobun orchestration, selected devkits,
+and compiler toolchains.
 
 ## Lifecycle hook environment
 

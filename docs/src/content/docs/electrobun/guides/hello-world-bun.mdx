@@ -16,10 +16,11 @@ runtime option.
 
 Cottontail is the default main process: it executes TypeScript and supports
 the Node.js and Bun-compatible APIs used by Electrobun applications. Choose
-Bun only when the application intentionally depends on the actual Bun
+Bun when the application intentionally depends on the actual Bun
 runtime — Bun apps get the real Bun API surface, and the two runtimes will
-diverge over time. Hutch still installs packages, bundles source, and
-packages the app in either configuration.
+diverge over time. Hutch bundles source and packages the app in either
+configuration; npm, Bun, or another chosen package manager owns ordinary
+JavaScript dependencies.
 
 ## 1. Create the project
 
@@ -35,24 +36,37 @@ Create `package.json`:
   "name": "my-app",
   "private": true,
   "type": "module",
-  "scripts": {
-    "dev": "hutch electrobun dev --watch",
-    "build": "hutch electrobun build --env=production"
-  },
-  "dependencies": {
-    "electrobun": "latest"
-  },
   "devDependencies": {
-    "@types/bun": "latest",
-    "typescript": "^5.9.3"
+    "@types/bun": "latest"
   }
 }
 ```
 
-Install dependencies:
+Create `hutch.config.ts`:
 
-```bash
-hutch install
+```ts docs=syntax
+export default {
+  packageManager: "bun",
+  scripts: {
+    install: ["hutch", "pm", "install", "--frozen-lockfile"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=production"],
+  },
+};
+```
+
+There is no `electrobun` package dependency. Hutch supplies its exact SDK and
+core. `packageManager: "bun"` is a first-class, independent choice: it makes
+`hutch install` and `hutch pm ...` delegate to Bun, while
+`build.mainProcess: "bun"` separately chooses Bun as the application runtime.
+
+Create `tsconfig.json` so editors and TypeScript resolve the package-free SDK
+facade that Hutch projects during sync:
+
+```json
+{
+  "extends": "./.hutch/devkit/tsconfig.json"
+}
 ```
 
 ## 2. Add a webview
@@ -108,6 +122,9 @@ field.
 import type { ElectrobunConfig } from "electrobun";
 
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   app: {
     name: "My App",
     identifier: "dev.example.my-app",
@@ -128,8 +145,13 @@ export default {
 ## 5. Run the app
 
 ```bash
+hutch install
+hutch electrobun sync
 hutch run dev
 ```
 
-Hutch builds and launches the app, then rebuilds it when watched source files
-change. Press Ctrl+C to stop it.
+The first command delegates to Bun and creates `bun.lock`; commit it. Future
+clean checkouts can run the configured `install` task with
+`hutch run install`, which delegates `bun install --frozen-lockfile`. Hutch
+builds and launches the app, then rebuilds it when watched source files change.
+Press Ctrl+C to stop it.
