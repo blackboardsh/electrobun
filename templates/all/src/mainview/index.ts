@@ -109,7 +109,7 @@ const toast = element<HTMLDivElement>("toast");
 
 let snapshot: Snapshot = {
 	catalogVersion: "",
-	channel: "beta",
+	channel: "stable",
 	root: "",
 	templates: [],
 	logs: [],
@@ -183,7 +183,7 @@ function applySnapshot(nextSnapshot: Snapshot): void {
 
 	snapshot = {
 		catalogVersion: String(nextSnapshot.catalogVersion ?? "unknown"),
-		channel: String(nextSnapshot.channel ?? "beta"),
+		channel: String(nextSnapshot.channel ?? "stable"),
 		root: String(nextSnapshot.root ?? ""),
 		templates: nextSnapshot.templates,
 		logs: [],
@@ -416,7 +416,7 @@ function renderTemplates(): void {
 		const description = document.createElement("span");
 		description.textContent = snapshot.templates.length
 			? "Try a template name, id, or main-process type."
-			: "The beta catalog and local project state will appear here.";
+			: "The selected release catalog and local project state will appear here.";
 		empty.append(mark, title, description);
 		templateList.append(empty);
 	} else {

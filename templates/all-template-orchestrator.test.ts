@@ -12,9 +12,11 @@ import {
 	BUILD_READY_MARKER,
 	PROCESS_SPAWNED_MARKER,
 	TemplateQaOrchestrator,
+	catalogChannelForVersion,
 	outputContainsBuildReady,
 	outputContainsSpawnedProcess,
-	parseBetaCatalog,
+	parseTemplateCatalog,
+	type CatalogChannel,
 	type CommandSpec,
 	type ManagedProcess,
 	type ProcessResult,
@@ -26,12 +28,16 @@ import {
 	resolveTemplateQaHutchExecutable,
 } from "./all/src/bun/project-root";
 
-function catalog(ids = ["all", "install-task", "no-install-task"]): unknown {
+function catalog(
+	ids = ["all", "install-task", "no-install-task"],
+	channel: CatalogChannel = "beta",
+	version = channel === "beta" ? "2.0.0-beta.7" : "2.0.0",
+): unknown {
 	return {
 		schema: 1,
 		kind: "electrobun-template-channel",
-		channel: "beta",
-		version: "2.0.0-beta.7",
+		channel,
+		version,
 		revision: "a".repeat(40),
 		templates: ids.map((id) => ({
 			id,
@@ -107,6 +113,8 @@ function fakeHarness(
 		configuredVersion?: string;
 		projectedVersion?: string;
 		omitProjectionFor?: string;
+		channel?: CatalogChannel;
+		catalogVersion?: string;
 	} = {},
 ): FakeHarness {
 	const commands: CommandSpec[] = [];
@@ -115,10 +123,14 @@ function fakeHarness(
 	const projected = new Set<string>();
 	const buildAttempts = new Map<string, number>();
 	let tick = 0;
+	const channel = options.channel ?? "beta";
+	const catalogVersion =
+		options.catalogVersion ?? (channel === "beta" ? "2.0.0-beta.7" : "2.0.0");
 
 	const runtime: QaRuntime = {
-		async loadCatalog() {
-			return catalog();
+		async loadCatalog(requestedChannel) {
+			expect(requestedChannel).toBe(channel);
+			return catalog(undefined, channel, catalogVersion);
 		},
 		ensureDirectory() {},
 		isMaterialized(path) {
@@ -129,9 +141,9 @@ function fakeHarness(
 			return {
 				hasInstallTask: id === "install-task",
 				configuredElectrobunVersion:
-					options.configuredVersion ?? "2.0.0-beta.7",
+					options.configuredVersion ?? catalogVersion,
 				projectedElectrobunVersion: projected.has(path)
-					? (options.projectedVersion ?? "2.0.0-beta.7")
+					? (options.projectedVersion ?? catalogVersion)
 					: null,
 				devkitProjectionPath: `${path}/.hutch/devkit`,
 			};
@@ -198,19 +210,34 @@ function fakeHarness(
 }
 
 describe("Template QA catalog and readiness contracts", () => {
-	test("uses the beta catalog and excludes its own all template", () => {
-		const parsed = parseBetaCatalog(catalog());
+	test("uses the requested catalog and excludes its own all template", () => {
+		const parsed = parseTemplateCatalog(catalog(), "beta");
 		expect(parsed.channel).toBe("beta");
 		expect(parsed.templates.map(({ id }) => id)).toEqual([
 			"install-task",
 			"no-install-task",
 		]);
 		expect(() =>
-			parseBetaCatalog({ ...(catalog() as object), channel: "stable" }),
+			parseTemplateCatalog({ ...(catalog() as object), channel: "stable" }, "beta"),
 		).toThrow(/expected beta catalog/);
+
+		const stable = parseTemplateCatalog(
+			catalog(undefined, "stable", "2.0.0"),
+			"stable",
+		);
+		expect(stable.channel).toBe("stable");
+		expect(stable.version).toBe("2.0.0");
 	});
 
-	test("requires an exact SemVer prerelease for the beta catalog", () => {
+	test("derives the channel from an exact product version", () => {
+		expect(catalogChannelForVersion("2.0.0")).toBe("stable");
+		expect(catalogChannelForVersion("2.0.0-beta.7")).toBe("beta");
+		for (const version of ["02.0.0", "2.0", "latest", "^2.0.0", "2.0.0\n"]) {
+			expect(() => catalogChannelForVersion(version)).toThrow(/exact version/);
+		}
+	});
+
+	test("requires a prerelease for beta and a release for stable", () => {
 		for (const version of [
 			"2.0.0",
 			"02.0.0-beta.1",
@@ -221,16 +248,23 @@ describe("Template QA catalog and readiness contracts", () => {
 			"2.0.0-beta.1\n",
 		]) {
 			expect(() =>
-				parseBetaCatalog({ ...(catalog() as object), version }),
+				parseTemplateCatalog({ ...(catalog() as object), version }, "beta"),
 			).toThrow(/exact prerelease using strict SemVer 2\.0\.0/);
 		}
 
 		expect(
-			parseBetaCatalog({
+			parseTemplateCatalog({
 				...(catalog() as object),
 				version: "2.0.0-preview.7+qa.001",
-			}).version,
+			}, "beta").version,
 		).toBe("2.0.0-preview.7+qa.001");
+
+		expect(() =>
+			parseTemplateCatalog(
+				catalog(undefined, "stable", "2.0.0-beta.1"),
+				"stable",
+			),
+		).toThrow(/exact stable release/);
 	});
 
 	test("recognizes build and launcher markers split across output chunks", () => {
@@ -321,6 +355,24 @@ describe("Template QA catalog and readiness contracts", () => {
 });
 
 describe("Template QA orchestration", () => {
+	test("uses the stable catalog and init channel for a stable product", async () => {
+		const harness = fakeHarness({ channel: "stable", catalogVersion: "2.0.0" });
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/stable template qa",
+			channel: "stable",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+
+		await orchestrator.startAll();
+		expect(orchestrator.getSnapshot().channel).toBe("stable");
+		for (const command of harness.commands.filter(({ kind }) => kind === "init")) {
+			expect(command.args).toContain("--channel=stable");
+			expect(command.args).not.toContain("--channel=beta");
+		}
+		await orchestrator.stopAll();
+	});
+
 	test("runs configured installs and builds serially before launching", async () => {
 		const harness = fakeHarness();
 		const pinnedHutch = join(
@@ -330,6 +382,7 @@ describe("Template QA orchestration", () => {
 		);
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/Template QA with spaces",
+			channel: "beta",
 			hutchExecutable: pinnedHutch,
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
@@ -387,6 +440,7 @@ describe("Template QA orchestration", () => {
 		const harness = fakeHarness({ failFirstBuildFor: "no-install-task" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
+			channel: "beta",
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});
@@ -426,6 +480,7 @@ describe("Template QA orchestration", () => {
 		});
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
+			channel: "beta",
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});
@@ -447,6 +502,7 @@ describe("Template QA orchestration", () => {
 		const harness = fakeHarness({ configuredVersion: "2.0.0-beta.8" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
+			channel: "beta",
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});
@@ -465,6 +521,7 @@ describe("Template QA orchestration", () => {
 		const harness = fakeHarness({ omitProjectionFor: "no-install-task" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
+			channel: "beta",
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});

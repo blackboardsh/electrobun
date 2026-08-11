@@ -4,6 +4,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
 	TemplateQaOrchestrator,
+	catalogChannelForVersion,
 	type CommandSpec,
 	type ManagedProcess,
 	type ProcessResult,
@@ -163,12 +164,15 @@ class NodeManagedProcess implements ManagedProcess {
 }
 
 const runtime: QaRuntime = {
-	async loadCatalog() {
-		const response = await fetch(`${normalizedTemplateBaseUrl()}/channels/beta.json`, {
-			cache: "no-store",
-		});
+	async loadCatalog(channel) {
+		const response = await fetch(
+			`${normalizedTemplateBaseUrl()}/channels/${channel}.json`,
+			{ cache: "no-store" },
+		);
 		if (!response.ok) {
-			throw new Error(`beta template catalog returned HTTP ${response.status}`);
+			throw new Error(
+				`${channel} template catalog returned HTTP ${response.status}`,
+			);
 		}
 		return response.json();
 	},
@@ -191,8 +195,16 @@ const runtime: QaRuntime = {
 let mainWindow: BrowserWindow | null = null;
 let autoStarted = false;
 const projectRoot = findTemplateQaProjectRoot();
+const projectVersion = inspectTemplateProject(projectRoot).configuredElectrobunVersion;
+if (!projectVersion) {
+	throw new Error(
+		"Template QA requires one exact electrobun.version in electrobun.config.ts",
+	);
+}
+const channel = catalogChannelForVersion(projectVersion);
 const orchestrator = new TemplateQaOrchestrator(runtime, {
 	projectRoot,
+	channel,
 	hutchExecutable: resolveTemplateQaHutchExecutable(),
 	onSnapshot(snapshot) {
 		// Live log entries use their own append-only message. Avoid repeatedly
@@ -256,3 +268,4 @@ process.on("SIGTERM", () => orchestrator.shutdownImmediately());
 process.on("exit", () => orchestrator.shutdownImmediately());
 
 console.log(`Template QA project root: ${projectRoot}`);
+console.log(`Template QA channel: ${channel} (${projectVersion})`);

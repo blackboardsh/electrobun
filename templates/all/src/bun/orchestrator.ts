@@ -35,8 +35,10 @@ export type TemplateAttempt = {
 	error?: string;
 };
 
-export type BetaCatalog = {
-	channel: "beta";
+export type CatalogChannel = "stable" | "beta";
+
+export type TemplateCatalog = {
+	channel: CatalogChannel;
 	version: string;
 	revision: string;
 	templates: CatalogTemplate[];
@@ -64,7 +66,7 @@ export type QaLog = {
 
 export type QaSnapshot = {
 	catalogVersion: string;
-	channel: "beta";
+	channel: CatalogChannel;
 	root: string;
 	templates: TemplateState[];
 	logs: QaLog[];
@@ -101,7 +103,7 @@ export interface ManagedProcess {
 }
 
 export interface QaRuntime {
-	loadCatalog(): Promise<unknown>;
+	loadCatalog(channel: CatalogChannel): Promise<unknown>;
 	ensureDirectory(path: string): Promise<void> | void;
 	isMaterialized(path: string): Promise<boolean> | boolean;
 	inspectProject(path: string): Promise<ProjectInspection> | ProjectInspection;
@@ -112,6 +114,7 @@ export interface QaRuntime {
 
 export type OrchestratorOptions = {
 	projectRoot: string;
+	channel: CatalogChannel;
 	hutchExecutable?: string;
 	readinessTimeoutMs?: number;
 	settleMs?: number;
@@ -144,23 +147,43 @@ function requireString(
 	return result;
 }
 
-export function parseBetaCatalog(value: unknown): BetaCatalog {
+export function catalogChannelForVersion(version: string): CatalogChannel {
+	const parsed = STRICT_SEMVER.exec(version);
+	if (!parsed || parsed[0].length !== version.length) {
+		throw new Error(
+			"electrobun.version must be an exact version using strict SemVer 2.0.0",
+		);
+	}
+	return parsed[4] === undefined ? "stable" : "beta";
+}
+
+export function parseTemplateCatalog(
+	value: unknown,
+	expectedChannel: CatalogChannel,
+): TemplateCatalog {
 	const root = requireRecord(value, "catalog");
 	if (root.schema !== 1 || root.kind !== "electrobun-template-channel") {
 		throw new Error("unsupported Electrobun template catalog");
 	}
-	if (root.channel !== "beta") {
-		throw new Error(`expected beta catalog, received ${String(root.channel)}`);
+	if (root.channel !== expectedChannel) {
+		throw new Error(
+			`expected ${expectedChannel} catalog, received ${String(root.channel)}`,
+		);
 	}
 	const version = requireString(root, "version", "catalog");
-	const parsedVersion = STRICT_SEMVER.exec(version);
-	if (
-		!parsedVersion ||
-		parsedVersion[0].length !== version.length ||
-		parsedVersion[4] === undefined
-	) {
+	const expectedVersionDescription =
+		expectedChannel === "beta" ? "prerelease" : "stable release";
+	let versionChannel: CatalogChannel;
+	try {
+		versionChannel = catalogChannelForVersion(version);
+	} catch {
 		throw new Error(
-			"catalog.version must be an exact prerelease using strict SemVer 2.0.0",
+			`catalog.version must be an exact ${expectedVersionDescription} using strict SemVer 2.0.0`,
+		);
+	}
+	if (versionChannel !== expectedChannel) {
+		throw new Error(
+			`catalog.version must be an exact ${expectedVersionDescription} using strict SemVer 2.0.0`,
 		);
 	}
 	const revision = requireString(root, "revision", "catalog");
@@ -190,9 +213,9 @@ export function parseBetaCatalog(value: unknown): BetaCatalog {
 		});
 	}
 	if (templates.length === 0) {
-		throw new Error("beta catalog contains no runnable templates");
+		throw new Error(`${expectedChannel} catalog contains no runnable templates`);
 	}
-	return { channel: "beta", version, revision, templates };
+	return { channel: expectedChannel, version, revision, templates };
 }
 
 export function safeCatalogDirectory(version: string, revision: string): string {
@@ -222,12 +245,13 @@ function resultDescription(result: ProcessResult): string {
 export class TemplateQaOrchestrator {
 	private readonly runtime: QaRuntime;
 	private readonly projectRoot: string;
+	private readonly channel: CatalogChannel;
 	private readonly hutchExecutable: string;
 	private readonly readinessTimeoutMs: number;
 	private readonly settleMs: number;
 	private readonly onSnapshot?: (snapshot: QaSnapshot) => void;
 	private readonly onLog?: (log: QaLog) => void;
-	private catalog: BetaCatalog | null = null;
+	private catalog: TemplateCatalog | null = null;
 	private runRoot = "";
 	private states: TemplateState[] = [];
 	private logs: QaLog[] = [];
@@ -243,6 +267,7 @@ export class TemplateQaOrchestrator {
 	constructor(runtime: QaRuntime, options: OrchestratorOptions) {
 		this.runtime = runtime;
 		this.projectRoot = options.projectRoot;
+		this.channel = options.channel;
 		this.hutchExecutable = options.hutchExecutable ?? "hutch";
 		this.readinessTimeoutMs = options.readinessTimeoutMs ?? 15 * 60_000;
 		this.settleMs = options.settleMs ?? 1_000;
@@ -258,7 +283,10 @@ export class TemplateQaOrchestrator {
 	}
 
 	private async initializeOnce(): Promise<void> {
-		this.catalog = parseBetaCatalog(await this.runtime.loadCatalog());
+		this.catalog = parseTemplateCatalog(
+			await this.runtime.loadCatalog(this.channel),
+			this.channel,
+		);
 		this.runRoot = join(
 			this.projectRoot,
 			"templates",
@@ -275,7 +303,7 @@ export class TemplateQaOrchestrator {
 		}));
 		this.systemLog(
 			META_TEMPLATE_ID,
-			`Loaded Electrobun ${this.catalog.version} beta catalog (${this.states.length} templates).`,
+			`Loaded Electrobun ${this.catalog.version} ${this.channel} catalog (${this.states.length} templates).`,
 		);
 		this.emitSnapshot();
 	}
@@ -283,7 +311,7 @@ export class TemplateQaOrchestrator {
 	getSnapshot(): QaSnapshot {
 		return {
 			catalogVersion: this.catalog?.version ?? "Discovering…",
-			channel: "beta",
+			channel: this.channel,
 			root: this.runRoot || join(this.projectRoot, "templates"),
 			templates: this.states.map((state) => ({
 				...state,
@@ -415,7 +443,7 @@ export class TemplateQaOrchestrator {
 		const directory = state.directory!;
 		const newlyMaterialized = !(await this.runtime.isMaterialized(directory));
 		if (newlyMaterialized) {
-			this.update(state, "downloading", "Downloading beta template");
+			this.update(state, "downloading", `Downloading ${this.channel} template`);
 			this.systemLog(id, `Materializing ${directory}`);
 			let initProcess: ManagedProcess;
 			try {
@@ -428,7 +456,7 @@ export class TemplateQaOrchestrator {
 						"init",
 						id,
 						`--template=${id}`,
-						"--channel=beta",
+						`--channel=${this.channel}`,
 						"--skip-install",
 					],
 					cwd: this.runRoot,
