@@ -3,9 +3,11 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
+	closeSync,
 	existsSync,
 	readdirSync,
-	readFileSync,
+	openSync,
+	readSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
@@ -88,11 +90,24 @@ function walkFiles(root) {
 }
 
 function descriptor(path, releaseUrl) {
-	const bytes = readFileSync(path);
+	const size = statSync(path).size;
+	positiveInteger(size, `${basename(path)} size`);
+	const hash = createHash("sha256");
+	const file = openSync(path, "r");
+	const buffer = Buffer.allocUnsafe(1024 * 1024);
+	try {
+		while (true) {
+			const count = readSync(file, buffer, 0, buffer.length, null);
+			if (count === 0) break;
+			hash.update(buffer.subarray(0, count));
+		}
+	} finally {
+		closeSync(file);
+	}
 	return {
 		url: `${releaseUrl}/${basename(path)}`,
-		size: bytes.length,
-		sha256: createHash("sha256").update(bytes).digest("hex"),
+		size,
+		sha256: hash.digest("hex"),
 	};
 }
 
