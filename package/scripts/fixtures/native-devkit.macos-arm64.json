@@ -117,7 +117,8 @@
 			},
 			"go": {
 				"root": "go-sdk",
-				"entrypoint": "go-sdk/electrobun.go"
+				"manifest": "go-sdk/go.mod",
+				"module": "electrobun"
 			},
 			"odin": {
 				"root": "odin-sdk/electrobun",

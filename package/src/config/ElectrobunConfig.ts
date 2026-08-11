@@ -267,8 +267,17 @@ export interface ElectrobunConfig {
 			version?: string;
 
 			/**
-			 * Entry point for the main Go process
-			 * @default "src/go/main.go"
+			 * Main package to compile from the project-owned Go module.
+			 * Hutch runs `go build` from the project root and passes this value as
+			 * the package argument; it never synthesizes a GOPATH or copies source.
+			 * @default "./src/go"
+			 */
+			package?: string;
+
+			/**
+			 * Legacy source hint retained temporarily for file watching. It is not
+			 * a Go build input in the v2 module contract.
+			 * @deprecated Use `package` to select the main package.
 			 */
 			entrypoint?: string;
 		};

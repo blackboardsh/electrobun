@@ -108,12 +108,24 @@ function collectSdkPaths(sdks) {
 		);
 	}
 
-	for (const language of ["zig", "rust", "go"]) {
+	for (const language of ["zig", "rust"]) {
 		const sdk = object(sdks[language], `layout.sdks.${language}`);
 		paths.push(relativePath(sdk.root, `layout.sdks.${language}.root`));
 		paths.push(
 			relativePath(sdk.entrypoint, `layout.sdks.${language}.entrypoint`),
 		);
+	}
+
+	const go = object(sdks.go, "layout.sdks.go");
+	const goRoot = relativePath(go.root, "layout.sdks.go.root");
+	const goManifest = relativePath(go.manifest, "layout.sdks.go.manifest");
+	if (goManifest !== `${goRoot}/go.mod`) {
+		fail("layout.sdks.go.manifest must be go.mod at layout.sdks.go.root");
+	}
+	paths.push(goRoot, goManifest);
+	const goModule = string(go.module, "layout.sdks.go.module");
+	if (goModule.trim() !== goModule || /\s/.test(goModule)) {
+		fail("layout.sdks.go.module must be a Go module import path");
 	}
 
 	const odin = object(sdks.odin, "layout.sdks.odin");
@@ -200,6 +212,20 @@ export function validateNativeDevkitManifest(options) {
 		if (!existsSync(absolutePath)) {
 			fail(`declared path does not exist: ${JSON.stringify(path)}`);
 		}
+	}
+
+	const go = object(object(layout.sdks, "layout.sdks").go, "layout.sdks.go");
+	const goManifest = resolve(
+		coreRoot,
+		relativePath(go.manifest, "layout.sdks.go.manifest"),
+	);
+	const moduleDirective = readFileSync(goManifest, "utf8").match(
+		/^[\t ]*module[\t ]+([^\s]+)[\t ]*(?:\/\/.*)?$/m,
+	)?.[1];
+	if (moduleDirective !== go.module) {
+		fail(
+			`layout.sdks.go.module ${JSON.stringify(go.module)} does not match ${JSON.stringify(moduleDirective)} in ${JSON.stringify(go.manifest)}`,
+		);
 	}
 
 	return manifest;

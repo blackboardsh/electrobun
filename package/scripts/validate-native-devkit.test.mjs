@@ -38,7 +38,7 @@ function declaredPaths(manifest) {
 		sdks.rust.root,
 		sdks.rust.entrypoint,
 		sdks.go.root,
-		sdks.go.entrypoint,
+		sdks.go.manifest,
 		sdks.odin.root,
 		sdks.odin.entrypoint,
 		sdks.odin.collection,
@@ -73,6 +73,10 @@ function makeCore(manifest = fixture()) {
 			writeFileSync(destination, "fixture");
 		}
 	}
+	writeFileSync(
+		join(root, manifest.layout.sdks.go.manifest),
+		`module ${manifest.layout.sdks.go.module}\n\ngo 1.26.0\n`,
+	);
 	writeFileSync(
 		join(root, NATIVE_DEVKIT_MANIFEST_FILENAME),
 		`${JSON.stringify(manifest, null, "\t")}\n`,
@@ -136,14 +140,31 @@ test("rejects unsafe or missing declared paths", () => {
 
 	const missing = fixture();
 	const missingRoot = makeCore(missing);
-	rmSync(join(missingRoot, missing.layout.sdks.go.entrypoint));
+	rmSync(join(missingRoot, missing.layout.sdks.go.manifest));
 	try {
 		assert.throws(
 			() => validateNativeDevkitManifest({ coreRoot: missingRoot, ...expected }),
-			/declared path does not exist: "go-sdk\/electrobun\.go"/,
+			/declared path does not exist: "go-sdk\/go\.mod"/,
 		);
 	} finally {
 		rmSync(missingRoot, { recursive: true, force: true });
+	}
+});
+
+test("rejects a Go SDK whose module identity drifts", () => {
+	const manifest = fixture();
+	const coreRoot = makeCore(manifest);
+	writeFileSync(
+		join(coreRoot, manifest.layout.sdks.go.manifest),
+		"module wrong-sdk\n\ngo 1.26.0\n",
+	);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot, ...expected }),
+			/layout\.sdks\.go\.module "electrobun" does not match "wrong-sdk"/,
+		);
+	} finally {
+		rmSync(coreRoot, { recursive: true, force: true });
 	}
 });
 

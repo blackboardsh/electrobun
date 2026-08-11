@@ -127,7 +127,11 @@ export interface NativeDevkitManifest {
 			};
 			zig: { root: string; entrypoint: string };
 			rust: { root: string; entrypoint: string };
-			go: { root: string; entrypoint: string };
+			go: {
+				root: string;
+				manifest: string;
+				module: string;
+			};
 			odin: {
 				root: string;
 				entrypoint: string;
@@ -238,7 +242,8 @@ export function createNativeDevkitManifest(options: {
 				},
 				go: {
 					root: "go-sdk",
-					entrypoint: "go-sdk/electrobun.go",
+					manifest: "go-sdk/go.mod",
+					module: "electrobun",
 				},
 				odin: {
 					root: "odin-sdk/electrobun",

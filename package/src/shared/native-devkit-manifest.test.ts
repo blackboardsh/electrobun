@@ -70,7 +70,7 @@ function manifestPaths(manifest: NativeDevkitManifest): string[] {
 		sdk.rust.root,
 		sdk.rust.entrypoint,
 		sdk.go.root,
-		sdk.go.entrypoint,
+		sdk.go.manifest,
 		sdk.odin.root,
 		sdk.odin.entrypoint,
 		sdk.odin.collection,
@@ -174,9 +174,11 @@ describe("native devkit manifest", () => {
 		expect(manifest.layout.sdks.rust.entrypoint).toBe(
 			"rust-sdk/electrobun.rs",
 		);
-		expect(manifest.layout.sdks.go.entrypoint).toBe(
-			"go-sdk/electrobun.go",
-		);
+		expect(manifest.layout.sdks.go).toEqual({
+			root: "go-sdk",
+			manifest: "go-sdk/go.mod",
+			module: "electrobun",
+		});
 		expect(manifest.layout.sdks.odin).toMatchObject({
 			entrypoint: "odin-sdk/electrobun/electrobun.odin",
 			collection: "odin-sdk",
