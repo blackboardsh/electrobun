@@ -232,17 +232,20 @@ describe("native devkit manifest", () => {
 		);
 		expect(module).toBe(ELECTROBUN_GO_SDK_MODULE);
 		expect(language).toBeDefined();
-		const baseline = language!.slice(1).map((part) => Number(part ?? "0"));
-		const compiler = manifest.toolchains.go.defaultVersion
-			.match(/^(\d+)\.(\d+)\.(\d+)/)!
+		const [baselineMajor = 0, baselineMinor = 0, baselinePatch = 0] = language!
 			.slice(1)
-			.map(Number);
+			.map((part) => Number(part ?? "0"));
+		const [compilerMajor = 0, compilerMinor = 0, compilerPatch = 0] =
+			manifest.toolchains.go.defaultVersion
+				.match(/^(\d+)\.(\d+)\.(\d+)/)!
+				.slice(1)
+				.map(Number);
 		expect(
-			baseline[0] < compiler[0] ||
-				(baseline[0] === compiler[0] && baseline[1] < compiler[1]) ||
-				(baseline[0] === compiler[0] &&
-					baseline[1] === compiler[1] &&
-					baseline[2] <= compiler[2]),
+			baselineMajor < compilerMajor ||
+				(baselineMajor === compilerMajor && baselineMinor < compilerMinor) ||
+				(baselineMajor === compilerMajor &&
+					baselineMinor === compilerMinor &&
+					baselinePatch <= compilerPatch),
 		).toBe(true);
 	});
 

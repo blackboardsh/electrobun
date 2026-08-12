@@ -17,7 +17,7 @@ export default {
 		"dev:production": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=production",
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
-			"node node_modules/typescript/bin/tsc --noEmit && cd ../kitchen && node node_modules/typescript/bin/tsc --noEmit",
+			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
 		"check:release": "hutch typecheck && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",

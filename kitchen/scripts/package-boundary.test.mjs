@@ -95,10 +95,14 @@ test("Kitchen matrix uses the projected devkit without an npm package bridge", (
 	);
 	assert.equal(
 		(releaseWorkflow.match(/HUTCH_ELECTROBUN_DEVKIT_ROOT/g) ?? []).length,
-		1,
+		2,
 	);
 	assert.match(
 		releaseWorkflow,
 		/HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist/,
+	);
+	assert.match(
+		releaseWorkflow,
+		/- name: Typecheck Kitchen against local devkit[\s\S]*?hutch electrobun sync[\s\S]*?node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit/,
 	);
 });

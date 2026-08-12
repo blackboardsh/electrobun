@@ -119,6 +119,10 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,
 	);
+	assert.match(
+		workflow,
+		/^      - name: Install Kitchen dependencies\n        run: hutch run install\n        working-directory: kitchen\n\n      - name: Typecheck Kitchen against local devkit\n        run: \|\n          hutch electrobun sync\n          node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit\n        working-directory: kitchen\n        env:\n          HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist$/m,
+	);
 
 	const provenance = workflow.indexOf(
 		"      - name: Verify production Hutch and Cottontail provenance",
@@ -143,7 +147,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	);
 	assert.equal(
 		(workflow.match(/HUTCH_ELECTROBUN_DEVKIT_ROOT/g) ?? []).length,
-		1,
-		"the local devkit override must remain scoped to the Kitchen build step",
+		2,
+		"the local devkit override must remain scoped to Kitchen typechecking and building",
 	);
 });

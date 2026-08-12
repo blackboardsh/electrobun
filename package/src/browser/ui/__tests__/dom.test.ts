@@ -42,7 +42,7 @@ describe("DOM renderer", () => {
 		expect(div!.tagName).toBe("div");
 		expect(div!.getAttribute("id")).toBe("app");
 		expect(div!.className).toBe("shell dark");
-		expect(div!.style.color).toBe("red");
+		expect(div!.style["color"]).toBe("red");
 		expect((div!.style as any)["--accent"]).toBe("#fff");
 		const [span, input] = div!.children;
 		expect(span!.textContent).toBe("hello");
@@ -122,7 +122,7 @@ describe("DOM renderer", () => {
 		let calls = 0;
 		function Badge(props: Record<string, unknown>) {
 			calls++;
-			return jsx("em", { children: props.label as string });
+			return jsx("em", { children: props["label"] as string });
 		}
 		const { container } = mount(() =>
 			jsx("div", {

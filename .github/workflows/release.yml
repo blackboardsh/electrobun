@@ -258,6 +258,14 @@ jobs:
         run: hutch run install
         working-directory: kitchen
 
+      - name: Typecheck Kitchen against local devkit
+        run: |
+          hutch electrobun sync
+          node ../package/node_modules/typescript/bin/tsc --noEmit
+        working-directory: kitchen
+        env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+
       - name: Test Kitchen AUTO_RUN exit propagation
         run: >-
           hutch test
