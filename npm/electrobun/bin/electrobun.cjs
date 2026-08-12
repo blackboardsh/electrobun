@@ -39,11 +39,16 @@ function hutchBinaryPath(channel, environment, platform, userHome) {
 		return environment.ELECTROBUN_HUTCH_BINARY;
 	}
 
-	const dashHome = environment.DASH_HOME || path.join(userHome, ".dash");
+	// HUTCH_HOME is Hutch's own home; DASH_HOME stays honored as a deprecated
+	// fallback for Dash Desktop and older setups.
+	const hutchHome =
+		environment.HUTCH_HOME ||
+		environment.DASH_HOME ||
+		path.join(userHome, ".hutch");
 	const command = channel === "canary" ? "hutch-canary" : "hutch";
 	const pathApi = platform === "win32" ? path.win32 : path.posix;
 	return pathApi.join(
-		dashHome,
+		hutchHome,
 		"bin",
 		`${command}${platform === "win32" ? ".exe" : ""}`,
 	);

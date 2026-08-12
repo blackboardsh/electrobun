@@ -2,8 +2,9 @@
 
 The `electrobun` npm package is a small compatibility entry point for npm,
 pnpm, Yarn, and Bun users. It contains no Electrobun runtime or SDK. The
-`electrobun` command installs Hutch into `~/.dash` when necessary and delegates
-all commands to `hutch electrobun`.
+`electrobun` command installs Hutch into `~/.hutch` (override with
+`HUTCH_HOME`; `DASH_HOME` is honored as a deprecated fallback) when necessary
+and delegates all commands to `hutch electrobun`.
 
 Create a project from the current stable template catalog:
 
@@ -20,7 +21,7 @@ npx electrobun init --beta
 The npm bootstrap ships under the same release version as Electrobun, but it
 does not contain or select the runtime by itself. An application's exact
 Electrobun version is selected in `hutch.config.ts`; Hutch downloads the
-matching runtime and SDK into the shared `~/.dash` store and projects the SDKs
+matching runtime and SDK into the shared `~/.hutch` store and projects the SDKs
 into the project's `.hutch/devkit` sysroot. Installing a beta bootstrap still
 uses stable templates unless `init` receives `--beta`.
 

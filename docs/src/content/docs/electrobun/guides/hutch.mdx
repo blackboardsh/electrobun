@@ -40,8 +40,10 @@ On Windows PowerShell:
 
 Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
 accept an exact semantic version or build revision. Production and canary
-live side by side under `~/.dash/products`, with launchers in `~/.dash/bin`.
-`stable` is accepted as an alias for the production channel.
+live side by side under `~/.hutch/products`, with launchers in `~/.hutch/bin`.
+Set `HUTCH_HOME` to relocate the store (`DASH_HOME` is still honored as a
+deprecated fallback). `stable` is accepted as an alias for the production
+channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
 work. The published package is a tiny bootstrap released at the same version
@@ -187,9 +189,9 @@ export default {
 
 The version must be exact; npm tags and semver ranges are not product
 selectors. `hutch electrobun sync` resolves and verifies that release in the
-global `~/.dash/products/electrobun` store, then copies its SDKs and editor
+global `~/.hutch/products/electrobun` store, then copies its SDKs and editor
 facade into the project's generated `.hutch/devkit` sysroot. It also resolves
-the selected native compiler under `~/.dash/toolchains` when the project needs
+the selected native compiler under `~/.hutch/toolchains` when the project needs
 one.
 
 `init` performs this sync before it finishes. `build`, `run`, and `dev` also
@@ -210,7 +212,7 @@ version for each language; `build.zig.version`, `build.rust.version`,
 `build.go.version`, and `build.odin.version` can override it per project. Hutch
 accepts an exact matching system compiler when supported, otherwise downloads
 the selected toolchain into
-`~/.dash/toolchains/<language>/<version>/<platform>` and shares it across
+`~/.hutch/toolchains/<language>/<version>/<platform>` and shares it across
 projects.
 
 The project still owns its build description and language dependencies:

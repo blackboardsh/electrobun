@@ -251,7 +251,7 @@ hutch electrobun init my-app --template=zig-wgpu
 Electrobun 2.0.0 defaults to Zig **0.16.0**. Override it exactly with
 `build.zig.version`. Hutch uses a system Zig only on an exact version match;
 otherwise it downloads the selected toolchain into
-`~/.dash/toolchains/zig/<version>/<platform>` and reuses it across projects. The
+`~/.hutch/toolchains/zig/<version>/<platform>` and reuses it across projects. The
 compiler is not bundled into the finished app.
 
 Native main processes build for the host OS/arch only — there is no

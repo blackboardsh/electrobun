@@ -98,8 +98,8 @@ export default {
 ```
 
 During `init`, Hutch syncs that exact core and SDK release into the shared
-`~/.dash` store, copies its SDKs into the generated project `.hutch/devkit`
-sysroot, and resolves any required native compiler under `~/.dash/toolchains`.
+`~/.hutch` store, copies its SDKs into the generated project `.hutch/devkit`
+sysroot, and resolves any required native compiler under `~/.hutch/toolchains`.
 `dev`, `run`, and `build` refresh that preparation automatically;
 `hutch electrobun sync` does the same work without building.
 

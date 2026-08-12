@@ -50,7 +50,7 @@ that Hutch will use.
 version, while the application version in `app.version` remains independent.
 
 Hutch resolves and verifies that release under
-`~/.dash/products/electrobun`, then copies its config types and language SDKs
+`~/.hutch/products/electrobun`, then copies its config types and language SDKs
 into the generated project `.hutch/devkit` sysroot. Run
 `hutch electrobun sync` to refresh that project copy without building. `init`,
 `build`, `run`, and `dev` sync implicitly. See
@@ -175,7 +175,7 @@ versions. The matching `build.zig.version`, `build.rust.version`,
 `build.go.version`, or `build.odin.version` field is an exact per-project
 override. Hutch reuses exact matching system compilers where supported, or
 stores the selected compiler under
-`~/.dash/toolchains/<language>/<version>/<platform>`.
+`~/.hutch/toolchains/<language>/<version>/<platform>`.
 
 Native build descriptions remain project-owned:
 

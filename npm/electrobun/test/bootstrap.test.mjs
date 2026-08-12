@@ -151,7 +151,7 @@ test("installs a missing stable Hutch before delegation", async () => {
 		{
 			run: {
 				args: ["dev", "--watch"],
-				binary: "/home/dev/.dash/bin/hutch",
+				binary: "/home/dev/.hutch/bin/hutch",
 				environment: {},
 			},
 		},
@@ -236,6 +236,22 @@ test("supports an explicit canary Hutch without changing template policy", () =>
 		"init",
 		"--channel=stable",
 	]);
+});
+
+test("resolves the Hutch home from HUTCH_HOME, then DASH_HOME, then ~/.hutch", () => {
+	assert.equal(
+		bootstrap.hutchBinaryPath(
+			"production",
+			{ HUTCH_HOME: "/opt/hutch", DASH_HOME: "/opt/dash" },
+			"linux",
+			"/home/dev",
+		),
+		"/opt/hutch/bin/hutch",
+	);
+	assert.equal(
+		bootstrap.hutchBinaryPath("production", {}, "linux", "/home/dev"),
+		"/home/dev/.hutch/bin/hutch",
+	);
 });
 
 test("uses the canonical Windows installation path", () => {

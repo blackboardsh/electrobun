@@ -251,7 +251,7 @@ rebuilds it when watched source files change. Press Ctrl+C to stop it.
 
 Electrobun 2.0.0 defaults to Go 1.26.4. Override it exactly with
 `build.go.version`; Hutch uses an exact matching system compiler when supported
-or downloads it under `~/.dash/toolchains/go/<version>/<platform>`. Builds
+or downloads it under `~/.hutch/toolchains/go/<version>/<platform>`. Builds
 target the host OS and architecture only — cross-compilation is not
 supported yet, so use native runners per platform. Because of cgo you need
 a host C toolchain: the Xcode Command Line Tools on macOS, the platform

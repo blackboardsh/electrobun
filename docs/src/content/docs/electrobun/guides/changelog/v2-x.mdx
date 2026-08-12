@@ -36,7 +36,7 @@ sizes.
   own dependency graphs and lockfiles. Hutch invokes them only when a project
   names an explicit `hutch.config.ts` task.
 - Every project pins an exact `electrobun.version` in `hutch.config.ts`. Hutch
-  verifies the matching platform core archive in `~/.dash`, then copies its
+  verifies the matching platform core archive in `~/.hutch`, then copies its
   SDKs into the generated project `.hutch/devkit` sysroot for builds and editor
   tooling.
 - Production and canary Hutch installations can coexist globally. Projects can

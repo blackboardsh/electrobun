@@ -75,7 +75,7 @@ package. The `electrobun` package on npm is only a thin command that installs
 or invokes Hutch; it never owns or supplies the SDK.
 
 When Hutch prepares a project, it verifies and stores the selected platform
-archive in its global `~/.dash/products/electrobun` cache. It then **copies**
+archive in its global `~/.hutch/products/electrobun` cache. It then **copies**
 the SDK trees into the project as a generated sysroot:
 
 ```text
@@ -105,7 +105,7 @@ archives on GitHub Releases and stable Hutch and Cottontail binaries on their
 existing release hosts. The global store is a local cache, and the project
 devkit is regenerated from those published artifacts when needed. Projects do
 not need to vendor `.hutch/devkit` to preserve a supported stable build. CI
-runners may cache `~/.dash` to avoid repeated downloads, but correctness does
+runners may cache `~/.hutch` to avoid repeated downloads, but correctness does
 not depend on that cache surviving between runs.
 </Aside>
 
