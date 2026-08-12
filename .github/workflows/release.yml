@@ -48,7 +48,7 @@ jobs:
 
     env:
       EXPECTED_HUTCH_VERSION: '0.6.4'
-      EXPECTED_COTTONTAIL_VERSION: '0.4.2'
+      EXPECTED_COTTONTAIL_VERSION: '0.4.3'
 
     steps:
       - uses: actions/checkout@v6
