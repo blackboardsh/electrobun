@@ -4,6 +4,7 @@ type TemplateStatus =
 	| "pending"
 	| "downloading"
 	| "installing"
+	| "prepared"
 	| "starting"
 	| "ready"
 	| "failed"
@@ -52,14 +53,39 @@ type Snapshot = {
 
 type AcceptedResponse = { accepted: boolean };
 
+type HutchStatusSummary = {
+	homePath: string;
+	homeSource: string;
+	productCount: number;
+	productInstallCount: number;
+	productsBytes: number;
+	toolchainCount: number;
+	toolchainsBytes: number;
+	cacheObjectCount: number;
+	cacheBytes: number;
+	prunableObjectCount: number;
+	totalBytes: number;
+	issueCount: number;
+};
+
+type HutchStoreStatus =
+	| { ok: true; summary: HutchStatusSummary }
+	| { ok: false; message: string };
+
 type TemplateQARPC = {
 	bun: {
 		requests: {
 			getSnapshot: { params: {}; response: Snapshot };
 			startAll: { params: {}; response: AcceptedResponse };
 			stopAll: { params: {}; response: AcceptedResponse };
-			startTemplate: { params: { id: string }; response: AcceptedResponse };
+			installTemplate: { params: { id: string }; response: AcceptedResponse };
+			launchTemplate: { params: { id: string }; response: AcceptedResponse };
 			stopTemplate: { params: { id: string }; response: AcceptedResponse };
+			getHutchStatus: { params: {}; response: HutchStoreStatus };
+			pruneHutchCache: {
+				params: { dryRun: boolean };
+				response: AcceptedResponse;
+			};
 		};
 		messages: {};
 	};
@@ -106,6 +132,10 @@ const logOutput = element<HTMLDivElement>("log-output");
 const visibleLogCount = element<HTMLSpanElement>("visible-log-count");
 const installRoot = element<HTMLElement>("install-root");
 const toast = element<HTMLDivElement>("toast");
+const storeBody = element<HTMLDivElement>("store-body");
+const refreshStatusButton = element<HTMLButtonElement>("refresh-status");
+const prunePreviewButton = element<HTMLButtonElement>("prune-preview");
+const pruneRunButton = element<HTMLButtonElement>("prune-run");
 
 let snapshot: Snapshot = {
 	catalogVersion: "",
@@ -205,6 +235,8 @@ function statusLabel(status: TemplateStatus): string {
 			return "Downloading";
 		case "installing":
 			return "Installing";
+		case "prepared":
+			return "Installed";
 		case "starting":
 			return "Starting";
 		case "ready":
@@ -225,10 +257,16 @@ function statusIsActive(status: TemplateStatus): boolean {
 	return status === "downloading" || status === "installing" || status === "starting" || status === "ready";
 }
 
+type TemplateAction = "install" | "launch" | "stop";
+
+function statusIsBusy(status: TemplateStatus): boolean {
+	return status === "downloading" || status === "installing" || status === "starting";
+}
+
 function createButton(
 	label: string,
 	className: string,
-	action: "start" | "stop",
+	action: TemplateAction,
 	template: TemplateSnapshot,
 ): HTMLButtonElement {
 	const button = document.createElement("button");
@@ -241,8 +279,7 @@ function createButton(
 		globalActionPending ||
 		templateActionsPending.has(template.id) ||
 		(action === "stop" && !statusIsActive(template.status) && template.status !== "stopping") ||
-		(action === "start" &&
-			(template.status === "downloading" || template.status === "installing" || template.status === "starting"));
+		(action !== "stop" && statusIsBusy(template.status));
 	return button;
 }
 
@@ -316,10 +353,12 @@ function createTemplateCard(template: TemplateSnapshot): HTMLElement {
 
 	const actions = document.createElement("div");
 	actions.className = "template-actions";
+	const installLabel = template.status === "prepared" ? "Reinstall" : "Install";
 	const launchLabel = statusIsActive(template.status) ? "Relaunch" : "Launch";
 	actions.append(
 		createButton("Stop", "button-danger", "stop", template),
-		createButton(launchLabel, "button-secondary", "start", template),
+		createButton(installLabel, "button-quiet", "install", template),
+		createButton(launchLabel, "button-secondary", "launch", template),
 	);
 	meta.append(processInfo, actions);
 	card.append(meta);
@@ -379,7 +418,10 @@ function renderSummary(): void {
 		(counts.get("installing") ?? 0) +
 		(counts.get("starting") ?? 0) +
 		(counts.get("stopping") ?? 0);
-	const stopped = (counts.get("pending") ?? 0) + (counts.get("stopped") ?? 0);
+	const stopped =
+		(counts.get("pending") ?? 0) +
+		(counts.get("stopped") ?? 0) +
+		(counts.get("prepared") ?? 0);
 
 	totalCount.textContent = String(snapshot.templates.length);
 	readyCount.textContent = String(ready);
@@ -427,7 +469,10 @@ function renderTemplates(): void {
 
 	templateSummary.textContent = query
 		? `${filtered.length} of ${snapshot.templates.length} templates shown`
-		: `${snapshot.templates.length} projects · setup and builds are serialized`;
+		: snapshot.templates.length > 0 &&
+				snapshot.templates.every(({ status }) => status === "pending")
+			? `${snapshot.templates.length} templates pending · press Install all to begin`
+			: `${snapshot.templates.length} projects · setup and builds are serialized`;
 }
 
 function renderTemplateFilter(): void {
@@ -596,7 +641,7 @@ async function runGlobalAction(kind: "start" | "stop"): Promise<void> {
 		setConnection("online", "Runner online");
 		showToast(
 			kind === "start"
-				? "Start-all queued. Projects will prepare in sequence, then launch together."
+				? "Install all queued. Projects install in sequence, then launch in dev mode."
 				: "Stop-all queued.",
 		);
 	} catch (error) {
@@ -608,7 +653,13 @@ async function runGlobalAction(kind: "start" | "stop"): Promise<void> {
 	}
 }
 
-async function runTemplateAction(id: string, kind: "start" | "stop"): Promise<void> {
+const TEMPLATE_ACTION_LABELS: Record<TemplateAction, string> = {
+	install: "Install",
+	launch: "Launch",
+	stop: "Stop",
+};
+
+async function runTemplateAction(id: string, kind: TemplateAction): Promise<void> {
 	if (templateActionsPending.has(id) || globalActionPending) return;
 	const template = snapshot.templates.find((candidate) => candidate.id === id);
 	if (!template) return;
@@ -616,12 +667,18 @@ async function runTemplateAction(id: string, kind: "start" | "stop"): Promise<vo
 	renderTemplates();
 	try {
 		const response =
-			kind === "start"
-				? await electrobun.rpc!.request.startTemplate({ id })
-				: await electrobun.rpc!.request.stopTemplate({ id });
+			kind === "install"
+				? await electrobun.rpc!.request.installTemplate({ id })
+				: kind === "launch"
+					? await electrobun.rpc!.request.launchTemplate({ id })
+					: await electrobun.rpc!.request.stopTemplate({ id });
 		if (!response.accepted) throw new Error(`The runner declined the ${kind} request for ${template.name}.`);
 		setConnection("online", "Runner online");
-		showToast(`${kind === "start" ? "Launch" : "Stop"} queued for ${template.name}.`);
+		showToast(
+			kind === "install"
+				? `Install queued for ${template.name}. Nothing is launched until you press Launch.`
+				: `${TEMPLATE_ACTION_LABELS[kind]} queued for ${template.name}.`,
+		);
 	} catch (error) {
 		setConnection("error", "Runner error");
 		showToast(error instanceof Error ? error.message : `Unable to ${kind} ${template.name}.`, true);
@@ -646,7 +703,9 @@ templateList.addEventListener("click", (event) => {
 	if (!button || button.disabled) return;
 	const id = button.dataset.templateId;
 	const action = button.dataset.action;
-	if (id && (action === "start" || action === "stop")) void runTemplateAction(id, action);
+	if (id && (action === "install" || action === "launch" || action === "stop")) {
+		void runTemplateAction(id, action);
+	}
 });
 
 clearLogsButton.addEventListener("click", () => {
@@ -705,6 +764,151 @@ exportLogsButton.addEventListener("click", () => {
 	showToast(`Exported ${retainedLogs.length.toLocaleString()} log entries.`);
 });
 
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+function formatByteSize(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	return `${unit === 0 ? Math.round(value) : Math.round(value * 10) / 10} ${BYTE_UNITS[unit]}`;
+}
+
+function renderStoreMessage(message: string, quiet = false): void {
+	const paragraph = document.createElement("p");
+	paragraph.className = `store-message${quiet ? " store-message-quiet" : ""}`;
+	paragraph.textContent = message;
+	storeBody.replaceChildren(paragraph);
+}
+
+function renderStoreSummary(summary: HutchStatusSummary): void {
+	const stats: Array<[string, string, string?]> = [
+		["Total", formatByteSize(summary.totalBytes)],
+		[
+			"Products",
+			formatByteSize(summary.productsBytes),
+			`${summary.productCount} products · ${summary.productInstallCount} installs`,
+		],
+		[
+			"Toolchains",
+			formatByteSize(summary.toolchainsBytes),
+			`${summary.toolchainCount} toolchains`,
+		],
+		[
+			"Cache",
+			`${summary.cacheObjectCount} objects`,
+			`${formatByteSize(summary.cacheBytes)} · ${summary.prunableObjectCount} unreachable`,
+		],
+	];
+	if (summary.issueCount > 0) stats.push(["Issues", String(summary.issueCount)]);
+
+	const fragment = document.createDocumentFragment();
+	for (const [label, value, title] of stats) {
+		const stat = document.createElement("div");
+		stat.className = "store-stat";
+		const statValue = document.createElement("span");
+		statValue.className = "store-stat-value";
+		statValue.textContent = value;
+		const statLabel = document.createElement("span");
+		statLabel.className = "store-stat-label";
+		statLabel.textContent = label;
+		if (title) stat.title = title;
+		stat.append(statValue, statLabel);
+		fragment.append(stat);
+	}
+	const home = document.createElement("div");
+	home.className = "store-home";
+	home.textContent = `${summary.homePath} (${summary.homeSource})`;
+	home.title = summary.homePath;
+	fragment.append(home);
+	storeBody.replaceChildren(fragment);
+}
+
+let storeStatusPending = false;
+
+async function refreshStoreStatus(announce = false): Promise<void> {
+	if (storeStatusPending) return;
+	storeStatusPending = true;
+	refreshStatusButton.disabled = true;
+	try {
+		const status = await electrobun.rpc!.request.getHutchStatus({});
+		if (status && status.ok === true) {
+			renderStoreSummary(status.summary);
+			if (announce) showToast("Hutch store status refreshed.");
+		} else {
+			renderStoreMessage(
+				status?.message || "Status unavailable — hutch returned no details.",
+			);
+		}
+	} catch (error) {
+		renderStoreMessage(
+			error instanceof Error ? error.message : "Could not read the Hutch store status.",
+		);
+	} finally {
+		storeStatusPending = false;
+		refreshStatusButton.disabled = false;
+	}
+}
+
+// The real prune requires a dry-run preview first, then a second confirming click.
+let pruneConfirmTimer: ReturnType<typeof setTimeout> | null = null;
+let pruneConfirmArmed = false;
+
+function resetPruneConfirm(): void {
+	if (pruneConfirmTimer) clearTimeout(pruneConfirmTimer);
+	pruneConfirmTimer = null;
+	pruneConfirmArmed = false;
+	pruneRunButton.textContent = "Prune";
+}
+
+async function requestPrune(dryRun: boolean): Promise<void> {
+	const response = await electrobun.rpc!.request.pruneHutchCache({ dryRun });
+	if (!response.accepted) throw new Error("The runner declined the prune request.");
+}
+
+refreshStatusButton.addEventListener("click", () => void refreshStoreStatus(true));
+
+prunePreviewButton.addEventListener("click", async () => {
+	prunePreviewButton.disabled = true;
+	try {
+		await requestPrune(true);
+		pruneRunButton.disabled = false;
+		resetPruneConfirm();
+		showToast("Prune preview running — output appears in the log pane.");
+		templateFilter.value = "all";
+		scheduleLogRender();
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : "Unable to preview the prune.", true);
+	} finally {
+		prunePreviewButton.disabled = false;
+	}
+});
+
+pruneRunButton.addEventListener("click", async () => {
+	if (!pruneConfirmArmed) {
+		pruneConfirmArmed = true;
+		pruneRunButton.textContent = "Confirm prune";
+		if (pruneConfirmTimer) clearTimeout(pruneConfirmTimer);
+		pruneConfirmTimer = setTimeout(resetPruneConfirm, 8_000);
+		showToast("Click again within 8 seconds to delete unreachable store objects.");
+		return;
+	}
+	resetPruneConfirm();
+	pruneRunButton.disabled = true;
+	try {
+		await requestPrune(false);
+		showToast("Prune running — output appears in the log pane.");
+		scheduleLogRender();
+		setTimeout(() => void refreshStoreStatus(), 4_000);
+	} catch (error) {
+		showToast(error instanceof Error ? error.message : "Unable to prune the store.", true);
+		pruneRunButton.disabled = false;
+	}
+});
+
 async function loadInitialSnapshot(): Promise<void> {
 	setConnection("connecting", "Connecting");
 	try {
@@ -716,3 +920,4 @@ async function loadInitialSnapshot(): Promise<void> {
 }
 
 void loadInitialSnapshot();
+void refreshStoreStatus();

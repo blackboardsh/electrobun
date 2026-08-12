@@ -9,11 +9,13 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-	BUILD_READY_MARKER,
 	PROCESS_SPAWNED_MARKER,
 	TemplateQaOrchestrator,
 	catalogChannelForVersion,
-	outputContainsBuildReady,
+	describeHutchStatusFailure,
+	formatByteSize,
+	parseHutchStatus,
+	parseHutchStatusOutput,
 	outputContainsSpawnedProcess,
 	parseTemplateCatalog,
 	sanitizedTemplateQaEnv,
@@ -112,7 +114,7 @@ type FakeHarness = {
 
 function fakeHarness(
 	options: {
-		failFirstBuildFor?: string;
+		failFirstInitFor?: string;
 		omitRunMarkerFor?: string;
 		enableTimeouts?: boolean;
 		configuredVersion?: string;
@@ -120,6 +122,9 @@ function fakeHarness(
 		omitProjectionFor?: string;
 		channel?: CatalogChannel;
 		catalogVersion?: string;
+		statusStdout?: string;
+		statusStderr?: string;
+		statusExitCode?: number;
 	} = {},
 ): FakeHarness {
 	const commands: CommandSpec[] = [];
@@ -128,7 +133,7 @@ function fakeHarness(
 	const projected = new Set<string>();
 	const installedVersions = new Map<string, string>();
 	const removed: string[] = [];
-	const buildAttempts = new Map<string, number>();
+	const initAttempts = new Map<string, number>();
 	let tick = 0;
 	const channel = options.channel ?? "beta";
 	const catalogVersion =
@@ -170,38 +175,40 @@ function fakeHarness(
 			processes.push({ spec, process });
 			queueMicrotask(() => {
 				switch (spec.kind) {
-					case "init":
-						{
-							const directory = join(spec.cwd, spec.templateId);
-							materialized.add(directory);
-							installedVersions.set(
-								directory,
-								options.configuredVersion ?? catalogVersion,
-							);
-							if (options.omitProjectionFor !== spec.templateId) {
-								projected.add(directory);
-							}
+					case "init": {
+						const attempt = (initAttempts.get(spec.templateId) ?? 0) + 1;
+						initAttempts.set(spec.templateId, attempt);
+						if (options.failFirstInitFor === spec.templateId && attempt === 1) {
+							process.emit("stderr", "cold install failed\n");
+							process.finish({ code: 1 });
+							break;
+						}
+						const directory = join(spec.cwd, spec.templateId);
+						materialized.add(directory);
+						installedVersions.set(
+							directory,
+							options.configuredVersion ?? catalogVersion,
+						);
+						if (options.omitProjectionFor !== spec.templateId) {
+							projected.add(directory);
 						}
 						process.emit("stdout", "Downloading template\n");
 						process.finish();
 						break;
+					}
 					case "install":
 						process.emit("stdout", "Installed dependencies\n");
 						process.finish();
 						break;
-					case "build": {
-						const count = (buildAttempts.get(spec.templateId) ?? 0) + 1;
-						buildAttempts.set(spec.templateId, count);
-						if (options.failFirstBuildFor === spec.templateId && count === 1) {
-							process.emit("stderr", "cold build failed\n");
-							process.finish({ code: 1 });
-						} else {
-							process.emit("stdout", "electrobun build comp");
-							process.emit("stdout", "lete: /tmp/build\n");
-							process.finish();
-						}
+					case "status":
+						if (options.statusStdout) process.emit("stdout", options.statusStdout);
+						if (options.statusStderr) process.emit("stderr", options.statusStderr);
+						process.finish({ code: options.statusExitCode ?? 0 });
 						break;
-					}
+					case "prune":
+						process.emit("stdout", "removed 2 unreachable objects\n");
+						process.finish();
+						break;
 					case "run":
 						if (options.omitRunMarkerFor !== spec.templateId) {
 							process.emit("stderr", "Child process spawned with ");
@@ -295,12 +302,11 @@ describe("Template QA catalog and readiness contracts", () => {
 		).toThrow(/exact stable release/);
 	});
 
-	test("recognizes build and launcher markers split across output chunks", () => {
-		expect(outputContainsBuildReady("electrobun build comp", "lete: path"))
-			.toBe(true);
+	test("recognizes the launcher marker split across output chunks", () => {
 		expect(outputContainsSpawnedProcess("Child process spawned with ", "PID 9"))
 			.toBe(true);
-		expect(BUILD_READY_MARKER).not.toBe(PROCESS_SPAWNED_MARKER);
+		expect(outputContainsSpawnedProcess("", PROCESS_SPAWNED_MARKER)).toBe(true);
+		expect(outputContainsSpawnedProcess("Child process ", "exited")).toBe(false);
 	});
 
 	test("finds the installed meta-template root through paths with spaces", () => {
@@ -464,7 +470,7 @@ describe("Template QA orchestration", () => {
 		await orchestrator.stopAll();
 	});
 
-	test("runs configured installs and builds serially before launching", async () => {
+	test("installs serially, then launches every template with its start task", async () => {
 		const harness = fakeHarness();
 		const pinnedHutch = join(
 			"/tmp",
@@ -486,9 +492,7 @@ describe("Template QA orchestration", () => {
 		expect(kinds).toEqual([
 			"init:install-task",
 			"install:install-task",
-			"build:install-task",
 			"init:no-install-task",
-			"build:no-install-task",
 			"run:install-task",
 			"run:no-install-task",
 		]);
@@ -507,16 +511,14 @@ describe("Template QA orchestration", () => {
 				"--skip-install",
 			]);
 		}
-		for (const command of harness.commands.filter(({ kind }) => kind === "build")) {
-			expect(command.args).toEqual(["run", "build"]);
+		for (const command of harness.commands.filter(({ kind }) => kind === "install")) {
+			expect(command.args).toEqual(["run", "install"]);
 			expect(command.env).toBeUndefined();
 		}
+		// Launch is exactly the command a new user runs; dev builds happen inside it.
 		for (const command of harness.commands.filter(({ kind }) => kind === "run")) {
-			expect(command.args).toEqual([
-				"electrobun",
-				"run",
-				"--env=production",
-			]);
+			expect(command.args).toEqual(["run", "start"]);
+			expect(command.cwd.endsWith(command.templateId)).toBe(true);
 			expect(command.env).toBeUndefined();
 		}
 		expect(orchestrator.getSnapshot().templates.map(({ status }) => status))
@@ -528,7 +530,7 @@ describe("Template QA orchestration", () => {
 	});
 
 	test("continues after a cold failure and records passed-after-retry history", async () => {
-		const harness = fakeHarness({ failFirstBuildFor: "no-install-task" });
+		const harness = fakeHarness({ failFirstInitFor: "no-install-task" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
 			channel: "beta",
@@ -604,7 +606,7 @@ describe("Template QA orchestration", () => {
 		expect(snapshot.templates[0]?.lastError).toMatch(
 			/product pin.*Electrobun 2\.0\.0-beta\.7.*2\.0\.0-beta\.8/,
 		);
-		expect(harness.commands.some(({ kind }) => kind === "build")).toBe(false);
+		expect(harness.commands.some(({ kind }) => kind === "install")).toBe(false);
 		expect(harness.commands.some(({ kind }) => kind === "run")).toBe(false);
 	});
 
@@ -628,7 +630,7 @@ describe("Template QA orchestration", () => {
 		expect(
 			harness.commands.some(
 				({ kind, templateId }) =>
-					kind === "build" && templateId === "no-install-task",
+					kind === "run" && templateId === "no-install-task",
 			),
 		).toBe(false);
 		expect(
@@ -636,5 +638,226 @@ describe("Template QA orchestration", () => {
 				({ kind, templateId }) => kind === "run" && templateId === "install-task",
 			),
 		).toBe(true);
+	});
+});
+
+function hutchStatusPayload(): unknown {
+	return {
+		schemaVersion: 1,
+		kind: "hutch-status",
+		home: { path: "/Users/qa/.hutch", source: "default" },
+		products: [
+			{ name: "electrobun", bytes: 2_048, installs: [{ version: "2.0.0" }] },
+			{
+				name: "hutch",
+				bytes: 1_024,
+				installs: [{ version: "0.7.1" }, { version: "0.7.0" }],
+			},
+		],
+		toolchains: [{ language: "go", version: "1.26.4", bytes: 4_096 }],
+		cache: {
+			objectCount: 3,
+			bytes: 8_192,
+			objects: [
+				{ type: "electrobun", bytes: 2_048, reachable: true, inUse: true },
+				{ type: "toolchain", bytes: 4_096, reachable: false, inUse: false },
+				{ type: "toolchain", bytes: 2_048, reachable: false, inUse: true },
+			],
+		},
+		issues: [{ kind: "missing-target" }],
+		totals: {
+			productsBytes: 3_072,
+			toolchainsBytes: 4_096,
+			cacheBytes: 8_192,
+			bytes: 7_168,
+		},
+	};
+}
+
+describe("Hutch store status", () => {
+	test("reduces a hutch status document to the panel summary", () => {
+		const summary = parseHutchStatus(hutchStatusPayload());
+		expect(summary).toEqual({
+			homePath: "/Users/qa/.hutch",
+			homeSource: "default",
+			productCount: 2,
+			productInstallCount: 3,
+			productsBytes: 3_072,
+			toolchainCount: 1,
+			toolchainsBytes: 4_096,
+			cacheObjectCount: 3,
+			cacheBytes: 8_192,
+			prunableObjectCount: 1,
+			totalBytes: 7_168,
+			issueCount: 1,
+		});
+	});
+
+	test("derives sizes when a payload omits totals and optional sections", () => {
+		const payload = hutchStatusPayload() as Record<string, unknown>;
+		delete payload.totals;
+		delete payload.issues;
+		delete payload.home;
+		const summary = parseHutchStatus(payload);
+		expect(summary.productsBytes).toBe(3_072);
+		expect(summary.toolchainsBytes).toBe(4_096);
+		expect(summary.totalBytes).toBe(7_168);
+		expect(summary.homePath).toBe("unknown");
+		expect(summary.issueCount).toBe(0);
+
+		const bare = parseHutchStatus({ kind: "hutch-status" });
+		expect(bare.productCount).toBe(0);
+		expect(bare.cacheObjectCount).toBe(0);
+		expect(bare.totalBytes).toBe(0);
+	});
+
+	test("rejects output that is not a hutch status document", () => {
+		expect(() => parseHutchStatus({ kind: "something-else" })).toThrow(
+			/unrecognized document/,
+		);
+		expect(() => parseHutchStatusOutput("hutch: unknown command 'status'\n")).toThrow(
+			/did not return JSON/,
+		);
+		expect(() => parseHutchStatusOutput("{not json}")).toThrow(/not valid JSON/);
+		expect(
+			parseHutchStatusOutput(
+				`warming caches\n${JSON.stringify(hutchStatusPayload())}\n`,
+			).cacheObjectCount,
+		).toBe(3);
+	});
+
+	test("explains an unsupported hutch with its own stderr", () => {
+		expect(
+			describeHutchStatusFailure(
+				"\nerror: unknown command 'status'\nusage: hutch\n",
+				"hutch status exited with code 2",
+			),
+		).toBe(
+			"Status unavailable — this hutch may predate `hutch status --json` (0.7+). error: unknown command 'status'",
+		);
+		expect(describeHutchStatusFailure("   \n", "hutch status exited with code 2")).toBe(
+			"Status unavailable — this hutch may predate `hutch status --json` (0.7+). hutch status exited with code 2",
+		);
+	});
+
+	test("formats store sizes for the panel", () => {
+		expect(formatByteSize(0)).toBe("0 B");
+		expect(formatByteSize(-4)).toBe("0 B");
+		expect(formatByteSize(900)).toBe("900 B");
+		expect(formatByteSize(1_536)).toBe("1.5 KB");
+		expect(formatByteSize(612_324_946)).toBe("584 MB");
+		expect(formatByteSize(5 * 1024 ** 3)).toBe("5 GB");
+	});
+
+	test("reads the store through hutch and reports an unsupported hutch", async () => {
+		const harness = fakeHarness({
+			statusStdout: JSON.stringify(hutchStatusPayload()),
+		});
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			channel: "beta",
+			hutchExecutable: "/opt/hutch",
+		});
+
+		const status = await orchestrator.readHutchStatus();
+		expect(status.ok).toBe(true);
+		if (status.ok) expect(status.summary.cacheObjectCount).toBe(3);
+		const statusCommand = harness.commands.find(({ kind }) => kind === "status");
+		expect(statusCommand?.command).toBe("/opt/hutch");
+		expect(statusCommand?.args).toEqual(["status", "--json"]);
+
+		const legacy = new TemplateQaOrchestrator(
+			fakeHarness({
+				statusStderr: "error: unknown command 'status'\n",
+				statusExitCode: 2,
+			}).runtime,
+			{ projectRoot: "/tmp/template qa", channel: "beta" },
+		);
+		const legacyStatus = await legacy.readHutchStatus();
+		expect(legacyStatus.ok).toBe(false);
+		if (!legacyStatus.ok) {
+			expect(legacyStatus.message).toMatch(/Status unavailable/);
+			expect(legacyStatus.message).toMatch(/unknown command 'status'/);
+		}
+	});
+
+	test("previews and runs a cache prune, logging its output", async () => {
+		const harness = fakeHarness();
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			channel: "beta",
+		});
+
+		expect(await orchestrator.pruneHutchCache(true)).toBe(true);
+		expect(await orchestrator.pruneHutchCache(false)).toBe(true);
+		expect(
+			harness.commands.filter(({ kind }) => kind === "prune").map(({ args }) => args),
+		).toEqual([
+			["cache", "prune", "--dry-run"],
+			["cache", "prune"],
+		]);
+		const logs = orchestrator
+			.getSnapshot()
+			.logs.filter(({ templateId }) => templateId === "hutch-store");
+		expect(logs.some(({ text }) => text.includes("removed 2 unreachable objects"))).toBe(
+			true,
+		);
+		expect(logs.some(({ text }) => text.includes("Prune preview finished."))).toBe(true);
+	});
+});
+
+describe("Per-template install and launch", () => {
+	test("install stops after the install task, and launch reuses the project", async () => {
+		const harness = fakeHarness();
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			channel: "beta",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+
+		await orchestrator.installTemplate("install-task");
+		const installed = orchestrator
+			.getSnapshot()
+			.templates.find(({ id }) => id === "install-task");
+		expect(installed?.status).toBe("prepared");
+		expect(harness.commands.map(({ kind }) => kind)).toEqual(["init", "install"]);
+
+		await orchestrator.launchTemplate("install-task");
+		const runCommands = harness.commands.filter(({ kind }) => kind === "run");
+		expect(runCommands).toHaveLength(1);
+		expect(runCommands[0]?.args).toEqual(["run", "start"]);
+		// Launch must not re-run init or the install task for a prepared project.
+		expect(harness.commands.filter(({ kind }) => kind === "init")).toHaveLength(1);
+		expect(harness.commands.filter(({ kind }) => kind === "install")).toHaveLength(1);
+		expect(
+			orchestrator.getSnapshot().templates.find(({ id }) => id === "install-task")
+				?.status,
+		).toBe("ready");
+	});
+
+	test("launch without an installed project installs first, and stop still works", async () => {
+		const harness = fakeHarness();
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			channel: "beta",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+
+		await orchestrator.launchTemplate("no-install-task");
+		expect(harness.commands.map(({ kind }) => kind)).toEqual(["init", "run"]);
+		expect(
+			orchestrator.getSnapshot().templates.find(({ id }) => id === "no-install-task")
+				?.status,
+		).toBe("ready");
+
+		await orchestrator.stopTemplate("no-install-task");
+		const runProcess = harness.processes.find(({ spec }) => spec.kind === "run");
+		expect(runProcess?.process.terminated).toBe(true);
+		expect(
+			orchestrator.getSnapshot().templates.find(({ id }) => id === "no-install-task")
+				?.status,
+		).toBe("stopped");
 	});
 });

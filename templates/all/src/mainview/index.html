@@ -33,10 +33,6 @@
 						<span aria-hidden="true">■</span>
 						Stop all
 					</button>
-					<button class="button button-primary" id="start-all" type="button">
-						<span aria-hidden="true">▶</span>
-						Start all
-					</button>
 				</div>
 			</header>
 
@@ -59,7 +55,7 @@
 				</div>
 				<div class="metric metric-stopped">
 					<span class="metric-value" id="stopped-count">0</span>
-					<span class="metric-label">Stopped</span>
+					<span class="metric-label">Idle</span>
 				</div>
 				<div class="metric metric-retried">
 					<span class="metric-value" id="retry-count">0</span>
@@ -67,6 +63,39 @@
 				</div>
 				<div class="summary-progress" aria-hidden="true">
 					<span id="summary-progress-bar"></span>
+				</div>
+			</section>
+
+			<section class="control-strip" aria-label="Run controls and Hutch store">
+				<div class="install-callout">
+					<div class="install-copy">
+						<h2>Nothing runs until you start it</h2>
+						<p class="disk-warning">
+							<span class="warning-mark" aria-hidden="true">⚠</span>
+							Installing all ~30 templates downloads Electrobun devkits, native toolchains, and
+							node_modules. Expect <strong>several GB of disk space</strong>. Launch runs a
+							template the way a new user would (<code>hutch run start</code>), so the first
+							launch builds in dev mode and can take a while.
+						</p>
+					</div>
+					<button class="button button-primary button-large" id="start-all" type="button">
+						<span aria-hidden="true">▶</span>
+						Install all
+					</button>
+				</div>
+
+				<div class="store-panel" aria-labelledby="store-heading">
+					<div class="store-header">
+						<h2 id="store-heading">Hutch store</h2>
+						<div class="store-actions">
+							<button class="button button-quiet" id="refresh-status" type="button">Refresh</button>
+							<button class="button button-quiet" id="prune-preview" type="button">Preview prune</button>
+							<button class="button button-danger" id="prune-run" type="button" disabled>Prune</button>
+						</div>
+					</div>
+					<div class="store-body" id="store-body" aria-live="polite">
+						<p class="store-message" id="store-message">Loading Hutch store status…</p>
+					</div>
 				</div>
 			</section>
 

@@ -12,6 +12,7 @@ import {
 	catalogChannelForVersion,
 	sanitizedTemplateQaEnv,
 	type CommandSpec,
+	type HutchStoreStatus,
 	type ManagedProcess,
 	type ProcessResult,
 	type QaLog,
@@ -33,12 +34,21 @@ type TemplateQaRPC = {
 			getSnapshot: { params: {}; response: QaSnapshot };
 			startAll: { params: {}; response: { accepted: boolean } };
 			stopAll: { params: {}; response: { accepted: boolean } };
-			startTemplate: {
+			installTemplate: {
+				params: { id: string };
+				response: { accepted: boolean };
+			};
+			launchTemplate: {
 				params: { id: string };
 				response: { accepted: boolean };
 			};
 			stopTemplate: {
 				params: { id: string };
+				response: { accepted: boolean };
+			};
+			getHutchStatus: { params: {}; response: HutchStoreStatus };
+			pruneHutchCache: {
+				params: { dryRun: boolean };
 				response: { accepted: boolean };
 			};
 		};
@@ -202,7 +212,6 @@ const runtime: QaRuntime = {
 };
 
 let mainWindow: BrowserWindow | null = null;
-let autoStarted = false;
 const projectRoot = findTemplateQaProjectRoot();
 const projectVersion = inspectTemplateProject(projectRoot).configuredElectrobunVersion;
 if (!projectVersion) {
@@ -238,12 +247,21 @@ const qaRPC = BrowserView.defineRPC<TemplateQaRPC>({
 				void orchestrator.stopAll().catch(console.error);
 				return { accepted: true };
 			},
-			startTemplate: ({ id }) => {
-				void orchestrator.startTemplate(id).catch(console.error);
+			installTemplate: ({ id }) => {
+				void orchestrator.installTemplate(id).catch(console.error);
+				return { accepted: true };
+			},
+			launchTemplate: ({ id }) => {
+				void orchestrator.launchTemplate(id).catch(console.error);
 				return { accepted: true };
 			},
 			stopTemplate: ({ id }) => {
 				void orchestrator.stopTemplate(id).catch(console.error);
+				return { accepted: true };
+			},
+			getHutchStatus: () => orchestrator.readHutchStatus(),
+			pruneHutchCache: ({ dryRun }) => {
+				void orchestrator.pruneHutchCache(dryRun === true).catch(console.error);
 				return { accepted: true };
 			},
 		},
@@ -281,12 +299,11 @@ mainWindow = new BrowserWindow({
 	},
 });
 
+// Load the catalog so templates list as pending, but never start a run without
+// an explicit Install all click.
 mainWindow.webview.on("dom-ready", () => {
 	(mainWindow?.webview.rpc as any)?.send?.snapshot(orchestrator.getSnapshot());
-	if (!autoStarted) {
-		autoStarted = true;
-		void orchestrator.startAll().catch(console.error);
-	}
+	void orchestrator.initialize().catch(console.error);
 });
 mainWindow.on("close", () => orchestrator.shutdownImmediately());
 

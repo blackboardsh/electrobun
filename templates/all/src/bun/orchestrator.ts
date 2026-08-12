@@ -1,7 +1,7 @@
 import { join } from "node:path";
 
 export const META_TEMPLATE_ID = "all";
-export const BUILD_READY_MARKER = "electrobun build complete:";
+export const HUTCH_STORE_TEMPLATE_ID = "hutch-store";
 export const PROCESS_SPAWNED_MARKER = "Child process spawned with PID";
 
 const STRICT_SEMVER =
@@ -11,6 +11,7 @@ export type TemplateStatus =
 	| "pending"
 	| "downloading"
 	| "installing"
+	| "prepared"
 	| "starting"
 	| "ready"
 	| "failed"
@@ -79,7 +80,7 @@ export type ProcessResult = {
 };
 
 export type CommandSpec = {
-	kind: "init" | "install" | "build" | "run";
+	kind: "init" | "install" | "run" | "status" | "prune";
 	templateId: string;
 	command: string;
 	args: string[];
@@ -125,7 +126,7 @@ export type OrchestratorOptions = {
 
 type ActiveProcess = {
 	process: ManagedProcess;
-	phase: "init" | "install" | "build" | "run";
+	phase: CommandSpec["kind"];
 	intentionalStop: boolean;
 };
 
@@ -244,8 +245,136 @@ export function sanitizedTemplateQaEnv(
 	return result;
 }
 
-export function outputContainsBuildReady(previousTail: string, chunk: string): boolean {
-	return `${previousTail}${chunk}`.includes(BUILD_READY_MARKER);
+export type HutchStatusSummary = {
+	homePath: string;
+	homeSource: string;
+	productCount: number;
+	productInstallCount: number;
+	productsBytes: number;
+	toolchainCount: number;
+	toolchainsBytes: number;
+	cacheObjectCount: number;
+	cacheBytes: number;
+	prunableObjectCount: number;
+	totalBytes: number;
+	issueCount: number;
+};
+
+export type HutchStoreStatus =
+	| { ok: true; summary: HutchStatusSummary }
+	| { ok: false; message: string };
+
+function optionalNumber(value: unknown): number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0
+		? value
+		: 0;
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: {};
+}
+
+function optionalArray(value: unknown): unknown[] {
+	return Array.isArray(value) ? value : [];
+}
+
+// Tolerates unknown extra fields and missing optional sections so a newer hutch
+// payload still renders; only the document identity is required.
+export function parseHutchStatus(value: unknown): HutchStatusSummary {
+	const root = optionalRecord(value);
+	if (root.kind !== "hutch-status") {
+		throw new Error("hutch status returned an unrecognized document");
+	}
+	const home = optionalRecord(root.home);
+	const products = optionalArray(root.products);
+	const toolchains = optionalArray(root.toolchains);
+	const cache = optionalRecord(root.cache);
+	const cacheObjects = optionalArray(cache.objects);
+	const totals = optionalRecord(root.totals);
+
+	const productsBytes = totals.productsBytes
+		? optionalNumber(totals.productsBytes)
+		: products.reduce<number>(
+				(sum, entry) => sum + optionalNumber(optionalRecord(entry).bytes),
+				0,
+			);
+	const toolchainsBytes = totals.toolchainsBytes
+		? optionalNumber(totals.toolchainsBytes)
+		: toolchains.reduce<number>(
+				(sum, entry) => sum + optionalNumber(optionalRecord(entry).bytes),
+				0,
+			);
+	const cacheBytes = totals.cacheBytes
+		? optionalNumber(totals.cacheBytes)
+		: optionalNumber(cache.bytes);
+
+	return {
+		homePath: typeof home.path === "string" ? home.path : "unknown",
+		homeSource: typeof home.source === "string" ? home.source : "unknown",
+		productCount: products.length,
+		productInstallCount: products.reduce<number>(
+			(sum, entry) => sum + optionalArray(optionalRecord(entry).installs).length,
+			0,
+		),
+		productsBytes,
+		toolchainCount: toolchains.length,
+		toolchainsBytes,
+		cacheObjectCount: cache.objectCount
+			? optionalNumber(cache.objectCount)
+			: cacheObjects.length,
+		cacheBytes,
+		prunableObjectCount: cacheObjects.filter((entry) => {
+			const object = optionalRecord(entry);
+			return object.reachable === false && object.inUse !== true;
+		}).length,
+		totalBytes: totals.bytes
+			? optionalNumber(totals.bytes)
+			: productsBytes + toolchainsBytes,
+		issueCount: optionalArray(root.issues).length,
+	};
+}
+
+export function parseHutchStatusOutput(stdout: string): HutchStatusSummary {
+	const start = stdout.indexOf("{");
+	const end = stdout.lastIndexOf("}");
+	if (start < 0 || end <= start) {
+		throw new Error("hutch status did not return JSON");
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout.slice(start, end + 1));
+	} catch {
+		throw new Error("hutch status returned output that is not valid JSON");
+	}
+	return parseHutchStatus(parsed);
+}
+
+export function describeHutchStatusFailure(
+	stderr: string,
+	fallback: string,
+): string {
+	const detail =
+		stderr
+			.split("\n")
+			.map((line) => line.trim())
+			.find((line) => line.length > 0) ?? fallback;
+	return `Status unavailable — this hutch may predate \`hutch status --json\` (0.7+). ${detail}`;
+}
+
+const BYTE_UNITS = ["B", "KB", "MB", "GB", "TB"];
+
+export function formatByteSize(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+	let value = bytes;
+	let unit = 0;
+	while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+	const rounded = unit === 0 ? Math.round(value) : Math.round(value * 10) / 10;
+	return `${rounded} ${BYTE_UNITS[unit]}`;
 }
 
 export function outputContainsSpawnedProcess(
@@ -279,6 +408,7 @@ export class TemplateQaOrchestrator {
 	private queue: Promise<void> = Promise.resolve();
 	private stopEpoch = 0;
 	private shuttingDown = false;
+	private pruning = false;
 	private readonly suppressed = new Set<string>();
 	private readonly active = new Map<string, ActiveProcess>();
 	private readonly preparedProjects = new Set<string>();
@@ -296,7 +426,11 @@ export class TemplateQaOrchestrator {
 
 	async initialize(): Promise<void> {
 		if (!this.initialization) {
-			this.initialization = this.initializeOnce();
+			// A failed catalog load must not poison every later action.
+			this.initialization = this.initializeOnce().catch((error: unknown) => {
+				this.initialization = null;
+				throw error;
+			});
 		}
 		return this.initialization;
 	}
@@ -370,16 +504,36 @@ export class TemplateQaOrchestrator {
 		});
 	}
 
-	startTemplate(id: string): Promise<void> {
+	// Install only: materialize the project and run its install task.
+	installTemplate(id: string): Promise<void> {
 		this.suppressed.delete(id);
 		const epoch = this.stopEpoch;
 		return this.enqueue(async () => {
 			await this.initialize();
 			await this.stopOne(id, false);
-			if (!this.shuttingDown && epoch === this.stopEpoch) {
-				if (await this.prepareOne(id, epoch)) await this.launchOne(id, epoch);
+			if (this.shuttingDown || epoch !== this.stopEpoch) return;
+			if (await this.prepareOne(id, epoch)) {
+				this.systemLog(id, "Installed — press Launch to run the app");
 			}
 		});
+	}
+
+	// Launch the installed project, installing first when nothing is on disk.
+	launchTemplate(id: string): Promise<void> {
+		this.suppressed.delete(id);
+		const epoch = this.stopEpoch;
+		return this.enqueue(async () => {
+			await this.initialize();
+			await this.stopOne(id, false);
+			if (this.shuttingDown || epoch !== this.stopEpoch) return;
+			if (this.preparedProjects.has(id) || (await this.prepareOne(id, epoch))) {
+				await this.launchOne(id, epoch);
+			}
+		});
+	}
+
+	startTemplate(id: string): Promise<void> {
+		return this.launchTemplate(id);
 	}
 
 	async stopTemplate(id: string): Promise<void> {
@@ -411,6 +565,96 @@ export class TemplateQaOrchestrator {
 
 	whenIdle(): Promise<void> {
 		return this.queue;
+	}
+
+	async readHutchStatus(): Promise<HutchStoreStatus> {
+		let process: ManagedProcess;
+		try {
+			process = this.runtime.spawn({
+				kind: "status",
+				templateId: HUTCH_STORE_TEMPLATE_ID,
+				command: this.hutchExecutable,
+				args: ["status", "--json"],
+				cwd: this.projectRoot,
+			});
+		} catch (error) {
+			return {
+				ok: false,
+				message: `Status unavailable — could not start hutch: ${String(error)}`,
+			};
+		}
+		let stdout = "";
+		let stderr = "";
+		process.onOutput((stream, text) => {
+			if (stream === "stdout") stdout += text;
+			else stderr += text;
+		});
+		const result = await process.completed;
+		if (result.code !== 0 || result.error) {
+			return {
+				ok: false,
+				message: describeHutchStatusFailure(
+					stderr,
+					`hutch status ${resultDescription(result)}`,
+				),
+			};
+		}
+		try {
+			return { ok: true, summary: parseHutchStatusOutput(stdout) };
+		} catch (error) {
+			return {
+				ok: false,
+				message: describeHutchStatusFailure(
+					stderr,
+					error instanceof Error ? error.message : String(error),
+				),
+			};
+		}
+	}
+
+	async pruneHutchCache(dryRun: boolean): Promise<boolean> {
+		if (this.pruning) {
+			this.systemLog(HUTCH_STORE_TEMPLATE_ID, "A prune is already running.");
+			return false;
+		}
+		this.pruning = true;
+		const label = dryRun ? "Prune preview" : "Prune";
+		try {
+			const args = ["cache", "prune"];
+			if (dryRun) args.push("--dry-run");
+			this.systemLog(
+				HUTCH_STORE_TEMPLATE_ID,
+				`Running ${[this.hutchExecutable, ...args].join(" ")}`,
+			);
+			let process: ManagedProcess;
+			try {
+				process = this.runtime.spawn({
+					kind: "prune",
+					templateId: HUTCH_STORE_TEMPLATE_ID,
+					command: this.hutchExecutable,
+					args,
+					cwd: this.projectRoot,
+				});
+			} catch (error) {
+				this.systemLog(
+					HUTCH_STORE_TEMPLATE_ID,
+					`${label} could not start: ${String(error)}`,
+				);
+				return false;
+			}
+			process.onOutput((stream, text) => {
+				this.appendOutput(HUTCH_STORE_TEMPLATE_ID, stream, text);
+			});
+			const result = await process.completed;
+			const succeeded = result.code === 0 && !result.error;
+			this.systemLog(
+				HUTCH_STORE_TEMPLATE_ID,
+				succeeded ? `${label} finished.` : `${label} ${resultDescription(result)}`,
+			);
+			return succeeded;
+		} finally {
+			this.pruning = false;
+		}
 	}
 
 	private enqueue(task: () => Promise<void>): Promise<void> {
@@ -582,23 +826,9 @@ export class TemplateQaOrchestrator {
 			return false;
 		}
 
-		this.update(state, "starting", "Building production app");
-		const buildResult = await this.runFiniteCommand(
-			state,
-			epoch,
-			{
-				kind: "build",
-				templateId: id,
-				command: this.hutchExecutable,
-				args: ["run", "build"],
-				cwd: directory,
-			},
-			BUILD_READY_MARKER,
-		);
-		if (!buildResult) return false;
 		this.preparedProjects.add(id);
-		this.update(state, "starting", "Prepared; waiting for the launch phase");
-		this.systemLog(id, "Production build prepared");
+		this.update(state, "prepared", "Installed; ready to launch");
+		this.systemLog(id, "Install complete");
 		return true;
 	}
 
@@ -625,7 +855,7 @@ export class TemplateQaOrchestrator {
 	private async launchOne(id: string, epoch: number): Promise<void> {
 		const state = this.stateFor(id);
 		if (!this.preparedProjects.has(id)) {
-			this.fail(state, "Prepared project marker is missing");
+			this.fail(state, "Installed project marker is missing");
 			return;
 		}
 		if (
@@ -638,15 +868,17 @@ export class TemplateQaOrchestrator {
 			return;
 		}
 
-		this.update(state, "starting", "Launching prepared app");
-		this.systemLog(id, "Starting hutch electrobun run");
+		// `hutch run start` is exactly what a new user runs; the dev build happens
+		// inside it, so the first launch can take a while.
+		this.update(state, "starting", "Building and launching (dev)…");
+		this.systemLog(id, "Starting hutch run start");
 		let runProcess: ManagedProcess;
 		try {
 			runProcess = this.runtime.spawn({
 				kind: "run",
 				templateId: id,
 				command: this.hutchExecutable,
-				args: ["electrobun", "run", "--env=production"],
+				args: ["run", "start"],
 				cwd: state.directory!,
 			});
 		} catch (error) {
@@ -671,7 +903,7 @@ export class TemplateQaOrchestrator {
 			sawSpawnedProcess ||= outputContainsSpawnedProcess(outputTail, text);
 			if (sawSpawnedProcess) signalReady?.();
 			outputTail = `${outputTail}${text}`.slice(
-				-Math.max(BUILD_READY_MARKER.length, PROCESS_SPAWNED_MARKER.length) * 2,
+				-PROCESS_SPAWNED_MARKER.length * 2,
 			);
 		});
 
@@ -749,8 +981,8 @@ export class TemplateQaOrchestrator {
 			state,
 			"ready",
 			passedAfterRetry
-				? "Passed after retry — build complete; app launched"
-				: "Build complete; app launched",
+				? "Passed after retry — dev app launched"
+				: "Dev app launched",
 		);
 		this.systemLog(id, "Ready — keeping the app process alive");
 		void runProcess.completed.then((result) => {
@@ -772,7 +1004,6 @@ export class TemplateQaOrchestrator {
 		state: TemplateState,
 		epoch: number,
 		spec: CommandSpec,
-		requiredOutputMarker?: string,
 	): Promise<boolean> {
 		this.systemLog(
 			state.id,
@@ -791,19 +1022,8 @@ export class TemplateQaOrchestrator {
 			intentionalStop: false,
 		};
 		this.active.set(state.id, active);
-		let outputTail = "";
-		let sawRequiredOutput = requiredOutputMarker === undefined;
 		process.onOutput((stream, text) => {
 			this.appendOutput(state.id, stream, text);
-			if (
-				requiredOutputMarker &&
-				`${outputTail}${text}`.includes(requiredOutputMarker)
-			) {
-				sawRequiredOutput = true;
-			}
-			outputTail = `${outputTail}${text}`.slice(
-				-(requiredOutputMarker?.length ?? 64) * 2,
-			);
 		});
 		const result = await process.completed;
 		if (this.active.get(state.id) === active) this.active.delete(state.id);
@@ -819,13 +1039,6 @@ export class TemplateQaOrchestrator {
 		}
 		if (result.code !== 0 || result.error) {
 			this.fail(state, `${spec.kind} ${resultDescription(result)}`);
-			return false;
-		}
-		if (!sawRequiredOutput) {
-			this.fail(
-				state,
-				`${spec.kind} completed without ${JSON.stringify(requiredOutputMarker)}`,
-			);
 			return false;
 		}
 		return true;
