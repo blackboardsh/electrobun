@@ -18,10 +18,15 @@ import { dirname, join, relative } from "path";
 import { fileURLToPath } from "url";
 import { assertStrictSemVer } from "../src/shared/strict-semver.js";
 import {
+	createRustSdkVersionUpdates,
 	createTemplateVersionUpdates,
 	updateKitchenVersions,
 	updateNpmBootstrapVersion,
 } from "./version-config.mjs";
+import {
+	assertReleaseGitState,
+	pushReleaseAtomically,
+} from "./release-git.mjs";
 
 const type = process.argv[2];
 
@@ -44,6 +49,10 @@ const currentVersion = assertStrictSemVer(
 	packageJson.version,
 	"package/package.json version",
 );
+
+// Refuse to mutate release identities unless this checkout is the clean branch
+// that the exact commit and tag will be published from.
+assertReleaseGitState(repoRoot);
 
 // Determine npm version command
 const versionCmd = {
@@ -86,6 +95,7 @@ const npmBootstrap = updateNpmBootstrapVersion(
 	readFileSync(npmBootstrapPath, "utf-8"),
 	newVersion,
 );
+const rustSdkVersions = createRustSdkVersionUpdates(repoRoot, newVersion);
 
 writeFileSync(kitchenHutchConfigPath, kitchenVersions.hutchConfig);
 writeFileSync(kitchenConfigPath, kitchenVersions.electrobunConfig);
@@ -93,8 +103,11 @@ writeFileSync(npmBootstrapPath, npmBootstrap);
 for (const templateConfig of templateConfigs) {
 	writeFileSync(templateConfig.path, templateConfig.source);
 }
+for (const rustSdkVersion of rustSdkVersions) {
+	writeFileSync(rustSdkVersion.path, rustSdkVersion.source);
+}
 console.log(
-	`Updated Kitchen, npm bootstrap, and ${templateConfigs.length} template product versions to ${newVersion}`,
+	`Updated Kitchen, npm bootstrap, Rust SDK identities, and ${templateConfigs.length} template product versions to ${newVersion}`,
 );
 
 // Git operations from repo root
@@ -110,13 +123,17 @@ execFileSync(
 		"kitchen/electrobun.config.ts",
 		"npm/electrobun/package.json",
 		...templateConfigs.map(({ path }) => relative(repoRoot, path)),
+		...rustSdkVersions.map(({ path }) => relative(repoRoot, path)),
 	],
 	{ cwd: repoRoot, stdio: "inherit" },
 );
-execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
-execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });
+execFileSync("git", ["commit", "-m", tagName], {
+	cwd: repoRoot,
+	stdio: "inherit",
+});
+execFileSync("git", ["tag", tagName], { cwd: repoRoot, stdio: "inherit" });
 
 console.log(`Pushing to origin...`);
-execSync(`git push origin main --tags`, { cwd: repoRoot, stdio: "inherit" });
+pushReleaseAtomically(repoRoot, tagName);
 
 console.log(`\n✓ Successfully pushed ${tagName}`);

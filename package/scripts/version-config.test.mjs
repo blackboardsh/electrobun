@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
+import {
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
+	createRustSdkVersionUpdates,
 	createTemplateVersionUpdates,
+	updateElectrobunCargoLockVersion,
+	updateElectrobunCargoManifestVersion,
 	updateKitchenVersions,
 	updateNpmBootstrapVersion,
 } from "./version-config.mjs";
@@ -117,7 +128,98 @@ test("push:beta writes and stages the synchronized npm bootstrap identity", () =
 	assert.match(source, /updateNpmBootstrapVersion\(/);
 	assert.match(source, /writeFileSync\(npmBootstrapPath, npmBootstrap\)/);
 	assert.match(source, /"npm\/electrobun\/package\.json"/);
+	assert.match(source, /createRustSdkVersionUpdates\(repoRoot, newVersion\)/);
+	assert.match(
+		source,
+		/writeFileSync\(rustSdkVersion\.path, rustSdkVersion\.source\)/,
+	);
+	assert.match(
+		source,
+		/\.\.\.rustSdkVersions\.map\(\(\{ path \}\) => relative\(repoRoot, path\)\)/,
+	);
 	assert.doesNotMatch(source, /npm-v\$\{newVersion\}/);
+});
+
+test("release bumps update only the Electrobun Cargo package identity", () => {
+	const manifest = `[package]\nname = "electrobun"\nversion = "2.0.0"\nedition = "2021"\n\n[dependencies]\nexample = { version = "9.8.7" }\n`;
+	assert.equal(
+		updateElectrobunCargoManifestVersion(
+			manifest,
+			"2.0.1-beta.0",
+			"fixture Cargo.toml",
+		),
+		`[package]\nname = "electrobun"\nversion = "2.0.1-beta.0"\nedition = "2021"\n\n[dependencies]\nexample = { version = "9.8.7" }\n`,
+	);
+
+	const lock = `version = 4\n\n[[package]]\nname = "before"\nversion = "1.2.3"\n\n[[package]]\nname = "electrobun"\nversion = "2.0.0"\n\n[[package]]\nname = "electrobun-kitchen"\nversion = "0.0.1"\ndependencies = [\n "electrobun",\n]\n`;
+	assert.equal(
+		updateElectrobunCargoLockVersion(
+			lock,
+			"2.0.1-beta.0",
+			"fixture Cargo.lock",
+		),
+		`version = 4\n\n[[package]]\nname = "before"\nversion = "1.2.3"\n\n[[package]]\nname = "electrobun"\nversion = "2.0.1-beta.0"\n\n[[package]]\nname = "electrobun-kitchen"\nversion = "0.0.1"\ndependencies = [\n "electrobun",\n]\n`,
+	);
+});
+
+test("Cargo identity updates fail closed on malformed package tables", () => {
+	assert.throws(
+		() =>
+			updateElectrobunCargoManifestVersion(
+				'[package]\nname = "other"\nversion = "2.0.0"\n',
+				"2.0.1-beta.0",
+			),
+		/exactly one \[package\] table named electrobun; found 0/,
+	);
+	assert.throws(
+		() =>
+			updateElectrobunCargoLockVersion(
+				'[[package]]\nname = "electrobun"\nversion = "2.0.0"\n\n[[package]]\nname = "electrobun"\nversion = "2.0.0"\n',
+				"2.0.1-beta.0",
+			),
+		/exactly one \[\[package\]\] table named electrobun; found 2/,
+	);
+	for (const body of [
+		'[package]\nname = "electrobun"\n',
+		'[package]\nname = "electrobun"\nversion = "2.0.0"\nversion = "2.0.1"\n',
+	]) {
+		assert.throws(
+			() =>
+				updateElectrobunCargoManifestVersion(body, "2.0.1-beta.0"),
+			/exactly one version field/,
+		);
+	}
+	assert.throws(
+		() =>
+			updateElectrobunCargoManifestVersion(
+				'[package]\nname = "electrobun"\nversion = "2.0.0"\n',
+				"beta",
+			),
+		/exact SemVer 2\.0\.0/,
+	);
+});
+
+test("Rust release bump plan is limited to the SDK and its two lockfiles", () => {
+	const updates = createRustSdkVersionUpdates(
+		repositoryRoot,
+		"2.0.1-beta.0",
+	);
+	assert.deepEqual(
+		updates.map(({ path }) =>
+			relative(repositoryRoot, path).split(sep).join("/"),
+		),
+		[
+			"package/src/sdks/rust/Cargo.toml",
+			"kitchen/Cargo.lock",
+			"templates/rust-flock-wgpu/Cargo.lock",
+		],
+	);
+	for (const { source } of updates) {
+		assert.match(
+			source,
+			/name = "electrobun"\r?\nversion = "2\.0\.1-beta\.0"/,
+		);
+	}
 });
 
 test("release bump plan stamps every template Hutch product pin", () => {
@@ -196,5 +298,121 @@ test("checked-in package, lock, Kitchen, and template product identities agree",
 			/\belectrobun\s*:\s*\{/,
 			electrobunConfigPath,
 		);
+	}
+
+	for (const update of createRustSdkVersionUpdates(repositoryRoot, version)) {
+		assert.equal(update.source, readFileSync(update.path, "utf8"), update.path);
+	}
+});
+
+test("push:beta dry semantics produce 2.0.1-beta.0 from 2.0.0", () => {
+	const helperSource = readFileSync(
+		join(repositoryRoot, "package", "scripts", "push-version.js"),
+		"utf8",
+	);
+	assert.match(helperSource, /beta:\s*"prerelease --preid=beta"/);
+	const baseVersion = "2.0.0";
+	const temporaryRoot = mkdtempSync(join(tmpdir(), "electrobun-beta-version-"));
+	try {
+		writeFileSync(
+			join(temporaryRoot, "package.json"),
+			`${JSON.stringify(
+				{
+					name: "electrobun-version-dry-run",
+					version: baseVersion,
+					private: true,
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		writeFileSync(
+			join(temporaryRoot, "package-lock.json"),
+			`${JSON.stringify(
+				{
+					name: "electrobun-version-dry-run",
+					version: baseVersion,
+					lockfileVersion: 3,
+					requires: true,
+					packages: {
+						"": {
+							name: "electrobun-version-dry-run",
+							version: baseVersion,
+						},
+					},
+				},
+				null,
+				2,
+			)}\n`,
+		);
+		const npmCommand =
+			process.platform === "win32"
+				? (process.env.ComSpec ?? "cmd.exe")
+				: "npm";
+		const npmArguments =
+			process.platform === "win32"
+				? [
+						"/d",
+						"/s",
+						"/c",
+						"npm version prerelease --preid=beta --no-git-tag-version",
+					]
+				: [
+						"version",
+						"prerelease",
+						"--preid=beta",
+						"--no-git-tag-version",
+					];
+		const result = spawnSync(npmCommand, npmArguments, {
+			cwd: temporaryRoot,
+			encoding: "utf8",
+		});
+		assert.equal(result.status, 0, result.stderr);
+		const bumpedManifest = JSON.parse(
+			readFileSync(join(temporaryRoot, "package.json"), "utf8"),
+		);
+		const bumpedLock = JSON.parse(
+			readFileSync(join(temporaryRoot, "package-lock.json"), "utf8"),
+		);
+		assert.equal(bumpedManifest.version, "2.0.1-beta.0");
+		assert.equal(bumpedLock.version, bumpedManifest.version);
+		assert.equal(bumpedLock.packages?.[""]?.version, bumpedManifest.version);
+
+		const version = bumpedManifest.version;
+		const kitchenVersions = updateKitchenVersions(
+			readFileSync(join(repositoryRoot, "kitchen", "hutch.config.ts"), "utf8"),
+			readFileSync(
+				join(repositoryRoot, "kitchen", "electrobun.config.ts"),
+				"utf8",
+			),
+			version,
+		);
+		assert.match(kitchenVersions.hutchConfig, /version: "2\.0\.1-beta\.0"/);
+		assert.match(
+			kitchenVersions.electrobunConfig,
+			/version: "2\.0\.1-beta\.0"/,
+		);
+		assert.equal(
+			JSON.parse(
+				updateNpmBootstrapVersion(
+					readFileSync(
+						join(repositoryRoot, "npm", "electrobun", "package.json"),
+						"utf8",
+					),
+					version,
+				),
+			).version,
+			version,
+		);
+		assert.equal(
+			createTemplateVersionUpdates(
+				join(repositoryRoot, "templates"),
+				version,
+			).length,
+			31,
+		);
+		assert.equal(createRustSdkVersionUpdates(repositoryRoot, version).length, 3);
+	} finally {
+		rmSync(temporaryRoot, { recursive: true, force: true });
 	}
 });

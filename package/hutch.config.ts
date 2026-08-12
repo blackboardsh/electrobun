@@ -37,7 +37,7 @@ export default {
 		"test:devkit-manifest":
 			"node --test scripts/validate-native-devkit.test.mjs scripts/bun-vendor.test.mjs",
 		"test:version-bump":
-			"node --test scripts/version-config.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
+			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": ["hutch", "scripts/test-cef-remote-debugging.ts"],
