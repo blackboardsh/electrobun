@@ -21,7 +21,7 @@ runs:
           https://hutch.blackboard.sh/hutch/install.sh \
           --output "$installer"
         sh "$installer" --channel "$HUTCH_INSTALL_CHANNEL" --no-modify-path
-        echo "$HOME/.dash/bin" >> "$GITHUB_PATH"
+        echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
 
     - name: Install Hutch
       if: runner.os == 'Windows'
@@ -35,4 +35,4 @@ runs:
           -OutFile $installer
         & $installer -Channel $env:HUTCH_INSTALL_CHANNEL
         if ($LASTEXITCODE -ne 0) { throw "Hutch installation failed" }
-        (Join-Path $HOME ".dash\bin") | Out-File -FilePath $env:GITHUB_PATH -Append
+        (Join-Path $HOME ".hutch\bin") | Out-File -FilePath $env:GITHUB_PATH -Append
