@@ -35,7 +35,7 @@ export default {
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:devkit-manifest":
-			"node --test scripts/validate-native-devkit.test.mjs scripts/bun-vendor.test.mjs",
+			"node --test scripts/validate-native-devkit.test.mjs scripts/bun-vendor.test.mjs scripts/electrobun-version-runtime.test.mjs",
 		"test:version-bump":
 			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
 		"test:linux-native-dialog":
