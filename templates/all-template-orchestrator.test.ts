@@ -16,6 +16,7 @@ import {
 	outputContainsBuildReady,
 	outputContainsSpawnedProcess,
 	parseTemplateCatalog,
+	sanitizedTemplateQaEnv,
 	type CatalogChannel,
 	type CommandSpec,
 	type ManagedProcess,
@@ -103,6 +104,10 @@ type FakeHarness = {
 	runtime: QaRuntime;
 	commands: CommandSpec[];
 	processes: Array<{ spec: CommandSpec; process: FakeProcess }>;
+	materialized: Set<string>;
+	projected: Set<string>;
+	installedVersions: Map<string, string>;
+	removed: string[];
 };
 
 function fakeHarness(
@@ -121,6 +126,8 @@ function fakeHarness(
 	const processes: Array<{ spec: CommandSpec; process: FakeProcess }> = [];
 	const materialized = new Set<string>();
 	const projected = new Set<string>();
+	const installedVersions = new Map<string, string>();
+	const removed: string[] = [];
 	const buildAttempts = new Map<string, number>();
 	let tick = 0;
 	const channel = options.channel ?? "beta";
@@ -133,17 +140,26 @@ function fakeHarness(
 			return catalog(undefined, channel, catalogVersion);
 		},
 		ensureDirectory() {},
+		removeDirectory(path) {
+			removed.push(path);
+			materialized.delete(path);
+			projected.delete(path);
+			installedVersions.delete(path);
+		},
 		isMaterialized(path) {
 			return materialized.has(path);
 		},
 		inspectProject(path) {
 			const id = path.split(/[\\/]/).at(-1)!;
+			const configuredVersion =
+				installedVersions.get(path) ??
+				options.configuredVersion ??
+				catalogVersion;
 			return {
 				hasInstallTask: id === "install-task",
-				configuredElectrobunVersion:
-					options.configuredVersion ?? catalogVersion,
+				configuredElectrobunVersion: configuredVersion,
 				projectedElectrobunVersion: projected.has(path)
-					? (options.projectedVersion ?? catalogVersion)
+					? (options.projectedVersion ?? configuredVersion)
 					: null,
 				devkitProjectionPath: `${path}/.hutch/devkit`,
 			};
@@ -158,6 +174,10 @@ function fakeHarness(
 						{
 							const directory = join(spec.cwd, spec.templateId);
 							materialized.add(directory);
+							installedVersions.set(
+								directory,
+								options.configuredVersion ?? catalogVersion,
+							);
 							if (options.omitProjectionFor !== spec.templateId) {
 								projected.add(directory);
 							}
@@ -206,7 +226,15 @@ function fakeHarness(
 		},
 	};
 
-	return { runtime, commands, processes };
+	return {
+		runtime,
+		commands,
+		processes,
+		materialized,
+		projected,
+		installedVersions,
+		removed,
+	};
 }
 
 describe("Template QA catalog and readiness contracts", () => {
@@ -350,7 +378,74 @@ describe("Template QA catalog and readiness contracts", () => {
 	});
 });
 
+describe("Template QA child environment", () => {
+	test("strips the parent app's Electrobun runtime markers", () => {
+		expect(
+			sanitizedTemplateQaEnv({
+				PATH: "/usr/bin",
+				HOME: "/Users/qa",
+				COTTONTAIL_ELECTROBUN_DIST: "/dist",
+				COTTONTAIL_ELECTROBUN_NAME: "Template QA",
+				COTTONTAIL_ELECTROBUN_IDENTIFIER: "qa.electrobun.dev",
+				COTTONTAIL_ELECTROBUN_CHANNEL: "dev",
+				ELECTROBUN_BUILD_ENV: "dev",
+				ELECTROBUN_OS: "macos",
+				ELECTROBUN_TEMPLATES_BASE_URL: "http://127.0.0.1:8080/templates",
+				UNSET: undefined,
+			}),
+		).toEqual({
+			PATH: "/usr/bin",
+			HOME: "/Users/qa",
+			ELECTROBUN_TEMPLATES_BASE_URL: "http://127.0.0.1:8080/templates",
+		});
+	});
+});
+
 describe("Template QA orchestration", () => {
+	test("installs into flat template directories and reinstalls stale projects", async () => {
+		const harness = fakeHarness();
+		const root = "/tmp/template qa";
+		const staleDirectory = join(root, "templates", "install-task");
+		harness.materialized.add(staleDirectory);
+		harness.projected.add(staleDirectory);
+		harness.installedVersions.set(staleDirectory, "2.0.0-beta.6");
+
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: root,
+			channel: "beta",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+		await orchestrator.startAll();
+
+		const snapshot = orchestrator.getSnapshot();
+		expect(snapshot.root).toBe(join(root, "templates"));
+		for (const command of harness.commands) {
+			if (command.kind === "init") {
+				expect(command.cwd).toBe(join(root, "templates"));
+			} else {
+				expect(command.cwd).toBe(join(root, "templates", command.templateId));
+			}
+		}
+		expect(harness.removed).toEqual([staleDirectory]);
+		expect(
+			harness.commands
+				.filter(({ kind }) => kind === "init")
+				.map(({ templateId }) => templateId),
+		).toEqual(["install-task", "no-install-task"]);
+		expect(snapshot.templates.map(({ status }) => status)).toEqual([
+			"ready",
+			"ready",
+		]);
+		expect(
+			snapshot.logs.some(
+				({ text }) =>
+					text.includes("Reinstalling") && text.includes("2.0.0-beta.6"),
+			),
+		).toBe(true);
+		await orchestrator.stopAll();
+	});
+
 	test("uses the stable catalog and init channel for a stable product", async () => {
 		const harness = fakeHarness({ channel: "stable", catalogVersion: "2.0.0" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {

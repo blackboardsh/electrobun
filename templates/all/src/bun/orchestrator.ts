@@ -105,6 +105,7 @@ export interface ManagedProcess {
 export interface QaRuntime {
 	loadCatalog(channel: CatalogChannel): Promise<unknown>;
 	ensureDirectory(path: string): Promise<void> | void;
+	removeDirectory(path: string): Promise<void> | void;
 	isMaterialized(path: string): Promise<boolean> | boolean;
 	inspectProject(path: string): Promise<ProjectInspection> | ProjectInspection;
 	spawn(spec: CommandSpec): ManagedProcess;
@@ -218,11 +219,29 @@ export function parseTemplateCatalog(
 	return { channel: expectedChannel, version, revision, templates };
 }
 
-export function safeCatalogDirectory(version: string, revision: string): string {
-	const versionPart = version.replace(/[^0-9A-Za-z._-]/g, "_").slice(0, 80);
-	const revisionPart = revision.replace(/[^0-9a-f]/g, "").slice(0, 12);
-	if (!versionPart || !revisionPart) throw new Error("invalid catalog identity");
-	return `${versionPart}-${revisionPart}`;
+// The QA app is itself a running Electrobun app, so its environment carries
+// the runtime markers hutch sets when launching an app. Cottontail boots
+// ElectrobunCore for any script it runs while COTTONTAIL_ELECTROBUN_DIST is
+// present, which fails outside a packaged bundle, so nested hutch and app
+// processes must never inherit those markers.
+const PRESERVED_ELECTROBUN_ENV = new Set(["ELECTROBUN_TEMPLATES_BASE_URL"]);
+
+export function sanitizedTemplateQaEnv(
+	env: Record<string, string | undefined>,
+): Record<string, string> {
+	const result: Record<string, string> = {};
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined) continue;
+		if (
+			!PRESERVED_ELECTROBUN_ENV.has(key) &&
+			(key.startsWith("ELECTROBUN_") ||
+				key.startsWith("COTTONTAIL_ELECTROBUN_"))
+		) {
+			continue;
+		}
+		result[key] = value;
+	}
+	return result;
 }
 
 export function outputContainsBuildReady(previousTail: string, chunk: string): boolean {
@@ -287,11 +306,7 @@ export class TemplateQaOrchestrator {
 			await this.runtime.loadCatalog(this.channel),
 			this.channel,
 		);
-		this.runRoot = join(
-			this.projectRoot,
-			"templates",
-			safeCatalogDirectory(this.catalog.version, this.catalog.revision),
-		);
+		this.runRoot = join(this.projectRoot, "templates");
 		await this.runtime.ensureDirectory(this.runRoot);
 		this.states = this.catalog.templates.map((template) => ({
 			...template,
@@ -441,8 +456,23 @@ export class TemplateQaOrchestrator {
 		this.beginAttempt(state);
 
 		const directory = state.directory!;
-		const newlyMaterialized = !(await this.runtime.isMaterialized(directory));
-		if (newlyMaterialized) {
+		let needsMaterialization = !(await this.runtime.isMaterialized(directory));
+		if (!needsMaterialization) {
+			const stale = await this.staleReason(directory);
+			if (stale) {
+				this.systemLog(id, `Reinstalling ${directory}: ${stale}`);
+				try {
+					await this.runtime.removeDirectory(directory);
+				} catch (error) {
+					this.fail(state, `Could not remove the stale project: ${String(error)}`);
+					return false;
+				}
+				needsMaterialization = true;
+			} else {
+				this.systemLog(id, `Reusing ${directory}`);
+			}
+		}
+		if (needsMaterialization) {
 			this.update(state, "downloading", `Downloading ${this.channel} template`);
 			this.systemLog(id, `Materializing ${directory}`);
 			let initProcess: ManagedProcess;
@@ -502,8 +532,6 @@ export class TemplateQaOrchestrator {
 				);
 				return false;
 			}
-		} else {
-			this.systemLog(id, `Reusing ${directory}`);
 		}
 
 		let inspection: ProjectInspection;
@@ -572,6 +600,26 @@ export class TemplateQaOrchestrator {
 		this.update(state, "starting", "Prepared; waiting for the launch phase");
 		this.systemLog(id, "Production build prepared");
 		return true;
+	}
+
+	// A reused project directory must match the catalog identity exactly;
+	// anything else is a leftover from an earlier Electrobun version and gets
+	// wiped and re-materialized instead of failing the run.
+	private async staleReason(directory: string): Promise<string | null> {
+		const version = this.catalog!.version;
+		let inspection: ProjectInspection;
+		try {
+			inspection = await this.runtime.inspectProject(directory);
+		} catch (error) {
+			return `the existing project could not be inspected (${String(error)})`;
+		}
+		if (inspection.configuredElectrobunVersion !== version) {
+			return `the existing project pins Electrobun ${inspection.configuredElectrobunVersion ?? "nothing"} instead of ${version}`;
+		}
+		if (inspection.projectedElectrobunVersion !== version) {
+			return `the existing project projects Electrobun ${inspection.projectedElectrobunVersion ?? "nothing"} instead of ${version}`;
+		}
+		return null;
 	}
 
 	private async launchOne(id: string, epoch: number): Promise<void> {

@@ -1,10 +1,16 @@
-import { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/main";
+import {
+	ApplicationMenu,
+	BrowserView,
+	BrowserWindow,
+	type RPCSchema,
+} from "electrobun/main";
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	TemplateQaOrchestrator,
 	catalogChannelForVersion,
+	sanitizedTemplateQaEnv,
 	type CommandSpec,
 	type ManagedProcess,
 	type ProcessResult,
@@ -80,7 +86,7 @@ class NodeManagedProcess implements ManagedProcess {
 	constructor(spec: CommandSpec) {
 		this.child = spawn(spec.command, spec.args, {
 			cwd: spec.cwd,
-			env: { ...process.env, ...spec.env },
+			env: { ...sanitizedTemplateQaEnv(process.env), ...spec.env },
 			stdio: ["ignore", "pipe", "pipe"],
 			detached: process.platform !== "win32",
 			windowsHide: false,
@@ -179,6 +185,9 @@ const runtime: QaRuntime = {
 	ensureDirectory(path) {
 		mkdirSync(path, { recursive: true });
 	},
+	removeDirectory(path) {
+		rmSync(path, { recursive: true, force: true });
+	},
 	isMaterialized(path) {
 		return existsSync(join(path, "electrobun.config.ts"));
 	},
@@ -241,6 +250,24 @@ const qaRPC = BrowserView.defineRPC<TemplateQaRPC>({
 		messages: {},
 	},
 });
+
+ApplicationMenu.setApplicationMenu([
+	{
+		submenu: [{ label: "Quit", role: "quit", accelerator: "q" }],
+	},
+	{
+		label: "Edit",
+		submenu: [
+			{ role: "undo" },
+			{ role: "redo" },
+			{ type: "separator" },
+			{ role: "cut" },
+			{ role: "copy" },
+			{ role: "paste" },
+			{ role: "selectAll" },
+		],
+	},
+]);
 
 mainWindow = new BrowserWindow({
 	title: "Electrobun Template QA",
