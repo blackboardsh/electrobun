@@ -47,7 +47,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      EXPECTED_HUTCH_VERSION: '0.6.1'
+      EXPECTED_HUTCH_VERSION: '0.6.4'
       EXPECTED_COTTONTAIL_VERSION: '0.4.1'
 
     steps:
