@@ -49,10 +49,10 @@ describe("platform-specific native FFI", () => {
 			'if (typeof setAlphaBlending !== "function") return;',
 		);
 		expect(nativeSource).toContain(
-			'if (typeof measureText !== "function")',
+			'if (!hasFFI || typeof measureText !== "function")',
 		);
 		expect(nativeSource).toContain(
-			'typeof rasterizeText !== "function"',
+			'!hasFFI ||\n\t\t\ttypeof rasterizeText !== "function"',
 		);
 		expect(nativeSource).toContain(
 			'typeof freeTextBitmap !== "function"',

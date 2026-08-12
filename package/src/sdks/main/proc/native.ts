@@ -2594,7 +2594,7 @@ export const nativeText = {
 		size: number,
 	): { w: number; h: number; ascent: number } {
 		const measureText = macOSNative?.symbols.uiMeasureText;
-		if (typeof measureText !== "function") {
+		if (!hasFFI || typeof measureText !== "function") {
 			return { w: 0, h: 0, ascent: 0 };
 		}
 		const w = new Float64Array(1);
@@ -2619,6 +2619,7 @@ export const nativeText = {
 		const rasterizeText = macOSNative?.symbols.uiRasterizeText;
 		const freeTextBitmap = macOSNative?.symbols.uiFreeTextBitmap;
 		if (
+			!hasFFI ||
 			typeof rasterizeText !== "function" ||
 			typeof freeTextBitmap !== "function"
 		) {
