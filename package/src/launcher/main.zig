@@ -130,9 +130,17 @@ fn delegateUninstall(
     allocator: std.mem.Allocator,
     io: std.Io,
     environ_map: *std.process.Environ.Map,
-    exe_dir: []const u8,
+    exe_path: []const u8,
     request: uninstall.Request,
 ) !void {
+    const platform = uninstallPlatform();
+    const physical_linux_exe_path = if (platform == .linux)
+        try std.Io.Dir.realPathFileAbsoluteAlloc(io, exe_path, allocator)
+    else
+        null;
+    defer if (physical_linux_exe_path) |path| allocator.free(path);
+    const delegation_exe_path = physical_linux_exe_path orelse exe_path;
+    const exe_dir = std.fs.path.dirname(delegation_exe_path) orelse return error.InvalidExePath;
     const version_path = try uninstall.versionJsonPath(allocator, exe_dir);
     defer allocator.free(version_path);
     const version_json = try std.Io.Dir.cwd().readFileAlloc(
@@ -147,17 +155,25 @@ fn delegateUninstall(
     defer allocator.free(identity.identifier);
     defer allocator.free(identity.channel);
 
-    const app_data_base = try uninstall.appDataBase(allocator, uninstallPlatform(), .{
-        .home = environ_map.get("HOME"),
-        .local_appdata = environ_map.get("LOCALAPPDATA"),
-        .xdg_data_home = environ_map.get("XDG_DATA_HOME"),
-    });
-    defer allocator.free(app_data_base);
-    const channel_root = try uninstall.channelRootPath(allocator, app_data_base, identity);
+    const channel_root = if (platform == .linux)
+        try uninstall.linuxChannelRootFromLauncherPath(
+            allocator,
+            delegation_exe_path,
+            identity,
+        )
+    else blk: {
+        const app_data_base = try uninstall.appDataBase(allocator, platform, .{
+            .home = environ_map.get("HOME"),
+            .local_appdata = environ_map.get("LOCALAPPDATA"),
+            .xdg_data_home = environ_map.get("XDG_DATA_HOME"),
+        });
+        defer allocator.free(app_data_base);
+        break :blk try uninstall.channelRootPath(allocator, app_data_base, identity);
+    };
     defer allocator.free(channel_root);
     const manager_path = try std.fs.path.join(
         allocator,
-        &.{ channel_root, uninstall.managerName(uninstallPlatform()) },
+        &.{ channel_root, uninstall.managerName(platform) },
     );
     defer allocator.free(manager_path);
 
@@ -306,8 +322,8 @@ pub fn main(init: std.process.Init) !void {
         break :blk args_list.items;
     };
 
-    if (uninstall.parseRequest(launcher_args)) |request| {
-        try delegateUninstall(alloc, io, init.environ_map, exe_dir, request);
+    if (try uninstall.parseRequest(launcher_args)) |request| {
+        try delegateUninstall(alloc, io, init.environ_map, exe_path, request);
         return;
     }
 

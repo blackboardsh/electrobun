@@ -1,7 +1,7 @@
 import { ffi, native } from "../proc/native";
 import { electrobunEventEmitter } from "../events/eventEmitter";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { readFileSync } from "node:fs";
 import { OS } from "../../../shared/platform";
 import { decodeDialogPaths } from "../../../shared/dialog-paths";
@@ -418,7 +418,10 @@ function getAppDataDir(): string {
 		case "win":
 			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
 		case "linux":
-			return process.env["XDG_DATA_HOME"] || join(home, ".local", "share");
+			return getLinuxXdgRoot(
+				"XDG_DATA_HOME",
+				join(home, ".local", "share"),
+			);
 	}
 }
 
@@ -429,7 +432,7 @@ function getCacheDir(): string {
 		case "win":
 			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
 		case "linux":
-			return process.env["XDG_CACHE_HOME"] || join(home, ".cache");
+			return getLinuxXdgRoot("XDG_CACHE_HOME", join(home, ".cache"));
 	}
 }
 
@@ -440,8 +443,18 @@ function getLogsDir(): string {
 		case "win":
 			return process.env["LOCALAPPDATA"] || join(home, "AppData", "Local");
 		case "linux":
-			return process.env["XDG_STATE_HOME"] || join(home, ".local", "state");
+			return getLinuxXdgRoot(
+				"XDG_STATE_HOME",
+				join(home, ".local", "state"),
+			);
 	}
+}
+
+function getLinuxXdgRoot(variable: string, fallback: string): string {
+	const value = process.env[variable];
+	if (!value || !isAbsolute(value)) return fallback;
+	const normalized = resolve(value);
+	return normalized === "/" ? fallback : normalized;
 }
 
 function getConfigDir(): string {

@@ -111,9 +111,19 @@ pub fn build(b: *std.Build) void {
     });
     const run_subsystem_parser_tests = b.addRunArtifact(subsystem_parser_tests);
 
+    const linux_uninstall_prompt_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("linux_uninstall_prompt.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_linux_uninstall_prompt_tests = b.addRunArtifact(linux_uninstall_prompt_tests);
+
     const test_step = b.step("test", "Run extractor tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_subsystem_parser_tests.step);
+    test_step.dependOn(&run_linux_uninstall_prompt_tests.step);
 
     if (target.result.os.tag == .windows) {
         const subsystem_checker = b.addExecutable(.{

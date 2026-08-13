@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const zstd = std.compress.zstd;
+const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
 
 // Initialized at the top of main(). Test-only helpers do not touch these.
 var g_io: std.Io = undefined;
@@ -25,7 +26,9 @@ const WINDOWS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
 const WINDOWS_UNINSTALL_REGISTRY_ROOT = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 const LINUX_UNINSTALL_EXE_NAME = "uninstall";
 const LINUX_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
-const LINUX_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const LINUX_UNINSTALL_MANIFEST_VERSION: u32 = 2;
+const LINUX_LEGACY_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const LINUX_DATA_PATH_VERSION: u32 = 1;
 const MACOS_UNINSTALL_EXE_NAME = "uninstall";
 const MACOS_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
 const MACOS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
@@ -95,7 +98,57 @@ const LinuxUninstallManifest = struct {
     desktop_entry: []const u8,
     application_entry_sha256: []const u8,
     desktop_entry_sha256: []const u8,
+    data_path_versions: ?[]const u32 = null,
+    home: ?[]const u8 = null,
+    xdg_cache_home: ?[]const u8 = null,
+    xdg_state_home: ?[]const u8 = null,
 };
+
+const LinuxUninstallMode = enum {
+    app,
+    app_and_data,
+};
+
+const LinuxManagerCommand = union(enum) {
+    uninstall: ?LinuxUninstallMode,
+    refresh_metadata,
+};
+
+fn parseLinuxManagerCommand(args: []const []const u8) !LinuxManagerCommand {
+    if (args.len == 0) return .{ .uninstall = null };
+    if (std.mem.eql(u8, args[0], "--uninstall")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = null },
+            2 => if (std.mem.eql(u8, args[1], "--quiet"))
+                .{ .uninstall = .app }
+            else
+                error.InvalidArguments,
+            3 => if (std.mem.eql(u8, args[1], "--quiet") and
+                std.mem.eql(u8, args[2], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--quiet")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = .app },
+            2 => if (std.mem.eql(u8, args[1], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--refresh-metadata") and
+        args.len == 2 and
+        std.mem.eql(u8, args[1], "--quiet"))
+    {
+        return .refresh_metadata;
+    }
+    return error.InvalidArguments;
+}
 
 const MacosUninstallManifest = struct {
     schema_version: u32,
@@ -673,7 +726,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     // Commit platform integration only after both the app and updater state are
     // in place. Package-managed Linux formats never execute this extractor.
     if (builtin.os.tag == .linux) {
-        try installLinuxIntegration(allocator, app_dir, metadata, exe_path);
+        try installLinuxIntegration(allocator, app_dir, metadata);
     } else if (builtin.os.tag == .windows) {
         try installWindowsIntegration(allocator, app_dir, metadata, exe_path);
     }
@@ -938,16 +991,59 @@ fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
             break :blk local_appdata;
         },
         .linux => blk: {
-            // Use XDG_DATA_HOME or ~/.local/share on Linux
-            const xdg_data_home = getEnvOwned(allocator, "XDG_DATA_HOME") catch {
-                const home = try getEnvOwned(allocator, "HOME");
-                defer allocator.free(home);
-                break :blk try std.fs.path.join(allocator, &.{ home, ".local", "share" });
-            };
-            break :blk xdg_data_home;
+            break :blk try linuxXdgRoot(allocator, "XDG_DATA_HOME", &.{ ".local", "share" });
         },
         else => @compileError("Unsupported platform for app data directory"),
     };
+}
+
+fn isValidLinuxAbsoluteRoot(path: []const u8) bool {
+    if (!std.fs.path.isAbsolute(path) or path.len <= 1 or path[path.len - 1] == std.fs.path.sep) {
+        return false;
+    }
+    var parts = std.mem.splitScalar(u8, path[1..], std.fs.path.sep);
+    while (parts.next()) |part| {
+        if (part.len == 0 or std.mem.eql(u8, part, ".") or std.mem.eql(u8, part, "..") or
+            std.mem.indexOfScalar(u8, part, 0) != null) return false;
+    }
+    return true;
+}
+
+fn linuxHome(allocator: std.mem.Allocator) ![]u8 {
+    const home = g_environ_map.get("HOME") orelse return error.EnvironmentVariableNotFound;
+    if (home.len == 0 or !std.fs.path.isAbsolute(home)) return error.InvalidEnvironmentRoot;
+    const resolved = try std.fs.path.resolve(allocator, &.{home});
+    if (!isValidLinuxAbsoluteRoot(resolved)) {
+        allocator.free(resolved);
+        return error.InvalidEnvironmentRoot;
+    }
+    return resolved;
+}
+
+fn linuxXdgRoot(
+    allocator: std.mem.Allocator,
+    key: []const u8,
+    fallback_parts: []const []const u8,
+) ![]u8 {
+    if (g_environ_map.get(key)) |value| {
+        if (value.len != 0 and std.fs.path.isAbsolute(value)) {
+            const resolved = try std.fs.path.resolve(allocator, &.{value});
+            if (isValidLinuxAbsoluteRoot(resolved)) return resolved;
+            allocator.free(resolved);
+        }
+    }
+    const home = try linuxHome(allocator);
+    defer allocator.free(home);
+    var parts: std.ArrayList([]const u8) = .empty;
+    defer parts.deinit(allocator);
+    try parts.append(allocator, home);
+    try parts.appendSlice(allocator, fallback_parts);
+    const result = try std.fs.path.join(allocator, parts.items);
+    if (!isValidLinuxAbsoluteRoot(result)) {
+        allocator.free(result);
+        return error.InvalidEnvironmentRoot;
+    }
+    return result;
 }
 
 fn replaceSelfWithLauncher(allocator: std.mem.Allocator, exe_path: []const u8, app_dir: []const u8) !void {
@@ -1066,30 +1162,48 @@ fn rewriteDesktopEntry(
 fn createDesktopShortcut(
     allocator: std.mem.Allocator,
     app_dir: []const u8,
+    normalized_home: []const u8,
+    data_home_path: []const u8,
     preserved_application_entry: ?[]const u8,
     preserved_desktop_entry: ?[]const u8,
 ) !LinuxDesktopIntegration {
     var integration: LinuxDesktopIntegration = .{};
     errdefer integration.deinit(allocator);
 
-    // Get home directory for desktop path
-    const home = getEnvOwned(allocator, "HOME") catch {
-        std.debug.print("Warning: Could not get HOME directory\n", .{});
-        return integration;
-    };
-    defer allocator.free(home);
-
     // Build desktop file path
-    const desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
+    const desktop_dir = try std.fs.path.join(allocator, &.{ normalized_home, "Desktop" });
     defer allocator.free(desktop_dir);
 
-    const desktop_dir_available = blk: {
-        std.Io.Dir.cwd().access(g_io, desktop_dir, .{}) catch {
-            std.debug.print("Note: Desktop directory not found at {s}; skipping Desktop shortcut creation\n", .{desktop_dir});
-            break :blk false;
-        };
-        break :blk true;
+    var desktop_dir_handle = openOptionalLinuxAbsoluteDirNoSymlinks(desktop_dir) catch |err| blk: {
+        std.debug.print("Note: Unsafe or unavailable Desktop directory at {s}: {}; skipping Desktop shortcut creation\n", .{ desktop_dir, err });
+        break :blk null;
     };
+    defer if (desktop_dir_handle) |*dir| dir.close(g_io);
+
+    const applications_dir = try std.fs.path.join(allocator, &.{ data_home_path, "applications" });
+    defer allocator.free(applications_dir);
+    var applications_dir_handle: ?std.Io.Dir = blk: {
+        var data_home_dir = openLinuxAbsoluteDirNoSymlinks(data_home_path) catch |err| {
+            std.debug.print("Warning: Unsafe or unavailable XDG data directory: {}\n", .{err});
+            break :blk null;
+        };
+        defer data_home_dir.close(g_io);
+        data_home_dir.createDir(g_io, "applications", .default_dir) catch |err| switch (err) {
+            error.PathAlreadyExists => {},
+            else => {
+                std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
+                break :blk null;
+            },
+        };
+        break :blk data_home_dir.openDir(g_io, "applications", .{
+            .follow_symlinks = false,
+            .iterate = true,
+        }) catch |err| {
+            std.debug.print("Warning: Unsafe applications directory: {}\n", .{err});
+            break :blk null;
+        };
+    };
+    defer if (applications_dir_handle) |*dir| dir.close(g_io);
 
     // On Linux, look for the launcher binary in the app directory
     const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
@@ -1174,7 +1288,7 @@ fn createDesktopShortcut(
             const entry_hash = std.fmt.bytesToHex(entry_digest, .lower);
 
             // Write the updated desktop file to Desktop (optional)
-            if (desktop_dir_available) {
+            if (desktop_dir_handle != null) {
                 desktop_shortcut: {
                     if (preserved_desktop_entry) |preserved_path| {
                         if (std.mem.eql(u8, preserved_path, desktop_file_path)) {
@@ -1182,9 +1296,9 @@ fn createDesktopShortcut(
                             break :desktop_shortcut;
                         }
                     }
-                    const desktop_file = std.Io.Dir.cwd().createFile(
+                    const desktop_file = desktop_dir_handle.?.createFile(
                         g_io,
-                        desktop_file_path,
+                        desktop_filename,
                         .{ .exclusive = true },
                     ) catch |err| switch (err) {
                         error.PathAlreadyExists => {
@@ -1199,7 +1313,12 @@ fn createDesktopShortcut(
                     defer desktop_file.close(g_io);
                     desktop_file.writeStreamingAll(g_io, rewritten_desktop) catch |err| {
                         std.debug.print("Warning: Could not write Desktop shortcut file: {}\n", .{err});
-                        deleteFileIfExists(desktop_file_path) catch {};
+                        desktop_dir_handle.?.deleteFile(g_io, desktop_filename) catch {};
+                        break :desktop_shortcut;
+                    };
+                    desktop_file.setPermissions(g_io, .fromMode(0o755)) catch |err| {
+                        std.debug.print("Warning: Could not set Desktop shortcut permissions: {}\n", .{err});
+                        desktop_dir_handle.?.deleteFile(g_io, desktop_filename) catch {};
                         break :desktop_shortcut;
                     };
                     integration.desktop_entry = try allocator.dupe(u8, desktop_file_path);
@@ -1212,23 +1331,7 @@ fn createDesktopShortcut(
             // This ensures the app appears in the desktop environment's application menu
             // This is optional - failure should not prevent the desktop shortcut from working
             write_applications_dir: {
-                const xdg_data_home = getAppDataDir(allocator) catch |err| {
-                    std.debug.print("Warning: Could not get app data dir for menu integration: {}\n", .{err});
-                    break :write_applications_dir;
-                };
-                defer allocator.free(xdg_data_home);
-
-                const applications_dir = std.fs.path.join(allocator, &.{ xdg_data_home, "applications" }) catch |err| {
-                    std.debug.print("Warning: Could not build applications dir path: {}\n", .{err});
-                    break :write_applications_dir;
-                };
-                defer allocator.free(applications_dir);
-
-                // Create applications directory if it doesn't exist
-                std.Io.Dir.cwd().createDirPath(g_io, applications_dir) catch |err| {
-                    std.debug.print("Warning: Could not create applications directory: {}\n", .{err});
-                    // Continue anyway - createFile will fail gracefully
-                };
+                const applications_handle = applications_dir_handle orelse break :write_applications_dir;
 
                 const applications_file_path = std.fs.path.join(allocator, &.{ applications_dir, desktop_filename }) catch |err| {
                     std.debug.print("Warning: Could not build applications file path: {}\n", .{err});
@@ -1243,9 +1346,9 @@ fn createDesktopShortcut(
                     }
                 }
 
-                const applications_file = std.Io.Dir.cwd().createFile(
+                const applications_file = applications_handle.createFile(
                     g_io,
-                    applications_file_path,
+                    desktop_filename,
                     .{ .exclusive = true },
                 ) catch |err| switch (err) {
                     error.PathAlreadyExists => {
@@ -1261,22 +1364,18 @@ fn createDesktopShortcut(
 
                 applications_file.writeStreamingAll(g_io, rewritten_desktop) catch |err| {
                     std.debug.print("Warning: Could not write applications desktop file: {}\n", .{err});
-                    deleteFileIfExists(applications_file_path) catch {};
+                    applications_handle.deleteFile(g_io, desktop_filename) catch {};
                     break :write_applications_dir;
                 };
 
                 // Set permissions on the desktop file (0o644 - readable, not executable)
                 // Desktop files in ~/.local/share/applications/ don't need execute bit
                 // (execute bit is only needed for Desktop surface, not application menus)
-                const applications_file_path_z = allocator.dupeZ(u8, applications_file_path) catch |err| {
-                    std.debug.print("Warning: Could not format applications file path: {}\n", .{err});
+                applications_file.setPermissions(g_io, .fromMode(0o644)) catch |err| {
+                    std.debug.print("Warning: Could not set applications entry permissions: {}\n", .{err});
+                    applications_handle.deleteFile(g_io, desktop_filename) catch {};
                     break :write_applications_dir;
                 };
-                defer allocator.free(applications_file_path_z);
-                const chmod_result = std.c.chmod(applications_file_path_z.ptr, 0o644);
-                if (chmod_result != 0) {
-                    std.debug.print("Warning: Could not set permissions on applications desktop file\n", .{});
-                }
 
                 // Note: gio set metadata::trusted is NOT needed for application menu entries
                 // It's only for .desktop files on the Desktop surface (~/Desktop)
@@ -1310,15 +1409,6 @@ fn createDesktopShortcut(
             }
 
             if (desktop_shortcut_created) {
-                // Make desktop file executable (required for some desktop environments)
-                const desktop_file_path_z = try allocator.dupeZ(u8, desktop_file_path);
-                defer allocator.free(desktop_file_path_z);
-
-                const result = std.c.chmod(desktop_file_path_z.ptr, 0o755);
-                if (result != 0) {
-                    std.debug.print("Warning: Could not set executable permissions on desktop file\n", .{});
-                }
-
                 // Try to mark as trusted for GNOME/Ubuntu using gio
                 const gio_argv = [_][]const u8{ "gio", "set", desktop_file_path, "metadata::trusted", "true" };
                 if (std.process.spawn(g_io, .{
@@ -1748,8 +1838,8 @@ fn readInstalledLinuxIdentity(
     const parsed = try std.json.parseFromSlice(
         struct {
             version: []const u8,
-            identifier: ?[]const u8 = null,
-            channel: ?[]const u8 = null,
+            identifier: []const u8,
+            channel: []const u8,
         },
         allocator,
         contents,
@@ -1757,10 +1847,8 @@ fn readInstalledLinuxIdentity(
     );
     defer parsed.deinit();
     if (parsed.value.version.len == 0 or
-        (parsed.value.identifier != null and
-            !std.mem.eql(u8, parsed.value.identifier.?, manifest.identifier)) or
-        (parsed.value.channel != null and
-            !std.mem.eql(u8, parsed.value.channel.?, manifest.channel)))
+        !std.mem.eql(u8, parsed.value.identifier, manifest.identifier) or
+        !std.mem.eql(u8, parsed.value.channel, manifest.channel))
     {
         return error.InvalidInstalledIdentity;
     }
@@ -1772,6 +1860,10 @@ fn readInstalledLinuxIdentity(
         manifest.channel,
         manifest.name,
     );
+    if (!isSafeLinuxDisplayName(name)) {
+        allocator.free(name);
+        return error.InvalidInstalledIdentity;
+    }
     return .{ .version = version, .name = name };
 }
 
@@ -1983,31 +2075,16 @@ fn isSafeLinuxComponent(value: []const u8) bool {
     return true;
 }
 
-fn linuxPathsReferToSameLocation(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    left: []const u8,
-    right: []const u8,
-) std.mem.Allocator.Error!bool {
-    if (std.mem.eql(u8, left, right)) return true;
-    if (!std.fs.path.isAbsolute(left) or !std.fs.path.isAbsolute(right)) return false;
-
-    const real_left = std.Io.Dir.realPathFileAbsoluteAlloc(io, left, allocator) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return false,
+fn isSafeLinuxDisplayName(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |byte| switch (byte) {
+        0...31, 127 => return false,
+        else => {},
     };
-    defer allocator.free(real_left);
-    const real_right = std.Io.Dir.realPathFileAbsoluteAlloc(io, right, allocator) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => return false,
-    };
-    defer allocator.free(real_right);
-    return std.mem.eql(u8, real_left, real_right);
+    return true;
 }
 
 fn validateLinuxIntegrationPath(
-    io: std.Io,
-    allocator: std.mem.Allocator,
     path: []const u8,
     allowed_parent: []const u8,
 ) !void {
@@ -2022,7 +2099,7 @@ fn validateLinuxIntegrationPath(
         }
     }
     const parent = std.fs.path.dirname(path) orelse return error.InvalidUninstallManifest;
-    if (!try linuxPathsReferToSameLocation(io, allocator, parent, allowed_parent) or
+    if (!std.mem.eql(u8, parent, allowed_parent) or
         !std.mem.endsWith(u8, std.fs.path.basename(path), ".desktop") or
         std.mem.eql(u8, std.fs.path.basename(path), ".desktop"))
     {
@@ -2040,15 +2117,133 @@ fn linuxManifestPath(allocator: std.mem.Allocator, base_dir: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ base_dir, LINUX_UNINSTALL_MANIFEST_NAME });
 }
 
+fn openLinuxAbsoluteDirNoSymlinks(path: []const u8) !std.Io.Dir {
+    if (!isValidLinuxAbsoluteRoot(path)) return error.InvalidUninstallLocation;
+    var current = try std.Io.Dir.openDirAbsolute(g_io, std.fs.path.sep_str, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    errdefer current.close(g_io);
+    var parts = std.mem.splitScalar(u8, path[1..], std.fs.path.sep);
+    while (parts.next()) |part| {
+        const next = current.openDir(g_io, part, .{
+            .follow_symlinks = false,
+            .iterate = true,
+        }) catch |err| switch (err) {
+            error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+            else => return err,
+        };
+        current.close(g_io);
+        current = next;
+    }
+    return current;
+}
+
+fn openOptionalLinuxAbsoluteDirNoSymlinks(path: []const u8) !?std.Io.Dir {
+    if (!isValidLinuxAbsoluteRoot(path)) return error.InvalidUninstallLocation;
+    var current = try std.Io.Dir.openDirAbsolute(g_io, std.fs.path.sep_str, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    errdefer current.close(g_io);
+    var parts = std.mem.splitScalar(u8, path[1..], std.fs.path.sep);
+    while (parts.next()) |part| {
+        const next = current.openDir(g_io, part, .{
+            .follow_symlinks = false,
+            .iterate = true,
+        }) catch |err| switch (err) {
+            error.FileNotFound => {
+                current.close(g_io);
+                return null;
+            },
+            error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+            else => return err,
+        };
+        current.close(g_io);
+        current = next;
+    }
+    return current;
+}
+
+const LinuxInstallScope = struct {
+    data_home_path: []u8,
+    identifier: []const u8,
+    channel: []const u8,
+    data_home_dir: std.Io.Dir,
+    identifier_dir: std.Io.Dir,
+    channel_dir: std.Io.Dir,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.channel_dir.close(g_io);
+        self.identifier_dir.close(g_io);
+        self.data_home_dir.close(g_io);
+        allocator.free(self.data_home_path);
+        self.* = undefined;
+    }
+};
+
+fn openLinuxInstallScope(
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+) !LinuxInstallScope {
+    if (!isValidLinuxAbsoluteRoot(base_dir)) return error.InvalidUninstallLocation;
+    const resolved = try std.fs.path.resolve(allocator, &.{base_dir});
+    defer allocator.free(resolved);
+    if (!std.mem.eql(u8, resolved, base_dir)) return error.InvalidUninstallLocation;
+
+    const channel = std.fs.path.basename(base_dir);
+    const identifier_path = std.fs.path.dirname(base_dir) orelse return error.InvalidUninstallLocation;
+    const identifier = std.fs.path.basename(identifier_path);
+    const data_home = std.fs.path.dirname(identifier_path) orelse return error.InvalidUninstallLocation;
+    if (!isSafeLinuxComponent(identifier) or !isSafeLinuxComponent(channel) or
+        !isValidLinuxAbsoluteRoot(data_home)) return error.InvalidUninstallLocation;
+
+    const data_home_path = try allocator.dupe(u8, data_home);
+    errdefer allocator.free(data_home_path);
+    var data_home_dir = try openLinuxAbsoluteDirNoSymlinks(data_home);
+    errdefer data_home_dir.close(g_io);
+    var identifier_dir = data_home_dir.openDir(g_io, identifier, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    errdefer identifier_dir.close(g_io);
+    const channel_dir = identifier_dir.openDir(g_io, channel, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    return .{
+        .data_home_path = data_home_path,
+        .identifier = std.fs.path.basename(identifier_path),
+        .channel = std.fs.path.basename(base_dir),
+        .data_home_dir = data_home_dir,
+        .identifier_dir = identifier_dir,
+        .channel_dir = channel_dir,
+    };
+}
+
+fn validateLinuxDataPathVersions(versions: ?[]const u32) !void {
+    const values = versions orelse return error.InvalidUninstallManifest;
+    if (values.len != 1 or values[0] != LINUX_DATA_PATH_VERSION) {
+        return error.InvalidUninstallManifest;
+    }
+}
+
 fn validateLinuxUninstallManifest(
     allocator: std.mem.Allocator,
     manifest: LinuxUninstallManifest,
-    base_dir: []const u8,
+    scope: LinuxInstallScope,
 ) !void {
-    if (manifest.schema_version != LINUX_UNINSTALL_MANIFEST_VERSION or
+    if ((manifest.schema_version != LINUX_UNINSTALL_MANIFEST_VERSION and
+        manifest.schema_version != LINUX_LEGACY_UNINSTALL_MANIFEST_VERSION) or
         !isSafeLinuxComponent(manifest.identifier) or
         !isSafeLinuxComponent(manifest.channel) or
-        manifest.name.len == 0 or
+        !isSafeLinuxDisplayName(manifest.name) or
         manifest.version.len == 0 or
         (manifest.application_entry.len != 0 and !isValidSha256Hex(manifest.application_entry_sha256)) or
         (manifest.application_entry.len == 0 and manifest.application_entry_sha256.len != 0) or
@@ -2057,45 +2252,43 @@ fn validateLinuxUninstallManifest(
     {
         return error.InvalidUninstallManifest;
     }
-    if (!std.fs.path.isAbsolute(base_dir) or
-        !std.mem.eql(u8, std.fs.path.basename(base_dir), manifest.channel))
+    if (!std.mem.eql(u8, scope.channel, manifest.channel) or
+        !std.mem.eql(u8, scope.identifier, manifest.identifier))
     {
         return error.InvalidUninstallLocation;
     }
-    const identifier_dir = std.fs.path.dirname(base_dir) orelse return error.InvalidUninstallLocation;
-    if (!std.mem.eql(u8, std.fs.path.basename(identifier_dir), manifest.identifier)) {
-        return error.InvalidUninstallLocation;
+
+    var home: []const u8 = undefined;
+    var legacy_home: ?[]u8 = null;
+    defer if (legacy_home) |value| allocator.free(value);
+    if (manifest.schema_version == LINUX_UNINSTALL_MANIFEST_VERSION) {
+        try validateLinuxDataPathVersions(manifest.data_path_versions);
+        home = manifest.home orelse return error.InvalidUninstallManifest;
+        const cache_root = manifest.xdg_cache_home orelse return error.InvalidUninstallManifest;
+        const state_root = manifest.xdg_state_home orelse return error.InvalidUninstallManifest;
+        if (!isValidLinuxAbsoluteRoot(home) or
+            !isValidLinuxAbsoluteRoot(cache_root) or
+            !isValidLinuxAbsoluteRoot(state_root)) return error.InvalidUninstallManifest;
+    } else {
+        legacy_home = try linuxHome(allocator);
+        home = legacy_home.?;
     }
 
     if (manifest.application_entry.len != 0) {
-        const data_home = try getAppDataDir(allocator);
-        defer allocator.free(data_home);
-        const applications_dir = try std.fs.path.join(allocator, &.{ data_home, "applications" });
+        const applications_dir = try std.fs.path.join(allocator, &.{ scope.data_home_path, "applications" });
         defer allocator.free(applications_dir);
-        try validateLinuxIntegrationPath(
-            g_io,
-            allocator,
-            manifest.application_entry,
-            applications_dir,
-        );
+        try validateLinuxIntegrationPath(manifest.application_entry, applications_dir);
     }
     if (manifest.desktop_entry.len != 0) {
-        const home = try getEnvOwned(allocator, "HOME");
-        defer allocator.free(home);
         const desktop_dir = try std.fs.path.join(allocator, &.{ home, "Desktop" });
         defer allocator.free(desktop_dir);
-        try validateLinuxIntegrationPath(
-            g_io,
-            allocator,
-            manifest.desktop_entry,
-            desktop_dir,
-        );
+        try validateLinuxIntegrationPath(manifest.desktop_entry, desktop_dir);
     }
 }
 
 fn writeLinuxUninstallManifest(
     allocator: std.mem.Allocator,
-    manifest_path: []const u8,
+    channel_dir: std.Io.Dir,
     manifest: LinuxUninstallManifest,
 ) !void {
     const json = try std.json.Stringify.valueAlloc(
@@ -2105,35 +2298,41 @@ fn writeLinuxUninstallManifest(
     );
     defer allocator.free(json);
 
-    var atomic_file = try std.Io.Dir.cwd().createFileAtomic(g_io, manifest_path, .{ .replace = true });
+    var atomic_file = try channel_dir.createFileAtomic(g_io, LINUX_UNINSTALL_MANIFEST_NAME, .{ .replace = true });
     defer atomic_file.deinit(g_io);
     var buffer: [4096]u8 = undefined;
     var writer = atomic_file.file.writer(g_io, &buffer);
     try writer.interface.writeAll(json);
     try writer.flush();
+    try atomic_file.file.sync(g_io);
     try atomic_file.replace(g_io);
 }
 
 fn loadAndValidateLinuxManifest(
     allocator: std.mem.Allocator,
-    manifest_path: []const u8,
-    base_dir: []const u8,
+    scope: LinuxInstallScope,
 ) !struct { contents: []u8, parsed: std.json.Parsed(LinuxUninstallManifest) } {
-    const contents = try std.Io.Dir.cwd().readFileAlloc(
-        g_io,
-        manifest_path,
-        allocator,
-        .limited(64 * 1024),
-    );
+    var manifest_file = try scope.channel_dir.openFile(g_io, LINUX_UNINSTALL_MANIFEST_NAME, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer manifest_file.close(g_io);
+    const manifest_stat = try manifest_file.stat(g_io);
+    if (manifest_stat.kind != .file) return error.InvalidUninstallManifest;
+    var manifest_reader = manifest_file.reader(g_io, &.{});
+    const contents = manifest_reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return manifest_reader.err.?,
+        else => |e| return e,
+    };
     errdefer allocator.free(contents);
     const parsed = try std.json.parseFromSlice(
         LinuxUninstallManifest,
         allocator,
         contents,
-        .{ .ignore_unknown_fields = true },
+        .{},
     );
     errdefer parsed.deinit();
-    try validateLinuxUninstallManifest(allocator, parsed.value, base_dir);
+    try validateLinuxUninstallManifest(allocator, parsed.value, scope);
     return .{ .contents = contents, .parsed = parsed };
 }
 
@@ -2180,10 +2379,9 @@ fn unescapeLinuxDesktopExecPath(
 }
 
 fn linuxDesktopEntryTargetsLauncher(
-    io: std.Io,
     allocator: std.mem.Allocator,
     contents: []const u8,
-    launcher_paths: []const []const u8,
+    launcher_path: []const u8,
 ) !bool {
     var found_exec = false;
     var lines = std.mem.tokenizeScalar(u8, contents, '\n');
@@ -2192,122 +2390,296 @@ fn linuxDesktopEntryTargetsLauncher(
         if (!std.mem.startsWith(u8, line, "Exec=")) continue;
         const parsed_path = (try unescapeLinuxDesktopExecPath(allocator, line["Exec=".len..])) orelse return false;
         defer allocator.free(parsed_path);
-        var matches = false;
-        for (launcher_paths) |launcher_path| {
-            if (try linuxPathsReferToSameLocation(io, allocator, parsed_path, launcher_path)) {
-                matches = true;
-                break;
-            }
-        }
-        if (!matches) return false;
+        if (!std.mem.eql(u8, parsed_path, launcher_path)) return false;
         found_exec = true;
     }
     return found_exec;
 }
 
-fn deleteLinuxDesktopEntryIfManaged(
+const PreparedLinuxDesktopEntry = struct {
+    parent: ?std.Io.Dir = null,
+    basename: []const u8 = "",
+    should_delete: bool = false,
+    already_absent: bool = false,
+
+    fn deinit(self: *@This()) void {
+        if (self.parent) |*dir| dir.close(g_io);
+        self.* = .{};
+    }
+
+    fn remove(self: @This()) !bool {
+        if (self.already_absent) return true;
+        if (!self.should_delete) return false;
+        const parent = self.parent orelse return false;
+        parent.deleteFile(g_io, self.basename) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+        return true;
+    }
+};
+
+fn prepareLinuxDesktopEntry(
     allocator: std.mem.Allocator,
     path: []const u8,
+    allowed_parent: []const u8,
     expected_hash: []const u8,
-    launcher_paths: []const []const u8,
-) !bool {
-    if (path.len == 0) return true;
-    const contents = std.Io.Dir.cwd().readFileAlloc(g_io, path, allocator, .limited(1024 * 1024)) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return true,
+    launcher_path: []const u8,
+) !PreparedLinuxDesktopEntry {
+    if (path.len == 0) return .{ .already_absent = true };
+    try validateLinuxIntegrationPath(path, allowed_parent);
+    var parent = (try openOptionalLinuxAbsoluteDirNoSymlinks(allowed_parent)) orelse
+        return .{ .already_absent = true };
+    errdefer parent.close(g_io);
+    const basename = std.fs.path.basename(path);
+    const stat = parent.statFile(g_io, basename, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return .{
+            .parent = parent,
+            .basename = basename,
+            .already_absent = true,
+        },
         else => return err,
+    };
+    if (stat.kind != .file) return .{ .parent = parent, .basename = basename };
+    var file = try parent.openFile(g_io, basename, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer file.close(g_io);
+    var reader = file.reader(g_io, &.{});
+    const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |e| return e,
     };
     defer allocator.free(contents);
     var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
     std.crypto.hash.sha2.Sha256.hash(contents, &digest, .{});
     const actual_hash = std.fmt.bytesToHex(digest, .lower);
-    if (!std.ascii.eqlIgnoreCase(&actual_hash, expected_hash)) return false;
-    if (!try linuxDesktopEntryTargetsLauncher(g_io, allocator, contents, launcher_paths)) return false;
-    try deleteFileIfExists(path);
-    return true;
+    const owned = std.ascii.eqlIgnoreCase(&actual_hash, expected_hash) and
+        try linuxDesktopEntryTargetsLauncher(allocator, contents, launcher_path);
+    return .{
+        .parent = parent,
+        .basename = basename,
+        .should_delete = owned,
+    };
+}
+
+const LinuxManagedChild = enum { missing, file, directory };
+
+fn prepareLinuxManagedChild(parent: std.Io.Dir, name: []const u8) !LinuxManagedChild {
+    const stat = parent.statFile(g_io, name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return .missing,
+        else => return err,
+    };
+    return switch (stat.kind) {
+        .file => .file,
+        .directory => .directory,
+        else => error.InvalidUninstallLocation,
+    };
+}
+
+fn deleteLinuxManagedChild(parent: std.Io.Dir, name: []const u8, kind: LinuxManagedChild) !void {
+    switch (kind) {
+        .missing => {},
+        .file => parent.deleteFile(g_io, name) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        },
+        .directory => try parent.deleteTree(g_io, name),
+    }
+}
+
+const LinuxScopedDeletionTarget = struct {
+    root_dir: ?std.Io.Dir = null,
+    identifier_dir: ?std.Io.Dir = null,
+    channel_present: bool = false,
+
+    fn deinit(self: *@This()) void {
+        if (self.identifier_dir) |*dir| dir.close(g_io);
+        if (self.root_dir) |*dir| dir.close(g_io);
+        self.* = .{};
+    }
+
+    fn remove(self: @This(), identifier: []const u8, channel: []const u8) !void {
+        const identifier_dir = self.identifier_dir orelse return;
+        if (self.channel_present) try identifier_dir.deleteTree(g_io, channel);
+        const root_dir = self.root_dir orelse return;
+        root_dir.deleteDir(g_io, identifier) catch {};
+    }
+};
+
+fn prepareLinuxScopedDeletionTarget(
+    root_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !LinuxScopedDeletionTarget {
+    var root_dir = (try openOptionalLinuxAbsoluteDirNoSymlinks(root_path)) orelse return .{};
+    errdefer root_dir.close(g_io);
+    var identifier_dir = root_dir.openDir(g_io, identifier, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.FileNotFound => return .{ .root_dir = root_dir },
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    errdefer identifier_dir.close(g_io);
+    const channel_stat = identifier_dir.statFile(g_io, channel, .{
+        .follow_symlinks = false,
+    }) catch |err| switch (err) {
+        error.FileNotFound => return .{
+            .root_dir = root_dir,
+            .identifier_dir = identifier_dir,
+        },
+        else => return err,
+    };
+    if (channel_stat.kind != .directory) return error.InvalidUninstallLocation;
+    return .{
+        .root_dir = root_dir,
+        .identifier_dir = identifier_dir,
+        .channel_present = true,
+    };
+}
+
+fn installLinuxManagerFromResource(
+    allocator: std.mem.Allocator,
+    scope: LinuxInstallScope,
+    app_dir: []const u8,
+) !void {
+    const resources_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources" });
+    defer allocator.free(resources_path);
+    var resources_dir = try openLinuxAbsoluteDirNoSymlinks(resources_path);
+    defer resources_dir.close(g_io);
+    var source_file = try resources_dir.openFile(g_io, LINUX_UNINSTALL_EXE_NAME, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer source_file.close(g_io);
+    const source_stat = try source_file.stat(g_io);
+    if (source_stat.kind != .file) return error.InvalidUninstallManager;
+
+    var atomic_uninstaller = try scope.channel_dir.createFileAtomic(g_io, LINUX_UNINSTALL_EXE_NAME, .{
+        .replace = true,
+        .permissions = .fromMode(0o755),
+    });
+    defer atomic_uninstaller.deinit(g_io);
+    var source_reader = source_file.reader(g_io, &.{});
+    var copy_buffer: [4096]u8 = undefined;
+    var destination_writer = atomic_uninstaller.file.writer(g_io, &copy_buffer);
+    _ = destination_writer.interface.sendFileAll(&source_reader, .unlimited) catch |err| switch (err) {
+        error.ReadFailed => return source_reader.err.?,
+        error.WriteFailed => return destination_writer.err.?,
+    };
+    try destination_writer.flush();
+    try atomic_uninstaller.file.setPermissions(g_io, .fromMode(0o755));
+    try atomic_uninstaller.file.sync(g_io);
+    try atomic_uninstaller.replace(g_io);
+}
+
+fn preflightLinuxManagerResource(
+    allocator: std.mem.Allocator,
+    app_dir: []const u8,
+) !void {
+    const resources_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources" });
+    defer allocator.free(resources_path);
+    var resources_dir = try openLinuxAbsoluteDirNoSymlinks(resources_path);
+    defer resources_dir.close(g_io);
+    var source_file = try resources_dir.openFile(g_io, LINUX_UNINSTALL_EXE_NAME, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer source_file.close(g_io);
+    const source_stat = try source_file.stat(g_io);
+    if (source_stat.kind != .file) return error.InvalidUninstallManager;
 }
 
 fn installLinuxIntegration(
     allocator: std.mem.Allocator,
     app_dir: []const u8,
     metadata: AppMetadata,
-    installer_path: []const u8,
 ) !void {
-    if (!isSafeLinuxComponent(metadata.identifier) or !isSafeLinuxComponent(metadata.channel)) {
-        return error.InvalidInstallIdentity;
-    }
+    if (!isSafeLinuxComponent(metadata.identifier) or
+        !isSafeLinuxComponent(metadata.channel) or
+        !isSafeLinuxDisplayName(metadata.name)) return error.InvalidInstallIdentity;
     const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
-    const identifier_dir = std.fs.path.dirname(base_dir) orelse return error.InvalidInstallLocation;
-    if (!std.fs.path.isAbsolute(base_dir) or
-        !std.mem.eql(u8, std.fs.path.basename(base_dir), metadata.channel) or
-        !std.mem.eql(u8, std.fs.path.basename(identifier_dir), metadata.identifier))
-    {
-        return error.InvalidInstallLocation;
-    }
+    var scope = try openLinuxInstallScope(allocator, base_dir);
+    defer scope.deinit(allocator);
+    if (!std.mem.eql(u8, scope.identifier, metadata.identifier) or
+        !std.mem.eql(u8, scope.channel, metadata.channel)) return error.InvalidInstallLocation;
 
-    const manifest_path = try linuxManifestPath(allocator, base_dir);
-    defer allocator.free(manifest_path);
+    const home = try linuxHome(allocator);
+    defer allocator.free(home);
+    const cache_root = try linuxXdgRoot(allocator, "XDG_CACHE_HOME", &.{".cache"});
+    defer allocator.free(cache_root);
+    const state_root = try linuxXdgRoot(allocator, "XDG_STATE_HOME", &.{ ".local", "state" });
+    defer allocator.free(state_root);
     const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
     defer allocator.free(launcher_path);
-    const launcher_paths = [_][]const u8{launcher_path};
+
+    // Refuse an incomplete bundle before touching any existing desktop
+    // integration. Hutch self-extracting packages must carry this thin manager.
+    try preflightLinuxManagerResource(allocator, app_dir);
 
     var preserved_application_entry: ?[]u8 = null;
     defer if (preserved_application_entry) |path| allocator.free(path);
     var preserved_desktop_entry: ?[]u8 = null;
     defer if (preserved_desktop_entry) |path| allocator.free(path);
 
-    // If a renamed release changes its desktop basename, clean up the previous
-    // generated entries only when their exact Electrobun-written contents are
-    // still present. User-edited files are preserved.
-    if (loadAndValidateLinuxManifest(allocator, manifest_path, base_dir)) |old_document_value| {
+    // Reinstall cleanup is conservative: prepare both recorded integration
+    // entries before removing either, and retain anything edited by the user.
+    if (loadAndValidateLinuxManifest(allocator, scope)) |old_document_value| {
         var old_document = old_document_value;
         defer allocator.free(old_document.contents);
         defer old_document.parsed.deinit();
-        const application_removed = deleteLinuxDesktopEntryIfManaged(
+        const old = old_document.parsed.value;
+        const applications_dir = try std.fs.path.join(allocator, &.{ scope.data_home_path, "applications" });
+        defer allocator.free(applications_dir);
+        const old_home = if (old.schema_version == LINUX_UNINSTALL_MANIFEST_VERSION)
+            old.home.?
+        else
+            home;
+        const desktop_dir = try std.fs.path.join(allocator, &.{ old_home, "Desktop" });
+        defer allocator.free(desktop_dir);
+        var application = prepareLinuxDesktopEntry(
             allocator,
-            old_document.parsed.value.application_entry,
-            old_document.parsed.value.application_entry_sha256,
-            &launcher_paths,
+            old.application_entry,
+            applications_dir,
+            old.application_entry_sha256,
+            launcher_path,
         ) catch |err| blk: {
-            std.debug.print("Warning: Could not remove previous application entry: {}\n", .{err});
-            break :blk false;
+            std.debug.print("Warning: Could not inspect previous application entry: {}\n", .{err});
+            break :blk PreparedLinuxDesktopEntry{};
         };
-        if (!application_removed) {
-            std.debug.print(
-                "Preserving user-edited application entry: {s}\n",
-                .{old_document.parsed.value.application_entry},
-            );
-            preserved_application_entry = try allocator.dupe(
-                u8,
-                old_document.parsed.value.application_entry,
-            );
+        defer application.deinit();
+        var desktop = prepareLinuxDesktopEntry(
+            allocator,
+            old.desktop_entry,
+            desktop_dir,
+            old.desktop_entry_sha256,
+            launcher_path,
+        ) catch |err| blk: {
+            std.debug.print("Warning: Could not inspect previous Desktop entry: {}\n", .{err});
+            break :blk PreparedLinuxDesktopEntry{};
+        };
+        defer desktop.deinit();
+        const application_removed = application.remove() catch false;
+        const desktop_removed = desktop.remove() catch false;
+        if (old.application_entry.len != 0 and !application_removed) {
+            preserved_application_entry = try allocator.dupe(u8, old.application_entry);
         }
-        const desktop_removed = deleteLinuxDesktopEntryIfManaged(
-            allocator,
-            old_document.parsed.value.desktop_entry,
-            old_document.parsed.value.desktop_entry_sha256,
-            &launcher_paths,
-        ) catch |err| blk: {
-            std.debug.print("Warning: Could not remove previous Desktop entry: {}\n", .{err});
-            break :blk false;
-        };
-        if (!desktop_removed) {
-            std.debug.print(
-                "Preserving user-edited Desktop entry: {s}\n",
-                .{old_document.parsed.value.desktop_entry},
-            );
-            preserved_desktop_entry = try allocator.dupe(
-                u8,
-                old_document.parsed.value.desktop_entry,
-            );
+        if (old.desktop_entry.len != 0 and !desktop_removed) {
+            preserved_desktop_entry = try allocator.dupe(u8, old.desktop_entry);
         }
     } else |err| switch (err) {
-        error.FileNotFound, error.NotDir => {},
+        error.FileNotFound => {},
         else => std.debug.print("Warning: Could not inspect previous Linux integration metadata: {}\n", .{err}),
     }
 
     var integration = try createDesktopShortcut(
         allocator,
         app_dir,
+        home,
+        scope.data_home_path,
         preserved_application_entry,
         preserved_desktop_entry,
     );
@@ -2315,14 +2687,9 @@ fn installLinuxIntegration(
     const version = try readInstalledVersion(allocator, app_dir);
     defer allocator.free(version);
 
-    const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, LINUX_UNINSTALL_EXE_NAME });
-    defer allocator.free(uninstall_path);
-    try std.Io.Dir.copyFileAbsolute(installer_path, uninstall_path, g_io, .{ .replace = true });
-    const uninstall_path_z = try allocator.dupeZ(u8, uninstall_path);
-    defer allocator.free(uninstall_path_z);
-    if (std.c.chmod(uninstall_path_z.ptr, 0o755) != 0) return error.SetPermissionsFailed;
-
-    const manifest = LinuxUninstallManifest{
+    try installLinuxManagerFromResource(allocator, scope, app_dir);
+    const data_path_versions = [_]u32{LINUX_DATA_PATH_VERSION};
+    try writeLinuxUninstallManifest(allocator, scope.channel_dir, .{
         .schema_version = LINUX_UNINSTALL_MANIFEST_VERSION,
         .identifier = metadata.identifier,
         .name = metadata.name,
@@ -2332,121 +2699,193 @@ fn installLinuxIntegration(
         .desktop_entry = integration.desktop_entry orelse "",
         .application_entry_sha256 = integration.application_entry_sha256 orelse "",
         .desktop_entry_sha256 = integration.desktop_entry_sha256 orelse "",
-    };
-    try writeLinuxUninstallManifest(allocator, manifest_path, manifest);
-    std.debug.print("Installed Linux uninstaller: {s}\n", .{uninstall_path});
+        .data_path_versions = &data_path_versions,
+        .home = home,
+        .xdg_cache_home = cache_root,
+        .xdg_state_home = state_root,
+    });
+    std.debug.print("Installed Linux uninstaller under: {s}\n", .{base_dir});
 }
 
-fn refreshLinuxUninstallMetadata(allocator: std.mem.Allocator) !void {
-    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
-    defer allocator.free(executable_path);
-    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
-    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), LINUX_UNINSTALL_EXE_NAME)) {
+fn linuxManagerInvocationPath(
+    allocator: std.mem.Allocator,
+    argv0: []const u8,
+) ![]u8 {
+    if (argv0.len == 0) return error.InvalidUninstallLocation;
+    if (std.fs.path.isAbsolute(argv0)) return std.fs.path.resolve(allocator, &.{argv0});
+    return error.InvalidUninstallLocation;
+}
+
+fn validateRunningLinuxManager(
+    allocator: std.mem.Allocator,
+    invocation_path: []const u8,
+) !void {
+    if (!std.mem.eql(u8, std.fs.path.basename(invocation_path), LINUX_UNINSTALL_EXE_NAME)) {
         return error.InvalidUninstallLocation;
     }
-    const manifest_path = try linuxManifestPath(allocator, base_dir);
-    defer allocator.free(manifest_path);
-    var document = try loadAndValidateLinuxManifest(allocator, manifest_path, base_dir);
+    const executable_stat = try std.Io.Dir.cwd().statFile(g_io, invocation_path, .{ .follow_symlinks = false });
+    if (executable_stat.kind != .file) return error.InvalidUninstallLocation;
+    const physical_invocation = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, invocation_path, allocator);
+    defer allocator.free(physical_invocation);
+    const running_executable = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(running_executable);
+    if (!std.mem.eql(u8, physical_invocation, running_executable)) {
+        return error.InvalidUninstallLocation;
+    }
+}
+
+fn refreshLinuxUninstallMetadata(
+    allocator: std.mem.Allocator,
+    invocation_path: []const u8,
+) !void {
+    try validateRunningLinuxManager(allocator, invocation_path);
+    const base_dir = std.fs.path.dirname(invocation_path) orelse return error.InvalidUninstallLocation;
+    var scope = try openLinuxInstallScope(allocator, base_dir);
+    defer scope.deinit(allocator);
+    var document = try loadAndValidateLinuxManifest(allocator, scope);
     defer allocator.free(document.contents);
     defer document.parsed.deinit();
+    const old = document.parsed.value;
     const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
     defer allocator.free(app_dir);
-    const installed_identity = try readInstalledLinuxIdentity(
-        allocator,
-        app_dir,
-        document.parsed.value,
-    );
+    const installed_identity = try readInstalledLinuxIdentity(allocator, app_dir, old);
     defer allocator.free(installed_identity.version);
     defer allocator.free(installed_identity.name);
-    const refreshed = LinuxUninstallManifest{
-        .schema_version = document.parsed.value.schema_version,
-        .identifier = document.parsed.value.identifier,
+    try writeLinuxUninstallManifest(allocator, scope.channel_dir, .{
+        .schema_version = old.schema_version,
+        .identifier = old.identifier,
         .name = installed_identity.name,
-        .channel = document.parsed.value.channel,
+        .channel = old.channel,
         .version = installed_identity.version,
-        .application_entry = document.parsed.value.application_entry,
-        .desktop_entry = document.parsed.value.desktop_entry,
-        .application_entry_sha256 = document.parsed.value.application_entry_sha256,
-        .desktop_entry_sha256 = document.parsed.value.desktop_entry_sha256,
-    };
-    try writeLinuxUninstallManifest(allocator, manifest_path, refreshed);
+        .application_entry = old.application_entry,
+        .desktop_entry = old.desktop_entry,
+        .application_entry_sha256 = old.application_entry_sha256,
+        .desktop_entry_sha256 = old.desktop_entry_sha256,
+        .data_path_versions = old.data_path_versions,
+        .home = old.home,
+        .xdg_cache_home = old.xdg_cache_home,
+        .xdg_state_home = old.xdg_state_home,
+    });
 }
 
-fn uninstallLinux(allocator: std.mem.Allocator, quiet: bool) !void {
-    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
-    defer allocator.free(executable_path);
-    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
-    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), LINUX_UNINSTALL_EXE_NAME)) {
-        return error.InvalidUninstallLocation;
-    }
-    const manifest_path = try linuxManifestPath(allocator, base_dir);
-    defer allocator.free(manifest_path);
-    var document = try loadAndValidateLinuxManifest(allocator, manifest_path, base_dir);
+fn uninstallLinux(
+    allocator: std.mem.Allocator,
+    invocation_path: []const u8,
+    requested_mode: ?LinuxUninstallMode,
+) !void {
+    try validateRunningLinuxManager(allocator, invocation_path);
+    const base_dir = std.fs.path.dirname(invocation_path) orelse return error.InvalidUninstallLocation;
+    var scope = try openLinuxInstallScope(allocator, base_dir);
+    defer scope.deinit(allocator);
+    var document = try loadAndValidateLinuxManifest(allocator, scope);
     defer allocator.free(document.contents);
     defer document.parsed.deinit();
     const manifest = document.parsed.value;
 
-    if (!quiet) {
-        std.debug.print("Uninstalling {s} ({s})...\n", .{ manifest.name, manifest.channel });
-    }
+    const mode: LinuxUninstallMode = requested_mode orelse blk: {
+        const selection = linux_uninstall_prompt.show(
+            allocator,
+            g_io,
+            g_environ_map,
+            manifest.name,
+        ) catch |err| switch (err) {
+            error.InteractivePromptUnavailable => {
+                std.debug.print(
+                    "No graphical uninstall dialog or terminal is available. " ++
+                        "Run '{s} --quiet' explicitly to remove the app only.\n",
+                    .{invocation_path},
+                );
+                return err;
+            },
+            else => return err,
+        };
+        break :blk switch (selection) {
+            .app => .app,
+            .app_and_data => .app_and_data,
+            .cancel => return,
+        };
+    };
 
-    const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
-    defer allocator.free(app_dir);
-    const self_extraction_dir = try std.fs.path.join(allocator, &.{ base_dir, "self-extraction" });
-    defer allocator.free(self_extraction_dir);
-    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher" });
+    const launcher_path = try std.fs.path.join(allocator, &.{ base_dir, "app", "bin", "launcher" });
     defer allocator.free(launcher_path);
-    const data_home = try getAppDataDir(allocator);
-    defer allocator.free(data_home);
-    const xdg_launcher_path = try std.fs.path.join(
-        allocator,
-        &.{ data_home, manifest.identifier, manifest.channel, "app", "bin", "launcher" },
-    );
-    defer allocator.free(xdg_launcher_path);
-    const launcher_paths = [_][]const u8{ launcher_path, xdg_launcher_path };
+    const applications_dir = try std.fs.path.join(allocator, &.{ scope.data_home_path, "applications" });
+    defer allocator.free(applications_dir);
+    const recorded_home = if (manifest.schema_version == LINUX_UNINSTALL_MANIFEST_VERSION)
+        manifest.home.?
+    else blk: {
+        const current_home = try linuxHome(allocator);
+        break :blk current_home;
+    };
+    defer if (manifest.schema_version == LINUX_LEGACY_UNINSTALL_MANIFEST_VERSION)
+        allocator.free(recorded_home);
+    const desktop_dir = try std.fs.path.join(allocator, &.{ recorded_home, "Desktop" });
+    defer allocator.free(desktop_dir);
 
-    // Verify integration entries while the launcher still exists so symlinked
-    // XDG roots can be resolved to the installed launcher's physical path.
-    const application_entry_removed = try deleteLinuxDesktopEntryIfManaged(
+    // Complete the preflight before the first mutation. The recursive children
+    // and integration parents are pinned without following symlinks.
+    const app_kind = try prepareLinuxManagedChild(scope.channel_dir, "app");
+    const extraction_kind = try prepareLinuxManagedChild(scope.channel_dir, "self-extraction");
+    var application_entry = try prepareLinuxDesktopEntry(
         allocator,
         manifest.application_entry,
+        applications_dir,
         manifest.application_entry_sha256,
-        &launcher_paths,
+        launcher_path,
     );
-    const desktop_entry_removed = try deleteLinuxDesktopEntryIfManaged(
+    defer application_entry.deinit();
+    var desktop_entry = try prepareLinuxDesktopEntry(
         allocator,
         manifest.desktop_entry,
+        desktop_dir,
         manifest.desktop_entry_sha256,
-        &launcher_paths,
+        launcher_path,
     );
-    if (!quiet and !application_entry_removed) {
-        std.debug.print("Preserving user-edited application entry: {s}\n", .{manifest.application_entry});
+    defer desktop_entry.deinit();
+
+    var cache_target: LinuxScopedDeletionTarget = .{};
+    defer cache_target.deinit();
+    var state_target: LinuxScopedDeletionTarget = .{};
+    defer state_target.deinit();
+    if (mode == .app_and_data) {
+        if (manifest.schema_version != LINUX_UNINSTALL_MANIFEST_VERSION) {
+            return error.DataDeletionUnavailableForLegacyManifest;
+        }
+        cache_target = try prepareLinuxScopedDeletionTarget(
+            manifest.xdg_cache_home.?,
+            manifest.identifier,
+            manifest.channel,
+        );
+        state_target = try prepareLinuxScopedDeletionTarget(
+            manifest.xdg_state_home.?,
+            manifest.identifier,
+            manifest.channel,
+        );
     }
-    if (!quiet and !desktop_entry_removed) {
-        std.debug.print("Preserving user-edited Desktop entry: {s}\n", .{manifest.desktop_entry});
-    }
+
+    _ = try application_entry.remove();
+    _ = try desktop_entry.remove();
     refreshLinuxDesktopDatabase(manifest.application_entry);
 
-    // These are the only recursive removals: both directories are owned and
-    // maintained by Electrobun. Everything else below is an exact manifest or
-    // executable path, and parent directories are removed non-recursively.
-    std.Io.Dir.cwd().deleteTree(g_io, app_dir) catch |err| switch (err) {
-        error.NotDir => {},
-        else => return err,
-    };
-    std.Io.Dir.cwd().deleteTree(g_io, self_extraction_dir) catch |err| switch (err) {
-        error.NotDir => {},
-        else => return err,
-    };
-
-    // Linux permits unlinking the running executable. Delete metadata last so
-    // a managed-cleanup error leaves a valid retry entry point.
-    try deleteFileIfExists(executable_path);
-    try deleteFileIfExists(manifest_path);
-    std.Io.Dir.cwd().deleteDir(g_io, base_dir) catch {};
-    if (std.fs.path.dirname(base_dir)) |identifier_dir| {
-        std.Io.Dir.cwd().deleteDir(g_io, identifier_dir) catch {};
+    if (mode == .app_and_data) {
+        try cache_target.remove(manifest.identifier, manifest.channel);
+        try state_target.remove(manifest.identifier, manifest.channel);
+        try scope.identifier_dir.deleteTree(g_io, manifest.channel);
+        scope.data_home_dir.deleteDir(g_io, manifest.identifier) catch {};
+        return;
     }
+
+    try deleteLinuxManagedChild(scope.channel_dir, "app", app_kind);
+    try deleteLinuxManagedChild(scope.channel_dir, "self-extraction", extraction_kind);
+    scope.channel_dir.deleteFile(g_io, LINUX_UNINSTALL_EXE_NAME) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    scope.channel_dir.deleteFile(g_io, LINUX_UNINSTALL_MANIFEST_NAME) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+    scope.identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+    scope.data_home_dir.deleteDir(g_io, manifest.identifier) catch {};
 }
 
 fn installWindowsIntegration(
@@ -3553,46 +3992,23 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     if (builtin.os.tag == .linux) {
-        const executable_path = try std.process.executablePathAlloc(g_io, allocator);
-        defer allocator.free(executable_path);
-        const installed_uninstaller = std.mem.eql(
-            u8,
-            std.fs.path.basename(executable_path),
-            LINUX_UNINSTALL_EXE_NAME,
-        );
         var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
         defer args.deinit();
-        _ = args.next() orelse return error.InvalidArguments;
-        if (args.next()) |command| {
-            if (std.mem.eql(u8, command, "--uninstall")) {
-                var quiet = false;
-                if (args.next()) |option| {
-                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
-                        return error.InvalidArguments;
-                    }
-                    quiet = true;
-                }
-                try uninstallLinux(allocator, quiet);
-                return;
+        const argv0 = args.next() orelse return error.InvalidArguments;
+        const invocation_path = try linuxManagerInvocationPath(allocator, argv0);
+        defer allocator.free(invocation_path);
+        if (std.mem.eql(u8, std.fs.path.basename(invocation_path), LINUX_UNINSTALL_EXE_NAME)) {
+            var command_args: [4][]const u8 = undefined;
+            var command_args_len: usize = 0;
+            while (args.next()) |arg| {
+                if (command_args_len == command_args.len) return error.InvalidArguments;
+                command_args[command_args_len] = arg;
+                command_args_len += 1;
             }
-            if (installed_uninstaller and std.mem.eql(u8, command, "--quiet")) {
-                if (args.next() != null) return error.InvalidArguments;
-                try uninstallLinux(allocator, true);
-                return;
+            switch (try parseLinuxManagerCommand(command_args[0..command_args_len])) {
+                .uninstall => |mode| try uninstallLinux(allocator, invocation_path, mode),
+                .refresh_metadata => try refreshLinuxUninstallMetadata(allocator, invocation_path),
             }
-            if (std.mem.eql(u8, command, "--refresh-metadata")) {
-                if (args.next()) |option| {
-                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
-                        return error.InvalidArguments;
-                    }
-                }
-                try refreshLinuxUninstallMetadata(allocator);
-                return;
-            }
-            return error.InvalidArguments;
-        }
-        if (installed_uninstaller) {
-            try uninstallLinux(allocator, false);
             return;
         }
     }
@@ -3894,6 +4310,40 @@ test "macOS uninstall manager accepts only the explicit interactive and quiet gr
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--other"}));
 }
 
+test "Linux uninstall manager accepts only the explicit interactive and quiet grammar" {
+    const direct = try parseLinuxManagerCommand(&.{});
+    try std.testing.expect(direct == .uninstall);
+    try std.testing.expect(direct.uninstall == null);
+
+    const delegated = try parseLinuxManagerCommand(&.{"--uninstall"});
+    try std.testing.expect(delegated == .uninstall);
+    try std.testing.expect(delegated.uninstall == null);
+
+    const quiet = try parseLinuxManagerCommand(&.{"--quiet"});
+    try std.testing.expectEqual(LinuxUninstallMode.app, quiet.uninstall.?);
+    const delegated_quiet = try parseLinuxManagerCommand(&.{ "--uninstall", "--quiet" });
+    try std.testing.expectEqual(LinuxUninstallMode.app, delegated_quiet.uninstall.?);
+    const delete_data = try parseLinuxManagerCommand(&.{ "--quiet", "--delete-data" });
+    try std.testing.expectEqual(LinuxUninstallMode.app_and_data, delete_data.uninstall.?);
+    const delegated_delete_data = try parseLinuxManagerCommand(&.{ "--uninstall", "--quiet", "--delete-data" });
+    try std.testing.expectEqual(LinuxUninstallMode.app_and_data, delegated_delete_data.uninstall.?);
+    try std.testing.expect((try parseLinuxManagerCommand(&.{ "--refresh-metadata", "--quiet" })) == .refresh_metadata);
+
+    const invalid = [_][]const []const u8{
+        &.{"--delete-data"},
+        &.{ "--uninstall", "--delete-data" },
+        &.{ "--uninstall", "--delete-data", "--quiet" },
+        &.{ "--quiet", "--uninstall" },
+        &.{ "--quiet", "--quiet" },
+        &.{"--refresh-metadata"},
+        &.{ "--refresh-metadata", "--quiet", "extra" },
+        &.{"--other"},
+    };
+    for (invalid) |args| {
+        try std.testing.expectError(error.InvalidArguments, parseLinuxManagerCommand(args));
+    }
+}
+
 test "macOS uninstall manifest path token binds identity channel and exact app path" {
     const nonce = "0123456789abcdef0123456789abcdef";
     const expected = macosAppPathToken(
@@ -3939,16 +4389,12 @@ test "Linux install identities and integration paths reject traversal" {
     try std.testing.expect(!isSafeLinuxComponent("production\n"));
 
     try validateLinuxIntegrationPath(
-        std.testing.io,
-        std.testing.allocator,
         "/tmp/xdg data/applications/archive.desktop",
         "/tmp/xdg data/applications",
     );
     try std.testing.expectError(
         error.InvalidUninstallManifest,
         validateLinuxIntegrationPath(
-            std.testing.io,
-            std.testing.allocator,
             "/tmp/xdg data/applications/../archive.desktop",
             "/tmp/xdg data/applications",
         ),
@@ -3956,8 +4402,6 @@ test "Linux install identities and integration paths reject traversal" {
     try std.testing.expectError(
         error.InvalidUninstallManifest,
         validateLinuxIntegrationPath(
-            std.testing.io,
-            std.testing.allocator,
             "/tmp/xdg data/applications/nested/archive.desktop",
             "/tmp/xdg data/applications",
         ),
@@ -3965,8 +4409,6 @@ test "Linux install identities and integration paths reject traversal" {
     try std.testing.expectError(
         error.InvalidUninstallManifest,
         validateLinuxIntegrationPath(
-            std.testing.io,
-            std.testing.allocator,
             "archive.desktop",
             "/tmp/xdg data/applications",
         ),
@@ -3974,15 +4416,13 @@ test "Linux install identities and integration paths reject traversal" {
     try std.testing.expectError(
         error.InvalidUninstallManifest,
         validateLinuxIntegrationPath(
-            std.testing.io,
-            std.testing.allocator,
             "/tmp/not-the-current-root/applications/archive.desktop",
             "/tmp/xdg data/applications",
         ),
     );
 }
 
-test "Linux integration paths allow a symlinked XDG root" {
+test "Linux pinned roots reject a symlinked XDG intermediate" {
     if (builtin.os.tag != .linux) return error.SkipZigTest;
 
     var tmp = std.testing.tmpDir(.{});
@@ -3991,21 +4431,15 @@ test "Linux integration paths allow a symlinked XDG root" {
     try tmp.dir.symLink(std.testing.io, "physical", "xdg-link", .{ .is_directory = true });
     const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(tmp_path);
-    const physical_applications = try std.fs.path.join(
+    const linked_root = try std.fs.path.join(
         std.testing.allocator,
-        &.{ tmp_path, "physical", "applications" },
+        &.{ tmp_path, "xdg-link", "applications" },
     );
-    defer std.testing.allocator.free(physical_applications);
-    const linked_entry = try std.fs.path.join(
-        std.testing.allocator,
-        &.{ tmp_path, "xdg-link", "applications", "archive.desktop" },
-    );
-    defer std.testing.allocator.free(linked_entry);
-    try validateLinuxIntegrationPath(
-        std.testing.io,
-        std.testing.allocator,
-        linked_entry,
-        physical_applications,
+    defer std.testing.allocator.free(linked_root);
+    g_io = std.testing.io;
+    try std.testing.expectError(
+        error.InvalidUninstallLocation,
+        openLinuxAbsoluteDirNoSymlinks(linked_root),
     );
 }
 
@@ -4021,25 +4455,20 @@ test "Linux desktop entry launcher paths are escaped" {
         "[Desktop Entry]\nExec=\"/tmp/Quoted \\\"App\\\"/bin/launcher\"\nIcon=theme-icon\n",
         rewritten,
     );
-    const matching_launchers = [_][]const u8{"/tmp/Quoted \"App\"/bin/launcher"};
     try std.testing.expect(try linuxDesktopEntryTargetsLauncher(
-        std.testing.io,
         std.testing.allocator,
         rewritten,
-        &matching_launchers,
+        "/tmp/Quoted \"App\"/bin/launcher",
     ));
-    const other_channel_launchers = [_][]const u8{"/tmp/Quoted \"App\"/canary/bin/launcher"};
     try std.testing.expect(!try linuxDesktopEntryTargetsLauncher(
-        std.testing.io,
         std.testing.allocator,
         rewritten,
-        &other_channel_launchers,
+        "/tmp/Quoted \"App\"/canary/bin/launcher",
     ));
     try std.testing.expect(!try linuxDesktopEntryTargetsLauncher(
-        std.testing.io,
         std.testing.allocator,
         "[Desktop Entry]\nExec=launcher --unexpected-argument\n",
-        &matching_launchers,
+        "/tmp/Quoted \"App\"/bin/launcher",
     ));
 }
 

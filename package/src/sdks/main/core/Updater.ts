@@ -2,15 +2,22 @@ import { join, dirname, resolve, win32 } from "path";
 import { homedir } from "os";
 import {
 	chmodSync,
+	closeSync,
 	constants as fsConstants,
 	copyFileSync,
+	fchmodSync,
+	fstatSync,
+	fsyncSync,
 	renameSync,
 	unlinkSync,
 	mkdirSync,
+	openSync,
+	readSync,
 	rmSync,
 	statSync,
 	lstatSync,
 	readdirSync,
+	writeSync,
 } from "fs";
 import { execFileSync, execSync } from "child_process";
 import { createHash, randomBytes } from "crypto";
@@ -220,27 +227,152 @@ type LinuxUninstallerMetadataRefreshExecutor = (
 	args: readonly string[],
 ) => void;
 
+export interface LinuxUninstallerRefreshPlan {
+	packagedUninstallerPath: string;
+	installedUninstallerPath: string;
+	stagedUninstallerPath: string;
+	refreshArguments: readonly ["--refresh-metadata", "--quiet"];
+}
+
+export function createLinuxUninstallerRefreshPlan(
+	channelRootPath: string,
+	appBundlePath: string,
+	nonce: string,
+): LinuxUninstallerRefreshPlan {
+	if (!/^[a-f0-9]{16}$/.test(nonce)) {
+		throw new Error("Invalid Linux uninstaller staging nonce");
+	}
+	return {
+		packagedUninstallerPath: join(appBundlePath, "Resources", "uninstall"),
+		installedUninstallerPath: join(channelRootPath, "uninstall"),
+		stagedUninstallerPath: join(
+			channelRootPath,
+			`.electrobun-uninstall-${nonce}.tmp`,
+		),
+		refreshArguments: ["--refresh-metadata", "--quiet"],
+	};
+}
+
+function isPlainLinuxPath(path: string): boolean {
+	const normalized = resolve(path);
+	if (!normalized.startsWith("/") || normalized !== path) return false;
+	let current = "/";
+	for (const component of normalized.slice(1).split("/")) {
+		if (!component) return false;
+		current = join(current, component);
+		const stat = lstatSync(current, { throwIfNoEntry: false });
+		if (!stat || stat.isSymbolicLink()) return false;
+	}
+	return true;
+}
+
 /**
- * Refresh the installed Linux uninstaller after replacing the app bundle.
- * Older installs and package-managed installs do not have this executable, so
- * both a missing uninstaller and a failed refresh are intentionally nonfatal.
+ * Replace the app-independent Linux uninstall manager from the newly installed
+ * bundle, then let that manager refresh its external manifest. Older bundles
+ * and package-managed installs do not contain the resource, so a missing source
+ * is intentionally nonfatal.
  */
 export function refreshLinuxUninstallerMetadata(
 	channelRootPath: string,
-	uninstallerExists: (path: string) => boolean = (path) =>
-		Boolean(statSync(path, { throwIfNoEntry: false })),
+	appBundlePath: string,
 	execute: LinuxUninstallerMetadataRefreshExecutor = (executable, args) => {
 		execFileSync(executable, [...args], { stdio: "ignore" });
 	},
+	nonce: () => string = () => randomBytes(8).toString("hex"),
 ): boolean {
-	const uninstallerPath = join(channelRootPath, "uninstall");
+	const plan = createLinuxUninstallerRefreshPlan(
+		channelRootPath,
+		appBundlePath,
+		nonce(),
+	);
+	let sourceFd: number | undefined;
+	let stagedFd: number | undefined;
 	try {
-		if (!uninstallerExists(uninstallerPath)) {
+		if (
+			!isPlainLinuxPath(channelRootPath) ||
+			!isPlainLinuxPath(appBundlePath) ||
+			!isPlainLinuxPath(join(appBundlePath, "Resources"))
+		) {
 			return false;
 		}
-		execute(uninstallerPath, ["--refresh-metadata", "--quiet"]);
+		const channelRoot = lstatSync(channelRootPath, { throwIfNoEntry: false });
+		if (!channelRoot?.isDirectory() || channelRoot.isSymbolicLink()) return false;
+		const installedManifest = lstatSync(
+			join(channelRootPath, ".electrobun-uninstall.json"),
+			{ throwIfNoEntry: false },
+		);
+		if (
+			!installedManifest?.isFile() ||
+			installedManifest.isSymbolicLink()
+		) {
+			return false;
+		}
+		const appBundle = lstatSync(appBundlePath, { throwIfNoEntry: false });
+		const resourcesPath = join(appBundlePath, "Resources");
+		const resources = lstatSync(resourcesPath, { throwIfNoEntry: false });
+		if (
+			!appBundle?.isDirectory() ||
+			appBundle.isSymbolicLink() ||
+			!resources?.isDirectory() ||
+			resources.isSymbolicLink()
+		) {
+			return false;
+		}
+		const sourcePathStat = lstatSync(plan.packagedUninstallerPath, {
+			throwIfNoEntry: false,
+		});
+		if (!sourcePathStat?.isFile() || sourcePathStat.isSymbolicLink()) return false;
+
+		sourceFd = openSync(
+			plan.packagedUninstallerPath,
+			fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK,
+		);
+		if (!fstatSync(sourceFd).isFile()) throw new Error("Invalid Linux uninstaller resource");
+		stagedFd = openSync(
+			plan.stagedUninstallerPath,
+			fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL,
+			0o600,
+		);
+		const buffer = new Uint8Array(64 * 1024);
+		for (;;) {
+			const bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+			if (bytesRead === 0) break;
+			let written = 0;
+			while (written < bytesRead) {
+				written += writeSync(
+					stagedFd,
+					buffer,
+					written,
+					bytesRead - written,
+					null,
+				);
+			}
+		}
+		fchmodSync(stagedFd, 0o755);
+		fsyncSync(stagedFd);
+		closeSync(stagedFd);
+		stagedFd = undefined;
+		closeSync(sourceFd);
+		sourceFd = undefined;
+		renameSync(plan.stagedUninstallerPath, plan.installedUninstallerPath);
+		execute(plan.installedUninstallerPath, plan.refreshArguments);
 		return true;
 	} catch {
+		if (stagedFd !== undefined) {
+			try {
+				closeSync(stagedFd);
+			} catch {}
+		}
+		if (sourceFd !== undefined) {
+			try {
+				closeSync(sourceFd);
+			} catch {}
+		}
+		try {
+			rmSync(plan.stagedUninstallerPath, { force: true });
+		} catch {
+			// A failed best-effort cleanup must not make an app update fail.
+		}
 		return false;
 	}
 }
@@ -1199,16 +1331,16 @@ const Updater = {
 						// Ensure launcher binary is executable
 						const launcherPath = join(appBundleDir, "bin", "launcher");
 						if (statSync(launcherPath, { throwIfNoEntry: false })) {
-							execSync(`chmod +x "${launcherPath}"`);
+							chmodSync(launcherPath, 0o755);
 						}
 
 						// Also ensure other binaries are executable
 						const cottontailPath = join(appBundleDir, "bin", "cottontail");
 						if (statSync(cottontailPath, { throwIfNoEntry: false })) {
-							execSync(`chmod +x "${cottontailPath}"`);
+							chmodSync(cottontailPath, 0o755);
 						}
 
-						refreshLinuxUninstallerMetadata(appDataFolder);
+						refreshLinuxUninstallerMetadata(appDataFolder, appBundleDir);
 					}
 
 					// Clean up stale files in extraction folder

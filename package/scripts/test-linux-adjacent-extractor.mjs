@@ -7,11 +7,14 @@ import {
 	chmodSync,
 	copyFileSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
+	renameSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +28,7 @@ if (process.platform !== "linux") {
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extractorRoot = join(packageRoot, "src", "extractor");
+const launcherRoot = join(packageRoot, "src", "launcher");
 const zig = process.env.ELECTROBUN_ZIG ?? join(packageRoot, "vendors", "zig", "zig");
 const zigZstd = join(packageRoot, "vendors", "zig-zstd", "zig-zstd");
 const temporaryRoot = mkdtempSync(join(tmpdir(), "electrobun-extractor-e2e-"));
@@ -70,7 +74,9 @@ const desktopDir = join(home, "Desktop");
 const applicationsDir = join(dataHome, "applications");
 const helperDir = join(temporaryRoot, "desktop helper bin");
 const emptyHelperDir = join(temporaryRoot, "empty helper bin");
+const dialogHelperDir = join(temporaryRoot, "dialog helper bin");
 const desktopDatabaseLog = join(temporaryRoot, "desktop database calls.log");
+const dialogHelperLog = join(temporaryRoot, "dialog helper calls.log");
 
 mkdirSync(desktopDir, { recursive: true });
 mkdirSync(dataHome, { recursive: true });
@@ -78,7 +84,9 @@ mkdirSync(cacheHome, { recursive: true });
 mkdirSync(stateHome, { recursive: true });
 mkdirSync(helperDir, { recursive: true });
 mkdirSync(emptyHelperDir, { recursive: true });
+mkdirSync(dialogHelperDir, { recursive: true });
 writeFileSync(desktopDatabaseLog, "");
+writeFileSync(dialogHelperLog, "");
 
 const desktopDatabaseHelper = join(helperDir, "update-desktop-database");
 writeFileSync(
@@ -87,37 +95,142 @@ writeFileSync(
 );
 chmodSync(desktopDatabaseHelper, 0o755);
 
-const installerEnv = (path) => ({
-	...process.env,
-	ELECTROBUN_DESKTOP_DB_LOG: desktopDatabaseLog,
-	HOME: home,
-	PATH: path,
-	XDG_CACHE_HOME: cacheHome,
-	XDG_DATA_HOME: dataHome,
-	XDG_STATE_HOME: stateHome,
-});
+const writeDialogHelper = (name) => {
+	const helper = join(dialogHelperDir, name);
+	writeFileSync(
+		helper,
+		name === "zenity"
+			? [
+					"#!/bin/sh",
+					'printf "zenity\\n" >> "$ELECTROBUN_DIALOG_LOG"',
+					'case "$ELECTROBUN_DIALOG_RESPONSE" in',
+					"  app) exit 0 ;;",
+					"  data) printf 'App and Data\\n'; exit 1 ;;",
+					"  cancel) exit 1 ;;",
+					"  *) printf 'simulated zenity failure\\n' >&2; exit 5 ;;",
+					"esac",
+					"",
+				].join("\n")
+			: [
+					"#!/bin/sh",
+					'printf "kdialog\\n" >> "$ELECTROBUN_DIALOG_LOG"',
+					'case "$ELECTROBUN_DIALOG_RESPONSE" in',
+					"  app) exit 0 ;;",
+					"  data) exit 1 ;;",
+					"  cancel) exit 2 ;;",
+					"  *) printf 'simulated kdialog failure\\n' >&2; exit 5 ;;",
+					"esac",
+					"",
+				].join("\n"),
+	);
+	chmodSync(helper, 0o755);
+};
+writeDialogHelper("zenity");
+writeDialogHelper("kdialog");
+copyFileSync(desktopDatabaseHelper, join(dialogHelperDir, "update-desktop-database"));
+chmodSync(join(dialogHelperDir, "update-desktop-database"), 0o755);
+
+const defaultRoots = {
+	home,
+	dataHome,
+	cacheHome,
+	stateHome,
+};
+
+const makeRoots = (label, { desktop = true } = {}) => {
+	const root = join(temporaryRoot, `${label} roots`);
+	const roots = {
+		home: join(root, "home with spaces"),
+		dataHome: join(root, "data home with spaces"),
+		cacheHome: join(root, "cache home with spaces"),
+		stateHome: join(root, "state home with spaces"),
+	};
+	mkdirSync(roots.home, { recursive: true });
+	if (desktop) mkdirSync(join(roots.home, "Desktop"), { recursive: true });
+	for (const path of [roots.dataHome, roots.cacheHome, roots.stateHome]) {
+		mkdirSync(path, { recursive: true });
+	}
+	return roots;
+};
+
+const environmentFor = (
+	roots,
+	path,
+	{
+		dialogResponse,
+		gui = true,
+		includeXdg = true,
+		xdgCacheHome = roots.cacheHome,
+		xdgDataHome = roots.dataHome,
+		xdgStateHome = roots.stateHome,
+	} = {},
+) => {
+	const environment = {
+		...process.env,
+		ELECTROBUN_DESKTOP_DB_LOG: desktopDatabaseLog,
+		ELECTROBUN_DIALOG_LOG: dialogHelperLog,
+		HOME: roots.home,
+		PATH: path,
+	};
+	if (includeXdg) {
+		environment.XDG_CACHE_HOME = xdgCacheHome;
+		environment.XDG_DATA_HOME = xdgDataHome;
+		environment.XDG_STATE_HOME = xdgStateHome;
+	} else {
+		delete environment.XDG_CACHE_HOME;
+		delete environment.XDG_DATA_HOME;
+		delete environment.XDG_STATE_HOME;
+	}
+	if (gui) {
+		environment.DISPLAY = process.env.DISPLAY || ":99";
+		environment.WAYLAND_DISPLAY = process.env.WAYLAND_DISPLAY || "wayland-test";
+	} else {
+		delete environment.DISPLAY;
+		delete environment.WAYLAND_DISPLAY;
+	}
+	if (dialogResponse !== undefined) {
+		environment.ELECTROBUN_DIALOG_RESPONSE = dialogResponse;
+	} else {
+		delete environment.ELECTROBUN_DIALOG_RESPONSE;
+	}
+	return environment;
+};
+
+const installerEnv = (path, options) =>
+	environmentFor(defaultRoots, path, options);
 
 const createPayload = ({
 	artifact,
+	bundleArtifact = artifact,
 	channel,
+	extractor,
 	fixtureRoot,
 	icon,
 	identifier,
+	includeManager = true,
+	launcher,
 	name,
 	version,
 }) => {
-	const innerRoot = join(fixtureRoot, "inner", artifact);
+	const innerRoot = join(fixtureRoot, "inner", bundleArtifact);
 	const innerBin = join(innerRoot, "bin");
 	const innerResources = join(innerRoot, "Resources");
 	mkdirSync(innerBin, { recursive: true });
 	mkdirSync(innerResources, { recursive: true });
 
 	const installedLauncher = join(innerBin, "launcher");
-	writeFileSync(
-		installedLauncher,
-		`#!/bin/sh\nprintf '%s\\n' '${channel}:${version}' > "$HOME/${artifact}-launched"\n`,
-	);
+	copyFileSync(launcher, installedLauncher);
 	chmodSync(installedLauncher, 0o755);
+	const runtime = join(innerBin, "cottontail");
+	writeFileSync(
+		runtime,
+		'#!/bin/sh\nprintf "runtime loaded\\n" > "$ELECTROBUN_RUNTIME_LOG"\nexit 0\n',
+	);
+	chmodSync(runtime, 0o755);
+	if (includeManager) {
+		copyFileSync(extractor, join(innerResources, "uninstall"));
+		chmodSync(join(innerResources, "uninstall"), 0o755);
+	}
 
 	writeFileSync(
 		join(innerRoot, `${artifact}.desktop`),
@@ -139,6 +252,11 @@ const createPayload = ({
 		join(innerResources, "version.json"),
 		JSON.stringify({ channel, identifier, name, version }),
 	);
+	writeFileSync(
+		join(innerResources, "build.json"),
+		JSON.stringify({ mainProcess: "cottontail" }),
+	);
+	writeFileSync(join(innerResources, "main.js"), "// runtime sentinel fixture\n");
 	writeFileSync(join(innerResources, "payload-version.txt"), `${version}\n`);
 	if (icon) {
 		writeFileSync(join(innerResources, "appIcon.png"), "fixture-icon");
@@ -147,7 +265,13 @@ const createPayload = ({
 	const tarPath = join(fixtureRoot, `${channel}-${version}.tar`);
 	const hash = `${channel}-${version.replaceAll(".", "-")}-hash`;
 	const archivePath = join(fixtureRoot, `${hash}.tar.zst`);
-	run("tar", ["-cf", tarPath, "-C", join(fixtureRoot, "inner"), artifact]);
+	run("tar", [
+		"-cf",
+		tarPath,
+		"-C",
+		join(fixtureRoot, "inner"),
+		bundleArtifact,
+	]);
 	run(zigZstd, [
 		"compress",
 		"-i",
@@ -163,15 +287,17 @@ const createPayload = ({
 	};
 };
 
-const createAdjacentFixture = (extractor, fixture) => {
+const createAdjacentFixture = (extractor, launcherBinary, fixture) => {
 	const fixtureRoot = join(
 		temporaryRoot,
 		`adjacent fixture ${fixture.channel}`,
 	);
 	const payload = createPayload({
 		...fixture,
+		extractor,
 		fixtureRoot,
 		identifier: adjacentIdentifier,
+		launcher: launcherBinary,
 		name: "Archive App",
 	});
 	const outerRoot = join(fixtureRoot, "outer", fixture.artifact);
@@ -193,15 +319,21 @@ const createAdjacentFixture = (extractor, fixture) => {
 	return launcher;
 };
 
-const createEmbeddedSetupFixture = (extractor, fixture) => {
+const createEmbeddedSetupFixture = (extractor, launcherBinary, fixture) => {
 	const fixtureRoot = join(
 		temporaryRoot,
 		`embedded Setup fixture ${fixture.channel} ${fixture.version}`,
 	);
 	const payload = createPayload({
 		...fixture,
+		bundleArtifact:
+			fixture.channel === "production"
+				? "EmbeddedArchiveApp"
+				: `EmbeddedArchiveApp-${fixture.channel}`,
+		extractor,
 		fixtureRoot,
 		identifier: uninstallIdentifier,
+		launcher: launcherBinary,
 		name: uninstallAppName,
 	});
 	const setupName =
@@ -223,13 +355,29 @@ const createEmbeddedSetupFixture = (extractor, fixture) => {
 	return setup;
 };
 
-const installPaths = (identifier, channel, artifact) => {
-	const channelRoot = join(dataHome, identifier, channel);
+const createEmbeddedSetupWithoutManager = (extractor, launcherBinary, fixture) => {
+	return createEmbeddedSetupFixture(extractor, launcherBinary, {
+		...fixture,
+		includeManager: false,
+	});
+};
+
+const installPaths = (
+	identifier,
+	channel,
+	artifact,
+	roots = defaultRoots,
+) => {
+	const channelRoot = join(roots.dataHome, identifier, channel);
 	return {
 		app: join(channelRoot, "app"),
-		applicationEntry: join(applicationsDir, `${artifact}.desktop`),
+		applicationEntry: join(
+			roots.dataHome,
+			"applications",
+			`${artifact}.desktop`,
+		),
 		channelRoot,
-		desktopEntry: join(desktopDir, `${artifact}.desktop`),
+		desktopEntry: join(roots.home, "Desktop", `${artifact}.desktop`),
 		launcher: join(channelRoot, "app", "bin", "launcher"),
 		manifest: join(channelRoot, ".electrobun-uninstall.json"),
 		selfExtraction: join(channelRoot, "self-extraction"),
@@ -247,6 +395,7 @@ const assertInstalled = ({
 	identifier,
 	name,
 	paths,
+	roots = defaultRoots,
 	version,
 }) => {
 	assertExists(paths.app);
@@ -255,6 +404,9 @@ const assertInstalled = ({
 	assertExists(paths.uninstaller);
 	assertExists(paths.manifest);
 	assertExists(paths.applicationEntry);
+	const bundledUninstaller = join(paths.app, "Resources", "uninstall");
+	assertExists(bundledUninstaller);
+	assert.equal(sha256(paths.uninstaller), sha256(bundledUninstaller));
 	assert.equal(
 		readFileSync(
 			join(paths.app, "Resources", "payload-version.txt"),
@@ -290,7 +442,7 @@ const assertInstalled = ({
 	}
 
 	const manifest = readManifest(paths.manifest);
-	assert.equal(manifest.schema_version, 1);
+	assert.equal(manifest.schema_version, 2);
 	assert.equal(manifest.identifier, identifier);
 	assert.equal(manifest.name, name);
 	assert.equal(manifest.channel, channel);
@@ -306,6 +458,11 @@ const assertInstalled = ({
 	} else {
 		assert.equal(manifest.desktop_entry_sha256, "");
 	}
+	assert.deepEqual(manifest.data_path_versions, [1]);
+	assert.equal(manifest.home, roots.home);
+	assert.equal(manifest.xdg_cache_home, roots.cacheHome);
+	assert.equal(manifest.xdg_state_home, roots.stateHome);
+	assert.equal(lstatSync(paths.uninstaller).mode & 0o777, 0o755);
 
 	const validation = spawnSync("desktop-file-validate", [paths.applicationEntry], {
 		encoding: "utf8",
@@ -328,11 +485,175 @@ const assertManagedArtifactsRemoved = (paths, { preservedDesktop = false } = {})
 	assertMissing(paths.manifest);
 };
 
+const assertUninstallNotStarted = (paths) => {
+	for (const path of [
+		paths.app,
+		paths.selfExtraction,
+		paths.uninstaller,
+		paths.manifest,
+		paths.applicationEntry,
+	]) {
+		assertExists(path);
+	}
+};
+
+const runExpectingFailure = (command, args, options = {}) => {
+	const result = spawnSync(command, args, {
+		encoding: "utf8",
+		maxBuffer: 16 * 1024 * 1024,
+		timeout: 30_000,
+		...options,
+	});
+	if (result.error) throw result.error;
+	assert.equal(result.signal, null, `${command} was terminated by ${result.signal}`);
+	assert.notEqual(result.status, 0, `${command} ${args.join(" ")} succeeded`);
+	return result;
+};
+
+const writeSentinel = (path, contents = "sentinel\n") => {
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, contents);
+};
+
 try {
-	run(zig, ["build", "test"], { cwd: extractorRoot });
-	run(zig, ["build"], { cwd: extractorRoot });
+	const zigBuildOptions = { timeout: 120_000 };
+	run(zig, ["build", "test"], {
+		cwd: extractorRoot,
+		...zigBuildOptions,
+	});
+	run(zig, ["build"], { cwd: extractorRoot, ...zigBuildOptions });
 	const extractor = join(extractorRoot, "zig-out", "bin", "extractor");
 	assertExists(extractor, "extractor build output is missing");
+	run(zig, ["build", "test"], {
+		cwd: launcherRoot,
+		...zigBuildOptions,
+	});
+	run(zig, ["build"], { cwd: launcherRoot, ...zigBuildOptions });
+	const launcherBinary = join(launcherRoot, "zig-out", "bin", "launcher");
+	assertExists(launcherBinary, "launcher build output is missing");
+
+	// A malformed self-extracting bundle that omits the thin manager must fail
+	// before creating or replacing any desktop integration.
+	const missingManagerRoots = makeRoots("missing manager resource");
+	const missingManagerFixture = {
+		artifact: "MissingManagerApp",
+		channel: "missing-manager",
+		icon: false,
+		version: "1.0.0",
+	};
+	const missingManagerSetup = createEmbeddedSetupWithoutManager(
+		extractor,
+		launcherBinary,
+		missingManagerFixture,
+	);
+	const missingManagerPaths = installPaths(
+		uninstallIdentifier,
+		missingManagerFixture.channel,
+		missingManagerFixture.artifact,
+		missingManagerRoots,
+	);
+	runExpectingFailure(missingManagerSetup, [], {
+		cwd: temporaryRoot,
+		env: environmentFor(missingManagerRoots, emptyHelperDir),
+	});
+	assertMissing(missingManagerPaths.uninstaller);
+	assertMissing(missingManagerPaths.manifest);
+	assertMissing(missingManagerPaths.applicationEntry);
+	assertMissing(missingManagerPaths.desktopEntry);
+
+	const installScenario = ({
+		artifact,
+		channel,
+		desktopEntry = true,
+		environmentOptions,
+		icon = false,
+		roots,
+		version = "1.0.0",
+	}) => {
+		const fixture = { artifact, channel, icon, version };
+		const setup = createEmbeddedSetupFixture(
+			extractor,
+			launcherBinary,
+			fixture,
+		);
+		run(setup, [], {
+			cwd: temporaryRoot,
+			env: environmentFor(
+				roots,
+				emptyHelperDir,
+				environmentOptions,
+			),
+		});
+		const paths = installPaths(
+			uninstallIdentifier,
+			channel,
+			artifact,
+			roots,
+		);
+		assertInstalled({
+			...fixture,
+			desktopEntry,
+			identifier: uninstallIdentifier,
+			name: uninstallAppName,
+			paths,
+			roots,
+		});
+		assert.equal(sha256(paths.uninstaller), sha256(extractor));
+		assert.notEqual(sha256(paths.uninstaller), sha256(setup));
+		return { fixture, paths, setup };
+	};
+
+	// Unsafe integration roots are skipped at install time so a Desktop or
+	// applications symlink can neither redirect writes nor make uninstall fail.
+	const integrationLinkRoots = makeRoots("symlinked integration roots");
+	const outsideDesktop = join(temporaryRoot, "outside Desktop integration");
+	const outsideApplications = join(
+		temporaryRoot,
+		"outside applications integration",
+	);
+	rmSync(join(integrationLinkRoots.home, "Desktop"), { recursive: true });
+	mkdirSync(outsideDesktop);
+	mkdirSync(outsideApplications);
+	writeSentinel(join(outsideDesktop, "outside.keep"));
+	writeSentinel(join(outsideApplications, "outside.keep"));
+	symlinkSync(outsideDesktop, join(integrationLinkRoots.home, "Desktop"));
+	symlinkSync(
+		outsideApplications,
+		join(integrationLinkRoots.dataHome, "applications"),
+	);
+	const integrationLinkFixture = {
+		artifact: "IntegrationSymlinkApp",
+		channel: "integration-symlink",
+		icon: false,
+		version: "1.0.0",
+	};
+	const integrationLinkSetup = createEmbeddedSetupFixture(
+		extractor,
+		launcherBinary,
+		integrationLinkFixture,
+	);
+	run(integrationLinkSetup, [], {
+		cwd: temporaryRoot,
+		env: environmentFor(integrationLinkRoots, emptyHelperDir),
+	});
+	const integrationLinkPaths = installPaths(
+		uninstallIdentifier,
+		integrationLinkFixture.channel,
+		integrationLinkFixture.artifact,
+		integrationLinkRoots,
+	);
+	const integrationLinkManifest = readManifest(integrationLinkPaths.manifest);
+	assert.equal(integrationLinkManifest.application_entry, "");
+	assert.equal(integrationLinkManifest.desktop_entry, "");
+	assertExists(join(outsideDesktop, "outside.keep"));
+	assertExists(join(outsideApplications, "outside.keep"));
+	run(integrationLinkPaths.uninstaller, ["--quiet"], {
+		env: environmentFor(integrationLinkRoots, emptyHelperDir),
+	});
+	assertMissing(integrationLinkPaths.app);
+	assertMissing(integrationLinkPaths.uninstaller);
+	assertExists(join(outsideDesktop, "outside.keep"));
+	assertExists(join(outsideApplications, "outside.keep"));
 
 	// Preserve coverage for the adjacent Resources/metadata.json distribution.
 	const adjacentFixtures = [
@@ -351,8 +672,12 @@ try {
 	];
 	const adjacentPaths = new Map();
 	for (const fixture of adjacentFixtures) {
-		const launcher = createAdjacentFixture(extractor, fixture);
-		run(launcher, [], {
+		const adjacentInstaller = createAdjacentFixture(
+			extractor,
+			launcherBinary,
+			fixture,
+		);
+		run(adjacentInstaller, [], {
 			cwd: temporaryRoot,
 			env: installerEnv(emptyHelperDir),
 		});
@@ -368,10 +693,16 @@ try {
 			name: "Archive App",
 			paths,
 		});
-		run(paths.launcher, [], { env: installerEnv(emptyHelperDir) });
+		const runtimeLog = join(home, `${fixture.artifact}-launched`);
+		run(paths.launcher, [], {
+			env: {
+				...installerEnv(emptyHelperDir),
+				ELECTROBUN_RUNTIME_LOG: runtimeLog,
+			},
+		});
 		assert.equal(
-			readFileSync(join(home, `${fixture.artifact}-launched`), "utf8").trim(),
-			`${fixture.channel}:${fixture.version}`,
+			readFileSync(runtimeLog, "utf8").trim(),
+			"runtime loaded",
 		);
 	}
 
@@ -394,7 +725,11 @@ try {
 		"[Desktop Entry]\nName=User-owned Desktop entry\nExec=/usr/bin/false\n";
 	writeFileSync(collisionPaths.applicationEntry, preexistingApplicationContents);
 	writeFileSync(collisionPaths.desktopEntry, preexistingDesktopContents);
-	const collisionLauncher = createAdjacentFixture(extractor, collisionFixture);
+	const collisionLauncher = createAdjacentFixture(
+		extractor,
+		launcherBinary,
+		collisionFixture,
+	);
 	run(collisionLauncher, [], {
 		cwd: temporaryRoot,
 		env: installerEnv(emptyHelperDir),
@@ -462,13 +797,19 @@ try {
 	};
 	const productionSetupV1 = createEmbeddedSetupFixture(
 		extractor,
+		launcherBinary,
 		productionV1,
 	);
 	const productionSetupV2 = createEmbeddedSetupFixture(
 		extractor,
+		launcherBinary,
 		productionV2,
 	);
-	const canarySetupV1 = createEmbeddedSetupFixture(extractor, canaryV1);
+	const canarySetupV1 = createEmbeddedSetupFixture(
+		extractor,
+		launcherBinary,
+		canaryV1,
+	);
 
 	run(productionSetupV1, [], {
 		cwd: temporaryRoot,
@@ -569,7 +910,13 @@ try {
 		),
 		["uninstall"],
 	);
-	assert.equal(sha256(productionPaths.uninstaller), sha256(productionSetupV2));
+	assert.equal(sha256(productionPaths.uninstaller), sha256(extractor));
+	assert.notEqual(sha256(productionPaths.uninstaller), sha256(productionSetupV2));
+	assert.ok(
+		lstatSync(productionPaths.uninstaller).size <
+			lstatSync(productionSetupV2).size,
+		"the external manager must be the thin resource, not archive-bearing Setup",
+	);
 
 	// Exercise the updater-facing refresh command and prove it repairs stale
 	// name/version metadata from the newly installed app.
@@ -601,6 +948,10 @@ try {
 	const refreshedManifest = readManifest(productionPaths.manifest);
 	assert.equal(refreshedManifest.version, productionV2.version);
 	assert.equal(refreshedManifest.name, "Renamed Embedded Archive App");
+	assert.deepEqual(refreshedManifest.data_path_versions, [1]);
+	assert.equal(refreshedManifest.home, staleManifest.home);
+	assert.equal(refreshedManifest.xdg_cache_home, staleManifest.xdg_cache_home);
+	assert.equal(refreshedManifest.xdg_state_home, staleManifest.xdg_state_home);
 
 	// Interactive uninstall removes only Electrobun-owned state, refreshes the
 	// desktop database, preserves a user-edited Desktop entry, and leaves the
@@ -608,12 +959,14 @@ try {
 	const editedDesktopContents = `${readFileSync(productionPaths.desktopEntry, "utf8")}# user customization\n`;
 	writeFileSync(productionPaths.desktopEntry, editedDesktopContents);
 	writeFileSync(desktopDatabaseLog, "");
+	writeFileSync(dialogHelperLog, "");
 	const interactiveUninstall = run(productionPaths.uninstaller, ["--uninstall"], {
-		env: installerEnv(helperDir),
+		env: installerEnv(dialogHelperDir, { dialogResponse: "app" }),
 	});
-	assert.match(
-		interactiveUninstall.stderr,
-		/Uninstalling Renamed Embedded Archive App/,
+	assert.equal(interactiveUninstall.status, 0);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["zenity"],
 	);
 	assertManagedArtifactsRemoved(productionPaths, { preservedDesktop: true });
 	assert.equal(
@@ -715,6 +1068,542 @@ try {
 	);
 	assertExists(productionPaths.channelRoot);
 	assertExists(canaryPaths.channelRoot);
+
+	// Invalid, duplicated, incomplete, and reordered manager arguments must be
+	// rejected before UI or filesystem mutation. The same fixture then proves
+	// that graphical-helper failure and a headless/non-TTY invocation are also
+	// non-mutating, while quiet success never launches a dialog.
+	const guardRoots = makeRoots("strict argv and UI guard");
+	const priorUmask = process.umask(0o077);
+	let guard;
+	try {
+		guard = installScenario({
+			artifact: "StrictArgvApp",
+			channel: "strict-argv",
+			environmentOptions: {
+				xdgCacheHome: `${guardRoots.cacheHome}/./`,
+				xdgDataHome: `${guardRoots.dataHome}/`,
+				xdgStateHome: `${guardRoots.stateHome}/nested/../`,
+			},
+			roots: guardRoots,
+		});
+	} finally {
+		process.umask(priorUmask);
+	}
+	const guardManifestBefore = readFileSync(guard.paths.manifest, "utf8");
+	const guardApplicationBefore = readFileSync(
+		guard.paths.applicationEntry,
+		"utf8",
+	);
+	const invalidManagerArguments = [
+		["--delete-data"],
+		["--uninstall", "--delete-data"],
+		["--uninstall", "--delete-data", "--quiet"],
+		["--quiet", "--uninstall"],
+		["--quiet", "--quiet"],
+		["--uninstall", "--quiet", "--quiet"],
+		["--uninstall", "--quiet", "--delete-data", "extra"],
+		["--refresh-metadata"],
+		["--refresh-metadata", "--quiet", "extra"],
+		["--unknown"],
+	];
+	for (const args of invalidManagerArguments) {
+		writeFileSync(dialogHelperLog, "");
+		runExpectingFailure(guard.paths.uninstaller, args, {
+			env: environmentFor(guardRoots, dialogHelperDir, {
+				dialogResponse: "app",
+			}),
+		});
+		assertUninstallNotStarted(guard.paths);
+		assert.equal(readFileSync(guard.paths.manifest, "utf8"), guardManifestBefore);
+		assert.equal(
+			readFileSync(guard.paths.applicationEntry, "utf8"),
+			guardApplicationBefore,
+		);
+		assert.equal(readFileSync(dialogHelperLog, "utf8"), "");
+	}
+
+	writeFileSync(dialogHelperLog, "");
+	runExpectingFailure(guard.paths.uninstaller, [], {
+		env: environmentFor(guardRoots, dialogHelperDir, {
+			dialogResponse: "fail",
+		}),
+	});
+	assertUninstallNotStarted(guard.paths);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["zenity", "kdialog"],
+	);
+
+	writeFileSync(dialogHelperLog, "");
+	const headlessFailure = runExpectingFailure(
+		guard.paths.uninstaller,
+		["--uninstall"],
+		{
+			env: environmentFor(guardRoots, dialogHelperDir, {
+				dialogResponse: "app",
+				gui: false,
+			}),
+		},
+	);
+	assert.match(headlessFailure.stderr, /--quiet/);
+	assertUninstallNotStarted(guard.paths);
+	assert.equal(readFileSync(dialogHelperLog, "utf8"), "");
+
+	const unknownPolicyManifest = JSON.parse(guardManifestBefore);
+	unknownPolicyManifest.cleanup_paths = ["/tmp/developer-controlled"];
+	writeFileSync(guard.paths.manifest, JSON.stringify(unknownPolicyManifest));
+	runExpectingFailure(guard.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(guardRoots, emptyHelperDir),
+	});
+	assertUninstallNotStarted(guard.paths);
+	writeFileSync(guard.paths.manifest, guardManifestBefore);
+
+	const guardData = join(guard.paths.channelRoot, "user-data.keep");
+	writeSentinel(guardData, "safe app-only data\n");
+	writeFileSync(dialogHelperLog, "");
+	const guardedQuiet = run(
+		guard.paths.uninstaller,
+		["--uninstall", "--quiet"],
+		{
+			env: environmentFor(guardRoots, dialogHelperDir, {
+				dialogResponse: "data",
+			}),
+		},
+	);
+	assert.equal(guardedQuiet.stdout, "");
+	assert.equal(guardedQuiet.stderr, "");
+	assert.equal(readFileSync(dialogHelperLog, "utf8"), "");
+	assertManagedArtifactsRemoved(guard.paths);
+	assertExists(guardData);
+
+	// The immediately preceding schema remains usable for App-only cleanup, but
+	// cannot authorize data deletion because it did not persist cache/state roots.
+	const legacyRoots = makeRoots("legacy schema one");
+	const legacy = installScenario({
+		artifact: "LegacySchemaApp",
+		channel: "legacy-schema",
+		roots: legacyRoots,
+	});
+	const legacyManifest = readManifest(legacy.paths.manifest);
+	legacyManifest.schema_version = 1;
+	delete legacyManifest.data_path_versions;
+	delete legacyManifest.home;
+	delete legacyManifest.xdg_cache_home;
+	delete legacyManifest.xdg_state_home;
+	writeFileSync(legacy.paths.manifest, JSON.stringify(legacyManifest));
+	runExpectingFailure(legacy.paths.uninstaller, ["--quiet", "--delete-data"], {
+		env: environmentFor(legacyRoots, emptyHelperDir),
+	});
+	assertUninstallNotStarted(legacy.paths);
+	run(legacy.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(legacyRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(legacy.paths);
+
+	// Launcher delegation must reach the external manager before selecting or
+	// loading the application runtime. Cancel/close is a successful no-op, and
+	// KDE sessions prefer KDialog when both helpers are available.
+	const cancelRoots = makeRoots("launcher delegated cancel");
+	const cancel = installScenario({
+		artifact: "DelegatedCancelApp",
+		channel: "delegated-cancel",
+		roots: cancelRoots,
+	});
+	const runtimeShouldNotLoad = join(cancelRoots.home, "runtime-loaded.fail");
+	writeFileSync(dialogHelperLog, "");
+	run(cancel.paths.launcher, ["--uninstall"], {
+		env: {
+			...environmentFor(cancelRoots, dialogHelperDir, {
+				dialogResponse: "cancel",
+			}),
+			ELECTROBUN_RUNTIME_LOG: runtimeShouldNotLoad,
+		},
+	});
+	assertUninstallNotStarted(cancel.paths);
+	assertMissing(runtimeShouldNotLoad);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["zenity"],
+	);
+
+	writeFileSync(dialogHelperLog, "");
+	run(cancel.paths.uninstaller, [], {
+		env: {
+			...environmentFor(cancelRoots, dialogHelperDir, {
+				dialogResponse: "cancel",
+			}),
+			XDG_CURRENT_DESKTOP: "KDE",
+		},
+	});
+	assertUninstallNotStarted(cancel.paths);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["kdialog"],
+	);
+	run(cancel.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(cancelRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(cancel.paths);
+
+	const delegatedAppRoots = makeRoots("launcher delegated App");
+	const delegatedApp = installScenario({
+		artifact: "DelegatedApp",
+		channel: "delegated-app",
+		roots: delegatedAppRoots,
+	});
+	const delegatedRuntimeLog = join(delegatedAppRoots.home, "runtime-loaded.fail");
+	const delegatedData = join(delegatedApp.paths.channelRoot, "user-data.keep");
+	writeSentinel(delegatedData);
+	writeFileSync(dialogHelperLog, "");
+	run(delegatedApp.paths.launcher, ["--uninstall"], {
+		env: {
+			...environmentFor(delegatedAppRoots, dialogHelperDir, {
+				dialogResponse: "app",
+			}),
+			ELECTROBUN_RUNTIME_LOG: delegatedRuntimeLog,
+		},
+	});
+	assertManagedArtifactsRemoved(delegatedApp.paths);
+	assertExists(delegatedData);
+	assertMissing(delegatedRuntimeLog);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["zenity"],
+	);
+
+	// Zenity's App-and-Data extra button has the unusual verified contract of
+	// exit 1 plus its exact label on stdout. Exercise that interactive response
+	// end-to-end and confirm all three current-channel roots are removed.
+	const dialogDataRoots = makeRoots("interactive app and data");
+	const dialogData = installScenario({
+		artifact: "InteractiveDataApp",
+		channel: "interactive-data",
+		roots: dialogDataRoots,
+	});
+	const dialogDataSentinel = join(
+		dialogData.paths.channelRoot,
+		"interactive-data.keep",
+	);
+	const dialogCacheRoot = join(
+		dialogDataRoots.cacheHome,
+		uninstallIdentifier,
+		dialogData.fixture.channel,
+	);
+	const dialogStateRoot = join(
+		dialogDataRoots.stateHome,
+		uninstallIdentifier,
+		dialogData.fixture.channel,
+	);
+	writeSentinel(dialogDataSentinel);
+	writeSentinel(join(dialogCacheRoot, "cache.keep"));
+	writeSentinel(join(dialogStateRoot, "state.keep"));
+	writeFileSync(dialogHelperLog, "");
+	run(dialogData.paths.uninstaller, ["--uninstall"], {
+		env: environmentFor(dialogDataRoots, dialogHelperDir, {
+			dialogResponse: "data",
+		}),
+	});
+	assertMissing(dialogData.paths.channelRoot);
+	assertMissing(dialogCacheRoot);
+	assertMissing(dialogStateRoot);
+	assertMissing(dialogData.paths.applicationEntry);
+	assertMissing(dialogData.paths.desktopEntry);
+	assert.deepEqual(
+		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
+		["zenity"],
+	);
+
+	// Persist install-time custom cache/state roots. Unsetting every XDG variable
+	// later must not redirect App-and-Data cleanup to HOME fallbacks. Sibling
+	// channels, sibling identifiers, and files at each platform root survive.
+	const customRoots = makeRoots("custom XDG roots later unset");
+	const custom = installScenario({
+		artifact: "CustomRootsApp",
+		channel: "custom-roots",
+		roots: customRoots,
+	});
+	const customCacheRoot = join(
+		customRoots.cacheHome,
+		uninstallIdentifier,
+		custom.fixture.channel,
+	);
+	const customStateRoot = join(
+		customRoots.stateHome,
+		uninstallIdentifier,
+		custom.fixture.channel,
+	);
+	const siblingChannel = "sibling-channel";
+	const customSiblingData = join(
+		customRoots.dataHome,
+		uninstallIdentifier,
+		siblingChannel,
+		"data.keep",
+	);
+	const customSiblingCache = join(
+		customRoots.cacheHome,
+		uninstallIdentifier,
+		siblingChannel,
+		"cache.keep",
+	);
+	const customSiblingState = join(
+		customRoots.stateHome,
+		uninstallIdentifier,
+		siblingChannel,
+		"state.keep",
+	);
+	const unrelatedIdentifierRoot = join(
+		customRoots.cacheHome,
+		"com.example.unrelated",
+		"production",
+		"unrelated.keep",
+	);
+	const customRootMarker = join(customRoots.stateHome, "root.keep");
+	writeSentinel(join(custom.paths.channelRoot, "unknown-managed-data.keep"));
+	writeSentinel(join(customCacheRoot, "cache.keep"));
+	writeSentinel(join(customStateRoot, "state.keep"));
+	for (const path of [
+		customSiblingData,
+		customSiblingCache,
+		customSiblingState,
+		unrelatedIdentifierRoot,
+		customRootMarker,
+	]) {
+		writeSentinel(path);
+	}
+	writeFileSync(dialogHelperLog, "");
+	run(
+		custom.paths.uninstaller,
+		["--uninstall", "--quiet", "--delete-data"],
+		{
+			env: environmentFor(customRoots, dialogHelperDir, {
+				dialogResponse: "app",
+				includeXdg: false,
+			}),
+		},
+	);
+	assertMissing(custom.paths.channelRoot);
+	assertMissing(customCacheRoot);
+	assertMissing(customStateRoot);
+	for (const path of [
+		customSiblingData,
+		customSiblingCache,
+		customSiblingState,
+		unrelatedIdentifierRoot,
+		customRootMarker,
+	]) {
+		assertExists(path);
+	}
+	assert.equal(readFileSync(dialogHelperLog, "utf8"), "");
+
+	// App-only must not even inspect cache/state identifier roots. Symlink both
+	// of them outside the XDG roots and verify the uninstall still succeeds while
+	// preserving application data and the symlink targets.
+	const appOnlySymlinkRoots = makeRoots("app only ignores cache state");
+	const appOnlySymlink = installScenario({
+		artifact: "AppOnlySymlinkApp",
+		channel: "app-only-symlink",
+		roots: appOnlySymlinkRoots,
+	});
+	const appOnlyData = join(appOnlySymlink.paths.channelRoot, "user-data.keep");
+	const outsideCache = join(temporaryRoot, "outside app-only cache");
+	const outsideState = join(temporaryRoot, "outside app-only state");
+	writeSentinel(join(outsideCache, "outside.keep"));
+	writeSentinel(join(outsideState, "outside.keep"));
+	const cacheIdentifierLink = join(
+		appOnlySymlinkRoots.cacheHome,
+		uninstallIdentifier,
+	);
+	const stateIdentifierLink = join(
+		appOnlySymlinkRoots.stateHome,
+		uninstallIdentifier,
+	);
+	symlinkSync(outsideCache, cacheIdentifierLink);
+	symlinkSync(outsideState, stateIdentifierLink);
+	writeSentinel(appOnlyData);
+	run(appOnlySymlink.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(appOnlySymlinkRoots, emptyHelperDir, {
+			includeXdg: false,
+		}),
+	});
+	assertManagedArtifactsRemoved(appOnlySymlink.paths);
+	assertExists(appOnlyData);
+	assert.equal(lstatSync(cacheIdentifierLink).isSymbolicLink(), true);
+	assert.equal(lstatSync(stateIdentifierLink).isSymbolicLink(), true);
+	assertExists(join(outsideCache, "outside.keep"));
+	assertExists(join(outsideState, "outside.keep"));
+
+	// App-and-Data must preflight data, cache, and state before deleting any of
+	// them. A symlinked state identifier is discovered after a valid cache root;
+	// nevertheless every app and user-data artifact remains untouched.
+	const preflightRoots = makeRoots("app and data symlink preflight");
+	const preflight = installScenario({
+		artifact: "PreflightSymlinkApp",
+		channel: "preflight-symlink",
+		roots: preflightRoots,
+	});
+	const preflightData = join(preflight.paths.channelRoot, "data.keep");
+	const preflightCache = join(
+		preflightRoots.cacheHome,
+		uninstallIdentifier,
+		preflight.fixture.channel,
+		"cache.keep",
+	);
+	const outsidePreflightState = join(temporaryRoot, "outside preflight state");
+	writeSentinel(preflightData);
+	writeSentinel(preflightCache);
+	writeSentinel(join(outsidePreflightState, "outside.keep"));
+	symlinkSync(
+		outsidePreflightState,
+		join(preflightRoots.stateHome, uninstallIdentifier),
+	);
+	runExpectingFailure(
+		preflight.paths.uninstaller,
+		["--quiet", "--delete-data"],
+		{
+			env: environmentFor(preflightRoots, emptyHelperDir, {
+				includeXdg: false,
+			}),
+		},
+	);
+	assertUninstallNotStarted(preflight.paths);
+	assertExists(preflightData);
+	assertExists(preflightCache);
+	assertExists(join(outsidePreflightState, "outside.keep"));
+	run(preflight.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(preflightRoots, emptyHelperDir, {
+			includeXdg: false,
+		}),
+	});
+	assertManagedArtifactsRemoved(preflight.paths);
+
+	// The running executable's physical /proc path must not hide a symlinked
+	// identifier/channel in the lexical manager path used by the caller.
+	const managerLinkRoots = makeRoots("manager symlink preflight");
+	const managerLink = installScenario({
+		artifact: "ManagerSymlinkApp",
+		channel: "manager-symlink",
+		roots: managerLinkRoots,
+	});
+	const movedChannelRoot = join(temporaryRoot, "moved manager channel");
+	renameSync(managerLink.paths.channelRoot, movedChannelRoot);
+	symlinkSync(movedChannelRoot, managerLink.paths.channelRoot);
+	runExpectingFailure(managerLink.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(managerLinkRoots, emptyHelperDir),
+	});
+	for (const path of [
+		join(movedChannelRoot, "app"),
+		join(movedChannelRoot, "self-extraction"),
+		join(movedChannelRoot, "uninstall"),
+		join(movedChannelRoot, ".electrobun-uninstall.json"),
+	]) {
+		assertExists(path);
+	}
+	rmSync(managerLink.paths.channelRoot);
+	renameSync(movedChannelRoot, managerLink.paths.channelRoot);
+	run(managerLink.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(managerLinkRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(managerLink.paths);
+
+	// A damaged or entirely missing app remains uninstallable because desktop
+	// ownership is proven from recorded content and the expected lexical launcher
+	// target, not by loading or resolving the app runtime.
+	const damagedRoots = makeRoots("damaged app");
+	const damaged = installScenario({
+		artifact: "DamagedApp",
+		channel: "damaged-app",
+		roots: damagedRoots,
+	});
+	rmSync(damaged.paths.app, { force: true, recursive: true });
+	run(damaged.paths.uninstaller, ["--uninstall", "--quiet"], {
+		env: environmentFor(damagedRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(damaged.paths);
+	assertMissing(damaged.paths.channelRoot);
+
+	// Reinstall and repeat with multiple already-missing managed children.
+	run(damaged.setup, [], {
+		cwd: temporaryRoot,
+		env: environmentFor(damagedRoots, emptyHelperDir),
+	});
+	rmSync(damaged.paths.app, { force: true, recursive: true });
+	rmSync(damaged.paths.selfExtraction, { force: true, recursive: true });
+	rmSync(damaged.paths.applicationEntry, { force: true });
+	run(damaged.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(damagedRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(damaged.paths);
+	assertMissing(damaged.paths.channelRoot);
+
+	// Empty and relative XDG variables are invalid per the XDG contract and must
+	// resolve to HOME fallbacks both in the install path and persisted manifest.
+	for (const invalidXdg of [
+		{ channel: "empty-xdg", value: "" },
+		{ channel: "relative-xdg", value: "relative/platform/root" },
+	]) {
+		const createdRoots = makeRoots(`${invalidXdg.channel} environment`);
+		const fallbackRoots = {
+			home: createdRoots.home,
+			dataHome: join(createdRoots.home, ".local", "share"),
+			cacheHome: join(createdRoots.home, ".cache"),
+			stateHome: join(createdRoots.home, ".local", "state"),
+		};
+		const fallback = installScenario({
+			artifact: `Fallback-${invalidXdg.channel}`,
+			channel: invalidXdg.channel,
+			environmentOptions: {
+				xdgCacheHome: invalidXdg.value,
+				xdgDataHome: invalidXdg.value,
+				xdgStateHome: invalidXdg.value,
+			},
+			roots: fallbackRoots,
+		});
+		const fallbackCache = join(
+			fallbackRoots.cacheHome,
+			uninstallIdentifier,
+			invalidXdg.channel,
+			"cache.keep",
+		);
+		const fallbackState = join(
+			fallbackRoots.stateHome,
+			uninstallIdentifier,
+			invalidXdg.channel,
+			"state.keep",
+		);
+		writeSentinel(fallbackCache);
+		writeSentinel(fallbackState);
+		run(fallback.paths.uninstaller, ["--quiet", "--delete-data"], {
+			env: environmentFor(fallbackRoots, emptyHelperDir, {
+					includeXdg: false,
+			}),
+		});
+		assertMissing(fallback.paths.channelRoot);
+		assertMissing(dirname(fallbackCache));
+		assertMissing(dirname(fallbackState));
+	}
+
+	// Missing Desktop and update-desktop-database remain benign across repeated
+	// install/uninstall cycles.
+	const missingDesktopRoots = makeRoots("missing Desktop", { desktop: false });
+	const missingDesktop = installScenario({
+		artifact: "MissingDesktopApp",
+		channel: "missing-desktop",
+		desktopEntry: false,
+		roots: missingDesktopRoots,
+	});
+	run(missingDesktop.paths.uninstaller, ["--quiet"], {
+		env: environmentFor(missingDesktopRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(missingDesktop.paths);
+	run(missingDesktop.setup, [], {
+		cwd: temporaryRoot,
+		env: environmentFor(missingDesktopRoots, emptyHelperDir),
+	});
+	run(missingDesktop.paths.uninstaller, ["--uninstall", "--quiet"], {
+		env: environmentFor(missingDesktopRoots, emptyHelperDir),
+	});
+	assertManagedArtifactsRemoved(missingDesktop.paths);
 
 	// Removing the remaining channel also removes the now-empty identity
 	// directory while retaining the adjacent-installer regression coverage.

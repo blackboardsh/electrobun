@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
@@ -33,6 +34,7 @@ describe.skipIf(process.platform !== "linux")(
 			const latestTar = join(extractionFolder, `${latestHash}.tar`);
 			const staleExtractionState = join(extractionFolder, "stale.patch");
 			const refreshLog = join(channelRoot, "refresh.log");
+			const oldManagerLog = join(channelRoot, "old-manager.log");
 
 			mkdirSync(join(runningApp, "Resources"), { recursive: true });
 			mkdirSync(join(newApp, "bin"), { recursive: true });
@@ -58,6 +60,13 @@ describe.skipIf(process.platform !== "linux")(
 			const uninstaller = join(channelRoot, "uninstall");
 			writeFileSync(
 				uninstaller,
+				`#!/bin/sh\nprintf 'old manager ran\\n' > "${oldManagerLog}"\nexit 99\n`,
+			);
+			chmodSync(uninstaller, 0o755);
+			writeFileSync(join(channelRoot, ".electrobun-uninstall.json"), "{}\n");
+			const packagedUninstaller = join(newApp, "Resources", "uninstall");
+			writeFileSync(
+				packagedUninstaller,
 				[
 					"#!/bin/sh",
 					'test "$1" = "--refresh-metadata" || exit 41',
@@ -69,7 +78,7 @@ describe.skipIf(process.platform !== "linux")(
 					"",
 				].join("\n"),
 			);
-			chmodSync(uninstaller, 0o755);
+			chmodSync(packagedUninstaller, 0o755);
 
 			const tarResult = spawnSync(
 				"tar",
@@ -121,8 +130,13 @@ describe.skipIf(process.platform !== "linux")(
 				await Updater.applyUpdate();
 
 				expect(readFileSync(refreshLog, "utf8")).toBe("refreshed\n");
+				expect(existsSync(oldManagerLog)).toBe(false);
 				expect(existsSync(join(runningApp, "new-version.txt"))).toBe(true);
 				expect(existsSync(join(runningApp, "old-version.txt"))).toBe(false);
+				expect(readFileSync(uninstaller, "utf8")).toBe(
+					readFileSync(join(runningApp, "Resources", "uninstall"), "utf8"),
+				);
+				expect(lstatSync(uninstaller).mode & 0o777).toBe(0o755);
 				expect(existsSync(staleExtractionState)).toBe(false);
 				expect(existsSync(latestTar)).toBe(true);
 				expect(fetchSpy).toHaveBeenCalledTimes(2);
