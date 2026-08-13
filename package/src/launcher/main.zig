@@ -197,6 +197,12 @@ fn delegateUninstall(
         .stdout = .inherit,
         .stderr = .inherit,
     });
+    // The Windows manager must stop every executable under app before it can
+    // remove that directory. Do not make the in-app launcher wait and thereby
+    // force the manager to terminate its own parent; successful spawn is the
+    // delegation boundary, and the standalone manager owns completion.
+    if (builtin.os.tag == .windows) return;
+
     const result = try manager.wait(io);
     switch (result) {
         .exited => |code| if (code != 0) std.process.exit(code),

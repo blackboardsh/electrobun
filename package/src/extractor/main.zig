@@ -21,8 +21,12 @@ const ARCHIVE_MARKER = "ELECTROBUN_ARCHIVE_V1";
 const METADATA_MARKER = "ELECTROBUN_METADATA_V1";
 
 const WINDOWS_UNINSTALL_EXE_NAME = "uninstall.exe";
+const WINDOWS_BUNDLED_UNINSTALL_EXE_NAME = "uninstall";
 const WINDOWS_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
 const WINDOWS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const WINDOWS_DATA_PATH_VERSION: u32 = 1;
+const WINDOWS_UPDATE_REFRESH_STAGE_PREFIX = "electrobun-uninstall-refresh-";
+const WINDOWS_UPDATE_REFRESH_STAGE_SUFFIX = ".exe";
 const WINDOWS_UNINSTALL_REGISTRY_ROOT = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
 const LINUX_UNINSTALL_EXE_NAME = "uninstall";
 const LINUX_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
@@ -55,6 +59,19 @@ const windows_uninstall_sync = if (builtin.os.tag == .windows) struct {
     const infinite: win.DWORD = 0xffffffff;
 } else struct {};
 
+const windows_uninstall_ui = if (builtin.os.tag == .windows) struct {
+    extern fn electrobun_show_windows_uninstall_prompt(app_name: [*:0]const u16) callconv(.c) c_int;
+    extern fn electrobun_atomic_copy_windows_manager(
+        source_path: [*:0]const u16,
+        destination_path: [*:0]const u16,
+    ) callconv(.c) c_int;
+    extern fn electrobun_read_windows_file_exact(
+        path: [*:0]const u16,
+        buffer: [*]u8,
+        expected_size: usize,
+    ) callconv(.c) c_int;
+} else struct {};
+
 // Metadata structure embedded in the binary
 const AppMetadata = struct {
     identifier: []const u8,
@@ -71,7 +88,88 @@ const WindowsUninstallManifest = struct {
     channel: []const u8,
     desktop_shortcut: []const u8,
     start_menu_shortcut: []const u8,
+    // Missing on manifests written by the first Windows uninstaller. A null
+    // value is the legacy spelling of the version-1 managed-path policy.
+    data_path_versions: ?[]const u32 = null,
 };
+
+const WindowsUninstallMode = enum {
+    app,
+    app_and_data,
+};
+
+const WindowsManagerCommand = union(enum) {
+    uninstall: ?WindowsUninstallMode,
+    refresh_registration,
+    refresh_registration_from_update: []const u8,
+    cleanup_uninstaller: struct {
+        original_uninstaller: []const u8,
+        manifest_path: []const u8,
+        install_nonce: []const u8,
+        delete_data: bool,
+    },
+};
+
+fn parseWindowsManagerCommand(args: []const []const u8) !WindowsManagerCommand {
+    if (args.len == 0) return .{ .uninstall = null };
+    if (std.mem.eql(u8, args[0], "--uninstall")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = null },
+            2 => if (std.mem.eql(u8, args[1], "--quiet"))
+                .{ .uninstall = .app }
+            else
+                error.InvalidArguments,
+            3 => if (std.mem.eql(u8, args[1], "--quiet") and
+                std.mem.eql(u8, args[2], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--quiet")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = .app },
+            2 => if (std.mem.eql(u8, args[1], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--refresh-registration")) {
+        return switch (args.len) {
+            1 => .refresh_registration,
+            2 => if (std.mem.eql(u8, args[1], "--quiet"))
+                .refresh_registration
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--refresh-registration-from-update")) {
+        if (args.len != 3 or
+            args[1].len == 0 or
+            !std.mem.eql(u8, args[2], "--quiet"))
+        {
+            return error.InvalidArguments;
+        }
+        return .{ .refresh_registration_from_update = args[1] };
+    }
+    if (std.mem.eql(u8, args[0], "--cleanup-uninstaller")) {
+        if (args.len != 4 and args.len != 5) return error.InvalidArguments;
+        if (args.len == 5 and !std.mem.eql(u8, args[4], "--delete-data")) {
+            return error.InvalidArguments;
+        }
+        return .{ .cleanup_uninstaller = .{
+            .original_uninstaller = args[1],
+            .manifest_path = args[2],
+            .install_nonce = args[3],
+            .delete_data = args.len == 5,
+        } };
+    }
+    return error.InvalidArguments;
+}
 
 const LinuxDesktopIntegration = struct {
     application_entry: ?[]u8 = null,
@@ -728,7 +826,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     if (builtin.os.tag == .linux) {
         try installLinuxIntegration(allocator, app_dir, metadata);
     } else if (builtin.os.tag == .windows) {
-        try installWindowsIntegration(allocator, app_dir, metadata, exe_path);
+        try installWindowsIntegration(allocator, app_dir, metadata);
     }
 
     std.debug.print(" Done!\n", .{});
@@ -1458,6 +1556,33 @@ fn runWindowsCommandChecked(argv: []const []const u8) !void {
     if (!try runWindowsCommand(argv)) return error.WindowsCommandFailed;
 }
 
+fn getWindowsSystemExecutablePath(
+    allocator: std.mem.Allocator,
+    executable_name: []const u8,
+) ![]u8 {
+    if (builtin.os.tag != .windows) unreachable;
+    const system_directory = try std.unicode.wtf16LeToWtf8Alloc(
+        allocator,
+        std.os.windows.getSystemDirectoryWtf16Le(),
+    );
+    defer allocator.free(system_directory);
+    return std.fs.path.join(allocator, &.{ system_directory, executable_name });
+}
+
+fn getWindowsPowerShellPath(allocator: std.mem.Allocator) ![]u8 {
+    const system_directory = try std.unicode.wtf16LeToWtf8Alloc(
+        allocator,
+        std.os.windows.getSystemDirectoryWtf16Le(),
+    );
+    defer allocator.free(system_directory);
+    return std.fs.path.join(allocator, &.{
+        system_directory,
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe",
+    });
+}
+
 fn isSafeWindowsComponent(value: []const u8) bool {
     if (value.len == 0 or std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
     if (value[value.len - 1] == ' ' or value[value.len - 1] == '.') return false;
@@ -1515,8 +1640,10 @@ fn queryWindowsKnownFolder(allocator: std.mem.Allocator, special_folder: []const
         .{special_folder},
     );
     defer allocator.free(command);
+    const powershell_path = try getWindowsPowerShellPath(allocator);
+    defer allocator.free(powershell_path);
     const argv = [_][]const u8{
-        "powershell.exe",
+        powershell_path,
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
@@ -1585,9 +1712,11 @@ fn createWindowsShortcutFile(
         \\
     , .{ escaped_lnk, escaped_target, escaped_working, escaped_icon });
     defer allocator.free(ps_content);
+    const powershell_path = try getWindowsPowerShellPath(allocator);
+    defer allocator.free(powershell_path);
 
     const ps_args = [_][]const u8{
-        "powershell.exe",
+        powershell_path,
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
@@ -1624,9 +1753,45 @@ fn deleteWindowsShortcutIfTargets(
         \\
     , .{ escaped_shortcut, escaped_shortcut, escaped_target, escaped_shortcut });
     defer allocator.free(command);
+    const powershell_path = try getWindowsPowerShellPath(allocator);
+    defer allocator.free(powershell_path);
 
     const argv = [_][]const u8{
-        "powershell.exe",
+        powershell_path,
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        command,
+    };
+    try runWindowsCommandChecked(&argv);
+}
+
+fn preflightWindowsShortcutForCleanup(
+    allocator: std.mem.Allocator,
+    shortcut_path: []const u8,
+) !void {
+    const escaped_shortcut = try powershellSingleQuoted(allocator, shortcut_path);
+    defer allocator.free(escaped_shortcut);
+    const command = try std.fmt.allocPrint(allocator,
+        \\$ErrorActionPreference = 'Stop'
+        \\if (-not (Test-Path -LiteralPath '{s}')) {{ exit 0 }}
+        \\$Item = Get-Item -LiteralPath '{s}' -Force
+        \\if ($Item.PSIsContainer -or (($Item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {{ exit 2 }}
+        \\try {{
+        \\    $WshShell = New-Object -ComObject WScript.Shell
+        \\    [void]$WshShell.CreateShortcut('{s}').TargetPath
+        \\}} catch {{
+        \\    # An edited/non-shortcut file is not Electrobun-owned. Preserve it.
+        \\}}
+        \\
+    , .{ escaped_shortcut, escaped_shortcut, escaped_shortcut });
+    defer allocator.free(command);
+    const powershell_path = try getWindowsPowerShellPath(allocator);
+    defer allocator.free(powershell_path);
+    const argv = [_][]const u8{
+        powershell_path,
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
@@ -1868,9 +2033,7 @@ fn readInstalledLinuxIdentity(
 }
 
 fn getWindowsRegExePath(allocator: std.mem.Allocator) ![]u8 {
-    const system_root = getEnvOwned(allocator, "SYSTEMROOT") catch allocator.dupe(u8, "C:\\Windows") catch return error.OutOfMemory;
-    defer allocator.free(system_root);
-    return std.fs.path.join(allocator, &.{ system_root, "System32", "reg.exe" });
+    return getWindowsSystemExecutablePath(allocator, "reg.exe");
 }
 
 fn registryKeyExists(reg_exe: []const u8, key: []const u8) !bool {
@@ -1953,6 +2116,233 @@ fn windowsPathsEqual(allocator: std.mem.Allocator, left: []const u8, right: []co
     return std.ascii.eqlIgnoreCase(resolved_left, resolved_right);
 }
 
+fn isSafeWindowsDisplayName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 240) return false;
+    for (value) |byte| switch (byte) {
+        0...31, 127 => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn validateWindowsDataPathVersions(versions: ?[]const u32) !void {
+    // The original Windows manifest predates this field. Those manifests used
+    // the same LOCALAPPDATA-based layout that policy version 1 describes.
+    const selected = versions orelse return;
+    if (selected.len != 1 or selected[0] != WINDOWS_DATA_PATH_VERSION) {
+        return error.InvalidUninstallManifest;
+    }
+}
+
+const WindowsManagedPaths = struct {
+    local_appdata: []u8,
+    identifier_dir: []u8,
+    channel_root: []u8,
+    app_dir: []u8,
+    self_extraction_dir: []u8,
+    update_script: []u8,
+    uninstaller: []u8,
+    manifest: []u8,
+    bundled_uninstaller: []u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.local_appdata);
+        allocator.free(self.identifier_dir);
+        allocator.free(self.channel_root);
+        allocator.free(self.app_dir);
+        allocator.free(self.self_extraction_dir);
+        allocator.free(self.update_script);
+        allocator.free(self.uninstaller);
+        allocator.free(self.manifest);
+        allocator.free(self.bundled_uninstaller);
+        self.* = undefined;
+    }
+};
+
+fn requirePlainWindowsDirectoryPhysical(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    expected_physical_path: ?[]const u8,
+) ![:0]u8 {
+    const stat = try std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false });
+    if (stat.kind != .directory) return error.InvalidUninstallLocation;
+    const physical = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, path, allocator);
+    errdefer allocator.free(physical);
+    if (expected_physical_path) |expected| {
+        if (!try windowsPathsEqual(allocator, physical, expected)) {
+            return error.InvalidUninstallLocation;
+        }
+    }
+    return physical;
+}
+
+fn windowsManagedPathsFromBaseDir(
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !WindowsManagedPaths {
+    if (!std.fs.path.isAbsolute(base_dir) or
+        !isSafeWindowsComponent(identifier) or
+        !isSafeWindowsComponent(channel)) return error.InvalidUninstallLocation;
+
+    const local_appdata_raw = try getAppDataDir(allocator);
+    defer allocator.free(local_appdata_raw);
+    const local_appdata = try std.fs.path.resolve(allocator, &.{local_appdata_raw});
+    errdefer allocator.free(local_appdata);
+    if (!std.fs.path.isAbsolute(local_appdata) or
+        std.mem.eql(u8, local_appdata, std.fs.path.sep_str)) return error.InvalidUninstallLocation;
+
+    const identifier_dir = try std.fs.path.join(allocator, &.{ local_appdata, identifier });
+    errdefer allocator.free(identifier_dir);
+    const channel_root = try std.fs.path.join(allocator, &.{ identifier_dir, channel });
+    errdefer allocator.free(channel_root);
+    if (!try windowsPathsEqual(allocator, base_dir, channel_root)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    // Validate each existing ancestor without following its final reparse
+    // point, then bind the next child to that ancestor's physical path. A
+    // junction anywhere in LOCALAPPDATA/<identifier>/<channel> is therefore
+    // rejected before any recursive cleanup is attempted.
+    const local_physical = try requirePlainWindowsDirectoryPhysical(allocator, local_appdata, null);
+    defer allocator.free(local_physical);
+    const expected_identifier_physical = try std.fs.path.join(allocator, &.{ local_physical, identifier });
+    defer allocator.free(expected_identifier_physical);
+    const identifier_physical = try requirePlainWindowsDirectoryPhysical(
+        allocator,
+        identifier_dir,
+        expected_identifier_physical,
+    );
+    defer allocator.free(identifier_physical);
+    const expected_channel_physical = try std.fs.path.join(allocator, &.{ identifier_physical, channel });
+    defer allocator.free(expected_channel_physical);
+    const channel_physical = try requirePlainWindowsDirectoryPhysical(
+        allocator,
+        channel_root,
+        expected_channel_physical,
+    );
+    allocator.free(channel_physical);
+
+    const app_dir = try std.fs.path.join(allocator, &.{ channel_root, "app" });
+    errdefer allocator.free(app_dir);
+    const self_extraction_dir = try std.fs.path.join(allocator, &.{ channel_root, "self-extraction" });
+    errdefer allocator.free(self_extraction_dir);
+    const update_script = try std.fs.path.join(allocator, &.{ channel_root, "update.bat" });
+    errdefer allocator.free(update_script);
+    const uninstaller = try std.fs.path.join(allocator, &.{ channel_root, WINDOWS_UNINSTALL_EXE_NAME });
+    errdefer allocator.free(uninstaller);
+    const manifest = try std.fs.path.join(allocator, &.{ channel_root, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    errdefer allocator.free(manifest);
+    const bundled_uninstaller = try std.fs.path.join(
+        allocator,
+        &.{ app_dir, "Resources", WINDOWS_BUNDLED_UNINSTALL_EXE_NAME },
+    );
+    errdefer allocator.free(bundled_uninstaller);
+    return .{
+        .local_appdata = local_appdata,
+        .identifier_dir = identifier_dir,
+        .channel_root = channel_root,
+        .app_dir = app_dir,
+        .self_extraction_dir = self_extraction_dir,
+        .update_script = update_script,
+        .uninstaller = uninstaller,
+        .manifest = manifest,
+        .bundled_uninstaller = bundled_uninstaller,
+    };
+}
+
+fn requirePlainWindowsFile(path: []const u8, invalid_error: anyerror) !void {
+    const stat = std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false }) catch return invalid_error;
+    if (stat.kind != .file) return invalid_error;
+}
+
+fn requirePlainWindowsBundledManager(
+    allocator: std.mem.Allocator,
+    paths: WindowsManagedPaths,
+) !void {
+    const channel_physical = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, paths.channel_root, allocator);
+    defer allocator.free(channel_physical);
+    const expected_app_physical = try std.fs.path.join(allocator, &.{ channel_physical, "app" });
+    defer allocator.free(expected_app_physical);
+    const app_physical = try requirePlainWindowsDirectoryPhysical(
+        allocator,
+        paths.app_dir,
+        expected_app_physical,
+    );
+    defer allocator.free(app_physical);
+    const resources_path = try std.fs.path.join(allocator, &.{ paths.app_dir, "Resources" });
+    defer allocator.free(resources_path);
+    const expected_resources_physical = try std.fs.path.join(allocator, &.{ app_physical, "Resources" });
+    defer allocator.free(expected_resources_physical);
+    const resources_physical = try requirePlainWindowsDirectoryPhysical(
+        allocator,
+        resources_path,
+        expected_resources_physical,
+    );
+    defer allocator.free(resources_physical);
+    try requirePlainWindowsFile(paths.bundled_uninstaller, error.InvalidUninstallManager);
+    const manager_physical = try std.Io.Dir.realPathFileAbsoluteAlloc(
+        g_io,
+        paths.bundled_uninstaller,
+        allocator,
+    );
+    defer allocator.free(manager_physical);
+    const expected_manager_physical = try std.fs.path.join(
+        allocator,
+        &.{ resources_physical, WINDOWS_BUNDLED_UNINSTALL_EXE_NAME },
+    );
+    defer allocator.free(expected_manager_physical);
+    if (!try windowsPathsEqual(allocator, manager_physical, expected_manager_physical)) {
+        return error.InvalidUninstallManager;
+    }
+}
+
+fn openWindowsIdentifierDir(paths: WindowsManagedPaths, identifier: []const u8) !std.Io.Dir {
+    var local_dir = std.Io.Dir.openDirAbsolute(g_io, paths.local_appdata, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    defer local_dir.close(g_io);
+    return local_dir.openDir(g_io, identifier, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => error.InvalidUninstallLocation,
+        else => err,
+    };
+}
+
+fn openWindowsChannelDir(paths: WindowsManagedPaths, identifier: []const u8, channel: []const u8) !std.Io.Dir {
+    var identifier_dir = try openWindowsIdentifierDir(paths, identifier);
+    defer identifier_dir.close(g_io);
+    return identifier_dir.openDir(g_io, channel, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => error.InvalidUninstallLocation,
+        else => err,
+    };
+}
+
+fn validateWindowsManagedChildIfExists(
+    channel_dir: std.Io.Dir,
+    child_name: []const u8,
+    allow_directory: bool,
+    allow_file: bool,
+) !void {
+    const stat = channel_dir.statFile(g_io, child_name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return,
+        else => return err,
+    };
+    if ((stat.kind == .directory and allow_directory) or
+        (stat.kind == .file and allow_file)) return;
+    return error.InvalidUninstallLocation;
+}
+
 fn isValidWindowsInstallNonce(nonce: []const u8) bool {
     if (nonce.len != 32) return false;
     for (nonce) |byte| {
@@ -2019,27 +2409,34 @@ fn validateWindowsUninstallManifest(
     if (manifest.schema_version != WINDOWS_UNINSTALL_MANIFEST_VERSION or
         !isValidWindowsInstallNonce(manifest.install_nonce) or
         !isSafeWindowsComponent(manifest.identifier) or
-        !isSafeWindowsComponent(manifest.channel))
+        !isSafeWindowsComponent(manifest.channel) or
+        !isSafeWindowsDisplayName(manifest.name))
     {
         return error.InvalidUninstallManifest;
     }
-
-    if (!std.fs.path.isAbsolute(base_dir) or
-        !std.ascii.eqlIgnoreCase(std.fs.path.basename(base_dir), manifest.channel))
-    {
-        return error.InvalidUninstallLocation;
-    }
-    const identifier_dir = std.fs.path.dirname(base_dir) orelse return error.InvalidUninstallLocation;
-    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(identifier_dir), manifest.identifier)) {
-        return error.InvalidUninstallLocation;
-    }
+    try validateWindowsDataPathVersions(manifest.data_path_versions);
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        base_dir,
+        manifest.identifier,
+        manifest.channel,
+    );
+    defer paths.deinit(allocator);
 
     const shortcut_name = try windowsShortcutFileName(allocator, manifest.name, manifest.channel);
     defer allocator.free(shortcut_name);
+    const desktop_dir = try getWindowsDesktopDir(allocator);
+    defer allocator.free(desktop_dir);
+    const programs_dir = try getWindowsProgramsDir(allocator);
+    defer allocator.free(programs_dir);
+    const expected_desktop_shortcut = try std.fs.path.join(allocator, &.{ desktop_dir, shortcut_name });
+    defer allocator.free(expected_desktop_shortcut);
+    const expected_start_menu_shortcut = try std.fs.path.join(allocator, &.{ programs_dir, shortcut_name });
+    defer allocator.free(expected_start_menu_shortcut);
     if (!std.fs.path.isAbsolute(manifest.desktop_shortcut) or
         !std.fs.path.isAbsolute(manifest.start_menu_shortcut) or
-        !std.ascii.eqlIgnoreCase(std.fs.path.basename(manifest.desktop_shortcut), shortcut_name) or
-        !std.ascii.eqlIgnoreCase(std.fs.path.basename(manifest.start_menu_shortcut), shortcut_name))
+        !try windowsPathsEqual(allocator, manifest.desktop_shortcut, expected_desktop_shortcut) or
+        !try windowsPathsEqual(allocator, manifest.start_menu_shortcut, expected_start_menu_shortcut))
     {
         return error.InvalidUninstallManifest;
     }
@@ -2056,7 +2453,29 @@ fn writeWindowsUninstallManifest(
         .{ .whitespace = .indent_2 },
     );
     defer allocator.free(json);
-    try std.Io.Dir.cwd().writeFile(g_io, .{ .sub_path = manifest_path, .data = json });
+    var atomic_file = try std.Io.Dir.cwd().createFileAtomic(g_io, manifest_path, .{ .replace = true });
+    defer atomic_file.deinit(g_io);
+    var buffer: [4096]u8 = undefined;
+    var writer = atomic_file.file.writer(g_io, &buffer);
+    try writer.interface.writeAll(json);
+    try writer.flush();
+    try atomic_file.file.sync(g_io);
+    try atomic_file.replace(g_io);
+}
+
+fn atomicCopyWindowsManager(
+    allocator: std.mem.Allocator,
+    source_path: []const u8,
+    destination_path: []const u8,
+) !void {
+    const source_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, source_path);
+    defer allocator.free(source_w);
+    const destination_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, destination_path);
+    defer allocator.free(destination_w);
+    if (windows_uninstall_ui.electrobun_atomic_copy_windows_manager(
+        source_w.ptr,
+        destination_w.ptr,
+    ) == 0) return error.WindowsManagerCopyFailed;
 }
 
 fn deleteFileIfExists(path: []const u8) !void {
@@ -2892,12 +3311,30 @@ fn installWindowsIntegration(
     allocator: std.mem.Allocator,
     app_dir: []const u8,
     metadata: AppMetadata,
-    installer_path: []const u8,
 ) !void {
-    if (!isSafeWindowsComponent(metadata.identifier) or !isSafeWindowsComponent(metadata.channel)) {
+    if (!isSafeWindowsComponent(metadata.identifier) or
+        !isSafeWindowsComponent(metadata.channel) or
+        !isSafeWindowsDisplayName(metadata.name))
+    {
         return error.InvalidInstallIdentity;
     }
     const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        base_dir,
+        metadata.identifier,
+        metadata.channel,
+    );
+    defer paths.deinit(allocator);
+    if (!try windowsPathsEqual(allocator, app_dir, paths.app_dir)) {
+        return error.InvalidInstallLocation;
+    }
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, paths.channel_root);
+    defer uninstall_lock.release();
+    var channel_dir = try openWindowsChannelDir(paths, metadata.identifier, metadata.channel);
+    defer channel_dir.close(g_io);
+    try requirePlainWindowsBundledManager(allocator, paths);
+
     const target_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
     defer allocator.free(target_path);
     try std.Io.Dir.cwd().access(g_io, target_path, .{});
@@ -2917,14 +3354,10 @@ fn installWindowsIntegration(
     const start_menu_shortcut = try std.fs.path.join(allocator, &.{ programs_dir, shortcut_name });
     defer allocator.free(start_menu_shortcut);
 
-    const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_EXE_NAME });
-    defer allocator.free(uninstall_path);
-    try std.Io.Dir.copyFileAbsolute(installer_path, uninstall_path, g_io, .{});
-    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
-    defer allocator.free(manifest_path);
+    try atomicCopyWindowsManager(allocator, paths.bundled_uninstaller, paths.uninstaller);
     removePreviousWindowsShortcuts(
         allocator,
-        manifest_path,
+        paths.manifest,
         metadata.identifier,
         metadata.channel,
         desktop_dir,
@@ -2947,6 +3380,7 @@ fn installWindowsIntegration(
         std.debug.print("Warning: Could not remove legacy Windows shortcuts: {}\n", .{err});
     };
     const install_nonce = createWindowsInstallNonce();
+    const data_path_versions = [_]u32{WINDOWS_DATA_PATH_VERSION};
     const manifest = WindowsUninstallManifest{
         .schema_version = WINDOWS_UNINSTALL_MANIFEST_VERSION,
         .install_nonce = &install_nonce,
@@ -2955,19 +3389,20 @@ fn installWindowsIntegration(
         .channel = metadata.channel,
         .desktop_shortcut = desktop_shortcut,
         .start_menu_shortcut = start_menu_shortcut,
+        .data_path_versions = &data_path_versions,
     };
-    try writeWindowsUninstallManifest(allocator, manifest_path, manifest);
+    try writeWindowsUninstallManifest(allocator, paths.manifest, manifest);
 
     errdefer deleteFileIfExists(desktop_shortcut) catch {};
     errdefer deleteFileIfExists(start_menu_shortcut) catch {};
     try createWindowsShortcutFile(allocator, desktop_shortcut, target_path, working_dir, target_path);
     try createWindowsShortcutFile(allocator, start_menu_shortcut, target_path, working_dir, target_path);
-    try registerWindowsUninstallEntry(allocator, manifest, app_dir, uninstall_path);
+    try registerWindowsUninstallEntry(allocator, manifest, app_dir, paths.uninstaller);
 }
 
-fn retryDeleteTree(path: []const u8) !void {
+fn retryDeleteTreeInDir(dir: std.Io.Dir, sub_path: []const u8) !void {
     for (0..60) |attempt| {
-        std.Io.Dir.cwd().deleteTree(g_io, path) catch |err| {
+        dir.deleteTree(g_io, sub_path) catch |err| {
             if (attempt == 59) return err;
             g_io.sleep(.fromMilliseconds(500), .awake) catch {};
             continue;
@@ -2976,12 +3411,15 @@ fn retryDeleteTree(path: []const u8) !void {
     }
 }
 
-fn retryDeleteFile(path: []const u8) !void {
+fn retryDeleteFileInDir(dir: std.Io.Dir, sub_path: []const u8) !void {
     for (0..20) |attempt| {
-        deleteFileIfExists(path) catch |err| {
-            if (attempt == 19) return err;
-            g_io.sleep(.fromMilliseconds(250), .awake) catch {};
-            continue;
+        dir.deleteFile(g_io, sub_path) catch |err| switch (err) {
+            error.FileNotFound, error.NotDir => return,
+            else => {
+                if (attempt == 19) return err;
+                g_io.sleep(.fromMilliseconds(250), .awake) catch {};
+                continue;
+            },
         };
         return;
     }
@@ -2999,8 +3437,10 @@ fn terminateWindowsAppProcesses(allocator: std.mem.Allocator, app_dir: []const u
         .{escaped_app_dir},
     );
     defer allocator.free(command);
+    const powershell_path = try getWindowsPowerShellPath(allocator);
+    defer allocator.free(powershell_path);
     const argv = [_][]const u8{
-        "powershell.exe",
+        powershell_path,
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
@@ -3021,6 +3461,96 @@ fn getWindowsTempDir(allocator: std.mem.Allocator) ![]u8 {
     };
 }
 
+fn isValidWindowsUpdateRefreshStageName(name: []const u8) bool {
+    const expected_len = WINDOWS_UPDATE_REFRESH_STAGE_PREFIX.len +
+        32 + WINDOWS_UPDATE_REFRESH_STAGE_SUFFIX.len;
+    if (name.len != expected_len or
+        !std.mem.startsWith(u8, name, WINDOWS_UPDATE_REFRESH_STAGE_PREFIX) or
+        !std.mem.endsWith(u8, name, WINDOWS_UPDATE_REFRESH_STAGE_SUFFIX))
+    {
+        return false;
+    }
+    const nonce = name[WINDOWS_UPDATE_REFRESH_STAGE_PREFIX.len..][0..32];
+    for (nonce) |byte| switch (byte) {
+        '0'...'9', 'a'...'f' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn validateWindowsUpdateRefreshStageLocation(
+    allocator: std.mem.Allocator,
+    executable_path: []const u8,
+) !void {
+    if (!std.fs.path.isAbsolute(executable_path) or
+        !isValidWindowsUpdateRefreshStageName(std.fs.path.basename(executable_path)))
+    {
+        return error.InvalidUninstallLocation;
+    }
+    try validateWindowsTemporaryExecutableLocation(allocator, executable_path);
+}
+
+fn isValidTemporaryUninstallWorkerName(name: []const u8) bool {
+    const prefix = "electrobun-uninstall-";
+    const suffix = ".exe";
+    if (!std.mem.startsWith(u8, name, prefix) or
+        !std.mem.endsWith(u8, name, suffix)) return false;
+    const nonce = name[prefix.len .. name.len - suffix.len];
+    if (nonce.len == 0 or nonce.len > 16) return false;
+    for (nonce) |byte| switch (byte) {
+        '0'...'9', 'a'...'f' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn validateTemporaryUninstallWorkerLocation(
+    allocator: std.mem.Allocator,
+    worker_path: []const u8,
+) !void {
+    if (!isValidTemporaryUninstallWorkerName(std.fs.path.basename(worker_path))) {
+        return error.InvalidUninstallLocation;
+    }
+    try validateWindowsTemporaryExecutableLocation(allocator, worker_path);
+}
+
+fn validateWindowsTemporaryExecutableLocation(
+    allocator: std.mem.Allocator,
+    executable_path: []const u8,
+) !void {
+    if (!std.fs.path.isAbsolute(executable_path)) return error.InvalidUninstallLocation;
+    try requirePlainWindowsFile(executable_path, error.InvalidUninstallLocation);
+
+    const temp_raw = try getWindowsTempDir(allocator);
+    defer allocator.free(temp_raw);
+    const temp_path = try std.fs.path.resolve(allocator, &.{temp_raw});
+    defer allocator.free(temp_path);
+    const executable_resolved = try std.fs.path.resolve(allocator, &.{executable_path});
+    defer allocator.free(executable_resolved);
+    const executable_parent = std.fs.path.dirname(executable_resolved) orelse
+        return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(executable_parent, temp_path)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    const temp_physical = try requirePlainWindowsDirectoryPhysical(allocator, temp_path, null);
+    defer allocator.free(temp_physical);
+    const executable_physical = try std.Io.Dir.realPathFileAbsoluteAlloc(
+        g_io,
+        executable_resolved,
+        allocator,
+    );
+    defer allocator.free(executable_physical);
+    const expected_physical = try std.fs.path.join(
+        allocator,
+        &.{ temp_physical, std.fs.path.basename(executable_resolved) },
+    );
+    defer allocator.free(expected_physical);
+    if (!try windowsPathsEqual(allocator, executable_physical, expected_physical)) {
+        return error.InvalidUninstallLocation;
+    }
+}
+
 fn createTemporaryUninstallWorker(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
     const temp_dir = try getWindowsTempDir(allocator);
     defer allocator.free(temp_dir);
@@ -3035,7 +3565,10 @@ fn createTemporaryUninstallWorker(allocator: std.mem.Allocator, source_path: []c
     defer allocator.free(worker_name);
     const worker_path = try std.fs.path.join(allocator, &.{ temp_dir, worker_name });
     errdefer allocator.free(worker_path);
-    try std.Io.Dir.copyFileAbsolute(source_path, worker_path, g_io, .{});
+    // Use the same Windows-native path as manager installation. Zig 0.16's
+    // copyFile/sendFile implementation can hit an internal unreachable when
+    // copying this PE on Windows.
+    try atomicCopyWindowsManager(allocator, source_path, worker_path);
     return worker_path;
 }
 
@@ -3044,13 +3577,27 @@ fn loadAndValidateWindowsManifest(
     manifest_path: []const u8,
     base_dir: []const u8,
 ) !struct { contents: []u8, parsed: std.json.Parsed(WindowsUninstallManifest) } {
-    const contents = try std.Io.Dir.cwd().readFileAlloc(
-        g_io,
-        manifest_path,
-        allocator,
-        .limited(64 * 1024),
-    );
+    var manifest_file = try std.Io.Dir.openFileAbsolute(g_io, manifest_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer manifest_file.close(g_io);
+    const manifest_stat = try manifest_file.stat(g_io);
+    if (manifest_stat.kind != .file) return error.InvalidUninstallManifest;
+    if (manifest_stat.size > 64 * 1024) return error.InvalidUninstallManifest;
+    const manifest_size = std.math.cast(usize, manifest_stat.size) orelse
+        return error.InvalidUninstallManifest;
+    const contents = try allocator.alloc(u8, manifest_size);
     errdefer allocator.free(contents);
+    const manifest_path_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, manifest_path);
+    defer allocator.free(manifest_path_w);
+    if (windows_uninstall_ui.electrobun_read_windows_file_exact(
+        manifest_path_w.ptr,
+        contents.ptr,
+        contents.len,
+    ) == 0) {
+        return error.InvalidUninstallManifest;
+    }
     const parsed = try std.json.parseFromSlice(
         WindowsUninstallManifest,
         allocator,
@@ -3062,82 +3609,299 @@ fn loadAndValidateWindowsManifest(
     return .{ .contents = contents, .parsed = parsed };
 }
 
+const WindowsManagerInvocation = struct {
+    base_dir: []u8,
+    bundled: bool,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.base_dir);
+        self.* = undefined;
+    }
+};
+
+fn locateWindowsManagerInvocation(
+    allocator: std.mem.Allocator,
+    executable_path: []const u8,
+    allow_bundled: bool,
+) !WindowsManagerInvocation {
+    try requirePlainWindowsFile(executable_path, error.InvalidUninstallLocation);
+    const executable_name = std.fs.path.basename(executable_path);
+    if (std.ascii.eqlIgnoreCase(executable_name, WINDOWS_UNINSTALL_EXE_NAME)) {
+        const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+        return .{ .base_dir = try allocator.dupe(u8, base_dir), .bundled = false };
+    }
+    if (!allow_bundled or
+        !std.ascii.eqlIgnoreCase(executable_name, WINDOWS_BUNDLED_UNINSTALL_EXE_NAME))
+    {
+        return error.InvalidUninstallLocation;
+    }
+    const resources_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(resources_dir), "Resources")) {
+        return error.InvalidUninstallLocation;
+    }
+    const app_dir = std.fs.path.dirname(resources_dir) orelse return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(app_dir), "app")) {
+        return error.InvalidUninstallLocation;
+    }
+    const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidUninstallLocation;
+    return .{ .base_dir = try allocator.dupe(u8, base_dir), .bundled = true };
+}
+
 fn refreshWindowsUninstallRegistration(allocator: std.mem.Allocator) !void {
     const executable_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(executable_path);
-    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
-    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(executable_path), WINDOWS_UNINSTALL_EXE_NAME)) {
-        return error.InvalidUninstallLocation;
-    }
-    var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
+    var invocation = try locateWindowsManagerInvocation(allocator, executable_path, true);
+    defer invocation.deinit(allocator);
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, invocation.base_dir);
     defer uninstall_lock.release();
-    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    const manifest_path = try std.fs.path.join(
+        allocator,
+        &.{ invocation.base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME },
+    );
     defer allocator.free(manifest_path);
-    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, invocation.base_dir);
     defer allocator.free(document.contents);
     defer document.parsed.deinit();
-    const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
-    defer allocator.free(app_dir);
-    try registerWindowsUninstallEntry(allocator, document.parsed.value, app_dir, executable_path);
-}
-
-fn uninstallWindows(allocator: std.mem.Allocator) !void {
-    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
-    defer allocator.free(executable_path);
-    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
-    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(executable_path), WINDOWS_UNINSTALL_EXE_NAME)) {
+    const old = document.parsed.value;
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        invocation.base_dir,
+        old.identifier,
+        old.channel,
+    );
+    defer paths.deinit(allocator);
+    const expected_invocation_path = if (invocation.bundled)
+        paths.bundled_uninstaller
+    else
+        paths.uninstaller;
+    if (!try windowsPathsEqual(allocator, executable_path, expected_invocation_path)) {
         return error.InvalidUninstallLocation;
     }
-    var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
+    var channel_dir = try openWindowsChannelDir(paths, old.identifier, old.channel);
+    defer channel_dir.close(g_io);
+    if (invocation.bundled) {
+        // The update bundle carries a thin, archive-free extractor resource.
+        // Replacing through an atomic temp file keeps the previous manager
+        // runnable if reading or writing the new resource fails.
+        try requirePlainWindowsBundledManager(allocator, paths);
+        try atomicCopyWindowsManager(allocator, executable_path, paths.uninstaller);
+    } else {
+        try requirePlainWindowsFile(paths.uninstaller, error.InvalidUninstallLocation);
+    }
+
+    const install_nonce = createWindowsInstallNonce();
+    const data_path_versions = [_]u32{WINDOWS_DATA_PATH_VERSION};
+    const refreshed = WindowsUninstallManifest{
+        .schema_version = WINDOWS_UNINSTALL_MANIFEST_VERSION,
+        .install_nonce = &install_nonce,
+        .identifier = old.identifier,
+        .name = old.name,
+        .channel = old.channel,
+        .desktop_shortcut = old.desktop_shortcut,
+        .start_menu_shortcut = old.start_menu_shortcut,
+        .data_path_versions = &data_path_versions,
+    };
+    errdefer if (invocation.bundled) {
+        // The freshly-copied manager understands the legacy manifest too, but
+        // retain a fully usable retry entry if either manifest or registry
+        // refresh fails after replacement.
+        writeWindowsUninstallManifest(allocator, paths.manifest, old) catch {};
+        registerWindowsUninstallEntry(allocator, old, paths.app_dir, paths.uninstaller) catch {};
+    };
+    try writeWindowsUninstallManifest(allocator, paths.manifest, refreshed);
+    try registerWindowsUninstallEntry(allocator, refreshed, paths.app_dir, paths.uninstaller);
+}
+
+fn refreshWindowsUninstallRegistrationFromUpdate(
+    allocator: std.mem.Allocator,
+    requested_channel_root: []const u8,
+) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    try validateWindowsUpdateRefreshStageLocation(allocator, executable_path);
+
+    if (!std.fs.path.isAbsolute(requested_channel_root)) {
+        return error.InvalidUninstallLocation;
+    }
+    const channel_root = try std.fs.path.resolve(allocator, &.{requested_channel_root});
+    defer allocator.free(channel_root);
+    // The updater passes the canonical channel root it staged against. Reject
+    // traversal or alternate spellings before deriving the mutex or manifest.
+    if (!std.ascii.eqlIgnoreCase(channel_root, requested_channel_root)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, channel_root);
     defer uninstall_lock.release();
-    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    const manifest_path = try std.fs.path.join(
+        allocator,
+        &.{ channel_root, WINDOWS_UNINSTALL_MANIFEST_NAME },
+    );
     defer allocator.free(manifest_path);
-    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, channel_root);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+    const old = document.parsed.value;
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        channel_root,
+        old.identifier,
+        old.channel,
+    );
+    defer paths.deinit(allocator);
+    if (!try windowsPathsEqual(allocator, requested_channel_root, paths.channel_root) or
+        !try windowsPathsEqual(allocator, manifest_path, paths.manifest))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
+    var channel_dir = try openWindowsChannelDir(paths, old.identifier, old.channel);
+    defer channel_dir.close(g_io);
+    try requirePlainWindowsBundledManager(allocator, paths);
+    // A missing external manager is repairable. Any existing target must be a
+    // normal file; in particular, never replace through a reparse point.
+    try validateWindowsManagedChildIfExists(
+        channel_dir,
+        WINDOWS_UNINSTALL_EXE_NAME,
+        false,
+        true,
+    );
+
+    // All stage, manifest, identity, resource, and destination checks precede
+    // the first mutation. From this point onward the validated staged process
+    // arranges its own deferred deletion regardless of refresh success.
+    defer scheduleTemporaryWorkerDeletion(allocator, executable_path) catch {};
+
+    const install_nonce = createWindowsInstallNonce();
+    const data_path_versions = [_]u32{WINDOWS_DATA_PATH_VERSION};
+    const refreshed = WindowsUninstallManifest{
+        .schema_version = WINDOWS_UNINSTALL_MANIFEST_VERSION,
+        .install_nonce = &install_nonce,
+        .identifier = old.identifier,
+        .name = old.name,
+        .channel = old.channel,
+        .desktop_shortcut = old.desktop_shortcut,
+        .start_menu_shortcut = old.start_menu_shortcut,
+        .data_path_versions = &data_path_versions,
+    };
+    var manager_replaced = false;
+    errdefer if (manager_replaced) {
+        // The new thin manager remains runnable with the old manifest. Restore
+        // the previous generation and ARP entry so the operation can be retried.
+        writeWindowsUninstallManifest(allocator, paths.manifest, old) catch {};
+        registerWindowsUninstallEntry(allocator, old, paths.app_dir, paths.uninstaller) catch {};
+    };
+
+    // The staged .exe is only an execution shim. Bind installed manager bytes
+    // to the validated extensionless resource from the updated application.
+    try atomicCopyWindowsManager(allocator, paths.bundled_uninstaller, paths.uninstaller);
+    manager_replaced = true;
+    try writeWindowsUninstallManifest(allocator, paths.manifest, refreshed);
+    try registerWindowsUninstallEntry(allocator, refreshed, paths.app_dir, paths.uninstaller);
+}
+
+fn uninstallWindows(
+    allocator: std.mem.Allocator,
+    requested_mode: ?WindowsUninstallMode,
+) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    var invocation = try locateWindowsManagerInvocation(allocator, executable_path, false);
+    defer invocation.deinit(allocator);
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, invocation.base_dir);
+    defer uninstall_lock.release();
+    const manifest_path = try std.fs.path.join(
+        allocator,
+        &.{ invocation.base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME },
+    );
+    defer allocator.free(manifest_path);
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, invocation.base_dir);
     defer allocator.free(document.contents);
     defer document.parsed.deinit();
     const manifest = document.parsed.value;
 
+    const mode: WindowsUninstallMode = requested_mode orelse blk: {
+        const name_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, manifest.name);
+        defer allocator.free(name_w);
+        break :blk switch (windows_uninstall_ui.electrobun_show_windows_uninstall_prompt(name_w.ptr)) {
+            1 => .app,
+            2 => .app_and_data,
+            else => return,
+        };
+    };
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        invocation.base_dir,
+        manifest.identifier,
+        manifest.channel,
+    );
+    defer paths.deinit(allocator);
+    if (!try windowsPathsEqual(allocator, executable_path, paths.uninstaller) or
+        !try windowsPathsEqual(allocator, manifest_path, paths.manifest))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
+    // Pin the channel directory and validate every selected managed node
+    // before creating a worker, stopping a process, deleting a task, or
+    // changing any file. App-only intentionally never enumerates data.
+    var channel_dir = try openWindowsChannelDir(paths, manifest.identifier, manifest.channel);
+    defer channel_dir.close(g_io);
+    var uninstaller_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_EXE_NAME, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer uninstaller_file.close(g_io);
+    if ((try uninstaller_file.stat(g_io)).kind != .file) return error.InvalidUninstallLocation;
+    var manifest_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_MANIFEST_NAME, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer manifest_file.close(g_io);
+    if ((try manifest_file.stat(g_io)).kind != .file) return error.InvalidUninstallManifest;
+    try validateWindowsManagedChildIfExists(channel_dir, "app", true, true);
+    try validateWindowsManagedChildIfExists(channel_dir, "self-extraction", true, true);
+    try validateWindowsManagedChildIfExists(channel_dir, "update.bat", false, true);
+    try preflightWindowsShortcutForCleanup(allocator, manifest.desktop_shortcut);
+    try preflightWindowsShortcutForCleanup(allocator, manifest.start_menu_shortcut);
+
+    const update_task_name = try windowsUpdateTaskName(allocator, manifest.identifier, manifest.channel);
+    defer allocator.free(update_task_name);
+    const schtasks_path = try getWindowsSystemExecutablePath(allocator, "schtasks.exe");
+    defer allocator.free(schtasks_path);
+    const query_task_args = [_][]const u8{ schtasks_path, "/query", "/tn", update_task_name };
+    const update_task_exists = runWindowsCommand(&query_task_args) catch false;
     const worker_path = try createTemporaryUninstallWorker(allocator, executable_path);
     defer allocator.free(worker_path);
     errdefer deleteFileIfExists(worker_path) catch {};
+    const worker_dir = std.fs.path.dirname(worker_path) orelse return error.InvalidPath;
 
-    const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
-    defer allocator.free(app_dir);
-    const self_extraction_dir = try std.fs.path.join(allocator, &.{ base_dir, "self-extraction" });
-    defer allocator.free(self_extraction_dir);
-    const update_script = try std.fs.path.join(allocator, &.{ base_dir, "update.bat" });
-    defer allocator.free(update_script);
-
-    // Update tasks use a stable, channel-scoped name. Remove only this
-    // installation's task so production/canary and unrelated apps are safe.
-    const update_task_name = try windowsUpdateTaskName(allocator, manifest.identifier, manifest.channel);
-    defer allocator.free(update_task_name);
-    const end_task_args = [_][]const u8{ "schtasks.exe", "/end", "/tn", update_task_name };
-    _ = runWindowsCommand(&end_task_args) catch false;
-    const delete_task_args = [_][]const u8{ "schtasks.exe", "/delete", "/tn", update_task_name, "/f" };
-    _ = runWindowsCommand(&delete_task_args) catch false;
+    var cleanup_error: ?anyerror = null;
+    if (update_task_exists) {
+        const end_task_args = [_][]const u8{ schtasks_path, "/end", "/tn", update_task_name };
+        _ = runWindowsCommand(&end_task_args) catch false;
+        const delete_task_args = [_][]const u8{ schtasks_path, "/delete", "/tn", update_task_name, "/f" };
+        if (!(runWindowsCommand(&delete_task_args) catch false)) {
+            cleanup_error = error.WindowsCommandFailed;
+        }
+    }
 
     // Stop only processes whose executable lives inside this channel's app
     // directory. This avoids terminating a coexisting production/canary app.
-    terminateWindowsAppProcesses(allocator, app_dir) catch |err| {
+    terminateWindowsAppProcesses(allocator, paths.app_dir) catch |err| {
         std.debug.print("Warning: Could not stop running app processes: {}\n", .{err});
     };
 
-    // Deliberately delete only Electrobun-managed paths. The channel root is
-    // also the public userData/cache/logs and browser-profile root.
-    // Attempt every independent item, but retain the ARP entry/uninstaller if
-    // any managed cleanup failed so Windows can retry the uninstall later.
-    var cleanup_error: ?anyerror = null;
-    retryDeleteTree(app_dir) catch |err| if (cleanup_error == null) {
+    retryDeleteTreeInDir(channel_dir, "app") catch |err| if (cleanup_error == null) {
         cleanup_error = err;
     };
-    retryDeleteTree(self_extraction_dir) catch |err| if (cleanup_error == null) {
+    retryDeleteTreeInDir(channel_dir, "self-extraction") catch |err| if (cleanup_error == null) {
         cleanup_error = err;
     };
-    retryDeleteFile(update_script) catch |err| if (cleanup_error == null) {
+    retryDeleteFileInDir(channel_dir, "update.bat") catch |err| if (cleanup_error == null) {
         cleanup_error = err;
     };
-    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+    const launcher_path = try std.fs.path.join(allocator, &.{ paths.app_dir, "bin", "launcher.exe" });
     defer allocator.free(launcher_path);
     deleteWindowsShortcutIfTargets(allocator, manifest.desktop_shortcut, launcher_path) catch |err| if (cleanup_error == null) {
         cleanup_error = err;
@@ -3146,22 +3910,37 @@ fn uninstallWindows(allocator: std.mem.Allocator) !void {
         cleanup_error = err;
     };
     if (cleanup_error) |err| return err;
-    try deleteWindowsUninstallEntry(allocator, manifest.identifier, manifest.channel);
 
-    const worker_args = [_][]const u8{
+    const app_worker_args = [_][]const u8{
         worker_path,
         "--cleanup-uninstaller",
-        executable_path,
-        manifest_path,
+        paths.uninstaller,
+        paths.manifest,
         manifest.install_nonce,
     };
-    _ = try std.process.spawn(g_io, .{
-        .argv = &worker_args,
+    const data_worker_args = [_][]const u8{
+        worker_path,
+        "--cleanup-uninstaller",
+        paths.uninstaller,
+        paths.manifest,
+        manifest.install_nonce,
+        "--delete-data",
+    };
+    const worker_args: []const []const u8 = if (mode == .app_and_data)
+        &data_worker_args
+    else
+        &app_worker_args;
+    const worker = std.process.spawn(g_io, .{
+        .argv = worker_args,
+        // App-and-Data removes the channel root. Do not let the worker inherit
+        // the manager's channel-root working directory and pin that directory.
+        .cwd = .{ .path = worker_dir },
         .stdin = .ignore,
         .stdout = .ignore,
         .stderr = .ignore,
         .create_no_window = true,
-    });
+    }) catch |err| return err;
+    _ = worker;
 }
 
 fn batchDoubleQuotedPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
@@ -3179,6 +3958,10 @@ fn scheduleTemporaryWorkerDeletion(allocator: std.mem.Allocator, worker_path: []
     defer allocator.free(script_path);
     const escaped_worker_path = try batchDoubleQuotedPath(allocator, worker_path);
     defer allocator.free(escaped_worker_path);
+    const ping_path = try getWindowsSystemExecutablePath(allocator, "ping.exe");
+    defer allocator.free(ping_path);
+    const escaped_ping_path = try batchDoubleQuotedPath(allocator, ping_path);
+    defer allocator.free(escaped_ping_path);
     const script = try std.fmt.allocPrint(allocator,
         \\@echo off
         \\setlocal DisableDelayedExpansion
@@ -3188,16 +3971,18 @@ fn scheduleTemporaryWorkerDeletion(allocator: std.mem.Allocator, worker_path: []
         \\if not exist "{s}" goto deleted
         \\set /a retries+=1
         \\if %retries% GEQ 30 exit /b 1
-        \\ping -n 2 127.0.0.1 >nul
+        \\"{s}" -n 2 127.0.0.1 >nul
         \\goto retry
         \\:deleted
         \\del /f /q "%~f0" >nul 2>&1
         \\
-    , .{ escaped_worker_path, escaped_worker_path });
+    , .{ escaped_worker_path, escaped_worker_path, escaped_ping_path });
     defer allocator.free(script);
     try std.Io.Dir.cwd().writeFile(g_io, .{ .sub_path = script_path, .data = script });
 
-    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", script_name };
+    const cmd_path = try getWindowsSystemExecutablePath(allocator, "cmd.exe");
+    defer allocator.free(cmd_path);
+    const argv = [_][]const u8{ cmd_path, "/d", "/c", script_name };
     _ = try std.process.spawn(g_io, .{
         .argv = &argv,
         .cwd = .{ .path = temp_dir },
@@ -3213,47 +3998,172 @@ fn cleanupWindowsUninstaller(
     original_uninstaller: []const u8,
     manifest_path: []const u8,
     expected_install_nonce: []const u8,
+    delete_data: bool,
 ) !void {
     const worker_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(worker_path);
-    defer scheduleTemporaryWorkerDeletion(allocator, worker_path) catch {};
-
-    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(original_uninstaller), WINDOWS_UNINSTALL_EXE_NAME)) {
-        return error.InvalidUninstallLocation;
-    }
     if (!isValidWindowsInstallNonce(expected_install_nonce)) return error.InvalidArguments;
+    try validateTemporaryUninstallWorkerLocation(allocator, worker_path);
+    defer scheduleTemporaryWorkerDeletion(allocator, worker_path) catch {};
     const base_dir = std.fs.path.dirname(original_uninstaller) orelse return error.InvalidUninstallLocation;
-    const expected_manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
-    defer allocator.free(expected_manifest_path);
-    if (!try windowsPathsEqual(allocator, manifest_path, expected_manifest_path)) return error.InvalidUninstallLocation;
-
     var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
     defer uninstall_lock.release();
     var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
     defer allocator.free(document.contents);
     defer document.parsed.deinit();
 
+    const manifest = document.parsed.value;
+    var paths = try windowsManagedPathsFromBaseDir(
+        allocator,
+        base_dir,
+        manifest.identifier,
+        manifest.channel,
+    );
+    defer paths.deinit(allocator);
+    if (!try windowsPathsEqual(allocator, original_uninstaller, paths.uninstaller) or
+        !try windowsPathsEqual(allocator, manifest_path, paths.manifest))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
     // A reinstall can finish before this deferred worker starts. Its new
     // manifest has a different nonce, so a stale worker must leave both files
     // (and the channel directory) intact and only arrange its own deletion.
-    if (!windowsInstallNonceMatches(document.parsed.value.install_nonce, expected_install_nonce)) return;
+    if (!windowsInstallNonceMatches(manifest.install_nonce, expected_install_nonce)) return;
 
-    for (0..40) |attempt| {
-        deleteFileIfExists(original_uninstaller) catch |err| {
-            if (attempt == 39) return err;
-            g_io.sleep(.fromMilliseconds(250), .awake) catch {};
-            continue;
+    var identifier_dir = try openWindowsIdentifierDir(paths, manifest.identifier);
+    defer identifier_dir.close(g_io);
+    if (delete_data) {
+        {
+            var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+                .follow_symlinks = false,
+                .iterate = true,
+            });
+            defer channel_dir.close(g_io);
+            var uninstaller_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_EXE_NAME, .{
+                .allow_directory = false,
+                .follow_symlinks = false,
+            });
+            defer uninstaller_file.close(g_io);
+            if ((try uninstaller_file.stat(g_io)).kind != .file) return error.InvalidUninstallLocation;
+            var manifest_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_MANIFEST_NAME, .{
+                .allow_directory = false,
+                .follow_symlinks = false,
+            });
+            defer manifest_file.close(g_io);
+            if ((try manifest_file.stat(g_io)).kind != .file) return error.InvalidUninstallManifest;
+        }
+
+        var registry_deleted = false;
+        errdefer if (registry_deleted) {
+            registerWindowsUninstallEntry(
+                allocator,
+                manifest,
+                paths.app_dir,
+                paths.uninstaller,
+            ) catch {};
         };
-        break;
+        try deleteWindowsUninstallEntry(allocator, manifest.identifier, manifest.channel);
+        registry_deleted = true;
+
+        // Windows currently maps userData, userCache, and userLogs to this one
+        // channel root. Delete that derived root exactly once, from outside it.
+        retryDeleteTreeInDir(identifier_dir, manifest.channel) catch |err| {
+            restoreWindowsManagerForRetry(
+                allocator,
+                worker_path,
+                identifier_dir,
+                paths,
+                manifest,
+            ) catch {};
+            return err;
+        };
+        std.Io.Dir.cwd().deleteDir(g_io, paths.identifier_dir) catch {};
+        registry_deleted = false;
+        return;
     }
-    try deleteFileIfExists(manifest_path);
+
+    {
+        var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+            .follow_symlinks = false,
+            .iterate = true,
+        });
+        defer channel_dir.close(g_io);
+        {
+            var uninstaller_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_EXE_NAME, .{
+                .allow_directory = false,
+                .follow_symlinks = false,
+            });
+            defer uninstaller_file.close(g_io);
+            if ((try uninstaller_file.stat(g_io)).kind != .file) return error.InvalidUninstallLocation;
+            var manifest_file = try channel_dir.openFile(g_io, WINDOWS_UNINSTALL_MANIFEST_NAME, .{
+                .allow_directory = false,
+                .follow_symlinks = false,
+            });
+            defer manifest_file.close(g_io);
+            if ((try manifest_file.stat(g_io)).kind != .file) return error.InvalidUninstallManifest;
+        }
+
+        var registry_deleted = false;
+        errdefer if (registry_deleted) {
+            registerWindowsUninstallEntry(
+                allocator,
+                manifest,
+                paths.app_dir,
+                paths.uninstaller,
+            ) catch {};
+        };
+        try deleteWindowsUninstallEntry(allocator, manifest.identifier, manifest.channel);
+        registry_deleted = true;
+
+        retryDeleteFileInDir(channel_dir, WINDOWS_UNINSTALL_EXE_NAME) catch |err| {
+            restoreWindowsManagerForRetry(
+                allocator,
+                worker_path,
+                identifier_dir,
+                paths,
+                manifest,
+            ) catch {};
+            return err;
+        };
+        retryDeleteFileInDir(channel_dir, WINDOWS_UNINSTALL_MANIFEST_NAME) catch |err| {
+            restoreWindowsManagerForRetry(
+                allocator,
+                worker_path,
+                identifier_dir,
+                paths,
+                manifest,
+            ) catch {};
+            return err;
+        };
+        registry_deleted = false;
+    }
 
     // These are non-recursive on purpose: preserved user data keeps either
     // directory non-empty, while a data-free install leaves no empty shell.
-    std.Io.Dir.cwd().deleteDir(g_io, base_dir) catch {};
-    if (std.fs.path.dirname(base_dir)) |identifier_dir| {
-        std.Io.Dir.cwd().deleteDir(g_io, identifier_dir) catch {};
-    }
+    identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+    std.Io.Dir.cwd().deleteDir(g_io, paths.identifier_dir) catch {};
+}
+
+fn restoreWindowsManagerForRetry(
+    allocator: std.mem.Allocator,
+    worker_path: []const u8,
+    identifier_dir: std.Io.Dir,
+    paths: WindowsManagedPaths,
+    manifest: WindowsUninstallManifest,
+) !void {
+    identifier_dir.createDir(g_io, manifest.channel, .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer channel_dir.close(g_io);
+    try atomicCopyWindowsManager(allocator, worker_path, paths.uninstaller);
+    try writeWindowsUninstallManifest(allocator, paths.manifest, manifest);
+    try registerWindowsUninstallEntry(allocator, manifest, paths.app_dir, paths.uninstaller);
 }
 
 fn isSafeMacosComponent(value: []const u8) bool {
@@ -3958,37 +4868,36 @@ pub fn main(init: std.process.Init) !void {
     // Installed uninstallers are copies of this extractor. Dispatch management
     // modes before attempting to discover or extract an installer payload.
     if (builtin.os.tag == .windows) {
+        const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+        defer allocator.free(executable_path);
         var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
         defer args.deinit();
         _ = args.next() orelse return error.InvalidArguments;
-        if (args.next()) |command| {
-            if (std.mem.eql(u8, command, "--uninstall")) {
-                if (args.next()) |option| {
-                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
-                        return error.InvalidArguments;
-                    }
-                }
-                try uninstallWindows(allocator);
-                return;
+        var manager_args: std.ArrayList([]const u8) = .empty;
+        defer manager_args.deinit(allocator);
+        while (args.next()) |arg| try manager_args.append(allocator, arg);
+        const installed_manager = std.ascii.eqlIgnoreCase(
+            std.fs.path.basename(executable_path),
+            WINDOWS_UNINSTALL_EXE_NAME,
+        );
+        if (manager_args.items.len != 0 or installed_manager) {
+            const command = try parseWindowsManagerCommand(manager_args.items);
+            switch (command) {
+                .uninstall => |mode| try uninstallWindows(allocator, mode),
+                .refresh_registration => try refreshWindowsUninstallRegistration(allocator),
+                .refresh_registration_from_update => |channel_root| try refreshWindowsUninstallRegistrationFromUpdate(
+                    allocator,
+                    channel_root,
+                ),
+                .cleanup_uninstaller => |cleanup| try cleanupWindowsUninstaller(
+                    allocator,
+                    cleanup.original_uninstaller,
+                    cleanup.manifest_path,
+                    cleanup.install_nonce,
+                    cleanup.delete_data,
+                ),
             }
-            if (std.mem.eql(u8, command, "--refresh-registration")) {
-                if (args.next()) |option| {
-                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
-                        return error.InvalidArguments;
-                    }
-                }
-                try refreshWindowsUninstallRegistration(allocator);
-                return;
-            }
-            if (std.mem.eql(u8, command, "--cleanup-uninstaller")) {
-                const original_uninstaller = args.next() orelse return error.InvalidArguments;
-                const manifest_path = args.next() orelse return error.InvalidArguments;
-                const expected_install_nonce = args.next() orelse return error.InvalidArguments;
-                if (args.next() != null) return error.InvalidArguments;
-                try cleanupWindowsUninstaller(allocator, original_uninstaller, manifest_path, expected_install_nonce);
-                return;
-            }
-            return error.InvalidArguments;
+            return;
         }
     }
     if (builtin.os.tag == .linux) {
@@ -4288,6 +5197,108 @@ test "Windows integration names and registry keys are channel scoped" {
     try std.testing.expectEqualStrings(
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.canary",
         canary_key,
+    );
+}
+
+test "Windows uninstall manager accepts only the unified ordered grammar" {
+    const direct = try parseWindowsManagerCommand(&.{});
+    try std.testing.expect(direct == .uninstall);
+    try std.testing.expect(direct.uninstall == null);
+
+    const delegated = try parseWindowsManagerCommand(&.{"--uninstall"});
+    try std.testing.expect(delegated == .uninstall);
+    try std.testing.expect(delegated.uninstall == null);
+    try std.testing.expectEqual(
+        WindowsUninstallMode.app,
+        (try parseWindowsManagerCommand(&.{"--quiet"})).uninstall.?,
+    );
+    try std.testing.expectEqual(
+        WindowsUninstallMode.app,
+        (try parseWindowsManagerCommand(&.{ "--uninstall", "--quiet" })).uninstall.?,
+    );
+    try std.testing.expectEqual(
+        WindowsUninstallMode.app_and_data,
+        (try parseWindowsManagerCommand(&.{ "--quiet", "--delete-data" })).uninstall.?,
+    );
+    try std.testing.expectEqual(
+        WindowsUninstallMode.app_and_data,
+        (try parseWindowsManagerCommand(&.{ "--uninstall", "--quiet", "--delete-data" })).uninstall.?,
+    );
+    try std.testing.expect((try parseWindowsManagerCommand(&.{"--refresh-registration"})) == .refresh_registration);
+    try std.testing.expect((try parseWindowsManagerCommand(&.{ "--refresh-registration", "--quiet" })) == .refresh_registration);
+    const update_refresh = try parseWindowsManagerCommand(&.{
+        "--refresh-registration-from-update",
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\production",
+        "--quiet",
+    });
+    try std.testing.expect(update_refresh == .refresh_registration_from_update);
+    try std.testing.expectEqualStrings(
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\production",
+        update_refresh.refresh_registration_from_update,
+    );
+    const worker = try parseWindowsManagerCommand(&.{
+        "--cleanup-uninstaller",
+        "C:\\managed\\uninstall.exe",
+        "C:\\managed\\.electrobun-uninstall.json",
+        "0123456789abcdef0123456789abcdef",
+        "--delete-data",
+    });
+    try std.testing.expect(worker == .cleanup_uninstaller);
+    try std.testing.expect(worker.cleanup_uninstaller.delete_data);
+
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{"--delete-data"}));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--uninstall", "--delete-data" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--delete-data", "--quiet" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--quiet", "--uninstall" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--quiet", "--quiet" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--uninstall", "--quiet", "--quiet" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--refresh-registration", "--delete-data" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{"--refresh-registration-from-update"}));
+    try std.testing.expectError(
+        error.InvalidArguments,
+        parseWindowsManagerCommand(&.{ "--refresh-registration-from-update", "C:\\managed", "--delete-data" }),
+    );
+    try std.testing.expectError(
+        error.InvalidArguments,
+        parseWindowsManagerCommand(&.{ "--refresh-registration-from-update", "--quiet", "C:\\managed" }),
+    );
+    try std.testing.expectError(
+        error.InvalidArguments,
+        parseWindowsManagerCommand(&.{ "--refresh-registration-from-update", "", "--quiet" }),
+    );
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--cleanup-uninstaller", "one", "two" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{"--other"}));
+}
+
+test "Windows staged update refresh names require 32 lowercase hex digits" {
+    try std.testing.expect(isValidWindowsUpdateRefreshStageName(
+        "electrobun-uninstall-refresh-0123456789abcdef0123456789abcdef.exe",
+    ));
+    try std.testing.expect(!isValidWindowsUpdateRefreshStageName(
+        "electrobun-uninstall-refresh-0123456789ABCDEF0123456789abcdef.exe",
+    ));
+    try std.testing.expect(!isValidWindowsUpdateRefreshStageName(
+        "electrobun-uninstall-refresh-0123456789abcdef0123456789abcdeg.exe",
+    ));
+    try std.testing.expect(!isValidWindowsUpdateRefreshStageName(
+        "electrobun-uninstall-refresh-0123456789abcdef0123456789abcde.exe",
+    ));
+    try std.testing.expect(!isValidWindowsUpdateRefreshStageName(
+        "electrobun-uninstall-refresh-0123456789abcdef0123456789abcdef",
+    ));
+    try std.testing.expect(!isValidWindowsUpdateRefreshStageName(
+        "other-0123456789abcdef0123456789abcdef.exe",
+    ));
+}
+
+test "Windows uninstall data policy accepts legacy manifests and only version 1" {
+    try validateWindowsDataPathVersions(null);
+    try validateWindowsDataPathVersions(&.{WINDOWS_DATA_PATH_VERSION});
+    try std.testing.expectError(error.InvalidUninstallManifest, validateWindowsDataPathVersions(&.{}));
+    try std.testing.expectError(error.InvalidUninstallManifest, validateWindowsDataPathVersions(&.{2}));
+    try std.testing.expectError(
+        error.InvalidUninstallManifest,
+        validateWindowsDataPathVersions(&.{ WINDOWS_DATA_PATH_VERSION, WINDOWS_DATA_PATH_VERSION }),
     );
 }
 

@@ -188,25 +188,62 @@ function quoteWindowsBatchPath(path: string): string {
 	return quoteWindowsBatchArgument(path.replace(/\//g, "\\"));
 }
 
+function quoteWindowsPowerShellPathForBatch(path: string): string {
+	const normalized = path.replace(/\//g, "\\");
+	if (/["\r\n]/.test(normalized)) {
+		throw new Error("Invalid Windows batch argument");
+	}
+	// The outer batch parser still expands percent signs. PowerShell single-
+	// quoted literals otherwise need only doubled apostrophes.
+	return `'${normalized.replace(/%/g, "%%").replace(/'/g, "''")}'`;
+}
+
 export function createWindowsRegistrationRefreshBatch(
 	channelRootPath: string,
 ): string {
-	const uninstallerPath = win32.join(
-		channelRootPath.replace(/\//g, "\\"),
+	const normalizedChannelRoot = channelRootPath.replace(/\//g, "\\");
+	const packagedUninstallerPath = win32.join(
+		normalizedChannelRoot,
+		"app",
+		"Resources",
+		"uninstall",
+	);
+	const installedUninstallerPath = win32.join(
+		normalizedChannelRoot,
 		"uninstall.exe",
 	);
-	const quotedUninstallerPath = quoteWindowsBatchPath(uninstallerPath);
+	const quotedPackagedUninstallerPath = quoteWindowsBatchPath(
+		packagedUninstallerPath,
+	);
+	const packagedUninstallerPowerShellPath =
+		quoteWindowsPowerShellPathForBatch(packagedUninstallerPath);
+	const channelRootPowerShellPath =
+		quoteWindowsPowerShellPathForBatch(normalizedChannelRoot);
+	const quotedInstalledUninstallerPath = quoteWindowsBatchPath(
+		installedUninstallerPath,
+	);
 
-	return `:: Refresh Windows uninstall metadata from the newly-installed app
-if not exist ${quotedUninstallerPath} (
-    echo Skipping uninstall registration refresh: uninstaller not found at ${quotedUninstallerPath}.
-    goto registrationrefreshdone
-)
-${quotedUninstallerPath} --refresh-registration --quiet
-if errorlevel 1 (
-    echo Warning: could not refresh Windows uninstall registration.
-)
-:registrationrefreshdone`;
+	return `:: Replace the standalone Windows uninstall manager from the newly-installed app.
+:: Windows cannot execute the extensionless bundled resource directly. Stage it
+:: as a uniquely-named .exe outside the channel, then let that process perform
+:: the atomic replacement while holding the channel uninstall mutex.
+if not exist ${quotedPackagedUninstallerPath} goto registrationrefreshlegacy
+"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -Command "$ErrorActionPreference = 'Stop'; $sourcePath = ${packagedUninstallerPowerShellPath}; $channelRoot = ${channelRootPowerShellPath}; $tempRoot = [Environment]::GetEnvironmentVariable('TEMP'); if ([String]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [Environment]::GetEnvironmentVariable('TMP') }; if ([String]::IsNullOrWhiteSpace($tempRoot)) { $localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA'); if (-not [String]::IsNullOrWhiteSpace($localAppData)) { $tempRoot = [IO.Path]::Combine($localAppData, 'Temp') } }; if ([String]::IsNullOrWhiteSpace($tempRoot)) { throw 'No Windows temporary directory is available' }; $stagePath = [IO.Path]::Combine($tempRoot, 'electrobun-uninstall-refresh-' + [Guid]::NewGuid().ToString('N') + '.exe'); $exitCode = 1; try { [IO.File]::Copy($sourcePath, $stagePath, $false); $channelRootArgument = [char]34 + $channelRoot + [char]34; $manager = Start-Process -FilePath $stagePath -ArgumentList @('--refresh-registration-from-update', $channelRootArgument, '--quiet') -WindowStyle Hidden -Wait -PassThru; $exitCode = $manager.ExitCode } finally { Remove-Item -LiteralPath $stagePath -Force -ErrorAction SilentlyContinue }; exit $exitCode"
+if errorlevel 1 echo Warning: could not replace or refresh the Windows uninstall manager.
+goto registrationrefreshdone
+
+:: Legacy bundles may not contain the manager resource. Keep updates working and
+:: refresh the existing registration when an older standalone manager is present.
+:registrationrefreshlegacy
+if not exist ${quotedInstalledUninstallerPath} goto registrationrefreshmissing
+${quotedInstalledUninstallerPath} --refresh-registration --quiet
+if errorlevel 1 echo Warning: could not refresh Windows uninstall registration.
+goto registrationrefreshdone
+:registrationrefreshmissing
+echo Skipping uninstall registration refresh: no bundled or installed manager was found.
+:registrationrefreshdone
+:: Metadata refresh is best effort and must not make a successful update fail.
+ver >nul`;
 }
 
 export function createWindowsUpdateTaskName(

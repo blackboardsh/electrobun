@@ -54,6 +54,8 @@ export default {
 		"test:linux-abi": "node scripts/run-cottontail-test.js scripts/verify-linux-elf-abi.test.ts",
 		"test:linux-extractor": "node scripts/test-linux-adjacent-extractor.mjs",
 		"test:macos-uninstaller": "node scripts/test-macos-uninstaller.mjs",
+		"test:windows-uninstaller":
+			"node scripts/test-windows-uninstaller.mjs",
 		"test:npm-bootstrap":
 			"node --test ../npm/electrobun/test/bootstrap.test.mjs ../npm/electrobun/test/package.test.mjs",
 		"test:release-notes": "node scripts/release-notes-contract.test.mjs",

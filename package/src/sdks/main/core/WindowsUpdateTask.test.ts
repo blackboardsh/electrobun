@@ -196,27 +196,78 @@ describe("Windows updater uninstall registration refresh", () => {
 		expect(canary).toMatch(/^ElectrobunUpdate_[a-f0-9]{24}$/);
 	});
 
-	test("runs the channel-root uninstaller quietly without blocking legacy updates", () => {
+	test("stages the bundled manager as an exe and preserves a legacy fallback", () => {
 		const batch = createWindowsRegistrationRefreshBatch(
 			"C:/Users/Test User/AppData/Local/com.example.app/canary",
 		);
-		const invocation =
+		const packagedManager =
+			"C:\\Users\\Test User\\AppData\\Local\\com.example.app\\canary\\app\\Resources\\uninstall";
+		const channelRoot =
+			"C:\\Users\\Test User\\AppData\\Local\\com.example.app\\canary";
+		const legacyInvocation =
 			'"C:\\Users\\Test User\\AppData\\Local\\com.example.app\\canary\\uninstall.exe" --refresh-registration --quiet';
+		const powershellInvocation = batch
+			.split("\n")
+			.find((line) => line.includes("WindowsPowerShell\\v1.0\\powershell.exe"));
 
 		expect(batch).toContain(
-			'if not exist "C:\\Users\\Test User\\AppData\\Local\\com.example.app\\canary\\uninstall.exe"',
+			`if not exist "${packagedManager}" goto registrationrefreshlegacy`,
 		);
-		expect(batch).toContain(invocation);
-		expect(batch.indexOf("if not exist")).toBeLessThan(
-			batch.indexOf(invocation),
+		expect(powershellInvocation).toBeDefined();
+		expect(powershellInvocation).toStartWith(
+			'"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" ',
 		);
-		expect(batch.slice(batch.indexOf(invocation))).toContain(
-			"if errorlevel 1",
+		expect(batch).not.toMatch(/^powershell\.exe\s/im);
+		expect(powershellInvocation).toContain(`$sourcePath = '${packagedManager}'`);
+		expect(powershellInvocation).toContain(`$channelRoot = '${channelRoot}'`);
+		expect(powershellInvocation).toContain(
+			"$tempRoot = [Environment]::GetEnvironmentVariable('TEMP')",
 		);
+		expect(powershellInvocation).toContain(
+			"if ([String]::IsNullOrWhiteSpace($tempRoot)) { $tempRoot = [Environment]::GetEnvironmentVariable('TMP') }",
+		);
+		expect(powershellInvocation).toContain(
+			"$localAppData = [Environment]::GetEnvironmentVariable('LOCALAPPDATA'); if (-not [String]::IsNullOrWhiteSpace($localAppData)) { $tempRoot = [IO.Path]::Combine($localAppData, 'Temp') }",
+		);
+		expect(powershellInvocation).toContain(
+			"if ([String]::IsNullOrWhiteSpace($tempRoot)) { throw 'No Windows temporary directory is available' }",
+		);
+		expect(powershellInvocation).toContain(
+			"[IO.Path]::Combine($tempRoot, 'electrobun-uninstall-refresh-' + [Guid]::NewGuid().ToString('N') + '.exe')",
+		);
+		expect(powershellInvocation?.indexOf("GetEnvironmentVariable('TEMP')")).toBeLessThan(
+			powershellInvocation?.indexOf("GetEnvironmentVariable('TMP')") ?? -1,
+		);
+		expect(powershellInvocation?.indexOf("GetEnvironmentVariable('TMP')")).toBeLessThan(
+			powershellInvocation?.indexOf("GetEnvironmentVariable('LOCALAPPDATA')") ?? -1,
+		);
+		expect(powershellInvocation).toContain(
+			"[IO.File]::Copy($sourcePath, $stagePath, $false)",
+		);
+		expect(powershellInvocation).toContain(
+			"$channelRootArgument = [char]34 + $channelRoot + [char]34",
+		);
+		expect(powershellInvocation).toContain(
+			"Start-Process -FilePath $stagePath -ArgumentList @('--refresh-registration-from-update', $channelRootArgument, '--quiet') -WindowStyle Hidden -Wait -PassThru",
+		);
+		expect(powershellInvocation).toContain(
+			"finally { Remove-Item -LiteralPath $stagePath -Force -ErrorAction SilentlyContinue }",
+		);
+		expect(powershellInvocation).toEndWith('exit $exitCode"');
 		expect(batch).toContain(
-			"goto registrationrefreshdone",
+			"if errorlevel 1 echo Warning: could not replace or refresh the Windows uninstall manager.",
 		);
+		expect(batch).toContain(legacyInvocation);
+		expect(batch.indexOf("WindowsPowerShell\\v1.0\\powershell.exe")).toBeLessThan(
+			batch.indexOf(legacyInvocation),
+		);
+		expect(batch).toContain(":registrationrefreshlegacy");
+		expect(batch).toContain("goto registrationrefreshdone");
 		expect(batch).not.toContain("goto updatefailed");
+		expect(batch).not.toMatch(/^\s*if\b.*\(\s*$/m);
+		expect(batch).toContain(
+			":registrationrefreshdone\n:: Metadata refresh is best effort and must not make a successful update fail.\nver >nul",
+		);
 	});
 
 	test("escapes percent signs before embedding a path in a batch file", () => {
@@ -225,9 +276,12 @@ describe("Windows updater uninstall registration refresh", () => {
 		);
 
 		expect(batch).toContain(
-			'"C:\\Users\\100%% Real\\AppData\\Local\\Example\\production\\uninstall.exe" --refresh-registration --quiet',
+			"$sourcePath = 'C:\\Users\\100%% Real\\AppData\\Local\\Example\\production\\app\\Resources\\uninstall'",
 		);
-		expect(batch).not.toContain('"C:\\Users\\100% Real\\');
+		expect(batch).toContain(
+			"$channelRoot = 'C:\\Users\\100%% Real\\AppData\\Local\\Example\\production'",
+		);
+		expect(batch).not.toContain("100% Real");
 	});
 
 	test("rejects paths that could inject another batch command", () => {
@@ -244,7 +298,23 @@ describe("Windows updater uninstall registration refresh", () => {
 		);
 
 		expect(batch).toContain(
-			'"C:\\Users\\Great!User\\AppData\\Local\\Example\\production\\uninstall.exe" --refresh-registration --quiet',
+			"$sourcePath = 'C:\\Users\\Great!User\\AppData\\Local\\Example\\production\\app\\Resources\\uninstall'",
+		);
+		expect(batch).toContain(
+			"$channelRoot = 'C:\\Users\\Great!User\\AppData\\Local\\Example\\production'",
+		);
+	});
+
+	test("escapes apostrophes in the bundled manager PowerShell command", () => {
+		const batch = createWindowsRegistrationRefreshBatch(
+			"C:\\Users\\O'Brien\\AppData\\Local\\Example\\production",
+		);
+
+		expect(batch).toContain(
+			"$sourcePath = 'C:\\Users\\O''Brien\\AppData\\Local\\Example\\production\\app\\Resources\\uninstall'",
+		);
+		expect(batch).toContain(
+			"$channelRoot = 'C:\\Users\\O''Brien\\AppData\\Local\\Example\\production'",
 		);
 	});
 });

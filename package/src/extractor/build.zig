@@ -29,6 +29,11 @@ pub fn build(b: *std.Build) void {
         break :blk path;
     } else null;
 
+    const windows_manifest = if (target.result.os.tag == .windows)
+        b.path("extractor.manifest")
+    else
+        null;
+
     const exe = b.addExecutable(.{
         .name = "extractor",
         .root_module = b.createModule(.{
@@ -38,6 +43,7 @@ pub fn build(b: *std.Build) void {
             // Link with libc for chmod and other system calls
             .link_libc = true,
         }),
+        .win32_manifest = windows_manifest,
     });
 
     if (target.result.os.tag == .macos) {
@@ -60,6 +66,12 @@ pub fn build(b: *std.Build) void {
     }
 
     if (target.result.os.tag == .windows) {
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("windows_uninstall_prompt.c"),
+            .flags = &.{},
+        });
+        exe.root_module.linkSystemLibrary("comctl32", .{});
+
         // Installers are user-facing GUI executables. The console subsystem
         // both flashes a debug terminal and can keep the parent terminal tied
         // to the installer process. Keep an explicit opt-in for diagnostics.
@@ -99,6 +111,16 @@ pub fn build(b: *std.Build) void {
             .flags = &.{"-fobjc-arc"},
         });
         unit_tests.root_module.linkFramework("AppKit", .{});
+    }
+    if (target.result.os.tag == .windows) {
+        // Build.TestOptions does not expose this field yet, but tests link the
+        // same TaskDialog bridge and therefore need the same activation context.
+        unit_tests.win32_manifest = windows_manifest;
+        unit_tests.root_module.addCSourceFile(.{
+            .file = b.path("windows_uninstall_prompt.c"),
+            .flags = &.{},
+        });
+        unit_tests.root_module.linkSystemLibrary("comctl32", .{});
     }
     const run_unit_tests = b.addRunArtifact(unit_tests);
 

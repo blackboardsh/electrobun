@@ -244,14 +244,23 @@ test "uninstall metadata and channel-root paths are derived independently of the
 
     const macos_base = try appDataBase(allocator, .macos, .{ .home = "/Users/test" });
     defer allocator.free(macos_base);
-    try std.testing.expectEqualStrings("/Users/test/Library/Application Support", macos_base);
+    const expected_macos_base = try std.fs.path.join(allocator, &.{
+        "/Users/test",
+        "Library",
+        "Application Support",
+    });
+    defer allocator.free(expected_macos_base);
+    try std.testing.expectEqualStrings(expected_macos_base, macos_base);
 
     const macos_root = try channelRootPath(allocator, macos_base, identity);
     defer allocator.free(macos_root);
-    try std.testing.expectEqualStrings(
-        "/Users/test/Library/Application Support/com.example.app/canary",
-        macos_root,
-    );
+    const expected_macos_root = try std.fs.path.join(allocator, &.{
+        expected_macos_base,
+        "com.example.app",
+        "canary",
+    });
+    defer allocator.free(expected_macos_root);
+    try std.testing.expectEqualStrings(expected_macos_root, macos_root);
 
     const windows_base = try appDataBase(allocator, .windows, .{ .local_appdata = "C:/Users/test/AppData/Local" });
     defer allocator.free(windows_base);
@@ -263,14 +272,27 @@ test "uninstall metadata and channel-root paths are derived independently of the
 
     const linux_fallback_base = try appDataBase(allocator, .linux, .{ .home = "/home/test" });
     defer allocator.free(linux_fallback_base);
-    try std.testing.expectEqualStrings("/home/test/.local/share", linux_fallback_base);
+    const expected_linux_fallback_base = try std.fs.path.join(allocator, &.{
+        "/home/test",
+        ".local",
+        "share",
+    });
+    defer allocator.free(expected_linux_fallback_base);
+    try std.testing.expectEqualStrings(expected_linux_fallback_base, linux_fallback_base);
 
     try std.testing.expectEqualStrings("uninstall", managerName(.macos));
     try std.testing.expectEqualStrings("uninstall.exe", managerName(.windows));
 
     const version_path = try versionJsonPath(allocator, "/Bundle/Contents/MacOS");
     defer allocator.free(version_path);
-    try std.testing.expectEqualStrings("/Bundle/Contents/MacOS/../Resources/version.json", version_path);
+    const expected_version_path = try std.fs.path.join(allocator, &.{
+        "/Bundle/Contents/MacOS",
+        "..",
+        "Resources",
+        "version.json",
+    });
+    defer allocator.free(expected_version_path);
+    try std.testing.expectEqualStrings(expected_version_path, version_path);
 }
 
 test "uninstall metadata requires identifier and channel" {
