@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const automation = @import("automation.zig");
 const linux_dependencies = @import("linux_dependencies.zig");
+const uninstall = @import("uninstall.zig");
 const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
@@ -113,6 +114,80 @@ const MainProcess = enum {
     go,
     odin,
 };
+
+fn uninstallPlatform() uninstall.Platform {
+    return switch (builtin.os.tag) {
+        .macos => .macos,
+        .windows => .windows,
+        .linux => .linux,
+        else => @panic("Unsupported platform"),
+    };
+}
+
+/// Delegate the launcher's exact uninstall command to the installed,
+/// channel-scoped manager before any application runtime is selected or started.
+fn delegateUninstall(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+    exe_dir: []const u8,
+    request: uninstall.Request,
+) !void {
+    const version_path = try uninstall.versionJsonPath(allocator, exe_dir);
+    defer allocator.free(version_path);
+    const version_json = try std.Io.Dir.cwd().readFileAlloc(
+        io,
+        version_path,
+        allocator,
+        .limited(1024 * 1024),
+    );
+    defer allocator.free(version_json);
+
+    const identity = try uninstall.parseInstallIdentity(allocator, version_json);
+    defer allocator.free(identity.identifier);
+    defer allocator.free(identity.channel);
+
+    const app_data_base = try uninstall.appDataBase(allocator, uninstallPlatform(), .{
+        .home = environ_map.get("HOME"),
+        .local_appdata = environ_map.get("LOCALAPPDATA"),
+        .xdg_data_home = environ_map.get("XDG_DATA_HOME"),
+    });
+    defer allocator.free(app_data_base);
+    const channel_root = try uninstall.channelRootPath(allocator, app_data_base, identity);
+    defer allocator.free(channel_root);
+    const manager_path = try std.fs.path.join(
+        allocator,
+        &.{ channel_root, uninstall.managerName(uninstallPlatform()) },
+    );
+    defer allocator.free(manager_path);
+
+    var argv: [4][]const u8 = undefined;
+    argv[0] = manager_path;
+    argv[1] = "--uninstall";
+    var argv_len: usize = 2;
+    if (request.quiet) {
+        argv[argv_len] = "--quiet";
+        argv_len += 1;
+    }
+    if (request.delete_data) {
+        argv[argv_len] = "--delete-data";
+        argv_len += 1;
+    }
+
+    var manager = try std.process.spawn(io, .{
+        .argv = argv[0..argv_len],
+        .cwd = .{ .path = channel_root },
+        .environ_map = environ_map,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const result = try manager.wait(io);
+    switch (result) {
+        .exited => |code| if (code != 0) std.process.exit(code),
+        .signal => |signal| std.process.exit(@intCast(128 + @intFromEnum(signal))),
+        else => std.process.exit(1),
+    }
+}
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
     const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
@@ -230,6 +305,12 @@ pub fn main(init: std.process.Init) !void {
         }
         break :blk args_list.items;
     };
+
+    if (uninstall.parseRequest(launcher_args)) |request| {
+        try delegateUninstall(alloc, io, init.environ_map, exe_dir, request);
+        return;
+    }
+
     const main_process = detectMainProcess(arena_alloc, exe_dir);
 
     // Platform-specific paths

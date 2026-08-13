@@ -61,7 +61,17 @@ pub fn build(b: *std.Build) void {
     });
     const run_automation_tests = b.addRunArtifact(automation_tests);
 
+    const uninstall_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("uninstall.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_uninstall_tests = b.addRunArtifact(uninstall_tests);
+
     const test_step = b.step("test", "Run launcher tests");
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_automation_tests.step);
+    test_step.dependOn(&run_uninstall_tests.step);
 }
