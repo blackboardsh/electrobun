@@ -211,6 +211,36 @@ export function createWindowsUpdateTaskName(
 	return `ElectrobunUpdate_${scope}`;
 }
 
+type LinuxUninstallerMetadataRefreshExecutor = (
+	executable: string,
+	args: readonly string[],
+) => void;
+
+/**
+ * Refresh the installed Linux uninstaller after replacing the app bundle.
+ * Older installs and package-managed installs do not have this executable, so
+ * both a missing uninstaller and a failed refresh are intentionally nonfatal.
+ */
+export function refreshLinuxUninstallerMetadata(
+	channelRootPath: string,
+	uninstallerExists: (path: string) => boolean = (path) =>
+		Boolean(statSync(path, { throwIfNoEntry: false })),
+	execute: LinuxUninstallerMetadataRefreshExecutor = (executable, args) => {
+		execFileSync(executable, [...args], { stdio: "ignore" });
+	},
+): boolean {
+	const uninstallerPath = join(channelRootPath, "uninstall");
+	try {
+		if (!uninstallerExists(uninstallerPath)) {
+			return false;
+		}
+		execute(uninstallerPath, ["--refresh-metadata", "--quiet"]);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
 export interface WindowsUpdateBatchOptions {
 	runningAppPath: string;
 	newAppPath: string;
@@ -1091,6 +1121,8 @@ const Updater = {
 						if (statSync(cottontailPath, { throwIfNoEntry: false })) {
 							execSync(`chmod +x "${cottontailPath}"`);
 						}
+
+						refreshLinuxUninstallerMetadata(appDataFolder);
 					}
 
 					// Clean up stale files in extraction folder

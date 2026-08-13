@@ -8,6 +8,7 @@ import {
 	createWindowsRegistrationRefreshBatch,
 	createWindowsUpdateBatch,
 	createWindowsUpdateTaskName,
+	refreshLinuxUninstallerMetadata,
 } from "./Updater";
 
 const productionTaskName = "ElectrobunUpdate_e765e7a8ffa45d1ada904e46";
@@ -301,5 +302,75 @@ describe("Windows updater replacement batch", () => {
 				}),
 			).toThrow("Invalid Windows batch argument");
 		}
+	});
+});
+
+describe("Linux updater uninstall metadata refresh", () => {
+	test("uses the channel-root uninstaller with argv-safe quiet arguments", () => {
+		const invocations: Array<{ executable: string; args: readonly string[] }> = [];
+		const channelRoot =
+			"/home/Test User/.local/share/com.example.app/canary channel";
+
+		const refreshed = refreshLinuxUninstallerMetadata(
+			channelRoot,
+			() => true,
+			(executable, args) => {
+				invocations.push({ executable, args: [...args] });
+			},
+		);
+
+		expect(refreshed).toBe(true);
+		expect(invocations).toEqual([
+			{
+				executable: `${channelRoot}/uninstall`,
+				args: ["--refresh-metadata", "--quiet"],
+			},
+		]);
+	});
+
+	test("skips a missing legacy uninstaller without executing anything", () => {
+		let checkedPath = "";
+		let executed = false;
+		const channelRoot = "/home/test/.local/share/com.example.app/production";
+
+		const refreshed = refreshLinuxUninstallerMetadata(
+			channelRoot,
+			(path) => {
+				checkedPath = path;
+				return false;
+			},
+			() => {
+				executed = true;
+			},
+		);
+
+		expect(refreshed).toBe(false);
+		expect(checkedPath).toBe(`${channelRoot}/uninstall`);
+		expect(executed).toBe(false);
+	});
+
+	test("does not propagate an uninstaller refresh failure", () => {
+		const refreshError = new Error("refresh failed");
+
+		expect(
+			refreshLinuxUninstallerMetadata(
+				"/home/test/.local/share/com.example.app/production",
+				() => true,
+				() => {
+					throw refreshError;
+				},
+			),
+		).toBe(false);
+	});
+
+	test("does not propagate an uninstaller existence-check failure", () => {
+		expect(
+			refreshLinuxUninstallerMetadata(
+				"/home/test/.local/share/com.example.app/production",
+				() => {
+					throw new Error("stat failed");
+				},
+			),
+		).toBe(false);
 	});
 });
