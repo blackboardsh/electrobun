@@ -18,7 +18,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 if (process.platform !== "linux") {
@@ -811,8 +811,10 @@ try {
 		canaryV1,
 	);
 
-	run(productionSetupV1, [], {
-		cwd: temporaryRoot,
+	// Shipped archives instruct users to launch `./installer`; keep relative
+	// Setup invocation working while installed managers require absolute paths.
+	run(`./${basename(productionSetupV1)}`, [], {
+		cwd: dirname(productionSetupV1),
 		env: installerEnv(helperDir),
 	});
 	run(canarySetupV1, [], {

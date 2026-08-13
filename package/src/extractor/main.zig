@@ -3995,9 +3995,12 @@ pub fn main(init: std.process.Init) !void {
         var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
         defer args.deinit();
         const argv0 = args.next() orelse return error.InvalidArguments;
-        const invocation_path = try linuxManagerInvocationPath(allocator, argv0);
-        defer allocator.free(invocation_path);
-        if (std.mem.eql(u8, std.fs.path.basename(invocation_path), LINUX_UNINSTALL_EXE_NAME)) {
+        // Only the installed manager requires an absolute lexical argv[0].
+        // Setup archives are documented to run as `./installer`; resolving
+        // every Linux executable as a manager would reject that normal path.
+        if (std.mem.eql(u8, std.fs.path.basename(argv0), LINUX_UNINSTALL_EXE_NAME)) {
+            const invocation_path = try linuxManagerInvocationPath(allocator, argv0);
+            defer allocator.free(invocation_path);
             var command_args: [4][]const u8 = undefined;
             var command_args_len: usize = 0;
             while (args.next()) |arg| {
