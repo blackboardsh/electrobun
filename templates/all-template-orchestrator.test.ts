@@ -197,6 +197,9 @@ function fakeHarness(
 						break;
 					}
 					case "install":
+						if (options.installStderr) {
+							process.emit("stderr", options.installStderr);
+						}
 						process.emit("stdout", "Installed dependencies\n");
 						process.finish();
 						break;
@@ -408,6 +411,25 @@ describe("Template QA child environment", () => {
 });
 
 describe("Template QA orchestration", () => {
+	test("hutch progress notices on stderr display as regular output", async () => {
+		const harness = fakeHarness({
+			installStderr:
+				"hutch: downloading rust 1.88.0 toolchain for macos-arm64\nhutch electrobun: macOS icon source not found: /x\n",
+		});
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			channel: "beta",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+		await orchestrator.installTemplate("install-task");
+		const logs = orchestrator.getSnapshot().logs;
+		const progress = logs.find(({ text }) => text.startsWith("hutch: downloading"));
+		const warning = logs.find(({ text }) => text.startsWith("hutch electrobun:"));
+		expect(progress?.stream).toBe("stdout");
+		expect(warning?.stream).toBe("stderr");
+	});
+
 	test("installs into flat template directories and reinstalls stale projects", async () => {
 		const harness = fakeHarness();
 		const root = "/tmp/template qa";

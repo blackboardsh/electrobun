@@ -377,6 +377,11 @@ export function formatByteSize(bytes: number): string {
 	return `${rounded} ${BYTE_UNITS[unit]}`;
 }
 
+// Hutch prints download/toolchain progress notices to stderr per CLI
+// convention. In the QA log they read as failures, so show them as regular
+// output. Deliberately narrow: real "hutch electrobun:" errors stay stderr.
+const HUTCH_PROGRESS_LINE = /^hutch: (downloading|verifying|installing|resolving) /;
+
 export function outputContainsSpawnedProcess(
 	previousTail: string,
 	chunk: string,
@@ -1115,7 +1120,13 @@ export class TemplateQaOrchestrator {
 	): void {
 		const normalized = text.replace(/\r\n/g, "\n");
 		for (const chunk of normalized.match(/[^\n]*\n|[^\n]+/g) ?? []) {
-			this.appendLog(templateId, stream, chunk.slice(0, 32_768));
+			this.appendLog(
+				templateId,
+				stream === "stderr" && HUTCH_PROGRESS_LINE.test(chunk)
+					? "stdout"
+					: stream,
+				chunk.slice(0, 32_768),
+			);
 		}
 	}
 

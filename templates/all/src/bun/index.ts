@@ -81,6 +81,33 @@ function sleep(milliseconds: number): Promise<void> {
 	return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
 }
 
+// Every spawned child leads a process group (detached on POSIX). Track the
+// live groups so app exit can reap entire trees synchronously — dev apps and
+// package managers must not outlive the QA app.
+const liveProcessGroups = new Set<number>();
+
+function killAllProcessGroups(): void {
+	for (const pid of liveProcessGroups) {
+		if (process.platform === "win32") {
+			spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], {
+				windowsHide: true,
+				stdio: "ignore",
+			});
+			continue;
+		}
+		try {
+			process.kill(-pid, "SIGKILL");
+		} catch {
+			try {
+				process.kill(pid, "SIGKILL");
+			} catch {
+				// The group already exited.
+			}
+		}
+	}
+	liveProcessGroups.clear();
+}
+
 class NodeManagedProcess implements ManagedProcess {
 	readonly completed: Promise<ProcessResult>;
 	private readonly child: ChildProcess;
@@ -109,12 +136,14 @@ class NodeManagedProcess implements ManagedProcess {
 			this.emitOutput("stderr", chunk.toString());
 		});
 
+		if (this.child.pid) liveProcessGroups.add(this.child.pid);
 		this.completed = new Promise((resolveCompletion) => {
 			let settled = false;
 			const finish = (result: ProcessResult) => {
 				if (settled) return;
 				settled = true;
 				this.running = false;
+				if (this.child.pid) liveProcessGroups.delete(this.child.pid);
 				resolveCompletion(result);
 			};
 			this.child.once("error", (error) => {
@@ -305,11 +334,21 @@ mainWindow.webview.on("dom-ready", () => {
 	(mainWindow?.webview.rpc as any)?.send?.snapshot(orchestrator.getSnapshot());
 	void orchestrator.initialize().catch(console.error);
 });
-mainWindow.on("close", () => orchestrator.shutdownImmediately());
+// Graceful stop first (SIGTERM via the orchestrator), then a hard exit whose
+// exit handler force-kills any process group that ignored it.
+function shutdownAndExit(code: number): void {
+	orchestrator.shutdownImmediately();
+	setTimeout(() => process.exit(code), 1_500);
+}
 
-process.on("SIGINT", () => orchestrator.shutdownImmediately());
-process.on("SIGTERM", () => orchestrator.shutdownImmediately());
-process.on("exit", () => orchestrator.shutdownImmediately());
+mainWindow.on("close", () => shutdownAndExit(0));
+
+process.on("SIGINT", () => shutdownAndExit(130));
+process.on("SIGTERM", () => shutdownAndExit(143));
+process.on("exit", () => {
+	orchestrator.shutdownImmediately();
+	killAllProcessGroups();
+});
 
 console.log(`Template QA project root: ${projectRoot}`);
 console.log(`Template QA channel: ${channel} (${projectVersion})`);
