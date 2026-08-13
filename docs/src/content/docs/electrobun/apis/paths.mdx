@@ -104,3 +104,9 @@ release channel.
 Packaged resources are read-only application content. Modifying a macOS app
 bundle invalidates its code signature. Use `Utils.paths.userData`,
 `Utils.paths.userCache`, or another writable system directory for mutable data.
+
+For installer builds, Electrobun's `App and Data` uninstall action removes the
+three app-scoped paths (`userData`, `userCache`, and `userLogs`) for only the
+current identifier and release channel. See
+[Uninstalling](/electrobun/guides/uninstalling/) for the exact behavior and
+platform availability.

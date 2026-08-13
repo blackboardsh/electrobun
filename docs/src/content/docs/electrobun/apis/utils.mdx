@@ -592,6 +592,12 @@ produce empty identifier/channel path components. The native SDKs resolve the
 same fields through their `Paths` type — see the tabbed examples on the
 [Paths page](/electrobun/apis/paths/).
 
+For installer builds, these three app-scoped locations are the only user data
+included by Electrobun's `App and Data` uninstall action. It is limited to the
+current identifier and release channel; see
+[Uninstalling](/electrobun/guides/uninstalling/) for details and platform
+availability.
+
 ## Quitting
 
 ```ts

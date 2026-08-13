@@ -41,6 +41,7 @@ export default defineConfig({
                 { label: "Creating UI", link: "/electrobun/guides/creating-ui/" },
                 { label: "Warren UI (Experimental)", link: "/electrobun/guides/electrobun-ui/" },
                 { label: "Bundling & Distribution", link: "/electrobun/guides/bundling-and-distribution/" },
+                { label: "Uninstalling", link: "/electrobun/guides/uninstalling/" },
                 { label: "Migrate to 2.x", link: "/electrobun/guides/migrating-to-v2/" },
               ],
             },

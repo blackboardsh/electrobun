@@ -1,0 +1,84 @@
+---
+title: "Uninstalling"
+description: "How Electrobun removes an installed application and its managed data."
+---
+
+Electrobun installer builds include an uninstaller that remains available even
+when the application bundle cannot start. It is a standalone manager, separate
+from the app bundle and runtime: uninstalling never needs to execute your app
+or load its dependencies.
+
+## The uninstall prompt
+
+On macOS, launching the installed uninstaller shows the native system alert:
+
+- **Title:** `Uninstall <App>?`
+- **Message:** `The application will be removed.`
+- **Actions:** `App`, `App and Data`, and `Cancel`
+
+`App` is the default, safe choice. It removes the installed application and
+Electrobun's installation/update state, while keeping the user's data. `Cancel`
+leaves the installation unchanged.
+
+Choose `App and Data` to also remove the app's managed per-user directories.
+It removes only the directories for this app's packaged identifier and current
+release channel:
+
+| Managed directory | API path |
+| --- | --- |
+| Application data | `Utils.paths.userData` |
+| Cache | `Utils.paths.userCache` |
+| Logs | `Utils.paths.userLogs` |
+
+Those paths resolve under their platform's normal data, cache, and log roots
+as `<base>/<identifier>/<channel>`. Other applications, other identifiers, and
+other channels (such as canary and production) are never removed. See
+[Paths](/electrobun/apis/paths/) for the path API and layout.
+
+Electrobun records the managed-root policy with the installation so a newer
+runtime can continue to clean up earlier Electrobun-managed locations if that
+policy changes in a future release. It does not scan arbitrary files or run
+application configuration during uninstall.
+
+## Launching an uninstall
+
+The installed standalone manager is the reliable entry point. As a convenience,
+an installed application may also be launched with `--uninstall`; the launcher
+hands that request to the standalone manager before starting the application.
+
+For non-interactive automation, use:
+
+```bash
+# Remove the application and Electrobun installation state; preserve data.
+<uninstaller> --quiet
+
+# Also remove this identifier and channel's managed data, cache, and logs.
+<uninstaller> --quiet --delete-data
+```
+
+`--quiet` intentionally has the same conservative meaning as selecting
+`App`. Automated jobs must opt in to data deletion with `--delete-data`.
+
+## Platform availability
+
+The unified standalone-manager prompt and the behavior described above are
+implemented for macOS installer builds. Windows and Linux installers already
+provide platform-specific uninstall integration; their unified prompt and
+managed-data selection are being completed separately. Do not depend on the
+macOS prompt wording or flags on those platforms until their implementation
+lands.
+
+Package-managed distributions, such as Flatpak, should be removed through
+their package manager rather than Electrobun's standalone installer manager.
+
+## Application cleanup
+
+There is no `electrobun.config.ts` setting for arbitrary uninstall paths.
+Electrobun deliberately limits cleanup to its app-scoped managed directories,
+which keeps an uninstall from deleting unrelated user files. Store removable
+application data under `Utils.paths.userData`, `Utils.paths.userCache`, or
+`Utils.paths.userLogs`; users can then choose whether that data is removed.
+
+If your application writes data elsewhere, document its removal separately for
+your users. Support for additional declarative cleanup locations is deferred;
+it will be constrained to paths beneath Electrobun-managed app roots.
