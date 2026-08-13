@@ -9,6 +9,7 @@
 
 import { describe, expect, it } from "bun:test";
 import {
+	CFunction,
 	CString,
 	FFIType,
 	JSCallback,
@@ -55,6 +56,45 @@ const libcPath =
 			const buf = new Uint8Array([72, 105, 33, 0]); // "Hi!\0"
 			const s = new CString(ptr(buf));
 			expect(s.toString()).toBe("Hi!");
+		});
+
+		// Regression: a macOS tray icon click calls the tray JSCallback with an
+		// EMPTY action string (nativeWrapper.mm, statusItemClicked:). Cottontail
+		// used to back the resulting zero-length view with a NULL pointer, which
+		// JSC reports as detached, so this threw
+		// "TypeError: Buffer is already detached" and wedged the tray.
+		it("CString reads an empty null-terminated string", () => {
+			const buf = new Uint8Array([0, 65]); // "\0A"
+			const s = new CString(ptr(buf));
+			expect(s.toString()).toBe("");
+			expect(s.length).toBe(0);
+			expect(new Uint8Array(s.arrayBuffer).length).toBe(0);
+		});
+
+		it("JSCallback: cstring arg survives an empty string (tray click)", () => {
+			const seen: string[] = [];
+			const onAction = new JSCallback(
+				(actionPtr: Pointer) => {
+					seen.push(new CString(actionPtr).toString());
+				},
+				{ args: [FFIType.cstring], returns: FFIType.void },
+			);
+
+			const empty = new Uint8Array([0]);
+			const filled = new TextEncoder().encode("open-settings\0");
+			const invoke = new CFunction({
+				ptr: onAction.ptr!,
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			});
+
+			invoke(ptr(empty));
+			invoke(ptr(filled));
+			invoke(ptr(empty));
+
+			expect(seen).toEqual(["", "open-settings", ""]);
+
+			onAction.close();
 		});
 
 		it("JSCallback: native invokes JS via function pointer (qsort)", () => {

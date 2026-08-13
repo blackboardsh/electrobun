@@ -3271,22 +3271,32 @@ const internalBridgeHandler = new JSCallback(
 
 const trayItemHandler = new JSCallback(
 	(id, action) => {
-		// Note: Some invisible character that doesn't appear in .length
-		// is causing issues
-		const actionString = (new CString(action).toString() || "").trim();
+		// Never let this throw. A raised exception unwinds through the native
+		// FFI trampoline (statusItemClicked: in nativeWrapper.mm), which leaves
+		// the tray wedged: the click does no work at all and the window keeps
+		// presenting its previous frame. The bridge handlers above take the
+		// same precaution.
+		try {
+			// Note: Some invisible character that doesn't appear in .length
+			// is causing issues
+			const actionString = (new CString(action).toString() || "").trim();
 
-		// Use shared deserialization method
-		const { action: actualAction, data } = deserializeMenuAction(actionString);
+			// Use shared deserialization method
+			const { action: actualAction, data } = deserializeMenuAction(actionString);
 
-		const event = electrobunEventEmitter.events.tray.trayClicked({
-			id,
-			action: actualAction,
-			data, // Always include data property (undefined if no data)
-		});
+			const event = electrobunEventEmitter.events.tray.trayClicked({
+				id,
+				action: actualAction,
+				data, // Always include data property (undefined if no data)
+			});
 
-		// global event
-		electrobunEventEmitter.emitEvent(event);
-		electrobunEventEmitter.emitEvent(event, id);
+			// Per-tray listeners first: a throwing global listener must not
+			// starve the handler the application registered via Tray.on().
+			electrobunEventEmitter.emitEvent(event, id);
+			electrobunEventEmitter.emitEvent(event);
+		} catch (err) {
+			console.error("error in trayItemHandler: ", err);
+		}
 	},
 	{
 		args: [FFIType.u32, FFIType.cstring],
