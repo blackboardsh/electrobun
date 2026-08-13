@@ -82,11 +82,11 @@ const libcPath =
 
 			const empty = new Uint8Array([0]);
 			const filled = new TextEncoder().encode("open-settings\0");
-			const invoke = new CFunction({
+			const invoke = CFunction({
 				ptr: onAction.ptr!,
 				args: [FFIType.cstring],
 				returns: FFIType.void,
-			});
+			}) as unknown as (pointer: ReturnType<typeof ptr>) => void;
 
 			invoke(ptr(empty));
 			invoke(ptr(filled));
