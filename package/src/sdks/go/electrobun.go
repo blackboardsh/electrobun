@@ -621,7 +621,43 @@ func LoadCore() (*Core, error) {
 		}
 		core.symbols[name] = symbol
 	}
+
+	// Honour the app's runtime.exitOnLastWindowClosed setting, which the JS SDK
+	// applies at startup too. The core only acts on it when a quit-requested
+	// handler is registered, so install one as well.
+	if err := core.SetExitOnLastWindowClosed(
+		ExitOnLastWindowClosedFromBuildConfig(bundlePaths),
+	); err != nil {
+		return nil, err
+	}
+	if err := core.SetQuitRequestedHandler(nil); err != nil {
+		return nil, err
+	}
 	return core, nil
+}
+
+// ExitOnLastWindowClosedFromBuildConfig reads runtime.exitOnLastWindowClosed out
+// of the bundled Resources/build.json, the same value the JS SDK reads through
+// BuildConfig. Anything missing or malformed falls back to the documented
+// default: quit when the last window closes.
+func ExitOnLastWindowClosedFromBuildConfig(bundlePaths BundlePaths) bool {
+	contents, err := os.ReadFile(filepath.Join(bundlePaths.ResourcesDir, "build.json"))
+	if err != nil {
+		return true
+	}
+
+	var config struct {
+		Runtime struct {
+			ExitOnLastWindowClosed *bool `json:"exitOnLastWindowClosed"`
+		} `json:"runtime"`
+	}
+	if json.Unmarshal(contents, &config) != nil {
+		return true
+	}
+	if config.Runtime.ExitOnLastWindowClosed == nil {
+		return true
+	}
+	return *config.Runtime.ExitOnLastWindowClosed
 }
 
 var requiredSymbols = []string{
@@ -732,6 +768,7 @@ var requiredSymbols = []string{
 	"setURLOpenHandler",
 	"setAppReopenHandler",
 	"setQuitRequestedHandler",
+	"setExitOnLastWindowClosed",
 	"stopEventLoop",
 	"waitForShutdownComplete",
 	"forceExit",
@@ -1710,9 +1747,24 @@ func (c *Core) SetAppReopenHandler(handler func()) error {
 	return c.ensureLastCallSucceeded()
 }
 
+// SetQuitRequestedHandler overrides the default quit behaviour. The core calls
+// the quit-requested handler when the last window closes (see
+// SetExitOnLastWindowClosed, on by default), when the app is asked to terminate
+// (Cmd+Q), and on SIGINT/SIGTERM. Pass nil to restore the SDK default, which
+// stops the event loop so RunMainThread returns and main unwinds normally.
 func (c *Core) SetQuitRequestedHandler(handler func()) error {
+	if handler == nil {
+		handler = func() { _ = c.StopEventLoop() }
+	}
 	setQuitRequestedHandler(handler)
-	C.eb_call_set_quit_requested_handler(c.symbol("setQuitRequestedHandler"), cbool(handler != nil))
+	C.eb_call_set_quit_requested_handler(c.symbol("setQuitRequestedHandler"), cbool(true))
+	return c.ensureLastCallSucceeded()
+}
+
+// SetExitOnLastWindowClosed controls whether closing the last window quits the
+// app. Enabled by default.
+func (c *Core) SetExitOnLastWindowClosed(enabled bool) error {
+	C.eb_call_bool(c.symbol("setExitOnLastWindowClosed"), cbool(enabled))
 	return c.ensureLastCallSucceeded()
 }
 

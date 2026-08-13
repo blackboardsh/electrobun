@@ -924,6 +924,33 @@ App_State :: struct {
 g_state: ^App_State
 g_queue_running: bool
 g_gpu_thread_started: bool
+g_shutting_down: bool
+
+// Stop the worker threads as soon as the window goes away. The core destroys a
+// window's webviews and WGPU views before it reports the close, so anything the
+// render loop sends afterwards targets ids that no longer exist and the core
+// answers with "Webview <id> not found". The SDK quits the app once the last
+// window closes; this just makes sure we stop talking to dead views first.
+request_shutdown :: proc() {
+	if intrinsics.atomic_exchange(&g_shutting_down, true) {
+		return
+	}
+
+	if g_state != nil {
+		sync.mutex_lock(&g_state.gpu.mutex)
+		g_state.gpu.running = false
+		g_state.gpu.view_id = 0
+		g_state.gpu.host_webview_id = 0
+		sync.mutex_unlock(&g_state.gpu.mutex)
+	}
+
+	intrinsics.atomic_store(&g_queue_running, false)
+}
+
+main_window_closed :: proc "c" (_: u32) {
+	context = runtime.default_context()
+	request_shutdown()
+}
 
 app_state :: proc() -> ^App_State {
 	if g_state == nil {
@@ -1610,6 +1637,7 @@ create_ui :: proc() {
 
 	window_options := electrobun.defaultWindowOptions("Odin Alchemy Sandbox")
 	window_options.frame = {x = 120, y = 80, width = 1160, height = 760}
+	window_options.callbacks = {close = main_window_closed}
 	window_id, window_err := electrobun.createWindow(state.core, window_options)
 	if window_err != .None {
 		fmt.eprintfln("[odin-alchemy] failed to create window: %v", window_err)
@@ -1673,12 +1701,7 @@ main :: proc() {
 	intrinsics.atomic_store(&g_queue_running, true)
 	thread.create_and_start(create_ui, self_cleanup = true)
 	thread.create_and_start(drain_host_message_queue, self_cleanup = true)
-	defer {
-		sync.mutex_lock(&state.gpu.mutex)
-		state.gpu.running = false
-		sync.mutex_unlock(&state.gpu.mutex)
-		intrinsics.atomic_store(&g_queue_running, false)
-	}
+	defer request_shutdown()
 	if err := electrobun.runMainThread(&core, app_info); err != .None {
 		fmt.eprintfln("[odin-alchemy] main thread exited with error: %v", err)
 	}

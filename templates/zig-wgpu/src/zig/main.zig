@@ -210,6 +210,30 @@ const WgpuApi = struct {
 var g_state: ?*AppState = null;
 var host_queue_running = std.atomic.Value(bool).init(false);
 var gpu_thread_started = std.atomic.Value(bool).init(false);
+var shutting_down = std.atomic.Value(bool).init(false);
+
+// Stop the worker threads as soon as the window goes away. The core destroys a
+// window's webviews and WGPU views before it reports the close, so anything the
+// render loop sends afterwards targets ids that no longer exist and the core
+// answers with "Webview <id> not found". The SDK quits the app on last window
+// close; this just makes sure we stop talking to dead views first.
+fn requestShutdown() void {
+    if (shutting_down.swap(true, .acq_rel)) return;
+
+    if (g_state) |state| {
+        state.gpu.mutex.lock();
+        state.gpu.running = false;
+        state.gpu.view_id = 0;
+        state.gpu.host_webview_id = 0;
+        state.gpu.mutex.unlock();
+    }
+
+    host_queue_running.store(false, .release);
+}
+
+fn mainWindowClosed(_: u32) callconv(.c) void {
+    requestShutdown();
+}
 
 fn appState() *AppState {
     return g_state orelse @panic("zig-wgpu state not initialized");
@@ -797,6 +821,7 @@ fn createUi(state: *AppState) void {
             .width = 1040,
             .height = 720,
         },
+        .callbacks = .{ .close = mainWindowClosed },
     }) catch |err| {
         std.debug.print("[zig-wgpu] failed to create window: {s}\n", .{@errorName(err)});
         return;
@@ -859,10 +884,7 @@ pub fn main() !void {
     host_queue_running.store(true, .release);
     const host_queue_thread = try std.Thread.spawn(.{}, drainHostMessageQueue, .{});
     defer {
-        state.gpu.mutex.lock();
-        state.gpu.running = false;
-        state.gpu.mutex.unlock();
-        host_queue_running.store(false, .release);
+        requestShutdown();
         host_queue_thread.join();
     }
 

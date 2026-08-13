@@ -1,7 +1,10 @@
 use std::ffi::{CStr, CString};
 use std::fs;
+use std::mem;
 use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
+use std::ptr;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 #[cfg(unix)]
 mod dynlib {
@@ -144,6 +147,33 @@ pub type GlobalShortcutHandler = extern "C" fn(*const c_char);
 pub type QuitRequestedHandler = extern "C" fn();
 pub type URLOpenHandler = extern "C" fn(*const c_char);
 pub type AppReopenHandler = extern "C" fn();
+
+// Quit-requested plumbing.
+//
+// The core invokes its quit-requested handler when the last window closes (see
+// `set_exit_on_last_window_closed`, on by default), when the app is asked to
+// terminate (Cmd+Q), and on SIGINT/SIGTERM. The JS SDK always registers a
+// handler, which is why closing the last window quits a Bun app. Rust apps used
+// to leave the handler unset, so the process kept running headless after the
+// last window closed. `Core::load` now installs the trampoline below so every
+// Rust app gets the same default: stop the event loop, which lets
+// `run_main_thread` return and `main` unwind normally.
+static QUIT_REQUESTED_STOP_EVENT_LOOP: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+static QUIT_REQUESTED_USER_HANDLER: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+
+extern "C" fn quit_requested_trampoline() {
+    let user = QUIT_REQUESTED_USER_HANDLER.load(Ordering::Acquire);
+    if !user.is_null() {
+        let handler: QuitRequestedHandler = unsafe { mem::transmute(user) };
+        handler();
+        return;
+    }
+    let stop = QUIT_REQUESTED_STOP_EVENT_LOOP.load(Ordering::Acquire);
+    if !stop.is_null() {
+        let stop_event_loop: StopEventLoopFn = unsafe { mem::transmute(stop) };
+        unsafe { stop_event_loop() };
+    }
+}
 
 #[derive(Clone, Copy)]
 pub enum Renderer {
@@ -586,6 +616,20 @@ pub fn resolve_app_info_from_bundle(bundle_paths: &BundlePaths) -> Result<AppInf
     })
 }
 
+/// Reads `runtime.exitOnLastWindowClosed` out of the bundled
+/// Resources/build.json, the same value the JS SDK reads through BuildConfig.
+/// Anything missing or malformed falls back to the documented default: quit when
+/// the last window closes.
+pub fn exit_on_last_window_closed_from_build_config(bundle_paths: &BundlePaths) -> bool {
+    let Ok(build_json) = fs::read_to_string(bundle_paths.resources_dir.join("build.json")) else {
+        return true;
+    };
+    let Some(runtime_object) = json_object_field(&build_json, "runtime") else {
+        return true;
+    };
+    json_bool_field(runtime_object, "exitOnLastWindowClosed").unwrap_or(true)
+}
+
 type LastErrorFn = unsafe extern "C" fn() -> *const c_char;
 type RunMainThreadFn =
     unsafe extern "C" fn(*const c_char, *const c_char, *const c_char, c_int) -> c_int;
@@ -768,6 +812,7 @@ type SessionClearStorageDataFn = unsafe extern "C" fn(*const c_char, *const c_ch
 type SetURLOpenHandlerFn = unsafe extern "C" fn(Option<URLOpenHandler>);
 type SetAppReopenHandlerFn = unsafe extern "C" fn(Option<AppReopenHandler>);
 type SetQuitRequestedHandlerFn = unsafe extern "C" fn(Option<QuitRequestedHandler>);
+type SetExitOnLastWindowClosedFn = unsafe extern "C" fn(bool);
 type StopEventLoopFn = unsafe extern "C" fn();
 type WaitForShutdownCompleteFn = unsafe extern "C" fn(c_int);
 type ForceExitFn = unsafe extern "C" fn(c_int);
@@ -886,6 +931,7 @@ struct Symbols {
     set_url_open_handler: SetURLOpenHandlerFn,
     set_app_reopen_handler: SetAppReopenHandlerFn,
     set_quit_requested_handler: SetQuitRequestedHandlerFn,
+    set_exit_on_last_window_closed: SetExitOnLastWindowClosedFn,
     stop_event_loop: StopEventLoopFn,
     wait_for_shutdown_complete: WaitForShutdownCompleteFn,
     force_exit: ForceExitFn,
@@ -1020,6 +1066,7 @@ impl Core {
             set_url_open_handler: lib.symbol("setURLOpenHandler")?,
             set_app_reopen_handler: lib.symbol("setAppReopenHandler")?,
             set_quit_requested_handler: lib.symbol("setQuitRequestedHandler")?,
+            set_exit_on_last_window_closed: lib.symbol("setExitOnLastWindowClosed")?,
             stop_event_loop: lib.symbol("stopEventLoop")?,
             wait_for_shutdown_complete: lib.symbol("waitForShutdownComplete")?,
             force_exit: lib.symbol("forceExit")?,
@@ -1031,6 +1078,23 @@ impl Core {
                 .symbol("wgpuSurfaceGetCurrentTextureMainThread")?,
             wgpu_surface_present_main_thread: lib.symbol("wgpuSurfacePresentMainThread")?,
         };
+
+        // Honour the app's `runtime.exitOnLastWindowClosed` setting, which the
+        // JS SDK applies at startup too. The core only acts on it when a
+        // quit-requested handler is registered, so install one as well.
+        unsafe {
+            (symbols.set_exit_on_last_window_closed)(
+                exit_on_last_window_closed_from_build_config(&bundle_paths),
+            );
+        }
+        QUIT_REQUESTED_STOP_EVENT_LOOP.store(
+            symbols.stop_event_loop as *mut c_void,
+            Ordering::Release,
+        );
+        QUIT_REQUESTED_USER_HANDLER.store(ptr::null_mut(), Ordering::Release);
+        unsafe {
+            (symbols.set_quit_requested_handler)(Some(quit_requested_trampoline));
+        }
 
         Ok(Self { _lib: lib, symbols })
     }
@@ -2053,12 +2117,27 @@ impl Core {
         self.ensure_last_call_succeeded()
     }
 
+    /// Override the default quit behaviour. Pass `None` to restore the SDK
+    /// default (stop the event loop so `run_main_thread` returns).
     pub fn set_quit_requested_handler(
         &self,
         handler: Option<QuitRequestedHandler>,
     ) -> Result<(), String> {
+        let handler_ptr = match handler {
+            Some(handler) => handler as *mut c_void,
+            None => ptr::null_mut(),
+        };
+        QUIT_REQUESTED_USER_HANDLER.store(handler_ptr, Ordering::Release);
         unsafe {
-            (self.symbols.set_quit_requested_handler)(handler);
+            (self.symbols.set_quit_requested_handler)(Some(quit_requested_trampoline));
+        }
+        self.ensure_last_call_succeeded()
+    }
+
+    /// When enabled (the default), closing the last window quits the app.
+    pub fn set_exit_on_last_window_closed(&self, enabled: bool) -> Result<(), String> {
+        unsafe {
+            (self.symbols.set_exit_on_last_window_closed)(enabled);
         }
         self.ensure_last_call_succeeded()
     }
@@ -2305,6 +2384,52 @@ pub fn json_bool_field(source: &str, key: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// Returns the text of a nested JSON object, braces included, so the field
+/// helpers above can be scoped to it instead of scanning the whole document.
+pub fn json_object_field<'a>(source: &'a str, key: &str) -> Option<&'a str> {
+    let needle = format!("\"{key}\"");
+    let key_index = source.find(&needle)?;
+    let after_key = &source[key_index + needle.len()..];
+    let colon_index = after_key.find(':')?;
+    let value = after_key[colon_index + 1..].trim_start();
+    let value_offset = after_key.len() - value.len();
+    if !value.starts_with('{') {
+        return None;
+    }
+
+    let start = key_index + needle.len() + value_offset;
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, ch) in source[start..].char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if in_string {
+            match ch {
+                '\\' => escaped = true,
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_string = true,
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[start..start + index + 1]);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    None
 }
 
 fn parse_rect_json(json: &str) -> Rect {

@@ -98,6 +98,29 @@ pub const QuitRequestedHandler = *const fn () callconv(.c) void;
 pub const URLOpenHandler = *const fn ([*:0]const u8) callconv(.c) void;
 pub const AppReopenHandler = *const fn () callconv(.c) void;
 
+// Quit-requested plumbing.
+//
+// The core invokes its quit-requested handler when the last window closes (see
+// `setExitOnLastWindowClosed`, on by default), when the app is asked to
+// terminate (Cmd+Q), and on SIGINT/SIGTERM. The JS SDK always registers a
+// handler, which is why closing the last window quits a Bun app. Zig apps used
+// to leave the handler unset, so the process kept running headless after the
+// last window closed. `Core.load` now installs the trampoline below so every
+// Zig app gets the same default: stop the event loop, which lets
+// `runMainThread` return and `main` unwind normally.
+var quit_requested_stop_event_loop: ?*const fn () callconv(.c) void = null;
+var quit_requested_user_handler: ?QuitRequestedHandler = null;
+
+fn quitRequestedTrampoline() callconv(.c) void {
+    if (quit_requested_user_handler) |handler| {
+        handler();
+        return;
+    }
+    if (quit_requested_stop_event_loop) |stop_event_loop| {
+        stop_event_loop();
+    }
+}
+
 pub const Renderer = enum {
     native,
     cef,
@@ -667,6 +690,40 @@ pub fn resolveAppInfoFromBundle(allocator: std.mem.Allocator, bundle_paths: *con
     };
 }
 
+/// Reads `runtime.exitOnLastWindowClosed` out of the bundled
+/// Resources/build.json, the same value the JS SDK reads through BuildConfig.
+/// Anything missing or malformed falls back to the documented default: quit
+/// when the last window closes.
+pub fn exitOnLastWindowClosedFromBuildConfig(
+    allocator: std.mem.Allocator,
+    bundle_paths: *const BundlePaths,
+) bool {
+    const build_json_path = std.fs.path.join(
+        allocator,
+        &.{ bundle_paths.resources_dir, "build.json" },
+    ) catch return true;
+    defer allocator.free(build_json_path);
+
+    const build_json = readFileAlloc(allocator, build_json_path) catch return true;
+    defer allocator.free(build_json);
+
+    return exitOnLastWindowClosedFromJson(allocator, build_json);
+}
+
+pub fn exitOnLastWindowClosedFromJson(allocator: std.mem.Allocator, build_json: []const u8) bool {
+    var parsed = std.json.parseFromSlice(std.json.Value, allocator, build_json, .{}) catch return true;
+    defer parsed.deinit();
+
+    if (parsed.value != .object) return true;
+    const runtime_value = parsed.value.object.get("runtime") orelse return true;
+    if (runtime_value != .object) return true;
+    const enabled = runtime_value.object.get("exitOnLastWindowClosed") orelse return true;
+    return switch (enabled) {
+        .bool => |value| value,
+        else => true,
+    };
+}
+
 pub const Core = struct {
     allocator: std.mem.Allocator,
     lib: DynamicLibrary,
@@ -780,6 +837,7 @@ pub const Core = struct {
     const SetURLOpenHandlerFn = *const fn (?URLOpenHandler) callconv(.c) void;
     const SetAppReopenHandlerFn = *const fn (?AppReopenHandler) callconv(.c) void;
     const SetQuitRequestedHandlerFn = *const fn (?QuitRequestedHandler) callconv(.c) void;
+    const SetExitOnLastWindowClosedFn = *const fn (bool) callconv(.c) void;
     const StopEventLoopFn = *const fn () callconv(.c) void;
     const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;
     const ForceExitFn = *const fn (c_int) callconv(.c) void;
@@ -898,6 +956,7 @@ pub const Core = struct {
         set_url_open_handler: SetURLOpenHandlerFn,
         set_app_reopen_handler: SetAppReopenHandlerFn,
         set_quit_requested_handler: SetQuitRequestedHandlerFn,
+        set_exit_on_last_window_closed: SetExitOnLastWindowClosedFn,
         stop_event_loop: StopEventLoopFn,
         wait_for_shutdown_complete: WaitForShutdownCompleteFn,
         force_exit: ForceExitFn,
@@ -923,7 +982,7 @@ pub const Core = struct {
         var lib = try openDynamicLibrary(allocator, lib_path);
         errdefer lib.close();
 
-        return .{
+        var core: Core = .{
             .allocator = allocator,
             .lib = lib,
             .symbols = .{
@@ -1035,6 +1094,7 @@ pub const Core = struct {
                 .set_url_open_handler = lib.lookup(SetURLOpenHandlerFn, "setURLOpenHandler") orelse return error.MissingCoreSymbol,
                 .set_app_reopen_handler = lib.lookup(SetAppReopenHandlerFn, "setAppReopenHandler") orelse return error.MissingCoreSymbol,
                 .set_quit_requested_handler = lib.lookup(SetQuitRequestedHandlerFn, "setQuitRequestedHandler") orelse return error.MissingCoreSymbol,
+                .set_exit_on_last_window_closed = lib.lookup(SetExitOnLastWindowClosedFn, "setExitOnLastWindowClosed") orelse return error.MissingCoreSymbol,
                 .stop_event_loop = lib.lookup(StopEventLoopFn, "stopEventLoop") orelse return error.MissingCoreSymbol,
                 .wait_for_shutdown_complete = lib.lookup(WaitForShutdownCompleteFn, "waitForShutdownComplete") orelse return error.MissingCoreSymbol,
                 .force_exit = lib.lookup(ForceExitFn, "forceExit") orelse return error.MissingCoreSymbol,
@@ -1045,9 +1105,26 @@ pub const Core = struct {
                 .wgpu_surface_present_main_thread = lib.lookup(WgpuSurfacePresentMainThreadFn, "wgpuSurfacePresentMainThread") orelse return error.MissingCoreSymbol,
             },
         };
+
+        // Honour the app's `runtime.exitOnLastWindowClosed` setting, which the
+        // JS SDK applies at startup too. The core only acts on it when a
+        // quit-requested handler is registered, so install one as well.
+        core.symbols.set_exit_on_last_window_closed(
+            exitOnLastWindowClosedFromBuildConfig(allocator, &bundle_paths),
+        );
+        quit_requested_stop_event_loop = core.symbols.stop_event_loop;
+        quit_requested_user_handler = null;
+        core.symbols.set_quit_requested_handler(quitRequestedTrampoline);
+
+        return core;
     }
 
     pub fn close(self: *Core) void {
+        // Drop the core's pointer to our trampoline before unloading the
+        // library so a late quit request can't jump into freed code.
+        self.symbols.set_quit_requested_handler(null);
+        quit_requested_stop_event_loop = null;
+        quit_requested_user_handler = null;
         self.lib.close();
     }
 
@@ -1897,8 +1974,17 @@ pub const Core = struct {
         try self.ensureLastCallSucceeded();
     }
 
+    /// Override the default quit behaviour. Pass `null` to restore the SDK
+    /// default (stop the event loop so `runMainThread` returns).
     pub fn setQuitRequestedHandler(self: *Core, handler: ?QuitRequestedHandler) !void {
-        self.symbols.set_quit_requested_handler(handler);
+        quit_requested_user_handler = handler;
+        self.symbols.set_quit_requested_handler(quitRequestedTrampoline);
+        try self.ensureLastCallSucceeded();
+    }
+
+    /// When enabled (the default), closing the last window quits the app.
+    pub fn setExitOnLastWindowClosed(self: *Core, enabled: bool) !void {
+        self.symbols.set_exit_on_last_window_closed(enabled);
         try self.ensureLastCallSucceeded();
     }
 
@@ -2212,4 +2298,32 @@ test "dialog path JSON preserves commas and escaped characters" {
     try std.testing.expectEqualStrings("/tmp/report,final.txt", paths[0]);
     try std.testing.expectEqualStrings("C:\\Temp\\quoted\"file.txt", paths[1]);
     try std.testing.expectEqualStrings("line\nbreak", paths[2]);
+}
+
+test "build config controls quitting on last window close" {
+    const allocator = std.testing.allocator;
+
+    // Documented default when the app says nothing.
+    try std.testing.expect(exitOnLastWindowClosedFromJson(allocator, "{}"));
+    try std.testing.expect(exitOnLastWindowClosedFromJson(
+        allocator,
+        "{\"runtime\":{\"other\":1}}",
+    ));
+    try std.testing.expect(exitOnLastWindowClosedFromJson(
+        allocator,
+        "{\"runtime\":{\"exitOnLastWindowClosed\":true}}",
+    ));
+
+    // Tray-style apps opt out and must keep running with no windows.
+    try std.testing.expect(!exitOnLastWindowClosedFromJson(
+        allocator,
+        "{\"runtime\":{\"exitOnLastWindowClosed\":false}}",
+    ));
+
+    // Malformed or unexpected shapes fall back to the default.
+    try std.testing.expect(exitOnLastWindowClosedFromJson(allocator, "not json"));
+    try std.testing.expect(exitOnLastWindowClosedFromJson(
+        allocator,
+        "{\"runtime\":{\"exitOnLastWindowClosed\":\"false\"}}",
+    ));
 }

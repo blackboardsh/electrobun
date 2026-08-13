@@ -55,6 +55,33 @@ QuitRequestedHandler :: proc "c" ()
 URLOpenHandler :: proc "c" (cstring)
 AppReopenHandler :: proc "c" ()
 
+// Quit-requested plumbing.
+//
+// The core invokes its quit-requested handler when the last window closes (see
+// setExitOnLastWindowClosed, on by default), when the app is asked to terminate
+// (Cmd+Q), and on SIGINT/SIGTERM. The JS SDK always registers a handler, which
+// is why closing the last window quits a Bun app. Odin apps used to leave the
+// handler unset, so the process kept running headless after the last window
+// closed. `load` now installs the trampoline below so every Odin app gets the
+// same default: stop the event loop, which lets runMainThread return and main
+// unwind normally.
+@(private = "file")
+g_quit_requested_stop_event_loop: VoidFn
+
+@(private = "file")
+g_quit_requested_user_handler: QuitRequestedHandler
+
+@(private = "file")
+quit_requested_trampoline :: proc "c" () {
+	if g_quit_requested_user_handler != nil {
+		g_quit_requested_user_handler()
+		return
+	}
+	if g_quit_requested_stop_event_loop != nil {
+		g_quit_requested_stop_event_loop()
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Public data types
 // ---------------------------------------------------------------------------
@@ -465,6 +492,52 @@ resolveAppInfoFromBundle :: proc(
 	return app_info, .None
 }
 
+// Reads runtime.exitOnLastWindowClosed out of the bundled Resources/build.json,
+// the same value the JS SDK reads through BuildConfig. Anything missing or
+// malformed falls back to the documented default: quit when the last window
+// closes.
+exitOnLastWindowClosedFromBuildConfig :: proc(
+	allocator: runtime.Allocator,
+	bundle_paths: ^BundlePaths,
+) -> bool {
+	build_json_path := join_path(allocator, {bundle_paths.resources_dir, "build.json"})
+	defer delete(build_json_path, allocator)
+
+	build_json, read_err := os.read_entire_file(build_json_path, allocator)
+	if read_err != nil {
+		return true
+	}
+	defer delete(build_json, allocator)
+
+	value, parse_err := json.parse(build_json, json.DEFAULT_SPECIFICATION, true, allocator)
+	if parse_err != .None {
+		return true
+	}
+	defer json.destroy_value(value, allocator)
+
+	root, root_is_object := value.(json.Object)
+	if !root_is_object {
+		return true
+	}
+	runtime_value, has_runtime := root["runtime"]
+	if !has_runtime {
+		return true
+	}
+	runtime_object, runtime_is_object := runtime_value.(json.Object)
+	if !runtime_is_object {
+		return true
+	}
+	enabled_value, has_enabled := runtime_object["exitOnLastWindowClosed"]
+	if !has_enabled {
+		return true
+	}
+	enabled, is_bool := enabled_value.(json.Boolean)
+	if !is_bool {
+		return true
+	}
+	return bool(enabled)
+}
+
 // ---------------------------------------------------------------------------
 // Window registry
 // ---------------------------------------------------------------------------
@@ -863,6 +936,7 @@ Symbols :: struct {
 	setURLOpenHandler:                      SetURLOpenHandlerFn,
 	setAppReopenHandler:                    SetAppReopenHandlerFn,
 	setQuitRequestedHandler:                SetQuitRequestedHandlerFn,
+	setExitOnLastWindowClosed:              SetBoolFn,
 	stopEventLoop:                          VoidFn,
 	waitForShutdownComplete:                IntVoidFn,
 	forceExit:                              IntVoidFn,
@@ -902,10 +976,28 @@ coreLoad :: proc(allocator := context.allocator) -> (core: Core, err: Error) {
 		dynlib.unload_library(core.symbols.__handle)
 		return {}, .MissingCoreSymbol
 	}
+
+	// Honour the app's runtime.exitOnLastWindowClosed setting, which the JS SDK
+	// applies at startup too. The core only acts on it when a quit-requested
+	// handler is registered, so install one as well.
+	core.symbols.setExitOnLastWindowClosed(
+		exitOnLastWindowClosedFromBuildConfig(allocator, &bundle_paths),
+	)
+	g_quit_requested_stop_event_loop = core.symbols.stopEventLoop
+	g_quit_requested_user_handler = nil
+	core.symbols.setQuitRequestedHandler(quit_requested_trampoline)
+
 	return core, .None
 }
 
 coreClose :: proc(self: ^Core) {
+	// Drop the core's pointer to our trampoline before unloading the library so
+	// a late quit request can't jump into freed code.
+	if self.symbols.setQuitRequestedHandler != nil {
+		self.symbols.setQuitRequestedHandler(nil)
+	}
+	g_quit_requested_stop_event_loop = nil
+	g_quit_requested_user_handler = nil
 	dynlib.unload_library(self.symbols.__handle)
 	self.symbols.__handle = nil
 }
@@ -1763,8 +1855,17 @@ setAppReopenHandler :: proc(self: ^Core, handler: AppReopenHandler) -> Error {
 	return ensure_last_call_succeeded(self)
 }
 
+// Override the default quit behaviour. Pass nil to restore the SDK default
+// (stop the event loop so runMainThread returns).
 setQuitRequestedHandler :: proc(self: ^Core, handler: QuitRequestedHandler) -> Error {
-	self.symbols.setQuitRequestedHandler(handler)
+	g_quit_requested_user_handler = handler
+	self.symbols.setQuitRequestedHandler(quit_requested_trampoline)
+	return ensure_last_call_succeeded(self)
+}
+
+// When enabled (the default), closing the last window quits the app.
+setExitOnLastWindowClosed :: proc(self: ^Core, enabled: bool) -> Error {
+	self.symbols.setExitOnLastWindowClosed(enabled)
 	return ensure_last_call_succeeded(self)
 }
 
