@@ -26,6 +26,15 @@ const WINDOWS_UNINSTALL_REGISTRY_ROOT = "HKCU\\Software\\Microsoft\\Windows\\Cur
 const LINUX_UNINSTALL_EXE_NAME = "uninstall";
 const LINUX_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
 const LINUX_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const MACOS_UNINSTALL_EXE_NAME = "uninstall";
+const MACOS_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
+const MACOS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const MACOS_DATA_PATH_VERSION: u32 = 1;
+
+const macos_uninstall_ui = if (builtin.os.tag == .macos) struct {
+    extern fn electrobun_show_uninstall_prompt(app_name_utf8: [*:0]const u8) c_int;
+    extern fn electrobun_terminate_app_at_path(app_path_utf8: [*:0]const u8) c_int;
+} else struct {};
 
 const windows_uninstall_sync = if (builtin.os.tag == .windows) struct {
     const win = std.os.windows;
@@ -87,6 +96,64 @@ const LinuxUninstallManifest = struct {
     application_entry_sha256: []const u8,
     desktop_entry_sha256: []const u8,
 };
+
+const MacosUninstallManifest = struct {
+    schema_version: u32,
+    install_nonce: []const u8,
+    identifier: []const u8,
+    name: []const u8,
+    channel: []const u8,
+    version: []const u8,
+    app_bundle_path: []const u8,
+    app_path_token: []const u8,
+    data_path_versions: []const u32,
+};
+
+const MacosUninstallMode = enum {
+    app,
+    app_and_data,
+};
+
+const MacosManagerCommand = union(enum) {
+    uninstall: ?MacosUninstallMode,
+    refresh_metadata,
+};
+
+fn parseMacosManagerCommand(args: []const []const u8) !MacosManagerCommand {
+    if (args.len == 0) return .{ .uninstall = null };
+    if (std.mem.eql(u8, args[0], "--uninstall")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = null },
+            2 => if (std.mem.eql(u8, args[1], "--quiet"))
+                .{ .uninstall = .app }
+            else
+                error.InvalidArguments,
+            3 => if (std.mem.eql(u8, args[1], "--quiet") and
+                std.mem.eql(u8, args[2], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--quiet")) {
+        return switch (args.len) {
+            1 => .{ .uninstall = .app },
+            2 => if (std.mem.eql(u8, args[1], "--delete-data"))
+                .{ .uninstall = .app_and_data }
+            else
+                error.InvalidArguments,
+            else => error.InvalidArguments,
+        };
+    }
+    if (std.mem.eql(u8, args[0], "--refresh-metadata") and
+        args.len == 2 and
+        std.mem.eql(u8, args[1], "--quiet"))
+    {
+        return .refresh_metadata;
+    }
+    return error.InvalidArguments;
+}
 
 // Progress indicator for extraction
 const ProgressIndicator = struct {
@@ -2750,6 +2817,686 @@ fn cleanupWindowsUninstaller(
     }
 }
 
+fn isSafeMacosComponent(value: []const u8) bool {
+    if (value.len == 0 or std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
+    for (value) |byte| switch (byte) {
+        0...31, 127, '/', '\\' => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn isSafeMacosDisplayName(value: []const u8) bool {
+    if (value.len == 0) return false;
+    for (value) |byte| switch (byte) {
+        0...31, 127 => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn isValidMacosInstallNonce(value: []const u8) bool {
+    if (value.len != 32) return false;
+    for (value) |byte| if (!std.ascii.isHex(byte)) return false;
+    return true;
+}
+
+fn createMacosInstallNonce() [32]u8 {
+    var random_bytes: [16]u8 = undefined;
+    g_io.random(&random_bytes);
+    return std.fmt.bytesToHex(random_bytes, .lower);
+}
+
+fn macosAppPathToken(
+    install_nonce: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+    app_bundle_path: []const u8,
+) [64]u8 {
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(install_nonce);
+    hasher.update(&.{0});
+    hasher.update(identifier);
+    hasher.update(&.{0});
+    hasher.update(channel);
+    hasher.update(&.{0});
+    hasher.update(app_bundle_path);
+    hasher.update(&.{0});
+    hasher.final(&digest);
+    return std.fmt.bytesToHex(digest, .lower);
+}
+
+const MacosManagedPaths = struct {
+    home: []u8,
+    install_root: []u8,
+    user_cache: []u8,
+    user_logs: []u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.home);
+        allocator.free(self.install_root);
+        allocator.free(self.user_cache);
+        allocator.free(self.user_logs);
+        self.* = undefined;
+    }
+};
+
+fn requirePlainDirectory(path: []const u8) !void {
+    const stat = try std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false });
+    if (stat.kind != .directory) return error.InvalidUninstallLocation;
+}
+
+fn ensurePlainMacosChildDir(parent: std.Io.Dir, name: []const u8) !std.Io.Dir {
+    parent.createDir(g_io, name, .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    return parent.openDir(g_io, name, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    }) catch |err| switch (err) {
+        error.NotDir, error.SymLinkLoop => error.InvalidUninstallLocation,
+        else => err,
+    };
+}
+
+fn ensureMacosInstallRoot(
+    home: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !std.Io.Dir {
+    if (!std.fs.path.isAbsolute(home) or
+        !isSafeMacosComponent(identifier) or
+        !isSafeMacosComponent(channel)) return error.InvalidUninstallLocation;
+    std.Io.Dir.createDirAbsolute(g_io, home, .default_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+    var home_dir = try std.Io.Dir.openDirAbsolute(g_io, home, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer home_dir.close(g_io);
+    var library_dir = try ensurePlainMacosChildDir(home_dir, "Library");
+    defer library_dir.close(g_io);
+    var application_support_dir = try ensurePlainMacosChildDir(library_dir, "Application Support");
+    defer application_support_dir.close(g_io);
+    var identifier_dir = try ensurePlainMacosChildDir(application_support_dir, identifier);
+    defer identifier_dir.close(g_io);
+    return ensurePlainMacosChildDir(identifier_dir, channel);
+}
+
+fn prepareMacosSelfExtractionRoot(
+    allocator: std.mem.Allocator,
+    home: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) ![]u8 {
+    var channel_dir = try ensureMacosInstallRoot(home, identifier, channel);
+    defer channel_dir.close(g_io);
+    try channel_dir.deleteTree(g_io, "self-extraction");
+    var extraction_dir = try ensurePlainMacosChildDir(channel_dir, "self-extraction");
+    extraction_dir.close(g_io);
+    return std.fs.path.join(
+        allocator,
+        &.{ home, "Library", "Application Support", identifier, channel, "self-extraction" },
+    );
+}
+
+fn macosManagedPathsFromInstallRoot(
+    allocator: std.mem.Allocator,
+    install_root: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !MacosManagedPaths {
+    if (!std.fs.path.isAbsolute(install_root) or
+        !isSafeMacosComponent(identifier) or
+        !isSafeMacosComponent(channel)) return error.InvalidUninstallLocation;
+
+    const resolved_root = try std.fs.path.resolve(allocator, &.{install_root});
+    errdefer allocator.free(resolved_root);
+    if (!std.mem.eql(u8, std.fs.path.basename(resolved_root), channel)) {
+        return error.InvalidUninstallLocation;
+    }
+    const identifier_dir = std.fs.path.dirname(resolved_root) orelse return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(identifier_dir), identifier)) {
+        return error.InvalidUninstallLocation;
+    }
+    const application_support = std.fs.path.dirname(identifier_dir) orelse return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(application_support), "Application Support")) {
+        return error.InvalidUninstallLocation;
+    }
+    const library_dir = std.fs.path.dirname(application_support) orelse return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(library_dir), "Library")) {
+        return error.InvalidUninstallLocation;
+    }
+    const home = std.fs.path.dirname(library_dir) orelse return error.InvalidUninstallLocation;
+    if (!std.fs.path.isAbsolute(home) or std.mem.eql(u8, home, std.fs.path.sep_str)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    // Refuse roots reached through symlinks. This makes every recursive target
+    // a structural consequence of the manager's physical, canonical location.
+    try requirePlainDirectory(library_dir);
+    try requirePlainDirectory(application_support);
+    try requirePlainDirectory(identifier_dir);
+    try requirePlainDirectory(resolved_root);
+
+    const user_cache = try std.fs.path.join(allocator, &.{ home, "Library", "Caches", identifier, channel });
+    errdefer allocator.free(user_cache);
+    const user_logs = try std.fs.path.join(allocator, &.{ home, "Library", "Logs", identifier, channel });
+    errdefer allocator.free(user_logs);
+    return .{
+        .home = try allocator.dupe(u8, home),
+        .install_root = resolved_root,
+        .user_cache = user_cache,
+        .user_logs = user_logs,
+    };
+}
+
+const InstalledMacosIdentity = struct {
+    version: []u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.version);
+        self.* = undefined;
+    }
+};
+
+fn readAndValidateInstalledMacosIdentity(
+    allocator: std.mem.Allocator,
+    app_bundle_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !InstalledMacosIdentity {
+    if (!std.fs.path.isAbsolute(app_bundle_path) or
+        !std.mem.endsWith(u8, std.fs.path.basename(app_bundle_path), ".app"))
+    {
+        return error.InvalidInstalledIdentity;
+    }
+    const resolved_path = try std.fs.path.resolve(allocator, &.{app_bundle_path});
+    defer allocator.free(resolved_path);
+    if (!std.mem.eql(u8, resolved_path, app_bundle_path)) return error.InvalidInstalledIdentity;
+    const stat = try std.Io.Dir.cwd().statFile(g_io, app_bundle_path, .{ .follow_symlinks = false });
+    if (stat.kind != .directory) return error.InvalidInstalledIdentity;
+
+    const version_path = try std.fs.path.join(
+        allocator,
+        &.{ app_bundle_path, "Contents", "Resources", "version.json" },
+    );
+    defer allocator.free(version_path);
+    var version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer version_file.close(g_io);
+    var version_reader = version_file.reader(g_io, &.{});
+    const contents = version_reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return version_reader.err.?,
+        else => |e| return e,
+    };
+    defer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            version: []const u8,
+            identifier: []const u8,
+            channel: []const u8,
+        },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    if (parsed.value.version.len == 0 or
+        !std.mem.eql(u8, parsed.value.identifier, identifier) or
+        !std.mem.eql(u8, parsed.value.channel, channel))
+    {
+        return error.InvalidInstalledIdentity;
+    }
+    return .{ .version = try allocator.dupe(u8, parsed.value.version) };
+}
+
+fn validateRecordedMacosAppPath(
+    allocator: std.mem.Allocator,
+    app_bundle_path: []const u8,
+    install_root: []const u8,
+) !void {
+    if (!std.fs.path.isAbsolute(app_bundle_path)) return error.InvalidUninstallManifest;
+    const basename = std.fs.path.basename(app_bundle_path);
+    if (basename.len <= ".app".len or !std.mem.endsWith(u8, basename, ".app")) {
+        return error.InvalidUninstallManifest;
+    }
+    const resolved = try std.fs.path.resolve(allocator, &.{app_bundle_path});
+    defer allocator.free(resolved);
+    if (!std.mem.eql(u8, resolved, app_bundle_path)) return error.InvalidUninstallManifest;
+
+    // The program target must never be the manager/data root or contain it.
+    // This makes an accidentally edited manifest incapable of widening the
+    // recursive cleanup to the channel's managed state hierarchy.
+    if (std.mem.eql(u8, resolved, install_root) or
+        (std.mem.startsWith(u8, install_root, resolved) and
+            install_root.len > resolved.len and
+            install_root[resolved.len] == std.fs.path.sep))
+    {
+        return error.InvalidUninstallManifest;
+    }
+}
+
+fn validateExistingMacosAppIdentityIfReadable(
+    allocator: std.mem.Allocator,
+    app_bundle_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !void {
+    const app_stat = std.Io.Dir.cwd().statFile(g_io, app_bundle_path, .{
+        .follow_symlinks = false,
+    }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return,
+        else => return err,
+    };
+    if (app_stat.kind != .directory) return error.InvalidUninstallManifest;
+
+    const version_path = try std.fs.path.join(
+        allocator,
+        &.{ app_bundle_path, "Contents", "Resources", "version.json" },
+    );
+    defer allocator.free(version_path);
+    var version_file = std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    }) catch return;
+    defer version_file.close(g_io);
+    var reader = version_file.reader(g_io, &.{});
+    const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch return;
+    defer allocator.free(contents);
+    const parsed = std.json.parseFromSlice(
+        struct {
+            identifier: []const u8,
+            channel: []const u8,
+        },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    ) catch return;
+    defer parsed.deinit();
+    if (!std.mem.eql(u8, parsed.value.identifier, identifier) or
+        !std.mem.eql(u8, parsed.value.channel, channel))
+    {
+        return error.InvalidUninstallManifest;
+    }
+}
+
+fn validateMacosDataPathVersions(versions: []const u32) !void {
+    if (versions.len == 0) return error.InvalidUninstallManifest;
+    var saw_v1 = false;
+    for (versions) |version| {
+        if (version != MACOS_DATA_PATH_VERSION or saw_v1) return error.InvalidUninstallManifest;
+        saw_v1 = true;
+    }
+}
+
+fn validateMacosUninstallManifest(
+    allocator: std.mem.Allocator,
+    manifest: MacosUninstallManifest,
+    base_dir: []const u8,
+) !void {
+    if (manifest.schema_version != MACOS_UNINSTALL_MANIFEST_VERSION or
+        !isValidMacosInstallNonce(manifest.install_nonce) or
+        !isSafeMacosComponent(manifest.identifier) or
+        !isSafeMacosComponent(manifest.channel) or
+        !isSafeMacosDisplayName(manifest.name) or
+        manifest.version.len == 0)
+    {
+        return error.InvalidUninstallManifest;
+    }
+    try validateMacosDataPathVersions(manifest.data_path_versions);
+    var paths = try macosManagedPathsFromInstallRoot(
+        allocator,
+        base_dir,
+        manifest.identifier,
+        manifest.channel,
+    );
+    defer paths.deinit(allocator);
+    try validateRecordedMacosAppPath(allocator, manifest.app_bundle_path, paths.install_root);
+    const expected_token = macosAppPathToken(
+        manifest.install_nonce,
+        manifest.identifier,
+        manifest.channel,
+        manifest.app_bundle_path,
+    );
+    if (manifest.app_path_token.len != expected_token.len) return error.InvalidUninstallManifest;
+    if (!std.crypto.timing_safe.eql([64]u8, expected_token, manifest.app_path_token[0..64].*)) {
+        return error.InvalidUninstallManifest;
+    }
+    try validateExistingMacosAppIdentityIfReadable(
+        allocator,
+        manifest.app_bundle_path,
+        manifest.identifier,
+        manifest.channel,
+    );
+}
+
+fn writeMacosUninstallManifest(
+    allocator: std.mem.Allocator,
+    channel_dir: std.Io.Dir,
+    manifest: MacosUninstallManifest,
+) !void {
+    const json = try std.json.Stringify.valueAlloc(allocator, manifest, .{ .whitespace = .indent_2 });
+    defer allocator.free(json);
+    var atomic_file = try channel_dir.createFileAtomic(g_io, MACOS_UNINSTALL_MANIFEST_NAME, .{ .replace = true });
+    defer atomic_file.deinit(g_io);
+    var buffer: [4096]u8 = undefined;
+    var writer = atomic_file.file.writer(g_io, &buffer);
+    try writer.interface.writeAll(json);
+    try writer.flush();
+    try atomic_file.file.sync(g_io);
+    try atomic_file.replace(g_io);
+}
+
+fn loadAndValidateMacosManifest(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    base_dir: []const u8,
+) !struct { contents: []u8, parsed: std.json.Parsed(MacosUninstallManifest) } {
+    var manifest_file = try std.Io.Dir.openFileAbsolute(g_io, manifest_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer manifest_file.close(g_io);
+    var manifest_reader = manifest_file.reader(g_io, &.{});
+    const contents = manifest_reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return manifest_reader.err.?,
+        else => |e| return e,
+    };
+    errdefer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        MacosUninstallManifest,
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    errdefer parsed.deinit();
+    try validateMacosUninstallManifest(allocator, parsed.value, base_dir);
+    return .{ .contents = contents, .parsed = parsed };
+}
+
+fn macosManifestPath(allocator: std.mem.Allocator, base_dir: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{ base_dir, MACOS_UNINSTALL_MANIFEST_NAME });
+}
+
+fn installMacosUninstallManager(
+    allocator: std.mem.Allocator,
+    source_app_bundle_path: []const u8,
+    installed_app_bundle_path: []const u8,
+    metadata: AppMetadata,
+) !void {
+    if (!isSafeMacosComponent(metadata.identifier) or
+        !isSafeMacosComponent(metadata.channel) or
+        !isSafeMacosDisplayName(metadata.name)) return error.InvalidInstallIdentity;
+
+    const home = try getEnvOwned(allocator, "HOME");
+    defer allocator.free(home);
+    const base_dir = try std.fs.path.join(
+        allocator,
+        &.{ home, "Library", "Application Support", metadata.identifier, metadata.channel },
+    );
+    defer allocator.free(base_dir);
+    var channel_dir = try ensureMacosInstallRoot(home, metadata.identifier, metadata.channel);
+    defer channel_dir.close(g_io);
+
+    var managed_paths = try macosManagedPathsFromInstallRoot(
+        allocator,
+        base_dir,
+        metadata.identifier,
+        metadata.channel,
+    );
+    defer managed_paths.deinit(allocator);
+    const canonical_source_path = try std.Io.Dir.cwd().realPathFileAlloc(g_io, source_app_bundle_path, allocator);
+    defer allocator.free(canonical_source_path);
+    const canonical_installed_path = try std.Io.Dir.cwd().realPathFileAlloc(g_io, installed_app_bundle_path, allocator);
+    defer allocator.free(canonical_installed_path);
+    try validateRecordedMacosAppPath(allocator, canonical_installed_path, managed_paths.install_root);
+    var installed = try readAndValidateInstalledMacosIdentity(
+        allocator,
+        canonical_source_path,
+        metadata.identifier,
+        metadata.channel,
+    );
+    defer installed.deinit(allocator);
+
+    const source_path = try std.fs.path.join(
+        allocator,
+        &.{ canonical_source_path, "Contents", "Resources", MACOS_UNINSTALL_EXE_NAME },
+    );
+    defer allocator.free(source_path);
+    var source_file = try std.Io.Dir.openFileAbsolute(g_io, source_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer source_file.close(g_io);
+    const source_stat = try source_file.stat(g_io);
+    if (source_stat.kind != .file) return error.InvalidUninstallManager;
+    const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, MACOS_UNINSTALL_EXE_NAME });
+    defer allocator.free(uninstall_path);
+    var atomic_uninstaller = try channel_dir.createFileAtomic(g_io, MACOS_UNINSTALL_EXE_NAME, .{
+        .replace = true,
+        .permissions = .fromMode(0o755),
+    });
+    defer atomic_uninstaller.deinit(g_io);
+    var source_reader = source_file.reader(g_io, &.{});
+    var copy_buffer: [4096]u8 = undefined;
+    var destination_writer = atomic_uninstaller.file.writer(g_io, &copy_buffer);
+    _ = destination_writer.interface.sendFileAll(&source_reader, .unlimited) catch |err| switch (err) {
+        error.ReadFailed => return source_reader.err.?,
+        error.WriteFailed => return destination_writer.err.?,
+    };
+    try destination_writer.flush();
+    try atomic_uninstaller.file.sync(g_io);
+    try atomic_uninstaller.replace(g_io);
+
+    const install_nonce = createMacosInstallNonce();
+    const app_path_token = macosAppPathToken(
+        &install_nonce,
+        metadata.identifier,
+        metadata.channel,
+        canonical_installed_path,
+    );
+    const data_path_versions = [_]u32{MACOS_DATA_PATH_VERSION};
+    const manifest = MacosUninstallManifest{
+        .schema_version = MACOS_UNINSTALL_MANIFEST_VERSION,
+        .install_nonce = &install_nonce,
+        .identifier = metadata.identifier,
+        .name = metadata.name,
+        .channel = metadata.channel,
+        .version = installed.version,
+        .app_bundle_path = canonical_installed_path,
+        .app_path_token = &app_path_token,
+        .data_path_versions = &data_path_versions,
+    };
+    try writeMacosUninstallManifest(allocator, channel_dir, manifest);
+    std.debug.print("Installed macOS uninstaller: {s}\n", .{uninstall_path});
+}
+
+fn refreshMacosUninstallMetadata(allocator: std.mem.Allocator) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), MACOS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+    const manifest_path = try macosManifestPath(allocator, base_dir);
+    defer allocator.free(manifest_path);
+    var document = try loadAndValidateMacosManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+    const old = document.parsed.value;
+    var installed = try readAndValidateInstalledMacosIdentity(
+        allocator,
+        old.app_bundle_path,
+        old.identifier,
+        old.channel,
+    );
+    defer installed.deinit(allocator);
+    var channel_dir = try std.Io.Dir.openDirAbsolute(g_io, base_dir, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer channel_dir.close(g_io);
+    const data_path_versions = [_]u32{MACOS_DATA_PATH_VERSION};
+    try writeMacosUninstallManifest(allocator, channel_dir, .{
+        .schema_version = MACOS_UNINSTALL_MANIFEST_VERSION,
+        .install_nonce = old.install_nonce,
+        .identifier = old.identifier,
+        .name = old.name,
+        .channel = old.channel,
+        .version = installed.version,
+        .app_bundle_path = old.app_bundle_path,
+        .app_path_token = old.app_path_token,
+        .data_path_versions = &data_path_versions,
+    });
+}
+
+fn openMacosScopedIdentifierDir(
+    home: []const u8,
+    category: []const u8,
+    identifier: []const u8,
+) !?std.Io.Dir {
+    var home_dir = std.Io.Dir.openDirAbsolute(g_io, home, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    defer home_dir.close(g_io);
+    var library_dir = home_dir.openDir(g_io, "Library", .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    defer library_dir.close(g_io);
+    var category_dir = library_dir.openDir(g_io, category, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        error.NotDir, error.SymLinkLoop => return error.InvalidUninstallLocation,
+        else => return err,
+    };
+    defer category_dir.close(g_io);
+    return category_dir.openDir(g_io, identifier, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        error.NotDir, error.SymLinkLoop => error.InvalidUninstallLocation,
+        else => err,
+    };
+}
+
+fn openMacosAppParent(app_bundle_path: []const u8) !?std.Io.Dir {
+    const parent_path = std.fs.path.dirname(app_bundle_path) orelse return error.InvalidUninstallManifest;
+    return std.Io.Dir.openDirAbsolute(g_io, parent_path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        error.NotDir, error.SymLinkLoop => error.InvalidUninstallManifest,
+        else => err,
+    };
+}
+
+fn deleteMacosScopedRoot(parent: ?std.Io.Dir, channel: []const u8) !void {
+    const dir = parent orelse return;
+    try dir.deleteTree(g_io, channel);
+}
+
+fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallMode) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), MACOS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    const executable_stat = try std.Io.Dir.cwd().statFile(g_io, executable_path, .{ .follow_symlinks = false });
+    if (executable_stat.kind != .file) return error.InvalidUninstallLocation;
+    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+    const manifest_path = try macosManifestPath(allocator, base_dir);
+    defer allocator.free(manifest_path);
+    var document = try loadAndValidateMacosManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+    const manifest = document.parsed.value;
+
+    const mode: MacosUninstallMode = requested_mode orelse blk: {
+        const name_z = try allocator.dupeZ(u8, manifest.name);
+        defer allocator.free(name_z);
+        break :blk switch (macos_uninstall_ui.electrobun_show_uninstall_prompt(name_z.ptr)) {
+            1 => .app,
+            2 => .app_and_data,
+            else => return,
+        };
+    };
+    var paths = try macosManagedPathsFromInstallRoot(
+        allocator,
+        base_dir,
+        manifest.identifier,
+        manifest.channel,
+    );
+    defer paths.deinit(allocator);
+
+    // Open every recursive target's parent without following symlinks before
+    // making any changes. Deletion is then relative to a pinned directory
+    // handle and the final channel/app entry is handled by deleteTree without
+    // following a root symlink.
+    var install_identifier_dir = (try openMacosScopedIdentifierDir(
+        paths.home,
+        "Application Support",
+        manifest.identifier,
+    )) orelse return error.InvalidUninstallLocation;
+    defer install_identifier_dir.close(g_io);
+    var app_parent = try openMacosAppParent(manifest.app_bundle_path);
+    defer if (app_parent) |*dir| dir.close(g_io);
+    var cache_identifier_dir: ?std.Io.Dir = null;
+    defer if (cache_identifier_dir) |*dir| dir.close(g_io);
+    var logs_identifier_dir: ?std.Io.Dir = null;
+    defer if (logs_identifier_dir) |*dir| dir.close(g_io);
+    if (mode == .app_and_data) {
+        cache_identifier_dir = try openMacosScopedIdentifierDir(
+            paths.home,
+            "Caches",
+            manifest.identifier,
+        );
+        logs_identifier_dir = try openMacosScopedIdentifierDir(
+            paths.home,
+            "Logs",
+            manifest.identifier,
+        );
+    }
+
+    const app_path_z = try allocator.dupeZ(u8, manifest.app_bundle_path);
+    defer allocator.free(app_path_z);
+    _ = macos_uninstall_ui.electrobun_terminate_app_at_path(app_path_z.ptr);
+
+    if (app_parent) |dir| try dir.deleteTree(g_io, std.fs.path.basename(manifest.app_bundle_path));
+
+    if (mode == .app_and_data) {
+        // Version 1 maps exactly to the three existing Utils.paths roots. The
+        // manifest stores only resolver versions, never deletion paths.
+        try deleteMacosScopedRoot(cache_identifier_dir, manifest.channel);
+        try deleteMacosScopedRoot(logs_identifier_dir, manifest.channel);
+        try install_identifier_dir.deleteTree(g_io, manifest.channel);
+        return;
+    }
+
+    {
+        var channel_dir = try install_identifier_dir.openDir(g_io, manifest.channel, .{
+            .follow_symlinks = false,
+            .iterate = true,
+        });
+        defer channel_dir.close(g_io);
+        try channel_dir.deleteTree(g_io, "self-extraction");
+        channel_dir.deleteFile(g_io, MACOS_UNINSTALL_EXE_NAME) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+        channel_dir.deleteFile(g_io, MACOS_UNINSTALL_MANIFEST_NAME) catch |err| switch (err) {
+            error.FileNotFound => {},
+            else => return err,
+        };
+    }
+    install_identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+}
+
 fn windowsUpdateTaskName(allocator: std.mem.Allocator, identifier: []const u8, channel: []const u8) ![]u8 {
     if (!isSafeWindowsComponent(identifier) or !isSafeWindowsComponent(channel)) {
         return error.InvalidInstallIdentity;
@@ -2849,6 +3596,27 @@ pub fn main(init: std.process.Init) !void {
             return;
         }
     }
+    if (builtin.os.tag == .macos) {
+        const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+        defer allocator.free(executable_path);
+        if (std.mem.eql(u8, std.fs.path.basename(executable_path), MACOS_UNINSTALL_EXE_NAME)) {
+            var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+            defer args.deinit();
+            _ = args.next() orelse return error.InvalidArguments;
+            var command_args: [4][]const u8 = undefined;
+            var command_args_len: usize = 0;
+            while (args.next()) |arg| {
+                if (command_args_len == command_args.len) return error.InvalidArguments;
+                command_args[command_args_len] = arg;
+                command_args_len += 1;
+            }
+            switch (try parseMacosManagerCommand(command_args[0..command_args_len])) {
+                .uninstall => |mode| try uninstallMacos(allocator, mode),
+                .refresh_metadata => try refreshMacosUninstallMetadata(allocator),
+            }
+            return;
+        }
+    }
 
     std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
     var startTime = std.Io.Clock.now(.awake, g_io);
@@ -2893,6 +3661,13 @@ pub fn main(init: std.process.Init) !void {
     }, allocator, metadataJsonContents, .{ .ignore_unknown_fields = true });
     defer metadataParsed.deinit();
 
+    if (!isSafeMacosComponent(metadataParsed.value.identifier) or
+        !isSafeMacosComponent(metadataParsed.value.channel) or
+        !isSafeMacosDisplayName(metadataParsed.value.name))
+    {
+        return error.InvalidInstallIdentity;
+    }
+
     const identifierName = try allocator.dupe(u8, metadataParsed.value.identifier);
     defer allocator.free(identifierName);
 
@@ -2905,13 +3680,14 @@ pub fn main(init: std.process.Init) !void {
     const hashName = try allocator.dupe(u8, metadataParsed.value.hash);
     defer allocator.free(hashName);
 
-    const appDataPathSegment = try std.fs.path.join(allocator, &.{ identifierName, channelName });
-
-    // macOS application data lives in ~/Library/Application Support/<identifier>/<channel>
     const home_dir = try getEnvOwned(allocator, "HOME");
     defer allocator.free(home_dir);
-    const APPDATA_PATH = try std.fs.path.join(allocator, &.{ home_dir, "Library", "Application Support", appDataPathSegment });
-    defer allocator.free(APPDATA_PATH);
+
+    // Resolve and pin the managed channel root before reading or extracting
+    // payload bytes. This rejects pre-existing symlinked path components
+    // before any recursive installer cleanup can begin.
+    var install_channel_dir = try ensureMacosInstallRoot(home_dir, identifierName, channelName);
+    defer install_channel_dir.close(g_io);
 
     const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
 
@@ -2923,12 +3699,13 @@ pub fn main(init: std.process.Init) !void {
     const compressedTarballPath = try std.fs.path.join(allocator, &.{ appBundleResourcesPath, compressedBundleFileName });
 
     const compressedAppBundle = try std.Io.Dir.cwd().openFile(g_io, compressedTarballPath, .{}); //|compressedAppBundle| {
-    const SELF_EXTRACTION_PATH = try std.fs.path.join(allocator, &.{ APPDATA_PATH, "self-extraction" });
-
-    // Remove any previous extraction directory before starting fresh
-    std.Io.Dir.cwd().deleteTree(g_io, SELF_EXTRACTION_PATH) catch {};
-
-    try std.Io.Dir.cwd().createDirPath(g_io, SELF_EXTRACTION_PATH);
+    const SELF_EXTRACTION_PATH = try prepareMacosSelfExtractionRoot(
+        allocator,
+        home_dir,
+        identifierName,
+        channelName,
+    );
+    defer allocator.free(SELF_EXTRACTION_PATH);
 
     // compressed file found, assume I'm the self-extractor
     defer compressedAppBundle.close(g_io);
@@ -3009,6 +3786,13 @@ pub fn main(init: std.process.Init) !void {
     // todo: get the basename of the newBundlePath and join a new path with it
     // in case the name changed.
 
+    try installMacosUninstallManager(allocator, newBundlePath, APPBUNDLE_PATH, .{
+        .identifier = identifierName,
+        .name = appDisplayName,
+        .channel = channelName,
+        .hash = hashName,
+    });
+
     std.Io.Dir.cwd().deleteTree(g_io, APPBUNDLE_PATH) catch {};
     try std.Io.Dir.renameAbsolute(newBundlePath, APPBUNDLE_PATH, g_io);
 
@@ -3086,6 +3870,49 @@ test "Windows integration names and registry keys are channel scoped" {
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.canary",
         canary_key,
     );
+}
+
+test "macOS uninstall manager accepts only the explicit interactive and quiet grammar" {
+    const interactive = try parseMacosManagerCommand(&.{});
+    try std.testing.expect(interactive == .uninstall);
+    try std.testing.expect(interactive.uninstall == null);
+
+    const delegated = try parseMacosManagerCommand(&.{"--uninstall"});
+    try std.testing.expect(delegated == .uninstall);
+    try std.testing.expect(delegated.uninstall == null);
+
+    const quiet = try parseMacosManagerCommand(&.{ "--uninstall", "--quiet" });
+    try std.testing.expectEqual(MacosUninstallMode.app, quiet.uninstall.?);
+    const delete_data = try parseMacosManagerCommand(&.{ "--quiet", "--delete-data" });
+    try std.testing.expectEqual(MacosUninstallMode.app_and_data, delete_data.uninstall.?);
+    try std.testing.expect((try parseMacosManagerCommand(&.{ "--refresh-metadata", "--quiet" })) == .refresh_metadata);
+
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--delete-data"}));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--uninstall", "--delete-data" }));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--quiet", "--quiet" }));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--refresh-metadata"}));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--other"}));
+}
+
+test "macOS uninstall manifest path token binds identity channel and exact app path" {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const expected = macosAppPathToken(
+        nonce,
+        "com.example.app",
+        "production",
+        "/Applications/Example.app",
+    );
+    try std.testing.expectEqualStrings(
+        "7fa6c0415eb8c0360d268485b4fd9576e3c2d8d1163b3c76b7ec6359a7e9844e",
+        &expected,
+    );
+    const canary = macosAppPathToken(
+        nonce,
+        "com.example.app",
+        "canary",
+        "/Applications/Example.app",
+    );
+    try std.testing.expect(!std.mem.eql(u8, &expected, &canary));
 }
 
 test "Windows install identities reject path traversal" {

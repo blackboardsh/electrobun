@@ -21,6 +21,14 @@ pub fn build(b: *std.Build) void {
         "Build the Windows extractor with a diagnostic console",
     ) orelse false;
 
+    const macos_sdk = if (target.result.os.tag == .macos) blk: {
+        const output = b.run(&.{ "xcrun", "--sdk", "macosx", "--show-sdk-path" });
+        const path = std.mem.trim(u8, output, " \t\r\n");
+        if (path.len == 0) @panic("xcrun returned an empty macOS SDK path");
+        b.sysroot = path;
+        break :blk path;
+    } else null;
+
     const exe = b.addExecutable(.{
         .name = "extractor",
         .root_module = b.createModule(.{
@@ -31,6 +39,25 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+
+    if (target.result.os.tag == .macos) {
+        exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{
+            macos_sdk.?,
+            "usr",
+            "include",
+        }) });
+        exe.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{
+            macos_sdk.?,
+            "System",
+            "Library",
+            "Frameworks",
+        }) });
+        exe.root_module.addCSourceFile(.{
+            .file = b.path("macos_uninstall_prompt.m"),
+            .flags = &.{"-fobjc-arc"},
+        });
+        exe.root_module.linkFramework("AppKit", .{});
+    }
 
     if (target.result.os.tag == .windows) {
         // Installers are user-facing GUI executables. The console subsystem
@@ -55,6 +82,24 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
+    if (target.result.os.tag == .macos) {
+        unit_tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{
+            macos_sdk.?,
+            "usr",
+            "include",
+        }) });
+        unit_tests.root_module.addSystemFrameworkPath(.{ .cwd_relative = b.pathJoin(&.{
+            macos_sdk.?,
+            "System",
+            "Library",
+            "Frameworks",
+        }) });
+        unit_tests.root_module.addCSourceFile(.{
+            .file = b.path("macos_uninstall_prompt.m"),
+            .flags = &.{"-fobjc-arc"},
+        });
+        unit_tests.root_module.linkFramework("AppKit", .{});
+    }
     const run_unit_tests = b.addRunArtifact(unit_tests);
 
     const subsystem_parser_tests = b.addTest(.{

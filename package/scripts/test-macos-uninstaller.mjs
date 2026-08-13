@@ -527,7 +527,7 @@ try {
 	assertUninstallDidNotStart(tampered);
 
 	console.log(
-		"macOS uninstaller integration passed (initial install, app-only, app-and-data, preservation, symlink safety, tamper rejection)",
+		"macOS uninstaller integration passed (initial install, app-only, app-and-data, preservation, symlink safety, stale-manifest rejection)",
 	);
 } finally {
 	rmSync(temporaryRoot, { force: true, recursive: true });
