@@ -19,12 +19,43 @@ const BUNLE_RESOURCES_REL_PATH = "../Resources/";
 const ARCHIVE_MARKER = "ELECTROBUN_ARCHIVE_V1";
 const METADATA_MARKER = "ELECTROBUN_METADATA_V1";
 
+const WINDOWS_UNINSTALL_EXE_NAME = "uninstall.exe";
+const WINDOWS_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
+const WINDOWS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
+const WINDOWS_UNINSTALL_REGISTRY_ROOT = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall";
+
+const windows_uninstall_sync = if (builtin.os.tag == .windows) struct {
+    const win = std.os.windows;
+    extern "kernel32" fn CreateMutexW(
+        lp_mutex_attributes: ?*anyopaque,
+        initial_owner: win.BOOL,
+        name: [*:0]const u16,
+    ) callconv(.winapi) ?win.HANDLE;
+    extern "kernel32" fn WaitForSingleObject(handle: win.HANDLE, milliseconds: win.DWORD) callconv(.winapi) win.DWORD;
+    extern "kernel32" fn ReleaseMutex(handle: win.HANDLE) callconv(.winapi) win.BOOL;
+    extern "kernel32" fn CloseHandle(handle: win.HANDLE) callconv(.winapi) win.BOOL;
+
+    const wait_object_0: win.DWORD = 0x00000000;
+    const wait_abandoned: win.DWORD = 0x00000080;
+    const infinite: win.DWORD = 0xffffffff;
+} else struct {};
+
 // Metadata structure embedded in the binary
 const AppMetadata = struct {
     identifier: []const u8,
     name: []const u8,
     channel: []const u8,
     hash: ?[]const u8 = null,
+};
+
+const WindowsUninstallManifest = struct {
+    schema_version: u32,
+    install_nonce: []const u8,
+    identifier: []const u8,
+    name: []const u8,
+    channel: []const u8,
+    desktop_shortcut: []const u8,
+    start_menu_shortcut: []const u8,
 };
 
 // Progress indicator for extraction
@@ -153,6 +184,11 @@ fn extractAdjacentArchive(
     );
     defer parsed.deinit();
     const metadata = parsed.value;
+    if (builtin.os.tag == .windows and
+        (!isSafeWindowsComponent(metadata.identifier) or !isSafeWindowsComponent(metadata.channel)))
+    {
+        return error.InvalidInstallIdentity;
+    }
 
     const generated_archive_path = if (explicit_archive_path == null)
         try adjacentArchivePathForMetadata(
@@ -189,6 +225,12 @@ fn extractAdjacentArchive(
 
     std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
     std.debug.print("App will be installed to: {s}\n", .{app_dir});
+
+    if (builtin.os.tag == .windows) {
+        var uninstall_lock = try acquireWindowsUninstallLock(allocator, app_base_dir);
+        defer uninstall_lock.release();
+        return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+    }
 
     return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
 }
@@ -285,6 +327,11 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         .channel = metadata.channel,
         .hash = backup_hash,
     };
+    if (builtin.os.tag == .windows and
+        (!isSafeWindowsComponent(safe_metadata.identifier) or !isSafeWindowsComponent(safe_metadata.channel)))
+    {
+        return error.InvalidInstallIdentity;
+    }
 
     // Defer cleanup until after extractAndInstall is done
     defer {
@@ -317,6 +364,15 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 
     // Archive runs from just past the marker to the end of the file
     const compressed_data = search_buffer[archive_offset + ARCHIVE_MARKER.len ..];
+
+    // Serialize the complete Windows install against uninstall and deferred
+    // cleanup. This prevents an uninstall that is already running from
+    // deleting a newly extracted app before its integration files are written.
+    if (builtin.os.tag == .windows) {
+        var uninstall_lock = try acquireWindowsUninstallLock(allocator, app_base_dir);
+        defer uninstall_lock.release();
+        return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
+    }
 
     // Continue with decompression (shared code path)
     return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
@@ -364,6 +420,9 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
 
     const app_bundle_name = try extractedBundleName(allocator, metadata.name, metadata.channel);
     defer allocator.free(app_bundle_name);
+    if (builtin.os.tag == .windows and !isSafeWindowsComponent(app_bundle_name)) {
+        return error.InvalidAppBundleName;
+    }
     std.debug.print("DEBUG: app_bundle_name = '{s}'\n", .{app_bundle_name});
 
     const extracted_app_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, app_bundle_name });
@@ -465,13 +524,11 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         try replaceSelfWithLauncher(allocator, exe_path, app_dir);
     }
 
-    // Create desktop shortcuts on Linux and Windows
+    // Create desktop shortcuts on Linux. Windows integration is committed
+    // after the updater state has been persisted below so a failed state write
+    // cannot leave a half-registered installation behind.
     if (builtin.os.tag == .linux) {
         try createDesktopShortcut(allocator, app_dir);
-    }
-
-    if (builtin.os.tag == .windows) {
-        try createWindowsShortcut(allocator, app_dir, metadata);
     }
 
     // Save tar file for Updater API on Linux and Windows after everything else is done
@@ -508,6 +565,10 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         while (try iter.next(g_io)) |entry| {
             std.debug.print("  - {s} ({s})\n", .{ entry.name, @tagName(entry.kind) });
         }
+    }
+
+    if (builtin.os.tag == .windows) {
+        try installWindowsIntegration(allocator, app_dir, metadata, exe_path);
     }
 
     std.debug.print(" Done!\n", .{});
@@ -761,8 +822,7 @@ fn getAppDataDir(allocator: std.mem.Allocator) ![]const u8 {
     return switch (builtin.os.tag) {
         .windows => blk: {
             // Use %LOCALAPPDATA% on Windows
-            const local_appdata = getEnvOwned(allocator, "LOCALAPPDATA") catch
-                getEnvOwned(allocator, "APPDATA") catch {
+            const local_appdata = getEnvOwned(allocator, "LOCALAPPDATA") catch {
                 // Fallback to user profile
                 const userprofile = try getEnvOwned(allocator, "USERPROFILE");
                 defer allocator.free(userprofile);
@@ -1126,30 +1186,158 @@ fn createDesktopShortcut(allocator: std.mem.Allocator, app_dir: []const u8) !voi
     }
 }
 
-fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const u8, app_name: []const u8, target_path: []const u8, working_dir: []const u8, icon_path: []const u8) !void {
-    // Create a .lnk shortcut using PowerShell
-    const lnk_name = try std.fmt.allocPrint(allocator, "{s}.lnk", .{app_name});
-    defer allocator.free(lnk_name);
+fn processExitedSuccessfully(term: std.process.Child.Term) bool {
+    return switch (term) {
+        .exited => |code| code == 0,
+        else => false,
+    };
+}
 
-    const lnk_path = try std.fs.path.join(allocator, &.{ shortcut_dir, lnk_name });
-    defer allocator.free(lnk_path);
+fn runWindowsCommand(argv: []const []const u8) !bool {
+    var child = try std.process.spawn(g_io, .{
+        .argv = argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
+    return processExitedSuccessfully(try child.wait(g_io));
+}
 
-    // Create PowerShell script to create the shortcut with icon
+fn runWindowsCommandChecked(argv: []const []const u8) !void {
+    if (!try runWindowsCommand(argv)) return error.WindowsCommandFailed;
+}
+
+fn isSafeWindowsComponent(value: []const u8) bool {
+    if (value.len == 0 or std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
+    if (value[value.len - 1] == ' ' or value[value.len - 1] == '.') return false;
+    for (value) |byte| switch (byte) {
+        0...31, '"', '%', '*', '/', ':', '<', '>', '?', '\\', '|' => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn windowsDisplayName(allocator: std.mem.Allocator, app_name: []const u8, channel: []const u8) ![]u8 {
+    if (isProductionChannel(channel)) return allocator.dupe(u8, app_name);
+    if (std.mem.eql(u8, channel, "canary")) return std.fmt.allocPrint(allocator, "{s} (Canary)", .{app_name});
+    if (std.mem.eql(u8, channel, "dev")) return std.fmt.allocPrint(allocator, "{s} (Development)", .{app_name});
+    return std.fmt.allocPrint(allocator, "{s} ({s})", .{ app_name, channel });
+}
+
+fn windowsShortcutFileName(allocator: std.mem.Allocator, app_name: []const u8, channel: []const u8) ![]u8 {
+    const display_name = try windowsDisplayName(allocator, app_name, channel);
+    defer allocator.free(display_name);
+
+    var sanitized: std.ArrayList(u8) = .empty;
+    errdefer sanitized.deinit(allocator);
+    for (display_name) |byte| {
+        const replacement: u8 = switch (byte) {
+            0...31, '<', '>', ':', '"', '/', '\\', '|', '?', '*' => '_',
+            else => byte,
+        };
+        try sanitized.append(allocator, replacement);
+    }
+    while (sanitized.items.len > 0 and
+        (sanitized.items[sanitized.items.len - 1] == ' ' or sanitized.items[sanitized.items.len - 1] == '.'))
+    {
+        _ = sanitized.pop();
+    }
+    if (sanitized.items.len == 0) try sanitized.appendSlice(allocator, "Electrobun App");
+    try sanitized.appendSlice(allocator, ".lnk");
+    return sanitized.toOwnedSlice(allocator);
+}
+
+fn powershellSingleQuoted(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    var escaped: std.ArrayList(u8) = .empty;
+    errdefer escaped.deinit(allocator);
+    for (value) |byte| {
+        try escaped.append(allocator, byte);
+        if (byte == '\'') try escaped.append(allocator, '\'');
+    }
+    return escaped.toOwnedSlice(allocator);
+}
+
+fn queryWindowsKnownFolder(allocator: std.mem.Allocator, special_folder: []const u8) ![]u8 {
+    const command = try std.fmt.allocPrint(
+        allocator,
+        "[Console]::OutputEncoding = [Text.UTF8Encoding]::new(); [Environment]::GetFolderPath([Environment+SpecialFolder]::{s})",
+        .{special_folder},
+    );
+    defer allocator.free(command);
+    const argv = [_][]const u8{
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        command,
+    };
+    const result = try std.process.run(allocator, g_io, .{
+        .argv = &argv,
+        .stdout_limit = .limited(32 * 1024),
+        .stderr_limit = .limited(32 * 1024),
+        .create_no_window = true,
+    });
+    defer allocator.free(result.stdout);
+    defer allocator.free(result.stderr);
+    if (!processExitedSuccessfully(result.term)) return error.KnownFolderLookupFailed;
+    const path = std.mem.trim(u8, result.stdout, " \t\r\n");
+    if (path.len == 0 or !std.fs.path.isAbsolute(path)) return error.KnownFolderLookupFailed;
+    return allocator.dupe(u8, path);
+}
+
+fn getWindowsDesktopDir(allocator: std.mem.Allocator) ![]u8 {
+    return queryWindowsKnownFolder(allocator, "DesktopDirectory") catch {
+        const userprofile = try getEnvOwned(allocator, "USERPROFILE");
+        defer allocator.free(userprofile);
+        return std.fs.path.join(allocator, &.{ userprofile, "Desktop" });
+    };
+}
+
+fn getWindowsProgramsDir(allocator: std.mem.Allocator) ![]u8 {
+    return queryWindowsKnownFolder(allocator, "Programs") catch {
+        const appdata = getEnvOwned(allocator, "APPDATA") catch blk: {
+            const userprofile = try getEnvOwned(allocator, "USERPROFILE");
+            defer allocator.free(userprofile);
+            break :blk try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Roaming" });
+        };
+        defer allocator.free(appdata);
+        return std.fs.path.join(allocator, &.{ appdata, "Microsoft", "Windows", "Start Menu", "Programs" });
+    };
+}
+
+fn createWindowsShortcutFile(
+    allocator: std.mem.Allocator,
+    lnk_path: []const u8,
+    target_path: []const u8,
+    working_dir: []const u8,
+    icon_path: []const u8,
+) !void {
+    const escaped_lnk = try powershellSingleQuoted(allocator, lnk_path);
+    defer allocator.free(escaped_lnk);
+    const escaped_target = try powershellSingleQuoted(allocator, target_path);
+    defer allocator.free(escaped_target);
+    const escaped_working = try powershellSingleQuoted(allocator, working_dir);
+    defer allocator.free(escaped_working);
+    const escaped_icon = try powershellSingleQuoted(allocator, icon_path);
+    defer allocator.free(escaped_icon);
+
     const ps_content = try std.fmt.allocPrint(allocator,
         \\$WshShell = New-Object -ComObject WScript.Shell
-        \\$Shortcut = $WshShell.CreateShortcut("{s}")
-        \\$Shortcut.TargetPath = "{s}"
-        \\$Shortcut.WorkingDirectory = "{s}"
-        \\$Shortcut.IconLocation = "{s}"
+        \\$Shortcut = $WshShell.CreateShortcut('{s}')
+        \\$Shortcut.TargetPath = '{s}'
+        \\$Shortcut.WorkingDirectory = '{s}'
+        \\$Shortcut.IconLocation = '{s}'
         \\$Shortcut.WindowStyle = 1
         \\$Shortcut.Save()
         \\
-    , .{ lnk_path, target_path, working_dir, icon_path });
+    , .{ escaped_lnk, escaped_target, escaped_working, escaped_icon });
     defer allocator.free(ps_content);
 
-    // Execute PowerShell command
     const ps_args = [_][]const u8{
-        "powershell",
+        "powershell.exe",
         "-NoProfile",
         "-NonInteractive",
         "-WindowStyle",
@@ -1157,120 +1345,769 @@ fn createWindowsShortcutFile(allocator: std.mem.Allocator, shortcut_dir: []const
         "-Command",
         ps_content,
     };
-
-    var child = std.process.spawn(g_io, .{
-        .argv = &ps_args,
-        .stdout = .ignore,
-        .stderr = .ignore,
-    }) catch |err| {
-        std.debug.print("Warning: Could not spawn PowerShell to create shortcut: {}\n", .{err});
-        return;
-    };
-
-    _ = child.wait(g_io) catch |err| {
-        std.debug.print("Warning: PowerShell shortcut creation failed: {}\n", .{err});
-        return;
-    };
-
+    try runWindowsCommandChecked(&ps_args);
     std.debug.print("Created Windows shortcut: {s}\n", .{lnk_path});
 }
 
-fn createWindowsShortcut(allocator: std.mem.Allocator, app_dir: []const u8, metadata: AppMetadata) !void {
-    // Get user directories
-    const userprofile = getEnvOwned(allocator, "USERPROFILE") catch {
-        std.debug.print("Warning: Could not get USERPROFILE directory\n", .{});
+fn deleteWindowsShortcutIfTargets(
+    allocator: std.mem.Allocator,
+    shortcut_path: []const u8,
+    expected_target: []const u8,
+) !void {
+    const escaped_shortcut = try powershellSingleQuoted(allocator, shortcut_path);
+    defer allocator.free(escaped_shortcut);
+    const escaped_target = try powershellSingleQuoted(allocator, expected_target);
+    defer allocator.free(escaped_target);
+
+    const command = try std.fmt.allocPrint(allocator,
+        \\$ErrorActionPreference = 'Stop'
+        \\if (-not (Test-Path -LiteralPath '{s}' -PathType Leaf)) {{ exit 0 }}
+        \\$WshShell = New-Object -ComObject WScript.Shell
+        \\$Target = $WshShell.CreateShortcut('{s}').TargetPath
+        \\if ([String]::IsNullOrWhiteSpace($Target)) {{ exit 0 }}
+        \\$Target = [Environment]::ExpandEnvironmentVariables($Target)
+        \\$Actual = [IO.Path]::GetFullPath($Target)
+        \\$Expected = [IO.Path]::GetFullPath('{s}')
+        \\if ([String]::Equals($Actual, $Expected, [StringComparison]::OrdinalIgnoreCase)) {{
+        \\    Remove-Item -LiteralPath '{s}' -Force
+        \\}}
+        \\
+    , .{ escaped_shortcut, escaped_shortcut, escaped_target, escaped_shortcut });
+    defer allocator.free(command);
+
+    const argv = [_][]const u8{
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        command,
+    };
+    try runWindowsCommandChecked(&argv);
+}
+
+fn deleteObsoleteWindowsShortcut(
+    allocator: std.mem.Allocator,
+    shortcut_path: []const u8,
+    current_shortcut_path: []const u8,
+    expected_target: []const u8,
+) !void {
+    if (try windowsPathsEqual(allocator, shortcut_path, current_shortcut_path)) return;
+    try deleteWindowsShortcutIfTargets(allocator, shortcut_path, expected_target);
+}
+
+fn removePreviousWindowsShortcuts(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+    desktop_dir: []const u8,
+    programs_dir: []const u8,
+    current_desktop_shortcut: []const u8,
+    current_start_menu_shortcut: []const u8,
+    expected_target: []const u8,
+) !void {
+    const contents = std.Io.Dir.cwd().readFileAlloc(
+        g_io,
+        manifest_path,
+        allocator,
+        .limited(64 * 1024),
+    ) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer allocator.free(contents);
+
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            identifier: []const u8,
+            channel: []const u8,
+            desktop_shortcut: []const u8,
+            start_menu_shortcut: []const u8,
+        },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    if (!std.ascii.eqlIgnoreCase(parsed.value.identifier, identifier) or
+        !std.ascii.eqlIgnoreCase(parsed.value.channel, channel))
+    {
         return;
+    }
+
+    const previous_desktop_name = std.fs.path.basename(parsed.value.desktop_shortcut);
+    if (std.ascii.endsWithIgnoreCase(previous_desktop_name, ".lnk")) {
+        const previous_desktop = try std.fs.path.join(allocator, &.{ desktop_dir, previous_desktop_name });
+        defer allocator.free(previous_desktop);
+        try deleteObsoleteWindowsShortcut(
+            allocator,
+            previous_desktop,
+            current_desktop_shortcut,
+            expected_target,
+        );
+    }
+
+    const previous_start_name = std.fs.path.basename(parsed.value.start_menu_shortcut);
+    if (std.ascii.endsWithIgnoreCase(previous_start_name, ".lnk")) {
+        const previous_start = try std.fs.path.join(allocator, &.{ programs_dir, previous_start_name });
+        defer allocator.free(previous_start);
+        try deleteObsoleteWindowsShortcut(
+            allocator,
+            previous_start,
+            current_start_menu_shortcut,
+            expected_target,
+        );
+    }
+}
+
+fn removeLegacyWindowsShortcuts(
+    allocator: std.mem.Allocator,
+    app_name: []const u8,
+    desktop_dir: []const u8,
+    programs_dir: []const u8,
+    current_desktop_shortcut: []const u8,
+    current_start_menu_shortcut: []const u8,
+    expected_target: []const u8,
+) !void {
+    // Older installers used the unqualified app name for every channel. The
+    // target check is what makes removing that shared legacy name channel-safe.
+    const legacy_name = try windowsShortcutFileName(allocator, app_name, "production");
+    defer allocator.free(legacy_name);
+    const legacy_desktop = try std.fs.path.join(allocator, &.{ desktop_dir, legacy_name });
+    defer allocator.free(legacy_desktop);
+    try deleteObsoleteWindowsShortcut(
+        allocator,
+        legacy_desktop,
+        current_desktop_shortcut,
+        expected_target,
+    );
+    const legacy_start = try std.fs.path.join(allocator, &.{ programs_dir, legacy_name });
+    defer allocator.free(legacy_start);
+    try deleteObsoleteWindowsShortcut(
+        allocator,
+        legacy_start,
+        current_start_menu_shortcut,
+        expected_target,
+    );
+}
+
+fn windowsUninstallRegistryKey(allocator: std.mem.Allocator, identifier: []const u8, channel: []const u8) ![]u8 {
+    if (!isSafeWindowsComponent(identifier) or !isSafeWindowsComponent(channel)) {
+        return error.InvalidInstallIdentity;
+    }
+    return std.fmt.allocPrint(
+        allocator,
+        "{s}\\{s}.{s}",
+        .{ WINDOWS_UNINSTALL_REGISTRY_ROOT, identifier, channel },
+    );
+}
+
+fn parseInstalledVersion(allocator: std.mem.Allocator, contents: []const u8) ![]u8 {
+    const parsed = try std.json.parseFromSlice(
+        struct { version: []const u8 },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    if (parsed.value.version.len == 0) return error.InvalidAppVersion;
+    return allocator.dupe(u8, parsed.value.version);
+}
+
+fn readInstalledVersion(allocator: std.mem.Allocator, app_dir: []const u8) ![]u8 {
+    const version_path = try std.fs.path.join(allocator, &.{ app_dir, "Resources", "version.json" });
+    defer allocator.free(version_path);
+    const contents = std.Io.Dir.cwd().readFileAlloc(g_io, version_path, allocator, .limited(1024 * 1024)) catch |err| {
+        std.debug.print("Warning: Could not read installed version metadata at {s}: {}\n", .{ version_path, err });
+        return allocator.dupe(u8, "0.0.0");
     };
-    defer allocator.free(userprofile);
+    defer allocator.free(contents);
+    return parseInstalledVersion(allocator, contents) catch |err| {
+        std.debug.print("Warning: Could not parse installed version metadata at {s}: {}\n", .{ version_path, err });
+        return allocator.dupe(u8, "0.0.0");
+    };
+}
 
-    const desktop_dir = try std.fs.path.join(allocator, &.{ userprofile, "Desktop" });
-    defer allocator.free(desktop_dir);
+fn getWindowsRegExePath(allocator: std.mem.Allocator) ![]u8 {
+    const system_root = getEnvOwned(allocator, "SYSTEMROOT") catch allocator.dupe(u8, "C:\\Windows") catch return error.OutOfMemory;
+    defer allocator.free(system_root);
+    return std.fs.path.join(allocator, &.{ system_root, "System32", "reg.exe" });
+}
 
-    const start_menu_dir = try std.fs.path.join(allocator, &.{ userprofile, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs" });
-    defer allocator.free(start_menu_dir);
+fn registryKeyExists(reg_exe: []const u8, key: []const u8) !bool {
+    const argv = [_][]const u8{ reg_exe, "query", key, "/reg:64" };
+    return runWindowsCommand(&argv);
+}
 
-    // Check if Desktop directory exists
-    std.Io.Dir.cwd().access(g_io, desktop_dir, .{}) catch {
-        std.debug.print("Warning: Desktop directory not found at {s}\n", .{desktop_dir});
-        // Continue anyway, might work
+fn deleteWindowsUninstallEntry(allocator: std.mem.Allocator, identifier: []const u8, channel: []const u8) !void {
+    const key = try windowsUninstallRegistryKey(allocator, identifier, channel);
+    defer allocator.free(key);
+    const reg_exe = try getWindowsRegExePath(allocator);
+    defer allocator.free(reg_exe);
+    const argv = [_][]const u8{ reg_exe, "delete", key, "/f", "/reg:64" };
+    // The entry is expected to exist for a registered installation. Treat any
+    // delete failure as fatal so an access/registry error cannot orphan an
+    // Installed Apps entry with a dead command after self-cleanup.
+    try runWindowsCommandChecked(&argv);
+}
+
+fn registerWindowsUninstallEntry(
+    allocator: std.mem.Allocator,
+    manifest: WindowsUninstallManifest,
+    app_dir: []const u8,
+    uninstall_path: []const u8,
+) !void {
+    const key = try windowsUninstallRegistryKey(allocator, manifest.identifier, manifest.channel);
+    defer allocator.free(key);
+    const reg_exe = try getWindowsRegExePath(allocator);
+    defer allocator.free(reg_exe);
+
+    const display_name = try windowsDisplayName(allocator, manifest.name, manifest.channel);
+    defer allocator.free(display_name);
+    const version = try readInstalledVersion(allocator, app_dir);
+    defer allocator.free(version);
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+    defer allocator.free(launcher_path);
+    const display_icon = try std.fmt.allocPrint(allocator, "\"{s}\",0", .{launcher_path});
+    defer allocator.free(display_icon);
+    const uninstall_command = try std.fmt.allocPrint(allocator, "\"{s}\" --uninstall", .{uninstall_path});
+    defer allocator.free(uninstall_command);
+    const quiet_uninstall_command = try std.fmt.allocPrint(allocator, "\"{s}\" --uninstall --quiet", .{uninstall_path});
+    defer allocator.free(quiet_uninstall_command);
+
+    const values = [_]struct { name: []const u8, kind: []const u8, data: []const u8 }{
+        .{ .name = "DisplayName", .kind = "REG_SZ", .data = display_name },
+        .{ .name = "DisplayVersion", .kind = "REG_SZ", .data = version },
+        .{ .name = "DisplayIcon", .kind = "REG_SZ", .data = display_icon },
+        .{ .name = "InstallLocation", .kind = "REG_SZ", .data = app_dir },
+        .{ .name = "UninstallString", .kind = "REG_SZ", .data = uninstall_command },
+        .{ .name = "QuietUninstallString", .kind = "REG_SZ", .data = quiet_uninstall_command },
+        .{ .name = "NoModify", .kind = "REG_DWORD", .data = "1" },
+        .{ .name = "NoRepair", .kind = "REG_DWORD", .data = "1" },
     };
 
-    // Point directly to launcher.exe (no more run.bat wrapper)
+    // A refresh updates an existing entry value-by-value. If one write fails,
+    // retain the previous entry (with any successful new values) rather than
+    // deleting a still-usable uninstaller registration. A brand-new partial
+    // entry is safe to remove because there was no prior registration to lose.
+    const key_existed_before = try registryKeyExists(reg_exe, key);
+    errdefer if (!key_existed_before) {
+        const delete_argv = [_][]const u8{ reg_exe, "delete", key, "/f", "/reg:64" };
+        if (!(runWindowsCommand(&delete_argv) catch false)) {
+            std.debug.print("Warning: Could not clean up incomplete Windows uninstaller registration: {s}\n", .{key});
+        }
+    };
+    for (values) |value| {
+        const argv = [_][]const u8{
+            reg_exe, "add", key, "/v", value.name, "/t", value.kind, "/d", value.data, "/f", "/reg:64",
+        };
+        try runWindowsCommandChecked(&argv);
+    }
+    std.debug.print("Registered Windows uninstaller: {s}\n", .{key});
+}
+
+fn windowsPathsEqual(allocator: std.mem.Allocator, left: []const u8, right: []const u8) !bool {
+    const resolved_left = try std.fs.path.resolve(allocator, &.{left});
+    defer allocator.free(resolved_left);
+    const resolved_right = try std.fs.path.resolve(allocator, &.{right});
+    defer allocator.free(resolved_right);
+    return std.ascii.eqlIgnoreCase(resolved_left, resolved_right);
+}
+
+fn isValidWindowsInstallNonce(nonce: []const u8) bool {
+    if (nonce.len != 32) return false;
+    for (nonce) |byte| {
+        if (!std.ascii.isHex(byte)) return false;
+    }
+    return true;
+}
+
+fn createWindowsInstallNonce() [32]u8 {
+    var random_bytes: [16]u8 = undefined;
+    g_io.random(&random_bytes);
+    return std.fmt.bytesToHex(random_bytes, .lower);
+}
+
+fn windowsInstallNonceMatches(current: []const u8, expected: []const u8) bool {
+    return isValidWindowsInstallNonce(current) and
+        isValidWindowsInstallNonce(expected) and
+        std.mem.eql(u8, current, expected);
+}
+
+const WindowsUninstallLock = if (builtin.os.tag == .windows) struct {
+    handle: std.os.windows.HANDLE,
+
+    fn release(self: *@This()) void {
+        _ = windows_uninstall_sync.ReleaseMutex(self.handle);
+        _ = windows_uninstall_sync.CloseHandle(self.handle);
+    }
+} else struct {};
+
+fn acquireWindowsUninstallLock(allocator: std.mem.Allocator, base_dir: []const u8) !WindowsUninstallLock {
+    if (builtin.os.tag != .windows) unreachable;
+
+    const resolved_base = try std.fs.path.resolve(allocator, &.{base_dir});
+    defer allocator.free(resolved_base);
+    const normalized_base = try allocator.dupe(u8, resolved_base);
+    defer allocator.free(normalized_base);
+    _ = std.ascii.lowerString(normalized_base, resolved_base);
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(normalized_base);
+    hasher.final(&digest);
+    const mutex_name = try std.fmt.allocPrint(allocator, "Local\\ElectrobunUninstall_{x}", .{digest[0..16]});
+    defer allocator.free(mutex_name);
+    const mutex_name_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, mutex_name);
+    defer allocator.free(mutex_name_w);
+
+    const handle = windows_uninstall_sync.CreateMutexW(null, .FALSE, mutex_name_w.ptr) orelse
+        return error.UninstallLockFailed;
+    errdefer _ = windows_uninstall_sync.CloseHandle(handle);
+    const wait_result = windows_uninstall_sync.WaitForSingleObject(handle, windows_uninstall_sync.infinite);
+    if (wait_result != windows_uninstall_sync.wait_object_0 and
+        wait_result != windows_uninstall_sync.wait_abandoned)
+    {
+        return error.UninstallLockFailed;
+    }
+    return .{ .handle = handle };
+}
+
+fn validateWindowsUninstallManifest(
+    allocator: std.mem.Allocator,
+    manifest: WindowsUninstallManifest,
+    base_dir: []const u8,
+) !void {
+    if (manifest.schema_version != WINDOWS_UNINSTALL_MANIFEST_VERSION or
+        !isValidWindowsInstallNonce(manifest.install_nonce) or
+        !isSafeWindowsComponent(manifest.identifier) or
+        !isSafeWindowsComponent(manifest.channel))
+    {
+        return error.InvalidUninstallManifest;
+    }
+
+    if (!std.fs.path.isAbsolute(base_dir) or
+        !std.ascii.eqlIgnoreCase(std.fs.path.basename(base_dir), manifest.channel))
+    {
+        return error.InvalidUninstallLocation;
+    }
+    const identifier_dir = std.fs.path.dirname(base_dir) orelse return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(identifier_dir), manifest.identifier)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    const shortcut_name = try windowsShortcutFileName(allocator, manifest.name, manifest.channel);
+    defer allocator.free(shortcut_name);
+    if (!std.fs.path.isAbsolute(manifest.desktop_shortcut) or
+        !std.fs.path.isAbsolute(manifest.start_menu_shortcut) or
+        !std.ascii.eqlIgnoreCase(std.fs.path.basename(manifest.desktop_shortcut), shortcut_name) or
+        !std.ascii.eqlIgnoreCase(std.fs.path.basename(manifest.start_menu_shortcut), shortcut_name))
+    {
+        return error.InvalidUninstallManifest;
+    }
+}
+
+fn writeWindowsUninstallManifest(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    manifest: WindowsUninstallManifest,
+) !void {
+    const json = try std.json.Stringify.valueAlloc(
+        allocator,
+        manifest,
+        .{ .whitespace = .indent_2 },
+    );
+    defer allocator.free(json);
+    try std.Io.Dir.cwd().writeFile(g_io, .{ .sub_path = manifest_path, .data = json });
+}
+
+fn deleteFileIfExists(path: []const u8) !void {
+    std.Io.Dir.cwd().deleteFile(g_io, path) catch |err| switch (err) {
+        error.FileNotFound => {},
+        else => return err,
+    };
+}
+
+fn installWindowsIntegration(
+    allocator: std.mem.Allocator,
+    app_dir: []const u8,
+    metadata: AppMetadata,
+    installer_path: []const u8,
+) !void {
+    if (!isSafeWindowsComponent(metadata.identifier) or !isSafeWindowsComponent(metadata.channel)) {
+        return error.InvalidInstallIdentity;
+    }
+    const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
     const target_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
     defer allocator.free(target_path);
-
-    // Check if target exists
-    std.Io.Dir.cwd().access(g_io, target_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not find launcher.exe at {s}: {}\n", .{ target_path, err });
-        return;
-    };
-
-    // Working directory is the bin directory
+    try std.Io.Dir.cwd().access(g_io, target_path, .{});
     const working_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
     defer allocator.free(working_dir);
 
-    // Icon is embedded in launcher.exe, so use it directly as icon source
-    const icon_to_use = target_path;
+    const shortcut_name = try windowsShortcutFileName(allocator, metadata.name, metadata.channel);
+    defer allocator.free(shortcut_name);
+    const desktop_dir = try getWindowsDesktopDir(allocator);
+    defer allocator.free(desktop_dir);
+    const programs_dir = try getWindowsProgramsDir(allocator);
+    defer allocator.free(programs_dir);
+    try std.Io.Dir.cwd().createDirPath(g_io, desktop_dir);
+    try std.Io.Dir.cwd().createDirPath(g_io, programs_dir);
+    const desktop_shortcut = try std.fs.path.join(allocator, &.{ desktop_dir, shortcut_name });
+    defer allocator.free(desktop_shortcut);
+    const start_menu_shortcut = try std.fs.path.join(allocator, &.{ programs_dir, shortcut_name });
+    defer allocator.free(start_menu_shortcut);
 
-    // Create desktop shortcut
-    try createWindowsShortcutFile(allocator, desktop_dir, metadata.name, target_path, working_dir, icon_to_use);
-
-    // Create Start Menu shortcut
-    // Make sure Start Menu directory exists
-    std.Io.Dir.cwd().createDirPath(g_io, start_menu_dir) catch {
-        std.debug.print("Warning: Could not create Start Menu directory\n", .{});
+    const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_EXE_NAME });
+    defer allocator.free(uninstall_path);
+    try std.Io.Dir.copyFileAbsolute(installer_path, uninstall_path, g_io, .{});
+    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    defer allocator.free(manifest_path);
+    removePreviousWindowsShortcuts(
+        allocator,
+        manifest_path,
+        metadata.identifier,
+        metadata.channel,
+        desktop_dir,
+        programs_dir,
+        desktop_shortcut,
+        start_menu_shortcut,
+        target_path,
+    ) catch |err| {
+        std.debug.print("Warning: Could not remove previous Windows shortcuts: {}\n", .{err});
     };
-    try createWindowsShortcutFile(allocator, start_menu_dir, metadata.name, target_path, working_dir, icon_to_use);
+    removeLegacyWindowsShortcuts(
+        allocator,
+        metadata.name,
+        desktop_dir,
+        programs_dir,
+        desktop_shortcut,
+        start_menu_shortcut,
+        target_path,
+    ) catch |err| {
+        std.debug.print("Warning: Could not remove legacy Windows shortcuts: {}\n", .{err});
+    };
+    const install_nonce = createWindowsInstallNonce();
+    const manifest = WindowsUninstallManifest{
+        .schema_version = WINDOWS_UNINSTALL_MANIFEST_VERSION,
+        .install_nonce = &install_nonce,
+        .identifier = metadata.identifier,
+        .name = metadata.name,
+        .channel = metadata.channel,
+        .desktop_shortcut = desktop_shortcut,
+        .start_menu_shortcut = start_menu_shortcut,
+    };
+    try writeWindowsUninstallManifest(allocator, manifest_path, manifest);
 
-    std.debug.print("Created Windows shortcuts for: {s}\n", .{metadata.name});
-
-    // Add uninstall registry entry for better Windows integration
-    try addWindowsUninstallEntry(allocator, metadata, app_dir);
+    errdefer deleteFileIfExists(desktop_shortcut) catch {};
+    errdefer deleteFileIfExists(start_menu_shortcut) catch {};
+    try createWindowsShortcutFile(allocator, desktop_shortcut, target_path, working_dir, target_path);
+    try createWindowsShortcutFile(allocator, start_menu_shortcut, target_path, working_dir, target_path);
+    try registerWindowsUninstallEntry(allocator, manifest, app_dir, uninstall_path);
 }
 
-fn addWindowsUninstallEntry(allocator: std.mem.Allocator, metadata: AppMetadata, app_dir: []const u8) !void {
-    // Create a simple registry file that users can double-click to install uninstall info
-    // This is a safer approach than directly modifying the registry from our code
-    const reg_name = try std.fmt.allocPrint(allocator, "{s}_uninstall.reg", .{metadata.name});
-    defer allocator.free(reg_name);
-
-    const reg_path = try std.fs.path.join(allocator, &.{ app_dir, reg_name });
-    defer allocator.free(reg_path);
-
-    const app_display_name = try std.fmt.allocPrint(allocator, "{s} ({s})", .{ metadata.name, metadata.channel });
-    defer allocator.free(app_display_name);
-
-    // Create registry content for Windows uninstall entry
-    const reg_content = try std.fmt.allocPrint(allocator,
-        \\Windows Registry Editor Version 5.00
-        \\
-        \\[HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Uninstall\{s}]
-        \\@="{s}"
-        \\"DisplayName"="{s}"
-        \\"DisplayVersion"="1.0"
-        \\"Publisher"="Electrobun"
-        \\"InstallLocation"="{s}"
-        \\"UninstallString"="cmd.exe /c rmdir /s /q \"{s}\""
-        \\"NoModify"=dword:00000001
-        \\"NoRepair"=dword:00000001
-        \\
-    , .{ metadata.identifier, app_display_name, app_display_name, app_dir, app_dir });
-    defer allocator.free(reg_content);
-
-    // Create and write registry file
-    const reg_file = std.Io.Dir.cwd().createFile(g_io, reg_path, .{}) catch |err| {
-        std.debug.print("Warning: Could not create uninstall registry file: {}\n", .{err});
+fn retryDeleteTree(path: []const u8) !void {
+    for (0..60) |attempt| {
+        std.Io.Dir.cwd().deleteTree(g_io, path) catch |err| {
+            if (attempt == 59) return err;
+            g_io.sleep(.fromMilliseconds(500), .awake) catch {};
+            continue;
+        };
         return;
-    };
-    defer reg_file.close(g_io);
+    }
+}
 
-    reg_file.writeStreamingAll(g_io, reg_content) catch |err| {
-        std.debug.print("Warning: Could not write registry content: {}\n", .{err});
+fn retryDeleteFile(path: []const u8) !void {
+    for (0..20) |attempt| {
+        deleteFileIfExists(path) catch |err| {
+            if (attempt == 19) return err;
+            g_io.sleep(.fromMilliseconds(250), .awake) catch {};
+            continue;
+        };
         return;
+    }
+}
+
+fn terminateWindowsAppProcesses(allocator: std.mem.Allocator, app_dir: []const u8) !void {
+    const escaped_app_dir = try powershellSingleQuoted(allocator, app_dir);
+    defer allocator.free(escaped_app_dir);
+    const command = try std.fmt.allocPrint(
+        allocator,
+        "$root = [IO.Path]::GetFullPath('{s}').TrimEnd('\\') + '\\'; " ++
+            "Get-CimInstance Win32_Process | Where-Object {{ $_.ExecutablePath -and " ++
+            "[IO.Path]::GetFullPath($_.ExecutablePath).StartsWith($root, [StringComparison]::OrdinalIgnoreCase) }} | " ++
+            "ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}",
+        .{escaped_app_dir},
+    );
+    defer allocator.free(command);
+    const argv = [_][]const u8{
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-WindowStyle",
+        "Hidden",
+        "-Command",
+        command,
+    };
+    try runWindowsCommandChecked(&argv);
+    g_io.sleep(.fromMilliseconds(500), .awake) catch {};
+}
+
+fn getWindowsTempDir(allocator: std.mem.Allocator) ![]u8 {
+    return getEnvOwned(allocator, "TEMP") catch
+        getEnvOwned(allocator, "TMP") catch {
+        const local_appdata = try getAppDataDir(allocator);
+        defer allocator.free(local_appdata);
+        return std.fs.path.join(allocator, &.{ local_appdata, "Temp" });
+    };
+}
+
+fn createTemporaryUninstallWorker(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
+    const temp_dir = try getWindowsTempDir(allocator);
+    defer allocator.free(temp_dir);
+    try std.Io.Dir.cwd().createDirPath(g_io, temp_dir);
+    var nonce: u64 = undefined;
+    g_io.random(std.mem.asBytes(&nonce));
+    const worker_name = try std.fmt.allocPrint(
+        allocator,
+        "electrobun-uninstall-{x}.exe",
+        .{nonce},
+    );
+    defer allocator.free(worker_name);
+    const worker_path = try std.fs.path.join(allocator, &.{ temp_dir, worker_name });
+    errdefer allocator.free(worker_path);
+    try std.Io.Dir.copyFileAbsolute(source_path, worker_path, g_io, .{});
+    return worker_path;
+}
+
+fn loadAndValidateWindowsManifest(
+    allocator: std.mem.Allocator,
+    manifest_path: []const u8,
+    base_dir: []const u8,
+) !struct { contents: []u8, parsed: std.json.Parsed(WindowsUninstallManifest) } {
+    const contents = try std.Io.Dir.cwd().readFileAlloc(
+        g_io,
+        manifest_path,
+        allocator,
+        .limited(64 * 1024),
+    );
+    errdefer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        WindowsUninstallManifest,
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    errdefer parsed.deinit();
+    try validateWindowsUninstallManifest(allocator, parsed.value, base_dir);
+    return .{ .contents = contents, .parsed = parsed };
+}
+
+fn refreshWindowsUninstallRegistration(allocator: std.mem.Allocator) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(executable_path), WINDOWS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
+    defer uninstall_lock.release();
+    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    defer allocator.free(manifest_path);
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+    const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
+    defer allocator.free(app_dir);
+    try registerWindowsUninstallEntry(allocator, document.parsed.value, app_dir, executable_path);
+}
+
+fn uninstallWindows(allocator: std.mem.Allocator) !void {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    const base_dir = std.fs.path.dirname(executable_path) orelse return error.InvalidUninstallLocation;
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(executable_path), WINDOWS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
+    defer uninstall_lock.release();
+    const manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    defer allocator.free(manifest_path);
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+    const manifest = document.parsed.value;
+
+    const worker_path = try createTemporaryUninstallWorker(allocator, executable_path);
+    defer allocator.free(worker_path);
+    errdefer deleteFileIfExists(worker_path) catch {};
+
+    const app_dir = try std.fs.path.join(allocator, &.{ base_dir, "app" });
+    defer allocator.free(app_dir);
+    const self_extraction_dir = try std.fs.path.join(allocator, &.{ base_dir, "self-extraction" });
+    defer allocator.free(self_extraction_dir);
+    const update_script = try std.fs.path.join(allocator, &.{ base_dir, "update.bat" });
+    defer allocator.free(update_script);
+
+    // Update tasks use a stable, channel-scoped name. Remove only this
+    // installation's task so production/canary and unrelated apps are safe.
+    const update_task_name = try windowsUpdateTaskName(allocator, manifest.identifier, manifest.channel);
+    defer allocator.free(update_task_name);
+    const end_task_args = [_][]const u8{ "schtasks.exe", "/end", "/tn", update_task_name };
+    _ = runWindowsCommand(&end_task_args) catch false;
+    const delete_task_args = [_][]const u8{ "schtasks.exe", "/delete", "/tn", update_task_name, "/f" };
+    _ = runWindowsCommand(&delete_task_args) catch false;
+
+    // Stop only processes whose executable lives inside this channel's app
+    // directory. This avoids terminating a coexisting production/canary app.
+    terminateWindowsAppProcesses(allocator, app_dir) catch |err| {
+        std.debug.print("Warning: Could not stop running app processes: {}\n", .{err});
     };
 
-    std.debug.print("Created uninstall registry file: {s}\n", .{reg_path});
-    std.debug.print("Note: Users can double-click {s} to add uninstall info to Windows\n", .{reg_name});
+    // Deliberately delete only Electrobun-managed paths. The channel root is
+    // also the public userData/cache/logs and browser-profile root.
+    // Attempt every independent item, but retain the ARP entry/uninstaller if
+    // any managed cleanup failed so Windows can retry the uninstall later.
+    var cleanup_error: ?anyerror = null;
+    retryDeleteTree(app_dir) catch |err| if (cleanup_error == null) {
+        cleanup_error = err;
+    };
+    retryDeleteTree(self_extraction_dir) catch |err| if (cleanup_error == null) {
+        cleanup_error = err;
+    };
+    retryDeleteFile(update_script) catch |err| if (cleanup_error == null) {
+        cleanup_error = err;
+    };
+    const launcher_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
+    defer allocator.free(launcher_path);
+    deleteWindowsShortcutIfTargets(allocator, manifest.desktop_shortcut, launcher_path) catch |err| if (cleanup_error == null) {
+        cleanup_error = err;
+    };
+    deleteWindowsShortcutIfTargets(allocator, manifest.start_menu_shortcut, launcher_path) catch |err| if (cleanup_error == null) {
+        cleanup_error = err;
+    };
+    if (cleanup_error) |err| return err;
+    try deleteWindowsUninstallEntry(allocator, manifest.identifier, manifest.channel);
+
+    const worker_args = [_][]const u8{
+        worker_path,
+        "--cleanup-uninstaller",
+        executable_path,
+        manifest_path,
+        manifest.install_nonce,
+    };
+    _ = try std.process.spawn(g_io, .{
+        .argv = &worker_args,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
+}
+
+fn batchDoubleQuotedPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    if (std.mem.indexOfAny(u8, path, "\"\r\n") != null) return error.InvalidPath;
+    return std.mem.replaceOwned(u8, allocator, path, "%", "%%");
+}
+
+fn scheduleTemporaryWorkerDeletion(allocator: std.mem.Allocator, worker_path: []const u8) !void {
+    const temp_dir = std.fs.path.dirname(worker_path) orelse return error.InvalidPath;
+    var nonce: u64 = undefined;
+    g_io.random(std.mem.asBytes(&nonce));
+    const script_name = try std.fmt.allocPrint(allocator, "electrobun-cleanup-{x}.cmd", .{nonce});
+    defer allocator.free(script_name);
+    const script_path = try std.fs.path.join(allocator, &.{ temp_dir, script_name });
+    defer allocator.free(script_path);
+    const escaped_worker_path = try batchDoubleQuotedPath(allocator, worker_path);
+    defer allocator.free(escaped_worker_path);
+    const script = try std.fmt.allocPrint(allocator,
+        \\@echo off
+        \\setlocal DisableDelayedExpansion
+        \\set retries=0
+        \\:retry
+        \\del /f /q "{s}" >nul 2>&1
+        \\if not exist "{s}" goto deleted
+        \\set /a retries+=1
+        \\if %retries% GEQ 30 exit /b 1
+        \\ping -n 2 127.0.0.1 >nul
+        \\goto retry
+        \\:deleted
+        \\del /f /q "%~f0" >nul 2>&1
+        \\
+    , .{ escaped_worker_path, escaped_worker_path });
+    defer allocator.free(script);
+    try std.Io.Dir.cwd().writeFile(g_io, .{ .sub_path = script_path, .data = script });
+
+    const argv = [_][]const u8{ "cmd.exe", "/d", "/c", script_name };
+    _ = try std.process.spawn(g_io, .{
+        .argv = &argv,
+        .cwd = .{ .path = temp_dir },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = true,
+    });
+}
+
+fn cleanupWindowsUninstaller(
+    allocator: std.mem.Allocator,
+    original_uninstaller: []const u8,
+    manifest_path: []const u8,
+    expected_install_nonce: []const u8,
+) !void {
+    const worker_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(worker_path);
+    defer scheduleTemporaryWorkerDeletion(allocator, worker_path) catch {};
+
+    if (!std.ascii.eqlIgnoreCase(std.fs.path.basename(original_uninstaller), WINDOWS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    if (!isValidWindowsInstallNonce(expected_install_nonce)) return error.InvalidArguments;
+    const base_dir = std.fs.path.dirname(original_uninstaller) orelse return error.InvalidUninstallLocation;
+    const expected_manifest_path = try std.fs.path.join(allocator, &.{ base_dir, WINDOWS_UNINSTALL_MANIFEST_NAME });
+    defer allocator.free(expected_manifest_path);
+    if (!try windowsPathsEqual(allocator, manifest_path, expected_manifest_path)) return error.InvalidUninstallLocation;
+
+    var uninstall_lock = try acquireWindowsUninstallLock(allocator, base_dir);
+    defer uninstall_lock.release();
+    var document = try loadAndValidateWindowsManifest(allocator, manifest_path, base_dir);
+    defer allocator.free(document.contents);
+    defer document.parsed.deinit();
+
+    // A reinstall can finish before this deferred worker starts. Its new
+    // manifest has a different nonce, so a stale worker must leave both files
+    // (and the channel directory) intact and only arrange its own deletion.
+    if (!windowsInstallNonceMatches(document.parsed.value.install_nonce, expected_install_nonce)) return;
+
+    for (0..40) |attempt| {
+        deleteFileIfExists(original_uninstaller) catch |err| {
+            if (attempt == 39) return err;
+            g_io.sleep(.fromMilliseconds(250), .awake) catch {};
+            continue;
+        };
+        break;
+    }
+    try deleteFileIfExists(manifest_path);
+
+    // These are non-recursive on purpose: preserved user data keeps either
+    // directory non-empty, while a data-free install leaves no empty shell.
+    std.Io.Dir.cwd().deleteDir(g_io, base_dir) catch {};
+    if (std.fs.path.dirname(base_dir)) |identifier_dir| {
+        std.Io.Dir.cwd().deleteDir(g_io, identifier_dir) catch {};
+    }
+}
+
+fn windowsUpdateTaskName(allocator: std.mem.Allocator, identifier: []const u8, channel: []const u8) ![]u8 {
+    if (!isSafeWindowsComponent(identifier) or !isSafeWindowsComponent(channel)) {
+        return error.InvalidInstallIdentity;
+    }
+    var digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+    hasher.update(identifier);
+    hasher.update(&.{0});
+    hasher.update(channel);
+    hasher.final(&digest);
+    return std.fmt.allocPrint(allocator, "ElectrobunUpdate_{x}", .{digest[0..12]});
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -1279,6 +2116,44 @@ pub fn main(init: std.process.Init) !void {
 
     std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
     const allocator = init.gpa;
+
+    // The installed Windows uninstaller is a copy of the extractor without
+    // adjacent archive files. Dispatch management modes before attempting to
+    // discover or extract an installer payload.
+    if (builtin.os.tag == .windows) {
+        var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+        defer args.deinit();
+        _ = args.next() orelse return error.InvalidArguments;
+        if (args.next()) |command| {
+            if (std.mem.eql(u8, command, "--uninstall")) {
+                if (args.next()) |option| {
+                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
+                        return error.InvalidArguments;
+                    }
+                }
+                try uninstallWindows(allocator);
+                return;
+            }
+            if (std.mem.eql(u8, command, "--refresh-registration")) {
+                if (args.next()) |option| {
+                    if (!std.mem.eql(u8, option, "--quiet") or args.next() != null) {
+                        return error.InvalidArguments;
+                    }
+                }
+                try refreshWindowsUninstallRegistration(allocator);
+                return;
+            }
+            if (std.mem.eql(u8, command, "--cleanup-uninstaller")) {
+                const original_uninstaller = args.next() orelse return error.InvalidArguments;
+                const manifest_path = args.next() orelse return error.InvalidArguments;
+                const expected_install_nonce = args.next() orelse return error.InvalidArguments;
+                if (args.next() != null) return error.InvalidArguments;
+                try cleanupWindowsUninstaller(allocator, original_uninstaller, manifest_path, expected_install_nonce);
+                return;
+            }
+            return error.InvalidArguments;
+        }
+    }
 
     var startTime = std.Io.Clock.now(.awake, g_io);
 
@@ -1483,6 +2358,85 @@ fn extractedBundleName(
     if (isProductionChannel(channel)) return sanitized_name;
     defer allocator.free(sanitized_name);
     return std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, channel });
+}
+
+test "Windows integration names and registry keys are channel scoped" {
+    const production_display = try windowsDisplayName(std.testing.allocator, "Archive App", "production");
+    defer std.testing.allocator.free(production_display);
+    try std.testing.expectEqualStrings("Archive App", production_display);
+
+    const canary_display = try windowsDisplayName(std.testing.allocator, "Archive App", "canary");
+    defer std.testing.allocator.free(canary_display);
+    try std.testing.expectEqualStrings("Archive App (Canary)", canary_display);
+
+    const production_shortcut = try windowsShortcutFileName(std.testing.allocator, "Archive: App", "production");
+    defer std.testing.allocator.free(production_shortcut);
+    try std.testing.expectEqualStrings("Archive_ App.lnk", production_shortcut);
+
+    const canary_shortcut = try windowsShortcutFileName(std.testing.allocator, "Archive: App", "canary");
+    defer std.testing.allocator.free(canary_shortcut);
+    try std.testing.expectEqualStrings("Archive_ App (Canary).lnk", canary_shortcut);
+    try std.testing.expect(!std.mem.eql(u8, production_shortcut, canary_shortcut));
+
+    const production_key = try windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "production");
+    defer std.testing.allocator.free(production_key);
+    try std.testing.expectEqualStrings(
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.production",
+        production_key,
+    );
+    const canary_key = try windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "canary");
+    defer std.testing.allocator.free(canary_key);
+    try std.testing.expectEqualStrings(
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.canary",
+        canary_key,
+    );
+}
+
+test "Windows install identities reject path traversal" {
+    try std.testing.expect(isSafeWindowsComponent("com.example.archive"));
+    try std.testing.expect(isSafeWindowsComponent("canary"));
+    try std.testing.expect(!isSafeWindowsComponent(""));
+    try std.testing.expect(!isSafeWindowsComponent(".."));
+    try std.testing.expect(!isSafeWindowsComponent("..\\other"));
+    try std.testing.expect(!isSafeWindowsComponent("C:escape"));
+    try std.testing.expect(!isSafeWindowsComponent("%TEMP%"));
+    try std.testing.expectError(
+        error.InvalidInstallIdentity,
+        windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "..\\production"),
+    );
+}
+
+test "Windows deferred cleanup accepts only its install generation" {
+    const first = "00112233445566778899aabbccddeeff";
+    const second = "ffeeddccbbaa99887766554433221100";
+    try std.testing.expect(isValidWindowsInstallNonce(first));
+    try std.testing.expect(windowsInstallNonceMatches(first, first));
+    try std.testing.expect(!windowsInstallNonceMatches(first, second));
+    try std.testing.expect(!windowsInstallNonceMatches(first, "001122"));
+    try std.testing.expect(!windowsInstallNonceMatches(first, "00112233445566778899aabbccddeezz"));
+}
+
+test "Windows update task identities are stable and channel scoped" {
+    const production = try windowsUpdateTaskName(std.testing.allocator, "com.example.app", "production");
+    defer std.testing.allocator.free(production);
+    try std.testing.expectEqualStrings("ElectrobunUpdate_e765e7a8ffa45d1ada904e46", production);
+
+    const canary = try windowsUpdateTaskName(std.testing.allocator, "com.example.app", "canary");
+    defer std.testing.allocator.free(canary);
+    try std.testing.expect(!std.mem.eql(u8, production, canary));
+}
+
+test "Windows uninstall registration reads the packaged app version" {
+    const version = try parseInstalledVersion(
+        std.testing.allocator,
+        "{\"identifier\":\"com.example.archive\",\"version\":\"2.3.4-canary.5\"}",
+    );
+    defer std.testing.allocator.free(version);
+    try std.testing.expectEqualStrings("2.3.4-canary.5", version);
+    try std.testing.expectError(
+        error.InvalidAppVersion,
+        parseInstalledVersion(std.testing.allocator, "{\"version\":\"\"}"),
+    );
 }
 
 test "production bundles use the unsuffixed application name" {

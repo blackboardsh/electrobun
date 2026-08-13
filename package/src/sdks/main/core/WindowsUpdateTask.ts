@@ -15,7 +15,7 @@ export type WindowsUpdateTaskCommandExecutor = (
 	command: WindowsUpdateTaskCommand,
 ) => void;
 
-const UPDATE_TASK_NAME_PATTERN = /^ElectrobunUpdate_\d+$/;
+const UPDATE_TASK_NAME_PATTERN = /^ElectrobunUpdate_[a-f0-9]{24}$/;
 
 /**
  * Build the commands used to register and launch the detached Windows updater.

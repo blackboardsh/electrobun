@@ -1,4 +1,4 @@
-import { join, dirname, resolve } from "path";
+import { join, dirname, resolve, win32 } from "path";
 import { homedir } from "os";
 import {
 	renameSync,
@@ -9,6 +9,7 @@ import {
 	readdirSync,
 } from "fs";
 import { execFileSync, execSync } from "child_process";
+import { createHash } from "crypto";
 import { OS as currentOS, ARCH as currentArch } from "../../../shared/platform";
 import { getPlatformPrefix, getTarballFileName } from "../../../shared/naming";
 import { quit } from "./Utils";
@@ -160,6 +161,154 @@ function cleanupExtractionFolder(
 	} catch (e) {
 		// Ignore errors in cleanup
 	}
+}
+
+function quoteWindowsBatchArgument(argument: string): string {
+	if (/["\r\n]/.test(argument)) {
+		throw new Error("Invalid Windows batch argument");
+	}
+
+	// Percent signs are expanded even inside quotes in a batch file. Doubling
+	// them preserves a literal percent sign when cmd.exe parses the script.
+	return `"${argument.replace(/%/g, "%%")}"`;
+}
+
+function quoteWindowsBatchPath(path: string): string {
+	return quoteWindowsBatchArgument(path.replace(/\//g, "\\"));
+}
+
+export function createWindowsRegistrationRefreshBatch(
+	channelRootPath: string,
+): string {
+	const uninstallerPath = win32.join(
+		channelRootPath.replace(/\//g, "\\"),
+		"uninstall.exe",
+	);
+	const quotedUninstallerPath = quoteWindowsBatchPath(uninstallerPath);
+
+	return `:: Refresh Windows uninstall metadata from the newly-installed app
+if not exist ${quotedUninstallerPath} (
+    echo Skipping uninstall registration refresh: uninstaller not found at ${quotedUninstallerPath}.
+    goto registrationrefreshdone
+)
+${quotedUninstallerPath} --refresh-registration --quiet
+if errorlevel 1 (
+    echo Warning: could not refresh Windows uninstall registration.
+)
+:registrationrefreshdone`;
+}
+
+export function createWindowsUpdateTaskName(
+	identifier: string,
+	channel: string,
+): string {
+	const scope = createHash("sha256")
+		.update(identifier)
+		.update("\0")
+		.update(channel)
+		.digest("hex")
+		.slice(0, 24);
+	return `ElectrobunUpdate_${scope}`;
+}
+
+export interface WindowsUpdateBatchOptions {
+	runningAppPath: string;
+	newAppPath: string;
+	extractionDirectoryPath: string;
+	launcherPath: string;
+	registrationRefreshBatch: string;
+	taskCleanupBatchLine: string;
+}
+
+export function createWindowsUpdateBatch({
+	runningAppPath,
+	newAppPath,
+	extractionDirectoryPath,
+	launcherPath,
+	registrationRefreshBatch,
+	taskCleanupBatchLine,
+}: WindowsUpdateBatchOptions): string {
+	const quotedRunningAppPath = quoteWindowsBatchPath(runningAppPath);
+	const quotedNewAppPath = quoteWindowsBatchPath(newAppPath);
+	const quotedExtractionDirectoryPath = quoteWindowsBatchPath(
+		extractionDirectoryPath,
+	);
+	const quotedLauncherPath = quoteWindowsBatchPath(launcherPath);
+
+	return `@echo off
+setlocal DisableDelayedExpansion
+
+:: Wait for the app and any CEF helper processes to fully exit.
+:: launcher.exe spawns cottontail.exe and "main Helper*.exe" processes that
+:: keep libcef.dll locked; if we proceed too early, rmdir partially fails.
+:waitloop
+tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL && goto waitsleep
+tasklist /FI "IMAGENAME eq cottontail.exe" 2>NUL | find /I /N "cottontail.exe">NUL && goto waitsleep
+tasklist /FI "IMAGENAME eq main Helper.exe" 2>NUL | find /I /N "main Helper.exe">NUL && goto waitsleep
+tasklist 2>NUL | find /I "main Helper">NUL && goto waitsleep
+goto waitdone
+:waitsleep
+timeout /t 1 /nobreak >nul
+goto waitloop
+:waitdone
+
+:: Small extra delay to ensure all file handles are released
+timeout /t 2 /nobreak >nul
+
+:: Remove current app folder, retrying if rmdir fails (locked files etc.)
+set rmRetry=0
+:rmloop
+if not exist ${quotedRunningAppPath} goto rmdone
+rmdir /s /q ${quotedRunningAppPath} 2>nul
+if not exist ${quotedRunningAppPath} goto rmdone
+set /a rmRetry=rmRetry+1
+if %rmRetry% GEQ 10 goto rmfailed
+timeout /t 2 /nobreak >nul
+goto rmloop
+:rmfailed
+echo Update failed: could not remove ${quotedRunningAppPath} after retries.
+echo Files may still be locked by a helper process.
+goto updatefailed
+:rmdone
+
+:: Move new app to current location (safe now that destination is gone)
+move ${quotedNewAppPath} ${quotedRunningAppPath}
+if errorlevel 1 (
+    echo Update failed: could not move ${quotedNewAppPath} to ${quotedRunningAppPath}.
+    goto updatefailed
+)
+if not exist ${quotedLauncherPath} (
+    echo Update failed: launcher not found at ${quotedLauncherPath} after move.
+    goto updatefailed
+)
+
+${registrationRefreshBatch}
+
+:: Clean up extraction directory
+rmdir /s /q ${quotedExtractionDirectoryPath} 2>nul
+
+:: Launch the new app
+start "" ${quotedLauncherPath}
+if errorlevel 1 (
+    echo Update failed: could not launch ${quotedLauncherPath}.
+    goto updatefailed
+)
+
+:: Remove this updater's scheduled task. The task name is generated internally
+:: and embedded directly so localized schtasks output never needs parsing.
+${taskCleanupBatchLine}
+
+:: Delete this update script after a short delay
+ping -n 2 127.0.0.1 >nul
+del "%~f0"
+exit /b 0
+
+:updatefailed
+:: Do not leave the generated task registered when an update step fails.
+${taskCleanupBatchLine}
+pause
+exit /b 1
+`;
 }
 
 const Updater = {
@@ -960,16 +1109,16 @@ const Updater = {
 							"launcher.exe",
 						);
 
-						// Convert paths to Windows format
-						const runningAppWin = runningAppBundlePath.replace(/\//g, "\\");
-						const newAppWin = newAppBundlePath.replace(/\//g, "\\");
-						const extractionDirWin = extractionDir.replace(/\//g, "\\");
-						const launcherPathWin = launcherPath.replace(/\//g, "\\");
-						const taskName = `ElectrobunUpdate_${Date.now()}`;
+						const taskName = createWindowsUpdateTaskName(
+							localInfo.identifier,
+							localInfo.channel,
+						);
 						const taskPlan = createWindowsUpdateTaskPlan(
 							taskName,
 							updateScriptPath.replace(/\//g, "\\"),
 						);
+						const registrationRefreshBatch =
+							createWindowsRegistrationRefreshBatch(parentDir);
 
 						// Create a batch script that will:
 						// 1. Wait for the current app and its helper processes to exit
@@ -977,80 +1126,17 @@ const Updater = {
 						//    keep libcef.dll locked after launcher.exe exits)
 						// 3. Move new app to current location (only if old folder is fully gone,
 						//    otherwise `move` would put it inside as a subdirectory)
-						// 4. Launch the new app
-						// 5. Clean up
-						const updateScript = `@echo off
-setlocal
-
-:: Wait for the app and any CEF helper processes to fully exit.
-:: launcher.exe spawns cottontail.exe and "main Helper*.exe" processes that
-:: keep libcef.dll locked; if we proceed too early, rmdir partially fails.
-:waitloop
-tasklist /FI "IMAGENAME eq launcher.exe" 2>NUL | find /I /N "launcher.exe">NUL && goto waitsleep
-tasklist /FI "IMAGENAME eq cottontail.exe" 2>NUL | find /I /N "cottontail.exe">NUL && goto waitsleep
-tasklist /FI "IMAGENAME eq main Helper.exe" 2>NUL | find /I /N "main Helper.exe">NUL && goto waitsleep
-tasklist 2>NUL | find /I "main Helper">NUL && goto waitsleep
-goto waitdone
-:waitsleep
-timeout /t 1 /nobreak >nul
-goto waitloop
-:waitdone
-
-:: Small extra delay to ensure all file handles are released
-timeout /t 2 /nobreak >nul
-
-:: Remove current app folder, retrying if rmdir fails (locked files etc.)
-set rmRetry=0
-:rmloop
-if not exist "${runningAppWin}" goto rmdone
-rmdir /s /q "${runningAppWin}" 2>nul
-if not exist "${runningAppWin}" goto rmdone
-set /a rmRetry=rmRetry+1
-if %rmRetry% GEQ 10 goto rmfailed
-timeout /t 2 /nobreak >nul
-goto rmloop
-:rmfailed
-echo Update failed: could not remove "${runningAppWin}" after retries.
-echo Files may still be locked by a helper process.
-goto updatefailed
-:rmdone
-
-:: Move new app to current location (safe now that destination is gone)
-move "${newAppWin}" "${runningAppWin}"
-if errorlevel 1 (
-    echo Update failed: could not move "${newAppWin}" to "${runningAppWin}".
-    goto updatefailed
-)
-if not exist "${launcherPathWin}" (
-    echo Update failed: launcher not found at "${launcherPathWin}" after move.
-    goto updatefailed
-)
-
-:: Clean up extraction directory
-rmdir /s /q "${extractionDirWin}" 2>nul
-
-:: Launch the new app
-start "" "${launcherPathWin}"
-if errorlevel 1 (
-    echo Update failed: could not launch "${launcherPathWin}".
-    goto updatefailed
-)
-
-:: Remove this updater's scheduled task. The task name is generated internally
-:: and embedded directly so localized schtasks output never needs parsing.
-${taskPlan.cleanupBatchLine}
-
-:: Delete this update script after a short delay
-ping -n 2 127.0.0.1 >nul
-del "%~f0"
-exit /b 0
-
-:updatefailed
-:: Do not leave the generated task registered when an update step fails.
-${taskPlan.cleanupBatchLine}
-pause
-exit /b 1
-`;
+						// 4. Refresh the channel's Windows uninstall registration
+						// 5. Launch the new app
+						// 6. Clean up
+						const updateScript = createWindowsUpdateBatch({
+							runningAppPath: runningAppBundlePath,
+							newAppPath: newAppBundlePath,
+							extractionDirectoryPath: extractionDir,
+							launcherPath,
+							registrationRefreshBatch,
+							taskCleanupBatchLine: taskPlan.cleanupBatchLine,
+						});
 
 						await Bun.write(updateScriptPath, updateScript);
 
