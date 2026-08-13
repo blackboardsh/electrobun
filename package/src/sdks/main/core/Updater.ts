@@ -1,15 +1,19 @@
 import { join, dirname, resolve, win32 } from "path";
 import { homedir } from "os";
 import {
+	chmodSync,
+	constants as fsConstants,
+	copyFileSync,
 	renameSync,
 	unlinkSync,
 	mkdirSync,
 	rmSync,
 	statSync,
+	lstatSync,
 	readdirSync,
 } from "fs";
 import { execFileSync, execSync } from "child_process";
-import { createHash } from "crypto";
+import { createHash, randomBytes } from "crypto";
 import { OS as currentOS, ARCH as currentArch } from "../../../shared/platform";
 import { getPlatformPrefix, getTarballFileName } from "../../../shared/naming";
 import { quit } from "./Utils";
@@ -237,6 +241,82 @@ export function refreshLinuxUninstallerMetadata(
 		execute(uninstallerPath, ["--refresh-metadata", "--quiet"]);
 		return true;
 	} catch {
+		return false;
+	}
+}
+
+type MacUninstallerMetadataRefreshExecutor = (
+	executable: string,
+	args: readonly string[],
+) => void;
+
+export interface MacUninstallerRefreshPlan {
+	packagedUninstallerPath: string;
+	installedUninstallerPath: string;
+	stagedUninstallerPath: string;
+	refreshArguments: readonly ["--refresh-metadata", "--quiet"];
+}
+
+export function createMacUninstallerRefreshPlan(
+	channelRootPath: string,
+	appBundlePath: string,
+	nonce: string,
+): MacUninstallerRefreshPlan {
+	if (!/^[a-f0-9]{16}$/.test(nonce)) {
+		throw new Error("Invalid macOS uninstaller staging nonce");
+	}
+	return {
+		packagedUninstallerPath: join(
+			appBundlePath,
+			"Contents",
+			"Resources",
+			"uninstall",
+		),
+		installedUninstallerPath: join(channelRootPath, "uninstall"),
+		stagedUninstallerPath: join(
+			channelRootPath,
+			`.electrobun-uninstall-${nonce}.tmp`,
+		),
+		refreshArguments: ["--refresh-metadata", "--quiet"],
+	};
+}
+
+/**
+ * Replace the app-independent macOS uninstall manager from the newly installed
+ * bundle, then let that manager refresh its external manifest. Legacy bundles
+ * do not contain the resource, so a missing source is intentionally nonfatal.
+ */
+export function refreshMacUninstallerMetadata(
+	channelRootPath: string,
+	appBundlePath: string,
+	execute: MacUninstallerMetadataRefreshExecutor = (executable, args) => {
+		execFileSync(executable, [...args], { stdio: "ignore" });
+	},
+	nonce: () => string = () => randomBytes(8).toString("hex"),
+): boolean {
+	const plan = createMacUninstallerRefreshPlan(
+		channelRootPath,
+		appBundlePath,
+		nonce(),
+	);
+	try {
+		const source = lstatSync(plan.packagedUninstallerPath, {
+			throwIfNoEntry: false,
+		});
+		if (!source?.isFile() || source.isSymbolicLink()) return false;
+
+		mkdirSync(channelRootPath, { recursive: true });
+		copyFileSync(
+			plan.packagedUninstallerPath,
+			plan.stagedUninstallerPath,
+			fsConstants.COPYFILE_EXCL,
+		);
+		chmodSync(plan.stagedUninstallerPath, 0o755);
+		renameSync(plan.stagedUninstallerPath, plan.installedUninstallerPath);
+		execute(plan.installedUninstallerPath, plan.refreshArguments);
+		return true;
+	} catch {
+		rmSync(plan.stagedUninstallerPath, { force: true });
 		return false;
 	}
 }
@@ -1096,6 +1176,12 @@ const Updater = {
 							);
 						} catch (e) {
 							// Ignore errors - attribute may not exist
+						}
+
+						if (!refreshMacUninstallerMetadata(appDataFolder, runningAppBundlePath)) {
+							console.warn(
+								"Could not refresh the standalone macOS uninstaller; the installed app was still updated.",
+							);
 						}
 					} else if (currentOS === "linux") {
 						// On Linux, we now have directory bundles instead of AppImage files

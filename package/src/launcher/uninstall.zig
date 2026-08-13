@@ -44,6 +44,7 @@ pub fn parseRequest(args: []const []const u8) ?Request {
             return null;
         }
     }
+    if (request.delete_data and !request.quiet) return null;
     return request;
 }
 
@@ -117,6 +118,10 @@ test "uninstall parser accepts only the exact supported grammar" {
     try std.testing.expect(parseRequest(&.{"--uninstall"}) == null);
     try std.testing.expect(parseRequest(&.{ "launcher", "uninstall" }) == null);
     try std.testing.expect(parseRequest(&.{ "launcher", "--uninstall=true" }) == null);
+
+    // Data deletion is an explicit unattended mode. Interactive callers make
+    // that choice in the native prompt instead of bypassing it with a flag.
+    try std.testing.expect(parseRequest(&.{ "launcher", "--uninstall", "--delete-data" }) == null);
     try std.testing.expect(parseRequest(&.{ "launcher", "--uninstall", "--quiet", "--quiet" }) == null);
     try std.testing.expect(parseRequest(&.{ "launcher", "--uninstall", "--other" }) == null);
     try std.testing.expect(parseRequest(&.{ "launcher", "--uninstall", "--quiet", "app-url" }) == null);
