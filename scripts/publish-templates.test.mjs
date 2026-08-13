@@ -75,24 +75,24 @@ test("the release toolchain pins come from the package pragma", () => {
 
 test("published templates stamp only Hutch release metadata", () => {
 	const source = [
-		"// @hutch cli=0.7.3 cottontail=0.4.3",
+		"// @hutch cli=0.7.3 cottontail=0.4.4",
 		"export default {",
 		'\tscripts: { install: ["npm", "ci"] },',
 		"};",
 		"",
 	].join("\n");
 	assert.equal(
-		pinHutchPragma(source, { hutch: "0.7.3", cottontail: "0.4.3" }),
+		pinHutchPragma(source, { hutch: "0.7.3", cottontail: "0.4.4" }),
 		source.replace(
-			"cli=0.7.3 cottontail=0.4.3",
-			"cli=0.7.3 cottontail=0.4.3",
+			"cli=0.7.3 cottontail=0.4.4",
+			"cli=0.7.3 cottontail=0.4.4",
 		),
 	);
 	assert.throws(
 		() =>
 			pinHutchPragma("export default {};\n", {
 				hutch: "0.7.3",
-				cottontail: "0.4.3",
+				cottontail: "0.4.4",
 			}),
 		/expected exactly one \/\/ @hutch pragma/,
 	);
@@ -100,7 +100,7 @@ test("published templates stamp only Hutch release metadata", () => {
 		() =>
 			pinHutchPragma(source, {
 				hutch: "^0.7.3",
-				cottontail: "0.4.3",
+				cottontail: "0.4.4",
 			}),
 		/Hutch CLI release pin must be an exact SemVer 2\.0\.0/,
 	);
@@ -108,7 +108,7 @@ test("published templates stamp only Hutch release metadata", () => {
 
 test("published templates stamp the Electrobun product version in Hutch config", () => {
 	const source = [
-		"// @hutch cli=0.7.3 cottontail=0.4.3",
+		"// @hutch cli=0.7.3 cottontail=0.4.4",
 		"export default {",
 		"\telectrobun: {",
 		'\t\tversion: "2.0.0-rc.1",',

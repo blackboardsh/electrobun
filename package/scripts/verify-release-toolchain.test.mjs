@@ -114,7 +114,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	}
 
 	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.7\.3'$/m);
-	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.4\.3'$/m);
+	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.4\.4'$/m);
 	assert.match(
 		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,
