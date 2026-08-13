@@ -95,6 +95,47 @@ const writeSentinel = (path, contents) => {
 	writeFileSync(path, contents);
 };
 
+const sha256File = (path) =>
+	createHash("sha256").update(readFileSync(path)).digest("hex");
+
+const appPathToken = ({ app, channel, identifier, installNonce }) =>
+	createHash("sha256")
+		.update(installNonce)
+		.update("\0")
+		.update(identifier)
+		.update("\0")
+		.update(channel)
+		.update("\0")
+		.update(app)
+		.update("\0")
+		.digest("hex");
+
+const requireSystemZstd = () => {
+	const command = process.env.ELECTROBUN_ZSTD ?? "zstd";
+	const probe = spawnSync(command, ["--version"], { encoding: "utf8" });
+	if (probe.error?.code === "ENOENT") {
+		throw new Error(
+			"macOS initial-install integration requires the system zstd command; install zstd or set ELECTROBUN_ZSTD",
+		);
+	}
+	if (probe.error || probe.status !== 0) {
+		throw new Error(
+			`could not run ${command} --version (${probe.status ?? probe.signal}):\n${probe.stdout ?? ""}\n${probe.stderr ?? ""}`,
+			{ cause: probe.error },
+		);
+	}
+	return command;
+};
+
+const waitForFile = (path, timeoutMs = 2_000) => {
+	const deadline = Date.now() + timeoutMs;
+	const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+	while (!existsSync(path) && Date.now() < deadline) {
+		Atomics.wait(waitBuffer, 0, 0, 20);
+	}
+	assertExists(path, `${path} was not created within ${timeoutMs}ms`);
+};
+
 const createAppBundle = (path, appIdentifier = identifier) => {
 	const resources = join(path, "Contents", "Resources");
 	mkdirSync(resources, { recursive: true });
@@ -190,22 +231,18 @@ const createFixture = (
 	symlinkSync(outsideLogsTarget, join(logsRoot, "outside-target"));
 
 	const installNonce = "0123456789abcdef0123456789abcdef";
-	const appPathToken = createHash("sha256")
-		.update(installNonce)
-		.update("\0")
-		.update(identifier)
-		.update("\0")
-		.update(channel)
-		.update("\0")
-		.update(app)
-		.update("\0")
-		.digest("hex");
+	const recordedAppPathToken = appPathToken({
+		app,
+		channel,
+		identifier,
+		installNonce,
+	});
 	writeFileSync(
 		manifest,
 		`${JSON.stringify(
 			{
 				app_bundle_path: app,
-				app_path_token: appPathToken,
+				app_path_token: recordedAppPathToken,
 				channel,
 				data_path_versions: [1],
 				identifier,
@@ -241,6 +278,83 @@ const createFixture = (
 		siblingLogsSentinel,
 		unrelatedDataSentinel,
 		unrelatedDocument,
+	};
+};
+
+const createInitialInstallFixture = (extractor, zstd) => {
+	const root = join(temporaryRoot, "initial self-extractor fixture");
+	const home = join(root, "home directory with spaces");
+	const applications = join(root, "Applications");
+	const installedApp = join(applications, `${name}.app`);
+	const outerMacos = join(installedApp, "Contents", "MacOS");
+	const outerResources = join(installedApp, "Contents", "Resources");
+	const installer = join(outerMacos, "installer");
+	const outerMarker = join(outerResources, "outer-installer.keep");
+	const archiveHash = "initial-install-fixture";
+	const archive = join(outerResources, `${archiveHash}.tar.zst`);
+	const tarPath = join(root, `${archiveHash}.tar`);
+	const payloadRoot = join(root, "payload");
+	const payloadApp = join(payloadRoot, `${name}.app`);
+	const payloadResources = join(payloadApp, "Contents", "Resources");
+	const payloadUninstaller = join(payloadResources, "uninstall");
+	const installedMarker = join(payloadResources, "app.keep");
+	const channelRoot = join(
+		home,
+		"Library",
+		"Application Support",
+		identifier,
+		channel,
+	);
+	const manager = join(channelRoot, "uninstall");
+	const manifest = join(channelRoot, ".electrobun-uninstall.json");
+	const selfExtraction = join(channelRoot, "self-extraction");
+	const openHelperDirectory = join(root, "open helper");
+	const openHelper = join(openHelperDirectory, "open");
+	const openLog = join(root, "open invocation.log");
+
+	mkdirSync(home, { recursive: true });
+	mkdirSync(outerMacos, { recursive: true });
+	mkdirSync(outerResources, { recursive: true });
+	copyFileSync(extractor, installer);
+	chmodSync(installer, 0o755);
+	writeFileSync(outerMarker, "outer self-extractor\n");
+	writeFileSync(
+		join(outerResources, "metadata.json"),
+		`${JSON.stringify({
+			channel,
+			hash: archiveHash,
+			identifier,
+			name,
+		})}\n`,
+	);
+
+	createAppBundle(payloadApp);
+	copyFileSync(extractor, payloadUninstaller);
+	chmodSync(payloadUninstaller, 0o755);
+	run("tar", ["-cf", tarPath, "-C", payloadRoot, `${name}.app`]);
+	run(zstd, ["-q", "-f", tarPath, "-o", archive]);
+
+	mkdirSync(openHelperDirectory, { recursive: true });
+	writeFileSync(
+		openHelper,
+		'#!/bin/sh\nprintf "%s\\n" "$@" > "$ELECTROBUN_OPEN_LOG"\n',
+	);
+	chmodSync(openHelper, 0o755);
+
+	return {
+		archive,
+		channelRoot,
+		home,
+		installedApp,
+		installedMarker,
+		installer,
+		manager,
+		manifest,
+		openHelperDirectory,
+		openLog,
+		outerMarker,
+		root,
+		selfExtraction,
 	};
 };
 
@@ -283,6 +397,64 @@ try {
 	run(zig, ["build"], { cwd: extractorRoot });
 	const extractor = join(extractorRoot, "zig-out", "bin", "extractor");
 	assertExists(extractor, "extractor build output is missing");
+	const zstd = requireSystemZstd();
+
+	const initialInstall = createInitialInstallFixture(extractor, zstd);
+	run(initialInstall.installer, [], {
+		cwd: initialInstall.root,
+		env: {
+			...process.env,
+			ELECTROBUN_OPEN_LOG: initialInstall.openLog,
+			HOME: initialInstall.home,
+			PATH: `${initialInstall.openHelperDirectory}:${process.env.PATH ?? ""}`,
+		},
+	});
+	waitForFile(initialInstall.openLog);
+	assert.equal(
+		readFileSync(initialInstall.openLog, "utf8").trim(),
+		initialInstall.installedApp,
+	);
+	assertExists(initialInstall.installedApp);
+	assertExists(initialInstall.installedMarker);
+	assertNodeMissing(initialInstall.outerMarker);
+	assertNodeMissing(initialInstall.archive);
+	assertExists(initialInstall.manager);
+	assert.equal(sha256File(initialInstall.manager), sha256File(extractor));
+	const installedManifest = JSON.parse(
+		readFileSync(initialInstall.manifest, "utf8"),
+	);
+	assert.equal(installedManifest.schema_version, 1);
+	assert.equal(installedManifest.identifier, identifier);
+	assert.equal(installedManifest.name, name);
+	assert.equal(installedManifest.channel, channel);
+	assert.equal(installedManifest.version, version);
+	assert.equal(installedManifest.app_bundle_path, initialInstall.installedApp);
+	assert.match(installedManifest.install_nonce, /^[0-9a-f]{32}$/);
+	assert.deepEqual(installedManifest.data_path_versions, [1]);
+	assert.equal(
+		installedManifest.app_path_token,
+		appPathToken({
+			app: initialInstall.installedApp,
+			channel,
+			identifier,
+			installNonce: installedManifest.install_nonce,
+		}),
+	);
+	const initialInstallUserData = join(
+		initialInstall.channelRoot,
+		"user-data.keep",
+	);
+	writeFileSync(initialInstallUserData, "preserve after initial install\n");
+	run(initialInstall.manager, ["--uninstall", "--quiet"], {
+		cwd: initialInstall.root,
+		env: managerEnv(initialInstall),
+		timeout: 30_000,
+	});
+	assertNodeMissing(initialInstall.installedApp);
+	assertNodeMissing(initialInstall.selfExtraction);
+	assertNodeMissing(initialInstall.manager);
+	assertNodeMissing(initialInstall.manifest);
+	assertExists(initialInstallUserData);
 
 	const appOnly = createFixture(extractor, "app only");
 	run(appOnly.manager, ["--uninstall", "--quiet"], {
@@ -355,7 +527,7 @@ try {
 	assertUninstallDidNotStart(tampered);
 
 	console.log(
-		"macOS uninstaller integration passed (app-only, app-and-data, preservation, symlink safety, tamper rejection)",
+		"macOS uninstaller integration passed (initial install, app-only, app-and-data, preservation, symlink safety, tamper rejection)",
 	);
 } finally {
 	rmSync(temporaryRoot, { force: true, recursive: true });
