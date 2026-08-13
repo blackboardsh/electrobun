@@ -222,13 +222,23 @@ async function mount(
 		renderer.render(paint(tree), width, height);
 	};
 
+	// A hidden window skips ticks entirely, so nothing marks the tree dirty
+	// while it is hidden. Track the visibility edge and force a frame on
+	// re-show; otherwise the swapchain keeps presenting its pre-hide contents
+	// until some input or state change happens to dirty the tree.
+	let wasVisible = true;
 	const timer = setInterval(() => {
 		if (target.isAlive && !target.isAlive()) return;
-		if (target.isVisible && !target.isVisible()) return;
+		if (target.isVisible && !target.isVisible()) {
+			wasVisible = false;
+			return;
+		}
+		const becameVisible = !wasVisible;
+		wasVisible = true;
 		input.poll();
 		const { width, height } = target.getSize();
 		const sizeChanged = width !== lastWidth || height !== lastHeight;
-		if (tree.takeDirty() || sizeChanged) {
+		if (tree.takeDirty() || sizeChanged || becameVisible) {
 			lastWidth = width;
 			lastHeight = height;
 			renderFrame(width, height);
