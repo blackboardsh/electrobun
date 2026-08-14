@@ -405,9 +405,12 @@ static std::atomic<bool> g_cefInitialized{false};
 static std::atomic<bool> g_useCEF{false};
 static std::atomic<bool> g_checkedForCEF{false};
 
-// Global webview storage to keep shared_ptr alive
+// Browser views and WGPU views have independent ID allocators. Keep their
+// ownership registries separate so equal IDs cannot replace one another.
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_webviewMap;
 static std::mutex g_webviewMapMutex;
+static std::map<uint32_t, std::shared_ptr<AbstractView>> g_wgpuViewMap;
+static std::mutex g_wgpuViewMapMutex;
 static std::map<uint32_t, std::string> g_webviewViewsRoot;
 static std::mutex g_webviewViewsRootMutex;
 
@@ -5491,8 +5494,6 @@ static void removeCEFViewsForParentWindow(Window parent_window) {
     }
 }
 
-
-
 // Container for managing multiple webviews
 class ContainerView {
 public:
@@ -5870,6 +5871,39 @@ static std::map<uint32_t, std::shared_ptr<X11Window>> g_x11_windows;
 static std::map<Window, uint32_t> g_x11_window_to_id;
 static std::map<Window, uint32_t> g_x11_child_window_to_parent_id;
 static std::mutex g_x11WindowsMutex;
+
+static void removeWGPUViewsForParentWindow(Window parent_window) {
+    std::vector<std::shared_ptr<WGPUViewImpl>> views_to_remove;
+    {
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        for (auto it = g_wgpuViewMap.begin(); it != g_wgpuViewMap.end();) {
+            auto wgpu_view = std::dynamic_pointer_cast<WGPUViewImpl>(it->second);
+            if (wgpu_view && wgpu_view->parentXWindow == parent_window &&
+                !wgpu_view->isRemoved) {
+                views_to_remove.push_back(wgpu_view);
+                it = g_wgpuViewMap.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
+    // The resize queue and X11 child routing table both store non-owning view
+    // state, so detach them before releasing the registry's shared_ptr.
+    for (const auto& view : views_to_remove) {
+        g_pendingResizeQueue.remove(view.get());
+
+        if (view->xWindow) {
+            std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+            g_x11_child_window_to_parent_id.erase(view->xWindow);
+            if (view->inputXWindow) {
+                g_x11_child_window_to_parent_id.erase(view->inputXWindow);
+            }
+        }
+
+        view->remove();
+    }
+}
 
 static uint32_t modifiersFromX11State(unsigned int state) {
     uint32_t modifiers = 0;
@@ -6712,19 +6746,17 @@ void resizeAutoSizingWebviewsInWindow(uint32_t windowId, int width, int height) 
         x11WindowHandle = windowIt->second->window;
     }
     
-    // Find all webviews that belong to this window
+    // Find all auto-sized WGPU views that belong to this window.
     std::vector<std::shared_ptr<AbstractView>> fullSizeWebviews;
     {
-        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        for (auto& [webviewId, webview] : g_webviewMap) {
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        for (auto& [webviewId, webview] : g_wgpuViewMap) {
             (void)webviewId;
             if (webview) {
-                CEFWebViewImpl* cefView = dynamic_cast<CEFWebViewImpl*>(webview.get());
                 WGPUViewImpl* wgpuView = dynamic_cast<WGPUViewImpl*>(webview.get());
                 // CEF has a separate geometry hook because pure parent moves
                 // may change monitor scale without changing parent size.
-                if (!cefView && wgpuView &&
-                    wgpuView->parentXWindow == x11WindowHandle &&
+                if (wgpuView && wgpuView->parentXWindow == x11WindowHandle &&
                     webview->fullSize) {
                     fullSizeWebviews.push_back(webview);
                 }
@@ -7003,6 +7035,7 @@ gboolean process_x11_events(gpointer data) {
             // This function takes registry locks internally, so it must remain
             // outside g_x11WindowsMutex.
             removeCEFViewsForParentWindow(closingWindow->window);
+            removeWGPUViewsForParentWindow(closingWindow->window);
             XDestroyWindow(closingWindow->display, closingWindow->window);
             XFlush(closingWindow->display);
         }
@@ -8000,8 +8033,8 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
     }
 
     {
-        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        g_webviewMap[webviewId] = view;
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        g_wgpuViewMap[webviewId] = view;
     }
 
     return view.get();
@@ -8047,22 +8080,35 @@ ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView* abstractView, bool hidden
 
 ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView* abstractView) {
     if (!abstractView) return;
-    uint32_t viewId = abstractView->webviewId;
-    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
-    if (view && view->xWindow) {
-        std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
-        g_x11_child_window_to_parent_id.erase(view->xWindow);
-        if (view->inputXWindow) {
-            g_x11_child_window_to_parent_id.erase(view->inputXWindow);
+    dispatch_sync_main_void([abstractView]() {
+        std::shared_ptr<AbstractView> retainedView;
+        {
+            std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+            auto it = std::find_if(
+                g_wgpuViewMap.begin(),
+                g_wgpuViewMap.end(),
+                [abstractView](const auto& entry) {
+                    return entry.second.get() == abstractView;
+                });
+            if (it == g_wgpuViewMap.end()) {
+                return;
+            }
+            retainedView = it->second;
+            g_wgpuViewMap.erase(it);
         }
-    }
-    dispatch_sync_main_void([&]() {
-        abstractView->remove();
+
+        g_pendingResizeQueue.remove(retainedView.get());
+
+        WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(retainedView.get());
+        if (view && view->xWindow) {
+            std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
+            g_x11_child_window_to_parent_id.erase(view->xWindow);
+            if (view->inputXWindow) {
+                g_x11_child_window_to_parent_id.erase(view->inputXWindow);
+            }
+        }
+        retainedView->remove();
     });
-    {
-        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        g_webviewMap.erase(viewId);
-    }
 }
 
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
@@ -9250,12 +9296,14 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
         {
             std::lock_guard<std::mutex> lock(g_webviewMapMutex);
             auto it = g_webviewMap.find(webviewId);
-            if (it != g_webviewMap.end()) {
+            if (it != g_webviewMap.end() && it->second.get() == abstractView) {
                 viewPtr = it->second;
             } else {
                 return;
             }
         }
+
+        g_pendingResizeQueue.remove(viewPtr.get());
         
         // Use g_idle_add to remove the webview asynchronously on the main thread
         // Pass the shared_ptr to keep the object alive
@@ -9609,14 +9657,18 @@ ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView* abstractView, con
 }
 
 ELECTROBUN_EXPORT void callAsyncJavaScript(const char* messageId, const char* jsString, uint32_t webviewId, uint32_t hostWebviewId, void* completionHandler) {
-    // Find the webview in containers
-    for (auto& [id, container] : g_containers) {
-        for (auto& view : container->abstractViews) {
-            if (view->webviewId == webviewId) {
-                view->callAsyncJavascript(messageId, jsString, webviewId, hostWebviewId, completionHandler);
-                return;
-            }
+    std::shared_ptr<AbstractView> browserView;
+    {
+        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+        auto it = g_webviewMap.find(webviewId);
+        if (it != g_webviewMap.end()) {
+            browserView = it->second;
         }
+    }
+
+    if (browserView) {
+        browserView->callAsyncJavascript(
+            messageId, jsString, webviewId, hostWebviewId, completionHandler);
     }
 }
 
@@ -10557,10 +10609,24 @@ void cleanupWebviewsForWindow(uint32_t windowId) {
             }
         });
 
-        std::lock_guard<std::mutex> lock(g_webviewMapMutex);
-        for (auto& webview : container->abstractViews) {
-            if (webview) {
-                g_webviewMap.erase(webview->webviewId);
+        {
+            std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+            for (auto& webview : container->abstractViews) {
+                if (webview && !dynamic_cast<WGPUViewImpl*>(webview.get())) {
+                    g_webviewMap.erase(webview->webviewId);
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+            for (auto& webview : container->abstractViews) {
+                if (webview && dynamic_cast<WGPUViewImpl*>(webview.get())) {
+                    auto it = g_wgpuViewMap.find(webview->webviewId);
+                    if (it != g_wgpuViewMap.end() &&
+                        it->second.get() == webview.get()) {
+                        g_wgpuViewMap.erase(it);
+                    }
+                }
             }
         }
     }
@@ -10657,6 +10723,7 @@ ELECTROBUN_EXPORT void closeWindow(void* window) {
                 // close callback. Also cover native adapters and abnormal window
                 // teardown before destroying the X11 parent.
                 removeCEFViewsForParentWindow(x11_window);
+                removeWGPUViewsForParentWindow(x11_window);
                 
                 // Remove the X11 window from global maps.
                 {

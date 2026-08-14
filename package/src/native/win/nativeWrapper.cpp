@@ -468,7 +468,8 @@ static std::mutex webviewHTMLMutex;
 // Forward declaration for AbstractView
 class AbstractView;
 
-// Global map to track all AbstractView instances by their webviewId
+// Browser views and WGPU views use independent ID allocators. This registry is
+// browser-only so an equal WGPU ID cannot replace navigation state.
 static std::map<uint32_t, AbstractView*> g_abstractViews;
 static std::mutex g_abstractViewsMutex;
 
@@ -3545,8 +3546,28 @@ public:
     }
 };
 
+// Keep the two core ID namespaces separate in native ownership as well.
 static std::map<uint32_t, std::shared_ptr<AbstractView>> g_retainedAbstractViews;
 static std::mutex g_retainedAbstractViewsMutex;
+static std::map<uint32_t, std::shared_ptr<AbstractView>> g_retainedWGPUViews;
+static std::mutex g_retainedWGPUViewsMutex;
+
+static void trackAbstractView(AbstractView* view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+    g_abstractViews[view->webviewId] = view;
+}
+
+static void untrackAbstractView(AbstractView* view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
+    auto it = g_abstractViews.find(view->webviewId);
+    if (it != g_abstractViews.end() && it->second == view) {
+        g_abstractViews.erase(it);
+    }
+}
 
 static void retainAbstractView(std::shared_ptr<AbstractView> view) {
     if (!view) return;
@@ -3555,9 +3576,49 @@ static void retainAbstractView(std::shared_ptr<AbstractView> view) {
     g_retainedAbstractViews[view->webviewId] = view;
 }
 
-static void releaseRetainedAbstractView(uint32_t webviewId) {
+static void releaseRetainedAbstractView(AbstractView* view) {
+    if (!view) return;
+
     std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
-    g_retainedAbstractViews.erase(webviewId);
+    auto it = g_retainedAbstractViews.find(view->webviewId);
+    if (it != g_retainedAbstractViews.end() && it->second.get() == view) {
+        g_retainedAbstractViews.erase(it);
+    }
+}
+
+static void retainWGPUView(std::shared_ptr<AbstractView> view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_retainedWGPUViewsMutex);
+    g_retainedWGPUViews[view->webviewId] = view;
+}
+
+static std::shared_ptr<AbstractView> takeRetainedWGPUView(AbstractView* view) {
+    if (!view) return nullptr;
+
+    std::lock_guard<std::mutex> lock(g_retainedWGPUViewsMutex);
+    auto it = std::find_if(
+        g_retainedWGPUViews.begin(),
+        g_retainedWGPUViews.end(),
+        [view](const auto& entry) {
+            return entry.second.get() == view;
+        });
+    if (it == g_retainedWGPUViews.end()) {
+        return nullptr;
+    }
+    std::shared_ptr<AbstractView> retainedView = std::move(it->second);
+    g_retainedWGPUViews.erase(it);
+    return retainedView;
+}
+
+static void releaseRetainedWGPUView(AbstractView* view) {
+    if (!view) return;
+
+    std::lock_guard<std::mutex> lock(g_retainedWGPUViewsMutex);
+    auto it = g_retainedWGPUViews.find(view->webviewId);
+    if (it != g_retainedWGPUViews.end() && it->second.get() == view) {
+        g_retainedWGPUViews.erase(it);
+    }
 }
 
 // Pending resize queue (cross-thread)
@@ -4206,10 +4267,7 @@ public:
                 break;
             }
         }
-        {
-            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-            g_abstractViews.erase(this->webviewId);
-        }
+        untrackAbstractView(this);
 
         if (osr_window) {
             delete osr_window;
@@ -5354,10 +5412,10 @@ public:
         if (target) target->focus();
     }
 
-    void BringViewToFront(uint32_t webviewId) {
+    void BringViewToFront(AbstractView* targetView) {
         auto it = std::find_if(m_abstractViews.begin(), m_abstractViews.end(),
-            [webviewId](const std::shared_ptr<AbstractView>& view) {
-                return view->webviewId == webviewId;
+            [targetView](const std::shared_ptr<AbstractView>& view) {
+                return view.get() == targetView;
             });
         
         if (it != m_abstractViews.end()) {
@@ -5388,7 +5446,6 @@ public:
         // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
-            uint32_t viewId = view->webviewId;
             if (g_eventLoopStopping.load()) {
                 if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
                     // The parent hierarchy is already being destroyed by the
@@ -5401,11 +5458,12 @@ public:
             } else {
                 view->remove();
             }
-            {
-                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-                g_abstractViews.erase(viewId);
+            if (dynamic_cast<WGPUView*>(view.get())) {
+                releaseRetainedWGPUView(view.get());
+            } else {
+                untrackAbstractView(view.get());
+                releaseRetainedAbstractView(view.get());
             }
-            releaseRetainedAbstractView(viewId);
         }
         if (m_hwnd) {
             DestroyWindow(m_hwnd);
@@ -5418,7 +5476,7 @@ public:
     
         // Add to front of vector so it's top-most first
         m_abstractViews.insert(m_abstractViews.begin(), view); 
-        BringViewToFront(view->webviewId);
+        BringViewToFront(view.get());
         
         // TODO: Temporarily disable mirror mode for CEF testing
         // Start new webviews in mirror mode (input disabled)
@@ -5426,14 +5484,14 @@ public:
         // view->toggleMirrorMode(true);
     }
     
-    void RemoveAbstractViewWithId(uint32_t webviewId) {
-        if (m_activeWebView && m_activeWebView->webviewId == webviewId) {
+    void RemoveAbstractView(AbstractView* targetView) {
+        if (m_activeWebView == targetView) {
             m_activeWebView = nullptr;
         }
         m_abstractViews.erase(
             std::remove_if(m_abstractViews.begin(), m_abstractViews.end(),
-                [webviewId](const std::shared_ptr<AbstractView>& view) {
-                    return view->webviewId == webviewId;
+                [targetView](const std::shared_ptr<AbstractView>& view) {
+                    return view.get() == targetView;
                 }),
             m_abstractViews.end());
     }
@@ -7737,10 +7795,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             }
 
                             // Register in global AbstractView map for navigation rules
-                            {
-                                std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-                                g_abstractViews[view->webviewId] = view.get();
-                            }
+                            trackAbstractView(view.get());
 
                             // Store WebView2View in global map for JavaScript execution
                             HWND containerHwnd = container->GetHwnd();
@@ -8202,10 +8257,7 @@ static std::shared_ptr<CEFView> createCEFView(uint32_t webviewId,
         view->visualBounds = initialBounds;
         container->AddAbstractView(view);
 
-        {
-            std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-            g_abstractViews[view->webviewId] = view.get();
-        }
+        trackAbstractView(view.get());
         g_cefClients[mapKey] = client;
         g_cefViews[mapKey] = view.get();
 
@@ -8666,11 +8718,7 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
     }
 
     container->AddAbstractView(view);
-
-    {
-        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-        g_abstractViews[webviewId] = view.get();
-    }
+    retainWGPUView(view);
 
     return view.get();
 }
@@ -8730,15 +8778,14 @@ ELECTROBUN_EXPORT void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden
 
 ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
     if (!abstractView) return;
-    uint32_t viewId = abstractView->webviewId;
     MainThreadDispatcher::dispatch_sync([abstractView]() {
-        abstractView->remove();
+        std::shared_ptr<AbstractView> retainedView =
+            takeRetainedWGPUView(abstractView);
+        if (!retainedView) return;
+
+        g_pendingResizeQueue.remove(retainedView.get());
+        retainedView->remove();
     });
-    {
-        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-        g_abstractViews.erase(viewId);
-    }
-    releaseRetainedAbstractView(viewId);
 }
 
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
@@ -10472,7 +10519,6 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
 
-    uint32_t viewId = abstractView->webviewId;
     g_pendingResizeQueue.remove(abstractView);
     // CEF browser creation and lifecycle callbacks run on the native UI
     // thread. Serialize removal with OnAfterCreated so a pending async browser
@@ -10480,11 +10526,8 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
     MainThreadDispatcher::dispatch_sync([abstractView]() {
         abstractView->remove();
     });
-    {
-        std::lock_guard<std::mutex> lock(g_abstractViewsMutex);
-        g_abstractViews.erase(viewId);
-    }
-    releaseRetainedAbstractView(viewId);
+    untrackAbstractView(abstractView);
+    releaseRetainedAbstractView(abstractView);
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
