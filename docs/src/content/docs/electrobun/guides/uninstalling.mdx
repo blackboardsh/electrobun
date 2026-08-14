@@ -10,15 +10,17 @@ or load its dependencies.
 
 ## The uninstall prompt
 
-On macOS, launching the installed uninstaller shows the native system alert:
+Launching the installed uninstaller interactively shows the same choices on
+macOS, Windows, and Linux:
 
 - **Title:** `Uninstall <App>?`
 - **Message:** `The application will be removed.`
 - **Actions:** `App`, `App and Data`, and `Cancel`
 
-`App` is the default, safe choice. It removes the installed application and
-Electrobun's installation/update state, while keeping the user's data. `Cancel`
-leaves the installation unchanged.
+`App` is the default, safe choice. It removes the installed application,
+Electrobun's installation/update state, and Electrobun-owned system integration
+such as shortcuts, while keeping the user's data. `Cancel` or closing the
+prompt leaves the installation unchanged.
 
 Choose `App and Data` to also remove the app's managed per-user directories.
 It removes only the directories for this app's packaged identifier and current
@@ -31,9 +33,23 @@ release channel:
 | Logs | `Utils.paths.userLogs` |
 
 Those paths resolve under their platform's normal data, cache, and log roots
-as `<base>/<identifier>/<channel>`. Other applications, other identifiers, and
-other channels (such as canary and production) are never removed. See
-[Paths](/electrobun/apis/paths/) for the path API and layout.
+as `<base>/<identifier>/<channel>`:
+
+| Platform | `userData` | `userCache` | `userLogs` |
+| --- | --- | --- | --- |
+| macOS | `~/Library/Application Support` | `~/Library/Caches` | `~/Library/Logs` |
+| Windows | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` |
+| Linux | `$XDG_DATA_HOME` | `$XDG_CACHE_HOME` | `$XDG_STATE_HOME` |
+
+On Windows, all three APIs name the same channel root, so `App and Data`
+removes that root once. Linux uses `~/.local/share`, `~/.cache`, and
+`~/.local/state` when the corresponding XDG variable is unavailable or not a
+valid absolute root. The Linux installer records the roots it used so changing
+the environment later does not redirect uninstall cleanup.
+
+Other applications, other identifiers, and other channels (such as canary and
+production) are never removed. See [Paths](/electrobun/apis/paths/) for the
+path API and layout.
 
 Electrobun records the managed-root policy with the installation so a newer
 runtime can continue to clean up earlier Electrobun-managed locations if that
@@ -46,6 +62,18 @@ The installed standalone manager is the reliable entry point. As a convenience,
 an installed application may also be launched with `--uninstall`; the launcher
 hands that request to the standalone manager before starting the application.
 
+The manager is installed at:
+
+| Platform | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/<identifier>/<channel>/uninstall` |
+| Windows | `%LOCALAPPDATA%\<identifier>\<channel>\uninstall.exe` |
+| Linux | `$XDG_DATA_HOME/<identifier>/<channel>/uninstall` |
+
+The Linux location falls back to
+`~/.local/share/<identifier>/<channel>/uninstall`. The manager is tied to that
+installation and should not be moved or copied elsewhere.
+
 For non-interactive automation, use:
 
 ```bash
@@ -57,16 +85,25 @@ For non-interactive automation, use:
 ```
 
 `--quiet` intentionally has the same conservative meaning as selecting
-`App`. Automated jobs must opt in to data deletion with `--delete-data`.
+`App`. Automated jobs must opt in to data deletion with `--delete-data`, which
+is only accepted after `--quiet`. Unknown, reordered, duplicate, or incomplete
+uninstall arguments are rejected before cleanup begins.
 
-## Platform availability
+## Platform integration
 
-The unified standalone-manager prompt and the behavior described above are
-implemented for macOS installer builds. Windows and Linux installers already
-provide platform-specific uninstall integration; their unified prompt and
-managed-data selection are being completed separately. Do not depend on the
-macOS prompt wording or flags on those platforms until their implementation
-lands.
+The unified standalone manager, interactive choices, and quiet flags are
+available in macOS, Windows, and Linux installer builds.
+
+On Windows, Electrobun registers each identifier and release channel separately
+in Windows Installed Apps. Choosing Uninstall there opens the same native Task
+Dialog. The registered quiet uninstall action uses the conservative `App`
+behavior and preserves user data.
+
+On Linux, Electrobun uses KDialog first on KDE/Plasma and Zenity first on other
+desktops, then tries the other graphical helper if necessary. If neither helper
+works, it offers the same choices in an attached terminal. With neither a
+working graphical helper nor a terminal, interactive uninstall exits without
+changing anything and asks for an explicit `--quiet` invocation.
 
 Package-managed distributions, such as Flatpak, should be removed through
 their package manager rather than Electrobun's standalone installer manager.
