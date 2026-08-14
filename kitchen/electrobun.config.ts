@@ -20,7 +20,7 @@ export default {
 	app: {
 		name: appName,
 		identifier: appIdentifier,
-		version: "2.0.1-beta.9",
+		version: "2.0.1-beta.10",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
