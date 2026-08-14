@@ -186,6 +186,11 @@ jobs:
         run: node scripts/run-cottontail-test.js src/shared/cef-find-session.test.ts
         working-directory: package
 
+      - name: Test cross-platform native symbol contracts
+        if: matrix.platform == 'linux' && matrix.arch == 'x64'
+        run: hutch test:native-symbol-contract
+        working-directory: package
+
       - name: Get CEF version for cache key
         id: cef-version
         shell: bash

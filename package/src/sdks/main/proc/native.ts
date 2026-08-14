@@ -132,6 +132,7 @@ function ensureWebviewRuntimeConfigured() {
 	webviewRuntimeConfigured = true;
 }
 
+let coreLoadError: unknown = null;
 const core = (() => {
 	try {
 		const coreFileName =
@@ -675,11 +676,13 @@ const core = (() => {
 				returns: FFIType.void,
 			},
 		});
-	} catch {
+	} catch (err) {
+		coreLoadError = err;
 		return null;
 	}
 })();
 
+let nativeWrapperLoadError: unknown = null;
 export const native = (() => {
 	try {
 		const nativeWrapperFileName = `libNativeWrapper.${suffix}`;
@@ -757,47 +760,52 @@ export const native = (() => {
 				returns: FFIType.void,
 			},
 
-			wgpuViewSetAlphaBlending: {
-				args: [FFIType.ptr, FFIType.bool],
-				returns: FFIType.void,
-			},
-
-			setWGPUPointerHandler: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-
-			setWGPUKeyHandler: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
-
-			uiMeasureText: {
-				args: [
-					FFIType.cstring,
-					FFIType.cstring,
-					FFIType.f64,
-					FFIType.ptr,
-					FFIType.ptr,
-					FFIType.ptr,
-				],
-				returns: FFIType.void,
-			},
-			uiRasterizeText: {
-				args: [
-					FFIType.cstring,
-					FFIType.cstring,
-					FFIType.f64,
-					FFIType.f64,
-					FFIType.ptr,
-					FFIType.ptr,
-				],
-				returns: FFIType.ptr,
-			},
-			uiFreeTextBitmap: {
-				args: [FFIType.ptr],
-				returns: FFIType.void,
-			},
+			// These capabilities currently have implementations only in the macOS
+			// wrapper. bun:ffi resolves every descriptor eagerly, so including one
+			// unavailable symbol would reject the entire native wrapper on Linux and
+			// Windows.
+			...(process.platform === "darwin"
+				? {
+					wgpuViewSetAlphaBlending: {
+						args: [FFIType.ptr, FFIType.bool],
+						returns: FFIType.void,
+					},
+					setWGPUPointerHandler: {
+						args: [FFIType.ptr],
+						returns: FFIType.void,
+					},
+					setWGPUKeyHandler: {
+						args: [FFIType.ptr],
+						returns: FFIType.void,
+					},
+					uiMeasureText: {
+						args: [
+							FFIType.cstring,
+							FFIType.cstring,
+							FFIType.f64,
+							FFIType.ptr,
+							FFIType.ptr,
+							FFIType.ptr,
+						],
+						returns: FFIType.void,
+					},
+					uiRasterizeText: {
+						args: [
+							FFIType.cstring,
+							FFIType.cstring,
+							FFIType.f64,
+							FFIType.f64,
+							FFIType.ptr,
+							FFIType.ptr,
+						],
+						returns: FFIType.ptr,
+					},
+					uiFreeTextBitmap: {
+						args: [FFIType.ptr],
+						returns: FFIType.void,
+					},
+				}
+				: {}),
 
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
@@ -1082,6 +1090,7 @@ export const native = (() => {
 			// },
 		});
 	} catch (err) {
+		nativeWrapperLoadError = err;
 		// FFI not available — running as a carrot inside Bunny Ears or in a build-only context.
 		return null;
 	}
@@ -1171,8 +1180,18 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 			if (typeof method !== "string") return target[method];
 			return (params?: unknown) => {
 				if (!bridge) {
+					const loadFailures = [
+						["ElectrobunCore", coreLoadError],
+						["NativeWrapper", nativeWrapperLoadError],
+					]
+						.filter((entry) => entry[1] !== null)
+						.map(([library, error]) =>
+							`${library}: ${error instanceof Error ? error.message : String(error)}`,
+						);
+					const loadFailureDetail =
+						loadFailures.length > 0 ? ` (${loadFailures.join("; ")})` : "";
 					throw new Error(
-						`Electrobun FFI is unavailable and no host bridge exists for request ${method}`,
+						`Electrobun FFI is unavailable and no host bridge exists for request ${method}${loadFailureDetail}`,
 					);
 				}
 				return bridge.requestHost(method, params);
@@ -1190,6 +1209,37 @@ function createFfiRequestProxy(ffiRequest: Record<string, Function>): Record<str
 // Non-null accessor for use inside _ffiImpl — these methods are only called when hasFFI is true.
 const core_ = core!;
 const native_ = native!;
+
+type DarwinNativeWrapperSymbols = {
+	wgpuViewSetAlphaBlending: (view: Pointer, enabled: boolean) => void;
+	setWGPUPointerHandler: (handler: Pointer | null) => void;
+	setWGPUKeyHandler: (handler: Pointer | null) => void;
+	uiMeasureText: (
+		text: CString,
+		fontName: CString,
+		size: number,
+		width: Pointer,
+		height: Pointer,
+		ascent: Pointer,
+	) => void;
+	uiRasterizeText: (
+		text: CString,
+		fontName: CString,
+		size: number,
+		scale: number,
+		width: Pointer,
+		height: Pointer,
+	) => Pointer | null;
+	uiFreeTextBitmap: (pixels: Pointer) => void;
+};
+
+// Conditional descriptor spreads become optional zero-argument functions in
+// Bun's mapped FFI types. Restore the callable shape while keeping absence
+// explicit on platforms that do not register these symbols.
+function getDarwinNativeWrapperSymbols(): Partial<DarwinNativeWrapperSymbols> {
+	return native_.symbols as unknown as Partial<DarwinNativeWrapperSymbols>;
+}
+
 core?.symbols.setRuntimeCallbacksAsync(true);
 const queuedHostMessageWebviewIdBuf = new Uint32Array(1);
 
@@ -1941,9 +1991,12 @@ const _ffiImpl = {
 		},
 
 		wgpuViewSetAlphaBlending: (params: { id: number; enabled: boolean }) => {
+			const setAlphaBlending =
+				getDarwinNativeWrapperSymbols().wgpuViewSetAlphaBlending;
+			if (typeof setAlphaBlending !== "function") return;
 			const ptr = core_.symbols.getWGPUViewPointer(params.id);
 			if (!ptr) return;
-			native_.symbols.wgpuViewSetAlphaBlending(ptr, params.enabled);
+			setAlphaBlending(ptr, params.enabled);
 		},
 
 		wgpuViewSetPassthrough: (params: {
@@ -2569,22 +2622,42 @@ const wgpuKeyCallback = new JSCallback(
 	},
 );
 
+function getNativeTextSymbols() {
+	if (!hasFFI) return null;
+
+	const {
+		uiMeasureText: measureText,
+		uiRasterizeText: rasterizeText,
+		uiFreeTextBitmap: freeTextBitmap,
+	} = getDarwinNativeWrapperSymbols();
+	if (
+		typeof measureText !== "function" ||
+		typeof rasterizeText !== "function" ||
+		typeof freeTextBitmap !== "function"
+	) {
+		return null;
+	}
+
+	return { measureText, rasterizeText, freeTextBitmap };
+}
+
 // CoreText-backed text for the UI runtime (macOS native wrapper).
 export const nativeText = {
 	available(): boolean {
-		return Boolean(
-			hasFFI && typeof native_.symbols.uiMeasureText === "function",
-		);
+		return getNativeTextSymbols() !== null;
 	},
 	measure(
 		text: string,
 		fontName: string,
 		size: number,
 	): { w: number; h: number; ascent: number } {
+		const symbols = getNativeTextSymbols();
+		if (!symbols) throw new Error("Native text is unavailable");
+
 		const w = new Float64Array(1);
 		const h = new Float64Array(1);
 		const ascent = new Float64Array(1);
-		native_.symbols.uiMeasureText(
+		symbols.measureText(
 			toCString(text),
 			toCString(fontName),
 			size,
@@ -2600,8 +2673,11 @@ export const nativeText = {
 		size: number,
 		scale: number,
 	): { width: number; height: number; data: Uint8Array } | null {
+		const symbols = getNativeTextSymbols();
+		if (!symbols) return null;
+
 		const dims = new Int32Array(2);
-		const pixelsPtr = native_.symbols.uiRasterizeText(
+		const pixelsPtr = symbols.rasterizeText(
 			toCString(text),
 			toCString(fontName),
 			size,
@@ -2615,7 +2691,7 @@ export const nativeText = {
 		const data = new Uint8Array(
 			toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4).slice(0),
 		);
-		native_.symbols.uiFreeTextBitmap(pixelsPtr);
+		symbols.freeTextBitmap(pixelsPtr);
 		return { width, height, data };
 	},
 };
@@ -2626,10 +2702,11 @@ export function enableWGPUKeyEvents(): boolean {
 	if (wgpuKeyEventsEnabled) return true;
 	if (!hasFFI) return false;
 	try {
-		if (typeof native_.symbols.setWGPUKeyHandler !== "function") {
+		const setKeyHandler = getDarwinNativeWrapperSymbols().setWGPUKeyHandler;
+		if (typeof setKeyHandler !== "function") {
 			return false;
 		}
-		native_.symbols.setWGPUKeyHandler(wgpuKeyCallback.ptr);
+		setKeyHandler(wgpuKeyCallback.ptr);
 		wgpuKeyEventsEnabled = true;
 		return true;
 	} catch {
@@ -2647,10 +2724,12 @@ export function enableWGPUPointerEvents(): boolean {
 	if (wgpuPointerEventsEnabled) return true;
 	if (!hasFFI) return false;
 	try {
-		if (typeof native_.symbols.setWGPUPointerHandler !== "function") {
+		const setPointerHandler =
+			getDarwinNativeWrapperSymbols().setWGPUPointerHandler;
+		if (typeof setPointerHandler !== "function") {
 			return false;
 		}
-		native_.symbols.setWGPUPointerHandler(wgpuPointerCallback.ptr);
+		setPointerHandler(wgpuPointerCallback.ptr);
 		wgpuPointerEventsEnabled = true;
 		return true;
 	} catch {
