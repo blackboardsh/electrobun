@@ -177,3 +177,17 @@ test("build verifies the downloaded and staged Bun before manifest emission", ()
 	);
 	assert.ok(stagedVerification !== -1 && stagedVerification < manifestStart);
 });
+
+test("Windows uninstaller integration uses the staged Bun runtime", () => {
+	const integrationSource = readFileSync(
+		new URL("./test-windows-uninstaller.mjs", import.meta.url),
+		"utf8",
+	);
+
+	assert.match(
+		integrationSource,
+		/const bunRuntime = join\(packageRoot, "dist", "bun\.exe"\);/,
+	);
+	assert.match(integrationSource, /run\(bunRuntime, \["-e", generatorSource\]/);
+	assert.doesNotMatch(integrationSource, /run\(["']bun["'], \["-e"/);
+});

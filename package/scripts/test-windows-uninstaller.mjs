@@ -31,6 +31,7 @@ if (process.platform !== "win32") {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extractorRoot = join(packageRoot, "src", "extractor");
 const launcherRoot = join(packageRoot, "src", "launcher");
+const bunRuntime = join(packageRoot, "dist", "bun.exe");
 const token = randomBytes(6).toString("hex");
 const identifier = "com.example.electrobun-uninstaller-e2e." + token;
 const unrelatedIdentifier = identifier + ".unrelated";
@@ -1367,6 +1368,11 @@ function runLauncherDelegationTest() {
 
 function runUpdateRefreshTest(extractor) {
 	console.log("Testing manager replacement and registration refresh after update...");
+	assert.equal(
+		pathExists(bunRuntime),
+		true,
+		"required staged Bun runtime is missing: " + bunRuntime,
+	);
 	const installation = install("production");
 	const paths = seedState("production");
 	const oldManagerHash = sha256File(paths.manager);
@@ -1401,7 +1407,7 @@ function runUpdateRefreshTest(extractor) {
 		"process.stdout.write(createWindowsRegistrationRefreshBatch(" +
 		JSON.stringify(paths.root) +
 		"));";
-	const generatedRefresh = run("bun", ["-e", generatorSource], {
+	const generatedRefresh = run(bunRuntime, ["-e", generatorSource], {
 		cwd: packageRoot,
 		timeout: 30_000,
 	}).stdout;
