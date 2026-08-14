@@ -80,6 +80,13 @@ const AppMetadata = struct {
     hash: ?[]const u8 = null,
 };
 
+const EmbeddedMetadataJson = struct {
+    identifier: []const u8,
+    name: []const u8,
+    channel: []const u8,
+    hash: ?[]const u8 = null,
+};
+
 const WindowsUninstallManifest = struct {
     schema_version: u32,
     install_nonce: []const u8,
@@ -532,42 +539,20 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         if (try extractAdjacentArchive(allocator, final_metadata_path, final_archive_path)) |result| return result;
     }
 
-    // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows)
-    // Read self entirely to find the SECOND occurrence of the metadata marker.
-    // This avoids false positives if markers appear in the extractor binary or user code
+    // Fall back to embedded archive approach (for Linux or if adjacent files not found on Windows).
+    // Marker literals can occur more than once in a Zig executable depending on
+    // target and optimization mode, so select a pair by its bounded metadata shape.
     const search_buffer = try std.Io.Dir.cwd().readFileAlloc(g_io, exe_path, allocator, .unlimited);
     defer allocator.free(search_buffer);
 
-    // Find first occurrence
-    const first_metadata_pos = std.mem.indexOf(u8, search_buffer, METADATA_MARKER);
-    if (first_metadata_pos == null) {
+    const embedded = (try findEmbeddedMetadata(allocator, search_buffer)) orelse {
         std.debug.print("DEBUG: No metadata marker found at all\n", .{});
-        return false; // No metadata marker at all
-    }
-    // Find second occurrence (the real one we appended)
-    const search_start = first_metadata_pos.? + METADATA_MARKER.len;
-    const remaining_after_first = search_buffer[search_start..];
-    const second_metadata_offset = std.mem.indexOf(u8, remaining_after_first, METADATA_MARKER);
-    if (second_metadata_offset == null) {
-        return false; // No second occurrence found
-    }
-
-    // Calculate absolute position of the second metadata marker
-    const metadata_marker_pos = search_start + second_metadata_offset.?;
-    const metadata_start = metadata_marker_pos + METADATA_MARKER.len;
-
-    // Look for archive marker after the metadata content (not the marker)
-    const remaining_buffer = search_buffer[metadata_start..];
-    const archive_marker_offset = std.mem.indexOf(u8, remaining_buffer, ARCHIVE_MARKER);
-    if (archive_marker_offset == null) {
-        return false; // Archive marker not found
-    }
-
-    // Calculate absolute position where archive marker starts (this marks end of metadata)
-    const archive_offset = metadata_start + archive_marker_offset.?;
+        return false;
+    };
+    const archive_offset = embedded.archive_offset;
 
     // Read metadata
-    const metadata = try readEmbeddedMetadata(allocator, search_buffer[metadata_start..archive_offset]);
+    const metadata = try readEmbeddedMetadata(allocator, embedded.metadata);
 
     // Create a completely independent copy of the hash to prevent corruption
     const backup_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
@@ -634,6 +619,38 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
 
     // Continue with decompression (shared code path)
     return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
+}
+
+const EmbeddedMetadataSlice = struct {
+    metadata: []const u8,
+    archive_offset: usize,
+};
+
+fn findEmbeddedMetadata(allocator: std.mem.Allocator, contents: []const u8) !?EmbeddedMetadataSlice {
+    var search_end = contents.len;
+    while (std.mem.lastIndexOf(u8, contents[0..search_end], METADATA_MARKER)) |marker_offset| {
+        const metadata_start = marker_offset + METADATA_MARKER.len;
+        const bounded_end = @min(contents.len, metadata_start + 4096 + ARCHIVE_MARKER.len);
+        var archive_search_start = metadata_start;
+        while (std.mem.indexOf(u8, contents[archive_search_start..bounded_end], ARCHIVE_MARKER)) |relative| {
+            const archive_offset = archive_search_start + relative;
+            const metadata = contents[metadata_start..archive_offset];
+            const valid = valid: {
+                const document = std.json.parseFromSlice(EmbeddedMetadataJson, allocator, metadata, .{}) catch |err| switch (err) {
+                    error.OutOfMemory => return err,
+                    else => break :valid false,
+                };
+                defer document.deinit();
+                break :valid true;
+            };
+            if (valid) {
+                return .{ .metadata = metadata, .archive_offset = archive_offset };
+            }
+            archive_search_start = archive_offset + ARCHIVE_MARKER.len;
+        }
+        search_end = marker_offset;
+    }
+    return null;
 }
 
 fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, metadata: AppMetadata, self_extraction_dir: []const u8, app_dir: []const u8) !bool {
@@ -1060,12 +1077,7 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, metadata_bytes: []const u8
     std.debug.print("'\n", .{});
 
     // Parse JSON metadata
-    const parsed = try std.json.parseFromSlice(struct {
-        identifier: []const u8,
-        name: []const u8,
-        channel: []const u8,
-        hash: ?[]const u8 = null,
-    }, allocator, metadata_bytes, .{});
+    const parsed = try std.json.parseFromSlice(EmbeddedMetadataJson, allocator, metadata_bytes, .{});
     defer parsed.deinit();
 
     return AppMetadata{
@@ -5166,6 +5178,26 @@ fn extractedBundleName(
     if (isProductionChannel(channel)) return sanitized_name;
     defer allocator.free(sanitized_name);
     return std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, channel });
+}
+
+test "embedded metadata discovery skips compiler marker pairs" {
+    const metadata =
+        \\{"identifier":"com.example.app","name":"Example","channel":"production","hash":"abc"}
+    ;
+    const fixture =
+        "extractor bytes" ++
+        METADATA_MARKER ++ "not embedded metadata" ++ ARCHIVE_MARKER ++
+        "more extractor bytes" ++
+        METADATA_MARKER ++ metadata ++ ARCHIVE_MARKER ++
+        "compressed payload";
+
+    const embedded = (try findEmbeddedMetadata(std.testing.allocator, fixture)) orelse
+        return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings(metadata, embedded.metadata);
+    try std.testing.expectEqual(
+        std.mem.indexOf(u8, fixture, ARCHIVE_MARKER ++ "compressed payload").?,
+        embedded.archive_offset,
+    );
 }
 
 test "Windows integration names and registry keys are channel scoped" {

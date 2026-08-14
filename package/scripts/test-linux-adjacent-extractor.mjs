@@ -345,6 +345,13 @@ const createEmbeddedSetupFixture = (extractor, launcherBinary, fixture) => {
 		setup,
 		Buffer.concat([
 			readFileSync(extractor),
+			...(fixture.includeDecoyMarkers
+				? [
+						Buffer.from(embeddedMetadataMarker),
+						Buffer.from("not embedded metadata"),
+						Buffer.from(embeddedArchiveMarker),
+					]
+				: []),
 			Buffer.from(embeddedMetadataMarker),
 			Buffer.from(JSON.stringify(payload.metadata)),
 			Buffer.from(embeddedArchiveMarker),
@@ -625,6 +632,9 @@ try {
 		artifact: "IntegrationSymlinkApp",
 		channel: "integration-symlink",
 		icon: false,
+		// Debug Linux binaries can contain more than one copy of each marker.
+		// Keep this fixture independent of compiler layout by adding a decoy pair.
+		includeDecoyMarkers: true,
 		version: "1.0.0",
 	};
 	const integrationLinkSetup = createEmbeddedSetupFixture(
