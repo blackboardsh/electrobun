@@ -3,6 +3,7 @@
 **/zig-cache
 **/zig-out
 node_modules
+**/.hutch/
 build
 /package/vendors
 /package/src/extractor/.zig-cache
