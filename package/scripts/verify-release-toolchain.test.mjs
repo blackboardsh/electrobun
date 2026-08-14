@@ -127,6 +127,28 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		workflow,
 		/^      - name: Install Kitchen dependencies\n        run: hutch run install\n        working-directory: kitchen\n\n      - name: Typecheck Kitchen against local devkit\n        run: \|\n          hutch electrobun sync\n          node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit\n        working-directory: kitchen\n        env:\n          HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist$/m,
 	);
+	const macCleanupStart = workflow.indexOf(
+		"      - name: Free disk space (macOS)",
+	);
+	const macCleanup = workflow.slice(
+		macCleanupStart,
+		workflow.indexOf("\n      - name:", macCleanupStart + 1),
+	);
+	assert.match(
+		macCleanup,
+		/selected_xcode_root="\$\(cd "\$\(xcode-select -p\)\/\.\.\/\.\." && pwd -P\)"/,
+		"macOS cleanup must resolve and preserve the selected Xcode",
+	);
+	assert.match(
+		macCleanup,
+		/for xcode_root in \/Applications\/Xcode_\*\.app; do\n            \[\[ -d "\$xcode_root" && ! -L "\$xcode_root" \]\] \|\| continue/,
+		"macOS cleanup must only consider real versioned Xcode directories",
+	);
+	assert.match(
+		macCleanup,
+		/case "\$resolved_xcode_root" in\n              \/Applications\/Xcode_\*\.app\) ;;[\s\S]*?if \[\[ "\$resolved_xcode_root" != "\$selected_xcode_root" \]\]; then\n              echo "Removing unused Xcode: \$resolved_xcode_root"\n              sudo rm -rf "\$resolved_xcode_root"/,
+		"macOS cleanup must not remove the selected Xcode",
+	);
 
 	const provenance = workflow.indexOf(
 		"      - name: Verify production Hutch and Cottontail provenance",

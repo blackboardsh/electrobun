@@ -130,6 +130,34 @@ jobs:
         run: |
           echo "Disk space before cleanup:"
           df -h /
+          # Keep the selected Xcode, but remove the other full Xcode installs
+          # preloaded on GitHub's macOS image. Kitchen only needs the selected
+          # macOS SDK and its multiple signed bundles otherwise exhaust the
+          # runner disk while hdiutil creates the final image.
+          selected_xcode_root="$(cd "$(xcode-select -p)/../.." && pwd -P)"
+          case "$selected_xcode_root" in
+            /Applications/Xcode*.app) ;;
+            *)
+              echo "Refusing to remove Xcode installs: unexpected selected Xcode root: $selected_xcode_root" >&2
+              exit 1
+              ;;
+          esac
+          echo "Preserving selected Xcode: $selected_xcode_root"
+          for xcode_root in /Applications/Xcode_*.app; do
+            [[ -d "$xcode_root" && ! -L "$xcode_root" ]] || continue
+            resolved_xcode_root="$(cd "$xcode_root" && pwd -P)"
+            case "$resolved_xcode_root" in
+              /Applications/Xcode_*.app) ;;
+              *)
+                echo "Refusing to remove unexpected Xcode root: $resolved_xcode_root" >&2
+                exit 1
+                ;;
+            esac
+            if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then
+              echo "Removing unused Xcode: $resolved_xcode_root"
+              sudo rm -rf "$resolved_xcode_root"
+            fi
+          done
           # Remove Xcode caches and simulators to free space.
           rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
           rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
