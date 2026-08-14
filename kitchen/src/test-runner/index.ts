@@ -208,15 +208,25 @@ function renderTests() {
   for (const [category, categoryTests] of byCategory) {
     const categoryEl = document.createElement('div');
     categoryEl.className = 'category';
-    categoryEl.innerHTML = `
-      <div class="category-header">
-        <span>${category}</span>
-        <span class="category-stats">${categoryTests.length} tests</span>
-      </div>
-      <div class="category-tests" id="category-${category.replace(/[^a-z0-9]/gi, '-')}">
-        ${categoryTests.map(test => renderTest(test)).join('')}
-      </div>
-    `;
+
+    const categoryHeaderEl = document.createElement('div');
+    categoryHeaderEl.className = 'category-header';
+
+    const categoryNameEl = document.createElement('span');
+    categoryNameEl.textContent = category;
+
+    const categoryStatsEl = document.createElement('span');
+    categoryStatsEl.className = 'category-stats';
+    categoryStatsEl.textContent = `${categoryTests.length} tests`;
+
+    categoryHeaderEl.append(categoryNameEl, categoryStatsEl);
+
+    const categoryTestsEl = document.createElement('div');
+    categoryTestsEl.className = 'category-tests';
+    categoryTestsEl.id = `category-${category.replace(/[^a-z0-9]/gi, '-')}`;
+    categoryTestsEl.append(...categoryTests.map(test => renderTest(test)));
+
+    categoryEl.append(categoryHeaderEl, categoryTestsEl);
     testList.appendChild(categoryEl);
   }
 
@@ -251,29 +261,66 @@ async function runSingleTest(testId: string) {
   }
 }
 
-function renderTest(test: TestInfo): string {
+function renderTest(test: TestInfo): HTMLElement {
   const result = testResults.get(test.id);
   const status = result?.status || 'pending';
   const statusIcon = getStatusIcon(status);
   const actionLabel = test.interactive ? 'Open' : 'Run';
 
-  return `
-    <div class="test-item" id="test-${test.id}" data-test-id="${test.id}">
-      <div class="test-status ${status}">${statusIcon}</div>
-      <div class="test-info">
-        <div class="test-name">
-          ${test.name}
-          ${test.interactive ? '<span class="interactive-badge">Interactive</span>' : ''}
-        </div>
-        ${test.description ? `<div class="test-description">${test.description}</div>` : ''}
-      </div>
-      <div class="test-meta">
-        ${result?.duration ? `<span class="test-duration">${result.duration}ms</span>` : ''}
-        ${result?.error ? `<span class="test-error" title="${escapeHtml(result.error)}">${truncate(result.error, 40)}</span>` : ''}
-      </div>
-      <button class="run-btn" data-test-id="${test.id}" title="${actionLabel} this test">${actionLabel}</button>
-    </div>
-  `;
+  const testEl = document.createElement('div');
+  testEl.className = 'test-item';
+  testEl.id = `test-${test.id}`;
+  testEl.dataset['testId'] = test.id;
+
+  const statusEl = document.createElement('div');
+  statusEl.className = `test-status ${status}`;
+  statusEl.textContent = statusIcon;
+
+  const infoEl = document.createElement('div');
+  infoEl.className = 'test-info';
+
+  const nameEl = document.createElement('div');
+  nameEl.className = 'test-name';
+  nameEl.textContent = test.name;
+  if (test.interactive) {
+    const badgeEl = document.createElement('span');
+    badgeEl.className = 'interactive-badge';
+    badgeEl.textContent = 'Interactive';
+    nameEl.appendChild(badgeEl);
+  }
+  infoEl.appendChild(nameEl);
+
+  if (test.description) {
+    const descriptionEl = document.createElement('div');
+    descriptionEl.className = 'test-description';
+    descriptionEl.textContent = test.description;
+    infoEl.appendChild(descriptionEl);
+  }
+
+  const metaEl = document.createElement('div');
+  metaEl.className = 'test-meta';
+  if (result?.duration) {
+    const durationEl = document.createElement('span');
+    durationEl.className = 'test-duration';
+    durationEl.textContent = `${result.duration}ms`;
+    metaEl.appendChild(durationEl);
+  }
+  if (result?.error) {
+    const errorEl = document.createElement('span');
+    errorEl.className = 'test-error';
+    errorEl.title = result.error;
+    errorEl.textContent = truncate(result.error, 40);
+    metaEl.appendChild(errorEl);
+  }
+
+  const runButtonEl = document.createElement('button');
+  runButtonEl.className = 'run-btn';
+  runButtonEl.dataset['testId'] = test.id;
+  runButtonEl.title = `${actionLabel} this test`;
+  runButtonEl.textContent = actionLabel;
+
+  testEl.append(statusEl, infoEl, metaEl, runButtonEl);
+  return testEl;
 }
 
 function getStatusIcon(status: TestStatus): string {
