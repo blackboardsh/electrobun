@@ -1402,11 +1402,15 @@ function runUpdateRefreshTest(extractor) {
 		temporaryRoot,
 		"generated-update-refresh-" + token + ".bat",
 	);
+	// Importing Updater also loads the app runtime, which wraps process.exit and
+	// keeps native host polling alive. Capture Bun's original exit first, then
+	// flush the generated batch before terminating this one-shot process.
 	const generatorSource =
-		'import { createWindowsRegistrationRefreshBatch } from "./src/sdks/main/core/Updater.ts"; ' +
-		"process.stdout.write(createWindowsRegistrationRefreshBatch(" +
+		"const exitGenerator = process.exit.bind(process); " +
+		'const { createWindowsRegistrationRefreshBatch } = await import("./src/sdks/main/core/Updater.ts"); ' +
+		"const output = createWindowsRegistrationRefreshBatch(" +
 		JSON.stringify(paths.root) +
-		"));";
+		"); await Bun.write(Bun.stdout, output); exitGenerator(0);";
 	const generatedRefresh = run(bunRuntime, ["-e", generatorSource], {
 		cwd: packageRoot,
 		timeout: 30_000,

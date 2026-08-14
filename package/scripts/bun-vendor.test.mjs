@@ -190,4 +190,20 @@ test("Windows uninstaller integration uses the staged Bun runtime", () => {
 	);
 	assert.match(integrationSource, /run\(bunRuntime, \["-e", generatorSource\]/);
 	assert.doesNotMatch(integrationSource, /run\(["']bun["'], \["-e"/);
+
+	const captureExit = integrationSource.indexOf(
+		'"const exitGenerator = process.exit.bind(process); "',
+	);
+	const importUpdater = integrationSource.indexOf(
+		'await import("./src/sdks/main/core/Updater.ts")',
+	);
+	const flushStdout = integrationSource.indexOf(
+		"await Bun.write(Bun.stdout, output)",
+	);
+	const exitGenerator = integrationSource.indexOf("exitGenerator(0)");
+
+	assert.ok(captureExit !== -1, "generator must capture the original process exit");
+	assert.ok(importUpdater > captureExit, "generator must capture exit before importing Updater");
+	assert.ok(flushStdout > importUpdater, "generator must await its stdout write");
+	assert.ok(exitGenerator > flushStdout, "generator must exit only after stdout is flushed");
 });
