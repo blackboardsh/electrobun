@@ -6,7 +6,7 @@ description: "Reference for electrobun.config.ts and Hutch's build lifecycle."
 `electrobun.config.ts` is a TypeScript module in the project root. Hutch loads
 its default export with Cottontail and merges it with Electrobun's defaults.
 Use `satisfies ElectrobunConfig` so unsupported fields and values fail during
-development. Product, task, and package-manager selection belongs in
+development. Electrobun release, task, and package-manager selection belongs in
 `hutch.config.ts`; this file owns the app, build, tool overrides, and
 distribution description.
 
@@ -50,7 +50,7 @@ that Hutch will use.
 version, while the application version in `app.version` remains independent.
 
 Hutch resolves and verifies that release under
-`~/.hutch/products/electrobun`, then copies its config types and language SDKs
+`~/.hutch/releases/electrobun`, then copies its config types and language SDKs
 into the generated project `.hutch/devkit` sysroot. Run
 `hutch electrobun sync` to refresh that project copy without building. `init`,
 `build`, `run`, and `dev` sync implicitly. See

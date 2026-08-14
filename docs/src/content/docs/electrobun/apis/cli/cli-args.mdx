@@ -20,37 +20,33 @@ hutch electrobun init my-app --template=hello-world
 # Use the beta template catalog
 hutch electrobun init my-app --template=solid --beta
 
-# Select stable regardless of the active Hutch channel
+# Select stable instead of the invoking launcher's default catalog
 hutch electrobun init my-app --template=solid --channel=stable
 
 # Leave the template's install task for later
 hutch electrobun init my-app --template=solid --skip-install
-
-# Require an already cached catalog and template
-hutch electrobun init my-app --template=solid --offline
 ```
 
 Usage:
 
 ```text
 hutch electrobun init [project-name] [--template=name]
-  [--channel=stable|beta] [--beta] [--offline] [--skip-install]
+  [--channel=stable|beta] [--beta] [--skip-install]
 ```
 
 Without `--template`, Hutch displays an interactive arrow-key selector. The
 stable and beta catalogs are published independently. Direct Hutch invocation
-uses the active Hutch channel unless `--channel` or the `--beta` shorthand
-selects one explicitly. The thin npm bootstrap adds `--channel=stable` when no
-template channel was requested. Legacy production/canary channel names remain
-accepted as aliases.
+chooses the catalog associated with the invoking launcher unless `--channel` or
+the `--beta` shorthand selects one explicitly. The thin npm bootstrap adds
+`--channel=stable` when no template channel was requested. `production` and
+`canary` are also accepted as template channel names.
 
 After extracting a template, `init` prepares its exact Electrobun core, devkit,
 and required native toolchain. If the template defines an `install` task in
 `hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
-later. `--offline` only disables network access for Dash-managed catalogs,
-templates, products, SDKs, runtimes, and toolchains; it does not suppress the
-external install task or govern that package manager's network access. Combine
-`--offline` with `--skip-install` when initialization must not start it.
+later. Init always requires network access: Hutch fetches the current template
+catalog and selected template instead of keeping persistent copies of either
+one.
 
 ## `hutch electrobun config`
 
@@ -64,10 +60,11 @@ hutch electrobun config --env=production
 
 ## `hutch electrobun sync`
 
-Resolve the exact `electrobun.version` from `hutch.config.ts`, verify and cache
-its platform core archive under `~/.hutch`, atomically refresh the project's
-generated `.hutch/devkit` SDK projection, and resolve the configured native
-compiler toolchain without building the application:
+Resolve the exact `electrobun.version` from `hutch.config.ts`, verify and
+install its platform core archive under `~/.hutch/releases/electrobun`,
+atomically refresh the project's generated `.hutch/devkit` SDK projection, and
+resolve the configured native compiler toolchain without building the
+application:
 
 ```bash
 hutch electrobun sync
@@ -75,8 +72,10 @@ hutch electrobun sync --env=production
 ```
 
 `init`, `build`, `run`, and `dev` perform the same preparation implicitly. Use
-the explicit command after changing the product pin, to prepare editor types,
-or before an offline build.
+the explicit command after changing the Electrobun release pin, to prepare
+editor types, or before a build that will later run without network access.
+Sync and builds can reuse exact releases and managed toolchains that are already
+installed; anything missing requires a network lookup and download.
 
 ## `hutch electrobun build`
 
@@ -203,6 +202,24 @@ maintain lockfiles. The selected external manager owns that behavior. The same
 boundary applies to Cargo, Go modules, and other language ecosystems: they own
 dependency graphs while Hutch owns Electrobun orchestration, selected devkits,
 and compiler toolchains.
+
+## Store maintenance
+
+`hutch prune --dry-run` lists every installed release and managed toolchain that
+is not protected by the currently executing Hutch release, a local selection, a
+resolvable registered project, or a live lease. `hutch prune` removes that same
+set immediately, with no age threshold. Missing projects and project dependency
+records that cannot be resolved protect nothing.
+
+Hutch also performs a lazy cleanup on every ordinary invocation, but retains an
+object for 10 days from when it first becomes unreachable. The dry run does not
+mutate Hutch state. `hutch reset` recreates the Hutch home immediately and
+without a prompt. It preserves the launcher, engine, and exact Hutch selection
+used to invoke reset so the command remains usable, while removing every other
+Hutch-managed release, toolchain, and state object. These commands never remove
+project files or dependency caches owned by external package managers. See
+[Hutch: Local store and cleanup](/electrobun/guides/hutch/#local-store-and-cleanup)
+for the on-disk layout and offline boundary.
 
 ## Lifecycle hook environment
 

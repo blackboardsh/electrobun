@@ -5,19 +5,19 @@ description: "Where Electrobun configuration, SDKs, tasks, and dependencies live
 import { Aside } from "@astrojs/starlight/components";
 
 Electrobun keeps workspace orchestration separate from application
-configuration. The split is intentional: `hutch.config.ts` selects the product,
-tasks, and package manager, while `electrobun.config.ts` describes the
-application and build that Hutch produces.
+configuration. The split is intentional: `hutch.config.ts` selects the exact
+Electrobun release, tasks, and package manager, while `electrobun.config.ts`
+describes the application and build that Hutch produces.
 
 ## Responsibility map
 
 | Concern | Owner |
 | --- | --- |
-| Exact Electrobun product version | `hutch.config.ts` → `electrobun.version` |
+| Exact Electrobun release | `hutch.config.ts` → `electrobun.version` |
 | Hutch and Cottontail versions | First-line `// @hutch` pragma in `hutch.config.ts` |
 | Project tasks | `hutch.config.ts` → `scripts` |
 | External JavaScript package manager | `hutch.config.ts` → `packageManager` |
-| Native toolchain resolution and global cache | Hutch |
+| Native toolchain resolution and shared installations | Hutch |
 | Native compiler version overrides | `electrobun.config.ts` → `build.<language>.version` |
 | App identity and app version | `electrobun.config.ts` → `app` |
 | Main-process choice and build inputs | `electrobun.config.ts` → `build` |
@@ -64,7 +64,7 @@ export default {
 
 The Electrobun version must be exact. The optional npm bootstrap shares that
 release version, but installing it by npm tag or range does not select a
-product for an existing project; the Hutch pin remains authoritative.
+release for an existing project; the Hutch pin remains authoritative.
 
 ## Where the SDK comes from
 
@@ -75,7 +75,7 @@ package. The `electrobun` package on npm is only a thin command that installs
 or invokes Hutch; it never owns or supplies the SDK.
 
 When Hutch prepares a project, it verifies and stores the selected platform
-archive in its global `~/.hutch/products/electrobun` cache. It then **copies**
+archive under `~/.hutch/releases/electrobun`. It then **copies**
 the SDK trees into the project as a generated sysroot:
 
 ```text
@@ -97,16 +97,17 @@ Zig, or Odin at their matching directory under `.hutch/devkit`.
 Templates ignore `.hutch/` by default. Hutch owns this generated projection and
 may replace it during synchronization. Directly editing SDK files or committing
 the projection is not a supported customization or dependency-management
-workflow. Do not edit the shared global cache either.
+workflow. Do not edit the shared installed release either.
 
-<Aside type="note" title="Stable artifacts remain available">
+<Aside type="note" title="Installed releases can be reused">
 The current distribution policy keeps published stable Electrobun core
 archives on GitHub Releases and stable Hutch and Cottontail binaries on their
-existing release hosts. The global store is a local cache, and the project
-devkit is regenerated from those published artifacts when needed. Projects do
-not need to vendor `.hutch/devkit` to preserve a supported stable build. CI
-runners may cache `~/.hutch` to avoid repeated downloads, but correctness does
-not depend on that cache surviving between runs.
+existing release hosts. Hutch can reuse an exact release and managed toolchains
+that are already installed, including for an offline build, and regenerates the
+project devkit from that installation when needed. Anything missing requires a
+fresh network lookup and download. Remote manifests and indexes are never
+persisted, and template initialization always requires the network. Projects do
+not need to vendor `.hutch/devkit`.
 </Aside>
 
 ## External bundlers

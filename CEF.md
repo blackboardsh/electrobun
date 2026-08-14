@@ -13,7 +13,7 @@ Electrobun releases ship 2 tarballs per platform:
 
 `process_helper` ships in the **core** tarball, not the CEF tarball. The CEF
 tarball therefore contains only upstream runtime files and can be downloaded
-and cached independently; the Electrobun release's artifact index still pins
+and installed independently; the Electrobun release's artifact index still pins
 its exact digest.
 
 ## How CEF Gets Built
@@ -75,11 +75,14 @@ path: package/src/native/build/process_helper[.exe]
 ## Application Artifact Resolution
 
 CEF is owned by the exact Electrobun release selected in
-`electrobun.config.ts`; there is no per-project CEF version override. The
+`hutch.config.ts`; there is no per-project CEF version override. The
 release publishes a verified CEF tarball separately from the core tarball so
-projects that do not enable CEF do not download it. When CEF is enabled, Hutch
-resolves the selected release's artifact index, verifies the CEF archive, and
-caches it under `~/.dash/products/electrobun` before packaging the app.
+projects that do not enable CEF do not download it. When CEF is enabled and its
+matching payload is not already installed, Hutch fetches the selected release's
+artifact index, verifies the CEF archive, and installs it under
+`~/.hutch/releases/electrobun` before packaging the app. The artifact index is
+fetched fresh and is not stored persistently; an already-installed verified CEF
+payload can be reused offline.
 
 The core tarball's native devkit manifest describes the CEF-capable wrapper and
 `process_helper` runtime paths. The artifact index—not the npm bootstrap or the

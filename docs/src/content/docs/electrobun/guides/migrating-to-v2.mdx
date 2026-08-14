@@ -19,13 +19,13 @@ On Windows PowerShell:
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-## 2. Move product and task selection to Hutch
+## 2. Move release and task selection to Hutch
 
 Remove `electrobun` from application dependencies. The npm package is now an
 optional thin Hutch bootstrap and never contains the runtime or SDK.
 
-Create `hutch.config.ts` with the exact product pin, external package manager,
-and project tasks:
+Create `hutch.config.ts` with the exact Electrobun release pin, external package
+manager, and project tasks:
 
 ```ts docs=syntax
 export default {
@@ -94,10 +94,11 @@ hutch electrobun build --env=canary
 ```
 
 Sync verifies the selected per-platform core archive from the Electrobun GitHub
-Release, caches it globally, and copies its SDKs into the generated project
-`.hutch/devkit` sysroot. Templates ignore `.hutch/` by default. Hutch owns this
-projection and can replace it when the selected product, target, or release
-manifest changes; direct edits are not a supported customization mechanism.
+Release, installs it under `~/.hutch/releases/electrobun`, and copies its SDKs
+into the generated project `.hutch/devkit` sysroot. Templates ignore `.hutch/`
+by default. Hutch owns this projection and can replace it when the selected
+Electrobun release, target, or manifest changes; direct edits are not a
+supported customization mechanism.
 
 Hutch builds for the current host. Verify startup, RPC, webviews, signing, and
 updates on native runners for every platform you distribute.

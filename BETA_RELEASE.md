@@ -1,8 +1,8 @@
 # Electrobun release channels
 
 Every Electrobun release has one exact version and one `v<version>` tag. The
-product manifest, thin npm bootstrap, Kitchen release fixture, and template
-product pins move together.
+release manifest, thin npm bootstrap, Kitchen release fixture, and template
+release pins move together.
 
 From a clean `main` checkout, run the release task in `package`:
 
@@ -15,7 +15,7 @@ semantics, updates every synchronized identity, commits `v<version>`, creates
 that tag, and pushes it. For example, a beta bump from `2.0.0` produces
 `v2.0.1-beta.0`.
 
-The single product workflow then:
+The single release workflow then:
 
 1. builds the per-platform core archives containing the runtime and SDK/devkit;
 2. publishes Kitchen builds and the GitHub prerelease;

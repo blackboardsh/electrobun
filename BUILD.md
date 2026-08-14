@@ -54,7 +54,7 @@ not the thin npm bootstrap.
 
 Both binaries are published with the versioned Electrobun devkit. Hutch resolves
 the exact `electrobun.version` selected in `hutch.config.ts`, verifies its
-artifacts, and caches them under `~/.dash/products/electrobun`. The thin
+artifacts, and installs them under `~/.hutch/releases/electrobun`. The thin
 `electrobun` npm bootstrap contains no runtime binaries or SDK source.
 
 ## Build Commands

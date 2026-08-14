@@ -1,10 +1,9 @@
 # Electrobun npm bootstrap
 
-The `electrobun` npm package is a small compatibility entry point for npm,
-pnpm, Yarn, and Bun users. It contains no Electrobun runtime or SDK. The
-`electrobun` command installs Hutch into `~/.hutch` (override with
-`HUTCH_HOME`; `DASH_HOME` is honored as a deprecated fallback) when necessary
-and delegates all commands to `hutch electrobun`.
+The `electrobun` npm package is a small Hutch entry point for npm, pnpm, Yarn,
+and Bun users. It contains no Electrobun runtime or SDK. The `electrobun`
+command installs Hutch into `~/.hutch` (override with `HUTCH_HOME`) when
+necessary and delegates all commands to `hutch electrobun`.
 
 Create a project from the current stable template catalog:
 
@@ -21,14 +20,16 @@ npx electrobun init --beta
 The npm bootstrap ships under the same release version as Electrobun, but it
 does not contain or select the runtime by itself. An application's exact
 Electrobun version is selected in `hutch.config.ts`; Hutch downloads the
-matching runtime and SDK into the shared `~/.hutch` store and projects the SDKs
-into the project's `.hutch/devkit` sysroot. Installing a beta bootstrap still
-uses stable templates unless `init` receives `--beta`.
+matching runtime and SDK into the shared `~/.hutch/releases/electrobun` store
+and projects the SDKs into the project's `.hutch/devkit` sysroot. Installing a
+beta bootstrap still uses stable templates unless `init` receives `--beta`.
 
 `DASH_RELEASE_OFFLINE=1` prevents this bootstrap from downloading a missing
-Hutch installation. An already installed Hutch is still invoked, and the flag
-continues to prevent network access for Dash-managed releases and artifacts.
-It does not put npm or another project package manager into offline mode.
+Hutch installation. An already installed Hutch is still invoked, but
+`electrobun init` requires network access for the current template catalog and
+selected template. Builds can run without network access only when every exact
+release and managed toolchain they require is already installed. The flag does
+not put npm or another project package manager into offline mode.
 
 You can install Hutch directly from <https://hutch.blackboard.sh> and run the
 same commands without npm:

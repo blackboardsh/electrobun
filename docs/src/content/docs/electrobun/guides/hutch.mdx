@@ -40,22 +40,22 @@ On Windows PowerShell:
 
 Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
 accept an exact semantic version or build revision. Production and canary
-live side by side under `~/.hutch/products`, with launchers in `~/.hutch/bin`.
-Set `HUTCH_HOME` to relocate the store (`DASH_HOME` is still honored as a
-deprecated fallback). `stable` is accepted as an alias for the production
-channel.
+live side by side under `~/.hutch/releases`, with launchers in `~/.hutch/bin`
+and their exact local selections in `~/.hutch/state/selections.json`. Set
+`HUTCH_HOME` to relocate the store. `stable` is accepted as an alias for the
+production channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
 work. The published package is a tiny bootstrap released at the same version
 as Electrobun: it installs Hutch when necessary and forwards every argument to
 `hutch electrobun`. It defaults `init` to stable templates; pass `--beta`
 explicitly for beta templates. The generated project's `hutch.config.ts` pin
-still selects the exact product, SDK, and runtime.
+still selects the exact Electrobun release, SDK, and runtime.
 
 ## Everyday commands
 
 ```bash
-# Choose a template from the active Hutch channel and create the project
+# Choose a template from the invoking launcher's default catalog
 hutch electrobun init
 
 # Opt into the current beta template catalog
@@ -86,10 +86,9 @@ Hutch's build environments are `dev`, `canary`, and `production`.
 
 After extracting a template, `init` syncs its exact Electrobun release and
 required native toolchain, then runs the template's configured `install` task
-when one exists. Pass `--skip-install` to defer that task. `--offline` only
-disables network access for Dash-managed assets; it does not suppress the
-external install task or govern that package manager's network access. Combine
-both flags when initialization must not start it.
+when one exists. Pass `--skip-install` to defer that task. Initialization always
+requires network access because Hutch fetches the current template catalog and
+chosen template instead of keeping persistent copies of either one.
 
 Scripts come only from the nearest `hutch.config.ts`. Hutch does not inspect
 `package.json`, resolve npm packages, add `node_modules/.bin` to `PATH`, or
@@ -136,9 +135,10 @@ operations to npm. Hutch provides no resolver of its own: it does not interpret
 
 ## Versions and updates
 
-The global launchers track independent production and canary channels. Hutch
-engines and Cottontail runtimes are stored side by side, so one project can
-pin an older release without replacing your global selection.
+The global launchers have independent production and canary selections. Each
+selection names an exact installed release. Hutch engines and Cottontail
+runtimes are stored side by side, so one project can pin an older release
+without replacing your global selection.
 
 ```bash
 hutch self version
@@ -149,6 +149,68 @@ hutch cottontail update
 
 Interactive use checks for updates periodically. CI and other non-interactive
 invocations never prompt.
+
+## Local store and cleanup
+
+Hutch keeps verified installations and authoritative local state under its
+home directory:
+
+```text
+~/.hutch/
+|-- bin/
+|-- releases/
+|   |-- hutch/
+|   |-- cottontail/
+|   `-- electrobun/
+|-- toolchains/
+`-- state/
+    |-- selections.json
+    |-- projects/
+    |-- leases/
+    |-- locks/
+    |-- trash/
+    `-- tmp/
+```
+
+Remote channel manifests, template catalogs, artifact indexes, and template
+indexes are fetched fresh and are not stored persistently. There is no local
+channel directory tree. A download may use `state/tmp/` while Hutch verifies
+and installs it, but only the installed release or toolchain remains.
+
+Hutch registers the exact releases and managed toolchains used by each prepared
+project. The currently executing Hutch release, local selections, resolvable
+registered projects, and live leases protect those installations. Missing
+projects and project dependency records that cannot be resolved protect
+nothing.
+
+Every ordinary Hutch invocation lazily removes releases and toolchains after
+they have remained unreachable for 10 days. The explicit cleanup commands use
+no retention period:
+
+```bash
+# Preview every currently unreachable release and toolchain without mutation
+hutch prune --dry-run
+
+# Remove every currently unreachable release and toolchain immediately
+hutch prune
+
+# Recreate the Hutch home immediately, without a prompt
+hutch reset
+```
+
+Reset reseeds the launcher, engine, and exact Hutch selection used to run it,
+so Hutch itself remains usable. It removes every other Hutch-managed release,
+toolchain, selection, project registration, lease, and temporary object. Prune
+and reset do not touch project files or caches owned by npm, Bun, pnpm, Yarn,
+Cargo, or Go.
+
+Offline use is limited to exact releases and managed toolchains that are already
+installed, including an exact release named by a local selection. A missing
+release or toolchain requires a fresh network lookup and download. Builds can
+run offline when every required Hutch, Cottontail, Electrobun, and toolchain
+installation is present; external package-manager dependencies must also be
+available by that manager's own rules. `hutch electrobun init` always requires
+the network.
 
 ## Pin a project
 
@@ -167,12 +229,12 @@ or `build:<full-git-revision>`. `stable` resolves to `production`:
 // @hutch cli=0.5.0 cottontail=0.3.0
 ```
 
-The pragma selects versions only for that project. It never rewrites the
-globally installed channel.
+The pragma selects versions only for that project. It never rewrites the global
+installation's local selections.
 
 ## Select and sync Electrobun
 
-Every Electrobun 2.x project separately pins the exact product release in
+Every Electrobun 2.x project separately pins the exact Electrobun release in
 `hutch.config.ts`, alongside its tasks and package-manager selection:
 
 ```ts docs=syntax
@@ -187,16 +249,17 @@ export default {
 };
 ```
 
-The version must be exact; npm tags and semver ranges are not product
+The version must be exact; npm tags and semver ranges are not Electrobun release
 selectors. `hutch electrobun sync` resolves and verifies that release in the
-global `~/.hutch/products/electrobun` store, then copies its SDKs and editor
+global `~/.hutch/releases/electrobun` store, then copies its SDKs and editor
 facade into the project's generated `.hutch/devkit` sysroot. It also resolves
 the selected native compiler under `~/.hutch/toolchains` when the project needs
 one.
 
 `init` performs this sync before it finishes. `build`, `run`, and `dev` also
 sync implicitly, so the explicit command is mainly useful after changing the
-version pin, for editor setup, or for preparing an offline build.
+version pin, for editor setup, or for preparing a build that will later run
+without network access.
 
 Templates ignore `.hutch/` by default. Hutch owns this generated state and may
 replace it during sync; direct SDK edits and committing the projection are not
@@ -204,7 +267,7 @@ supported workflows. See
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
 the complete boundary and external-bundler recipe.
 
-## Toolchains and caches
+## Toolchains and installed releases
 
 For Zig, Rust, Go, and Odin main processes, you don't need to install the
 compiler yourself. The selected Electrobun devkit declares a default exact
