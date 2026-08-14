@@ -8,6 +8,7 @@ export type DevCommand = {
 	command: string;
 	args: string[];
 	cwd: string;
+	env?: NodeJS.ProcessEnv;
 };
 
 type CreateDevCommandsOptions = {
@@ -60,6 +61,9 @@ export function createDevCommands({
 			command: hutchBinary,
 			args: ["electrobun", "dev", ...devArgs],
 			cwd: kitchenDir,
+			env: {
+				HUTCH_ELECTROBUN_DEVKIT_ROOT: join(packageDir, "dist"),
+			},
 		},
 	);
 	return commands;
@@ -96,7 +100,7 @@ export function runCommand(command: DevCommand) {
 	console.log(`[dev] ${command.label}...`);
 	const result = spawnSync(command.command, command.args, {
 		cwd: command.cwd,
-		env: process.env,
+		env: command.env ? { ...process.env, ...command.env } : process.env,
 		stdio: "inherit",
 	});
 

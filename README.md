@@ -201,14 +201,18 @@ hutch dev
 hutch dev:clean
 ```
 
+`hutch dev` builds `package/dist` and runs Kitchen against that local
+Electrobun devkit. Running `hutch dev` directly from `kitchen/` continues to
+use the Electrobun version pinned in `kitchen/hutch.config.ts`.
+
 The native build generates `package/src/native/compile_flags.txt` from the
 compiler flags resolved for the current machine. clangd-compatible editors
 discover it automatically; rerun the build after changing native dependencies
 or system toolchains.
 
 With sibling `jsc`, `cottontail`, `dash-cloud`, and `electrobun` checkouts, use
-one command to build only changed native layers and run Kitchen with the local
-stack:
+`--local` to additionally build and select the local JSC, Cottontail, and Hutch
+layers:
 
 ```bash
 hutch dev --local

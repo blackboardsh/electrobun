@@ -44,6 +44,19 @@ assertArray(
 	"Kitchen launch argv",
 );
 assert(windowsCommands[2]?.cwd === kitchenDir, "Kitchen launch cwd mismatch");
+assert(
+	windowsCommands[2]?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT ===
+		join(packageDir, "dist"),
+	"Kitchen launch should use the freshly built Electrobun devkit",
+);
+assert(
+	windowsCommands[0]?.env === undefined,
+	"Package build should not receive the devkit override",
+);
+assert(
+	windowsCommands[1]?.env === undefined,
+	"Kitchen install should not receive the devkit override",
+);
 
 const posixCommands = createDevCommands({
 	hutchBinary: "/tmp/hutch",
@@ -73,6 +86,11 @@ assertArray(
 	localCommands[1]?.args ?? [],
 	["electrobun", "dev", "--watch"],
 	"Local launch argv",
+);
+assert(
+	localCommands[1]?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT ===
+		join("/tmp/electrobun/package", "dist"),
+	"Local-stack Kitchen launch should use the freshly built Electrobun devkit",
 );
 
 const matrixCommands = createMatrixDevCommands({
@@ -104,6 +122,11 @@ assertArray(
 	localMatrixCommands[1]?.args ?? [],
 	["scripts/kitchen-matrix.ts", "--launch-only"],
 	"Local matrix runner argv",
+);
+assert(
+	localMatrixCommands[1]?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT ===
+		join(packageDir, "dist"),
+	"Kitchen matrix should preserve the local Electrobun devkit override",
 );
 
 console.log("Electrobun dev command plan passed");

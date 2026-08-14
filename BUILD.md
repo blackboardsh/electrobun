@@ -78,6 +78,10 @@ hutch build.ts --release
 hutch build.ts --ci
 ```
 
+From `package/`, `hutch dev` builds `package/dist` and launches Kitchen with
+that local Electrobun devkit. Running `hutch dev` from `kitchen/` uses its
+published version pin instead.
+
 ## Hutch and Cottontail
 
 Hutch and Cottontail are installed and released independently of Electrobun.
@@ -85,9 +89,9 @@ The first-line `// @hutch` pragma in `package/hutch.config.ts` pins the exact
 versions used for reproducible Electrobun builds. Hutch resolves and verifies
 Cottontail, then bundles the selected runtime into each application.
 
-For local runtime development, `hutch dev --local` builds and selects the
-sibling Hutch launcher, Hutch engine, and Cottontail binary without changing the
-published version pins.
+For full local-stack development, `hutch dev --local` additionally builds and
+selects the sibling Hutch launcher, Hutch engine, and Cottontail binary without
+changing the published version pins.
 
 ## Architecture Support
 

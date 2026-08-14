@@ -40,6 +40,7 @@ export function createMatrixDevCommands({
 		command: hutchBinary,
 		args: ["scripts/kitchen-matrix.ts", ...matrixArgs],
 		cwd: kitchenDir,
+		env: commands[commands.length - 1]?.env,
 	};
 	return commands;
 }
