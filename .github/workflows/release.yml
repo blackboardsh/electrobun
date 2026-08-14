@@ -47,7 +47,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      EXPECTED_HUTCH_VERSION: '0.7.3'
+      EXPECTED_HUTCH_VERSION: '0.8.0'
       EXPECTED_COTTONTAIL_VERSION: '0.4.4'
 
     steps:
@@ -206,6 +206,11 @@ jobs:
       - name: Test Linux adjacent archive installation
         if: matrix.platform == 'linux' && matrix.arch == 'x64'
         run: hutch test:linux-extractor
+        working-directory: package
+
+      - name: Test Windows standalone uninstaller
+        if: matrix.platform == 'win32'
+        run: hutch test:windows-uninstaller
         working-directory: package
 
       - name: Upload core artifact

@@ -113,8 +113,12 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		assert.match(matrix, new RegExp(`^          - os: ${runner}$`, "m"));
 	}
 
-	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.7\.3'$/m);
+	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.8\.0'$/m);
 	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.4\.4'$/m);
+	assert.match(
+		workflow,
+		/^      - name: Test Windows standalone uninstaller\n        if: matrix\.platform == 'win32'\n        run: hutch test:windows-uninstaller\n        working-directory: package$/m,
+	);
 	assert.match(
 		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,

@@ -1,4 +1,4 @@
-// @hutch cli=0.7.3 cottontail=0.4.4
+// @hutch cli=0.8.0 cottontail=0.4.4
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -18,7 +18,7 @@ export default {
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:windows-uninstaller && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
