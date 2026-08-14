@@ -1,4 +1,4 @@
-// @hutch cli=0.8.0 cottontail=0.4.4
+// @hutch cli=0.9.0 cottontail=0.4.4
 export default {
 	packageManager: "npm",
 	scripts: {
