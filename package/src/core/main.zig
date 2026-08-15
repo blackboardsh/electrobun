@@ -3196,6 +3196,29 @@ export fn sendHostMessageToWebviewViaTransport(webview_id: u32, message_json: [*
     return enqueueHostTransportSend(webview_id, socket_handle, 0x1, encrypted_packet);
 }
 
+export fn sendPreEncryptedHostMessageToWebviewViaTransport(
+    webview_id: u32,
+    encrypted_packet_json: [*:0]const u8,
+) bool {
+    clearLastError();
+
+    if (builtin.os.tag != .linux) {
+        return false;
+    }
+
+    const context = lookupWebviewTransportContext(webview_id) orelse return false;
+    if (!context.transport_ready) {
+        return false;
+    }
+    const socket_handle = context.socket_handle orelse return false;
+    const encrypted_packet = allocator.dupe(u8, std.mem.span(encrypted_packet_json)) catch |err| {
+        setLastError("Failed to allocate pre-encrypted host transport packet: {s}", .{@errorName(err)});
+        return false;
+    };
+
+    return enqueueHostTransportSend(webview_id, socket_handle, 0x1, encrypted_packet);
+}
+
 export fn sendInternalMessageToWebview(webview_id: u32, message_json: [*:0]const u8) bool {
     clearLastError();
 

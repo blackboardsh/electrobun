@@ -1,4 +1,5 @@
 import { ffi } from "../proc/native";
+import { encryptHostTransportPacket } from "./hostTransportEncryption";
 
 export const removeSocketForWebview = (webviewId: number) => {
 	ffi.request.clearWebviewHostTransport({ id: webviewId });
@@ -9,11 +10,25 @@ export const removeSocketForWebview = (webviewId: number) => {
 export const sendMessageToWebviewViaSocket = (
 	webviewId: number,
 	message: unknown,
+	secretKey?: Uint8Array,
 ): boolean => {
 	try {
+		const messageJson = JSON.stringify(message);
+		if (process.platform === "linux" && secretKey?.byteLength === 32) {
+			const encryptedPacket = encryptHostTransportPacket(messageJson, secretKey);
+			if (
+				ffi.request.sendPreEncryptedHostMessageToWebviewViaTransport({
+					id: webviewId,
+					encryptedPacketJson: JSON.stringify(encryptedPacket),
+				}) as boolean
+			) {
+				return true;
+			}
+		}
+
 		return ffi.request.sendHostMessageToWebviewViaTransport({
 			id: webviewId,
-			messageJson: JSON.stringify(message),
+			messageJson,
 		}) as boolean;
 	} catch (error) {
 		console.error("Error sending message to webview via host transport:", error);

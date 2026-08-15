@@ -9,6 +9,8 @@ import type { WGPUView } from "../core/WGPUView";
 import { FLOATS_PER_INSTANCE, parseColor, type PaintBuffer } from "./paint";
 import { ATLAS_SIZE, textAtlas } from "./text";
 import { runCleanupSteps } from "./cleanupSteps";
+import { getWebgpuContextKey } from "../webgpuContextKey";
+import { releaseWebgpuContext } from "../webgpuContextRegistry";
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -170,6 +172,14 @@ export async function createUiRenderer(
 			() => instances?.destroy(),
 			() => uniform?.destroy(),
 			() => atlas?.destroy(),
+			() => {
+				// Dawn/Vulkan retains the unconfigured swapchain on the surface.
+				// Release that surface while its device is still alive; otherwise
+				// Surface::~Surface dereferences the already-destroyed Vulkan device.
+				if (process.platform === "linux") {
+					releaseWebgpuContext(getWebgpuContextKey(target));
+				}
+			},
 			() => {
 				if (shouldDestroyDevice) device.destroy();
 			},

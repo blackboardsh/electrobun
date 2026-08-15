@@ -15,6 +15,7 @@ import {
 	WebgpuContextRegistry,
 	createNativeWebgpuContext,
 	registerWebgpuContextRelease,
+	releaseWebgpuContext,
 	releaseNativeWebgpuContext,
 } from "./webgpuContextRegistry";
 import { WebgpuPresentationState } from "./webgpuPresentationState";
@@ -1218,9 +1219,15 @@ class GPUQueue {
 			setTimeout(poll, 5);
 		});
 	}
-	_releaseReference() {
+	_releaseReference(releaseSurfaceContexts = false) {
 		const configuredContexts = PRESENTATION_STATE.detachQueue(this);
 		for (const context of configuredContexts) {
+			if (
+				releaseSurfaceContexts &&
+				context._releaseForDeviceDestroy(this)
+			) {
+				continue;
+			}
 			context._onQueueReleased(this);
 		}
 		if (!this.ptr) return;
@@ -1260,7 +1267,9 @@ class GPUDevice {
 		this.ptr = 0;
 		this.instancePtr = null;
 		try {
-			this.queue._releaseReference();
+			// Dawn/Vulkan retains an unconfigured swapchain until its surface is
+			// released. Tear down configured Linux surfaces while the device lives.
+			this.queue._releaseReference(process.platform === "linux");
 		} catch {}
 		try {
 			WGPUNative.symbols.wgpuDeviceDestroy(devicePtr);
@@ -2495,10 +2504,12 @@ class GPUCanvasContext {
 	private _device: GPUDevice | null = null;
 	private _currentTexture: GPUTexture | null = null;
 	private readonly _adapters = new Set<GPUAdapter>();
+	private readonly _contextKey: number;
 	_fallbackSize?: { width: number; height: number };
-	constructor(surfacePtr: number, instancePtr?: number) {
+	constructor(surfacePtr: number, instancePtr: number, contextKey: number) {
 		this.surfacePtr = surfacePtr;
-		this.instancePtr = instancePtr ?? null;
+		this.instancePtr = instancePtr;
+		this._contextKey = contextKey;
 	}
 	configure(options: {
 		device: GPUDevice;
@@ -2648,6 +2659,10 @@ class GPUCanvasContext {
 			} catch {}
 		}
 	}
+	_releaseForDeviceDestroy(queue: GPUQueue) {
+		if (this._device?.queue !== queue) return false;
+		return releaseWebgpuContext(this._contextKey);
+	}
 	_registerAdapter(adapter: GPUAdapter) {
 		this._adapters.add(adapter);
 	}
@@ -2741,7 +2756,7 @@ function createContext(view: WGPUView | GpuWindow) {
 			WGPUBridge.surfaceCapabilitiesFreeMembers(caps.ptr as any);
 		}
 
-		const ctx = new GPUCanvasContext(surface, instance);
+		const ctx = new GPUCanvasContext(surface, instance, key);
 		ctx.format = pick.format;
 		ctx.alphaMode = pick.alphaMode;
 		ctx.supportedAlphaModes = new Set(

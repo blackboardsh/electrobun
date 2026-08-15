@@ -3637,6 +3637,7 @@ public:
                     break;
                 case WEBKIT_LOAD_COMMITTED:
                     impl->eventHandler(impl->webviewId, "load-committed", uri);
+                    impl->eventHandler(impl->webviewId, "did-commit-navigation", uri);
                     break;
                 case WEBKIT_LOAD_FINISHED:
                     impl->eventHandler(impl->webviewId, "load-finished", uri);

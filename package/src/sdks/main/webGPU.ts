@@ -323,10 +323,25 @@ export const native = (() => {
 
 	try {
 		const lib = dlopen(libPath, WGPU_SYMBOLS);
+		const symbols =
+			process.platform === "linux"
+				? {
+						...lib.symbols,
+						wgpuTextureRelease: (
+							texture: Parameters<
+								typeof lib.symbols.wgpuTextureRelease
+							>[0],
+						) => {
+							// Linux Dawn dereferences null release handles, while adapter
+							// textures clear their public pointer once presented.
+							if (texture) lib.symbols.wgpuTextureRelease(texture);
+						},
+					}
+				: lib.symbols;
 		return {
 			available: true,
 			path: libPath,
-			symbols: lib.symbols,
+			symbols,
 			close: lib.close,
 		};
 	} catch {

@@ -4,11 +4,18 @@
 import "./globals.d.ts";
 
 function base64ToUint8Array(base64: string): Uint8Array {
-	return new Uint8Array(
-		atob(base64)
-			.split("")
-			.map((char) => char.charCodeAt(0)),
-	);
+	const binary = atob(base64);
+	if (window.__electrobunPlatform === "linux") {
+		// WebKitGTK becomes allocation-bound on large RPC bursts if every byte
+		// is first expanded into a split/map array.
+		const bytes = new Uint8Array(binary.length);
+		for (let i = 0; i < binary.length; i++) {
+			bytes[i] = binary.charCodeAt(i);
+		}
+		return bytes;
+	}
+
+	return new Uint8Array(binary.split("").map((char) => char.charCodeAt(0)));
 }
 
 function uint8ArrayToBase64(uint8Array: Uint8Array): string {

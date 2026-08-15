@@ -420,6 +420,10 @@ const core = (() => {
 				args: [FFIType.u32, FFIType.cstring],
 				returns: FFIType.bool,
 			},
+			sendPreEncryptedHostMessageToWebviewViaTransport: {
+				args: [FFIType.u32, FFIType.cstring],
+				returns: FFIType.bool,
+			},
 			popNextQueuedHostMessage: {
 				args: [FFIType.ptr],
 				returns: FFIType.ptr,
@@ -2040,6 +2044,15 @@ const _ffiImpl = {
 			return core_.symbols.sendHostMessageToWebviewViaTransport(
 				params.id,
 				toCString(params.messageJson),
+			);
+		},
+		sendPreEncryptedHostMessageToWebviewViaTransport: (params: {
+			id: number;
+			encryptedPacketJson: string;
+		}): boolean => {
+			return core_.symbols.sendPreEncryptedHostMessageToWebviewViaTransport(
+				params.id,
+				toCString(params.encryptedPacketJson),
 			);
 		},
 		clearWebviewHostTransport: (params: { id: number }) => {

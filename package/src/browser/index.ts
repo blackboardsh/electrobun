@@ -24,6 +24,10 @@ type QueuedHostMessage = {
 	markSent: () => void;
 };
 
+type SettledHostMessage =
+	| { status: "fulfilled"; value: unknown }
+	| { status: "rejected"; reason: unknown };
+
 class Electroview<T extends RPCWithTransport> {
 	hostSocket?: WebSocket;
 	hostSocketCanSend = false;
@@ -31,6 +35,7 @@ class Electroview<T extends RPCWithTransport> {
 	flushingHostSocketMessages = false;
 	hostSocketSendQueue: QueuedHostMessage[] = [];
 	flushingHostSocketSendQueue = false;
+	linuxHostSocketDispatchTail: Promise<void> = Promise.resolve();
 	// user's custom rpc browser <-> bun
 	rpc?: T;
 	rpcHandler?: (msg: unknown) => void;
@@ -99,6 +104,17 @@ class Electroview<T extends RPCWithTransport> {
 						typeof packet?.iv === "string" &&
 						typeof packet?.tag === "string"
 					) {
+						if (window.__electrobunPlatform === "linux") {
+							const decodedMessage = window
+								.__electrobun_decrypt(
+									packet.encryptedData,
+									packet.iv,
+									packet.tag,
+								)
+								.then((decrypted) => JSON.parse(decrypted));
+							this.queueLinuxHostSocketDispatch(decodedMessage);
+							return;
+						}
 						const decrypted = await window.__electrobun_decrypt(
 							packet.encryptedData,
 							packet.iv,
@@ -129,6 +145,30 @@ class Electroview<T extends RPCWithTransport> {
 			this.flushHostMessagesViaFallback(this.hostSocketSendQueue);
 			// console.log("Socket closed:", event);
 		});
+	}
+
+	queueLinuxHostSocketDispatch(decodedMessage: Promise<unknown>) {
+		// Start WebCrypto work as each frame arrives, but dispatch in frame order.
+		// Attaching both handlers immediately also prevents delayed rejections from
+		// being reported as unhandled while an earlier frame is still decrypting.
+		const settledMessage: Promise<SettledHostMessage> = decodedMessage.then(
+			(value) => ({ status: "fulfilled", value }),
+			(reason) => ({ status: "rejected", reason }),
+		);
+
+		this.linuxHostSocketDispatchTail = this.linuxHostSocketDispatchTail
+			.then(async () => {
+				const result = await settledMessage;
+				if (result.status === "rejected") {
+					console.error("Error parsing bun message:", result.reason);
+					return;
+				}
+				this.rpcHandler?.(result.value);
+			})
+			.catch((err) => {
+				// Keep a single bad frame or handler from poisoning the dispatch tail.
+				console.error("Error parsing bun message:", err);
+			});
 	}
 
 	createTransport(): RPCTransport {
