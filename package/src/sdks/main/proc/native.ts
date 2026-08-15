@@ -529,6 +529,10 @@ const core = (() => {
 				args: [FFIType.u32],
 				returns: FFIType.void,
 			},
+			wgpuReleaseSurfaceForView: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
 			createTray: {
 				args: [
 					FFIType.cstring,
@@ -1002,10 +1006,6 @@ export const native = (() => {
 			wgpuCreateSurfaceForView: {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
-			},
-			wgpuReleaseSurfaceForView: {
-				args: [FFIType.ptr],
-				returns: FFIType.bool,
 			},
 			// Global keyboard shortcuts
 			setGlobalShortcutCallback: {
@@ -2484,7 +2484,7 @@ export const WGPUBridge = {
 		return native_.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
 	},
 	releaseSurfaceForView: (surfacePtr: Pointer): boolean =>
-		!!native_.symbols.wgpuReleaseSurfaceForView(surfacePtr as any),
+		!!core_.symbols.wgpuReleaseSurfaceForView(surfacePtr as any),
 };
 
 

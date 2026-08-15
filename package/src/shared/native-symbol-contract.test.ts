@@ -135,6 +135,14 @@ const coreLazyWrapperSymbols = requireContract(
 	),
 	80,
 );
+const coreOptionalWrapperSymbols = requireContract(
+	"ElectrobunCore optional NativeWrapper lookups",
+	captures(
+		sources.core,
+		/lookupOptionalNativeSymbol\(\s*[^,]+,\s*"([A-Za-z_$][\w$]*)"/gs,
+	),
+	2,
+);
 const allCoreWrapperSymbols = uniqueSorted([
 	...coreBootstrapWrapperSymbols,
 	...coreLazyWrapperSymbols,
@@ -170,6 +178,18 @@ const odinCoreTable = sourceSection(
 	"\nSymbols :: struct {",
 	"\n}",
 	"Odin ElectrobunCore symbol table",
+);
+const typescriptWgpuBridge = sourceSection(
+	sources.typescript,
+	"export const WGPUBridge = {",
+	"\n};",
+	"TypeScript WGPU bridge",
+);
+const coreWgpuSurfaceRelease = sourceSection(
+	sources.core,
+	"export fn wgpuReleaseSurfaceForView(",
+	"\n}\n\nexport fn wgpuCreateAdapterDeviceMainThread(",
+	"ElectrobunCore WGPU surface release",
 );
 
 const eagerCoreDemands = {
@@ -246,6 +266,38 @@ describe("ElectrobunCore to NativeWrapper ABI", () => {
 			);
 		},
 	);
+});
+
+describe("WGPU surface release ABI", () => {
+	test("keeps the Windows cleanup hook optional behind ElectrobunCore", () => {
+		expect(eagerCoreDemands.typescript).toContain("wgpuReleaseSurfaceForView");
+		expect(coreExports).toContain("wgpuReleaseSurfaceForView");
+		expect(directWrapperCommonSymbols).not.toContain(
+			"wgpuReleaseSurfaceForView",
+		);
+		expect(coreLazyWrapperSymbols).not.toContain("wgpuReleaseSurfaceForView");
+		expect(coreOptionalWrapperSymbols).toContain("wgpuReleaseSurfaceForView");
+
+		expect(typescriptWgpuBridge).toMatch(
+			/releaseSurfaceForView:[\s\S]*core_\.symbols\.wgpuReleaseSurfaceForView/,
+		);
+		expect(coreWgpuSurfaceRelease).toContain("lookupOptionalNativeSymbol(");
+		expect(coreWgpuSurfaceRelease).toContain("orelse return false");
+		expect(coreWgpuSurfaceRelease).toContain("return true;");
+
+		expect(definesNativeFunction(sources.wrappers.win32, "wgpuReleaseSurfaceForView")).toBe(
+			true,
+		);
+		expect(sources.wrappers.win32).toMatch(
+			/ELECTROBUN_EXPORT\s+void\s+wgpuReleaseSurfaceForView\s*\(/,
+		);
+		expect(definesNativeFunction(sources.wrappers.darwin, "wgpuReleaseSurfaceForView")).toBe(
+			false,
+		);
+		expect(definesNativeFunction(sources.wrappers.linux, "wgpuReleaseSurfaceForView")).toBe(
+			false,
+		);
+	});
 });
 
 describe("SDK to ElectrobunCore ABI", () => {
