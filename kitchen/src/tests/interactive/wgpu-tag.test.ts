@@ -11,23 +11,22 @@ function createWgpuTagTest(name: string, transparent: boolean) {
     description: transparent
       ? "Test WGPU tag rendering in a transparent window"
       : "Test WGPU view positioning, transparency, passthrough, and resizing",
+    instructions: transparent ? [
+      "A transparent window with a WGPU tag will open",
+      "The desktop should be visible behind the HTML content",
+      "The WGPU surface should render correctly within the page",
+      ...(process.platform === "linux" ? [
+        "Linux note: passthrough/mask interaction for WGPU tags inside transparent windows is not supported; verify rendering and resize only",
+      ] : []),
+      "Close the window when done to pass the test",
+    ] : [
+      "A WGPU tag playground will open",
+      "Use the controls to toggle transparency/passthrough and resize",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions(transparent ? [
-        "A transparent window with a WGPU tag will open",
-        "The desktop should be visible behind the HTML content",
-        "The WGPU surface should render correctly within the page",
-        ...(process.platform === "linux" ? [
-          "Linux note: passthrough/mask interaction for WGPU tags inside transparent windows is not supported; verify rendering and resize only",
-        ] : []),
-        "Close the window when done to pass the test",
-      ] : [
-        "A WGPU tag playground will open",
-        "Use the controls to toggle transparency/passthrough and resize",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log(`Opening ${transparent ? "transparent " : ""}WGPU tag playground`);
 
       await new Promise<void>((resolve) => {

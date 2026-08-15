@@ -72,7 +72,7 @@
                 id="test-search"
                 class="search-input"
                 type="search"
-                placeholder="Search tests (fuzzy by name, category, description)"
+                placeholder="Search tests (fuzzy by name, category, description, instructions)"
                 autocomplete="off"
                 spellcheck="false"
             >
@@ -83,23 +83,6 @@
             <!-- Tests will be populated here -->
         </div>
 
-        <!-- Modal for interactive test instructions -->
-        <div class="modal" id="interactive-modal" style="display: none;">
-            <div class="modal-content">
-                <h2 id="modal-title">Interactive Test</h2>
-                <div id="modal-instructions"></div>
-                <div class="modal-actions" id="modal-buttons">
-                    <button id="btn-start" class="btn btn-primary" style="display: none;">Start Test</button>
-                    <button id="btn-pass" class="btn btn-success">Pass</button>
-                    <button id="btn-fail" class="btn btn-danger">Fail</button>
-                    <button id="btn-retest" class="btn btn-secondary" style="display: none;">Re-test</button>
-                </div>
-                <div class="modal-notes">
-                    <label for="notes-input">Notes (optional):</label>
-                    <input type="text" id="notes-input" placeholder="Add notes about the result...">
-                </div>
-            </div>
-        </div>
     </div>
 </body>
 </html>

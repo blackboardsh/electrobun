@@ -10,6 +10,10 @@
 // textured instances.
 
 import { measureText as measureBitmap } from "./font";
+import {
+	AtlasDirtyHistory,
+	type AtlasDirtySnapshot,
+} from "./atlasDirtyHistory";
 
 export interface AtlasEntry {
 	// Normalized UV rect in the atlas.
@@ -55,24 +59,23 @@ class TextAtlas {
 	private shelfX = 0;
 	private shelfY = 0;
 	private shelfHeight = 0;
-	private dirty: { x0: number; y0: number; x1: number; y1: number } | null =
-		null;
+	private readonly dirtyHistory = new AtlasDirtyHistory({
+		x0: 0,
+		y0: 0,
+		x1: ATLAS_SIZE,
+		y1: ATLAS_SIZE,
+	});
 
-	takeDirty() {
-		const d = this.dirty;
-		this.dirty = null;
-		return d;
+	get revision(): number {
+		return this.dirtyHistory.revision;
+	}
+
+	dirtySince(revision: number): AtlasDirtySnapshot | null {
+		return this.dirtyHistory.snapshotSince(revision);
 	}
 
 	private markDirty(x: number, y: number, w: number, h: number) {
-		if (!this.dirty) {
-			this.dirty = { x0: x, y0: y, x1: x + w, y1: y + h };
-			return;
-		}
-		this.dirty.x0 = Math.min(this.dirty.x0, x);
-		this.dirty.y0 = Math.min(this.dirty.y0, y);
-		this.dirty.x1 = Math.max(this.dirty.x1, x + w);
-		this.dirty.y1 = Math.max(this.dirty.y1, y + h);
+		this.dirtyHistory.mark({ x0: x, y0: y, x1: x + w, y1: y + h });
 	}
 
 	private reset() {

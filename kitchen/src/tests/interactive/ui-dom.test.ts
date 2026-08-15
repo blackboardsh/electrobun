@@ -12,25 +12,33 @@ export const uiDomTests = [
 		category: "Cottontail UI",
 		description:
 			"electrobun/browser/ui renders JSX into real DOM: signals, memo, keyed For, Portal, input. The page's self-test banner must show PASS.",
+		instructions: [
+			"A webview window opened rendering Warren via the DOM renderer.",
+			"1. The Self-test section must show a green PASS banner.",
+			"2. Counter buttons update the number (and its memo) instantly.",
+			"3. Typing in the input echoes 'hello, <name>'.",
+			"4. Reverse/Add/Drop reorder the keyed list; top row highlights.",
+			"5. 'Open modal' shows a Portal card; Close removes it.",
+			"Close the playground window when you are done.",
+		],
 		interactive: true,
-		async run({ showInstructions, waitForUserVerification }) {
+		timeout: 600000,
+		async run() {
 			const win = new BrowserWindow({
 				title: "Warren DOM playground",
 				frame: { x: 220, y: 120, width: 720, height: 820 },
 				url: "views://playgrounds/warren-dom/index.html",
 			});
+			let closed = false;
 			try {
-				showInstructions([
-					"A webview window opened rendering Warren via the DOM renderer.",
-					"1. The Self-test section must show a green PASS banner.",
-					"2. Counter buttons update the number (and its memo) instantly.",
-					"3. Typing in the input echoes 'hello, <name>'.",
-					"4. Reverse/Add/Drop reorder the keyed list; top row highlights.",
-					"5. 'Open modal' shows a Portal card; Close removes it.",
-				]);
-				await waitForUserVerification();
+				await new Promise<void>((resolve) =>
+					win.on("close", () => {
+						closed = true;
+						resolve();
+					}),
+				);
 			} finally {
-				win.close();
+				if (!closed) win.close();
 			}
 		},
 	}),

@@ -65,6 +65,22 @@ let currentScope: Scope | null = null;
 let trackingScope: Scope | null = null;
 let inertDepth = 0;
 
+function runTeardownSteps(steps: ReadonlyArray<() => void>): void {
+	let firstError: unknown;
+	let failed = false;
+	for (const step of steps) {
+		try {
+			step();
+		} catch (error) {
+			if (!failed) {
+				failed = true;
+				firstError = error;
+			}
+		}
+	}
+	if (failed) throw firstError;
+}
+
 class Scope {
 	kind: ScopeKind;
 	fn: (() => void) | null;
@@ -85,15 +101,13 @@ class Scope {
 	run(): void {
 		if (this.disposed || !this.fn) return;
 		// A re-run replaces the previous run's scope state.
-		for (let i = this.children.length - 1; i >= 0; i--) {
-			this.children[i]!.dispose();
-		}
-		this.children.length = 0;
-		for (let i = this.cleanups.length - 1; i >= 0; i--) {
-			this.cleanups[i]!();
-		}
-		this.cleanups.length = 0;
-		this.clearSources();
+		const children = this.children.splice(0).reverse();
+		const cleanups = this.cleanups.splice(0).reverse();
+		runTeardownSteps([
+			...children.map((child) => () => child.dispose()),
+			...cleanups,
+			() => this.clearSources(),
+		]);
 
 		const prevScope = currentScope;
 		const prevTracking = trackingScope;
@@ -120,19 +134,19 @@ class Scope {
 		if (this.disposed) return;
 		this.disposed = true;
 		liveQueue.delete(this);
-		this.clearSources();
-		for (let i = this.children.length - 1; i >= 0; i--) {
-			this.children[i]!.dispose();
-		}
-		this.children.length = 0;
-		for (let i = this.cleanups.length - 1; i >= 0; i--) {
-			this.cleanups[i]!();
-		}
-		this.cleanups.length = 0;
-		if (this.parent && !this.parent.disposed) {
-			const idx = this.parent.children.indexOf(this);
-			if (idx >= 0) this.parent.children.splice(idx, 1);
-		}
+		const children = this.children.splice(0).reverse();
+		const cleanups = this.cleanups.splice(0).reverse();
+		runTeardownSteps([
+			() => this.clearSources(),
+			...children.map((child) => () => child.dispose()),
+			...cleanups,
+			() => {
+				if (this.parent && !this.parent.disposed) {
+					const idx = this.parent.children.indexOf(this);
+					if (idx >= 0) this.parent.children.splice(idx, 1);
+				}
+			},
+		]);
 	}
 }
 

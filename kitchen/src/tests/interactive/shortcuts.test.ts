@@ -8,15 +8,14 @@ export const shortcutTests = [
     name: "Global shortcuts playground",
     category: "Shortcuts (Interactive)",
     description: "Interactive playground for testing global keyboard shortcuts",
+    instructions: [
+      "A shortcuts control panel will open",
+      "Register shortcuts and press them anywhere to test",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000, // 10 minutes for exploration
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A shortcuts control panel will open",
-        "Register shortcuts and press them anywhere to test",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening shortcuts playground window");
 
       await new Promise<void>((resolve) => {

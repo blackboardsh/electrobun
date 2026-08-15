@@ -199,10 +199,17 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 Electrobun.events.on("application-menu-clicked", async (e) => {
-	if (e.data.action === "run-all-automated") {
-		await executor.runAllAutomated();
-	} else if (e.data.action === "run-interactive") {
-		await executor.runInteractiveTests();
+	try {
+		if (e.data.action === "run-all-automated") {
+			await executor.runAllAutomated();
+		} else if (e.data.action === "run-interactive") {
+			await executor.runInteractiveTests();
+		}
+	} catch (error) {
+		// Application-menu actions do not have an RPC caller to receive errors.
+		// Keep an overlapping shortcut invocation from becoming an unhandled
+		// rejection; TestExecutor reports which run is already active.
+		console.error("Unable to start test run from application menu:", error);
 	}
 });
 
@@ -217,6 +224,7 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 					name: t.name,
 					category: t.category,
 					description: t.description,
+					instructions: t.instructions,
 					interactive: t.interactive,
 				}));
 			},
@@ -235,18 +243,6 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 
 			runInteractiveTests: async () => {
 				return await executor.runInteractiveTests();
-			},
-
-			submitInteractiveResult: ({ testId, passed, notes }) => {
-				executor.submitInteractiveResult(testId, passed, notes);
-			},
-
-			submitReady: ({ testId }) => {
-				executor.submitReady(testId);
-			},
-
-			submitVerification: ({ testId, action, notes }) => {
-				executor.submitVerification(testId, action, notes);
 			},
 
 			applyUpdate: () => {
@@ -340,25 +336,6 @@ executor.onEvent((event) => {
 			});
 			break;
 
-		case "interactive-waiting":
-			testRunnerWindow.webview.rpc?.send.interactiveWaiting({
-				testId: event.testId!,
-				instructions: event.instructions!,
-			});
-			break;
-
-		case "interactive-ready":
-			testRunnerWindow.webview.rpc?.send.interactiveReady({
-				testId: event.testId!,
-				instructions: event.instructions!,
-			});
-			break;
-
-		case "interactive-verify":
-			testRunnerWindow.webview.rpc?.send.interactiveVerify({
-				testId: event.testId!,
-			});
-			break;
 	}
 });
 

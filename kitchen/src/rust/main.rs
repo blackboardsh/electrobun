@@ -2,8 +2,10 @@ use electrobun::{
     self, BundlePaths, Core, NotificationOptions, Paths, Rect, Renderer, TrafficLightOffset,
     TrayOptions, WGPUViewOptions, WebviewCallbacks, WebviewOptions, WindowOptions,
 };
+use serde_json::{Map as JsonMap, Value as JsonValue};
+use std::collections::HashMap;
 use std::os::raw::c_char;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -20,6 +22,8 @@ const LONG_WAIT_MS: u64 = 1200;
 
 static APP_STATE: OnceLock<AppState> = OnceLock::new();
 static HOST_QUEUE_RUNNING: AtomicBool = AtomicBool::new(false);
+static QUIT_TARGET_WEBVIEW_ID: AtomicU32 = AtomicU32::new(0);
+static SHORTCUT_TARGET_WEBVIEW_ID: AtomicU32 = AtomicU32::new(0);
 static CALLBACK_STATE: Mutex<CallbackState> = Mutex::new(CallbackState::new());
 
 struct AppState {
@@ -34,9 +38,18 @@ struct AppState {
     test_runner_webview_id: Mutex<Option<u32>>,
     top_level_webviews: Mutex<Vec<(u32, u32)>>,
     child_webviews: Mutex<Vec<(u32, Renderer)>>,
+    menu_bridge: Mutex<MenuBridgeState>,
     auto_run_all: bool,
     auto_run_test_name: Option<String>,
     auto_run_triggered: AtomicBool,
+}
+
+#[derive(Default)]
+struct MenuBridgeState {
+    application_target_webview_id: Option<u32>,
+    context_target_webview_id: Option<u32>,
+    next_data_id: u64,
+    data_by_id: HashMap<String, JsonValue>,
 }
 
 #[derive(Clone, Copy)]
@@ -820,6 +833,7 @@ fn run() -> Result<(), String> {
             test_runner_webview_id: Mutex::new(None),
             top_level_webviews: Mutex::new(Vec::new()),
             child_webviews: Mutex::new(Vec::new()),
+            menu_bridge: Mutex::new(MenuBridgeState::default()),
             auto_run_all: std::env::var("AUTO_RUN").is_ok(),
             auto_run_test_name: std::env::var("AUTO_RUN_TEST_NAME").ok(),
             auto_run_triggered: AtomicBool::new(false),
@@ -1165,17 +1179,190 @@ fn handle_rpc_request(webview_id: u32, request_id: u64, method: &str, packet: &s
                 send_rpc_response_error(webview_id, request_id, "No top-level window for webview");
                 return;
             };
+            // Acknowledge while the requesting webview is still alive. Closing it first
+            // destroys the response transport and makes a successful close look like an
+            // RPC failure to the playground.
+            send_rpc_response_success(webview_id, request_id, "{\"success\":true}");
             forget_top_level_webview(webview_id);
-            match app_state().core.close_window(window_id) {
+            if let Err(err) = app_state().core.close_window(window_id) {
+                eprintln!("[kitchen rust] failed to close playground window {window_id}: {err}");
+            }
+        }
+        "setApplicationMenu" => {
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(
+                    webview_id,
+                    request_id,
+                    "Missing setApplicationMenu params",
+                );
+                return;
+            };
+            let Some(menu) = json_value_field(params, "menu") else {
+                send_rpc_response_error(webview_id, request_id, "Missing menu payload");
+                return;
+            };
+            let menu_json = match prepare_menu_json(menu) {
+                Ok(menu_json) => menu_json,
+                Err(err) => {
+                    send_rpc_response_error(webview_id, request_id, &err);
+                    return;
+                }
+            };
+            set_application_menu_target(webview_id);
+            match app_state()
+                .core
+                .set_application_menu_json(&menu_json, Some(application_menu_handler))
+            {
                 Ok(()) => send_rpc_response_success(webview_id, request_id, "{\"success\":true}"),
                 Err(err) => send_rpc_response_error(webview_id, request_id, &err),
             }
         }
-        "setApplicationMenu" => {
-            send_rpc_response_success(webview_id, request_id, "{\"success\":true}");
-        }
         "showContextMenu" => {
-            send_rpc_response_success(webview_id, request_id, "{\"success\":true}");
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(webview_id, request_id, "Missing showContextMenu params");
+                return;
+            };
+            let Some(menu) = json_value_field(params, "menu") else {
+                send_rpc_response_error(webview_id, request_id, "Missing menu payload");
+                return;
+            };
+            let menu_json = match prepare_menu_json(menu) {
+                Ok(menu_json) => menu_json,
+                Err(err) => {
+                    send_rpc_response_error(webview_id, request_id, &err);
+                    return;
+                }
+            };
+            set_context_menu_target(webview_id);
+            match app_state()
+                .core
+                .show_context_menu_json(&menu_json, Some(context_menu_handler))
+            {
+                Ok(()) => send_rpc_response_success(webview_id, request_id, "{\"success\":true}"),
+                Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+            }
+        }
+        "triggerQuit" => {
+            QUIT_TARGET_WEBVIEW_ID.store(webview_id, Ordering::Release);
+            quit_requested_handler();
+            send_rpc_response_success(
+                webview_id,
+                request_id,
+                "{\"success\":true,\"message\":\"Quit handled through Rust before-quit callback and cancelled for playground mode.\"}",
+            );
+        }
+        "openFileDialog" => {
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(webview_id, request_id, "Missing openFileDialog params");
+                return;
+            };
+            let starting_folder_input = electrobun::json_string_field(params, "startingFolder")
+                .unwrap_or_else(|| "~/".to_string());
+            let starting_folder = match expand_tilde_path(&starting_folder_input) {
+                Ok(path) => path,
+                Err(err) => {
+                    send_rpc_response_error(webview_id, request_id, &err);
+                    return;
+                }
+            };
+            let allowed_file_types = electrobun::json_string_field(params, "allowedFileTypes")
+                .unwrap_or_else(|| "*".to_string());
+
+            match app_state()
+                .core
+                .open_file_dialog(electrobun::OpenFileDialogOptions {
+                    starting_folder: &starting_folder,
+                    allowed_file_types: &allowed_file_types,
+                    can_choose_files: electrobun::json_bool_field(params, "canChooseFiles")
+                        .unwrap_or(true),
+                    can_choose_directory: electrobun::json_bool_field(params, "canChooseDirectory")
+                        .unwrap_or(true),
+                    allows_multiple_selection: electrobun::json_bool_field(
+                        params,
+                        "allowsMultipleSelection",
+                    )
+                    .unwrap_or(true),
+                }) {
+                Ok(paths_json) => {
+                    let payload = if paths_json.trim().is_empty() {
+                        "[]"
+                    } else {
+                        &paths_json
+                    };
+                    send_rpc_response_success(webview_id, request_id, payload);
+                }
+                Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+            }
+        }
+        "registerShortcut" => {
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(webview_id, request_id, "Missing registerShortcut params");
+                return;
+            };
+            let Some(accelerator) = electrobun::json_string_field(params, "accelerator") else {
+                send_rpc_response_error(webview_id, request_id, "Missing accelerator");
+                return;
+            };
+            SHORTCUT_TARGET_WEBVIEW_ID.store(webview_id, Ordering::Release);
+            if let Err(err) = app_state()
+                .core
+                .set_global_shortcut_callback(Some(shortcut_triggered_handler))
+            {
+                send_rpc_response_error(webview_id, request_id, &err);
+                return;
+            }
+            match app_state().core.register_global_shortcut(&accelerator) {
+                Ok(success) => send_rpc_response_success(
+                    webview_id,
+                    request_id,
+                    &format!("{{\"success\":{success}}}"),
+                ),
+                Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+            }
+        }
+        "unregisterShortcut" => {
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(
+                    webview_id,
+                    request_id,
+                    "Missing unregisterShortcut params",
+                );
+                return;
+            };
+            let Some(accelerator) = electrobun::json_string_field(params, "accelerator") else {
+                send_rpc_response_error(webview_id, request_id, "Missing accelerator");
+                return;
+            };
+            match app_state().core.unregister_global_shortcut(&accelerator) {
+                Ok(success) => send_rpc_response_success(
+                    webview_id,
+                    request_id,
+                    &format!("{{\"success\":{success}}}"),
+                ),
+                Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+            }
+        }
+        "unregisterAllShortcuts" => match app_state().core.unregister_all_global_shortcuts() {
+            Ok(()) => send_rpc_response_success(webview_id, request_id, "{\"success\":true}"),
+            Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+        },
+        "isRegistered" => {
+            let Some(params) = json_object_field(packet, "params") else {
+                send_rpc_response_error(webview_id, request_id, "Missing isRegistered params");
+                return;
+            };
+            let Some(accelerator) = electrobun::json_string_field(params, "accelerator") else {
+                send_rpc_response_error(webview_id, request_id, "Missing accelerator");
+                return;
+            };
+            match app_state().core.is_global_shortcut_registered(&accelerator) {
+                Ok(registered) => send_rpc_response_success(
+                    webview_id,
+                    request_id,
+                    &format!("{{\"registered\":{registered}}}"),
+                ),
+                Err(err) => send_rpc_response_error(webview_id, request_id, &err),
+            }
         }
         "runTest" => {
             let Some(test_id) = electrobun::json_string_field(packet, "testId") else {
@@ -1364,17 +1551,11 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
             "File Dialog Playground",
             "views://playgrounds/file-dialog/index.html",
         ),
-        TestKind::GlobalShortcutsPlayground => run_interactive_playground_test(
-            "Global Shortcuts Playground",
-            "views://playgrounds/shortcuts/index.html",
-        ),
+        TestKind::GlobalShortcutsPlayground => run_global_shortcuts_playground_test(),
         TestKind::GlobalShortcutIsRegisteredApi => run_global_shortcut_is_registered_api_test(),
         TestKind::GlobalShortcutUnregisterAllApi => run_global_shortcut_unregister_all_api_test(),
         TestKind::LifecycleBeforeQuitCancel => run_lifecycle_before_quit_cancel_test(),
-        TestKind::QuitShutdownPlayground => run_interactive_playground_test(
-            "Quit/Shutdown Test Playground",
-            "views://playgrounds/quit-test/index.html",
-        ),
+        TestKind::QuitShutdownPlayground => run_quit_shutdown_playground_test(),
         TestKind::WgpuAdapterContextDevice => run_wgpu_adapter_context_device_test(),
         TestKind::DockIconVisibilityContract => run_dock_icon_visibility_contract_test(),
         TestKind::UtilsClipboardRoundTrip => run_utils_clipboard_round_trip_test(),
@@ -1572,6 +1753,236 @@ fn child_webview_renderer(webview_id: u32) -> Renderer {
                 .map(|(_, renderer)| *renderer)
         })
         .unwrap_or(Renderer::Native)
+}
+
+const MENU_DATA_PREFIX: &str = "|EB|";
+
+fn set_application_menu_target(webview_id: u32) {
+    if let Ok(mut bridge) = app_state().menu_bridge.lock() {
+        bridge.application_target_webview_id = Some(webview_id);
+    }
+}
+
+fn set_context_menu_target(webview_id: u32) {
+    if let Ok(mut bridge) = app_state().menu_bridge.lock() {
+        bridge.context_target_webview_id = Some(webview_id);
+    }
+}
+
+fn default_menu_role_label(role: &str) -> String {
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for ch in role.chars() {
+        if ch.is_ascii_uppercase() && !current.is_empty() {
+            words.push(current);
+            current = String::new();
+        }
+        current.push(ch.to_ascii_lowercase());
+    }
+    if !current.is_empty() {
+        words.push(current);
+    }
+
+    words
+        .into_iter()
+        .enumerate()
+        .map(|(index, word)| {
+            if index > 0 && matches!(word.as_str(), "and" | "by" | "in" | "of" | "to") {
+                return word;
+            }
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => word,
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_menu_array(
+    value: JsonValue,
+    bridge: &mut MenuBridgeState,
+) -> Result<JsonValue, String> {
+    let items = value
+        .as_array()
+        .ok_or_else(|| "Menu payload must be an array".to_string())?;
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        normalized.push(normalize_menu_item(item, bridge)?);
+    }
+    Ok(JsonValue::Array(normalized))
+}
+
+fn normalize_menu_item(
+    value: &JsonValue,
+    bridge: &mut MenuBridgeState,
+) -> Result<JsonValue, String> {
+    let item = value
+        .as_object()
+        .ok_or_else(|| "Menu items must be objects".to_string())?;
+    if matches!(
+        item.get("type").and_then(JsonValue::as_str),
+        Some("divider" | "separator")
+    ) {
+        return Ok(serde_json::json!({ "type": "divider" }));
+    }
+
+    let role = item.get("role").and_then(JsonValue::as_str);
+    let label = item
+        .get("label")
+        .and_then(JsonValue::as_str)
+        .map(str::to_string)
+        .or_else(|| role.map(default_menu_role_label))
+        .unwrap_or_default();
+
+    let mut normalized = JsonMap::new();
+    normalized.insert("label".to_string(), JsonValue::String(label));
+    normalized.insert(
+        "type".to_string(),
+        JsonValue::String(
+            item.get("type")
+                .and_then(JsonValue::as_str)
+                .unwrap_or("normal")
+                .to_string(),
+        ),
+    );
+
+    if let Some(role) = role {
+        normalized.insert("role".to_string(), JsonValue::String(role.to_string()));
+    } else {
+        let mut action = item
+            .get("action")
+            .and_then(JsonValue::as_str)
+            .unwrap_or_default()
+            .to_string();
+        if let Some(data) = item.get("data") {
+            bridge.next_data_id = bridge.next_data_id.wrapping_add(1);
+            let data_id = format!("rustMenuData_{}", bridge.next_data_id);
+            bridge.data_by_id.insert(data_id.clone(), data.clone());
+            action = format!("{MENU_DATA_PREFIX}{data_id}|{action}");
+        }
+        normalized.insert("action".to_string(), JsonValue::String(action));
+    }
+
+    normalized.insert(
+        "enabled".to_string(),
+        JsonValue::Bool(
+            item.get("enabled")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(true),
+        ),
+    );
+    normalized.insert(
+        "checked".to_string(),
+        JsonValue::Bool(
+            item.get("checked")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+        ),
+    );
+    normalized.insert(
+        "hidden".to_string(),
+        JsonValue::Bool(
+            item.get("hidden")
+                .and_then(JsonValue::as_bool)
+                .unwrap_or(false),
+        ),
+    );
+
+    for field in ["tooltip", "accelerator"] {
+        if let Some(value) = item.get(field).filter(|value| !value.is_null()) {
+            normalized.insert(field.to_string(), value.clone());
+        }
+    }
+    if let Some(submenu) = item.get("submenu") {
+        normalized.insert(
+            "submenu".to_string(),
+            normalize_menu_array(submenu.clone(), bridge)?,
+        );
+    }
+
+    Ok(JsonValue::Object(normalized))
+}
+
+fn prepare_menu_json(menu_json: &str) -> Result<String, String> {
+    let menu =
+        serde_json::from_str(menu_json).map_err(|err| format!("Invalid menu JSON: {err}"))?;
+    let mut bridge = app_state()
+        .menu_bridge
+        .lock()
+        .map_err(|_| "Menu bridge state is unavailable".to_string())?;
+    let normalized = normalize_menu_array(menu, &mut bridge)?;
+    serde_json::to_string(&normalized).map_err(|err| format!("Failed to serialize menu: {err}"))
+}
+
+fn send_menu_click(webview_id: Option<u32>, message_id: &str, encoded_action: &str) {
+    let Some(webview_id) = webview_id else {
+        return;
+    };
+    let Some(encoded) = encoded_action.strip_prefix(MENU_DATA_PREFIX) else {
+        send_rpc_message(
+            webview_id,
+            message_id,
+            &format!(
+                "{{\"action\":{}}}",
+                electrobun::json_string_literal(encoded_action)
+            ),
+        );
+        return;
+    };
+    let Some((data_id, action)) = encoded.split_once('|') else {
+        return;
+    };
+    let data = app_state()
+        .menu_bridge
+        .lock()
+        .ok()
+        .and_then(|mut bridge| bridge.data_by_id.remove(data_id));
+    let payload = match data {
+        Some(data) => format!(
+            "{{\"action\":{},\"data\":{data}}}",
+            electrobun::json_string_literal(action)
+        ),
+        None => format!("{{\"action\":{}}}", electrobun::json_string_literal(action)),
+    };
+    send_rpc_message(webview_id, message_id, &payload);
+}
+
+extern "C" fn application_menu_handler(_: u32, encoded_action: *const c_char) {
+    let action = electrobun::c_string_to_string(encoded_action);
+    let target = app_state()
+        .menu_bridge
+        .lock()
+        .ok()
+        .and_then(|bridge| bridge.application_target_webview_id);
+    send_menu_click(target, "menuClicked", &action);
+}
+
+extern "C" fn context_menu_handler(_: u32, encoded_action: *const c_char) {
+    let action = electrobun::c_string_to_string(encoded_action);
+    let target = app_state()
+        .menu_bridge
+        .lock()
+        .ok()
+        .and_then(|bridge| bridge.context_target_webview_id);
+    send_menu_click(target, "contextMenuClicked", &action);
+}
+
+extern "C" fn shortcut_triggered_handler(accelerator: *const c_char) {
+    let webview_id = SHORTCUT_TARGET_WEBVIEW_ID.load(Ordering::Acquire);
+    if webview_id == 0 {
+        return;
+    }
+    let accelerator = electrobun::c_string_to_string(accelerator);
+    send_rpc_message(
+        webview_id,
+        "shortcutTriggered",
+        &format!(
+            "{{\"accelerator\":{}}}",
+            electrobun::json_string_literal(&accelerator)
+        ),
+    );
 }
 
 fn create_window_with_harness_custom(
@@ -2373,6 +2784,52 @@ fn run_interactive_playground_test(title: &'static str, url: &'static str) -> Re
     Ok(())
 }
 
+fn run_global_shortcuts_playground_test() -> Result<(), String> {
+    let created = open_interactive_playground_window(
+        "Global Shortcuts Playground",
+        "views://playgrounds/shortcuts/index.html",
+    )?;
+    SHORTCUT_TARGET_WEBVIEW_ID.store(created.webview_id, Ordering::Release);
+    if let Err(err) = app_state()
+        .core
+        .set_global_shortcut_callback(Some(shortcut_triggered_handler))
+    {
+        SHORTCUT_TARGET_WEBVIEW_ID.store(0, Ordering::Release);
+        forget_top_level_webview(created.webview_id);
+        close_window_silent(created.window_id);
+        return Err(err);
+    }
+
+    wait_for_interactive_window_close();
+    SHORTCUT_TARGET_WEBVIEW_ID.store(0, Ordering::Release);
+    forget_top_level_webview(created.webview_id);
+    let unregister_result = app_state().core.unregister_all_global_shortcuts();
+    let callback_result = app_state().core.set_global_shortcut_callback(None);
+    unregister_result.and(callback_result)
+}
+
+fn run_quit_shutdown_playground_test() -> Result<(), String> {
+    let created = open_interactive_playground_window(
+        "Quit/Shutdown Test Playground",
+        "views://playgrounds/quit-test/index.html",
+    )?;
+    QUIT_TARGET_WEBVIEW_ID.store(created.webview_id, Ordering::Release);
+    if let Err(err) = app_state()
+        .core
+        .set_quit_requested_handler(Some(quit_requested_handler))
+    {
+        QUIT_TARGET_WEBVIEW_ID.store(0, Ordering::Release);
+        forget_top_level_webview(created.webview_id);
+        close_window_silent(created.window_id);
+        return Err(err);
+    }
+
+    wait_for_interactive_window_close();
+    QUIT_TARGET_WEBVIEW_ID.store(0, Ordering::Release);
+    forget_top_level_webview(created.webview_id);
+    app_state().core.set_quit_requested_handler(None)
+}
+
 fn run_navigation_load_url_test() -> Result<(), String> {
     reset_callback_state();
     let created = create_window_with_harness_custom(
@@ -2660,18 +3117,38 @@ fn run_global_shortcut_unregister_all_api_test() -> Result<(), String> {
 
 fn run_lifecycle_before_quit_cancel_test() -> Result<(), String> {
     reset_callback_state();
+    QUIT_TARGET_WEBVIEW_ID.store(0, Ordering::Release);
     app_state()
         .core
         .set_quit_requested_handler(Some(quit_requested_handler))?;
     quit_requested_handler();
-    if callback_count(|state| state.before_quit_count) == 0 {
-        return Err("quit requested handler did not fire".to_string());
-    }
-    Ok(())
+    let callback_result = if callback_count(|state| state.before_quit_count) == 0 {
+        Err("quit requested handler did not fire".to_string())
+    } else {
+        Ok(())
+    };
+    let restore_result = app_state().core.set_quit_requested_handler(None);
+    callback_result.and(restore_result)
 }
 
 extern "C" fn quit_requested_handler() {
     record_before_quit();
+    let webview_id = QUIT_TARGET_WEBVIEW_ID.load(Ordering::Acquire);
+    if webview_id == 0 {
+        return;
+    }
+
+    send_rpc_message(
+        webview_id,
+        "beforeQuitFired",
+        "{\"message\":\"beforeQuit handler fired! Waiting 2 seconds for cleanup...\"}",
+    );
+    sleep_ms(2_000);
+    send_rpc_message(
+        webview_id,
+        "beforeQuitDone",
+        "{\"message\":\"beforeQuit cleanup complete (2s elapsed). Quit cancelled in Rust mode.\"}",
+    );
 }
 
 fn run_wgpu_adapter_context_device_test() -> Result<(), String> {
@@ -2756,6 +3233,19 @@ fn run_utils_show_notification_test() -> Result<(), String> {
 
 fn resolved_paths() -> Result<Paths, String> {
     Paths::resolve(&app_state().app_info)
+}
+
+fn expand_tilde_path(path: &str) -> Result<String, String> {
+    if path == "~" {
+        return Ok(resolved_paths()?.home);
+    }
+    let Some(suffix) = path.strip_prefix("~/") else {
+        return Ok(path.to_string());
+    };
+    Ok(std::path::Path::new(&resolved_paths()?.home)
+        .join(suffix)
+        .to_string_lossy()
+        .into_owned())
 }
 
 fn run_utils_paths_object_exists_test() -> Result<(), String> {
@@ -3221,16 +3711,73 @@ fn maybe_auto_run_after_handshake(webview_id: u32) {
     }
 }
 
+fn interactive_test_instructions(kind: TestKind) -> Option<&'static [&'static str]> {
+    match kind {
+        TestKind::WebviewTagPlaygroundInteractive => Some(&[
+            "A webview tag playground will open",
+            "Test masks, passthrough, navigation, and inline HTML",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::WgpuTagPlaygroundInteractive => Some(&[
+            "A WGPU tag playground will open",
+            "Use the controls to toggle transparency and passthrough, then resize the view",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::ApplicationMenuPlayground => Some(&[
+            "An application menu playground will open",
+            "Apply the different configurations and check the macOS menu bar",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::ContextMenuPlayground => Some(&[
+            "A context menu playground will open",
+            "Use the buttons and right-click the test area to open each menu",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::DialogShowMessageBoxInfo => Some(&[
+            "A native information dialog will open",
+            "Click either button to complete the test",
+        ]),
+        TestKind::DialogFileDialogPlayground => Some(&[
+            "A file-dialog control panel will open",
+            "Configure the options and click Open File Dialog",
+            "Select a path containing a comma and verify it is returned unchanged",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::GlobalShortcutsPlayground => Some(&[
+            "A shortcuts control panel will open",
+            "Register shortcuts and press them globally to verify they fire",
+            "Close the window when done to pass the test",
+        ]),
+        TestKind::QuitShutdownPlayground => Some(&[
+            "A quit and shutdown control panel will open",
+            "Exercise both quit modes and verify the before-quit messages appear",
+            "Close the window when done to pass the test",
+        ]),
+        _ => None,
+    }
+}
+
 fn tests_json() -> String {
     let mut entries = Vec::with_capacity(RUST_TESTS.len());
     for test in RUST_TESTS {
+        let instructions = interactive_test_instructions(test.kind)
+            .map(|items| {
+                let items = items
+                    .iter()
+                    .map(|item| electrobun::json_string_literal(item))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(",\"instructions\":[{items}]")
+            })
+            .unwrap_or_default();
         entries.push(format!(
-            "{{\"id\":{},\"name\":{},\"category\":{},\"description\":{},\"interactive\":{}}}",
+            "{{\"id\":{},\"name\":{},\"category\":{},\"description\":{},\"interactive\":{}{} }}",
             electrobun::json_string_literal(test.id),
             electrobun::json_string_literal(test.name),
             electrobun::json_string_literal(test.category),
             electrobun::json_string_literal(test.description),
-            test.interactive
+            test.interactive,
+            instructions
         ));
     }
     format!("[{}]", entries.join(","))
@@ -3494,4 +4041,108 @@ fn json_string_array_items(source: &str) -> Vec<String> {
     }
 
     items
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn menu_normalization_applies_native_defaults_recursively() {
+        let menu = serde_json::json!([
+            { "type": "separator" },
+            {
+                "label": "Parent",
+                "enabled": false,
+                "submenu": [
+                    { "role": "copy" },
+                    { "label": "Child", "action": "child-action" }
+                ]
+            }
+        ]);
+        let mut bridge = MenuBridgeState::default();
+        let normalized = normalize_menu_array(menu, &mut bridge).unwrap();
+        let items = normalized.as_array().unwrap();
+
+        assert_eq!(items[0], serde_json::json!({ "type": "divider" }));
+        assert_eq!(items[1]["enabled"], false);
+        assert_eq!(items[1]["checked"], false);
+        assert_eq!(items[1]["hidden"], false);
+        assert_eq!(items[1]["submenu"][0]["label"], "Copy");
+        assert_eq!(items[1]["submenu"][0]["enabled"], true);
+        assert_eq!(items[1]["submenu"][1]["action"], "child-action");
+    }
+
+    #[test]
+    fn menu_normalization_retains_custom_data_for_click_callback() {
+        let menu = serde_json::json!([
+            {
+                "label": "Custom",
+                "action": "custom-action",
+                "data": { "value": 42, "active": true }
+            }
+        ]);
+        let mut bridge = MenuBridgeState::default();
+        let normalized = normalize_menu_array(menu, &mut bridge).unwrap();
+        let action = normalized[0]["action"].as_str().unwrap();
+        let encoded = action.strip_prefix(MENU_DATA_PREFIX).unwrap();
+        let (data_id, original_action) = encoded.split_once('|').unwrap();
+
+        assert_eq!(original_action, "custom-action");
+        assert_eq!(
+            bridge.data_by_id.get(data_id),
+            Some(&serde_json::json!({ "value": 42, "active": true }))
+        );
+    }
+
+    #[test]
+    fn serialized_interactive_tests_include_inline_instructions() {
+        let tests: JsonValue = serde_json::from_str(&tests_json()).unwrap();
+        let tests = tests.as_array().unwrap();
+        let interactive = tests
+            .iter()
+            .filter(|test| test["interactive"] == true)
+            .collect::<Vec<_>>();
+
+        assert_eq!(interactive.len(), 8);
+        assert!(interactive.iter().all(|test| test["instructions"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty())));
+    }
+
+    #[test]
+    fn rust_dispatcher_covers_interactive_playground_requests() {
+        let playgrounds = [
+            include_str!("../playgrounds/webviewtag/index.ts"),
+            include_str!("../playgrounds/wgpu-tag/index.ts"),
+            include_str!("../playgrounds/application-menu/index.ts"),
+            include_str!("../playgrounds/context-menu/index.ts"),
+            include_str!("../playgrounds/file-dialog/index.ts"),
+            include_str!("../playgrounds/shortcuts/index.ts"),
+            include_str!("../playgrounds/quit-test/index.ts"),
+        ];
+        let dispatcher = include_str!("main.rs");
+        let mut methods = std::collections::BTreeSet::new();
+
+        for playground in playgrounds {
+            let mut rest = playground;
+            while let Some(index) = rest.find("request.") {
+                rest = &rest[index + "request.".len()..];
+                let method = rest
+                    .chars()
+                    .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
+                    .collect::<String>();
+                if !method.is_empty() {
+                    methods.insert(method);
+                }
+            }
+        }
+
+        for method in methods {
+            assert!(
+                dispatcher.contains(&format!("\"{method}\" =>")),
+                "Rust dispatcher is missing interactive RPC method {method}"
+            );
+        }
+    }
 }

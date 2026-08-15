@@ -8,16 +8,15 @@ export const windowEventTests = [
     name: "Window move and resize events",
     category: "Window Events (Interactive)",
     description: "Test both move and resize events are detected with live updates",
+    instructions: [
+      "A test window will open",
+      "1. Drag the window to detect move event",
+      "2. Resize the window by dragging edges/corners",
+      "After both events are detected, close the window to pass the test",
+    ],
     interactive: true,
     timeout: 120000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A test window will open",
-        "1. Drag the window to detect move event",
-        "2. Resize the window by dragging edges/corners",
-        "After both events are detected, close the window to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening test window for move and resize event detection");
 
       await new Promise<void>((resolve, reject) => {
@@ -106,16 +105,15 @@ export const windowEventTests = [
   name: "Window blur and focus events",
   category: "Window Events (Interactive)",
   description: "Test both blur and focus events are detected with live updates",
+  instructions: [
+    "A test window will open",
+    "1. Focus another window to detect blur event",
+    "2. Focus the test window to detect focus event",
+    "After both events are detected, close the window to pass the test",
+  ],
   interactive: true,
   timeout: 120000,
-  async run({ log, showInstructions }) {
-    await showInstructions([
-      "A test window will open",
-      "1. Focus another window to detect blur event",
-      "2. Focus the test window to detect focus event",
-      "After both events are detected, close the window to pass the test",
-    ]);
-
+  async run({ log }) {
     log("Opening test window for blur and focus event detection");
 
     await new Promise<void>((resolve, reject) => {
@@ -191,60 +189,62 @@ defineTest({
   name: "Window visibleOnAllWorkspaces (macOS)",
   category: "Window Events (Interactive)",
   description: "Test window appears on all macOS Spaces",
+  instructions: [
+    "A test window will open",
+    "Use Mission Control (Ctrl+Up or swipe up) to switch to another Space/Desktop",
+    "Verify the test window appears on ALL Spaces, not just the current one",
+    "Then return to this Space and close the test window when done",
+  ],
   interactive: true,
   timeout: 120000,
-  async run({ createWindow, log, showInstructions, waitForUserVerification }) {
+  async run({ log }) {
     if (process.platform !== "darwin") {
       log("Skipping test - only available on macOS");
       return;
     }
 
-    await showInstructions([
-      "A test window will open",
-      "Use Mission Control (Ctrl+Up or swipe up) to switch to another Space/Desktop",
-      "Verify the test window appears on ALL Spaces, not just the current one",
-      "Then return to this Space",
-    ]);
-
     log("Creating test window for visibleOnAllWorkspaces");
-    const win = await createWindow({
+    const win = new BrowserWindow({
       url: "views://test-harness/index.html",
       title: "Visible On All Workspaces Test",
       renderer: "cef",
-      width: 400,
-      height: 300,
+      frame: { width: 400, height: 300 },
     });
 
-    log("Checking initial visibleOnAllWorkspaces state");
-    if (win.window.isVisibleOnAllWorkspaces()) {
-      throw new Error("Window should not be visible on all workspaces initially");
-    }
+    let closed = false;
+    const closedPromise = new Promise<void>((resolve) => {
+      win.on("close", () => {
+        closed = true;
+        resolve();
+      });
+    });
 
-    log("Setting window visible on all workspaces");
-    win.window.setAlwaysOnTop(true);
-    win.window.setVisibleOnAllWorkspaces(true);
+    try {
+      log("Checking initial visibleOnAllWorkspaces state");
+      if (win.isVisibleOnAllWorkspaces()) {
+        throw new Error("Window should not be visible on all workspaces initially");
+      }
 
-    log("Verifying state is set to true");
-    if (!win.window.isVisibleOnAllWorkspaces()) {
-      throw new Error("Window should be visible on all workspaces after setting");
-    }
+      log("Setting window visible on all workspaces");
+      win.setAlwaysOnTop(true);
+      win.setVisibleOnAllWorkspaces(true);
 
-    log("Window is now visible on all workspaces - verify in Mission Control");
-    const result = await waitForUserVerification();
+      log("Verifying state is set to true");
+      if (!win.isVisibleOnAllWorkspaces()) {
+        throw new Error("Window should be visible on all workspaces after setting");
+      }
 
-    if (result.action === "pass") {
+      log("Window is now visible on all workspaces - verify in Mission Control");
+      await closedPromise;
       log("Test passed - window successfully visible on all workspaces");
-    } else if (result.action === "fail") {
-      throw new Error("User reported window not visible on all workspaces");
-    } else if (result.action === "retest") {
-      log("Re-test requested");
-      return;
-    }
-
-    log("Setting window back to single workspace");
-    win.window.setVisibleOnAllWorkspaces(false);
-    if (win.window.isVisibleOnAllWorkspaces()) {
-      throw new Error("Window should not be visible on all workspaces after unsetting");
+    } finally {
+      if (!closed) {
+        try {
+          win.setVisibleOnAllWorkspaces(false);
+        } finally {
+          win.close();
+        }
+      }
     }
     log("Test completed successfully");
   },

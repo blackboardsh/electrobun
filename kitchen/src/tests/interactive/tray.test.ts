@@ -8,15 +8,14 @@ export const trayTests = [
     name: "Tray playground",
     category: "Tray (Interactive)",
     description: "Interactive playground for testing tray icon, title, and menus",
+    instructions: [
+      "A tray control panel will open",
+      "Configure tray options and click buttons to test",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000, // 10 minutes for exploration
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A tray control panel will open",
-        "Configure tray options and click buttons to test",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening tray playground window");
 
       await new Promise<void>((resolve) => {

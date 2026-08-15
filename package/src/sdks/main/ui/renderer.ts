@@ -8,6 +8,7 @@ import type { GpuWindow } from "../core/GpuWindow";
 import type { WGPUView } from "../core/WGPUView";
 import { FLOATS_PER_INSTANCE, parseColor, type PaintBuffer } from "./paint";
 import { ATLAS_SIZE, textAtlas } from "./text";
+import { runCleanupSteps } from "./cleanupSteps";
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -94,6 +95,7 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 export interface UiRenderer {
 	render(buffer: PaintBuffer, width: number, height: number): void;
 	resize(width: number, height: number): void;
+	dispose(): void;
 }
 
 /**
@@ -113,166 +115,252 @@ export async function createUiRenderer(
 		compatibleSurface: ctx,
 	});
 	const device = await adapter.requestDevice();
-	// Non-sRGB surface (command-buffer colors are already display-referred).
-	// Premultiplied alpha lets transparent windows composite; configure falls
-	// back to the surface's supported mode when unavailable, and our blend
-	// state produces premultiplied output over the alpha clear either way.
-	ctx.configure({ device, format: "bgra8unorm", alphaMode: "premultiplied" });
+	let configured = false;
+	let disposed = false;
+	let deviceAlive = true;
+	let uniformBuffer: ReturnType<typeof device.createBuffer> | null = null;
+	let atlasTexture: ReturnType<typeof device.createTexture> | null = null;
+	let instanceBuffer: ReturnType<typeof device.createBuffer> | null = null;
+	let shaderModule: ReturnType<typeof device.createShaderModule> | null = null;
+	let renderPipeline: ReturnType<typeof device.createRenderPipeline> | null = null;
+	let bindGroupLayout: ReturnType<
+		ReturnType<typeof device.createRenderPipeline>["getBindGroupLayout"]
+	> | null = null;
+	let atlasView: ReturnType<
+		ReturnType<typeof device.createTexture>["createView"]
+	> | null = null;
+	let atlasSampler: ReturnType<typeof device.createSampler> | null = null;
+	let bindGroup: ReturnType<typeof device.createBindGroup> | null = null;
 
-	const clear = parseColor(clearColor) >>> 0;
-	const clearValue = {
-		r: ((clear >>> 24) & 0xff) / 255,
-		g: ((clear >>> 16) & 0xff) / 255,
-		b: ((clear >>> 8) & 0xff) / 255,
-		a: (clear & 0xff) / 255,
+	const disposeResources = () => {
+		if (disposed) return;
+		disposed = true;
+		const shouldUnconfigure = configured;
+		configured = false;
+		const uniform = uniformBuffer;
+		uniformBuffer = null;
+		const atlas = atlasTexture;
+		atlasTexture = null;
+		const instances = instanceBuffer;
+		instanceBuffer = null;
+		const group = bindGroup;
+		bindGroup = null;
+		const sampler = atlasSampler;
+		atlasSampler = null;
+		const view = atlasView;
+		atlasView = null;
+		const layout = bindGroupLayout;
+		bindGroupLayout = null;
+		const pipeline = renderPipeline;
+		renderPipeline = null;
+		const module = shaderModule;
+		shaderModule = null;
+		const shouldDestroyDevice = deviceAlive;
+		deviceAlive = false;
+		runCleanupSteps([
+			() => {
+				if (shouldUnconfigure) ctx.unconfigure();
+			},
+			() => group?.release(),
+			() => sampler?.release(),
+			() => view?.release(),
+			() => layout?.release(),
+			() => pipeline?.release(),
+			() => module?.release(),
+			() => instances?.destroy(),
+			() => uniform?.destroy(),
+			() => atlas?.destroy(),
+			() => {
+				if (shouldDestroyDevice) device.destroy();
+			},
+		]);
 	};
 
-	const module = device.createShaderModule({ code: SHADER });
-	const pipeline = device.createRenderPipeline({
-		layout: "auto",
-		vertex: {
-			module,
-			entryPoint: "vs",
-			buffers: [
-				{
-					arrayStride: FLOATS_PER_INSTANCE * 4,
-					stepMode: "instance",
-					attributes: [
-						{ shaderLocation: 0, offset: 0, format: "float32x4" },
-						{ shaderLocation: 1, offset: 16, format: "float32x4" },
-						{ shaderLocation: 2, offset: 32, format: "float32x4" },
-						{ shaderLocation: 3, offset: 48, format: "float32x4" },
-						{ shaderLocation: 4, offset: 64, format: "float32x4" },
-					],
-				},
-			],
-		},
-		fragment: {
-			module,
-			entryPoint: "fs",
-			targets: [
-				{
-					format: ctx.format,
-					blend: {
-						color: {
-							operation: "add",
-							srcFactor: "src-alpha",
-							dstFactor: "one-minus-src-alpha",
-						},
-						alpha: {
-							operation: "add",
-							srcFactor: "one",
-							dstFactor: "one-minus-src-alpha",
-						},
-					},
-				},
-			],
-		},
-		primitive: { topology: "triangle-list" },
-	});
+	try {
+		// Non-sRGB surface (command-buffer colors are already display-referred).
+		// Premultiplied alpha lets transparent windows composite; configure falls
+		// back to the surface's supported mode when unavailable, and our blend
+		// state produces premultiplied output over the alpha clear either way.
+		ctx.configure({ device, format: "bgra8unorm", alphaMode: "premultiplied" });
+		configured = true;
 
-	const uniformBuffer = device.createBuffer({
-		size: 16,
-		usage: 0x40 | 0x8, // UNIFORM | COPY_DST
-	});
-	const atlasTexture = device.createTexture({
-		size: { width: ATLAS_SIZE, height: ATLAS_SIZE },
-		format: "rgba8unorm",
-		usage: 0x4 | 0x2, // TEXTURE_BINDING | COPY_DST
-	});
-	const atlasView = atlasTexture.createView();
-	const atlasSampler = device.createSampler({
-		magFilter: "linear",
-		minFilter: "linear",
-	});
-	const bindGroup = device.createBindGroup({
-		layout: pipeline.getBindGroupLayout(0),
-		entries: [
-			{ binding: 0, resource: { buffer: uniformBuffer } },
-			{ binding: 1, resource: atlasSampler },
-			{ binding: 2, resource: atlasView },
-		],
-	});
+		const clear = parseColor(clearColor) >>> 0;
+		const clearValue = {
+			r: ((clear >>> 24) & 0xff) / 255,
+			g: ((clear >>> 16) & 0xff) / 255,
+			b: ((clear >>> 8) & 0xff) / 255,
+			a: (clear & 0xff) / 255,
+		};
 
-	let atlasGeneration = -1;
-	const flushAtlas = () => {
-		const dirty = textAtlas.takeDirty();
-		const generationChanged = textAtlas.generation !== atlasGeneration;
-		if (!dirty && !generationChanged) return;
-		atlasGeneration = textAtlas.generation;
-		const region = generationChanged
-			? { x0: 0, y0: 0, x1: ATLAS_SIZE, y1: ATLAS_SIZE }
-			: dirty!;
-		const x = Math.max(0, Math.floor(region.x0));
-		const y = Math.max(0, Math.floor(region.y0));
-		const w = Math.min(ATLAS_SIZE, Math.ceil(region.x1)) - x;
-		const h = Math.min(ATLAS_SIZE, Math.ceil(region.y1)) - y;
-		if (w <= 0 || h <= 0) return;
-		// Pack the dirty rows into a tight buffer for the upload.
-		const packed = new Uint8Array(w * h * 4);
-		for (let row = 0; row < h; row++) {
-			const src = ((y + row) * ATLAS_SIZE + x) * 4;
-			packed.set(textAtlas.pixels.subarray(src, src + w * 4), row * w * 4);
-		}
-		device.queue.writeTexture(
-			{ texture: atlasTexture, origin: { x, y } },
-			packed,
-			{ bytesPerRow: w * 4, rowsPerImage: h },
-			{ width: w, height: h },
-		);
-	};
-
-	let instanceCapacity = 1024;
-	let instanceBuffer = device.createBuffer({
-		size: instanceCapacity * FLOATS_PER_INSTANCE * 4,
-		usage: 0x20 | 0x8, // VERTEX | COPY_DST
-	});
-
-	return {
-		resize(width: number, height: number) {
-			ctx._fallbackSize = { width, height };
-		},
-		render(buffer: PaintBuffer, width: number, height: number) {
-			if (width <= 0 || height <= 0) return;
-			flushAtlas();
-			if (buffer.count > instanceCapacity) {
-				while (instanceCapacity < buffer.count) instanceCapacity *= 2;
-				instanceBuffer = device.createBuffer({
-					size: instanceCapacity * FLOATS_PER_INSTANCE * 4,
-					usage: 0x20 | 0x8,
-				});
-			}
-			device.queue.writeBuffer(
-				uniformBuffer,
-				0,
-				new Float32Array([width, height, 0, 0]),
-			);
-			if (buffer.count > 0) {
-				device.queue.writeBuffer(
-					instanceBuffer,
-					0,
-					buffer.data.subarray(0, buffer.count * FLOATS_PER_INSTANCE),
-				);
-			}
-			const encoder = device.createCommandEncoder();
-			const pass = encoder.beginRenderPass({
-				colorAttachments: [
+		shaderModule = device.createShaderModule({ code: SHADER });
+		const module = shaderModule;
+		renderPipeline = device.createRenderPipeline({
+			layout: "auto",
+			vertex: {
+				module,
+				entryPoint: "vs",
+				buffers: [
 					{
-						view: ctx.getCurrentTexture().createView(),
-						loadOp: "clear",
-						storeOp: "store",
-						clearValue,
+						arrayStride: FLOATS_PER_INSTANCE * 4,
+						stepMode: "instance",
+						attributes: [
+							{ shaderLocation: 0, offset: 0, format: "float32x4" },
+							{ shaderLocation: 1, offset: 16, format: "float32x4" },
+							{ shaderLocation: 2, offset: 32, format: "float32x4" },
+							{ shaderLocation: 3, offset: 48, format: "float32x4" },
+							{ shaderLocation: 4, offset: 64, format: "float32x4" },
+						],
 					},
 				],
-			});
-			pass.setPipeline(pipeline);
-			pass.setBindGroup(0, bindGroup);
-			pass.setVertexBuffer(0, instanceBuffer);
-			if (buffer.count > 0) {
-				pass.draw(6, buffer.count);
+			},
+			fragment: {
+				module,
+				entryPoint: "fs",
+				targets: [
+					{
+						format: ctx.format,
+						blend: {
+							color: {
+								operation: "add",
+								srcFactor: "src-alpha",
+								dstFactor: "one-minus-src-alpha",
+							},
+							alpha: {
+								operation: "add",
+								srcFactor: "one",
+								dstFactor: "one-minus-src-alpha",
+							},
+						},
+					},
+				],
+			},
+			primitive: { topology: "triangle-list" },
+		});
+		const pipeline = renderPipeline;
+
+		uniformBuffer = device.createBuffer({
+			size: 16,
+			usage: 0x40 | 0x8, // UNIFORM | COPY_DST
+		});
+		atlasTexture = device.createTexture({
+			size: { width: ATLAS_SIZE, height: ATLAS_SIZE },
+			format: "rgba8unorm",
+			usage: 0x4 | 0x2, // TEXTURE_BINDING | COPY_DST
+		});
+		atlasView = atlasTexture.createView();
+		atlasSampler = device.createSampler({
+			magFilter: "linear",
+			minFilter: "linear",
+		});
+		bindGroupLayout = pipeline.getBindGroupLayout(0);
+		bindGroup = device.createBindGroup({
+			layout: bindGroupLayout,
+			entries: [
+				{ binding: 0, resource: { buffer: uniformBuffer } },
+				{ binding: 1, resource: atlasSampler },
+				{ binding: 2, resource: atlasView },
+			],
+		});
+		const rendererBindGroup = bindGroup;
+
+		let atlasRevision = 0;
+		const flushAtlas = () => {
+			if (!atlasTexture) return;
+			const update = textAtlas.dirtySince(atlasRevision);
+			if (!update) return;
+			const region = update.region;
+			const x = Math.max(0, Math.floor(region.x0));
+			const y = Math.max(0, Math.floor(region.y0));
+			const w = Math.min(ATLAS_SIZE, Math.ceil(region.x1)) - x;
+			const h = Math.min(ATLAS_SIZE, Math.ceil(region.y1)) - y;
+			if (w <= 0 || h <= 0) return;
+			// Pack the dirty rows into a tight buffer for the upload.
+			const packed = new Uint8Array(w * h * 4);
+			for (let row = 0; row < h; row++) {
+				const src = ((y + row) * ATLAS_SIZE + x) * 4;
+				packed.set(textAtlas.pixels.subarray(src, src + w * 4), row * w * 4);
 			}
-			pass.end();
-			device.queue.submit([encoder.finish()]);
-		},
-	};
+			device.queue.writeTexture(
+				{ texture: atlasTexture, origin: { x, y } },
+				packed,
+				{ bytesPerRow: w * 4, rowsPerImage: h },
+				{ width: w, height: h },
+			);
+			// A failed write leaves this renderer's revision unchanged, so the next
+			// frame retries without consuming other renderers' updates.
+			atlasRevision = update.revision;
+		};
+
+		let instanceCapacity = 1024;
+		instanceBuffer = device.createBuffer({
+			size: instanceCapacity * FLOATS_PER_INSTANCE * 4,
+			usage: 0x20 | 0x8, // VERTEX | COPY_DST
+		});
+
+		return {
+			resize(width: number, height: number) {
+				if (disposed) return;
+				ctx._fallbackSize = { width, height };
+			},
+			render(buffer: PaintBuffer, width: number, height: number) {
+				if (disposed || width <= 0 || height <= 0) return;
+				flushAtlas();
+				if (buffer.count > instanceCapacity) {
+					let nextCapacity = instanceCapacity;
+					while (nextCapacity < buffer.count) nextCapacity *= 2;
+					const previous = instanceBuffer;
+					const next = device.createBuffer({
+						size: nextCapacity * FLOATS_PER_INSTANCE * 4,
+						usage: 0x20 | 0x8,
+					});
+					instanceBuffer = next;
+					instanceCapacity = nextCapacity;
+					previous?.destroy();
+				}
+				if (!uniformBuffer || !instanceBuffer) return;
+				device.queue.writeBuffer(
+					uniformBuffer,
+					0,
+					new Float32Array([width, height, 0, 0]),
+				);
+				if (buffer.count > 0) {
+					device.queue.writeBuffer(
+						instanceBuffer,
+						0,
+						buffer.data.subarray(0, buffer.count * FLOATS_PER_INSTANCE),
+					);
+				}
+				const encoder = device.createCommandEncoder();
+				const pass = encoder.beginRenderPass({
+					colorAttachments: [
+						{
+							view: ctx.getCurrentTexture().createView(),
+							loadOp: "clear",
+							storeOp: "store",
+							clearValue,
+						},
+					],
+				});
+				pass.setPipeline(pipeline);
+				pass.setBindGroup(0, rendererBindGroup);
+				pass.setVertexBuffer(0, instanceBuffer);
+				if (buffer.count > 0) {
+					pass.draw(6, buffer.count);
+				}
+				pass.end();
+				device.queue.submit([encoder.finish()]);
+			},
+			dispose: disposeResources,
+		};
+	} catch (error) {
+		try {
+			disposeResources();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to create and clean up the UI renderer",
+			);
+		}
+		throw error;
+	}
 }

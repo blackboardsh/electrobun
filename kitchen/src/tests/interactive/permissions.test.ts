@@ -13,7 +13,7 @@
 // actually testable in this build.
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserWindow } from "electrobun/main";
+import { BrowserWindow, BuildConfig } from "electrobun/main";
 
 const PERMISSION_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
@@ -232,16 +232,15 @@ function createPermissionTest(renderer: "cef" | "native") {
     name: `Permission prompt - ${rendererLabel}`,
     category: "Permissions (Interactive)",
     description: `Verify the native permission dialog names the specific permission being requested. Exercises the ${rendererLabel} permission delegate path.`,
+    instructions: [
+      `A page will open in a ${rendererLabel} window with permission-requesting buttons grouped by API family.`,
+      "Buttons whose API is unavailable in this renderer are disabled — only enabled buttons can trigger a prompt.",
+      "Click an enabled button. The Electrobun dialog should name the specific permission (e.g. 'Camera', 'Geolocation', 'MIDI system-exclusive').",
+      "Try a few different buttons, then close the window to pass the test.",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        `A page will open in a ${rendererLabel} window with permission-requesting buttons grouped by API family.`,
-        "Buttons whose API is unavailable in this renderer are disabled — only enabled buttons can trigger a prompt.",
-        "Click an enabled button. The Electrobun dialog should name the specific permission (e.g. 'Camera', 'Geolocation', 'MIDI system-exclusive').",
-        "Try a few different buttons, then close the window to pass the test.",
-      ]);
-
+    async run({ log }) {
       const server = await startPermissionServer();
       const url = `http://127.0.0.1:${server.port}/`;
       log(`Permission test server listening at ${url}`);
@@ -270,7 +269,13 @@ function createPermissionTest(renderer: "cef" | "native") {
   });
 }
 
-export const permissionTests = [
+const bundledPermissionTests = [
   createPermissionTest("cef"),
   createPermissionTest("native"),
 ];
+
+// Do not label a system-webview fallback as CEF when the bundle does not
+// contain CEF. Define both first so later test IDs stay stable across variants.
+export const permissionTests = BuildConfig.getSync().availableRenderers.includes("cef")
+  ? bundledPermissionTests
+  : bundledPermissionTests.slice(1);

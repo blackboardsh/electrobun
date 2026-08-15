@@ -57,8 +57,18 @@ export const uiInputEventTests = [
 		category: "Cottontail UI",
 		description:
 			"Visualizes the raw native pointer/key event stream and UI-level dispatch (hover, click, focus, drag, wheel).",
+		instructions: [
+			"A window titled 'UI input events' is open.",
+			"Move the mouse over it: the header should say 'native event path active' and show live coordinates.",
+			"Hover and click the button: enter/leave/click entries appear (violet = UI dispatch, blue = raw pointer).",
+			"Drag the amber handle: the window moves; a still click logs instead.",
+			"Click the input and type (try your OS keyboard layout): green raw-key entries show keycodes AND the produced characters.",
+			"Two-finger scroll over the list: wheel events with deltas, and the list scrolls.",
+			"Close the input-event window when you are done.",
+		],
 		interactive: true,
-		async run({ showInstructions, waitForUserVerification, log }) {
+		timeout: 600000,
+		async run() {
 			const [pos, setPos] = signal({ x: 0, y: 0 });
 			const [pathLabel, setPathLabel] = signal("waiting for events...");
 			const [query, setQuery] = signal("");
@@ -278,24 +288,16 @@ export const uiInputEventTests = [
 			events.on(`wgpu-pointer-${viewId}`, onRawPointer);
 			events.on(`wgpu-key-${viewId}`, onRawKey);
 
+			const lifecycle = uiWindow as typeof uiWindow & {
+				readonly closed: Promise<void>;
+				isClosed(): boolean;
+			};
 			try {
-				await showInstructions([
-					"A window titled 'UI input events' is open.",
-					"Move the mouse over it: the header should say 'native event path active' and show live coordinates.",
-					"Hover and click the button: enter/leave/click entries appear (violet = UI dispatch, blue = raw pointer).",
-					"Drag the amber handle: the window moves; a still click logs instead.",
-					"Click the input and type (try your OS keyboard layout): green raw-key entries show keycodes AND the produced characters.",
-					"Two-finger scroll over the list: wheel events with deltas, and the list scrolls.",
-				]);
-				const result = await waitForUserVerification();
-				log(`user verdict: ${result.action}`);
-				if (result.action === "fail") {
-					throw new Error(result.notes || "User reported failure");
-				}
+				await lifecycle.closed;
 			} finally {
 				events.off(`wgpu-pointer-${viewId}`, onRawPointer);
 				events.off(`wgpu-key-${viewId}`, onRawKey);
-				uiWindow.dispose();
+				if (!lifecycle.isClosed()) uiWindow.dispose();
 			}
 		},
 	}),

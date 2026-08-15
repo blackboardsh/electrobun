@@ -10,6 +10,14 @@ import {
 	mapStoreOp,
 	normalizeRenderPassDepthStencilFields,
 } from "./webgpuRenderPass";
+import { getWebgpuContextKey } from "./webgpuContextKey";
+import {
+	WebgpuContextRegistry,
+	createNativeWebgpuContext,
+	registerWebgpuContextRelease,
+	releaseNativeWebgpuContext,
+} from "./webgpuContextRegistry";
+import { WebgpuPresentationState } from "./webgpuPresentationState";
 
 const WGPUNative = WGPU.native;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
@@ -146,11 +154,14 @@ const WGPUStorageTextureAccess_ReadWrite = 0x00000004;
 const WGPU_STRLEN = 0xffffffffffffffffn;
 const WGPU_DEPTH_SLICE_UNDEFINED = 0xffffffff;
 
-const WGPU_KEEPALIVE: any[] = [];
-let LAST_SURFACE_PTR: number | null = null;
-let LAST_SURFACE_HAS_TEXTURE = false;
-let LAST_CREATED_CONTEXT: GPUCanvasContext | null = null;
-const VIEW_CONTEXTS = new Map<number, { instance: number; surface: number; context: GPUCanvasContext }>();
+// Only callbacks cross the synchronous FFI call boundary. Descriptor buffers
+// stay live through their local stack frame and must not accumulate globally.
+const WGPU_CALLBACK_KEEPALIVE: any[] = [];
+const VIEW_CONTEXTS = new WebgpuContextRegistry<GPUCanvasContext>();
+const PRESENTATION_STATE = new WebgpuPresentationState<
+	GPUQueue,
+	GPUCanvasContext
+>();
 const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
 const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
 
@@ -169,7 +180,7 @@ const bufferMapCallback = new JSCallback(
 		threadsafe: true,
 	},
 );
-WGPU_KEEPALIVE.push(bufferMapCallback);
+WGPU_CALLBACK_KEEPALIVE.push(bufferMapCallback);
 
 const queueWorkDoneCallback = new JSCallback(
 	(status: number, _message: number, userdata1: number, _userdata2: number) => {
@@ -186,7 +197,7 @@ const queueWorkDoneCallback = new JSCallback(
 		threadsafe: true,
 	},
 );
-WGPU_KEEPALIVE.push(queueWorkDoneCallback);
+WGPU_CALLBACK_KEEPALIVE.push(queueWorkDoneCallback);
 
 function toBigInt(value: unknown, fallback = 0n) {
 	if (typeof value === "bigint") return value;
@@ -227,7 +238,6 @@ function makeStringView(str?: string | null) {
 		return { ptr: 0, len: 0n, cstr: null };
 	}
 	const bytes = new TextEncoder().encode(str);
-	WGPU_KEEPALIVE.push(bytes);
 	return { ptr: ptr(bytes), len: BigInt(bytes.byteLength), cstr: bytes };
 }
 
@@ -870,9 +880,16 @@ function pickSurfaceFormatAlpha(capsView: DataView, preferredFormat: number) {
 class GPUTexture {
 	ptr: number;
 	format?: number;
-	constructor(ptr: number, format?: number) {
+	private readonly _views = new Set<GPUTextureView>();
+	private readonly _presentationContext?: GPUCanvasContext;
+	constructor(
+		ptr: number,
+		format?: number,
+		presentationContext?: GPUCanvasContext,
+	) {
 		this.ptr = ptr;
 		this.format = format;
+		this._presentationContext = presentationContext;
 	}
 	createView(descriptor?: {
 		format?: string;
@@ -884,7 +901,9 @@ class GPUTexture {
 		aspect?: string;
 		usage?: number;
 	}) {
+		if (!this.ptr) throw new Error("WebGPU texture has been released");
 		let descPtr = 0;
+		let descBuffer: ArrayBuffer | undefined;
 		if (descriptor) {
 			let format = mapTextureFormat(descriptor.format) ?? 0;
 			const baseFormat =
@@ -904,26 +923,84 @@ class GPUTexture {
 				aspect: mapTextureAspect(descriptor.aspect) ?? 0,
 				usage: toBigInt(descriptor.usage ?? 0),
 			});
-			WGPU_KEEPALIVE.push(desc.buffer);
+			descBuffer = desc.buffer;
 			descPtr = desc.ptr as any;
 		}
 		const view = WGPUNative.symbols.wgpuTextureCreateView(
 			this.ptr,
 			descPtr,
 		);
-		return new GPUTextureView(view, this.format);
+		void descBuffer;
+		if (!view) throw new Error("Failed to create WebGPU texture view");
+		const textureView = new GPUTextureView(
+			Number(view),
+			this.format,
+			() => this._views.delete(textureView),
+			this._presentationContext,
+		);
+		this._views.add(textureView);
+		return textureView;
 	}
 	destroy() {
-		WGPUNative.symbols.wgpuTextureDestroy(this.ptr);
+		if (!this.ptr) return;
+		const texturePtr = this.ptr;
+		this.ptr = 0;
+		try {
+			WGPUNative.symbols.wgpuTextureDestroy(texturePtr);
+		} finally {
+			try {
+				this._releaseViews();
+			} finally {
+				WGPUNative.symbols.wgpuTextureRelease(texturePtr);
+			}
+		}
+	}
+	_releaseReference() {
+		if (!this.ptr) return;
+		const texturePtr = this.ptr;
+		this.ptr = 0;
+		try {
+			this._releaseViews();
+		} finally {
+			WGPUNative.symbols.wgpuTextureRelease(texturePtr);
+		}
+	}
+	private _releaseViews() {
+		for (const view of [...this._views]) {
+			try {
+				view._releaseReference();
+			} catch {}
+		}
+		this._views.clear();
 	}
 }
 
 class GPUTextureView {
 	ptr: number;
 	format?: number;
-	constructor(ptr: number, format?: number) {
+	readonly _presentationContext?: GPUCanvasContext;
+	private _onRelease?: () => void;
+	constructor(
+		ptr: number,
+		format?: number,
+		onRelease?: () => void,
+		presentationContext?: GPUCanvasContext,
+	) {
 		this.ptr = ptr;
 		this.format = format;
+		this._onRelease = onRelease;
+		this._presentationContext = presentationContext;
+	}
+	_releaseReference() {
+		if (!this.ptr) return;
+		const viewPtr = this.ptr;
+		this.ptr = 0;
+		this._onRelease?.();
+		this._onRelease = undefined;
+		WGPUNative.symbols.wgpuTextureViewRelease(viewPtr);
+	}
+	release() {
+		this._releaseReference();
 	}
 }
 
@@ -934,22 +1011,46 @@ class GPUQueue {
 		this.ptr = ptr;
 	}
 	submit(commandBuffers: GPUCommandBuffer[]) {
+		if (!this.ptr || !this._device?.ptr) {
+			throw new Error("WebGPU queue belongs to a destroyed device");
+		}
 		const buffer = new BigUint64Array(commandBuffers.length);
+		const presentationContexts = new Set<GPUCanvasContext>();
 		for (let i = 0; i < commandBuffers.length; i += 1) {
+			if (!commandBuffers[i]!.ptr) {
+				throw new Error("WebGPU command buffer has already been submitted");
+			}
 			buffer[i] = BigInt(commandBuffers[i]!.ptr);
 		}
-		WGPU_KEEPALIVE.push(buffer);
-		WGPUNative.symbols.wgpuQueueSubmit(
-			this.ptr,
-			BigInt(commandBuffers.length) as any,
-			ptrOrNull(buffer),
-		);
-		if (LAST_SURFACE_PTR && LAST_SURFACE_HAS_TEXTURE) {
-			LAST_SURFACE_HAS_TEXTURE = false;
-			WGPUBridge.surfacePresent(LAST_SURFACE_PTR as any);
+		for (const commandBuffer of commandBuffers) {
+			for (const context of commandBuffer._consumePresentationContexts()) {
+				presentationContexts.add(context);
+			}
+		}
+		try {
+			WGPUNative.symbols.wgpuQueueSubmit(
+				this.ptr,
+				BigInt(commandBuffers.length) as any,
+				ptrOrNull(buffer),
+			);
+			void buffer;
+		} finally {
+			for (const commandBuffer of commandBuffers) {
+				try {
+					commandBuffer._releaseReference();
+				} catch {}
+			}
+		}
+		for (const context of presentationContexts) {
+			PRESENTATION_STATE.presentPendingSurface(this, context, (surface) =>
+				surface._presentNative(),
+			);
 		}
 	}
 	writeBuffer(buffer: GPUBuffer, offset: number, data: ArrayBufferView) {
+		if (!this.ptr || !this._device?.ptr) {
+			throw new Error("WebGPU queue belongs to a destroyed device");
+		}
 		WGPUNative.symbols.wgpuQueueWriteBuffer(
 			this.ptr,
 			buffer.ptr,
@@ -964,6 +1065,9 @@ class GPUQueue {
 		dataLayout: { bytesPerRow: number; rowsPerImage?: number },
 		size: { width: number; height: number; depthOrArrayLayers?: number },
 	) {
+		if (!this.ptr || !this._device?.ptr) {
+			throw new Error("WebGPU queue belongs to a destroyed device");
+		}
 		if (!data || data.byteLength === 0) return;
 		let bytesPerPixel = bytesPerPixelForFormat(destination.texture.format);
 		let width =
@@ -1048,7 +1152,6 @@ class GPUQueue {
 			height,
 			layers,
 		);
-		WGPU_KEEPALIVE.push(texInfo.buffer, layout.buffer, extent.buffer);
 		WGPUNative.symbols.wgpuQueueWriteTexture(
 			this.ptr,
 			texInfo.ptr as any,
@@ -1057,31 +1160,47 @@ class GPUQueue {
 			layout.ptr as any,
 			extent.ptr as any,
 		);
+		void texInfo.buffer;
+		void layout.buffer;
+		void extent.buffer;
+		void writeData;
 	}
 	onSubmittedWorkDone() {
+		if (!this.ptr || !this._device?.ptr) return Promise.resolve(false);
+		const queuePtr = this.ptr;
 		const callbackPtr = (queueWorkDoneCallback as any).ptr ?? queueWorkDoneCallback;
 		const info = makeQueueWorkDoneCallbackInfo(
 			Number(callbackPtr),
-			this.ptr,
+			queuePtr,
 			0,
-		);
-		WGPU_KEEPALIVE.push(info.buffer);
-		WGPUBridge.queueOnSubmittedWorkDone(
-			this.ptr as any,
-			info.ptr as any,
 		);
 		return new Promise<boolean>((resolve) => {
 			let done = false;
-			const resolveOnce = () => {
+			const finish = (ok: boolean) => {
 				if (done) return;
 				done = true;
-				resolve(true);
+				WORK_DONE_RESOLVERS.delete(queuePtr);
+				resolve(ok);
 			};
-			WORK_DONE_RESOLVERS.set(this.ptr, () => resolveOnce());
+			WORK_DONE_RESOLVERS.set(queuePtr, finish);
+			try {
+				WGPUBridge.queueOnSubmittedWorkDone(
+					queuePtr as any,
+					info.ptr as any,
+				);
+				void info.buffer;
+			} catch {
+				finish(false);
+				return;
+			}
 
 			const start = Date.now();
 			const poll = () => {
 				if (done) return;
+				if (this.ptr !== queuePtr || !this._device?.ptr) {
+					finish(false);
+					return;
+				}
 				try {
 					if ((this as any)._device?.instancePtr) {
 						WGPUNative.symbols.wgpuInstanceProcessEvents(
@@ -1091,13 +1210,25 @@ class GPUQueue {
 					WGPUNative.symbols.wgpuDeviceTick((this as any)._device?.ptr ?? 0);
 				} catch {}
 				if (Date.now() - start > 5000) {
-					resolve(false);
+					finish(false);
 					return;
 				}
 				setTimeout(poll, 5);
 			};
 			setTimeout(poll, 5);
 		});
+	}
+	_releaseReference() {
+		const configuredContexts = PRESENTATION_STATE.detachQueue(this);
+		for (const context of configuredContexts) {
+			context._onQueueReleased(this);
+		}
+		if (!this.ptr) return;
+		const queuePtr = this.ptr;
+		this.ptr = 0;
+		WORK_DONE_RESOLVERS.get(queuePtr)?.(false);
+		WORK_DONE_RESOLVERS.delete(queuePtr);
+		WGPUNative.symbols.wgpuQueueRelease(queuePtr);
 	}
 }
 
@@ -1115,29 +1246,48 @@ class GPUDevice {
 		this.ptr = ptr;
 		this.instancePtr = instancePtr ?? null;
 		this.queue = new GPUQueue(WGPUNative.symbols.wgpuDeviceGetQueue(ptr));
+		if (!this.queue.ptr) {
+			WGPUNative.symbols.wgpuDeviceRelease(ptr);
+			throw new Error("Failed to get WGPU device queue");
+		}
 		this.queue._device = this;
 	}
 	destroy() {
 		if (!this.ptr) return;
+		const devicePtr = this.ptr;
+		// Zero the public handle before native teardown so reentrant or repeated
+		// destroy calls cannot use/release the same device twice.
+		this.ptr = 0;
+		this.instancePtr = null;
 		try {
-			WGPUNative.symbols.wgpuDeviceDestroy(this.ptr);
+			this.queue._releaseReference();
 		} catch {}
 		try {
-			WGPUNative.symbols.wgpuDeviceRelease(this.ptr);
+			WGPUNative.symbols.wgpuDeviceDestroy(devicePtr);
+		} catch {}
+		try {
+			WGPUNative.symbols.wgpuDeviceRelease(devicePtr);
 		} catch {}
 	}
+	_invalidateInstance(instancePtr: number) {
+		if (this.instancePtr === instancePtr) this.instancePtr = null;
+	}
+	private _assertLive() {
+		if (!this.ptr) throw new Error("WebGPU device has been destroyed");
+	}
 	createBuffer(descriptor: { size: number; usage: number; mappedAtCreation?: boolean }) {
+		this._assertLive();
 		let usage = toBigInt(descriptor.usage ?? 0);
 		const desc = makeBufferDescriptor(
 			descriptor.size,
 			usage,
 			!!descriptor.mappedAtCreation,
 		);
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const bufferPtr = WGPUNative.symbols.wgpuDeviceCreateBuffer(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void desc.buffer;
 		return new GPUBuffer(
 			bufferPtr,
 			descriptor.size,
@@ -1154,6 +1304,7 @@ class GPUDevice {
 		sampleCount?: number;
 		viewFormats?: string[];
 	}) {
+		this._assertLive();
 		const mappedFormat =
 			mapTextureFormat(descriptor.format) ?? WGPUTextureFormat_BGRA8Unorm;
 		const rawSample = Number(descriptor.sampleCount ?? 1);
@@ -1163,12 +1314,13 @@ class GPUDevice {
 		}
 		let viewFormatsPtr: number | null = null;
 		let viewFormatCount = 0;
+		let viewFormatsArray: Uint32Array | undefined;
 		if (descriptor.viewFormats && descriptor.viewFormats.length) {
 			const arr = new Uint32Array(descriptor.viewFormats.length);
 			descriptor.viewFormats.forEach((f, i) => {
 				arr[i] = mapTextureFormat(f) ?? 0;
 			});
-			WGPU_KEEPALIVE.push(arr);
+			viewFormatsArray = arr;
 			viewFormatsPtr = ptr(arr) as any;
 			viewFormatCount = descriptor.viewFormats.length;
 		}
@@ -1183,11 +1335,12 @@ class GPUDevice {
 			viewFormatsPtr,
 			viewFormatCount,
 		);
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const texPtr = WGPUNative.symbols.wgpuDeviceCreateTexture(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void viewFormatsArray;
+		void desc.buffer;
 		return new GPUTexture(texPtr, mappedFormat);
 	}
 	createSampler(descriptor?: {
@@ -1202,6 +1355,7 @@ class GPUDevice {
 		compare?: string;
 		maxAnisotropy?: number;
 	}) {
+		this._assertLive();
 		const desc = makeSamplerDescriptor({
 			addressModeU: mapAddressMode(descriptor?.addressModeU),
 			addressModeV: mapAddressMode(descriptor?.addressModeV),
@@ -1214,14 +1368,15 @@ class GPUDevice {
 			compare: mapCompareFunction(descriptor?.compare),
 			maxAnisotropy: descriptor?.maxAnisotropy,
 		});
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const samplerPtr = WGPUNative.symbols.wgpuDeviceCreateSampler(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void desc.buffer;
 		return new GPUSampler(samplerPtr);
 	}
 	createBindGroupLayout(descriptor: { entries: any[] }) {
+		this._assertLive();
 		const entries = descriptor.entries.map((entry) => {
 			const hasBindingKind =
 				!!entry.buffer ||
@@ -1269,7 +1424,6 @@ class GPUDevice {
 					  }
 					: undefined,
 			});
-			WGPU_KEEPALIVE.push(bindingEntry.buffer);
 			return bindingEntry;
 		});
 		const entryBuf = new ArrayBuffer(entries.length * 120);
@@ -1279,19 +1433,20 @@ class GPUDevice {
 			);
 		});
 		const entryPtr = ptrOrNull(entryBuf);
-		WGPU_KEEPALIVE.push(entryBuf);
 		const desc = makeBindGroupLayoutDescriptor(
 			entryPtr as any,
 			entries.length,
 		);
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const layoutPtr = WGPUNative.symbols.wgpuDeviceCreateBindGroupLayout(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void entryBuf;
+		void desc.buffer;
 		return new GPUBindGroupLayout(layoutPtr);
 	}
 	createBindGroup(descriptor: { layout: GPUBindGroupLayout; entries: any[] }) {
+		this._assertLive();
 		const entries = descriptor.entries.map((entry) => {
 			const bufferResource =
 				entry.resource?.buffer || entry.resource instanceof GPUBuffer
@@ -1337,53 +1492,59 @@ class GPUDevice {
 			);
 		});
 		const entryPtr = ptrOrNull(entryBuf);
-		WGPU_KEEPALIVE.push(entryBuf);
 		const desc = makeBindGroupDescriptor(
 			descriptor.layout.ptr,
 			entryPtr as any,
 			entries.length,
 		);
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const bindGroupPtr = WGPUNative.symbols.wgpuDeviceCreateBindGroup(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void entryBuf;
+		void desc.buffer;
 		return new GPUBindGroup(bindGroupPtr);
 	}
 	createPipelineLayout(descriptor: { bindGroupLayouts: GPUBindGroupLayout[] }) {
+		this._assertLive();
 		const layouts = new BigUint64Array(descriptor.bindGroupLayouts.length);
 		for (let i = 0; i < layouts.length; i += 1) {
 			layouts[i] = BigInt(descriptor.bindGroupLayouts[i]!.ptr);
 		}
-		WGPU_KEEPALIVE.push(layouts);
 		const desc = makePipelineLayoutDescriptor(
 			ptrOrNull(layouts) as any,
 			layouts.length,
 		);
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const layoutPtr = WGPUNative.symbols.wgpuDeviceCreatePipelineLayout(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void layouts;
+		void desc.buffer;
 		return new GPUPipelineLayout(layoutPtr);
 	}
 	createShaderModule(descriptor: { code: string }) {
+		this._assertLive();
 		const code = new TextEncoder().encode(descriptor.code + "\0");
 		const codeBuf = new Uint8Array(code);
-		WGPU_KEEPALIVE.push(codeBuf);
 		const codePtr = ptr(codeBuf);
 		const source = makeShaderSourceWGSL(codePtr as any, WGPU_STRLEN);
 		const desc = makeShaderModuleDescriptor(source.ptr as any);
-		WGPU_KEEPALIVE.push(source.buffer, desc.buffer);
 		const modulePtr = WGPUNative.symbols.wgpuDeviceCreateShaderModule(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void codeBuf;
+		void source.buffer;
+		void desc.buffer;
 		return new GPUShaderModule(modulePtr);
 	}
 	createRenderPipeline(descriptor: any) {
+		this._assertLive();
+		const ffiKeepalive: unknown[] = [];
 		const vertexModule = descriptor.vertex.module as GPUShaderModule;
 		const vertexEntry = makeStringView(descriptor.vertex.entryPoint ?? "main");
+		ffiKeepalive.push(vertexEntry);
 		const vertexBuffers = descriptor.vertex.buffers ?? [];
 		const vertexLayouts: ArrayBuffer[] = [];
 		const vertexLayoutPtrs: number[] = [];
@@ -1402,14 +1563,14 @@ class GPUDevice {
 				);
 			});
 			const attrPtr = ptrOrNull(attrBuf);
-			WGPU_KEEPALIVE.push(attrBuf);
+			ffiKeepalive.push(attrBuf);
 			const layout = makeVertexBufferLayout(
 				attrPtr as any,
 				attrs.length,
 				BigInt(buf.arrayStride ?? 0),
 				mapVertexStepMode(buf.stepMode),
 			);
-			WGPU_KEEPALIVE.push(layout.buffer);
+			ffiKeepalive.push(layout.buffer);
 			vertexLayouts.push(layout.buffer);
 			vertexLayoutPtrs.push(layout.ptr as any);
 		}
@@ -1421,7 +1582,7 @@ class GPUDevice {
 			);
 		});
 		const vertexLayoutsPtr = ptrOrNull(vertexLayoutsBuf);
-		WGPU_KEEPALIVE.push(vertexLayoutsBuf);
+		ffiKeepalive.push(vertexLayoutsBuf);
 
 		const vertexState = makeVertexState(
 			vertexModule.ptr,
@@ -1429,14 +1590,16 @@ class GPUDevice {
 			vertexLayoutsPtr as any,
 			vertexLayouts.length,
 		);
-		WGPU_KEEPALIVE.push(vertexState.buffer);
+		ffiKeepalive.push(vertexState.buffer);
 
 		let fragmentStatePtr: number | null = null;
 		if (descriptor.fragment) {
 			const fragModule = descriptor.fragment.module as GPUShaderModule;
 			const fragEntry = makeStringView(descriptor.fragment.entryPoint ?? "main");
+			ffiKeepalive.push(fragEntry);
 			const targets = descriptor.fragment.targets ?? [];
 			const targetBuf = new ArrayBuffer(targets.length * 32);
+			ffiKeepalive.push(targetBuf);
 			targets.forEach((t: any, i: number) => {
 				let blendPtr: number | null = null;
 				if (t.blend) {
@@ -1451,7 +1614,7 @@ class GPUDevice {
 						mapBlendFactor(t.blend.alpha?.dstFactor),
 					);
 					const blend = makeBlendState(colorComp.buffer, alphaComp.buffer);
-					WGPU_KEEPALIVE.push(colorComp.buffer, alphaComp.buffer, blend.buffer);
+					ffiKeepalive.push(colorComp.buffer, alphaComp.buffer, blend.buffer);
 					blendPtr = blend.ptr as any;
 				}
 				const target = makeColorTargetState(
@@ -1464,14 +1627,13 @@ class GPUDevice {
 				);
 			});
 			const targetPtr = ptrOrNull(targetBuf);
-			WGPU_KEEPALIVE.push(targetBuf);
 			const fragState = makeFragmentState(
 				fragModule.ptr,
 				{ ptr: fragEntry.ptr as any, len: fragEntry.len },
 				targetPtr as any,
 				targets.length,
 			);
-			WGPU_KEEPALIVE.push(fragState.buffer);
+			ffiKeepalive.push(fragState.buffer);
 			fragmentStatePtr = fragState.ptr as any;
 		}
 
@@ -1482,7 +1644,7 @@ class GPUDevice {
 			cullMode: mapCullMode(descriptor.primitive?.cullMode),
 			unclippedDepth: descriptor.primitive?.unclippedDepth ? 1 : 0,
 		});
-		WGPU_KEEPALIVE.push(primitive.buffer);
+		ffiKeepalive.push(primitive.buffer);
 
 		let depthStencilPtr: number | null = null;
 		if (descriptor.depthStencil) {
@@ -1498,7 +1660,7 @@ class GPUDevice {
 				depthBiasSlopeScale: descriptor.depthStencil.depthBiasSlopeScale ?? 0,
 				depthBiasClamp: descriptor.depthStencil.depthBiasClamp ?? 0,
 			});
-			WGPU_KEEPALIVE.push(depth.buffer);
+			ffiKeepalive.push(depth.buffer);
 			depthStencilPtr = depth.ptr as any;
 		}
 
@@ -1507,7 +1669,7 @@ class GPUDevice {
 			mask: descriptor.multisample?.mask ?? 0xffffffff,
 			alphaToCoverageEnabled: !!descriptor.multisample?.alphaToCoverageEnabled,
 		});
-		WGPU_KEEPALIVE.push(multisample.buffer);
+		ffiKeepalive.push(multisample.buffer);
 
 		const pipelineDesc = makeRenderPipelineDescriptor(
 			descriptor.layout && descriptor.layout !== "auto"
@@ -1519,45 +1681,51 @@ class GPUDevice {
 			multisample.buffer,
 			fragmentStatePtr,
 		);
-		WGPU_KEEPALIVE.push(pipelineDesc.buffer);
+		ffiKeepalive.push(pipelineDesc.buffer);
 
 		const pipelinePtr = WGPUNative.symbols.wgpuDeviceCreateRenderPipeline(
 			this.ptr,
 			pipelineDesc.ptr as any,
 		);
+		void ffiKeepalive;
 		return new GPURenderPipeline(pipelinePtr);
 	}
 	createComputePipeline(descriptor: {
 		layout?: GPUPipelineLayout | "auto";
 		compute: { module: GPUShaderModule; entryPoint?: string };
 	}) {
+		this._assertLive();
+		const ffiKeepalive: unknown[] = [];
 		const module = descriptor.compute.module as GPUShaderModule;
 		const entry = makeStringView(descriptor.compute.entryPoint ?? "main");
+		ffiKeepalive.push(entry);
 		const stage = makeProgrammableStageDescriptor(
 			module.ptr,
 			{ ptr: entry.ptr as any, len: entry.len },
 		);
-		WGPU_KEEPALIVE.push(stage.buffer);
+		ffiKeepalive.push(stage.buffer);
 		const pipelineDesc = makeComputePipelineDescriptor(
 			descriptor.layout && descriptor.layout !== "auto"
 				? (descriptor.layout as GPUPipelineLayout).ptr
 				: null,
 			stage.buffer,
 		);
-		WGPU_KEEPALIVE.push(pipelineDesc.buffer);
+		ffiKeepalive.push(pipelineDesc.buffer);
 		const pipelinePtr = WGPUNative.symbols.wgpuDeviceCreateComputePipeline(
 			this.ptr,
 			pipelineDesc.ptr as any,
 		);
+		void ffiKeepalive;
 		return new GPUComputePipeline(pipelinePtr);
 	}
 	createCommandEncoder() {
+		this._assertLive();
 		const desc = makeCommandEncoderDescriptor();
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const encoderPtr = WGPUNative.symbols.wgpuDeviceCreateCommandEncoder(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void desc.buffer;
 		return new GPUCommandEncoder(encoderPtr, this);
 	}
 	addEventListener(type: string, handler: (event: any) => void) {
@@ -1585,7 +1753,13 @@ class GPUBuffer {
 		this._device = device;
 		this._mapped = mapped;
 	}
+	private _assertLive() {
+		if (!this.ptr || !this._device.ptr) {
+			throw new Error("WebGPU buffer has been destroyed");
+		}
+	}
 	getMappedRange(_offset = 0, _size?: number) {
+		this._assertLive();
 		if (!this._mapped) {
 			return new ArrayBuffer(0);
 		}
@@ -1601,6 +1775,8 @@ class GPUBuffer {
 		return toArrayBuffer(mapped as any, 0, size);
 	}
 	mapAsync(mode?: number, offset = 0, size?: number) {
+		this._assertLive();
+		const bufferPtr = this.ptr;
 		const mapMode =
 			mode ??
 			((this.usage & WGPUBufferUsage_MapRead) !== 0n
@@ -1610,37 +1786,41 @@ class GPUBuffer {
 		const callbackPtr = (bufferMapCallback as any).ptr ?? bufferMapCallback;
 		const info = makeBufferMapCallbackInfo(
 			Number(callbackPtr),
-			this.ptr,
+			bufferPtr,
 			0,
-		);
-		WGPU_KEEPALIVE.push(info.buffer);
-		WGPUBridge.bufferMapAsync(
-			this.ptr as any,
-			BigInt(mapMode),
-			BigInt(offset),
-			BigInt(mapSize),
-			info.ptr as any,
 		);
 		return new Promise<boolean>((resolve) => {
 			let done = false;
-			const resolveOnce = () => {
+			const finish = (mapped: boolean) => {
 				if (done) return;
 				done = true;
-				resolve(true);
+				MAP_ASYNC_RESOLVERS.delete(bufferPtr);
+				if (mapped) this._mapped = true;
+				resolve(mapped);
 			};
 
-			MAP_ASYNC_RESOLVERS.set(this.ptr, (mapped) => {
-				if (mapped) {
-					this._mapped = true;
-					resolveOnce();
-				} else {
-					resolve(false);
-				}
-			});
+			MAP_ASYNC_RESOLVERS.set(bufferPtr, finish);
+			try {
+				WGPUBridge.bufferMapAsync(
+					bufferPtr as any,
+					BigInt(mapMode),
+					BigInt(offset),
+					BigInt(mapSize),
+					info.ptr as any,
+				);
+				void info.buffer;
+			} catch {
+				finish(false);
+				return;
+			}
 
 			const start = Date.now();
 			const poll = () => {
 				if (done) return;
+				if (this.ptr !== bufferPtr || !this._device.ptr) {
+					finish(false);
+					return;
+				}
 				try {
 					if (this._device.instancePtr) {
 						WGPUNative.symbols.wgpuInstanceProcessEvents(
@@ -1651,14 +1831,13 @@ class GPUBuffer {
 				} catch {
 					// ignore
 				}
-				const state = WGPUNative.symbols.wgpuBufferGetMapState(this.ptr);
+				const state = WGPUNative.symbols.wgpuBufferGetMapState(bufferPtr);
 				if (state === WGPUBufferMapState_Mapped) {
-					this._mapped = true;
-					resolveOnce();
+					finish(true);
 					return;
 				}
 				if (Date.now() - start > 2000) {
-					resolve(false);
+					finish(false);
 					return;
 				}
 				setTimeout(poll, 5);
@@ -1667,10 +1846,12 @@ class GPUBuffer {
 		});
 	}
 	unmap() {
+		this._assertLive();
 		WGPUNative.symbols.wgpuBufferUnmap(this.ptr);
 		this._mapped = false;
 	}
 	readSync(offset = 0, size?: number, timeoutNs = 2_000_000_000) {
+		this._assertLive();
 		if (!this._device.instancePtr) return null;
 		const readSize = Math.max(0, size ?? this.size - offset);
 		const out = new ArrayBuffer(readSize);
@@ -1691,6 +1872,7 @@ class GPUBuffer {
 		size?: number,
 		timeoutMs = 2000,
 	) {
+		this._assertLive();
 		const readSize = Math.max(0, size ?? dst.byteLength);
 		const jobPtr = WGPUBridge.bufferReadbackBegin(
 			this.ptr as any,
@@ -1702,6 +1884,11 @@ class GPUBuffer {
 		return new Promise<number>((resolve) => {
 			const start = Date.now();
 			const poll = () => {
+				if (!this._device.ptr) {
+					WGPUBridge.bufferReadbackFree(jobPtr as any);
+					resolve(2);
+					return;
+				}
 				try {
 					if (this._device.instancePtr) {
 						WGPUNative.symbols.wgpuInstanceProcessEvents(
@@ -1727,7 +1914,16 @@ class GPUBuffer {
 		});
 	}
 	destroy() {
-		WGPUNative.symbols.wgpuBufferDestroy(this.ptr);
+		if (!this.ptr) return;
+		const bufferPtr = this.ptr;
+		this.ptr = 0;
+		MAP_ASYNC_RESOLVERS.get(bufferPtr)?.(false);
+		MAP_ASYNC_RESOLVERS.delete(bufferPtr);
+		try {
+			WGPUNative.symbols.wgpuBufferDestroy(bufferPtr);
+		} finally {
+			WGPUNative.symbols.wgpuBufferRelease(bufferPtr);
+		}
 	}
 }
 
@@ -1736,12 +1932,24 @@ class GPUSampler {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
+	release() {
+		if (!this.ptr) return;
+		const samplerPtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuSamplerRelease(samplerPtr);
+	}
 }
 
 class GPUBindGroupLayout {
 	ptr: number;
 	constructor(ptr: number) {
 		this.ptr = ptr;
+	}
+	release() {
+		if (!this.ptr) return;
+		const layoutPtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuBindGroupLayoutRelease(layoutPtr);
 	}
 }
 
@@ -1750,6 +1958,12 @@ class GPUBindGroup {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
+	release() {
+		if (!this.ptr) return;
+		const bindGroupPtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuBindGroupRelease(bindGroupPtr);
+	}
 }
 
 class GPUPipelineLayout {
@@ -1757,12 +1971,24 @@ class GPUPipelineLayout {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
+	release() {
+		if (!this.ptr) return;
+		const layoutPtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuPipelineLayoutRelease(layoutPtr);
+	}
 }
 
 class GPUShaderModule {
 	ptr: number;
 	constructor(ptr: number) {
 		this.ptr = ptr;
+	}
+	release() {
+		if (!this.ptr) return;
+		const modulePtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuShaderModuleRelease(modulePtr);
 	}
 }
 
@@ -1772,11 +1998,18 @@ class GPURenderPipeline {
 		this.ptr = ptr;
 	}
 	getBindGroupLayout(index: number) {
+		if (!this.ptr) throw new Error("WebGPU render pipeline has been released");
 		const layoutPtr = WGPUNative.symbols.wgpuRenderPipelineGetBindGroupLayout(
 			this.ptr,
 			index,
 		);
 		return new GPUBindGroupLayout(layoutPtr);
+	}
+	release() {
+		if (!this.ptr) return;
+		const pipelinePtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuRenderPipelineRelease(pipelinePtr);
 	}
 }
 
@@ -1786,27 +2019,53 @@ class GPUComputePipeline {
 		this.ptr = ptr;
 	}
 	getBindGroupLayout(index: number) {
+		if (!this.ptr) throw new Error("WebGPU compute pipeline has been released");
 		const layoutPtr = WGPUNative.symbols.wgpuComputePipelineGetBindGroupLayout(
 			this.ptr,
 			index,
 		);
 		return new GPUBindGroupLayout(layoutPtr);
 	}
+	release() {
+		if (!this.ptr) return;
+		const pipelinePtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuComputePipelineRelease(pipelinePtr);
+	}
 }
 
 class GPUCommandBuffer {
 	ptr: number;
-	constructor(ptr: number) {
+	private readonly _presentationContexts: Set<GPUCanvasContext>;
+	constructor(ptr: number, presentationContexts: Set<GPUCanvasContext>) {
 		this.ptr = ptr;
+		this._presentationContexts = presentationContexts;
+	}
+	_consumePresentationContexts() {
+		const contexts = [...this._presentationContexts];
+		this._presentationContexts.clear();
+		return contexts;
+	}
+	_releaseReference() {
+		if (!this.ptr) return;
+		const commandBufferPtr = this.ptr;
+		this.ptr = 0;
+		WGPUNative.symbols.wgpuCommandBufferRelease(commandBufferPtr);
 	}
 }
 
 class GPUCommandEncoder {
 	ptr: number;
 	_device: GPUDevice;
+	private readonly _presentationContexts = new Set<GPUCanvasContext>();
 	constructor(ptr: number, device: GPUDevice) {
 		this.ptr = ptr;
 		this._device = device;
+	}
+	private _assertLive() {
+		if (!this.ptr || !this._device.ptr) {
+			throw new Error("WebGPU command encoder has been released");
+		}
 	}
 	beginRenderPass(descriptor: {
 		colorAttachments: Array<{
@@ -1828,6 +2087,24 @@ class GPUCommandEncoder {
 			stencilReadOnly?: boolean;
 		};
 	}) {
+		this._assertLive();
+		const ffiKeepalive: unknown[] = [];
+		for (const attachment of descriptor.colorAttachments) {
+			if (
+				!attachment.view.ptr ||
+				(attachment.resolveTarget && !attachment.resolveTarget.ptr)
+			) {
+				throw new Error("WebGPU render pass uses a released texture view");
+			}
+			if (attachment.view._presentationContext) {
+				this._presentationContexts.add(attachment.view._presentationContext);
+			}
+			if (attachment.resolveTarget?._presentationContext) {
+				this._presentationContexts.add(
+					attachment.resolveTarget._presentationContext,
+				);
+			}
+		}
 		const colorAttachments = descriptor.colorAttachments.map((c) =>
 			makeRenderPassColorAttachment(
 				c.view.ptr,
@@ -1842,11 +2119,17 @@ class GPUCommandEncoder {
 			new Uint8Array(colorBuf, i * 72, 72).set(new Uint8Array(c.buffer));
 		});
 		const colorPtr = ptrOrNull(colorBuf);
-		WGPU_KEEPALIVE.push(colorBuf);
+		ffiKeepalive.push(colorBuf);
 
 		let depthPtr: number | null = null;
 		if (descriptor.depthStencilAttachment) {
 			const d = descriptor.depthStencilAttachment;
+			if (!d.view.ptr) {
+				throw new Error("WebGPU render pass uses a released depth view");
+			}
+			if (d.view._presentationContext) {
+				this._presentationContexts.add(d.view._presentationContext);
+			}
 			const viewFormat = d.view.format ?? 0;
 			if (viewFormat && !isDepthFormat(viewFormat)) {
 				// Skip invalid depth/stencil view attachments.
@@ -1856,7 +2139,7 @@ class GPUCommandEncoder {
 					view: d.view.ptr,
 					...fields,
 				});
-				WGPU_KEEPALIVE.push(depth.buffer);
+				ffiKeepalive.push(depth.buffer);
 				depthPtr = depth.ptr as any;
 			}
 		}
@@ -1866,20 +2149,22 @@ class GPUCommandEncoder {
 			colorAttachments.length,
 			depthPtr,
 		);
-		WGPU_KEEPALIVE.push(passDesc.buffer);
+		ffiKeepalive.push(passDesc.buffer);
 		const passPtr = WGPUNative.symbols.wgpuCommandEncoderBeginRenderPass(
 			this.ptr,
 			passDesc.ptr as any,
 		);
+		void ffiKeepalive;
 		return new GPURenderPassEncoder(passPtr);
 	}
 	beginComputePass() {
+		this._assertLive();
 		const desc = makeComputePassDescriptor();
-		WGPU_KEEPALIVE.push(desc.buffer);
 		const passPtr = WGPUNative.symbols.wgpuCommandEncoderBeginComputePass(
 			this.ptr,
 			desc.ptr as any,
 		);
+		void desc.buffer;
 		return new GPUComputePassEncoder(passPtr);
 	}
 	copyBufferToTexture(
@@ -1896,6 +2181,7 @@ class GPUCommandEncoder {
 		},
 		size: { width: number; height: number; depthOrArrayLayers?: number },
 	) {
+		this._assertLive();
 		const offset = source.offset ?? 0;
 		const mapped = source.buffer.getMappedRange(0, source.buffer.size);
 		const data =
@@ -1919,6 +2205,10 @@ class GPUCommandEncoder {
 		destinationOffset: number,
 		size: number,
 	) {
+		this._assertLive();
+		if (!source.ptr || !destination.ptr) {
+			throw new Error("WebGPU buffer has been destroyed");
+		}
 		WGPUNative.symbols.wgpuCommandEncoderCopyBufferToBuffer(
 			this.ptr,
 			source.ptr,
@@ -1929,8 +2219,19 @@ class GPUCommandEncoder {
 		);
 	}
 	finish() {
-		const cmdPtr = WGPUNative.symbols.wgpuCommandEncoderFinish(this.ptr, 0);
-		return new GPUCommandBuffer(cmdPtr);
+		if (!this.ptr) throw new Error("WebGPU command encoder has been released");
+		const encoderPtr = this.ptr;
+		this.ptr = 0;
+		let cmdPtr = 0;
+		try {
+			cmdPtr = Number(
+				WGPUNative.symbols.wgpuCommandEncoderFinish(encoderPtr, 0),
+			);
+		} finally {
+			WGPUNative.symbols.wgpuCommandEncoderRelease(encoderPtr);
+		}
+		if (!cmdPtr) throw new Error("Failed to finish WebGPU command encoder");
+		return new GPUCommandBuffer(cmdPtr, this._presentationContexts);
 	}
 }
 
@@ -1939,21 +2240,29 @@ class GPURenderPassEncoder {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
+	private _assertLive() {
+		if (!this.ptr) throw new Error("WebGPU render pass has ended");
+	}
 	setPipeline(pipeline: GPURenderPipeline) {
+		this._assertLive();
+		if (!pipeline.ptr) throw new Error("WebGPU render pipeline has been released");
 		WGPUNative.symbols.wgpuRenderPassEncoderSetPipeline(
 			this.ptr,
 			pipeline.ptr,
 		);
 	}
 	setBindGroup(index: number, bindGroup: GPUBindGroup, offsets?: number[]) {
+		this._assertLive();
+		if (!bindGroup.ptr) throw new Error("WebGPU bind group has been released");
 		let offsetsPtr = 0;
 		let count = 0n;
+		let offsetArray: BigUint64Array | undefined;
 		if (offsets && offsets.length) {
 			const arr = new BigUint64Array(offsets.length);
+			offsetArray = arr;
 			offsets.forEach((o, i) => {
 				arr[i] = BigInt(o);
 			});
-			WGPU_KEEPALIVE.push(arr);
 			offsetsPtr = ptr(arr) as any;
 			count = BigInt(offsets.length);
 		}
@@ -1964,8 +2273,11 @@ class GPURenderPassEncoder {
 			count as any,
 			offsetsPtr as any,
 		);
+		void offsetArray;
 	}
 	setVertexBuffer(slot: number, buffer: GPUBuffer, offset = 0, size?: number) {
+		this._assertLive();
+		if (!buffer.ptr) throw new Error("WebGPU buffer has been destroyed");
 		WGPUNative.symbols.wgpuRenderPassEncoderSetVertexBuffer(
 			this.ptr,
 			slot,
@@ -1975,6 +2287,8 @@ class GPURenderPassEncoder {
 		);
 	}
 	setIndexBuffer(buffer: GPUBuffer, indexFormat: string, offset = 0, size?: number) {
+		this._assertLive();
+		if (!buffer.ptr) throw new Error("WebGPU buffer has been destroyed");
 		const format = mapIndexFormat(indexFormat);
 		WGPUNative.symbols.wgpuRenderPassEncoderSetIndexBuffer(
 			this.ptr,
@@ -1985,6 +2299,7 @@ class GPURenderPassEncoder {
 		);
 	}
 	setViewport(x: number, y: number, width: number, height: number, minDepth = 0, maxDepth = 1) {
+		this._assertLive();
 		WGPUNative.symbols.wgpuRenderPassEncoderSetViewport(
 			this.ptr,
 			x,
@@ -1996,6 +2311,7 @@ class GPURenderPassEncoder {
 		);
 	}
 	setScissorRect(x: number, y: number, width: number, height: number) {
+		this._assertLive();
 		WGPUNative.symbols.wgpuRenderPassEncoderSetScissorRect(
 			this.ptr,
 			x,
@@ -2005,6 +2321,7 @@ class GPURenderPassEncoder {
 		);
 	}
 	draw(vertexCount: number, instanceCount = 1, firstVertex = 0, firstInstance = 0) {
+		this._assertLive();
 		WGPUNative.symbols.wgpuRenderPassEncoderDraw(
 			this.ptr,
 			vertexCount,
@@ -2014,6 +2331,7 @@ class GPURenderPassEncoder {
 		);
 	}
 	drawIndexed(indexCount: number, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
+		this._assertLive();
 		WGPUNative.symbols.wgpuRenderPassEncoderDrawIndexed(
 			this.ptr,
 			indexCount,
@@ -2024,7 +2342,14 @@ class GPURenderPassEncoder {
 		);
 	}
 	end() {
-		WGPUNative.symbols.wgpuRenderPassEncoderEnd(this.ptr);
+		if (!this.ptr) return;
+		const passPtr = this.ptr;
+		this.ptr = 0;
+		try {
+			WGPUNative.symbols.wgpuRenderPassEncoderEnd(passPtr);
+		} finally {
+			WGPUNative.symbols.wgpuRenderPassEncoderRelease(passPtr);
+		}
 	}
 }
 
@@ -2033,21 +2358,29 @@ class GPUComputePassEncoder {
 	constructor(ptr: number) {
 		this.ptr = ptr;
 	}
+	private _assertLive() {
+		if (!this.ptr) throw new Error("WebGPU compute pass has ended");
+	}
 	setPipeline(pipeline: GPUComputePipeline) {
+		this._assertLive();
+		if (!pipeline.ptr) throw new Error("WebGPU compute pipeline has been released");
 		WGPUNative.symbols.wgpuComputePassEncoderSetPipeline(
 			this.ptr,
 			pipeline.ptr,
 		);
 	}
 	setBindGroup(index: number, bindGroup: GPUBindGroup, offsets?: number[]) {
+		this._assertLive();
+		if (!bindGroup.ptr) throw new Error("WebGPU bind group has been released");
 		let offsetsPtr = 0;
 		let count = 0n;
+		let offsetArray: BigUint64Array | undefined;
 		if (offsets && offsets.length) {
 			const arr = new BigUint64Array(offsets.length);
+			offsetArray = arr;
 			offsets.forEach((o, i) => {
 				arr[i] = BigInt(o);
 			});
-			WGPU_KEEPALIVE.push(arr);
 			offsetsPtr = ptr(arr) as any;
 			count = BigInt(offsets.length);
 		}
@@ -2058,8 +2391,10 @@ class GPUComputePassEncoder {
 			count as any,
 			offsetsPtr as any,
 		);
+		void offsetArray;
 	}
 	dispatchWorkgroups(x: number, y = 1, z = 1) {
+		this._assertLive();
 		WGPUNative.symbols.wgpuComputePassEncoderDispatchWorkgroups(
 			this.ptr,
 			x,
@@ -2068,7 +2403,14 @@ class GPUComputePassEncoder {
 		);
 	}
 	end() {
-		WGPUNative.symbols.wgpuComputePassEncoderEnd(this.ptr);
+		if (!this.ptr) return;
+		const passPtr = this.ptr;
+		this.ptr = 0;
+		try {
+			WGPUNative.symbols.wgpuComputePassEncoderEnd(passPtr);
+		} finally {
+			WGPUNative.symbols.wgpuComputePassEncoderRelease(passPtr);
+		}
 	}
 }
 
@@ -2078,23 +2420,64 @@ class GPUAdapter {
 	features = new Set<string>();
 	limits: Record<string, number> = {};
 	info: Record<string, string> = {};
-	constructor(instancePtr: number, surfacePtr: number) {
+	private _compatibleSurface: GPUCanvasContext | null;
+	private readonly _devices = new Set<GPUDevice>();
+	constructor(
+		instancePtr: number,
+		surfacePtr: number,
+		compatibleSurface?: GPUCanvasContext,
+	) {
 		this.instancePtr = instancePtr;
 		this.surfacePtr = surfacePtr;
+		this._compatibleSurface = compatibleSurface ?? null;
+		this._compatibleSurface?._registerAdapter(this);
 	}
 	async requestDevice() {
-		const adapterDevice = new BigUint64Array(2);
-		WGPUBridge.createAdapterDeviceMainThread(
-			this.instancePtr as any,
-			this.surfacePtr as any,
-			ptr(adapterDevice),
-		);
-		const devicePtr = adapterDevice[1];
-		if (devicePtr === 0n) {
-			throw new Error("Failed to create WGPU device");
+		if (!this.instancePtr) {
+			throw new Error("WebGPU adapter has been released");
 		}
-		const device = Number(devicePtr);
-		return new GPUDevice(device, this.instancePtr);
+		if (
+			this._compatibleSurface &&
+			!this._compatibleSurface._matchesNativeHandles(
+				this.instancePtr,
+				this.surfacePtr,
+			)
+		) {
+			this._invalidateFromSurface(this._compatibleSurface);
+			throw new Error("WebGPU adapter's compatible surface has been released");
+		}
+
+		const adapterDevice = new BigUint64Array(2);
+		try {
+			WGPUBridge.createAdapterDeviceMainThread(
+				this.instancePtr as any,
+				this.surfacePtr as any,
+				ptr(adapterDevice),
+			);
+			const devicePtr = Number(adapterDevice[1]);
+			if (!devicePtr) throw new Error("Failed to create WGPU device");
+			const device = new GPUDevice(devicePtr, this.instancePtr);
+			this._devices.add(device);
+			return device;
+		} finally {
+			const nativeAdapterPtr = Number(adapterDevice[0]);
+			if (nativeAdapterPtr) {
+				try {
+					WGPUNative.symbols.wgpuAdapterRelease(nativeAdapterPtr);
+				} catch {}
+			}
+		}
+	}
+	_invalidateFromSurface(surface: GPUCanvasContext) {
+		if (this._compatibleSurface !== surface) return;
+		const instancePtr = this.instancePtr;
+		this.instancePtr = 0;
+		this.surfacePtr = 0;
+		this._compatibleSurface = null;
+		for (const device of this._devices) {
+			device._invalidateInstance(instancePtr);
+		}
+		this._devices.clear();
 	}
 }
 
@@ -2107,8 +2490,11 @@ class GPUCanvasContext {
 	supportedAlphaModes = new Set<number>([WGPUCompositeAlphaMode_Opaque]);
 	width = 1;
 	height = 1;
-	private _hasCurrentTexture = false;
 	private _usage = WGPUTextureUsage_RenderAttachment;
+	private _configured = false;
+	private _device: GPUDevice | null = null;
+	private _currentTexture: GPUTexture | null = null;
+	private readonly _adapters = new Set<GPUAdapter>();
 	_fallbackSize?: { width: number; height: number };
 	constructor(surfacePtr: number, instancePtr?: number) {
 		this.surfacePtr = surfacePtr;
@@ -2121,11 +2507,14 @@ class GPUCanvasContext {
 		usage?: number;
 		size?: { width: number; height: number };
 	}) {
+		this._assertLive();
+		if (!options.device?.ptr || !options.device.queue.ptr) {
+			throw new Error("Cannot configure a WebGPU surface with a destroyed device");
+		}
 		if (!options.size && this._fallbackSize) {
 			this.width = this._fallbackSize.width;
 			this.height = this._fallbackSize.height;
 		}
-		this.devicePtr = options.device.ptr;
 		if (options.format) {
 			this.format =
 				typeof options.format === "string"
@@ -2162,10 +2551,21 @@ class GPUCanvasContext {
 		this._usage = toBigInt(
 			options.usage ?? WGPUTextureUsage_RenderAttachment,
 		);
+		PRESENTATION_STATE.detachSurface(this);
+		this._releaseCurrentTexture();
+		this.devicePtr = options.device.ptr;
+		this._device = options.device;
 		this._configureSurface();
+		PRESENTATION_STATE.attach(options.device.queue, this);
 	}
 	private _configureSurface() {
-		if (!this.devicePtr) return;
+		this._assertLive();
+		if (!this.devicePtr || !this._device?.ptr) {
+			throw new Error("WebGPU surface is not configured with a live device");
+		}
+		PRESENTATION_STATE.takePending(this);
+		this._releaseCurrentTexture();
+		this._configured = false;
 		const config = makeSurfaceConfiguration(
 			this.devicePtr,
 			this.width,
@@ -2175,9 +2575,10 @@ class GPUCanvasContext {
 			this._usage,
 		);
 		WGPUBridge.surfaceConfigure(this.surfacePtr as any, config.ptr as any);
-		this._hasCurrentTexture = false;
+		this._configured = true;
 	}
 	getCurrentTexture() {
+		this._assertConfigured();
 		if (
 			this.devicePtr &&
 			this._fallbackSize &&
@@ -2188,31 +2589,105 @@ class GPUCanvasContext {
 			this.height = this._fallbackSize.height;
 			this._configureSurface();
 		}
+		if (PRESENTATION_STATE.isPending(this) && this._currentTexture?.ptr) {
+			return this._currentTexture;
+		}
+		PRESENTATION_STATE.takePending(this);
+		this._releaseCurrentTexture();
 		const surfaceTexture = makeSurfaceTexture();
 		WGPUBridge.surfaceGetCurrentTexture(
 			this.surfacePtr as any,
 			surfaceTexture.ptr as any,
 		);
 		const status = surfaceTexture.view.getUint32(16, true);
+		const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
 		if (status !== 1 && status !== 2) {
+			if (texPtr) WGPUNative.symbols.wgpuTextureRelease(texPtr);
 			throw new Error(`Surface status ${status}`);
 		}
-		const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
-		LAST_SURFACE_PTR = this.surfacePtr;
-		this._hasCurrentTexture = true;
-		LAST_SURFACE_HAS_TEXTURE = true;
-		return new GPUTexture(texPtr, this.format);
+		if (!texPtr) throw new Error("WebGPU surface returned a null texture");
+		this._currentTexture = new GPUTexture(texPtr, this.format, this);
+		PRESENTATION_STATE.markPending(this);
+		return this._currentTexture;
 	}
 	present() {
-		if (!this._hasCurrentTexture) return;
-		this._hasCurrentTexture = false;
-		LAST_SURFACE_HAS_TEXTURE = false;
-		return WGPUBridge.surfacePresent(this.surfacePtr as any);
+		this._assertLive();
+		if (!PRESENTATION_STATE.takePending(this)) return;
+		return this._presentNative();
 	}
 	unconfigure() {
-		this._hasCurrentTexture = false;
-		LAST_SURFACE_HAS_TEXTURE = false;
-		return WGPUNative.symbols.wgpuSurfaceUnconfigure(this.surfacePtr as any);
+		PRESENTATION_STATE.detachSurface(this);
+		this._releaseCurrentTexture();
+		const shouldUnconfigure = this._configured && !!this.surfacePtr;
+		this._configured = false;
+		this.devicePtr = null;
+		this._device = null;
+		if (shouldUnconfigure) {
+			return WGPUNative.symbols.wgpuSurfaceUnconfigure(this.surfacePtr as any);
+		}
+	}
+	_presentNative() {
+		this._assertConfigured();
+		const surfacePtr = this.surfacePtr;
+		try {
+			return WGPUBridge.surfacePresent(surfacePtr as any);
+		} finally {
+			this._releaseCurrentTexture();
+		}
+	}
+	_onQueueReleased(queue: GPUQueue) {
+		if (this._device?.queue !== queue) return;
+		this._releaseCurrentTexture();
+		const shouldUnconfigure = this._configured && !!this.surfacePtr;
+		this._configured = false;
+		this.devicePtr = null;
+		this._device = null;
+		if (shouldUnconfigure) {
+			try {
+				WGPUNative.symbols.wgpuSurfaceUnconfigure(this.surfacePtr as any);
+			} catch {}
+		}
+	}
+	_registerAdapter(adapter: GPUAdapter) {
+		this._adapters.add(adapter);
+	}
+	_matchesNativeHandles(instancePtr: number, surfacePtr: number) {
+		return (
+			!!this.surfacePtr &&
+			!!this.instancePtr &&
+			this.instancePtr === instancePtr &&
+			this.surfacePtr === surfacePtr
+		);
+	}
+	_prepareRelease() {
+		PRESENTATION_STATE.detachSurface(this);
+		this._releaseCurrentTexture();
+		for (const adapter of this._adapters) {
+			adapter._invalidateFromSurface(this);
+		}
+		this._adapters.clear();
+		const wasConfigured = this._configured;
+		this._configured = false;
+		this.surfacePtr = 0;
+		this.instancePtr = null;
+		this.devicePtr = null;
+		this._device = null;
+		return wasConfigured;
+	}
+	private _releaseCurrentTexture() {
+		this._currentTexture?._releaseReference();
+		this._currentTexture = null;
+	}
+	private _assertLive() {
+		if (!this.surfacePtr || !this.instancePtr) {
+			throw new Error("WebGPU canvas context has been released");
+		}
+	}
+	private _assertConfigured() {
+		this._assertLive();
+		if (!this._configured || !this.devicePtr || !this._device?.ptr) {
+			throw new Error("WebGPU canvas context is not configured");
+		}
 	}
 }
 
@@ -2222,60 +2697,98 @@ function getViewPtr(view: WGPUView | GpuWindow): Pointer | null {
 }
 
 function getViewContextKey(view: WGPUView | GpuWindow) {
-	return view.id;
+	return getWebgpuContextKey(view);
 }
 
 function createContext(view: WGPUView | GpuWindow) {
 	const key = getViewContextKey(view);
 	const existing = VIEW_CONTEXTS.get(key);
 	if (existing) {
-		LAST_CREATED_CONTEXT = existing.context;
+		VIEW_CONTEXTS.lastCreatedContext = existing.context;
 		return existing;
 	}
 
 	const viewPtr = getViewPtr(view);
 	if (!viewPtr) throw new Error("WGPUView pointer not available");
-	const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-	const surface = WGPUBridge.createSurfaceForView(
-		instance as Pointer,
-		viewPtr,
-	);
-	if (!surface) throw new Error("Failed to create WGPU surface");
-
-	const caps = makeSurfaceCapabilities();
-	WGPUNative.symbols.wgpuSurfaceGetCapabilities(
-		surface as any,
-		0,
-		caps.ptr as any,
-	);
-	const pick = pickSurfaceFormatAlpha(caps.view, WGPUTextureFormat_BGRA8UnormSrgb);
-
-	const ctx = new GPUCanvasContext(
-		surface as unknown as number,
-		Number(instance),
-	);
-	ctx.format = pick.format;
-	ctx.alphaMode = pick.alphaMode;
-	ctx.supportedAlphaModes = new Set(
-		pick.alphaModes.length ? pick.alphaModes : [pick.alphaMode],
-	);
-	try {
-		if (view instanceof GpuWindow) {
-			const size = view.getSize();
-			ctx.width = size.width;
-			ctx.height = size.height;
-			ctx._fallbackSize = { width: size.width, height: size.height };
-		}
-	} catch {}
-
-	const created = {
-		instance: Number(instance),
-		surface: Number(surface),
-		context: ctx,
+	const nativeOps = {
+		createInstance: () => Number(WGPUNative.symbols.wgpuCreateInstance(0)),
+		createSurface: (instancePtr: number) =>
+			Number(
+				WGPUBridge.createSurfaceForView(instancePtr as Pointer, viewPtr),
+			),
+		unconfigureSurface: (surfacePtr: number) =>
+			WGPUNative.symbols.wgpuSurfaceUnconfigure(surfacePtr as any),
+		releaseSurface: (surfacePtr: number) =>
+			WGPUNative.symbols.wgpuSurfaceRelease(surfacePtr as any),
+		releaseInstance: (instancePtr: number) =>
+			WGPUNative.symbols.wgpuInstanceRelease(instancePtr as any),
 	};
-	VIEW_CONTEXTS.set(key, created);
-	LAST_CREATED_CONTEXT = ctx;
-	return created;
+
+	const created = createNativeWebgpuContext(nativeOps, ({ instance, surface }) => {
+		const caps = makeSurfaceCapabilities();
+		let pick: ReturnType<typeof pickSurfaceFormatAlpha>;
+		try {
+			WGPUNative.symbols.wgpuSurfaceGetCapabilities(
+				surface as any,
+				0,
+				caps.ptr as any,
+			);
+			pick = pickSurfaceFormatAlpha(
+				caps.view,
+				WGPUTextureFormat_BGRA8UnormSrgb,
+			);
+		} finally {
+			WGPUBridge.surfaceCapabilitiesFreeMembers(caps.ptr as any);
+		}
+
+		const ctx = new GPUCanvasContext(surface, instance);
+		ctx.format = pick.format;
+		ctx.alphaMode = pick.alphaMode;
+		ctx.supportedAlphaModes = new Set(
+			pick.alphaModes.length ? pick.alphaModes : [pick.alphaMode],
+		);
+		try {
+			if (view instanceof GpuWindow) {
+				const size = view.getSize();
+				ctx.width = size.width;
+				ctx.height = size.height;
+				ctx._fallbackSize = { width: size.width, height: size.height };
+			}
+		} catch {}
+
+		return {
+			instance,
+			surface,
+			context: ctx,
+			teardown: () => {
+				const wasConfigured = ctx._prepareRelease();
+				releaseNativeWebgpuContext(
+					{ instance, surface },
+					{
+						unconfigureSurface: (surfacePtr) => {
+							if (wasConfigured) {
+								WGPUNative.symbols.wgpuSurfaceUnconfigure(surfacePtr as any);
+							}
+						},
+						releaseSurface: nativeOps.releaseSurface,
+						releaseInstance: nativeOps.releaseInstance,
+					},
+				);
+			},
+		};
+	});
+
+	let didRegisterEntry = false;
+	try {
+		VIEW_CONTEXTS.set(key, created);
+		didRegisterEntry = true;
+		registerWebgpuContextRelease(key, () => VIEW_CONTEXTS.release(key));
+		return created;
+	} catch (error) {
+		if (didRegisterEntry) VIEW_CONTEXTS.release(key);
+		else created.teardown();
+		throw error;
+	}
 }
 
 function createCanvasShim(win: GpuWindow) {
@@ -2980,15 +3493,28 @@ const webgpu = {
 	navigator: {
 		async requestAdapter(options?: { compatibleSurface?: GPUCanvasContext }) {
 			const compatibleSurface =
-				options?.compatibleSurface ?? LAST_CREATED_CONTEXT ?? undefined;
-			if (compatibleSurface?.instancePtr) {
+				options?.compatibleSurface ??
+				VIEW_CONTEXTS.lastCreatedContext ??
+				undefined;
+			if (compatibleSurface) {
+				const instancePtr = compatibleSurface.instancePtr;
+				const surfacePtr = compatibleSurface.surfacePtr;
+				if (
+					!instancePtr ||
+					!surfacePtr ||
+					!compatibleSurface._matchesNativeHandles(instancePtr, surfacePtr)
+				) {
+					throw new Error("Cannot request an adapter for a released WebGPU surface");
+				}
 				return new GPUAdapter(
-					compatibleSurface.instancePtr,
-					compatibleSurface.surfacePtr,
+					instancePtr,
+					surfacePtr,
+					compatibleSurface,
 				);
 			}
-			const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-			return new GPUAdapter(Number(instance), 0);
+			const instance = Number(WGPUNative.symbols.wgpuCreateInstance(0));
+			if (!instance) throw new Error("Failed to create WGPU instance");
+			return new GPUAdapter(instance, 0);
 		},
 		getPreferredCanvasFormat() {
 			return "bgra8unorm";

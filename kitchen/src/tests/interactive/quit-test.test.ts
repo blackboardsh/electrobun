@@ -47,18 +47,17 @@ export const quitTests = [
     category: "Quit (Interactive)",
     description:
       "Interactive playground for testing quit modes and verifying beforeQuit handler fires correctly",
+    instructions: [
+      "A quit test control panel will open",
+      "Use buttons to test programmatic quit, or follow instructions for system quit",
+      "The beforeQuit handler will log to the event log and wait 2 seconds",
+      "Close the window when done exploring to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       // Ensure the beforeQuit handler is registered
       ensureBeforeQuitHandler();
-
-      await showInstructions([
-        "A quit test control panel will open",
-        "Use buttons to test programmatic quit, or follow instructions for system quit",
-        "The beforeQuit handler will log to the event log and wait 2 seconds",
-        "Close the window when done exploring to pass the test",
-      ]);
 
       log("Opening quit test playground window");
 

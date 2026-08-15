@@ -9,27 +9,28 @@ export const menuTests = [
     name: "Application menu playground",
     category: "Menus (Interactive)",
     description: "Interactive playground for testing application menu configurations",
+    instructions:
+      process.platform === "linux"
+        ? [
+            "Application menus are not supported on Linux",
+            "This feature is available on macOS and Windows only",
+            "On Linux, application menus would overlay webview content",
+            "Implement menu UI directly in your HTML instead",
+          ]
+        : [
+            "An application menu playground will open",
+            "Click buttons to apply different menu configurations",
+            "Check the menu bar to see changes",
+            "Close the window when done to pass the test",
+          ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       // Check if we're on Linux - application menus are not supported
-      if (process.platform === 'linux') {
-        await showInstructions([
-          "Application menus are not supported on Linux",
-          "This feature is available on macOS and Windows only",
-          "On Linux, application menus would overlay webview content",
-          "Implement menu UI directly in your HTML instead",
-        ]);
+      if (process.platform === "linux") {
         log("Application menu feature not supported on Linux - skipping test");
         return;
       }
-
-      await showInstructions([
-        "An application menu playground will open",
-        "Click buttons to apply different menu configurations",
-        "Check the menu bar to see changes",
-        "Close the window when done to pass the test",
-      ]);
 
       log("Opening application menu playground window");
 
@@ -94,26 +95,27 @@ export const menuTests = [
     name: "Context menu playground",
     category: "Menus (Interactive)",
     description: "Interactive playground for context menus",
+    instructions:
+      process.platform === "linux"
+        ? [
+            "Context menus are not supported on Linux",
+            "This feature is available on macOS only",
+            "On Linux, use application menus or system tray menus instead",
+          ]
+        : [
+            "A context menu playground will open",
+            "Click buttons to show different context menus",
+            "Right-click in the test area to show current menu",
+            "Close the window when done to pass the test",
+          ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       // Check if we're on Linux - context menus are not supported
-      if (process.platform === 'linux') {
-        await showInstructions([
-          "Context menus are not supported on Linux",
-          "This feature is available on macOS only",
-          "On Linux, use application menus or system tray menus instead",
-        ]);
+      if (process.platform === "linux") {
         log("Context menu feature not supported on Linux - skipping test");
         return;
       }
-
-      await showInstructions([
-        "A context menu playground will open",
-        "Click buttons to show different context menus",
-        "Right-click in the test area to show current menu",
-        "Close the window when done to pass the test",
-      ]);
 
       log("Opening context menu playground window");
 

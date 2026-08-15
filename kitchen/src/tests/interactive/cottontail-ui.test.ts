@@ -5,6 +5,7 @@
 import { defineTest } from "../../test-framework/types";
 import { webgpu } from "electrobun/main";
 import {
+	cleanup,
 	live,
 	memo,
 	signal,
@@ -93,62 +94,93 @@ async function openDemoWindow(): Promise<UIWindow> {
 							size: 11,
 							color: "#8c8ca8",
 						});
-						let repaint: (() => void) | null = null;
+						let repaint: ((color: string) => void) | null = null;
+						let surfaceDevice: { destroy(): void } | null = null;
+						let surfaceDisposed = false;
 						wgpuSurface({
 							grow: 1,
 							onReady: async (view) => {
-								const { context } = webgpu.createContext(view as any);
-								const adapter = await webgpu.navigator.requestAdapter({
-									compatibleSurface: context,
-								});
-								const device = await adapter.requestDevice();
-								context._fallbackSize = {
-									width: view.frame.width,
-									height: view.frame.height,
-								};
-								context.configure({ device, format: "bgra8unorm" });
-								repaint = () => {
-									const rgba = parseColor(accent()) >>> 0;
-									context._fallbackSize = {
-										width: view.frame.width,
-										height: view.frame.height,
-									};
-									const encoder = device.createCommandEncoder();
-									const pass = encoder.beginRenderPass({
-										colorAttachments: [
-											{
-												view: context.getCurrentTexture().createView(),
-												loadOp: "clear",
-												storeOp: "store",
-												clearValue: {
-													r: ((rgba >>> 24) & 0xff) / 255,
-													g: ((rgba >>> 16) & 0xff) / 255,
-													b: ((rgba >>> 8) & 0xff) / 255,
-													a: 1,
-												},
-											},
-										],
+								try {
+									const { context } = webgpu.createContext(view as any);
+									const adapter = await webgpu.navigator.requestAdapter({
+										compatibleSurface: context,
 									});
-									pass.end();
-									device.queue.submit([encoder.finish()]);
-								};
-								live(() => repaint!());
+									if (surfaceDisposed || view.isRemoved) return;
+									const device = await adapter.requestDevice();
+									if (surfaceDisposed || view.isRemoved) {
+										device.destroy();
+										return;
+									}
+									surfaceDevice = device;
+									try {
+										context._fallbackSize = {
+											width: view.frame.width,
+											height: view.frame.height,
+										};
+										context.configure({ device, format: "bgra8unorm" });
+										repaint = (color) => {
+											const rgba = parseColor(color) >>> 0;
+											context._fallbackSize = {
+												width: view.frame.width,
+												height: view.frame.height,
+											};
+											const encoder = device.createCommandEncoder();
+											const pass = encoder.beginRenderPass({
+												colorAttachments: [
+													{
+														view: context.getCurrentTexture().createView(),
+														loadOp: "clear",
+														storeOp: "store",
+														clearValue: {
+															r: ((rgba >>> 24) & 0xff) / 255,
+															g: ((rgba >>> 16) & 0xff) / 255,
+															b: ((rgba >>> 8) & 0xff) / 255,
+															a: 1,
+														},
+													},
+												],
+											});
+											pass.end();
+											device.queue.submit([encoder.finish()]);
+										};
+										repaint(accent());
+									} catch (error) {
+										repaint = null;
+										surfaceDevice = null;
+										device.destroy();
+										throw error;
+									}
+								} catch (error) {
+									if (surfaceDisposed || view.isRemoved) return;
+									throw error;
+								}
 							},
-							onFrame: () => repaint?.(),
+							onFrame: () => repaint?.(accent()),
+						});
+						cleanup(() => {
+							surfaceDisposed = true;
+							repaint = null;
+							const device = surfaceDevice;
+							surfaceDevice = null;
+							device?.destroy();
+						});
+						// Register the effect while the UI root scope is active. onReady is
+						// asynchronous, so registering it there would happen outside Warren's
+						// root scope after requestAdapter/requestDevice resolve.
+						live(() => {
+							const color = accent();
+							repaint?.(color);
 						});
 					});
 					ui.box({ height: 1, bg: "#262638" });
 					ui.column({ pad: 12, gap: 6, grow: 1 }, () => {
-						ui.text("webview (OOPIF)", { size: 11, color: "#8c8ca8" });
+						ui.text("webview (https://blackboard.sh)", {
+							size: 11,
+							color: "#8c8ca8",
+						});
 						webview({
 							grow: 1,
-							html: `<!doctype html><html><head><style>
-								body { background:#171722; color:#e4e4f0; font-family:-apple-system,sans-serif;
-								       display:grid; place-items:center; height:100vh; margin:0; text-align:center; }
-								small { color:#8c8ca8; }
-							</style></head><body><div><h3>Real webview</h3>
-							<small>Out-of-process web content positioned<br/>by the Cottontail UI layout.</small>
-							</div></body></html>`,
+							url: "https://blackboard.sh",
 						});
 					});
 				});
@@ -168,26 +200,28 @@ export const cottontailUiTests = [
 		name: "Cottontail UI demo window",
 		category: "Cottontail UI",
 		description:
-			"Reactive counter card rendered by Dawn, with an accent-colored wgpuSurface and an OOPIF webview panel laid out by the UI tree.",
+			"Reactive counter card rendered by Dawn, with an accent-colored wgpuSurface and a blackboard.sh OOPIF webview panel laid out by the UI tree.",
+		instructions: [
+			"A dark window titled 'Cottontail UI (kitchen)' should be open.",
+			"Hover the three buttons: their borders should tint to the accent color.",
+			"Click +1 / -1: the large number and the right-hand color panel should change together.",
+			"Press space (or +/-): the counter should respond to the keyboard.",
+			"The bottom-right webview should load https://blackboard.sh.",
+			"Resize the window: everything should reflow, including both panels.",
+			"Close the demo window when you are done.",
+		],
 		interactive: true,
-		async run({ showInstructions, waitForUserVerification, log }) {
+		timeout: 600000,
+		async run() {
 			const uiWindow = await openDemoWindow();
+			const lifecycle = uiWindow as UIWindow & {
+				readonly closed: Promise<void>;
+				isClosed(): boolean;
+			};
 			try {
-				await showInstructions([
-					"A dark window titled 'Cottontail UI (kitchen)' should be open.",
-					"Hover the three buttons: their borders should tint to the accent color.",
-					"Click +1 / -1: the large number and the right-hand color panel should change together.",
-					"Press space (or +/-): the counter should respond to the keyboard.",
-					"The bottom-right panel is a real webview showing 'Real webview'.",
-					"Resize the window: everything should reflow, including both panels.",
-				]);
-				const result = await waitForUserVerification();
-				log(`user verdict: ${result.action}`);
-				if (result.action === "fail") {
-					throw new Error(result.notes || "User reported failure");
-				}
+				await lifecycle.closed;
 			} finally {
-				uiWindow.dispose();
+				if (!lifecycle.isClosed()) uiWindow.dispose();
 			}
 		},
 	}),

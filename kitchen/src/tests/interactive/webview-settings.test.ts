@@ -9,17 +9,16 @@ export const webviewSettingsTests = [
     category: "Webview Tag (Interactive)",
     description:
       "Add webview tags with transparent/passthrough/sandbox settings and toggle them at runtime",
+    instructions: [
+      "A webview settings playground will open",
+      "Toggle transparent, passthrough, sandbox, renderer, then click '+ Add Webview'",
+      "Use the toggle buttons on each card to change settings at runtime",
+      "Click the red '-' button to remove a webview",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A webview settings playground will open",
-        "Toggle transparent, passthrough, sandbox, renderer, then click '+ Add Webview'",
-        "Use the toggle buttons on each card to change settings at runtime",
-        "Click the red '-' button to remove a webview",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening webview settings playground window");
 
       await new Promise<void>((resolve) => {

@@ -4047,6 +4047,13 @@ static bool ensureWgpuTestSymbols() {
     return true;
 }
 
+extern "C" void wgpuSurfaceCapabilitiesFreeMembersShim(void* capabilitiesPtr) {
+    if (!capabilitiesPtr || !ensureWgpuTestSymbols()) return;
+    WGPUSurfaceCapabilities* capabilities = (WGPUSurfaceCapabilities*)capabilitiesPtr;
+    p_wgpuSurfaceCapabilitiesFreeMembers(*capabilities);
+    *capabilities = {};
+}
+
 extern "C" void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
     if (!ensureWgpuTestSymbols()) return;
     runOnMainThreadSyncVoid(^{

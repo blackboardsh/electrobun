@@ -16,6 +16,7 @@ export interface TestDefinition {
   name: string;
   category: string;
   description?: string;
+  instructions?: string[];
   interactive: boolean;
   timeout?: number;
   run: (context: TestContext) => Promise<void>;
@@ -29,19 +30,11 @@ export interface TestSuiteDefinition {
   teardown?: (fixture: any) => Promise<void>;
 }
 
-export type InteractiveResult = { action: 'pass' | 'fail' | 'retest'; notes?: string };
-
 export interface TestContext {
   // Window creation helpers
   createWindow: (options: WindowOptions) => Promise<TestWindow>;
   // Log to test output
   log: (message: string) => void;
-  // For interactive tests - show instructions and wait for user to be ready
-  showInstructions: (instructions: string[]) => Promise<void>;
-  // For interactive tests - wait for user to verify (pass/fail/retest)
-  waitForUserVerification: () => Promise<InteractiveResult>;
-  // Legacy - wait for user action (combines show + verify)
-  waitForUserAction: (instructions: string[]) => Promise<{ passed: boolean; notes?: string }>;
 }
 
 export type TitleBarStyle = 'default' | 'hiddenInset' | 'hidden';
@@ -193,6 +186,7 @@ export function defineTest(config: {
   name: string;
   category: string;
   description?: string;
+  instructions?: string[];
   interactive?: boolean;
   timeout?: number;
   run: (context: TestContext) => Promise<void>;
@@ -202,6 +196,7 @@ export function defineTest(config: {
     name: config.name,
     category: config.category,
     description: config.description,
+    instructions: config.instructions,
     interactive: config.interactive ?? false,
     timeout: config.timeout ?? 10000,
     run: config.run,
@@ -215,6 +210,7 @@ export function defineTestSuite(config: TestSuiteDefinition): TestDefinition[] {
     name: test.name,
     category: config.category,
     description: test.description,
+    instructions: test.instructions,
     interactive: test.interactive,
     timeout: test.timeout ?? 10000,
     run: test.run,

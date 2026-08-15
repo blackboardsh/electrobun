@@ -4,7 +4,6 @@ import { type Pointer } from "bun:ffi";
 import { WGPUView } from "./WGPUView";
 import { BuildConfig } from "./BuildConfig";
 
-
 export type GpuWindowOptionsType = {
 	trafficLightOffset?: {
 		x: number;
@@ -195,6 +194,8 @@ export class GpuWindow {
 	}
 
 	close() {
+		// The native close callback stops mounted renderers before its global close
+		// event removes child views and releases their WebGPU contexts.
 		return ffi.request.closeWindow({ winId: this.id });
 	}
 
@@ -323,5 +324,11 @@ export class GpuWindow {
 	on(name: string, handler: (event: unknown) => void) {
 		const specificName = `${name}-${this.id}`;
 		electrobunEventEmitter.on(specificName, handler);
+		return () => this.off(name, handler);
+	}
+
+	off(name: string, handler: (event: unknown) => void) {
+		const specificName = `${name}-${this.id}`;
+		electrobunEventEmitter.off(specificName, handler);
 	}
 }

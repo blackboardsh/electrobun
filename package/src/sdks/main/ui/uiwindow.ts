@@ -30,6 +30,9 @@ import {
 	type UiContext,
 } from "./ui";
 import electrobunEventEmitter from "../events/eventEmitter";
+import { createWindowMountLifecycle } from "./windowMountLifecycle";
+import { runCleanupSteps } from "./cleanupSteps";
+import { createViewMountLifecycle } from "./viewMountLifecycle";
 
 export interface UIMountOptions {
 	/** Painted every frame behind the tree. */
@@ -58,6 +61,9 @@ export interface UIMount {
 
 export interface UIWindow extends UIMount {
 	window: GpuWindow;
+	/** Settles after a natural close is observed or disposal requests close. */
+	readonly closed: Promise<void>;
+	isClosed(): boolean;
 }
 
 export interface UIView extends UIMount {
@@ -96,19 +102,56 @@ async function mount(
 		background,
 		target.getSize(),
 	);
-	const ctx = createUiContext();
+	if (target.isAlive && !target.isAlive()) {
+		const error = new Error("UI mount target closed during renderer initialization");
+		try {
+			renderer.dispose();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"UI mount target closed and renderer cleanup failed",
+			);
+		}
+		throw error;
+	}
+	let ctx: UiContext;
+	try {
+		ctx = createUiContext();
+	} catch (error) {
+		try {
+			renderer.dispose();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to create the UI context and clean up its renderer",
+			);
+		}
+		throw error;
+	}
 	ctx.windowId = target.windowId;
 	const { tree } = ctx;
 
 	let disposeRoot = () => {};
-	createRoot((dispose) => {
-		disposeRoot = dispose;
-		withUiContext(ctx, () => {
-			const result = app();
-			// JSX apps return a lazy element; the builder API returns nothing.
-			if (isUIElement(result)) result.create();
+	try {
+		createRoot((dispose) => {
+			disposeRoot = dispose;
+			withUiContext(ctx, () => {
+				const result = app();
+				// JSX apps return a lazy element; the builder API returns nothing.
+				if (isUIElement(result)) result.create();
+			});
 		});
-	});
+	} catch (error) {
+		try {
+			runCleanupSteps([disposeRoot, renderer.dispose]);
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to mount and clean up the UI tree",
+			);
+		}
+		throw error;
+	}
 
 	const pointerHandler = (
 		type: "click" | "down" | "up" | "enter" | "leave",
@@ -146,43 +189,56 @@ async function mount(
 		if (fn) batch(() => fn(event));
 	};
 
-	const input = attachInput(target.windowId, target.viewId, target.viewOffset, {
-		hitChain: (x, y) => hitChain(tree, x, y),
-		dispatchWheel: (x, y, dx, dy) => {
-			const targetId = scrollTargetAt(tree, x, y);
-			if (targetId === 0) return;
-			const node = tree.get(targetId);
-			const column = tree.getProp(targetId, Prop.Dir) === 1;
-			const delta = column ? dy : dx;
-			const viewport = column ? node.h : node.w;
-			const max = Math.max(0, node.contentMain - viewport);
-			const current = tree.getProp(targetId, Prop.Scroll);
-			// Natural scrolling: positive delta scrolls content down/right.
-			const next = Math.max(0, Math.min(max, current - delta));
-			tree.setProp(targetId, Prop.Scroll, next);
-		},
-		isDragHandle: (id) => {
-			if (!target.allowWindowDrag) return false;
-			for (let n = id; n !== 0 && tree.has(n); n = tree.parentOf(n)) {
-				if (tree.getProp(n, Prop.WindowDrag) === 1) return true;
-			}
-			return false;
-		},
-		dispatchPointer: pointerHandler,
-		dispatchKey: (e: KeyEventInfo) => {
-			batch(() => {
-				// Focused node first, bubbling through ancestors; a handler
-				// returning true stops propagation to the window-level handlers.
-				let id = inert(ctx.focusedId);
-				while (id !== 0 && tree.has(id)) {
-					const handler = ctx.handlers.get(id)?.onKeyDown;
-					if (handler && handler(e) === true) return;
-					id = tree.parentOf(id);
+	let input: ReturnType<typeof attachInput>;
+	try {
+		input = attachInput(target.windowId, target.viewId, target.viewOffset, {
+			hitChain: (x, y) => hitChain(tree, x, y),
+			dispatchWheel: (x, y, dx, dy) => {
+				const targetId = scrollTargetAt(tree, x, y);
+				if (targetId === 0) return;
+				const node = tree.get(targetId);
+				const column = tree.getProp(targetId, Prop.Dir) === 1;
+				const delta = column ? dy : dx;
+				const viewport = column ? node.h : node.w;
+				const max = Math.max(0, node.contentMain - viewport);
+				const current = tree.getProp(targetId, Prop.Scroll);
+				// Natural scrolling: positive delta scrolls content down/right.
+				const next = Math.max(0, Math.min(max, current - delta));
+				tree.setProp(targetId, Prop.Scroll, next);
+			},
+			isDragHandle: (id) => {
+				if (!target.allowWindowDrag) return false;
+				for (let n = id; n !== 0 && tree.has(n); n = tree.parentOf(n)) {
+					if (tree.getProp(n, Prop.WindowDrag) === 1) return true;
 				}
-				for (const handler of ctx.keyHandlers) handler(e);
-			});
-		},
-	});
+				return false;
+			},
+			dispatchPointer: pointerHandler,
+			dispatchKey: (e: KeyEventInfo) => {
+				batch(() => {
+					// Focused node first, bubbling through ancestors; a handler
+					// returning true stops propagation to the window-level handlers.
+					let id = inert(ctx.focusedId);
+					while (id !== 0 && tree.has(id)) {
+						const handler = ctx.handlers.get(id)?.onKeyDown;
+						if (handler && handler(e) === true) return;
+						id = tree.parentOf(id);
+					}
+					for (const handler of ctx.keyHandlers) handler(e);
+				});
+			},
+		});
+	} catch (error) {
+		try {
+			runCleanupSteps([disposeRoot, renderer.dispose]);
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to attach input and clean up the UI mount",
+			);
+		}
+		throw error;
+	}
 
 	let lastWidth = 0;
 	let lastHeight = 0;
@@ -227,7 +283,7 @@ async function mount(
 	// re-show; otherwise the swapchain keeps presenting its pre-hide contents
 	// until some input or state change happens to dirty the tree.
 	let wasVisible = true;
-	const timer = setInterval(() => {
+	const tick = () => {
 		if (target.isAlive && !target.isAlive()) return;
 		if (target.isVisible && !target.isVisible()) {
 			wasVisible = false;
@@ -243,14 +299,34 @@ async function mount(
 			lastHeight = height;
 			renderFrame(width, height);
 		}
-	}, options.tickMs ?? 8);
+	};
+	let timer: ReturnType<typeof setInterval>;
+	try {
+		timer = setInterval(tick, options.tickMs ?? 8);
+	} catch (error) {
+		try {
+			runCleanupSteps([input.dispose, disposeRoot, renderer.dispose]);
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to schedule and clean up the UI mount",
+			);
+		}
+		throw error;
+	}
 
+	let stopped = false;
 	return {
 		context: ctx,
 		stop() {
-			clearInterval(timer);
-			input.dispose();
-			disposeRoot();
+			if (stopped) return;
+			stopped = true;
+			runCleanupSteps([
+				() => clearInterval(timer),
+				input.dispose,
+				disposeRoot,
+				renderer.dispose,
+			]);
 		},
 	};
 }
@@ -267,38 +343,57 @@ export async function createUIWindow(
 		titleBarStyle: options.titleBarStyle ?? "hiddenInset",
 		transparent: options.transparent ?? false,
 	});
-	if (options.alwaysOnTop) {
-		win.setAlwaysOnTop(true);
+	const closeEvent = `close-${win.id}`;
+	const lifecycle = createWindowMountLifecycle({
+		subscribe: (handler) => electrobunEventEmitter.on(closeEvent, handler),
+		unsubscribe: (handler) => electrobunEventEmitter.off(closeEvent, handler),
+		close: () => win.close(),
+		reportError: (error) => {
+			console.error("Failed to stop a UI mount during window close", error);
+		},
+	});
+
+	try {
+		if (options.alwaysOnTop && !lifecycle.isClosed()) {
+			win.setAlwaysOnTop(true);
+		}
+
+		const mounted = await mount(
+			{
+				renderTarget: win,
+				viewId: win.wgpuViewId,
+				windowId: win.id,
+				getSize: () => win.getSize(),
+				viewOffset: () => ({ x: 0, y: 0 }),
+				isAlive: () => !lifecycle.isClosed(),
+				// Hidden windows skip layout/paint/GPU entirely (e.g. a focused
+				// textInput's caret blink must not keep a hidden palette rendering).
+				isVisible: () => win.isVisible(),
+				allowWindowDrag: true,
+			},
+			options,
+			app,
+		);
+		lifecycle.attach(mounted.stop);
+
+		return {
+			window: win,
+			context: mounted.context,
+			closed: lifecycle.closed,
+			isClosed: lifecycle.isClosed,
+			dispose: lifecycle.dispose,
+		};
+	} catch (error) {
+		try {
+			lifecycle.dispose();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to create and clean up the UI window",
+			);
+		}
+		throw error;
 	}
-
-	const mounted = await mount(
-		{
-			renderTarget: win,
-			viewId: win.wgpuViewId,
-			windowId: win.id,
-			getSize: () => win.getSize(),
-			viewOffset: () => ({ x: 0, y: 0 }),
-			// Hidden windows skip layout/paint/GPU entirely (e.g. a focused
-			// textInput's caret blink must not keep a hidden palette rendering).
-			isVisible: () => win.isVisible(),
-			allowWindowDrag: true,
-		},
-		options,
-		app,
-	);
-
-	const onClose = () => mounted.stop();
-	electrobunEventEmitter.on(`close-${win.id}`, onClose);
-
-	return {
-		window: win,
-		context: mounted.context,
-		dispose() {
-			electrobunEventEmitter.off(`close-${win.id}`, onClose);
-			mounted.stop();
-			win.close();
-		},
-	};
 }
 
 /**
@@ -314,27 +409,48 @@ export async function createUIView(
 	options: UIMountOptions,
 	app: UIApp,
 ): Promise<UIView> {
-	const mounted = await mount(
-		{
-			renderTarget: view,
-			viewId: view.id,
-			windowId: view.windowId,
-			getSize: () => ({
-				width: view.frame.width,
-				height: view.frame.height,
-			}),
-			viewOffset: () => ({ x: view.frame.x, y: view.frame.y }),
-			isAlive: () => !view.isRemoved,
+	if (view.isRemoved) {
+		throw new Error("Cannot mount UI into a removed WGPUView");
+	}
+	const lifecycle = createViewMountLifecycle({
+		subscribeBeforeRemove: (handler) => view.onBeforeRemove(handler),
+		reportError: (error) => {
+			console.error("Failed to stop a UI mount before view removal", error);
 		},
-		options,
-		app,
-	);
+	});
 
-	return {
-		view,
-		context: mounted.context,
-		dispose() {
-			mounted.stop();
-		},
-	};
+	try {
+		const mounted = await mount(
+			{
+				renderTarget: view,
+				viewId: view.id,
+				windowId: view.windowId,
+				getSize: () => ({
+					width: view.frame.width,
+					height: view.frame.height,
+				}),
+				viewOffset: () => ({ x: view.frame.x, y: view.frame.y }),
+				isAlive: () => !view.isRemoved,
+			},
+			options,
+			app,
+		);
+		lifecycle.attach(mounted.stop);
+
+		return {
+			view,
+			context: mounted.context,
+			dispose: lifecycle.dispose,
+		};
+	} catch (error) {
+		try {
+			lifecycle.dispose();
+		} catch (cleanupError) {
+			throw new AggregateError(
+				[error, cleanupError],
+				"Failed to create and clean up the UI view",
+			);
+		}
+		throw error;
+	}
 }

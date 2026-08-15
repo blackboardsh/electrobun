@@ -10,14 +10,13 @@ export const dialogTests = [
     name: "showMessageBox - info dialog",
     category: "Dialogs (Interactive)",
     description: "Test info message box - clicking any button auto-passes",
+    instructions: [
+      "An info dialog will appear with OK and Cancel buttons",
+      "Click either button to pass the test",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
-      // Show instructions FIRST, before the dialog
-      await showInstructions([
-        "An info dialog will appear with OK and Cancel buttons",
-        "Click either button to pass the test",
-      ]);
-
+    timeout: 600000,
+    async run({ log }) {
       log("Showing info dialog");
 
       const result = await Utils.showMessageBox({
@@ -41,13 +40,13 @@ export const dialogTests = [
     name: "showMessageBox - question dialog",
     category: "Dialogs (Interactive)",
     description: "Test question dialog - clicking any button auto-passes",
+    instructions: [
+      "A question dialog will appear with Yes/No/Cancel",
+      "Click any button to pass the test",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A question dialog will appear with Yes/No/Cancel",
-        "Click any button to pass the test",
-      ]);
-
+    timeout: 600000,
+    async run({ log }) {
       log("Showing question dialog");
 
       const result = await Utils.showMessageBox({
@@ -70,16 +69,15 @@ export const dialogTests = [
     name: "File dialog playground",
     category: "Dialogs (Interactive)",
     description: "Interactive playground to test file dialog with configurable options",
+    instructions: [
+      "A control panel will open for file dialog testing",
+      "Configure options and click 'Open Dialog' to test",
+      "Select a path containing a comma and verify it is returned as one unchanged path",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000, // 10 minutes for exploration
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A control panel will open for file dialog testing",
-        "Configure options and click 'Open Dialog' to test",
-        "Select a path containing a comma and verify it is returned as one unchanged path",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening file dialog playground window");
 
       // Create a promise that resolves when user closes the window
@@ -138,14 +136,13 @@ export const dialogTests = [
     name: "openExternal - open URL in browser",
     category: "Dialogs (Interactive)",
     description: "Test opening a URL in the default browser",
+    instructions: [
+      "This will open electrobun.dev in your browser",
+      "Verify the browser opens correctly",
+      "The test will auto-pass after attempting",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "This will open electrobun.dev in your browser",
-        "Verify the browser opens correctly",
-        "The test will auto-pass after attempting",
-      ]);
-
+    async run({ log }) {
       log("Opening https://electrobun.dev in default browser");
       const result = Utils.openExternal("https://electrobun.dev");
       log(`openExternal returned: ${result}`);
@@ -160,15 +157,14 @@ export const dialogTests = [
     name: "openPath - open folder",
     category: "Dialogs (Interactive)",
     description: "Test opening a folder in Finder/Explorer",
+    instructions: [
+      `This will open your home folder: ${homedir()}`,
+      "Verify Finder/Explorer opens correctly",
+      "The test will auto-pass after attempting",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       const targetPath = homedir();
-
-      await showInstructions([
-        `This will open your home folder: ${targetPath}`,
-        "Verify Finder/Explorer opens correctly",
-        "The test will auto-pass after attempting",
-      ]);
 
       log(`Opening folder: ${targetPath}`);
       const result = Utils.openPath(targetPath);
@@ -183,16 +179,15 @@ export const dialogTests = [
     name: "showItemInFolder",
     category: "Dialogs (Interactive)",
     description: "Test revealing an item in Finder/Explorer",
+    instructions: [
+      `This will reveal ${join(homedir(), ".zshrc")} in Finder`,
+      "(Or fallback to home folder if file doesn't exist)",
+      "Verify Finder opens and highlights the item",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       // Use a path that should exist on most systems
       const targetPath = join(homedir(), ".zshrc");
-
-      await showInstructions([
-        `This will reveal ${targetPath} in Finder`,
-        "(Or fallback to home folder if file doesn't exist)",
-        "Verify Finder opens and highlights the item",
-      ]);
 
       // Try the target path, fall back to home folder
       let pathToReveal = targetPath;
@@ -217,14 +212,13 @@ export const dialogTests = [
     name: "showNotification - interactive",
     category: "Dialogs (Interactive)",
     description: "Test showing a desktop notification",
+    instructions: [
+      "A notification will be sent in 3 seconds",
+      "CLICK AWAY from this app to see it",
+      "(macOS hides notifications when app is focused)",
+    ],
     interactive: true,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A notification will be sent in 3 seconds",
-        "CLICK AWAY from this app to see it",
-        "(macOS hides notifications when app is focused)",
-      ]);
-
+    async run({ log }) {
       log("Sending notification in 3 seconds - click away from this app!");
 
       // Give user time to click away

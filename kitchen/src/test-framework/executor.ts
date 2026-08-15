@@ -7,18 +7,17 @@ import type {
   TestContext,
   TestWindow,
   WindowOptions,
-  InteractiveResult,
 } from "./types";
+import { ExclusiveRunCoordinator } from "./exclusive-run";
 
 type TestEventHandler = (event: TestEvent) => void;
 
 export interface TestEvent {
-  type: 'test-started' | 'test-completed' | 'test-log' | 'all-completed' | 'interactive-waiting' | 'interactive-ready' | 'interactive-verify';
+  type: 'test-started' | 'test-completed' | 'test-log' | 'all-completed';
   testId?: string;
   name?: string;
   result?: TestResult;
   message?: string;
-  instructions?: string[];
   results?: TestResult[];
 }
 
@@ -27,10 +26,7 @@ export class TestExecutor {
   private results: Map<string, TestResult> = new Map();
   private eventHandlers: TestEventHandler[] = [];
   private testWindows: Map<string, TestWindow[]> = new Map();
-  private interactiveResolver: ((result: { passed: boolean; notes?: string }) => void) | null = null;
-  private readyResolver: (() => void) | null = null;
-  private verificationResolver: ((result: InteractiveResult) => void) | null = null;
-  private currentTestId: string | null = null;
+  private runCoordinator = new ExclusiveRunCoordinator();
 
   constructor() {}
 
@@ -71,30 +67,6 @@ export class TestExecutor {
       } catch (e) {
         console.error('Error in test event handler:', e);
       }
-    }
-  }
-
-  // Submit result for interactive test (legacy)
-  submitInteractiveResult(testId: string, passed: boolean, notes?: string) {
-    if (this.interactiveResolver && this.currentTestId === testId) {
-      this.interactiveResolver({ passed, notes });
-      this.interactiveResolver = null;
-    }
-  }
-
-  // User clicked "Start" after reading instructions
-  submitReady(testId: string) {
-    if (this.readyResolver && this.currentTestId === testId) {
-      this.readyResolver();
-      this.readyResolver = null;
-    }
-  }
-
-  // User submitted verification result (pass/fail/retest)
-  submitVerification(testId: string, action: 'pass' | 'fail' | 'retest', notes?: string) {
-    if (this.verificationResolver && this.currentTestId === testId) {
-      this.verificationResolver({ action, notes });
-      this.verificationResolver = null;
     }
   }
 
@@ -148,45 +120,6 @@ export class TestExecutor {
         this.emit({ type: 'test-log', testId, message });
       },
 
-      // Show instructions and wait for user to click "Start"
-      showInstructions: async (instructions: string[]): Promise<void> => {
-        if (
-          process.env["AUTO_RUN_TEST_NAME"] ||
-          process.env["AUTO_RUN_WGPU"] ||
-          process.env["AUTO_ACCEPT_INTERACTIVE"]
-        ) {
-          instructions.forEach((instruction) => {
-            const timestamp = new Date().toISOString().split('T')[1]!.split('.')[0]!;
-            console.log(`  [${timestamp}] ${instruction}`);
-          });
-          return;
-        }
-        this.emit({ type: 'interactive-ready', testId, instructions });
-        this.currentTestId = testId;
-
-        return new Promise((resolve) => {
-          this.readyResolver = resolve;
-        });
-      },
-
-      // Wait for user to verify the result (pass/fail/retest)
-      waitForUserVerification: async (): Promise<InteractiveResult> => {
-        this.emit({ type: 'interactive-verify', testId });
-
-        return new Promise((resolve) => {
-          this.verificationResolver = resolve;
-        });
-      },
-
-      // Legacy - combines show + verify
-      waitForUserAction: async (instructions: string[]): Promise<{ passed: boolean; notes?: string }> => {
-        this.emit({ type: 'interactive-waiting', testId, instructions });
-
-        return new Promise((resolve) => {
-          this.interactiveResolver = resolve;
-          this.currentTestId = testId;
-        });
-      },
     };
   }
 
@@ -211,6 +144,12 @@ export class TestExecutor {
   }
 
   async runTest(test: TestDefinition): Promise<TestResult> {
+    return this.runCoordinator.run(`test "${test.name}"`, () =>
+      this.runTestInternal(test)
+    );
+  }
+
+  private async runTestInternal(test: TestDefinition): Promise<TestResult> {
     const startTime = Date.now();
     const logs: string[] = [];
 
@@ -220,13 +159,20 @@ export class TestExecutor {
     const context = this.createTestContext(test.id);
 
     try {
-      // Run with timeout
-      await Promise.race([
-        test.run(context),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Test timed out after ${test.timeout}ms`)), test.timeout)
-        ),
-      ]);
+      if (test.interactive) {
+        // Interactive tests own their completion through a dialog response or
+        // natural window close. An outer timeout cannot cancel direct
+        // BrowserWindow/GpuWindow work, so racing one would orphan the active
+        // test and allow the next test to overlap it.
+        await test.run(context);
+      } else {
+        await Promise.race([
+          test.run(context),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Test timed out after ${test.timeout}ms`)), test.timeout)
+          ),
+        ]);
+      }
 
       const result: TestResult = {
         testId: test.id,
@@ -263,6 +209,12 @@ export class TestExecutor {
   }
 
   async runAllAutomated(): Promise<TestResult[]> {
+    return this.runCoordinator.run("the automated test suite", () =>
+      this.runAllAutomatedInternal()
+    );
+  }
+
+  private async runAllAutomatedInternal(): Promise<TestResult[]> {
     const automated = this.getAutomatedTests();
     console.log(`\n${'='.repeat(60)}`);
     console.log(`Running ${automated.length} automated tests...`);
@@ -285,7 +237,7 @@ export class TestExecutor {
       // Run tests in this category sequentially to avoid resource exhaustion
       // Running 30+ CEF browser instances in parallel causes crashes on Linux
       for (const test of tests) {
-        const result = await this.runTest(test);
+        const result = await this.runTestInternal(test);
         results.push(result);
       }
     }
@@ -311,6 +263,12 @@ export class TestExecutor {
   }
 
   async runInteractiveTests(): Promise<TestResult[]> {
+    return this.runCoordinator.run("the interactive test suite", () =>
+      this.runInteractiveTestsInternal()
+    );
+  }
+
+  private async runInteractiveTestsInternal(): Promise<TestResult[]> {
     const interactive = this.getInteractiveTests();
     console.log(`\n${'='.repeat(60)}`);
     console.log(`Running ${interactive.length} interactive tests...`);
@@ -319,7 +277,7 @@ export class TestExecutor {
     const results: TestResult[] = [];
 
     for (const test of interactive) {
-      const result = await this.runTest(test);
+      const result = await this.runTestInternal(test);
       results.push(result);
     }
 

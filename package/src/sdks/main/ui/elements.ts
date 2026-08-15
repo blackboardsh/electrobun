@@ -9,6 +9,7 @@ import { BrowserView } from "../core/BrowserView";
 import { ffi } from "../proc/native";
 import { cleanup, inert } from "./reactive";
 import { getUiContext, ui, type AnchorRect, type Reactive } from "./ui";
+import { observeAsyncReady } from "./asyncReady";
 
 export interface WgpuSurfaceProps {
 	width?: Reactive<number>;
@@ -16,7 +17,7 @@ export interface WgpuSurfaceProps {
 	grow?: Reactive<number>;
 	transparent?: boolean;
 	/** Called once, after layout first places the surface. */
-	onReady?: (view: WGPUView) => void;
+	onReady?: (view: WGPUView) => void | PromiseLike<void>;
 	/** Called on every subsequent layout move/resize. */
 	onFrame?: (view: WGPUView, rect: AnchorRect) => void;
 }
@@ -53,7 +54,12 @@ export function wgpuSurface(props: WgpuSurfaceProps): number {
 					startTransparent: props.transparent ?? false,
 					startPassthrough: false,
 				});
-				inert(() => props.onReady?.(view!));
+				const ready = inert(() => props.onReady?.(view!));
+				observeAsyncReady(
+					ready,
+					() => view === null || view.isRemoved,
+					(error) => console.error("wgpuSurface onReady failed", error),
+				);
 			} else {
 				view.setFrame(rect.x, rect.y, rect.width, rect.height);
 				inert(() => props.onFrame?.(view!, rect));

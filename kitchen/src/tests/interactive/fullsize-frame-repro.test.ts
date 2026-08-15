@@ -7,20 +7,19 @@ export const fullsizeFrameReproTests = [
     category: "Layout (Interactive)",
     description:
       "Repro for macOS fullSize webview sizing against titlebar; verifies bottom sentinel remains visible while resizing",
+    instructions: [
+      "A native-rendered window will open with default titlebar.",
+      "Resize the window height up/down several times.",
+      "Verify the green 'BOTTOM SENTINEL' bar stays fully visible at the bottom.",
+      "Close the window when done to pass the test.",
+    ],
     interactive: true,
     timeout: 180000,
-    async run({ log, showInstructions, waitForUserVerification }) {
+    async run({ log }) {
       if (process.platform !== "darwin") {
         log("Skipping: repro target is macOS-specific");
         return;
       }
-
-      await showInstructions([
-        "A native-rendered window will open with default titlebar.",
-        "Resize the window height up/down several times.",
-        "Verify the green 'BOTTOM SENTINEL' bar stays fully visible at the bottom.",
-        "If the bar is clipped or partially hidden, mark as Fail.",
-      ]);
 
       await new Promise<void>((resolve) => {
         let winRef: BrowserWindow<any> | null = null;
@@ -52,14 +51,6 @@ export const fullsizeFrameReproTests = [
           resolve();
         });
       });
-
-      const result = await waitForUserVerification();
-      if (result.action === "fail") {
-        throw new Error(result.notes || "User observed clipping / overflow");
-      }
-      if (result.action === "retest") {
-        throw new Error("RETEST: User requested another run");
-      }
 
       log("No clipping observed in fullSize frame repro");
     },

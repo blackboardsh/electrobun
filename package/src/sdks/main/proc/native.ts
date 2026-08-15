@@ -939,6 +939,10 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
+			wgpuSurfaceCapabilitiesFreeMembersShim: {
+				args: [FFIType.ptr],
+				returns: FFIType.void,
+			},
 			wgpuSurfaceGetCurrentTextureMainThread: {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
@@ -2312,6 +2316,10 @@ export const WGPUBridge = {
 		native_.symbols.wgpuSurfaceConfigureMainThread(
 			surfacePtr as any,
 			configPtr as any,
+		),
+	surfaceCapabilitiesFreeMembers: (capabilitiesPtr: Pointer) =>
+		native_.symbols.wgpuSurfaceCapabilitiesFreeMembersShim(
+			capabilitiesPtr as any,
 		),
 	surfaceGetCurrentTexture: (surfacePtr: Pointer, surfaceTexturePtr: Pointer) =>
 		native_.symbols.wgpuSurfaceGetCurrentTextureMainThread(

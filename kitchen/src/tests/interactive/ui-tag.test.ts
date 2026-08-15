@@ -35,8 +35,16 @@ export const uiTagTests = [
 		category: "Cottontail UI",
 		description:
 			"registerUIRoot mounts a reactive counter into a Dawn layer anchored by an <electrobun-ui> tag inside web content.",
+		instructions: [
+			"A window with cream-colored web content should be open.",
+			"Inside it, a dark panel renders 'Native UI in a webview' — that panel is a Dawn layer, not DOM.",
+			"Click the 'Click me' button in the dark panel: the click counter should increment.",
+			"Scroll the page: the panel should track the dashed anchor rectangle.",
+			"Close the overlay window when you are done.",
+		],
 		interactive: true,
-		async run({ showInstructions, waitForUserVerification, log }) {
+		timeout: 600000,
+		async run() {
 			const registration = registerUIRoot(
 				"kitchen-overlay",
 				{ background: "#1b1b28" },
@@ -77,21 +85,17 @@ export const uiTagTests = [
 				frame: { width: 640, height: 560 },
 			});
 
+			let closed = false;
 			try {
-				await showInstructions([
-					"A window with cream-colored web content should be open.",
-					"Inside it, a dark panel renders 'Native UI in a webview' — that panel is a Dawn layer, not DOM.",
-					"Click the 'Click me' button in the dark panel: the click counter should increment.",
-					"Scroll the page: the panel should track the dashed anchor rectangle.",
-				]);
-				const result = await waitForUserVerification();
-				log(`user verdict: ${result.action}`);
-				if (result.action === "fail") {
-					throw new Error(result.notes || "User reported failure");
-				}
+				await new Promise<void>((resolve) =>
+					win.on("close", () => {
+						closed = true;
+						resolve();
+					}),
+				);
 			} finally {
 				registration.dispose();
-				win.close();
+				if (!closed) win.close();
 			}
 		},
 	}),

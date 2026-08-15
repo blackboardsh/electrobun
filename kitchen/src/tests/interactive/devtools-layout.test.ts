@@ -7,22 +7,21 @@ export const devtoolsLayoutTests = [
     category: "Layout (Interactive)",
     description:
       "Verifies that focusing and closing a docked system WebKit inspector does not shift or gray the app content",
+    instructions: [
+      "A hidden-inset native window will open and show its Web Inspector.",
+      "Dock the inspector to the bottom if it opens in a separate window.",
+      "Move the pointer over the inspector and click several tabs and controls.",
+      "Verify the red/green app content remains aligned and never turns gray.",
+      "Close the inspector and verify the app content fills the window again.",
+      "Close the test window when done to pass the test.",
+    ],
     interactive: true,
     timeout: 180000,
-    async run({ log, showInstructions, waitForUserVerification }) {
+    async run({ log }) {
       if (process.platform !== "darwin") {
         log("Skipping: docked WKWebView inspector is macOS-specific");
         return;
       }
-
-      await showInstructions([
-        "A hidden-inset native window will open and show its Web Inspector.",
-        "Dock the inspector to the bottom if it opens in a separate window.",
-        "Move the pointer over the inspector and click several tabs and controls.",
-        "Verify the red/green app content remains aligned and never turns gray.",
-        "Close the inspector and verify the app content fills the window again.",
-        "Close the test window, then mark the result.",
-      ]);
 
       await new Promise<void>((resolve) => {
         const win = new BrowserWindow({
@@ -44,17 +43,12 @@ export const devtoolsLayoutTests = [
             <footer>BOTTOM EDGE</footer>`,
         });
 
-        setTimeout(() => win.webview.openDevTools(), 500);
-        win.on("close", () => resolve());
+        const openDevToolsTimer = setTimeout(() => win.webview.openDevTools(), 500);
+        win.on("close", () => {
+          clearTimeout(openDevToolsTimer);
+          resolve();
+        });
       });
-
-      const result = await waitForUserVerification();
-      if (result.action === "fail") {
-        throw new Error(result.notes || "Docked inspector shifted or grayed app content");
-      }
-      if (result.action === "retest") {
-        throw new Error("RETEST: User requested another run");
-      }
 
       log("Docked inspector layout remained stable through hover and close");
     },

@@ -3,12 +3,12 @@
 import { defineTest, expect } from "../test-framework/types";
 import { BrowserView, BuildConfig } from "electrobun/main";
 import type {
-  HostSocketStressState,
   SocketSendSummary,
   StressMessageStats,
   StressRequestSummary,
   TestHarnessRPC,
 } from "../test-harness/index";
+import { waitForHostSocketOpen } from "./rpc-stress-readiness";
 
 function sleep(ms: number) {
   return new Promise<void>((resolve) => setTimeout(resolve, ms));
@@ -107,22 +107,6 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
   ) {
     throw new Error(describeStressFailure(label, stats));
   }
-}
-
-async function waitForHostSocketOpen(webviewRpc: any, timeoutMs = 10000): Promise<HostSocketStressState> {
-	const deadline = Date.now() + timeoutMs;
-	let lastState: HostSocketStressState | undefined;
-
-	while (Date.now() < deadline) {
-		const currentState = await webviewRpc.request.getHostSocketStressState({}) as HostSocketStressState;
-		lastState = currentState;
-		if (currentState.readyState === 1) {
-			return currentState;
-		}
-		await sleep(100);
-	}
-
-  throw new Error(`Timed out waiting for webview host socket to open: ${JSON.stringify(lastState)}`);
 }
 
 // Create RPC config for test harness

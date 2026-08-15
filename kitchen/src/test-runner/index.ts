@@ -1,6 +1,7 @@
 import Electrobun, { Electroview } from "electrobun/view";
 import type { TestRunnerRPC, TestInfo, UpdateInfo, UpdateStatusEntry } from "./rpc";
 import type { TestResult, TestStatus } from "../test-framework/types";
+import { groupTestsForDisplay } from "./test-order";
 
 // RPC setup
 const rpc = Electroview.defineRPC<TestRunnerRPC>({
@@ -21,18 +22,11 @@ const rpc = Electroview.defineRPC<TestRunnerRPC>({
         console.log(`[${testId}] ${message}`);
       },
       allCompleted: ({ results: _results }) => {
-        setButtonsEnabled(true);
+        // UI-initiated runs are unlocked by their request's finally block.
+        // Avoid briefly enabling a second run before that request resolves.
+        if (!runInProgress) setButtonsEnabled(true);
         updateSummary();
         console.log('All tests completed');
-      },
-      interactiveWaiting: ({ testId, instructions }) => {
-        showInteractiveModal(testId, instructions, 'legacy');
-      },
-      interactiveReady: ({ testId, instructions }) => {
-        showInteractiveModal(testId, instructions, 'ready');
-      },
-      interactiveVerify: ({ testId }) => {
-        showVerificationModal(testId);
       },
       buildConfig: (config) => {
         updateBuildConfigUI(config);
@@ -54,9 +48,9 @@ const electrobun = new Electrobun.Electroview({ rpc });
 // State
 let tests: TestInfo[] = [];
 let testResults: Map<string, TestResult> = new Map();
-let currentInteractiveTestId: string | null = null;
 let statusHistoryVisible = false;
 let searchQuery = '';
+let runInProgress = false;
 
 // DOM elements - will be initialized in init()
 let testList: HTMLElement;
@@ -66,25 +60,12 @@ let failedCount: HTMLElement;
 let pendingCount: HTMLElement;
 let btnRunAll: HTMLButtonElement;
 let btnRunInteractive: HTMLButtonElement;
-let modal: HTMLElement;
-let modalTitle: HTMLElement;
-let modalInstructions: HTMLElement;
-let btnStart: HTMLButtonElement;
-let btnPass: HTMLButtonElement;
-let btnFail: HTMLButtonElement;
-let btnRetest: HTMLButtonElement;
-let notesInput: HTMLInputElement;
 let historyToggle: HTMLButtonElement;
 let historyPanel: HTMLElement;
 let historyList: HTMLElement;
 let historyClear: HTMLButtonElement;
 let searchInput: HTMLInputElement;
 let searchMeta: HTMLElement;
-
-// Modal mode
-type ModalMode = 'legacy' | 'ready' | 'verify';
-// @ts-expect-error - reserved for tracking modal state
-let _currentModalMode: ModalMode = 'legacy';
 
 // Initialize
 async function init() {
@@ -96,14 +77,6 @@ async function init() {
   pendingCount = document.getElementById('pending-count')!;
   btnRunAll = document.getElementById('btn-run-all')! as HTMLButtonElement;
   btnRunInteractive = document.getElementById('btn-run-interactive')! as HTMLButtonElement;
-  modal = document.getElementById('interactive-modal')!;
-  modalTitle = document.getElementById('modal-title')!;
-  modalInstructions = document.getElementById('modal-instructions')!;
-  btnStart = document.getElementById('btn-start')! as HTMLButtonElement;
-  btnPass = document.getElementById('btn-pass')! as HTMLButtonElement;
-  btnFail = document.getElementById('btn-fail')! as HTMLButtonElement;
-  btnRetest = document.getElementById('btn-retest')! as HTMLButtonElement;
-  notesInput = document.getElementById('notes-input')! as HTMLInputElement;
   historyToggle = document.getElementById('update-history-toggle')! as HTMLButtonElement;
   historyPanel = document.getElementById('update-history-panel')!;
   historyList = document.getElementById('update-history-list')!;
@@ -120,10 +93,6 @@ async function init() {
   // Setup event handlers
   btnRunAll.addEventListener('click', runAllAutomated);
   btnRunInteractive.addEventListener('click', runInteractiveTests);
-  btnStart.addEventListener('click', submitReady);
-  btnPass.addEventListener('click', () => submitVerification('pass'));
-  btnFail.addEventListener('click', () => submitVerification('fail'));
-  btnRetest.addEventListener('click', () => submitVerification('retest'));
   searchInput.addEventListener('input', onSearchInput);
 
   await loadPersistedSearchQuery();
@@ -189,13 +158,9 @@ async function loadTests(retries = 10): Promise<void> {
 function renderTests() {
   const visibleTests = getVisibleTests();
 
-  // Group by category
-  const byCategory = new Map<string, TestInfo[]>();
-  for (const test of visibleTests) {
-    const existing = byCategory.get(test.category) || [];
-    existing.push(test);
-    byCategory.set(test.category, existing);
-  }
+  // Keep category grouping, but split mixed categories so every interactive
+  // test remains above every automated test.
+  const testGroups = groupTestsForDisplay(visibleTests);
 
   testList.innerHTML = '';
 
@@ -205,7 +170,7 @@ function renderTests() {
     return;
   }
 
-  for (const [category, categoryTests] of byCategory) {
+  for (const { category, interactive, tests: categoryTests } of testGroups) {
     const categoryEl = document.createElement('div');
     categoryEl.className = 'category';
 
@@ -223,7 +188,7 @@ function renderTests() {
 
     const categoryTestsEl = document.createElement('div');
     categoryTestsEl.className = 'category-tests';
-    categoryTestsEl.id = `category-${category.replace(/[^a-z0-9]/gi, '-')}`;
+    categoryTestsEl.id = `category-${interactive ? 'interactive' : 'automated'}-${category.replace(/[^a-z0-9]/gi, '-')}`;
     categoryTestsEl.append(...categoryTests.map(test => renderTest(test)));
 
     categoryEl.append(categoryHeaderEl, categoryTestsEl);
@@ -234,8 +199,13 @@ function renderTests() {
 }
 
 async function runSingleTest(testId: string) {
+  if (!beginRun()) return;
+
   const test = tests.find(t => t.id === testId);
-  if (!test) return;
+  if (!test) {
+    finishRun();
+    return;
+  }
 
   // Update UI to show running state
   updateTestStatus(testId, 'running');
@@ -249,15 +219,18 @@ async function runSingleTest(testId: string) {
 
   try {
     console.log(`Running test: ${test.name}`);
-    await electrobun.rpc?.request.runTest({ testId });
+    // The backend owns each test's timeout. Interactive tests can legitimately
+    // remain open longer than the runner RPC's default request deadline.
+    await electrobun.rpc?.request.runTest(
+      { testId },
+      { maxRequestTime: Infinity },
+    );
   } catch (err) {
     console.error(`Failed to run test ${testId}:`, err);
   } finally {
     // Re-enable button
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = test.interactive ? 'Open' : 'Run';
-    }
+    if (btn) btn.textContent = test.interactive ? 'Open' : 'Run';
+    finishRun();
   }
 }
 
@@ -297,6 +270,17 @@ function renderTest(test: TestInfo): HTMLElement {
     infoEl.appendChild(descriptionEl);
   }
 
+  if (test.instructions?.length) {
+    const instructionsEl = document.createElement('ol');
+    instructionsEl.className = 'test-instructions';
+    for (const instruction of test.instructions) {
+      const instructionEl = document.createElement('li');
+      instructionEl.textContent = instruction;
+      instructionsEl.appendChild(instructionEl);
+    }
+    infoEl.appendChild(instructionsEl);
+  }
+
   const metaEl = document.createElement('div');
   metaEl.className = 'test-meta';
   if (result?.duration) {
@@ -318,6 +302,7 @@ function renderTest(test: TestInfo): HTMLElement {
   runButtonEl.dataset['testId'] = test.id;
   runButtonEl.title = `${actionLabel} this test`;
   runButtonEl.textContent = actionLabel;
+  runButtonEl.disabled = runInProgress;
 
   testEl.append(statusEl, infoEl, metaEl, runButtonEl);
   return testEl;
@@ -405,6 +390,7 @@ function fuzzyMatches(test: TestInfo, rawQuery: string): boolean {
     test.name.toLowerCase(),
     test.category.toLowerCase(),
     (test.description || '').toLowerCase(),
+    ...(test.instructions || []).map((instruction) => instruction.toLowerCase()),
   ];
 
   return queryTokens.every((token) =>
@@ -449,130 +435,54 @@ async function loadPersistedSearchQuery(): Promise<void> {
 function setButtonsEnabled(enabled: boolean) {
   btnRunAll.disabled = !enabled;
   btnRunInteractive.disabled = !enabled;
+  document.querySelectorAll<HTMLButtonElement>('.run-btn').forEach((button) => {
+    button.disabled = !enabled;
+  });
+}
+
+function beginRun(): boolean {
+  if (runInProgress) return false;
+  runInProgress = true;
+  setButtonsEnabled(false);
+  return true;
+}
+
+function finishRun() {
+  runInProgress = false;
+  setButtonsEnabled(true);
 }
 
 async function runAllAutomated() {
-  setButtonsEnabled(false);
+  if (!beginRun()) return;
   testResults.clear();
   renderTests();
 
   try {
-    await electrobun.rpc?.request.runAllAutomated({});
+    await electrobun.rpc?.request.runAllAutomated(
+      {},
+      { maxRequestTime: Infinity },
+    );
   } catch (err) {
     console.error('Failed to run tests:', err);
   } finally {
-    setButtonsEnabled(true);
+    finishRun();
   }
 }
 
 async function runInteractiveTests() {
-  setButtonsEnabled(false);
+  if (!beginRun()) return;
 
   try {
-    await electrobun.rpc?.request.runInteractiveTests({});
+    // This request covers the entire sequential interactive suite, including
+    // however long the tester keeps each playground open.
+    await electrobun.rpc?.request.runInteractiveTests(
+      {},
+      { maxRequestTime: Infinity },
+    );
   } catch (err) {
     console.error('Failed to run interactive tests:', err);
   } finally {
-    setButtonsEnabled(true);
-    hideInteractiveModal();
-  }
-}
-
-function showInteractiveModal(testId: string, instructions: string[], mode: ModalMode) {
-  currentInteractiveTestId = testId;
-  _currentModalMode =mode;
-  const test = tests.find(t => t.id === testId);
-
-  modalTitle.textContent = test?.name || 'Interactive Test';
-  modalInstructions.innerHTML = `
-    <ol>
-      ${instructions.map(i => `<li>${i}</li>`).join('')}
-    </ol>
-  `;
-  notesInput.value = '';
-
-  // Show/hide buttons based on mode
-  if (mode === 'ready') {
-    // Show only "Start Test" button - user reads instructions first
-    btnStart.style.display = 'inline-block';
-    btnPass.style.display = 'none';
-    btnFail.style.display = 'none';
-    btnRetest.style.display = 'none';
-    notesInput.style.display = 'none';
-  } else {
-    // Legacy mode - show pass/fail (used for tests that show dialog then instructions)
-    btnStart.style.display = 'none';
-    btnPass.style.display = 'inline-block';
-    btnFail.style.display = 'inline-block';
-    btnRetest.style.display = 'none';
-    notesInput.style.display = 'block';
-  }
-
-  modal.style.display = 'flex';
-}
-
-function showVerificationModal(testId: string) {
-  currentInteractiveTestId = testId;
-  _currentModalMode ='verify';
-  const test = tests.find(t => t.id === testId);
-
-  modalTitle.textContent = `Verify: ${test?.name || 'Test'}`;
-  modalInstructions.innerHTML = `
-    <p>Did the test work as expected?</p>
-    <ul>
-      <li><strong>Pass</strong> - Everything worked correctly</li>
-      <li><strong>Fail</strong> - Something didn't work</li>
-      <li><strong>Re-test</strong> - Run the action again</li>
-    </ul>
-  `;
-  notesInput.value = '';
-
-  // Show verification buttons
-  btnStart.style.display = 'none';
-  btnPass.style.display = 'inline-block';
-  btnFail.style.display = 'inline-block';
-  btnRetest.style.display = 'inline-block';
-  notesInput.style.display = 'block';
-
-  modal.style.display = 'flex';
-}
-
-function hideInteractiveModal() {
-  modal.style.display = 'none';
-  currentInteractiveTestId = null;
-}
-
-async function submitReady() {
-  if (!currentInteractiveTestId) return;
-
-  try {
-    await electrobun.rpc?.request.submitReady({
-      testId: currentInteractiveTestId,
-    });
-  } catch (err) {
-    console.error('Failed to submit ready:', err);
-  }
-
-  hideInteractiveModal();
-}
-
-async function submitVerification(action: 'pass' | 'fail' | 'retest') {
-  if (!currentInteractiveTestId) return;
-
-  const notes = notesInput.value.trim() || undefined;
-
-  try {
-    await electrobun.rpc?.request.submitVerification({
-      testId: currentInteractiveTestId,
-      action,
-      notes,
-    });
-  } catch (err) {
-    console.error('Failed to submit verification:', err);
-  }
-
-  if (action !== 'retest') {
-    hideInteractiveModal();
+    finishRun();
   }
 }
 

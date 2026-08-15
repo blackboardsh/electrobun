@@ -8,15 +8,14 @@ export const webviewTagTests = [
     name: "Webview Tag playground",
     category: "Webview Tag (Interactive)",
     description: "Test masks, passthrough, navigation, and inline HTML",
+    instructions: [
+      "A webview tag playground will open",
+      "Test masks, passthrough, navigation, and more",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A webview tag playground will open",
-        "Test masks, passthrough, navigation, and more",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening webview tag playground window");
 
       await new Promise<void>((resolve) => {
@@ -58,17 +57,16 @@ export const webviewTagTests = [
     name: "Draggable region playground",
     category: "Webview Tag (Interactive)",
     description: "Test frameless window with draggable regions",
+    instructions: [
+      "A frameless window with draggable regions will open",
+      "Drag from both the dark class-based box and outlined stylesheet-based box",
+      "The stylesheet region is transparent and must work on system webviews",
+      "The no-drag controls and 'Done' button must remain clickable",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A frameless window with draggable regions will open",
-        "Drag from both the dark class-based box and outlined stylesheet-based box",
-        "The stylesheet region is transparent and must work on system webviews",
-        "The no-drag controls and 'Done' button must remain clickable",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening draggable region playground window");
 
       await new Promise<void>((resolve) => {
@@ -111,16 +109,15 @@ export const webviewTagTests = [
     name: "Host message playground",
     category: "Webview Tag (Interactive)",
     description: "Test sendToHost communication from nested webview",
+    instructions: [
+      "A window will open with a nested webview",
+      "Click buttons in the webview to send messages to the host",
+      "Messages will appear in the log area",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A window will open with a nested webview",
-        "Click buttons in the webview to send messages to the host",
-        "Messages will appear in the log area",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening host message playground window");
 
       await new Promise<void>((resolve) => {
@@ -162,16 +159,15 @@ export const webviewTagTests = [
     name: "Session & partition playground",
     category: "Webview Tag (Interactive)",
     description: "Test webview partitions, cookies, and session storage",
+    instructions: [
+      "A window will open to test webview sessions",
+      "Click +/- buttons in webviews to test localStorage isolation",
+      "Webviews with same partition should share counter values",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A window will open to test webview sessions",
-        "Click +/- buttons in webviews to test localStorage isolation",
-        "Webviews with same partition should share counter values",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening session playground window");
 
       await new Promise<void>((resolve) => {

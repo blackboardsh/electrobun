@@ -7,6 +7,7 @@ export interface TestInfo {
   name: string;
   category: string;
   description?: string;
+  instructions?: string[];
   interactive: boolean;
 }
 
@@ -49,18 +50,6 @@ export type TestRunnerRPC = {
       runInteractiveTests: {
         params: {};
         response: TestResult[];
-      };
-      submitInteractiveResult: {
-        params: { testId: string; passed: boolean; notes?: string };
-        response: void;
-      };
-      submitReady: {
-        params: { testId: string };
-        response: void;
-      };
-      submitVerification: {
-        params: { testId: string; action: 'pass' | 'fail' | 'retest'; notes?: string };
-        response: void;
       };
       applyUpdate: {
         params: {};
@@ -106,17 +95,6 @@ export type TestRunnerRPC = {
       };
       allCompleted: {
         results: TestResult[];
-      };
-      interactiveWaiting: {
-        testId: string;
-        instructions: string[];
-      };
-      interactiveReady: {
-        testId: string;
-        instructions: string[];
-      };
-      interactiveVerify: {
-        testId: string;
       };
       buildConfig: {
         defaultRenderer: 'native' | 'cef';

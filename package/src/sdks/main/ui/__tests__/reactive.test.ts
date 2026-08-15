@@ -176,6 +176,26 @@ describe("scopes", () => {
 		expect(events).toEqual(["cleanup 0"]);
 	});
 
+	test("a throwing child cleanup cannot skip sibling root teardown", () => {
+		const calls: string[] = [];
+		const cleanupError = new Error("child cleanup failed");
+		let dispose = () => {};
+		createRoot((disposeRoot) => {
+			dispose = disposeRoot;
+			cleanup(() => calls.push("root cleanup"));
+			effect(() => {
+				cleanup(() => {
+					calls.push("child cleanup");
+					throw cleanupError;
+				});
+			});
+		});
+
+		expect(() => dispose()).toThrow(cleanupError);
+		expect(calls).toEqual(["child cleanup", "root cleanup"]);
+		expect(() => dispose()).not.toThrow();
+	});
+
 	test("nested scopes dispose with their parent", () => {
 		const [outer, setOuter] = signal(0);
 		const [inner, setInner] = signal(0);

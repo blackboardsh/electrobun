@@ -8298,6 +8298,13 @@ static bool ensureWgpuTestSymbols() {
     return true;
 }
 
+ELECTROBUN_EXPORT void wgpuSurfaceCapabilitiesFreeMembersShim(void* capabilitiesPtr) {
+    if (!capabilitiesPtr || !ensureWgpuTestSymbols()) return;
+    WGPUSurfaceCapabilities* capabilities = (WGPUSurfaceCapabilities*)capabilitiesPtr;
+    p_wgpuSurfaceCapabilitiesFreeMembers(*capabilities);
+    *capabilities = {};
+}
+
 struct GPUTestState {
     WGPUInstance instance = nullptr;
     WGPUSurface surface = nullptr;

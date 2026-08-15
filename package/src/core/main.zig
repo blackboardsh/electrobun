@@ -2249,6 +2249,14 @@ fn windowCloseTrampoline(window_id: u32) callconv(.c) void {
     }
     window_registry_mutex.unlock(coreIo());
 
+    // Give JS mounts a chance to stop render loops and destroy their devices
+    // while child views and WebGPU surfaces are still valid. The global close
+    // event then removes JS-owned views; the collection below cleans up any
+    // native children that remain.
+    if (close_handler) |handler| {
+        handler(window_id);
+    }
+
     collectWebviewIdsForWindow(window_id, &child_webview_ids);
     for (child_webview_ids.items) |webview_id| {
         webviewRemove(webview_id);
@@ -2257,10 +2265,6 @@ fn windowCloseTrampoline(window_id: u32) callconv(.c) void {
     collectWgpuViewIdsForWindow(window_id, &child_wgpu_view_ids);
     for (child_wgpu_view_ids.items) |wgpu_view_id| {
         removeWGPUView(wgpu_view_id);
-    }
-
-    if (close_handler) |handler| {
-        handler(window_id);
     }
 
     if (exit_on_last_window_closed and !hasOpenWindows()) {
@@ -3968,6 +3972,16 @@ export fn wgpuSurfaceConfigureMainThread(surface_ptr: ?*anyopaque, config_ptr: ?
         "wgpuSurfaceConfigureMainThread",
     ) orelse return;
     wgpu_surface_configure_main_thread(surface_ptr, config_ptr);
+}
+
+export fn wgpuSurfaceCapabilitiesFreeMembersShim(capabilities_ptr: ?*anyopaque) void {
+    clearLastError();
+    const WgpuSurfaceCapabilitiesFreeMembersShimFn = *const fn (?*anyopaque) callconv(.c) void;
+    const wgpu_surface_capabilities_free_members = lookupNativeSymbol(
+        WgpuSurfaceCapabilitiesFreeMembersShimFn,
+        "wgpuSurfaceCapabilitiesFreeMembersShim",
+    ) orelse return;
+    wgpu_surface_capabilities_free_members(capabilities_ptr);
 }
 
 export fn wgpuSurfaceGetCurrentTextureMainThread(surface_ptr: ?*anyopaque, surface_texture_ptr: ?*anyopaque) void {

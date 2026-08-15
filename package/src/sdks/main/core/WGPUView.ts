@@ -1,6 +1,8 @@
 import { ffi } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { type Pointer } from "bun:ffi";
+import { releaseWebgpuContext } from "../webgpuContextRegistry";
+import { BeforeRemoveHooks } from "./beforeRemoveHooks";
 
 const WGPUViewMap: {
 	[id: number]: WGPUView;
@@ -49,6 +51,7 @@ export class WGPUView {
 	startTransparent: boolean = false;
 	startPassthrough: boolean = false;
 	isRemoved: boolean = false;
+	private beforeRemoveHooks = new BeforeRemoveHooks();
 
 	get ptr(): Pointer | null {
 		if (this.isRemoved) {
@@ -119,6 +122,15 @@ export class WGPUView {
 		electrobunEventEmitter.on(specificName, handler);
 	}
 
+	/**
+	 * Run teardown synchronously while the native view and WebGPU context still
+	 * exist. The returned callback removes this subscription.
+	 */
+	onBeforeRemove(handler: () => void): () => void {
+		if (this.isRemoved) return () => {};
+		return this.beforeRemoveHooks.subscribe(handler);
+	}
+
 	remove() {
 		if (this.isRemoved) {
 			return;
@@ -126,11 +138,24 @@ export class WGPUView {
 
 		this.isRemoved = true;
 		delete WGPUViewMap[this.id];
+		const hookErrors = this.beforeRemoveHooks.run();
+		// Release the adapter-owned surface/instance while an explicit removal
+		// still has a live native view. On natural window close this is also
+		// idempotently invoked when GpuWindow drains its child wrappers.
+		try {
+			releaseWebgpuContext(this.id);
+		} catch (e) {
+			console.error(`Error releasing WebGPU context for view ${this.id}:`, e);
+		}
 
 		try {
 			ffi.request.wgpuViewRemove({ id: this.id });
 		} catch (e) {
 			console.error(`Error removing WGPU view ${this.id}:`, e);
+		}
+
+		for (const error of hookErrors) {
+			console.error(`Error before removing WGPU view ${this.id}:`, error);
 		}
 	}
 
@@ -166,6 +191,7 @@ export class WGPUView {
 		view.startTransparent = options.startTransparent ?? false;
 		view.startPassthrough = options.startPassthrough ?? false;
 		view.isRemoved = false;
+		view.beforeRemoveHooks = new BeforeRemoveHooks();
 		WGPUViewMap[id] = view;
 		return view;
 	}

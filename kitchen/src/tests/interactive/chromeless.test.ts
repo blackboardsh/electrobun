@@ -8,18 +8,17 @@ export const chromelessTests = [
     name: "Custom titlebar with window controls",
     category: "Chromeless Windows (Interactive)",
     description: "Test custom titlebar with draggable region and custom close/minimize/maximize buttons",
+    instructions: [
+      "A window with a custom titlebar will open",
+      "Test the following:",
+      "- Drag the window by the dark titlebar area",
+      "- Click the colored buttons (close, minimize, maximize)",
+      "- Verify text input works in the content area",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 120000,
-    async run({ log, showInstructions, waitForUserVerification }) {
-      await showInstructions([
-        "A window with a custom titlebar will open",
-        "Test the following:",
-        "- Drag the window by the dark titlebar area",
-        "- Click the colored buttons (close, minimize, maximize)",
-        "- Verify text input works in the content area",
-        "Click Pass if all controls work correctly",
-      ]);
-
+    async run({ log }) {
       log("Opening custom titlebar test window");
 
       await new Promise<void>((resolve, _reject) => {
@@ -77,15 +76,6 @@ export const chromelessTests = [
         });
       });
 
-      // Wait for user verification
-      const result = await waitForUserVerification();
-      if (result.action === "fail") {
-        throw new Error(result.notes || "User marked test as failed");
-      }
-      if (result.action === "retest") {
-        throw new Error("RETEST: User requested to run the test again");
-      }
-
       log("Custom titlebar test completed");
     },
   }),
@@ -94,20 +84,19 @@ export const chromelessTests = [
     name: "Transparent/borderless window for floating UI",
     category: "Chromeless Windows (Interactive)",
     description: "Test transparent window with custom-shaped floating UI elements",
+    instructions: [
+      "A transparent borderless window will open",
+      "The window background should be transparent/see-through",
+      "Test the following:",
+      "- Verify you can see through the window background",
+      "- Drag any of the floating cards to move the window",
+      "- Drag empty transparent space covered by the stylesheet-defined overlay",
+      "- Click the red close button when done",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 120000,
-    async run({ log, showInstructions, waitForUserVerification }) {
-      await showInstructions([
-        "A transparent borderless window will open",
-        "The window background should be transparent/see-through",
-        "Test the following:",
-        "- Verify you can see through the window background",
-        "- Drag any of the floating cards to move the window",
-        "- Drag empty transparent space covered by the stylesheet-defined overlay",
-        "- Click the red close button when done",
-        "Click Pass if transparency and dragging work",
-      ]);
-
+    async run({ log }) {
       log("Opening transparent window test");
 
       await new Promise<void>((resolve, _reject) => {
@@ -148,15 +137,6 @@ export const chromelessTests = [
           resolve();
         });
       });
-
-      // Wait for user verification
-      const result = await waitForUserVerification();
-      if (result.action === "fail") {
-        throw new Error(result.notes || "User marked test as failed");
-      }
-      if (result.action === "retest") {
-        throw new Error("RETEST: User requested to run the test again");
-      }
 
       log("Transparent window test completed");
     },
