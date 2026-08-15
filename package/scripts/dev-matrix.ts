@@ -3,7 +3,7 @@ import {
 	createDevCommands,
 	parseDevArgs,
 	resolveHutchBinary,
-	runCommand,
+	runCommandWithSignalForwarding,
 	type DevCommand,
 } from "./dev";
 import { prepareLocalStack } from "./local-stack.js";
@@ -45,7 +45,7 @@ export function createMatrixDevCommands({
 	return commands;
 }
 
-function main(): void {
+async function main(): Promise<void> {
 	const packageDir = resolve(import.meta.dirname, "..");
 	const kitchenDir = resolve(packageDir, "..", "kitchen");
 	const parsedArgs = parseDevArgs(process.argv.slice(2));
@@ -66,15 +66,14 @@ function main(): void {
 	});
 
 	console.log(`[dev:matrix] Hutch: ${hutchBinary}`);
-	for (const command of commands) runCommand(command);
+	for (const command of commands) await runCommandWithSignalForwarding(command);
 }
 
 if (import.meta.main) {
-	try {
-		main();
-	} catch (error) {
+	main().catch((error) => {
 		console.error(error instanceof Error ? error.message : String(error));
 		const status = (error as { status?: number | null })?.status;
-		process.exit(typeof status === "number" && Number.isInteger(status) ? status : 1);
-	}
+		process.exitCode =
+			typeof status === "number" && Number.isInteger(status) ? status : 1;
+	});
 }

@@ -21,6 +21,7 @@ import {
 	parseKitchenMatrixArguments,
 	prepareKitchenVariantWorkspace,
 	publishKitchenVariantWorkspace,
+	stopChildProcessTree,
 } from "./kitchen-matrix";
 
 describe("kitchen matrix", () => {
@@ -170,6 +171,52 @@ describe("kitchen matrix", () => {
 		expect(() =>
 			parseKitchenMatrixArguments(["--full", "--with=go:system"], 3),
 		).toThrow("cannot be used together");
+	});
+
+	it("terminates the isolated POSIX variant process group", () => {
+		const directSignals: Array<NodeJS.Signals | number | undefined> = [];
+		const groupSignals: Array<{
+			pid: number;
+			signal: NodeJS.Signals | number | undefined;
+		}> = [];
+		const child: Parameters<typeof stopChildProcessTree>[0] = {
+			pid: 4321,
+			exitCode: null,
+			signalCode: null,
+			kill: (signal) => {
+				directSignals.push(signal);
+				return true;
+			},
+		};
+		const killProcess = ((
+			pid: number,
+			signal?: NodeJS.Signals | number,
+		) => {
+			groupSignals.push({ pid, signal });
+			return true;
+		}) as typeof process.kill;
+
+		stopChildProcessTree(child, true, "SIGTERM", "linux", killProcess);
+
+		expect(groupSignals).toEqual([{ pid: -4321, signal: "SIGTERM" }]);
+		expect(directSignals).toEqual([]);
+	});
+
+	it("terminates a foreground variant directly", () => {
+		const directSignals: Array<NodeJS.Signals | number | undefined> = [];
+		const child: Parameters<typeof stopChildProcessTree>[0] = {
+			pid: 4321,
+			exitCode: null,
+			signalCode: null,
+			kill: (signal) => {
+				directSignals.push(signal);
+				return true;
+			},
+		};
+
+		stopChildProcessTree(child, false, "SIGTERM", "linux");
+
+		expect(directSignals).toEqual(["SIGTERM"]);
 	});
 
 	it("isolates and publishes staging output for every native runtime variant", () => {

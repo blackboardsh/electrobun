@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { prepareLocalStack } from "./local-stack.js";
@@ -96,7 +96,7 @@ function formatExitStatus(status: number | null) {
 		: String(value);
 }
 
-export function runCommand(command: DevCommand) {
+export function runCommand(command: DevCommand): void {
 	console.log(`[dev] ${command.label}...`);
 	const result = spawnSync(command.command, command.args, {
 		cwd: command.cwd,
@@ -108,6 +108,79 @@ export function runCommand(command: DevCommand) {
 		throw new Error(
 			`[dev] Failed to start ${formatCommand(command)} in ${command.cwd}: ${result.error.message}`,
 		);
+	}
+	if (result.status !== 0) {
+		const failure = new Error(
+			`[dev] ${command.label} failed with ${result.signal ? `signal ${result.signal}` : `exit status ${formatExitStatus(result.status)}`}\n` +
+				`Command: ${formatCommand(command)}\n` +
+				`Working directory: ${command.cwd}`,
+		) as Error & { status?: number | null };
+		failure.status = result.status;
+		throw failure;
+	}
+}
+
+function signalExitStatus(signal: NodeJS.Signals): number {
+	if (signal === "SIGINT") return 130;
+	if (signal === "SIGTERM") return 143;
+	return 1;
+}
+
+export async function runCommandWithSignalForwarding(
+	command: DevCommand,
+): Promise<void> {
+	console.log(`[dev] ${command.label}...`);
+	const child = spawn(command.command, command.args, {
+		cwd: command.cwd,
+		env: command.env ? { ...process.env, ...command.env } : process.env,
+		stdio: "inherit",
+	});
+	let interruptedBy: NodeJS.Signals | null = null;
+	const forwardSignal = (signal: NodeJS.Signals) => {
+		if (interruptedBy) return;
+		interruptedBy = signal;
+		if (child.exitCode === null && child.signalCode === null) {
+			child.kill(process.platform === "win32" ? undefined : signal);
+		}
+	};
+	const onSigint = () => forwardSignal("SIGINT");
+	const onSigterm = () => forwardSignal("SIGTERM");
+	process.on("SIGINT", onSigint);
+	process.on("SIGTERM", onSigterm);
+
+	const result = await new Promise<{
+		status: number | null;
+		signal: NodeJS.Signals | null;
+		error: Error | null;
+	}>((resolveResult) => {
+		let settled = false;
+		const settle = (
+			status: number | null,
+			signal: NodeJS.Signals | null,
+			error: Error | null,
+		) => {
+			if (settled) return;
+			settled = true;
+			resolveResult({ status, signal, error });
+		};
+		child.once("error", (error) => settle(null, null, error));
+		child.once("close", (status, signal) => settle(status, signal, null));
+	}).finally(() => {
+		process.off("SIGINT", onSigint);
+		process.off("SIGTERM", onSigterm);
+	});
+
+	if (result.error) {
+		throw new Error(
+			`[dev] Failed to start ${formatCommand(command)} in ${command.cwd}: ${result.error.message}`,
+		);
+	}
+	if (interruptedBy) {
+		const interruption = new Error(
+			`[dev] ${command.label} interrupted by ${interruptedBy}`,
+		) as Error & { status?: number };
+		interruption.status = signalExitStatus(interruptedBy);
+		throw interruption;
 	}
 	if (result.status !== 0) {
 		const failure = new Error(

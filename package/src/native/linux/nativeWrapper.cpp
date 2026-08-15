@@ -5671,8 +5671,23 @@ public:
             }
             
             if (view->fullSize) {
+                // GTK emits configure-event for window moves as well as resizes.
+                // A pure move must not reconfigure a full-size WGPU child: doing
+                // so with an empty mask removes native-layer holes even though
+                // their view-local geometry has not changed.
+                const GdkRectangle currentBounds = view->visualBounds;
+                if (currentBounds.x == 0 &&
+                    currentBounds.y == 0 &&
+                    currentBounds.width == width &&
+                    currentBounds.height == height) {
+                    continue;
+                }
+
                 // Auto-resize webviews should fill the entire window
-                view->resize(frame, "");
+                // Preserve any native-layer masks while the SDK computes and
+                // applies updated anchor geometry for the new client size.
+                const std::string masks = view->maskJSON;
+                view->resize(frame, masks.c_str());
             }
             // OOPIFs (fullSize=false) keep their positioning and don't auto-resize
             // The JavaScript ResizeObserver will handle repositioning them

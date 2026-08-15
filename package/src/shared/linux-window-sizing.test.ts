@@ -24,4 +24,26 @@ describe("Linux GTK window sizing source contract", () => {
 			nativeWrapper.match(/autoResize \? -1 : \(int\)height/g)?.length,
 		).toBe(2);
 	});
+
+	it("keeps WGPU native-layer masks across GTK configure events", () => {
+		// configure-event also fires for pure moves. Reapplying an unchanged
+		// full-size frame with an empty mask would cover positioned GTK views
+		// until a later resize made the SDK send its masks again.
+		const methodStart = nativeWrapper.indexOf("void resizeAutoSizingViews(");
+		const methodEnd = nativeWrapper.indexOf("\n    }\n};", methodStart);
+		expect(methodStart).toBeGreaterThanOrEqual(0);
+		expect(methodEnd).toBeGreaterThan(methodStart);
+		const resizeAutoSizingViews = nativeWrapper.slice(methodStart, methodEnd);
+
+		expect(resizeAutoSizingViews).toContain(
+			"currentBounds.width == width &&\n                    currentBounds.height == height",
+		);
+		expect(resizeAutoSizingViews).toContain(
+			"const std::string masks = view->maskJSON;",
+		);
+		expect(resizeAutoSizingViews).toContain(
+			"view->resize(frame, masks.c_str());",
+		);
+		expect(resizeAutoSizingViews).not.toContain('view->resize(frame, "");');
+	});
 });
