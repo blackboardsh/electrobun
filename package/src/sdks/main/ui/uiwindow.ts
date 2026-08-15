@@ -18,9 +18,10 @@ import { computeLayout } from "./layout";
 import { paint } from "./paint";
 import { createUiRenderer } from "./renderer";
 import { attachInput } from "./input";
+import { collectWebviewAnchorMasks } from "./nativeLayerGeometry";
 import { tryEnableNativeText } from "./text";
 import { isUIElement, type UIElement } from "./jsx-runtime";
-import { nativeText } from "../proc/native";
+import { ffi, nativeText } from "../proc/native";
 import {
 	createUiContext,
 	withUiContext,
@@ -243,6 +244,41 @@ async function mount(
 	let lastWidth = 0;
 	let lastHeight = 0;
 	const lastAnchorRects = new Map<number, AnchorRect>();
+	let lastWebviewMaskKey: string | null = null;
+	const applyWebviewMasks = (
+		width: number,
+		height: number,
+		masks = collectWebviewAnchorMasks(ctx),
+	) => {
+		if (process.platform !== "linux") return;
+
+		const offset = target.viewOffset();
+		const masksJson = JSON.stringify(masks);
+		if (masks.length === 0) {
+			if (lastWebviewMaskKey === null) return;
+			ffi.request.resizeWGPUView({
+				id: target.viewId,
+				frame: { x: offset.x, y: offset.y, width, height },
+				masks: masksJson,
+			});
+			lastWebviewMaskKey = null;
+			return;
+		}
+
+		const key = `${offset.x},${offset.y},${width},${height}:${masksJson}`;
+		if (key === lastWebviewMaskKey) return;
+		ffi.request.resizeWGPUView({
+			id: target.viewId,
+			frame: { x: offset.x, y: offset.y, width, height },
+			masks: masksJson,
+		});
+		lastWebviewMaskKey = key;
+	};
+	const clearWebviewMasks = () => {
+		if (process.platform !== "linux" || lastWebviewMaskKey === null) return;
+		const { width, height } = target.getSize();
+		applyWebviewMasks(width, height, []);
+	};
 	const syncAnchors = () => {
 		for (const [id, onFrame] of ctx.anchors) {
 			if (!tree.has(id)) {
@@ -275,6 +311,7 @@ async function mount(
 		renderer.resize(width, height);
 		computeLayout(tree, width, height);
 		syncAnchors();
+		applyWebviewMasks(width, height);
 		renderer.render(paint(tree), width, height);
 	};
 
@@ -324,6 +361,7 @@ async function mount(
 			runCleanupSteps([
 				() => clearInterval(timer),
 				input.dispose,
+				clearWebviewMasks,
 				disposeRoot,
 				renderer.dispose,
 			]);

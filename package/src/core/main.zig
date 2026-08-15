@@ -1442,6 +1442,15 @@ fn lookupNativeSymbol(comptime T: type, comptime name: [:0]const u8) ?T {
     };
 }
 
+// Platform-specific wrapper capabilities are optional so adding one does not
+// expand the common NativeWrapper ABI required from every operating system.
+fn lookupOptionalNativeSymbol(comptime T: type, comptime name: [:0]const u8) ?T {
+    if (!ensureNativeWrapperLoaded()) {
+        return null;
+    }
+    return native_wrapper_state.lib.lookup(T, name);
+}
+
 fn createNativeTrayForState(tray_id: u32, state: *TrayState) bool {
     const CreateNativeTrayFn = *const fn (
         u32,
@@ -2741,6 +2750,26 @@ export fn getWindowFrame(
     const window = requireWindowPtr(window_id) orelse return;
     const get_window_frame = lookupNativeSymbol(GetWindowFrameFn, "getWindowFrame") orelse return;
     get_window_frame(window, x, y, width, height);
+}
+
+export fn getWindowContentOrigin(window_id: u32, x: *f64, y: *f64) void {
+    const GetWindowContentOriginFn = *const fn (WindowPtr, *f64, *f64) callconv(.c) void;
+    const window = requireWindowPtr(window_id) orelse return;
+    const get_window_content_origin = lookupOptionalNativeSymbol(
+        GetWindowContentOriginFn,
+        "getWindowContentOrigin",
+    );
+    if (get_window_content_origin) |get_origin| {
+        get_origin(window, x, y);
+        return;
+    }
+
+    // Non-Linux wrappers do not expose a distinct content-origin query. Keep
+    // the export safe for all SDKs by falling back to their existing frame
+    // coordinates; the TypeScript UI calls this only on Linux.
+    var width: f64 = 0;
+    var height: f64 = 0;
+    getWindowFrame(window_id, x, y, &width, &height);
 }
 
 export fn beginWindowMove(window_id: u32) void {

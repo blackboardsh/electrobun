@@ -1,7 +1,11 @@
 // Interactive Webview Tag Tests - Playgrounds for various webview features
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/main";
+import { BrowserView, BrowserWindow, BuildConfig } from "electrobun/main";
+
+const usesLinuxSystemWebKit =
+  process.platform === "linux" &&
+  !BuildConfig.getSync().availableRenderers.includes("cef");
 
 export const webviewTagTests = [
   defineTest({
@@ -11,6 +15,9 @@ export const webviewTagTests = [
     instructions: [
       "A webview tag playground will open",
       "Test masks, passthrough, navigation, and more",
+      ...(usesLinuxSystemWebKit ? [
+        "Linux note: mask selectors are not supported by system WebKit webviews; verify the remaining controls only",
+      ] : []),
       "Close the window when done to pass the test",
     ],
     interactive: true,

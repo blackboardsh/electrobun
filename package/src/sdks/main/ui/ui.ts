@@ -100,6 +100,8 @@ export interface AnchorProps {
 	width?: Reactive<number>;
 	height?: Reactive<number>;
 	grow?: Reactive<number>;
+	/** Native layer kind; webviews need a compositor hole on Linux. */
+	nativeLayer?: "webview";
 	/** Called with the anchor's absolute rect whenever layout moves it. */
 	onFrame: (rect: AnchorRect) => void;
 }
@@ -108,6 +110,7 @@ export interface UiContext {
 	tree: UiTree;
 	handlers: Map<number, Handlers>;
 	anchors: Map<number, (rect: AnchorRect) => void>;
+	webviewAnchors: Set<number>;
 	keyHandlers: Set<(e: KeyEventInfo) => void>;
 	parentStack: number[];
 	/** Native window hosting this tree; 0 when headless (tests). */
@@ -127,6 +130,7 @@ export function createUiContext(tree = new UiTree()): UiContext {
 		tree,
 		handlers: new Map(),
 		anchors: new Map(),
+		webviewAnchors: new Set(),
 		keyHandlers: new Set(),
 		parentStack: [tree.root],
 		windowId: 0,
@@ -337,7 +341,11 @@ function anchor(props: AnchorProps): number {
 	applyNumber(ctx, id, Prop.Height, props.height);
 	applyNumber(ctx, id, Prop.Grow, props.grow);
 	ctx.anchors.set(id, props.onFrame);
-	cleanup(() => ctx.anchors.delete(id));
+	if (props.nativeLayer === "webview") ctx.webviewAnchors.add(id);
+	cleanup(() => {
+		ctx.anchors.delete(id);
+		ctx.webviewAnchors.delete(id);
+	});
 	attachToParent(ctx, id);
 	return id;
 }

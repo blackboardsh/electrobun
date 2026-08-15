@@ -167,4 +167,15 @@ describe("builder API", () => {
 		});
 		expect(frames).toEqual([{ width: 300 }]);
 	});
+
+	test("webview anchors are registered for native compositor masks", () => {
+		const { ctx, dispose } = build(() => {
+			ui.anchor({ nativeLayer: "webview", onFrame: () => {} });
+		});
+		const [anchorId] = ctx.tree.childrenOf(ctx.tree.root);
+		expect(ctx.webviewAnchors.has(anchorId!)).toBe(true);
+
+		dispose();
+		expect(ctx.webviewAnchors.size).toBe(0);
+	});
 });

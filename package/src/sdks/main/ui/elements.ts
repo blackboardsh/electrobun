@@ -100,6 +100,7 @@ export function webview(props: WebviewElementProps): number {
 	let view: BrowserView | null = null;
 
 	const id = ui.anchor({
+		nativeLayer: "webview",
 		width: props.width,
 		height: props.height,
 		grow: props.grow,

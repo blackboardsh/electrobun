@@ -9,6 +9,7 @@
 import { enableWGPUKeyEvents, enableWGPUPointerEvents, ffi, Screen } from "../proc/native";
 import electrobunEventEmitter from "../events/eventEmitter";
 import type { KeyEventInfo } from "./ui";
+import { pointerToViewLocal } from "./nativeLayerGeometry";
 
 export interface InputSink {
 	/** Hittable chain under the point, innermost first. */
@@ -228,11 +229,15 @@ export function attachInput(
 
 	return {
 		poll() {
-			const frame = ffi.request.getWindowFrame({ winId: windowId });
+			// GTK reports decorated frame coordinates from getWindowFrame(), while
+			// the WGPU view starts at the client area's origin. Use the native client
+			// origin on Linux so titlebar/shadow extents do not skew hit testing.
+			const windowOrigin = process.platform === "linux"
+				? ffi.request.getWindowContentOrigin({ winId: windowId })
+				: ffi.request.getWindowFrame({ winId: windowId });
 			const offset = viewOffset();
 			const point = Screen.getCursorScreenPoint();
-			const x = point.x - frame.x - offset.x;
-			const y = point.y - frame.y - offset.y;
+			const { x, y } = pointerToViewLocal(point, windowOrigin, offset);
 
 			if (drag) {
 				const stillDown =

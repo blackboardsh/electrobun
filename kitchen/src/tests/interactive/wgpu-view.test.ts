@@ -819,6 +819,7 @@ function trackGpuWindowLifecycle(
 function trackRawWgpuResources() {
 	let cleaned = false;
 	let configuredSurface = 0;
+	let releaseSurface: (() => void) | undefined;
 	let renderInterval: ReturnType<typeof setInterval> | undefined;
 	const releases: Array<() => void> = [];
 	const keepAlive: any[] = [];
@@ -830,6 +831,20 @@ function trackRawWgpuResources() {
 				try {
 					release();
 				} catch {}
+				return;
+			}
+			releases.push(release);
+		},
+		trackSurface(surface: number) {
+			let released = false;
+			const release = () => {
+				if (released) return;
+				WGPUNative.symbols.wgpuSurfaceRelease(surface);
+				released = true;
+			};
+			releaseSurface = release;
+			if (cleaned) {
+				release();
 				return;
 			}
 			releases.push(release);
@@ -856,6 +871,12 @@ function trackRawWgpuResources() {
 					WGPUNative.symbols.wgpuSurfaceUnconfigure(configuredSurface);
 				} catch {}
 				configuredSurface = 0;
+			}
+			if (process.platform === "linux" && releaseSurface) {
+				try {
+					releaseSurface();
+				} catch {}
+				releaseSurface = undefined;
 			}
 			for (let i = releases.length - 1; i >= 0; i -= 1) {
 				try {
@@ -960,9 +981,7 @@ export const wgpuViewTests = [
 					if (!surface) {
 						throw new Error("Failed to create WGPU surface");
 					}
-					rawResources.trackRelease(() =>
-						WGPUNative.symbols.wgpuSurfaceRelease(surface),
-					);
+					rawResources.trackSurface(surface as number);
 
 					const adapterDevice = new BigUint64Array(2);
 					WGPUBridge.createAdapterDeviceMainThread(
@@ -1805,9 +1824,7 @@ fn fs_main(
 						if (!surface) {
 							throw new Error("Failed to create WGPU surface");
 						}
-						rawResources.trackRelease(() =>
-							WGPUNative.symbols.wgpuSurfaceRelease(surface),
-						);
+						rawResources.trackSurface(surface as number);
 
 						const adapterDevice = new BigUint64Array(2);
 						WGPUBridge.createAdapterDeviceMainThread(

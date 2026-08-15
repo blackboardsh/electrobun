@@ -19,7 +19,7 @@
 
         <div class="section">
             <h2>Programmatic Quit Triggers</h2>
-            <p class="hint">The beforeQuit handler will log a message below and wait 2 seconds before allowing quit.</p>
+            <p class="hint">The beforeQuit handler will log a message below, wait 2 seconds, then cancel the quit so this playground stays open.</p>
             <div class="button-row">
                 <button id="utilsQuitBtn" class="primary-btn">Utils.quit()</button>
                 <button id="processExitBtn" class="primary-btn">process.exit(0)</button>
@@ -28,7 +28,7 @@
 
         <div class="section">
             <h2>System-Initiated Quit (Manual)</h2>
-            <p class="hint">These require manual action. The beforeQuit handler should still fire and log below.</p>
+            <p class="hint">These require manual action. While this playground is open, the beforeQuit handler should fire, log below, and cancel the quit.</p>
             <div class="instructions">
                 <div class="instruction-item">
                     <strong>Dock Icon Quit (macOS):</strong>

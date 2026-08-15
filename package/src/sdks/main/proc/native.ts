@@ -295,6 +295,10 @@ const core = (() => {
 				args: [FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.ptr],
 				returns: FFIType.void,
 			},
+			getWindowContentOrigin: {
+				args: [FFIType.u32, FFIType.ptr, FFIType.ptr],
+				returns: FFIType.void,
+			},
 			configureWebviewRuntime: {
 				args: [
 					FFIType.u32,
@@ -1783,6 +1787,22 @@ const _ffiImpl = {
 				height: heightBuf[0]!,
 			};
 		},
+		getWindowContentOrigin: (params: {
+			winId: number;
+		}): { x: number; y: number } => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+
+			if (!windowPtr) {
+				return { x: 0, y: 0 };
+			}
+
+			const xBuf = new Float64Array(1);
+			const yBuf = new Float64Array(1);
+			core_.symbols.getWindowContentOrigin(winId, ptr(xBuf), ptr(yBuf));
+
+			return { x: xBuf[0]!, y: yBuf[0]! };
+		},
 		createWebview: (params: {
 			windowId: number;
 			hostWebviewId: number | null;
@@ -1991,6 +2011,21 @@ const _ffiImpl = {
 				params.y,
 				params.width,
 				params.height,
+			);
+		},
+		resizeWGPUView: (params: {
+			id: number;
+			frame: { x: number; y: number; width: number; height: number };
+			masks?: string;
+		}) => {
+			const { id, frame: { x, y, width, height }, masks = "[]" } = params;
+			core_.symbols.resizeWGPUView(
+				id,
+				x,
+				y,
+				width,
+				height,
+				toCString(masks),
 			);
 		},
 

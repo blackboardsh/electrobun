@@ -5604,7 +5604,23 @@ public:
                 gtk_fixed_put(GTK_FIXED(wrapper), view->widget, 0, 0);
                 g_object_set_data(G_OBJECT(view->widget), "wrapper", wrapper);
 
-                // Now that widget is anchored, realize it for rendering
+                // Add wrapper as overlay layer
+                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
+
+                // The wrapper is exactly the positioned webview's allocation.
+                // It must remain an input target; the WGPU layer's XShape hole
+                // handles pass-through outside this rectangle.
+                gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, FALSE);
+
+                // Position wrapper using margins (will be updated in resize)
+                gtk_widget_set_margin_start(wrapper, (int)x);
+                gtk_widget_set_margin_top(wrapper, (int)y);
+
+                gtk_widget_show(wrapper);
+
+                // Realize only after the wrapper is attached to the toplevel.
+                // Realizing while the GtkFixed is still unanchored is rejected
+                // by GTK and can leave positioned WebKit views without a surface.
                 gtk_widget_realize(view->widget);
 
                 // Apply pending transparency/passthrough flags now that widget is realized
@@ -5616,18 +5632,6 @@ public:
                     view->setPassthrough(true);
                     view->pendingStartPassthrough = false;
                 }
-
-                // Add wrapper as overlay layer
-                gtk_overlay_add_overlay(GTK_OVERLAY(overlay), wrapper);
-
-                // Make the wrapper pass-through for events outside the webview
-                gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(overlay), wrapper, TRUE);
-
-                // Position wrapper using margins (will be updated in resize)
-                gtk_widget_set_margin_start(wrapper, (int)x);
-                gtk_widget_set_margin_top(wrapper, (int)y);
-
-                gtk_widget_show(wrapper);
             }
             
             if (auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(view.get())) {
@@ -11389,6 +11393,62 @@ ELECTROBUN_EXPORT void getWindowFrame(void* window, double* outX, double* outY, 
                     *outHeight = 0;
                 }
             }
+        }
+    });
+}
+
+// Return the drawable client area's screen-space origin. Unlike
+// getWindowFrame(), this intentionally excludes window-manager decorations so
+// screen-space pointer coordinates can be translated into content coordinates.
+ELECTROBUN_EXPORT void getWindowContentOrigin(void* window, double* outX, double* outY) {
+    if (!outX || !outY) return;
+
+    *outX = 0;
+    *outY = 0;
+    if (!window) return;
+
+    dispatch_sync_main_void([&]() {
+        if (GTK_IS_WIDGET(window)) {
+            GtkWidget* gtkWindow = static_cast<GtkWidget*>(window);
+            if (!GTK_IS_WINDOW(gtkWindow)) return;
+
+            GdkWindow* contentWindow = gtk_widget_get_window(gtkWindow);
+            if (contentWindow) {
+                gint contentX = 0;
+                gint contentY = 0;
+                gdk_window_get_origin(contentWindow, &contentX, &contentY);
+                *outX = static_cast<double>(contentX);
+                *outY = static_cast<double>(contentY);
+                return;
+            }
+
+            // A not-yet-realized GTK window has no client GdkWindow. Preserve
+            // the best available position until it is realized.
+            gint windowX = 0;
+            gint windowY = 0;
+            gtk_window_get_position(GTK_WINDOW(gtkWindow), &windowX, &windowY);
+            *outX = static_cast<double>(windowX);
+            *outY = static_cast<double>(windowY);
+            return;
+        }
+
+        X11Window* x11win = static_cast<X11Window*>(window);
+        if (!x11win || !x11win->display || !x11win->window) return;
+
+        int contentX = 0;
+        int contentY = 0;
+        Window child = None;
+        if (XTranslateCoordinates(
+                x11win->display,
+                x11win->window,
+                DefaultRootWindow(x11win->display),
+                0,
+                0,
+                &contentX,
+                &contentY,
+                &child)) {
+            *outX = static_cast<double>(contentX);
+            *outY = static_cast<double>(contentY);
         }
     });
 }
