@@ -1003,6 +1003,10 @@ export const native = (() => {
 				args: [FFIType.ptr, FFIType.ptr],
 				returns: FFIType.ptr,
 			},
+			wgpuReleaseSurfaceForView: {
+				args: [FFIType.ptr],
+				returns: FFIType.bool,
+			},
 			// Global keyboard shortcuts
 			setGlobalShortcutCallback: {
 				args: [FFIType.function],
@@ -2479,6 +2483,8 @@ export const WGPUBridge = {
 		if (!native?.symbols?.wgpuCreateSurfaceForView) return null;
 		return native_.symbols.wgpuCreateSurfaceForView(instancePtr as any, viewPtr as any) as Pointer;
 	},
+	releaseSurfaceForView: (surfacePtr: Pointer): boolean =>
+		!!native_.symbols.wgpuReleaseSurfaceForView(surfacePtr as any),
 };
 
 

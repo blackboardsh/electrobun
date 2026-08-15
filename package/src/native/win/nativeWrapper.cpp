@@ -3813,25 +3813,8 @@ public:
         if (!urlString) return;
         std::string urlStr(urlString);
 
-        // Fire will-navigate event on the calling thread (before Navigate)
-        bool isViewsUrl = (urlStr.substr(0, 8) == "views://");
-        if (webviewEventHandler) {
-            std::string escapedUrl;
-            for (char c : urlStr) {
-                switch (c) {
-                    case '"': escapedUrl += "\\\""; break;
-                    case '\\': escapedUrl += "\\\\"; break;
-                    default: escapedUrl += c; break;
-                }
-            }
-            std::string willNavEventData = "{\"url\":\"" + escapedUrl + "\",\"allowed\":true}";
-            webviewEventHandler(webviewId, _strdup("will-navigate"), _strdup(willNavEventData.c_str()));
-        }
-
         // Navigate must happen on the UI thread — WebView2 APIs are single-threaded
-        WebviewEventHandler handler = webviewEventHandler;
-        uint32_t wvId = webviewId;
-        MainThreadDispatcher::dispatch_async([this, urlStr, isViewsUrl, handler, wvId]() {
+        MainThreadDispatcher::dispatch_async([this, urlStr]() {
             if (webview) {
                 std::wstring url;
                 if (!electrobun::utf8ToWide(urlStr, url)) {
@@ -3839,21 +3822,6 @@ public:
                     return;
                 }
                 webview->Navigate(url.c_str());
-
-                // Fire did-navigate after Navigate() for views:// URLs only
-                // For https:// URLs, NavigationCompleted will fire did-navigate
-                if (isViewsUrl && handler) {
-                    std::string escapedUrl;
-                    for (char c : urlStr) {
-                        switch (c) {
-                            case '"': escapedUrl += "\\\""; break;
-                            case '\\': escapedUrl += "\\\\"; break;
-                            default: escapedUrl += c; break;
-                        }
-                    }
-                    std::string didNavEventData = "{\"url\":\"" + escapedUrl + "\"}";
-                    handler(wvId, _strdup("did-navigate"), _strdup(didNavEventData.c_str()));
-                }
             } else {
                 // WebView2 not ready — store URL for creation callback to load
                 pendingUrl = urlStr;
@@ -7281,6 +7249,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Capture webviewId and handler for event handlers
                             uint32_t capturedWebviewId = view->webviewId;
                             WebviewEventHandler capturedHandler = view->webviewEventHandler;
+                            auto latestNavigationId = std::make_shared<UINT64>(0);
 
                             // Add views:// scheme support - TEST ADDITION
                             webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
@@ -7405,8 +7374,12 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Add Ctrl+Click detection and navigation rules handler
                             webview->add_NavigationStarting(
                                 Callback<ICoreWebView2NavigationStartingEventHandler>(
-                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
+                                    [capturedWebviewId, capturedHandler, latestNavigationId](ICoreWebView2* sender, ICoreWebView2NavigationStartingEventArgs* args) -> HRESULT {
                                         printf("[WebView2] NavigationStarting fired for webview %u\n", capturedWebviewId);
+                                        UINT64 navigationId = 0;
+                                        if (SUCCEEDED(args->get_NavigationId(&navigationId))) {
+                                            *latestNavigationId = navigationId;
+                                        }
                                         // Get URL first - needed for both ctrl+click and navigation rules
                                         wchar_t* uriWStr = nullptr;
                                         args->get_Uri(&uriWStr);
@@ -7490,11 +7463,58 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                     }).Get(),
                                 nullptr);
 
-                            // Add NavigationCompleted handler for did-navigate event
+                            // SourceChanged with IsNewDocument is WebView2's commit point:
+                            // the main-frame URL has changed, but loading has not completed.
+                            webview->add_SourceChanged(
+                                Callback<ICoreWebView2SourceChangedEventHandler>(
+                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2SourceChangedEventArgs* args) -> HRESULT {
+                                        BOOL isNewDocument = FALSE;
+                                        if (FAILED(args->get_IsNewDocument(&isNewDocument)) || !isNewDocument) {
+                                            return S_OK;
+                                        }
+
+                                        wchar_t* uriWStr = nullptr;
+                                        sender->get_Source(&uriWStr);
+                                        std::string uri;
+                                        if (uriWStr) {
+                                            if (!electrobun::wideToUtf8(uriWStr, uri)) {
+                                                ::log("[WebView2] Source URI is not valid UTF-16");
+                                            }
+                                            CoTaskMemFree(uriWStr);
+                                        }
+
+                                        if (capturedHandler && !uri.empty()) {
+                                            std::string escapedUrl;
+                                            for (char c : uri) {
+                                                switch (c) {
+                                                    case '"': escapedUrl += "\\\""; break;
+                                                    case '\\': escapedUrl += "\\\\"; break;
+                                                    default: escapedUrl += c; break;
+                                                }
+                                            }
+                                            std::string eventData = "{\"url\":\"" + escapedUrl + "\"}";
+                                            capturedHandler(capturedWebviewId, _strdup("did-commit-navigation"), _strdup(eventData.c_str()));
+                                        }
+
+                                        return S_OK;
+                                    }).Get(),
+                                nullptr);
+
+                            // Add NavigationCompleted handler for successful navigations only.
                             webview->add_NavigationCompleted(
                                 Callback<ICoreWebView2NavigationCompletedEventHandler>(
-                                    [capturedWebviewId, capturedHandler](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
+                                    [capturedWebviewId, capturedHandler, latestNavigationId](ICoreWebView2* sender, ICoreWebView2NavigationCompletedEventArgs* args) -> HRESULT {
                                         printf("[WebView2] NavigationCompleted fired for webview %u\n", capturedWebviewId);
+                                        UINT64 navigationId = 0;
+                                        if (FAILED(args->get_NavigationId(&navigationId)) ||
+                                            navigationId != *latestNavigationId) {
+                                            return S_OK;
+                                        }
+                                        BOOL isSuccess = FALSE;
+                                        if (FAILED(args->get_IsSuccess(&isSuccess)) || !isSuccess) {
+                                            return S_OK;
+                                        }
+
                                         // Get current URL
                                         wchar_t* uriWStr = nullptr;
                                         sender->get_Source(&uriWStr);
@@ -8894,12 +8914,15 @@ static WGPUProcSharedTextureMemoryGetProperties p_wgpuSharedTextureMemoryGetProp
 static WGPUProcSharedTextureMemoryCreateTexture p_wgpuSharedTextureMemoryCreateTexture = nullptr;
 static WGPUProcSharedTextureMemoryBeginAccess p_wgpuSharedTextureMemoryBeginAccess = nullptr;
 static WGPUProcSharedTextureMemoryEndAccess p_wgpuSharedTextureMemoryEndAccess = nullptr;
+static WGPUProcSharedTextureMemoryEndAccessStateFreeMembers p_wgpuSharedTextureMemoryEndAccessStateFreeMembers = nullptr;
 static WGPUProcSharedTextureMemoryRelease p_wgpuSharedTextureMemoryRelease = nullptr;
 static WGPUProcSharedFenceExportInfo p_wgpuSharedFenceExportInfo = nullptr;
+static WGPUProcSharedFenceAddRef p_wgpuSharedFenceAddRef = nullptr;
 static WGPUProcSharedFenceRelease p_wgpuSharedFenceRelease = nullptr;
 static WGPUProcTextureDestroy p_wgpuTextureDestroy = nullptr;
 static WGPUProcTextureGetUsage p_wgpuTextureGetUsage = nullptr;
 static WGPUProcTextureAddRef p_wgpuTextureAddRef = nullptr;
+static WGPUProcSurfaceRelease p_wgpuSurfaceRelease = nullptr;
 static bool g_dcompSymbolsLoaded = false;
 static HMODULE loadWgpuLibrary();  // forward declaration
 
@@ -8916,13 +8939,16 @@ static bool ensureDCompSymbols() {
     LOAD_DCOMP_SYM(wgpuSharedTextureMemoryCreateTexture);
     LOAD_DCOMP_SYM(wgpuSharedTextureMemoryBeginAccess);
     LOAD_DCOMP_SYM(wgpuSharedTextureMemoryEndAccess);
+    LOAD_DCOMP_SYM(wgpuSharedTextureMemoryEndAccessStateFreeMembers);
     LOAD_DCOMP_SYM(wgpuSharedTextureMemoryRelease);
     LOAD_DCOMP_SYM(wgpuSharedFenceExportInfo);
+    LOAD_DCOMP_SYM(wgpuSharedFenceAddRef);
     LOAD_DCOMP_SYM(wgpuSharedFenceRelease);
     LOAD_DCOMP_SYM(wgpuTextureDestroy);
     LOAD_DCOMP_SYM(wgpuTextureGetUsage);
     LOAD_DCOMP_SYM(wgpuTextureAddRef);
     LOAD_DCOMP_SYM(wgpuTextureRelease);
+    LOAD_DCOMP_SYM(wgpuSurfaceRelease);
 #undef LOAD_DCOMP_SYM
     g_dcompSymbolsLoaded = true;
     // All symbols loaded
@@ -8945,12 +8971,25 @@ struct DCompBridgeState {
     std::mutex frameMutex;
     bool accessActive = false;
     WGPUDevice wgpuDevice = nullptr;
+    uint32_t width = 0;
+    uint32_t height = 0;
 
     // Fences from EndAccess must be passed to next BeginAccess (Dawn protocol)
     std::vector<WGPUSharedFence> pendingFences;
     std::vector<uint64_t> pendingFenceValues;
 
     void cleanup() {
+        std::lock_guard<std::mutex> lock(frameMutex);
+        if (accessActive && sharedTexMem && zeroCopyTexture &&
+            p_wgpuSharedTextureMemoryEndAccess &&
+            p_wgpuSharedTextureMemoryEndAccessStateFreeMembers) {
+            WGPUSharedTextureMemoryEndAccessState endState =
+                WGPU_SHARED_TEXTURE_MEMORY_END_ACCESS_STATE_INIT;
+            p_wgpuSharedTextureMemoryEndAccess(sharedTexMem, zeroCopyTexture, &endState);
+            p_wgpuSharedTextureMemoryEndAccessStateFreeMembers(endState);
+            accessActive = false;
+        }
+
         // Release any pending fences first
         for (auto f : pendingFences) {
             if (f && p_wgpuSharedFenceRelease) p_wgpuSharedFenceRelease(f);
@@ -8983,6 +9022,12 @@ struct DCompBridgeState {
 
     ~DCompBridgeState() { cleanup(); }
 };
+
+static void destroyDCompBridgeOnMainThread(std::unique_ptr<DCompBridgeState> bridge) {
+    if (!bridge) return;
+    DCompBridgeState* rawBridge = bridge.release();
+    MainThreadDispatcher::dispatch_sync([rawBridge]() { delete rawBridge; });
+}
 
 static std::wstring getExecutableDirW() {
     wchar_t buffer[MAX_PATH];
@@ -9653,6 +9698,8 @@ static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t w
 
     auto bridge = std::make_unique<DCompBridgeState>();
     bridge->wgpuDevice = device;
+    bridge->width = width;
+    bridge->height = height;
     bridge->useSharedFenceSync = hasSharedFence;
 
     // Step 1: Init DComp compositor (visual tree) on main thread
@@ -9864,20 +9911,49 @@ ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(void* surface, void* confi
 
     if (!devicePtr || width == 0 || height == 0) return;
 
-    // Check if bridge already exists
+    // The bridge owns fixed-size D3D11/D3D12 textures. Reuse it only when
+    // both the dimensions and Dawn device are unchanged.
+    std::unique_ptr<DCompBridgeState> staleBridge;
     {
         std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
         auto it = g_dcompBridges.find(surface);
         if (it != g_dcompBridges.end()) {
-            // Bridge already exists — don't recreate on resize.
-            // The DComp swap chain handles resize via native WM_SIZE hook,
-            // and the staging texture dimensions are checked per-frame.
-            return;
+            if (it->second->wgpuDevice == devicePtr &&
+                it->second->width == width && it->second->height == height) {
+                return;
+            }
+            staleBridge = std::move(it->second);
+            g_dcompBridges.erase(it);
         }
     }
 
+    destroyDCompBridgeOnMainThread(std::move(staleBridge));
+
     // Try to initialize DComp bridge (graceful fallback on failure)
     initDCompBridgeForSurface(surface, devicePtr, width, height);
+}
+
+ELECTROBUN_EXPORT void wgpuReleaseSurfaceForView(void* surface) {
+    if (!surface) return;
+
+    std::unique_ptr<DCompBridgeState> bridge;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(surface);
+        if (it != g_dcompBridges.end()) {
+            bridge = std::move(it->second);
+            g_dcompBridges.erase(it);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        g_surfaceToHwnd.erase(surface);
+    }
+
+    destroyDCompBridgeOnMainThread(std::move(bridge));
+    if (ensureDCompSymbols() && p_wgpuSurfaceRelease) {
+        p_wgpuSurfaceRelease((WGPUSurface)surface);
+    }
 }
 
 ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
@@ -9897,14 +9973,11 @@ ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, voi
         // If access is still active from a previous frame (e.g. Present wasn't called),
         // end it first to avoid "already used to access" errors.
         if (bridge->accessActive) {
-            WGPUSharedTextureMemoryEndAccessState endState = {};
+            WGPUSharedTextureMemoryEndAccessState endState =
+                WGPU_SHARED_TEXTURE_MEMORY_END_ACCESS_STATE_INIT;
             p_wgpuSharedTextureMemoryEndAccess(
                 bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
-            // Release any returned fences
-            for (size_t i = 0; i < endState.fenceCount; i++) {
-                if (endState.fences[i] && p_wgpuSharedFenceRelease)
-                    p_wgpuSharedFenceRelease(endState.fences[i]);
-            }
+            p_wgpuSharedTextureMemoryEndAccessStateFreeMembers(endState);
             bridge->accessActive = false;
         }
 
@@ -9972,10 +10045,12 @@ ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
 
         // End Dawn's access — returns shared fences for cross-device sync
         bridge->accessActive = false;
-        WGPUSharedTextureMemoryEndAccessState endState = {};
+        WGPUSharedTextureMemoryEndAccessState endState =
+            WGPU_SHARED_TEXTURE_MEMORY_END_ACCESS_STATE_INIT;
         WGPUStatus status = p_wgpuSharedTextureMemoryEndAccess(
             bridge->sharedTexMem, bridge->zeroCopyTexture, &endState);
         if (status != WGPUStatus_Success) {
+            p_wgpuSharedTextureMemoryEndAccessStateFreeMembers(endState);
             printf("[DComp] EndAccess failed: status=%d\n", status);
             return 0;
         }
@@ -9986,7 +10061,10 @@ ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
             bridge->pendingFences.clear();
             bridge->pendingFenceValues.clear();
             for (size_t i = 0; i < endState.fenceCount; i++) {
-                bridge->pendingFences.push_back(endState.fences[i]);  // take ownership of ref
+                // FreeMembers releases the returned fence references, so retain
+                // those that must survive until the next BeginAccess.
+                p_wgpuSharedFenceAddRef(endState.fences[i]);
+                bridge->pendingFences.push_back(endState.fences[i]);
                 bridge->pendingFenceValues.push_back(endState.signaledValues[i]);
             }
             for (size_t i = 0; i < endState.fenceCount; i++) {
@@ -10006,11 +10084,6 @@ ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
                 }
             }
         } else if (bridge->d3d11on12Device && bridge->syncWrappedResource) {
-            // Release fences (not needed for D3D11On12 sync path)
-            for (size_t i = 0; i < endState.fenceCount; i++) {
-                if (endState.fences[i] && p_wgpuSharedFenceRelease)
-                    p_wgpuSharedFenceRelease(endState.fences[i]);
-            }
             // Acquire the wrapped D3D12 resource for D3D11, then release it.
             // This inserts a GPU wait for Dawn's D3D12 work to complete.
             ID3D11Resource* resources[] = { bridge->syncWrappedResource.Get() };
@@ -10043,12 +10116,10 @@ ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
                 }
             }
         } else {
-            // No sync mechanism — just release fences
-            for (size_t i = 0; i < endState.fenceCount; i++) {
-                if (endState.fences[i] && p_wgpuSharedFenceRelease)
-                    p_wgpuSharedFenceRelease(endState.fences[i]);
-            }
+            // No additional synchronization mechanism is available.
         }
+
+        p_wgpuSharedTextureMemoryEndAccessStateFreeMembers(endState);
 
         // Copy staging -> back buffer and present
         ComPtr<ID3D11Texture2D> backBuffer;
@@ -10396,14 +10467,20 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
         AdapterCtx adapterCtx = { &adapter, adapterEvent };
 
         WGPURequestAdapterOptions opts = {};
+        // The Windows presentation path uses Dawn's D3D12 interop APIs below.
+        // Leaving this undefined can select D3D11, which then cannot supply the
+        // device expected by the D3D12 DirectComposition bridge.
+        opts.backendType = WGPUBackendType_D3D12;
         opts.compatibleSurface = surface;
         WGPURequestAdapterCallbackInfo adapterInfo = {};
         adapterInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         adapterInfo.callback = [](WGPURequestAdapterStatus status, WGPUAdapter cbAdapter, WGPUStringView message, void* userdata1, void* userdata2) {
-            (void)message; (void)userdata2;
+            (void)userdata2;
             AdapterCtx* ctx = (AdapterCtx*)userdata1;
             if (status == WGPURequestAdapterStatus_Success) {
                 *(ctx->adapter) = cbAdapter;
+            } else {
+                logWgpuStringView("WGPU adapter request failed:", message);
             }
             SetEvent(ctx->event);
         };
@@ -10430,26 +10507,24 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
         WGPURequestDeviceCallbackInfo deviceInfo = {};
         deviceInfo.mode = WGPUCallbackMode_AllowSpontaneous;
         deviceInfo.callback = [](WGPURequestDeviceStatus status, WGPUDevice cbDevice, WGPUStringView message, void* userdata1, void* userdata2) {
-            (void)message; (void)userdata2;
+            (void)userdata2;
             DeviceCtx* ctx = (DeviceCtx*)userdata1;
             if (status == WGPURequestDeviceStatus_Success) {
                 *(ctx->device) = cbDevice;
+            } else {
+                logWgpuStringView("WGPU device request failed:", message);
             }
             SetEvent(ctx->event);
         };
         deviceInfo.userdata1 = &deviceCtx;
         // Request shared texture memory features for zero-copy DComp bridge
-        WGPUFeatureName zeroCopyFeatures[2];
+        WGPUFeatureName zeroCopyFeatures[1];
         size_t zeroCopyFeatureCount = 0;
 
         if (p_wgpuAdapterHasFeature) {
             if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryDXGISharedHandle)) {
                 zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryDXGISharedHandle;
                 printf("[WGPU] Adapter supports SharedTextureMemoryDXGISharedHandle\n");
-            }
-            if (p_wgpuAdapterHasFeature(adapter, WGPUFeatureName_SharedTextureMemoryD3D12Resource)) {
-                zeroCopyFeatures[zeroCopyFeatureCount++] = WGPUFeatureName_SharedTextureMemoryD3D12Resource;
-                printf("[WGPU] Adapter supports SharedTextureMemoryD3D12Resource\n");
             }
         }
         if (zeroCopyFeatureCount == 0) {
@@ -10458,7 +10533,6 @@ ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void
 
         WGPUDeviceDescriptor deviceDesc = {};
         deviceDesc.uncapturedErrorCallbackInfo.callback = gpuTestUncapturedErrorCallback;
-        deviceDesc.uncapturedErrorCallbackInfo.userdata1 = &deviceCtx;
         deviceDesc.requiredFeatureCount = zeroCopyFeatureCount;
         deviceDesc.requiredFeatures = zeroCopyFeatures;
 
@@ -10854,13 +10928,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
         if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
             // "hidden" = borderless window (no titlebar, no native controls)
             // This is for completely custom chrome
-            windowStyle = WS_POPUP | WS_VISIBLE;
+            windowStyle = WS_POPUP;
         } else if (titleBarStyle && strcmp(titleBarStyle, "hiddenInset") == 0) {
             // "hiddenInset" = frameless window with resize borders and DWM shadow.
             // We use WS_CAPTION | WS_THICKFRAME so the system treats it as a
             // standard framed window (giving us shadow and border resizing),
             // then remove the caption bar area in WM_NCCALCSIZE.
-            windowStyle = WS_VISIBLE | WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+            windowStyle = WS_CAPTION | WS_THICKFRAME | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
             data->chromeStyle = ChromeStyle::HiddenInset;
         }
         // else: default titleBarStyle = WS_OVERLAPPEDWINDOW (standard window)
@@ -10928,8 +11002,8 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
             }
 
-            // Show the window
-            ShowWindow(hwnd, SW_SHOW);
+            // The Zig core shows the window after creation unless hidden=true.
+            // Creating it visible here makes the hidden option impossible to honor.
             UpdateWindow(hwnd);
         } else {
             // Clean up if window creation failed

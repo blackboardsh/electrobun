@@ -140,7 +140,6 @@ export const wgpuAdapterTests = [
           initialTexture.ptr as any,
         );
         context.present();
-        WGPUNative.symbols.wgpuTextureRelease(initialTexture.ptr as any);
 
         win.setSize(initialWidth + 120, initialHeight + 80);
         await sleep(100);
@@ -156,7 +155,6 @@ export const wgpuAdapterTests = [
           resizedTexture.ptr as any,
         );
         context.present();
-        WGPUNative.symbols.wgpuTextureRelease(resizedTexture.ptr as any);
 
         expect(textureWidth, "resized surface texture width").toBe(
           resized.width,

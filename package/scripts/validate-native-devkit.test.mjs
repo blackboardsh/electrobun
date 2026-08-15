@@ -25,8 +25,10 @@ function fixture() {
 
 function declaredPaths(manifest) {
 	const sdks = manifest.layout.sdks;
+	const { wgpuAuxiliaryLibraries = [], ...runtime } = manifest.layout.runtime;
 	return new Set([
-		...Object.values(manifest.layout.runtime),
+		...Object.values(runtime),
+		...wgpuAuxiliaryLibraries,
 		sdks.javascript.root,
 		sdks.javascript.main,
 		sdks.javascript.browser,

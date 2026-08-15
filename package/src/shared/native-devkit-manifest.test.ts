@@ -29,6 +29,7 @@ const targets: Array<{
 			coreLibrary: "libElectrobunCore.dylib",
 			nativeWrapper: "libNativeWrapper.dylib",
 			wgpuLibrary: "libwebgpu_dawn.dylib",
+			wgpuAuxiliaryLibraries: [],
 			bun: "bun",
 		},
 	},
@@ -40,6 +41,7 @@ const targets: Array<{
 			nativeWrapper: "libNativeWrapper.so",
 			nativeWrapperCef: "libNativeWrapper_cef.so",
 			wgpuLibrary: "libwebgpu_dawn.so",
+			wgpuAuxiliaryLibraries: [],
 		},
 	},
 	{
@@ -50,6 +52,7 @@ const targets: Array<{
 			coreLibrary: "ElectrobunCore.dll",
 			nativeWrapper: "libNativeWrapper.dll",
 			wgpuLibrary: "webgpu_dawn.dll",
+			wgpuAuxiliaryLibraries: ["d3dcompiler_47.dll"],
 			bun: "bun.exe",
 			zigAsar: "zig-asar/x64/zig-asar.exe",
 		},
@@ -57,7 +60,11 @@ const targets: Array<{
 ];
 
 function manifestPaths(manifest: NativeDevkitManifest): string[] {
-	const runtimePaths = Object.values(manifest.layout.runtime);
+	const { wgpuAuxiliaryLibraries, ...runtime } = manifest.layout.runtime;
+	const runtimePaths = [
+		...Object.values(runtime),
+		...wgpuAuxiliaryLibraries,
+	];
 	const sdk = manifest.layout.sdks;
 	return [
 		...runtimePaths,

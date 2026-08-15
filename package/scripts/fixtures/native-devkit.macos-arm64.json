@@ -50,6 +50,7 @@
 			"nativeWrapperCef": "libNativeWrapper.dylib",
 			"asarLibrary": "libasar.dylib",
 			"wgpuLibrary": "libwebgpu_dawn.dylib",
+			"wgpuAuxiliaryLibraries": [],
 			"processHelper": "process_helper",
 			"bsdiff": "bsdiff",
 			"bspatch": "bspatch",

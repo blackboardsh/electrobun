@@ -119,6 +119,7 @@ export interface NativeDevkitManifest {
 			nativeWrapperCef: string;
 			asarLibrary: string;
 			wgpuLibrary: string;
+			wgpuAuxiliaryLibraries: string[];
 			processHelper: string;
 			bsdiff: string;
 			bspatch: string;
@@ -201,6 +202,7 @@ function targetRuntimeLayout(
 				: windows
 					? "webgpu_dawn.dll"
 					: "libwebgpu_dawn.so",
+		wgpuAuxiliaryLibraries: windows ? ["d3dcompiler_47.dll"] : [],
 		processHelper: `process_helper${extension}`,
 		bsdiff: `bsdiff${extension}`,
 		bspatch: `bspatch${extension}`,

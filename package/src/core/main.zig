@@ -4002,6 +4002,17 @@ export fn wgpuCreateSurfaceForView(instance: ?*anyopaque, view_ptr: ?*anyopaque)
     return wgpu_create_surface_for_view(instance, view_ptr);
 }
 
+export fn wgpuReleaseSurfaceForView(surface_ptr: ?*anyopaque) bool {
+    clearLastError();
+    const WgpuReleaseSurfaceForViewFn = *const fn (?*anyopaque) callconv(.c) void;
+    const wgpu_release_surface_for_view = lookupNativeSymbol(
+        WgpuReleaseSurfaceForViewFn,
+        "wgpuReleaseSurfaceForView",
+    ) orelse return false;
+    wgpu_release_surface_for_view(surface_ptr);
+    return true;
+}
+
 export fn wgpuCreateAdapterDeviceMainThread(
     instance_ptr: ?*anyopaque,
     surface_ptr: ?*anyopaque,

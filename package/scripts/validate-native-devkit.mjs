@@ -224,6 +224,21 @@ export function validateNativeDevkitManifest(options) {
 	const declaredPaths = runtimePathKeys.map((key) =>
 		relativePath(runtime[key], `layout.runtime.${key}`),
 	);
+	const wgpuAuxiliaryLibraries =
+		runtime.wgpuAuxiliaryLibraries === undefined
+			? []
+			: runtime.wgpuAuxiliaryLibraries;
+	if (!Array.isArray(wgpuAuxiliaryLibraries)) {
+		fail("layout.runtime.wgpuAuxiliaryLibraries must be an array");
+	}
+	for (const [index, path] of wgpuAuxiliaryLibraries.entries()) {
+		declaredPaths.push(
+			relativePath(
+				path,
+				`layout.runtime.wgpuAuxiliaryLibraries[${index}]`,
+			),
+		);
+	}
 	declaredPaths.push(...collectSdkPaths(object(layout.sdks, "layout.sdks")));
 
 	const coreRoot = resolve(options.coreRoot);

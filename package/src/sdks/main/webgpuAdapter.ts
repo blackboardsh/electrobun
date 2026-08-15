@@ -2734,6 +2734,7 @@ function createContext(view: WGPUView | GpuWindow) {
 		unconfigureSurface: (surfacePtr: number) =>
 			WGPUNative.symbols.wgpuSurfaceUnconfigure(surfacePtr as any),
 		releaseSurface: (surfacePtr: number) =>
+			WGPUBridge.releaseSurfaceForView(surfacePtr as any) ||
 			WGPUNative.symbols.wgpuSurfaceRelease(surfacePtr as any),
 		releaseInstance: (instancePtr: number) =>
 			WGPUNative.symbols.wgpuInstanceRelease(instancePtr as any),
