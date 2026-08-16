@@ -3011,6 +3011,15 @@ public:
         webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
         webkit_settings_set_enable_back_forward_navigation_gestures(settings, TRUE);
         webkit_settings_set_enable_smooth_scrolling(settings, TRUE);
+
+        // WebKitGTK's accelerated backing store disappears when a positioned
+        // view is partially outside its toplevel. Software compositing keeps
+        // the full view allocation while its GTK ancestors clip it correctly.
+        if (!autoResize) {
+            webkit_settings_set_hardware_acceleration_policy(
+                settings,
+                WEBKIT_HARDWARE_ACCELERATION_POLICY_NEVER);
+        }
         
         // Enable media stream and WebRTC for camera/microphone access
         webkit_settings_set_enable_media_stream(settings, TRUE);
@@ -3370,11 +3379,6 @@ public:
             }
 
             if (wrapper) {
-
-                // TODO: this only sort of works, the webview ends up half height
-                // and other overlay stuff is just janky and gross
-                // so people should probably use CEF if they want OOPIFs on linux
-
                 // For negative positions (scrolled out of view), we need to use
                 // gtk_widget_set_margin_* with clamped values and offset the webview inside
                 int clampedX = MAX(0, frame.x);
@@ -3386,10 +3390,11 @@ public:
                 gtk_widget_set_margin_start(wrapper, clampedX);
                 gtk_widget_set_margin_top(wrapper, clampedY);
 
-                // Position webview within wrapper with offset to handle negative positions
-                // Note: /2 division appears necessary for GTK coordinate system
-                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX / 2, offsetY / 2);
-               
+                // Position the webview by the full clipped distance. GtkFixed
+                // coordinates are already in logical pixels, just like the DOM
+                // bounds used to construct frame.
+                gtk_fixed_move(GTK_FIXED(wrapper), webview, offsetX, offsetY);
+
                 // OOPIF positioned with coordinate adjustment
             } else if (!fullSize) {
                 // For host webview, position directly with margins (can't be negative)
@@ -5595,6 +5600,8 @@ public:
                 // For OOPIFs, wrap in a fixed container to enforce size constraints
                 GtkWidget* wrapper = gtk_fixed_new();
                 gtk_widget_set_size_request(wrapper, 1, 1); // Don't affect overlay size
+                gtk_widget_set_halign(wrapper, GTK_ALIGN_START);
+                gtk_widget_set_valign(wrapper, GTK_ALIGN_START);
 
                 // Make wrapper receive no events (pass through to widgets below)
                 gtk_widget_set_events(wrapper, 0);
@@ -9541,13 +9548,27 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView* abstractView) {
 }
 
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView* abstractView, double zoomLevel) {
-    // pageZoom is WebKit-specific, not available on Linux CEF
-    // TODO: implement CEF zoom if needed
+    if (!abstractView) return;
+
+    dispatch_sync_main_void([abstractView, zoomLevel]() {
+        auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(abstractView);
+        if (webKitView && webKitView->webview) {
+            webkit_web_view_set_zoom_level(WEBKIT_WEB_VIEW(webKitView->webview), zoomLevel);
+        }
+    });
 }
 
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView* abstractView) {
-    // pageZoom is WebKit-specific, not available on Linux CEF
-    return 1.0;
+    if (!abstractView) return 1.0;
+
+    double zoomLevel = 1.0;
+    dispatch_sync_main_void([abstractView, &zoomLevel]() {
+        auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(abstractView);
+        if (webKitView && webKitView->webview) {
+            zoomLevel = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(webKitView->webview));
+        }
+    });
+    return zoomLevel;
 }
 
 ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView* abstractView, const char* scriptIdentifier, const char* scriptContent, bool forMainFrameOnly) {

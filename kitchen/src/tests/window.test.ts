@@ -175,11 +175,7 @@ export const windowTests = [
       const zoom = win.window.getPageZoom();
       expect(typeof zoom).toBe("number");
 
-      if (process.platform === "darwin" || process.platform === "win32") {
-        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
-      } else {
-        expect(zoom).toBe(1.0);
-      }
+      expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
 
       log(`Window zoom reported: ${zoom}`);
     },
@@ -205,11 +201,7 @@ export const windowTests = [
       const zoom = win.webview.getPageZoom();
       expect(typeof zoom).toBe("number");
 
-      if (process.platform === "darwin" || process.platform === "win32") {
-        expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
-      } else {
-        expect(zoom).toBe(1.0);
-      }
+      expect(Math.abs(zoom - targetZoom)).toBeLessThan(0.02);
 
       log(`Webview zoom reported: ${zoom}`);
     },

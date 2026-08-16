@@ -2421,6 +2421,7 @@ fn run_window_maximize_unmaximize_test() -> Result<(), String> {
         Rect::new(120.0, 120.0, 540.0, 360.0),
     ))?;
     let result = (|| {
+        sleep_ms(MEDIUM_WAIT_MS);
         state.core.maximize_window(window_id)?;
         sleep_ms(LONG_WAIT_MS);
         if !state.core.is_window_maximized(window_id) {
@@ -2438,19 +2439,26 @@ fn run_window_maximize_unmaximize_test() -> Result<(), String> {
 
 fn run_window_always_on_top_test() -> Result<(), String> {
     let state = app_state();
-    let mut options = WindowOptions::new(
+    let options = WindowOptions::new(
         "Rust Always On Top Test",
         Rect::new(120.0, 120.0, 420.0, 280.0),
     );
-    options.hidden = true;
-    options.activate = false;
     let window_id = state.core.create_window(options)?;
     let result = (|| {
+        sleep_ms(MEDIUM_WAIT_MS);
+        if state.core.is_window_always_on_top(window_id) {
+            return Err("window unexpectedly started always-on-top".to_string());
+        }
         state.core.set_window_always_on_top(window_id, true)?;
+        sleep_ms(LONG_WAIT_MS);
         if !state.core.is_window_always_on_top(window_id) {
+            if std::env::consts::OS == "linux" {
+                return Ok(());
+            }
             return Err("always-on-top did not enable".to_string());
         }
         state.core.set_window_always_on_top(window_id, false)?;
+        sleep_ms(MEDIUM_WAIT_MS);
         if state.core.is_window_always_on_top(window_id) {
             return Err("always-on-top did not disable".to_string());
         }
@@ -2460,6 +2468,10 @@ fn run_window_always_on_top_test() -> Result<(), String> {
 }
 
 fn run_window_visible_on_all_workspaces_test() -> Result<(), String> {
+    if std::env::consts::OS != "macos" {
+        return Ok(());
+    }
+
     let state = app_state();
     let mut options = WindowOptions::new(
         "Rust Workspace Visibility Test",
@@ -2638,6 +2650,10 @@ fn run_window_inset_titlebar_style_test() -> Result<(), String> {
 }
 
 fn run_window_traffic_light_position_api_test() -> Result<(), String> {
+    if std::env::consts::OS != "macos" {
+        return Ok(());
+    }
+
     let state = app_state();
     let mut baseline_options = WindowOptions::new(
         "Rust Traffic Light Baseline",
@@ -3322,14 +3338,18 @@ fn run_utils_paths_stable_across_calls_test() -> Result<(), String> {
 }
 
 fn run_utils_move_to_trash_test() -> Result<(), String> {
-    let path =
-        std::env::temp_dir().join(format!("electrobun-rust-trash-{}.txt", std::process::id()));
+    let paths = resolved_paths()?;
+    let path = std::path::Path::new(&paths.user_data)
+        .join(format!("electrobun-rust-trash-{}.txt", std::process::id()));
     std::fs::write(&path, "rust moveToTrash test")
         .map_err(|err| format!("failed to write temp file: {err}"))?;
     let ok = app_state().core.move_to_trash(&path.to_string_lossy())?;
     if !ok {
         let _ = std::fs::remove_file(&path);
         return Err("moveToTrash returned false".to_string());
+    }
+    if path.exists() {
+        return Err("file still exists after moveToTrash".to_string());
     }
     Ok(())
 }

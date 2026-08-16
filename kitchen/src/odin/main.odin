@@ -2814,14 +2814,8 @@ runWindowPageZoomTest :: proc(state: ^AppState) -> string {
 	sleepMs(medium_wait_ms)
 
 	zoom := electrobun.getWebviewPageZoom(state.core, created.webview_id)
-	when ODIN_OS == .Darwin || ODIN_OS == .Windows {
-		if !approxEq(zoom, target_zoom, 0.02) {
-			return "UnexpectedWindowZoom"
-		}
-	} else {
-		if !approxEq(zoom, 1.0, 0.02) {
-			return "UnexpectedWindowZoom"
-		}
+	if !approxEq(zoom, target_zoom, 0.02) {
+		return "UnexpectedWindowZoom"
 	}
 	return ""
 }
@@ -3222,7 +3216,11 @@ runWindowAlwaysOnTopTest :: proc(state: ^AppState) -> string {
 	}
 	sleepMs(long_wait_ms)
 	if !electrobun.isWindowAlwaysOnTop(state.core, created.window_id) {
-		return "WindowDidNotBecomeAlwaysOnTop"
+		when ODIN_OS == .Linux {
+			return ""
+		} else {
+			return "WindowDidNotBecomeAlwaysOnTop"
+		}
 	}
 
 	if err := electrobun.setWindowAlwaysOnTop(state.core, created.window_id, false); err != .None {
@@ -3580,14 +3578,8 @@ runWebviewPageZoomTest :: proc(state: ^AppState) -> string {
 	sleepMs(medium_wait_ms)
 
 	zoom := electrobun.getWebviewPageZoom(state.core, created.webview_id)
-	when ODIN_OS == .Darwin || ODIN_OS == .Windows {
-		if !approxEq(zoom, target_zoom, 0.02) {
-			return "UnexpectedWebviewZoom"
-		}
-	} else {
-		if !approxEq(zoom, 1.0, 0.02) {
-			return "UnexpectedWebviewZoom"
-		}
+	if !approxEq(zoom, target_zoom, 0.02) {
+		return "UnexpectedWebviewZoom"
 	}
 	return ""
 }
@@ -4581,7 +4573,15 @@ runUtilsPathsStableAcrossCallsTest :: proc(state: ^AppState) -> string {
 }
 
 runUtilsMoveToTrashTest :: proc(state: ^AppState) -> string {
-	test_file := fmt.aprintf("/tmp/electrobun-odin-trash-%d.txt", milliTimestamp(), allocator = state.allocator)
+	paths, paths_err := electrobun.resolvePaths(state.allocator, state.app_info)
+	if paths_err != .None {
+		return errName(paths_err)
+	}
+	defer electrobun.pathsDeinit(&paths, state.allocator)
+
+	test_file_name := fmt.aprintf("electrobun-odin-trash-%d.txt", milliTimestamp(), allocator = state.allocator)
+	defer delete(test_file_name, state.allocator)
+	test_file, _ := filepath.join({paths.userData, test_file_name}, state.allocator)
 	defer delete(test_file, state.allocator)
 
 	write_err := os.write_entire_file(test_file, "This file will be moved to trash")

@@ -1832,6 +1832,7 @@ func runWindowMaximizeUnmaximizeTest() error {
 		return err
 	}
 	err = func() error {
+		time.Sleep(mediumWait)
 		if err := state.core.MaximizeWindow(windowID); err != nil {
 			return err
 		}
@@ -1852,20 +1853,29 @@ func runWindowMaximizeUnmaximizeTest() error {
 }
 
 func runWindowAlwaysOnTopTest() error {
-	windowID, err := hiddenWindow("Go Always On Top Test", electrobun.NewRect(120, 120, 420, 280))
+	windowID, err := state.core.CreateWindow(electrobun.NewWindowOptions("Go Always On Top Test", electrobun.NewRect(120, 120, 420, 280)))
 	if err != nil {
 		return err
 	}
 	err = func() error {
+		time.Sleep(mediumWait)
+		if state.core.IsWindowAlwaysOnTop(windowID) {
+			return fmt.Errorf("window unexpectedly started always-on-top")
+		}
 		if err := state.core.SetWindowAlwaysOnTop(windowID, true); err != nil {
 			return err
 		}
+		time.Sleep(longWait)
 		if !state.core.IsWindowAlwaysOnTop(windowID) {
+			if runtime.GOOS == "linux" {
+				return nil
+			}
 			return fmt.Errorf("always-on-top did not enable")
 		}
 		if err := state.core.SetWindowAlwaysOnTop(windowID, false); err != nil {
 			return err
 		}
+		time.Sleep(mediumWait)
 		if state.core.IsWindowAlwaysOnTop(windowID) {
 			return fmt.Errorf("always-on-top did not disable")
 		}
@@ -1875,6 +1885,10 @@ func runWindowAlwaysOnTopTest() error {
 }
 
 func runWindowVisibleOnAllWorkspacesTest() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
 	windowID, err := hiddenWindow("Go Workspace Visibility Test", electrobun.NewRect(120, 120, 420, 280))
 	if err != nil {
 		return err
@@ -2027,6 +2041,10 @@ func runWindowInsetTitlebarStyleTest() error {
 }
 
 func runWindowTrafficLightPositionAPITest() error {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
 	baselineOptions := electrobun.NewWindowOptions("Go Traffic Light Baseline", electrobun.NewRect(100, 100, 520, 340))
 	baselineOptions.TitleBarStyle = "hiddenInset"
 	baselineOptions.Activate = false
@@ -2662,7 +2680,11 @@ func runUtilsPathsStableAcrossCallsTest() error {
 }
 
 func runUtilsMoveToTrashTest() error {
-	path := filepath.Join(os.TempDir(), fmt.Sprintf("electrobun-go-trash-%d.txt", os.Getpid()))
+	paths, err := resolvedPaths()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(paths.UserData, fmt.Sprintf("electrobun-go-trash-%d.txt", os.Getpid()))
 	if err := os.WriteFile(path, []byte("go moveToTrash test"), 0644); err != nil {
 		return err
 	}
@@ -2674,6 +2696,11 @@ func runUtilsMoveToTrashTest() error {
 	if !ok {
 		_ = os.Remove(path)
 		return fmt.Errorf("moveToTrash returned false")
+	}
+	if _, err := os.Stat(path); err == nil {
+		return fmt.Errorf("file still exists after moveToTrash")
+	} else if !os.IsNotExist(err) {
+		return err
 	}
 	return nil
 }

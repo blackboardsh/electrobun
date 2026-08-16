@@ -118,8 +118,11 @@ export const utilsTests = [
     category: "Utils",
     description: "Test moving a file to trash",
     async run({ log }) {
-      // Create a temp directory and file
-      const tempDir = await mkdtemp(join(tmpdir(), "electrobun-test-"));
+      // Use the app's data filesystem: Linux does not support trashing files
+      // from system-internal mounts such as /tmp.
+      const tempDir = await mkdtemp(
+        join(Utils.paths.userData, "electrobun-test-"),
+      );
       const testFile = join(tempDir, "test-trash-file.txt");
 
       log(`Creating temp file: ${testFile}`);
@@ -137,14 +140,17 @@ export const utilsTests = [
       log("Moving file to trash");
       const result = Utils.moveToTrash(testFile);
       log(`moveToTrash returned: ${result}`);
+      expect(result).toBe(true);
 
       // Verify file no longer exists at original path
+      let originalStillExists = true;
       try {
         await access(testFile);
-        throw new Error("File still exists after moveToTrash");
       } catch {
-        log("File successfully moved to trash");
+        originalStillExists = false;
       }
+      expect(originalStillExists).toBe(false);
+      log("File successfully moved to trash");
 
       // Cleanup temp directory (it should be empty now)
       try {
