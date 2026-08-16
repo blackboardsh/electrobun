@@ -18,6 +18,14 @@ const wgpuTag = readFileSync(
 	join(import.meta.dirname, "../preload/wgpuTag.ts"),
 	"utf8",
 );
+const uiInput = readFileSync(
+	join(import.meta.dirname, "../sdks/main/ui/input.ts"),
+	"utf8",
+);
+const uiWindow = readFileSync(
+	join(import.meta.dirname, "../sdks/main/ui/uiwindow.ts"),
+	"utf8",
+);
 
 function sourceBetween(start: string, end: string) {
 	const startIndex = windowsWrapper.indexOf(start);
@@ -89,6 +97,131 @@ describe("Windows per-monitor DPI and window shell", () => {
 			"const RECT& workArea = monitor.logicalWorkArea",
 		);
 		expect(screenGeometry).toContain("physicalScreenPointToLogical(");
+	});
+
+	it("translates Windows UI input from the drawable client origin", () => {
+		const contentOrigin = sourceBetween(
+			"ELECTROBUN_EXPORT void getWindowContentOrigin(",
+			"ELECTROBUN_EXPORT void resizeWebview(",
+		);
+
+		expect(contentOrigin).toContain("ClientToScreen(hwnd, &clientOrigin)");
+		expect(contentOrigin).toContain("physicalScreenPointToLogical(");
+		expect(uiInput).toContain('process.platform === "win32"');
+		expect(uiInput).toContain("ffi.request.getWindowContentOrigin");
+	});
+
+	it("sizes full-window UI surfaces from the drawable client area", () => {
+		const contentSize = sourceBetween(
+			"ELECTROBUN_EXPORT void getWindowContentSize(",
+			"ELECTROBUN_EXPORT void resizeWebview(",
+		);
+		const initialization = sourceBetween(
+			"ELECTROBUN_EXPORT AbstractView* initWGPUView(",
+			"ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply*",
+		);
+
+		expect(contentSize).toContain("GetClientRect(hwnd, &clientRect)");
+		expect(contentSize).toContain("physicalToLogicalCoordinate(");
+		expect(initialization).toContain("GetClientRect(containerHwnd, &physicalBounds)");
+		expect(uiWindow).toContain("ffi.request.getWindowContentSize");
+	});
+
+	it("routes committed WM_CHAR text separately from virtual-key events", () => {
+		const textBridge = sourceBetween(
+			"typedef void (*WindowTextHandler)",
+			"static bool readAppsUseDarkTheme(",
+		);
+		const inputMessages = sourceBetween(
+			"// Forward mouse and keyboard events to CEF OSR view if present",
+			"case WM_CLOSE:",
+		);
+
+		expect(textBridge).toContain("std::atomic<WindowTextHandler>");
+		expect(textBridge).toContain("value < 0x20 || value == 0x7f");
+		expect(textBridge).toContain("value >= 0xd800 && value <= 0xdbff");
+		expect(textBridge).toContain("value >= 0xdc00 && value <= 0xdfff");
+		expect(textBridge).toContain("0x10000 + ((high - 0xd800) << 10)");
+		expect(inputMessages).toContain("if (data && msg == WM_CHAR)");
+		expect(inputMessages).toContain("dispatchWindowText(");
+		expect(uiInput).toContain("dispatchText(text)");
+		expect(uiWindow).toContain("?.onTextInput");
+	});
+
+	it("registers WGPU child views on their owning UI thread", () => {
+		const initialization = sourceBetween(
+			"ELECTROBUN_EXPORT AbstractView* initWGPUView(",
+			"ELECTROBUN_EXPORT MyScriptMessageHandlerWithReply*",
+		);
+		const dispatchEnd = initialization.indexOf("\n    });");
+		const retention = initialization.indexOf("retainWGPUView(view);");
+		const registration = initialization.indexOf("container->AddAbstractView(view);");
+
+		expect(retention).toBeGreaterThan(0);
+		expect(retention).toBeLessThan(dispatchEnd);
+		expect(registration).toBeGreaterThan(0);
+		expect(registration).toBeLessThan(dispatchEnd);
+		expect(initialization).toContain("bool initialized = false");
+		expect(initialization).toContain("if (!initialized)");
+	});
+
+	it("preserves native-layer z-order when resizing WGPU child views", () => {
+		const wgpuResize = sourceBetween(
+			"class WGPUView : public AbstractView {",
+			"    void setTransparent(bool transparent) override {",
+		);
+		const explicitZOrder = sourceBetween(
+			"void BringViewToFront(AbstractView* targetView)",
+			"    ~ContainerView()",
+		);
+
+		expect(wgpuResize).toContain("SWP_NOZORDER");
+		expect(wgpuResize).not.toContain("SetWindowPos(hwnd, HWND_TOP");
+		expect(explicitZOrder).toContain("SetWindowPos(view->hwnd, HWND_TOP");
+	});
+
+	it("enables Dawn's shared fence for cross-device presentation", () => {
+		const bridgeState = sourceBetween(
+			"// DComp zero-copy bridge function pointers",
+			"static std::wstring getExecutableDirW()",
+		);
+		const bridgeInitialization = sourceBetween(
+			"static bool initDCompBridgeForSurface(",
+			"ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(",
+		);
+		const bridgeFrames = sourceBetween(
+			"ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(",
+			"ELECTROBUN_EXPORT uint64_t wgpuQueueOnSubmittedWorkDoneShim(",
+		);
+		const deviceCreation = sourceBetween(
+			"ELECTROBUN_EXPORT void wgpuCreateAdapterDeviceMainThread(",
+			"ELECTROBUN_EXPORT void loadHTMLInWebView(",
+		);
+
+		expect(bridgeState).toContain("WGPUProcDeviceImportSharedFence");
+		expect(bridgeState).toContain("WGPUSharedFence presentationSharedFence");
+		expect(bridgeInitialization).toContain("presentDevice->CreateFence(");
+		expect(bridgeInitialization).toContain("presentationFence->CreateSharedHandle(");
+		expect(bridgeInitialization).toContain("p_wgpuDeviceImportSharedFence(");
+		expect(bridgeInitialization).toContain(
+			"if (!hasDXGISharedHandle || !hasSharedFence)",
+		);
+		expect(bridgeInitialization).toContain("using normal HWND surface");
+		expect(bridgeFrames).toContain("beginDesc.fences = &presentationFence");
+		expect(bridgeFrames).toContain("presentContext->Wait(");
+		expect(bridgeFrames).toContain("presentContext->Signal(");
+		expect(bridgeFrames).toContain("bridge->unusable.store(true)");
+		expect(bridgeFrames).not.toContain("pendingFences");
+		expect(deviceCreation).toContain("WGPUFeatureName zeroCopyFeatures[2]");
+		expect(deviceCreation).toContain(
+			"WGPUFeatureName_SharedTextureMemoryDXGISharedHandle",
+		);
+		expect(deviceCreation).toContain(
+			"WGPUFeatureName_SharedFenceDXGISharedHandle",
+		);
+		expect(deviceCreation).toContain(
+			"deviceDesc.requiredFeatures = zeroCopyFeatures",
+		);
 	});
 
 	it("converts public child-view DIPs to raw Win32 pixels and reapplies them on DPI changes", () => {

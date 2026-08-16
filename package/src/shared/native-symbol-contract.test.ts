@@ -100,6 +100,12 @@ const darwinDescriptorBlock = sourceSection(
 	"\n\t\t\t\t: {}),",
 	"Darwin NativeWrapper descriptor block",
 );
+const windowsDescriptorBlock = sourceSection(
+	typescriptNativeTable,
+	'\t\t\t...(process.platform === "win32"',
+	"\n\t\t\t\t: {}),",
+	"Windows NativeWrapper descriptor block",
+);
 
 const directWrapperCommonSymbols = requireContract(
 	"TypeScript NativeWrapper descriptor table",
@@ -110,6 +116,10 @@ const directWrapperDarwinSymbols = descriptorNamesAtIndent(
 	darwinDescriptorBlock,
 	5,
 );
+const directWrapperWindowsSymbols = descriptorNamesAtIndent(
+	windowsDescriptorBlock,
+	5,
+);
 const expectedDirectWrapperDarwinSymbols = [
 	"setWGPUKeyHandler",
 	"setWGPUPointerHandler",
@@ -117,6 +127,10 @@ const expectedDirectWrapperDarwinSymbols = [
 	"uiMeasureText",
 	"uiRasterizeText",
 	"wgpuViewSetAlphaBlending",
+].sort();
+const expectedDirectWrapperWindowsSymbols = [
+	"getWindowContentSize",
+	"setWindowTextHandler",
 ].sort();
 
 const coreBootstrapWrapperSymbols = requireContract(
@@ -188,7 +202,7 @@ const typescriptWgpuBridge = sourceSection(
 const coreWgpuSurfaceRelease = sourceSection(
 	sources.core,
 	"export fn wgpuReleaseSurfaceForView(",
-	"\n}\n\nexport fn wgpuCreateAdapterDeviceMainThread(",
+	"export fn wgpuCreateAdapterDeviceMainThread(",
 	"ElectrobunCore WGPU surface release",
 );
 
@@ -226,7 +240,13 @@ const eagerCoreDemands = {
 };
 
 describe("TypeScript to NativeWrapper ABI", () => {
-	test("keeps exactly the six macOS-only descriptors out of the common table", () => {
+	test("exports the Windows text handler with unmangled C linkage", () => {
+		expect(sources.wrappers.win32).toMatch(
+			/^extern\s+"C"\s+ELECTROBUN_EXPORT\s+void\s+setWindowTextHandler\s*\(/m,
+		);
+	});
+
+	test("keeps platform-only descriptors out of the common table", () => {
 		expect(uniqueSorted(directWrapperDarwinSymbols)).toEqual(
 			expectedDirectWrapperDarwinSymbols,
 		);
@@ -236,12 +256,22 @@ describe("TypeScript to NativeWrapper ABI", () => {
 			expect(definesNativeFunction(sources.wrappers.linux, symbol)).toBe(false);
 			expect(definesNativeFunction(sources.wrappers.win32, symbol)).toBe(false);
 		}
+
+		expect(uniqueSorted(directWrapperWindowsSymbols)).toEqual(
+			expectedDirectWrapperWindowsSymbols,
+		);
+		for (const symbol of expectedDirectWrapperWindowsSymbols) {
+			expect(directWrapperCommonSymbols).not.toContain(symbol);
+			expect(definesNativeFunction(sources.wrappers.darwin, symbol)).toBe(false);
+			expect(definesNativeFunction(sources.wrappers.linux, symbol)).toBe(false);
+			expect(definesNativeFunction(sources.wrappers.win32, symbol)).toBe(true);
+		}
 	});
 
 	test.each([
 		["darwin", uniqueSorted([...directWrapperCommonSymbols, ...directWrapperDarwinSymbols])],
 		["linux", directWrapperCommonSymbols],
-		["win32", directWrapperCommonSymbols],
+		["win32", uniqueSorted([...directWrapperCommonSymbols, ...directWrapperWindowsSymbols])],
 	] as const)("every %s descriptor has a wrapper definition", (platform, symbols) => {
 		const missing = symbols.filter(
 			(symbol) => !definesNativeFunction(sources.wrappers[platform], symbol),

@@ -228,6 +228,16 @@ async function mount(
 					for (const handler of ctx.keyHandlers) handler(e);
 				});
 			},
+			dispatchText: (text: string) => {
+				batch(() => {
+					let id = inert(ctx.focusedId);
+					while (id !== 0 && tree.has(id)) {
+						const handler = ctx.handlers.get(id)?.onTextInput;
+						if (handler && handler(text) === true) return;
+						id = tree.parentOf(id);
+					}
+				});
+			},
 		});
 	} catch (error) {
 		try {
@@ -401,7 +411,10 @@ export async function createUIWindow(
 				renderTarget: win,
 				viewId: win.wgpuViewId,
 				windowId: win.id,
-				getSize: () => win.getSize(),
+				getSize: () =>
+					process.platform === "win32"
+						? ffi.request.getWindowContentSize({ winId: win.id })
+						: win.getSize(),
 				viewOffset: () => ({ x: 0, y: 0 }),
 				isAlive: () => !lifecycle.isClosed(),
 				// Hidden windows skip layout/paint/GPU entirely (e.g. a focused

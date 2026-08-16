@@ -818,6 +818,18 @@ export const native = (() => {
 					},
 				}
 				: {}),
+			...(process.platform === "win32"
+				? {
+					getWindowContentSize: {
+						args: [FFIType.ptr, FFIType.ptr, FFIType.ptr],
+						returns: FFIType.void,
+					},
+					setWindowTextHandler: {
+						args: [FFIType.ptr],
+						returns: FFIType.void,
+					},
+				}
+				: {}),
 
 			loadURLInWebView: {
 				args: [FFIType.ptr, FFIType.cstring],
@@ -1249,11 +1261,24 @@ type DarwinNativeWrapperSymbols = {
 	uiFreeTextBitmap: (pixels: Pointer) => void;
 };
 
+type WindowsNativeWrapperSymbols = {
+	getWindowContentSize: (
+		window: Pointer,
+		width: Pointer,
+		height: Pointer,
+	) => void;
+	setWindowTextHandler: (handler: Pointer | null) => void;
+};
+
 // Conditional descriptor spreads become optional zero-argument functions in
 // Bun's mapped FFI types. Restore the callable shape while keeping absence
 // explicit on platforms that do not register these symbols.
 function getDarwinNativeWrapperSymbols(): Partial<DarwinNativeWrapperSymbols> {
 	return native_.symbols as unknown as Partial<DarwinNativeWrapperSymbols>;
+}
+
+function getWindowsNativeWrapperSymbols(): Partial<WindowsNativeWrapperSymbols> {
+	return native_.symbols as unknown as Partial<WindowsNativeWrapperSymbols>;
 }
 
 core?.symbols.setRuntimeCallbacksAsync(true);
@@ -1806,6 +1831,35 @@ const _ffiImpl = {
 			core_.symbols.getWindowContentOrigin(winId, ptr(xBuf), ptr(yBuf));
 
 			return { x: xBuf[0]!, y: yBuf[0]! };
+		},
+		getWindowContentSize: (params: {
+			winId: number;
+		}): { width: number; height: number } => {
+			const { winId } = params;
+			const windowPtr = getWindowPtr(winId);
+			if (!windowPtr) return { width: 0, height: 0 };
+
+			const getContentSize =
+				getWindowsNativeWrapperSymbols().getWindowContentSize;
+			if (process.platform !== "win32" || typeof getContentSize !== "function") {
+				const xBuf = new Float64Array(1);
+				const yBuf = new Float64Array(1);
+				const widthBuf = new Float64Array(1);
+				const heightBuf = new Float64Array(1);
+				core_.symbols.getWindowFrame(
+					winId,
+					ptr(xBuf),
+					ptr(yBuf),
+					ptr(widthBuf),
+					ptr(heightBuf),
+				);
+				return { width: widthBuf[0]!, height: heightBuf[0]! };
+			}
+
+			const widthBuf = new Float64Array(1);
+			const heightBuf = new Float64Array(1);
+			getContentSize(windowPtr, ptr(widthBuf), ptr(heightBuf));
+			return { width: widthBuf[0]!, height: heightBuf[0]! };
 		},
 		createWebview: (params: {
 			windowId: number;
@@ -2770,6 +2824,38 @@ export function enableWGPUKeyEvents(): boolean {
 		}
 		setKeyHandler(wgpuKeyCallback.ptr);
 		wgpuKeyEventsEnabled = true;
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// Win32's WM_CHAR stream contains the text produced by the active keyboard
+// layout (including composed/dead-key and IME output). It is deliberately
+// separate from keyDown, which remains the source of editing/navigation keys.
+const windowTextCallback = new JSCallback(
+	(windowId, codePoint) => {
+		electrobunEventEmitter.emit(`window-text-${windowId}`, {
+			text: String.fromCodePoint(codePoint),
+		});
+	},
+	{
+		args: ["u32", "u32"],
+		returns: "void",
+		threadsafe: true,
+	},
+);
+
+let windowTextEventsEnabled = false;
+export function enableWindowTextEvents(): boolean {
+	if (windowTextEventsEnabled) return true;
+	if (process.platform !== "win32" || !hasFFI) return false;
+	try {
+		const setHandler =
+			getWindowsNativeWrapperSymbols().setWindowTextHandler;
+		if (typeof setHandler !== "function") return false;
+		setHandler(windowTextCallback.ptr);
+		windowTextEventsEnabled = true;
 		return true;
 	} catch {
 		return false;

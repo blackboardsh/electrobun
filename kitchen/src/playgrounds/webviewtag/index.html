@@ -30,6 +30,27 @@
         button:hover {
             background: #f0f0f0;
         }
+        button:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        button:disabled:hover {
+            background: #fff;
+        }
+        .capability-notice {
+            margin: 12px 0;
+            padding: 10px 12px;
+            border: 1px solid #93c5fd;
+            border-radius: 4px;
+            background: #eff6ff;
+            color: #1e3a8a;
+            font-size: 13px;
+        }
+        .capability-notice.has-unsupported {
+            border-color: #fbbf24;
+            background: #fffbeb;
+            color: #78350f;
+        }
         .element-to-mask {
             position: absolute;
             display: flex;
@@ -62,6 +83,7 @@
 
     <h1>Webview Tag Playground</h1>
     <p>Test OOPIF webview with masks, passthrough, and navigation controls.</p>
+    <div id="capabilityNotice" class="capability-notice" role="status"></div>
 
     <h2>Navigation & Display Controls</h2>
     <div class="controls">
@@ -95,10 +117,10 @@
     <h2>Mask & Passthrough Controls</h2>
     <div class="controls">
         <button onclick="document.querySelector('electrobun-webview').toggleTransparent()">Toggle Transparent</button>
-        <button onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
+        <button id="togglePassthroughBtn" onclick="document.querySelector('electrobun-webview').togglePassthrough()">Toggle Passthrough</button>
         <button onclick="document.querySelector('electrobun-webview').toggleHidden()">Toggle Hidden</button>
-        <button onclick="document.querySelector('electrobun-webview').addMaskSelector('.element-to-mask')">Add Mask Selector</button>
-        <button onclick="document.querySelector('electrobun-webview').removeMaskSelector('.element-to-mask')">Remove Mask Selector</button>
+        <button id="addMaskBtn" onclick="document.querySelector('electrobun-webview').addMaskSelector('.element-to-mask')">Add Mask Selector</button>
+        <button id="removeMaskBtn" onclick="document.querySelector('electrobun-webview').removeMaskSelector('.element-to-mask')">Remove Mask Selector</button>
     </div>
 
     <div style="position: relative; margin-top: 15px;">
@@ -125,6 +147,48 @@
     <img src="views://playgrounds/webviewtag/electrobun.png" style="max-width: 200px; border: 1px solid #ccc;" />
 
     <script>
+        const capabilityParams = new URLSearchParams(window.location.search);
+        const configuredRenderer = capabilityParams.get('renderer');
+        const hasCapabilityConfig = configuredRenderer === 'cef' || configuredRenderer === 'native';
+        const effectiveRenderer = configuredRenderer === 'native' ? 'native' : 'cef';
+        const masksSupported = !hasCapabilityConfig || capabilityParams.get('masks') === '1';
+        const passthroughSupported = !hasCapabilityConfig || capabilityParams.get('passthrough') === '1';
+        const configuredPlatform = capabilityParams.get('platform');
+        const nativeRendererLabel = configuredPlatform === 'win32'
+            ? 'native (Windows WebView2)'
+            : configuredPlatform === 'darwin'
+                ? 'native (macOS WKWebView)'
+                : configuredPlatform === 'linux'
+                    ? 'native (Linux system WebKit)'
+                    : 'native';
+        const rendererLabel = effectiveRenderer === 'cef' ? 'CEF' : nativeRendererLabel;
+
+        document.querySelectorAll('electrobun-webview').forEach((webview) => {
+            webview.setAttribute('renderer', effectiveRenderer);
+        });
+
+        const unsupportedFeatures = [];
+        if (!masksSupported) {
+            unsupportedFeatures.push('mask selectors');
+            document.getElementById('addMaskBtn').disabled = true;
+            document.getElementById('removeMaskBtn').disabled = true;
+        }
+        if (!passthroughSupported) {
+            unsupportedFeatures.push('passthrough');
+            document.getElementById('togglePassthroughBtn').disabled = true;
+        }
+
+        const capabilityNotice = document.getElementById('capabilityNotice');
+        if (unsupportedFeatures.length > 0) {
+            capabilityNotice.classList.add('has-unsupported');
+            capabilityNotice.textContent =
+                `Effective renderer: ${rendererLabel}. ${unsupportedFeatures.join(' and ')} ` +
+                `${unsupportedFeatures.length === 1 ? 'is' : 'are'} unsupported by this renderer, so the corresponding controls are disabled.`;
+        } else {
+            capabilityNotice.textContent =
+                `Effective renderer: ${rendererLabel}. Mask selectors and passthrough are supported.`;
+        }
+
         // Drag info display
         document.body.ondragover = (e) => {
             document.getElementById('draginfo').innerHTML = 'Drag position: ' + e.clientX + ', ' + e.clientY;

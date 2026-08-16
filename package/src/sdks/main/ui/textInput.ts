@@ -5,7 +5,7 @@
 
 import { cleanup, inert, live, liveScope, signal } from "./reactive";
 import { getUiContext, read, ui, type KeyEventInfo, type Reactive } from "./ui";
-import { applyEditKey } from "./keymap";
+import { applyEditKey, normalizeEditKeyCode } from "./keymap";
 
 export interface TextInputProps {
 	value: () => string;
@@ -46,7 +46,7 @@ export function textInput(props: TextInputProps): number {
 		// applyEditKey clamps the caret itself; String.slice clamps in render.
 		const result = applyEditKey(
 			{ value, caret: inert(caret) },
-			e.keyCode,
+			normalizeEditKeyCode(e.keyCode, process.platform),
 			e.modifiers,
 			e.chars,
 		);
@@ -60,11 +60,26 @@ export function textInput(props: TextInputProps): number {
 		if (result.value !== value) props.onInput(result.value);
 		return true;
 	};
+	const handleText = (text: string): boolean => {
+		const value = inert(props.value);
+		const result = applyEditKey(
+			{ value, caret: inert(caret) },
+			0,
+			0,
+			text,
+		);
+		if (!result.handled) return false;
+		setCaret(result.caret);
+		setBlinkOn(true);
+		if (result.value !== value) props.onInput(result.value);
+		return true;
+	};
 
 	id = ui.row(
 		{
 			focusable: true,
 			onKeyDown: handleKey,
+			onTextInput: handleText,
 			onClick: () => setCaret(inert(props.value).length),
 			grow: props.grow,
 			width: props.width,

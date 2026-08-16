@@ -2764,9 +2764,9 @@ export fn getWindowContentOrigin(window_id: u32, x: *f64, y: *f64) void {
         return;
     }
 
-    // Non-Linux wrappers do not expose a distinct content-origin query. Keep
-    // the export safe for all SDKs by falling back to their existing frame
-    // coordinates; the TypeScript UI calls this only on Linux.
+    // Wrappers without a distinct content-origin query fall back to their
+    // existing frame coordinates. Linux and Windows expose the native client
+    // origin because their public frame includes window-manager decorations.
     var width: f64 = 0;
     var height: f64 = 0;
     getWindowFrame(window_id, x, y, &width, &height);

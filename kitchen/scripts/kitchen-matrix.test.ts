@@ -18,6 +18,7 @@ import {
 } from "./kitchen-matrix-plan";
 import {
 	createKitchenMatrixRunRoot,
+	kitchenWorkspaceCopyOptions,
 	parseKitchenMatrixArguments,
 	prepareKitchenVariantWorkspace,
 	publishKitchenVariantWorkspace,
@@ -25,6 +26,18 @@ import {
 } from "./kitchen-matrix";
 
 describe("kitchen matrix", () => {
+	it("avoids Cottontail's rounded-inode copy fallback on Windows", () => {
+		expect(kitchenWorkspaceCopyOptions("win32")).toEqual({ recursive: true });
+		expect(kitchenWorkspaceCopyOptions("darwin")).toEqual({
+			recursive: true,
+			dereference: true,
+		});
+		expect(kitchenWorkspaceCopyOptions("linux")).toEqual({
+			recursive: true,
+			dereference: true,
+		});
+	});
+
 	it("owns the native project build graphs used by Hutch", () => {
 		const kitchenRoot = join(import.meta.dirname, "..");
 		const build = readFileSync(

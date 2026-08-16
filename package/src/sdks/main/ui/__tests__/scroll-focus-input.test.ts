@@ -7,7 +7,13 @@ import { NodeKind, Prop, UiTree } from "../tree";
 import { computeLayout } from "../layout";
 import { FLOATS_PER_INSTANCE, paint } from "../paint";
 import { hitChain } from "../hit";
-import { Key, Mod, applyEditKey, charForKey } from "../keymap";
+import {
+	Key,
+	Mod,
+	applyEditKey,
+	charForKey,
+	normalizeEditKeyCode,
+} from "../keymap";
 import { createUiContext, ui, withUiContext, type UiContext } from "../ui";
 import { textInput } from "../textInput";
 
@@ -134,10 +140,46 @@ describe("keymap and edit reducer", () => {
 		expect(charForKey(Key.Left, 0)).toBe(null);
 	});
 
+	test("normalizes Windows virtual keys used by the edit reducer", () => {
+		expect(normalizeEditKeyCode(0x08, "win32")).toBe(Key.Backspace);
+		expect(normalizeEditKeyCode(0x0d, "win32")).toBe(Key.Return);
+		expect(normalizeEditKeyCode(0x25, "win32")).toBe(Key.Left);
+		expect(normalizeEditKeyCode(0x27, "win32")).toBe(Key.Right);
+		expect(normalizeEditKeyCode(0x41, "win32")).toBe(0x41);
+		expect(normalizeEditKeyCode(0x08, "darwin")).toBe(0x08);
+	});
+
 	test("inserts at the caret", () => {
 		const r = applyEditKey({ value: "ac", caret: 1 }, 11, 0); // 'b'
 		expect(r.value).toBe("abc");
 		expect(r.caret).toBe(2);
+	});
+
+	test("inserts native layout characters and advances by UTF-16 length", () => {
+		const accented = applyEditKey({ value: "", caret: 0 }, 0x41, 0, "å");
+		expect(accented).toMatchObject({ value: "å", caret: 1, handled: true });
+
+		const emoji = applyEditKey({ value: "", caret: 0 }, 0, 0, "😀");
+		expect(emoji).toMatchObject({ value: "😀", caret: 2, handled: true });
+	});
+
+	test("rejects modifier-bearing native characters for Ctrl shortcuts", () => {
+		expect(
+			applyEditKey({ value: "", caret: 0 }, 0x51, Mod.Ctrl | Mod.Alt, "@")
+				.value,
+		).toBe("");
+		expect(
+			applyEditKey({ value: "", caret: 0 }, 0x43, Mod.Ctrl, "c").value,
+		).toBe("");
+	});
+
+	test("explicit empty native chars suppress the macOS keycode fallback", () => {
+		// Win32 VK_1 is decimal 49, which is also the macOS Space keycode.
+		// Its keyDown must wait for the separate WM_CHAR("1") event.
+		const down = applyEditKey({ value: "", caret: 0 }, 0x31, 0, "");
+		expect(down).toMatchObject({ value: "", caret: 0, handled: false });
+		const text = applyEditKey(down, 0, 0, "1");
+		expect(text).toMatchObject({ value: "1", caret: 1, handled: true });
 	});
 
 	test("backspace variants", () => {
@@ -278,6 +320,45 @@ describe("focus and textInput", () => {
 
 		key({ keyCode: Key.Return, modifiers: 0, isRepeat: false });
 		expect(submitted).toBe("h");
+	});
+
+	test("textInput handles Win32 virtual keys when native chars are present", () => {
+		const [value, setValue] = signal("");
+		const { ctx } = build(() => {
+			textInput({ value, onInput: setValue, autofocus: true });
+		});
+		const key = ctx.handlers.get(ctx.focusedId())!.onKeyDown!;
+
+		key({ keyCode: 0x41, modifiers: 0, isRepeat: false, chars: "a" });
+		key({ keyCode: 0x42, modifiers: 0, isRepeat: false, chars: "b" });
+		expect(value()).toBe("ab");
+
+		key({ keyCode: 0x08, modifiers: 0, isRepeat: false });
+		expect(value()).toBe("a");
+	});
+
+	test("textInput accepts committed Windows text separately from keyDown", () => {
+		const [value, setValue] = signal("");
+		const { ctx } = build(() => {
+			textInput({ value, onInput: setValue, autofocus: true });
+		});
+		const handlers = ctx.handlers.get(ctx.focusedId())!;
+
+		// VK_1 collides with the macOS Space keycode. Empty chars keeps the
+		// keyDown non-textual, then the committed WM_CHAR inserts exactly once.
+		handlers.onKeyDown!({
+			keyCode: 0x31,
+			modifiers: 0,
+			isRepeat: false,
+			chars: "",
+		});
+		expect(value()).toBe("");
+		handlers.onTextInput!("1");
+		expect(value()).toBe("1");
+
+		handlers.onTextInput!("😀");
+		handlers.onTextInput!("@"); // committed AltGr text has no shortcut modifiers
+		expect(value()).toBe("1😀@");
 	});
 
 	test("unfocused input ignores nothing but stays inert visually", () => {

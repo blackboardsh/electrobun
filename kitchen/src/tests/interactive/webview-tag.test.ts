@@ -2,10 +2,21 @@
 
 import { defineTest } from "../../test-framework/types";
 import { BrowserView, BrowserWindow, BuildConfig } from "electrobun/main";
+import { resolveWebviewTagPlaygroundCapabilities } from "./webview-tag-capabilities";
 
-const usesLinuxSystemWebKit =
-  process.platform === "linux" &&
-  !BuildConfig.getSync().availableRenderers.includes("cef");
+const webviewTagCapabilities = resolveWebviewTagPlaygroundCapabilities(
+  process.platform,
+  BuildConfig.getSync().availableRenderers,
+);
+
+const unsupportedCapabilityNotes = [
+  ...(!webviewTagCapabilities.masks
+    ? ["Mask selectors are unavailable with this system webview renderer; the mask controls will be disabled"]
+    : []),
+  ...(!webviewTagCapabilities.passthrough
+    ? ["Passthrough is unavailable with this system webview renderer; the passthrough control will be disabled"]
+    : []),
+];
 
 export const webviewTagTests = [
   defineTest({
@@ -14,10 +25,9 @@ export const webviewTagTests = [
     description: "Test masks, passthrough, navigation, and inline HTML",
     instructions: [
       "A webview tag playground will open",
+      `Effective renderer: ${webviewTagCapabilities.renderer}`,
       "Test masks, passthrough, navigation, and more",
-      ...(usesLinuxSystemWebKit ? [
-        "Linux note: mask selectors are not supported by system WebKit webviews; verify the remaining controls only",
-      ] : []),
+      ...unsupportedCapabilityNotes,
       "Close the window when done to pass the test",
     ],
     interactive: true,
@@ -43,8 +53,8 @@ export const webviewTagTests = [
 
         winRef = new BrowserWindow({
           title: "Webview Tag Playground",
-          url: "views://playgrounds/webviewtag/index.html",
-          renderer: "cef",
+          url: `views://playgrounds/webviewtag/index.html?renderer=${webviewTagCapabilities.renderer}&platform=${process.platform}&masks=${webviewTagCapabilities.masks ? "1" : "0"}&passthrough=${webviewTagCapabilities.passthrough ? "1" : "0"}`,
+          renderer: webviewTagCapabilities.renderer,
           frame: { width: 800, height: 900, x: 100, y: 50 },
           rpc,
         });

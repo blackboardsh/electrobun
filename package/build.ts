@@ -1037,10 +1037,12 @@ async function createPlatformDistFolder() {
 	// Copy all files from dist/ to platform-specific folder
 	if (OS === "win") {
 		rmSync(platformDistDir, { recursive: true, force: true });
+		// Keep this on Cottontail's native tree-copy path. Its older JavaScript
+		// fallback rounded large NTFS directory IDs and could report a false ELOOP;
+		// this generated staging mirror does not need source timestamps.
 		cpSync("dist", platformDistDir, {
 			recursive: true,
 			force: true,
-			preserveTimestamps: true,
 		});
 	} else if (OS === "macos") {
 		rmSync(platformDistDir, { recursive: true, force: true });

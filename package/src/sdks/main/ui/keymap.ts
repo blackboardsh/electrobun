@@ -23,6 +23,27 @@ export const Key = {
 	Up: 126,
 } as const;
 
+const WINDOWS_EDIT_KEYS: Readonly<Record<number, number>> = {
+	0x08: Key.Backspace,
+	0x09: Key.Tab,
+	0x0d: Key.Return,
+	0x1b: Key.Escape,
+	0x20: Key.Space,
+	0x25: Key.Left,
+	0x26: Key.Up,
+	0x27: Key.Right,
+	0x28: Key.Down,
+};
+
+/** Normalize platform-native control keys for the portable edit reducer. */
+export function normalizeEditKeyCode(
+	keyCode: number,
+	platform: string,
+): number {
+	if (platform !== "win32") return keyCode;
+	return WINDOWS_EDIT_KEYS[keyCode] ?? keyCode;
+}
+
 // macOS virtual key code → [char, shiftedChar]
 const CHARS: Record<number, [string, string]> = {
 	0: ["a", "A"], 1: ["s", "S"], 2: ["d", "D"], 3: ["f", "F"],
@@ -109,21 +130,22 @@ export function applyEditKey(
 	// them; fall back to the built-in US map. Control characters and
 	// cmd/ctrl-chorded keys never insert.
 	let char: string | null = null;
-	if (
-		chars &&
-		chars.length > 0 &&
-		!(modifiers & (Mod.Cmd | Mod.Ctrl)) &&
-		// eslint-disable-next-line no-control-regex
-		!/[\u0000-\u001f\u007f\uf700-\uf8ff]/.test(chars)
-	) {
-		char = chars;
+	if (chars !== undefined) {
+		if (
+			chars.length > 0 &&
+			!(modifiers & (Mod.Cmd | Mod.Ctrl)) &&
+			// eslint-disable-next-line no-control-regex
+			!/[\u0000-\u001f\u007f\uf700-\uf8ff]/.test(chars)
+		) {
+			char = chars;
+		}
 	} else {
 		char = charForKey(keyCode, modifiers);
 	}
 	if (char !== null) {
 		return {
 			value: value.slice(0, caret) + char + value.slice(caret),
-			caret: caret + 1,
+			caret: caret + char.length,
 			handled: true,
 			submit: false,
 		};

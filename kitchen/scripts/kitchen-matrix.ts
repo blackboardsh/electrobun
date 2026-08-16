@@ -44,6 +44,17 @@ const workspaceExcludedEntries = new Set([
 ]);
 const workspaceSharedDirectoryEntries = new Set(["node_modules", "vendors"]);
 
+export function kitchenWorkspaceCopyOptions(
+	platform = process.platform,
+): Parameters<typeof cpSync>[2] {
+	// Older Cottontail releases used rounded NTFS directory IDs in the
+	// dereferencing fallback. Shared link-bearing entries are handled separately,
+	// so retain native tree copying here and avoid false ELOOP failures.
+	return platform === "win32"
+		? { recursive: true }
+		: { recursive: true, dereference: true };
+}
+
 export type KitchenVariantWorkspace = {
 	root: string;
 	buildOutput: string;
@@ -72,7 +83,7 @@ function mirrorWorkspaceEntry(
 				process.platform === "win32" ? "junction" : "dir",
 			);
 		} else {
-			cpSync(source, destination, { recursive: true, dereference: true });
+			cpSync(source, destination, kitchenWorkspaceCopyOptions());
 		}
 		return;
 	}

@@ -59,10 +59,14 @@ export const uiInputEventTests = [
 			"Visualizes the raw native pointer/key event stream and UI-level dispatch (hover, click, focus, drag, wheel).",
 		instructions: [
 			"A window titled 'UI input events' is open.",
-			"Move the mouse over it: the header should say 'native event path active' and show live coordinates.",
+			...(process.platform === "darwin"
+				? ["Move the mouse over it: the header should say 'native event path active' and show live coordinates."]
+				: process.platform === "win32"
+					? ["Pointer input uses the polling fallback; committed Windows text still appears in the event log."]
+					: ["This platform uses the polling fallback: UI hover/click should work, while the raw native-event pane remains empty."]),
 			"Hover and click the button: enter/leave/click entries appear (violet = UI dispatch, blue = raw pointer).",
 			"Drag the amber handle: the window moves; a still click logs instead.",
-			"Click the input and type (try your OS keyboard layout): green raw-key entries show keycodes AND the produced characters.",
+			"Click the input and type (try your OS keyboard layout): green entries show keycodes and committed text.",
 			"Two-finger scroll over the list: wheel events with deltas, and the list scrolls.",
 			"Close the input-event window when you are done.",
 		],
@@ -70,7 +74,11 @@ export const uiInputEventTests = [
 		timeout: 600000,
 		async run() {
 			const [pos, setPos] = signal({ x: 0, y: 0 });
-			const [pathLabel, setPathLabel] = signal("waiting for events...");
+			const [pathLabel, setPathLabel] = signal(
+				process.platform === "darwin"
+					? "waiting for native events..."
+					: "polling fallback active",
+			);
 			const [query, setQuery] = signal("");
 			const [lastChars, setLastChars] = signal("");
 			const [clicks, setClicks] = signal(0);
@@ -287,6 +295,14 @@ export const uiInputEventTests = [
 			};
 			events.on(`wgpu-pointer-${viewId}`, onRawPointer);
 			events.on(`wgpu-key-${viewId}`, onRawKey);
+			const onWindowText = (e: any) => {
+				const text = typeof e?.text === "string" ? e.text : "";
+				setLastChars(text);
+				push("key", "window text", `text=${JSON.stringify(text)}`);
+			};
+			if (process.platform === "win32") {
+				events.on(`window-text-${uiWindow.window.id}`, onWindowText);
+			}
 
 			const lifecycle = uiWindow as typeof uiWindow & {
 				readonly closed: Promise<void>;
@@ -297,6 +313,9 @@ export const uiInputEventTests = [
 			} finally {
 				events.off(`wgpu-pointer-${viewId}`, onRawPointer);
 				events.off(`wgpu-key-${viewId}`, onRawKey);
+				if (process.platform === "win32") {
+					events.off(`window-text-${uiWindow.window.id}`, onWindowText);
+				}
 				if (!lifecycle.isClosed()) uiWindow.dispose();
 			}
 		},

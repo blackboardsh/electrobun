@@ -57,6 +57,8 @@ export interface Handlers {
 	onPointerLeave?: (e: PointerEventInfo) => void;
 	/** Keys route to the focused node first; return true to stop bubbling. */
 	onKeyDown?: (e: KeyEventInfo) => boolean | void;
+	/** Committed platform text routes to the focused node and its ancestors. */
+	onTextInput?: (text: string) => boolean | void;
 }
 
 export interface BoxProps extends Handlers {
@@ -249,6 +251,7 @@ const HANDLER_KEYS = [
 	"onPointerEnter",
 	"onPointerLeave",
 	"onKeyDown",
+	"onTextInput",
 ] as const;
 
 function registerHandlers(ctx: UiContext, id: number, props: Handlers): void {
