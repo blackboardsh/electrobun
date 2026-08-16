@@ -1079,40 +1079,59 @@ func findTestByNameOrID(value string) (goTest, bool) {
 	return goTest{}, false
 }
 
-func runSelectedTests(webviewID uint32, interactiveOnly bool) string {
+func runSelectedTests(webviewID uint32, interactiveOnly bool) (string, int) {
 	results := []string{}
+	exitCode := 0
 	for _, test := range goTests {
 		if test.Interactive != interactiveOnly {
 			continue
 		}
-		results = append(results, executeSingleTestAndBroadcast(webviewID, test))
+		resultJSON, passed := executeSingleTestAndBroadcast(webviewID, test)
+		if !passed {
+			exitCode = 1
+		}
+		results = append(results, resultJSON)
 	}
 	payload := fmt.Sprintf(`{"results":[%s]}`, strings.Join(results, ","))
 	sendRPCMessage(webviewID, "allCompleted", payload)
-	return fmt.Sprintf("[%s]", strings.Join(results, ","))
+	return fmt.Sprintf("[%s]", strings.Join(results, ",")), exitCode
 }
 
 func startSingleTest(webviewID uint32, requestID uint64, respond bool, test goTest) {
 	go func() {
-		resultJSON := executeSingleTestAndBroadcast(webviewID, test)
+		resultJSON, passed := executeSingleTestAndBroadcast(webviewID, test)
 		if respond {
 			fmt.Fprintf(os.Stderr, "[kitchen go] sending runTest response #%d\n", requestID)
 			sendRPCResponseSuccess(webviewID, requestID, resultJSON)
 			fmt.Fprintf(os.Stderr, "[kitchen go] sent runTest response #%d\n", requestID)
+		} else if passed {
+			finishAutoRun(0)
+		} else {
+			finishAutoRun(1)
 		}
 	}()
 }
 
 func startAllTests(webviewID uint32, requestID uint64, respond bool, interactiveOnly bool) {
 	go func() {
-		results := runSelectedTests(webviewID, interactiveOnly)
+		results, exitCode := runSelectedTests(webviewID, interactiveOnly)
 		if respond {
 			sendRPCResponseSuccess(webviewID, requestID, results)
+		} else {
+			finishAutoRun(exitCode)
 		}
 	}()
 }
 
-func executeSingleTestAndBroadcast(webviewID uint32, test goTest) string {
+func finishAutoRun(exitCode int) {
+	fmt.Fprintf(os.Stderr, "[kitchen go] auto-run complete; exiting with code %d\n", exitCode)
+	// Give the final RPC message and console output time to reach the matrix
+	// runner before terminating the native process.
+	time.Sleep(500 * time.Millisecond)
+	state.core.ForceExit(exitCode)
+}
+
+func executeSingleTestAndBroadcast(webviewID uint32, test goTest) (string, bool) {
 	fmt.Fprintf(os.Stderr, "[kitchen go] running test: %s\n", test.Name)
 	sendRPCMessage(webviewID, "testStarted", fmt.Sprintf(`{"testId":%s,"name":%s}`, electrobun.JsonStringLiteral(test.ID), electrobun.JsonStringLiteral(test.Name)))
 	sendTestLog(webviewID, test.ID, "Running Go native test")
@@ -1123,7 +1142,7 @@ func executeSingleTestAndBroadcast(webviewID uint32, test goTest) string {
 	resultJSON := testResultJSON(test, result)
 	sendRPCMessage(webviewID, "testCompleted", fmt.Sprintf(`{"testId":%s,"result":%s}`, electrobun.JsonStringLiteral(test.ID), resultJSON))
 	fmt.Fprintf(os.Stderr, "[kitchen go] completed test: %s -> %s\n", test.Name, result.Status)
-	return resultJSON
+	return resultJSON, result.Status == "passed"
 }
 
 func runGoTest(test goTest) testRunResult {
@@ -2996,6 +3015,7 @@ func maybeAutoRunAfterHandshake(webviewID uint32) {
 			startSingleTest(webviewID, 0, false, test)
 		} else {
 			fmt.Fprintf(os.Stderr, "[kitchen go] failed to find auto-run test: %s\n", state.autoRunTestName)
+			finishAutoRun(1)
 		}
 		return
 	}

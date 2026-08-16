@@ -1416,38 +1416,55 @@ fn find_test_by_name_or_id(value: &str) -> Option<RustTest> {
         .find(|test| test.id == value || test.name == value)
 }
 
-fn run_selected_tests(webview_id: u32, interactive_only: bool) -> String {
+fn run_selected_tests(webview_id: u32, interactive_only: bool) -> (String, i32) {
     let mut results = Vec::new();
+    let mut exit_code = 0;
     for test in RUST_TESTS {
         if test.interactive != interactive_only {
             continue;
         }
-        results.push(execute_single_test_and_broadcast(webview_id, *test));
+        let (result_json, passed) = execute_single_test_and_broadcast(webview_id, *test);
+        if !passed {
+            exit_code = 1;
+        }
+        results.push(result_json);
     }
     let payload = format!("{{\"results\":[{}]}}", results.join(","));
     send_rpc_message(webview_id, "allCompleted", &payload);
-    format!("[{}]", results.join(","))
+    (format!("[{}]", results.join(",")), exit_code)
 }
 
 fn start_single_test(webview_id: u32, request_id: Option<u64>, test: RustTest) {
     thread::spawn(move || {
-        let result_json = execute_single_test_and_broadcast(webview_id, test);
+        let (result_json, passed) = execute_single_test_and_broadcast(webview_id, test);
         if let Some(request_id) = request_id {
             send_rpc_response_success(webview_id, request_id, &result_json);
+        } else {
+            finish_auto_run(if passed { 0 } else { 1 });
         }
     });
 }
 
 fn start_all_tests(webview_id: u32, request_id: Option<u64>, interactive_only: bool) {
     thread::spawn(move || {
-        let results = run_selected_tests(webview_id, interactive_only);
+        let (results, exit_code) = run_selected_tests(webview_id, interactive_only);
         if let Some(request_id) = request_id {
             send_rpc_response_success(webview_id, request_id, &results);
+        } else {
+            finish_auto_run(exit_code);
         }
     });
 }
 
-fn execute_single_test_and_broadcast(webview_id: u32, test: RustTest) -> String {
+fn finish_auto_run(exit_code: i32) -> ! {
+    eprintln!("[kitchen rust] auto-run complete; exiting with code {exit_code}");
+    // Give the final RPC message and console output time to reach the matrix
+    // runner before terminating the native process.
+    thread::sleep(Duration::from_millis(500));
+    app_state().core.force_exit(exit_code)
+}
+
+fn execute_single_test_and_broadcast(webview_id: u32, test: RustTest) -> (String, bool) {
     eprintln!("[kitchen rust] running test: {}", test.name);
     send_rpc_message(
         webview_id,
@@ -1479,7 +1496,7 @@ fn execute_single_test_and_broadcast(webview_id: u32, test: RustTest) -> String 
         "[kitchen rust] completed test: {} -> {}",
         test.name, result.status
     );
-    result_json
+    (result_json, result.status == "passed")
 }
 
 fn run_rust_test(test: RustTest) -> TestRunResult {
@@ -3721,6 +3738,7 @@ fn maybe_auto_run_after_handshake(webview_id: u32) {
             start_single_test(webview_id, None, test);
         } else {
             eprintln!("[kitchen rust] failed to find auto-run test: {test_name}");
+            finish_auto_run(1);
         }
         return;
     }

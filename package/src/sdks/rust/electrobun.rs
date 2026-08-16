@@ -468,13 +468,12 @@ impl Paths {
         let pictures = user_dir(&home, "Pictures");
         let music = user_dir(&home, "Music");
         let videos = user_dir(&home, "Videos");
-        let scoped = app_scoped_name(app_info);
 
         Ok(Self {
             home,
-            user_data: join_path(&app_data, &scoped),
-            user_cache: join_path(&cache, &scoped),
-            user_logs: join_path(&logs, &scoped),
+            user_data: app_scoped_dir(&app_data, app_info),
+            user_cache: app_scoped_dir(&cache, app_info),
+            user_logs: app_scoped_dir(&logs, app_info),
             app_data,
             config,
             cache,
@@ -2538,7 +2537,7 @@ fn app_data_dir(home: &str) -> String {
     if cfg!(target_os = "macos") {
         join_path(home, "Library/Application Support")
     } else if cfg!(windows) {
-        std::env::var("APPDATA").unwrap_or_else(|_| join_path(home, "AppData/Roaming"))
+        std::env::var("LOCALAPPDATA").unwrap_or_else(|_| join_path(home, "AppData/Local"))
     } else {
         std::env::var("XDG_DATA_HOME").unwrap_or_else(|_| join_path(home, ".local/share"))
     }
@@ -2582,10 +2581,9 @@ fn join_path(base: &str, child: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-fn app_scoped_name(app_info: &AppInfo) -> String {
-    if app_info.identifier.is_empty() {
-        app_info.name.clone()
-    } else {
-        app_info.identifier.clone()
+fn app_scoped_dir(base: &str, app_info: &AppInfo) -> String {
+    if app_info.identifier.is_empty() || app_info.channel.is_empty() {
+        return base.to_string();
     }
+    join_path(&join_path(base, &app_info.identifier), &app_info.channel)
 }

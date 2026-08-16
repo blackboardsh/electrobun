@@ -7,6 +7,7 @@ package main
 
 import "base:intrinsics"
 import "base:runtime"
+import "core:c"
 import "core:encoding/json"
 import "core:fmt"
 import "core:math"
@@ -4905,12 +4906,31 @@ runSelectedTests :: proc(webview_id: u32, interactive_only: bool) -> [dynamic]Te
 	return results
 }
 
+autoRunExitCode :: proc(results: []TestResult) -> c.int {
+	for result in results {
+		if result.status == "failed" {
+			return 1
+		}
+	}
+	return 0
+}
+
+finishAutoRun :: proc(exit_code: c.int) -> ! {
+	fmt.eprintf("[kitchen odin] auto-run complete; exiting with code %d\n", exit_code)
+	// Allow the final test result and console output to reach the runner before
+	// the native event loop is shut down.
+	sleepMs(500)
+	electrobun.quitGracefully(appState().core, exit_code)
+}
+
 runSingleTestJob :: proc(job: ^SingleTestJob) {
 	defer free(job)
 
 	result := executeSingleTestAndBroadcast(job.webview_id, job.odin_test)
 	if request_id, has_request_id := job.request_id.?; has_request_id {
 		sendRpcResponseSuccess(job.webview_id, request_id, result)
+	} else {
+		finishAutoRun(autoRunExitCode([]TestResult{result}))
 	}
 }
 
@@ -4921,6 +4941,8 @@ runAllTestsJob :: proc(job: ^AllTestsJob) {
 	defer delete(results)
 	if request_id, has_request_id := job.request_id.?; has_request_id {
 		sendRpcResponseSuccess(job.webview_id, request_id, results[:])
+	} else {
+		finishAutoRun(autoRunExitCode(results[:]))
 	}
 }
 
@@ -5009,16 +5031,21 @@ maybeAutoRunAfterHandshake :: proc(webview_id: u32) {
 	if has_auto_run_test_name {
 		fmt.eprintf("[kitchen odin] auto-running test: %s\n", auto_run_test_name)
 		if auto_run_test_found {
-			_ = startSingleTest(webview_id, nil, auto_run_test)
+			if !startSingleTest(webview_id, nil, auto_run_test) {
+				finishAutoRun(1)
+			}
 		} else {
 			fmt.eprintf("[kitchen odin] failed to find auto-run test: %s\n", auto_run_test_name)
+			finishAutoRun(1)
 		}
 		return
 	}
 
 	if auto_run_all {
 		fmt.eprintf("[kitchen odin] auto-running all automated tests\n")
-		_ = startAllTests(webview_id, nil, false)
+		if !startAllTests(webview_id, nil, false) {
+			finishAutoRun(1)
+		}
 	}
 }
 

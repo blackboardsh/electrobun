@@ -4074,12 +4074,31 @@ fn runSelectedTests(webview_id: u32, interactive_only: bool) [zig_tests.len]Test
     return results;
 }
 
+fn autoRunExitCode(results: []const TestResult) c_int {
+    for (results) |result| {
+        if (std.mem.eql(u8, result.status, "failed")) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+fn finishAutoRun(exit_code: c_int) noreturn {
+    std.debug.print("[kitchen zig] auto-run complete; exiting with code {d}\n", .{exit_code});
+    // Allow the final test result and console output to reach the runner before
+    // the native event loop is shut down.
+    sleepMs(500);
+    appState().core.quitGracefully(exit_code);
+}
+
 fn runSingleTestJob(job: *SingleTestJob) void {
     defer std.heap.c_allocator.destroy(job);
 
     const result = executeSingleTestAndBroadcast(job.webview_id, job.zig_test);
     if (job.request_id) |request_id| {
         sendRpcResponseSuccess(job.webview_id, request_id, result);
+    } else {
+        finishAutoRun(autoRunExitCode(&.{result}));
     }
 }
 
@@ -4095,6 +4114,8 @@ fn runAllTestsJob(job: *AllTestsJob) void {
     }
     if (job.request_id) |request_id| {
         sendRpcResponseSuccess(job.webview_id, request_id, results[0..count]);
+    } else {
+        finishAutoRun(autoRunExitCode(results[0..count]));
     }
 }
 
@@ -4178,16 +4199,21 @@ fn maybeAutoRunAfterHandshake(webview_id: u32) void {
     if (auto_run_test_name) |test_name| {
         std.debug.print("[kitchen zig] auto-running test: {s}\n", .{test_name});
         if (auto_run_test) |zig_test| {
-            _ = startSingleTest(webview_id, null, zig_test);
+            if (!startSingleTest(webview_id, null, zig_test)) {
+                finishAutoRun(1);
+            }
         } else {
             std.debug.print("[kitchen zig] failed to find auto-run test: {s}\n", .{test_name});
+            finishAutoRun(1);
         }
         return;
     }
 
     if (auto_run_all) {
         std.debug.print("[kitchen zig] auto-running all automated tests\n", .{});
-        _ = startAllTests(webview_id, null, false);
+        if (!startAllTests(webview_id, null, false)) {
+            finishAutoRun(1);
+        }
     }
 }
 

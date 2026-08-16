@@ -1896,10 +1896,6 @@ func ResolvePaths(appInfo AppInfo) (Paths, error) {
 	config := configDir(home)
 	cache := cacheDir(home)
 	logs := logsDir(home)
-	scoped := appInfo.Identifier
-	if scoped == "" {
-		scoped = appInfo.Name
-	}
 	return Paths{
 		Home:      home,
 		AppData:   appData,
@@ -1913,10 +1909,17 @@ func ResolvePaths(appInfo AppInfo) (Paths, error) {
 		Pictures:  filepath.Join(home, "Pictures"),
 		Music:     filepath.Join(home, "Music"),
 		Videos:    filepath.Join(home, "Videos"),
-		UserData:  filepath.Join(appData, scoped),
-		UserCache: filepath.Join(cache, scoped),
-		UserLogs:  filepath.Join(logs, scoped),
+		UserData:  appScopedDir(appData, appInfo),
+		UserCache: appScopedDir(cache, appInfo),
+		UserLogs:  appScopedDir(logs, appInfo),
 	}, nil
+}
+
+func appScopedDir(base string, appInfo AppInfo) string {
+	if appInfo.Identifier == "" || appInfo.Channel == "" {
+		return base
+	}
+	return filepath.Join(base, appInfo.Identifier, appInfo.Channel)
 }
 
 func AllowAllNavigation(_ uint32, _ string) uint32 {
@@ -2078,10 +2081,10 @@ func appDataDir(home string) string {
 	case "darwin":
 		return filepath.Join(home, "Library", "Application Support")
 	case "windows":
-		if value := os.Getenv("APPDATA"); value != "" {
+		if value := os.Getenv("LOCALAPPDATA"); value != "" {
 			return value
 		}
-		return filepath.Join(home, "AppData", "Roaming")
+		return filepath.Join(home, "AppData", "Local")
 	default:
 		if value := os.Getenv("XDG_DATA_HOME"); value != "" {
 			return value
