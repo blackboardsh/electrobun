@@ -11,7 +11,7 @@ it is, this is the place.
 The short version: Hutch does everything at build time and ships nothing;
 your main process owns the app at runtime; webviews render UI in isolation
 and talk to the main process over bridges; and distribution is a small
-self-extractor plus binary-diff updates served from static storage.
+self-extractor plus verified transactional updates served from static storage.
 
 ## Build-time architecture
 
@@ -126,11 +126,12 @@ for the artifact layout.
 
 ## Updates
 
-Updates are designed around a simple idea: users should download only what
-changed. The installed app compares its local hash with hosted update
-metadata, tries a binary patch from the installed hash to the current
-release, verifies the result, and replaces the bundle. If no valid patch path
-exists, it falls back to downloading the compressed full archive.
+The installed app compares its local hash with hosted update metadata,
+downloads the named compressed archive, and verifies its size and SHA-256. A
+native post-exit helper then validates the bundle identity and replaces the app
+with rollback protection before relaunching it. The same transaction is used on
+Windows, macOS, and Linux; Windows uses Task Scheduler only to run the helper
+after locked processes exit.
 
 There's no update server to run — static object storage is sufficient. The
 application decides when to check, download, install, and relaunch through

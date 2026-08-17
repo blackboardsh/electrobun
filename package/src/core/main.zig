@@ -2,6 +2,39 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const allocator = std.heap.c_allocator;
+const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
+
+fn processEnviron() std.process.Environ {
+    return switch (builtin.os.tag) {
+        .windows => .{ .block = .global },
+        else => blk: {
+            const c_environ = std.c.environ;
+            var count: usize = 0;
+            while (c_environ[count] != null) : (count += 1) {}
+            break :blk .{ .block = .{ .slice = @ptrCast(c_environ[0..count :null]) } };
+        },
+    };
+}
+
+fn isSafeInstallRootName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 256 or
+        std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f or byte == '/' or byte == '\\') return false;
+    }
+    if (builtin.os.tag == .windows) {
+        if (value[value.len - 1] == ' ' or value[value.len - 1] == '.') return false;
+        if (std.mem.indexOfAny(u8, value, "\"%*:<>?|") != null) return false;
+    }
+    return true;
+}
+
+fn installRootNameOverride() ?[:0]u8 {
+    const value = processEnviron().getAlloc(allocator, install_root_name_environment_variable) catch return null;
+    defer allocator.free(value);
+    if (!isSafeInstallRootName(value)) return null;
+    return allocator.dupeZ(u8, value) catch null;
+}
 
 // Lazily-initialized event-loop-free Io implementation. The library keeps its
 // C-ABI surface unchanged, so `std.Io` is not threaded through call sites.
@@ -2343,9 +2376,26 @@ export fn electrobun_core_run_main_thread(
         return 1;
     }
 
-    native_wrapper_state.start_event_loop(identifier, name, channel);
+    const install_root_name = installRootNameOverride();
+    defer if (install_root_name) |value| allocator.free(value);
+    native_wrapper_state.start_event_loop(
+        identifier,
+        name,
+        if (install_root_name) |value| value.ptr else channel,
+    );
     native_wrapper_state.force_exit(exit_code);
     return 0;
+}
+
+test "native profile root override accepts only a safe root leaf" {
+    try std.testing.expect(isSafeInstallRootName("stable"));
+    try std.testing.expect(isSafeInstallRootName("Legacy App"));
+    const invalid = [_][]const u8{ "", ".", "..", "nested/root", "nested\\root", "line\nbreak" };
+    for (invalid) |value| try std.testing.expect(!isSafeInstallRootName(value));
+    if (builtin.os.tag == .windows) {
+        try std.testing.expect(!isSafeInstallRootName("bad:name"));
+        try std.testing.expect(!isSafeInstallRootName("trailing."));
+    }
 }
 
 export fn runNativeEventLoopTick(timeout_ms: c_int) void {

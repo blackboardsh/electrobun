@@ -47,6 +47,7 @@ assert.equal(
 );
 assert.equal(
 	focusedTest === undefined ||
+		focusedTest === "bootstrap" ||
 		focusedTest === "update-refresh" ||
 		focusedTest === "interactive" ||
 		focusedTest === "installer-ui",
@@ -1582,6 +1583,40 @@ function runUpdateRefreshTest(extractor) {
 	resetChannel("production");
 }
 
+function runBootstrapInstallTest() {
+	console.log("Testing first-v2-launch install bootstrap...");
+	const installation = install("production");
+	const paths = installation.paths;
+	rmSync(paths.manager, { force: true });
+	rmSync(paths.manifest, { force: true });
+	rmSync(paths.desktopShortcut, { force: true });
+	rmSync(paths.startShortcut, { force: true });
+	deleteRegistry("production");
+	assert.equal(pathExists(paths.manager), false);
+	assert.equal(pathExists(paths.manifest), false);
+	assert.equal(pathExists(paths.desktopShortcut), false);
+	assert.equal(pathExists(paths.startShortcut), false);
+	assert.equal(registryExists("production"), false);
+	runPowerShell(
+		"$psi = [Diagnostics.ProcessStartInfo]::new(); " +
+			"$psi.FileName = " +
+			psLiteral(paths.packagedManager) +
+			"; $psi.WorkingDirectory = " +
+			psLiteral(paths.root) +
+			"; $psi.UseShellExecute = $false; " +
+			"$psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true; " +
+			"$psi.Arguments = " +
+			psLiteral(`--bootstrap-install "${paths.root}" --quiet`) +
+			"; " +
+			"$p = [Diagnostics.Process]::Start($psi); " +
+			"$stdout = $p.StandardOutput.ReadToEnd(); $stderr = $p.StandardError.ReadToEnd(); " +
+			"$p.WaitForExit(); [Console]::Out.Write($stdout); [Console]::Error.Write($stderr); exit $p.ExitCode",
+	);
+	assertInstalled("production", setups.get("production"));
+	runManager("production", ["--quiet", "--delete-data"]);
+	assertDataRemoved("production");
+}
+
 function runNonceRaceTest() {
 	console.log("Testing deterministic stale-worker nonce protection...");
 	const first = install("production");
@@ -1966,7 +2001,9 @@ try {
 
 	buildSetup("production", extractor, launcher, zigZstd);
 	buildSetup("canary", extractor, launcher, zigZstd);
-	if (focusedTest === "update-refresh") {
+	if (focusedTest === "bootstrap") {
+		runBootstrapInstallTest();
+	} else if (focusedTest === "update-refresh") {
 		runUpdateRefreshTest(extractor);
 	} else if (focusedTest === "interactive") {
 		runInteractiveTests();
@@ -1974,6 +2011,7 @@ try {
 		automateInstallerUi("production");
 	} else {
 		runStrictCliAndCleanupTests();
+		runBootstrapInstallTest();
 		runChannelIsolationTests();
 		runDamagedAppTest();
 		runLocationAndJunctionSafetyTests();
@@ -1993,7 +2031,9 @@ try {
 	assertNoNewCleanupArtifacts();
 
 	console.log(
-		(focusedTest === "update-refresh"
+		(focusedTest === "bootstrap"
+			? "Windows first-v2-launch bootstrap integration passed"
+			: focusedTest === "update-refresh"
 			? "Windows uninstaller focused update-refresh integration passed"
 			: focusedTest === "interactive"
 				? "Windows uninstaller focused interactive integration passed"

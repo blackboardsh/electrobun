@@ -125,6 +125,13 @@ production-linux-x64-MyCoolApp-Setup.tar.gz
 
 The leading channel/platform/architecture prefix is always retained.
 
+Production builds additionally copy the update JSON, compressed update archive,
+and any generated patch under a `stable-<os>-<arch>-` prefix. Those aliases are
+for compatible Electrobun v1.18.1+ clients, which used `stable` as the
+production channel name; installer artifacts are not duplicated. Keep the app
+name, identifier, and existing update base URL unchanged for that bridge release;
+see [Updates](/electrobun/guides/updates/).
+
 ## Delta Patches
 
 When `release.generatePatch` is true and `release.baseUrl` is present, Hutch:
@@ -139,10 +146,9 @@ invalid previous artifact also skips patch generation while preserving the
 full update archive. Set `generatePatch: false` for an intentional build that
 must not consult the release host.
 
-Keep previously published patch files when uploading a new release. The latest
-metadata and full archive can be replaced, but users on an older hash need the
-patch named for that hash. If a patch path is unavailable, the Updater falls
-back to the full archive.
+Patch generation is available for custom distribution pipelines. The built-in
+Electrobun 2.0 updater downloads the full archive named in the update metadata,
+then verifies its declared size and SHA-256 before applying it.
 
 See [Updater](/electrobun/apis/updater) for application-side checks, downloads,
 and installation.

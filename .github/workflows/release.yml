@@ -246,6 +246,11 @@ jobs:
         run: hutch test:windows-uninstaller
         working-directory: package
 
+      - name: Test application updater lifecycle
+        if: matrix.platform != 'linux' || matrix.arch == 'x64'
+        run: node scripts/test-updater-lifecycle.mjs
+        working-directory: package
+
       - name: Upload core artifact
         uses: actions/upload-artifact@v6
         with:

@@ -6,6 +6,8 @@ const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
 // Initialized at the top of main(). Test-only helpers do not touch these.
 var g_io: std.Io = undefined;
 var g_environ_map: *std.process.Environ.Map = undefined;
+var g_bootstrap_stage: []const u8 = "command dispatch";
+var g_bootstrap_trace_enabled = false;
 var g_installer_failure_presented = false;
 
 fn getEnvOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
@@ -38,6 +40,17 @@ const MACOS_UNINSTALL_EXE_NAME = "uninstall";
 const MACOS_UNINSTALL_MANIFEST_NAME = ".electrobun-uninstall.json";
 const MACOS_UNINSTALL_MANIFEST_VERSION: u32 = 1;
 const MACOS_DATA_PATH_VERSION: u32 = 1;
+const APPLY_UPDATE_PLAN_SCHEMA_VERSION: u32 = 1;
+const APPLY_UPDATE_RESULT_SCHEMA_VERSION: u32 = 1;
+const APPLY_UPDATE_TRANSACTION_HEX_LENGTH: usize = 32;
+const APPLY_UPDATE_PLAN_PREFIX = ".electrobun-update-";
+const APPLY_UPDATE_PLAN_SUFFIX = ".json";
+const APPLY_UPDATE_RESULT_SUFFIX = ".result.json";
+const APPLY_UPDATE_HELPER_PREFIX = "electrobun-update-";
+const APPLY_UPDATE_PREPARED_FILE = ".electrobun-prepared-update.json";
+const APPLY_UPDATE_PARENT_WAIT_MILLISECONDS: u64 = 120_000;
+const APPLY_UPDATE_WINDOWS_RENAME_RETRIES: usize = 60;
+const APPLY_UPDATE_WINDOWS_RENAME_RETRY_MILLISECONDS: u64 = 500;
 
 const macos_uninstall_ui = if (builtin.os.tag == .macos) struct {
     extern fn electrobun_show_uninstall_prompt(app_name_utf8: [*:0]const u8) c_int;
@@ -53,14 +66,29 @@ const windows_uninstall_sync = if (builtin.os.tag == .windows) struct {
         name: [*:0]const u16,
     ) callconv(.winapi) ?win.HANDLE;
     extern "kernel32" fn WaitForSingleObject(handle: win.HANDLE, milliseconds: win.DWORD) callconv(.winapi) win.DWORD;
+    extern "kernel32" fn OpenProcess(
+        desired_access: win.DWORD,
+        inherit_handle: win.BOOL,
+        process_id: win.DWORD,
+    ) callconv(.winapi) ?win.HANDLE;
     extern "kernel32" fn ReleaseMutex(handle: win.HANDLE) callconv(.winapi) win.BOOL;
     extern "kernel32" fn CloseHandle(handle: win.HANDLE) callconv(.winapi) win.BOOL;
+    extern "kernel32" fn GetLastError() callconv(.winapi) win.DWORD;
+    extern "kernel32" fn MoveFileExW(
+        existing_file_name: [*:0]const u16,
+        new_file_name: ?[*:0]const u16,
+        flags: win.DWORD,
+    ) callconv(.winapi) win.BOOL;
 
     const wait_object_0: win.DWORD = 0x00000000;
     const wait_abandoned: win.DWORD = 0x00000080;
     const wait_timeout: win.DWORD = 0x00000102;
     const no_wait: win.DWORD = 0;
     const infinite: win.DWORD = 0xffffffff;
+    const synchronize: win.DWORD = 0x00100000;
+    const wait_failed: win.DWORD = 0xffffffff;
+    const error_invalid_parameter: win.DWORD = 87;
+    const movefile_delay_until_reboot: win.DWORD = 0x00000004;
 } else struct {};
 
 const windows_uninstall_ui = if (builtin.os.tag == .windows) struct {
@@ -115,7 +143,172 @@ const AppMetadata = struct {
     name: []const u8,
     channel: []const u8,
     hash: ?[]const u8 = null,
+    install_root_name: ?[]const u8 = null,
 };
+
+const BootstrapMetadata = struct {
+    identifier: []u8,
+    name: []u8,
+    channel: []u8,
+    hash: ?[]u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.identifier);
+        allocator.free(self.name);
+        allocator.free(self.channel);
+        if (self.hash) |hash| allocator.free(hash);
+        self.* = undefined;
+    }
+
+    fn appMetadata(self: *const @This(), install_root_name: []const u8) AppMetadata {
+        return .{
+            .identifier = self.identifier,
+            .name = self.name,
+            .channel = self.channel,
+            .hash = self.hash,
+            .install_root_name = install_root_name,
+        };
+    }
+};
+
+fn parseBootstrapMetadata(
+    allocator: std.mem.Allocator,
+    contents: []const u8,
+) !BootstrapMetadata {
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            version: []const u8,
+            identifier: []const u8,
+            channel: []const u8,
+            name: []const u8,
+            displayName: ?[]const u8 = null,
+            hash: ?[]const u8 = null,
+        },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+
+    const display_name = parsed.value.displayName orelse parsed.value.name;
+    const valid_component = if (builtin.os.tag == .windows)
+        isSafeWindowsComponent
+    else if (builtin.os.tag == .linux)
+        isSafeLinuxComponent
+    else
+        isSafeMacosComponent;
+    const valid_display_name = if (builtin.os.tag == .windows)
+        isSafeWindowsDisplayName(display_name)
+    else if (builtin.os.tag == .linux)
+        isSafeLinuxDisplayName(display_name)
+    else
+        isSafeMacosDisplayName(display_name);
+    if (parsed.value.version.len == 0 or
+        !valid_component(parsed.value.identifier) or
+        !valid_component(parsed.value.channel) or
+        !valid_display_name or
+        (parsed.value.hash != null and !valid_component(parsed.value.hash.?)))
+    {
+        return error.InvalidInstalledIdentity;
+    }
+
+    const identifier = try allocator.dupe(u8, parsed.value.identifier);
+    errdefer allocator.free(identifier);
+    const name = try allocator.dupe(u8, display_name);
+    errdefer allocator.free(name);
+    const channel = try allocator.dupe(u8, parsed.value.channel);
+    errdefer allocator.free(channel);
+    return .{
+        .identifier = identifier,
+        .name = name,
+        .channel = channel,
+        .hash = if (parsed.value.hash) |hash| try allocator.dupe(u8, hash) else null,
+    };
+}
+
+fn readBootstrapMetadata(
+    allocator: std.mem.Allocator,
+    version_path: []const u8,
+) !BootstrapMetadata {
+    var file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer file.close(g_io);
+    prepareNoFollowFileForRead(&file);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &read_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |other| return other,
+    };
+    defer allocator.free(contents);
+    return parseBootstrapMetadata(allocator, contents);
+}
+
+const ApplyUpdatePlan = struct {
+    schema_version: u32,
+    transaction_id: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+    platform: []const u8,
+    arch: []const u8,
+    version: []const u8,
+    hash: []const u8,
+    channel_root: []const u8,
+    app_bundle_path: []const u8,
+    retained_tar_path: []const u8,
+    parent_pid: u32,
+    result_path: []const u8,
+};
+
+const ApplyUpdatePreparedRecord = struct {
+    schema_version: u32,
+    identifier: []const u8,
+    channel: []const u8,
+    platform: []const u8,
+    arch: []const u8,
+    version: []const u8,
+    hash: []const u8,
+    retained_tar_path: []const u8,
+};
+
+const ApplyUpdatePhase = enum {
+    validating,
+    waiting_for_parent,
+    extracting,
+    validating_payload,
+    swapping,
+    integrating,
+    launching,
+    complete,
+};
+
+const ApplyUpdateResult = struct {
+    schema_version: u32 = APPLY_UPDATE_RESULT_SCHEMA_VERSION,
+    transaction_id: []const u8,
+    success: bool,
+    phase: []const u8,
+    message: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+    version: []const u8,
+    hash: []const u8,
+};
+
+const StagedUpdateIdentity = struct {
+    version: []const u8,
+    hash: []const u8,
+    channel: []const u8,
+    identifier: []const u8,
+    displayName: []const u8,
+};
+
+fn installedChannelMatches(actual: []const u8, expected: []const u8) bool {
+    return std.mem.eql(u8, actual, expected) or
+        (std.mem.eql(u8, actual, "stable") and
+            std.mem.eql(u8, expected, "production"));
+}
 
 const EmbeddedMetadataJson = struct {
     identifier: []const u8,
@@ -132,6 +325,7 @@ const WindowsUninstallManifest = struct {
     channel: []const u8,
     desktop_shortcut: []const u8,
     start_menu_shortcut: []const u8,
+    install_root_name: ?[]const u8 = null,
     // Missing on manifests written by the first Windows uninstaller. A null
     // value is the legacy spelling of the version-1 managed-path policy.
     data_path_versions: ?[]const u32 = null,
@@ -144,6 +338,7 @@ const WindowsUninstallMode = enum {
 
 const WindowsManagerCommand = union(enum) {
     uninstall: ?WindowsUninstallMode,
+    bootstrap_install: []const u8,
     refresh_registration,
     refresh_registration_from_update: []const u8,
     cleanup_uninstaller: struct {
@@ -190,6 +385,15 @@ fn parseWindowsManagerCommand(args: []const []const u8) !WindowsManagerCommand {
                 error.InvalidArguments,
             else => error.InvalidArguments,
         };
+    }
+    if (std.mem.eql(u8, args[0], "--bootstrap-install")) {
+        if (args.len != 3 or
+            args[1].len == 0 or
+            !std.mem.eql(u8, args[2], "--quiet"))
+        {
+            return error.InvalidArguments;
+        }
+        return .{ .bootstrap_install = args[1] };
     }
     if (std.mem.eql(u8, args[0], "--refresh-registration-from-update")) {
         if (args.len != 3 or
@@ -244,6 +448,7 @@ const LinuxUninstallManifest = struct {
     home: ?[]const u8 = null,
     xdg_cache_home: ?[]const u8 = null,
     xdg_state_home: ?[]const u8 = null,
+    install_root_name: ?[]const u8 = null,
 };
 
 const LinuxUninstallMode = enum {
@@ -253,6 +458,7 @@ const LinuxUninstallMode = enum {
 
 const LinuxManagerCommand = union(enum) {
     uninstall: ?LinuxUninstallMode,
+    bootstrap_install: []const u8,
     refresh_metadata,
 };
 
@@ -289,6 +495,15 @@ fn parseLinuxManagerCommand(args: []const []const u8) !LinuxManagerCommand {
     {
         return .refresh_metadata;
     }
+    if (std.mem.eql(u8, args[0], "--bootstrap-install")) {
+        if (args.len != 3 or
+            args[1].len == 0 or
+            !std.mem.eql(u8, args[2], "--quiet"))
+        {
+            return error.InvalidArguments;
+        }
+        return .{ .bootstrap_install = args[1] };
+    }
     return error.InvalidArguments;
 }
 
@@ -302,6 +517,7 @@ const MacosUninstallManifest = struct {
     app_bundle_path: []const u8,
     app_path_token: []const u8,
     data_path_versions: []const u32,
+    install_root_name: ?[]const u8 = null,
 };
 
 const MacosUninstallMode = enum {
@@ -311,6 +527,7 @@ const MacosUninstallMode = enum {
 
 const MacosManagerCommand = union(enum) {
     uninstall: ?MacosUninstallMode,
+    bootstrap_install: []const u8,
     refresh_metadata,
 };
 
@@ -346,6 +563,15 @@ fn parseMacosManagerCommand(args: []const []const u8) !MacosManagerCommand {
         std.mem.eql(u8, args[1], "--quiet"))
     {
         return .refresh_metadata;
+    }
+    if (std.mem.eql(u8, args[0], "--bootstrap-install")) {
+        if (args.len != 3 or
+            args[1].len == 0 or
+            !std.mem.eql(u8, args[2], "--quiet"))
+        {
+            return error.InvalidArguments;
+        }
+        return .{ .bootstrap_install = args[1] };
     }
     return error.InvalidArguments;
 }
@@ -1558,17 +1784,29 @@ fn streamZstdToTar(
     progress.update(.decompressing, compressed_size, compressed_size);
 }
 
-fn extractTarFile(tar_path: []const u8, extract_dir: []const u8, progress: *ProgressIndicator) !void {
+fn extractTarFileOptionalProgress(
+    tar_path: []const u8,
+    extract_dir: []const u8,
+    progress: ?*ProgressIndicator,
+) !void {
     const tar_file = try std.Io.Dir.cwd().openFile(g_io, tar_path, .{});
     defer tar_file.close(g_io);
     var reader_buffer: [64 * 1024]u8 = undefined;
     var reader = tar_file.reader(g_io, &reader_buffer);
     const tar_size = try reader.getSize();
-    progress.update(.extracting, 0, tar_size);
+    if (progress) |reporter| reporter.update(.extracting, 0, tar_size);
     var extraction_dir = try std.Io.Dir.cwd().openDir(g_io, extract_dir, .{});
     defer extraction_dir.close(g_io);
     try pipeToFileSystemWithProgress(g_io, extraction_dir, &reader.interface, progress, tar_size);
-    progress.update(.extracting, tar_size, tar_size);
+    if (progress) |reporter| reporter.update(.extracting, tar_size, tar_size);
+}
+
+fn extractTarFile(tar_path: []const u8, extract_dir: []const u8, progress: *ProgressIndicator) !void {
+    return extractTarFileOptionalProgress(tar_path, extract_dir, progress);
+}
+
+fn extractTarFileQuiet(tar_path: []const u8, extract_dir: []const u8) !void {
+    return extractTarFileOptionalProgress(tar_path, extract_dir, null);
 }
 
 fn extractionPathExists(path: []const u8) !bool {
@@ -2604,7 +2842,7 @@ fn removePreviousWindowsShortcuts(
     );
     defer parsed.deinit();
     if (!std.ascii.eqlIgnoreCase(parsed.value.identifier, identifier) or
-        !std.ascii.eqlIgnoreCase(parsed.value.channel, channel))
+        !installedChannelMatches(parsed.value.channel, channel))
     {
         return;
     }
@@ -2770,7 +3008,7 @@ fn readInstalledLinuxIdentity(
     defer parsed.deinit();
     if (parsed.value.version.len == 0 or
         !std.mem.eql(u8, parsed.value.identifier, manifest.identifier) or
-        !std.mem.eql(u8, parsed.value.channel, manifest.channel))
+        !installedChannelMatches(parsed.value.channel, manifest.channel))
     {
         return error.InvalidInstalledIdentity;
     }
@@ -2952,9 +3190,14 @@ fn windowsManagedPathsFromBaseDir(
 
     const identifier_dir = try std.fs.path.join(allocator, &.{ local_appdata, identifier });
     errdefer allocator.free(identifier_dir);
-    const channel_root = try std.fs.path.join(allocator, &.{ identifier_dir, channel });
+    const channel_root = try std.fs.path.resolve(allocator, &.{base_dir});
     errdefer allocator.free(channel_root);
-    if (!try windowsPathsEqual(allocator, base_dir, channel_root)) {
+    const root_parent = std.fs.path.dirname(channel_root) orelse return error.InvalidUninstallLocation;
+    const root_name = std.fs.path.basename(channel_root);
+    if (!try windowsPathsEqual(allocator, base_dir, channel_root) or
+        !try windowsPathsEqual(allocator, root_parent, identifier_dir) or
+        !isSafeWindowsComponent(root_name))
+    {
         return error.InvalidUninstallLocation;
     }
 
@@ -2972,7 +3215,7 @@ fn windowsManagedPathsFromBaseDir(
         expected_identifier_physical,
     );
     defer allocator.free(identifier_physical);
-    const expected_channel_physical = try std.fs.path.join(allocator, &.{ identifier_physical, channel });
+    const expected_channel_physical = try std.fs.path.join(allocator, &.{ identifier_physical, root_name });
     defer allocator.free(expected_channel_physical);
     const channel_physical = try requirePlainWindowsDirectoryPhysical(
         allocator,
@@ -3074,9 +3317,10 @@ fn openWindowsIdentifierDir(paths: WindowsManagedPaths, identifier: []const u8) 
 }
 
 fn openWindowsChannelDir(paths: WindowsManagedPaths, identifier: []const u8, channel: []const u8) !std.Io.Dir {
+    _ = channel;
     var identifier_dir = try openWindowsIdentifierDir(paths, identifier);
     defer identifier_dir.close(g_io);
-    return identifier_dir.openDir(g_io, channel, .{
+    return identifier_dir.openDir(g_io, std.fs.path.basename(paths.channel_root), .{
         .follow_symlinks = false,
         .iterate = true,
     }) catch |err| switch (err) {
@@ -3175,6 +3419,19 @@ fn acquireWindowsInstallLock(allocator: std.mem.Allocator, base_dir: []const u8)
     return acquireWindowsLock(allocator, base_dir, windows_uninstall_sync.no_wait);
 }
 
+fn windowsRootMatchesInstallIdentity(
+    base_dir: []const u8,
+    channel: []const u8,
+    name: []const u8,
+    install_root_name: ?[]const u8,
+) bool {
+    const root_name = std.fs.path.basename(base_dir);
+    const allowed_alias = install_root_name orelse name;
+    return std.ascii.eqlIgnoreCase(root_name, channel) or
+        (isSafeWindowsComponent(allowed_alias) and
+            std.ascii.eqlIgnoreCase(root_name, allowed_alias));
+}
+
 fn validateWindowsUninstallManifest(
     allocator: std.mem.Allocator,
     manifest: WindowsUninstallManifest,
@@ -3184,7 +3441,13 @@ fn validateWindowsUninstallManifest(
         !isValidWindowsInstallNonce(manifest.install_nonce) or
         !isSafeWindowsComponent(manifest.identifier) or
         !isSafeWindowsComponent(manifest.channel) or
-        !isSafeWindowsDisplayName(manifest.name))
+        !isSafeWindowsDisplayName(manifest.name) or
+        !windowsRootMatchesInstallIdentity(
+            base_dir,
+            manifest.channel,
+            manifest.name,
+            manifest.install_root_name,
+        ))
     {
         return error.InvalidUninstallManifest;
     }
@@ -3427,6 +3690,17 @@ fn validateLinuxDataPathVersions(versions: ?[]const u32) !void {
     }
 }
 
+fn linuxRootMatchesInstallIdentity(
+    root_name: []const u8,
+    channel: []const u8,
+    name: []const u8,
+    install_root_name: ?[]const u8,
+) bool {
+    const allowed_alias = install_root_name orelse name;
+    return std.mem.eql(u8, root_name, channel) or
+        (isSafeLinuxComponent(allowed_alias) and std.mem.eql(u8, root_name, allowed_alias));
+}
+
 fn validateLinuxUninstallManifest(
     allocator: std.mem.Allocator,
     manifest: LinuxUninstallManifest,
@@ -3445,7 +3719,12 @@ fn validateLinuxUninstallManifest(
     {
         return error.InvalidUninstallManifest;
     }
-    if (!std.mem.eql(u8, scope.channel, manifest.channel) or
+    if (!linuxRootMatchesInstallIdentity(
+        scope.channel,
+        manifest.channel,
+        manifest.name,
+        manifest.install_root_name,
+    ) or
         !std.mem.eql(u8, scope.identifier, manifest.identifier))
     {
         return error.InvalidUninstallLocation;
@@ -3510,9 +3789,11 @@ fn loadAndValidateLinuxManifest(
         .follow_symlinks = false,
     });
     defer manifest_file.close(g_io);
+    prepareNoFollowFileForRead(&manifest_file);
     const manifest_stat = try manifest_file.stat(g_io);
     if (manifest_stat.kind != .file) return error.InvalidUninstallManifest;
-    var manifest_reader = manifest_file.reader(g_io, &.{});
+    var read_buffer: [4096]u8 = undefined;
+    var manifest_reader = manifest_file.reader(g_io, &read_buffer);
     const contents = manifest_reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
         error.ReadFailed => return manifest_reader.err.?,
         else => |e| return e,
@@ -3639,7 +3920,9 @@ fn prepareLinuxDesktopEntry(
         .follow_symlinks = false,
     });
     defer file.close(g_io);
-    var reader = file.reader(g_io, &.{});
+    prepareNoFollowFileForRead(&file);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.ReadFailed => return reader.err.?,
         else => |e| return e,
@@ -3748,6 +4031,7 @@ fn installLinuxManagerFromResource(
         .follow_symlinks = false,
     });
     defer source_file.close(g_io);
+    prepareNoFollowFileForRead(&source_file);
     const source_stat = try source_file.stat(g_io);
     if (source_stat.kind != .file) return error.InvalidUninstallManager;
 
@@ -3756,7 +4040,8 @@ fn installLinuxManagerFromResource(
         .permissions = .fromMode(0o755),
     });
     defer atomic_uninstaller.deinit(g_io);
-    var source_reader = source_file.reader(g_io, &.{});
+    var source_buffer: [4096]u8 = undefined;
+    var source_reader = source_file.reader(g_io, &source_buffer);
     var copy_buffer: [4096]u8 = undefined;
     var destination_writer = atomic_uninstaller.file.writer(g_io, &copy_buffer);
     _ = destination_writer.interface.sendFileAll(&source_reader, .unlimited) catch |err| switch (err) {
@@ -3798,7 +4083,15 @@ fn installLinuxIntegration(
     var scope = try openLinuxInstallScope(allocator, base_dir);
     defer scope.deinit(allocator);
     if (!std.mem.eql(u8, scope.identifier, metadata.identifier) or
-        !std.mem.eql(u8, scope.channel, metadata.channel)) return error.InvalidInstallLocation;
+        !linuxRootMatchesInstallIdentity(
+            scope.channel,
+            metadata.channel,
+            metadata.name,
+            metadata.install_root_name,
+        ))
+    {
+        return error.InvalidInstallLocation;
+    }
 
     const home = try linuxHome(allocator);
     defer allocator.free(home);
@@ -3896,6 +4189,7 @@ fn installLinuxIntegration(
         .home = home,
         .xdg_cache_home = cache_root,
         .xdg_state_home = state_root,
+        .install_root_name = scope.channel,
     });
     std.debug.print("Installed Linux uninstaller under: {s}\n", .{base_dir});
 }
@@ -3958,6 +4252,7 @@ fn refreshLinuxUninstallMetadata(
         .home = old.home,
         .xdg_cache_home = old.xdg_cache_home,
         .xdg_state_home = old.xdg_state_home,
+        .install_root_name = old.install_root_name orelse scope.channel,
     });
 }
 
@@ -4046,12 +4341,12 @@ fn uninstallLinux(
         cache_target = try prepareLinuxScopedDeletionTarget(
             manifest.xdg_cache_home.?,
             manifest.identifier,
-            manifest.channel,
+            scope.channel,
         );
         state_target = try prepareLinuxScopedDeletionTarget(
             manifest.xdg_state_home.?,
             manifest.identifier,
-            manifest.channel,
+            scope.channel,
         );
     }
 
@@ -4060,9 +4355,9 @@ fn uninstallLinux(
     refreshLinuxDesktopDatabase(manifest.application_entry);
 
     if (mode == .app_and_data) {
-        try cache_target.remove(manifest.identifier, manifest.channel);
-        try state_target.remove(manifest.identifier, manifest.channel);
-        try scope.identifier_dir.deleteTree(g_io, manifest.channel);
+        try cache_target.remove(manifest.identifier, scope.channel);
+        try state_target.remove(manifest.identifier, scope.channel);
+        try scope.identifier_dir.deleteTree(g_io, scope.channel);
         scope.data_home_dir.deleteDir(g_io, manifest.identifier) catch {};
         return;
     }
@@ -4077,7 +4372,7 @@ fn uninstallLinux(
         error.FileNotFound => {},
         else => return err,
     };
-    scope.identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+    scope.identifier_dir.deleteDir(g_io, scope.channel) catch {};
     scope.data_home_dir.deleteDir(g_io, manifest.identifier) catch {};
 }
 
@@ -4086,6 +4381,7 @@ fn installWindowsIntegration(
     app_dir: []const u8,
     metadata: AppMetadata,
 ) !void {
+    bootstrapTrace("windows integration: validate identity");
     if (!isSafeWindowsComponent(metadata.identifier) or
         !isSafeWindowsComponent(metadata.channel) or
         !isSafeWindowsDisplayName(metadata.name))
@@ -4093,6 +4389,16 @@ fn installWindowsIntegration(
         return error.InvalidInstallIdentity;
     }
     const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
+    bootstrapTrace("windows integration: validate root identity");
+    if (!windowsRootMatchesInstallIdentity(
+        base_dir,
+        metadata.channel,
+        metadata.name,
+        metadata.install_root_name,
+    )) {
+        return error.InvalidInstallLocation;
+    }
+    bootstrapTrace("windows integration: resolve managed paths");
     var paths = try windowsManagedPathsFromBaseDir(
         allocator,
         base_dir,
@@ -4100,27 +4406,34 @@ fn installWindowsIntegration(
         metadata.channel,
     );
     defer paths.deinit(allocator);
+    bootstrapTrace("windows integration: validate app path");
     if (!try windowsPathsEqual(allocator, app_dir, paths.app_dir)) {
         return error.InvalidInstallLocation;
     }
+    bootstrapTrace("windows integration: acquire lock");
     var uninstall_lock = try acquireWindowsUninstallLock(allocator, paths.channel_root);
     defer uninstall_lock.release();
+    bootstrapTrace("windows integration: open channel root");
     var channel_dir = try openWindowsChannelDir(paths, metadata.identifier, metadata.channel);
     defer channel_dir.close(g_io);
+    bootstrapTrace("windows integration: attest bundled manager");
     try requirePlainWindowsBundledManager(allocator, paths);
 
+    bootstrapTrace("windows integration: validate launcher");
     const target_path = try std.fs.path.join(allocator, &.{ app_dir, "bin", "launcher.exe" });
     defer allocator.free(target_path);
     try std.Io.Dir.cwd().access(g_io, target_path, .{});
     const working_dir = try std.fs.path.join(allocator, &.{ app_dir, "bin" });
     defer allocator.free(working_dir);
 
+    bootstrapTrace("windows integration: resolve shell folders");
     const shortcut_name = try windowsShortcutFileName(allocator, metadata.name, metadata.channel);
     defer allocator.free(shortcut_name);
     const desktop_dir = try getWindowsDesktopDir(allocator);
     defer allocator.free(desktop_dir);
     const programs_dir = try getWindowsProgramsDir(allocator);
     defer allocator.free(programs_dir);
+    bootstrapTrace("windows integration: create shell folders");
     try std.Io.Dir.cwd().createDirPath(g_io, desktop_dir);
     try std.Io.Dir.cwd().createDirPath(g_io, programs_dir);
     const desktop_shortcut = try std.fs.path.join(allocator, &.{ desktop_dir, shortcut_name });
@@ -4128,7 +4441,9 @@ fn installWindowsIntegration(
     const start_menu_shortcut = try std.fs.path.join(allocator, &.{ programs_dir, shortcut_name });
     defer allocator.free(start_menu_shortcut);
 
+    bootstrapTrace("windows integration: copy manager");
     try atomicCopyWindowsManager(allocator, paths.bundled_uninstaller, paths.uninstaller);
+    bootstrapTrace("windows integration: remove prior shortcuts");
     removePreviousWindowsShortcuts(
         allocator,
         paths.manifest,
@@ -4163,15 +4478,20 @@ fn installWindowsIntegration(
         .channel = metadata.channel,
         .desktop_shortcut = desktop_shortcut,
         .start_menu_shortcut = start_menu_shortcut,
+        .install_root_name = std.fs.path.basename(paths.channel_root),
         .data_path_versions = &data_path_versions,
     };
+    bootstrapTrace("windows integration: write manifest");
     try writeWindowsUninstallManifest(allocator, paths.manifest, manifest);
 
     errdefer deleteFileIfExists(desktop_shortcut) catch {};
     errdefer deleteFileIfExists(start_menu_shortcut) catch {};
+    bootstrapTrace("windows integration: write shortcuts");
     try createWindowsShortcutFile(allocator, desktop_shortcut, target_path, working_dir, target_path);
     try createWindowsShortcutFile(allocator, start_menu_shortcut, target_path, working_dir, target_path);
+    bootstrapTrace("windows integration: register uninstall entry");
     try registerWindowsUninstallEntry(allocator, manifest, app_dir, paths.uninstaller);
+    bootstrapTrace("windows integration: complete");
 }
 
 fn retryDeleteTreeInDir(dir: std.Io.Dir, sub_path: []const u8) !void {
@@ -4473,6 +4793,7 @@ fn refreshWindowsUninstallRegistration(allocator: std.mem.Allocator) !void {
         .channel = old.channel,
         .desktop_shortcut = old.desktop_shortcut,
         .start_menu_shortcut = old.start_menu_shortcut,
+        .install_root_name = old.install_root_name orelse std.fs.path.basename(paths.channel_root),
         .data_path_versions = &data_path_versions,
     };
     errdefer if (invocation.bundled) {
@@ -4556,6 +4877,7 @@ fn refreshWindowsUninstallRegistrationFromUpdate(
         .channel = old.channel,
         .desktop_shortcut = old.desktop_shortcut,
         .start_menu_shortcut = old.start_menu_shortcut,
+        .install_root_name = old.install_root_name orelse std.fs.path.basename(paths.channel_root),
         .data_path_versions = &data_path_versions,
     };
     var manager_replaced = false;
@@ -4794,6 +5116,7 @@ fn cleanupWindowsUninstaller(
         manifest.channel,
     );
     defer paths.deinit(allocator);
+    const managed_root_name = std.fs.path.basename(paths.channel_root);
     if (!try windowsPathsEqual(allocator, original_uninstaller, paths.uninstaller) or
         !try windowsPathsEqual(allocator, manifest_path, paths.manifest))
     {
@@ -4809,7 +5132,7 @@ fn cleanupWindowsUninstaller(
     defer identifier_dir.close(g_io);
     if (delete_data) {
         {
-            var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+            var channel_dir = try identifier_dir.openDir(g_io, managed_root_name, .{
                 .follow_symlinks = false,
                 .iterate = true,
             });
@@ -4842,7 +5165,7 @@ fn cleanupWindowsUninstaller(
 
         // Windows currently maps userData, userCache, and userLogs to this one
         // channel root. Delete that derived root exactly once, from outside it.
-        retryDeleteTreeInDir(identifier_dir, manifest.channel) catch |err| {
+        retryDeleteTreeInDir(identifier_dir, managed_root_name) catch |err| {
             restoreWindowsManagerForRetry(
                 allocator,
                 worker_path,
@@ -4858,7 +5181,7 @@ fn cleanupWindowsUninstaller(
     }
 
     {
-        var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+        var channel_dir = try identifier_dir.openDir(g_io, managed_root_name, .{
             .follow_symlinks = false,
             .iterate = true,
         });
@@ -4915,7 +5238,7 @@ fn cleanupWindowsUninstaller(
 
     // These are non-recursive on purpose: preserved user data keeps either
     // directory non-empty, while a data-free install leaves no empty shell.
-    identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+    identifier_dir.deleteDir(g_io, managed_root_name) catch {};
     std.Io.Dir.cwd().deleteDir(g_io, paths.identifier_dir) catch {};
 }
 
@@ -4926,11 +5249,12 @@ fn restoreWindowsManagerForRetry(
     paths: WindowsManagedPaths,
     manifest: WindowsUninstallManifest,
 ) !void {
-    identifier_dir.createDir(g_io, manifest.channel, .default_dir) catch |err| switch (err) {
+    const managed_root_name = std.fs.path.basename(paths.channel_root);
+    identifier_dir.createDir(g_io, managed_root_name, .default_dir) catch |err| switch (err) {
         error.PathAlreadyExists => {},
         else => return err,
     };
-    var channel_dir = try identifier_dir.openDir(g_io, manifest.channel, .{
+    var channel_dir = try identifier_dir.openDir(g_io, managed_root_name, .{
         .follow_symlinks = false,
         .iterate = true,
     });
@@ -5100,9 +5424,8 @@ fn macosManagedPathsFromInstallRoot(
 
     const resolved_root = try std.fs.path.resolve(allocator, &.{install_root});
     errdefer allocator.free(resolved_root);
-    if (!std.mem.eql(u8, std.fs.path.basename(resolved_root), channel)) {
-        return error.InvalidUninstallLocation;
-    }
+    const root_name = std.fs.path.basename(resolved_root);
+    if (!isSafeMacosComponent(root_name)) return error.InvalidUninstallLocation;
     const identifier_dir = std.fs.path.dirname(resolved_root) orelse return error.InvalidUninstallLocation;
     if (!std.mem.eql(u8, std.fs.path.basename(identifier_dir), identifier)) {
         return error.InvalidUninstallLocation;
@@ -5127,9 +5450,9 @@ fn macosManagedPathsFromInstallRoot(
     try requirePlainDirectory(identifier_dir);
     try requirePlainDirectory(resolved_root);
 
-    const user_cache = try std.fs.path.join(allocator, &.{ home, "Library", "Caches", identifier, channel });
+    const user_cache = try std.fs.path.join(allocator, &.{ home, "Library", "Caches", identifier, root_name });
     errdefer allocator.free(user_cache);
-    const user_logs = try std.fs.path.join(allocator, &.{ home, "Library", "Logs", identifier, channel });
+    const user_logs = try std.fs.path.join(allocator, &.{ home, "Library", "Logs", identifier, root_name });
     errdefer allocator.free(user_logs);
     return .{
         .home = try allocator.dupe(u8, home),
@@ -5175,7 +5498,9 @@ fn readAndValidateInstalledMacosIdentity(
         .follow_symlinks = false,
     });
     defer version_file.close(g_io);
-    var version_reader = version_file.reader(g_io, &.{});
+    prepareNoFollowFileForRead(&version_file);
+    var read_buffer: [4096]u8 = undefined;
+    var version_reader = version_file.reader(g_io, &read_buffer);
     const contents = version_reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
         error.ReadFailed => return version_reader.err.?,
         else => |e| return e,
@@ -5194,7 +5519,7 @@ fn readAndValidateInstalledMacosIdentity(
     defer parsed.deinit();
     if (parsed.value.version.len == 0 or
         !std.mem.eql(u8, parsed.value.identifier, identifier) or
-        !std.mem.eql(u8, parsed.value.channel, channel))
+        !installedChannelMatches(parsed.value.channel, channel))
     {
         return error.InvalidInstalledIdentity;
     }
@@ -5251,7 +5576,9 @@ fn validateExistingMacosAppIdentityIfReadable(
         .follow_symlinks = false,
     }) catch return;
     defer version_file.close(g_io);
-    var reader = version_file.reader(g_io, &.{});
+    prepareNoFollowFileForRead(&version_file);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = version_file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch return;
     defer allocator.free(contents);
     const parsed = std.json.parseFromSlice(
@@ -5265,7 +5592,7 @@ fn validateExistingMacosAppIdentityIfReadable(
     ) catch return;
     defer parsed.deinit();
     if (!std.mem.eql(u8, parsed.value.identifier, identifier) or
-        !std.mem.eql(u8, parsed.value.channel, channel))
+        !installedChannelMatches(parsed.value.channel, channel))
     {
         return error.InvalidUninstallManifest;
     }
@@ -5280,6 +5607,18 @@ fn validateMacosDataPathVersions(versions: []const u32) !void {
     }
 }
 
+fn macosRootMatchesInstallIdentity(
+    install_root: []const u8,
+    channel: []const u8,
+    name: []const u8,
+    install_root_name: ?[]const u8,
+) bool {
+    const root_name = std.fs.path.basename(install_root);
+    const allowed_alias = install_root_name orelse name;
+    return std.mem.eql(u8, root_name, channel) or
+        (isSafeMacosComponent(allowed_alias) and std.mem.eql(u8, root_name, allowed_alias));
+}
+
 fn validateMacosUninstallManifest(
     allocator: std.mem.Allocator,
     manifest: MacosUninstallManifest,
@@ -5290,6 +5629,12 @@ fn validateMacosUninstallManifest(
         !isSafeMacosComponent(manifest.identifier) or
         !isSafeMacosComponent(manifest.channel) or
         !isSafeMacosDisplayName(manifest.name) or
+        !macosRootMatchesInstallIdentity(
+            base_dir,
+            manifest.channel,
+            manifest.name,
+            manifest.install_root_name,
+        ) or
         manifest.version.len == 0)
     {
         return error.InvalidUninstallManifest;
@@ -5348,7 +5693,9 @@ fn loadAndValidateMacosManifest(
         .follow_symlinks = false,
     });
     defer manifest_file.close(g_io);
-    var manifest_reader = manifest_file.reader(g_io, &.{});
+    prepareNoFollowFileForRead(&manifest_file);
+    var read_buffer: [4096]u8 = undefined;
+    var manifest_reader = manifest_file.reader(g_io, &read_buffer);
     const contents = manifest_reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
         error.ReadFailed => return manifest_reader.err.?,
         else => |e| return e,
@@ -5369,8 +5716,9 @@ fn macosManifestPath(allocator: std.mem.Allocator, base_dir: []const u8) ![]u8 {
     return std.fs.path.join(allocator, &.{ base_dir, MACOS_UNINSTALL_MANIFEST_NAME });
 }
 
-fn installMacosUninstallManager(
+fn installMacosUninstallManagerAtRoot(
     allocator: std.mem.Allocator,
+    base_dir: []const u8,
     source_app_bundle_path: []const u8,
     installed_app_bundle_path: []const u8,
     metadata: AppMetadata,
@@ -5379,14 +5727,18 @@ fn installMacosUninstallManager(
         !isSafeMacosComponent(metadata.channel) or
         !isSafeMacosDisplayName(metadata.name)) return error.InvalidInstallIdentity;
 
-    const home = try getEnvOwned(allocator, "HOME");
-    defer allocator.free(home);
-    const base_dir = try std.fs.path.join(
-        allocator,
-        &.{ home, "Library", "Application Support", metadata.identifier, metadata.channel },
-    );
-    defer allocator.free(base_dir);
-    var channel_dir = try ensureMacosInstallRoot(home, metadata.identifier, metadata.channel);
+    if (!macosRootMatchesInstallIdentity(
+        base_dir,
+        metadata.channel,
+        metadata.name,
+        metadata.install_root_name,
+    )) {
+        return error.InvalidInstallLocation;
+    }
+    var channel_dir = try std.Io.Dir.openDirAbsolute(g_io, base_dir, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
     defer channel_dir.close(g_io);
 
     var managed_paths = try macosManagedPathsFromInstallRoot(
@@ -5419,6 +5771,7 @@ fn installMacosUninstallManager(
         .follow_symlinks = false,
     });
     defer source_file.close(g_io);
+    prepareNoFollowFileForRead(&source_file);
     const source_stat = try source_file.stat(g_io);
     if (source_stat.kind != .file) return error.InvalidUninstallManager;
     const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, MACOS_UNINSTALL_EXE_NAME });
@@ -5428,7 +5781,8 @@ fn installMacosUninstallManager(
         .permissions = .fromMode(0o755),
     });
     defer atomic_uninstaller.deinit(g_io);
-    var source_reader = source_file.reader(g_io, &.{});
+    var source_buffer: [4096]u8 = undefined;
+    var source_reader = source_file.reader(g_io, &source_buffer);
     var copy_buffer: [4096]u8 = undefined;
     var destination_writer = atomic_uninstaller.file.writer(g_io, &copy_buffer);
     _ = destination_writer.interface.sendFileAll(&source_reader, .unlimited) catch |err| switch (err) {
@@ -5457,9 +5811,34 @@ fn installMacosUninstallManager(
         .app_bundle_path = canonical_installed_path,
         .app_path_token = &app_path_token,
         .data_path_versions = &data_path_versions,
+        .install_root_name = std.fs.path.basename(base_dir),
     };
     try writeMacosUninstallManifest(allocator, channel_dir, manifest);
     std.debug.print("Installed macOS uninstaller: {s}\n", .{uninstall_path});
+}
+
+fn installMacosUninstallManager(
+    allocator: std.mem.Allocator,
+    source_app_bundle_path: []const u8,
+    installed_app_bundle_path: []const u8,
+    metadata: AppMetadata,
+) !void {
+    const home = try getEnvOwned(allocator, "HOME");
+    defer allocator.free(home);
+    const base_dir = try std.fs.path.join(
+        allocator,
+        &.{ home, "Library", "Application Support", metadata.identifier, metadata.channel },
+    );
+    defer allocator.free(base_dir);
+    var channel_dir = try ensureMacosInstallRoot(home, metadata.identifier, metadata.channel);
+    channel_dir.close(g_io);
+    return installMacosUninstallManagerAtRoot(
+        allocator,
+        base_dir,
+        source_app_bundle_path,
+        installed_app_bundle_path,
+        metadata,
+    );
 }
 
 fn refreshMacosUninstallMetadata(allocator: std.mem.Allocator) !void {
@@ -5498,6 +5877,7 @@ fn refreshMacosUninstallMetadata(allocator: std.mem.Allocator) !void {
         .app_bundle_path = old.app_bundle_path,
         .app_path_token = old.app_path_token,
         .data_path_versions = &data_path_versions,
+        .install_root_name = old.install_root_name orelse std.fs.path.basename(base_dir),
     });
 }
 
@@ -5577,6 +5957,7 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
         manifest.channel,
     );
     defer paths.deinit(allocator);
+    const managed_root_name = std.fs.path.basename(paths.install_root);
 
     // Open every recursive target's parent without following symlinks before
     // making any changes. Deletion is then relative to a pinned directory
@@ -5616,14 +5997,14 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
     if (mode == .app_and_data) {
         // Version 1 maps exactly to the three existing Utils.paths roots. The
         // manifest stores only resolver versions, never deletion paths.
-        try deleteMacosScopedRoot(cache_identifier_dir, manifest.channel);
-        try deleteMacosScopedRoot(logs_identifier_dir, manifest.channel);
-        try install_identifier_dir.deleteTree(g_io, manifest.channel);
+        try deleteMacosScopedRoot(cache_identifier_dir, managed_root_name);
+        try deleteMacosScopedRoot(logs_identifier_dir, managed_root_name);
+        try install_identifier_dir.deleteTree(g_io, managed_root_name);
         return;
     }
 
     {
-        var channel_dir = try install_identifier_dir.openDir(g_io, manifest.channel, .{
+        var channel_dir = try install_identifier_dir.openDir(g_io, managed_root_name, .{
             .follow_symlinks = false,
             .iterate = true,
         });
@@ -5638,7 +6019,7 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
             else => return err,
         };
     }
-    install_identifier_dir.deleteDir(g_io, manifest.channel) catch {};
+    install_identifier_dir.deleteDir(g_io, managed_root_name) catch {};
 }
 
 fn windowsUpdateTaskName(allocator: std.mem.Allocator, identifier: []const u8, channel: []const u8) ![]u8 {
@@ -5654,11 +6035,1848 @@ fn windowsUpdateTaskName(allocator: std.mem.Allocator, identifier: []const u8, c
     return std.fmt.allocPrint(allocator, "ElectrobunUpdate_{x}", .{digest[0..12]});
 }
 
+fn isApplyUpdateTransactionId(value: []const u8) bool {
+    if (value.len != APPLY_UPDATE_TRANSACTION_HEX_LENGTH) return false;
+    for (value) |byte| switch (byte) {
+        '0'...'9', 'a'...'f' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn isApplyUpdateHash(value: []const u8) bool {
+    if (value.len == 0 or value.len > 13) return false;
+    for (value) |byte| switch (byte) {
+        '0'...'9', 'a'...'z' => {},
+        else => return false,
+    };
+    return true;
+}
+
+fn isApplyUpdateVersion(value: []const u8) bool {
+    if (value.len == 0 or value.len > 256) return false;
+    for (value) |byte| switch (byte) {
+        0...31, 127 => return false,
+        else => {},
+    };
+    return true;
+}
+
+fn expectedApplyUpdatePlatform() []const u8 {
+    return switch (builtin.os.tag) {
+        .windows => "win",
+        .linux => "linux",
+        .macos => "macos",
+        else => @compileError("Unsupported update-manager platform"),
+    };
+}
+
+fn expectedApplyUpdateArch() []const u8 {
+    return switch (builtin.cpu.arch) {
+        .x86_64 => "x64",
+        .aarch64 => "arm64",
+        else => @compileError("Unsupported update-manager architecture"),
+    };
+}
+
+fn applyUpdatePlanName(allocator: std.mem.Allocator, transaction_id: []const u8) ![]u8 {
+    if (!isApplyUpdateTransactionId(transaction_id)) return error.InvalidUpdatePlan;
+    return std.fmt.allocPrint(
+        allocator,
+        APPLY_UPDATE_PLAN_PREFIX ++ "{s}" ++ APPLY_UPDATE_PLAN_SUFFIX,
+        .{transaction_id},
+    );
+}
+
+fn applyUpdateResultName(allocator: std.mem.Allocator, transaction_id: []const u8) ![]u8 {
+    if (!isApplyUpdateTransactionId(transaction_id)) return error.InvalidUpdatePlan;
+    return std.fmt.allocPrint(
+        allocator,
+        APPLY_UPDATE_PLAN_PREFIX ++ "{s}" ++ APPLY_UPDATE_RESULT_SUFFIX,
+        .{transaction_id},
+    );
+}
+
+fn applyUpdateHelperName(allocator: std.mem.Allocator, transaction_id: []const u8) ![]u8 {
+    if (!isApplyUpdateTransactionId(transaction_id)) return error.InvalidUpdatePlan;
+    return std.fmt.allocPrint(
+        allocator,
+        APPLY_UPDATE_HELPER_PREFIX ++ "{s}{s}",
+        .{ transaction_id, if (builtin.os.tag == .windows) ".exe" else "" },
+    );
+}
+
+fn applyUpdateTaskName(allocator: std.mem.Allocator, transaction_id: []const u8) ![]u8 {
+    if (!isApplyUpdateTransactionId(transaction_id)) return error.InvalidUpdatePlan;
+    return std.fmt.allocPrint(allocator, "ApplicationUpdate_{s}", .{transaction_id[0..24]});
+}
+
+fn applyUpdatePathsEqual(
+    allocator: std.mem.Allocator,
+    left: []const u8,
+    right: []const u8,
+) !bool {
+    if (builtin.os.tag == .windows) return windowsPathsEqual(allocator, left, right);
+    return std.mem.eql(u8, left, right);
+}
+
+const ApplyUpdateRootPlatform = enum {
+    windows,
+    linux,
+    macos,
+};
+
+fn applyUpdateRootComponentEqual(
+    left: []const u8,
+    right: []const u8,
+    platform: ApplyUpdateRootPlatform,
+) bool {
+    return if (platform == .windows)
+        std.ascii.eqlIgnoreCase(left, right)
+    else
+        std.mem.eql(u8, left, right);
+}
+
+fn applyUpdateRootMatchesJoined(
+    root_name: []const u8,
+    base_name: []const u8,
+    suffix: []const u8,
+    platform: ApplyUpdateRootPlatform,
+) bool {
+    if (root_name.len != base_name.len + 1 + suffix.len or
+        root_name[base_name.len] != '-')
+    {
+        return false;
+    }
+    return applyUpdateRootComponentEqual(root_name[0..base_name.len], base_name, platform) and
+        applyUpdateRootComponentEqual(root_name[base_name.len + 1 ..], suffix, platform);
+}
+
+fn applyUpdateRootMatchesIdentityForPlatform(
+    root_name: []const u8,
+    channel: []const u8,
+    current_bundle_name: []const u8,
+    current_display_name: ?[]const u8,
+    platform: ApplyUpdateRootPlatform,
+) bool {
+    if (applyUpdateRootComponentEqual(root_name, channel, platform) or
+        applyUpdateRootComponentEqual(root_name, current_bundle_name, platform))
+    {
+        return true;
+    }
+    const is_production = applyUpdateRootComponentEqual(channel, "production", platform);
+    if (is_production and applyUpdateRootComponentEqual(root_name, "stable", platform)) {
+        return true;
+    }
+
+    // Early v1 Windows and Linux extractors used
+    // `<sanitized app name>-<channel>`. For production, version.json.name
+    // omitted the stable suffix, so this alias cannot be covered by the
+    // current bundle name comparison above.
+    if (platform != .macos and is_production and
+        applyUpdateRootMatchesJoined(root_name, current_bundle_name, "stable", platform))
+    {
+        return true;
+    }
+
+    if (platform == .macos) {
+        if (current_display_name) |display_name| {
+            // The original macOS extractor used CFBundleName as its data root.
+            // Stable bundles used the display name verbatim; other channels
+            // appended their v1 channel name.
+            if (is_production) {
+                return applyUpdateRootComponentEqual(root_name, display_name, platform);
+            }
+            return applyUpdateRootMatchesJoined(
+                root_name,
+                display_name,
+                channel,
+                platform,
+            );
+        }
+    }
+    return false;
+}
+
+fn applyUpdateRootMatchesIdentity(
+    root_name: []const u8,
+    channel: []const u8,
+    current_bundle_name: []const u8,
+    current_display_name: ?[]const u8,
+) bool {
+    return applyUpdateRootMatchesIdentityForPlatform(
+        root_name,
+        channel,
+        current_bundle_name,
+        current_display_name,
+        switch (builtin.os.tag) {
+            .windows => .windows,
+            .linux => .linux,
+            else => .macos,
+        },
+    );
+}
+
+fn requireResolvedApplyUpdatePath(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+) !void {
+    if (!std.fs.path.isAbsolute(path) or std.mem.indexOfScalar(u8, path, 0) != null) {
+        return error.InvalidUpdatePath;
+    }
+    const resolved = try std.fs.path.resolve(allocator, &.{path});
+    defer allocator.free(resolved);
+    if (!try applyUpdatePathsEqual(allocator, resolved, path)) return error.InvalidUpdatePath;
+}
+
+fn requireApplyUpdateFile(path: []const u8) !void {
+    const stat = std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false }) catch
+        return error.InvalidUpdatePath;
+    if (stat.kind != .file) return error.InvalidUpdatePath;
+}
+
+fn requireApplyUpdateDirectory(path: []const u8) !void {
+    const stat = std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false }) catch
+        return error.InvalidUpdatePath;
+    if (stat.kind != .directory) return error.InvalidUpdatePath;
+}
+
+fn prepareNoFollowFileForRead(file: *std.Io.File) void {
+    if (builtin.os.tag == .windows) {
+        // Zig opens no-follow Windows handles with asynchronous NT semantics,
+        // but this vendored stdlib currently reports them as blocking files.
+        // Correct the flag before reading so pending reads are awaited safely.
+        file.flags.nonblocking = true;
+    }
+}
+
+fn requirePhysicalApplyUpdateChild(
+    allocator: std.mem.Allocator,
+    parent_path: []const u8,
+    child_path: []const u8,
+    expected_kind: std.Io.File.Kind,
+) !void {
+    try requireResolvedApplyUpdatePath(allocator, parent_path);
+    try requireResolvedApplyUpdatePath(allocator, child_path);
+    const lexical_parent = std.fs.path.dirname(child_path) orelse return error.InvalidUpdatePath;
+    if (!try applyUpdatePathsEqual(allocator, lexical_parent, parent_path)) return error.InvalidUpdatePath;
+    const stat = std.Io.Dir.cwd().statFile(g_io, child_path, .{ .follow_symlinks = false }) catch
+        return error.InvalidUpdatePath;
+    if (stat.kind != expected_kind) return error.InvalidUpdatePath;
+    const physical_parent = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, parent_path, allocator);
+    defer allocator.free(physical_parent);
+    const physical_child = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, child_path, allocator);
+    defer allocator.free(physical_child);
+    const expected_physical = try std.fs.path.join(
+        allocator,
+        &.{ physical_parent, std.fs.path.basename(child_path) },
+    );
+    defer allocator.free(expected_physical);
+    if (!try applyUpdatePathsEqual(allocator, physical_child, expected_physical)) {
+        return error.InvalidUpdatePath;
+    }
+}
+
+fn expectedApplyUpdateChannelRoot(
+    allocator: std.mem.Allocator,
+    identifier: []const u8,
+    channel: []const u8,
+) ![]u8 {
+    if (builtin.os.tag == .windows) {
+        if (!isSafeWindowsComponent(identifier) or !isSafeWindowsComponent(channel)) {
+            return error.InvalidUpdateIdentity;
+        }
+        const data_root = try getAppDataDir(allocator);
+        defer allocator.free(data_root);
+        return std.fs.path.resolve(allocator, &.{ data_root, identifier });
+    }
+    if (builtin.os.tag == .linux) {
+        if (!isSafeLinuxComponent(identifier) or !isSafeLinuxComponent(channel)) {
+            return error.InvalidUpdateIdentity;
+        }
+        const data_root = try getAppDataDir(allocator);
+        defer allocator.free(data_root);
+        return std.fs.path.resolve(allocator, &.{ data_root, identifier });
+    }
+    if (!isSafeMacosComponent(identifier) or !isSafeMacosComponent(channel)) {
+        return error.InvalidUpdateIdentity;
+    }
+    const home = try getEnvOwned(allocator, "HOME");
+    defer allocator.free(home);
+    return std.fs.path.resolve(
+        allocator,
+        &.{ home, "Library", "Application Support", identifier },
+    );
+}
+
+const LoadedApplyUpdatePlan = struct {
+    contents: []u8,
+    parsed: std.json.Parsed(ApplyUpdatePlan),
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        self.parsed.deinit();
+        allocator.free(self.contents);
+        self.* = undefined;
+    }
+};
+
+fn loadApplyUpdatePlan(
+    allocator: std.mem.Allocator,
+    plan_path: []const u8,
+) !LoadedApplyUpdatePlan {
+    try requireResolvedApplyUpdatePath(allocator, plan_path);
+    try requireApplyUpdateFile(plan_path);
+    var file = try std.Io.Dir.openFileAbsolute(g_io, plan_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer file.close(g_io);
+    prepareNoFollowFileForRead(&file);
+    const stat = try file.stat(g_io);
+    if (stat.kind != .file or stat.size > 64 * 1024) return error.InvalidUpdatePlan;
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &read_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |other| return other,
+    };
+    errdefer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(ApplyUpdatePlan, allocator, contents, .{});
+    errdefer parsed.deinit();
+    return .{ .contents = contents, .parsed = parsed };
+}
+
+const ValidatedApplyUpdateContext = struct {
+    display_name: []u8,
+    install_root_name: []u8,
+    had_uninstall_manifest: bool,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.display_name);
+        allocator.free(self.install_root_name);
+        self.* = undefined;
+    }
+};
+
+const ApplyUpdateValidationProgress = struct {
+    plan_path_safe: bool = false,
+    result_path_safe: bool = false,
+};
+
+const ApplyUpdateValidationFailureActions = struct {
+    cleanup_transport: bool,
+    cleanup_plan: bool,
+    publish_result: bool,
+};
+
+fn applyUpdateValidationFailureActions(
+    helper_is_valid: bool,
+    progress: ApplyUpdateValidationProgress,
+) ApplyUpdateValidationFailureActions {
+    return .{
+        .cleanup_transport = helper_is_valid,
+        .cleanup_plan = helper_is_valid and progress.plan_path_safe,
+        .publish_result = helper_is_valid and progress.result_path_safe,
+    };
+}
+
+const CurrentApplyUpdateIdentity = struct {
+    name: []u8,
+    display_name: ?[]u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.name);
+        if (self.display_name) |display_name| allocator.free(display_name);
+        self.* = undefined;
+    }
+};
+
+fn currentApplyUpdateIdentity(
+    allocator: std.mem.Allocator,
+    app_bundle_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) !CurrentApplyUpdateIdentity {
+    const version_path = try applyUpdateBundleResourcePath(
+        allocator,
+        app_bundle_path,
+        "version.json",
+    );
+    defer allocator.free(version_path);
+    var file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer file.close(g_io);
+    prepareNoFollowFileForRead(&file);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &read_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |other| return other,
+    };
+    defer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        struct {
+            version: []const u8,
+            identifier: []const u8,
+            channel: []const u8,
+            name: []const u8,
+            displayName: ?[]const u8 = null,
+        },
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    const valid_name = if (builtin.os.tag == .windows)
+        isSafeWindowsDisplayName(parsed.value.name)
+    else if (builtin.os.tag == .linux)
+        isSafeLinuxDisplayName(parsed.value.name)
+    else
+        isSafeMacosDisplayName(parsed.value.name);
+    const valid_display_name = if (parsed.value.displayName) |display_name|
+        if (builtin.os.tag == .windows)
+            isSafeWindowsDisplayName(display_name)
+        else if (builtin.os.tag == .linux)
+            isSafeLinuxDisplayName(display_name)
+        else
+            isSafeMacosDisplayName(display_name)
+    else
+        true;
+    if (parsed.value.version.len == 0 or
+        !std.mem.eql(u8, parsed.value.identifier, identifier) or
+        !installedChannelMatches(parsed.value.channel, channel) or
+        !valid_name or
+        !valid_display_name)
+    {
+        return error.InvalidUpdateIdentity;
+    }
+    const name = try allocator.dupe(u8, parsed.value.name);
+    errdefer allocator.free(name);
+    return .{
+        .name = name,
+        .display_name = if (parsed.value.displayName) |display_name|
+            try allocator.dupe(u8, display_name)
+        else
+            null,
+    };
+}
+
+fn legacyApplyUpdateDisplayName(
+    allocator: std.mem.Allocator,
+    app_bundle_path: []const u8,
+    identifier: []const u8,
+    channel: []const u8,
+) ![]u8 {
+    const identity = try currentApplyUpdateIdentity(
+        allocator,
+        app_bundle_path,
+        identifier,
+        channel,
+    );
+    if (identity.display_name) |display_name| {
+        allocator.free(identity.name);
+        return display_name;
+    }
+    return identity.name;
+}
+
+fn validateApplyUpdateHelper(
+    allocator: std.mem.Allocator,
+    transaction_id: []const u8,
+) ![]u8 {
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    errdefer allocator.free(executable_path);
+    const expected_name = try applyUpdateHelperName(allocator, transaction_id);
+    defer allocator.free(expected_name);
+    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), expected_name)) {
+        return error.InvalidUpdateHelper;
+    }
+    try requireApplyUpdateFile(executable_path);
+    if (builtin.os.tag == .windows) {
+        try validateWindowsTemporaryExecutableLocation(allocator, executable_path);
+    } else {
+        const physical = try std.Io.Dir.realPathFileAbsoluteAlloc(g_io, executable_path, allocator);
+        defer allocator.free(physical);
+        if (!std.mem.eql(u8, physical, executable_path)) return error.InvalidUpdateHelper;
+    }
+    return executable_path;
+}
+
+fn validateApplyUpdatePlanAndPaths(
+    allocator: std.mem.Allocator,
+    plan_path: []const u8,
+    plan: ApplyUpdatePlan,
+    progress: *ApplyUpdateValidationProgress,
+) !ValidatedApplyUpdateContext {
+    if (plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION or
+        !isApplyUpdateTransactionId(plan.transaction_id) or
+        !std.mem.eql(u8, plan.platform, expectedApplyUpdatePlatform()) or
+        !std.mem.eql(u8, plan.arch, expectedApplyUpdateArch()) or
+        !isApplyUpdateVersion(plan.version) or
+        !isApplyUpdateHash(plan.hash) or
+        plan.parent_pid == 0)
+    {
+        return error.InvalidUpdatePlan;
+    }
+
+    const expected_identifier_root = try expectedApplyUpdateChannelRoot(
+        allocator,
+        plan.identifier,
+        plan.channel,
+    );
+    defer allocator.free(expected_identifier_root);
+    try requireResolvedApplyUpdatePath(allocator, plan.channel_root);
+    const actual_identifier_root = std.fs.path.dirname(plan.channel_root) orelse
+        return error.InvalidUpdatePath;
+    if (!try applyUpdatePathsEqual(
+        allocator,
+        actual_identifier_root,
+        expected_identifier_root,
+    )) {
+        return error.InvalidUpdatePath;
+    }
+    const root_name = std.fs.path.basename(plan.channel_root);
+    const safe_root_name = if (builtin.os.tag == .windows)
+        isSafeWindowsComponent(root_name)
+    else if (builtin.os.tag == .linux)
+        isSafeLinuxComponent(root_name)
+    else
+        isSafeMacosComponent(root_name);
+    if (!safe_root_name) return error.InvalidUpdatePath;
+
+    const expected_plan_name = try applyUpdatePlanName(allocator, plan.transaction_id);
+    defer allocator.free(expected_plan_name);
+    const expected_plan_path = try std.fs.path.join(
+        allocator,
+        &.{ plan.channel_root, expected_plan_name },
+    );
+    defer allocator.free(expected_plan_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(plan_path), expected_plan_name) or
+        !try applyUpdatePathsEqual(allocator, plan_path, expected_plan_path))
+    {
+        return error.InvalidUpdatePath;
+    }
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        plan.channel_root,
+        plan_path,
+        .file,
+    );
+    progress.plan_path_safe = true;
+
+    const expected_result_name = try applyUpdateResultName(allocator, plan.transaction_id);
+    defer allocator.free(expected_result_name);
+    const expected_result_path = try std.fs.path.join(
+        allocator,
+        &.{ plan.channel_root, expected_result_name },
+    );
+    defer allocator.free(expected_result_path);
+    try requireResolvedApplyUpdatePath(allocator, plan.result_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(plan.result_path), expected_result_name) or
+        !try applyUpdatePathsEqual(allocator, plan.result_path, expected_result_path))
+    {
+        return error.InvalidUpdatePath;
+    }
+    const result_stat = std.Io.Dir.cwd().statFile(g_io, plan.result_path, .{
+        .follow_symlinks = false,
+    }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (result_stat) |stat| {
+        if (stat.kind != .file) return error.InvalidUpdatePath;
+        try requirePhysicalApplyUpdateChild(
+            allocator,
+            plan.channel_root,
+            plan.result_path,
+            .file,
+        );
+    }
+    progress.result_path_safe = true;
+
+    const extraction_dir = try std.fs.path.join(
+        allocator,
+        &.{ plan.channel_root, "self-extraction" },
+    );
+    defer allocator.free(extraction_dir);
+    const tar_name = try std.fmt.allocPrint(allocator, "{s}.tar", .{plan.hash});
+    defer allocator.free(tar_name);
+    const expected_tar_path = try std.fs.path.join(allocator, &.{ extraction_dir, tar_name });
+    defer allocator.free(expected_tar_path);
+    try requireResolvedApplyUpdatePath(allocator, plan.retained_tar_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(plan.retained_tar_path), tar_name) or
+        !try applyUpdatePathsEqual(allocator, plan.retained_tar_path, expected_tar_path))
+    {
+        return error.InvalidUpdatePath;
+    }
+
+    var display_name: []u8 = undefined;
+    var had_uninstall_manifest = false;
+    if (builtin.os.tag == .windows) {
+        var paths = try windowsManagedPathsFromBaseDir(
+            allocator,
+            plan.channel_root,
+            plan.identifier,
+            plan.channel,
+        );
+        defer paths.deinit(allocator);
+        if (!try applyUpdatePathsEqual(allocator, plan.app_bundle_path, paths.app_dir)) {
+            return error.InvalidUpdatePath;
+        }
+        if (loadAndValidateWindowsManifest(
+            allocator,
+            paths.manifest,
+            paths.channel_root,
+        )) |document_value| {
+            had_uninstall_manifest = true;
+            var document = document_value;
+            defer allocator.free(document.contents);
+            defer document.parsed.deinit();
+            if (!std.mem.eql(u8, document.parsed.value.identifier, plan.identifier) or
+                !installedChannelMatches(document.parsed.value.channel, plan.channel))
+            {
+                return error.InvalidUpdateIdentity;
+            }
+            display_name = try allocator.dupe(u8, document.parsed.value.name);
+        } else |err| switch (err) {
+            error.FileNotFound => display_name = try legacyApplyUpdateDisplayName(
+                allocator,
+                plan.app_bundle_path,
+                plan.identifier,
+                plan.channel,
+            ),
+            else => return err,
+        }
+    } else if (builtin.os.tag == .linux) {
+        var scope = try openLinuxInstallScope(allocator, plan.channel_root);
+        defer scope.deinit(allocator);
+        if (!std.mem.eql(u8, scope.identifier, plan.identifier)) {
+            return error.InvalidUpdateIdentity;
+        }
+        const expected_app_path = try std.fs.path.join(
+            allocator,
+            &.{ plan.channel_root, "app" },
+        );
+        defer allocator.free(expected_app_path);
+        if (!std.mem.eql(u8, plan.app_bundle_path, expected_app_path)) {
+            return error.InvalidUpdatePath;
+        }
+        if (loadAndValidateLinuxManifest(allocator, scope)) |document_value| {
+            had_uninstall_manifest = true;
+            var document = document_value;
+            defer allocator.free(document.contents);
+            defer document.parsed.deinit();
+            if (!std.mem.eql(u8, document.parsed.value.identifier, plan.identifier) or
+                !installedChannelMatches(document.parsed.value.channel, plan.channel))
+            {
+                return error.InvalidUpdateIdentity;
+            }
+            display_name = try allocator.dupe(u8, document.parsed.value.name);
+        } else |err| switch (err) {
+            error.FileNotFound => display_name = try legacyApplyUpdateDisplayName(
+                allocator,
+                plan.app_bundle_path,
+                plan.identifier,
+                plan.channel,
+            ),
+            else => return err,
+        }
+    } else {
+        var paths = try macosManagedPathsFromInstallRoot(
+            allocator,
+            plan.channel_root,
+            plan.identifier,
+            plan.channel,
+        );
+        defer paths.deinit(allocator);
+        const manifest_path = try macosManifestPath(allocator, plan.channel_root);
+        defer allocator.free(manifest_path);
+        if (loadAndValidateMacosManifest(
+            allocator,
+            manifest_path,
+            plan.channel_root,
+        )) |document_value| {
+            had_uninstall_manifest = true;
+            var document = document_value;
+            defer allocator.free(document.contents);
+            defer document.parsed.deinit();
+            if (!std.mem.eql(u8, document.parsed.value.identifier, plan.identifier) or
+                !installedChannelMatches(document.parsed.value.channel, plan.channel) or
+                !std.mem.eql(u8, document.parsed.value.app_bundle_path, plan.app_bundle_path))
+            {
+                return error.InvalidUpdateIdentity;
+            }
+            display_name = try allocator.dupe(u8, document.parsed.value.name);
+        } else |err| switch (err) {
+            error.FileNotFound => display_name = try legacyApplyUpdateDisplayName(
+                allocator,
+                plan.app_bundle_path,
+                plan.identifier,
+                plan.channel,
+            ),
+            else => return err,
+        }
+    }
+    errdefer allocator.free(display_name);
+    var current_identity = try currentApplyUpdateIdentity(
+        allocator,
+        plan.app_bundle_path,
+        plan.identifier,
+        plan.channel,
+    );
+    defer current_identity.deinit(allocator);
+    if (!applyUpdateRootMatchesIdentity(
+        root_name,
+        plan.channel,
+        current_identity.name,
+        current_identity.display_name,
+    )) {
+        return error.InvalidUpdatePath;
+    }
+    const install_root_name = try allocator.dupe(u8, root_name);
+    errdefer allocator.free(install_root_name);
+
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        plan.channel_root,
+        extraction_dir,
+        .directory,
+    );
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        extraction_dir,
+        plan.retained_tar_path,
+        .file,
+    );
+    try requireResolvedApplyUpdatePath(allocator, plan.app_bundle_path);
+    try requireApplyUpdateDirectory(plan.app_bundle_path);
+    const app_parent = std.fs.path.dirname(plan.app_bundle_path) orelse return error.InvalidUpdatePath;
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        app_parent,
+        plan.app_bundle_path,
+        .directory,
+    );
+
+    return .{
+        .display_name = display_name,
+        .install_root_name = install_root_name,
+        .had_uninstall_manifest = had_uninstall_manifest,
+    };
+}
+
+fn validateApplyUpdateRecoveryTarget(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+) !void {
+    if (plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION or
+        !isApplyUpdateTransactionId(plan.transaction_id) or
+        !std.mem.eql(u8, plan.platform, expectedApplyUpdatePlatform()) or
+        !std.mem.eql(u8, plan.arch, expectedApplyUpdateArch()) or
+        plan.parent_pid == 0)
+    {
+        return error.InvalidUpdatePlan;
+    }
+
+    const expected_identifier_root = try expectedApplyUpdateChannelRoot(
+        allocator,
+        plan.identifier,
+        plan.channel,
+    );
+    defer allocator.free(expected_identifier_root);
+    try requireResolvedApplyUpdatePath(allocator, plan.channel_root);
+    const actual_identifier_root = std.fs.path.dirname(plan.channel_root) orelse
+        return error.InvalidUpdatePath;
+    if (!try applyUpdatePathsEqual(
+        allocator,
+        actual_identifier_root,
+        expected_identifier_root,
+    )) {
+        return error.InvalidUpdatePath;
+    }
+
+    if (builtin.os.tag == .windows) {
+        var paths = try windowsManagedPathsFromBaseDir(
+            allocator,
+            plan.channel_root,
+            plan.identifier,
+            plan.channel,
+        );
+        defer paths.deinit(allocator);
+        if (!try applyUpdatePathsEqual(allocator, plan.app_bundle_path, paths.app_dir)) {
+            return error.InvalidUpdatePath;
+        }
+    } else if (builtin.os.tag == .linux) {
+        var scope = try openLinuxInstallScope(allocator, plan.channel_root);
+        defer scope.deinit(allocator);
+        if (!std.mem.eql(u8, scope.identifier, plan.identifier)) {
+            return error.InvalidUpdateIdentity;
+        }
+        const expected_app_path = try std.fs.path.join(
+            allocator,
+            &.{ plan.channel_root, "app" },
+        );
+        defer allocator.free(expected_app_path);
+        if (!std.mem.eql(u8, plan.app_bundle_path, expected_app_path)) {
+            return error.InvalidUpdatePath;
+        }
+    } else {
+        var paths = try macosManagedPathsFromInstallRoot(
+            allocator,
+            plan.channel_root,
+            plan.identifier,
+            plan.channel,
+        );
+        defer paths.deinit(allocator);
+    }
+
+    try requireResolvedApplyUpdatePath(allocator, plan.app_bundle_path);
+    try requireApplyUpdateDirectory(plan.app_bundle_path);
+    var current_identity = try currentApplyUpdateIdentity(
+        allocator,
+        plan.app_bundle_path,
+        plan.identifier,
+        plan.channel,
+    );
+    defer current_identity.deinit(allocator);
+    if (!applyUpdateRootMatchesIdentity(
+        std.fs.path.basename(plan.channel_root),
+        plan.channel,
+        current_identity.name,
+        current_identity.display_name,
+    )) {
+        return error.InvalidUpdatePath;
+    }
+    const app_parent = std.fs.path.dirname(plan.app_bundle_path) orelse
+        return error.InvalidUpdatePath;
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        app_parent,
+        plan.app_bundle_path,
+        .directory,
+    );
+}
+
+fn waitForApplyUpdateParent(parent_pid: u32) !void {
+    if (builtin.os.tag == .windows) {
+        const handle = windows_uninstall_sync.OpenProcess(
+            windows_uninstall_sync.synchronize,
+            .FALSE,
+            @intCast(parent_pid),
+        ) orelse {
+            if (windows_uninstall_sync.GetLastError() ==
+                windows_uninstall_sync.error_invalid_parameter) return;
+            return error.ParentProcessWaitFailed;
+        };
+        defer _ = windows_uninstall_sync.CloseHandle(handle);
+        const result = windows_uninstall_sync.WaitForSingleObject(
+            handle,
+            @intCast(APPLY_UPDATE_PARENT_WAIT_MILLISECONDS),
+        );
+        if (result == windows_uninstall_sync.wait_object_0) return;
+        if (result == windows_uninstall_sync.wait_timeout) return error.ParentProcessWaitTimedOut;
+        if (result == windows_uninstall_sync.wait_failed) return error.ParentProcessWaitFailed;
+        return error.ParentProcessWaitFailed;
+    }
+
+    const pid = std.math.cast(std.posix.pid_t, parent_pid) orelse
+        return error.InvalidParentProcess;
+    const attempts = APPLY_UPDATE_PARENT_WAIT_MILLISECONDS / 100;
+    var attempt: u64 = 0;
+    while (attempt < attempts) : (attempt += 1) {
+        std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+            error.ProcessNotFound => return,
+            error.PermissionDenied => {},
+            else => return err,
+        };
+        g_io.sleep(.fromMilliseconds(100), .awake) catch {};
+    }
+    return error.ParentProcessWaitTimedOut;
+}
+
+fn applyUpdateBundleResourcePath(
+    allocator: std.mem.Allocator,
+    bundle_path: []const u8,
+    child: []const u8,
+) ![]u8 {
+    return if (builtin.os.tag == .macos)
+        std.fs.path.join(allocator, &.{ bundle_path, "Contents", "Resources", child })
+    else
+        std.fs.path.join(allocator, &.{ bundle_path, "Resources", child });
+}
+
+fn applyUpdateLauncherPath(
+    allocator: std.mem.Allocator,
+    bundle_path: []const u8,
+) ![]u8 {
+    return switch (builtin.os.tag) {
+        .windows => std.fs.path.join(allocator, &.{ bundle_path, "bin", "launcher.exe" }),
+        .linux => std.fs.path.join(allocator, &.{ bundle_path, "bin", "launcher" }),
+        .macos => std.fs.path.join(allocator, &.{ bundle_path, "Contents", "MacOS", "launcher" }),
+        else => unreachable,
+    };
+}
+
+fn validateApplyUpdateBundleIdentity(
+    allocator: std.mem.Allocator,
+    bundle_path: []const u8,
+    plan: ApplyUpdatePlan,
+) ![]u8 {
+    try requireApplyUpdateDirectory(bundle_path);
+    const bundle_parent = std.fs.path.dirname(bundle_path) orelse return error.InvalidUpdatePath;
+    try requirePhysicalApplyUpdateChild(allocator, bundle_parent, bundle_path, .directory);
+    const contents_path: ?[]u8 = if (builtin.os.tag == .macos)
+        try std.fs.path.join(allocator, &.{ bundle_path, "Contents" })
+    else
+        null;
+    defer if (contents_path) |path| allocator.free(path);
+    const resource_parent = contents_path orelse bundle_path;
+    if (contents_path) |path| {
+        try requirePhysicalApplyUpdateChild(allocator, bundle_path, path, .directory);
+    }
+    const resources_path = try std.fs.path.join(allocator, &.{ resource_parent, "Resources" });
+    defer allocator.free(resources_path);
+    try requirePhysicalApplyUpdateChild(allocator, resource_parent, resources_path, .directory);
+    const version_path = try applyUpdateBundleResourcePath(allocator, bundle_path, "version.json");
+    defer allocator.free(version_path);
+    try requirePhysicalApplyUpdateChild(allocator, resources_path, version_path, .file);
+    var version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer version_file.close(g_io);
+    prepareNoFollowFileForRead(&version_file);
+    var read_buffer: [4096]u8 = undefined;
+    var reader = version_file.reader(g_io, &read_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
+        error.ReadFailed => return reader.err.?,
+        else => |other| return other,
+    };
+    defer allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        StagedUpdateIdentity,
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    );
+    defer parsed.deinit();
+    if (!std.mem.eql(u8, parsed.value.identifier, plan.identifier) or
+        !std.mem.eql(u8, parsed.value.channel, plan.channel) or
+        !std.mem.eql(u8, parsed.value.version, plan.version) or
+        !std.mem.eql(u8, parsed.value.hash, plan.hash))
+    {
+        return error.InvalidUpdateIdentity;
+    }
+    const valid_display_name = if (builtin.os.tag == .windows)
+        isSafeWindowsDisplayName(parsed.value.displayName)
+    else if (builtin.os.tag == .linux)
+        isSafeLinuxDisplayName(parsed.value.displayName)
+    else
+        isSafeMacosDisplayName(parsed.value.displayName);
+    if (!valid_display_name) return error.InvalidUpdateIdentity;
+
+    const launcher_path = try applyUpdateLauncherPath(allocator, bundle_path);
+    defer allocator.free(launcher_path);
+    const launcher_parent = std.fs.path.dirname(launcher_path) orelse return error.InvalidUpdatePath;
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        resource_parent,
+        launcher_parent,
+        .directory,
+    );
+    try requirePhysicalApplyUpdateChild(allocator, launcher_parent, launcher_path, .file);
+    const manager_path = try applyUpdateBundleResourcePath(
+        allocator,
+        bundle_path,
+        if (builtin.os.tag == .windows) WINDOWS_BUNDLED_UNINSTALL_EXE_NAME else "uninstall",
+    );
+    defer allocator.free(manager_path);
+    try requirePhysicalApplyUpdateChild(allocator, resources_path, manager_path, .file);
+    return allocator.dupe(u8, parsed.value.displayName);
+}
+
+fn findSingleApplyUpdateBundle(
+    allocator: std.mem.Allocator,
+    staging_path: []const u8,
+) ![]u8 {
+    var staging_dir = try std.Io.Dir.openDirAbsolute(g_io, staging_path, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer staging_dir.close(g_io);
+    var iterator = staging_dir.iterate();
+    var bundle_name: ?[]u8 = null;
+    errdefer if (bundle_name) |name| allocator.free(name);
+    while (try iterator.next(g_io)) |entry| {
+        if (entry.kind != .directory or bundle_name != null) {
+            return error.InvalidUpdateArchive;
+        }
+        bundle_name = try allocator.dupe(u8, entry.name);
+    }
+    const name = bundle_name orelse return error.InvalidUpdateArchive;
+    defer allocator.free(name);
+    if (builtin.os.tag == .macos and
+        !std.mem.endsWith(u8, name, ".app")) return error.InvalidUpdateArchive;
+    return std.fs.path.join(allocator, &.{ staging_path, name });
+}
+
+fn removePlainApplyUpdateDirectoryIfPresent(path: []const u8) !void {
+    const stat = std.Io.Dir.cwd().statFile(g_io, path, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound, error.NotDir => return,
+        else => return err,
+    };
+    if (stat.kind != .directory) return error.InvalidUpdatePath;
+    try std.Io.Dir.cwd().deleteTree(g_io, path);
+}
+
+fn renameApplyUpdatePath(
+    source_path: []const u8,
+    destination_path: []const u8,
+) !void {
+    try std.Io.Dir.cwd().rename(source_path, std.Io.Dir.cwd(), destination_path, g_io);
+}
+
+fn renameCurrentApplyUpdateBundle(
+    source_path: []const u8,
+    destination_path: []const u8,
+) !void {
+    if (builtin.os.tag != .windows) return renameApplyUpdatePath(source_path, destination_path);
+    var attempt: usize = 0;
+    while (attempt < APPLY_UPDATE_WINDOWS_RENAME_RETRIES) : (attempt += 1) {
+        renameApplyUpdatePath(source_path, destination_path) catch |err| {
+            if (attempt + 1 == APPLY_UPDATE_WINDOWS_RENAME_RETRIES) return err;
+            g_io.sleep(
+                .fromMilliseconds(APPLY_UPDATE_WINDOWS_RENAME_RETRY_MILLISECONDS),
+                .awake,
+            ) catch {};
+            continue;
+        };
+        return;
+    }
+    unreachable;
+}
+
+fn removeRollbackApplyUpdateBundle(path: []const u8) !void {
+    if (builtin.os.tag != .windows) return removePlainApplyUpdateDirectoryIfPresent(path);
+    var attempt: usize = 0;
+    while (attempt < APPLY_UPDATE_WINDOWS_RENAME_RETRIES) : (attempt += 1) {
+        removePlainApplyUpdateDirectoryIfPresent(path) catch |err| {
+            if (attempt + 1 == APPLY_UPDATE_WINDOWS_RENAME_RETRIES) return err;
+            g_io.sleep(
+                .fromMilliseconds(APPLY_UPDATE_WINDOWS_RENAME_RETRY_MILLISECONDS),
+                .awake,
+            ) catch {};
+            continue;
+        };
+        return;
+    }
+    unreachable;
+}
+
+fn applyUpdateIntegrationMetadata(
+    plan: ApplyUpdatePlan,
+    display_name: []const u8,
+    hash: ?[]const u8,
+    install_root_name: []const u8,
+) AppMetadata {
+    return .{
+        .identifier = plan.identifier,
+        .name = display_name,
+        .channel = plan.channel,
+        .hash = hash,
+        .install_root_name = install_root_name,
+    };
+}
+
+fn applyUpdatePlatformIntegration(
+    allocator: std.mem.Allocator,
+    bundle_path: []const u8,
+    display_name: []const u8,
+    plan: ApplyUpdatePlan,
+    hash: ?[]const u8,
+    install_root_name: []const u8,
+) !void {
+    const metadata = applyUpdateIntegrationMetadata(
+        plan,
+        display_name,
+        hash,
+        install_root_name,
+    );
+    if (builtin.os.tag == .windows) {
+        try installWindowsIntegration(allocator, bundle_path, metadata);
+    } else if (builtin.os.tag == .linux) {
+        try installLinuxIntegration(allocator, bundle_path, metadata);
+    } else {
+        try installMacosUninstallManagerAtRoot(
+            allocator,
+            plan.channel_root,
+            bundle_path,
+            bundle_path,
+            metadata,
+        );
+    }
+}
+
+fn launchAppliedUpdate(
+    allocator: std.mem.Allocator,
+    bundle_path: []const u8,
+) !void {
+    if (builtin.os.tag == .macos) {
+        const argv = [_][]const u8{ "/usr/bin/open", bundle_path };
+        _ = try std.process.spawn(g_io, .{
+            .argv = &argv,
+            .stdin = .ignore,
+            .stdout = .ignore,
+            .stderr = .ignore,
+        });
+        return;
+    }
+
+    const launcher_path = try applyUpdateLauncherPath(allocator, bundle_path);
+    defer allocator.free(launcher_path);
+    const working_dir = std.fs.path.dirname(launcher_path) orelse return error.InvalidUpdatePath;
+    const argv = [_][]const u8{launcher_path};
+    _ = try std.process.spawn(g_io, .{
+        .argv = &argv,
+        .cwd = .{ .path = working_dir },
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+        .create_no_window = builtin.os.tag == .windows,
+    });
+}
+
+fn rollbackAppliedUpdate(
+    target_path: []const u8,
+    previous_path: []const u8,
+) !void {
+    try removeRollbackApplyUpdateBundle(target_path);
+    try renameCurrentApplyUpdateBundle(previous_path, target_path);
+}
+
+const ApplyUpdateCommit = struct {
+    previous_path: []u8,
+
+    fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
+        allocator.free(self.previous_path);
+        self.* = undefined;
+    }
+};
+
+const ApplyUpdateFailureRecovery = enum {
+    none,
+    wait_then_relaunch,
+    relaunch,
+};
+
+fn applyUpdateFailureRecovery(
+    phase: ApplyUpdatePhase,
+    parent_exited: bool,
+    update_error: anyerror,
+) ApplyUpdateFailureRecovery {
+    if (update_error == error.UpdateRollbackFailed or phase == .complete) return .none;
+    if (parent_exited) return .relaunch;
+    return switch (phase) {
+        .validating, .extracting, .validating_payload => .wait_then_relaunch,
+        .waiting_for_parent, .swapping, .integrating, .launching, .complete => .none,
+    };
+}
+
+fn recoverApplyUpdateFailure(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+    phase: ApplyUpdatePhase,
+    parent_exited: bool,
+    update_error: anyerror,
+) void {
+    switch (applyUpdateFailureRecovery(phase, parent_exited, update_error)) {
+        .none => return,
+        .wait_then_relaunch => waitForApplyUpdateParent(plan.parent_pid) catch |wait_error| {
+            std.debug.print(
+                "Warning: Could not safely relaunch the previous application after update failure: {}\n",
+                .{wait_error},
+            );
+            return;
+        },
+        .relaunch => {},
+    }
+    launchAppliedUpdate(allocator, plan.app_bundle_path) catch |launch_error| {
+        std.debug.print(
+            "Warning: Could not relaunch the previous application after update failure: {}\n",
+            .{launch_error},
+        );
+    };
+}
+
+fn performApplyUpdateTransaction(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+    display_name: []const u8,
+    install_root_name: []const u8,
+    had_uninstall_manifest: bool,
+    phase: *ApplyUpdatePhase,
+    parent_exited: *bool,
+) !ApplyUpdateCommit {
+    const target_parent_path = std.fs.path.dirname(plan.app_bundle_path) orelse
+        return error.InvalidUpdatePath;
+    try requireResolvedApplyUpdatePath(allocator, target_parent_path);
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        target_parent_path,
+        plan.app_bundle_path,
+        .directory,
+    );
+
+    const staging_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}.update-{s}",
+        .{ plan.app_bundle_path, plan.transaction_id },
+    );
+    defer allocator.free(staging_path);
+    const previous_path = try std.fmt.allocPrint(
+        allocator,
+        "{s}.previous",
+        .{plan.app_bundle_path},
+    );
+    errdefer allocator.free(previous_path);
+
+    try removePlainApplyUpdateDirectoryIfPresent(staging_path);
+    try std.Io.Dir.createDirAbsolute(g_io, staging_path, .default_dir);
+    defer removePlainApplyUpdateDirectoryIfPresent(staging_path) catch {};
+
+    phase.* = .extracting;
+    try extractTarFileQuiet(plan.retained_tar_path, staging_path);
+    const staged_bundle = try findSingleApplyUpdateBundle(allocator, staging_path);
+    defer allocator.free(staged_bundle);
+
+    if (builtin.os.tag != .windows) try fixExecutablePermissions(allocator, staged_bundle);
+    if (builtin.os.tag == .linux) try fixCefSymlinks(allocator, staged_bundle);
+    if (builtin.os.tag == .macos) removeQuarantine(allocator, staged_bundle) catch |err| {
+        std.debug.print("Warning: Could not remove quarantine from staged update: {}\n", .{err});
+    };
+    phase.* = .validating_payload;
+    const staged_display_name = try validateApplyUpdateBundleIdentity(
+        allocator,
+        staged_bundle,
+        plan,
+    );
+    defer allocator.free(staged_display_name);
+    const rollback_display_name = if (had_uninstall_manifest)
+        display_name
+    else
+        staged_display_name;
+
+    phase.* = .waiting_for_parent;
+    try waitForApplyUpdateParent(plan.parent_pid);
+    parent_exited.* = true;
+
+    var windows_lock: ?WindowsUninstallLock = null;
+    defer if (builtin.os.tag == .windows) {
+        if (windows_lock) |*lock| lock.release();
+    };
+    if (builtin.os.tag == .windows) {
+        windows_lock = try acquireWindowsUninstallLock(allocator, plan.channel_root);
+    }
+
+    phase.* = .swapping;
+    const target_exists = try extractionPathExists(plan.app_bundle_path);
+    const previous_exists = try extractionPathExists(previous_path);
+    if (!target_exists and previous_exists) {
+        try requireApplyUpdateDirectory(previous_path);
+        try renameCurrentApplyUpdateBundle(previous_path, plan.app_bundle_path);
+    } else if (!target_exists) {
+        return error.UpdateTargetMissing;
+    }
+    if (try extractionPathExists(previous_path)) {
+        try removePlainApplyUpdateDirectoryIfPresent(previous_path);
+    }
+    try requirePhysicalApplyUpdateChild(
+        allocator,
+        target_parent_path,
+        plan.app_bundle_path,
+        .directory,
+    );
+    try renameCurrentApplyUpdateBundle(plan.app_bundle_path, previous_path);
+    var rollback_armed = true;
+    errdefer if (rollback_armed) {
+        rollbackAppliedUpdate(plan.app_bundle_path, previous_path) catch |rollback_error| {
+            std.debug.print("ERROR: Update rollback failed: {}\n", .{rollback_error});
+        };
+    };
+    renameApplyUpdatePath(staged_bundle, plan.app_bundle_path) catch |err| {
+        rollbackAppliedUpdate(plan.app_bundle_path, previous_path) catch |rollback_error| {
+            std.debug.print("ERROR: Update rollback failed after swap error: {}\n", .{rollback_error});
+            rollback_armed = false;
+            return error.UpdateRollbackFailed;
+        };
+        rollback_armed = false;
+        return err;
+    };
+
+    phase.* = .integrating;
+    applyUpdatePlatformIntegration(
+        allocator,
+        plan.app_bundle_path,
+        staged_display_name,
+        plan,
+        plan.hash,
+        install_root_name,
+    ) catch |err| {
+        rollbackAppliedUpdate(plan.app_bundle_path, previous_path) catch |rollback_error| {
+            std.debug.print("ERROR: Update rollback failed after integration error: {}\n", .{rollback_error});
+            rollback_armed = false;
+            return error.UpdateRollbackFailed;
+        };
+        rollback_armed = false;
+        applyUpdatePlatformIntegration(
+            allocator,
+            plan.app_bundle_path,
+            rollback_display_name,
+            plan,
+            null,
+            install_root_name,
+        ) catch |repair_error| {
+            std.debug.print("Warning: Could not restore previous uninstall integration: {}\n", .{repair_error});
+        };
+        return err;
+    };
+
+    phase.* = .launching;
+    launchAppliedUpdate(allocator, plan.app_bundle_path) catch |err| {
+        rollbackAppliedUpdate(plan.app_bundle_path, previous_path) catch |rollback_error| {
+            std.debug.print("ERROR: Update rollback failed after launch error: {}\n", .{rollback_error});
+            rollback_armed = false;
+            return error.UpdateRollbackFailed;
+        };
+        rollback_armed = false;
+        applyUpdatePlatformIntegration(
+            allocator,
+            plan.app_bundle_path,
+            rollback_display_name,
+            plan,
+            null,
+            install_root_name,
+        ) catch |repair_error| {
+            std.debug.print("Warning: Could not restore previous uninstall integration: {}\n", .{repair_error});
+        };
+        return err;
+    };
+    rollback_armed = false;
+    return .{ .previous_path = previous_path };
+}
+
+fn publishApplyUpdateResult(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+    success: bool,
+    phase: ApplyUpdatePhase,
+    message: []const u8,
+) !void {
+    const result = ApplyUpdateResult{
+        .transaction_id = plan.transaction_id,
+        .success = success,
+        .phase = @tagName(phase),
+        .message = message,
+        .identifier = plan.identifier,
+        .channel = plan.channel,
+        .version = plan.version,
+        .hash = plan.hash,
+    };
+    const json = try std.json.Stringify.valueAlloc(
+        allocator,
+        result,
+        .{ .whitespace = .indent_2 },
+    );
+    defer allocator.free(json);
+    var atomic_file = try std.Io.Dir.cwd().createFileAtomic(g_io, plan.result_path, .{
+        .replace = true,
+    });
+    defer atomic_file.deinit(g_io);
+    var buffer: [4096]u8 = undefined;
+    var writer = atomic_file.file.writer(g_io, &buffer);
+    try writer.interface.writeAll(json);
+    try writer.flush();
+    try atomic_file.file.sync(g_io);
+    try atomic_file.replace(g_io);
+}
+
+fn removeApplyUpdateWindowsTask(
+    allocator: std.mem.Allocator,
+    transaction_id: []const u8,
+) void {
+    if (builtin.os.tag != .windows) return;
+    const task_name = applyUpdateTaskName(allocator, transaction_id) catch return;
+    defer allocator.free(task_name);
+    const schtasks_path = getWindowsSystemExecutablePath(allocator, "schtasks.exe") catch return;
+    defer allocator.free(schtasks_path);
+    const argv = [_][]const u8{ schtasks_path, "/Delete", "/TN", task_name, "/F" };
+    _ = runWindowsCommand(&argv) catch {};
+}
+
+fn cleanupApplyUpdateHelper(allocator: std.mem.Allocator, helper_path: []const u8) void {
+    if (builtin.os.tag == .windows) {
+        // A running PE cannot delete itself. Reuse the short-lived deferred
+        // cleanup worker used by the Windows uninstaller so the update helper
+        // normally disappears as soon as this process exits instead of
+        // accumulating in TEMP until the next reboot.
+        scheduleTemporaryWorkerDeletion(allocator, helper_path) catch |err| {
+            std.debug.print("Warning: Could not start update-helper cleanup: {}\n", .{err});
+            const helper_path_w = std.unicode.wtf8ToWtf16LeAllocZ(allocator, helper_path) catch return;
+            defer allocator.free(helper_path_w);
+            if (windows_uninstall_sync.MoveFileExW(
+                helper_path_w.ptr,
+                null,
+                windows_uninstall_sync.movefile_delay_until_reboot,
+            ) == .FALSE) {
+                std.debug.print("Warning: Could not schedule update-helper cleanup.\n", .{});
+            }
+        };
+    } else {
+        std.Io.Dir.cwd().deleteFile(g_io, helper_path) catch |err| {
+            std.debug.print("Warning: Could not remove update helper: {}\n", .{err});
+        };
+    }
+}
+
+fn shouldInvalidateApplyUpdatePayload(phase: ApplyUpdatePhase) bool {
+    return phase == .extracting or phase == .validating_payload;
+}
+
+fn isApplyUpdateHashTransientName(name: []const u8, hash: []const u8) bool {
+    if (std.mem.startsWith(u8, name, hash)) {
+        const suffix = name[hash.len..];
+        if (std.mem.eql(u8, suffix, ".tar.previous")) return true;
+        if (std.mem.startsWith(u8, suffix, ".tar.") and
+            std.mem.endsWith(u8, suffix, ".partial"))
+        {
+            const transaction_id = suffix[".tar.".len .. suffix.len - ".partial".len];
+            return isApplyUpdateTransactionId(transaction_id);
+        }
+    }
+    if (name.len <= hash.len + 2 or name[0] != '.' or
+        !std.mem.eql(u8, name[1 .. hash.len + 1], hash) or
+        name[hash.len + 1] != '.') return false;
+    const compressed_suffix = name[hash.len + 2 ..];
+    if (compressed_suffix.len < APPLY_UPDATE_TRANSACTION_HEX_LENGTH) return false;
+    const transaction_id = compressed_suffix[0..APPLY_UPDATE_TRANSACTION_HEX_LENGTH];
+    if (!isApplyUpdateTransactionId(transaction_id)) return false;
+    const transaction_suffix = compressed_suffix[APPLY_UPDATE_TRANSACTION_HEX_LENGTH..];
+    return std.mem.eql(u8, transaction_suffix, ".tar.zst") or
+        std.mem.eql(u8, transaction_suffix, ".tar.zst.partial");
+}
+
+fn isApplyUpdatePreparedStateName(name: []const u8) bool {
+    return std.mem.eql(u8, name, APPLY_UPDATE_PREPARED_FILE) or
+        std.mem.eql(u8, name, APPLY_UPDATE_PREPARED_FILE ++ ".previous") or
+        (std.mem.startsWith(u8, name, APPLY_UPDATE_PREPARED_FILE ++ ".") and
+            std.mem.endsWith(u8, name, ".partial"));
+}
+
+fn applyUpdatePreparedStateMatchesPlan(
+    allocator: std.mem.Allocator,
+    extraction_path: []const u8,
+    name: []const u8,
+    plan: ApplyUpdatePlan,
+) bool {
+    const path = std.fs.path.join(allocator, &.{ extraction_path, name }) catch return false;
+    defer allocator.free(path);
+    var file = std.Io.Dir.openFileAbsolute(g_io, path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    }) catch return false;
+    defer file.close(g_io);
+    prepareNoFollowFileForRead(&file);
+    const stat = file.stat(g_io) catch return false;
+    if (stat.kind != .file or stat.size > 64 * 1024) return false;
+    var read_buffer: [4096]u8 = undefined;
+    var reader = file.reader(g_io, &read_buffer);
+    const contents = reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch
+        return false;
+    defer allocator.free(contents);
+    const parsed = std.json.parseFromSlice(
+        ApplyUpdatePreparedRecord,
+        allocator,
+        contents,
+        .{ .ignore_unknown_fields = true },
+    ) catch return false;
+    defer parsed.deinit();
+    return parsed.value.schema_version == 1 and
+        std.mem.eql(u8, parsed.value.identifier, plan.identifier) and
+        std.mem.eql(u8, parsed.value.channel, plan.channel) and
+        std.mem.eql(u8, parsed.value.platform, plan.platform) and
+        std.mem.eql(u8, parsed.value.arch, plan.arch) and
+        std.mem.eql(u8, parsed.value.version, plan.version) and
+        std.mem.eql(u8, parsed.value.hash, plan.hash) and
+        std.mem.eql(u8, parsed.value.retained_tar_path, plan.retained_tar_path);
+}
+
+fn cleanupInvalidApplyUpdatePayloadState(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+    phase: ApplyUpdatePhase,
+) !void {
+    if (!shouldInvalidateApplyUpdatePayload(phase)) return;
+    const extraction_path = std.fs.path.dirname(plan.retained_tar_path) orelse
+        return error.InvalidUpdatePath;
+    const retained_tar_name = std.fs.path.basename(plan.retained_tar_path);
+    var extraction_dir = try std.Io.Dir.openDirAbsolute(g_io, extraction_path, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer extraction_dir.close(g_io);
+    var iterator = extraction_dir.iterate();
+    while (try iterator.next(g_io)) |entry| {
+        if (entry.kind != .file) continue;
+        const remove = std.mem.eql(u8, entry.name, retained_tar_name) or
+            isApplyUpdateHashTransientName(entry.name, plan.hash) or
+            (isApplyUpdatePreparedStateName(entry.name) and
+                applyUpdatePreparedStateMatchesPlan(allocator, extraction_path, entry.name, plan));
+        if (!remove) continue;
+        extraction_dir.deleteFile(g_io, entry.name) catch |err| {
+            std.debug.print("Warning: Could not invalidate failed update state {s}: {}\n", .{
+                entry.name,
+                err,
+            });
+        };
+    }
+}
+
+fn shouldRemoveCommittedUpdateState(name: []const u8, retained_tar_name: []const u8) bool {
+    if (std.mem.eql(u8, name, retained_tar_name)) return false;
+    if (std.mem.eql(u8, name, APPLY_UPDATE_PREPARED_FILE) or
+        std.mem.startsWith(u8, name, APPLY_UPDATE_PREPARED_FILE ++ ".")) return true;
+    return std.mem.endsWith(u8, name, ".tar") or
+        std.mem.endsWith(u8, name, ".tar.previous") or
+        std.mem.endsWith(u8, name, ".tar.zst") or
+        std.mem.endsWith(u8, name, ".partial");
+}
+
+fn cleanupCommittedApplyUpdateState(
+    allocator: std.mem.Allocator,
+    plan: ApplyUpdatePlan,
+) !void {
+    const extraction_path = std.fs.path.dirname(plan.retained_tar_path) orelse
+        return error.InvalidUpdatePath;
+    const retained_tar_name = std.fs.path.basename(plan.retained_tar_path);
+    var extraction_dir = try std.Io.Dir.openDirAbsolute(g_io, extraction_path, .{
+        .follow_symlinks = false,
+        .iterate = true,
+    });
+    defer extraction_dir.close(g_io);
+    var iterator = extraction_dir.iterate();
+    while (try iterator.next(g_io)) |entry| {
+        if (!shouldRemoveCommittedUpdateState(entry.name, retained_tar_name)) continue;
+        if (entry.kind != .file) {
+            std.debug.print(
+                "Warning: Refusing to remove non-file update state: {s}\n",
+                .{entry.name},
+            );
+            continue;
+        }
+        extraction_dir.deleteFile(g_io, entry.name) catch |err| {
+            std.debug.print("Warning: Could not remove stale update state {s}: {}\n", .{
+                entry.name,
+                err,
+            });
+        };
+    }
+    _ = allocator;
+}
+
+fn runApplyUpdateManager(
+    allocator: std.mem.Allocator,
+    plan_path: []const u8,
+) !void {
+    var document = try loadApplyUpdatePlan(allocator, plan_path);
+    defer document.deinit(allocator);
+    const plan = document.parsed.value;
+    var phase: ApplyUpdatePhase = .validating;
+    var parent_exited = false;
+    var validation_progress: ApplyUpdateValidationProgress = .{};
+    var context = validateApplyUpdatePlanAndPaths(
+        allocator,
+        plan_path,
+        plan,
+        &validation_progress,
+    ) catch |err| {
+        const helper_path = validateApplyUpdateHelper(
+            allocator,
+            plan.transaction_id,
+        ) catch return err;
+        defer allocator.free(helper_path);
+        const actions = applyUpdateValidationFailureActions(true, validation_progress);
+        if (actions.cleanup_transport) {
+            removeApplyUpdateWindowsTask(allocator, plan.transaction_id);
+            defer cleanupApplyUpdateHelper(allocator, helper_path);
+        }
+        if (actions.publish_result) {
+            publishApplyUpdateResult(
+                allocator,
+                plan,
+                false,
+                phase,
+                @errorName(err),
+            ) catch |result_error| {
+                std.debug.print(
+                    "ERROR: Could not publish update validation failure result: {}\n",
+                    .{result_error},
+                );
+            };
+        }
+        if (actions.cleanup_plan) {
+            std.Io.Dir.cwd().deleteFile(g_io, plan_path) catch |cleanup_error| {
+                std.debug.print(
+                    "Warning: Could not remove rejected update plan: {}\n",
+                    .{cleanup_error},
+                );
+            };
+        }
+        validateApplyUpdateRecoveryTarget(allocator, plan) catch |recovery_validation_error| {
+            std.debug.print(
+                "Warning: Refusing to relaunch an unvalidated update target: {}\n",
+                .{recovery_validation_error},
+            );
+            return err;
+        };
+        recoverApplyUpdateFailure(allocator, plan, phase, parent_exited, err);
+        return err;
+    };
+    defer context.deinit(allocator);
+    defer {
+        removeApplyUpdateWindowsTask(allocator, plan.transaction_id);
+        std.Io.Dir.cwd().deleteFile(g_io, plan_path) catch {};
+    }
+
+    const helper_path = validateApplyUpdateHelper(allocator, plan.transaction_id) catch |err| {
+        publishApplyUpdateResult(allocator, plan, false, phase, @errorName(err)) catch {};
+        cleanupInvalidApplyUpdatePayloadState(allocator, plan, phase) catch {};
+        recoverApplyUpdateFailure(allocator, plan, phase, parent_exited, err);
+        return err;
+    };
+    defer allocator.free(helper_path);
+    defer cleanupApplyUpdateHelper(allocator, helper_path);
+
+    var commit = performApplyUpdateTransaction(
+        allocator,
+        plan,
+        context.display_name,
+        context.install_root_name,
+        context.had_uninstall_manifest,
+        &phase,
+        &parent_exited,
+    ) catch |err| {
+        publishApplyUpdateResult(allocator, plan, false, phase, @errorName(err)) catch |result_error| {
+            std.debug.print("ERROR: Could not publish update failure result: {}\n", .{result_error});
+        };
+        cleanupInvalidApplyUpdatePayloadState(allocator, plan, phase) catch |cleanup_error| {
+            std.debug.print("Warning: Could not invalidate failed update payload: {}\n", .{cleanup_error});
+        };
+        recoverApplyUpdateFailure(allocator, plan, phase, parent_exited, err);
+        return err;
+    };
+    defer commit.deinit(allocator);
+
+    phase = .complete;
+    try publishApplyUpdateResult(allocator, plan, true, phase, "Update applied successfully.");
+    cleanupCommittedApplyUpdateState(allocator, plan) catch |err| {
+        std.debug.print("Warning: Could not clean stale committed update state: {}\n", .{err});
+    };
+    removePlainApplyUpdateDirectoryIfPresent(commit.previous_path) catch |err| {
+        std.debug.print("Warning: Could not remove previous application after update: {}\n", .{err});
+    };
+}
+
+/// Electrobun v1 updaters replace only the application bundle. The first v2
+/// launcher therefore asks the archive-free manager bundled in that new app to
+/// create the v2 standalone manager, manifest, and platform integration in the
+/// preserved physical v1 root. The explicit root argument is independently
+/// bound to the manager's installed location before any mutation.
+fn bootstrapTrace(message: []const u8) void {
+    g_bootstrap_stage = message;
+    if (g_bootstrap_trace_enabled) {
+        std.debug.print("Bootstrap trace: {s}\n", .{message});
+    }
+}
+
+fn reportBootstrapFailure(err: anyerror) void {
+    std.debug.print(
+        "Bootstrap install failed during {s}: {s}\n",
+        .{ g_bootstrap_stage, @errorName(err) },
+    );
+}
+
+fn bootstrapWindowsInstall(
+    allocator: std.mem.Allocator,
+    requested_channel_root: []const u8,
+) !void {
+    bootstrapTrace("windows: resolve executable");
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    bootstrapTrace("windows: locate bundled invocation");
+    var invocation = try locateWindowsManagerInvocation(allocator, executable_path, true);
+    defer invocation.deinit(allocator);
+    bootstrapTrace("windows: validate requested root");
+    if (!invocation.bundled or
+        !std.fs.path.isAbsolute(requested_channel_root) or
+        !try windowsPathsEqual(allocator, requested_channel_root, invocation.base_dir))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
+    bootstrapTrace("windows: locate version metadata");
+    const app_dir = try std.fs.path.join(allocator, &.{ invocation.base_dir, "app" });
+    defer allocator.free(app_dir);
+    const version_path = try std.fs.path.join(
+        allocator,
+        &.{ app_dir, "Resources", "version.json" },
+    );
+    defer allocator.free(version_path);
+    bootstrapTrace("windows: read version metadata");
+    var metadata = try readBootstrapMetadata(allocator, version_path);
+    defer metadata.deinit(allocator);
+    bootstrapTrace("windows: install integration");
+    try installWindowsIntegration(
+        allocator,
+        app_dir,
+        metadata.appMetadata(std.fs.path.basename(invocation.base_dir)),
+    );
+    bootstrapTrace("windows: complete");
+}
+
+fn bootstrapLinuxInstall(
+    allocator: std.mem.Allocator,
+    invocation_path: []const u8,
+    requested_channel_root: []const u8,
+) !void {
+    bootstrapTrace("linux: validate bundled manager");
+    try validateRunningLinuxManager(allocator, invocation_path);
+    const resources_dir = std.fs.path.dirname(invocation_path) orelse
+        return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(resources_dir), "Resources")) {
+        return error.InvalidUninstallLocation;
+    }
+    const app_dir = std.fs.path.dirname(resources_dir) orelse return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(app_dir), "app")) {
+        return error.InvalidUninstallLocation;
+    }
+    const channel_root = std.fs.path.dirname(app_dir) orelse return error.InvalidUninstallLocation;
+    bootstrapTrace("linux: validate requested root");
+    const requested_resolved = try std.fs.path.resolve(allocator, &.{requested_channel_root});
+    defer allocator.free(requested_resolved);
+    if (!std.fs.path.isAbsolute(requested_channel_root) or
+        !std.mem.eql(u8, requested_resolved, requested_channel_root) or
+        !std.mem.eql(u8, requested_channel_root, channel_root))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
+    bootstrapTrace("linux: read version metadata");
+    const version_path = try std.fs.path.join(allocator, &.{ resources_dir, "version.json" });
+    defer allocator.free(version_path);
+    var metadata = try readBootstrapMetadata(allocator, version_path);
+    defer metadata.deinit(allocator);
+    bootstrapTrace("linux: install integration");
+    try installLinuxIntegration(
+        allocator,
+        app_dir,
+        metadata.appMetadata(std.fs.path.basename(channel_root)),
+    );
+    bootstrapTrace("linux: complete");
+}
+
+fn bootstrapMacosInstall(
+    allocator: std.mem.Allocator,
+    requested_channel_root: []const u8,
+) !void {
+    bootstrapTrace("macos: validate bundled manager");
+    const executable_path = try std.process.executablePathAlloc(g_io, allocator);
+    defer allocator.free(executable_path);
+    if (!std.mem.eql(u8, std.fs.path.basename(executable_path), MACOS_UNINSTALL_EXE_NAME)) {
+        return error.InvalidUninstallLocation;
+    }
+    var executable_file = try std.Io.Dir.openFileAbsolute(g_io, executable_path, .{
+        .allow_directory = false,
+        .follow_symlinks = false,
+    });
+    defer executable_file.close(g_io);
+    if ((try executable_file.stat(g_io)).kind != .file) return error.InvalidUninstallLocation;
+    const executable_physical = try std.Io.Dir.realPathFileAbsoluteAlloc(
+        g_io,
+        executable_path,
+        allocator,
+    );
+    defer allocator.free(executable_physical);
+    if (!std.mem.eql(u8, executable_path, executable_physical)) {
+        return error.InvalidUninstallLocation;
+    }
+
+    const resources_dir = std.fs.path.dirname(executable_path) orelse
+        return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(resources_dir), "Resources")) {
+        return error.InvalidUninstallLocation;
+    }
+    const contents_dir = std.fs.path.dirname(resources_dir) orelse
+        return error.InvalidUninstallLocation;
+    if (!std.mem.eql(u8, std.fs.path.basename(contents_dir), "Contents")) {
+        return error.InvalidUninstallLocation;
+    }
+    const app_bundle_path = std.fs.path.dirname(contents_dir) orelse
+        return error.InvalidUninstallLocation;
+    if (!std.mem.endsWith(u8, std.fs.path.basename(app_bundle_path), ".app")) {
+        return error.InvalidUninstallLocation;
+    }
+    bootstrapTrace("macos: validate requested root");
+    const requested_resolved = try std.fs.path.resolve(allocator, &.{requested_channel_root});
+    defer allocator.free(requested_resolved);
+    if (!std.fs.path.isAbsolute(requested_channel_root) or
+        !std.mem.eql(u8, requested_resolved, requested_channel_root))
+    {
+        return error.InvalidUninstallLocation;
+    }
+
+    bootstrapTrace("macos: read version metadata");
+    const version_path = try std.fs.path.join(allocator, &.{ resources_dir, "version.json" });
+    defer allocator.free(version_path);
+    var metadata = try readBootstrapMetadata(allocator, version_path);
+    defer metadata.deinit(allocator);
+    bootstrapTrace("macos: install integration");
+    try installMacosUninstallManagerAtRoot(
+        allocator,
+        requested_channel_root,
+        app_bundle_path,
+        app_bundle_path,
+        metadata.appMetadata(std.fs.path.basename(requested_channel_root)),
+    );
+    bootstrapTrace("macos: complete");
+}
+
 pub fn main(init: std.process.Init) !void {
     g_io = init.io;
     g_environ_map = init.environ_map;
+    g_bootstrap_trace_enabled = g_environ_map.get("ELECTROBUN_BOOTSTRAP_TRACE") != null;
 
     const allocator = init.gpa;
+
+    // The update helper is always a unique temporary copy of the installed
+    // manager. Dispatch it before preview or normal uninstall-manager modes.
+    {
+        var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, allocator);
+        defer args.deinit();
+        _ = args.next() orelse return error.InvalidArguments;
+        if (args.next()) |first_arg| {
+            if (std.mem.eql(u8, first_arg, "--apply-update")) {
+                const plan_path = args.next() orelse return error.InvalidArguments;
+                const quiet = args.next() orelse return error.InvalidArguments;
+                if (!std.mem.eql(u8, quiet, "--quiet") or args.next() != null) {
+                    return error.InvalidArguments;
+                }
+                try runApplyUpdateManager(allocator, plan_path);
+                return;
+            }
+        }
+    }
 
     // Hidden manual QA entrypoint. It exercises the real platform adapters but
     // returns before manager parsing, payload discovery, or any install state.
@@ -5686,6 +7904,13 @@ pub fn main(init: std.process.Init) !void {
             const command = try parseWindowsManagerCommand(manager_args.items);
             switch (command) {
                 .uninstall => |mode| try uninstallWindows(allocator, mode),
+                .bootstrap_install => |channel_root| bootstrapWindowsInstall(
+                    allocator,
+                    channel_root,
+                ) catch |err| {
+                    reportBootstrapFailure(err);
+                    return err;
+                },
                 .refresh_registration => try refreshWindowsUninstallRegistration(allocator),
                 .refresh_registration_from_update => |channel_root| try refreshWindowsUninstallRegistrationFromUpdate(
                     allocator,
@@ -5721,6 +7946,14 @@ pub fn main(init: std.process.Init) !void {
             }
             switch (try parseLinuxManagerCommand(command_args[0..command_args_len])) {
                 .uninstall => |mode| try uninstallLinux(allocator, invocation_path, mode),
+                .bootstrap_install => |channel_root| bootstrapLinuxInstall(
+                    allocator,
+                    invocation_path,
+                    channel_root,
+                ) catch |err| {
+                    reportBootstrapFailure(err);
+                    return err;
+                },
                 .refresh_metadata => try refreshLinuxUninstallMetadata(allocator, invocation_path),
             }
             return;
@@ -5742,6 +7975,13 @@ pub fn main(init: std.process.Init) !void {
             }
             switch (try parseMacosManagerCommand(command_args[0..command_args_len])) {
                 .uninstall => |mode| try uninstallMacos(allocator, mode),
+                .bootstrap_install => |channel_root| bootstrapMacosInstall(
+                    allocator,
+                    channel_root,
+                ) catch |err| {
+                    reportBootstrapFailure(err);
+                    return err;
+                },
                 .refresh_metadata => try refreshMacosUninstallMetadata(allocator),
             }
             return;
@@ -6059,6 +8299,47 @@ test "embedded metadata discovery skips compiler marker pairs" {
     );
 }
 
+test "first-v2-launch bootstrap metadata uses the developer display name" {
+    var metadata = try parseBootstrapMetadata(std.testing.allocator,
+        \\{
+        \\  "version": "2.0.0-canary.1",
+        \\  "identifier": "com.example.archive",
+        \\  "channel": "production",
+        \\  "name": "ArchiveApp-production",
+        \\  "displayName": "Archive App",
+        \\  "hash": "abc123"
+        \\}
+    );
+    defer metadata.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("com.example.archive", metadata.identifier);
+    try std.testing.expectEqualStrings("production", metadata.channel);
+    try std.testing.expectEqualStrings("Archive App", metadata.name);
+    try std.testing.expectEqualStrings("abc123", metadata.hash.?);
+    try std.testing.expectEqualStrings(
+        "stable",
+        metadata.appMetadata("stable").install_root_name.?,
+    );
+
+    var legacy_display = try parseBootstrapMetadata(std.testing.allocator,
+        \\{"version":"2.0.0","identifier":"com.example.archive","channel":"production","name":"Archive App"}
+    );
+    defer legacy_display.deinit(std.testing.allocator);
+    try std.testing.expectEqualStrings("Archive App", legacy_display.name);
+
+    try std.testing.expectError(
+        error.InvalidInstalledIdentity,
+        parseBootstrapMetadata(std.testing.allocator,
+            \\{"version":"","identifier":"com.example.archive","channel":"production","name":"Archive App"}
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidInstalledIdentity,
+        parseBootstrapMetadata(std.testing.allocator,
+            \\{"version":"2.0.0","identifier":"../other","channel":"production","name":"Archive App"}
+        ),
+    );
+}
+
 test "Windows integration names and registry keys are channel scoped" {
     const production_display = try windowsDisplayName(std.testing.allocator, "Archive App", "production");
     defer std.testing.allocator.free(production_display);
@@ -6117,6 +8398,16 @@ test "Windows uninstall manager accepts only the unified ordered grammar" {
     );
     try std.testing.expect((try parseWindowsManagerCommand(&.{"--refresh-registration"})) == .refresh_registration);
     try std.testing.expect((try parseWindowsManagerCommand(&.{ "--refresh-registration", "--quiet" })) == .refresh_registration);
+    const bootstrap = try parseWindowsManagerCommand(&.{
+        "--bootstrap-install",
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\stable",
+        "--quiet",
+    });
+    try std.testing.expect(bootstrap == .bootstrap_install);
+    try std.testing.expectEqualStrings(
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\stable",
+        bootstrap.bootstrap_install,
+    );
     const update_refresh = try parseWindowsManagerCommand(&.{
         "--refresh-registration-from-update",
         "C:\\Users\\example\\AppData\\Local\\com.example.app\\production",
@@ -6144,6 +8435,9 @@ test "Windows uninstall manager accepts only the unified ordered grammar" {
     try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--quiet", "--quiet" }));
     try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--uninstall", "--quiet", "--quiet" }));
     try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--refresh-registration", "--delete-data" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--bootstrap-install", "C:\\managed" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--bootstrap-install", "--quiet", "C:\\managed" }));
+    try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{ "--bootstrap-install", "", "--quiet" }));
     try std.testing.expectError(error.InvalidArguments, parseWindowsManagerCommand(&.{"--refresh-registration-from-update"}));
     try std.testing.expectError(
         error.InvalidArguments,
@@ -6207,11 +8501,23 @@ test "macOS uninstall manager accepts only the explicit interactive and quiet gr
     const delete_data = try parseMacosManagerCommand(&.{ "--quiet", "--delete-data" });
     try std.testing.expectEqual(MacosUninstallMode.app_and_data, delete_data.uninstall.?);
     try std.testing.expect((try parseMacosManagerCommand(&.{ "--refresh-metadata", "--quiet" })) == .refresh_metadata);
+    const bootstrap = try parseMacosManagerCommand(&.{
+        "--bootstrap-install",
+        "/Users/example/Library/Application Support/com.example.app/stable",
+        "--quiet",
+    });
+    try std.testing.expect(bootstrap == .bootstrap_install);
+    try std.testing.expectEqualStrings(
+        "/Users/example/Library/Application Support/com.example.app/stable",
+        bootstrap.bootstrap_install,
+    );
 
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--delete-data"}));
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--uninstall", "--delete-data" }));
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--quiet", "--quiet" }));
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--refresh-metadata"}));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--bootstrap-install", "/tmp/root" }));
+    try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{ "--bootstrap-install", "--quiet", "/tmp/root" }));
     try std.testing.expectError(error.InvalidArguments, parseMacosManagerCommand(&.{"--other"}));
 }
 
@@ -6233,6 +8539,16 @@ test "Linux uninstall manager accepts only the explicit interactive and quiet gr
     const delegated_delete_data = try parseLinuxManagerCommand(&.{ "--uninstall", "--quiet", "--delete-data" });
     try std.testing.expectEqual(LinuxUninstallMode.app_and_data, delegated_delete_data.uninstall.?);
     try std.testing.expect((try parseLinuxManagerCommand(&.{ "--refresh-metadata", "--quiet" })) == .refresh_metadata);
+    const bootstrap = try parseLinuxManagerCommand(&.{
+        "--bootstrap-install",
+        "/home/example/.local/share/com.example.app/stable",
+        "--quiet",
+    });
+    try std.testing.expect(bootstrap == .bootstrap_install);
+    try std.testing.expectEqualStrings(
+        "/home/example/.local/share/com.example.app/stable",
+        bootstrap.bootstrap_install,
+    );
 
     const invalid = [_][]const []const u8{
         &.{"--delete-data"},
@@ -6242,6 +8558,9 @@ test "Linux uninstall manager accepts only the explicit interactive and quiet gr
         &.{ "--quiet", "--quiet" },
         &.{"--refresh-metadata"},
         &.{ "--refresh-metadata", "--quiet", "extra" },
+        &.{ "--bootstrap-install", "/tmp/root" },
+        &.{ "--bootstrap-install", "--quiet", "/tmp/root" },
+        &.{ "--bootstrap-install", "", "--quiet" },
         &.{"--other"},
     };
     for (invalid) |args| {
@@ -7058,4 +9377,545 @@ test "failed updater state publication restores the previous retained state" {
         error.FileNotFound,
         tmp.dir.access(std.testing.io, previous_sub_path, .{}),
     );
+}
+
+test "apply-update names are transaction-scoped and neutral" {
+    const allocator = std.testing.allocator;
+    const transaction_id = "0123456789abcdef0123456789abcdef";
+    try std.testing.expect(isApplyUpdateTransactionId(transaction_id));
+    try std.testing.expect(!isApplyUpdateTransactionId("0123456789ABCDEF0123456789ABCDEF"));
+    try std.testing.expect(!isApplyUpdateTransactionId("0123456789abcdef"));
+
+    const plan_name = try applyUpdatePlanName(allocator, transaction_id);
+    defer allocator.free(plan_name);
+    try std.testing.expectEqualStrings(
+        ".electrobun-update-0123456789abcdef0123456789abcdef.json",
+        plan_name,
+    );
+    const result_name = try applyUpdateResultName(allocator, transaction_id);
+    defer allocator.free(result_name);
+    try std.testing.expectEqualStrings(
+        ".electrobun-update-0123456789abcdef0123456789abcdef.result.json",
+        result_name,
+    );
+    const task_name = try applyUpdateTaskName(allocator, transaction_id);
+    defer allocator.free(task_name);
+    try std.testing.expectEqualStrings(
+        "ApplicationUpdate_0123456789abcdef01234567",
+        task_name,
+    );
+    try std.testing.expect(std.mem.indexOf(u8, task_name, "Electrobun") == null);
+}
+
+test "managed roots accept only channel or validated legacy app name" {
+    try std.testing.expect(linuxRootMatchesInstallIdentity("production", "production", "Example App", null));
+    try std.testing.expect(linuxRootMatchesInstallIdentity("Legacy-App", "production", "Example App", "Legacy-App"));
+    try std.testing.expect(!linuxRootMatchesInstallIdentity("other", "production", "Example App", "Legacy-App"));
+    try std.testing.expect(windowsRootMatchesInstallIdentity(
+        "Example App",
+        "production",
+        "Example App",
+        "Example App",
+    ));
+    try std.testing.expect(macosRootMatchesInstallIdentity(
+        "Example App",
+        "production",
+        "Example App",
+        "Example App",
+    ));
+}
+
+test "apply-update roots accept only exact current and v1 aliases" {
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "stable",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "stable",
+        "canary",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "Stable",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "Stable",
+        "Production",
+        "ExampleApp",
+        "Example App",
+        .windows,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "ExampleApp",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "ExampleApp-stable",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "EXAMPLEAPP-STABLE",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .windows,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "ExampleApp-stable",
+        "canary",
+        "ExampleApp-canary",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "Example App",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "Example App",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .macos,
+    ));
+    try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
+        "Example App-canary",
+        "canary",
+        "ExampleApp-canary",
+        "Example App",
+        .macos,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "Example App",
+        "canary",
+        "ExampleApp-canary",
+        "Example App",
+        .macos,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "Example App-stable",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .macos,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "Example App-canary",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .macos,
+    ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "unrelated",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
+}
+
+test "validation failure cleanup only touches independently validated paths" {
+    try std.testing.expectEqualDeep(
+        ApplyUpdateValidationFailureActions{
+            .cleanup_transport = false,
+            .cleanup_plan = false,
+            .publish_result = false,
+        },
+        applyUpdateValidationFailureActions(false, .{
+            .plan_path_safe = true,
+            .result_path_safe = true,
+        }),
+    );
+    try std.testing.expectEqualDeep(
+        ApplyUpdateValidationFailureActions{
+            .cleanup_transport = true,
+            .cleanup_plan = false,
+            .publish_result = false,
+        },
+        applyUpdateValidationFailureActions(true, .{}),
+    );
+    try std.testing.expectEqualDeep(
+        ApplyUpdateValidationFailureActions{
+            .cleanup_transport = true,
+            .cleanup_plan = true,
+            .publish_result = false,
+        },
+        applyUpdateValidationFailureActions(true, .{ .plan_path_safe = true }),
+    );
+    try std.testing.expectEqualDeep(
+        ApplyUpdateValidationFailureActions{
+            .cleanup_transport = true,
+            .cleanup_plan = true,
+            .publish_result = true,
+        },
+        applyUpdateValidationFailureActions(true, .{
+            .plan_path_safe = true,
+            .result_path_safe = true,
+        }),
+    );
+}
+
+test "successful update cleanup preserves the committed retained tar" {
+    const keep = "newhash.tar";
+    try std.testing.expect(!shouldRemoveCommittedUpdateState(keep, keep));
+    try std.testing.expect(shouldRemoveCommittedUpdateState("oldhash.tar", keep));
+    try std.testing.expect(shouldRemoveCommittedUpdateState("oldhash.tar.previous", keep));
+    try std.testing.expect(shouldRemoveCommittedUpdateState(
+        ".electrobun-prepared-update.json",
+        keep,
+    ));
+    try std.testing.expect(shouldRemoveCommittedUpdateState(
+        ".electrobun-prepared-update.json.previous",
+        keep,
+    ));
+    try std.testing.expect(shouldRemoveCommittedUpdateState("download.tar.zst", keep));
+    try std.testing.expect(shouldRemoveCommittedUpdateState("download.partial", keep));
+    try std.testing.expect(!shouldRemoveCommittedUpdateState("unrelated.json", keep));
+
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "self-extraction", .default_dir);
+    for ([_][]const u8{
+        "self-extraction/newhash.tar",
+        "self-extraction/oldhash.tar",
+        "self-extraction/.electrobun-prepared-update.json",
+        "self-extraction/download.partial",
+        "self-extraction/unrelated.json",
+    }) |path| {
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = "test" });
+    }
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const retained_tar_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "self-extraction", keep },
+    );
+    defer std.testing.allocator.free(retained_tar_path);
+    const plan = ApplyUpdatePlan{
+        .schema_version = 1,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "production",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = root,
+        .app_bundle_path = root,
+        .retained_tar_path = retained_tar_path,
+        .parent_pid = 1,
+        .result_path = root,
+    };
+    try cleanupCommittedApplyUpdateState(std.testing.allocator, plan);
+    try tmp.dir.access(std.testing.io, "self-extraction/newhash.tar", .{});
+    try tmp.dir.access(std.testing.io, "self-extraction/unrelated.json", .{});
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "self-extraction/oldhash.tar", .{}),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "self-extraction/.electrobun-prepared-update.json", .{}),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "self-extraction/download.partial", .{}),
+    );
+}
+
+test "invalid payload cleanup removes only the failed hash and matching prepared state" {
+    try std.testing.expect(shouldInvalidateApplyUpdatePayload(.extracting));
+    try std.testing.expect(shouldInvalidateApplyUpdatePayload(.validating_payload));
+    try std.testing.expect(!shouldInvalidateApplyUpdatePayload(.integrating));
+    const transaction_id = "0123456789abcdef0123456789abcdef";
+    try std.testing.expect(isApplyUpdateHashTransientName(
+        ".newhash.0123456789abcdef0123456789abcdef.tar.zst.partial",
+        "newhash",
+    ));
+    try std.testing.expect(isApplyUpdateHashTransientName(
+        "newhash.tar.0123456789abcdef0123456789abcdef.partial",
+        "newhash",
+    ));
+    try std.testing.expect(!isApplyUpdateHashTransientName(
+        "oldhash.tar.0123456789abcdef0123456789abcdef.partial",
+        "newhash",
+    ));
+
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "self-extraction", .default_dir);
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const retained_tar_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, "self-extraction", "newhash.tar" },
+    );
+    defer std.testing.allocator.free(retained_tar_path);
+    const plan = ApplyUpdatePlan{
+        .schema_version = 1,
+        .transaction_id = transaction_id,
+        .identifier = "dev.example.application",
+        .channel = "production",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = root,
+        .app_bundle_path = root,
+        .retained_tar_path = retained_tar_path,
+        .parent_pid = 1,
+        .result_path = root,
+    };
+    for ([_][]const u8{
+        "self-extraction/newhash.tar",
+        "self-extraction/oldhash.tar",
+        "self-extraction/newhash.tar.previous",
+        "self-extraction/oldhash.tar.previous",
+        "self-extraction/.newhash.0123456789abcdef0123456789abcdef.tar.zst.partial",
+        "self-extraction/.oldhash.0123456789abcdef0123456789abcdef.tar.zst.partial",
+        "self-extraction/newhash.tar.0123456789abcdef0123456789abcdef.partial",
+        "self-extraction/oldhash.tar.0123456789abcdef0123456789abcdef.partial",
+    }) |path| {
+        try tmp.dir.writeFile(std.testing.io, .{ .sub_path = path, .data = "test" });
+    }
+    const matching_record = ApplyUpdatePreparedRecord{
+        .schema_version = 1,
+        .identifier = plan.identifier,
+        .channel = plan.channel,
+        .platform = plan.platform,
+        .arch = plan.arch,
+        .version = plan.version,
+        .hash = plan.hash,
+        .retained_tar_path = plan.retained_tar_path,
+    };
+    const matching_json = try std.json.Stringify.valueAlloc(
+        std.testing.allocator,
+        matching_record,
+        .{},
+    );
+    defer std.testing.allocator.free(matching_json);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "self-extraction/.electrobun-prepared-update.json",
+        .data = matching_json,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "self-extraction/.electrobun-prepared-update.json.0123.partial",
+        .data = matching_json,
+    });
+    const previous_record = ApplyUpdatePreparedRecord{
+        .schema_version = 1,
+        .identifier = plan.identifier,
+        .channel = plan.channel,
+        .platform = plan.platform,
+        .arch = plan.arch,
+        .version = "1.0.0",
+        .hash = "oldhash",
+        .retained_tar_path = "oldhash.tar",
+    };
+    const previous_json = try std.json.Stringify.valueAlloc(
+        std.testing.allocator,
+        previous_record,
+        .{},
+    );
+    defer std.testing.allocator.free(previous_json);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "self-extraction/.electrobun-prepared-update.json.previous",
+        .data = previous_json,
+    });
+
+    try cleanupInvalidApplyUpdatePayloadState(
+        std.testing.allocator,
+        plan,
+        .validating_payload,
+    );
+    for ([_][]const u8{
+        "self-extraction/oldhash.tar",
+        "self-extraction/oldhash.tar.previous",
+        "self-extraction/.oldhash.0123456789abcdef0123456789abcdef.tar.zst.partial",
+        "self-extraction/oldhash.tar.0123456789abcdef0123456789abcdef.partial",
+        "self-extraction/.electrobun-prepared-update.json.previous",
+    }) |path| try tmp.dir.access(std.testing.io, path, .{});
+    for ([_][]const u8{
+        "self-extraction/newhash.tar",
+        "self-extraction/newhash.tar.previous",
+        "self-extraction/.newhash.0123456789abcdef0123456789abcdef.tar.zst.partial",
+        "self-extraction/newhash.tar.0123456789abcdef0123456789abcdef.partial",
+        "self-extraction/.electrobun-prepared-update.json",
+        "self-extraction/.electrobun-prepared-update.json.0123.partial",
+    }) |path| try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, path, .{}),
+    );
+}
+
+test "rollback integration metadata never carries the new update hash" {
+    const plan = ApplyUpdatePlan{
+        .schema_version = 1,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "production",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "newhash",
+        .channel_root = "unused",
+        .app_bundle_path = "unused",
+        .retained_tar_path = "unused",
+        .parent_pid = 1,
+        .result_path = "unused",
+    };
+    const rollback = applyUpdateIntegrationMetadata(plan, "Example App", null, "Legacy-App");
+    try std.testing.expect(rollback.hash == null);
+    try std.testing.expectEqualStrings("Legacy-App", rollback.install_root_name.?);
+}
+
+test "apply-update rollback restores the previous application tree" {
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "app", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "app/new.txt",
+        .data = "new",
+    });
+    try tmp.dir.createDir(std.testing.io, "app.previous", .default_dir);
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "app.previous/old.txt",
+        .data = "old",
+    });
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const target = try std.fs.path.join(std.testing.allocator, &.{ root, "app" });
+    defer std.testing.allocator.free(target);
+    const previous = try std.fs.path.join(std.testing.allocator, &.{ root, "app.previous" });
+    defer std.testing.allocator.free(previous);
+
+    try rollbackAppliedUpdate(target, previous);
+    const restored = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        "app/old.txt",
+        std.testing.allocator,
+        .limited(16),
+    );
+    defer std.testing.allocator.free(restored);
+    try std.testing.expectEqualStrings("old", restored);
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "app/new.txt", .{}),
+    );
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, "app.previous", .{}),
+    );
+}
+
+test "apply-update failure recovery never duplicates or launches uncertain state" {
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.wait_then_relaunch,
+        applyUpdateFailureRecovery(.validating, false, error.InvalidUpdateHelper),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.wait_then_relaunch,
+        applyUpdateFailureRecovery(.extracting, false, error.InvalidUpdateArchive),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.none,
+        applyUpdateFailureRecovery(.waiting_for_parent, false, error.ParentProcessWaitTimedOut),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.none,
+        applyUpdateFailureRecovery(.waiting_for_parent, false, error.ParentProcessWaitFailed),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.relaunch,
+        applyUpdateFailureRecovery(.waiting_for_parent, true, error.WindowsUninstallBusy),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.relaunch,
+        applyUpdateFailureRecovery(.swapping, true, error.AccessDenied),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.relaunch,
+        applyUpdateFailureRecovery(.integrating, true, error.AccessDenied),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.relaunch,
+        applyUpdateFailureRecovery(.launching, true, error.FileNotFound),
+    );
+    try std.testing.expectEqual(
+        ApplyUpdateFailureRecovery.none,
+        applyUpdateFailureRecovery(.integrating, true, error.UpdateRollbackFailed),
+    );
+}
+
+test "successful apply-update result uses the complete phase" {
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(root);
+    const result_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ root, ".electrobun-update-0123456789abcdef0123456789abcdef.result.json" },
+    );
+    defer std.testing.allocator.free(result_path);
+    const plan = ApplyUpdatePlan{
+        .schema_version = 1,
+        .transaction_id = "0123456789abcdef0123456789abcdef",
+        .identifier = "dev.example.application",
+        .channel = "production",
+        .platform = expectedApplyUpdatePlatform(),
+        .arch = expectedApplyUpdateArch(),
+        .version = "2.0.0",
+        .hash = "abc123",
+        .channel_root = root,
+        .app_bundle_path = root,
+        .retained_tar_path = root,
+        .parent_pid = 1,
+        .result_path = result_path,
+    };
+    try publishApplyUpdateResult(
+        std.testing.allocator,
+        plan,
+        true,
+        .complete,
+        "Update applied successfully.",
+    );
+    const contents = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        std.fs.path.basename(result_path),
+        std.testing.allocator,
+        .limited(4096),
+    );
+    defer std.testing.allocator.free(contents);
+    const parsed = try std.json.parseFromSlice(
+        ApplyUpdateResult,
+        std.testing.allocator,
+        contents,
+        .{},
+    );
+    defer parsed.deinit();
+    try std.testing.expect(parsed.value.success);
+    try std.testing.expectEqualStrings("complete", parsed.value.phase);
 }

@@ -23,8 +23,8 @@ such as shortcuts, while keeping the user's data. `Cancel` or closing the
 prompt leaves the installation unchanged.
 
 Choose `App and Data` to also remove the app's managed per-user directories.
-It removes only the directories for this app's packaged identifier and current
-release channel:
+It removes only the directories recorded for this app's packaged identifier
+and physical install root:
 
 | Managed directory | API path |
 | --- | --- |
@@ -33,7 +33,7 @@ release channel:
 | Logs | `Utils.paths.userLogs` |
 
 Those paths resolve under their platform's normal data, cache, and log roots
-as `<base>/<identifier>/<channel>`:
+as `<base>/<identifier>/<install-root>`:
 
 | Platform | `userData` | `userCache` | `userLogs` |
 | --- | --- | --- | --- |
@@ -47,9 +47,15 @@ removes that root once. Linux uses `~/.local/share`, `~/.cache`, and
 valid absolute root. The Linux installer records the roots it used so changing
 the environment later does not redirect uninstall cleanup.
 
-Other applications, other identifiers, and other channels (such as canary and
-production) are never removed. See [Paths](/electrobun/apis/paths/) for the
-path API and layout.
+The install-root name normally matches the app's logical release channel. An
+Electrobun v1.18.1+ production install keeps its existing `stable` root
+after updating to 2.x, even though the packaged channel is `production`. The
+uninstaller follows that recorded physical root so the migrated app and its
+data remain one installation.
+
+Other applications, other identifiers, and separately installed channel roots
+are never removed. See [Paths](/electrobun/apis/paths/) for the path API and
+layout.
 
 Electrobun records the managed-root policy with the installation so a newer
 runtime can continue to clean up earlier Electrobun-managed locations if that
@@ -66,13 +72,13 @@ The manager is installed at:
 
 | Platform | Location |
 | --- | --- |
-| macOS | `~/Library/Application Support/<identifier>/<channel>/uninstall` |
-| Windows | `%LOCALAPPDATA%\<identifier>\<channel>\uninstall.exe` |
-| Linux | `$XDG_DATA_HOME/<identifier>/<channel>/uninstall` |
+| macOS | `~/Library/Application Support/<identifier>/<install-root>/uninstall` |
+| Windows | `%LOCALAPPDATA%\<identifier>\<install-root>\uninstall.exe` |
+| Linux | `$XDG_DATA_HOME/<identifier>/<install-root>/uninstall` |
 
 The Linux location falls back to
-`~/.local/share/<identifier>/<channel>/uninstall`. The manager is tied to that
-installation and should not be moved or copied elsewhere.
+`~/.local/share/<identifier>/<install-root>/uninstall`. The manager is tied to
+that installation and should not be moved or copied elsewhere.
 
 For non-interactive automation, use:
 
@@ -97,7 +103,9 @@ available in macOS, Windows, and Linux installer builds.
 On Windows, Electrobun registers each identifier and release channel separately
 in Windows Installed Apps. Choosing Uninstall there opens the same native Task
 Dialog. The registered quiet uninstall action uses the conservative `App`
-behavior and preserves user data.
+behavior and preserves user data. The registry identity remains the logical
+channel, so a migrated production app can be registered as `production` while
+its manager remains under the preserved `stable` install root.
 
 On Linux, Electrobun uses KDialog first on KDE/Plasma and Zenity first on other
 desktops, then tries the other graphical helper if necessary. If neither helper

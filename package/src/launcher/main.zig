@@ -3,6 +3,8 @@ const builtin = @import("builtin");
 const automation = @import("automation.zig");
 const linux_dependencies = @import("linux_dependencies.zig");
 const uninstall = @import("uninstall.zig");
+const windows_spawn = @import("windows_spawn.zig");
+const launcher_pid_environment_variable = "ELECTROBUN_LAUNCHER_PID";
 const c = @cImport({
     @cInclude("signal.h");
     @cInclude("unistd.h");
@@ -69,6 +71,7 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     extern "kernel32" fn WaitForSingleObject(hHandle: HANDLE, dwMilliseconds: DWORD) callconv(.winapi) DWORD;
     extern "kernel32" fn GetExitCodeProcess(hProcess: HANDLE, lpExitCode: *DWORD) callconv(.winapi) BOOL;
     extern "kernel32" fn CloseHandle(hObject: HANDLE) callconv(.winapi) BOOL;
+    extern "kernel32" fn GetCurrentProcessId() callconv(.winapi) DWORD;
 
     // Console attachment for dev mode
     extern "kernel32" fn AttachConsole(dwProcessId: DWORD) callconv(.winapi) BOOL;
@@ -80,8 +83,16 @@ const windows_imports = if (builtin.os.tag == .windows) struct {
     const STD_OUTPUT_HANDLE: DWORD = 0xFFFFFFF5; // -11
     const STD_ERROR_HANDLE: DWORD = 0xFFFFFFF4; // -12
     const CREATE_NO_WINDOW: DWORD = 0x08000000;
+    const CREATE_UNICODE_ENVIRONMENT: DWORD = 0x00000400;
     const INFINITE: DWORD = 0xFFFFFFFF;
 } else struct {};
+
+fn launcherProcessId() u32 {
+    return if (builtin.os.tag == .windows)
+        windows_imports.GetCurrentProcessId()
+    else
+        @intCast(c.getpid());
+}
 
 // Check if this is a dev build by reading version.json
 fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
@@ -124,6 +135,114 @@ fn uninstallPlatform() uninstall.Platform {
     };
 }
 
+fn installedChannelRoot(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    exe_path: []const u8,
+    metadata: *const uninstall.InstallMetadata,
+) ![]u8 {
+    const platform = uninstallPlatform();
+    if (platform == .macos) {
+        const app_data_base = try uninstall.appDataBase(allocator, .macos, .{
+            .home = environ_map.get("HOME"),
+        });
+        defer allocator.free(app_data_base);
+        return uninstall.macosChannelRootFromMetadata(
+            allocator,
+            io,
+            app_data_base,
+            metadata,
+        );
+    }
+
+    const physical_exe_path = if (platform == .linux)
+        try std.Io.Dir.realPathFileAbsoluteAlloc(io, exe_path, allocator)
+    else
+        null;
+    defer if (physical_exe_path) |path| allocator.free(path);
+    return uninstall.channelRootFromLauncherPath(
+        allocator,
+        platform,
+        physical_exe_path orelse exe_path,
+        metadata.identity(),
+    );
+}
+
+fn configureInstallRootEnv(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+    exe_path: []const u8,
+    exe_dir: []const u8,
+) !?[]u8 {
+    // Never trust an inherited override. Only the launcher may attest which
+    // physical install root contains (or, on macOS, owns) this app.
+    _ = environ_map.swapRemove(uninstall.install_root_name_environment_variable);
+    _ = environ_map.swapRemove(launcher_pid_environment_variable);
+    const launcher_pid = try std.fmt.allocPrint(allocator, "{d}", .{launcherProcessId()});
+    defer allocator.free(launcher_pid);
+    try environ_map.put(launcher_pid_environment_variable, launcher_pid);
+
+    const version_path = try uninstall.versionJsonPath(allocator, exe_dir);
+    defer allocator.free(version_path);
+    const version_json = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        version_path,
+        allocator,
+        .limited(1024 * 1024),
+    ) catch return null;
+    defer allocator.free(version_json);
+    var metadata = uninstall.parseInstallMetadata(allocator, version_json) catch return null;
+    defer metadata.deinit(allocator);
+
+    const channel_root = installedChannelRoot(
+        allocator,
+        io,
+        environ_map,
+        exe_path,
+        &metadata,
+    ) catch null;
+    const root_name = if (channel_root) |root| std.fs.path.basename(root) else metadata.channel;
+    if (!uninstall.isSafeInstallRootName(root_name, uninstallPlatform())) {
+        if (channel_root) |root| allocator.free(root);
+        return null;
+    }
+    try environ_map.put(uninstall.install_root_name_environment_variable, root_name);
+    return channel_root;
+}
+
+fn bootstrapLegacyInstallIfNeeded(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *std.process.Environ.Map,
+    exe_dir: []const u8,
+    channel_root: []const u8,
+) !void {
+    const platform = uninstallPlatform();
+    if (!try uninstall.bootstrapRequired(allocator, io, channel_root, platform)) return;
+
+    const bundled_manager = try std.fs.path.join(
+        allocator,
+        // Hutch embeds the native extractor under this extensionless resource
+        // name on every platform; the standalone installed manager differs.
+        &.{ exe_dir, "..", "Resources", "uninstall" },
+    );
+    defer allocator.free(bundled_manager);
+    var manager = try std.process.spawn(io, .{
+        .argv = &.{ bundled_manager, "--bootstrap-install", channel_root, "--quiet" },
+        .cwd = .{ .path = exe_dir },
+        .environ_map = environ_map,
+        .stdout = .inherit,
+        .stderr = .inherit,
+    });
+    const result = try manager.wait(io);
+    switch (result) {
+        .exited => |code| if (code != 0) return error.BootstrapInstallFailed,
+        else => return error.BootstrapInstallFailed,
+    }
+}
+
 /// Delegate the launcher's exact uninstall command to the installed,
 /// channel-scoped manager before any application runtime is selected or started.
 fn delegateUninstall(
@@ -151,25 +270,16 @@ fn delegateUninstall(
     );
     defer allocator.free(version_json);
 
-    const identity = try uninstall.parseInstallIdentity(allocator, version_json);
-    defer allocator.free(identity.identifier);
-    defer allocator.free(identity.channel);
+    var metadata = try uninstall.parseInstallMetadata(allocator, version_json);
+    defer metadata.deinit(allocator);
 
-    const channel_root = if (platform == .linux)
-        try uninstall.linuxChannelRootFromLauncherPath(
-            allocator,
-            delegation_exe_path,
-            identity,
-        )
-    else blk: {
-        const app_data_base = try uninstall.appDataBase(allocator, platform, .{
-            .home = environ_map.get("HOME"),
-            .local_appdata = environ_map.get("LOCALAPPDATA"),
-            .xdg_data_home = environ_map.get("XDG_DATA_HOME"),
-        });
-        defer allocator.free(app_data_base);
-        break :blk try uninstall.channelRootPath(allocator, app_data_base, identity);
-    };
+    const channel_root = try installedChannelRoot(
+        allocator,
+        io,
+        environ_map,
+        delegation_exe_path,
+        &metadata,
+    );
     defer allocator.free(channel_root);
     const manager_path = try std.fs.path.join(
         allocator,
@@ -259,7 +369,10 @@ fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env
         if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_IDENTIFIER", value.string);
     }
     if (parsed.value.object.get("channel")) |value| {
-        if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_CHANNEL", value.string);
+        if (value == .string) try env_map.put(
+            "COTTONTAIL_ELECTROBUN_CHANNEL",
+            env_map.get(uninstall.install_root_name_environment_variable) orelse value.string,
+        );
     }
 }
 
@@ -361,6 +474,14 @@ pub fn main(init: std.process.Init) !void {
 
     // Child processes inherit the launcher's environment plus our overrides.
     const env_map = init.environ_map;
+    const installed_channel_root = try configureInstallRootEnv(
+        arena_alloc,
+        io,
+        env_map,
+        exe_path,
+        exe_dir,
+    );
+    defer if (installed_channel_root) |root| arena_alloc.free(root);
 
     // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
@@ -446,12 +567,29 @@ pub fn main(init: std.process.Init) !void {
         false;
 
     // Check if this is a dev build by reading version.json, or if console is forced
-    const is_dev_build = force_console or isDevBuild(arena_alloc, exe_dir);
+    const metadata_is_dev = isDevBuild(arena_alloc, exe_dir);
+    const is_dev_build = force_console or metadata_is_dev;
     if (force_console) {
         std.debug.print("Console mode forced via ELECTROBUN_CONSOLE=1\n", .{});
     } else if (is_dev_build) {
         std.debug.print("Dev build detected - console output enabled\n", .{});
     }
+
+    // A v1 updater can place the v2 payload but cannot create v2's standalone
+    // manager, manifest, or OS integration. Repair those records on the first
+    // managed v2 launch; failure is non-fatal and is retried next launch.
+    if (!metadata_is_dev) if (installed_channel_root) |channel_root| {
+        bootstrapLegacyInstallIfNeeded(
+            arena_alloc,
+            io,
+            env_map,
+            exe_dir,
+            channel_root,
+        ) catch |err| std.debug.print(
+            "Warning: could not bootstrap v2 install records: {}\n",
+            .{err},
+        );
+    };
 
     // Windows non-dev builds: Use CreateProcessW with CREATE_NO_WINDOW (no console)
     // Dev builds and other platforms: Use standard spawn with inherited I/O
@@ -462,7 +600,7 @@ pub fn main(init: std.process.Init) !void {
         const win = windows_imports;
 
         // Build command line (needs to be mutable for CreateProcessW)
-        const cmd_line = try std.fmt.allocPrintSentinel(arena_alloc, "\"{s}\" \"{s}\"", .{ argv[0], argv[1] }, 0);
+        const cmd_line = try windows_spawn.commandLine(arena_alloc, argv);
         const cmd_line_w = try std.unicode.wtf8ToWtf16LeAllocZ(arena_alloc, cmd_line);
 
         // Convert current directory to UTF-16
@@ -472,6 +610,7 @@ pub fn main(init: std.process.Init) !void {
         si.cb = @sizeOf(win.STARTUPINFOW);
 
         var pi: win.PROCESS_INFORMATION = undefined;
+        const environment_block = try env_map.createWindowsBlock(arena_alloc, .{});
 
         const success = win.CreateProcessW(
             null,
@@ -479,8 +618,8 @@ pub fn main(init: std.process.Init) !void {
             null,
             null,
             .FALSE, // Don't inherit handles
-            win.CREATE_NO_WINDOW,
-            null,
+            win.CREATE_NO_WINDOW | win.CREATE_UNICODE_ENVIRONMENT,
+            @ptrCast(@constCast(environment_block.slice.ptr)),
             @constCast(cwd_w.ptr),
             &si,
             &pi,

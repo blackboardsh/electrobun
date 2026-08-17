@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+pub const INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE: &str = "ELECTROBUN_INSTALL_ROOT_NAME";
+
 #[cfg(unix)]
 mod dynlib {
     use super::*;
@@ -2585,5 +2587,47 @@ fn app_scoped_dir(base: &str, app_info: &AppInfo) -> String {
     if app_info.identifier.is_empty() || app_info.channel.is_empty() {
         return base.to_string();
     }
-    join_path(&join_path(base, &app_info.identifier), &app_info.channel)
+    let install_root_name = effective_install_root_name(&app_info.channel);
+    join_path(&join_path(base, &app_info.identifier), &install_root_name)
+}
+
+fn is_safe_install_root_name(value: &str) -> bool {
+    if value.is_empty() || value.len() > 256 || value == "." || value == ".." {
+        return false;
+    }
+    if value
+        .bytes()
+        .any(|byte| byte < 0x20 || byte == 0x7f || byte == b'/' || byte == b'\\')
+    {
+        return false;
+    }
+    if cfg!(windows)
+        && (value.ends_with(' ')
+            || value.ends_with('.')
+            || value.bytes().any(|byte| b"\"%*:<>?|".contains(&byte)))
+    {
+        return false;
+    }
+    true
+}
+
+fn effective_install_root_name(fallback: &str) -> String {
+    match std::env::var(INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE) {
+        Ok(candidate) if is_safe_install_root_name(&candidate) => candidate,
+        _ => fallback.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod install_root_name_tests {
+    use super::is_safe_install_root_name;
+
+    #[test]
+    fn validates_launcher_install_root_leaf() {
+        assert!(is_safe_install_root_name("stable"));
+        assert!(is_safe_install_root_name("Legacy App"));
+        for invalid in ["", ".", "..", "nested/root", "nested\\root", "line\nbreak"] {
+            assert!(!is_safe_install_root_name(invalid));
+        }
+    }
 }

@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+pub const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
+
 // Zig 0.16's std.DynLib does not support Windows. Keep the SDK's loader
 // surface consistent there by using the equivalent Win32 APIs directly.
 const WindowsDynamicLibrary = struct {
@@ -80,6 +82,27 @@ pub fn processEnviron() std.process.Environ {
 
 fn getEnvVarOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     return processEnviron().getAlloc(allocator, key);
+}
+
+fn isSafeInstallRootName(value: []const u8) bool {
+    if (value.len == 0 or value.len > 256 or
+        std.mem.eql(u8, value, ".") or std.mem.eql(u8, value, "..")) return false;
+    for (value) |byte| {
+        if (byte < 0x20 or byte == 0x7f or byte == '/' or byte == '\\') return false;
+    }
+    if (builtin.os.tag == .windows) {
+        if (value[value.len - 1] == ' ' or value[value.len - 1] == '.') return false;
+        if (std.mem.indexOfAny(u8, value, "\"%*:<>?|") != null) return false;
+    }
+    return true;
+}
+
+fn effectiveInstallRootNameOwned(allocator: std.mem.Allocator, fallback: []const u8) ![]u8 {
+    const candidate = getEnvVarOwned(allocator, install_root_name_environment_variable) catch
+        return allocator.dupe(u8, fallback);
+    if (isSafeInstallRootName(candidate)) return candidate;
+    allocator.free(candidate);
+    return allocator.dupe(u8, fallback);
 }
 
 pub const WindowCloseHandler = *const fn (u32) callconv(.c) void;
@@ -2188,7 +2211,16 @@ fn buildAppScopedDir(allocator: std.mem.Allocator, base: []const u8, app_info: A
     if (app_info.identifier.len == 0 or app_info.channel.len == 0) {
         return allocator.dupe(u8, base);
     }
-    return std.fs.path.join(allocator, &.{ base, app_info.identifier, app_info.channel });
+    const install_root_name = try effectiveInstallRootNameOwned(allocator, app_info.channel);
+    defer allocator.free(install_root_name);
+    return std.fs.path.join(allocator, &.{ base, app_info.identifier, install_root_name });
+}
+
+test "native paths validate the launcher install root override" {
+    try std.testing.expect(isSafeInstallRootName("stable"));
+    try std.testing.expect(isSafeInstallRootName("Legacy App"));
+    const invalid = [_][]const u8{ "", ".", "..", "nested/root", "nested\\root", "line\nbreak" };
+    for (invalid) |value| try std.testing.expect(!isSafeInstallRootName(value));
 }
 
 fn readFileZ(allocator: std.mem.Allocator, path: []const u8) ![:0]u8 {

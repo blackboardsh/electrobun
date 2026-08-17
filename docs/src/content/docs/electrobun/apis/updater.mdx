@@ -10,9 +10,9 @@ main processes (Zig, Rust, Go, Odin) currently ship without an update API —
 see [Native main process](/electrobun/guides/native-main-process/).
 </Aside>
 
-Hutch production and canary builds create update metadata, compressed full
-bundles, and optional delta patches. Publish the artifact directory to a static
-host and configure its public base URL:
+Hutch production and canary builds create identity- and integrity-pinned update
+metadata plus a compressed full bundle. Publish the artifact directory to a
+static host and configure its public base URL:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -25,7 +25,6 @@ export default {
   },
   release: {
     baseUrl: "https://downloads.example.com/my-app",
-    generatePatch: true,
   },
 } satisfies ElectrobunConfig;
 ```
@@ -48,8 +47,11 @@ if (update.updateAvailable) {
 }
 ```
 
-`applyUpdate()` quits the current process, replaces the installed app, and
-launches the new version. It does nothing until a download is ready.
+`applyUpdate()` first asks the normal `before-quit` handlers for permission. If
+they allow the quit, a native post-exit helper validates the downloaded bundle,
+replaces the installed app transactionally, refreshes platform integration,
+and launches the new version. A failed replacement restores the previous app.
+It does nothing until a verified download is ready.
 
 <Aside type="note">
 The `dev` channel never reports an available update. Exercise updater behavior
@@ -85,7 +87,10 @@ void identifier;
 
 Convenience methods under `Updater.localInfo` return the current `version`,
 `hash`, `channel`, and `baseUrl`. `channelBucketUrl()` returns the base URL, and
-`appDataFolder()` returns the channel-specific update workspace.
+`appDataFolder()` returns the physical installed update workspace. That folder
+normally uses the logical channel name; an Electrobun v1.18.1+ production
+migration continues using its existing `stable` root after the app reports
+`production`.
 
 ## Status reporting
 
@@ -103,7 +108,7 @@ Updater.onStatusChange(null);
 void history;
 ```
 
-Statuses cover checking, patch discovery and application, full-bundle fallback,
-download progress, extraction, replacement, relaunch, completion, and errors.
+Statuses cover checking, full-bundle download progress, preparation, handoff,
+relaunch, completion, and errors.
 `UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
 structured `details`.

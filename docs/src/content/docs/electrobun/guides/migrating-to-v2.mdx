@@ -64,7 +64,28 @@ export default {
 See [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
 for the full responsibility table.
 
-## 3. Use the runtime-neutral SDK import
+## 3. Preserve the deployed updater identity
+
+If users already have a production app built with Electrobun v1.18.1 or later,
+the first 2.x release can be delivered through that app's existing updater.
+For this bridge release:
+
+- keep `app.name` and `app.identifier` unchanged;
+- keep the same `release.baseUrl` embedded in the installed 1.x app;
+- build the new release with `--env=production`; and
+- publish the complete `artifacts/` directory without renaming its files.
+
+Hutch emits the `stable-*` metadata and payload aliases requested by compatible
+1.x production clients. After the old updater places the 2.x payload, its first
+launch preserves the physical `stable` state root and creates the current
+update/uninstall manager records there. The app reports the logical
+`production` channel, but existing user data and browser state do not move.
+
+Earlier prereleases used updater or payload layouts that are not universally
+bridgeable. Distribute the normal 2.x installer to those users. See
+[Updates](/electrobun/guides/updates/) for the hosted artifact contract.
+
+## 4. Use the runtime-neutral SDK import
 
 Main-process code should import from `electrobun/main`:
 
@@ -84,7 +105,7 @@ Cottontail is the default architectural path. `build.mainProcess: "bun"`
 remains a first-class option, and `packageManager: "bun"` independently keeps
 Bun as the external dependency manager.
 
-## 4. Sync and verify
+## 5. Sync and verify
 
 ```bash
 hutch electrobun sync

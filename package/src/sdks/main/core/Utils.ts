@@ -1,9 +1,9 @@
 import { ffi, native } from "../proc/native";
 import { electrobunEventEmitter } from "../events/eventEmitter";
 import { homedir, tmpdir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import { readFileSync } from "node:fs";
-import { OS } from "../../../shared/platform";
+import { isAbsolute, join, posix, resolve, win32 } from "node:path";
+import { lstatSync, readFileSync } from "node:fs";
+import { OS, type SupportedOS } from "../../../shared/platform";
 import { decodeDialogPaths } from "../../../shared/dialog-paths";
 
 export const moveToTrash = (path: string) => {
@@ -121,27 +121,77 @@ export const showNotification = (options: NotificationOptions): void => {
 };
 
 let isQuitting = false;
+const quitApprovalBrand = Symbol("ElectrobunQuitApproval");
 
-export const quit = (code = 0) => {
-	if (isQuitting) return;
-	isQuitting = true;
+export interface QuitApproval {
+	readonly [quitApprovalBrand]: true;
+}
 
-	const beforeQuitEvent = electrobunEventEmitter.events.app.beforeQuit({});
-	electrobunEventEmitter.emitEvent(beforeQuitEvent);
+let activeQuitApproval: QuitApproval | null = null;
+
+/** Ask before-quit handlers once, without starting native shutdown yet. */
+export const requestQuitApproval = (): QuitApproval | null => {
+	if (isQuitting || activeQuitApproval) return null;
+
+	const approval = Object.freeze({
+		[quitApprovalBrand]: true as const,
+	});
+	activeQuitApproval = approval;
+
+	let beforeQuitEvent: ReturnType<
+		typeof electrobunEventEmitter.events.app.beforeQuit
+	>;
+	try {
+		beforeQuitEvent = electrobunEventEmitter.events.app.beforeQuit({});
+		electrobunEventEmitter.emitEvent(beforeQuitEvent);
+	} catch (error) {
+		activeQuitApproval = null;
+		throw error;
+	}
 
 	if (
 		beforeQuitEvent.responseWasSet &&
 		beforeQuitEvent.response?.allow === false
 	) {
-		isQuitting = false;
-		return;
+		activeQuitApproval = null;
+		return null;
 	}
 
-	if (native) {
-		ffi.request.quitGracefully({ code, timeoutMs: 5000 });
-	} else {
-		process.exit(code);
+	return approval;
+};
+
+/** Release a reserved approval when arming a post-exit action fails. */
+export const cancelQuitApproval = (approval: QuitApproval): void => {
+	if (activeQuitApproval === approval) activeQuitApproval = null;
+};
+
+/** Begin shutdown using a previously-approved request without a second veto. */
+export const quitAfterApproval = (
+	approval: QuitApproval,
+	code = 0,
+): void => {
+	if (activeQuitApproval !== approval) {
+		throw new Error("Invalid or expired quit approval");
 	}
+	activeQuitApproval = null;
+	isQuitting = true;
+	try {
+		if (native) {
+			ffi.request.quitGracefully({ code, timeoutMs: 5000 });
+		} else {
+			process.exit(code);
+		}
+	} catch (error) {
+		isQuitting = false;
+		throw error;
+	}
+};
+
+export const quit = (code = 0): boolean => {
+	const approval = requestQuitApproval();
+	if (!approval) return false;
+	quitAfterApproval(approval, code);
+	return true;
 };
 
 // Override process.exit so that calling it triggers proper native cleanup
@@ -395,20 +445,129 @@ function xdgUserDir(key: string, fallbackName: string): string {
 	return _xdgUserDirs[key] || join(home, fallbackName);
 }
 
-let _versionInfo: { identifier: string; channel: string } | undefined;
-function getVersionInfo(): { identifier: string; channel: string } {
+interface RuntimeVersionInfo {
+	identifier: string;
+	channel: string;
+	version?: string;
+	hash?: string;
+	name?: string;
+	displayName?: string;
+}
+
+let _versionInfo: RuntimeVersionInfo | undefined;
+function getVersionInfo(): RuntimeVersionInfo {
 	if (_versionInfo) return _versionInfo;
 	try {
 		const resourcesDir = "Resources";
 		const raw = readFileSync(join("..", resourcesDir, "version.json"), "utf-8");
 		const parsed = JSON.parse(raw);
-		_versionInfo = { identifier: parsed.identifier, channel: parsed.channel };
+		_versionInfo = {
+			identifier: parsed.identifier,
+			channel: parsed.channel,
+			version: parsed.version,
+			hash: parsed.hash,
+			name: parsed.name,
+			displayName: parsed.displayName,
+		};
 		return _versionInfo;
 	} catch (error) {
 		console.error("Failed to read version.json", error);
 		_versionInfo = { identifier: "", channel: "" };
 		return _versionInfo;
 	}
+}
+
+function safeManagedRootName(value: unknown, platform: SupportedOS): value is string {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.length > 256 ||
+		value === "." ||
+		value === ".."
+	) {
+		return false;
+	}
+	return platform === "win"
+		? !/[\u0000-\u001f"%*/:<>?\\|]/.test(value) && !/[ .]$/.test(value)
+		: !/[\u0000-\u001f\u007f/\\]/.test(value);
+}
+
+function isRegularManagedFile(path: string): boolean {
+	const stat = lstatSync(path, { throwIfNoEntry: false });
+	return Boolean(stat?.isFile() && !stat.isSymbolicLink());
+}
+
+/** Resolve the physical v1/v2 root leaf used by app-scoped data paths. */
+export function resolveInstalledRootNameForPaths(
+	info: RuntimeVersionInfo,
+	platform: SupportedOS,
+	executablePath: string,
+	appDataRoot: string,
+	regularFileProbe: (path: string) => boolean = isRegularManagedFile,
+): string {
+	if (
+		!safeManagedRootName(info.identifier, platform) ||
+		!safeManagedRootName(info.channel, platform)
+	) {
+		return "";
+	}
+	const pathApi = platform === "win" ? win32 : posix;
+	const identifierRoot = pathApi.resolve(pathApi.join(appDataRoot, info.identifier));
+	if (platform !== "macos") {
+		const derivedRoot = pathApi.resolve(
+			pathApi.dirname(executablePath),
+			"..",
+			"..",
+		);
+		const derivedParent = pathApi.resolve(pathApi.dirname(derivedRoot));
+		const parentMatches =
+			platform === "win"
+				? derivedParent.toLowerCase() === identifierRoot.toLowerCase()
+				: derivedParent === identifierRoot;
+		const derivedName = pathApi.basename(derivedRoot);
+		if (parentMatches && safeManagedRootName(derivedName, platform)) {
+			return derivedName;
+		}
+		return info.channel;
+	}
+
+	const candidateNames = [info.channel];
+	if (info.channel === "production") candidateNames.push("stable");
+	if (safeManagedRootName(info.name, "macos")) candidateNames.push(info.name);
+	if (safeManagedRootName(info.displayName, "macos")) {
+		candidateNames.push(
+			info.channel === "production"
+				? info.displayName
+				: `${info.displayName}-${info.channel}`,
+		);
+	}
+	const candidates = [...new Set(candidateNames)].filter((name) =>
+		safeManagedRootName(name, "macos"),
+	);
+	if (typeof info.hash === "string" && /^[a-z0-9]{1,13}$/.test(info.hash)) {
+		const retainedRoot = candidates.find((name) =>
+			regularFileProbe(
+				pathApi.join(identifierRoot, name, "self-extraction", `${info.hash}.tar`),
+			),
+		);
+		if (retainedRoot) return retainedRoot;
+	}
+	const manifestRoot = candidates.find((name) =>
+		regularFileProbe(pathApi.join(identifierRoot, name, ".electrobun-uninstall.json")),
+	);
+	return manifestRoot ?? info.channel;
+}
+
+function getInstalledRootName(): string {
+	const info = getVersionInfo();
+	const launcherRootName = process.env["ELECTROBUN_INSTALL_ROOT_NAME"];
+	if (safeManagedRootName(launcherRootName, OS)) return launcherRootName;
+	return resolveInstalledRootNameForPaths(
+		info,
+		OS,
+		process.execPath,
+		getAppDataDir(),
+	);
 }
 
 function getAppDataDir(): string {
@@ -534,15 +693,15 @@ export const paths = {
 		return getUserDir("Movies", "Videos", "XDG_VIDEOS_DIR", "Videos");
 	},
 	get userData(): string {
-		const { identifier, channel } = getVersionInfo();
-		return join(getAppDataDir(), identifier, channel);
+		const { identifier } = getVersionInfo();
+		return join(getAppDataDir(), identifier, getInstalledRootName());
 	},
 	get userCache(): string {
-		const { identifier, channel } = getVersionInfo();
-		return join(getCacheDir(), identifier, channel);
+		const { identifier } = getVersionInfo();
+		return join(getCacheDir(), identifier, getInstalledRootName());
 	},
 	get userLogs(): string {
-		const { identifier, channel } = getVersionInfo();
-		return join(getLogsDir(), identifier, channel);
+		const { identifier } = getVersionInfo();
+		return join(getLogsDir(), identifier, getInstalledRootName());
 	},
 };

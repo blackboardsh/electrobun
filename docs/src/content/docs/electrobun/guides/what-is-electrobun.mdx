@@ -48,8 +48,8 @@ Zig, Rust, Go, or Odin and keep the same Hutch build and packaging workflow.
 - Embed independent `<electrobun-webview>` and `<electrobun-wgpu>` surfaces
   right in your HTML layout, like any other element.
 - Distribute self-extracting Zstandard-compressed installers.
-- Ship updates as binary diffs — users download only what changed, with a
-  full-download fallback when no patch path exists.
+- Ship integrity-checked updates from static storage, with transactional app
+  replacement and rollback on every desktop platform.
 - Run production and canary channels side by side, built independently.
 
 ## Process model

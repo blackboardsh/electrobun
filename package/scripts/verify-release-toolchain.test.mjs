@@ -121,6 +121,10 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	);
 	assert.match(
 		workflow,
+		/^      - name: Test application updater lifecycle\n        if: matrix\.platform != 'linux' \|\| matrix\.arch == 'x64'\n        run: node scripts\/test-updater-lifecycle\.mjs\n        working-directory: package$/m,
+	);
+	assert.match(
+		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,
 	);
 	assert.match(

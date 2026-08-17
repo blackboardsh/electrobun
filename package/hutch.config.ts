@@ -21,7 +21,7 @@ export default {
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:windows-uninstaller && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:windows-uninstaller && hutch test:updater-unit && hutch test:updater-lifecycle && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
@@ -63,6 +63,10 @@ export default {
 		"test:macos-uninstaller": "node scripts/test-macos-uninstaller.mjs",
 		"test:windows-uninstaller":
 			"node scripts/test-windows-uninstaller.mjs",
+		"test:updater-unit":
+			"node scripts/run-cottontail-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts",
+		"test:updater-lifecycle":
+			"hutch build:release && node scripts/test-updater-lifecycle.mjs",
 		"test:npm-bootstrap":
 			"node --test ../npm/electrobun/test/bootstrap.test.mjs ../npm/electrobun/test/package.test.mjs",
 		"test:release-notes": "node scripts/release-notes-contract.test.mjs",

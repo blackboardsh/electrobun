@@ -1919,7 +1919,7 @@ func appScopedDir(base string, appInfo AppInfo) string {
 	if appInfo.Identifier == "" || appInfo.Channel == "" {
 		return base
 	}
-	return filepath.Join(base, appInfo.Identifier, appInfo.Channel)
+	return filepath.Join(base, appInfo.Identifier, effectiveInstallRootName(appInfo.Channel))
 }
 
 func AllowAllNavigation(_ uint32, _ string) uint32 {

@@ -4,10 +4,10 @@ description: "Publish update artifacts and automate cross-platform releases."
 ---
 
 Shipping updates in Electrobun doesn't require an update server — updates are
-just static files. Hutch creates the update metadata, full bundle, and
-optional delta patch at build time; the application-side `Updater` checks for
-them and installs them. Anything that serves files over HTTPS works as the
-host: R2, S3, GitHub Releases, or a plain static server.
+just static files. Hutch creates the update metadata and compressed full bundle
+at build time; the application-side `Updater` checks, verifies, and installs
+them. Anything that serves files over HTTPS works as the host: R2, S3, GitHub
+Releases, or a plain static server.
 
 This page covers the publishing side — where artifacts go and how to automate
 building them for every platform. The application-side API lives in the
@@ -29,7 +29,6 @@ export default {
   },
   release: {
     baseUrl: "https://downloads.example.com/my-app",
-    generatePatch: true,
   },
 } satisfies ElectrobunConfig;
 ```
@@ -38,10 +37,28 @@ A production macOS ARM64 build checks
 `production-macos-arm64-update.json`; a canary Windows x64 build checks
 `canary-win-x64-update.json`. Upload `artifacts/` without renaming its files.
 
-Hutch generates one patch from the previously published bundle to the new
-bundle. Keep old patch files on the host so clients can follow a retained
-chain. If a required patch is absent or invalid, `Updater` downloads the full
-`.tar.zst` bundle.
+The metadata names the exact `.tar.zst` artifact and includes its byte size and
+SHA-256. The updater rejects mismatched metadata, targets, or archive bytes
+before preparing an update.
+
+The identity fields used by Electrobun 1.x (`version`, `hash`, `platform`, and
+`arch`) remain at the top level. Together with the production aliases described
+below, those additive fields provide a one-time bridge for Electrobun v1.18.1
+and later. For the bridge release, keep `app.name` and `app.identifier`
+unchanged and publish it at the `release.baseUrl` embedded in the installed 1.x
+app. Older prereleases used updater or payload layouts that are not universally
+bridgeable; install the 2.0 release normally for those users.
+
+Production releases also include `stable-*` aliases for the metadata and update
+payloads requested by compatible 1.x clients. After a supported transition,
+the installed 2.0 app uses the `production` channel name while preserving the
+actual 1.x `stable` state root. It creates
+the 2.0 update/uninstall manager metadata in that existing root, so those users
+do not need to reinstall first.
+
+Electrobun 2.0 deliberately uses the verified full archive for application
+updates. Hutch can still emit optional delta-patch artifacts with
+`release.generatePatch`, but the built-in 2.0 updater does not consume them.
 
 ## Release Tags
 

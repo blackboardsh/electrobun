@@ -1,3 +1,5 @@
+import { win32 } from "node:path";
+
 export interface WindowsUpdateTaskCommand {
 	executable: string;
 	args: string[];
@@ -8,35 +10,43 @@ export interface WindowsUpdateTaskPlan {
 	configure: WindowsUpdateTaskCommand;
 	run: WindowsUpdateTaskCommand;
 	deleteTask: WindowsUpdateTaskCommand;
-	cleanupBatchLine: string;
 }
 
 export type WindowsUpdateTaskCommandExecutor = (
 	command: WindowsUpdateTaskCommand,
 ) => void;
 
-const UPDATE_TASK_NAME_PATTERN = /^ElectrobunUpdate_[a-f0-9]{24}$/;
+const TRANSACTION_ID_PATTERN = /^[a-f0-9]{32}$/;
+const UPDATE_TASK_NAME_PATTERN = /^ApplicationUpdate_[a-f0-9]{24}$/;
 
-/**
- * Build the commands used to register and launch the detached Windows updater.
- *
- * schtasks does not expose battery settings through /create. A newly-created
- * task therefore refuses to start on battery and stops if AC power is removed.
- * Apply explicit Task Scheduler settings before starting it, and only then let
- * the caller quit the running application.
- */
+export function createWindowsUpdateTaskName(transactionId: string): string {
+	if (!TRANSACTION_ID_PATTERN.test(transactionId)) {
+		throw new Error("Invalid update transaction ID");
+	}
+	return `ApplicationUpdate_${transactionId.slice(0, 24)}`;
+}
+
+function requireSafeAbsolutePath(path: string, description: string): void {
+	const root = win32.parse(path).root;
+	const isFullyQualified = root !== "\\" && root !== "/";
+	if (!win32.isAbsolute(path) || !isFullyQualified || /["\r\n]/.test(path)) {
+		throw new Error(`Invalid Windows update ${description} path`);
+	}
+}
+
+/** Register the copied native manager itself as the scheduled task action. */
 export function createWindowsUpdateTaskPlan(
 	taskName: string,
-	scriptPath: string,
+	helperPath: string,
+	planPath: string,
 ): WindowsUpdateTaskPlan {
 	if (!UPDATE_TASK_NAME_PATTERN.test(taskName)) {
-		throw new Error(`Invalid Electrobun update task name: ${taskName}`);
+		throw new Error(`Invalid application update task name: ${taskName}`);
 	}
-	if (/["\r\n]/.test(scriptPath)) {
-		throw new Error("Invalid Windows update script path");
-	}
+	requireSafeAbsolutePath(helperPath, "helper");
+	requireSafeAbsolutePath(planPath, "plan");
 
-	const taskAction = `cmd.exe /d /s /c ""${scriptPath}""`;
+	const taskAction = `"${helperPath}" --apply-update "${planPath}" --quiet`;
 	const settingsScript = [
 		"$ErrorActionPreference = 'Stop'",
 		"$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries",
@@ -71,24 +81,15 @@ export function createWindowsUpdateTaskPlan(
 			executable: "schtasks.exe",
 			args: ["/delete", "/tn", taskName, "/f"],
 		},
-		cleanupBatchLine: `schtasks.exe /delete /tn "${taskName}" /f >nul 2>&1`,
 	};
 }
 
-/**
- * Register and start a Windows updater task as a transaction.
- *
- * Once creation succeeds, any configuration or launch failure must remove the
- * generated task before returning control to the running application. Cleanup
- * failures are reported together with the original failure so a possible
- * orphaned task is never hidden.
- */
+/** Configure and start a scheduled update task as one cleanup-aware action. */
 export function executeWindowsUpdateTaskPlan(
 	plan: WindowsUpdateTaskPlan,
 	execute: WindowsUpdateTaskCommandExecutor,
 ): void {
 	let created = false;
-
 	try {
 		execute(plan.create);
 		created = true;
@@ -105,7 +106,6 @@ export function executeWindowsUpdateTaskPlan(
 				);
 			}
 		}
-
 		throw error;
 	}
 }

@@ -4,11 +4,27 @@ Every Electrobun release has one exact version and one `v<version>` tag. The
 release manifest, thin npm bootstrap, Kitchen release fixture, and template
 release pins move together.
 
+Updater packaging is a cross-repository contract. When an Electrobun release
+depends on Hutch metadata or artifact-layout changes, publish Hutch first and
+update the exact `// @hutch` pin in `package/hutch.config.ts`. The final release
+check must run against that pinned Hutch release. A sibling Hutch checkout is a
+development override only and must be selected explicitly with
+`ELECTROBUN_UPDATER_E2E_HUTCH` (and `HUTCH_ENGINE_BINARY` when needed).
+
 From a clean `main` checkout, run the release task in `package`:
 
 ```sh
 hutch push:beta
 ```
+
+To exercise install, update, relaunch, and uninstall directly on the current
+native platform before the release task, run `hutch test:updater-lifecycle`
+from `package/`.
+
+Before the first 2.0 release, also smoke-test one real v1.18.1 installation
+updating to the 2.0 release candidate. Keep `app.name`, `app.identifier`, and
+the release base URL unchanged for that bridge release, and verify that the
+updated app preserves its data/profile root and can update and uninstall again.
 
 The task runs the release checks, advances the version with npm's prerelease
 semantics, updates every synchronized identity, commits `v<version>`, creates

@@ -19,6 +19,8 @@ import "core:path/filepath"
 import "core:reflect"
 import "core:strings"
 
+INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE :: "ELECTROBUN_INSTALL_ROOT_NAME"
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -2540,5 +2542,41 @@ build_app_scoped_dir :: proc(allocator: runtime.Allocator, base: string, app_inf
 	if len(app_info.identifier) == 0 || len(app_info.channel) == 0 {
 		return clone_string(base, allocator)
 	}
-	return join_path(allocator, {base, app_info.identifier, app_info.channel})
+	install_root_name := effective_install_root_name(allocator, app_info.channel)
+	defer delete(install_root_name, allocator)
+	return join_path(allocator, {base, app_info.identifier, install_root_name})
+}
+
+@(private = "file")
+is_safe_install_root_name :: proc(value: string) -> bool {
+	if len(value) == 0 || len(value) > 256 || value == "." || value == ".." {
+		return false
+	}
+	for byte in value {
+		if byte < 0x20 || byte == 0x7f || byte == '/' || byte == '\\' {
+			return false
+		}
+	}
+	when ODIN_OS == .Windows {
+		if value[len(value) - 1] == ' ' || value[len(value) - 1] == '.' {
+			return false
+		}
+		for invalid in "\"%*:<>?|" {
+			if strings.index_byte(value, u8(invalid)) >= 0 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+@(private = "file")
+effective_install_root_name :: proc(allocator: runtime.Allocator, fallback: string) -> string {
+	if candidate, found := os.lookup_env(INSTALL_ROOT_NAME_ENVIRONMENT_VARIABLE, allocator); found {
+		if is_safe_install_root_name(candidate) {
+			return candidate
+		}
+		delete(candidate, allocator)
+	}
+	return clone_string(fallback, allocator)
 }
