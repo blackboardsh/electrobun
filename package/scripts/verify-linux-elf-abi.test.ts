@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
 	mkdirSync,
 	mkdtempSync,
+	readFileSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -162,6 +163,20 @@ function makeElf({
 }
 
 describe("Linux ELF ABI verification", () => {
+	test("builds the Linux ARM64 extractor for the generic baseline CPU", () => {
+		const buildSource = readFileSync(
+			new URL("../build.ts", import.meta.url),
+			"utf8",
+		);
+		const start = buildSource.indexOf("async function buildSelfExtractor()");
+		const end = buildSource.indexOf("async function buildPreload()", start);
+		expect(start).toBeGreaterThan(-1);
+		expect(end).toBeGreaterThan(start);
+		expect(buildSource.slice(start, end)).toMatch(
+			/OS === "linux" && ARCH === "arm64"\s*\? \["-Dtarget=aarch64-linux-gnu", "-Dcpu=baseline"\]/,
+		);
+	});
+
 	test("compares every numeric ABI version component", () => {
 		expect(compareAbiVersions("2.35", "2.34.9")).toBeGreaterThan(0);
 		expect(compareAbiVersions("3.4.30", "3.4.30.0")).toBe(0);

@@ -2707,6 +2707,8 @@ async function buildSelfExtractor() {
 						`-Dtarget=${macosZigTarget(ARCH)}`,
 						...(ARCH === "x64" ? ["-Dcpu=baseline"] : []),
 					]
+			: OS === "linux" && ARCH === "arm64"
+				? ["-Dtarget=aarch64-linux-gnu", "-Dcpu=baseline"]
 			: ARCH === "x64"
 				? ["-Dcpu=baseline"]
 				: [];
