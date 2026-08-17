@@ -1,5 +1,10 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, parse, resolve } from "node:path";
+import {
+	hutchPlatformForHost,
+	resolveElectrobunDevkitRootFromHutchStatusOutput,
+} from "./orchestrator";
+import { isMatchingElectrobunDevkitRoot } from "./project-inspection";
 
 export const TEMPLATE_QA_IDENTIFIER = "template-qa.electrobun.dev";
 
@@ -11,6 +16,42 @@ export function resolveTemplateQaHutchExecutable(
 		environment.HUTCH_LAUNCHER_PATH ??
 		"hutch"
 	);
+}
+
+export function resolveTemplateQaElectrobunDevkitRoot(options: {
+	version: string;
+	platform: string;
+	arch: string;
+	inheritedRoot?: string;
+	loadHutchStatus: () => string;
+}): string {
+	const expectedPlatform = hutchPlatformForHost(options.platform, options.arch);
+	const expectedTarget = {
+		os: expectedPlatform.slice(0, expectedPlatform.lastIndexOf("-")),
+		arch: options.arch,
+	};
+	if (
+		options.inheritedRoot &&
+		isMatchingElectrobunDevkitRoot(
+			options.inheritedRoot,
+			options.version,
+			expectedTarget,
+		)
+	) {
+		return options.inheritedRoot;
+	}
+
+	const root = resolveElectrobunDevkitRootFromHutchStatusOutput(
+		options.loadHutchStatus(),
+		options.version,
+		expectedPlatform,
+	);
+	if (!isMatchingElectrobunDevkitRoot(root, options.version, expectedTarget)) {
+		throw new Error(
+			`Hutch reported an invalid Electrobun ${options.version} devkit root at ${root}`,
+		);
+	}
+	return root;
 }
 
 export function findTemplateQaProjectRoot(

@@ -365,34 +365,22 @@ h2 {
 }
 
 .install-callout {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 18px;
+	display: grid;
+	align-content: center;
+	justify-items: start;
+	gap: 10px;
 	padding: 14px 18px;
 	border-right: 1px solid var(--line);
 	background: rgba(184, 255, 79, 0.035);
 }
 
-.install-copy h2 {
-	margin: 0;
-	font-size: 13px;
-	font-weight: 700;
-}
-
 .disk-warning {
 	display: flex;
 	gap: 7px;
-	max-width: 46ch;
-	margin: 5px 0 0;
+	margin: 0;
 	color: var(--muted);
 	font-size: 11px;
 	line-height: 1.5;
-}
-
-.disk-warning strong {
-	color: var(--amber);
-	font-weight: 700;
 }
 
 .warning-mark {

@@ -118,6 +118,7 @@ export type OrchestratorOptions = {
 	projectRoot: string;
 	channel: CatalogChannel;
 	hutchExecutable?: string;
+	nestedHutchEnv?: Record<string, string>;
 	readinessTimeoutMs?: number;
 	settleMs?: number;
 	onSnapshot?: (snapshot: QaSnapshot) => void;
@@ -336,19 +337,65 @@ export function parseHutchStatus(value: unknown): HutchStatusSummary {
 	};
 }
 
-export function parseHutchStatusOutput(stdout: string): HutchStatusSummary {
+export function parseHutchStatusDocument(stdout: string): unknown {
 	const start = stdout.indexOf("{");
 	const end = stdout.lastIndexOf("}");
 	if (start < 0 || end <= start) {
 		throw new Error("hutch status did not return JSON");
 	}
-	let parsed: unknown;
 	try {
-		parsed = JSON.parse(stdout.slice(start, end + 1));
+		return JSON.parse(stdout.slice(start, end + 1));
 	} catch {
 		throw new Error("hutch status returned output that is not valid JSON");
 	}
-	return parseHutchStatus(parsed);
+}
+
+export function parseHutchStatusOutput(stdout: string): HutchStatusSummary {
+	return parseHutchStatus(parseHutchStatusDocument(stdout));
+}
+
+export function hutchPlatformForHost(platform: string, arch: string): string {
+	const os =
+		platform === "darwin"
+			? "macos"
+			: platform === "win32"
+				? "windows"
+				: platform === "linux"
+					? "linux"
+					: null;
+	if (!os || (arch !== "arm64" && arch !== "x64")) {
+		throw new Error(`unsupported Hutch host platform ${platform}-${arch}`);
+	}
+	return `${os}-${arch}`;
+}
+
+export function resolveElectrobunDevkitRootFromHutchStatusOutput(
+	stdout: string,
+	expectedVersion: string,
+	expectedPlatform: string,
+): string {
+	const root = requireRecord(parseHutchStatusDocument(stdout), "hutch status");
+	if (root.kind !== "hutch-status") {
+		throw new Error("hutch status returned an unrecognized document");
+	}
+	for (const releaseValue of optionalArray(root.releases)) {
+		const release = optionalRecord(releaseValue);
+		if (release.name !== "electrobun") continue;
+		for (const installValue of optionalArray(release.installs)) {
+			const install = optionalRecord(installValue);
+			if (
+				install.version === expectedVersion &&
+				install.platform === expectedPlatform &&
+				typeof install.path === "string" &&
+				install.path.length > 0
+			) {
+				return install.path;
+			}
+		}
+	}
+	throw new Error(
+		`hutch status does not list Electrobun ${expectedVersion} for ${expectedPlatform}`,
+	);
 }
 
 export function describeHutchStatusFailure(
@@ -400,6 +447,7 @@ export class TemplateQaOrchestrator {
 	private readonly projectRoot: string;
 	private readonly channel: CatalogChannel;
 	private readonly hutchExecutable: string;
+	private readonly nestedHutchEnv?: Record<string, string>;
 	private readonly readinessTimeoutMs: number;
 	private readonly settleMs: number;
 	private readonly onSnapshot?: (snapshot: QaSnapshot) => void;
@@ -423,6 +471,9 @@ export class TemplateQaOrchestrator {
 		this.projectRoot = options.projectRoot;
 		this.channel = options.channel;
 		this.hutchExecutable = options.hutchExecutable ?? "hutch";
+		this.nestedHutchEnv = options.nestedHutchEnv
+			? { ...options.nestedHutchEnv }
+			: undefined;
 		this.readinessTimeoutMs = options.readinessTimeoutMs ?? 15 * 60_000;
 		this.settleMs = options.settleMs ?? 1_000;
 		this.onSnapshot = options.onSnapshot;
@@ -739,6 +790,7 @@ export class TemplateQaOrchestrator {
 						"--skip-install",
 					],
 					cwd: this.runRoot,
+					env: this.nestedHutchEnv,
 				});
 			} catch (error) {
 				this.fail(state, `Could not start template installer: ${String(error)}`);
@@ -817,6 +869,7 @@ export class TemplateQaOrchestrator {
 				command: this.hutchExecutable,
 				args: ["run", "install"],
 				cwd: directory,
+				env: this.nestedHutchEnv,
 			});
 			if (!installResult) return false;
 		}
@@ -885,6 +938,7 @@ export class TemplateQaOrchestrator {
 				command: this.hutchExecutable,
 				args: ["run", "start"],
 				cwd: state.directory!,
+				env: this.nestedHutchEnv,
 			});
 		} catch (error) {
 			this.fail(state, `Could not start app process: ${String(error)}`);

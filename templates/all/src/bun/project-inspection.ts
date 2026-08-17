@@ -54,6 +54,31 @@ function validProjectedVersion(devkitRoot: string): string | null {
 	}
 }
 
+export function isMatchingElectrobunDevkitRoot(
+	devkitRoot: string,
+	expectedVersion: string,
+	expectedTarget: { os: string; arch: string },
+): boolean {
+	try {
+		const manifest = JSON.parse(
+			readFileSync(join(devkitRoot, "native-devkit.json"), "utf8"),
+		) as {
+			schemaVersion?: unknown;
+			product?: { name?: unknown; version?: unknown };
+			target?: { os?: unknown; arch?: unknown };
+		};
+		return (
+			manifest.schemaVersion === 1 &&
+			manifest.product?.name === "electrobun" &&
+			manifest.product.version === expectedVersion &&
+			manifest.target?.os === expectedTarget.os &&
+			manifest.target.arch === expectedTarget.arch
+		);
+	} catch {
+		return false;
+	}
+}
+
 export function inspectTemplateProject(directory: string): ProjectInspection {
 	const hutchConfigPath = join(directory, "hutch.config.ts");
 	const devkitProjectionPath = join(directory, ".hutch", "devkit");

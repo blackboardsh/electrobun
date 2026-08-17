@@ -22,6 +22,7 @@ import {
 import { inspectTemplateProject } from "./project-inspection";
 import {
 	findTemplateQaProjectRoot,
+	resolveTemplateQaElectrobunDevkitRoot,
 	resolveTemplateQaHutchExecutable,
 } from "./project-root";
 
@@ -79,6 +80,24 @@ function normalizedTemplateBaseUrl(): string {
 
 function sleep(milliseconds: number): Promise<void> {
 	return new Promise((resolveSleep) => setTimeout(resolveSleep, milliseconds));
+}
+
+function loadHutchStatus(hutchExecutable: string, projectRoot: string): string {
+	const result = spawnSync(hutchExecutable, ["status", "--json"], {
+		cwd: projectRoot,
+		env: sanitizedTemplateQaEnv(process.env),
+		encoding: "utf8",
+		maxBuffer: 16 * 1024 * 1024,
+		windowsHide: true,
+	});
+	if (result.error) {
+		throw new Error(`Could not start hutch status: ${result.error.message}`);
+	}
+	if (result.status !== 0) {
+		const detail = result.stderr.trim() || `exited with code ${result.status}`;
+		throw new Error(`Could not read hutch status: ${detail}`);
+	}
+	return result.stdout;
 }
 
 // Every spawned child leads a process group (detached on POSIX). Track the
@@ -249,10 +268,21 @@ if (!projectVersion) {
 	);
 }
 const channel = catalogChannelForVersion(projectVersion);
+const hutchExecutable = resolveTemplateQaHutchExecutable();
+const electrobunDevkitRoot = resolveTemplateQaElectrobunDevkitRoot({
+	version: projectVersion,
+	platform: process.platform,
+	arch: process.arch,
+	inheritedRoot: process.env.HUTCH_ELECTROBUN_DEVKIT_ROOT,
+	loadHutchStatus: () => loadHutchStatus(hutchExecutable, projectRoot),
+});
 const orchestrator = new TemplateQaOrchestrator(runtime, {
 	projectRoot,
 	channel,
-	hutchExecutable: resolveTemplateQaHutchExecutable(),
+	hutchExecutable,
+	nestedHutchEnv: {
+		HUTCH_ELECTROBUN_DEVKIT_ROOT: electrobunDevkitRoot,
+	},
 	onSnapshot(snapshot) {
 		// Live log entries use their own append-only message. Avoid repeatedly
 		// serializing the complete history on every phase transition.

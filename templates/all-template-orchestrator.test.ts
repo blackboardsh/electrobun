@@ -14,10 +14,12 @@ import {
 	catalogChannelForVersion,
 	describeHutchStatusFailure,
 	formatByteSize,
+	hutchPlatformForHost,
 	parseHutchStatus,
 	parseHutchStatusOutput,
 	outputContainsSpawnedProcess,
 	parseTemplateCatalog,
+	resolveElectrobunDevkitRootFromHutchStatusOutput,
 	sanitizedTemplateQaEnv,
 	type CatalogChannel,
 	type CommandSpec,
@@ -25,11 +27,32 @@ import {
 	type ProcessResult,
 	type QaRuntime,
 } from "./all/src/bun/orchestrator";
-import { inspectTemplateProject } from "./all/src/bun/project-inspection";
+import {
+	inspectTemplateProject,
+	isMatchingElectrobunDevkitRoot,
+} from "./all/src/bun/project-inspection";
 import {
 	findTemplateQaProjectRoot,
+	resolveTemplateQaElectrobunDevkitRoot,
 	resolveTemplateQaHutchExecutable,
 } from "./all/src/bun/project-root";
+
+function writeNativeDevkitManifest(
+	root: string,
+	version = "2.0.0-beta.7",
+	os = "linux",
+	arch = "arm64",
+): void {
+	mkdirSync(root, { recursive: true });
+	writeFileSync(
+		join(root, "native-devkit.json"),
+		JSON.stringify({
+			schemaVersion: 1,
+			product: { name: "electrobun", version },
+			target: { os, arch },
+		}),
+	);
+}
 
 function catalog(
 	ids = ["all", "install-task", "no-install-task"],
@@ -345,6 +368,120 @@ describe("Template QA catalog and readiness contracts", () => {
 		expect(resolveTemplateQaHutchExecutable({})).toBe("hutch");
 	});
 
+	test("selects the exact installed Electrobun devkit from Hutch status", () => {
+		const status = JSON.stringify({
+			schemaVersion: 3,
+			kind: "hutch-status",
+			releases: [
+				{
+					name: "electrobun",
+					installs: [
+						{
+							version: "2.0.0-beta.6",
+							platform: "linux-arm64",
+							path: "/store/electrobun/2.0.0-beta.6/linux-arm64",
+						},
+						{
+							version: "2.0.0-beta.7",
+							platform: "linux-x64",
+							path: "/store/electrobun/2.0.0-beta.7/linux-x64",
+						},
+						{
+							version: "2.0.0-beta.7",
+							platform: "linux-arm64",
+							path: "/store/electrobun/2.0.0-beta.7/linux-arm64",
+						},
+					],
+				},
+			],
+		});
+		expect(
+			resolveElectrobunDevkitRootFromHutchStatusOutput(
+				`hutch notice\n${status}\n`,
+				"2.0.0-beta.7",
+				"linux-arm64",
+			),
+		).toBe("/store/electrobun/2.0.0-beta.7/linux-arm64");
+		expect(() =>
+			resolveElectrobunDevkitRootFromHutchStatusOutput(
+				status,
+				"2.0.0-beta.8",
+				"linux-arm64",
+			),
+		).toThrow(/does not list Electrobun 2\.0\.0-beta\.8 for linux-arm64/);
+		expect(hutchPlatformForHost("darwin", "arm64")).toBe("macos-arm64");
+		expect(hutchPlatformForHost("win32", "x64")).toBe("windows-x64");
+		expect(hutchPlatformForHost("linux", "arm64")).toBe("linux-arm64");
+		expect(() => hutchPlatformForHost("freebsd", "x64")).toThrow(
+			/unsupported Hutch host platform/,
+		);
+	});
+
+	test("uses a full inherited devkit root and rejects a project projection", () => {
+		const fixture = mkdtempSync(join(tmpdir(), "template qa devkit root "));
+		const releaseRoot = join(fixture, "release");
+		const projectionRoot = join(fixture, "project", ".hutch", "devkit");
+		try {
+			writeNativeDevkitManifest(releaseRoot);
+			mkdirSync(projectionRoot, { recursive: true });
+			writeFileSync(
+				join(projectionRoot, "projection.json"),
+				JSON.stringify({
+					schemaVersion: 1,
+					kind: "electrobun-devkit-projection",
+					product: { name: "electrobun", version: "2.0.0-beta.7" },
+				}),
+			);
+
+			let statusLoads = 0;
+			const status = () => {
+				statusLoads += 1;
+				return JSON.stringify({
+					kind: "hutch-status",
+					releases: [
+						{
+							name: "electrobun",
+							installs: [
+								{
+									version: "2.0.0-beta.7",
+									platform: "linux-arm64",
+									path: releaseRoot,
+								},
+							],
+						},
+					],
+				});
+			};
+
+			expect(
+				resolveTemplateQaElectrobunDevkitRoot({
+					version: "2.0.0-beta.7",
+					platform: "linux",
+					arch: "arm64",
+					inheritedRoot: releaseRoot,
+					loadHutchStatus: status,
+				}),
+			).toBe(releaseRoot);
+			expect(statusLoads).toBe(0);
+			expect(isMatchingElectrobunDevkitRoot(projectionRoot, "2.0.0-beta.7", {
+				os: "linux",
+				arch: "arm64",
+			})).toBe(false);
+			expect(
+				resolveTemplateQaElectrobunDevkitRoot({
+					version: "2.0.0-beta.7",
+					platform: "linux",
+					arch: "arm64",
+					inheritedRoot: projectionRoot,
+					loadHutchStatus: status,
+				}),
+			).toBe(releaseRoot);
+			expect(statusLoads).toBe(1);
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
+	});
+
 	test("inspects the exact product pin and project-local devkit facade", () => {
 		const root = mkdtempSync(join(tmpdir(), "template qa inspection "));
 		const devkit = join(root, ".hutch", "devkit");
@@ -400,12 +537,14 @@ describe("Template QA child environment", () => {
 				ELECTROBUN_BUILD_ENV: "dev",
 				ELECTROBUN_OS: "macos",
 				ELECTROBUN_TEMPLATES_BASE_URL: "http://127.0.0.1:8080/templates",
+				HUTCH_ELECTROBUN_DEVKIT_ROOT: "/store/electrobun/devkit",
 				UNSET: undefined,
 			}),
 		).toEqual({
 			PATH: "/usr/bin",
 			HOME: "/Users/qa",
 			ELECTROBUN_TEMPLATES_BASE_URL: "http://127.0.0.1:8080/templates",
+			HUTCH_ELECTROBUN_DEVKIT_ROOT: "/store/electrobun/devkit",
 		});
 	});
 });
@@ -499,10 +638,15 @@ describe("Template QA orchestration", () => {
 			"Pinned Hutch Runtime",
 			"hutch launcher with spaces",
 		);
+		const nestedHutchEnv = {
+			HUTCH_ELECTROBUN_DEVKIT_ROOT:
+				"/store/electrobun/2.0.0-beta.7/linux-arm64",
+		};
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/Template QA with spaces",
 			channel: "beta",
 			hutchExecutable: pinnedHutch,
+			nestedHutchEnv,
 			readinessTimeoutMs: 1_000,
 			settleMs: 0,
 		});
@@ -532,16 +676,17 @@ describe("Template QA orchestration", () => {
 				"--channel=beta",
 				"--skip-install",
 			]);
+			expect(command.env).toEqual(nestedHutchEnv);
 		}
 		for (const command of harness.commands.filter(({ kind }) => kind === "install")) {
 			expect(command.args).toEqual(["run", "install"]);
-			expect(command.env).toBeUndefined();
+			expect(command.env).toEqual(nestedHutchEnv);
 		}
 		// Launch is exactly the command a new user runs; dev builds happen inside it.
 		for (const command of harness.commands.filter(({ kind }) => kind === "run")) {
 			expect(command.args).toEqual(["run", "start"]);
 			expect(command.cwd.endsWith(command.templateId)).toBe(true);
-			expect(command.env).toBeUndefined();
+			expect(command.env).toEqual(nestedHutchEnv);
 		}
 		expect(orchestrator.getSnapshot().templates.map(({ status }) => status))
 			.toEqual(["ready", "ready"]);
@@ -779,6 +924,9 @@ describe("Hutch store status", () => {
 			projectRoot: "/tmp/template qa",
 			channel: "beta",
 			hutchExecutable: "/opt/hutch",
+			nestedHutchEnv: {
+				HUTCH_ELECTROBUN_DEVKIT_ROOT: "/store/electrobun/devkit",
+			},
 		});
 
 		const status = await orchestrator.readHutchStatus();
@@ -787,6 +935,7 @@ describe("Hutch store status", () => {
 		const statusCommand = harness.commands.find(({ kind }) => kind === "status");
 		expect(statusCommand?.command).toBe("/opt/hutch");
 		expect(statusCommand?.args).toEqual(["status", "--json"]);
+		expect(statusCommand?.env).toBeUndefined();
 
 		const legacy = new TemplateQaOrchestrator(
 			fakeHarness({
@@ -808,6 +957,9 @@ describe("Hutch store status", () => {
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
 			channel: "beta",
+			nestedHutchEnv: {
+				HUTCH_ELECTROBUN_DEVKIT_ROOT: "/store/electrobun/devkit",
+			},
 		});
 
 		expect(await orchestrator.pruneHutchCache(true)).toBe(true);
@@ -818,6 +970,11 @@ describe("Hutch store status", () => {
 			["cache", "prune", "--dry-run"],
 			["cache", "prune"],
 		]);
+		expect(
+			harness.commands
+				.filter(({ kind }) => kind === "prune")
+				.every(({ env }) => env === undefined),
+		).toBe(true);
 		const logs = orchestrator
 			.getSnapshot()
 			.logs.filter(({ templateId }) => templateId === "hutch-store");

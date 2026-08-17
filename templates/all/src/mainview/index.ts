@@ -788,9 +788,9 @@ function renderStoreSummary(summary: HutchStatusSummary): void {
 	const stats: Array<[string, string, string?]> = [
 		["Total", formatByteSize(summary.totalBytes)],
 		[
-			"Products",
+			"Releases",
 			formatByteSize(summary.productsBytes),
-			`${summary.productCount} products · ${summary.productInstallCount} installs`,
+			`${summary.productCount} releases · ${summary.productInstallCount} installs`,
 		],
 		[
 			"Toolchains",
