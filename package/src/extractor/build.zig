@@ -86,6 +86,32 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Manual previews exercise the platform installer renderer without an
+    // application payload. The extractor handles this environment variable
+    // before installer/uninstaller dispatch and returns success after the
+    // terminal dialog is dismissed on every supported desktop platform.
+    const installer_ui_preview = b.addRunArtifact(exe);
+    installer_ui_preview.setEnvironmentVariable(
+        "ELECTROBUN_INSTALLER_UI_PREVIEW",
+        "all",
+    );
+    const installer_ui_preview_step = b.step(
+        "installer-ui-preview",
+        "Preview the successful installer UI",
+    );
+    installer_ui_preview_step.dependOn(&installer_ui_preview.step);
+
+    const installer_ui_preview_error = b.addRunArtifact(exe);
+    installer_ui_preview_error.setEnvironmentVariable(
+        "ELECTROBUN_INSTALLER_UI_PREVIEW",
+        "error",
+    );
+    const installer_ui_preview_error_step = b.step(
+        "installer-ui-preview-error",
+        "Preview the failed installer UI",
+    );
+    installer_ui_preview_error_step.dependOn(&installer_ui_preview_error.step);
+
     const unit_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("main.zig"),

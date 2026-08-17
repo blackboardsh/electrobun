@@ -10,6 +10,7 @@ import {
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -343,6 +344,7 @@ const createInitialInstallFixture = (extractor, zstd) => {
 
 	return {
 		archive,
+		archiveHash,
 		channelRoot,
 		home,
 		installedApp,
@@ -355,6 +357,7 @@ const createInitialInstallFixture = (extractor, zstd) => {
 		outerMarker,
 		root,
 		selfExtraction,
+		tarPath,
 	};
 };
 
@@ -404,6 +407,7 @@ try {
 		cwd: initialInstall.root,
 		env: {
 			...process.env,
+			ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1",
 			ELECTROBUN_OPEN_LOG: initialInstall.openLog,
 			HOME: initialInstall.home,
 			PATH: `${initialInstall.openHelperDirectory}:${process.env.PATH ?? ""}`,
@@ -420,6 +424,33 @@ try {
 	assertNodeMissing(initialInstall.archive);
 	assertExists(initialInstall.manager);
 	assert.equal(sha256File(initialInstall.manager), sha256File(extractor));
+	const retainedTar = join(
+		initialInstall.selfExtraction,
+		`${initialInstall.archiveHash}.tar`,
+	);
+	assertExists(retainedTar);
+	assert.equal(
+		sha256File(retainedTar),
+		sha256File(initialInstall.tarPath),
+		"retained updater tar differs from the adjacent installer payload",
+	);
+	assert.equal(
+		readdirSync(initialInstall.selfExtraction).some((entry) =>
+			entry.endsWith(".partial"),
+		),
+		false,
+		"completed install retained a partial updater tar",
+	);
+	for (const staleTransactionPath of [
+		`${initialInstall.selfExtraction}.partial`,
+		`${initialInstall.selfExtraction}.previous`,
+		`${initialInstall.installedApp}.previous`,
+	]) {
+		assertNodeMissing(
+			staleTransactionPath,
+			`completed install retained transaction state at ${staleTransactionPath}`,
+		);
+	}
 	const installedManifest = JSON.parse(
 		readFileSync(initialInstall.manifest, "utf8"),
 	);

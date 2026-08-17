@@ -12,13 +12,16 @@ export default {
 		dev: ["hutch", "scripts/dev.ts"],
 		"dev:matrix": ["hutch", "scripts/dev-matrix.ts"],
 		"dev:test": ["hutch", "scripts/dev.test.ts"],
+		"preview:installer-ui": "node scripts/preview-installer-ui.mjs",
+		"preview:installer-ui:error":
+			"node scripts/preview-installer-ui.mjs --error",
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && hutch dev",
 		"dev:canary": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=canary",
 		"dev:production": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=production",
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:windows-uninstaller && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:linux-extractor && hutch test:macos-uninstaller && hutch test:windows-uninstaller && hutch test:npm-bootstrap && hutch test:release-notes",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
@@ -33,6 +36,8 @@ export default {
 		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
+		"test:installer-ui":
+			"node scripts/run-cottontail-test.js src/shared/windows-installer-progress.test.ts",
 		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:native-symbol-contract":
 			"node scripts/run-cottontail-test.js src/shared/native-symbol-contract.test.ts",

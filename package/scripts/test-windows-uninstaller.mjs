@@ -48,7 +48,8 @@ assert.equal(
 assert.equal(
 	focusedTest === undefined ||
 		focusedTest === "update-refresh" ||
-		focusedTest === "interactive",
+		focusedTest === "interactive" ||
+		focusedTest === "installer-ui",
 	true,
 	"invalid ELECTROBUN_WINDOWS_FOCUS value: " + focusedTest,
 );
@@ -327,6 +328,91 @@ try {
 	return result;
 }
 
+function automateInstallerUi(channel) {
+	resetChannel(channel);
+	const setup = setups.get(channel);
+	assert.ok(setup, "missing Setup fixture for " + channel);
+	const script = `
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ElectrobunInstallerUiNative {
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern IntPtr SendMessage(IntPtr window, uint message, IntPtr wParam, IntPtr lParam);
+}
+'@
+$process = Start-Process -FilePath ${psLiteral(setup.path)} -WorkingDirectory ${psLiteral(dirname(setup.path))} -PassThru
+try {
+    $pidCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ProcessIdProperty,
+        $process.Id)
+    $windowTypeCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Window)
+    $windowNameCondition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty,
+        ${psLiteral(appName + " Setup")})
+    $windowCondition = [System.Windows.Automation.AndCondition]::new(
+        $pidCondition,
+        $windowTypeCondition,
+        $windowNameCondition)
+    $deadline = [DateTime]::UtcNow.AddSeconds(90)
+    $window = $null
+    $terminalNames = @()
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $window = [System.Windows.Automation.AutomationElement]::RootElement.FindFirst(
+            [System.Windows.Automation.TreeScope]::Descendants,
+            $windowCondition)
+        if ($null -ne $window) {
+            $allElements = $window.FindAll(
+                [System.Windows.Automation.TreeScope]::Descendants,
+                [System.Windows.Automation.Condition]::TrueCondition)
+            $terminalNames = @($allElements | ForEach-Object { $_.Current.Name } | Where-Object { $_ })
+            if ($terminalNames -contains 'Installation complete') { break }
+        }
+        Start-Sleep -Milliseconds 50
+    }
+    if ($null -eq $window) { throw 'Installer TaskDialog did not appear' }
+    if ($terminalNames -notcontains 'Installation complete') {
+        throw ('Installer did not reach its success state: ' + ($terminalNames -join ', '))
+    }
+    if ($terminalNames -notcontains 'Close') { throw 'Installer Close action did not appear' }
+    $handle = [IntPtr]$window.Current.NativeWindowHandle
+    $windowName = $window.Current.Name
+    if ($handle -eq [IntPtr]::Zero) { throw 'Installer TaskDialog has no native handle' }
+    # TDM_CLICK_BUTTON activates the native Close button (ID 200).
+    $null = [ElectrobunInstallerUiNative]::SendMessage(
+        $handle, 0x0466, [IntPtr]200, [IntPtr]::Zero)
+    if (-not $process.WaitForExit(60000)) { throw 'Installer did not exit after Close' }
+    [ordered]@{
+        elementNames = $terminalNames
+        exitCode = $process.ExitCode
+        windowName = $windowName
+    } | ConvertTo-Json -Compress
+} finally {
+    if (-not $process.HasExited) { $process.Kill() }
+}`;
+	const output = runPowerShell(script, { timeout: 180_000 }).stdout.trim();
+	const result = JSON.parse(output.split(/\r?\n/).at(-1));
+	console.log("Installer UI Automation: " + JSON.stringify(result));
+	assert.equal(result.exitCode, 0, "interactive installer exit code");
+	assert.equal(result.windowName, appName + " Setup", "installer window title");
+	assert.equal(
+		result.elementNames.includes("Installation complete"),
+		true,
+		"installer success instruction",
+	);
+	assert.equal(
+		result.elementNames.includes("Close"),
+		true,
+		"installer terminal Close action",
+	);
+	return assertInstalled(channel, setup);
+}
+
 function automateInstalledAppsUninstall(channel) {
 	const paths = fixturePaths(channel);
 	const script = `
@@ -569,7 +655,9 @@ function runZigBuild(zig, projectRoot, buildArguments) {
 			"--global-cache-dir",
 			join(temporaryRoot, "zig-global-cache"),
 		],
-		{ cwd: projectRoot, timeout: 180_000 },
+		// A clean Windows global cache can spend several minutes compiling LLVM
+		// compiler-rt and the native UI bridge before any fixture executes.
+		{ cwd: projectRoot, timeout: 300_000 },
 	);
 }
 
@@ -904,6 +992,7 @@ function assertShortcuts(channel) {
 
 function assertInstalled(channel, setup, expectedVersion = version) {
 	const paths = fixturePaths(channel);
+	const retainedTar = join(paths.selfExtraction, setup.hash + ".tar");
 	for (const path of [
 		paths.app,
 		paths.appMarker,
@@ -912,9 +1001,37 @@ function assertInstalled(channel, setup, expectedVersion = version) {
 		paths.manager,
 		paths.manifest,
 		paths.selfExtraction,
+		retainedTar,
 	]) {
 		assert.equal(pathExists(path), true, path + " should exist");
 	}
+	assert.equal(
+		sha256File(retainedTar),
+		sha256File(setup.tarPath),
+		"retained updater tar differs from the adjacent installer payload",
+	);
+	assert.equal(
+		readdirSync(paths.selfExtraction).some((name) => name.endsWith(".partial")),
+		false,
+		"completed install retained a partial updater tar",
+	);
+	for (const staleTransactionPath of [
+		paths.app + ".previous",
+		paths.selfExtraction + ".previous",
+		paths.selfExtraction + ".partial",
+	]) {
+		assert.equal(
+			pathExists(staleTransactionPath),
+			false,
+			"completed install retained transaction state at " +
+				staleTransactionPath,
+		);
+	}
+	assert.equal(
+		sha256File(setup.archivePath),
+		setup.archiveSha256,
+		"adjacent compressed archive changed during streaming installation",
+	);
 	assert.equal(
 		sha256File(paths.manager),
 		sha256File(paths.packagedManager),
@@ -1081,8 +1198,11 @@ function buildSetup(channel, extractor, launcher, zigZstd) {
 	appendFileSync(setupPath, readFileSync(archivePath));
 	const setup = {
 		archivePath,
+		archiveSha256: sha256File(archivePath),
 		bundledManager: join(resources, "uninstall"),
+		hash,
 		path: setupPath,
+		tarPath,
 	};
 	setups.set(channel, setup);
 	return setup;
@@ -1092,7 +1212,14 @@ function install(channel, options = {}) {
 	if (!options.allowExisting) resetChannel(channel);
 	const setup = setups.get(channel);
 	assert.ok(setup, "missing Setup fixture for " + channel);
-	run(setup.path, [], { timeout: 120_000, windowsHide: false });
+	run(setup.path, [], {
+		timeout: 120_000,
+		windowsHide: false,
+		env: {
+			...process.env,
+			ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1",
+		},
+	});
 	const paths = fixturePaths(channel);
 	waitFor(
 		() =>
@@ -1843,6 +1970,8 @@ try {
 		runUpdateRefreshTest(extractor);
 	} else if (focusedTest === "interactive") {
 		runInteractiveTests();
+	} else if (focusedTest === "installer-ui") {
+		automateInstallerUi("production");
 	} else {
 		runStrictCliAndCleanupTests();
 		runChannelIsolationTests();
@@ -1868,6 +1997,8 @@ try {
 			? "Windows uninstaller focused update-refresh integration passed"
 			: focusedTest === "interactive"
 				? "Windows uninstaller focused interactive integration passed"
+				: focusedTest === "installer-ui"
+					? "Windows installer native UI integration passed"
 			: "Windows uninstaller integration passed (strict CLI, thin manager, Installed Apps, shortcuts, app/data cleanup, isolation, damage, path safety, delegation, update refresh, nonce race, legacy manifest, retry retention, user-data executable isolation, deferred-worker retry, private cleanup location safety)") +
 			(interactive ? " + interactive TaskDialog" : ""),
 	);

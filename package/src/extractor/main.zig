@@ -6,6 +6,7 @@ const linux_uninstall_prompt = @import("linux_uninstall_prompt.zig");
 // Initialized at the top of main(). Test-only helpers do not touch these.
 var g_io: std.Io = undefined;
 var g_environ_map: *std.process.Environ.Map = undefined;
+var g_installer_failure_presented = false;
 
 fn getEnvOwned(allocator: std.mem.Allocator, key: []const u8) ![]u8 {
     const value = g_environ_map.get(key) orelse return error.EnvironmentVariableNotFound;
@@ -40,6 +41,7 @@ const MACOS_DATA_PATH_VERSION: u32 = 1;
 
 const macos_uninstall_ui = if (builtin.os.tag == .macos) struct {
     extern fn electrobun_show_uninstall_prompt(app_name_utf8: [*:0]const u8) c_int;
+    extern fn electrobun_preview_macos_uninstall_prompt(app_name_utf8: [*:0]const u8) c_int;
     extern fn electrobun_terminate_app_at_path(app_path_utf8: [*:0]const u8) c_int;
 } else struct {};
 
@@ -56,11 +58,14 @@ const windows_uninstall_sync = if (builtin.os.tag == .windows) struct {
 
     const wait_object_0: win.DWORD = 0x00000000;
     const wait_abandoned: win.DWORD = 0x00000080;
+    const wait_timeout: win.DWORD = 0x00000102;
+    const no_wait: win.DWORD = 0;
     const infinite: win.DWORD = 0xffffffff;
 } else struct {};
 
 const windows_uninstall_ui = if (builtin.os.tag == .windows) struct {
     extern fn electrobun_show_windows_uninstall_prompt(app_name: [*:0]const u16) callconv(.c) c_int;
+    extern fn electrobun_preview_windows_uninstall_prompt(app_name: [*:0]const u16) callconv(.c) c_int;
     extern fn electrobun_atomic_copy_windows_manager(
         source_path: [*:0]const u16,
         destination_path: [*:0]const u16,
@@ -70,6 +75,38 @@ const windows_uninstall_ui = if (builtin.os.tag == .windows) struct {
         buffer: [*]u8,
         expected_size: usize,
     ) callconv(.c) c_int;
+} else struct {};
+
+const windows_installer_ui = if (builtin.os.tag == .windows) struct {
+    extern fn electrobun_windows_installer_ui_start(app_name: [*:0]const u16) callconv(.c) ?*anyopaque;
+    extern fn electrobun_windows_installer_ui_set_phase(
+        ui: *anyopaque,
+        phase: [*:0]const u16,
+        marquee: c_int,
+    ) callconv(.c) void;
+    extern fn electrobun_windows_installer_ui_set_progress(ui: *anyopaque, percent: u32) callconv(.c) void;
+    extern fn electrobun_windows_installer_ui_complete(
+        ui: *anyopaque,
+        succeeded: c_int,
+        message: [*:0]const u16,
+    ) callconv(.c) void;
+    extern fn electrobun_windows_installer_ui_close(ui: *anyopaque) callconv(.c) void;
+} else struct {};
+
+const macos_installer_ui = if (builtin.os.tag == .macos) struct {
+    extern fn electrobun_macos_installer_ui_start(app_name: [*:0]const u8) callconv(.c) ?*anyopaque;
+    extern fn electrobun_macos_installer_ui_set_phase(
+        ui: *anyopaque,
+        phase: [*:0]const u8,
+        marquee: c_int,
+    ) callconv(.c) void;
+    extern fn electrobun_macos_installer_ui_set_progress(ui: *anyopaque, percent: u32) callconv(.c) void;
+    extern fn electrobun_macos_installer_ui_complete(
+        ui: *anyopaque,
+        succeeded: c_int,
+        message: [*:0]const u8,
+    ) callconv(.c) void;
+    extern fn electrobun_macos_installer_ui_close(ui: *anyopaque) callconv(.c) void;
 } else struct {};
 
 // Metadata structure embedded in the binary
@@ -313,11 +350,118 @@ fn parseMacosManagerCommand(args: []const []const u8) !MacosManagerCommand {
     return error.InvalidArguments;
 }
 
-// Progress indicator for extraction
+const InstallPhase = enum {
+    preparing,
+    decompressing,
+    extracting,
+    installing_files,
+    integrating,
+    completed,
+    failed,
+
+    fn text(self: InstallPhase) []const u8 {
+        return switch (self) {
+            .preparing => "Preparing installation...",
+            .decompressing => "Decompressing application...",
+            .extracting => "Extracting application files...",
+            .installing_files => "Installing application files...",
+            .integrating => "Creating shortcuts and integration...",
+            .completed => "Installation completed successfully.",
+            .failed => "Installation failed.",
+        };
+    }
+};
+
+const InstallProgress = struct {
+    phase: InstallPhase,
+    completed_bytes: ?u64 = null,
+    total_bytes: ?u64 = null,
+
+    fn isDeterminate(self: InstallProgress) bool {
+        return self.completed_bytes != null and self.total_bytes != null and self.total_bytes.? != 0;
+    }
+
+    fn percent(self: InstallProgress) ?u32 {
+        if (self.phase == .failed) return null;
+        if (self.phase == .completed) return 100;
+        const completed = self.completed_bytes orelse return null;
+        const total = self.total_bytes orelse return null;
+        if (total == 0) return null;
+        const bounds: struct { start: u32, end: u32 } = switch (self.phase) {
+            .preparing => .{ .start = 0, .end = 5 },
+            .decompressing => .{ .start = 5, .end = 45 },
+            .extracting => .{ .start = 45, .end = 70 },
+            .installing_files => .{ .start = 70, .end = 90 },
+            .integrating => .{ .start = 90, .end = 99 },
+            .completed => unreachable,
+            .failed => unreachable,
+        };
+        const range: u128 = bounds.end - bounds.start;
+        const numerator: u128 = @as(u128, @min(completed, total)) * range;
+        const mapped: u128 = @as(u128, bounds.start) + numerator / @as(u128, total);
+        return @intCast(@min(mapped, bounds.end));
+    }
+};
+
+const KdialogProgressReference = struct {
+    service: []const u8,
+    object_path: []const u8,
+};
+
+const KdialogProgress = struct {
+    dbus_command: []const u8,
+    service: []u8,
+    object_path: []u8,
+};
+
+fn parseKdialogProgressReference(output: []const u8) ?KdialogProgressReference {
+    var tokens = std.mem.tokenizeAny(u8, output, " \t\r\n");
+    const service = tokens.next() orelse return null;
+    const object_path = tokens.next() orelse return null;
+    if (tokens.next() != null) return null;
+
+    const service_prefix = "org.kde.kdialog-";
+    if (!std.mem.startsWith(u8, service, service_prefix)) return null;
+    const pid = service[service_prefix.len..];
+    if (pid.len == 0) return null;
+    for (pid) |byte| {
+        if (byte < '0' or byte > '9') return null;
+    }
+    if (!std.mem.eql(u8, object_path, "/ProgressDialog")) return null;
+
+    return .{
+        .service = service,
+        .object_path = object_path,
+    };
+}
+
+fn kdialogDbusArgv(
+    dbus_command: []const u8,
+    reference: KdialogProgressReference,
+    method_args: []const []const u8,
+    storage: *[8][]const u8,
+) ?[]const []const u8 {
+    if (method_args.len > storage.len - 3) return null;
+    storage[0] = dbus_command;
+    storage[1] = reference.service;
+    storage[2] = reference.object_path;
+    @memcpy(storage[3 .. 3 + method_args.len], method_args);
+    return storage[0 .. 3 + method_args.len];
+}
+
+// Cross-platform progress adapter. The install pipeline reports the same phase
+// and byte events on every platform; native frontends only translate them.
 const ProgressIndicator = struct {
     child_process: ?std.process.Child,
     allocator: std.mem.Allocator,
     app_name: []const u8 = "",
+    native_handle: ?*anyopaque = null,
+    kdialog_progress: ?KdialogProgress = null,
+    current: InstallProgress = .{ .phase = .preparing },
+    last_emitted_phase: ?InstallPhase = null,
+    last_emitted_percent: ?u32 = null,
+    last_emitted_marquee: ?bool = null,
+    completion_reported: bool = false,
 
     fn init(allocator: std.mem.Allocator, metadata: AppMetadata) ProgressIndicator {
         var self = ProgressIndicator{
@@ -331,25 +475,47 @@ const ProgressIndicator = struct {
             // Fallback to console output
             std.debug.print("\nInstalling {s}...\n", .{metadata.name});
         };
+        self.update(.preparing, null, null);
 
         return self;
     }
 
     fn startProgressDialog(self: *ProgressIndicator, metadata: AppMetadata) !void {
-        // On Windows, use simple console output (no spinner thread to avoid deadlock)
         if (builtin.os.tag == .windows) {
-            return error.NoProgressDialog; // Fallback to simple print
+            const app_name_w = try std.unicode.wtf8ToWtf16LeAllocZ(self.allocator, metadata.name);
+            defer self.allocator.free(app_name_w);
+            self.native_handle = windows_installer_ui.electrobun_windows_installer_ui_start(app_name_w.ptr);
+            if (self.native_handle == null) return error.NoProgressDialog;
+            return;
+        }
+
+        if (builtin.os.tag == .macos) {
+            const app_name_z = try self.allocator.dupeZ(u8, metadata.name);
+            defer self.allocator.free(app_name_z);
+            self.native_handle = macos_installer_ui.electrobun_macos_installer_ui_start(app_name_z.ptr);
+            if (self.native_handle == null) return error.NoProgressDialog;
+            return;
         }
 
         if (builtin.os.tag != .linux) return;
+
+        const dialog_title = try std.fmt.allocPrint(self.allocator, "{s} Setup", .{metadata.name});
+        defer self.allocator.free(dialog_title);
+        const zenity_title = try std.fmt.allocPrint(self.allocator, "--title={s}", .{dialog_title});
+        defer self.allocator.free(zenity_title);
 
         // Try zenity first (most common)
         const extract_text = try std.fmt.allocPrint(self.allocator, "--text=Extracting {s}...", .{metadata.name});
         defer self.allocator.free(extract_text);
 
         const zenity_args = [_][]const u8{
-            "zenity",                       "--progress", "--pulsate",    "--no-cancel",
-            "--title=Electrobun Installer", extract_text, "--auto-close",
+            "zenity",
+            "--progress",
+            "--no-cancel",
+            "--percentage=0",
+            zenity_title,
+            extract_text,
+            "--auto-close",
         };
 
         const child = std.process.spawn(g_io, .{
@@ -358,26 +524,46 @@ const ProgressIndicator = struct {
             .stdout = .ignore,
             .stderr = .ignore,
         }) catch |err| {
-            // Try kdialog for KDE
+            // KDialog returns a D-Bus service and object path. Unlike Zenity,
+            // its progress dialog does not accept updates over stdin.
             if (err == error.FileNotFound) {
                 const kdialog_text = try std.fmt.allocPrint(self.allocator, "Extracting {s}...", .{metadata.name});
                 defer self.allocator.free(kdialog_text);
 
+                const dbus_command = self.findKdialogDbusCommand() orelse return error.NoProgressDialog;
+
                 const kdialog_args = [_][]const u8{
-                    "kdialog", "--progressbar",        kdialog_text, "0",
-                    "--title", "Electrobun Installer",
+                    "kdialog", "--progressbar", kdialog_text, "100",
+                    "--title", dialog_title,
                 };
 
-                const kde_child = std.process.spawn(g_io, .{
+                const result = std.process.run(self.allocator, g_io, .{
                     .argv = &kdialog_args,
-                    .stdin = .ignore,
-                    .stdout = .ignore,
-                    .stderr = .ignore,
-                }) catch {
+                    .stdout_limit = .limited(4096),
+                    .stderr_limit = .limited(4096),
+                }) catch return error.NoProgressDialog;
+                defer self.allocator.free(result.stdout);
+                defer self.allocator.free(result.stderr);
+                if (!processExitedSuccessfully(result.term)) return error.NoProgressDialog;
+
+                const reference = parseKdialogProgressReference(result.stdout) orelse
                     return error.NoProgressDialog;
+                const service = try self.allocator.dupe(u8, reference.service);
+                const object_path = self.allocator.dupe(u8, reference.object_path) catch |alloc_err| {
+                    self.allocator.free(service);
+                    return alloc_err;
                 };
 
-                self.child_process = kde_child;
+                self.kdialog_progress = .{
+                    .dbus_command = dbus_command,
+                    .service = service,
+                    .object_path = object_path,
+                };
+                if (!self.runKdialogDbus(&.{ "org.kde.kdialog.ProgressDialog.showCancelButton", "false" })) {
+                    self.closeKdialogProgress();
+                    return error.NoProgressDialog;
+                }
+
                 return;
             }
             return err;
@@ -386,7 +572,253 @@ const ProgressIndicator = struct {
         self.child_process = child;
     }
 
+    fn findKdialogDbusCommand(self: *ProgressIndicator) ?[]const u8 {
+        _ = self;
+        const candidates = [_][]const u8{ "qdbus6", "qdbus", "qdbus-qt6", "qdbus-qt5" };
+        for (candidates) |candidate| {
+            const argv = [_][]const u8{candidate};
+            var probe = std.process.spawn(g_io, .{
+                .argv = &argv,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            }) catch continue;
+            const term = probe.wait(g_io) catch continue;
+            if (processExitedSuccessfully(term)) return candidate;
+        }
+        return null;
+    }
+
+    fn runKdialogDbus(self: *ProgressIndicator, method_args: []const []const u8) bool {
+        const progress = self.kdialog_progress orelse return false;
+        var argv_storage: [8][]const u8 = undefined;
+        const argv = kdialogDbusArgv(
+            progress.dbus_command,
+            .{
+                .service = progress.service,
+                .object_path = progress.object_path,
+            },
+            method_args,
+            &argv_storage,
+        ) orelse return false;
+        const result = std.process.run(self.allocator, g_io, .{
+            .argv = argv,
+            .stdout_limit = .limited(4096),
+            .stderr_limit = .limited(4096),
+        }) catch return false;
+        defer self.allocator.free(result.stdout);
+        defer self.allocator.free(result.stderr);
+        return processExitedSuccessfully(result.term);
+    }
+
+    fn releaseKdialogProgress(self: *ProgressIndicator) void {
+        if (self.kdialog_progress) |progress| {
+            self.allocator.free(progress.service);
+            self.allocator.free(progress.object_path);
+            self.kdialog_progress = null;
+        }
+    }
+
+    fn closeKdialogProgress(self: *ProgressIndicator) void {
+        if (self.kdialog_progress == null) return;
+        _ = self.runKdialogDbus(&.{"org.kde.kdialog.ProgressDialog.close"});
+        self.releaseKdialogProgress();
+    }
+
+    fn update(
+        self: *ProgressIndicator,
+        phase: InstallPhase,
+        completed_bytes: ?u64,
+        total_bytes: ?u64,
+    ) void {
+        const event = InstallProgress{
+            .phase = phase,
+            .completed_bytes = completed_bytes,
+            .total_bytes = total_bytes,
+        };
+        self.current = event;
+
+        const phase_changed = self.last_emitted_phase != phase;
+        const percent = event.percent();
+        const marquee = !event.isDeterminate() and phase != .completed;
+        const percent_changed = percent != self.last_emitted_percent;
+        const marquee_changed = self.last_emitted_marquee != marquee;
+        if (!phase_changed and !percent_changed and !marquee_changed) return;
+
+        if (builtin.os.tag == .windows) {
+            if (self.native_handle) |ui| {
+                if (phase_changed or marquee_changed) {
+                    const phase_w = std.unicode.wtf8ToWtf16LeAllocZ(self.allocator, phase.text()) catch return;
+                    defer self.allocator.free(phase_w);
+                    windows_installer_ui.electrobun_windows_installer_ui_set_phase(
+                        ui,
+                        phase_w.ptr,
+                        if (marquee) 1 else 0,
+                    );
+                }
+                if (!marquee) if (percent) |value| {
+                    windows_installer_ui.electrobun_windows_installer_ui_set_progress(ui, value);
+                };
+            }
+        } else if (builtin.os.tag == .macos) {
+            if (self.native_handle) |ui| {
+                if (phase_changed or marquee_changed) {
+                    const phase_z = self.allocator.dupeZ(u8, phase.text()) catch return;
+                    defer self.allocator.free(phase_z);
+                    macos_installer_ui.electrobun_macos_installer_ui_set_phase(
+                        ui,
+                        phase_z.ptr,
+                        if (marquee) 1 else 0,
+                    );
+                }
+                if (!marquee) if (percent) |value| {
+                    macos_installer_ui.electrobun_macos_installer_ui_set_progress(ui, value);
+                };
+            }
+        } else if (builtin.os.tag == .linux) {
+            if (self.child_process) |*child| {
+                if (child.stdin) |stdin| {
+                    var buffer: [512]u8 = undefined;
+                    var writer = stdin.writer(g_io, &buffer);
+                    if (phase_changed) writer.interface.print("# {s}\n", .{phase.text()}) catch return;
+                    if (!marquee) if (percent) |value| writer.interface.print("{d}\n", .{value}) catch return;
+                    writer.interface.flush() catch return;
+                }
+            } else if (self.kdialog_progress != null) {
+                var update_succeeded = true;
+                if (phase_changed) {
+                    update_succeeded = self.runKdialogDbus(&.{
+                        "org.kde.kdialog.ProgressDialog.setLabelText",
+                        phase.text(),
+                    });
+                }
+                if (update_succeeded and !marquee) if (percent) |value| {
+                    var percent_buffer: [4]u8 = undefined;
+                    const percent_text = std.fmt.bufPrint(&percent_buffer, "{d}", .{value}) catch {
+                        self.closeKdialogProgress();
+                        return;
+                    };
+                    update_succeeded = self.runKdialogDbus(&.{
+                        "org.freedesktop.DBus.Properties.Set",
+                        "org.kde.kdialog.ProgressDialog",
+                        "value",
+                        percent_text,
+                    });
+                };
+                if (!update_succeeded) {
+                    self.closeKdialogProgress();
+                    std.debug.print("KDialog progress updates failed; continuing with console progress.\n", .{});
+                }
+            }
+        }
+
+        if (phase_changed) std.debug.print("{s}\n", .{phase.text()});
+        self.last_emitted_phase = phase;
+        self.last_emitted_percent = percent;
+        self.last_emitted_marquee = marquee;
+    }
+
+    fn complete(self: *ProgressIndicator, succeeded: bool, message: []const u8) void {
+        if (self.completion_reported) return;
+        self.completion_reported = true;
+        if (!succeeded) g_installer_failure_presented = true;
+        self.update(if (succeeded) .completed else .failed, if (succeeded) 1 else null, if (succeeded) 1 else null);
+        if (builtin.os.tag == .linux and succeeded) self.closeKdialogProgress();
+
+        if (builtin.os.tag == .windows) {
+            if (self.native_handle) |ui| {
+                const message_w = std.unicode.wtf8ToWtf16LeAllocZ(self.allocator, message) catch return;
+                defer self.allocator.free(message_w);
+                windows_installer_ui.electrobun_windows_installer_ui_complete(
+                    ui,
+                    if (succeeded) 1 else 0,
+                    message_w.ptr,
+                );
+            }
+        } else if (builtin.os.tag == .macos) {
+            if (self.native_handle) |ui| {
+                const message_z = self.allocator.dupeZ(u8, message) catch return;
+                defer self.allocator.free(message_z);
+                macos_installer_ui.electrobun_macos_installer_ui_complete(
+                    ui,
+                    if (succeeded) 1 else 0,
+                    message_z.ptr,
+                );
+            }
+        } else if (builtin.os.tag == .linux and !succeeded) {
+            // End the progress process before presenting a terminal error.
+            self.closeKdialogProgress();
+            if (self.child_process) |*child| {
+                if (child.stdin) |stdin| {
+                    stdin.close(g_io);
+                    child.stdin = null;
+                }
+                child.kill(g_io);
+                self.child_process = null;
+            }
+            const owned_dialog_title = std.fmt.allocPrint(
+                self.allocator,
+                "{s} Setup",
+                .{self.app_name},
+            ) catch null;
+            defer if (owned_dialog_title) |title| self.allocator.free(title);
+            const dialog_title: []const u8 = owned_dialog_title orelse "Installer";
+            const owned_zenity_title = std.fmt.allocPrint(
+                self.allocator,
+                "--title={s}",
+                .{dialog_title},
+            ) catch null;
+            defer if (owned_zenity_title) |title| self.allocator.free(title);
+            const zenity_title: []const u8 = owned_zenity_title orelse "--title=Installer";
+            const zenity_args = [_][]const u8{
+                "zenity",
+                "--error",
+                zenity_title,
+                "--text",
+                message,
+            };
+            var dialog = std.process.spawn(g_io, .{
+                .argv = &zenity_args,
+                .stdin = .ignore,
+                .stdout = .ignore,
+                .stderr = .ignore,
+            }) catch {
+                const kdialog_args = [_][]const u8{
+                    "kdialog",
+                    "--error",
+                    message,
+                    "--title",
+                    dialog_title,
+                };
+                var fallback = std.process.spawn(g_io, .{
+                    .argv = &kdialog_args,
+                    .stdin = .ignore,
+                    .stdout = .ignore,
+                    .stderr = .ignore,
+                }) catch {
+                    std.debug.print("Installation failed: {s}\n", .{message});
+                    return;
+                };
+                _ = fallback.wait(g_io) catch {};
+                return;
+            };
+            _ = dialog.wait(g_io) catch {};
+        }
+    }
+
     fn deinit(self: *ProgressIndicator) void {
+        if (builtin.os.tag == .windows) {
+            if (self.native_handle) |ui| {
+                windows_installer_ui.electrobun_windows_installer_ui_close(ui);
+                self.native_handle = null;
+            }
+        } else if (builtin.os.tag == .macos) {
+            if (self.native_handle) |ui| {
+                macos_installer_ui.electrobun_macos_installer_ui_close(ui);
+                self.native_handle = null;
+            }
+        }
+        self.closeKdialogProgress();
         if (self.child_process) |*child| {
             // Close stdin to signal completion for zenity
             if (child.stdin) |stdin| {
@@ -402,6 +834,82 @@ const ProgressIndicator = struct {
         }
     }
 };
+
+fn installErrorMessage(err: anyerror) []const u8 {
+    return switch (err) {
+        error.InstallationAlreadyInProgress => "Another installation is already in progress. Close it before trying again.",
+        error.AccessDenied, error.FileBusy, error.PermissionDenied => "The application is still running or its files are locked. Close it and try again.",
+        else => "The application could not be installed.",
+    };
+}
+
+fn presentGenericInstallerFailure(allocator: std.mem.Allocator, message: []const u8) void {
+    if (g_installer_failure_presented) return;
+    const metadata = AppMetadata{
+        .identifier = "sh.blackboard.electrobun-installer-error",
+        .name = "Application",
+        .channel = "error",
+    };
+    var progress = ProgressIndicator.init(allocator, metadata);
+    defer progress.deinit();
+    progress.complete(false, message);
+}
+
+fn previewPause() void {
+    g_io.sleep(.fromMilliseconds(80), .awake) catch {};
+}
+
+fn runInstallerUiPreview(allocator: std.mem.Allocator, mode: []const u8) !void {
+    if (!std.mem.eql(u8, mode, "all") and !std.mem.eql(u8, mode, "error")) {
+        return error.InvalidInstallerUiPreview;
+    }
+    const metadata = AppMetadata{
+        .identifier = "sh.blackboard.electrobun-installer-preview",
+        .name = "Example App",
+        .channel = "preview",
+    };
+    var progress = ProgressIndicator.init(allocator, metadata);
+    defer progress.deinit();
+
+    progress.update(.preparing, null, null);
+    previewPause();
+    for (0..11) |step| {
+        progress.update(.decompressing, @intCast(step * 10), 100);
+        previewPause();
+    }
+    for (0..11) |step| {
+        progress.update(.extracting, @intCast(step * 10), 100);
+        previewPause();
+    }
+    progress.update(.installing_files, null, null);
+    previewPause();
+    progress.update(.integrating, null, null);
+    previewPause();
+
+    if (std.mem.eql(u8, mode, "error")) {
+        progress.complete(false, "Preview of an installation failure. No files were changed.");
+        return;
+    }
+
+    progress.complete(true, "Preview completed. No application was installed.");
+    const preview_name = "Example App";
+    switch (builtin.os.tag) {
+        .windows => {
+            const name_w = try std.unicode.wtf8ToWtf16LeAllocZ(allocator, preview_name);
+            defer allocator.free(name_w);
+            _ = windows_uninstall_ui.electrobun_preview_windows_uninstall_prompt(name_w.ptr);
+        },
+        .macos => {
+            const name_z = try allocator.dupeZ(u8, preview_name);
+            defer allocator.free(name_z);
+            _ = macos_uninstall_ui.electrobun_preview_macos_uninstall_prompt(name_z.ptr);
+        },
+        .linux => {
+            _ = try linux_uninstall_prompt.showPreview(allocator, g_io, g_environ_map, preview_name);
+        },
+        else => {},
+    }
+}
 
 fn linuxAdjacentMetadataPath(allocator: std.mem.Allocator, exe_path: []const u8) !?[]u8 {
     const exe_dir = std.fs.path.dirname(exe_path) orelse return error.InvalidPath;
@@ -461,11 +969,17 @@ fn extractAdjacentArchive(
     defer if (generated_archive_path) |path| allocator.free(path);
     const archive_path = explicit_archive_path orelse generated_archive_path.?;
 
-    const compressed_data = std.Io.Dir.cwd().readFileAlloc(g_io, archive_path, allocator, .unlimited) catch |err| switch (err) {
-        error.FileNotFound, error.NotDir => return null,
+    // Metadata established that this is an adjacent installer. From this
+    // point, missing or unreadable payloads are visible install failures rather
+    // than a silent fallback to legacy embedded discovery.
+    var progress = ProgressIndicator.init(allocator, metadata);
+    defer progress.deinit();
+    errdefer progress.complete(false, "The application could not be installed.");
+
+    std.Io.Dir.cwd().access(g_io, archive_path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return error.MissingInstallerArchive,
         else => return err,
     };
-    defer allocator.free(compressed_data);
 
     std.debug.print("Found adjacent archive file: {s}\n", .{archive_path});
     std.debug.print("Using metadata: identifier={s}, name={s}, channel={s}\n", .{
@@ -486,13 +1000,34 @@ fn extractAdjacentArchive(
     std.debug.print("Extracting to: {s}\n", .{self_extraction_dir});
     std.debug.print("App will be installed to: {s}\n", .{app_dir});
 
-    if (builtin.os.tag == .windows) {
-        var uninstall_lock = try acquireWindowsUninstallLock(allocator, app_base_dir);
-        defer uninstall_lock.release();
-        return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
-    }
+    const installed = install: {
+        if (builtin.os.tag == .windows) {
+            var install_lock = try acquireWindowsInstallLock(allocator, app_base_dir);
+            defer install_lock.release();
+            break :install extractAndInstall(
+                allocator,
+                .{ .file = archive_path },
+                metadata,
+                self_extraction_dir,
+                app_dir,
+                &progress,
+            );
+        }
 
-    return try extractAndInstall(allocator, compressed_data, metadata, self_extraction_dir, app_dir);
+        break :install extractAndInstall(
+            allocator,
+            .{ .file = archive_path },
+            metadata,
+            self_extraction_dir,
+            app_dir,
+            &progress,
+        );
+    } catch |err| {
+        progress.complete(false, installErrorMessage(err));
+        return err;
+    };
+    progress.complete(true, "The application was installed successfully.");
+    return installed;
 }
 
 fn extractFromSelf(allocator: std.mem.Allocator) !bool {
@@ -576,6 +1111,9 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         return error.InvalidInstallIdentity;
     }
 
+    var progress = ProgressIndicator.init(allocator, safe_metadata);
+    defer progress.deinit();
+
     // Defer cleanup until after extractAndInstall is done
     defer {
         allocator.free(metadata.identifier);
@@ -611,14 +1149,33 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
     // Serialize the complete Windows install against uninstall and deferred
     // cleanup. This prevents an uninstall that is already running from
     // deleting a newly extracted app before its integration files are written.
-    if (builtin.os.tag == .windows) {
-        var uninstall_lock = try acquireWindowsUninstallLock(allocator, app_base_dir);
-        defer uninstall_lock.release();
-        return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
-    }
-
-    // Continue with decompression (shared code path)
-    return try extractAndInstall(allocator, compressed_data, safe_metadata, self_extraction_dir, app_dir);
+    const installed = install: {
+        if (builtin.os.tag == .windows) {
+            var install_lock = try acquireWindowsInstallLock(allocator, app_base_dir);
+            defer install_lock.release();
+            break :install extractAndInstall(
+                allocator,
+                .{ .memory = compressed_data },
+                safe_metadata,
+                self_extraction_dir,
+                app_dir,
+                &progress,
+            );
+        }
+        break :install extractAndInstall(
+            allocator,
+            .{ .memory = compressed_data },
+            safe_metadata,
+            self_extraction_dir,
+            app_dir,
+            &progress,
+        );
+    } catch |err| {
+        progress.complete(false, installErrorMessage(err));
+        return err;
+    };
+    progress.complete(true, "The application was installed successfully.");
+    return installed;
 }
 
 const EmbeddedMetadataSlice = struct {
@@ -653,37 +1210,60 @@ fn findEmbeddedMetadata(allocator: std.mem.Allocator, contents: []const u8) !?Em
     return null;
 }
 
-fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, metadata: AppMetadata, self_extraction_dir: []const u8, app_dir: []const u8) !bool {
+const InstallArchiveSource = union(enum) {
+    memory: []const u8,
+    file: []const u8,
+};
 
-    // Initialize progress indicator
-    var progress = ProgressIndicator.init(allocator, metadata);
-    defer progress.deinit();
+fn extractAndInstall(
+    allocator: std.mem.Allocator,
+    archive_source: InstallArchiveSource,
+    metadata: AppMetadata,
+    self_extraction_dir: []const u8,
+    app_dir: []const u8,
+    progress: *ProgressIndicator,
+) !bool {
+    errdefer progress.update(.failed, null, null);
 
     // Get exe path for shortcuts
     const exe_path = try std.process.executablePathAlloc(g_io, allocator);
     defer allocator.free(exe_path);
 
-    // Decompress using zstd
-    // Note: the sliding window is a big boy so we allocate it on the heap
-    const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
-    defer allocator.free(window_buffer);
+    var decompressed_data: ?[]u8 = null;
+    defer if (decompressed_data) |data| allocator.free(data);
+    var staged_extraction_dir: ?[]u8 = null;
+    defer if (staged_extraction_dir) |path| allocator.free(path);
+    var staging_published = false;
+    defer if (!staging_published) if (staged_extraction_dir) |path| {
+        std.Io.Dir.cwd().deleteTree(g_io, path) catch {};
+    };
+    var working_extraction_dir = self_extraction_dir;
 
-    var input_reader: std.Io.Reader = .fixed(compressed_data);
-    var decompress: zstd.Decompress = .init(&input_reader, window_buffer, .{ .verify_checksum = false });
+    switch (archive_source) {
+        .memory => |compressed_data| {
+            // Embedded legacy installers retain their existing in-memory path.
+            // Shipped adjacent installers use the bounded file path below.
+            const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
+            defer allocator.free(window_buffer);
+            var input_reader: std.Io.Reader = .fixed(compressed_data);
+            var decompress: zstd.Decompress = .init(&input_reader, window_buffer, .{ .verify_checksum = false });
+            progress.update(.decompressing, 0, @intCast(compressed_data.len));
+            decompressed_data = try decompress.reader.allocRemaining(allocator, .unlimited);
+            progress.update(.decompressing, @intCast(compressed_data.len), @intCast(compressed_data.len));
+            try extractTarWithProgress(decompressed_data.?, self_extraction_dir, progress);
+        },
+        .file => |archive_path| {
+            const staging_dir = try std.fmt.allocPrint(allocator, "{s}.partial", .{self_extraction_dir});
+            staged_extraction_dir = staging_dir;
+            try resetExtractionDirectory(staging_dir);
 
-    std.debug.print("Decompressing", .{});
-    const decompressed_data = try decompress.reader.allocRemaining(allocator, .unlimited);
-    defer allocator.free(decompressed_data);
-    std.debug.print(" Done!\n", .{});
-
-    // For Linux: Save the compressed archive to self-extraction directory (for future updates)
-    // This is similar to what macOS does to enable the Updater API to apply patches
-    // We'll save tar files after extraction to avoid them being deleted
-
-    // Extract tar archive to self-extraction directory first
-    std.debug.print("Extracting files", .{});
-
-    try extractTar(allocator, decompressed_data, self_extraction_dir);
+            const tar_path = try retainedTarPath(allocator, staging_dir, metadata.hash);
+            defer allocator.free(tar_path);
+            try streamZstdToTar(allocator, archive_path, tar_path, progress);
+            try extractTarFile(tar_path, staging_dir, progress);
+            working_extraction_dir = staging_dir;
+        },
+    }
     std.debug.print(" Done!\n", .{});
 
     // Now move the extracted app to the app directory
@@ -703,12 +1283,9 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     }
     std.debug.print("DEBUG: app_bundle_name = '{s}'\n", .{app_bundle_name});
 
-    const extracted_app_path = try std.fs.path.join(allocator, &.{ self_extraction_dir, app_bundle_name });
+    const extracted_app_path = try std.fs.path.join(allocator, &.{ working_extraction_dir, app_bundle_name });
     defer allocator.free(extracted_app_path);
     std.debug.print("DEBUG: extracted_app_path = '{s}'\n", .{extracted_app_path});
-
-    // Remove existing app directory before installing the new one
-    std.Io.Dir.cwd().deleteTree(g_io, app_dir) catch {};
 
     // Move the extracted app to the app directory
     std.debug.print("\nDEBUG: Preparing to move app...\n", .{});
@@ -719,8 +1296,8 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     std.Io.Dir.cwd().access(g_io, extracted_app_path, .{}) catch |err| {
         std.debug.print("ERROR: Source directory does not exist: '{s}' - {}\n", .{ extracted_app_path, err });
         // List what's actually in the extraction directory
-        std.debug.print("DEBUG: Listing contents of extraction directory '{s}':\n", .{self_extraction_dir});
-        var iter_dir = try std.Io.Dir.cwd().openDir(g_io, self_extraction_dir, .{ .iterate = true });
+        std.debug.print("DEBUG: Listing contents of extraction directory '{s}':\n", .{working_extraction_dir});
+        var iter_dir = try std.Io.Dir.cwd().openDir(g_io, working_extraction_dir, .{ .iterate = true });
         defer iter_dir.close(g_io);
         var iterator = iter_dir.iterate();
         while (try iterator.next(g_io)) |entry| {
@@ -729,6 +1306,42 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         return err;
     };
     std.debug.print("DEBUG: Source directory exists\n", .{});
+
+    // Keep the previous application available until its matching updater state
+    // has also been published. This bounds rollback storage to one app version
+    // and avoids leaving a newly copied app paired with the old retained tar
+    // when publication fails.
+    const previous_app_dir = try std.fmt.allocPrint(allocator, "{s}.previous", .{app_dir});
+    defer allocator.free(previous_app_dir);
+
+    var current_app_exists = try extractionPathExists(app_dir);
+    if (!current_app_exists and try extractionPathExists(previous_app_dir)) {
+        try std.Io.Dir.cwd().rename(previous_app_dir, std.Io.Dir.cwd(), app_dir, g_io);
+        current_app_exists = true;
+    }
+    if (try extractionPathExists(previous_app_dir)) {
+        try std.Io.Dir.cwd().deleteTree(g_io, previous_app_dir);
+    }
+
+    const had_previous_app = current_app_exists;
+    if (had_previous_app) {
+        try std.Io.Dir.cwd().rename(app_dir, std.Io.Dir.cwd(), previous_app_dir, g_io);
+    }
+
+    var app_rollback_armed = true;
+    var app_install_committed = false;
+    defer if (app_rollback_armed and !app_install_committed) {
+        std.Io.Dir.cwd().deleteTree(g_io, app_dir) catch |err| {
+            std.debug.print("WARNING: Failed to remove incomplete application during rollback: {}\n", .{err});
+        };
+        if (had_previous_app) {
+            std.Io.Dir.cwd().rename(previous_app_dir, std.Io.Dir.cwd(), app_dir, g_io) catch |err| {
+                std.debug.print("ERROR: Failed to restore previous application during rollback: {}\n", .{err});
+            };
+        }
+    };
+
+    progress.update(.installing_files, null, null);
 
     // On Windows, we need to create the parent directory first, then copy contents
     if (builtin.os.tag == .windows) {
@@ -777,7 +1390,7 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         try copyDirectory(allocator, extracted_app_path, app_dir);
 
         // Remove the extracted directory after successful copy
-        std.Io.Dir.cwd().deleteTree(g_io, extracted_app_path) catch {};
+        try std.Io.Dir.cwd().deleteTree(g_io, extracted_app_path);
     } else {
         // On Unix systems, rename works across directories
         std.Io.Dir.cwd().rename(extracted_app_path, std.Io.Dir.cwd(), app_dir, g_io) catch |err| {
@@ -803,10 +1416,13 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     }
 
     // Save tar file for Updater API on Linux and Windows after everything else is done
-    if (builtin.os.tag == .linux or builtin.os.tag == .windows) {
+    if ((builtin.os.tag == .linux or builtin.os.tag == .windows) and archive_source == .memory) {
         std.debug.print("\n✓ Saving tar file for Updater API...\n", .{});
         // Make a defensive copy of the hash to prevent memory corruption
-        const safe_hash = if (metadata.hash) |h| try allocator.dupe(u8, h) else null;
+        const safe_hash = if (archive_source == .memory and metadata.hash != null)
+            try allocator.dupe(u8, metadata.hash.?)
+        else
+            null;
         defer if (safe_hash != null) allocator.free(safe_hash.?);
 
         // Save decompressed tar with hash as filename (for Updater API patching)
@@ -823,10 +1439,12 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         try std.Io.Dir.cwd().createDirPath(g_io, self_extraction_dir);
 
         std.debug.print("DEBUG: Creating tar file at: {s}\n", .{tar_path});
-        const tar_file = try std.Io.Dir.cwd().createFile(g_io, tar_path, .{});
-        defer tar_file.close(g_io);
-        try tar_file.writeStreamingAll(g_io, decompressed_data);
-        std.debug.print("✓ Saved tar file ({} bytes)\n", .{decompressed_data.len});
+        if (archive_source == .memory) {
+            const tar_file = try std.Io.Dir.cwd().createFile(g_io, tar_path, .{});
+            defer tar_file.close(g_io);
+            try tar_file.writeStreamingAll(g_io, decompressed_data.?);
+        }
+        if (decompressed_data) |data| std.debug.print("✓ Saved tar file ({} bytes)\n", .{data.len});
 
         // List files to confirm they're saved
         std.debug.print("\nDEBUG: Final files in self-extraction dir:\n", .{});
@@ -838,8 +1456,26 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
         }
     }
 
-    // Commit platform integration only after both the app and updater state are
-    // in place. Package-managed Linux formats never execute this extractor.
+    // Publish the already-complete adjacent updater state before committing the
+    // app replacement. A publication failure therefore rolls the app back to
+    // the version matching the retained updater tar.
+    if (archive_source == .file) {
+        try publishExtractionState(allocator, staged_extraction_dir.?, self_extraction_dir);
+        staging_published = true;
+    }
+
+    app_install_committed = true;
+    app_rollback_armed = false;
+    if (had_previous_app) {
+        std.Io.Dir.cwd().deleteTree(g_io, previous_app_dir) catch |err| {
+            std.debug.print("WARNING: Failed to remove previous application after commit: {}\n", .{err});
+        };
+    }
+
+    // Platform integration runs only after the app and updater state are a
+    // coherent committed pair. If integration fails, the installed files stay
+    // coherent and a later installer run can safely retry integration.
+    progress.update(.integrating, null, null);
     if (builtin.os.tag == .linux) {
         try installLinuxIntegration(allocator, app_dir, metadata);
     } else if (builtin.os.tag == .windows) {
@@ -851,28 +1487,137 @@ fn extractAndInstall(allocator: std.mem.Allocator, compressed_data: []const u8, 
     return true;
 }
 
+fn retainedTarPath(
+    allocator: std.mem.Allocator,
+    extraction_dir: []const u8,
+    hash: ?[]const u8,
+) ![]u8 {
+    if (hash) |value| {
+        if (value.len == 0) return error.InvalidArchiveHash;
+        for (value) |byte| {
+            if (!std.ascii.isAlphanumeric(byte) and byte != '-' and byte != '_') {
+                return error.InvalidArchiveHash;
+            }
+        }
+    }
+    const file_name = if (hash) |value|
+        try std.fmt.allocPrint(allocator, "{s}.tar", .{value})
+    else
+        try allocator.dupe(u8, "current.tar");
+    defer allocator.free(file_name);
+    return std.fs.path.join(allocator, &.{ extraction_dir, file_name });
+}
+
+fn resetExtractionDirectory(extract_dir: []const u8) !void {
+    std.Io.Dir.cwd().deleteTree(g_io, extract_dir) catch |err| switch (err) {
+        error.NotDir => try std.Io.Dir.cwd().deleteFile(g_io, extract_dir),
+        else => return err,
+    };
+    try std.Io.Dir.cwd().createDirPath(g_io, extract_dir);
+}
+
+fn streamZstdToTar(
+    allocator: std.mem.Allocator,
+    compressed_path: []const u8,
+    tar_path: []const u8,
+    progress: *ProgressIndicator,
+) !void {
+    const partial_path = try std.fmt.allocPrint(allocator, "{s}.partial", .{tar_path});
+    defer allocator.free(partial_path);
+    std.Io.Dir.cwd().deleteFile(g_io, partial_path) catch {};
+    errdefer std.Io.Dir.cwd().deleteFile(g_io, partial_path) catch {};
+
+    const source_file = try std.Io.Dir.cwd().openFile(g_io, compressed_path, .{});
+    defer source_file.close(g_io);
+    var source_buffer: [64 * 1024]u8 = undefined;
+    var source_reader = source_file.reader(g_io, &source_buffer);
+    const compressed_size = try source_reader.getSize();
+
+    const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
+    defer allocator.free(window_buffer);
+    var decompress: zstd.Decompress = .init(&source_reader.interface, window_buffer, .{ .verify_checksum = false });
+    progress.update(.decompressing, 0, compressed_size);
+
+    {
+        const partial_file = try std.Io.Dir.cwd().createFile(g_io, partial_path, .{ .truncate = true });
+        defer partial_file.close(g_io);
+        var writer_buffer: [64 * 1024]u8 = undefined;
+        var writer = partial_file.writer(g_io, &writer_buffer);
+        var output_buffer: [64 * 1024]u8 = undefined;
+        while (true) {
+            const count = try decompress.reader.readSliceShort(&output_buffer);
+            if (count == 0) break;
+            try writer.interface.writeAll(output_buffer[0..count]);
+            progress.update(.decompressing, source_reader.logicalPos(), compressed_size);
+        }
+        try writer.interface.flush();
+        try partial_file.sync(g_io);
+    }
+
+    try std.Io.Dir.cwd().rename(partial_path, std.Io.Dir.cwd(), tar_path, g_io);
+    progress.update(.decompressing, compressed_size, compressed_size);
+}
+
+fn extractTarFile(tar_path: []const u8, extract_dir: []const u8, progress: *ProgressIndicator) !void {
+    const tar_file = try std.Io.Dir.cwd().openFile(g_io, tar_path, .{});
+    defer tar_file.close(g_io);
+    var reader_buffer: [64 * 1024]u8 = undefined;
+    var reader = tar_file.reader(g_io, &reader_buffer);
+    const tar_size = try reader.getSize();
+    progress.update(.extracting, 0, tar_size);
+    var extraction_dir = try std.Io.Dir.cwd().openDir(g_io, extract_dir, .{});
+    defer extraction_dir.close(g_io);
+    try pipeToFileSystemWithProgress(g_io, extraction_dir, &reader.interface, progress, tar_size);
+    progress.update(.extracting, tar_size, tar_size);
+}
+
+fn extractionPathExists(path: []const u8) !bool {
+    std.Io.Dir.cwd().access(g_io, path, .{}) catch |err| switch (err) {
+        error.FileNotFound => return false,
+        else => return err,
+    };
+    return true;
+}
+
+fn publishExtractionState(
+    allocator: std.mem.Allocator,
+    staged_dir: []const u8,
+    final_dir: []const u8,
+) !void {
+    const previous_dir = try std.fmt.allocPrint(allocator, "{s}.previous", .{final_dir});
+    defer allocator.free(previous_dir);
+
+    if (!try extractionPathExists(final_dir) and try extractionPathExists(previous_dir)) {
+        try std.Io.Dir.cwd().rename(previous_dir, std.Io.Dir.cwd(), final_dir, g_io);
+    }
+    if (try extractionPathExists(previous_dir)) try std.Io.Dir.cwd().deleteTree(g_io, previous_dir);
+
+    const had_previous = try extractionPathExists(final_dir);
+    if (had_previous) try std.Io.Dir.cwd().rename(final_dir, std.Io.Dir.cwd(), previous_dir, g_io);
+    errdefer if (had_previous) {
+        std.Io.Dir.cwd().rename(previous_dir, std.Io.Dir.cwd(), final_dir, g_io) catch {};
+    };
+    try std.Io.Dir.cwd().rename(staged_dir, std.Io.Dir.cwd(), final_dir, g_io);
+    if (had_previous) std.Io.Dir.cwd().deleteTree(g_io, previous_dir) catch {};
+}
+
+fn extractTarWithProgress(tar_data: []const u8, extract_dir: []const u8, progress: *ProgressIndicator) !void {
+    try resetExtractionDirectory(extract_dir);
+    progress.update(.extracting, 0, @intCast(tar_data.len));
+    var dir = try std.Io.Dir.cwd().openDir(g_io, extract_dir, .{});
+    defer dir.close(g_io);
+    var reader: std.Io.Reader = .fixed(tar_data);
+    try pipeToFileSystemWithProgress(g_io, dir, &reader, progress, @intCast(tar_data.len));
+    progress.update(.extracting, @intCast(tar_data.len), @intCast(tar_data.len));
+}
+
 fn extractTar(allocator: std.mem.Allocator, tar_data: []const u8, extract_dir: []const u8) !void {
-    _ = allocator; // Mark as used (needed for potential path operations)
+    _ = allocator;
 
     std.debug.print("DEBUG: Starting tar extraction to: {s}\n", .{extract_dir});
     std.debug.print("DEBUG: Tar data size: {} bytes\n", .{tar_data.len});
 
-    // Clean up existing directory if it exists to ensure no old files remain
-    std.Io.Dir.cwd().deleteTree(g_io, extract_dir) catch |err| switch (err) {
-        error.NotDir => {
-            // Path exists but is not a directory, try to delete as file
-            std.Io.Dir.cwd().deleteFile(g_io, extract_dir) catch {
-                // If that fails too, just continue - we'll overwrite
-            };
-        },
-        else => {
-            // For any other error (including if directory doesn't exist), just continue
-            // The createDirPath call below will create the directory as needed
-        },
-    };
-
-    // Create extraction directory
-    try std.Io.Dir.cwd().createDirPath(g_io, extract_dir);
+    try resetExtractionDirectory(extract_dir);
 
     // Open extraction directory
     var dir = try std.Io.Dir.cwd().openDir(g_io, extract_dir, .{});
@@ -1630,7 +2375,7 @@ fn windowsShortcutFileName(allocator: std.mem.Allocator, app_name: []const u8, c
     {
         _ = sanitized.pop();
     }
-    if (sanitized.items.len == 0) try sanitized.appendSlice(allocator, "Electrobun App");
+    if (sanitized.items.len == 0) try sanitized.appendSlice(allocator, "Application");
     try sanitized.appendSlice(allocator, ".lnk");
     return sanitized.toOwnedSlice(allocator);
 }
@@ -2384,7 +3129,11 @@ const WindowsUninstallLock = if (builtin.os.tag == .windows) struct {
     }
 } else struct {};
 
-fn acquireWindowsUninstallLock(allocator: std.mem.Allocator, base_dir: []const u8) !WindowsUninstallLock {
+fn acquireWindowsLock(
+    allocator: std.mem.Allocator,
+    base_dir: []const u8,
+    wait_milliseconds: std.os.windows.DWORD,
+) !WindowsUninstallLock {
     if (builtin.os.tag != .windows) unreachable;
 
     const resolved_base = try std.fs.path.resolve(allocator, &.{base_dir});
@@ -2404,13 +3153,26 @@ fn acquireWindowsUninstallLock(allocator: std.mem.Allocator, base_dir: []const u
     const handle = windows_uninstall_sync.CreateMutexW(null, .FALSE, mutex_name_w.ptr) orelse
         return error.UninstallLockFailed;
     errdefer _ = windows_uninstall_sync.CloseHandle(handle);
-    const wait_result = windows_uninstall_sync.WaitForSingleObject(handle, windows_uninstall_sync.infinite);
+    const wait_result = windows_uninstall_sync.WaitForSingleObject(handle, wait_milliseconds);
+    if (wait_result == windows_uninstall_sync.wait_timeout and
+        wait_milliseconds == windows_uninstall_sync.no_wait)
+    {
+        return error.InstallationAlreadyInProgress;
+    }
     if (wait_result != windows_uninstall_sync.wait_object_0 and
         wait_result != windows_uninstall_sync.wait_abandoned)
     {
         return error.UninstallLockFailed;
     }
     return .{ .handle = handle };
+}
+
+fn acquireWindowsUninstallLock(allocator: std.mem.Allocator, base_dir: []const u8) !WindowsUninstallLock {
+    return acquireWindowsLock(allocator, base_dir, windows_uninstall_sync.infinite);
+}
+
+fn acquireWindowsInstallLock(allocator: std.mem.Allocator, base_dir: []const u8) !WindowsUninstallLock {
+    return acquireWindowsLock(allocator, base_dir, windows_uninstall_sync.no_wait);
 }
 
 fn validateWindowsUninstallManifest(
@@ -4296,9 +5058,30 @@ fn prepareMacosSelfExtractionRoot(
 ) ![]u8 {
     var channel_dir = try ensureMacosInstallRoot(home, identifier, channel);
     defer channel_dir.close(g_io);
-    try channel_dir.deleteTree(g_io, "self-extraction");
-    var extraction_dir = try ensurePlainMacosChildDir(channel_dir, "self-extraction");
+
+    // Retain the currently published updater state while the replacement is
+    // decompressed and extracted. All managed children must be real
+    // directories so cleanup and publication cannot traverse a symlink.
+    for ([_][]const u8{ "self-extraction", "self-extraction.previous" }) |name| {
+        const stat = channel_dir.statFile(g_io, name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+            error.FileNotFound => continue,
+            else => return err,
+        };
+        if (stat.kind != .directory) return error.InvalidUninstallLocation;
+    }
+
+    const staging_name = "self-extraction.partial";
+    const staging_stat = channel_dir.statFile(g_io, staging_name, .{ .follow_symlinks = false }) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    if (staging_stat) |stat| {
+        if (stat.kind != .directory) return error.InvalidUninstallLocation;
+        try channel_dir.deleteTree(g_io, staging_name);
+    }
+    var extraction_dir = try ensurePlainMacosChildDir(channel_dir, staging_name);
     extraction_dir.close(g_io);
+
     return std.fs.path.join(
         allocator,
         &.{ home, "Library", "Application Support", identifier, channel, "self-extraction" },
@@ -4877,6 +5660,13 @@ pub fn main(init: std.process.Init) !void {
 
     const allocator = init.gpa;
 
+    // Hidden manual QA entrypoint. It exercises the real platform adapters but
+    // returns before manager parsing, payload discovery, or any install state.
+    if (g_environ_map.get("ELECTROBUN_INSTALLER_UI_PREVIEW")) |mode| {
+        try runInstallerUiPreview(allocator, mode);
+        return;
+    }
+
     // Installed uninstallers are copies of this extractor. Dispatch management
     // modes before attempting to discover or extract an installer payload.
     if (builtin.os.tag == .windows) {
@@ -4958,7 +5748,7 @@ pub fn main(init: std.process.Init) !void {
         }
     }
 
-    std.debug.print("Electrobun self-extractor v1.3 starting...\n", .{});
+    std.debug.print("Self-extractor v1.3 starting...\n", .{});
     var startTime = std.Io.Clock.now(.awake, g_io);
 
     // try get the absolute path to the executable inside the app bundle
@@ -4971,9 +5761,19 @@ pub fn main(init: std.process.Init) !void {
     // Platform-specific extraction
     if (builtin.os.tag == .windows or builtin.os.tag == .linux) {
         // Windows and Linux ONLY use self-extraction with magic bytes
-        const extracted = try extractFromSelf(allocator);
+        const extracted = extractFromSelf(allocator) catch |err| {
+            presentGenericInstallerFailure(
+                allocator,
+                "The installer package is invalid or could not be read. Download it again and retry.",
+            );
+            return err;
+        };
         if (!extracted) {
             std.debug.print("ERROR: Not a valid self-extracting installer\n", .{});
+            presentGenericInstallerFailure(
+                allocator,
+                "The installer package is incomplete. Download it again and keep its .installer folder beside Setup.",
+            );
             return error.InvalidInstaller;
         }
         return;
@@ -4989,22 +5789,36 @@ pub fn main(init: std.process.Init) !void {
 
     const metadataJsonContents = std.Io.Dir.cwd().readFileAlloc(g_io, metadataJsonPath, allocator, .unlimited) catch |err| {
         std.debug.print("Failed to read metadata.json at {s}: {}\n", .{ metadataJsonPath, err });
+        presentGenericInstallerFailure(
+            allocator,
+            "The installer package is incomplete. Download it again and retry.",
+        );
         return err;
     };
     defer allocator.free(metadataJsonContents);
 
-    const metadataParsed = try std.json.parseFromSlice(struct {
+    const metadataParsed = std.json.parseFromSlice(struct {
         identifier: []const u8,
         name: []const u8,
         channel: []const u8,
         hash: []const u8,
-    }, allocator, metadataJsonContents, .{ .ignore_unknown_fields = true });
+    }, allocator, metadataJsonContents, .{ .ignore_unknown_fields = true }) catch |err| {
+        presentGenericInstallerFailure(
+            allocator,
+            "The installer metadata is invalid. Download the package again and retry.",
+        );
+        return err;
+    };
     defer metadataParsed.deinit();
 
     if (!isSafeMacosComponent(metadataParsed.value.identifier) or
         !isSafeMacosComponent(metadataParsed.value.channel) or
         !isSafeMacosDisplayName(metadataParsed.value.name))
     {
+        presentGenericInstallerFailure(
+            allocator,
+            "The installer metadata is invalid. Download the package again and retry.",
+        );
         return error.InvalidInstallIdentity;
     }
 
@@ -5020,6 +5834,16 @@ pub fn main(init: std.process.Init) !void {
     const hashName = try allocator.dupe(u8, metadataParsed.value.hash);
     defer allocator.free(hashName);
 
+    const macos_metadata = AppMetadata{
+        .identifier = identifierName,
+        .name = appDisplayName,
+        .channel = channelName,
+        .hash = hashName,
+    };
+    var macos_progress = ProgressIndicator.init(allocator, macos_metadata);
+    defer macos_progress.deinit();
+    errdefer macos_progress.complete(false, "The application could not be installed.");
+
     const home_dir = try getEnvOwned(allocator, "HOME");
     defer allocator.free(home_dir);
 
@@ -5030,6 +5854,7 @@ pub fn main(init: std.process.Init) !void {
     defer install_channel_dir.close(g_io);
 
     const appBundleResourcesPath = try std.fs.path.resolve(allocator, &.{ APPBUNDLE_MACOS_PATH, BUNLE_RESOURCES_REL_PATH });
+    defer allocator.free(appBundleResourcesPath);
 
     const compressedBundleFileName = try std.fmt.allocPrint(allocator, "{s}.tar.zst", .{hashName});
     defer allocator.free(compressedBundleFileName);
@@ -5037,8 +5862,8 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("compressedBundleFileName: {s}\n", .{compressedBundleFileName});
 
     const compressedTarballPath = try std.fs.path.join(allocator, &.{ appBundleResourcesPath, compressedBundleFileName });
+    defer allocator.free(compressedTarballPath);
 
-    const compressedAppBundle = try std.Io.Dir.cwd().openFile(g_io, compressedTarballPath, .{}); //|compressedAppBundle| {
     const SELF_EXTRACTION_PATH = try prepareMacosSelfExtractionRoot(
         allocator,
         home_dir,
@@ -5046,53 +5871,28 @@ pub fn main(init: std.process.Init) !void {
         channelName,
     );
     defer allocator.free(SELF_EXTRACTION_PATH);
-
-    // compressed file found, assume I'm the self-extractor
-    defer compressedAppBundle.close(g_io);
-
-    var src_reader_buffer: [64 * 1024]u8 = undefined;
-    var src_file_reader = compressedAppBundle.reader(g_io, src_reader_buffer[0..]);
-
-    // Initialize the decompressor
-    // Note: the sliding window is a big boy so we allocate it on the heap
-    const window_buffer = try allocator.alloc(u8, zstd.default_window_len + zstd.block_size_max);
-    defer allocator.free(window_buffer);
-
-    var zstd_stream: zstd.Decompress = .init(&src_file_reader.interface, window_buffer, .{ .verify_checksum = false });
+    const SELF_EXTRACTION_STAGING_PATH = try std.fmt.allocPrint(allocator, "{s}.partial", .{SELF_EXTRACTION_PATH});
+    defer allocator.free(SELF_EXTRACTION_STAGING_PATH);
+    var extraction_state_published = false;
+    defer if (!extraction_state_published) {
+        std.Io.Dir.cwd().deleteTree(g_io, SELF_EXTRACTION_STAGING_PATH) catch {};
+    };
 
     // compressedTarballPath replace extension
     // remove the .zst extension from filename.tar.zst
     const tarFileName = std.fs.path.stem(compressedTarballPath);
 
-    const tarPath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, tarFileName });
+    const tarPath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_STAGING_PATH, tarFileName });
+    defer allocator.free(tarPath);
     std.debug.print("tarPath: {s}\n", .{tarPath});
-    // Open the destination file for writing
-
-    const dst_file = try std.Io.Dir.cwd().createFile(g_io, tarPath, .{ .truncate = true });
-    defer dst_file.close(g_io);
-
-    // Create a writer for the destination file
-    var dst_writer_buffer: [64 * 1024]u8 = undefined;
-    var dst_file_writer = dst_file.writer(g_io, dst_writer_buffer[0..]);
-
-    // Stream from the decompressor into the destination file
-    _ = try zstd_stream.reader.streamRemaining(&dst_file_writer.interface);
-    try dst_file_writer.interface.flush();
+    try streamZstdToTar(allocator, compressedTarballPath, tarPath, &macos_progress);
 
     const decompress_done = std.Io.Clock.now(.awake, g_io);
     std.debug.print("Time taken to decompress: {} ns\n", .{startTime.durationTo(decompress_done).toNanoseconds()});
 
     startTime = decompress_done;
 
-    var extractionFolder = try std.Io.Dir.cwd().openDir(g_io, SELF_EXTRACTION_PATH, .{});
-    defer extractionFolder.close(g_io);
-
-    const tarfile = try std.Io.Dir.cwd().openFile(g_io, tarPath, .{});
-    defer tarfile.close(g_io);
-
-    var tar_reader_buffer: [64 * 1024]u8 = undefined;
-    var tar_file_reader = tarfile.reader(g_io, tar_reader_buffer[0..]);
-    try pipeToFileSystem(g_io, extractionFolder, &tar_file_reader.interface);
+    try extractTarFile(tarPath, SELF_EXTRACTION_STAGING_PATH, &macos_progress);
 
     const untar_done = std.Io.Clock.now(.awake, g_io);
     std.debug.print("Time taken to untar: {} ns\n", .{startTime.durationTo(untar_done).toNanoseconds()});
@@ -5110,14 +5910,15 @@ pub fn main(init: std.process.Init) !void {
     // Note: the name of the application or bundle may change between builds. By switching distribution channels
     // and/or by the app developer deciding to rename it.
     // todo: consider having a metadata file for the final bundle name and having all the names in this directory consistent
-    // const iterableDir = try std.fs.openIterableDirAbsolute(SELF_EXTRACTION_PATH, .{});
+    // const iterableDir = try std.fs.openIterableDirAbsolute(SELF_EXTRACTION_STAGING_PATH, .{});
     // var extractionFolderWalker = try iterableDir.walk(allocator);
     // defer extractionFolderWalker.deinit();
 
     // while (try extractionFolderWalker.next()) |entry| {
     //     const entryName = entry.basename;
     //     if (std.mem.eql(u8, std.fs.path.extension(entryName), ".app")) {
-    const newBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_PATH, bundleFileName });
+    const newBundlePath = try std.fs.path.join(allocator, &.{ SELF_EXTRACTION_STAGING_PATH, bundleFileName });
+    defer allocator.free(newBundlePath);
 
     // todo
     // rename the tar file to its hash so we can update it later
@@ -5126,15 +5927,71 @@ pub fn main(init: std.process.Init) !void {
     // todo: get the basename of the newBundlePath and join a new path with it
     // in case the name changed.
 
-    try installMacosUninstallManager(allocator, newBundlePath, APPBUNDLE_PATH, .{
+    // Validate the replacement before moving the running outer bundle aside.
+    // installMacosUninstallManager performs the same identity validation when
+    // integration is committed, but doing it here keeps malformed payloads out
+    // of the app/state transaction entirely.
+    var staged_identity = try readAndValidateInstalledMacosIdentity(
+        allocator,
+        newBundlePath,
+        identifierName,
+        channelName,
+    );
+    defer staged_identity.deinit(allocator);
+
+    // Keep at most one previous outer app bundle until the matching retained
+    // updater state has been published. A normal publication error therefore
+    // restores both the previous bundle and the previous self-extraction tree.
+    const previousBundlePath = try std.fmt.allocPrint(allocator, "{s}.previous", .{APPBUNDLE_PATH});
+    defer allocator.free(previousBundlePath);
+
+    var current_bundle_exists = try extractionPathExists(APPBUNDLE_PATH);
+    if (!current_bundle_exists and try extractionPathExists(previousBundlePath)) {
+        try requirePlainDirectory(previousBundlePath);
+        try std.Io.Dir.renameAbsolute(previousBundlePath, APPBUNDLE_PATH, g_io);
+        current_bundle_exists = true;
+    }
+    if (current_bundle_exists) try requirePlainDirectory(APPBUNDLE_PATH);
+    if (try extractionPathExists(previousBundlePath)) {
+        try requirePlainDirectory(previousBundlePath);
+        try std.Io.Dir.cwd().deleteTree(g_io, previousBundlePath);
+    }
+
+    const had_previous_bundle = current_bundle_exists;
+    var bundle_rollback_armed = false;
+    defer if (bundle_rollback_armed) {
+        std.Io.Dir.cwd().deleteTree(g_io, APPBUNDLE_PATH) catch |err| {
+            std.debug.print("WARNING: Failed to remove incomplete macOS app during rollback: {}\n", .{err});
+        };
+        if (had_previous_bundle) {
+            std.Io.Dir.renameAbsolute(previousBundlePath, APPBUNDLE_PATH, g_io) catch |err| {
+                std.debug.print("ERROR: Failed to restore previous macOS app during rollback: {}\n", .{err});
+            };
+        }
+    };
+
+    macos_progress.update(.installing_files, null, null);
+    if (had_previous_bundle) {
+        try std.Io.Dir.renameAbsolute(APPBUNDLE_PATH, previousBundlePath, g_io);
+    }
+    bundle_rollback_armed = true;
+    try std.Io.Dir.renameAbsolute(newBundlePath, APPBUNDLE_PATH, g_io);
+    try publishExtractionState(allocator, SELF_EXTRACTION_STAGING_PATH, SELF_EXTRACTION_PATH);
+    extraction_state_published = true;
+    bundle_rollback_armed = false;
+    if (had_previous_bundle) {
+        std.Io.Dir.cwd().deleteTree(g_io, previousBundlePath) catch |err| {
+            std.debug.print("WARNING: Failed to remove previous macOS app after commit: {}\n", .{err});
+        };
+    }
+
+    macos_progress.update(.integrating, null, null);
+    try installMacosUninstallManager(allocator, APPBUNDLE_PATH, APPBUNDLE_PATH, .{
         .identifier = identifierName,
         .name = appDisplayName,
         .channel = channelName,
         .hash = hashName,
     });
-
-    std.Io.Dir.cwd().deleteTree(g_io, APPBUNDLE_PATH) catch {};
-    try std.Io.Dir.renameAbsolute(newBundlePath, APPBUNDLE_PATH, g_io);
 
     // Platform-specific app launching
     const argv = switch (builtin.os.tag) {
@@ -5152,10 +6009,12 @@ pub fn main(init: std.process.Init) !void {
     // so we want to just spawn (so it detaches) and exit as soon as possible
     _ = std.process.spawn(g_io, .{ .argv = argv }) catch |err| {
         std.debug.print("Failed to spawn child process: {}\n", .{err});
+        macos_progress.complete(false, "The application was installed, but it could not be launched.");
         return;
     };
 
-    std.process.exit(0);
+    macos_progress.complete(true, "The application was installed successfully.");
+    return;
 
     //     }
     // } else |_| {
@@ -5630,15 +6489,119 @@ test "Linux desktop entries preserve channel-specific names and omit missing ico
     try std.testing.expect(std.mem.indexOf(u8, with_icon, "Icon=/opt/archive/Resources/appIcon.png") != null);
 }
 
+test "installer progress maps phases monotonically and clamps without overflow" {
+    const events = [_]InstallProgress{
+        .{ .phase = .decompressing, .completed_bytes = 0, .total_bytes = 100 },
+        .{ .phase = .decompressing, .completed_bytes = 100, .total_bytes = 100 },
+        .{ .phase = .extracting, .completed_bytes = 0, .total_bytes = 100 },
+        .{ .phase = .extracting, .completed_bytes = 100, .total_bytes = 100 },
+        .{ .phase = .installing_files, .completed_bytes = 0, .total_bytes = 100 },
+        .{ .phase = .installing_files, .completed_bytes = 100, .total_bytes = 100 },
+        .{ .phase = .integrating, .completed_bytes = 0, .total_bytes = 100 },
+        .{ .phase = .integrating, .completed_bytes = std.math.maxInt(u64), .total_bytes = std.math.maxInt(u64) },
+        .{ .phase = .completed },
+    };
+    var previous: u32 = 0;
+    for (events) |event| {
+        const percent = event.percent() orelse return error.TestUnexpectedResult;
+        try std.testing.expect(percent >= previous);
+        try std.testing.expect(percent <= 100);
+        previous = percent;
+    }
+    try std.testing.expectEqual(@as(?u32, null), (InstallProgress{ .phase = .failed }).percent());
+    try std.testing.expectEqual(
+        @as(?u32, 45),
+        (InstallProgress{
+            .phase = .decompressing,
+            .completed_bytes = std.math.maxInt(u64),
+            .total_bytes = 1,
+        }).percent(),
+    );
+}
+
+test "KDialog progress references accept only the detached helper address" {
+    const reference = parseKdialogProgressReference(
+        "org.kde.kdialog-4821 /ProgressDialog\n",
+    ) orelse return error.TestUnexpectedResult;
+    try std.testing.expectEqualStrings("org.kde.kdialog-4821", reference.service);
+    try std.testing.expectEqualStrings("/ProgressDialog", reference.object_path);
+
+    try std.testing.expect(parseKdialogProgressReference(
+        "org.kde.kdialog-4821 /ProgressDialog trailing",
+    ) == null);
+    try std.testing.expect(parseKdialogProgressReference(
+        "org.kde.kdialog-not-a-pid /ProgressDialog",
+    ) == null);
+    try std.testing.expect(parseKdialogProgressReference(
+        "org.kde.kdialog-4821 /UnexpectedObject",
+    ) == null);
+}
+
+test "KDialog D-Bus commands preserve service path and typed property arguments" {
+    var storage: [8][]const u8 = undefined;
+    const method_args = [_][]const u8{
+        "org.freedesktop.DBus.Properties.Set",
+        "org.kde.kdialog.ProgressDialog",
+        "value",
+        "73",
+    };
+    const argv = kdialogDbusArgv(
+        "qdbus6",
+        .{
+            .service = "org.kde.kdialog-4821",
+            .object_path = "/ProgressDialog",
+        },
+        &method_args,
+        &storage,
+    ) orelse return error.TestUnexpectedResult;
+    const expected = [_][]const u8{
+        "qdbus6",
+        "org.kde.kdialog-4821",
+        "/ProgressDialog",
+        "org.freedesktop.DBus.Properties.Set",
+        "org.kde.kdialog.ProgressDialog",
+        "value",
+        "73",
+    };
+    try std.testing.expectEqual(expected.len, argv.len);
+    for (expected, argv) |expected_arg, actual_arg| {
+        try std.testing.expectEqualStrings(expected_arg, actual_arg);
+    }
+}
+
 // Note: zig stdlib's untar function doesn't support file modes. They don't plan on adding it later,
 // or at least not for windows in the near future which we expect to support in the future. In the meantime this is a patched
 // version of std.tar.pipeToFileSystem from the stdlib that supports file modes on unix systems.
 // todo: when we add windows support we can revisit
 pub fn pipeToFileSystem(io: std.Io, dir: std.Io.Dir, reader: *std.Io.Reader) !void {
+    return pipeToFileSystemWithProgress(io, dir, reader, null, null);
+}
+
+fn readTarChunk(
+    reader: *std.Io.Reader,
+    destination: []u8,
+    progress: ?*ProgressIndicator,
+    bytes_read: *u64,
+    total_bytes: ?u64,
+) !usize {
+    const count = try reader.readSliceShort(destination);
+    bytes_read.* += count;
+    if (progress) |reporter| reporter.update(.extracting, bytes_read.*, total_bytes);
+    return count;
+}
+
+fn pipeToFileSystemWithProgress(
+    io: std.Io,
+    dir: std.Io.Dir,
+    reader: *std.Io.Reader,
+    progress: ?*ProgressIndicator,
+    total_bytes: ?u64,
+) !void {
     var file_name_buffer: [255]u8 = undefined;
     var buffer: [512 * 8]u8 = undefined;
     var start: usize = 0;
     var end: usize = 0;
+    var bytes_read: u64 = 0;
     header: while (true) {
         if (buffer.len - start < 1024) {
             const dest_end = end - start;
@@ -5646,7 +6609,7 @@ pub fn pipeToFileSystem(io: std.Io, dir: std.Io.Dir, reader: *std.Io.Reader) !vo
             end = dest_end;
             start = 0;
         }
-        end += try reader.readSliceShort(buffer[end..]);
+        end += try readTarChunk(reader, buffer[end..], progress, &bytes_read, total_bytes);
         switch (end - start) {
             0 => return,
             1...511 => return error.UnexpectedEndOfStream,
@@ -5721,7 +6684,7 @@ pub fn pipeToFileSystem(io: std.Io, dir: std.Io.Dir, reader: *std.Io.Reader) !vo
                         buffer.len - end,
                         rounded_file_size + 512 - file_off -| (end - start),
                     )));
-                    end += try reader.readSliceShort(buffer[end..]);
+                    end += try readTarChunk(reader, buffer[end..], progress, &bytes_read, total_bytes);
                     if (end - start < ask) return error.UnexpectedEndOfStream;
                     // TODO: https://github.com/ziglang/zig/issues/14039
                     const slice = buffer[start..@as(usize, @intCast(@min(file_size - file_off + start, end)))];
@@ -5756,7 +6719,7 @@ pub fn pipeToFileSystem(io: std.Io, dir: std.Io.Dir, reader: *std.Io.Reader) !vo
                         @memcpy(buffer[0..dest_end], buffer[start..end]);
                         end = dest_end;
                         start = 0;
-                        const read_n = try reader.readSliceShort(buffer[end..]);
+                        const read_n = try readTarChunk(reader, buffer[end..], progress, &bytes_read, total_bytes);
                         if (read_n == 0) return error.UnexpectedEndOfStream;
                         end += read_n;
                     }
@@ -6033,4 +6996,66 @@ fn sanitizeWindowsPath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
     allocator.free(sanitized);
 
     return result;
+}
+
+test "failed updater state publication restores the previous retained state" {
+    g_io = std.testing.io;
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const final_sub_path = "updater-state";
+    const previous_sub_path = "updater-state.previous";
+    const missing_staged_sub_path = "missing-staged-state";
+    const retained_tar_sub_path = final_sub_path ++ "/previous-hash.tar";
+    const retained_metadata_sub_path = final_sub_path ++ "/nested/state.json";
+    const retained_tar = "previous retained tar bytes";
+    const retained_metadata = "{\"generation\":\"previous\"}";
+
+    try tmp.dir.createDirPath(std.testing.io, final_sub_path ++ "/nested");
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = retained_tar_sub_path,
+        .data = retained_tar,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = retained_metadata_sub_path,
+        .data = retained_metadata,
+    });
+
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_path);
+    const final_path = try std.fs.path.join(std.testing.allocator, &.{ tmp_path, final_sub_path });
+    defer std.testing.allocator.free(final_path);
+    const missing_staged_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ tmp_path, missing_staged_sub_path },
+    );
+    defer std.testing.allocator.free(missing_staged_path);
+
+    if (publishExtractionState(std.testing.allocator, missing_staged_path, final_path)) |_| {
+        return error.TestExpectedError;
+    } else |_| {}
+
+    const restored_tar = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        retained_tar_sub_path,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(restored_tar);
+    try std.testing.expectEqualStrings(retained_tar, restored_tar);
+
+    const restored_metadata = try tmp.dir.readFileAlloc(
+        std.testing.io,
+        retained_metadata_sub_path,
+        std.testing.allocator,
+        .limited(1024),
+    );
+    defer std.testing.allocator.free(restored_metadata);
+    try std.testing.expectEqualStrings(retained_metadata, restored_metadata);
+
+    try std.testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(std.testing.io, previous_sub_path, .{}),
+    );
 }

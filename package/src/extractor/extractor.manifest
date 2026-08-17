@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <assemblyIdentity
-      name="Electrobun.Extractor"
+      name="Application.Extractor"
       processorArchitecture="*"
       type="win32"
       version="1.0.0.0" />
-  <description>Electrobun extractor and uninstall manager</description>
+  <description>Application installer and uninstall manager</description>
   <dependency>
     <dependentAssembly>
       <assemblyIdentity

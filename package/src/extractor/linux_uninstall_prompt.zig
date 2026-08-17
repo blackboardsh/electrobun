@@ -1,5 +1,8 @@
 const std = @import("std");
 
+const uninstall_message = "The application will be removed.";
+pub const preview_message = "UI preview only; no files will be removed.";
+
 pub const Selection = enum {
     app,
     app_and_data,
@@ -37,6 +40,7 @@ pub const Backend = struct {
         context: *anyopaque,
         allocator: std.mem.Allocator,
         app_name: []const u8,
+        message: []const u8,
     ) anyerror!Selection,
 };
 
@@ -64,9 +68,38 @@ pub fn show(
         .io = io,
         .environ_map = environ_map,
     };
-    return showWithBackend(
+    return showWithBackendMessage(
         allocator,
         app_name,
+        uninstall_message,
+        shouldPreferKdialog(environ_map),
+        .{
+            .context = &context,
+            .run_helper = runSystemHelper,
+            .graphical_session_available = systemGraphicalSessionAvailable,
+            .terminal_available = systemTerminalAvailable,
+            .terminal_prompt = showSystemTerminalPrompt,
+        },
+    );
+}
+
+/// Shows the real platform chooser with copy that makes its non-mutating
+/// preview behavior explicit. The returned selection is informational only;
+/// callers must not dispatch uninstall work from it.
+pub fn showPreview(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    environ_map: *const std.process.Environ.Map,
+    app_name: []const u8,
+) !Selection {
+    var context = SystemContext{
+        .io = io,
+        .environ_map = environ_map,
+    };
+    return showWithBackendMessage(
+        allocator,
+        app_name,
+        preview_message,
         shouldPreferKdialog(environ_map),
         .{
             .context = &context,
@@ -84,6 +117,22 @@ pub fn showWithBackend(
     prefer_kdialog: bool,
     backend: Backend,
 ) !Selection {
+    return showWithBackendMessage(
+        allocator,
+        app_name,
+        uninstall_message,
+        prefer_kdialog,
+        backend,
+    );
+}
+
+fn showWithBackendMessage(
+    allocator: std.mem.Allocator,
+    app_name: []const u8,
+    message: []const u8,
+    prefer_kdialog: bool,
+    backend: Backend,
+) !Selection {
     const helpers: [2]Helper = if (prefer_kdialog)
         .{ .kdialog, .zenity }
     else
@@ -94,7 +143,7 @@ pub fn showWithBackend(
 
     if (backend.graphical_session_available(backend.context)) {
         for (helpers) |helper| {
-            switch (tryHelper(allocator, backend, helper, title)) {
+            switch (tryHelper(allocator, backend, helper, title, message)) {
                 .selected => |selection| return selection,
                 .failed => continue,
             }
@@ -104,7 +153,7 @@ pub fn showWithBackend(
     if (!backend.terminal_available(backend.context)) {
         return error.InteractivePromptUnavailable;
     }
-    return backend.terminal_prompt(backend.context, allocator, app_name);
+    return backend.terminal_prompt(backend.context, allocator, app_name, message);
 }
 
 pub fn shouldPreferKdialog(environ_map: *const std.process.Environ.Map) bool {
@@ -134,8 +183,8 @@ fn tryHelper(
     backend: Backend,
     helper: Helper,
     title: []const u8,
+    message: []const u8,
 ) HelperAttempt {
-    const message = "The application will be removed.";
     var output = switch (helper) {
         .zenity => blk: {
             const argv = [_][]const u8{
@@ -283,17 +332,18 @@ fn showSystemTerminalPrompt(
     raw_context: *anyopaque,
     allocator: std.mem.Allocator,
     app_name: []const u8,
+    message: []const u8,
 ) !Selection {
     const context: *SystemContext = @ptrCast(@alignCast(raw_context));
     const prompt = try std.fmt.allocPrint(
         allocator,
         "Uninstall {s}?\n" ++
-            "The application will be removed.\n\n" ++
+            "{s}\n\n" ++
             "  1) App (default)\n" ++
             "  2) App and Data\n" ++
             "  3) Cancel\n\n" ++
             "Choice [1]: ",
-        .{app_name},
+        .{ app_name, message },
     );
     defer allocator.free(prompt);
     try std.Io.File.stderr().writeStreamingAll(context.io, prompt);
@@ -329,6 +379,7 @@ const FakeContext = struct {
     terminal_selection: Selection = .cancel,
     terminal_call_count: usize = 0,
     saw_contract_arguments: bool = true,
+    expected_message: []const u8 = uninstall_message,
 
     fn backend(self: *@This()) Backend {
         return .{
@@ -352,8 +403,8 @@ fn fakeRunHelper(
     context.call_count += 1;
     context.saw_contract_arguments = context.saw_contract_arguments and
         argvHasPair(argv, "--title", "Uninstall Test App?") and
-        (argvHasPair(argv, "--text", "The application will be removed.") or
-            argvHasValue(argv, "The application will be removed.")) and
+        (argvHasPair(argv, "--text", context.expected_message) or
+            argvHasValue(argv, context.expected_message)) and
         (argvHasPair(argv, "--ok-label", "App") or
             argvHasPair(argv, "--yes-label", "App")) and
         (argvHasPair(argv, "--extra-button", "App and Data") or
@@ -385,6 +436,7 @@ fn fakeGraphicalSessionAvailable(raw_context: *anyopaque) bool {
 fn fakeTerminalPrompt(
     raw_context: *anyopaque,
     _: std.mem.Allocator,
+    _: []const u8,
     _: []const u8,
 ) !Selection {
     const context: *FakeContext = @ptrCast(@alignCast(raw_context));
@@ -523,6 +575,28 @@ test "prefers Zenity outside KDE and does not retry a cancel" {
     );
     try std.testing.expectEqualSlices(Helper, &.{.zenity}, context.calls[0..context.call_count]);
     try std.testing.expectEqual(@as(usize, 0), context.terminal_call_count);
+}
+
+test "preview chooser uses explicit non-mutating copy" {
+    const responses = [_]FakeResponse{
+        .{ .helper = .zenity, .term = .{ .exited = 1 } },
+    };
+    var context = FakeContext{
+        .responses = &responses,
+        .expected_message = preview_message,
+    };
+    try std.testing.expectEqual(
+        Selection.cancel,
+        try showWithBackendMessage(
+            std.testing.allocator,
+            "Test App",
+            preview_message,
+            false,
+            context.backend(),
+        ),
+    );
+    try std.testing.expect(context.saw_contract_arguments);
+    try std.testing.expect(std.mem.indexOf(u8, preview_message, "no files will be removed") != null);
 }
 
 test "falls back to an attached terminal only after both GUI helpers fail" {
