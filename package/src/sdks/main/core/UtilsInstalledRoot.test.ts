@@ -4,7 +4,7 @@ import { resolveInstalledRootNameForPaths } from "./Utils";
 
 const baseInfo = {
 	identifier: "com.example.application",
-	channel: "production",
+	channel: "stable",
 	version: "2.0.0",
 	hash: "abc123",
 	name: "ExampleApp",
@@ -47,7 +47,18 @@ describe("app-scoped path migration", () => {
 				"/tmp/outside/app/bin/cottontail",
 				"/home/test/.local/share",
 			),
-		).toBe("production");
+		).toBe("stable");
+	});
+
+	test("does not translate the retired production alias", () => {
+		expect(
+			resolveInstalledRootNameForPaths(
+				{ ...baseInfo, channel: "production" },
+				"linux",
+				"/home/test/.local/share/com.example.application/stable/app/bin/cottontail",
+				"/home/test/.local/share",
+			),
+		).toBe("");
 	});
 
 	test("finds macOS stable and display-name roots from retained state", () => {

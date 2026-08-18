@@ -136,13 +136,13 @@ When you're ready to share it:
 
 ```bash
 hutch electrobun build --env=canary
-hutch electrobun build --env=production
+hutch electrobun build --env=stable
 ```
 
 This produces a signed, distributable build — installer, self-extracting
-wrapper, and update metadata included. Canary and production are independent
+wrapper, and update metadata included. Canary and stable are independent
 channels, so you can ship prerelease builds to testers without touching your
-production line.
+stable release line.
 
 Hutch builds for the operating system and architecture it's running on, so a
 complete cross-platform release means running the build on native CI runners

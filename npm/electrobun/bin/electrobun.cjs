@@ -11,7 +11,9 @@ const installerBaseUrl = "https://hutch.blackboard.sh/hutch";
 const maxInstallerBytes = 1024 * 1024;
 const maxInstallerRedirects = 5;
 
-function normalizeChannel(value) {
+// Hutch owns a separate release-channel contract: its stable executable is
+// still published under Hutch's "production" channel.
+function normalizeHutchChannel(value) {
 	if (value === "stable") return "production";
 	if (value === "production" || value === "canary") return value;
 	return null;
@@ -19,7 +21,7 @@ function normalizeChannel(value) {
 
 function hutchChannel(environment) {
 	for (const key of ["ELECTROBUN_HUTCH_CHANNEL", "HUTCH_ACTIVE_CHANNEL"]) {
-		const selected = normalizeChannel(environment[key]);
+		const selected = normalizeHutchChannel(environment[key]);
 		if (selected) return selected;
 	}
 	return "production";
@@ -39,14 +41,14 @@ function hutchBinaryPath(channel, environment, platform, userHome) {
 		return environment.ELECTROBUN_HUTCH_BINARY;
 	}
 
+	const pathApi = platform === "win32" ? path.win32 : path.posix;
 	// HUTCH_HOME is Hutch's own home; DASH_HOME stays honored as a deprecated
 	// fallback for Dash Desktop and older setups.
 	const hutchHome =
 		environment.HUTCH_HOME ||
 		environment.DASH_HOME ||
-		path.join(userHome, ".hutch");
+		pathApi.join(userHome, ".hutch");
 	const command = channel === "canary" ? "hutch-canary" : "hutch";
-	const pathApi = platform === "win32" ? path.win32 : path.posix;
 	return pathApi.join(
 		hutchHome,
 		"bin",

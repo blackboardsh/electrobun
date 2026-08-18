@@ -9,7 +9,7 @@ export const runtimeTests = [
 			"Use packaged build metadata rather than NODE_ENV to identify development builds.",
 		async run({ log }) {
 			const config = await BuildConfig.get();
-			expect(["dev", "canary", "production"].includes(config.channel)).toBe(
+			expect(["dev", "canary", "stable"].includes(config.channel)).toBe(
 				true,
 			);
 			expect(config.isPackaged).toBe(config.channel !== "dev");

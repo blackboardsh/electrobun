@@ -36,7 +36,7 @@ function fixtureRoot(): string {
 
 const info: LocalUpdateInfo = {
 	identifier: "com.example.application",
-	channel: "production",
+	channel: "stable",
 	version: "2.0.0",
 	hash: "current123",
 	baseUrl: "https://updates.example.invalid",
@@ -93,9 +93,7 @@ function writePreparedUpdate(root: string, version: string, hash: string): void 
 			platform: OS,
 			arch: ARCH,
 			retained_tar_path: retainedTarPath,
-			artifact_file: `${getPlatformPrefix(info.channel, OS, ARCH)}-Example.tar.zst`,
-			artifact_size: 123,
-			artifact_sha256: "a".repeat(64),
+			artifact_file: `${getPlatformPrefix("stable", OS, ARCH)}-Example.tar.zst`,
 		})}\n`,
 		"utf8",
 	);

@@ -18,11 +18,11 @@ it is running. Produce and test each release on a native runner.
 Windows on ARM runs the x64 application through Windows emulation. The current
 Electrobun release workflow does not publish a macOS x64 core artifact.
 
-On each runner, install Hutch and execute the same production command:
+On each runner, install Hutch and execute the same stable-release command:
 
 ```bash
 hutch run install
-hutch electrobun build --env=production
+hutch electrobun build --env=stable
 ```
 
 Here `install` is a project task such as `["hutch", "pm", "ci"]` with
@@ -115,7 +115,7 @@ dynamic dependency set for a distribution.
 
 Packaged Windows applications use the GUI subsystem and do not open a console
 window. Hutch dev launches attach to the invoking terminal. To expose output
-from a canary or production executable for diagnosis, set
+from a canary or stable executable for diagnosis, set
 `ELECTROBUN_CONSOLE=1` before launch:
 
 ```powershell

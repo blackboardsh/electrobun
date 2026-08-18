@@ -128,7 +128,7 @@ Highlights from the 2.0 reconciliation include:
   archive extraction, launch dependency diagnostics, ABI checks, and an
   initial Flatpak output path.
 - Isolated Kitchen Sink matrix builds, remote release templates, R2-hosted
-  owned dependencies, and cross-platform production/canary packaging.
+  owned dependencies, and cross-platform stable/canary packaging.
 
 ## Platforms and channels
 
@@ -136,10 +136,8 @@ The release pipeline builds application bundles and distributable artifacts on
 macOS ARM64, Windows x64, Linux x64, and Linux ARM64. Apps can use the system
 webview or CEF on each supported operating system.
 
-Hutch's build environments are `dev`, `canary`, and `production`. `stable`
-remains supported as an alias for `production`; emitted metadata and artifacts
-use the canonical `production` name. Canary and production are independent
-release channels.
+Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
+Canary and stable are independent release channels.
 
 See [Migrate from Electrobun 1.x](/electrobun/guides/migrating-to-v2/) for the
 required project changes.

@@ -11,8 +11,8 @@ describe("Linux desktop WM class", () => {
 	test("derives the native class from app name and channel", () => {
 		expect(source).toContain("deriveLinuxWindowClass(");
 		expect(source).toContain("character != ' '");
-		expect(source).toContain('channel != "production"');
 		expect(source).toContain('channel != "stable"');
+		expect(source).not.toContain('channel != "production"');
 		expect(source).not.toContain("ElectrobunKitchenSink-dev");
 	});
 

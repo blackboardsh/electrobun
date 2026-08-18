@@ -135,7 +135,7 @@ describe("Windows installer native progress UI contract", () => {
 		const platformDispatch = sourceBetween(
 			extractorMain,
 			"// Platform-specific extraction",
-			"fn isProductionChannel",
+			"fn isStableChannel",
 		);
 		expect(platformDispatch).toContain(
 			"const extracted = extractFromSelf(allocator) catch",

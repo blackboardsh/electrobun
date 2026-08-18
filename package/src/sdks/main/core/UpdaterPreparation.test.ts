@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	writeFileSync,
 } from "node:fs";
@@ -13,22 +13,24 @@ import { join, posix, resolve, win32 } from "node:path";
 import { getPlatformPrefix } from "../../../shared/naming";
 import { ARCH, OS } from "../../../shared/platform";
 import {
+	Updater,
+	addUpdateArtifactCacheBuster,
 	atomicWriteFile,
-	applyVerifiedDeltaPatch,
+	applyDeltaPatch,
 	buildUpdateArtifactUrl,
-	buildUpdatePatchUrl,
 	createDownloadProgressThrottleState,
 	createNativeUpdatePlan,
-	downloadVerifiedFile,
+	downloadResponseToFile,
 	nextDownloadProgressPercent,
+	preparePatchChainForUpdate,
 	publishFileReplacingRegular,
+	readUpdateHashFromTar,
 	resolveInstalledChannelRoot,
 	resolveInstalledChannelRootForPlatform,
 	resolveUpdateParentPid,
 	resolveUpdateHelperSource,
 	syncFile,
 	validateUpdateManifest,
-	verifyRegularFileIntegrity,
 } from "./Updater";
 
 function fixtureRoot(): string {
@@ -39,32 +41,104 @@ function validManifest() {
 	return {
 		schemaVersion: 1,
 		identifier: "com.example.application",
-		channel: "production",
+		channel: "stable",
 		version: "2.0.0",
 		hash: "abc123",
 		platform: OS,
 		arch: ARCH,
 		artifact: {
-			file: `${getPlatformPrefix("production", OS, ARCH)}-Example.tar.zst`,
-			size: 123456,
-			sha256: "a".repeat(64),
+			file: `${getPlatformPrefix("stable", OS, ARCH)}-Example.tar.zst`,
 		},
 	};
 }
 
-function sha256(bytes: Uint8Array | string): string {
-	return createHash("sha256").update(bytes).digest("hex");
+const textEncoder = new TextEncoder();
+
+function concatenateBytes(parts: readonly Uint8Array[]): Uint8Array {
+	const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
+	const result = new Uint8Array(total);
+	let offset = 0;
+	for (const part of parts) {
+		result.set(part, offset);
+		offset += part.byteLength;
+	}
+	return result;
+}
+
+function writeTarField(
+	header: Uint8Array,
+	offset: number,
+	length: number,
+	value: string,
+): void {
+	header.set(textEncoder.encode(value).subarray(0, length), offset);
+}
+
+function tarHeader(
+	name: string,
+	size: number,
+	type = "0",
+	prefix = "",
+): Uint8Array {
+	const header = new Uint8Array(512);
+	writeTarField(header, 0, 100, name);
+	writeTarField(header, 100, 8, "0000600\0");
+	writeTarField(header, 108, 8, "0000000\0");
+	writeTarField(header, 116, 8, "0000000\0");
+	writeTarField(header, 124, 12, `${size.toString(8).padStart(11, "0")}\0`);
+	writeTarField(header, 136, 12, "00000000000\0");
+	header.fill(0x20, 148, 156);
+	writeTarField(header, 156, 1, type);
+	writeTarField(header, 257, 6, "ustar\0");
+	writeTarField(header, 263, 2, "00");
+	writeTarField(header, 345, 155, prefix);
+	let checksum = 0;
+	for (const byte of header) checksum += byte;
+	writeTarField(header, 148, 8, `${checksum.toString(8).padStart(6, "0")}\0 `);
+	return header;
+}
+
+function tarEntry(
+	name: string,
+	contents: Uint8Array,
+	type = "0",
+	prefix = "",
+): Uint8Array {
+	const padding = new Uint8Array((512 - (contents.byteLength % 512)) % 512);
+	return concatenateBytes([
+		tarHeader(name, contents.byteLength, type, prefix),
+		contents,
+		padding,
+	]);
+}
+
+function updateTar(hash: string, path = "Example/Resources/version.json"): Uint8Array {
+	return concatenateBytes([
+		tarEntry(path, textEncoder.encode(JSON.stringify({ hash }))),
+		new Uint8Array(1024),
+	]);
+}
+
+function paxRecord(key: string, value: string): Uint8Array {
+	const body = `${key}=${value}\n`;
+	let length = textEncoder.encode(body).byteLength + 2;
+	for (;;) {
+		const record = `${length} ${body}`;
+		const actual = textEncoder.encode(record).byteLength;
+		if (actual === length) return textEncoder.encode(record);
+		length = actual;
+	}
 }
 
 const expected = {
 	identifier: "com.example.application",
-	channel: "production",
+	channel: "stable",
 	platform: OS,
 	arch: ARCH,
 };
 
 describe("v2 update preparation contracts", () => {
-	test("accepts integrity metadata while preserving the legacy manifest subset", () => {
+	test("accepts the canonical manifest and preserves its legacy release fields", () => {
 		const document = validManifest();
 		const manifest = validateUpdateManifest(document, expected);
 		const legacySubset = {
@@ -81,55 +155,37 @@ describe("v2 update preparation contracts", () => {
 		});
 	});
 
-	test("accepts and pins authenticated direct-patch metadata", () => {
-		const prefix = getPlatformPrefix("production", OS, ARCH);
-		const patch = {
-			fromHash: "oldhash",
-			file: `${prefix}-oldhash.patch`,
-			size: 456,
-			sha256: "b".repeat(64),
-			targetSize: 789,
-			targetSha256: "c".repeat(64),
-		};
+	test("ignores artifact integrity and patch descriptors from newer documents", () => {
+		const document = validManifest();
 		const manifest = validateUpdateManifest(
-			{ ...validManifest(), patch },
+			{
+				...document,
+				artifact: {
+					...document.artifact,
+					size: 0,
+					sha256: "not-a-digest",
+				},
+				patch: { arbitrary: true },
+			},
 			expected,
 		);
-		expect(manifest.patch).toEqual(patch);
-		expect(
-			buildUpdatePatchUrl(
-				"https://updates.example.test/releases/",
-				patch.file,
-				patch.sha256,
-			),
-		).toBe(
-			`https://updates.example.test/releases/${encodeURIComponent(patch.file)}?sha256=${patch.sha256}`,
-		);
+		expect(manifest.artifact).toEqual({ file: document.artifact.file });
+		expect("patch" in manifest).toBe(false);
 	});
 
-	test("rejects unsafe or incomplete direct-patch metadata", () => {
-		const prefix = getPlatformPrefix("production", OS, ARCH);
-		const validPatch = {
-			fromHash: "oldhash",
-			file: `${prefix}-oldhash.patch`,
-			size: 456,
-			sha256: "b".repeat(64),
-			targetSize: 789,
-			targetSha256: "c".repeat(64),
-		};
-		for (const patch of [
-			null,
-			{ ...validPatch, fromHash: "../old" },
-			{ ...validPatch, file: `${prefix}-other.patch` },
-			{ ...validPatch, size: 0 },
-			{ ...validPatch, sha256: "B".repeat(64) },
-			{ ...validPatch, targetSize: 0 },
-			{ ...validPatch, targetSha256: "C".repeat(64) },
-		]) {
-			expect(() =>
-				validateUpdateManifest({ ...validManifest(), patch }, expected),
-			).toThrow();
-		}
+	test("rejects the non-canonical production channel", () => {
+		expect(() =>
+			validateUpdateManifest(
+				{
+					...validManifest(),
+					channel: "production",
+					artifact: {
+						file: `production-${OS}-${ARCH}-Example.tar.zst`,
+					},
+				},
+				{ ...expected, channel: "production" },
+			),
+		).toThrow("release identity");
 	});
 
 	for (const mutation of [
@@ -146,13 +202,11 @@ describe("v2 update preparation contracts", () => {
 		});
 	}
 
-	test("rejects unsafe artifact names, lengths, sizes, and digests", () => {
+	test("rejects unsafe artifact names", () => {
 		for (const artifact of [
-			{ ...validManifest().artifact, file: "../Example.tar.zst" },
-			{ ...validManifest().artifact, file: "Example.tar.zst" },
-			{ ...validManifest().artifact, size: 0 },
-			{ ...validManifest().artifact, size: Number.MAX_SAFE_INTEGER },
-			{ ...validManifest().artifact, sha256: "A".repeat(64) },
+			{ file: "../Example.tar.zst" },
+			{ file: "Example.tar.zst" },
+			{},
 		]) {
 			expect(() =>
 				validateUpdateManifest({ ...validManifest(), artifact }, expected),
@@ -161,7 +215,7 @@ describe("v2 update preparation contracts", () => {
 	});
 
 	test("accepts Hutch artifact names and URL-encodes them as one path segment", () => {
-		const prefix = getPlatformPrefix("production", OS, ARCH);
+		const prefix = getPlatformPrefix("stable", OS, ARCH);
 		const file = `${prefix}-Résumé's & Notes #1.tar.zst`;
 		const manifest = validateUpdateManifest(
 			{
@@ -177,17 +231,21 @@ describe("v2 update preparation contracts", () => {
 			`https://updates.example.test/releases/${encodeURIComponent(file)}`,
 		);
 		expect(
-			buildUpdateArtifactUrl(
-				"https://updates.example.test/releases/",
-				file,
-				"a".repeat(64),
+			buildUpdateArtifactUrl("https://updates.example.test/releases/", file),
+		).toBe(
+			`https://updates.example.test/releases/${encodeURIComponent(file)}`,
+		);
+		expect(
+			addUpdateArtifactCacheBuster(
+				buildUpdateArtifactUrl("https://updates.example.test/releases/", file),
+				"0123456789abcdef0123456789abcdef",
 			),
 		).toBe(
-			`https://updates.example.test/releases/${encodeURIComponent(file)}?sha256=${"a".repeat(64)}`,
+			`https://updates.example.test/releases/${encodeURIComponent(file)}?cache=0123456789abcdef0123456789abcdef`,
 		);
 	});
 
-	test("bounds chunk progress and reserves 100 percent for verified completion", () => {
+	test("bounds chunk progress and reserves 100 percent for completion", () => {
 		const state = createDownloadProgressThrottleState();
 		const total = 100 * 1024 * 1024;
 		const emitted: number[] = [];
@@ -219,46 +277,45 @@ describe("v2 update preparation contracts", () => {
 		expect(nextDownloadProgressPercent(state, 11, 1_000, 2_000)).toBeNull();
 	});
 
-	test("streams an authenticated update file to disk and removes rejected bytes", async () => {
+	test("streams an update file to disk without requiring integrity metadata", async () => {
 		const root = fixtureRoot();
 		try {
-			const bytes = new TextEncoder().encode("authenticated patch bytes");
+			const bytes = new TextEncoder().encode("patch bytes");
 			const destination = join(root, "patch.partial");
-			await downloadVerifiedFile(
+			expect(await downloadResponseToFile(
 				new Response(bytes, {
-					headers: { "content-length": String(bytes.byteLength) },
+					headers: { "content-length": "1" },
 				}),
 				destination,
-				bytes.byteLength,
-				sha256(bytes),
 				"Update patch",
-			);
-			expect(readFileSync(destination)).toEqual(Buffer.from(bytes));
+			)).toBe(bytes.byteLength);
+			expect([...readFileSync(destination)]).toEqual([...bytes]);
 
 			const rejected = join(root, "rejected.partial");
 			await expect(
-				downloadVerifiedFile(
+				downloadResponseToFile(
 					new Response(bytes),
 					rejected,
-					bytes.byteLength,
-					"0".repeat(64),
 					"Update patch",
+					() => {
+						throw new Error("interrupted");
+					},
 				),
-			).rejects.toThrow("SHA-256");
+			).rejects.toThrow("interrupted");
 			expect(existsSync(rejected)).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	test("applies a direct patch with argv and verifies its target before publication", async () => {
+	test("applies a patch with direct argv and checks for a nonempty output", () => {
 		const root = fixtureRoot();
 		try {
 			const bspatchPath = join(root, OS === "win" ? "bspatch.exe" : "bspatch");
 			const currentTarPath = join(root, "old.tar");
 			const patchPath = join(root, "old.patch");
 			const outputPath = join(root, "target.partial");
-			const target = new TextEncoder().encode("verified target tar bytes");
+			const target = new TextEncoder().encode("target tar bytes");
 			for (const [path, contents] of [
 				[bspatchPath, "executable"],
 				[currentTarPath, "current tar"],
@@ -269,14 +326,12 @@ describe("v2 update preparation contracts", () => {
 			let invocation:
 				| { executable: string; args: readonly string[] }
 				| undefined;
-			await applyVerifiedDeltaPatch(
+			applyDeltaPatch(
 				{
 					bspatchPath,
 					currentTarPath,
 					patchPath,
 					outputPath,
-					targetSize: target.byteLength,
-					targetSha256: sha256(target),
 				},
 				(executable, args) => {
 					invocation = { executable, args: [...args] };
@@ -287,20 +342,13 @@ describe("v2 update preparation contracts", () => {
 				executable: bspatchPath,
 				args: [currentTarPath, outputPath, patchPath],
 			});
-			await expect(
-				verifyRegularFileIntegrity(
-					outputPath,
-					target.byteLength,
-					sha256(target),
-					"Patched update archive",
-				),
-			).resolves.toBeUndefined();
+			expect([...readFileSync(outputPath)]).toEqual([...target]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	test("rejects a patch output whose target digest does not match", async () => {
+	test("rejects and removes an empty patch output", () => {
 		const root = fixtureRoot();
 		try {
 			const bspatchPath = join(root, OS === "win" ? "bspatch.exe" : "bspatch");
@@ -310,20 +358,215 @@ describe("v2 update preparation contracts", () => {
 			for (const path of [bspatchPath, currentTarPath, patchPath]) {
 				writeFileSync(path, "input");
 			}
-			await expect(
-				applyVerifiedDeltaPatch(
+			expect(() =>
+				applyDeltaPatch(
 					{
 						bspatchPath,
 						currentTarPath,
 						patchPath,
 						outputPath,
-						targetSize: 5,
-						targetSha256: "0".repeat(64),
 					},
-					(_executable, args) => writeFileSync(args[1]!, "wrong"),
+					(_executable, args) => writeFileSync(args[1]!, ""),
 				),
-			).rejects.toThrow("SHA-256");
+			).toThrow("empty");
 			expect(existsSync(outputPath)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("reads Hutch update hashes from USTAR, PAX, and GNU long-name entries", async () => {
+		const root = fixtureRoot();
+		try {
+			const ustarPath = join(root, "ustar.tar");
+			writeFileSync(
+				ustarPath,
+				concatenateBytes([
+					tarEntry(
+						"version.json",
+						textEncoder.encode(JSON.stringify({ hash: "ustarhash" })),
+						"0",
+						"Example/Resources",
+					),
+					new Uint8Array(1024),
+				]),
+			);
+			await expect(readUpdateHashFromTar(ustarPath)).resolves.toBe("ustarhash");
+
+			const longPath = `${"LongApplicationName".repeat(7)}/Resources/version.json`;
+			const metadata = textEncoder.encode(JSON.stringify({ hash: "paxhash" }));
+			const paxPath = join(root, "pax.tar");
+			writeFileSync(
+				paxPath,
+				concatenateBytes([
+					tarEntry("PaxHeaders/version", paxRecord("path", longPath), "x"),
+					tarEntry("version.json", metadata),
+					new Uint8Array(1024),
+				]),
+			);
+			await expect(readUpdateHashFromTar(paxPath)).resolves.toBe("paxhash");
+
+			const gnuPath = join(root, "gnu.tar");
+			writeFileSync(
+				gnuPath,
+				concatenateBytes([
+					tarEntry("././@LongLink", textEncoder.encode(`${longPath}\0`), "L"),
+					tarEntry(
+						"version.json",
+						textEncoder.encode(JSON.stringify({ hash: "gnuhash" })),
+					),
+					new Uint8Array(1024),
+				]),
+			);
+			await expect(readUpdateHashFromTar(gnuPath)).resolves.toBe("gnuhash");
+
+			const unsafePath = join(root, "unsafe.tar");
+			writeFileSync(unsafePath, updateTar("../escape"));
+			await expect(readUpdateHashFromTar(unsafePath)).rejects.toThrow("unsafe");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("prepares an unbounded two-hop filename-based patch chain atomically", async () => {
+		const root = fixtureRoot();
+		try {
+			const currentHash = "oldhash";
+			const middleHash = "middlehash";
+			const latestHash = "finalhash";
+			writeFileSync(join(root, `${currentHash}.tar`), "retained original");
+			const manifest = validateUpdateManifest(
+				{ ...validManifest(), hash: latestHash },
+				expected,
+			);
+			const requested: string[] = [];
+			const statusStart = Updater.getStatusHistory().length;
+			const result = await preparePatchChainForUpdate(
+				{
+					info: {
+						...validManifest(),
+						hash: currentHash,
+						baseUrl: "https://updates.example.test/releases/",
+						name: "Example",
+					},
+					manifest,
+					extractionFolder: root,
+					transactionId: "a".repeat(32),
+					retainedTarPath: resolve(join(root, `${latestHash}.tar`)),
+				},
+				{
+					fetchResponse: async (url) => {
+						requested.push(url);
+						return new Response(
+							url.endsWith(`${currentHash}.patch`) ? middleHash : latestHash,
+						);
+					},
+					applyPatch: ({ patchPath, outputPath }) => {
+						writeFileSync(outputPath, updateTar(readFileSync(patchPath, "utf8")));
+					},
+				},
+			);
+			expect(result).toEqual({ completed: true, patchesApplied: 2 });
+			expect(requested).toEqual([
+				`https://updates.example.test/releases/${getPlatformPrefix("stable", OS, ARCH)}-${currentHash}.patch`,
+				`https://updates.example.test/releases/${getPlatformPrefix("stable", OS, ARCH)}-${middleHash}.patch`,
+			]);
+			await expect(
+				readUpdateHashFromTar(join(root, `${latestHash}.tar`)),
+			).resolves.toBe(latestHash);
+			expect(readFileSync(join(root, `${currentHash}.tar`), "utf8")).toBe(
+				"retained original",
+			);
+			expect(readdirSync(root).filter((name) => name.startsWith("."))).toEqual([]);
+			const statuses = Updater.getStatusHistory().slice(statusStart);
+			expect(
+				statuses.filter((entry) => entry.status === "patch-applied").map((entry) => entry.details?.patchNumber),
+			).toEqual([1, 2]);
+			expect(statuses.find((entry) => entry.status === "patch-chain-complete")?.details?.totalPatchesApplied).toBe(2);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("discards all intermediates when a later patch is missing", async () => {
+		const root = fixtureRoot();
+		try {
+			const currentHash = "fallbackold";
+			const middleHash = "fallbackmid";
+			const latestHash = "fallbacknew";
+			writeFileSync(join(root, `${currentHash}.tar`), "retained original");
+			const result = await preparePatchChainForUpdate(
+				{
+					info: {
+						...validManifest(),
+						hash: currentHash,
+						baseUrl: "https://updates.example.test/releases",
+						name: "Example",
+					},
+					manifest: validateUpdateManifest(
+						{ ...validManifest(), hash: latestHash },
+						expected,
+					),
+					extractionFolder: root,
+					transactionId: "b".repeat(32),
+					retainedTarPath: resolve(join(root, `${latestHash}.tar`)),
+				},
+				{
+					fetchResponse: async (url) =>
+						url.endsWith(`${currentHash}.patch`)
+							? new Response(middleHash)
+							: new Response(null, { status: 404 }),
+					applyPatch: ({ patchPath, outputPath }) => {
+						writeFileSync(outputPath, updateTar(readFileSync(patchPath, "utf8")));
+					},
+				},
+			);
+			expect(result).toEqual({ completed: false, patchesApplied: 1 });
+			expect(existsSync(join(root, `${latestHash}.tar`))).toBe(false);
+			expect(readFileSync(join(root, `${currentHash}.tar`), "utf8")).toBe(
+				"retained original",
+			);
+			expect(readdirSync(root).filter((name) => name.startsWith("."))).toEqual([]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects a patch-chain cycle without replacing the retained archive", async () => {
+		const root = fixtureRoot();
+		try {
+			const currentHash = "cycleold";
+			const latestHash = "cyclenew";
+			writeFileSync(join(root, `${currentHash}.tar`), "retained original");
+			const result = await preparePatchChainForUpdate(
+				{
+					info: {
+						...validManifest(),
+						hash: currentHash,
+						baseUrl: "https://updates.example.test/releases",
+						name: "Example",
+					},
+					manifest: validateUpdateManifest(
+						{ ...validManifest(), hash: latestHash },
+						expected,
+					),
+					extractionFolder: root,
+					transactionId: "c".repeat(32),
+					retainedTarPath: resolve(join(root, `${latestHash}.tar`)),
+				},
+				{
+					fetchResponse: async () => new Response("cycle"),
+					applyPatch: ({ outputPath }) => {
+						writeFileSync(outputPath, updateTar(currentHash));
+					},
+				},
+			);
+			expect(result).toEqual({ completed: false, patchesApplied: 0 });
+			expect(existsSync(join(root, `${latestHash}.tar`))).toBe(false);
+			expect(readFileSync(join(root, `${currentHash}.tar`), "utf8")).toBe(
+				"retained original",
+			);
+			expect(readdirSync(root).filter((name) => name.startsWith("."))).toEqual([]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -349,7 +592,7 @@ describe("v2 update preparation contracts", () => {
 		const dataRoot = fixtureRoot();
 		const info = {
 			identifier: "com.example.application",
-			channel: "production",
+			channel: "stable",
 			version: "2.0.0",
 			hash: "abc123",
 			baseUrl: "https://updates.example.invalid",
@@ -385,7 +628,7 @@ describe("v2 update preparation contracts", () => {
 	test("derives Windows and Linux migration roots from the actual executable", () => {
 		const info = {
 			identifier: "com.example.application",
-			channel: "production",
+			channel: "stable",
 			version: "2.0.0",
 			hash: "abc123",
 			baseUrl: "https://updates.example.invalid",
@@ -420,7 +663,7 @@ describe("v2 update preparation contracts", () => {
 	test("selects the macOS legacy root from retained current-version state", () => {
 		const info = {
 			identifier: "com.example.application",
-			channel: "production",
+			channel: "stable",
 			version: "2.0.0",
 			hash: "abc123",
 			baseUrl: "https://updates.example.invalid",
@@ -477,17 +720,16 @@ describe("v2 update preparation contracts", () => {
 		).toBe(legacyRoot);
 	});
 
-	test("selects the macOS recent-v1 stable root for a production install", () => {
+	test("selects the canonical macOS stable root from retained state", () => {
 		const info = {
 			identifier: "com.example.application",
-			channel: "production",
+			channel: "stable",
 			version: "2.0.0",
 			hash: "abc123",
 			baseUrl: "https://updates.example.invalid",
 			name: "Example App",
 		};
 		const dataRoot = "/Users/test/Library/Application Support";
-		const modernRoot = posix.join(dataRoot, info.identifier, info.channel);
 		const stableRoot = posix.join(dataRoot, info.identifier, "stable");
 		const stableTar = posix.join(
 			stableRoot,
@@ -498,12 +740,6 @@ describe("v2 update preparation contracts", () => {
 			stableRoot,
 			".electrobun-uninstall.json",
 		);
-		const modernTar = posix.join(
-			modernRoot,
-			"self-extraction",
-			`${info.hash}.tar`,
-		);
-
 		expect(
 			resolveInstalledChannelRootForPlatform(
 				info,
@@ -522,20 +758,11 @@ describe("v2 update preparation contracts", () => {
 				(path) => path === stableManifest,
 			),
 		).toBe(stableRoot);
-		expect(
-			resolveInstalledChannelRootForPlatform(
-				info,
-				"macos",
-				"/Applications/Example App.app/Contents/MacOS/bun",
-				dataRoot,
-				(path) => path === modernTar || path === stableTar,
-			),
-		).toBe(modernRoot);
 	});
 
 	test("prefers the standalone native manager once v2 registration exists", () => {
 		const root = fixtureRoot();
-		const channelRoot = join(root, "production");
+		const channelRoot = join(root, "stable");
 		const appBundle = join(channelRoot, "app");
 		const bundled =
 			OS === "macos"
@@ -580,12 +807,12 @@ describe("v2 update preparation contracts", () => {
 		const root = resolve(fixtureRoot());
 		const transactionId = "0123456789abcdef0123456789abcdef";
 		const hash = "abc123";
-		const channelRoot = join(root, "com.example.application", "production");
+		const channelRoot = join(root, "com.example.application", "stable");
 		const plan = createNativeUpdatePlan({
 			schema_version: 1,
 			transaction_id: transactionId,
 			identifier: "com.example.application",
-			channel: "production",
+			channel: "stable",
 			platform: OS,
 			arch: ARCH,
 			version: "2.0.0",

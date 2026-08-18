@@ -1224,7 +1224,7 @@ fn runAppPackagedModeReflectsBuildChannelTest(state: *AppState) !void {
     const channel = state.app_info.channel;
     const is_known_channel = std.mem.eql(u8, channel, "dev") or
         std.mem.eql(u8, channel, "canary") or
-        std.mem.eql(u8, channel, "production");
+        std.mem.eql(u8, channel, "stable");
 
     if (!is_known_channel) return error.UnexpectedBuildChannel;
     if (state.app_info.isPackaged() != !std.mem.eql(u8, channel, "dev")) {

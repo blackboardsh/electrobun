@@ -11,14 +11,14 @@ import {
 	verifyReleaseVersionFromEnvironment,
 } from "./verify-release-version.mjs";
 
-test("derives production and canary channels from strict SemVer", () => {
+test("derives stable and canary channels from strict SemVer", () => {
 	assert.deepEqual(
 		verifyReleaseVersion({ tag: "v2.0.0", version: "2.0.0" }),
 		{
 			tag: "v2.0.0",
 			version: "2.0.0",
 			prerelease: false,
-			environment: "production",
+			environment: "stable",
 			npmDistTag: "latest",
 		},
 	);
@@ -43,7 +43,7 @@ test("does not mistake hyphens in build metadata for a prerelease", () => {
 		version: "2.0.0+build-with-hyphen",
 	});
 	assert.equal(result.prerelease, false);
-	assert.equal(result.environment, "production");
+	assert.equal(result.environment, "stable");
 	assert.equal(result.npmDistTag, "latest");
 });
 
@@ -174,7 +174,7 @@ test("CLI writes all GitHub Actions outputs", () => {
 				"tag=v2.0.0+build-with-hyphen",
 				"version=2.0.0+build-with-hyphen",
 				"prerelease=false",
-				"env=production",
+				"env=stable",
 				"dist-tag=latest",
 				"",
 			].join("\n"),

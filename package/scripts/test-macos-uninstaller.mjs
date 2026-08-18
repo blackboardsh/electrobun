@@ -35,7 +35,7 @@ const temporaryRoot = realpathSync(
 
 const identifier = "com.example.uninstaller-e2e";
 const unrelatedIdentifier = "com.example.unrelated";
-const channel = "production";
+const channel = "stable";
 const siblingChannel = "canary";
 const name = "Uninstaller E2E App";
 const version = "9.8.7";

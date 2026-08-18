@@ -277,9 +277,9 @@ type AppInfo struct {
 	Channel    string
 }
 
-// IsPackaged returns false for dev builds and true for nonempty release channels.
+// IsPackaged returns true only for the canonical stable and canary release channels.
 func (a AppInfo) IsPackaged() bool {
-	return a.Channel != "" && a.Channel != "dev"
+	return a.Channel == "stable" || a.Channel == "canary"
 }
 
 type Rect struct {

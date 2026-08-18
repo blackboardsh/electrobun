@@ -4,7 +4,17 @@ import type { SupportedOS, SupportedArch } from "./platform";
  * Build environment/channel types.
  * "stable" is special - it produces artifacts without a channel suffix.
  */
-export type BuildEnvironment = "stable" | "canary" | "dev" | (string & {});
+export type BuildEnvironment = "stable" | "canary" | "dev";
+
+export function isBuildEnvironment(value: string): value is BuildEnvironment {
+	return value === "stable" || value === "canary" || value === "dev";
+}
+
+function requireBuildEnvironment(value: BuildEnvironment): void {
+	if (!isBuildEnvironment(value)) {
+		throw new Error(`Unsupported build environment: ${value}`);
+	}
+}
 
 /**
  * Sanitizes an app name by removing spaces.
@@ -26,6 +36,7 @@ export function getAppFileName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	const sanitized = sanitizeAppName(appName);
 	return buildEnvironment === "stable"
 		? sanitized
@@ -45,6 +56,7 @@ export function getMacOSBundleDisplayName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	return buildEnvironment === "stable"
 		? appName
 		: `${appName}-${buildEnvironment}`;
@@ -74,6 +86,7 @@ export function getPlatformPrefix(
 	os: SupportedOS,
 	arch: SupportedArch,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	return `${buildEnvironment}-${os}-${arch}`;
 }
 
@@ -100,6 +113,7 @@ export function getWindowsSetupFileName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	return buildEnvironment === "stable"
 		? `${appName}-Setup.exe`
 		: `${appName}-Setup-${buildEnvironment}.exe`;
@@ -114,6 +128,7 @@ export function getLinuxAppImageBaseName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	return buildEnvironment === "stable"
 		? `${appName}-Setup`
 		: `${appName}-Setup-${buildEnvironment}`;
@@ -146,6 +161,7 @@ export function getDmgVolumeName(
 	appName: string,
 	buildEnvironment: BuildEnvironment,
 ): string {
+	requireBuildEnvironment(buildEnvironment);
 	const baseName = sanitizeVolumeNameForHdiutil(appName);
 	return buildEnvironment === "stable"
 		? baseName

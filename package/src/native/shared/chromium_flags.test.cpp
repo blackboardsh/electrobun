@@ -20,7 +20,7 @@ int main() {
     assert(development.scanForAvailablePort);
     assert(development.source == RemoteDebuggingSource::development_default);
 
-    for (const char* environment : {"canary", "production"}) {
+    for (const char* environment : {"canary", "stable"}) {
         const auto packaged = resolve(
             std::string("{\"buildEnvironment\":\"") + environment + "\"}");
         assert(!packaged.enabled());
@@ -31,7 +31,7 @@ int main() {
     assert(missingMetadata.source == RemoteDebuggingSource::disabled_by_default);
 
     const auto configured = resolve(
-        R"({"buildEnvironment":"production","chromiumFlags":{"remote-debugging-port":"9333"}})");
+        R"({"buildEnvironment":"stable","chromiumFlags":{"remote-debugging-port":"9333"}})");
     assert(configured.enabled());
     assert(configured.requestedPort == 9333);
     assert(!configured.scanForAvailablePort);
@@ -51,7 +51,7 @@ int main() {
     }
 
     const auto environmentOverride = resolve(
-        R"({"buildEnvironment":"production","chromiumFlags":{"remote-debugging-port":"9333"}})",
+        R"({"buildEnvironment":"stable","chromiumFlags":{"remote-debugging-port":"9333"}})",
         "9444");
     assert(environmentOverride.requestedPort == 9444);
     assert(environmentOverride.source == RemoteDebuggingSource::environment);

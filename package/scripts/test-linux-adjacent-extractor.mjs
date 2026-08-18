@@ -327,7 +327,7 @@ const createEmbeddedSetupFixture = (extractor, launcherBinary, fixture) => {
 	const payload = createPayload({
 		...fixture,
 		bundleArtifact:
-			fixture.channel === "production"
+			fixture.channel === "stable"
 				? "EmbeddedArchiveApp"
 				: `EmbeddedArchiveApp-${fixture.channel}`,
 		extractor,
@@ -337,7 +337,7 @@ const createEmbeddedSetupFixture = (extractor, launcherBinary, fixture) => {
 		name: uninstallAppName,
 	});
 	const setupName =
-		fixture.channel === "production"
+		fixture.channel === "stable"
 			? `${uninstallAppName}-Setup`
 			: `${uninstallAppName}-Setup-${fixture.channel}`;
 	const setup = join(fixtureRoot, setupName);
@@ -669,7 +669,7 @@ try {
 	const adjacentFixtures = [
 		{
 			artifact: "ArchiveApp",
-			channel: "production",
+			channel: "stable",
 			icon: true,
 			version: "1.0.0",
 		},
@@ -780,40 +780,40 @@ try {
 	// Remove one pristine Desktop shortcut before any test deletes the Desktop
 	// directory itself. This distinguishes Electrobun cleanup from a false pass
 	// caused by the later missing-Desktop scenario.
-	const adjacentProductionPaths = adjacentPaths.get("production");
+	const adjacentStablePaths = adjacentPaths.get("stable");
 	const adjacentCanaryPaths = adjacentPaths.get("canary");
-	run(adjacentProductionPaths.uninstaller, ["--uninstall", "--quiet"], {
+	run(adjacentStablePaths.uninstaller, ["--uninstall", "--quiet"], {
 		env: installerEnv(emptyHelperDir),
 	});
-	assertManagedArtifactsRemoved(adjacentProductionPaths);
-	assertMissing(adjacentProductionPaths.channelRoot);
+	assertManagedArtifactsRemoved(adjacentStablePaths);
+	assertMissing(adjacentStablePaths.channelRoot);
 	assertExists(adjacentCanaryPaths.channelRoot);
 	assertExists(adjacentCanaryPaths.desktopEntry);
 
 	// Build real self-contained Setup executables, including the exact embedded
 	// metadata/archive markers used by shipped Electrobun Linux installers.
-	const productionV1 = {
+	const stableV1 = {
 		artifact: "EmbeddedArchiveApp",
-		channel: "production",
+		channel: "stable",
 		icon: true,
 		version: "2.3.4",
 	};
-	const productionV2 = { ...productionV1, version: "2.4.0" };
+	const stableV2 = { ...stableV1, version: "2.4.0" };
 	const canaryV1 = {
 		artifact: "EmbeddedArchiveApp-canary",
 		channel: "canary",
 		icon: false,
 		version: "2.4.0-canary.3",
 	};
-	const productionSetupV1 = createEmbeddedSetupFixture(
+	const stableSetupV1 = createEmbeddedSetupFixture(
 		extractor,
 		launcherBinary,
-		productionV1,
+		stableV1,
 	);
-	const productionSetupV2 = createEmbeddedSetupFixture(
+	const stableSetupV2 = createEmbeddedSetupFixture(
 		extractor,
 		launcherBinary,
-		productionV2,
+		stableV2,
 	);
 	const canarySetupV1 = createEmbeddedSetupFixture(
 		extractor,
@@ -823,8 +823,8 @@ try {
 
 	// Shipped archives instruct users to launch `./installer`; keep relative
 	// Setup invocation working while installed managers require absolute paths.
-	run(`./${basename(productionSetupV1)}`, [], {
-		cwd: dirname(productionSetupV1),
+	run(`./${basename(stableSetupV1)}`, [], {
+		cwd: dirname(stableSetupV1),
 		env: installerEnv(helperDir),
 	});
 	run(canarySetupV1, [], {
@@ -832,10 +832,10 @@ try {
 		env: installerEnv(helperDir),
 	});
 
-	const productionPaths = installPaths(
+	const stablePaths = installPaths(
 		uninstallIdentifier,
-		productionV1.channel,
-		productionV1.artifact,
+		stableV1.channel,
+		stableV1.artifact,
 	);
 	const canaryPaths = installPaths(
 		uninstallIdentifier,
@@ -843,10 +843,10 @@ try {
 		canaryV1.artifact,
 	);
 	assertInstalled({
-		...productionV1,
+		...stableV1,
 		identifier: uninstallIdentifier,
 		name: uninstallAppName,
-		paths: productionPaths,
+		paths: stablePaths,
 	});
 	assertInstalled({
 		...canaryV1,
@@ -855,8 +855,8 @@ try {
 		paths: canaryPaths,
 	});
 
-	const productionSentinel = join(
-		productionPaths.channelRoot,
+	const stableSentinel = join(
+		stablePaths.channelRoot,
 		"user data",
 		"keep me.txt",
 	);
@@ -866,19 +866,19 @@ try {
 		"keep me too.txt",
 	);
 	const unknownChannelFile = join(
-		productionPaths.channelRoot,
+		stablePaths.channelRoot,
 		"unknown file.keep",
 	);
 	const cacheSentinel = join(
 		cacheHome,
 		uninstallIdentifier,
-		"production",
+		"stable",
 		"cache.keep",
 	);
 	const logSentinel = join(
 		stateHome,
 		uninstallIdentifier,
-		"production",
+		"stable",
 		"application.log",
 	);
 	const userDocument = join(home, "Documents", "user document.txt");
@@ -888,12 +888,12 @@ try {
 	);
 	const unrelatedDesktopEntry = join(desktopDir, "unrelated-user-entry.desktop");
 	const mimePreferences = join(applicationsDir, "mimeapps.list");
-	mkdirSync(dirname(productionSentinel), { recursive: true });
+	mkdirSync(dirname(stableSentinel), { recursive: true });
 	mkdirSync(dirname(canarySentinel), { recursive: true });
 	mkdirSync(dirname(cacheSentinel), { recursive: true });
 	mkdirSync(dirname(logSentinel), { recursive: true });
 	mkdirSync(dirname(userDocument), { recursive: true });
-	writeFileSync(productionSentinel, "production application data\n");
+	writeFileSync(stableSentinel, "stable application data\n");
 	writeFileSync(canarySentinel, "canary application data\n");
 	writeFileSync(unknownChannelFile, "unknown channel state\n");
 	writeFileSync(cacheSentinel, "application cache\n");
@@ -905,37 +905,37 @@ try {
 
 	// A reinstall replaces the managed app/update state and leaves exactly one
 	// current, runnable channel-root uninstaller without touching user data.
-	run(productionSetupV2, [], {
+	run(stableSetupV2, [], {
 		cwd: temporaryRoot,
 		env: installerEnv(helperDir),
 	});
-	assertExists(productionSentinel);
+	assertExists(stableSentinel);
 	assertInstalled({
-		...productionV2,
+		...stableV2,
 		identifier: uninstallIdentifier,
 		name: uninstallAppName,
-		paths: productionPaths,
+		paths: stablePaths,
 	});
 	assert.deepEqual(
-		readdirSync(productionPaths.channelRoot).filter((entry) =>
+		readdirSync(stablePaths.channelRoot).filter((entry) =>
 			entry.startsWith("uninstall"),
 		),
 		["uninstall"],
 	);
-	assert.equal(sha256(productionPaths.uninstaller), sha256(extractor));
-	assert.notEqual(sha256(productionPaths.uninstaller), sha256(productionSetupV2));
+	assert.equal(sha256(stablePaths.uninstaller), sha256(extractor));
+	assert.notEqual(sha256(stablePaths.uninstaller), sha256(stableSetupV2));
 	assert.ok(
-		lstatSync(productionPaths.uninstaller).size <
-			lstatSync(productionSetupV2).size,
+		lstatSync(stablePaths.uninstaller).size <
+			lstatSync(stableSetupV2).size,
 		"the external manager must be the thin resource, not archive-bearing Setup",
 	);
 
 	// Exercise the updater-facing refresh command and prove it repairs stale
 	// name/version metadata from the newly installed app.
-	const staleManifest = readManifest(productionPaths.manifest);
+	const staleManifest = readManifest(stablePaths.manifest);
 	const installedDesktopSource = join(
-		productionPaths.app,
-		`${productionV2.artifact}.desktop`,
+		stablePaths.app,
+		`${stableV2.artifact}.desktop`,
 	);
 	writeFileSync(
 		installedDesktopSource,
@@ -945,7 +945,7 @@ try {
 		),
 	);
 	writeFileSync(
-		productionPaths.manifest,
+		stablePaths.manifest,
 		JSON.stringify({
 			...staleManifest,
 			name: "Stale App Name",
@@ -953,12 +953,12 @@ try {
 		}),
 	);
 	run(
-		productionPaths.uninstaller,
+		stablePaths.uninstaller,
 		["--refresh-metadata", "--quiet"],
 		{ env: installerEnv(emptyHelperDir) },
 	);
-	const refreshedManifest = readManifest(productionPaths.manifest);
-	assert.equal(refreshedManifest.version, productionV2.version);
+	const refreshedManifest = readManifest(stablePaths.manifest);
+	assert.equal(refreshedManifest.version, stableV2.version);
 	assert.equal(refreshedManifest.name, "Renamed Embedded Archive App");
 	assert.deepEqual(refreshedManifest.data_path_versions, [1]);
 	assert.equal(refreshedManifest.home, staleManifest.home);
@@ -968,11 +968,11 @@ try {
 	// Interactive uninstall removes only Electrobun-owned state, refreshes the
 	// desktop database, preserves a user-edited Desktop entry, and leaves the
 	// canary installation and user data alone.
-	const editedDesktopContents = `${readFileSync(productionPaths.desktopEntry, "utf8")}# user customization\n`;
-	writeFileSync(productionPaths.desktopEntry, editedDesktopContents);
+	const editedDesktopContents = `${readFileSync(stablePaths.desktopEntry, "utf8")}# user customization\n`;
+	writeFileSync(stablePaths.desktopEntry, editedDesktopContents);
 	writeFileSync(desktopDatabaseLog, "");
 	writeFileSync(dialogHelperLog, "");
-	const interactiveUninstall = run(productionPaths.uninstaller, ["--uninstall"], {
+	const interactiveUninstall = run(stablePaths.uninstaller, ["--uninstall"], {
 		env: installerEnv(dialogHelperDir, { dialogResponse: "app" }),
 	});
 	assert.equal(interactiveUninstall.status, 0);
@@ -980,15 +980,15 @@ try {
 		readFileSync(dialogHelperLog, "utf8").trim().split("\n"),
 		["zenity"],
 	);
-	assertManagedArtifactsRemoved(productionPaths, { preservedDesktop: true });
+	assertManagedArtifactsRemoved(stablePaths, { preservedDesktop: true });
 	assert.equal(
-		readFileSync(productionPaths.desktopEntry, "utf8"),
+		readFileSync(stablePaths.desktopEntry, "utf8"),
 		editedDesktopContents,
 	);
-	assertExists(productionSentinel);
+	assertExists(stableSentinel);
 	assert.equal(
-		readFileSync(productionSentinel, "utf8"),
-		"production application data\n",
+		readFileSync(stableSentinel, "utf8"),
+		"stable application data\n",
 	);
 	assertExists(unknownChannelFile);
 	assertExists(cacheSentinel);
@@ -1014,17 +1014,17 @@ try {
 	// Reinstall the same channel after uninstalling it, this time with neither a
 	// Desktop directory nor desktop integration helpers available.
 	rmSync(desktopDir, { recursive: true, force: true });
-	run(productionSetupV2, [], {
+	run(stableSetupV2, [], {
 		cwd: temporaryRoot,
 		env: installerEnv(emptyHelperDir),
 	});
-	assertExists(productionSentinel);
+	assertExists(stableSentinel);
 	assertInstalled({
-		...productionV2,
+		...stableV2,
 		desktopEntry: false,
 		identifier: uninstallIdentifier,
 		name: uninstallAppName,
-		paths: productionPaths,
+		paths: stablePaths,
 	});
 
 	// Quiet uninstall is tolerant of already-missing managed files and a missing
@@ -1046,25 +1046,25 @@ try {
 		readFileSync(canarySentinel, "utf8"),
 		"canary application data\n",
 	);
-	assertExists(productionPaths.app);
-	assertExists(productionPaths.selfExtraction);
-	assertExists(productionPaths.uninstaller);
-	assertExists(productionPaths.manifest);
-	assertExists(productionPaths.applicationEntry);
+	assertExists(stablePaths.app);
+	assertExists(stablePaths.selfExtraction);
+	assertExists(stablePaths.uninstaller);
+	assertExists(stablePaths.manifest);
+	assertExists(stablePaths.applicationEntry);
 
 	// A repeated install/uninstall cycle also succeeds when every managed child
 	// except the installed uninstaller and manifest has already disappeared.
-	rmSync(productionPaths.app, { recursive: true, force: true });
-	rmSync(productionPaths.selfExtraction, { recursive: true, force: true });
-	rmSync(productionPaths.applicationEntry, { force: true });
-	run(productionPaths.uninstaller, ["--uninstall", "--quiet"], {
+	rmSync(stablePaths.app, { recursive: true, force: true });
+	rmSync(stablePaths.selfExtraction, { recursive: true, force: true });
+	rmSync(stablePaths.applicationEntry, { force: true });
+	run(stablePaths.uninstaller, ["--uninstall", "--quiet"], {
 		env: installerEnv(emptyHelperDir),
 	});
-	assertManagedArtifactsRemoved(productionPaths);
-	assertExists(productionSentinel);
+	assertManagedArtifactsRemoved(stablePaths);
+	assertExists(stableSentinel);
 	assert.equal(
-		readFileSync(productionSentinel, "utf8"),
-		"production application data\n",
+		readFileSync(stableSentinel, "utf8"),
+		"stable application data\n",
 	);
 	assert.equal(readFileSync(unknownChannelFile, "utf8"), "unknown channel state\n");
 	assert.equal(readFileSync(cacheSentinel, "utf8"), "application cache\n");
@@ -1078,7 +1078,7 @@ try {
 		readFileSync(mimePreferences, "utf8"),
 		"[Default Applications]\ntext/plain=user.desktop\n",
 	);
-	assertExists(productionPaths.channelRoot);
+	assertExists(stablePaths.channelRoot);
 	assertExists(canaryPaths.channelRoot);
 
 	// Invalid, duplicated, incomplete, and reordered manager arguments must be
@@ -1367,7 +1367,7 @@ try {
 	const unrelatedIdentifierRoot = join(
 		customRoots.cacheHome,
 		"com.example.unrelated",
-		"production",
+		"stable",
 		"unrelated.keep",
 	);
 	const customRootMarker = join(customRoots.stateHome, "root.keep");
@@ -1625,7 +1625,7 @@ try {
 	assertMissing(join(dataHome, adjacentIdentifier));
 
 	console.log(
-		"Linux extractor integration passed (adjacent + embedded Setup, production + canary, uninstall + preservation)",
+		"Linux extractor integration passed (adjacent + embedded Setup, stable + canary, uninstall + preservation)",
 	);
 } finally {
 	rmSync(temporaryRoot, { recursive: true, force: true });

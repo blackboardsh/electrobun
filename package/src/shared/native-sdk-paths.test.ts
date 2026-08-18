@@ -48,6 +48,9 @@ describe("native SDK path parity", () => {
 			"uninstall.install_root_name_environment_variable",
 		);
 		expect(launcher).toContain("COTTONTAIL_ELECTROBUN_CHANNEL");
+		expect(launcher).not.toContain(
+			"env_map.get(uninstall.install_root_name_environment_variable) orelse value.string",
+		);
 		expect(launcher).toContain("env_map.createWindowsBlock(");
 		expect(launcher).toContain("CREATE_UNICODE_ENVIRONMENT");
 	});

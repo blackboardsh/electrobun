@@ -55,7 +55,7 @@ is useful for validating a dynamically constructed config without building.
 
 ```bash
 hutch electrobun config --env=dev
-hutch electrobun config --env=production
+hutch electrobun config --env=stable
 ```
 
 ## `hutch electrobun sync`
@@ -68,7 +68,7 @@ application:
 
 ```bash
 hutch electrobun sync
-hutch electrobun sync --env=production
+hutch electrobun sync --env=stable
 ```
 
 `init`, `build`, `run`, and `dev` perform the same preparation implicitly. Use
@@ -84,21 +84,21 @@ Build the application for the current host platform and architecture.
 ```bash
 hutch electrobun build --env=dev
 hutch electrobun build --env=canary
-hutch electrobun build --env=production
+hutch electrobun build --env=stable
 ```
 
 | Environment | Result |
 | --- | --- |
 | `dev` | Runnable inner app bundle with terminal diagnostics; no distribution artifacts |
 | `canary` | Optimized canary app, wrapper, update metadata, and platform installer |
-| `production` | Optimized production app, wrapper, update metadata, and platform installer |
+| `stable` | Optimized stable app, wrapper, update metadata, and platform installer |
 
 Canary app names include `-canary`. Production names are unsuffixed. Signing,
 notarization, patch generation, CEF, WGPU, and installer behavior come from
 `electrobun.config.ts`.
 
-`--env=stable` is supported as an alias for `--env=production`. Hutch emits the
-canonical `production` value in lifecycle and release metadata.
+`stable` is the canonical main release environment. Canary remains a separate
+release channel.
 
 Hutch does not cross-compile an Electrobun release. Run the command on native
 macOS, Windows, and Linux CI workers for a complete matrix.
@@ -159,7 +159,7 @@ export default {
     start: ["hutch", "electrobun", "dev"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
-    build: ["hutch", "electrobun", "build", "--env=production"],
+    build: ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
@@ -227,7 +227,7 @@ Build hooks receive:
 
 | Variable | Value |
 | --- | --- |
-| `ELECTROBUN_BUILD_ENV` | `dev`, `canary`, or `production` |
+| `ELECTROBUN_BUILD_ENV` | `dev`, `canary`, or `stable` |
 | `ELECTROBUN_OS` | `macos`, `win`, or `linux` |
 | `ELECTROBUN_ARCH` | `arm64` or `x64` |
 | `ELECTROBUN_BUILD_DIR` | Build output path |

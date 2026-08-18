@@ -266,7 +266,7 @@ Two things hold regardless of the setting:
 
 - **Dev builds ignore `bytecode`** (`hutch electrobun dev` / `--env=dev`) and
   always ship source, so sourcemaps, the debugger, and hot reload keep working.
-  Bytecode applies to canary and production builds.
+  Bytecode applies to canary and stable builds.
 - The bytecode is generated against the **exact Cottontail bundled into your
   app** and regenerated on every build, so it never drifts from the runtime
   that will execute it.
@@ -501,7 +501,7 @@ export default {
 ```
 
 Development CEF builds automatically select an available loopback debugging
-port from 9222 through 9232. Canary and production builds disable remote
+port from 9222 through 9232. Canary and stable builds disable remote
 debugging unless `"remote-debugging-port"` is set to a string port from 1024
 through 65535. Set it to `false` to disable the dev endpoint too.
 
@@ -569,7 +569,7 @@ export default {
 
 All hooks inherit the process environment and receive:
 
-- `ELECTROBUN_BUILD_ENV`: `dev`, `canary`, or `production`
+- `ELECTROBUN_BUILD_ENV`: `dev`, `canary`, or `stable`
 - `ELECTROBUN_OS`: `macos`, `linux`, or `win`
 - `ELECTROBUN_ARCH`: `x64` or `arm64`
 - `ELECTROBUN_BUILD_DIR`
@@ -603,7 +603,7 @@ for a cross-platform hook.
 
 `release.baseUrl` is the public artifact base used by update metadata.
 `release.generatePatch` defaults to `true`; disable it when a local canary or
-production build should skip downloading and diffing the previous release.
+stable build should skip downloading and diffing the previous release.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";

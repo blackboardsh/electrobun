@@ -47,11 +47,10 @@ removes that root once. Linux uses `~/.local/share`, `~/.cache`, and
 valid absolute root. The Linux installer records the roots it used so changing
 the environment later does not redirect uninstall cleanup.
 
-The install-root name normally matches the app's logical release channel. An
-Electrobun v1.18.1+ production install keeps its existing `stable` root
-after updating to 2.x, even though the packaged channel is `production`. The
-uninstaller follows that recorded physical root so the migrated app and its
-data remain one installation.
+The install-root name normally matches the app's release channel. A supported
+Electrobun v1 install keeps its existing physical root after updating to 2.x.
+The uninstaller follows that recorded root so the migrated app and its data
+remain one installation.
 
 Other applications, other identifiers, and separately installed channel roots
 are never removed. See [Paths](/electrobun/apis/paths/) for the path API and
@@ -103,9 +102,8 @@ available in macOS, Windows, and Linux installer builds.
 On Windows, Electrobun registers each identifier and release channel separately
 in Windows Installed Apps. Choosing Uninstall there opens the same native Task
 Dialog. The registered quiet uninstall action uses the conservative `App`
-behavior and preserves user data. The registry identity remains the logical
-channel, so a migrated production app can be registered as `production` while
-its manager remains under the preserved `stable` install root.
+behavior and preserves user data. Migrated apps retain their validated
+physical install root in the registration metadata.
 
 On Linux, Electrobun uses KDialog first on KDE/Plasma and Zenity first on other
 desktops, then tries the other graphical helper if necessary. If neither helper

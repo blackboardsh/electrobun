@@ -205,7 +205,7 @@ fn parseBootstrapMetadata(
         isSafeMacosDisplayName(display_name);
     if (parsed.value.version.len == 0 or
         !valid_component(parsed.value.identifier) or
-        !valid_component(parsed.value.channel) or
+        !isBuildChannel(parsed.value.channel) or
         !valid_display_name or
         (parsed.value.hash != null and !valid_component(parsed.value.hash.?)))
     {
@@ -304,10 +304,14 @@ const StagedUpdateIdentity = struct {
     displayName: []const u8,
 };
 
+fn isBuildChannel(channel: []const u8) bool {
+    return std.mem.eql(u8, channel, "stable") or
+        std.mem.eql(u8, channel, "canary") or
+        std.mem.eql(u8, channel, "dev");
+}
+
 fn installedChannelMatches(actual: []const u8, expected: []const u8) bool {
-    return std.mem.eql(u8, actual, expected) or
-        (std.mem.eql(u8, actual, "stable") and
-            std.mem.eql(u8, expected, "production"));
+    return std.mem.eql(u8, actual, expected);
 }
 
 const EmbeddedMetadataJson = struct {
@@ -1174,12 +1178,12 @@ fn extractAdjacentArchive(
     defer parsed.deinit();
     const metadata = parsed.value;
     if (builtin.os.tag == .windows and
-        (!isSafeWindowsComponent(metadata.identifier) or !isSafeWindowsComponent(metadata.channel)))
+        (!isSafeWindowsComponent(metadata.identifier) or !isBuildChannel(metadata.channel)))
     {
         return error.InvalidInstallIdentity;
     }
     if (builtin.os.tag == .linux and
-        (!isSafeLinuxComponent(metadata.identifier) or !isSafeLinuxComponent(metadata.channel)))
+        (!isSafeLinuxComponent(metadata.identifier) or !isBuildChannel(metadata.channel)))
     {
         return error.InvalidInstallIdentity;
     }
@@ -1327,12 +1331,12 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         .hash = backup_hash,
     };
     if (builtin.os.tag == .windows and
-        (!isSafeWindowsComponent(safe_metadata.identifier) or !isSafeWindowsComponent(safe_metadata.channel)))
+        (!isSafeWindowsComponent(safe_metadata.identifier) or !isBuildChannel(safe_metadata.channel)))
     {
         return error.InvalidInstallIdentity;
     }
     if (builtin.os.tag == .linux and
-        (!isSafeLinuxComponent(safe_metadata.identifier) or !isSafeLinuxComponent(safe_metadata.channel)))
+        (!isSafeLinuxComponent(safe_metadata.identifier) or !isBuildChannel(safe_metadata.channel)))
     {
         return error.InvalidInstallIdentity;
     }
@@ -1424,7 +1428,7 @@ fn findEmbeddedMetadata(allocator: std.mem.Allocator, contents: []const u8) !?Em
                     else => break :valid false,
                 };
                 defer document.deinit();
-                break :valid true;
+                break :valid isBuildChannel(document.value.channel);
             };
             if (valid) {
                 return .{ .metadata = metadata, .archive_offset = archive_offset };
@@ -2062,6 +2066,7 @@ fn readEmbeddedMetadata(allocator: std.mem.Allocator, metadata_bytes: []const u8
     // Parse JSON metadata
     const parsed = try std.json.parseFromSlice(EmbeddedMetadataJson, allocator, metadata_bytes, .{});
     defer parsed.deinit();
+    if (!isBuildChannel(parsed.value.channel)) return error.InvalidInstallIdentity;
 
     return AppMetadata{
         .identifier = try allocator.dupe(u8, parsed.value.identifier),
@@ -2589,7 +2594,7 @@ fn isSafeWindowsComponent(value: []const u8) bool {
 }
 
 fn windowsDisplayName(allocator: std.mem.Allocator, app_name: []const u8, channel: []const u8) ![]u8 {
-    if (isProductionChannel(channel)) return allocator.dupe(u8, app_name);
+    if (isStableChannel(channel)) return allocator.dupe(u8, app_name);
     if (std.mem.eql(u8, channel, "canary")) return std.fmt.allocPrint(allocator, "{s} (Canary)", .{app_name});
     if (std.mem.eql(u8, channel, "dev")) return std.fmt.allocPrint(allocator, "{s} (Development)", .{app_name});
     return std.fmt.allocPrint(allocator, "{s} ({s})", .{ app_name, channel });
@@ -2883,7 +2888,7 @@ fn removeLegacyWindowsShortcuts(
 ) !void {
     // Older installers used the unqualified app name for every channel. The
     // target check is what makes removing that shared legacy name channel-safe.
-    const legacy_name = try windowsShortcutFileName(allocator, app_name, "production");
+    const legacy_name = try windowsShortcutFileName(allocator, app_name, "stable");
     defer allocator.free(legacy_name);
     const legacy_desktop = try std.fs.path.join(allocator, &.{ desktop_dir, legacy_name });
     defer allocator.free(legacy_desktop);
@@ -3440,7 +3445,7 @@ fn validateWindowsUninstallManifest(
     if (manifest.schema_version != WINDOWS_UNINSTALL_MANIFEST_VERSION or
         !isValidWindowsInstallNonce(manifest.install_nonce) or
         !isSafeWindowsComponent(manifest.identifier) or
-        !isSafeWindowsComponent(manifest.channel) or
+        !isBuildChannel(manifest.channel) or
         !isSafeWindowsDisplayName(manifest.name) or
         !windowsRootMatchesInstallIdentity(
             base_dir,
@@ -3709,7 +3714,7 @@ fn validateLinuxUninstallManifest(
     if ((manifest.schema_version != LINUX_UNINSTALL_MANIFEST_VERSION and
         manifest.schema_version != LINUX_LEGACY_UNINSTALL_MANIFEST_VERSION) or
         !isSafeLinuxComponent(manifest.identifier) or
-        !isSafeLinuxComponent(manifest.channel) or
+        !isBuildChannel(manifest.channel) or
         !isSafeLinuxDisplayName(manifest.name) or
         manifest.version.len == 0 or
         (manifest.application_entry.len != 0 and !isValidSha256Hex(manifest.application_entry_sha256)) or
@@ -4077,7 +4082,7 @@ fn installLinuxIntegration(
     metadata: AppMetadata,
 ) !void {
     if (!isSafeLinuxComponent(metadata.identifier) or
-        !isSafeLinuxComponent(metadata.channel) or
+        !isBuildChannel(metadata.channel) or
         !isSafeLinuxDisplayName(metadata.name)) return error.InvalidInstallIdentity;
     const base_dir = std.fs.path.dirname(app_dir) orelse return error.InvalidInstallLocation;
     var scope = try openLinuxInstallScope(allocator, base_dir);
@@ -4383,7 +4388,7 @@ fn installWindowsIntegration(
 ) !void {
     bootstrapTrace("windows integration: validate identity");
     if (!isSafeWindowsComponent(metadata.identifier) or
-        !isSafeWindowsComponent(metadata.channel) or
+        !isBuildChannel(metadata.channel) or
         !isSafeWindowsDisplayName(metadata.name))
     {
         return error.InvalidInstallIdentity;
@@ -4983,7 +4988,7 @@ fn uninstallWindows(
     }
 
     // Stop only processes whose executable lives inside this channel's app
-    // directory. This avoids terminating a coexisting production/canary app.
+    // directory. This avoids terminating a coexisting stable/canary app.
     terminateWindowsAppProcesses(allocator, paths.app_dir) catch |err| {
         std.debug.print("Warning: Could not stop running app processes: {}\n", .{err});
     };
@@ -5627,7 +5632,7 @@ fn validateMacosUninstallManifest(
     if (manifest.schema_version != MACOS_UNINSTALL_MANIFEST_VERSION or
         !isValidMacosInstallNonce(manifest.install_nonce) or
         !isSafeMacosComponent(manifest.identifier) or
-        !isSafeMacosComponent(manifest.channel) or
+        !isBuildChannel(manifest.channel) or
         !isSafeMacosDisplayName(manifest.name) or
         !macosRootMatchesInstallIdentity(
             base_dir,
@@ -5724,7 +5729,7 @@ fn installMacosUninstallManagerAtRoot(
     metadata: AppMetadata,
 ) !void {
     if (!isSafeMacosComponent(metadata.identifier) or
-        !isSafeMacosComponent(metadata.channel) or
+        !isBuildChannel(metadata.channel) or
         !isSafeMacosDisplayName(metadata.name)) return error.InvalidInstallIdentity;
 
     if (!macosRootMatchesInstallIdentity(
@@ -6159,21 +6164,19 @@ fn applyUpdateRootMatchesIdentityForPlatform(
     current_display_name: ?[]const u8,
     platform: ApplyUpdateRootPlatform,
 ) bool {
+    if (!isBuildChannel(channel)) return false;
     if (applyUpdateRootComponentEqual(root_name, channel, platform) or
         applyUpdateRootComponentEqual(root_name, current_bundle_name, platform))
     {
         return true;
     }
-    const is_production = applyUpdateRootComponentEqual(channel, "production", platform);
-    if (is_production and applyUpdateRootComponentEqual(root_name, "stable", platform)) {
-        return true;
-    }
+    const is_stable = applyUpdateRootComponentEqual(channel, "stable", platform);
 
     // Early v1 Windows and Linux extractors used
-    // `<sanitized app name>-<channel>`. For production, version.json.name
+    // `<sanitized app name>-<channel>`. For stable, version.json.name
     // omitted the stable suffix, so this alias cannot be covered by the
     // current bundle name comparison above.
-    if (platform != .macos and is_production and
+    if (platform != .macos and is_stable and
         applyUpdateRootMatchesJoined(root_name, current_bundle_name, "stable", platform))
     {
         return true;
@@ -6184,7 +6187,7 @@ fn applyUpdateRootMatchesIdentityForPlatform(
             // The original macOS extractor used CFBundleName as its data root.
             // Stable bundles used the display name verbatim; other channels
             // appended their v1 channel name.
-            if (is_production) {
+            if (is_stable) {
                 return applyUpdateRootComponentEqual(root_name, display_name, platform);
             }
             return applyUpdateRootMatchesJoined(
@@ -6282,6 +6285,7 @@ fn expectedApplyUpdateChannelRoot(
     identifier: []const u8,
     channel: []const u8,
 ) ![]u8 {
+    if (!isBuildChannel(channel)) return error.InvalidUpdateIdentity;
     if (builtin.os.tag == .windows) {
         if (!isSafeWindowsComponent(identifier) or !isSafeWindowsComponent(channel)) {
             return error.InvalidUpdateIdentity;
@@ -6512,6 +6516,7 @@ fn validateApplyUpdatePlanAndPaths(
 ) !ValidatedApplyUpdateContext {
     if (plan.schema_version != APPLY_UPDATE_PLAN_SCHEMA_VERSION or
         !isApplyUpdateTransactionId(plan.transaction_id) or
+        !isBuildChannel(plan.channel) or
         !std.mem.eql(u8, plan.platform, expectedApplyUpdatePlatform()) or
         !std.mem.eql(u8, plan.arch, expectedApplyUpdateArch()) or
         !isApplyUpdateVersion(plan.version) or
@@ -8052,7 +8057,7 @@ pub fn main(init: std.process.Init) !void {
     defer metadataParsed.deinit();
 
     if (!isSafeMacosComponent(metadataParsed.value.identifier) or
-        !isSafeMacosComponent(metadataParsed.value.channel) or
+        !isBuildChannel(metadataParsed.value.channel) or
         !isSafeMacosDisplayName(metadataParsed.value.name))
     {
         presentGenericInstallerFailure(
@@ -8137,11 +8142,11 @@ pub fn main(init: std.process.Init) !void {
     const untar_done = std.Io.Clock.now(.awake, g_io);
     std.debug.print("Time taken to untar: {} ns\n", .{startTime.durationTo(untar_done).toNanoseconds()});
 
-    const bundleBaseName = if (isProductionChannel(channelName))
+    const bundleBaseName = if (isStableChannel(channelName))
         appDisplayName
     else
         try std.fmt.allocPrint(allocator, "{s}-{s}", .{ appDisplayName, channelName });
-    defer if (!isProductionChannel(channelName)) allocator.free(bundleBaseName);
+    defer if (!isStableChannel(channelName)) allocator.free(bundleBaseName);
 
     const bundleFileName = try std.fmt.allocPrint(allocator, "{s}.app", .{bundleBaseName});
     defer allocator.free(bundleFileName);
@@ -8264,8 +8269,8 @@ pub fn main(init: std.process.Init) !void {
     // }
 }
 
-fn isProductionChannel(channel: []const u8) bool {
-    return std.mem.eql(u8, channel, "production");
+fn isStableChannel(channel: []const u8) bool {
+    return std.mem.eql(u8, channel, "stable");
 }
 
 fn extractedBundleName(
@@ -8274,14 +8279,14 @@ fn extractedBundleName(
     channel: []const u8,
 ) ![]u8 {
     const sanitized_name = try std.mem.replaceOwned(u8, allocator, app_name, " ", "");
-    if (isProductionChannel(channel)) return sanitized_name;
+    if (isStableChannel(channel)) return sanitized_name;
     defer allocator.free(sanitized_name);
     return std.fmt.allocPrint(allocator, "{s}-{s}", .{ sanitized_name, channel });
 }
 
 test "embedded metadata discovery skips compiler marker pairs" {
     const metadata =
-        \\{"identifier":"com.example.app","name":"Example","channel":"production","hash":"abc"}
+        \\{"identifier":"com.example.app","name":"Example","channel":"stable","hash":"abc"}
     ;
     const fixture =
         "extractor bytes" ++
@@ -8304,15 +8309,15 @@ test "first-v2-launch bootstrap metadata uses the developer display name" {
         \\{
         \\  "version": "2.0.0-canary.1",
         \\  "identifier": "com.example.archive",
-        \\  "channel": "production",
-        \\  "name": "ArchiveApp-production",
+        \\  "channel": "stable",
+        \\  "name": "ArchiveApp-stable",
         \\  "displayName": "Archive App",
         \\  "hash": "abc123"
         \\}
     );
     defer metadata.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("com.example.archive", metadata.identifier);
-    try std.testing.expectEqualStrings("production", metadata.channel);
+    try std.testing.expectEqualStrings("stable", metadata.channel);
     try std.testing.expectEqualStrings("Archive App", metadata.name);
     try std.testing.expectEqualStrings("abc123", metadata.hash.?);
     try std.testing.expectEqualStrings(
@@ -8321,7 +8326,7 @@ test "first-v2-launch bootstrap metadata uses the developer display name" {
     );
 
     var legacy_display = try parseBootstrapMetadata(std.testing.allocator,
-        \\{"version":"2.0.0","identifier":"com.example.archive","channel":"production","name":"Archive App"}
+        \\{"version":"2.0.0","identifier":"com.example.archive","channel":"stable","name":"Archive App"}
     );
     defer legacy_display.deinit(std.testing.allocator);
     try std.testing.expectEqualStrings("Archive App", legacy_display.name);
@@ -8329,40 +8334,46 @@ test "first-v2-launch bootstrap metadata uses the developer display name" {
     try std.testing.expectError(
         error.InvalidInstalledIdentity,
         parseBootstrapMetadata(std.testing.allocator,
-            \\{"version":"","identifier":"com.example.archive","channel":"production","name":"Archive App"}
+            \\{"version":"","identifier":"com.example.archive","channel":"stable","name":"Archive App"}
         ),
     );
     try std.testing.expectError(
         error.InvalidInstalledIdentity,
         parseBootstrapMetadata(std.testing.allocator,
-            \\{"version":"2.0.0","identifier":"../other","channel":"production","name":"Archive App"}
+            \\{"version":"2.0.0","identifier":"../other","channel":"stable","name":"Archive App"}
+        ),
+    );
+    try std.testing.expectError(
+        error.InvalidInstalledIdentity,
+        parseBootstrapMetadata(std.testing.allocator,
+            \\{"version":"2.0.0","identifier":"com.example.archive","channel":"production","name":"Archive App"}
         ),
     );
 }
 
 test "Windows integration names and registry keys are channel scoped" {
-    const production_display = try windowsDisplayName(std.testing.allocator, "Archive App", "production");
-    defer std.testing.allocator.free(production_display);
-    try std.testing.expectEqualStrings("Archive App", production_display);
+    const stable_display = try windowsDisplayName(std.testing.allocator, "Archive App", "stable");
+    defer std.testing.allocator.free(stable_display);
+    try std.testing.expectEqualStrings("Archive App", stable_display);
 
     const canary_display = try windowsDisplayName(std.testing.allocator, "Archive App", "canary");
     defer std.testing.allocator.free(canary_display);
     try std.testing.expectEqualStrings("Archive App (Canary)", canary_display);
 
-    const production_shortcut = try windowsShortcutFileName(std.testing.allocator, "Archive: App", "production");
-    defer std.testing.allocator.free(production_shortcut);
-    try std.testing.expectEqualStrings("Archive_ App.lnk", production_shortcut);
+    const stable_shortcut = try windowsShortcutFileName(std.testing.allocator, "Archive: App", "stable");
+    defer std.testing.allocator.free(stable_shortcut);
+    try std.testing.expectEqualStrings("Archive_ App.lnk", stable_shortcut);
 
     const canary_shortcut = try windowsShortcutFileName(std.testing.allocator, "Archive: App", "canary");
     defer std.testing.allocator.free(canary_shortcut);
     try std.testing.expectEqualStrings("Archive_ App (Canary).lnk", canary_shortcut);
-    try std.testing.expect(!std.mem.eql(u8, production_shortcut, canary_shortcut));
+    try std.testing.expect(!std.mem.eql(u8, stable_shortcut, canary_shortcut));
 
-    const production_key = try windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "production");
-    defer std.testing.allocator.free(production_key);
+    const stable_key = try windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "stable");
+    defer std.testing.allocator.free(stable_key);
     try std.testing.expectEqualStrings(
-        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.production",
-        production_key,
+        "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\com.example.archive.stable",
+        stable_key,
     );
     const canary_key = try windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "canary");
     defer std.testing.allocator.free(canary_key);
@@ -8410,12 +8421,12 @@ test "Windows uninstall manager accepts only the unified ordered grammar" {
     );
     const update_refresh = try parseWindowsManagerCommand(&.{
         "--refresh-registration-from-update",
-        "C:\\Users\\example\\AppData\\Local\\com.example.app\\production",
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\stable",
         "--quiet",
     });
     try std.testing.expect(update_refresh == .refresh_registration_from_update);
     try std.testing.expectEqualStrings(
-        "C:\\Users\\example\\AppData\\Local\\com.example.app\\production",
+        "C:\\Users\\example\\AppData\\Local\\com.example.app\\stable",
         update_refresh.refresh_registration_from_update,
     );
     const worker = try parseWindowsManagerCommand(&.{
@@ -8573,11 +8584,11 @@ test "macOS uninstall manifest path token binds identity channel and exact app p
     const expected = macosAppPathToken(
         nonce,
         "com.example.app",
-        "production",
+        "stable",
         "/Applications/Example.app",
     );
     try std.testing.expectEqualStrings(
-        "7fa6c0415eb8c0360d268485b4fd9576e3c2d8d1163b3c76b7ec6359a7e9844e",
+        "7d4d21dc51bd2c14fda970718c146036c7dddd6706eb0ffc2100030d573a773a",
         &expected,
     );
     const canary = macosAppPathToken(
@@ -8599,7 +8610,7 @@ test "Windows install identities reject path traversal" {
     try std.testing.expect(!isSafeWindowsComponent("%TEMP%"));
     try std.testing.expectError(
         error.InvalidInstallIdentity,
-        windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "..\\production"),
+        windowsUninstallRegistryKey(std.testing.allocator, "com.example.archive", "..\\stable"),
     );
 }
 
@@ -8608,9 +8619,9 @@ test "Linux install identities and integration paths reject traversal" {
     try std.testing.expect(isSafeLinuxComponent("canary channel"));
     try std.testing.expect(!isSafeLinuxComponent(""));
     try std.testing.expect(!isSafeLinuxComponent(".."));
-    try std.testing.expect(!isSafeLinuxComponent("../production"));
-    try std.testing.expect(!isSafeLinuxComponent("production/canary"));
-    try std.testing.expect(!isSafeLinuxComponent("production\n"));
+    try std.testing.expect(!isSafeLinuxComponent("../stable"));
+    try std.testing.expect(!isSafeLinuxComponent("stable/canary"));
+    try std.testing.expect(!isSafeLinuxComponent("stable\n"));
 
     try validateLinuxIntegrationPath(
         "/tmp/xdg data/applications/archive.desktop",
@@ -8707,13 +8718,13 @@ test "Windows deferred cleanup accepts only its install generation" {
 }
 
 test "Windows update task identities are stable and channel scoped" {
-    const production = try windowsUpdateTaskName(std.testing.allocator, "com.example.app", "production");
-    defer std.testing.allocator.free(production);
-    try std.testing.expectEqualStrings("ElectrobunUpdate_e765e7a8ffa45d1ada904e46", production);
+    const stable = try windowsUpdateTaskName(std.testing.allocator, "com.example.app", "stable");
+    defer std.testing.allocator.free(stable);
+    try std.testing.expectEqualStrings("ElectrobunUpdate_3b0d4743415a798b541a0fd0", stable);
 
     const canary = try windowsUpdateTaskName(std.testing.allocator, "com.example.app", "canary");
     defer std.testing.allocator.free(canary);
-    try std.testing.expect(!std.mem.eql(u8, production, canary));
+    try std.testing.expect(!std.mem.eql(u8, stable, canary));
 }
 
 test "Windows uninstall registration reads the packaged app version" {
@@ -8729,15 +8740,15 @@ test "Windows uninstall registration reads the packaged app version" {
     );
 }
 
-test "production bundles use the unsuffixed application name" {
-    try std.testing.expect(isProductionChannel("production"));
-    try std.testing.expect(!isProductionChannel("canary"));
-    try std.testing.expect(!isProductionChannel("dev"));
-    try std.testing.expect(!isProductionChannel("stable"));
+test "stable bundles use the unsuffixed application name" {
+    try std.testing.expect(isStableChannel("stable"));
+    try std.testing.expect(!isStableChannel("canary"));
+    try std.testing.expect(!isStableChannel("dev"));
+    try std.testing.expect(!isStableChannel("production"));
 
-    const production = try extractedBundleName(std.testing.allocator, "My App.Name", "production");
-    defer std.testing.allocator.free(production);
-    try std.testing.expectEqualStrings("MyApp.Name", production);
+    const stable = try extractedBundleName(std.testing.allocator, "My App.Name", "stable");
+    defer std.testing.allocator.free(stable);
+    try std.testing.expectEqualStrings("MyApp.Name", stable);
 
     const canary = try extractedBundleName(std.testing.allocator, "My App.Name", "canary");
     defer std.testing.allocator.free(canary);
@@ -9408,18 +9419,18 @@ test "apply-update names are transaction-scoped and neutral" {
 }
 
 test "managed roots accept only channel or validated legacy app name" {
-    try std.testing.expect(linuxRootMatchesInstallIdentity("production", "production", "Example App", null));
-    try std.testing.expect(linuxRootMatchesInstallIdentity("Legacy-App", "production", "Example App", "Legacy-App"));
-    try std.testing.expect(!linuxRootMatchesInstallIdentity("other", "production", "Example App", "Legacy-App"));
+    try std.testing.expect(linuxRootMatchesInstallIdentity("stable", "stable", "Example App", null));
+    try std.testing.expect(linuxRootMatchesInstallIdentity("Legacy-App", "stable", "Example App", "Legacy-App"));
+    try std.testing.expect(!linuxRootMatchesInstallIdentity("other", "stable", "Example App", "Legacy-App"));
     try std.testing.expect(windowsRootMatchesInstallIdentity(
         "Example App",
-        "production",
+        "stable",
         "Example App",
         "Example App",
     ));
     try std.testing.expect(macosRootMatchesInstallIdentity(
         "Example App",
-        "production",
+        "stable",
         "Example App",
         "Example App",
     ));
@@ -9428,7 +9439,7 @@ test "managed roots accept only channel or validated legacy app name" {
 test "apply-update roots accept only exact current and v1 aliases" {
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "stable",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
@@ -9442,35 +9453,42 @@ test "apply-update roots accept only exact current and v1 aliases" {
     ));
     try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
         "Stable",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
     ));
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "Stable",
-        "Production",
+        "stable",
         "ExampleApp",
         "Example App",
         .windows,
     ));
+    try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
+        "stable",
+        "production",
+        "ExampleApp",
+        "Example App",
+        .linux,
+    ));
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "ExampleApp",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
     ));
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "ExampleApp-stable",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
     ));
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "EXAMPLEAPP-STABLE",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .windows,
@@ -9484,14 +9502,14 @@ test "apply-update roots accept only exact current and v1 aliases" {
     ));
     try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
         "Example App",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
     ));
     try std.testing.expect(applyUpdateRootMatchesIdentityForPlatform(
         "Example App",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .macos,
@@ -9512,21 +9530,21 @@ test "apply-update roots accept only exact current and v1 aliases" {
     ));
     try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
         "Example App-stable",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .macos,
     ));
     try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
         "Example App-canary",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .macos,
     ));
     try std.testing.expect(!applyUpdateRootMatchesIdentityForPlatform(
         "unrelated",
-        "production",
+        "stable",
         "ExampleApp",
         "Example App",
         .linux,
@@ -9615,7 +9633,7 @@ test "successful update cleanup preserves the committed retained tar" {
         .schema_version = 1,
         .transaction_id = "0123456789abcdef0123456789abcdef",
         .identifier = "dev.example.application",
-        .channel = "production",
+        .channel = "stable",
         .platform = expectedApplyUpdatePlatform(),
         .arch = expectedApplyUpdateArch(),
         .version = "2.0.0",
@@ -9676,7 +9694,7 @@ test "invalid payload cleanup removes only the failed hash and matching prepared
         .schema_version = 1,
         .transaction_id = transaction_id,
         .identifier = "dev.example.application",
-        .channel = "production",
+        .channel = "stable",
         .platform = expectedApplyUpdatePlatform(),
         .arch = expectedApplyUpdateArch(),
         .version = "2.0.0",
@@ -9774,7 +9792,7 @@ test "rollback integration metadata never carries the new update hash" {
         .schema_version = 1,
         .transaction_id = "0123456789abcdef0123456789abcdef",
         .identifier = "dev.example.application",
-        .channel = "production",
+        .channel = "stable",
         .platform = expectedApplyUpdatePlatform(),
         .arch = expectedApplyUpdateArch(),
         .version = "2.0.0",
@@ -9884,7 +9902,7 @@ test "successful apply-update result uses the complete phase" {
         .schema_version = 1,
         .transaction_id = "0123456789abcdef0123456789abcdef",
         .identifier = "dev.example.application",
-        .channel = "production",
+        .channel = "stable",
         .platform = expectedApplyUpdatePlatform(),
         .arch = expectedApplyUpdateArch(),
         .version = "2.0.0",

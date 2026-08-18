@@ -1,6 +1,6 @@
 ---
 title: "Bundling And Distribution"
-description: "Create canary and production installers, update archives, and patches."
+description: "Create stable and canary installers, update archives, and patches."
 ---
 
 When your app is ready to leave your machine, one command produces everything
@@ -10,8 +10,8 @@ previous release. This page explains what those artifacts are, what they're
 named, and where to put them.
 
 Hutch builds for the current host platform. Use canary builds for testing and
-production builds for user-facing releases — the two channels are
-independent, so testers can run prerelease builds alongside the production
+stable builds for user-facing releases — the two channels are
+independent, so testers can run prerelease builds alongside the stable
 app. A typical project wires both into `hutch.config.ts`:
 
 ```ts docs=syntax
@@ -24,7 +24,7 @@ export default {
     install: ["hutch", "pm", "ci"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
-    "build:production": ["hutch", "electrobun", "build", "--env=production"],
+    "build:stable": ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
@@ -32,7 +32,7 @@ export default {
 ```bash
 hutch run install
 hutch run build:canary
-hutch run build:production
+hutch run build:stable
 ```
 
 ## Release Host
@@ -67,14 +67,14 @@ constructs URLs from this base and the channel/platform prefix.
 
 Run the same build on each published target:
 
-| Runner | Output prefix |
-| --- | --- |
-| macOS ARM64 | `production-macos-arm64-` |
-| Windows x64 | `production-win-x64-` |
-| Linux x64 | `production-linux-x64-` |
-| Linux ARM64 | `production-linux-arm64-` |
+| Runner | Stable installer prefix | Stable updater prefix |
+| --- | --- | --- |
+| macOS ARM64 | `macos-arm64-` | `stable-macos-arm64-` |
+| Windows x64 | `win-x64-` | `stable-win-x64-` |
+| Linux x64 | `linux-x64-` | `stable-linux-x64-` |
+| Linux ARM64 | `linux-arm64-` | `stable-linux-arm64-` |
 
-Canary builds replace the initial `production` with `canary`. Windows ARM uses
+Canary builds prepend `canary-` to both prefixes. Windows ARM uses
 the x64 artifact through system emulation. Electrobun's current release matrix
 does not publish a macOS x64 core artifact.
 
@@ -115,21 +115,18 @@ artifacts/
 ```
 
 The Linux installer archive contains an executable named `installer` and a
-README. Production artifact names omit `-canary` from the app-name portion:
+README. Stable installer names omit both the channel prefix and `-canary`:
 
 ```text
-production-macos-arm64-MyCoolApp.dmg
-production-win-x64-MyCoolApp-Setup.zip
-production-linux-x64-MyCoolApp-Setup.tar.gz
+macos-arm64-MyCoolApp.dmg
+win-x64-MyCoolApp-Setup.zip
+linux-x64-MyCoolApp-Setup.tar.gz
 ```
 
-The leading channel/platform/architecture prefix is always retained.
-
-Production builds additionally copy the update JSON, compressed update archive,
-and any generated patch under a `stable-<os>-<arch>-` prefix. Those aliases are
-for compatible Electrobun v1.18.1+ clients, which used `stable` as the
-production channel name; installer artifacts are not duplicated. Keep the app
-name, identifier, and existing update base URL unchanged for that bridge release;
+Stable update JSON, compressed archives, and patches retain the
+`stable-<os>-<arch>-` protocol prefix used by compatible Electrobun v1.18.1+
+clients. Installer artifacts do not use that prefix. Keep the app name,
+identifier, and existing update base URL unchanged for the first 2.0 release;
 see [Updates](/electrobun/guides/updates/).
 
 ## Delta Patches
@@ -146,11 +143,10 @@ invalid previous artifact also skips patch generation while preserving the
 full update archive. Set `generatePatch: false` for an intentional build that
 must not consult the release host.
 
-Hutch records the patch's source hash, filename, size, and SHA-256 together
-with the reconstructed target tar's size and SHA-256. The built-in updater uses
-the patch only when those identities match and all checks pass. Otherwise it
-downloads the full archive named in the same metadata and verifies that
-archive's declared size and SHA-256 before applying it.
+Each release contributes one `<previous-hash>.patch`. Static hosts that retain
+those immutable files form a patch trail, so an app several releases behind can
+apply successive patches until its current hash equals `update.json.hash`. A
+missing or failed patch falls back to the full archive named in the metadata.
 
 See [Updater](/electrobun/apis/updater) for application-side checks, downloads,
 and installation.

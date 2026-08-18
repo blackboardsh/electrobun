@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
 	chmodSync,
 	closeSync,
@@ -30,7 +30,12 @@ import {
 	sep,
 	win32,
 } from "node:path";
-import { getPlatformPrefix } from "../../../shared/naming";
+import {
+	getPatchFileUrl,
+	getPlatformPrefix,
+	isBuildEnvironment,
+	type BuildEnvironment,
+} from "../../../shared/naming";
 import {
 	ARCH as currentArch,
 	OS as currentOS,
@@ -48,8 +53,8 @@ import {
 	executeWindowsUpdateTaskPlan,
 } from "./WindowsUpdateTask";
 
-// Keep the established status names source-compatible. The v2 updater may use
-// one authenticated direct patch, then falls back to the full artifact.
+// Keep the established status names source-compatible across multi-hop patch
+// preparation and full-bundle fallback.
 export type UpdateStatusType =
 	| "idle"
 	| "checking"
@@ -125,17 +130,6 @@ export interface UpdateInfo {
 
 export interface UpdateArtifactV1 {
 	file: string;
-	size: number;
-	sha256: string;
-}
-
-export interface UpdatePatchV1 {
-	fromHash: string;
-	file: string;
-	size: number;
-	sha256: string;
-	targetSize: number;
-	targetSha256: string;
 }
 
 export interface UpdateManifestV1 {
@@ -147,7 +141,6 @@ export interface UpdateManifestV1 {
 	platform: SupportedOS;
 	arch: SupportedArch;
 	artifact: UpdateArtifactV1;
-	patch?: UpdatePatchV1;
 }
 
 export interface PreparedUpdateV1 {
@@ -160,8 +153,6 @@ export interface PreparedUpdateV1 {
 	arch: SupportedArch;
 	retained_tar_path: string;
 	artifact_file: string;
-	artifact_size: number;
-	artifact_sha256: string;
 }
 
 export interface NativeUpdatePlanV1 {
@@ -227,10 +218,10 @@ interface ManifestExpectation {
 }
 
 const MAX_UPDATE_DOCUMENT_BYTES = 1024 * 1024;
-const MAX_ARTIFACT_BYTES = 16 * 1024 * 1024 * 1024;
 const SAFE_HASH_PATTERN = /^[a-z0-9]{1,13}$/;
-const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const TRANSACTION_ID_PATTERN = /^[a-f0-9]{32}$/;
+const MAX_TAR_METADATA_BYTES = 1024 * 1024;
+const MAX_TAR_EXTENSION_BYTES = 64 * 1024;
 const PREPARED_UPDATE_FILE = ".electrobun-prepared-update.json";
 const OBSERVED_UPDATE_RESULT_FILE = ".electrobun-observed-update-result.json";
 const UPDATE_RESULT_FILE_PATTERN =
@@ -277,7 +268,8 @@ export function createDownloadProgressThrottleState(): DownloadProgressThrottleS
 /**
  * Return the next bounded progress percentage, or null when this chunk should
  * not produce a status entry. Non-final progress is capped at 99 so a corrupt
- * artifact never reports 100%; the caller forces 100 only after verification.
+ * response never reports 100%; the caller forces 100 only after the complete
+ * response has been durably written.
  */
 export function nextDownloadProgressPercent(
 	state: DownloadProgressThrottleState,
@@ -399,50 +391,28 @@ function isSafeArtifactFileName(value: string): boolean {
 	);
 }
 
-function isSafePatchFileName(value: string): boolean {
-	return (
-		value.length > ".patch".length &&
-		value.length <= 1024 &&
-		value.endsWith(".patch") &&
-		!/[\u0000-\u001f\u007f/\\:]/.test(value)
-	);
-}
-
 /** Encode the manifest's single filename as one URL path segment. */
 export function buildUpdateArtifactUrl(
 	baseUrl: string,
 	artifactFile: string,
-	sha256?: string,
 ): string {
 	if (!isSafeArtifactFileName(artifactFile)) {
 		throw new Error("Invalid update artifact filename");
 	}
-	const artifactUrl = `${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(artifactFile)}`;
-	if (sha256 === undefined) return artifactUrl;
-	if (!SHA256_PATTERN.test(sha256)) {
-		throw new Error("Invalid update artifact SHA-256");
-	}
-	// Release artifact filenames stay stable for v1 compatibility. Pin the
-	// mutable URL to its verified bytes so caches cannot serve the prior build.
-	return `${artifactUrl}?sha256=${sha256}`;
+	return `${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(artifactFile)}`;
 }
 
-/** Encode and integrity-pin one patch filename from validated update metadata. */
-export function buildUpdatePatchUrl(
-	baseUrl: string,
-	patchFile: string,
-	sha256: string,
+export function addUpdateArtifactCacheBuster(
+	artifactUrl: string,
+	transactionId: string,
 ): string {
-	if (!isSafePatchFileName(patchFile)) {
-		throw new Error("Invalid update patch filename");
+	if (!TRANSACTION_ID_PATTERN.test(transactionId)) {
+		throw new Error("Invalid update transaction identifier");
 	}
-	if (!SHA256_PATTERN.test(sha256)) {
-		throw new Error("Invalid update patch SHA-256");
-	}
-	return `${baseUrl.replace(/\/+$/, "")}/${encodeURIComponent(patchFile)}?sha256=${sha256}`;
+	return `${artifactUrl}?cache=${transactionId}`;
 }
 
-/** Validate and pin the v2 update metadata before any artifact is fetched. */
+/** Validate the v2 update metadata before any artifact is fetched. */
 export function validateUpdateManifest(
 	document: unknown,
 	expected: ManifestExpectation,
@@ -458,6 +428,8 @@ export function validateUpdateManifest(
 	const platform = requireString(document, "platform");
 	const arch = requireString(document, "arch");
 	if (
+		!isBuildEnvironment(channel) ||
+		!isBuildEnvironment(expected.channel) ||
 		identifier !== expected.identifier ||
 		channel !== expected.channel ||
 		platform !== expected.platform ||
@@ -479,80 +451,12 @@ export function validateUpdateManifest(
 		throw new Error("Invalid update manifest: artifact is required");
 	}
 	const file = requireString(artifactValue, "file");
-	const size = artifactValue["size"];
-	const sha256 = requireString(artifactValue, "sha256");
 	const requiredPrefix = `${getPlatformPrefix(channel, expected.platform, expected.arch)}-`;
 	if (
 		!isSafeArtifactFileName(file) ||
 		!file.startsWith(requiredPrefix)
 	) {
 		throw new Error("Invalid update manifest: unsafe artifact filename");
-	}
-	if (
-		typeof size !== "number" ||
-		!Number.isSafeInteger(size) ||
-		size <= 0 ||
-		size > MAX_ARTIFACT_BYTES
-	) {
-		throw new Error("Invalid update manifest: artifact size is out of range");
-	}
-	if (!SHA256_PATTERN.test(sha256)) {
-		throw new Error("Invalid update manifest: artifact sha256 must be lowercase hex");
-	}
-
-	let patch: UpdatePatchV1 | undefined;
-	const patchValue = document["patch"];
-	if (patchValue !== undefined) {
-		if (!isRecord(patchValue)) {
-			throw new Error("Invalid update manifest: patch must be an object");
-		}
-		const fromHash = requireString(patchValue, "fromHash");
-		const patchFile = requireString(patchValue, "file");
-		const patchSize = patchValue["size"];
-		const patchSha256 = requireString(patchValue, "sha256");
-		const targetSize = patchValue["targetSize"];
-		const targetSha256 = requireString(patchValue, "targetSha256");
-		if (!SAFE_HASH_PATTERN.test(fromHash)) {
-			throw new Error("Invalid update manifest: patch fromHash is unsafe");
-		}
-		if (
-			!isSafePatchFileName(patchFile) ||
-			patchFile !== `${requiredPrefix}${fromHash}.patch`
-		) {
-			throw new Error("Invalid update manifest: unsafe patch filename");
-		}
-		if (
-			typeof patchSize !== "number" ||
-			!Number.isSafeInteger(patchSize) ||
-			patchSize <= 0 ||
-			patchSize > MAX_ARTIFACT_BYTES
-		) {
-			throw new Error("Invalid update manifest: patch size is out of range");
-		}
-		if (!SHA256_PATTERN.test(patchSha256)) {
-			throw new Error("Invalid update manifest: patch sha256 must be lowercase hex");
-		}
-		if (
-			typeof targetSize !== "number" ||
-			!Number.isSafeInteger(targetSize) ||
-			targetSize <= 0 ||
-			targetSize > MAX_ARTIFACT_BYTES
-		) {
-			throw new Error("Invalid update manifest: patch targetSize is out of range");
-		}
-		if (!SHA256_PATTERN.test(targetSha256)) {
-			throw new Error(
-				"Invalid update manifest: patch targetSha256 must be lowercase hex",
-			);
-		}
-		patch = {
-			fromHash,
-			file: patchFile,
-			size: patchSize,
-			sha256: patchSha256,
-			targetSize,
-			targetSha256,
-		};
 	}
 
 	return {
@@ -563,8 +467,7 @@ export function validateUpdateManifest(
 		hash,
 		platform: platform as SupportedOS,
 		arch: arch as SupportedArch,
-		artifact: { file, size, sha256 },
-		...(patch ? { patch } : {}),
+		artifact: { file },
 	};
 }
 
@@ -618,7 +521,8 @@ export function resolveInstalledChannelRootForPlatform(
 ): string {
 	if (
 		!isSafeIdentityComponent(info.identifier, platform) ||
-		!isSafeIdentityComponent(info.channel, platform)
+		!isSafeIdentityComponent(info.channel, platform) ||
+		!isBuildEnvironment(info.channel)
 	) {
 		throw new Error("The installed update identity is unsafe");
 	}
@@ -650,13 +554,6 @@ export function resolveInstalledChannelRootForPlatform(
 
 	const modernRoot = pathApi.resolve(pathApi.join(identifierRoot, info.channel));
 	const candidates = [modernRoot];
-	// Recent v1 production installs used a literal `stable` root. macOS cannot
-	// derive that physical root from process.execPath because the app bundle is
-	// installed separately under /Applications, so retain it as a migration
-	// candidate alongside the still older display-name layout.
-	if (info.channel === "production") {
-		candidates.push(pathApi.resolve(pathApi.join(identifierRoot, "stable")));
-	}
 	if (isSafeIdentityComponent(info.name, "macos")) {
 		candidates.push(pathApi.resolve(pathApi.join(identifierRoot, info.name)));
 	}
@@ -667,7 +564,7 @@ export function resolveInstalledChannelRootForPlatform(
 		isSafeIdentityComponent(info.displayName, "macos")
 	) {
 		const legacyDisplayRootName =
-			info.channel === "production"
+			info.channel === "stable"
 				? info.displayName
 				: `${info.displayName}-${info.channel}`;
 		if (isSafeIdentityComponent(legacyDisplayRootName, "macos")) {
@@ -817,26 +714,20 @@ function validatePreparedUpdate(
 	const arch = requireString(document, "arch");
 	const retainedTarPath = requireString(document, "retained_tar_path");
 	const artifactFile = requireString(document, "artifact_file");
-	const artifactSize = document["artifact_size"];
-	const artifactSha256 = requireString(document, "artifact_sha256");
 	const expectedTarPath = resolve(
 		join(extractionFolderFor(channelRoot), `${hash}.tar`),
 	);
 	if (
 		identifier !== info.identifier ||
 		channel !== info.channel ||
+		!isBuildEnvironment(channel) ||
 		platform !== currentOS ||
 		arch !== currentArch ||
 		!isSafeVersion(version) ||
 		!SAFE_HASH_PATTERN.test(hash) ||
 		resolve(retainedTarPath) !== retainedTarPath ||
 		retainedTarPath !== expectedTarPath ||
-		!isSafeArtifactFileName(artifactFile) ||
-		typeof artifactSize !== "number" ||
-		!Number.isSafeInteger(artifactSize) ||
-		artifactSize <= 0 ||
-		artifactSize > MAX_ARTIFACT_BYTES ||
-		!SHA256_PATTERN.test(artifactSha256)
+		!isSafeArtifactFileName(artifactFile)
 	) {
 		throw new Error("Invalid prepared update record");
 	}
@@ -851,8 +742,6 @@ function validatePreparedUpdate(
 		arch: arch as SupportedArch,
 		retained_tar_path: retainedTarPath,
 		artifact_file: artifactFile,
-		artifact_size: artifactSize,
-		artifact_sha256: artifactSha256,
 	};
 }
 
@@ -879,9 +768,7 @@ function preparedMatchesManifest(
 	return (
 		prepared.hash === manifest.hash &&
 		prepared.version === manifest.version &&
-		prepared.artifact_file === manifest.artifact.file &&
-		prepared.artifact_size === manifest.artifact.size &&
-		prepared.artifact_sha256 === manifest.artifact.sha256
+		prepared.artifact_file === manifest.artifact.file
 	);
 }
 
@@ -1250,54 +1137,37 @@ async function readBoundedResponse(
 	return result;
 }
 
-export async function downloadVerifiedFile(
+export async function downloadResponseToFile(
 	response: Response,
 	partialPath: string,
-	expectedSize: number,
-	expectedSha256: string,
 	description: string,
 	onProgress?: (bytesDownloaded: number) => void,
-): Promise<void> {
+): Promise<number> {
 	if (!response.body) throw new Error(`${description} response has no body`);
-	const contentLength = response.headers.get("content-length");
-	if (contentLength !== null) {
-		const parsedLength = Number(contentLength);
-		if (!Number.isSafeInteger(parsedLength) || parsedLength !== expectedSize) {
-			throw new Error(`${description} Content-Length does not match its manifest`);
-		}
-	}
 
 	let fileDescriptor: number | undefined;
 	let bytesDownloaded = 0;
-	const hasher = createHash("sha256");
 	try {
-		fileDescriptor = openSync(
-			partialPath,
-			"wx+",
-			0o600,
-		);
+		fileDescriptor = openSync(partialPath, "wx+", 0o600);
 		const reader = response.body.getReader();
-		for (;;) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			bytesDownloaded += value.byteLength;
-			if (bytesDownloaded > expectedSize) {
-				await reader.cancel();
-				throw new Error(`${description} is larger than its manifest size`);
+		try {
+			for (;;) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				bytesDownloaded += value.byteLength;
+				writeAll(fileDescriptor, value);
+				onProgress?.(bytesDownloaded);
 			}
-			hasher.update(value);
-			writeAll(fileDescriptor, value);
-			onProgress?.(bytesDownloaded);
-		}
-		if (bytesDownloaded !== expectedSize) {
-			throw new Error(`${description} is smaller than its manifest size`);
-		}
-		if (hasher.digest("hex") !== expectedSha256) {
-			throw new Error(`${description} failed SHA-256 verification`);
+		} catch (error) {
+			try {
+				await reader.cancel();
+			} catch {}
+			throw error;
 		}
 		fsyncSync(fileDescriptor);
 		closeSync(fileDescriptor);
 		fileDescriptor = undefined;
+		return bytesDownloaded;
 	} catch (error) {
 		if (fileDescriptor !== undefined) {
 			try {
@@ -1312,86 +1182,46 @@ export async function downloadVerifiedFile(
 async function downloadArtifact(
 	response: Response,
 	partialPath: string,
-	expectedSize: number,
-	expectedSha256: string,
 ): Promise<void> {
+	const headerValue = response.headers.get("content-length");
+	const parsedLength = headerValue === null ? 0 : Number(headerValue);
+	const totalBytes =
+		Number.isSafeInteger(parsedLength) && parsedLength > 0 ? parsedLength : 0;
 	const progressState = createDownloadProgressThrottleState();
-	await downloadVerifiedFile(
+	const bytesDownloaded = await downloadResponseToFile(
 		response,
 		partialPath,
-		expectedSize,
-		expectedSha256,
 		"Update artifact",
 		(bytesDownloaded) => {
+			if (totalBytes === 0) return;
 			const progress = nextDownloadProgressPercent(
 				progressState,
 				bytesDownloaded,
-				expectedSize,
+				totalBytes,
 				Date.now(),
 			);
 			if (progress !== null) {
 				emitStatus("download-progress", "Downloading update bundle...", {
 					progress,
 					bytesDownloaded,
-					totalBytes: expectedSize,
+					totalBytes,
 				});
 			}
 		},
 	);
 	const finalProgress = nextDownloadProgressPercent(
 		progressState,
-		expectedSize,
-		expectedSize,
+		bytesDownloaded,
+		bytesDownloaded || 1,
 		Date.now(),
 		true,
 	);
 	if (finalProgress !== null) {
 		emitStatus("download-progress", "Downloading update bundle...", {
 			progress: finalProgress,
-			bytesDownloaded: expectedSize,
-			totalBytes: expectedSize,
+			bytesDownloaded,
+			...(totalBytes > 0 ? { totalBytes } : {}),
 		});
-	}
-}
-
-export async function verifyRegularFileIntegrity(
-	path: string,
-	expectedSize: number,
-	expectedSha256: string,
-	description: string,
-): Promise<void> {
-	let fileDescriptor: number | undefined;
-	try {
-		fileDescriptor = openSync(
-			path,
-			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
-		);
-		const stat = fstatSync(fileDescriptor);
-		if (!stat.isFile() || stat.size !== expectedSize) {
-			throw new Error(`${description} size does not match its manifest`);
-		}
-		const hasher = createHash("sha256");
-		let bytesRead = 0;
-		const stream = createReadStream(path, {
-			fd: fileDescriptor,
-			autoClose: false,
-			highWaterMark: 64 * 1024,
-		});
-		for await (const chunk of stream) {
-			bytesRead += chunk.byteLength;
-			if (bytesRead > expectedSize) {
-				throw new Error(`${description} size does not match its manifest`);
-			}
-			hasher.update(chunk);
-		}
-		if (bytesRead !== expectedSize) {
-			throw new Error(`${description} size does not match its manifest`);
-		}
-		if (hasher.digest("hex") !== expectedSha256) {
-			throw new Error(`${description} failed SHA-256 verification`);
-		}
-	} finally {
-		if (fileDescriptor !== undefined) closeSync(fileDescriptor);
 	}
 }
 
@@ -1400,14 +1230,12 @@ type DeltaPatchExecutor = (
 	args: readonly string[],
 ) => void;
 
-export async function applyVerifiedDeltaPatch(
+export function applyDeltaPatch(
 	options: {
 		bspatchPath: string;
 		currentTarPath: string;
 		patchPath: string;
 		outputPath: string;
-		targetSize: number;
-		targetSha256: string;
 	},
 	execute: DeltaPatchExecutor = (executable, args) => {
 		execFileSync(executable, [...args], {
@@ -1416,7 +1244,7 @@ export async function applyVerifiedDeltaPatch(
 			timeout: 10 * 60_000,
 		});
 	},
-): Promise<void> {
+): void {
 	requireRegularFile(options.bspatchPath, "bspatch executable");
 	requireRegularFile(options.currentTarPath, "Current update archive");
 	requireRegularFile(options.patchPath, "Downloaded update patch");
@@ -1429,16 +1257,288 @@ export async function applyVerifiedDeltaPatch(
 			options.outputPath,
 			options.patchPath,
 		]);
-		await verifyRegularFileIntegrity(
-			options.outputPath,
-			options.targetSize,
-			options.targetSha256,
-			"Patched update archive",
-		);
+		requireRegularFile(options.outputPath, "Patched update archive");
+		if (lstatSync(options.outputPath).size <= 0) {
+			throw new Error("Patched update archive is empty");
+		}
 		syncFile(options.outputPath);
 	} catch (error) {
 		rmSync(options.outputPath, { force: true });
 		throw error;
+	}
+}
+
+class TarStreamReader {
+	private readonly iterator: AsyncIterator<Uint8Array<ArrayBufferLike>>;
+	private chunk: Uint8Array<ArrayBufferLike> = new Uint8Array(0);
+	private chunkOffset = 0;
+	bytesRead = 0;
+
+	constructor(stream: AsyncIterable<Uint8Array<ArrayBufferLike>>) {
+		this.iterator = stream[Symbol.asyncIterator]();
+	}
+
+	private async fill(): Promise<boolean> {
+		while (this.chunkOffset >= this.chunk.byteLength) {
+			const next = await this.iterator.next();
+			if (next.done) return false;
+			this.chunk = next.value;
+			this.chunkOffset = 0;
+		}
+		return true;
+	}
+
+	async readExactly(length: number): Promise<Uint8Array> {
+		const result = new Uint8Array(length);
+		let resultOffset = 0;
+		while (resultOffset < length) {
+			if (!(await this.fill())) throw new Error("Truncated update archive");
+			const available = this.chunk.byteLength - this.chunkOffset;
+			const count = Math.min(available, length - resultOffset);
+			result.set(
+				this.chunk.subarray(this.chunkOffset, this.chunkOffset + count),
+				resultOffset,
+			);
+			this.chunkOffset += count;
+			resultOffset += count;
+			this.bytesRead += count;
+		}
+		return result;
+	}
+
+	async skip(length: number): Promise<void> {
+		let remaining = length;
+		while (remaining > 0) {
+			if (!(await this.fill())) throw new Error("Truncated update archive");
+			const count = Math.min(
+				this.chunk.byteLength - this.chunkOffset,
+				remaining,
+			);
+			this.chunkOffset += count;
+			this.bytesRead += count;
+			remaining -= count;
+		}
+	}
+
+	async close(): Promise<void> {
+		try {
+			await this.iterator.return?.();
+		} catch {}
+	}
+}
+
+const tarDecoder = new TextDecoder("utf-8", { fatal: true });
+
+function decodeTarString(bytes: Uint8Array): string {
+	const terminator = bytes.indexOf(0);
+	return tarDecoder.decode(
+		terminator < 0 ? bytes : bytes.subarray(0, terminator),
+	);
+}
+
+function parseTarNumber(bytes: Uint8Array, description: string): number {
+	if (bytes.byteLength === 0) throw new Error(`Invalid TAR ${description}`);
+	if ((bytes[0]! & 0x80) !== 0) {
+		// GNU base-256 uses the high bit as its marker and the next bit as the
+		// sign bit. Update archive offsets and sizes must be non-negative.
+		if ((bytes[0]! & 0x40) !== 0) {
+			throw new Error(`Invalid TAR ${description}`);
+		}
+		let value = BigInt(bytes[0]! & 0x3f);
+		for (let index = 1; index < bytes.byteLength; index += 1) {
+			value = (value << 8n) | BigInt(bytes[index]!);
+		}
+		if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+			throw new Error(`TAR ${description} is too large`);
+		}
+		return Number(value);
+	}
+	const text = new TextDecoder()
+		.decode(bytes)
+		.replace(/\0.*$/, "")
+		.trim();
+	if (text === "") return 0;
+	if (!/^[0-7]+$/.test(text)) throw new Error(`Invalid TAR ${description}`);
+	const value = Number.parseInt(text, 8);
+	if (!Number.isSafeInteger(value) || value < 0) {
+		throw new Error(`Invalid TAR ${description}`);
+	}
+	return value;
+}
+
+function verifyTarHeader(header: Uint8Array): void {
+	const expected = parseTarNumber(header.subarray(148, 156), "checksum");
+	let actual = 0;
+	for (let index = 0; index < header.byteLength; index += 1) {
+		actual += index >= 148 && index < 156 ? 0x20 : header[index]!;
+	}
+	if (actual !== expected) throw new Error("Invalid TAR header checksum");
+}
+
+function parsePaxRecords(bytes: Uint8Array): Record<string, string> {
+	const records: Record<string, string> = {};
+	let offset = 0;
+	while (offset < bytes.byteLength) {
+		let space = offset;
+		while (space < bytes.byteLength && bytes[space] !== 0x20) space += 1;
+		const lengthText = new TextDecoder().decode(bytes.subarray(offset, space));
+		if (space === bytes.byteLength || !/^[1-9]\d*$/.test(lengthText)) {
+			throw new Error("Invalid PAX record length");
+		}
+		const recordLength = Number(lengthText);
+		const end = offset + recordLength;
+		if (
+			!Number.isSafeInteger(recordLength) ||
+			recordLength <= space - offset + 2 ||
+			end > bytes.byteLength ||
+			bytes[end - 1] !== 0x0a
+		) {
+			throw new Error("Invalid PAX record");
+		}
+		const body = tarDecoder.decode(bytes.subarray(space + 1, end - 1));
+		const equals = body.indexOf("=");
+		if (equals <= 0) throw new Error("Invalid PAX record");
+		records[body.slice(0, equals)] = body.slice(equals + 1);
+		offset = end;
+	}
+	return records;
+}
+
+function parsePaxSize(value: string): number {
+	if (!/^\d+$/.test(value)) throw new Error("Invalid PAX entry size");
+	const size = Number(value);
+	if (!Number.isSafeInteger(size) || size < 0) {
+		throw new Error("Invalid PAX entry size");
+	}
+	return size;
+}
+
+function isUpdateMetadataPath(value: string): boolean {
+	const path = value.replace(/^\.\//, "");
+	if (
+		path.startsWith("/") ||
+		path.includes("\\") ||
+		path.includes("\0")
+	) {
+		return false;
+	}
+	const components = path.split("/");
+	if (components.some((component) => component === "" || component === "." || component === "..")) {
+		return false;
+	}
+	return (
+		(components.length === 3 &&
+			components[1] === "Resources" &&
+			components[2] === "version.json") ||
+		(components.length === 4 &&
+			components[0]!.endsWith(".app") &&
+			components[1] === "Contents" &&
+			components[2] === "Resources" &&
+			components[3] === "version.json") ||
+		(components.length === 2 && components[1] === "metadata.json")
+	);
+}
+
+function tarEntrySpan(size: number): number {
+	const padding = (512 - (size % 512)) % 512;
+	const span = size + padding;
+	if (!Number.isSafeInteger(span)) throw new Error("TAR entry is too large");
+	return span;
+}
+
+/** Read only the small version metadata entry while streaming over the TAR. */
+export async function readUpdateHashFromTar(path: string): Promise<string> {
+	let fileDescriptor: number | undefined;
+	let reader: TarStreamReader | undefined;
+	let stream: ReturnType<typeof createReadStream> | undefined;
+	try {
+		fileDescriptor = openSync(
+			path,
+			fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0),
+		);
+		const stat = fstatSync(fileDescriptor);
+		if (!stat.isFile() || stat.size < 512) {
+			throw new Error("Patched update archive is not a regular TAR file");
+		}
+		stream = createReadStream(path, {
+			fd: fileDescriptor,
+			autoClose: false,
+			highWaterMark: 64 * 1024,
+		});
+		reader = new TarStreamReader(stream);
+		let globalPax: Record<string, string> = {};
+		let localPax: Record<string, string> | undefined;
+		let longName: string | undefined;
+
+		for (;;) {
+			const header = await reader.readExactly(512);
+			if (header.every((byte) => byte === 0)) break;
+			verifyTarHeader(header);
+			const headerSize = parseTarNumber(header.subarray(124, 136), "entry size");
+			const headerSpan = tarEntrySpan(headerSize);
+			if (headerSpan > stat.size - reader.bytesRead) {
+				throw new Error("TAR entry extends beyond the update archive");
+			}
+			const type = header[156] ?? 0;
+			const rawName = decodeTarString(header.subarray(0, 100));
+			const prefix = decodeTarString(header.subarray(345, 500));
+			const headerName = prefix ? `${prefix}/${rawName}` : rawName;
+
+			if (type === 0x78 || type === 0x67 || type === 0x4c) {
+				if (headerSize > MAX_TAR_EXTENSION_BYTES) {
+					throw new Error("TAR path metadata exceeds the size limit");
+				}
+				const extension = await reader.readExactly(headerSize);
+				await reader.skip(headerSpan - headerSize);
+				if (type === 0x78) localPax = parsePaxRecords(extension);
+				else if (type === 0x67) {
+					globalPax = { ...globalPax, ...parsePaxRecords(extension) };
+				} else {
+					longName = decodeTarString(extension).replace(/\n$/, "");
+				}
+				continue;
+			}
+
+			const pax = { ...globalPax, ...localPax };
+			const entryName = pax["path"] ?? longName ?? headerName;
+			const entrySize =
+				pax["size"] === undefined ? headerSize : parsePaxSize(pax["size"]);
+			const entrySpan = tarEntrySpan(entrySize);
+			if (entrySpan > stat.size - reader.bytesRead) {
+				throw new Error("TAR entry extends beyond the update archive");
+			}
+			localPax = undefined;
+			longName = undefined;
+
+			if ((type === 0 || type === 0x30) && isUpdateMetadataPath(entryName)) {
+				if (entrySize === 0 || entrySize > MAX_TAR_METADATA_BYTES) {
+					throw new Error("Update metadata exceeds the size limit");
+				}
+				const bytes = await reader.readExactly(entrySize);
+				const document: unknown = JSON.parse(tarDecoder.decode(bytes));
+				if (!isRecord(document) || typeof document["hash"] !== "string") {
+					throw new Error("Update archive metadata has no hash");
+				}
+				if (!SAFE_HASH_PATTERN.test(document["hash"])) {
+					throw new Error("Update archive metadata hash is unsafe");
+				}
+				return document["hash"];
+			}
+			await reader.skip(entrySpan);
+		}
+		throw new Error("Update archive metadata was not found");
+	} finally {
+		await reader?.close();
+		stream?.destroy();
+		if (fileDescriptor !== undefined) {
+			try {
+				closeSync(fileDescriptor);
+			} catch (error) {
+				// Bun may close the supplied descriptor when an async iterator is
+				// returned even with autoClose:false; Cottontail leaves it open.
+				if ((error as NodeJS.ErrnoException).code !== "EBADF") throw error;
+			}
+		}
 	}
 }
 
@@ -1581,6 +1681,7 @@ export function createNativeUpdatePlan(
 		!TRANSACTION_ID_PATTERN.test(plan.transaction_id) ||
 		!isSafeIdentityComponent(plan.identifier, plan.platform) ||
 		!isSafeIdentityComponent(plan.channel, plan.platform) ||
+		!isBuildEnvironment(plan.channel) ||
 		!isSafeVersion(plan.version) ||
 		!SAFE_HASH_PATTERN.test(plan.hash) ||
 		!Number.isSafeInteger(plan.parent_pid) ||
@@ -1632,6 +1733,19 @@ export function resolveUpdateParentPid(
 async function checkForUpdateOperation(): Promise<UpdateInfo> {
 	emitStatus("checking", "Checking for updates...");
 	const info = await Updater.getLocalInfo();
+	if (!isBuildEnvironment(info.channel)) {
+		checkedManifest = undefined;
+		const message = `Unsupported update channel: ${info.channel}`;
+		updateInfo = {
+			version: info.version,
+			hash: info.hash,
+			updateAvailable: false,
+			updateReady: false,
+			error: message,
+		};
+		emitStatus("error", message, { errorMessage: message });
+		return updateInfo;
+	}
 	if (info.channel === "dev") {
 		checkedManifest = undefined;
 		updateInfo = {
@@ -1733,14 +1847,42 @@ function checkForUpdate(): Promise<UpdateInfo> {
 	return operation;
 }
 
-async function tryPrepareDeltaPatch(
-	info: LocalUpdateInfo,
-	manifest: UpdateManifestV1,
-	extractionFolder: string,
-	transactionId: string,
-	tarPartialPath: string,
-	retainedTarPath: string,
-): Promise<boolean> {
+export interface PatchChainPreparationResult {
+	completed: boolean;
+	patchesApplied: number;
+}
+
+interface PatchChainDependencies {
+	fetchResponse?: (url: string, init: RequestInit) => Promise<Response>;
+	applyPatch?: typeof applyDeltaPatch;
+	readNextHash?: typeof readUpdateHashFromTar;
+	bspatchPath?: string;
+}
+
+export async function preparePatchChainForUpdate(
+	options: {
+		info: LocalUpdateInfo;
+		manifest: UpdateManifestV1;
+		extractionFolder: string;
+		transactionId: string;
+		retainedTarPath: string;
+	},
+	dependencies: PatchChainDependencies = {},
+): Promise<PatchChainPreparationResult> {
+	const { info, manifest, extractionFolder, transactionId, retainedTarPath } = options;
+	if (
+		!isBuildEnvironment(info.channel) ||
+		info.channel === "dev" ||
+		manifest.channel !== info.channel ||
+		!SAFE_HASH_PATTERN.test(info.hash) ||
+		!SAFE_HASH_PATTERN.test(manifest.hash) ||
+		!TRANSACTION_ID_PATTERN.test(transactionId) ||
+		resolve(retainedTarPath) !==
+			resolve(join(extractionFolder, `${manifest.hash}.tar`))
+	) {
+		throw new Error("Invalid patch-chain preparation request");
+	}
+	const channel: BuildEnvironment = info.channel;
 	const currentTarPath = resolve(
 		join(extractionFolder, `${info.hash}.tar`),
 	);
@@ -1756,7 +1898,7 @@ async function tryPrepareDeltaPatch(
 			`Local tar not found for ${info.hash.slice(0, 8)}, will download full bundle`,
 			{ currentHash: info.hash },
 		);
-		return false;
+		return { completed: false, patchesApplied: 0 };
 	}
 	emitStatus(
 		"local-tar-found",
@@ -1764,126 +1906,145 @@ async function tryPrepareDeltaPatch(
 		{ currentHash: info.hash },
 	);
 
-	const patch = manifest.patch;
-	if (!patch || patch.fromHash !== info.hash) {
-		emitStatus(
-			"patch-not-found",
-			`No direct patch is available for ${info.hash.slice(0, 8)}, will download full bundle`,
-			{ currentHash: info.hash, latestHash: manifest.hash },
-		);
-		return false;
-	}
-
-	const patchUrl = buildUpdatePatchUrl(
-		info.baseUrl,
-		patch.file,
-		patch.sha256,
+	const fetchResponse = dependencies.fetchResponse ?? fetch;
+	const applyPatch = dependencies.applyPatch ?? applyDeltaPatch;
+	const readNextHash = dependencies.readNextHash ?? readUpdateHashFromTar;
+	const bspatchPath =
+		dependencies.bspatchPath ??
+		join(dirname(process.execPath), currentOS === "win" ? "bspatch.exe" : "bspatch");
+	const platformPrefix = getPlatformPrefix(
+		channel,
+		manifest.platform,
+		manifest.arch,
 	);
-	const patchPartialPath = join(
-		extractionFolder,
-		`.${info.hash}.${transactionId}.patch.partial`,
-	);
-	const patchPath = join(
-		extractionFolder,
-		`.${info.hash}.${transactionId}.patch`,
-	);
+	const transactionPaths = new Set<string>();
+	const seenHashes = new Set([info.hash]);
+	let currentHash = info.hash;
+	let activeTarPath = currentTarPath;
+	let patchesApplied = 0;
+	let patchUrl: string | undefined;
 	try {
-		emitStatus(
-			"fetching-patch",
-			`Checking for patch: ${info.hash.slice(0, 8)}`,
-			{ currentHash: info.hash, latestHash: manifest.hash, url: patchUrl },
-		);
-		const response = await fetch(patchUrl, {
-			signal: AbortSignal.timeout(10 * 60_000),
-		});
-		if (!response.ok) {
+		while (currentHash !== manifest.hash) {
+			const patchNumber = patchesApplied + 1;
+			patchUrl = getPatchFileUrl(info.baseUrl, platformPrefix, currentHash);
+			const pathPrefix = join(
+				extractionFolder,
+				`.${transactionId}.${patchNumber}.${currentHash}`,
+			);
+			const patchPartialPath = `${pathPrefix}.patch.partial`;
+			const patchPath = `${pathPrefix}.patch`;
+			const outputPath = `${pathPrefix}.tar.partial`;
+			transactionPaths.add(patchPartialPath);
+			transactionPaths.add(patchPath);
+			transactionPaths.add(outputPath);
+
 			emitStatus(
-				"patch-not-found",
-				`No patch available for ${info.hash.slice(0, 8)}, will download full bundle`,
+				"fetching-patch",
+				`Checking for patch: ${currentHash.slice(0, 8)}`,
 				{
-					currentHash: info.hash,
+					currentHash,
 					latestHash: manifest.hash,
+					patchNumber,
 					url: patchUrl,
 				},
 			);
-			return false;
+			const response = await fetchResponse(patchUrl, {
+				signal: AbortSignal.timeout(10 * 60_000),
+			});
+			if (!response.ok) {
+				try {
+					await response.body?.cancel();
+				} catch {}
+				emitStatus(
+					"patch-not-found",
+					`No patch available for ${currentHash.slice(0, 8)}, will download full bundle`,
+					{
+						currentHash,
+						latestHash: manifest.hash,
+						patchNumber,
+						totalPatchesApplied: patchesApplied,
+						url: patchUrl,
+					},
+				);
+				return { completed: false, patchesApplied };
+			}
+
+			emitStatus(
+				"patch-found",
+				`Patch found for ${currentHash.slice(0, 8)}`,
+				{ currentHash, latestHash: manifest.hash, patchNumber, url: patchUrl },
+			);
+			emitStatus(
+				"downloading-patch",
+				`Downloading patch for ${currentHash.slice(0, 8)}...`,
+				{ currentHash, latestHash: manifest.hash, patchNumber, url: patchUrl },
+			);
+			await downloadResponseToFile(
+				response,
+				patchPartialPath,
+				"Update patch",
+			);
+			renameSync(patchPartialPath, patchPath);
+
+			emitStatus(
+				"applying-patch",
+				`Applying patch for ${currentHash.slice(0, 8)}...`,
+				{ currentHash, latestHash: manifest.hash, patchNumber },
+			);
+			await applyPatch({
+				bspatchPath,
+				currentTarPath: activeTarPath,
+				patchPath,
+				outputPath,
+			});
+			emitStatus("extracting-version", "Reading patched update metadata...", {
+				currentHash,
+				latestHash: manifest.hash,
+				patchNumber,
+			});
+			const nextHash = await readNextHash(outputPath);
+			if (seenHashes.has(nextHash)) {
+				throw new Error(`Patch chain contains a cycle at ${nextHash}`);
+			}
+			seenHashes.add(nextHash);
+			patchesApplied += 1;
+			emitStatus("patch-applied", "Patch applied successfully", {
+				fromHash: currentHash,
+				toHash: nextHash,
+				currentHash: nextHash,
+				latestHash: manifest.hash,
+				patchNumber,
+				totalPatchesApplied: patchesApplied,
+			});
+			currentHash = nextHash;
+			activeTarPath = outputPath;
 		}
 
-		emitStatus(
-			"patch-found",
-			`Patch found for ${info.hash.slice(0, 8)}`,
-			{ currentHash: info.hash, latestHash: manifest.hash, url: patchUrl },
-		);
-		emitStatus(
-			"downloading-patch",
-			`Downloading patch for ${info.hash.slice(0, 8)}...`,
-			{ currentHash: info.hash, latestHash: manifest.hash, url: patchUrl },
-		);
-		await downloadVerifiedFile(
-			response,
-			patchPartialPath,
-			patch.size,
-			patch.sha256,
-			"Update patch",
-		);
-		renameSync(patchPartialPath, patchPath);
-
-		const bspatchPath = join(
-			dirname(process.execPath),
-			currentOS === "win" ? "bspatch.exe" : "bspatch",
-		);
-		emitStatus(
-			"applying-patch",
-			`Applying patch for ${info.hash.slice(0, 8)}...`,
-			{
-				currentHash: info.hash,
-				latestHash: manifest.hash,
-				patchNumber: 1,
-			},
-		);
-		await applyVerifiedDeltaPatch({
-			bspatchPath,
-			currentTarPath,
-			patchPath,
-			outputPath: tarPartialPath,
-			targetSize: patch.targetSize,
-			targetSha256: patch.targetSha256,
-		});
-		publishFileReplacingRegular(tarPartialPath, retainedTarPath);
-		emitStatus("patch-applied", "Patch applied successfully", {
+		publishFileReplacingRegular(activeTarPath, retainedTarPath);
+		emitStatus("patch-chain-complete", "Patch chain complete", {
 			fromHash: info.hash,
 			toHash: manifest.hash,
 			currentHash: manifest.hash,
 			latestHash: manifest.hash,
-			patchNumber: 1,
-		});
-		emitStatus("patch-chain-complete", "Direct patch complete", {
-			fromHash: info.hash,
-			toHash: manifest.hash,
-			currentHash: manifest.hash,
-			latestHash: manifest.hash,
-			totalPatchesApplied: 1,
+			totalPatchesApplied: patchesApplied,
 			usedPatchPath: true,
 		});
-		return true;
+		return { completed: true, patchesApplied };
 	} catch (error) {
 		emitStatus(
 			"patch-failed",
-			`Patch failed for ${info.hash.slice(0, 8)}, will download full bundle`,
+			`Patch failed for ${currentHash.slice(0, 8)}, will download full bundle`,
 			{
-				currentHash: info.hash,
+				currentHash,
 				latestHash: manifest.hash,
+				totalPatchesApplied: patchesApplied,
 				errorMessage: (error as Error).message,
-				url: patchUrl,
+				...(patchUrl ? { url: patchUrl } : {}),
 			},
 		);
-		return false;
+		return { completed: false, patchesApplied };
 	} finally {
-		rmSync(patchPartialPath, { force: true });
-		rmSync(patchPath, { force: true });
-		// A successful publication renamed this path; failed and interrupted patch
-		// attempts must not leave output for a later full-download transaction.
-		rmSync(tarPartialPath, { force: true });
+		for (const path of transactionPaths) rmSync(path, { force: true });
 	}
 }
 
@@ -1908,12 +2069,13 @@ async function downloadUpdateOperation(): Promise<void> {
 			emitStatus("download-complete", "Update bundle is already prepared", {
 				latestHash: manifest.hash,
 				usedPatchPath: false,
+				totalPatchesApplied: 0,
 			});
 			return;
 		}
 	} catch {
 		// A missing or stale prepared record is replaced only after a fully
-		// verified artifact and decompressed tar have been published.
+		// downloaded artifact and decompressed tar have been published.
 	}
 
 	const transactionId = randomBytes(16).toString("hex");
@@ -1935,35 +2097,33 @@ async function downloadUpdateOperation(): Promise<void> {
 	const artifactUrl = buildUpdateArtifactUrl(
 		info.baseUrl,
 		manifest.artifact.file,
-		manifest.artifact.sha256,
+	);
+	const artifactRequestUrl = addUpdateArtifactCacheBuster(
+		artifactUrl,
+		transactionId,
 	);
 	try {
-		const usedPatchPath = await tryPrepareDeltaPatch(
+		const patchResult = await preparePatchChainForUpdate({
 			info,
 			manifest,
 			extractionFolder,
 			transactionId,
-			tarPartialPath,
 			retainedTarPath,
-		);
+		});
+		const usedPatchPath = patchResult.completed;
 		if (!usedPatchPath) {
 			emitStatus("downloading-full-bundle", "Downloading full update bundle...", {
-				url: artifactUrl,
+				url: artifactRequestUrl,
 				latestHash: manifest.hash,
 				usedPatchPath: false,
 			});
-			const response = await fetch(artifactUrl, {
+			const response = await fetch(artifactRequestUrl, {
 				signal: AbortSignal.timeout(10 * 60_000),
 			});
 			if (!response.ok) {
 				throw new Error(`Update artifact request failed with HTTP ${response.status}`);
 			}
-			await downloadArtifact(
-				response,
-				compressedPartialPath,
-				manifest.artifact.size,
-				manifest.artifact.sha256,
-			);
+			await downloadArtifact(response, compressedPartialPath);
 			renameSync(compressedPartialPath, compressedPath);
 
 			const zstdPath = join(
@@ -2004,8 +2164,6 @@ async function downloadUpdateOperation(): Promise<void> {
 			arch: manifest.arch,
 			retained_tar_path: retainedTarPath,
 			artifact_file: manifest.artifact.file,
-			artifact_size: manifest.artifact.size,
-			artifact_sha256: manifest.artifact.sha256,
 		};
 		atomicWriteJson(preparedUpdatePathFor(channelRoot), record);
 		updateInfo = {
@@ -2015,17 +2173,17 @@ async function downloadUpdateOperation(): Promise<void> {
 			updateReady: true,
 			error: "",
 		};
-		emitStatus("download-complete", "Update bundle downloaded and verified", {
+		emitStatus("download-complete", "Update bundle downloaded and prepared", {
 			latestHash: manifest.hash,
 			usedPatchPath,
-			...(usedPatchPath ? { totalPatchesApplied: 1 } : {}),
+			totalPatchesApplied: patchResult.patchesApplied,
 		});
 	} catch (error) {
 		const message = `Failed to download update: ${(error as Error).message}`;
 		updateInfo = { ...updateInfo, updateReady: false, error: message };
 		emitStatus("error", message, {
 			errorMessage: (error as Error).message,
-			url: artifactUrl,
+			url: artifactRequestUrl,
 		});
 	} finally {
 		rmSync(compressedPartialPath, { force: true });

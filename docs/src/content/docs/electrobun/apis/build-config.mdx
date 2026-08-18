@@ -48,7 +48,7 @@ renderer only.
 | `mainProcess` | `"bun" \| "cottontail" \| "zig" \| "rust" \| "go" \| "odin" \| undefined` | Packaged main-process runtime. |
 | `defaultRenderer` | `"native" \| "cef"` | Renderer used when a window or view does not select one. |
 | `availableRenderers` | `("native" \| "cef")[]` | Renderers included in the app bundle. |
-| `buildEnvironment` | `"dev" \| "canary" \| "production" \| "stable" \| undefined` | Environment recorded in `build.json`; Hutch accepts `stable` as an alias for `production`, while the low-level type retains it for Electrobun 1.x bundle compatibility. |
+| `buildEnvironment` | `"dev" \| "canary" \| "stable" \| undefined` | Environment recorded in `build.json`. |
 | `channel` | `string` | Runtime release channel from `version.json`. |
 | `isPackaged` | `boolean` | `false` only for the `dev` channel. |
 | `chromiumFlags` | `Record<string, string \| boolean> \| undefined` | CEF switches selected for the target platform. |

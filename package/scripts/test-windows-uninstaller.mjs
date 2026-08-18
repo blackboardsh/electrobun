@@ -31,7 +31,6 @@ if (process.platform !== "win32") {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extractorRoot = join(packageRoot, "src", "extractor");
 const launcherRoot = join(packageRoot, "src", "launcher");
-const bunRuntime = join(packageRoot, "dist", "bun.exe");
 const token = randomBytes(6).toString("hex");
 const identifier = "com.example.electrobun-uninstaller-e2e." + token;
 const unrelatedIdentifier = identifier + ".unrelated";
@@ -69,7 +68,7 @@ const archiveMarker = Buffer.from(
 	"\nELECTROBUN_E2E_ARCHIVE_BEARING_SETUP_" + token + "\n",
 	"utf8",
 );
-const allowedChannels = new Set(["production", "canary"]);
+const allowedChannels = new Set(["stable", "canary"]);
 const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
 const trackedJunctions = new Set();
 const windowsTemporaryDirectory = resolve(
@@ -658,7 +657,7 @@ function runZigBuild(zig, projectRoot, buildArguments) {
 		],
 		// A clean Windows global cache can spend several minutes compiling LLVM
 		// compiler-rt and the native UI bridge before any fixture executes.
-		{ cwd: projectRoot, timeout: 300_000 },
+		{ cwd: projectRoot, timeout: 600_000 },
 	);
 }
 
@@ -720,7 +719,7 @@ function updateTaskName(channel) {
 }
 
 function shortcutName(channel) {
-	if (channel === "production") return appName + ".lnk";
+	if (channel === "stable") return appName + ".lnk";
 	if (channel === "canary") return appName + " (Canary).lnk";
 	if (channel === "dev") return appName + " (Development).lnk";
 	return appName + " (" + channel + ").lnk";
@@ -953,7 +952,7 @@ function assertRegistration(channel, expectedVersion = version) {
 	assert.equal(registryExists(channel), true, "Installed Apps key is missing");
 	const values = registryProperties(channel);
 	const expectedDisplayName =
-		channel === "production"
+		channel === "stable"
 			? appName
 			: channel === "canary"
 				? appName + " (Canary)"
@@ -1131,13 +1130,13 @@ function buildSetup(channel, extractor, launcher, zigZstd) {
 	const setupRoot = join(temporaryRoot, "setup-" + channel);
 	const payloadRoot = join(setupRoot, "payload");
 	const bundleName =
-		channel === "production" ? appName : appName + "-" + channel;
+		channel === "stable" ? appName : appName + "-" + channel;
 	const bundle = join(payloadRoot, bundleName);
 	const resources = join(bundle, "Resources");
 	const bin = join(bundle, "bin");
 	const installerDirectory = join(setupRoot, ".installer");
 	const setupName =
-		appName + "-Setup" + (channel === "production" ? "" : "-" + channel);
+		appName + "-Setup" + (channel === "stable" ? "" : "-" + channel);
 	const setupPath = join(setupRoot, setupName + ".exe");
 	const tarPath = join(setupRoot, setupName + ".tar");
 	const archivePath = join(installerDirectory, setupName + ".tar.zst");
@@ -1249,7 +1248,7 @@ function runManagerExpectingFailure(channel, args, options = {}) {
 
 function runStrictCliAndCleanupTests() {
 	console.log("Testing strict manager CLI and app-only cleanup...");
-	const channel = "production";
+	const channel = "stable";
 	const installation = install(channel);
 	const paths = seedState(channel, { task: true });
 	const outsideTarget = join(temporaryRoot, "app-only-user-junction-target");
@@ -1323,14 +1322,14 @@ function runStrictCliAndCleanupTests() {
 }
 
 function runChannelIsolationTests() {
-	console.log("Testing production/canary isolation...");
-	resetChannel("production");
+	console.log("Testing stable/canary isolation...");
+	resetChannel("stable");
 	resetChannel("canary");
-	const production = install("production");
-	const productionPaths = seedState("production", { task: true });
+	const stable = install("stable");
+	const stablePaths = seedState("stable", { task: true });
 	const canary = install("canary");
 	const canaryPaths = seedState("canary", { task: true });
-	const productionBeforeCanaryUninstall = captureFixture("production");
+	const stableBeforeCanaryUninstall = captureFixture("stable");
 	mkdirSync(unrelatedRoot, { recursive: true });
 	const unrelatedSentinel = join(unrelatedRoot, "unrelated.keep");
 	writeFileSync(unrelatedSentinel, "unrelated identifier\n");
@@ -1339,35 +1338,35 @@ function runChannelIsolationTests() {
 	runManager("canary", ["--uninstall", "--quiet"]);
 	assertAppOnlyRemoved("canary", canary);
 	assertFixtureUnchanged(
-		"production",
-		productionBeforeCanaryUninstall,
-		"canary uninstall mutated production state",
+		"stable",
+		stableBeforeCanaryUninstall,
+		"canary uninstall mutated stable state",
 	);
 	for (const path of [
-		productionPaths.app,
-		productionPaths.manager,
-		productionPaths.manifest,
-		productionPaths.userSentinel,
-		productionPaths.desktopShortcut,
-		productionPaths.startShortcut,
+		stablePaths.app,
+		stablePaths.manager,
+		stablePaths.manifest,
+		stablePaths.userSentinel,
+		stablePaths.desktopShortcut,
+		stablePaths.startShortcut,
 		unrelatedSentinel,
 		unrelatedShortcut,
 	]) {
 		assert.equal(pathExists(path), true, path + " was damaged by canary uninstall");
 	}
-	assertRegistration("production");
-	assert.equal(taskExists("production"), true);
+	assertRegistration("stable");
+	assert.equal(taskExists("stable"), true);
 
 	resetChannel("canary");
 	const reinstalledCanary = install("canary");
 	seedState("canary", { task: true });
-	const canaryBeforeProductionUninstall = captureFixture("canary");
-	runManager("production", ["--uninstall", "--quiet", "--delete-data"]);
-	assertDataRemoved("production");
+	const canaryBeforeStableUninstall = captureFixture("canary");
+	runManager("stable", ["--uninstall", "--quiet", "--delete-data"]);
+	assertDataRemoved("stable");
 	assertFixtureUnchanged(
 		"canary",
-		canaryBeforeProductionUninstall,
-		"production uninstall mutated canary state",
+		canaryBeforeStableUninstall,
+		"stable uninstall mutated canary state",
 	);
 	for (const path of [
 		canaryPaths.root,
@@ -1377,42 +1376,42 @@ function runChannelIsolationTests() {
 		unrelatedSentinel,
 		unrelatedShortcut,
 	]) {
-		assert.equal(pathExists(path), true, path + " was damaged by production uninstall");
+		assert.equal(pathExists(path), true, path + " was damaged by stable uninstall");
 	}
 	assertRegistration("canary");
 	assertShortcuts("canary");
 	assert.ok(reinstalledCanary.manifest.install_nonce);
-	assert.ok(production.manifest.install_nonce);
+	assert.ok(stable.manifest.install_nonce);
 	resetChannel("canary");
 }
 
 function runDamagedAppTest() {
 	console.log("Testing uninstall with a missing/damaged app...");
-	const installation = install("production");
-	const paths = seedState("production", { task: true });
+	const installation = install("stable");
+	const paths = seedState("stable", { task: true });
 	assertExactOrChild(paths.root, paths.app, "damaged-app fixture cleanup");
 	rmSync(paths.app, { force: true, recursive: true });
-	runManager("production", ["--uninstall", "--quiet"]);
-	assertAppOnlyRemoved("production", installation);
-	resetChannel("production");
+	runManager("stable", ["--uninstall", "--quiet"]);
+	assertAppOnlyRemoved("stable", installation);
+	resetChannel("stable");
 }
 
 function runLocationAndJunctionSafetyTests() {
 	console.log("Testing unexpected manager location and junction rejection...");
-	install("production");
-	seedState("production", { task: true });
-	const realBefore = captureFixture("production");
+	install("stable");
+	seedState("stable", { task: true });
+	const realBefore = captureFixture("stable");
 	const fakeRoot = join(
 		temporaryRoot,
 		"unexpected-manager-location",
 		identifier,
-		"production",
+		"stable",
 	);
 	mkdirSync(join(fakeRoot, "app"), { recursive: true });
 	mkdirSync(join(fakeRoot, "self-extraction"), { recursive: true });
-	copyFileSync(fixturePaths("production").manager, join(fakeRoot, "uninstall.exe"));
+	copyFileSync(fixturePaths("stable").manager, join(fakeRoot, "uninstall.exe"));
 	copyFileSync(
-		fixturePaths("production").manifest,
+		fixturePaths("stable").manifest,
 		join(fakeRoot, ".electrobun-uninstall.json"),
 	);
 	writeFileSync(join(fakeRoot, "app", "outside.keep"), "outside fake app\n");
@@ -1425,7 +1424,7 @@ function runLocationAndJunctionSafetyTests() {
 		cwd: fakeRoot,
 	});
 	assertFixtureUnchanged(
-		"production",
+		"stable",
 		realBefore,
 		"unexpected manager location mutated the real installation",
 	);
@@ -1435,7 +1434,7 @@ function runLocationAndJunctionSafetyTests() {
 		"unexpected manager location mutated its outside tree",
 	);
 
-	const paths = fixturePaths("production");
+	const paths = fixturePaths("stable");
 	const outsideApp = join(temporaryRoot, "junction-escape-target");
 	const outsideSentinel = join(outsideApp, "outside.keep");
 	mkdirSync(join(outsideApp, "bin"), { recursive: true });
@@ -1447,21 +1446,21 @@ function runLocationAndJunctionSafetyTests() {
 	assertExactOrChild(paths.root, paths.app, "junction fixture cleanup");
 	rmSync(paths.app, { force: true, recursive: true });
 	createJunction(paths.app, outsideApp);
-	const beforeJunctionAttempt = captureFixture("production");
-	runManagerExpectingFailure("production", ["--uninstall", "--quiet"]);
+	const beforeJunctionAttempt = captureFixture("stable");
+	runManagerExpectingFailure("stable", ["--uninstall", "--quiet"]);
 	assertFixtureUnchanged(
-		"production",
+		"stable",
 		beforeJunctionAttempt,
 		"junction rejection occurred after a mutation",
 	);
 	assert.equal(pathExists(outsideSentinel), true, "junction target was modified");
-	resetChannel("production");
+	resetChannel("stable");
 }
 
 function runLauncherDelegationTest() {
 	console.log("Testing launcher delegation before runtime startup...");
-	const installation = install("production");
-	const paths = seedState("production");
+	const installation = install("stable");
+	const paths = seedState("stable");
 	const result = runRaw(paths.launcher, ["--uninstall", "--quiet"], {
 		cwd: dirname(paths.launcher),
 		timeout: 45_000,
@@ -1490,19 +1489,14 @@ function runLauncherDelegationTest() {
 		"launcher-delegated uninstall",
 		35_000,
 	);
-	assertAppOnlyRemoved("production", installation);
-	resetChannel("production");
+	assertAppOnlyRemoved("stable", installation);
+	resetChannel("stable");
 }
 
 function runUpdateRefreshTest(extractor) {
 	console.log("Testing manager replacement and registration refresh after update...");
-	assert.equal(
-		pathExists(bunRuntime),
-		true,
-		"required staged Bun runtime is missing: " + bunRuntime,
-	);
-	const installation = install("production");
-	const paths = seedState("production");
+	const installation = install("stable");
+	const paths = seedState("stable");
 	const oldManagerHash = sha256File(paths.manager);
 	const oldNonce = installation.manifest.install_nonce;
 	const channelEntriesBeforeRefresh = readdirSync(paths.root).sort();
@@ -1510,7 +1504,7 @@ function runUpdateRefreshTest(extractor) {
 		join(paths.app, "Resources", "version.json"),
 		JSON.stringify(
 			{
-				channel: "production",
+				channel: "stable",
 				identifier,
 				name: appName,
 				version: updatedVersion,
@@ -1526,77 +1520,59 @@ function runUpdateRefreshTest(extractor) {
 	);
 	const newManagerHash = sha256File(paths.packagedManager);
 	assert.notEqual(newManagerHash, oldManagerHash);
-	const refreshBatch = join(
-		temporaryRoot,
-		"generated-update-refresh-" + token + ".bat",
+	const refreshStage = join(
+		windowsTemporaryDirectory,
+		"electrobun-uninstall-refresh-" + randomBytes(16).toString("hex") + ".exe",
 	);
-	// Importing Updater also loads the app runtime, which wraps process.exit and
-	// keeps native host polling alive. Capture Bun's original exit first, then
-	// flush the generated batch before terminating this one-shot process.
-	const generatorSource =
-		"const exitGenerator = process.exit.bind(process); " +
-		'const { createWindowsRegistrationRefreshBatch } = await import("./src/sdks/main/core/Updater.ts"); ' +
-		"const output = createWindowsRegistrationRefreshBatch(" +
-		JSON.stringify(paths.root) +
-		"); await Bun.write(Bun.stdout, output); exitGenerator(0);";
-	const generatedRefresh = run(bunRuntime, ["-e", generatorSource], {
-		cwd: packageRoot,
-		timeout: 30_000,
-	}).stdout;
-	assert.match(generatedRefresh, /--refresh-registration-from-update/);
-	writeFileSync(
-		refreshBatch,
-		"@echo off\r\nsetlocal DisableDelayedExpansion\r\n" +
-			generatedRefresh.replaceAll("\n", "\r\n") +
-			"\r\nexit /b %errorlevel%\r\n",
+	copyFileSync(extractor, refreshStage);
+	run(
+		refreshStage,
+		["--refresh-registration-from-update", paths.root, "--quiet"],
+		{ cwd: paths.root, timeout: 60_000 },
 	);
-	try {
-		run(process.env.ComSpec || "cmd.exe", ["/d", "/c", refreshBatch], {
-			cwd: paths.root,
-			timeout: 60_000,
-		});
-	} finally {
-		rmSync(refreshBatch, { force: true });
-	}
-	assert.equal(pathExists(refreshBatch), false, "generated refresh batch survived");
+	waitFor(
+		() => !pathExists(refreshStage),
+		"temporary update-refresh manager cleanup",
+		45_000,
+	);
 	waitFor(
 		() => pathExists(paths.manager) && sha256File(paths.manager) === newManagerHash,
 		"atomic Windows manager replacement",
 	);
-	const refreshedManifest = readManifest("production");
+	const refreshedManifest = readManifest("stable");
 	assert.notEqual(
 		refreshedManifest.install_nonce,
 		oldNonce,
 		"manager refresh did not rotate its install nonce",
 	);
-	assertRegistration("production", updatedVersion);
+	assertRegistration("stable", updatedVersion);
 	assert.deepEqual(
 		readdirSync(paths.root).sort(),
 		channelEntriesBeforeRefresh,
 		"manager refresh left an atomic staging file",
 	);
-	runManager("production", ["--quiet"]);
-	assertAppOnlyRemoved("production", {
+	runManager("stable", ["--quiet"]);
+	assertAppOnlyRemoved("stable", {
 		manifest: refreshedManifest,
 		paths,
 	});
-	resetChannel("production");
+	resetChannel("stable");
 }
 
 function runBootstrapInstallTest() {
 	console.log("Testing first-v2-launch install bootstrap...");
-	const installation = install("production");
+	const installation = install("stable");
 	const paths = installation.paths;
 	rmSync(paths.manager, { force: true });
 	rmSync(paths.manifest, { force: true });
 	rmSync(paths.desktopShortcut, { force: true });
 	rmSync(paths.startShortcut, { force: true });
-	deleteRegistry("production");
+	deleteRegistry("stable");
 	assert.equal(pathExists(paths.manager), false);
 	assert.equal(pathExists(paths.manifest), false);
 	assert.equal(pathExists(paths.desktopShortcut), false);
 	assert.equal(pathExists(paths.startShortcut), false);
-	assert.equal(registryExists("production"), false);
+	assert.equal(registryExists("stable"), false);
 	runPowerShell(
 		"$psi = [Diagnostics.ProcessStartInfo]::new(); " +
 			"$psi.FileName = " +
@@ -1612,29 +1588,29 @@ function runBootstrapInstallTest() {
 			"$stdout = $p.StandardOutput.ReadToEnd(); $stderr = $p.StandardError.ReadToEnd(); " +
 			"$p.WaitForExit(); [Console]::Out.Write($stdout); [Console]::Error.Write($stderr); exit $p.ExitCode",
 	);
-	assertInstalled("production", setups.get("production"));
-	runManager("production", ["--quiet", "--delete-data"]);
-	assertDataRemoved("production");
+	assertInstalled("stable", setups.get("stable"));
+	runManager("stable", ["--quiet", "--delete-data"]);
+	assertDataRemoved("stable");
 }
 
 function runNonceRaceTest() {
 	console.log("Testing deterministic stale-worker nonce protection...");
-	const first = install("production");
-	const paths = seedState("production");
+	const first = install("stable");
+	const paths = seedState("stable");
 	const sentinelContents = readFileSync(paths.userSentinel, "utf8");
 	const staleWorker = join(
 		windowsTemporaryDirectory,
 		"electrobun-uninstall-" + randomBytes(8).toString("hex") + ".exe",
 	);
 	copyFileSync(paths.manager, staleWorker);
-	const second = install("production", { allowExisting: true });
+	const second = install("stable", { allowExisting: true });
 	assert.notEqual(
 		second.manifest.install_nonce,
 		first.manifest.install_nonce,
 		"reinstall reused the previous install nonce",
 	);
 	assert.equal(readFileSync(paths.userSentinel, "utf8"), sentinelContents);
-	const beforeStaleWorker = captureFixture("production");
+	const beforeStaleWorker = captureFixture("stable");
 	run(staleWorker, [
 		"--cleanup-uninstaller",
 		paths.manager,
@@ -1643,24 +1619,24 @@ function runNonceRaceTest() {
 	]);
 	waitFor(() => !pathExists(staleWorker), "stale temporary worker self-cleanup");
 	assertFixtureUnchanged(
-		"production",
+		"stable",
 		beforeStaleWorker,
 		"stale worker mutated the reinstalled channel",
 	);
-	runManager("production", ["--quiet", "--delete-data"]);
-	assertDataRemoved("production");
+	runManager("stable", ["--quiet", "--delete-data"]);
+	assertDataRemoved("stable");
 }
 
 function runLegacyManifestTest() {
 	console.log("Testing legacy manifest and missing bundled-manager compatibility...");
-	const installation = install("production");
-	const paths = seedState("production");
+	const installation = install("stable");
+	const paths = seedState("stable");
 	const legacy = {
 		schema_version: 1,
 		install_nonce: installation.manifest.install_nonce,
 		identifier,
 		name: appName,
-		channel: "production",
+		channel: "stable",
 		desktop_shortcut: installation.manifest.desktop_shortcut,
 		start_menu_shortcut: installation.manifest.start_menu_shortcut,
 	};
@@ -1671,25 +1647,25 @@ function runLegacyManifestTest() {
 	writeFileSync(
 		join(paths.app, "Resources", "version.json"),
 		JSON.stringify({
-			channel: "production",
+			channel: "stable",
 			identifier,
 			name: appName,
 			version: updatedVersion,
 		}) + "\n",
 	);
-	runManager("production", ["--refresh-registration", "--quiet"]);
-	const refreshed = readManifest("production");
+	runManager("stable", ["--refresh-registration", "--quiet"]);
+	const refreshed = readManifest("stable");
 	assert.equal(sha256File(paths.manager), previousManagerHash);
 	assert.notEqual(refreshed.install_nonce, previousNonce);
 	assert.deepEqual(refreshed.data_path_versions, [1]);
-	assertRegistration("production", updatedVersion);
+	assertRegistration("stable", updatedVersion);
 	// Rewrite the original manifest shape to prove uninstall itself remains
 	// compatible after the legacy refresh fallback has also been exercised.
 	legacy.install_nonce = refreshed.install_nonce;
 	writeFileSync(paths.manifest, JSON.stringify(legacy, null, 2) + "\n");
-	runManager("production", ["--uninstall", "--quiet"]);
-	assertAppOnlyRemoved("production", { manifest: legacy, paths });
-	resetChannel("production");
+	runManager("stable", ["--uninstall", "--quiet"]);
+	assertAppOnlyRemoved("stable", { manifest: legacy, paths });
+	resetChannel("stable");
 }
 
 function startExclusiveFileHolder(path, readyPath) {
@@ -1725,8 +1701,8 @@ function stopProcessTree(child) {
 
 function runRetryRetentionTest() {
 	console.log("Testing retry retention after managed cleanup failure...");
-	install("production");
-	const paths = seedState("production");
+	install("stable");
+	const paths = seedState("stable");
 	const readyPath = join(temporaryRoot, "locked-update-ready-" + token);
 	const holder = startExclusiveFileHolder(paths.updateScript, readyPath);
 	try {
@@ -1747,40 +1723,40 @@ function runRetryRetentionTest() {
 			"cleanup failure removed the retry manifest",
 		);
 		assert.equal(
-			registryExists("production"),
+			registryExists("stable"),
 			true,
 			"cleanup failure removed the retry Installed Apps entry",
 		);
 	} finally {
 		stopProcessTree(holder);
 	}
-	runManager("production", ["--quiet"]);
-	waitForManagerCleanup("production");
-	assert.equal(registryExists("production"), false);
+	runManager("stable", ["--quiet"]);
+	waitForManagerCleanup("stable");
+	assert.equal(registryExists("stable"), false);
 	assert.equal(pathExists(paths.userSentinel), true);
-	resetChannel("production");
+	resetChannel("stable");
 }
 
 function runUserDataExecutableHijackTest() {
 	console.log("Testing app-only cleanup ignores user-data executable names...");
-	const installation = install("production");
-	const paths = seedState("production", { task: true });
+	const installation = install("stable");
+	const paths = seedState("stable", { task: true });
 	const fakePowerShell = join(paths.root, "powershell.exe");
 	const fakeScheduledTasks = join(paths.root, "schtasks.exe");
 	writeFileSync(fakePowerShell, "user data, not an executable\n");
 	writeFileSync(fakeScheduledTasks, "user data, not an executable\n");
 
-	runManager("production", ["--quiet"]);
-	assertAppOnlyRemoved("production", installation);
+	runManager("stable", ["--quiet"]);
+	assertAppOnlyRemoved("stable", installation);
 	assert.equal(pathExists(fakePowerShell), true);
 	assert.equal(pathExists(fakeScheduledTasks), true);
-	resetChannel("production");
+	resetChannel("stable");
 }
 
 function runDeferredWorkerRetryRetentionTest() {
 	console.log("Testing early deferred-worker failure retains retry registration...");
-	const installation = install("production");
-	const paths = seedState("production");
+	const installation = install("stable");
+	const paths = seedState("stable");
 	const workerPath = join(
 		windowsTemporaryDirectory,
 		"electrobun-uninstall-" + randomBytes(8).toString("hex") + ".exe",
@@ -1804,7 +1780,7 @@ function runDeferredWorkerRetryRetentionTest() {
 		assert.equal(pathExists(paths.manager), true);
 		assert.equal(pathExists(paths.manifest), true);
 		assert.equal(
-			registryExists("production"),
+			registryExists("stable"),
 			true,
 			"early worker failure removed the Installed Apps retry entry",
 		);
@@ -1812,16 +1788,16 @@ function runDeferredWorkerRetryRetentionTest() {
 		stopProcessTree(holder);
 	}
 	waitFor(() => !pathExists(workerPath), "failed worker self-cleanup", 45_000);
-	runManager("production", ["--quiet"]);
-	assertAppOnlyRemoved("production", installation);
-	resetChannel("production");
+	runManager("stable", ["--quiet"]);
+	assertAppOnlyRemoved("stable", installation);
+	resetChannel("stable");
 }
 
 function runPrivateCleanupLocationSafetyTest() {
 	console.log("Testing private cleanup rejects installed/arbitrary manager locations...");
-	const installation = install("production");
-	const paths = seedState("production");
-	const before = captureFixture("production");
+	const installation = install("stable");
+	const paths = seedState("stable");
+	const before = captureFixture("stable");
 	const installedResult = runRaw(
 		paths.manager,
 		[
@@ -1835,7 +1811,7 @@ function runPrivateCleanupLocationSafetyTest() {
 	if (installedResult.error) throw installedResult.error;
 	assert.notEqual(installedResult.status, 0);
 	assertFixtureUnchanged(
-		"production",
+		"stable",
 		before,
 		"installed manager accepted a private cleanup command",
 	);
@@ -1859,14 +1835,14 @@ function runPrivateCleanupLocationSafetyTest() {
 	assert.notEqual(copiedResult.status, 0);
 	assert.equal(pathExists(arbitraryManager), true, "arbitrary copy self-deleted");
 	assertFixtureUnchanged(
-		"production",
+		"stable",
 		before,
 		"arbitrary copied manager mutated the installation",
 	);
 	unlinkSync(arbitraryManager);
-	runManager("production", ["--quiet"]);
-	assertAppOnlyRemoved("production", installation);
-	resetChannel("production");
+	runManager("stable", ["--quiet"]);
+	assertAppOnlyRemoved("stable", installation);
+	resetChannel("stable");
 }
 
 function runInteractiveTests() {
@@ -1878,55 +1854,55 @@ function runInteractiveTests() {
 			: "Follow each instruction exactly; the harness verifies the result.",
 	);
 
-	let installation = install("production");
-	seedState("production");
-	let before = captureFixture("production");
+	let installation = install("stable");
+	seedState("stable");
+	let before = captureFixture("stable");
 	console.log("\n1/4: Close the dialog with its X button.");
 	if (automated) {
-		automateTaskDialog("production", [], "close");
+		automateTaskDialog("stable", [], "close");
 	} else {
-		runManager("production", [], { timeout: 600_000, windowsHide: false });
+		runManager("stable", [], { timeout: 600_000, windowsHide: false });
 	}
-	assertFixtureUnchanged("production", before, "window close was not Cancel");
+	assertFixtureUnchanged("stable", before, "window close was not Cancel");
 
-	before = captureFixture("production");
+	before = captureFixture("stable");
 	console.log("\n2/4: Click Cancel.");
 	if (automated) {
-		automateTaskDialog("production", ["--uninstall"], "Cancel");
+		automateTaskDialog("stable", ["--uninstall"], "Cancel");
 	} else {
-		runManager("production", ["--uninstall"], {
+		runManager("stable", ["--uninstall"], {
 			timeout: 600_000,
 			windowsHide: false,
 		});
 	}
-	assertFixtureUnchanged("production", before, "Cancel mutated installation");
+	assertFixtureUnchanged("stable", before, "Cancel mutated installation");
 
 	if (automated) {
 		console.log("\n2b/4: Press Enter to verify App is the effective default.");
-		automateTaskDialog("production", [], "default");
-		assertAppOnlyRemoved("production", installation);
-		resetChannel("production");
-		installation = install("production");
-		seedState("production");
+		automateTaskDialog("stable", [], "default");
+		assertAppOnlyRemoved("stable", installation);
+		resetChannel("stable");
+		installation = install("stable");
+		seedState("stable");
 	}
 
 	console.log("\n3/4: Click App and Data.");
 	if (automated) {
-		automateTaskDialog("production", [], "App and Data");
+		automateTaskDialog("stable", [], "App and Data");
 	} else {
-		runManager("production", [], { timeout: 600_000, windowsHide: false });
+		runManager("stable", [], { timeout: 600_000, windowsHide: false });
 	}
-	assertDataRemoved("production");
+	assertDataRemoved("stable");
 
-	installation = install("production");
-	seedState("production");
+	installation = install("stable");
+	seedState("stable");
 	console.log(
 		"\n4/4: Settings will open. Find " +
 			appName +
 			", click Uninstall, then click App.",
 	);
 	if (automated) {
-		automateInstalledAppsUninstall("production");
+		automateInstalledAppsUninstall("stable");
 	} else {
 		spawn("cmd.exe", ["/d", "/c", "start", "", "ms-settings:appsfeatures"], {
 			detached: true,
@@ -1935,17 +1911,17 @@ function runInteractiveTests() {
 		}).unref();
 	}
 	waitFor(
-		() => !pathExists(fixturePaths("production").manager),
+		() => !pathExists(fixturePaths("stable").manager),
 		"Installed Apps interactive uninstall",
 		600_000,
 	);
-	assertAppOnlyRemoved("production", installation);
-	resetChannel("production");
+	assertAppOnlyRemoved("stable", installation);
+	resetChannel("stable");
 	console.log("Interactive TaskDialog validation passed.");
 }
 
 function cleanupEverything() {
-	for (const channel of ["production", "canary"]) {
+	for (const channel of ["stable", "canary"]) {
 		try {
 			resetChannel(channel);
 		} catch (error) {
@@ -1974,7 +1950,7 @@ try {
 	assert.equal(pathExists(identifierRoot), false, "fixture identifier already exists");
 	assert.equal(pathExists(unrelatedRoot), false, "unrelated fixture identifier exists");
 	assert.equal(pathExists(unrelatedShortcut), false, "fixture shortcut collision");
-	for (const channel of ["production", "canary"]) {
+	for (const channel of ["stable", "canary"]) {
 		assert.equal(registryExists(channel), false, "fixture registry collision");
 		assert.equal(taskExists(channel), false, "fixture task collision");
 		assert.equal(pathExists(expectedDesktopShortcut(channel)), false);
@@ -1999,7 +1975,7 @@ try {
 		assert.equal(pathExists(path), true, "required test binary is missing: " + path);
 	}
 
-	buildSetup("production", extractor, launcher, zigZstd);
+	buildSetup("stable", extractor, launcher, zigZstd);
 	buildSetup("canary", extractor, launcher, zigZstd);
 	if (focusedTest === "bootstrap") {
 		runBootstrapInstallTest();
@@ -2008,7 +1984,7 @@ try {
 	} else if (focusedTest === "interactive") {
 		runInteractiveTests();
 	} else if (focusedTest === "installer-ui") {
-		automateInstallerUi("production");
+		automateInstallerUi("stable");
 	} else {
 		runStrictCliAndCleanupTests();
 		runBootstrapInstallTest();

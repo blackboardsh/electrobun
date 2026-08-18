@@ -193,7 +193,7 @@ test("warm offline bootstrap still delegates to Hutch", async () => {
 	};
 
 	const status = await bootstrap.main({
-		args: ["build", "--env=production"],
+		args: ["build", "--env=stable"],
 		environment,
 		existsSync: () => true,
 		installHutch: async () => {
@@ -211,7 +211,7 @@ test("warm offline bootstrap still delegates to Hutch", async () => {
 	assert.equal(installCalls, 0);
 	assert.deepEqual(calls, [
 		{
-			args: ["build", "--env=production"],
+			args: ["build", "--env=stable"],
 			binary: "/home/dev/.dash/bin/hutch",
 			environment,
 		},

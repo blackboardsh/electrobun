@@ -2686,7 +2686,7 @@ runSmokeTest :: proc() -> string {
 
 runAppPackagedModeReflectsBuildChannelTest :: proc(state: ^AppState) -> string {
 	channel := state.app_info.channel
-	if channel != "dev" && channel != "canary" && channel != "production" {
+	if channel != "dev" && channel != "canary" && channel != "stable" {
 		return "UnexpectedBuildChannel"
 	}
 

@@ -1,4 +1,4 @@
-// @hutch cli=0.12.0 cottontail=0.5.0
+// @hutch cli=0.13.0 cottontail=0.5.0
 export default {
 	electrobun: {
 		version: "2.0.1-beta.15",
@@ -20,8 +20,8 @@ export default {
 		"check:odin-mirrors": ["hutch", "scripts/check-odin-test-mirrors.ts"],
 		"build:canary":
 			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
-		"build:production":
-			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=production",
+		"build:stable":
+			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=stable",
 		"start:canary": ["hutch", "electrobun", "dev", "--env=canary"],
 	},
 };

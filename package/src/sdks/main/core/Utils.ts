@@ -5,6 +5,7 @@ import { isAbsolute, join, posix, resolve, win32 } from "node:path";
 import { lstatSync, readFileSync } from "node:fs";
 import { OS, type SupportedOS } from "../../../shared/platform";
 import { decodeDialogPaths } from "../../../shared/dialog-paths";
+import { isBuildEnvironment } from "../../../shared/naming";
 
 export const moveToTrash = (path: string) => {
 	return ffi.request.moveToTrash({ path });
@@ -507,7 +508,8 @@ export function resolveInstalledRootNameForPaths(
 ): string {
 	if (
 		!safeManagedRootName(info.identifier, platform) ||
-		!safeManagedRootName(info.channel, platform)
+		!safeManagedRootName(info.channel, platform) ||
+		!isBuildEnvironment(info.channel)
 	) {
 		return "";
 	}
@@ -531,12 +533,11 @@ export function resolveInstalledRootNameForPaths(
 		return info.channel;
 	}
 
-	const candidateNames = [info.channel];
-	if (info.channel === "production") candidateNames.push("stable");
+	const candidateNames: string[] = [info.channel];
 	if (safeManagedRootName(info.name, "macos")) candidateNames.push(info.name);
 	if (safeManagedRootName(info.displayName, "macos")) {
 		candidateNames.push(
-			info.channel === "production"
+			info.channel === "stable"
 				? info.displayName
 				: `${info.displayName}-${info.channel}`,
 		);

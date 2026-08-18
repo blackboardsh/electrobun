@@ -178,32 +178,22 @@ test("build verifies the downloaded and staged Bun before manifest emission", ()
 	assert.ok(stagedVerification !== -1 && stagedVerification < manifestStart);
 });
 
-test("Windows uninstaller integration uses the staged Bun runtime", () => {
+test("Windows uninstaller integration exercises the native update-refresh worker", () => {
 	const integrationSource = readFileSync(
 		new URL("./test-windows-uninstaller.mjs", import.meta.url),
 		"utf8",
 	);
 
+	assert.match(integrationSource, /const refreshStage = join\(/);
 	assert.match(
 		integrationSource,
-		/const bunRuntime = join\(packageRoot, "dist", "bun\.exe"\);/,
+		/"electrobun-uninstall-refresh-" \+ randomBytes\(16\)\.toString\("hex"\) \+ "\.exe"/,
 	);
-	assert.match(integrationSource, /run\(bunRuntime, \["-e", generatorSource\]/);
-	assert.doesNotMatch(integrationSource, /run\(["']bun["'], \["-e"/);
-
-	const captureExit = integrationSource.indexOf(
-		'"const exitGenerator = process.exit.bind(process); "',
+	assert.match(integrationSource, /copyFileSync\(extractor, refreshStage\)/);
+	assert.match(
+		integrationSource,
+		/\["--refresh-registration-from-update", paths\.root, "--quiet"\]/,
 	);
-	const importUpdater = integrationSource.indexOf(
-		'await import("./src/sdks/main/core/Updater.ts")',
-	);
-	const flushStdout = integrationSource.indexOf(
-		"await Bun.write(Bun.stdout, output)",
-	);
-	const exitGenerator = integrationSource.indexOf("exitGenerator(0)");
-
-	assert.ok(captureExit !== -1, "generator must capture the original process exit");
-	assert.ok(importUpdater > captureExit, "generator must capture exit before importing Updater");
-	assert.ok(flushStdout > importUpdater, "generator must await its stdout write");
-	assert.ok(exitGenerator > flushStdout, "generator must exit only after stdout is flushed");
+	assert.match(integrationSource, /"temporary update-refresh manager cleanup"/);
+	assert.doesNotMatch(integrationSource, /createWindowsRegistrationRefreshBatch/);
 });

@@ -107,6 +107,7 @@ const run = async () => {
 	}
 	const releaseSequence = [
 		control.initialVersion,
+		control.intermediateVersion,
 		control.patchTargetVersion,
 		control.fallbackTargetVersion,
 	];
@@ -126,7 +127,7 @@ const run = async () => {
 		normalizePath(runningAppBundlePath) ===
 			normalizePath(control.appBundlePath);
 	// Setup may relaunch v1 as part of installation. The harness activates the
-	// updater only after it has prepared the selected modern or legacy scope.
+	// updater only after it has prepared the v1-compatible stable scope.
 	if (!existsSync(control.updateActivationPath)) {
 		appendEvent("ignored-installer-relaunch", localInfo.version, {
 			appDataFolder,
@@ -269,7 +270,14 @@ const run = async () => {
 		return;
 	}
 
-	if (targetIndex !== currentIndex + 1) {
+	const supportedTransition =
+		(localInfo.version === control.initialVersion &&
+			activation.targetVersion === control.patchTargetVersion &&
+			targetIndex === currentIndex + 2) ||
+		(localInfo.version === control.patchTargetVersion &&
+			activation.targetVersion === control.fallbackTargetVersion &&
+			targetIndex === currentIndex + 1);
+	if (!supportedTransition) {
 		throw new Error(
 			`unsupported fixture update transition ${localInfo.version} -> ${activation.targetVersion}`,
 		);

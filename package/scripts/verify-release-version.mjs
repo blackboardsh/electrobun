@@ -74,7 +74,7 @@ export function verifyReleaseVersion({
 		tag,
 		version,
 		prerelease,
-		environment: prerelease ? "canary" : "production",
+		environment: prerelease ? "canary" : "stable",
 		npmDistTag: prerelease ? "beta" : "latest",
 	};
 }

@@ -154,9 +154,10 @@ pub const AppInfo = struct {
     name: []const u8,
     channel: []const u8,
 
-    /// False for dev builds; true for nonempty release channels.
+    /// True only for the canonical stable and canary release channels.
     pub fn isPackaged(self: AppInfo) bool {
-        return self.channel.len > 0 and !std.mem.eql(u8, self.channel, "dev");
+        return std.mem.eql(u8, self.channel, "stable") or
+            std.mem.eql(u8, self.channel, "canary");
     }
 };
 
@@ -166,7 +167,8 @@ test "AppInfo packaged mode reflects build channel" {
     try std.testing.expect(!base.isPackaged());
     try std.testing.expect(!(AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "dev" }).isPackaged());
     try std.testing.expect((AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "canary" }).isPackaged());
-    try std.testing.expect((AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "production" }).isPackaged());
+    try std.testing.expect((AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "stable" }).isPackaged());
+    try std.testing.expect(!(AppInfo{ .identifier = base.identifier, .name = base.name, .channel = "production" }).isPackaged());
 }
 
 pub const OwnedAppInfo = struct {

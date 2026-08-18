@@ -6,7 +6,7 @@ description: "Publish update artifacts and automate cross-platform releases."
 Shipping updates in Electrobun doesn't require an update server — updates are
 just static files. Hutch creates the update metadata, compressed full bundle,
 and an optional delta patch at build time; the application-side `Updater`
-checks, verifies, and installs them. Anything that serves files over HTTPS
+checks, downloads, and installs them. Anything that serves files over HTTPS
 works as the host: R2, S3, GitHub Releases, or a plain static server.
 
 This page covers the publishing side — where artifacts go and how to automate
@@ -33,38 +33,36 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-A production macOS ARM64 build checks
-`production-macos-arm64-update.json`; a canary Windows x64 build checks
+A stable macOS ARM64 build checks
+`stable-macos-arm64-update.json`; a canary Windows x64 build checks
 `canary-win-x64-update.json`. Upload `artifacts/` without renaming its files.
 
-The metadata names the exact `.tar.zst` artifact and includes its byte size and
-SHA-256. The updater rejects mismatched metadata, targets, or archive bytes
-before preparing an update.
+The metadata names the exact `.tar.zst` artifact. When Hutch can reach the
+previous release it also creates a patch named after that release's bundle
+hash. The updater starts with its retained current tar, applies
+`<channel>-<os>-<arch>-<current-hash>.patch`, reads the next hash from the
+result, and follows the chain until it reaches the hash in `update.json`.
+A missing or failed edge discards the attempted chain and downloads the latest
+full archive instead. Hosts should retain old hash-named patches and return a
+normal `404` for unavailable ones.
 
-When Hutch can reach the previous release, the metadata also names a patch for
-that exact source hash and pins the patch and reconstructed target tar by size
-and SHA-256. The updater uses it only when the installed retained tar matches
-the declared source. A missing, invalid, or failed patch falls back to the
-authenticated full archive; hosts should return a normal `404` for unavailable
-patch files.
+The bundle hash is a release-routing identifier, not a code-signing or
+content-authentication mechanism. Serve updates over HTTPS and sign distributed
+applications with the platform's normal code-signing system when authenticity
+is required.
 
 The identity fields used by Electrobun 1.x (`version`, `hash`, `platform`, and
-`arch`) remain at the top level. Together with the production aliases described
-below, those additive fields provide a one-time bridge for Electrobun v1.18.1
-and later. For the bridge release, keep `app.name` and `app.identifier`
+`arch`) remain at the top level, and `stable` remains the main release channel.
+That lets Electrobun v1.18.1 and later consume a 2.0 release directly. For the
+bridge release, keep `app.name` and `app.identifier`
 unchanged and publish it at the `release.baseUrl` embedded in the installed 1.x
 app. Older prereleases used updater or payload layouts that are not universally
 bridgeable; install the 2.0 release normally for those users.
 
-Production releases also include `stable-*` aliases for the metadata and update
-payloads requested by compatible 1.x clients. After a supported transition,
-the installed 2.0 app uses the `production` channel name while preserving the
-actual 1.x `stable` state root. It creates
-the 2.0 update/uninstall manager metadata in that existing root, so those users
-do not need to reinstall first.
-
-Patch metadata is additive, so the full archive remains the canonical fallback
-and the v1.18.1 bridge fields remain at the top level.
+On its first 2.0 launch, an app delivered by the v1 updater creates the new
+update/uninstall manager metadata in its existing `stable` root. Its user data,
+browser profiles, update state, and future update URLs therefore stay on the
+same channel without a translation layer or reinstall.
 
 ## Release Tags
 
@@ -76,8 +74,8 @@ my-app/v2.0.0-canary.1
 my-app/v2.0.0
 ```
 
-These are independent releases. A production artifact is built from its own
-tag; a canary artifact is never promoted into production. Keep the version in
+These are independent releases. A stable artifact is built from its own tag;
+a canary artifact is never promoted into stable. Keep the version in
 `electrobun.config.ts` aligned with the tag.
 
 ## GitHub Actions Matrix
@@ -139,7 +137,7 @@ jobs:
           if [[ "${{ github.ref_name }}" == *"-canary."* ]]; then
             echo "value=canary" >> "$GITHUB_OUTPUT"
           else
-            echo "value=production" >> "$GITHUB_OUTPUT"
+            echo "value=stable" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Install dependencies
@@ -187,7 +185,7 @@ for their values.
 
 ## GitHub Releases As The Host
 
-For production-only updates, `release.baseUrl` can use GitHub's latest release
+For stable-only updates, `release.baseUrl` can use GitHub's latest release
 redirect:
 
 ```typescript

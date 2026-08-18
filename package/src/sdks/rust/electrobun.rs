@@ -200,9 +200,9 @@ pub struct AppInfo {
 }
 
 impl AppInfo {
-    /// Returns false for dev builds and true for nonempty release channels.
+    /// Returns true only for the canonical stable and canary release channels.
     pub fn is_packaged(&self) -> bool {
-        !self.channel.is_empty() && self.channel != "dev"
+        matches!(self.channel.as_str(), "stable" | "canary")
     }
 }
 
@@ -1084,14 +1084,12 @@ impl Core {
         // JS SDK applies at startup too. The core only acts on it when a
         // quit-requested handler is registered, so install one as well.
         unsafe {
-            (symbols.set_exit_on_last_window_closed)(
-                exit_on_last_window_closed_from_build_config(&bundle_paths),
-            );
+            (symbols.set_exit_on_last_window_closed)(exit_on_last_window_closed_from_build_config(
+                &bundle_paths,
+            ));
         }
-        QUIT_REQUESTED_STOP_EVENT_LOOP.store(
-            symbols.stop_event_loop as *mut c_void,
-            Ordering::Release,
-        );
+        QUIT_REQUESTED_STOP_EVENT_LOOP
+            .store(symbols.stop_event_loop as *mut c_void, Ordering::Release);
         QUIT_REQUESTED_USER_HANDLER.store(ptr::null_mut(), Ordering::Release);
         unsafe {
             (symbols.set_quit_requested_handler)(Some(quit_requested_trampoline));
@@ -2620,7 +2618,7 @@ fn effective_install_root_name(fallback: &str) -> String {
 
 #[cfg(test)]
 mod install_root_name_tests {
-    use super::is_safe_install_root_name;
+    use super::{is_safe_install_root_name, AppInfo};
 
     #[test]
     fn validates_launcher_install_root_leaf() {
@@ -2628,6 +2626,26 @@ mod install_root_name_tests {
         assert!(is_safe_install_root_name("Legacy App"));
         for invalid in ["", ".", "..", "nested/root", "nested\\root", "line\nbreak"] {
             assert!(!is_safe_install_root_name(invalid));
+        }
+    }
+
+    #[test]
+    fn packaged_mode_uses_canonical_release_channels() {
+        for channel in ["stable", "canary"] {
+            assert!(AppInfo {
+                identifier: String::new(),
+                name: String::new(),
+                channel: channel.to_string(),
+            }
+            .is_packaged());
+        }
+        for channel in ["", "dev", "production", "nightly"] {
+            assert!(!AppInfo {
+                identifier: String::new(),
+                name: String::new(),
+                channel: channel.to_string(),
+            }
+            .is_packaged());
         }
     }
 }

@@ -94,6 +94,10 @@ fn launcherProcessId() u32 {
         @intCast(c.getpid());
 }
 
+fn isDevelopmentChannel(channel: []const u8) bool {
+    return !uninstall.isBuildChannel(channel) or std.mem.eql(u8, channel, "dev");
+}
+
 // Check if this is a dev build by reading version.json
 fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     // Build path to version.json: exe_dir/../Resources/version.json
@@ -110,7 +114,7 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
 
     if (parsed.value.object.get("channel")) |channel_value| {
         if (channel_value == .string) {
-            return std.mem.eql(u8, channel_value.string, "dev");
+            return isDevelopmentChannel(channel_value.string);
         }
     }
 
@@ -369,9 +373,9 @@ fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env
         if (value == .string) try env_map.put("COTTONTAIL_ELECTROBUN_IDENTIFIER", value.string);
     }
     if (parsed.value.object.get("channel")) |value| {
-        if (value == .string) try env_map.put(
+        if (value == .string and uninstall.isBuildChannel(value.string)) try env_map.put(
             "COTTONTAIL_ELECTROBUN_CHANNEL",
-            env_map.get(uninstall.install_root_name_environment_variable) orelse value.string,
+            value.string,
         );
     }
 }
@@ -711,4 +715,12 @@ pub fn main(init: std.process.Init) !void {
             },
         }
     }
+}
+
+test "launcher treats only canonical release channels as packaged" {
+    try std.testing.expect(!isDevelopmentChannel("stable"));
+    try std.testing.expect(!isDevelopmentChannel("canary"));
+    try std.testing.expect(isDevelopmentChannel("dev"));
+    try std.testing.expect(isDevelopmentChannel("production"));
+    try std.testing.expect(isDevelopmentChannel("nightly"));
 }

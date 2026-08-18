@@ -19,9 +19,9 @@ hutch push:beta
 
 To exercise install, update, relaunch, and uninstall directly on the current
 native platform before the release task, run `hutch test:updater-lifecycle`
-from `package/`. The shared lifecycle builds three releases, verifies one
-authenticated patch-only update, verifies a second update falls back to the
-full archive when its advertised patch returns `404`, and then uninstalls.
+from `package/`. The shared lifecycle builds four releases, verifies an app two
+versions behind follows a two-patch chain, verifies the next update falls back
+to the full archive when its patch returns `404`, and then uninstalls.
 
 Before the first 2.0 release, also smoke-test one real v1.18.1 installation
 updating to the 2.0 release candidate. Keep `app.name`, `app.identifier`, and

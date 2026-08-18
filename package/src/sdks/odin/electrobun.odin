@@ -125,9 +125,9 @@ borrowed :: proc(self: OwnedAppInfo) -> AppInfo {
 	return {identifier = self.identifier, name = self.name, channel = self.channel}
 }
 
-// False for dev builds; true for nonempty release channels.
+// True only for the canonical stable and canary release channels.
 appInfoIsPackaged :: proc(app_info: AppInfo) -> bool {
-	return len(app_info.channel) > 0 && app_info.channel != "dev"
+	return app_info.channel == "stable" || app_info.channel == "canary"
 }
 
 Rect :: struct {

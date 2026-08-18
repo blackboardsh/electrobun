@@ -9,7 +9,7 @@ const appName = requiredEnvironment("ELECTROBUN_UPDATER_E2E_NAME");
 const identifier = requiredEnvironment("ELECTROBUN_UPDATER_E2E_IDENTIFIER");
 const baseUrl = requiredEnvironment("ELECTROBUN_UPDATER_E2E_BASE_URL");
 
-if (!["1.0.0", "2.0.0", "3.0.0"].includes(version)) {
+if (!["1.0.0", "2.0.0", "3.0.0", "4.0.0"].includes(version)) {
 	throw new Error(`unsupported updater lifecycle fixture version: ${version}`);
 }
 

@@ -7,6 +7,8 @@ describe("BuildConfig runtime mode", () => {
 		expect(isPackagedBuildChannel("")).toBe(false);
 		expect(isPackagedBuildChannel("dev")).toBe(false);
 		expect(isPackagedBuildChannel("canary")).toBe(true);
-		expect(isPackagedBuildChannel("production")).toBe(true);
+		expect(isPackagedBuildChannel("stable")).toBe(true);
+		expect(isPackagedBuildChannel("production")).toBe(false);
+		expect(isPackagedBuildChannel("nightly")).toBe(false);
 	});
 });

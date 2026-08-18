@@ -588,9 +588,8 @@ void userLogs;
 `userData`, `userCache`, and `userLogs` include the packaged app identifier and
 physical install-root name (`<base>/<identifier>/<install-root>`) — the same
 layout on every runtime. The install-root name normally matches the packaged
-release channel. An app updated from Electrobun v1.18.1+ production
-install keeps its existing `stable` root even though its 2.x metadata uses the
-logical `production` channel; this preserves its data, browser profile, and
+release channel. An app updated from a supported Electrobun v1 release keeps
+its existing physical root; this preserves its data, browser profile, and
 update state in place. In a development run, malformed or missing package
 metadata can produce empty identifier/root path components. The native SDKs
 resolve the same fields through their `Paths` type — see the tabbed examples on

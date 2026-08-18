@@ -1307,7 +1307,7 @@ func runGoTestBody(test goTest) error {
 func runAppPackagedModeReflectsBuildChannelTest() error {
 	channel := state.appInfo.Channel
 	switch channel {
-	case "dev", "canary", "production":
+	case "dev", "canary", "stable":
 	default:
 		return fmt.Errorf("unexpected app build channel %q", channel)
 	}

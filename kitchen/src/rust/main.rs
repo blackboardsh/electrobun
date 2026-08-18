@@ -1605,7 +1605,7 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
 
 fn run_app_packaged_mode_test() -> Result<(), String> {
     let app_info = &app_state().app_info;
-    if !matches!(app_info.channel.as_str(), "dev" | "canary" | "production") {
+    if !matches!(app_info.channel.as_str(), "dev" | "canary" | "stable") {
         return Err(format!("unexpected build channel: {}", app_info.channel));
     }
 

@@ -2,7 +2,7 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import {
 	chmodSync,
 	copyFileSync,
@@ -15,7 +15,6 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
-	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -27,15 +26,16 @@ import { fileURLToPath } from "node:url";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
-const PATCH_TARGET_VERSION = "2.0.0";
-const FALLBACK_TARGET_VERSION = "3.0.0";
+const INTERMEDIATE_VERSION = "2.0.0";
+const PATCH_TARGET_VERSION = "3.0.0";
+const FALLBACK_TARGET_VERSION = "4.0.0";
 const RELEASE_VERSIONS = [
 	INITIAL_VERSION,
+	INTERMEDIATE_VERSION,
 	PATCH_TARGET_VERSION,
 	FALLBACK_TARGET_VERSION,
 ];
-const CHANNEL = "production";
-const LEGACY_CHANNEL_ROOT_NAME = "stable";
+const CHANNEL = "stable";
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 const RESULT_PATTERN = /^\.electrobun-update-([0-9a-f]{32})\.result\.json$/;
 const PLAN_PATTERN = /^\.electrobun-update-([0-9a-f]{32})\.json$/;
@@ -60,8 +60,8 @@ const serverRoot = join(temporaryRoot, "server");
 const signalDirectory = join(temporaryRoot, "signals");
 const eventLogPath = join(signalDirectory, "events.jsonl");
 const failurePath = join(signalDirectory, "failure.json");
-const patchRelaunchSentinelPath = join(signalDirectory, "v2-relaunched.json");
-const fallbackRelaunchSentinelPath = join(signalDirectory, "v3-relaunched.json");
+const patchRelaunchSentinelPath = join(signalDirectory, "v3-relaunched.json");
+const fallbackRelaunchSentinelPath = join(signalDirectory, "v4-relaunched.json");
 const updateActivationPath = join(signalDirectory, "activate-update");
 const bootstrapVerificationPath = join(signalDirectory, "verify-v2-bootstrap");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
@@ -71,7 +71,7 @@ const timeoutMs = Number(
 	process.env.ELECTROBUN_UPDATER_E2E_TIMEOUT_MS || DEFAULT_TIMEOUT_MS,
 );
 const keepTemporary = process.env.ELECTROBUN_UPDATER_E2E_KEEP === "1";
-const migrationEnabled =
+const v1CompatibilitySimulationEnabled =
 	process.env.ELECTROBUN_UPDATER_E2E_MIGRATION !== "0";
 const devkitRoot = resolve(
 	process.env.HUTCH_ELECTROBUN_DEVKIT_ROOT || join(packageRoot, "dist"),
@@ -98,28 +98,18 @@ assert.equal(
 
 const platform = platformAdapter();
 const profile = platform.createProfile(temporaryRoot, identifier);
-const modernChannelRoot = profile.channelRoot;
-const legacyChannelRoot = platform.legacyChannelRoot(profile, appName);
-const expectedUpdateRoot = migrationEnabled
-	? legacyChannelRoot
-	: modernChannelRoot;
-const expectedUpdateAppBundlePath = platform.appBundlePath(
-	profile,
-	appName,
-	expectedUpdateRoot,
-);
+const channelRoot = profile.channelRoot;
+const appBundlePath = platform.appBundlePath(profile, appName, channelRoot);
 const expectedBrowserProfileRoot =
 	process.platform === "linux"
 		? join(
 				profile.home,
 				".cache",
 				identifier,
-				basename(expectedUpdateRoot),
+				basename(channelRoot),
 				"CEF",
 			)
-		: join(expectedUpdateRoot, "CEF");
-let channelRoot = modernChannelRoot;
-let appBundlePath = platform.appBundlePath(profile, appName, channelRoot);
+		: join(channelRoot, "CEF");
 const requests = [];
 const backgroundChildren = new Set();
 let launcherFailure;
@@ -138,7 +128,7 @@ function parseFocus(args) {
 				"Usage: node scripts/test-updater-lifecycle.mjs [--focus=build|install|update|uninstall|full]\n" +
 					"Environment: ELECTROBUN_UPDATER_E2E_HUTCH=<launcher> selects a local Hutch launcher; " +
 					"HUTCH_ENGINE_BINARY=<engine> overrides its engine; " +
-					"ELECTROBUN_UPDATER_E2E_MIGRATION=0 disables the v1 root/manager migration; " +
+					"ELECTROBUN_UPDATER_E2E_MIGRATION=0 disables the v1 manager/manifest compatibility simulation; " +
 					"ELECTROBUN_UPDATER_E2E_KEEP=1 preserves the isolated temporary root.",
 			);
 			process.exit(0);
@@ -193,12 +183,6 @@ function assertWithin(root, candidate, label) {
 
 function readJson(path) {
 	return JSON.parse(readFileSync(path, "utf8"));
-}
-
-async function sha256File(path) {
-	const hash = createHash("sha256");
-	for await (const chunk of createReadStream(path)) hash.update(chunk);
-	return hash.digest("hex");
 }
 
 function copyDirectoryContents(source, destination) {
@@ -426,11 +410,12 @@ function createFixtureProject(projectRoot, builtVersion) {
 		identifier,
 		builtVersion,
 		initialVersion: INITIAL_VERSION,
+		intermediateVersion: INTERMEDIATE_VERSION,
 		patchTargetVersion: PATCH_TARGET_VERSION,
 		fallbackTargetVersion: FALLBACK_TARGET_VERSION,
 		channel: CHANNEL,
-		channelRoot: expectedUpdateRoot,
-		appBundlePath: expectedUpdateAppBundlePath,
+		channelRoot,
+		appBundlePath,
 		browserProfileRoot: expectedBrowserProfileRoot,
 		signalDirectory,
 		eventLogPath,
@@ -478,7 +463,7 @@ async function buildRelease(version, baseUrl, label, previousRelease) {
 		releaseMarker,
 		"utf8",
 	);
-	await run(hutchLauncher, ["electrobun", "build", "--env=production"], {
+	await run(hutchLauncher, ["electrobun", "build", "--env=stable"], {
 		cwd: projectRoot,
 		env: buildEnvironment(version, baseUrl),
 		label: `build ${label} (${version})`,
@@ -500,14 +485,12 @@ async function buildRelease(version, baseUrl, label, previousRelease) {
 async function inspectArtifacts(root, version, label, previousRelease) {
 	const names = readdirSync(root);
 	const releasePrefix = `${CHANNEL}-${platform.updatePlatform}-${platform.updateArch}`;
-	const stablePrefix = `${LEGACY_CHANNEL_ROOT_NAME}-${platform.updatePlatform}-${platform.updateArch}`;
+	const installerPrefix = `${platform.updatePlatform}-${platform.updateArch}-`;
 	const updatePath = join(root, `${releasePrefix}-update.json`);
-	const stableUpdatePath = join(root, `${stablePrefix}-update.json`);
-	assert.equal(pathExists(updatePath), true, `${label} production update metadata`);
-	assert.equal(pathExists(stableUpdatePath), true, `${label} stable update alias`);
+	assert.equal(pathExists(updatePath), true, `${label} stable update metadata`);
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith("-update.json"))),
-		new Set([basename(updatePath), basename(stableUpdatePath)]),
+		new Set([basename(updatePath)]),
 		`${label} update metadata names`,
 	);
 	const metadata = readJson(updatePath);
@@ -527,6 +510,16 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 		/electrobun/i,
 		`${label} installer leaked a framework brand`,
 	);
+	assert.equal(
+		basename(installerPath).startsWith(installerPrefix),
+		true,
+		`${label} stable installer must use the unprefixed main-release name`,
+	);
+	assert.equal(
+		basename(installerPath).startsWith(`${CHANNEL}-`),
+		false,
+		`${label} stable installer unexpectedly has a channel prefix`,
+	);
 	assert.equal(metadata.schemaVersion, 1, `${label} metadata schema`);
 	assert.equal(metadata.identifier, identifier, `${label} metadata identifier`);
 	assert.equal(metadata.channel, CHANNEL, `${label} metadata channel`);
@@ -536,143 +529,39 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 	assert.match(metadata.hash, /^[a-z0-9_-]+$/, `${label} metadata hash`);
 	assert.equal(metadata.artifact?.file, basename(archivePath), `${label} artifact filename`);
 	assert.equal(
-		Number.isSafeInteger(metadata.artifact?.size) && metadata.artifact.size > 0,
+		metadata.artifact.file.startsWith(`${releasePrefix}-`),
 		true,
-		`${label} artifact size must be a positive safe integer`,
+		`${label} updater archive must retain the stable protocol prefix`,
 	);
-	assert.equal(metadata.artifact?.size, statSync(archivePath).size, `${label} artifact size`);
-	assert.match(metadata.artifact?.sha256 || "", /^[0-9a-f]{64}$/, `${label} artifact SHA-256`);
-	assert.equal(
-		metadata.artifact.sha256,
-		await sha256File(archivePath),
-		`${label} artifact SHA-256 contents`,
+	assert.deepEqual(
+		new Set(Object.keys(metadata.artifact || {})),
+		new Set(["file"]),
+		`${label} artifact metadata must use the historical filename-only protocol`,
 	);
+	assert.equal(metadata.patch, undefined, `${label} metadata unexpectedly advertised a patch descriptor`);
 	let patchPath;
 	if (previousRelease) {
-		assert.equal(metadata.patch?.fromHash, previousRelease.metadata.hash, `${label} patch source hash`);
-		assert.equal(
-			metadata.patch?.file,
+		patchPath = join(
+			root,
 			`${releasePrefix}-${previousRelease.metadata.hash}.patch`,
-			`${label} patch filename`,
 		);
-		patchPath = join(root, metadata.patch.file);
-		assert.equal(pathExists(patchPath), true, `${label} authenticated patch`);
-		assert.equal(metadata.patch.size, statSync(patchPath).size, `${label} patch size`);
-		assert.equal(
-			metadata.patch.sha256,
-			await sha256File(patchPath),
-			`${label} patch SHA-256 contents`,
-		);
-		assert.equal(
-			Number.isSafeInteger(metadata.patch.targetSize) && metadata.patch.targetSize > 0,
-			true,
-			`${label} patch target size`,
-		);
-		assert.match(
-			metadata.patch.targetSha256 || "",
-			/^[0-9a-f]{64}$/,
-			`${label} patch target SHA-256`,
-		);
-	} else {
-		assert.equal(metadata.patch, undefined, `${label} unexpectedly advertised a patch`);
-	}
-
-	const stableMetadata = readJson(stableUpdatePath);
-	assert.equal(stableMetadata.schemaVersion, 1, `${label} stable metadata schema`);
-	assert.equal(stableMetadata.identifier, identifier, `${label} stable metadata identifier`);
-	assert.equal(stableMetadata.channel, CHANNEL, `${label} stable metadata channel`);
-	assert.equal(stableMetadata.version, version, `${label} stable metadata version`);
-	assert.equal(stableMetadata.platform, platform.updatePlatform, `${label} stable metadata platform`);
-	assert.equal(stableMetadata.arch, platform.updateArch, `${label} stable metadata arch`);
-	assert.equal(stableMetadata.hash, metadata.hash, `${label} stable metadata hash`);
-	assert.equal(
-		basename(stableMetadata.artifact?.file || ""),
-		stableMetadata.artifact?.file,
-		`${label} stable artifact filename must be a basename`,
-	);
-	assert.equal(
-		stableMetadata.artifact.file.startsWith(`${stablePrefix}-`),
-		true,
-		`${label} stable artifact filename prefix`,
-	);
-	const stableArchivePath = join(root, stableMetadata.artifact.file);
-	assert.equal(pathExists(stableArchivePath), true, `${label} stable archive alias`);
-	assert.equal(
-		stableMetadata.artifact.size,
-		statSync(stableArchivePath).size,
-		`${label} stable artifact size`,
-	);
-	assert.equal(
-		stableMetadata.artifact.sha256,
-		await sha256File(stableArchivePath),
-		`${label} stable artifact SHA-256 contents`,
-	);
-	assert.equal(
-		stableMetadata.artifact.size,
-		metadata.artifact.size,
-		`${label} stable alias size differs from production`,
-	);
-	assert.equal(
-		stableMetadata.artifact.sha256,
-		metadata.artifact.sha256,
-		`${label} stable alias SHA differs from production`,
-	);
-	let stablePatchPath;
-	if (previousRelease) {
-		assert.equal(
-			stableMetadata.patch?.fromHash,
-			previousRelease.metadata.hash,
-			`${label} stable patch source hash`,
-		);
-		assert.equal(
-			stableMetadata.patch?.file,
-			`${stablePrefix}-${previousRelease.metadata.hash}.patch`,
-			`${label} stable patch filename`,
-		);
-		stablePatchPath = join(root, stableMetadata.patch.file);
-		assert.equal(pathExists(stablePatchPath), true, `${label} stable patch alias`);
-		assert.equal(
-			stableMetadata.patch.size,
-			statSync(stablePatchPath).size,
-			`${label} stable patch size`,
-		);
-		assert.equal(
-			stableMetadata.patch.sha256,
-			await sha256File(stablePatchPath),
-			`${label} stable patch SHA-256 contents`,
-		);
-		for (const field of ["size", "sha256", "targetSize", "targetSha256"]) {
-			assert.equal(
-				stableMetadata.patch[field],
-				metadata.patch[field],
-				`${label} stable patch ${field} differs from production`,
-			);
-		}
-	} else {
-		assert.equal(stableMetadata.patch, undefined, `${label} stable metadata unexpectedly advertised a patch`);
+		assert.equal(pathExists(patchPath), true, `${label} filename-addressed patch`);
 	}
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith(".tar.zst"))),
-		new Set([basename(archivePath), basename(stableArchivePath)]),
+		new Set([basename(archivePath)]),
 		`${label} full update archive names`,
 	);
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith(".patch"))),
-		new Set(
-			previousRelease
-				? [basename(patchPath), basename(stablePatchPath)]
-				: [],
-		),
-		`${label} authenticated patch names`,
+		new Set(previousRelease ? [basename(patchPath)] : []),
+		`${label} filename-addressed patch names`,
 	);
 	return {
 		root,
 		updatePath,
 		archivePath,
-		stableUpdatePath,
-		stableArchivePath,
 		patchPath,
-		stablePatchPath,
 		installerPath,
 		metadata,
 	};
@@ -681,24 +570,14 @@ async function inspectArtifacts(root, version, label, previousRelease) {
 function publishRelease(release, options = {}) {
 	const includePatch = options.includePatch !== false;
 	mkdirSync(serverRoot, { recursive: true });
-	// Publish immutable payloads before the mutable target document.
+	// Publish immutable payloads before the mutable target document. Deliberately
+	// leave every older source-hash patch in place so clients can traverse the
+	// complete release chain even after the update document advances.
 	copyFileSync(release.archivePath, join(serverRoot, basename(release.archivePath)));
-	copyFileSync(
-		release.stableArchivePath,
-		join(serverRoot, basename(release.stableArchivePath)),
-	);
 	if (includePatch && release.patchPath) {
 		copyFileSync(release.patchPath, join(serverRoot, basename(release.patchPath)));
-		copyFileSync(
-			release.stablePatchPath,
-			join(serverRoot, basename(release.stablePatchPath)),
-		);
 	}
 	copyFileSync(release.updatePath, join(serverRoot, basename(release.updatePath)));
-	copyFileSync(
-		release.stableUpdatePath,
-		join(serverRoot, basename(release.stableUpdatePath)),
-	);
 }
 
 async function startReleaseServer() {
@@ -783,58 +662,24 @@ function bundledUninstallerPath() {
 	return platform.bundledUninstallerPath(appBundlePath);
 }
 
-async function migrateInitialInstallToLegacyLayout() {
-	assert.equal(
-		normalized(channelRoot),
-		normalized(modernChannelRoot),
-		"migration must start at the modern channel root",
-	);
-	assert.notEqual(
-		normalized(modernChannelRoot),
-		normalized(legacyChannelRoot),
-		"legacy and modern roots unexpectedly match",
-	);
-	assert.equal(pathExists(modernChannelRoot), true, "modern v1 root is missing");
-	assert.equal(pathExists(legacyChannelRoot), false, "legacy v1 root already exists");
-	const renameDeadline = Date.now() + 20_000;
-	for (;;) {
-		try {
-			renameSync(modernChannelRoot, legacyChannelRoot);
-			break;
-		} catch (error) {
-			const retryableWindowsLock =
-				process.platform === "win32" &&
-				["EACCES", "EBUSY", "EPERM"].includes(error?.code) &&
-				Date.now() < renameDeadline;
-			if (!retryableWindowsLock) throw error;
-			await new Promise((resolvePromise) => setTimeout(resolvePromise, 250));
-		}
-	}
-	channelRoot = legacyChannelRoot;
-	appBundlePath = platform.appBundlePath(profile, appName, channelRoot);
-	assert.equal(
-		normalized(channelRoot),
-		normalized(expectedUpdateRoot),
-		"migrated channel root does not match the compiled fixture expectation",
-	);
-	assert.equal(
-		normalized(appBundlePath),
-		normalized(expectedUpdateAppBundlePath),
-		"migrated app bundle does not match the compiled fixture expectation",
-	);
-
+async function simulateV1InstallLayout() {
+	assert.equal(pathExists(channelRoot), true, "installed v1 stable root is missing");
 	const manager = platform.uninstallerPath(channelRoot);
 	const manifest = join(channelRoot, ".electrobun-uninstall.json");
 	const bundled = bundledUninstallerPath();
 	assert.equal(pathExists(bundled), true, `bundled update helper missing: ${bundled}`);
-	assert.equal(pathExists(manager), true, `moved standalone manager missing: ${manager}`);
-	assert.equal(pathExists(manifest), true, `moved uninstall manifest missing: ${manifest}`);
+	assert.equal(pathExists(manager), true, `standalone manager missing: ${manager}`);
+	assert.equal(pathExists(manifest), true, `uninstall manifest missing: ${manifest}`);
+	// Electrobun v1 used the same stable root and updater protocol, but it did not
+	// install the standalone v2 manager/manifest pair. Removing those two files
+	// exercises the first-v2-runtime launcher bootstrap without inventing a
+	// second channel root or any channel-name translation.
 	rmSync(manager, { force: true });
 	rmSync(manifest, { force: true });
 	assert.equal(pathExists(manager), false);
 	assert.equal(pathExists(manifest), false);
 	console.log(
-		`[updater-e2e] migrated v1 to legacy root and removed manager/manifest: ${channelRoot}`,
+		`[updater-e2e] simulated v1 stable layout without manager/manifest: ${channelRoot}`,
 	);
 }
 
@@ -923,6 +768,7 @@ async function verifySuccessfulUpdate({
 	toRelease,
 	relaunchSentinelPath,
 	expectedDownloadPath,
+	patchReleases,
 	requestStart,
 	eventStart,
 	previousResultPaths,
@@ -996,86 +842,144 @@ async function verifySuccessfulUpdate({
 	const phaseRequests = requests.slice(requestStart);
 	const updateName = `/${basename(toRelease.updatePath)}`;
 	const archiveName = `/${basename(toRelease.archivePath)}`;
-	const patchName = `/${basename(toRelease.patchPath)}`;
 	const metadataRequest = phaseRequests.findIndex(
-		(request) => request.pathname === updateName && request.status === 200,
+		(request) =>
+			request.pathname === updateName &&
+			request.status === 200,
 	);
 	assert.notEqual(metadataRequest, -1, `updater never fetched ${updateName}`);
-	const patchRequest = phaseRequests.findIndex(
-		(request) =>
-			request.pathname === patchName &&
-			request.search === `?sha256=${toRelease.metadata.patch.sha256}` &&
-			request.status === (expectedDownloadPath === "patch" ? 200 : 404),
-	);
-	assert.notEqual(
-		patchRequest,
-		-1,
-		`updater did not make the expected authenticated patch request for ${patchName}`,
+	assert.equal(
+		phaseRequests.every(
+			(request) => !request.search.toLowerCase().includes("sha256"),
+		),
+		true,
+		"historical updater artifact requests must not add SHA-256 query parameters",
 	);
 	assert.equal(
-		phaseRequests.some((request) =>
-			request.pathname.startsWith(`/${LEGACY_CHANNEL_ROOT_NAME}-`),
-		),
+		phaseRequests.some((request) => request.pathname.startsWith("/production-")),
 		false,
-		"logical production updater unexpectedly requested a physical-root stable artifact",
+		"stable updater unexpectedly requested a removed production alias",
 	);
+
+	assert.equal(
+		patchReleases.length > 0,
+		true,
+		"update verification requires at least one filename-addressed patch edge",
+	);
+	const patchRequestIndexes = [];
+	for (const [index, patchRelease] of patchReleases.entries()) {
+		const patchName = `/${basename(patchRelease.patchPath)}`;
+		const expectedStatus = expectedDownloadPath === "patch" ? 200 : 404;
+		const matchingRequests = phaseRequests
+			.map((request, requestIndex) => ({ request, requestIndex }))
+			.filter(
+				({ request }) =>
+					request.pathname === patchName &&
+					request.search === "" &&
+					request.status === expectedStatus,
+			);
+		assert.equal(
+			matchingRequests.length,
+			1,
+			`updater must request filename-addressed patch ${patchName} exactly once`,
+		);
+		const requestIndex = matchingRequests[0].requestIndex;
+		assert.equal(
+			requestIndex > (patchRequestIndexes.at(-1) ?? metadataRequest),
+			true,
+			`patch request ${index + 1} was out of order: ${patchName}`,
+		);
+		patchRequestIndexes.push(requestIndex);
+	}
 	if (expectedDownloadPath === "patch") {
 		assert.equal(
-			phaseRequests.some(
-				(request) =>
-					request.pathname === archiveName ||
-					request.pathname === `/${basename(toRelease.stableArchivePath)}`,
-			),
+			phaseRequests.some((request) => request.pathname.endsWith(".tar.zst")),
 			false,
-			"patch-success update unexpectedly fetched a full archive",
+			"multi-hop patch update unexpectedly fetched a full archive",
 		);
 	} else {
-		const archiveRequest = phaseRequests.findIndex(
-			(request) =>
-				request.pathname === archiveName &&
-				request.search === `?sha256=${toRelease.metadata.artifact.sha256}` &&
-				request.status === 200,
-		);
+		const archiveRequests = phaseRequests
+			.map((request, requestIndex) => ({ request, requestIndex }))
+			.filter(({ request }) => request.pathname === archiveName);
 		assert.equal(
-			archiveRequest > patchRequest,
+			archiveRequests.length,
+			1,
+			`full fallback must request ${archiveName} exactly once`,
+		);
+		const archiveRequest = archiveRequests[0];
+		assert.match(
+			archiveRequest.request.search,
+			/^\?cache=[0-9a-f]{32}$/,
+			"full fallback must keep only the historical cache buster",
+		);
+		assert.equal(archiveRequest.request.status, 200, "full fallback request status");
+		assert.equal(
+			archiveRequest.requestIndex > patchRequestIndexes.at(-1),
 			true,
-			`full fallback did not follow the missing patch request for ${patchName}`,
+			`full fallback did not follow the missing patch request`,
 		);
 	}
 
 	const phaseEvents = recordedEvents().slice(eventStart);
 	const sourceVersion = fromRelease.metadata.version;
 	const targetVersion = toRelease.metadata.version;
-	const expectedStatuses =
-		expectedDownloadPath === "patch"
+	const sourceStateEvents =
+		sourceVersion === INITIAL_VERSION
 			? [
-					{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
-					{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
-					{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
-					{ event: "updater-status", version: sourceVersion, status: "patch-found" },
-					{ event: "updater-status", version: sourceVersion, status: "downloading-patch" },
-					{ event: "updater-status", version: sourceVersion, status: "applying-patch" },
-					{ event: "updater-status", version: sourceVersion, status: "patch-applied" },
-					{
-						event: "updater-status",
-						version: sourceVersion,
-						status: "patch-chain-complete",
-						verify: (entry) =>
-							entry.details?.details?.usedPatchPath === true &&
-							entry.details?.details?.totalPatchesApplied === 1,
-					},
+					{ event: "integration-bootstrapped", version: sourceVersion },
+					{ event: "user-data-seeded", version: sourceVersion },
 				]
-			: [
-					{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
-					{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
-					{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
-					{ event: "updater-status", version: sourceVersion, status: "patch-not-found" },
-					{ event: "updater-status", version: sourceVersion, status: "downloading-full-bundle" },
-				];
+			: [{ event: "source-data-preserved", version: sourceVersion }];
+	const expectedStatuses = [
+		{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
+		{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
+	];
+	if (expectedDownloadPath === "patch") {
+		for (const [index, patchRelease] of patchReleases.entries()) {
+			const source = index === 0 ? fromRelease : patchReleases[index - 1];
+			expectedStatuses.push(
+				{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
+				{ event: "updater-status", version: sourceVersion, status: "patch-found" },
+				{ event: "updater-status", version: sourceVersion, status: "downloading-patch" },
+				{ event: "updater-status", version: sourceVersion, status: "applying-patch" },
+				{
+					event: "updater-status",
+					version: sourceVersion,
+					status: "patch-applied",
+					verify: (entry) =>
+						entry.details?.details?.patchNumber === index + 1 &&
+						entry.details?.details?.totalPatchesApplied === index + 1 &&
+						entry.details?.details?.fromHash === source.metadata.hash &&
+						entry.details?.details?.toHash === patchRelease.metadata.hash &&
+						entry.details?.details?.currentHash === patchRelease.metadata.hash,
+				},
+			);
+		}
+		expectedStatuses.push({
+			event: "updater-status",
+			version: sourceVersion,
+			status: "patch-chain-complete",
+			verify: (entry) =>
+				entry.details?.details?.usedPatchPath === true &&
+				entry.details?.details?.totalPatchesApplied === patchReleases.length,
+		});
+	} else {
+		expectedStatuses.push(
+			{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
+			{
+				event: "updater-status",
+				version: sourceVersion,
+				status: "patch-not-found",
+				verify: (entry) => entry.details?.details?.totalPatchesApplied === 0,
+			},
+			{ event: "updater-status", version: sourceVersion, status: "downloading-full-bundle" },
+		);
+	}
 	assertOrderedPhaseEvents(
 		phaseEvents,
 		[
 			{ event: "launched", version: sourceVersion },
+			...sourceStateEvents,
 			...expectedStatuses,
 			{
 				event: "updater-status",
@@ -1083,7 +987,9 @@ async function verifySuccessfulUpdate({
 				status: "download-complete",
 				verify: (entry) =>
 					entry.details?.details?.usedPatchPath ===
-					(expectedDownloadPath === "patch"),
+						(expectedDownloadPath === "patch") &&
+					entry.details?.details?.totalPatchesApplied ===
+						(expectedDownloadPath === "patch" ? patchReleases.length : 0),
 			},
 			{ event: "download-completed", version: sourceVersion },
 			{ event: "launched", version: targetVersion },
@@ -1093,6 +999,27 @@ async function verifySuccessfulUpdate({
 		],
 		`${sourceVersion} -> ${targetVersion}`,
 	);
+	assert.equal(
+		phaseEvents.filter(
+			(entry) =>
+				entry.event === "updater-status" &&
+				entry.version === sourceVersion &&
+				entry.details?.status === "patch-applied",
+		).length,
+		expectedDownloadPath === "patch" ? patchReleases.length : 0,
+		`${sourceVersion} -> ${targetVersion} patch-applied count`,
+	);
+	for (const intermediateRelease of patchReleases.slice(0, -1)) {
+		assert.equal(
+			phaseEvents.some(
+				(entry) =>
+					entry.event === "launched" &&
+					entry.version === intermediateRelease.metadata.version,
+			),
+			false,
+			`patch chain unexpectedly launched intermediate ${intermediateRelease.metadata.version}`,
+		);
+	}
 	assert.equal(
 		phaseEvents.some(
 			(entry) =>
@@ -1107,7 +1034,7 @@ async function verifySuccessfulUpdate({
 	return { resultPath, result };
 }
 
-async function verifyFirstV2LaunchBootstrap(v2) {
+async function verifyFirstPostV1LaunchBootstrap(release) {
 	const manager = platform.uninstallerPath(channelRoot);
 	const manifestPath = join(channelRoot, ".electrobun-uninstall.json");
 	assert.equal(pathExists(manager), true, "pre-bootstrap manager is missing");
@@ -1118,21 +1045,21 @@ async function verifyFirstV2LaunchBootstrap(v2) {
 	assert.equal(pathExists(manifestPath), false);
 	writeFileSync(bootstrapVerificationPath, `${token}\n`, "utf8");
 	// Let the first target runtime and its outer launcher finish before asking
-	// the installed launcher to exercise first-v2-launch repair independently.
+	// the installed launcher to exercise the first-v2-runtime repair independently.
 	await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
 	launchInstalledApp();
-	await waitFor("first-v2-launch integration bootstrap", () =>
+	await waitFor("first-v2-runtime integration bootstrap", () =>
 		eventWasRecorded("target-bootstrap-repaired", PATCH_TARGET_VERSION),
 	);
 	await waitFor("bootstrapped standalone manager", () =>
 		pathExists(manager) && pathExists(manifestPath),
 	);
-	cleanupManifest = assertInstalledIdentity(v2).manifest;
+	cleanupManifest = assertInstalledIdentity(release).manifest;
 	await platform.verifyInstalled(
 		channelRoot,
 		appBundlePath,
 		cleanupManifest,
-		v2,
+		release,
 	);
 	rmSync(bootstrapVerificationPath, { force: true });
 }
@@ -1150,9 +1077,7 @@ async function uninstallAndVerify() {
 	});
 	await waitFor("uninstaller cleanup", () => !pathExists(channelRoot), 90_000);
 	assert.equal(pathExists(appBundlePath), false, "uninstaller left the installed app bundle");
-	for (const root of [modernChannelRoot, legacyChannelRoot]) {
-		assert.equal(pathExists(root), false, `uninstaller left install state: ${root}`);
-	}
+	assert.equal(pathExists(channelRoot), false, `uninstaller left install state: ${channelRoot}`);
 	await platform.verifyUninstalled(
 		identifier,
 		completedUpdateResults,
@@ -1164,7 +1089,7 @@ async function uninstallAndVerify() {
 
 async function bestEffortCleanup() {
 	let cleanupFailure;
-	rememberUpdateTransactions([modernChannelRoot, legacyChannelRoot]);
+	rememberUpdateTransactions([channelRoot]);
 	for (const child of backgroundChildren) {
 		try {
 			child.kill();
@@ -1186,11 +1111,8 @@ async function bestEffortCleanup() {
 	try {
 		await platform.cleanup(
 			identifier,
-			[modernChannelRoot, legacyChannelRoot],
-			[
-				platform.appBundlePath(profile, appName, modernChannelRoot),
-				platform.appBundlePath(profile, appName, legacyChannelRoot),
-			],
+			[channelRoot],
+			[appBundlePath],
 			[...cleanupTransactionIds],
 			cleanupManifest,
 		);
@@ -1254,8 +1176,6 @@ function platformAdapter() {
 					},
 				};
 			},
-			legacyChannelRoot: (profileValue) =>
-				join(profileValue.dataRoot, profileValue.identifier, LEGACY_CHANNEL_ROOT_NAME),
 			appBundlePath: (_profileValue, _name, root) => join(root, "app"),
 			versionPath: (app) => join(app, "Resources", "version.json"),
 			launcherPath: (app) => join(app, "bin", "launcher.exe"),
@@ -1402,18 +1322,14 @@ function platformAdapter() {
 					await runStatus("schtasks.exe", ["/end", "/tn", task]);
 					await runStatus("schtasks.exe", ["/delete", "/tn", task, "/f"]);
 				}
-				const expectedModernRoot = join(
+				const expectedRoot = join(
 					resolve(process.env.LOCALAPPDATA || join(process.env.USERPROFILE || "", "AppData", "Local")),
 					identifierValue,
 					CHANNEL,
 				);
-				const expectedLegacyRoot = join(
-					dirname(expectedModernRoot),
-					LEGACY_CHANNEL_ROOT_NAME,
-				);
 				assert.deepEqual(
 					new Set(roots.map(normalized)),
-					new Set([normalized(expectedModernRoot), normalized(expectedLegacyRoot)]),
+					new Set([normalized(expectedRoot)]),
 					"Windows cleanup root identities",
 				);
 				if (manifest) {
@@ -1434,7 +1350,7 @@ function platformAdapter() {
 				for (const root of roots) {
 					await removeTreeWithRetry(root);
 				}
-				const identifierRoot = dirname(expectedModernRoot);
+				const identifierRoot = dirname(expectedRoot);
 				assert.equal(basename(identifierRoot), identifierValue);
 				await removeTreeWithRetry(identifierRoot);
 				const roamingIdentifierRoot = join(
@@ -1475,8 +1391,6 @@ function platformAdapter() {
 					},
 				};
 			},
-			legacyChannelRoot: (profileValue) =>
-				join(profileValue.dataRoot, profileValue.identifier, LEGACY_CHANNEL_ROOT_NAME),
 			appBundlePath: (_profileValue, name) =>
 				join(temporaryRoot, "Applications", `${name}.app`),
 			versionPath: (app) => join(app, "Contents", "Resources", "version.json"),
@@ -1534,10 +1448,8 @@ function platformAdapter() {
 						category,
 						identifierValue,
 					);
-					for (const rootName of [CHANNEL, LEGACY_CHANNEL_ROOT_NAME]) {
-						const path = join(identifierRoot, rootName);
-						assert.equal(pathExists(path), false, `macOS data survived uninstall: ${path}`);
-					}
+					const path = join(identifierRoot, CHANNEL);
+					assert.equal(pathExists(path), false, `macOS data survived uninstall: ${path}`);
 				}
 			},
 			async cleanup(identifierValue, roots, apps) {
@@ -1551,10 +1463,7 @@ function platformAdapter() {
 					"Application Support",
 					identifierValue,
 				);
-				const expectedRoots = [
-					join(identifierRoot, CHANNEL),
-					join(identifierRoot, LEGACY_CHANNEL_ROOT_NAME),
-				];
+				const expectedRoots = [join(identifierRoot, CHANNEL)];
 				assert.deepEqual(
 					new Set(roots.map(normalized)),
 					new Set(expectedRoots.map(normalized)),
@@ -1607,8 +1516,6 @@ function platformAdapter() {
 					},
 				};
 			},
-			legacyChannelRoot: (profileValue) =>
-				join(profileValue.dataRoot, profileValue.identifier, LEGACY_CHANNEL_ROOT_NAME),
 			appBundlePath: (_profileValue, _name, root) => join(root, "app"),
 			versionPath: (app) => join(app, "Resources", "version.json"),
 			launcherPath: (app) => join(app, "bin", "launcher"),
@@ -1652,10 +1559,8 @@ function platformAdapter() {
 				}
 				for (const base of [profile.dataRoot, profile.cacheRoot, profile.stateRoot]) {
 					const identifierRoot = join(base, identifierValue);
-					for (const rootName of [CHANNEL, LEGACY_CHANNEL_ROOT_NAME]) {
-						const path = join(identifierRoot, rootName);
-						assert.equal(pathExists(path), false, `Linux data survived uninstall: ${path}`);
-					}
+					const path = join(identifierRoot, CHANNEL);
+					assert.equal(pathExists(path), false, `Linux data survived uninstall: ${path}`);
 				}
 				assert.equal(
 					pathExists(expectedBrowserProfileRoot),
@@ -1685,14 +1590,32 @@ async function main() {
 	let v3;
 	if (focus === "build" || focus === "update" || focus === "full") {
 		publishRelease(v1);
-		v2 = await buildRelease(PATCH_TARGET_VERSION, baseUrl, "v2", v1);
+		v2 = await buildRelease(INTERMEDIATE_VERSION, baseUrl, "v2", v1);
 		assert.notEqual(v1.metadata.hash, v2.metadata.hash, "v1 and v2 produced the same hash");
 		publishRelease(v2);
-		v3 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v3", v2);
+		v3 = await buildRelease(PATCH_TARGET_VERSION, baseUrl, "v3", v2);
 		assert.notEqual(v2.metadata.hash, v3.metadata.hash, "v2 and v3 produced the same hash");
 		assert.notEqual(v1.metadata.hash, v3.metadata.hash, "v1 and v3 produced the same hash");
+		publishRelease(v3);
+		for (const release of [v2, v3]) {
+			assert.equal(
+				pathExists(join(serverRoot, basename(release.patchPath))),
+				true,
+				`historical patch was not retained after publishing v3: ${basename(release.patchPath)}`,
+			);
+		}
 	}
-	if (focus === "build") return;
+	if (focus === "build") {
+		const v4 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v4", v3);
+		assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
+		publishRelease(v4, { includePatch: false });
+		assert.equal(
+			pathExists(join(serverRoot, basename(v4.patchPath))),
+			false,
+			"v4 fallback patch was unexpectedly published",
+		);
+		return;
+	}
 
 	await installInitialRelease(v1);
 	if (focus === "install") return;
@@ -1701,50 +1624,58 @@ async function main() {
 		return;
 	}
 
-	if (migrationEnabled) await migrateInitialInstallToLegacyLayout();
+	if (v1CompatibilitySimulationEnabled) await simulateV1InstallLayout();
 	const firstRequestStart = requests.length;
 	const firstEventStart = recordedEvents().length;
 	const firstPriorResults = new Set(resultFiles());
 	launchInstalledApp(PATCH_TARGET_VERSION);
-	await waitFor("v2 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath));
+	await waitFor("v3 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath));
 	await waitFor("first durable updater result", () =>
 		resultFiles().some((path) => !firstPriorResults.has(path)),
 	);
 	await verifySuccessfulUpdate({
 		fromRelease: v1,
-		toRelease: v2,
+		toRelease: v3,
 		relaunchSentinelPath: patchRelaunchSentinelPath,
 		expectedDownloadPath: "patch",
+		patchReleases: [v2, v3],
 		requestStart: firstRequestStart,
 		eventStart: firstEventStart,
 		previousResultPaths: firstPriorResults,
 	});
-	await verifyFirstV2LaunchBootstrap(v2);
+	await verifyFirstPostV1LaunchBootstrap(v3);
 
-	publishRelease(v3, { includePatch: false });
+	const v4 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v4", v3);
+	assert.notEqual(v3.metadata.hash, v4.metadata.hash, "v3 and v4 produced the same hash");
+	assert.notEqual(v2.metadata.hash, v4.metadata.hash, "v2 and v4 produced the same hash");
+	assert.notEqual(v1.metadata.hash, v4.metadata.hash, "v1 and v4 produced the same hash");
+	publishRelease(v4, { includePatch: false });
 	assert.equal(
-		pathExists(join(serverRoot, basename(v3.patchPath))),
+		pathExists(join(serverRoot, basename(v4.patchPath))),
 		false,
-		"fallback patch was unexpectedly published",
+		"v4 fallback patch was unexpectedly published",
 	);
-	assert.equal(
-		pathExists(join(serverRoot, basename(v3.stablePatchPath))),
-		false,
-		"fallback stable patch alias was unexpectedly published",
-	);
+	for (const release of [v2, v3]) {
+		assert.equal(
+			pathExists(join(serverRoot, basename(release.patchPath))),
+			true,
+			`publishing v4 discarded historical patch: ${basename(release.patchPath)}`,
+		);
+	}
 	const secondRequestStart = requests.length;
 	const secondEventStart = recordedEvents().length;
 	const secondPriorResults = new Set(resultFiles());
 	launchInstalledApp(FALLBACK_TARGET_VERSION);
-	await waitFor("v3 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath));
+	await waitFor("v4 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath));
 	await waitFor("second durable updater result", () =>
 		resultFiles().some((path) => !secondPriorResults.has(path)),
 	);
 	await verifySuccessfulUpdate({
-		fromRelease: v2,
-		toRelease: v3,
+		fromRelease: v3,
+		toRelease: v4,
 		relaunchSentinelPath: fallbackRelaunchSentinelPath,
 		expectedDownloadPath: "full",
+		patchReleases: [v4],
 		requestStart: secondRequestStart,
 		eventStart: secondEventStart,
 		previousResultPaths: secondPriorResults,

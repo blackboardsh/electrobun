@@ -1,4 +1,4 @@
-// @hutch cli=0.12.0 cottontail=0.5.0
+// @hutch cli=0.13.0 cottontail=0.5.0
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -17,7 +17,7 @@ export default {
 			"node scripts/preview-installer-ui.mjs --error",
 		"dev:clean": "cd ../kitchen && rm -rf node_modules vendors/cef && cd ../package && hutch dev",
 		"dev:canary": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=canary",
-		"dev:production": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=production",
+		"dev:stable": "hutch run install && hutch build:release && cd ../kitchen && hutch run install && hutch electrobun build --env=stable",
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",

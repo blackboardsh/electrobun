@@ -48,7 +48,7 @@ test("Kitchen resolves tasks and SDK types through Hutch", () => {
 		.sort();
 	assert.deepEqual(scriptNames, [
 		"build:canary",
-		"build:production",
+		"build:stable",
 		"check:odin-mirrors",
 		"check:zig-mirrors",
 		"dev",

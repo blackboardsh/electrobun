@@ -1,8 +1,27 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
-type Platform = "macos" | "linux" | "win";
-type Channel = "canary" | "production";
+export type Platform = "macos" | "linux" | "win";
+export type Channel = "canary" | "stable";
+
+export const kitchenArtifactPrefixes = (
+	channel: Channel,
+	platform: Platform,
+	arch: string,
+): { update: string; installer: string } => {
+	const update = `${channel}-${platform}-${arch}`;
+	return {
+		update,
+		installer: channel === "stable" ? `${platform}-${arch}` : update,
+	};
+};
+
+export const isExpectedKitchenInstaller = (
+	file: string,
+	installerPrefix: string,
+	installerSuffix: string,
+): boolean =>
+	file.startsWith(`${installerPrefix}-`) && file.endsWith(installerSuffix);
 
 const fail = (message: string): never => {
 	throw new Error(`Kitchen artifact validation failed: ${message}`);
@@ -30,7 +49,7 @@ async function main() {
 	const arch = requireArgument(process.argv[5], "architecture");
 	const version = requireArgument(process.argv[6], "version");
 
-	if (channel !== "canary" && channel !== "production") {
+	if (channel !== "canary" && channel !== "stable") {
 		fail(`unsupported channel ${JSON.stringify(channel)}`);
 	}
 	if (platform !== "macos" && platform !== "linux" && platform !== "win") {
@@ -40,11 +59,17 @@ async function main() {
 		fail(`unsupported architecture ${JSON.stringify(arch)}`);
 	}
 
-	const prefix = `${channel}-${platform}-${arch}`;
-	const files = (await readdir(artifactsDir)).filter((file) =>
-		file.startsWith(`${prefix}-`),
+	const prefixes = kitchenArtifactPrefixes(channel, platform, arch);
+	const updatePrefix = prefixes.update;
+	// Stable installers keep their user-facing unsuffixed bundle name. Update
+	// artifacts remain channel-prefixed because their URLs are channel scoped.
+	const installerPrefix = prefixes.installer;
+	const files = (await readdir(artifactsDir)).filter(
+		(file) =>
+			file.startsWith(`${updatePrefix}-`) ||
+			file.startsWith(`${installerPrefix}-`),
 	);
-	const updateName = `${prefix}-update.json`;
+	const updateName = `${updatePrefix}-update.json`;
 	const archiveSuffix = platform === "macos" ? ".app.tar.zst" : ".tar.zst";
 	const installerSuffix =
 		platform === "macos" ? ".dmg" : platform === "win" ? ".zip" : ".tar.gz";
@@ -58,7 +83,7 @@ async function main() {
 	requireArtifact(
 		files,
 		`${platform} installer ending in ${installerSuffix}`,
-		(file) => file.endsWith(installerSuffix),
+		(file) => isExpectedKitchenInstaller(file, installerPrefix, installerSuffix),
 	);
 
 	for (const file of files) {
@@ -90,7 +115,7 @@ async function main() {
 		fail(`${updateName} does not contain a non-empty hash`);
 	}
 
-	console.log(`Validated ${files.length} Kitchen artifacts for ${prefix}.`);
+	console.log(`Validated ${files.length} Kitchen artifacts for ${updatePrefix}.`);
 }
 
-await main();
+if (import.meta.main) await main();

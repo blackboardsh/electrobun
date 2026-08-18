@@ -100,9 +100,8 @@ TypeScript: `home`, `appData`, `config`, `cache`, `temp`, `logs`,
 Go). On every runtime, `userData`, `userCache`, and `userLogs` resolve to
 `<base>/<identifier>/<install-root>` using the packaged app identifier and
 physical install-root name. That root normally matches the packaged release
-channel. An Electrobun v1.18.1+ production update deliberately keeps the
-existing `stable` root while the 2.x app reports the logical `production`
-channel.
+channel. Supported Electrobun v1 updates keep their existing physical root,
+including `stable` and older app-name roots, so app data stays in place.
 
 Packaged resources are read-only application content. Modifying a macOS app
 bundle invalidates its code signature. Use `Utils.paths.userData`,

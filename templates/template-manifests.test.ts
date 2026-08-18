@@ -327,7 +327,7 @@ describe("Electrobun template package boundaries", () => {
 		expect(invalidConfigs).toEqual([]);
 	});
 
-	test("every template exposes a production build through hutch run build", () => {
+	test("every template exposes a stable build through hutch run build", () => {
 		const invalidScripts: string[] = [];
 
 		for (const templateName of templateNames) {
@@ -340,8 +340,8 @@ describe("Electrobun template package boundaries", () => {
 				manifest.dependencies?.vite ?? manifest.devDependencies?.vite,
 			);
 			const expected = usesVite
-				? 'build: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun build --env=production"'
-				: 'build: ["hutch", "electrobun", "build", "--env=production"]';
+				? 'build: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun build --env=stable"'
+				: 'build: ["hutch", "electrobun", "build", "--env=stable"]';
 
 			if (!hutch.includes(expected)) {
 				invalidScripts.push(
@@ -411,7 +411,7 @@ describe("Electrobun template package boundaries", () => {
 		expect(rustConfig).not.toContain("entrypoint:");
 	});
 
-	test("template READMEs do not bypass the production build script", () => {
+	test("template READMEs do not bypass the stable build script", () => {
 		const invalidDocs: string[] = [];
 
 		for (const templateName of templateNames) {
@@ -433,8 +433,8 @@ describe("Electrobun template package boundaries", () => {
 			if (readme.includes("installs dependencies on the first run")) {
 				invalidDocs.push(`${templateName}: promises implicit dependency installation`);
 			}
-			if (readme.includes("hutch electrobun build --env=stable")) {
-				invalidDocs.push(`${templateName}: uses the non-canonical stable alias`);
+			if (readme.includes("hutch electrobun build --env=production")) {
+				invalidDocs.push(`${templateName}: uses the retired production alias`);
 			}
 		}
 

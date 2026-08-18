@@ -5,6 +5,7 @@ export type UpdaterLifecycleControl = {
 	readonly identifier: string;
 	readonly builtVersion: string;
 	readonly initialVersion: string;
+	readonly intermediateVersion: string;
 	readonly patchTargetVersion: string;
 	readonly fallbackTargetVersion: string;
 	readonly channel: string;

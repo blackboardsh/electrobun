@@ -36,7 +36,7 @@ export default {
   scripts: {
     install: ["hutch", "pm", "ci"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
-    build: ["hutch", "electrobun", "build", "--env=production"],
+    build: ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
@@ -66,20 +66,20 @@ for the full responsibility table.
 
 ## 3. Preserve the deployed updater identity
 
-If users already have a production app built with Electrobun v1.18.1 or later,
+If users already have a stable app built with Electrobun v1.18.1 or later,
 the first 2.x release can be delivered through that app's existing updater.
 For this bridge release:
 
 - keep `app.name` and `app.identifier` unchanged;
 - keep the same `release.baseUrl` embedded in the installed 1.x app;
-- build the new release with `--env=production`; and
+- build the new release with `--env=stable`; and
 - publish the complete `artifacts/` directory without renaming its files.
 
-Hutch emits the `stable-*` metadata and payload aliases requested by compatible
-1.x production clients. After the old updater places the 2.x payload, its first
+Hutch emits the `stable-*` metadata and payload names requested by compatible
+1.x stable clients. After the old updater places the 2.x payload, its first
 launch preserves the physical `stable` state root and creates the current
-update/uninstall manager records there. The app reports the logical
-`production` channel, but existing user data and browser state do not move.
+update/uninstall manager records there. Existing user data and browser state do
+not move.
 
 Earlier prereleases used updater or payload layouts that are not universally
 bridgeable. Distribute the normal 2.x installer to those users. See

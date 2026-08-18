@@ -221,7 +221,7 @@ static std::string deriveLinuxWindowClass(
     if (result.empty()) {
         result = "Electrobun";
     }
-    if (!channel.empty() && channel != "production" && channel != "stable") {
+    if (!channel.empty() && channel != "stable") {
         result += "-";
         result += channel;
     }

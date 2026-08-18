@@ -5,12 +5,12 @@ export type BuildConfigType = {
 	mainProcess?: "bun" | "cottontail" | "zig" | "rust" | "go" | "odin";
 	defaultRenderer: "native" | "cef";
 	availableRenderers: ("native" | "cef")[];
-	buildEnvironment?: "dev" | "canary" | "production" | "stable";
+	buildEnvironment?: RuntimeBuildChannel;
 	chromiumFlags?: Record<string, string | boolean>;
 	autoGrantPermissions?: WindowsWebView2Permission[];
 	/** Runtime channel read from the packaged Resources/version.json metadata. */
-	channel: string;
-	/** False for dev builds; true for canary, production, and other release channels. */
+	channel: RuntimeBuildChannel;
+	/** False for dev builds; true for stable and canary builds. */
 	isPackaged: boolean;
 	runtime?: {
 		exitOnLastWindowClosed?: boolean;
@@ -18,20 +18,25 @@ export type BuildConfigType = {
 	};
 };
 
+export type RuntimeBuildChannel = "dev" | "canary" | "stable";
+
 let buildConfig: BuildConfigType | null = null;
 
 export function isPackagedBuildChannel(channel: unknown): boolean {
-	return typeof channel === "string" && channel.length > 0 && channel !== "dev";
+	return channel === "stable" || channel === "canary";
 }
 
 function withRuntimeMode(
 	config: Omit<BuildConfigType, "channel" | "isPackaged">,
 	channel: unknown,
 ): BuildConfigType {
-	const resolvedChannel =
-		typeof channel === "string" && channel.length > 0 ? channel : "dev";
+	const resolvedChannel: RuntimeBuildChannel =
+		channel === "stable" || channel === "canary" || channel === "dev"
+			? channel
+			: "dev";
 	return {
 		...config,
+		buildEnvironment: resolvedChannel,
 		channel: resolvedChannel,
 		isPackaged: isPackagedBuildChannel(resolvedChannel),
 	};

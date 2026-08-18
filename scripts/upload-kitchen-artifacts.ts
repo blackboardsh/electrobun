@@ -12,7 +12,12 @@ export const KITCHEN_ARTIFACT_PUBLIC_BASE_URL =
 	"https://electrobun-artifacts.blackboard.sh/kitchen";
 
 const KITCHEN_ARTIFACT_NAME =
-	/^(canary|production)-(macos|linux|win)-(arm64|x64)-.+/;
+	/^(?:(canary|stable)-)?(macos|linux|win)-(arm64|x64)-(.+)$/;
+
+const isStableUpdateArtifact = (filename: string): boolean =>
+	filename.endsWith("-update.json") ||
+	filename.endsWith(".tar.zst") ||
+	/-[a-z0-9]+\.patch$/.test(filename);
 
 const requiredEnv = (key: EnvKey): string => {
 	const value = process.env[key];
@@ -37,7 +42,8 @@ async function* walk(dir: string): AsyncGenerator<string> {
 
 export const kitchenArtifactKey = (filePath: string): string => {
 	const filename = basename(filePath);
-	if (!KITCHEN_ARTIFACT_NAME.test(filename)) {
+	const match = KITCHEN_ARTIFACT_NAME.exec(filename);
+	if (!match || (match[1] === "stable" && !isStableUpdateArtifact(filename))) {
 		throw new Error(`Unexpected Kitchen artifact filename: ${filename}`);
 	}
 	return `${KITCHEN_ARTIFACT_PREFIX}/${filename}`;

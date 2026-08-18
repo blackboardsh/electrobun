@@ -11,7 +11,7 @@ const taskName = "ApplicationUpdate_0123456789abcdef01234567";
 const helperPath =
 	"C:\\Users\\Test User\\AppData\\Local\\Temp\\electrobun-update-0123456789abcdef0123456789abcdef.exe";
 const planPath =
-	"C:\\Users\\Test User\\AppData\\Local\\Example\\production\\.electrobun-update-0123456789abcdef0123456789abcdef.json";
+	"C:\\Users\\Test User\\AppData\\Local\\Example\\stable\\.electrobun-update-0123456789abcdef0123456789abcdef.json";
 
 describe("Windows native update task", () => {
 	test("derives a neutral transaction-scoped task name", () => {

@@ -3,6 +3,7 @@ import { dlopen, suffix, ptr, toArrayBuffer } from "bun:ffi";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawn } from "child_process";
+import { isBuildEnvironment } from "../shared/naming";
 
 // Since main.js now runs from Resources, we need to find libraries in the MacOS directory
 const pathToMacOS = dirname(process.argv0);
@@ -37,8 +38,10 @@ function main() {
 			if (versionInfo.name) {
 				name = versionInfo.name;
 			}
-			if (versionInfo.channel) {
+			if (isBuildEnvironment(versionInfo.channel)) {
 				channel = versionInfo.channel;
+			} else if (versionInfo.channel !== undefined) {
+				throw new Error(`Invalid Electrobun channel: ${versionInfo.channel}`);
 			}
 			console.log(
 				`[LAUNCHER] Loaded identifier: ${identifier}, name: ${name}, channel: ${channel}`,

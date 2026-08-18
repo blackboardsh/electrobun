@@ -28,7 +28,7 @@ Hutch is the only build orchestrator. When you run a build, it:
 5. Bundles a Cottontail or Bun main process, or compiles a Zig, Rust, Go, or
    Odin main process.
 6. Assembles the platform application bundle.
-7. For canary and production builds, creates the self-extracting wrapper,
+7. For canary and stable builds, creates the self-extracting wrapper,
    compressed update archive, metadata, optional patch, and platform
    installer.
 8. Applies configured code signing and notarization.
@@ -113,7 +113,7 @@ ordinary elements on the page.
 
 ## Distribution wrapper
 
-A canary or production release wraps the full runnable app in a small native
+A canary or stable release wraps the full runnable app in a small native
 self-extractor whose payload is a Zstandard-compressed archive. On first
 launch, the wrapper verifies and extracts the application to its managed
 location, then starts the inner app — from the user's perspective, the app
@@ -126,8 +126,8 @@ for the artifact layout.
 
 ## Updates
 
-The installed app compares its local hash with hosted update metadata,
-downloads the named compressed archive, and verifies its size and SHA-256. A
+The installed app compares its local hash with hosted update metadata, follows
+available hash-named patches or downloads the named compressed archive. A
 native post-exit helper then validates the bundle identity and replaces the app
 with rollback protection before relaunching it. The same transaction is used on
 Windows, macOS, and Linux; Windows uses Task Scheduler only to run the helper

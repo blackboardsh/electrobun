@@ -62,6 +62,12 @@ pub fn isSafeInstallRootName(value: []const u8, platform: Platform) bool {
     return std.mem.indexOfAny(u8, value, "\"%*:<>?|") == null;
 }
 
+pub fn isBuildChannel(value: []const u8) bool {
+    return std.mem.eql(u8, value, "stable") or
+        std.mem.eql(u8, value, "canary") or
+        std.mem.eql(u8, value, "dev");
+}
+
 /// Recognize only the launcher's public uninstall command. Anything outside
 /// this compact grammar remains an application argument, while a malformed
 /// command that starts with the exact `--uninstall` token is rejected instead
@@ -96,7 +102,7 @@ pub fn parseInstallIdentity(allocator: std.mem.Allocator, version_json: []const 
     );
     defer parsed.deinit();
 
-    if (!isSafePathComponent(parsed.value.identifier) or !isSafePathComponent(parsed.value.channel)) {
+    if (!isSafePathComponent(parsed.value.identifier) or !isBuildChannel(parsed.value.channel)) {
         return error.InvalidInstallIdentity;
     }
 
@@ -122,7 +128,7 @@ pub fn parseInstallMetadata(allocator: std.mem.Allocator, version_json: []const 
     defer parsed.deinit();
 
     if (!isSafePathComponent(parsed.value.identifier) or
-        !isSafePathComponent(parsed.value.channel) or
+        !isBuildChannel(parsed.value.channel) or
         (parsed.value.name != null and !isSafePathComponent(parsed.value.name.?)) or
         (parsed.value.displayName != null and !isSafePathComponent(parsed.value.displayName.?)) or
         (parsed.value.hash != null and !isSafePathComponent(parsed.value.hash.?)))
@@ -173,6 +179,9 @@ pub fn channelRootPath(
     app_data_base: []const u8,
     identity: InstallIdentity,
 ) ![]u8 {
+    if (!isSafePathComponent(identity.identifier) or !isBuildChannel(identity.channel)) {
+        return error.InvalidInstallIdentity;
+    }
     return std.fs.path.join(allocator, &.{ app_data_base, identity.identifier, identity.channel });
 }
 
@@ -184,16 +193,16 @@ pub fn managerName(platform: Platform) []const u8 {
 /// Windows and Linux use `<identifier>/<root-name>/app/bin/launcher`.
 ///
 /// `root-name` intentionally does not have to equal `version.json.channel`.
-/// Electrobun v1 called production `stable`, and early macOS releases used a
-/// display-name-derived root. The physical root is the durable profile and
-/// uninstall scope when those apps update to v2.
+/// Early Electrobun releases used display-name-derived roots. The physical
+/// root is the durable profile and uninstall scope when those apps update to
+/// v2.
 pub fn channelRootFromLauncherPath(
     allocator: std.mem.Allocator,
     platform: Platform,
     launcher_path: []const u8,
     identity: InstallIdentity,
 ) ![]u8 {
-    if (!isSafePathComponent(identity.identifier) or !isSafePathComponent(identity.channel)) {
+    if (!isSafePathComponent(identity.identifier) or !isBuildChannel(identity.channel)) {
         return error.InvalidInstallIdentity;
     }
     if (platform == .macos) return error.InvalidInstallLocation;
@@ -257,6 +266,9 @@ pub fn macosChannelRootFromMetadata(
     app_data_base: []const u8,
     metadata: *const InstallMetadata,
 ) ![]u8 {
+    if (!isSafePathComponent(metadata.identifier) or !isBuildChannel(metadata.channel)) {
+        return error.InvalidInstallIdentity;
+    }
     const identifier_root = try std.fs.path.join(allocator, &.{ app_data_base, metadata.identifier });
     defer allocator.free(identifier_root);
 
@@ -266,16 +278,12 @@ pub fn macosChannelRootFromMetadata(
 
     candidates[count] = try std.fs.path.join(allocator, &.{ identifier_root, metadata.channel });
     count += 1;
-    if (std.mem.eql(u8, metadata.channel, "production")) {
-        candidates[count] = try std.fs.path.join(allocator, &.{ identifier_root, "stable" });
-        count += 1;
-    }
     if (metadata.name) |name| {
         candidates[count] = try std.fs.path.join(allocator, &.{ identifier_root, name });
         count += 1;
     }
     if (metadata.display_name) |display_name| {
-        const legacy_name = if (std.mem.eql(u8, metadata.channel, "production"))
+        const legacy_name = if (std.mem.eql(u8, metadata.channel, "stable"))
             try allocator.dupe(u8, display_name)
         else
             try std.fmt.allocPrint(allocator, "{s}-{s}", .{ display_name, metadata.channel });
@@ -418,7 +426,7 @@ test "macOS state root preserves the v1 stable profile scope" {
     defer std.testing.allocator.free(app_data_base);
     const metadata = InstallMetadata{
         .identifier = "com.example.app",
-        .channel = "production",
+        .channel = "stable",
         .name = "example-app",
         .display_name = "Example App",
         .hash = "currenthash",
@@ -448,16 +456,16 @@ test "macOS state root finds the early v1 display-name layout by current tar" {
     });
     // A stale modern candidate must not win over the root that owns the
     // running version's retained archive.
-    try tmp.dir.createDirPath(std.testing.io, "com.example.app/production");
+    try tmp.dir.createDirPath(std.testing.io, "com.example.app/stable");
     try tmp.dir.writeFile(std.testing.io, .{
-        .sub_path = "com.example.app/production/.electrobun-uninstall.json",
+        .sub_path = "com.example.app/stable/.electrobun-uninstall.json",
         .data = "{}",
     });
     const app_data_base = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
     defer std.testing.allocator.free(app_data_base);
     const metadata = InstallMetadata{
         .identifier = "com.example.app",
-        .channel = "production",
+        .channel = "stable",
         .name = "example-app",
         .display_name = "Example App",
         .hash = "currenthash",
@@ -569,7 +577,7 @@ test "uninstall metadata requires identifier and channel" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
         error.InvalidInstallIdentity,
-        parseInstallIdentity(allocator, "{\"identifier\":\"\",\"channel\":\"production\"}"),
+        parseInstallIdentity(allocator, "{\"identifier\":\"\",\"channel\":\"stable\"}"),
     );
     try std.testing.expectError(
         error.InvalidInstallIdentity,
@@ -577,6 +585,10 @@ test "uninstall metadata requires identifier and channel" {
     );
     try std.testing.expectError(
         error.InvalidInstallIdentity,
-        parseInstallIdentity(allocator, "{\"identifier\":\"../other\",\"channel\":\"production\"}"),
+        parseInstallIdentity(allocator, "{\"identifier\":\"../other\",\"channel\":\"stable\"}"),
+    );
+    try std.testing.expectError(
+        error.InvalidInstallIdentity,
+        parseInstallIdentity(allocator, "{\"identifier\":\"com.example.app\",\"channel\":\"production\"}"),
     );
 }

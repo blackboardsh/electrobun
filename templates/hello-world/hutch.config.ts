@@ -1,4 +1,4 @@
-// @hutch cli=0.12.0 cottontail=0.5.0
+// @hutch cli=0.13.0 cottontail=0.5.0
 export default {
 	electrobun: {
 		version: "2.0.1-beta.15",
@@ -8,6 +8,6 @@ export default {
 		install: ["hutch", "pm", "ci"],
 		start: ["hutch", "electrobun", "dev"],
 		dev: ["hutch", "electrobun", "dev", "--watch"],
-		build: ["hutch", "electrobun", "build", "--env=production"],
+		build: ["hutch", "electrobun", "build", "--env=stable"],
 	},
 };

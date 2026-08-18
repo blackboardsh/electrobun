@@ -3,7 +3,7 @@ title: "Code Signing"
 description: "Sign and notarize Electrobun releases on macOS."
 ---
 
-Hutch can sign, notarize, and staple macOS canary and production builds. Dev
+Hutch can sign, notarize, and staple macOS canary and stable builds. Dev
 builds are not signed even when `build.mac.codesign` is enabled.
 
 Windows release signing is not currently part of Hutch's packaging pipeline.
@@ -95,11 +95,11 @@ variables are used together; a partial set is not sufficient.
 
 ## Build A Signed Release
 
-Code signing runs for canary and production builds:
+Code signing runs for canary and stable builds:
 
 ```bash
 hutch electrobun build --env=canary
-hutch electrobun build --env=production
+hutch electrobun build --env=stable
 ```
 
 To diagnose packaging without submitting to Apple, retain `notarize: true` in

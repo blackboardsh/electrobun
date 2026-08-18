@@ -78,11 +78,10 @@ hutch electrobun sync
 
 # Create distributable builds
 hutch electrobun build --env=canary
-hutch electrobun build --env=production
+hutch electrobun build --env=stable
 ```
 
-Hutch's build environments are `dev`, `canary`, and `production`.
-`--env=stable` remains an alias for `--env=production`.
+Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
 After extracting a template, `init` syncs its exact Electrobun release and
 required native toolchain, then runs the template's configured `install` task
@@ -107,7 +106,7 @@ export default {
     install: ["hutch", "pm", "ci"],
     ui: ["hutch", "pm", "exec", "--", "vite", "build"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
-    build: ["hutch", "electrobun", "build", "--env=production"],
+    build: ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
