@@ -119,15 +119,23 @@ function updateTar(hash: string, path = "Example/Resources/version.json"): Uint8
 	]);
 }
 
-function paxRecord(key: string, value: string): Uint8Array {
-	const body = `${key}=${value}\n`;
-	let length = textEncoder.encode(body).byteLength + 2;
+function paxRecordBytes(key: string, value: Uint8Array): Uint8Array {
+	const body = concatenateBytes([
+		textEncoder.encode(`${key}=`),
+		value,
+		new Uint8Array([0x0a]),
+	]);
+	let length = body.byteLength + 2;
 	for (;;) {
-		const record = `${length} ${body}`;
-		const actual = textEncoder.encode(record).byteLength;
-		if (actual === length) return textEncoder.encode(record);
+		const prefix = textEncoder.encode(`${length} `);
+		const actual = prefix.byteLength + body.byteLength;
+		if (actual === length) return concatenateBytes([prefix, body]);
 		length = actual;
 	}
+}
+
+function paxRecord(key: string, value: string): Uint8Array {
+	return paxRecordBytes(key, textEncoder.encode(value));
 }
 
 const expected = {
@@ -423,6 +431,35 @@ describe("v2 update preparation contracts", () => {
 			const unsafePath = join(root, "unsafe.tar");
 			writeFileSync(unsafePath, updateTar("../escape"));
 			await expect(readUpdateHashFromTar(unsafePath)).rejects.toThrow("unsafe");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("ignores opaque binary PAX xattrs while reading update metadata", async () => {
+		const root = fixtureRoot();
+		try {
+			const hash = "xattrhash";
+			const metadata = textEncoder.encode(JSON.stringify({ hash }));
+			const archivePath = join(root, "binary-xattr.tar");
+			const pax = concatenateBytes([
+				paxRecordBytes(
+					"SCHILY.xattr.com.apple.provenance",
+					new Uint8Array([0xff, 0xfe, 0x00, 0x80]),
+				),
+				paxRecord("path", "Example/Resources/version.json"),
+				paxRecord("size", String(metadata.byteLength)),
+			]);
+			writeFileSync(
+				archivePath,
+				concatenateBytes([
+					tarEntry("PaxHeaders/version", pax, "x"),
+					tarEntry("version.json", metadata),
+					new Uint8Array(1024),
+				]),
+			);
+
+			await expect(readUpdateHashFromTar(archivePath)).resolves.toBe(hash);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

@@ -21,7 +21,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
@@ -52,8 +52,9 @@ const token = randomBytes(6).toString("hex");
 const identifier = `dev.example.updater-lifecycle.${token}`;
 const appName = `UpdaterLifecycleE2E-${token}`;
 const artifactAppName = appName;
+const temporaryBase = realpathSync(tmpdir());
 const temporaryRoot = realpathSync(
-	mkdtempSync(join(tmpdir(), `updater-lifecycle-e2e-${token}-`)),
+	mkdtempSync(join(temporaryBase, `updater-lifecycle-e2e-${token}-`)),
 );
 const releaseRoot = join(temporaryRoot, "releases");
 const serverRoot = join(temporaryRoot, "server");
@@ -175,7 +176,10 @@ function normalized(path) {
 function assertWithin(root, candidate, label) {
 	const fromRoot = relative(resolve(root), resolve(candidate));
 	assert.equal(
-		fromRoot === "" || (!fromRoot.startsWith(`..${sep}`) && fromRoot !== ".."),
+		fromRoot === "" ||
+			(!isAbsolute(fromRoot) &&
+				!fromRoot.startsWith(`..${sep}`) &&
+				fromRoot !== ".."),
 		true,
 		`${label} escaped the temporary root: ${candidate}`,
 	);
@@ -1125,7 +1129,7 @@ async function bestEffortCleanup() {
 		await new Promise((resolvePromise) => server.close(resolvePromise));
 	}
 	if (!keepTemporary) {
-		assertWithin(tmpdir(), temporaryRoot, "temporary cleanup root");
+		assertWithin(temporaryBase, temporaryRoot, "temporary cleanup root");
 		await removeTreeWithRetry(temporaryRoot);
 	} else {
 		console.log(`[updater-e2e] preserved temporary root: ${temporaryRoot}`);

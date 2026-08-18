@@ -1395,10 +1395,20 @@ function parsePaxRecords(bytes: Uint8Array): Record<string, string> {
 		) {
 			throw new Error("Invalid PAX record");
 		}
-		const body = tarDecoder.decode(bytes.subarray(space + 1, end - 1));
-		const equals = body.indexOf("=");
-		if (equals <= 0) throw new Error("Invalid PAX record");
-		records[body.slice(0, equals)] = body.slice(equals + 1);
+		const bodyStart = space + 1;
+		const bodyEnd = end - 1;
+		let equals = bodyStart;
+		while (equals < bodyEnd && bytes[equals] !== 0x3d) equals += 1;
+		if (equals === bodyStart || equals === bodyEnd) {
+			throw new Error("Invalid PAX record");
+		}
+		const key = tarDecoder.decode(bytes.subarray(bodyStart, equals));
+		if (key === "path" || key === "size") {
+			// macOS tar archives may contain opaque binary xattr values (for
+			// example SCHILY.xattr.com.apple.provenance). Only decode the PAX
+			// values that affect update metadata discovery.
+			records[key] = tarDecoder.decode(bytes.subarray(equals + 1, bodyEnd));
+		}
 		offset = end;
 	}
 	return records;
