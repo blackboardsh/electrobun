@@ -645,34 +645,42 @@ function findZig() {
 
 function runZigBuild(zig, projectRoot, buildArguments) {
 	const cacheName = projectRoot === extractorRoot ? "extractor" : "launcher";
-	try {
-		return run(
-			zig,
-			[
-				"build",
-				...buildArguments,
-				"--cache-dir",
-				join(temporaryRoot, "zig-cache-" + cacheName),
-				"--global-cache-dir",
-				join(temporaryRoot, "zig-global-cache"),
-			],
-			// A clean Windows global cache can spend several minutes compiling LLVM
-			// compiler-rt and the native UI bridge before any fixture executes.
-			{ cwd: projectRoot, timeout: 600_000 },
-		);
-	} catch (error) {
-		if (error.cause?.code === "ETIMEDOUT") {
+	for (let attempt = 0; attempt < 2; attempt += 1) {
+		const retrySuffix = attempt === 0 ? "" : "-retry";
+		try {
+			return run(
+				zig,
+				[
+					"build",
+					...buildArguments,
+					"--cache-dir",
+					join(temporaryRoot, "zig-cache-" + cacheName + retrySuffix),
+					"--global-cache-dir",
+					join(temporaryRoot, "zig-global-cache" + retrySuffix),
+				],
+				// A clean Windows global cache can spend several minutes compiling LLVM
+				// compiler-rt and the native UI bridge before any fixture executes.
+				{ cwd: projectRoot, timeout: 600_000 },
+			);
+		} catch (error) {
+			if (error.cause?.code !== "ETIMEDOUT") throw error;
+			let contained = true;
 			try {
 				terminateTemporaryBuildProcesses();
 			} catch (terminationError) {
+				contained = false;
 				console.error(
 					"Warning: timed-out Zig descendants could not be terminated:",
 					terminationError,
 				);
 			}
+			if (!contained || attempt === 1) throw error;
+			console.warn(
+				"Timed-out isolated Zig build was contained; retrying once with a fresh cache.",
+			);
 		}
-		throw error;
 	}
+	throw new Error("unreachable Zig build retry state");
 }
 
 function terminateTemporaryBuildProcesses() {

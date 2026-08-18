@@ -204,8 +204,14 @@ test("Windows uninstaller integration contains timed-out Zig descendants", () =>
 		"utf8",
 	);
 
-	assert.match(integrationSource, /error\.cause\?\.code === "ETIMEDOUT"/);
+	assert.match(integrationSource, /error\.cause\?\.code !== "ETIMEDOUT"/);
 	assert.match(integrationSource, /terminateTemporaryBuildProcesses\(\)/);
+	assert.match(
+		integrationSource,
+		/for \(let attempt = 0; attempt < 2; attempt \+= 1\)/,
+	);
+	assert.match(integrationSource, /attempt === 0 \? "" : "-retry"/);
+	assert.match(integrationSource, /if \(!contained \|\| attempt === 1\) throw error/);
 	assert.match(
 		integrationSource,
 		/process\.CommandLine\.IndexOf\(\$root, \[StringComparison\]::OrdinalIgnoreCase\)/,
