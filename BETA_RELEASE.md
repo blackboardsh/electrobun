@@ -17,11 +17,13 @@ From a clean `main` checkout, run the release task in `package`:
 hutch push:beta
 ```
 
-To exercise install, update, relaunch, and uninstall directly on the current
-native platform before the release task, run `hutch test:updater-lifecycle`
-from `package/`. The shared lifecycle builds four releases, verifies an app two
+The updater lifecycle is intentionally a local desktop-VM test and does not run
+as part of `check:release`, the `push:*` tasks, or release CI. When working on
+installer, updater, or uninstaller code, run `hutch test:updater-lifecycle` from
+`package/`. It builds four releases, installs the first, verifies an app two
 versions behind follows a two-patch chain, verifies the next update falls back
-to the full archive when its patch returns `404`, and then uninstalls.
+to the full archive when its patch returns `404`, and then uninstalls. It uses
+real native UI and may display installer or uninstaller windows while running.
 
 Before the first 2.0 release, also smoke-test one real v1.18.1 installation
 updating to the 2.0 release candidate. Keep `app.name`, `app.identifier`, and

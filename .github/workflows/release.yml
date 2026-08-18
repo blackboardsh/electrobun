@@ -236,21 +236,6 @@ jobs:
         run: hutch test:linux-native-dialog
         working-directory: package
 
-      - name: Test Linux adjacent archive installation
-        if: matrix.platform == 'linux' && matrix.arch == 'x64'
-        run: hutch test:linux-extractor
-        working-directory: package
-
-      - name: Test Windows standalone uninstaller
-        if: matrix.platform == 'win32'
-        run: hutch test:windows-uninstaller
-        working-directory: package
-
-      - name: Test application updater lifecycle
-        if: matrix.platform != 'linux' || matrix.arch == 'x64'
-        run: node scripts/test-updater-lifecycle.mjs
-        working-directory: package
-
       - name: Upload core artifact
         uses: actions/upload-artifact@v6
         with:

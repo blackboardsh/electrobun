@@ -115,14 +115,19 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 
 	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.13\.0'$/m);
 	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.5\.0'$/m);
-	assert.match(
-		workflow,
-		/^      - name: Test Windows standalone uninstaller\n        if: matrix\.platform == 'win32'\n        run: hutch test:windows-uninstaller\n        working-directory: package$/m,
-	);
-	assert.match(
-		workflow,
-		/^      - name: Test application updater lifecycle\n        if: matrix\.platform != 'linux' \|\| matrix\.arch == 'x64'\n        run: node scripts\/test-updater-lifecycle\.mjs\n        working-directory: package$/m,
-	);
+	for (const lifecycleToken of [
+		"test:linux-extractor",
+		"test:macos-uninstaller",
+		"test:windows-uninstaller",
+		"test:updater-lifecycle",
+		"test-updater-lifecycle.mjs",
+	]) {
+		assert.equal(
+			workflow.includes(lifecycleToken),
+			false,
+			`${lifecycleToken} must remain opt-in rather than running for every release`,
+		);
+	}
 	assert.match(
 		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,
