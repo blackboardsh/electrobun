@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
@@ -13,6 +13,16 @@ const manifest = JSON.parse(
 const productSourceManifest = JSON.parse(
 	readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
 );
+
+function gitStdout(args) {
+	const result = spawnSync("git", args, {
+		cwd: repositoryRoot,
+		encoding: "utf8",
+	});
+	if (result.error) throw result.error;
+	assert.equal(result.status, 0, result.stderr);
+	return result.stdout;
+}
 
 test("shares the product release version and remains dependency-free", () => {
 	assert.equal(manifest.name, "electrobun");
@@ -47,15 +57,17 @@ test("shares the product release version and remains dependency-free", () => {
 });
 
 test("packs only the allowlisted bootstrap files and stays tiny", () => {
-	const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-	const result = spawnSync(
-		npm,
-		["pack", "--dry-run", "--json", "--ignore-scripts"],
-		{
-			cwd: packageRoot,
-			encoding: "utf8",
-		},
-	);
+	const packArguments = ["pack", "--dry-run", "--json", "--ignore-scripts"];
+	const command =
+		process.platform === "win32" ? process.env.ComSpec || "cmd.exe" : "npm";
+	const arguments_ =
+		process.platform === "win32"
+			? ["/d", "/s", "/c", ["npm.cmd", ...packArguments].join(" ")]
+			: packArguments;
+	const result = spawnSync(command, arguments_, {
+		cwd: packageRoot,
+		encoding: "utf8",
+	});
 
 	if (result.error) throw result.error;
 	assert.equal(result.status, 0, result.stderr);
@@ -74,8 +86,16 @@ test("packs only the allowlisted bootstrap files and stays tiny", () => {
 test("ships an executable CommonJS entry point", () => {
 	const bootstrapPath = join(packageRoot, "bin", "electrobun.cjs");
 	const bootstrapSource = readFileSync(bootstrapPath, "utf8");
-	assert.notEqual(statSync(bootstrapPath).mode & 0o111, 0);
-	assert.match(bootstrapSource, /^#!\/usr\/bin\/env node\n/);
+	assert.match(
+		gitStdout([
+			"ls-files",
+			"--stage",
+			"--",
+			"npm/electrobun/bin/electrobun.cjs",
+		]),
+		/^100755 /,
+	);
+	assert.match(bootstrapSource, /^#!\/usr\/bin\/env node\r?\n/);
 	assert.doesNotMatch(bootstrapSource, /package\.json|packageVersion/);
 });
 
@@ -83,7 +103,7 @@ test("publishes from the unified product release lane before templates", () => {
 	const productWorkflow = readFileSync(
 		join(repositoryRoot, ".github", "workflows", "release.yml"),
 		"utf8",
-	);
+	).replace(/\r\n/g, "\n");
 
 	assert.equal(
 		existsSync(
@@ -123,8 +143,8 @@ test("the product source tree cannot be published in place", () => {
 	assert.equal(productSourceManifest.private, true);
 	assert.equal(productSourceManifest.bin, undefined);
 	assert.equal(
-		existsSync(join(repositoryRoot, "package", "src", "cli")),
-		false,
+		gitStdout(["ls-files", "--", "package/src/cli"]).trim(),
+		"",
 		"the retired product CLI must not coexist with the thin Hutch bootstrap",
 	);
 });
