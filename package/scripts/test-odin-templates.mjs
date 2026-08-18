@@ -64,12 +64,29 @@ function resolveSdkCollection() {
 	return { path: stagingRoot, cleanup: stagingRoot };
 }
 
+function removeTemporaryDirectory(path) {
+	try {
+		rmSync(path, {
+			recursive: true,
+			force: true,
+			maxRetries: 40,
+			retryDelay: 250,
+		});
+	} catch (error) {
+		// Windows scanners can retain the generated test executable after Odin
+		// exits. It lives under the OS temp directory, never in the worktree.
+		if (process.platform === "win32" && error?.code === "EPERM") return;
+		throw error;
+	}
+}
+
 const tests = templateTestPackages();
 if (tests.length === 0) {
 	throw new Error("No Odin template test packages were found");
 }
 
 const sdkCollection = resolveSdkCollection();
+const executionRoot = mkdtempSync(join(tmpdir(), "electrobun-odin-run-"));
 try {
 	for (const test of tests) {
 		console.log(`Testing ${test.name}...`);
@@ -80,7 +97,7 @@ try {
 				test.source,
 				`-collection:electrobun_sdk=${sdkCollection.path}`,
 			],
-			{ cwd: repositoryRoot, stdio: "inherit" },
+			{ cwd: executionRoot, stdio: "inherit" },
 		);
 		if (result.error) throw result.error;
 		if (result.status !== 0) {
@@ -91,8 +108,9 @@ try {
 	}
 } finally {
 	if (sdkCollection.cleanup) {
-		rmSync(sdkCollection.cleanup, { recursive: true, force: true });
+		removeTemporaryDirectory(sdkCollection.cleanup);
 	}
+	removeTemporaryDirectory(executionRoot);
 }
 
 console.log(`Odin template tests passed (${tests.length} packages).`);
