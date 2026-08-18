@@ -438,6 +438,13 @@ const LinuxDesktopIntegration = struct {
     }
 };
 
+const LinuxDesktopCollisionPolicy = enum {
+    preserve,
+    // v1 created these entries before Linux uninstall manifests recorded
+    // ownership hashes. Only migration paths may reclaim an exact match.
+    adopt_matching_legacy,
+};
+
 const LinuxUninstallManifest = struct {
     schema_version: u32,
     identifier: []const u8,
@@ -1707,7 +1714,7 @@ fn extractAndInstall(
     // coherent and a later installer run can safely retry integration.
     progress.update(.integrating, null, null);
     if (builtin.os.tag == .linux) {
-        try installLinuxIntegration(allocator, app_dir, metadata);
+        try installLinuxIntegration(allocator, app_dir, metadata, .preserve);
     } else if (builtin.os.tag == .windows) {
         try installWindowsIntegration(allocator, app_dir, metadata);
     }
@@ -2264,6 +2271,7 @@ fn createDesktopShortcut(
     data_home_path: []const u8,
     preserved_application_entry: ?[]const u8,
     preserved_desktop_entry: ?[]const u8,
+    collision_policy: LinuxDesktopCollisionPolicy,
 ) !LinuxDesktopIntegration {
     var integration: LinuxDesktopIntegration = .{};
     errdefer integration.deinit(allocator);
@@ -2319,7 +2327,8 @@ fn createDesktopShortcut(
 
     var found_desktop_file = false;
     var desktop_shortcut_created = false;
-    var applications_entry_created = false;
+    var desktop_shortcut_managed = false;
+    var applications_entry_managed = false;
     var iterator = app_dir_handle.iterate();
     while (try iterator.next(g_io)) |entry| {
         if (entry.kind == .file) {
@@ -2400,6 +2409,25 @@ fn createDesktopShortcut(
                         .{ .exclusive = true },
                     ) catch |err| switch (err) {
                         error.PathAlreadyExists => {
+                            if (collision_policy == .adopt_matching_legacy) {
+                                const matches_legacy_entry = matchingLegacyLinuxDesktopEntry(
+                                    allocator,
+                                    desktop_file_path,
+                                    desktop_dir,
+                                    &entry_hash,
+                                    launcher_path,
+                                ) catch |inspect_err| blk: {
+                                    std.debug.print("Warning: Could not inspect legacy Desktop entry: {}\n", .{inspect_err});
+                                    break :blk false;
+                                };
+                                if (matches_legacy_entry) {
+                                    integration.desktop_entry = try allocator.dupe(u8, desktop_file_path);
+                                    integration.desktop_entry_sha256 = try allocator.dupe(u8, &entry_hash);
+                                    desktop_shortcut_managed = true;
+                                    std.debug.print("Adopted matching legacy Desktop entry: {s}\n", .{desktop_file_path});
+                                    break :desktop_shortcut;
+                                }
+                            }
                             std.debug.print("Preserving pre-existing Desktop entry: {s}\n", .{desktop_file_path});
                             break :desktop_shortcut;
                         },
@@ -2422,6 +2450,7 @@ fn createDesktopShortcut(
                     integration.desktop_entry = try allocator.dupe(u8, desktop_file_path);
                     integration.desktop_entry_sha256 = try allocator.dupe(u8, &entry_hash);
                     desktop_shortcut_created = true;
+                    desktop_shortcut_managed = true;
                 }
             }
 
@@ -2450,6 +2479,25 @@ fn createDesktopShortcut(
                     .{ .exclusive = true },
                 ) catch |err| switch (err) {
                     error.PathAlreadyExists => {
+                        if (collision_policy == .adopt_matching_legacy) {
+                            const matches_legacy_entry = matchingLegacyLinuxDesktopEntry(
+                                allocator,
+                                applications_file_path,
+                                applications_dir,
+                                &entry_hash,
+                                launcher_path,
+                            ) catch |inspect_err| blk: {
+                                std.debug.print("Warning: Could not inspect legacy application entry: {}\n", .{inspect_err});
+                                break :blk false;
+                            };
+                            if (matches_legacy_entry) {
+                                integration.application_entry = try allocator.dupe(u8, applications_file_path);
+                                integration.application_entry_sha256 = try allocator.dupe(u8, &entry_hash);
+                                applications_entry_managed = true;
+                                std.debug.print("Adopted matching legacy application entry: {s}\n", .{applications_file_path});
+                                break :write_applications_dir;
+                            }
+                        }
                         std.debug.print("Preserving pre-existing application entry: {s}\n", .{applications_file_path});
                         break :write_applications_dir;
                     },
@@ -2492,7 +2540,7 @@ fn createDesktopShortcut(
                     std.debug.print("Note: Could not update desktop database: {}\n", .{err});
                 }
 
-                applications_entry_created = true;
+                applications_entry_managed = true;
                 integration.application_entry = try allocator.dupe(u8, applications_file_path);
                 integration.application_entry_sha256 = try allocator.dupe(u8, &entry_hash);
                 std.debug.print("Copied desktop shortcut to applications dir: {s}\n", .{applications_file_path});
@@ -2502,7 +2550,7 @@ fn createDesktopShortcut(
             if (desktop_shortcut_created) {
                 std.debug.print("Copied desktop shortcut to: {s}\n", .{desktop_file_path});
             }
-            if (!desktop_shortcut_created and !applications_entry_created) {
+            if (!desktop_shortcut_managed and !applications_entry_managed) {
                 std.debug.print("Warning: Could not create Desktop shortcut or applications menu entry\n", .{});
             }
 
@@ -3945,6 +3993,26 @@ fn prepareLinuxDesktopEntry(
     };
 }
 
+fn matchingLegacyLinuxDesktopEntry(
+    allocator: std.mem.Allocator,
+    path: []const u8,
+    allowed_parent: []const u8,
+    expected_hash: []const u8,
+    launcher_path: []const u8,
+) !bool {
+    // Reuse uninstall's no-follow, regular-file, hash, and Exec checks without
+    // removing the entry. The caller records ownership only after all match.
+    var prepared = try prepareLinuxDesktopEntry(
+        allocator,
+        path,
+        allowed_parent,
+        expected_hash,
+        launcher_path,
+    );
+    defer prepared.deinit();
+    return prepared.should_delete;
+}
+
 const LinuxManagedChild = enum { missing, file, directory };
 
 fn prepareLinuxManagedChild(parent: std.Io.Dir, name: []const u8) !LinuxManagedChild {
@@ -4080,6 +4148,7 @@ fn installLinuxIntegration(
     allocator: std.mem.Allocator,
     app_dir: []const u8,
     metadata: AppMetadata,
+    collision_policy: LinuxDesktopCollisionPolicy,
 ) !void {
     if (!isSafeLinuxComponent(metadata.identifier) or
         !isBuildChannel(metadata.channel) or
@@ -4173,6 +4242,7 @@ fn installLinuxIntegration(
         scope.data_home_path,
         preserved_application_entry,
         preserved_desktop_entry,
+        collision_policy,
     );
     defer integration.deinit(allocator);
     const version = try readInstalledVersion(allocator, app_dir);
@@ -7102,6 +7172,7 @@ fn applyUpdatePlatformIntegration(
     plan: ApplyUpdatePlan,
     hash: ?[]const u8,
     install_root_name: []const u8,
+    linux_desktop_collision_policy: LinuxDesktopCollisionPolicy,
 ) !void {
     const metadata = applyUpdateIntegrationMetadata(
         plan,
@@ -7112,7 +7183,12 @@ fn applyUpdatePlatformIntegration(
     if (builtin.os.tag == .windows) {
         try installWindowsIntegration(allocator, bundle_path, metadata);
     } else if (builtin.os.tag == .linux) {
-        try installLinuxIntegration(allocator, bundle_path, metadata);
+        try installLinuxIntegration(
+            allocator,
+            bundle_path,
+            metadata,
+            linux_desktop_collision_policy,
+        );
     } else {
         try installMacosUninstallManagerAtRoot(
             allocator,
@@ -7272,6 +7348,10 @@ fn performApplyUpdateTransaction(
         display_name
     else
         staged_display_name;
+    const linux_desktop_collision_policy: LinuxDesktopCollisionPolicy = if (had_uninstall_manifest)
+        .preserve
+    else
+        .adopt_matching_legacy;
 
     phase.* = .waiting_for_parent;
     try waitForApplyUpdateParent(plan.parent_pid);
@@ -7328,6 +7408,7 @@ fn performApplyUpdateTransaction(
         plan,
         plan.hash,
         install_root_name,
+        linux_desktop_collision_policy,
     ) catch |err| {
         rollbackAppliedUpdate(plan.app_bundle_path, previous_path) catch |rollback_error| {
             std.debug.print("ERROR: Update rollback failed after integration error: {}\n", .{rollback_error});
@@ -7342,6 +7423,7 @@ fn performApplyUpdateTransaction(
             plan,
             null,
             install_root_name,
+            linux_desktop_collision_policy,
         ) catch |repair_error| {
             std.debug.print("Warning: Could not restore previous uninstall integration: {}\n", .{repair_error});
         };
@@ -7363,6 +7445,7 @@ fn performApplyUpdateTransaction(
             plan,
             null,
             install_root_name,
+            linux_desktop_collision_policy,
         ) catch |repair_error| {
             std.debug.print("Warning: Could not restore previous uninstall integration: {}\n", .{repair_error});
         };
@@ -7787,6 +7870,7 @@ fn bootstrapLinuxInstall(
         allocator,
         app_dir,
         metadata.appMetadata(std.fs.path.basename(channel_root)),
+        .adopt_matching_legacy,
     );
     bootstrapTrace("linux: complete");
 }
@@ -8704,6 +8788,93 @@ test "Linux desktop entry launcher paths are escaped" {
         std.testing.allocator,
         "[Desktop Entry]\nExec=launcher --unexpected-argument\n",
         "/tmp/Quoted \"App\"/bin/launcher",
+    ));
+}
+
+test "Linux legacy desktop adoption requires exact generated contents and launcher" {
+    if (builtin.os.tag != .linux) return error.SkipZigTest;
+
+    g_io = std.testing.io;
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.createDir(std.testing.io, "applications", .default_dir);
+
+    const launcher_path = "/tmp/example app/bin/launcher";
+    const generated =
+        "[Desktop Entry]\n" ++
+        "Name=Example App\n" ++
+        "Exec=\"/tmp/example app/bin/launcher\"\n";
+    const edited =
+        "[Desktop Entry]\n" ++
+        "Name=My Edited Name\n" ++
+        "Exec=\"/tmp/example app/bin/launcher\"\n";
+    const unrelated =
+        "[Desktop Entry]\n" ++
+        "Name=Example App\n" ++
+        "Exec=\"/tmp/other app/bin/launcher\"\n";
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "applications/generated.desktop",
+        .data = generated,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "applications/edited.desktop",
+        .data = edited,
+    });
+    try tmp.dir.writeFile(std.testing.io, .{
+        .sub_path = "applications/unrelated.desktop",
+        .data = unrelated,
+    });
+
+    const tmp_path = try tmp.dir.realPathFileAlloc(std.testing.io, ".", std.testing.allocator);
+    defer std.testing.allocator.free(tmp_path);
+    const applications_dir = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ tmp_path, "applications" },
+    );
+    defer std.testing.allocator.free(applications_dir);
+    const generated_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ applications_dir, "generated.desktop" },
+    );
+    defer std.testing.allocator.free(generated_path);
+    const edited_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ applications_dir, "edited.desktop" },
+    );
+    defer std.testing.allocator.free(edited_path);
+    const unrelated_path = try std.fs.path.join(
+        std.testing.allocator,
+        &.{ applications_dir, "unrelated.desktop" },
+    );
+    defer std.testing.allocator.free(unrelated_path);
+
+    var generated_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(generated, &generated_digest, .{});
+    const generated_hash = std.fmt.bytesToHex(generated_digest, .lower);
+    try std.testing.expect(try matchingLegacyLinuxDesktopEntry(
+        std.testing.allocator,
+        generated_path,
+        applications_dir,
+        &generated_hash,
+        launcher_path,
+    ));
+    try std.testing.expect(!try matchingLegacyLinuxDesktopEntry(
+        std.testing.allocator,
+        edited_path,
+        applications_dir,
+        &generated_hash,
+        launcher_path,
+    ));
+
+    var unrelated_digest: [std.crypto.hash.sha2.Sha256.digest_length]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(unrelated, &unrelated_digest, .{});
+    const unrelated_hash = std.fmt.bytesToHex(unrelated_digest, .lower);
+    try std.testing.expect(!try matchingLegacyLinuxDesktopEntry(
+        std.testing.allocator,
+        unrelated_path,
+        applications_dir,
+        &unrelated_hash,
+        launcher_path,
     ));
 }
 
