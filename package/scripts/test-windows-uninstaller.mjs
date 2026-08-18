@@ -645,20 +645,70 @@ function findZig() {
 
 function runZigBuild(zig, projectRoot, buildArguments) {
 	const cacheName = projectRoot === extractorRoot ? "extractor" : "launcher";
-	return run(
-		zig,
-		[
-			"build",
-			...buildArguments,
-			"--cache-dir",
-			join(temporaryRoot, "zig-cache-" + cacheName),
-			"--global-cache-dir",
-			join(temporaryRoot, "zig-global-cache"),
-		],
-		// A clean Windows global cache can spend several minutes compiling LLVM
-		// compiler-rt and the native UI bridge before any fixture executes.
-		{ cwd: projectRoot, timeout: 600_000 },
-	);
+	try {
+		return run(
+			zig,
+			[
+				"build",
+				...buildArguments,
+				"--cache-dir",
+				join(temporaryRoot, "zig-cache-" + cacheName),
+				"--global-cache-dir",
+				join(temporaryRoot, "zig-global-cache"),
+			],
+			// A clean Windows global cache can spend several minutes compiling LLVM
+			// compiler-rt and the native UI bridge before any fixture executes.
+			{ cwd: projectRoot, timeout: 600_000 },
+		);
+	} catch (error) {
+		if (error.cause?.code === "ETIMEDOUT") {
+			try {
+				terminateTemporaryBuildProcesses();
+			} catch (terminationError) {
+				console.error(
+					"Warning: timed-out Zig descendants could not be terminated:",
+					terminationError,
+				);
+			}
+		}
+		throw error;
+	}
+}
+
+function terminateTemporaryBuildProcesses() {
+	const script = `
+$root = ${psLiteral(temporaryRoot)}
+$matchesRoot = {
+    param($process)
+    $process.ProcessId -ne $PID -and
+        $process.CommandLine -and
+        $process.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0
+}
+$processes = @(Get-CimInstance Win32_Process | Where-Object $matchesRoot)
+foreach ($process in @($processes | Sort-Object CreationDate -Descending)) {
+    Stop-Process -Id $process.ProcessId -Force -ErrorAction SilentlyContinue
+}
+$deadline = [DateTime]::UtcNow.AddSeconds(15)
+do {
+    $remaining = @(Get-CimInstance Win32_Process | Where-Object $matchesRoot)
+    if ($remaining.Count -eq 0) { break }
+    Start-Sleep -Milliseconds 100
+} while ([DateTime]::UtcNow -lt $deadline)
+if ($remaining.Count -ne 0) {
+    throw ('Timed-out fixture processes remained: ' + (($remaining | ForEach-Object ProcessId) -join ', '))
+}
+`;
+	runPowerShell(script, { cwd: packageRoot, timeout: 30_000 });
+}
+
+function removeTemporaryRoot() {
+	assertExactOrChild(tmpdir(), temporaryRoot, "temporary cleanup");
+	rmSync(temporaryRoot, {
+		force: true,
+		recursive: true,
+		maxRetries: 40,
+		retryDelay: 250,
+	});
 }
 
 function windowsKnownFolder(name, fallback) {
@@ -1937,8 +1987,7 @@ function cleanupEverything() {
 	try {
 		rmdirSync(identifierRoot);
 	} catch {}
-	assertExactOrChild(tmpdir(), temporaryRoot, "temporary cleanup");
-	rmSync(temporaryRoot, { force: true, recursive: true });
+	removeTemporaryRoot();
 }
 
 try {
@@ -2022,7 +2071,6 @@ try {
 	if (fixtureCleanupArmed) {
 		cleanupEverything();
 	} else {
-		assertExactOrChild(tmpdir(), temporaryRoot, "unarmed temporary cleanup");
-		rmSync(temporaryRoot, { force: true, recursive: true });
+		removeTemporaryRoot();
 	}
 }

@@ -197,3 +197,19 @@ test("Windows uninstaller integration exercises the native update-refresh worker
 	assert.match(integrationSource, /"temporary update-refresh manager cleanup"/);
 	assert.doesNotMatch(integrationSource, /createWindowsRegistrationRefreshBatch/);
 });
+
+test("Windows uninstaller integration contains timed-out Zig descendants", () => {
+	const integrationSource = readFileSync(
+		new URL("./test-windows-uninstaller.mjs", import.meta.url),
+		"utf8",
+	);
+
+	assert.match(integrationSource, /error\.cause\?\.code === "ETIMEDOUT"/);
+	assert.match(integrationSource, /terminateTemporaryBuildProcesses\(\)/);
+	assert.match(
+		integrationSource,
+		/process\.CommandLine\.IndexOf\(\$root, \[StringComparison\]::OrdinalIgnoreCase\)/,
+	);
+	assert.match(integrationSource, /maxRetries: 40/);
+	assert.match(integrationSource, /retryDelay: 250/);
+});
