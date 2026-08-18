@@ -342,8 +342,13 @@ function runInherited(command: string, args: string[], cwd = process.cwd()) {
 	}
 }
 
-async function runZigBuild(projectDir: string, zigArgs: string[]) {
-	const optimizeArgs = CHANNEL === "release" ? ["-Doptimize=ReleaseSmall"] : [];
+async function runZigBuild(
+	projectDir: string,
+	zigArgs: string[],
+	releaseOptimize: "ReleaseFast" | "ReleaseSmall" = "ReleaseSmall",
+) {
+	const optimizeArgs =
+		CHANNEL === "release" ? [`-Doptimize=${releaseOptimize}`] : [];
 	if (OS === "win") {
 		runInherited(
 			PATH.zig.BIN,
@@ -355,7 +360,7 @@ async function runZigBuild(projectDir: string, zigArgs: string[]) {
 
 	const projectPath = join("src", projectDir);
 	if (CHANNEL === "release") {
-		await $`cd ${projectPath} && ../../vendors/zig/zig build -Doptimize=ReleaseSmall ${zigArgs}`;
+		await $`cd ${projectPath} && ../../vendors/zig/zig build ${optimizeArgs} ${zigArgs}`;
 	} else {
 		await $`cd ${projectPath} && ../../vendors/zig/zig build ${zigArgs}`;
 	}
@@ -2713,7 +2718,7 @@ async function buildSelfExtractor() {
 				? ["-Dcpu=baseline"]
 				: [];
 
-	await runZigBuild("extractor", zigArgs);
+	await runZigBuild("extractor", zigArgs, "ReleaseFast");
 }
 
 async function buildPreload() {
