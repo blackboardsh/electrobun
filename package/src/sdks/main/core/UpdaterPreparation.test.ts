@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import {
 	existsSync,
 	mkdirSync,
@@ -13,9 +14,12 @@ import { getPlatformPrefix } from "../../../shared/naming";
 import { ARCH, OS } from "../../../shared/platform";
 import {
 	atomicWriteFile,
+	applyVerifiedDeltaPatch,
 	buildUpdateArtifactUrl,
+	buildUpdatePatchUrl,
 	createDownloadProgressThrottleState,
 	createNativeUpdatePlan,
+	downloadVerifiedFile,
 	nextDownloadProgressPercent,
 	publishFileReplacingRegular,
 	resolveInstalledChannelRoot,
@@ -24,20 +28,11 @@ import {
 	resolveUpdateHelperSource,
 	syncFile,
 	validateUpdateManifest,
+	verifyRegularFileIntegrity,
 } from "./Updater";
 
-const temporaryDirectories: string[] = [];
-
-afterEach(() => {
-	for (const directory of temporaryDirectories.splice(0)) {
-		rmSync(directory, { recursive: true, force: true });
-	}
-});
-
 function fixtureRoot(): string {
-	const root = mkdtempSync(join(tmpdir(), "electrobun-updater-v2-"));
-	temporaryDirectories.push(root);
-	return root;
+	return mkdtempSync(join(tmpdir(), "electrobun-updater-v2-"));
 }
 
 function validManifest() {
@@ -55,6 +50,10 @@ function validManifest() {
 			sha256: "a".repeat(64),
 		},
 	};
+}
+
+function sha256(bytes: Uint8Array | string): string {
+	return createHash("sha256").update(bytes).digest("hex");
 }
 
 const expected = {
@@ -80,6 +79,57 @@ describe("v2 update preparation contracts", () => {
 			platform: document.platform,
 			arch: document.arch,
 		});
+	});
+
+	test("accepts and pins authenticated direct-patch metadata", () => {
+		const prefix = getPlatformPrefix("production", OS, ARCH);
+		const patch = {
+			fromHash: "oldhash",
+			file: `${prefix}-oldhash.patch`,
+			size: 456,
+			sha256: "b".repeat(64),
+			targetSize: 789,
+			targetSha256: "c".repeat(64),
+		};
+		const manifest = validateUpdateManifest(
+			{ ...validManifest(), patch },
+			expected,
+		);
+		expect(manifest.patch).toEqual(patch);
+		expect(
+			buildUpdatePatchUrl(
+				"https://updates.example.test/releases/",
+				patch.file,
+				patch.sha256,
+			),
+		).toBe(
+			`https://updates.example.test/releases/${encodeURIComponent(patch.file)}?sha256=${patch.sha256}`,
+		);
+	});
+
+	test("rejects unsafe or incomplete direct-patch metadata", () => {
+		const prefix = getPlatformPrefix("production", OS, ARCH);
+		const validPatch = {
+			fromHash: "oldhash",
+			file: `${prefix}-oldhash.patch`,
+			size: 456,
+			sha256: "b".repeat(64),
+			targetSize: 789,
+			targetSha256: "c".repeat(64),
+		};
+		for (const patch of [
+			null,
+			{ ...validPatch, fromHash: "../old" },
+			{ ...validPatch, file: `${prefix}-other.patch` },
+			{ ...validPatch, size: 0 },
+			{ ...validPatch, sha256: "B".repeat(64) },
+			{ ...validPatch, targetSize: 0 },
+			{ ...validPatch, targetSha256: "C".repeat(64) },
+		]) {
+			expect(() =>
+				validateUpdateManifest({ ...validManifest(), patch }, expected),
+			).toThrow();
+		}
 	});
 
 	for (const mutation of [
@@ -167,6 +217,116 @@ describe("v2 update preparation contracts", () => {
 		expect(nextDownloadProgressPercent(state, 1, 1_000, 1_000)).toBe(0);
 		expect(nextDownloadProgressPercent(state, 10, 1_000, 1_300)).toBe(1);
 		expect(nextDownloadProgressPercent(state, 11, 1_000, 2_000)).toBeNull();
+	});
+
+	test("streams an authenticated update file to disk and removes rejected bytes", async () => {
+		const root = fixtureRoot();
+		try {
+			const bytes = new TextEncoder().encode("authenticated patch bytes");
+			const destination = join(root, "patch.partial");
+			await downloadVerifiedFile(
+				new Response(bytes, {
+					headers: { "content-length": String(bytes.byteLength) },
+				}),
+				destination,
+				bytes.byteLength,
+				sha256(bytes),
+				"Update patch",
+			);
+			expect(readFileSync(destination)).toEqual(Buffer.from(bytes));
+
+			const rejected = join(root, "rejected.partial");
+			await expect(
+				downloadVerifiedFile(
+					new Response(bytes),
+					rejected,
+					bytes.byteLength,
+					"0".repeat(64),
+					"Update patch",
+				),
+			).rejects.toThrow("SHA-256");
+			expect(existsSync(rejected)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("applies a direct patch with argv and verifies its target before publication", async () => {
+		const root = fixtureRoot();
+		try {
+			const bspatchPath = join(root, OS === "win" ? "bspatch.exe" : "bspatch");
+			const currentTarPath = join(root, "old.tar");
+			const patchPath = join(root, "old.patch");
+			const outputPath = join(root, "target.partial");
+			const target = new TextEncoder().encode("verified target tar bytes");
+			for (const [path, contents] of [
+				[bspatchPath, "executable"],
+				[currentTarPath, "current tar"],
+				[patchPath, "patch"],
+			] as const) {
+				writeFileSync(path, contents);
+			}
+			let invocation:
+				| { executable: string; args: readonly string[] }
+				| undefined;
+			await applyVerifiedDeltaPatch(
+				{
+					bspatchPath,
+					currentTarPath,
+					patchPath,
+					outputPath,
+					targetSize: target.byteLength,
+					targetSha256: sha256(target),
+				},
+				(executable, args) => {
+					invocation = { executable, args: [...args] };
+					writeFileSync(args[1]!, target);
+				},
+			);
+			expect(invocation).toEqual({
+				executable: bspatchPath,
+				args: [currentTarPath, outputPath, patchPath],
+			});
+			await expect(
+				verifyRegularFileIntegrity(
+					outputPath,
+					target.byteLength,
+					sha256(target),
+					"Patched update archive",
+				),
+			).resolves.toBeUndefined();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("rejects a patch output whose target digest does not match", async () => {
+		const root = fixtureRoot();
+		try {
+			const bspatchPath = join(root, OS === "win" ? "bspatch.exe" : "bspatch");
+			const currentTarPath = join(root, "old.tar");
+			const patchPath = join(root, "old.patch");
+			const outputPath = join(root, "target.partial");
+			for (const path of [bspatchPath, currentTarPath, patchPath]) {
+				writeFileSync(path, "input");
+			}
+			await expect(
+				applyVerifiedDeltaPatch(
+					{
+						bspatchPath,
+						currentTarPath,
+						patchPath,
+						outputPath,
+						targetSize: 5,
+						targetSha256: "0".repeat(64),
+					},
+					(_executable, args) => writeFileSync(args[1]!, "wrong"),
+				),
+			).rejects.toThrow("SHA-256");
+			expect(existsSync(outputPath)).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	test("falls back to the bundled native manager for a v1-installed app", () => {

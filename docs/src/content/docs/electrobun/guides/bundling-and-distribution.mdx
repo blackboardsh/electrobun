@@ -146,9 +146,11 @@ invalid previous artifact also skips patch generation while preserving the
 full update archive. Set `generatePatch: false` for an intentional build that
 must not consult the release host.
 
-Patch generation is available for custom distribution pipelines. The built-in
-Electrobun 2.0 updater downloads the full archive named in the update metadata,
-then verifies its declared size and SHA-256 before applying it.
+Hutch records the patch's source hash, filename, size, and SHA-256 together
+with the reconstructed target tar's size and SHA-256. The built-in updater uses
+the patch only when those identities match and all checks pass. Otherwise it
+downloads the full archive named in the same metadata and verifies that
+archive's declared size and SHA-256 before applying it.
 
 See [Updater](/electrobun/apis/updater) for application-side checks, downloads,
 and installation.

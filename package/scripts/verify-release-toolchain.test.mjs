@@ -113,7 +113,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		assert.match(matrix, new RegExp(`^          - os: ${runner}$`, "m"));
 	}
 
-	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.11\.0'$/m);
+	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.12\.0'$/m);
 	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.5\.0'$/m);
 	assert.match(
 		workflow,

@@ -54,12 +54,13 @@ const fail = (error: unknown, version?: string) => {
 };
 
 let resolveReconciledComplete: ((entry: UpdateStatusEntry) => void) | undefined;
+let runningVersion = control.builtVersion;
 const reconciledComplete = new Promise<UpdateStatusEntry>((resolvePromise) => {
 	resolveReconciledComplete = resolvePromise;
 });
 
 const recordStatus = (entry: UpdateStatusEntry) => {
-	appendEvent("updater-status", undefined, entry);
+	appendEvent("updater-status", runningVersion, entry);
 	if (entry.status === "complete") resolveReconciledComplete?.(entry);
 };
 
@@ -83,6 +84,12 @@ const waitForReconciledComplete = async (): Promise<UpdateStatusEntry> => {
 const run = async () => {
 	Updater.onStatusChange(recordStatus);
 	const localInfo = await Updater.getLocalInfo();
+	if (localInfo.version !== control.builtVersion) {
+		throw new Error(
+			`packaged fixture version mismatch: ${JSON.stringify({ local: localInfo.version, built: control.builtVersion })}`,
+		);
+	}
+	runningVersion = localInfo.version;
 	appendEvent("launched", localInfo.version, {
 		hash: localInfo.hash,
 		channel: localInfo.channel,
@@ -98,10 +105,12 @@ const run = async () => {
 			`unexpected installed identity ${localInfo.identifier}/${localInfo.channel}`,
 		);
 	}
-	if (
-		localInfo.version !== control.initialVersion &&
-		localInfo.version !== control.targetVersion
-	) {
+	const releaseSequence = [
+		control.initialVersion,
+		control.patchTargetVersion,
+		control.fallbackTargetVersion,
+	];
+	if (!releaseSequence.includes(localInfo.version)) {
 		throw new Error(
 			`packaged version ${localInfo.version} is outside the fixture lifecycle`,
 		);
@@ -127,6 +136,16 @@ const run = async () => {
 		});
 		Utils.quit(0);
 		return;
+	}
+	const activation = JSON.parse(
+		readFileSync(control.updateActivationPath, "utf8"),
+	) as { runToken?: unknown; targetVersion?: unknown };
+	if (
+		activation.runToken !== control.runToken ||
+		typeof activation.targetVersion !== "string" ||
+		!releaseSequence.includes(activation.targetVersion)
+	) {
+		throw new Error(`invalid update activation: ${JSON.stringify(activation)}`);
 	}
 	if (!scopedLaunch) {
 		throw new Error(
@@ -174,27 +193,41 @@ const run = async () => {
 		);
 	}
 
-	if (localInfo.version === control.targetVersion) {
-		if (existsSync(control.bootstrapVerificationPath)) {
-			appendEvent("target-bootstrap-repaired", localInfo.version, {
-				standaloneManagerPath,
-				uninstallManifestPath,
-			});
-			Utils.quit(0);
-			return;
+	if (existsSync(control.bootstrapVerificationPath)) {
+		if (localInfo.version !== control.patchTargetVersion) {
+			throw new Error(
+				`bootstrap repair must run on ${control.patchTargetVersion}, not ${localInfo.version}`,
+			);
 		}
+		appendEvent("target-bootstrap-repaired", localInfo.version, {
+			standaloneManagerPath,
+			uninstallManifestPath,
+		});
+		Utils.quit(0);
+		return;
+	}
+
+	const currentIndex = releaseSequence.indexOf(localInfo.version);
+	const targetIndex = releaseSequence.indexOf(activation.targetVersion);
+	if (localInfo.version === activation.targetVersion) {
 		const preservedUserData = JSON.parse(
 			readFileSync(userDataSentinelPath, "utf8"),
 		);
 		const preservedBrowserProfile = JSON.parse(
 			readFileSync(browserProfileSentinelPath, "utf8"),
 		);
+		const expectedVisits =
+			localInfo.version === control.patchTargetVersion
+				? []
+				: [control.patchTargetVersion];
 		if (
 			preservedUserData.runToken !== control.runToken ||
-			preservedUserData.value !== "preserved-across-update"
+			preservedUserData.value !== "preserved-across-update" ||
+			JSON.stringify(preservedUserData.visitedVersions) !==
+				JSON.stringify(expectedVisits)
 		) {
 			throw new Error(
-				`v1 user data was not preserved: ${JSON.stringify(preservedUserData)}`,
+				`user data did not preserve the expected update chain: ${JSON.stringify({ preservedUserData, expectedVisits })}`,
 			);
 		}
 		if (
@@ -211,9 +244,17 @@ const run = async () => {
 			userLogs: Utils.paths.userLogs,
 			browserProfileRoot: control.browserProfileRoot,
 		});
+		writeJsonAtomically(userDataSentinelPath, {
+			...preservedUserData,
+			visitedVersions: [...expectedVisits, localInfo.version],
+		});
 		const reconciledStatus = await waitForReconciledComplete();
 		appendEvent("update-result-reconciled", localInfo.version, reconciledStatus);
-		writeJsonAtomically(control.relaunchSentinelPath, {
+		const relaunchSentinelPath =
+			localInfo.version === control.patchTargetVersion
+				? control.patchRelaunchSentinelPath
+				: control.fallbackRelaunchSentinelPath;
+		writeJsonAtomically(relaunchSentinelPath, {
 			runToken: control.runToken,
 			pid: process.pid,
 			version: localInfo.version,
@@ -228,35 +269,64 @@ const run = async () => {
 		return;
 	}
 
-	if (localInfo.version !== control.initialVersion) {
-		throw new Error(`unexpected fixture version ${localInfo.version}`);
+	if (targetIndex !== currentIndex + 1) {
+		throw new Error(
+			`unsupported fixture update transition ${localInfo.version} -> ${activation.targetVersion}`,
+		);
 	}
-	appendEvent("integration-bootstrapped", localInfo.version, {
-		standaloneManagerPath,
-		uninstallManifestPath,
-	});
-	mkdirSync(Utils.paths.userData, { recursive: true });
-	mkdirSync(control.browserProfileRoot, { recursive: true });
-	writeJsonAtomically(userDataSentinelPath, {
-		runToken: control.runToken,
-		value: "preserved-across-update",
-	});
-	writeJsonAtomically(browserProfileSentinelPath, {
-		runToken: control.runToken,
-		value: "profile-preserved-across-update",
-	});
-	appendEvent("user-data-seeded", localInfo.version, {
-		userData: Utils.paths.userData,
-		userCache: Utils.paths.userCache,
-		userLogs: Utils.paths.userLogs,
-		browserProfileRoot: control.browserProfileRoot,
-	});
+	if (localInfo.version === control.initialVersion) {
+		appendEvent("integration-bootstrapped", localInfo.version, {
+			standaloneManagerPath,
+			uninstallManifestPath,
+		});
+		mkdirSync(Utils.paths.userData, { recursive: true });
+		mkdirSync(control.browserProfileRoot, { recursive: true });
+		writeJsonAtomically(userDataSentinelPath, {
+			runToken: control.runToken,
+			value: "preserved-across-update",
+			visitedVersions: [],
+		});
+		writeJsonAtomically(browserProfileSentinelPath, {
+			runToken: control.runToken,
+			value: "profile-preserved-across-update",
+		});
+		appendEvent("user-data-seeded", localInfo.version, {
+			userData: Utils.paths.userData,
+			userCache: Utils.paths.userCache,
+			userLogs: Utils.paths.userLogs,
+			browserProfileRoot: control.browserProfileRoot,
+		});
+	} else {
+		const preservedUserData = JSON.parse(
+			readFileSync(userDataSentinelPath, "utf8"),
+		);
+		const preservedBrowserProfile = JSON.parse(
+			readFileSync(browserProfileSentinelPath, "utf8"),
+		);
+		if (
+			preservedUserData.runToken !== control.runToken ||
+			JSON.stringify(preservedUserData.visitedVersions) !==
+				JSON.stringify([control.patchTargetVersion]) ||
+			preservedBrowserProfile.runToken !== control.runToken
+		) {
+			throw new Error(
+				`intermediate release state was not preserved: ${JSON.stringify({ preservedUserData, preservedBrowserProfile })}`,
+			);
+		}
+		appendEvent("source-data-preserved", localInfo.version, {
+			userData: Utils.paths.userData,
+			browserProfileRoot: control.browserProfileRoot,
+		});
+	}
 
 	const available = await Updater.checkForUpdate();
 	if (available.error) throw new Error(available.error);
-	if (!available.updateAvailable || available.version !== control.targetVersion) {
+	if (
+		!available.updateAvailable ||
+		available.version !== activation.targetVersion
+	) {
 		throw new Error(
-			`expected ${control.targetVersion} update, received ${JSON.stringify(available)}`,
+			`expected ${activation.targetVersion} update, received ${JSON.stringify(available)}`,
 		);
 	}
 

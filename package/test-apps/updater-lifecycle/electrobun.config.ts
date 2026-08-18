@@ -9,7 +9,7 @@ const appName = requiredEnvironment("ELECTROBUN_UPDATER_E2E_NAME");
 const identifier = requiredEnvironment("ELECTROBUN_UPDATER_E2E_IDENTIFIER");
 const baseUrl = requiredEnvironment("ELECTROBUN_UPDATER_E2E_BASE_URL");
 
-if (version !== "1.0.0" && version !== "2.0.0") {
+if (!["1.0.0", "2.0.0", "3.0.0"].includes(version)) {
 	throw new Error(`unsupported updater lifecycle fixture version: ${version}`);
 }
 
@@ -51,8 +51,6 @@ export default {
 	},
 	release: {
 		baseUrl,
-		// Version 2.0's supported updater path is the full archive. Keeping
-		// patches disabled makes this fixture exercise exactly the shipped path.
-		generatePatch: false,
+		generatePatch: true,
 	},
 };

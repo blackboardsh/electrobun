@@ -4,10 +4,10 @@ description: "Publish update artifacts and automate cross-platform releases."
 ---
 
 Shipping updates in Electrobun doesn't require an update server — updates are
-just static files. Hutch creates the update metadata and compressed full bundle
-at build time; the application-side `Updater` checks, verifies, and installs
-them. Anything that serves files over HTTPS works as the host: R2, S3, GitHub
-Releases, or a plain static server.
+just static files. Hutch creates the update metadata, compressed full bundle,
+and an optional delta patch at build time; the application-side `Updater`
+checks, verifies, and installs them. Anything that serves files over HTTPS
+works as the host: R2, S3, GitHub Releases, or a plain static server.
 
 This page covers the publishing side — where artifacts go and how to automate
 building them for every platform. The application-side API lives in the
@@ -41,6 +41,13 @@ The metadata names the exact `.tar.zst` artifact and includes its byte size and
 SHA-256. The updater rejects mismatched metadata, targets, or archive bytes
 before preparing an update.
 
+When Hutch can reach the previous release, the metadata also names a patch for
+that exact source hash and pins the patch and reconstructed target tar by size
+and SHA-256. The updater uses it only when the installed retained tar matches
+the declared source. A missing, invalid, or failed patch falls back to the
+authenticated full archive; hosts should return a normal `404` for unavailable
+patch files.
+
 The identity fields used by Electrobun 1.x (`version`, `hash`, `platform`, and
 `arch`) remain at the top level. Together with the production aliases described
 below, those additive fields provide a one-time bridge for Electrobun v1.18.1
@@ -56,9 +63,8 @@ actual 1.x `stable` state root. It creates
 the 2.0 update/uninstall manager metadata in that existing root, so those users
 do not need to reinstall first.
 
-Electrobun 2.0 deliberately uses the verified full archive for application
-updates. Hutch can still emit optional delta-patch artifacts with
-`release.generatePatch`, but the built-in 2.0 updater does not consume them.
+Patch metadata is additive, so the full archive remains the canonical fallback
+and the v1.18.1 bridge fields remain at the top level.
 
 ## Release Tags
 

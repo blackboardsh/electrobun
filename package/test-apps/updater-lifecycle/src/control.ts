@@ -3,8 +3,10 @@
 export type UpdaterLifecycleControl = {
 	readonly runToken: string;
 	readonly identifier: string;
+	readonly builtVersion: string;
 	readonly initialVersion: string;
-	readonly targetVersion: string;
+	readonly patchTargetVersion: string;
+	readonly fallbackTargetVersion: string;
 	readonly channel: string;
 	readonly channelRoot: string;
 	readonly appBundlePath: string;
@@ -12,7 +14,8 @@ export type UpdaterLifecycleControl = {
 	readonly signalDirectory: string;
 	readonly eventLogPath: string;
 	readonly failurePath: string;
-	readonly relaunchSentinelPath: string;
+	readonly patchRelaunchSentinelPath: string;
+	readonly fallbackRelaunchSentinelPath: string;
 	readonly updateActivationPath: string;
 	readonly bootstrapVerificationPath: string;
 };

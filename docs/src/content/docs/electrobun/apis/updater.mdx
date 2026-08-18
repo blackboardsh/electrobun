@@ -11,8 +11,9 @@ see [Native main process](/electrobun/guides/native-main-process/).
 </Aside>
 
 Hutch production and canary builds create identity- and integrity-pinned update
-metadata plus a compressed full bundle. Publish the artifact directory to a
-static host and configure its public base URL:
+metadata plus a compressed full bundle. When a previous release is available,
+Hutch also creates an authenticated delta patch. Publish the artifact directory
+to a static host and configure its public base URL:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -52,6 +53,12 @@ they allow the quit, a native post-exit helper validates the downloaded bundle,
 replaces the installed app transactionally, refreshes platform integration,
 and launches the new version. A failed replacement restores the previous app.
 It does nothing until a verified download is ready.
+
+`downloadUpdate()` attempts the patch named in the update metadata when it
+matches the installed hash and the retained local archive is available. It
+verifies both the downloaded patch and its reconstructed target archive. If the
+patch is missing or rejected, the updater downloads and verifies the full
+archive instead.
 
 <Aside type="note">
 The `dev` channel never reports an available update. Exercise updater behavior
@@ -108,7 +115,7 @@ Updater.onStatusChange(null);
 void history;
 ```
 
-Statuses cover checking, full-bundle download progress, preparation, handoff,
-relaunch, completion, and errors.
+Statuses cover checking, authenticated patch attempts and fallback, full-bundle
+download progress, preparation, handoff, relaunch, completion, and errors.
 `UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
 structured `details`.

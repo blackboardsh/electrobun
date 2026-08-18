@@ -27,7 +27,13 @@ import { fileURLToPath } from "node:url";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
-const TARGET_VERSION = "2.0.0";
+const PATCH_TARGET_VERSION = "2.0.0";
+const FALLBACK_TARGET_VERSION = "3.0.0";
+const RELEASE_VERSIONS = [
+	INITIAL_VERSION,
+	PATCH_TARGET_VERSION,
+	FALLBACK_TARGET_VERSION,
+];
 const CHANNEL = "production";
 const LEGACY_CHANNEL_ROOT_NAME = "stable";
 const DEFAULT_TIMEOUT_MS = 5 * 60_000;
@@ -54,7 +60,8 @@ const serverRoot = join(temporaryRoot, "server");
 const signalDirectory = join(temporaryRoot, "signals");
 const eventLogPath = join(signalDirectory, "events.jsonl");
 const failurePath = join(signalDirectory, "failure.json");
-const relaunchSentinelPath = join(signalDirectory, "v2-relaunched.json");
+const patchRelaunchSentinelPath = join(signalDirectory, "v2-relaunched.json");
+const fallbackRelaunchSentinelPath = join(signalDirectory, "v3-relaunched.json");
 const updateActivationPath = join(signalDirectory, "activate-update");
 const bootstrapVerificationPath = join(signalDirectory, "verify-v2-bootstrap");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
@@ -118,7 +125,7 @@ const backgroundChildren = new Set();
 let launcherFailure;
 let installed = false;
 let uninstallVerified = false;
-let completedUpdateResult;
+const completedUpdateResults = [];
 let cleanupManifest;
 const cleanupTransactionIds = new Set();
 let server;
@@ -381,15 +388,24 @@ async function waitForOptional(predicate, limit) {
 	return false;
 }
 
-function eventWasRecorded(event) {
-	if (!pathExists(eventLogPath)) return false;
+function recordedEvents() {
+	if (!pathExists(eventLogPath)) return [];
 	return readFileSync(eventLogPath, "utf8")
 		.split(/\r?\n/)
 		.filter(Boolean)
-		.some((line) => JSON.parse(line).event === event);
+		.map((line) => JSON.parse(line));
 }
 
-function createFixtureProject(projectRoot) {
+function eventWasRecorded(event, version) {
+	const events = recordedEvents();
+	return events.some(
+		(entry) =>
+			entry.event === event &&
+			(version === undefined || entry.version === version),
+	);
+}
+
+function createFixtureProject(projectRoot, builtVersion) {
 	assertWithin(temporaryRoot, projectRoot, "fixture project");
 	cpSync(fixtureTemplate, projectRoot, { recursive: true });
 	const fixtureHutchConfigPath = join(projectRoot, "hutch.config.ts");
@@ -408,8 +424,10 @@ function createFixtureProject(projectRoot) {
 	const control = {
 		runToken: token,
 		identifier,
+		builtVersion,
 		initialVersion: INITIAL_VERSION,
-		targetVersion: TARGET_VERSION,
+		patchTargetVersion: PATCH_TARGET_VERSION,
+		fallbackTargetVersion: FALLBACK_TARGET_VERSION,
 		channel: CHANNEL,
 		channelRoot: expectedUpdateRoot,
 		appBundlePath: expectedUpdateAppBundlePath,
@@ -417,7 +435,8 @@ function createFixtureProject(projectRoot) {
 		signalDirectory,
 		eventLogPath,
 		failurePath,
-		relaunchSentinelPath,
+		patchRelaunchSentinelPath,
+		fallbackRelaunchSentinelPath,
 		updateActivationPath,
 		bootstrapVerificationPath,
 	};
@@ -443,15 +462,12 @@ function buildEnvironment(version, baseUrl) {
 	return environment;
 }
 
-async function buildRelease(version, baseUrl, label) {
-	// Keep the two builds in separate project roots so neither Hutch nor the
-	// main-process compiler can reuse a v1 entrypoint for v2.
+async function buildRelease(version, baseUrl, label, previousRelease) {
+	// Keep releases in separate project roots so neither Hutch nor the
+	// main-process compiler can reuse an earlier entrypoint.
 	const projectRoot = join(temporaryRoot, `project-${label}`);
-	createFixtureProject(projectRoot);
-	const releaseMarker =
-		version === INITIAL_VERSION
-			? "Updater lifecycle fixture 1.0.0\n"
-			: "Updater lifecycle fixture 2.0.0\n";
+	createFixtureProject(projectRoot, version);
+	const releaseMarker = `Updater lifecycle fixture ${version}\n`;
 	assert.equal(
 		Buffer.byteLength(releaseMarker),
 		Buffer.byteLength("Updater lifecycle fixture 1.0.0\n"),
@@ -473,10 +489,15 @@ async function buildRelease(version, baseUrl, label) {
 	assert.equal(pathExists(artifactRoot), true, `${label} artifact directory missing`);
 	const destination = join(releaseRoot, label);
 	copyDirectoryContents(artifactRoot, destination);
-	return await inspectArtifacts(destination, version, label);
+	return await inspectArtifacts(
+		destination,
+		version,
+		label,
+		previousRelease,
+	);
 }
 
-async function inspectArtifacts(root, version, label) {
+async function inspectArtifacts(root, version, label, previousRelease) {
 	const names = readdirSync(root);
 	const releasePrefix = `${CHANNEL}-${platform.updatePlatform}-${platform.updateArch}`;
 	const stablePrefix = `${LEGACY_CHANNEL_ROOT_NAME}-${platform.updatePlatform}-${platform.updateArch}`;
@@ -506,11 +527,6 @@ async function inspectArtifacts(root, version, label) {
 		/electrobun/i,
 		`${label} installer leaked a framework brand`,
 	);
-	assert.deepEqual(
-		names.filter((name) => name.endsWith(".patch")),
-		[],
-		`${label} unexpectedly generated delta patches`,
-	);
 	assert.equal(metadata.schemaVersion, 1, `${label} metadata schema`);
 	assert.equal(metadata.identifier, identifier, `${label} metadata identifier`);
 	assert.equal(metadata.channel, CHANNEL, `${label} metadata channel`);
@@ -531,6 +547,35 @@ async function inspectArtifacts(root, version, label) {
 		await sha256File(archivePath),
 		`${label} artifact SHA-256 contents`,
 	);
+	let patchPath;
+	if (previousRelease) {
+		assert.equal(metadata.patch?.fromHash, previousRelease.metadata.hash, `${label} patch source hash`);
+		assert.equal(
+			metadata.patch?.file,
+			`${releasePrefix}-${previousRelease.metadata.hash}.patch`,
+			`${label} patch filename`,
+		);
+		patchPath = join(root, metadata.patch.file);
+		assert.equal(pathExists(patchPath), true, `${label} authenticated patch`);
+		assert.equal(metadata.patch.size, statSync(patchPath).size, `${label} patch size`);
+		assert.equal(
+			metadata.patch.sha256,
+			await sha256File(patchPath),
+			`${label} patch SHA-256 contents`,
+		);
+		assert.equal(
+			Number.isSafeInteger(metadata.patch.targetSize) && metadata.patch.targetSize > 0,
+			true,
+			`${label} patch target size`,
+		);
+		assert.match(
+			metadata.patch.targetSha256 || "",
+			/^[0-9a-f]{64}$/,
+			`${label} patch target SHA-256`,
+		);
+	} else {
+		assert.equal(metadata.patch, undefined, `${label} unexpectedly advertised a patch`);
+	}
 
 	const stableMetadata = readJson(stableUpdatePath);
 	assert.equal(stableMetadata.schemaVersion, 1, `${label} stable metadata schema`);
@@ -572,10 +617,53 @@ async function inspectArtifacts(root, version, label) {
 		metadata.artifact.sha256,
 		`${label} stable alias SHA differs from production`,
 	);
+	let stablePatchPath;
+	if (previousRelease) {
+		assert.equal(
+			stableMetadata.patch?.fromHash,
+			previousRelease.metadata.hash,
+			`${label} stable patch source hash`,
+		);
+		assert.equal(
+			stableMetadata.patch?.file,
+			`${stablePrefix}-${previousRelease.metadata.hash}.patch`,
+			`${label} stable patch filename`,
+		);
+		stablePatchPath = join(root, stableMetadata.patch.file);
+		assert.equal(pathExists(stablePatchPath), true, `${label} stable patch alias`);
+		assert.equal(
+			stableMetadata.patch.size,
+			statSync(stablePatchPath).size,
+			`${label} stable patch size`,
+		);
+		assert.equal(
+			stableMetadata.patch.sha256,
+			await sha256File(stablePatchPath),
+			`${label} stable patch SHA-256 contents`,
+		);
+		for (const field of ["size", "sha256", "targetSize", "targetSha256"]) {
+			assert.equal(
+				stableMetadata.patch[field],
+				metadata.patch[field],
+				`${label} stable patch ${field} differs from production`,
+			);
+		}
+	} else {
+		assert.equal(stableMetadata.patch, undefined, `${label} stable metadata unexpectedly advertised a patch`);
+	}
 	assert.deepEqual(
 		new Set(names.filter((name) => name.endsWith(".tar.zst"))),
 		new Set([basename(archivePath), basename(stableArchivePath)]),
 		`${label} full update archive names`,
+	);
+	assert.deepEqual(
+		new Set(names.filter((name) => name.endsWith(".patch"))),
+		new Set(
+			previousRelease
+				? [basename(patchPath), basename(stablePatchPath)]
+				: [],
+		),
+		`${label} authenticated patch names`,
 	);
 	return {
 		root,
@@ -583,12 +671,15 @@ async function inspectArtifacts(root, version, label) {
 		archivePath,
 		stableUpdatePath,
 		stableArchivePath,
+		patchPath,
+		stablePatchPath,
 		installerPath,
 		metadata,
 	};
 }
 
-function publishRelease(release) {
+function publishRelease(release, options = {}) {
+	const includePatch = options.includePatch !== false;
 	mkdirSync(serverRoot, { recursive: true });
 	// Publish immutable payloads before the mutable target document.
 	copyFileSync(release.archivePath, join(serverRoot, basename(release.archivePath)));
@@ -596,6 +687,13 @@ function publishRelease(release) {
 		release.stableArchivePath,
 		join(serverRoot, basename(release.stableArchivePath)),
 	);
+	if (includePatch && release.patchPath) {
+		copyFileSync(release.patchPath, join(serverRoot, basename(release.patchPath)));
+		copyFileSync(
+			release.stablePatchPath,
+			join(serverRoot, basename(release.stablePatchPath)),
+		);
+	}
 	copyFileSync(release.updatePath, join(serverRoot, basename(release.updatePath)));
 	copyFileSync(
 		release.stableUpdatePath,
@@ -760,10 +858,21 @@ async function installInitialRelease(release) {
 	}
 }
 
-function launchInstalledApp() {
+function launchInstalledApp(targetVersion) {
 	const launcher = platform.launcherPath(appBundlePath);
 	assert.equal(pathExists(launcher), true, `installed launcher missing: ${launcher}`);
-	writeFileSync(updateActivationPath, `${token}\n`, "utf8");
+	if (targetVersion) {
+		assert.equal(
+			RELEASE_VERSIONS.includes(targetVersion),
+			true,
+			`unsupported activation target: ${targetVersion}`,
+		);
+		writeFileSync(
+			updateActivationPath,
+			`${JSON.stringify({ runToken: token, targetVersion })}\n`,
+			"utf8",
+		);
+	}
 	launch(launcher, [], {
 		cwd: dirname(launcher),
 		env: profile.environment,
@@ -785,65 +894,63 @@ function rememberUpdateTransactions(roots) {
 			if (match) cleanupTransactionIds.add(match[1]);
 		}
 	}
-	if (completedUpdateResult?.transaction_id) {
-		cleanupTransactionIds.add(completedUpdateResult.transaction_id);
+	for (const result of completedUpdateResults) {
+		cleanupTransactionIds.add(result.transaction_id);
 	}
 }
 
-function assertLifecycleEvents() {
-	assert.equal(pathExists(eventLogPath), true, "fixture event log is missing");
-	const events = readFileSync(eventLogPath, "utf8")
-		.split(/\r?\n/)
-		.filter(Boolean)
-		.map((line) => JSON.parse(line));
+function assertOrderedPhaseEvents(events, expectedEvents, label) {
 	let cursor = -1;
-	for (const expected of [
-		{ event: "launched", version: INITIAL_VERSION },
-		{ event: "integration-bootstrapped", version: INITIAL_VERSION },
-		{ event: "user-data-seeded", version: INITIAL_VERSION },
-		{ event: "download-started", version: INITIAL_VERSION },
-		{ event: "download-completed", version: INITIAL_VERSION },
-		{ event: "launched", version: TARGET_VERSION },
-		{ event: "user-data-preserved", version: TARGET_VERSION },
-		{ event: "update-result-reconciled", version: TARGET_VERSION },
-		{ event: "target-relaunched", version: TARGET_VERSION },
-	]) {
+	for (const expected of expectedEvents) {
 		cursor = events.findIndex(
 			(entry, index) =>
 				index > cursor &&
 				entry.event === expected.event &&
-				entry.version === expected.version,
+				(expected.version === undefined || entry.version === expected.version) &&
+				(expected.status === undefined || entry.details?.status === expected.status) &&
+				(expected.verify === undefined || expected.verify(entry)),
 		);
 		assert.notEqual(
 			cursor,
 			-1,
-			`lifecycle event is missing or out of order: ${expected.event} ${expected.version}`,
+			`${label} event is missing or out of order: ${expected.event}${expected.status ? `/${expected.status}` : ""}${expected.version ? ` ${expected.version}` : ""}`,
 		);
 	}
 }
 
-async function verifySuccessfulUpdate(v1, v2) {
+async function verifySuccessfulUpdate({
+	fromRelease,
+	toRelease,
+	relaunchSentinelPath,
+	expectedDownloadPath,
+	requestStart,
+	eventStart,
+	previousResultPaths,
+}) {
 	const sentinel = readJson(relaunchSentinelPath);
 	assert.equal(sentinel.runToken, token);
 	assert.equal(sentinel.identifier, identifier);
 	assert.equal(sentinel.channel, CHANNEL);
-	assert.equal(sentinel.version, TARGET_VERSION);
-	assert.equal(sentinel.hash, v2.metadata.hash);
+	assert.equal(sentinel.version, toRelease.metadata.version);
+	assert.equal(sentinel.hash, toRelease.metadata.hash);
 
-	const resultPath = exactlyOne(resultFiles(), "durable updater result");
+	const resultPath = exactlyOne(
+		resultFiles().filter((path) => !previousResultPaths.has(path)),
+		`${toRelease.metadata.version} durable updater result`,
+	);
 	const result = readJson(resultPath);
 	const transactionId = basename(resultPath).match(RESULT_PATTERN)?.[1];
 	assert.equal(result.schema_version, 1);
 	assert.equal(result.transaction_id, transactionId);
 	assert.match(result.transaction_id, /^[0-9a-f]{32}$/);
-	completedUpdateResult = result;
+	completedUpdateResults.push(result);
 	cleanupTransactionIds.add(result.transaction_id);
 	assert.equal(result.success, true);
 	assert.equal(result.phase, "complete");
 	assert.equal(result.identifier, identifier);
 	assert.equal(result.channel, CHANNEL);
-	assert.equal(result.version, TARGET_VERSION);
-	assert.equal(result.hash, v2.metadata.hash);
+	assert.equal(result.version, toRelease.metadata.version);
+	assert.equal(result.hash, toRelease.metadata.hash);
 	assert.equal(typeof result.message, "string");
 	if (process.platform === "win32") {
 		const temporaryHelper = join(
@@ -857,15 +964,15 @@ async function verifySuccessfulUpdate(v1, v2) {
 		);
 	}
 
-	cleanupManifest = assertInstalledIdentity(v2).manifest;
+	cleanupManifest = assertInstalledIdentity(toRelease).manifest;
 	await platform.verifyInstalled(
 		channelRoot,
 		appBundlePath,
 		cleanupManifest,
-		v2,
+		toRelease,
 	);
 	assert.equal(
-		pathExists(join(channelRoot, "self-extraction", `${v1.metadata.hash}.tar`)),
+		pathExists(join(channelRoot, "self-extraction", `${fromRelease.metadata.hash}.tar`)),
 		false,
 		"the previous retained tar survived a committed update",
 	);
@@ -878,30 +985,125 @@ async function verifySuccessfulUpdate(v1, v2) {
 	]) {
 		assert.equal(pathExists(join(channelRoot, stale)), false, `stale update state remains: ${stale}`);
 	}
+	for (const entry of readdirSync(join(channelRoot, "self-extraction"))) {
+		assert.equal(
+			entry.endsWith(".patch") || entry.endsWith(".partial"),
+			false,
+			`stale patch preparation state remains: ${entry}`,
+		);
+	}
 
-	const updateName = `/${basename(v2.updatePath)}`;
-	const archiveName = `/${basename(v2.archivePath)}`;
-	assert.equal(
-		requests.some((request) => request.pathname === updateName && request.status === 200),
-		true,
-		`updater never fetched ${updateName}`,
+	const phaseRequests = requests.slice(requestStart);
+	const updateName = `/${basename(toRelease.updatePath)}`;
+	const archiveName = `/${basename(toRelease.archivePath)}`;
+	const patchName = `/${basename(toRelease.patchPath)}`;
+	const metadataRequest = phaseRequests.findIndex(
+		(request) => request.pathname === updateName && request.status === 200,
+	);
+	assert.notEqual(metadataRequest, -1, `updater never fetched ${updateName}`);
+	const patchRequest = phaseRequests.findIndex(
+		(request) =>
+			request.pathname === patchName &&
+			request.search === `?sha256=${toRelease.metadata.patch.sha256}` &&
+			request.status === (expectedDownloadPath === "patch" ? 200 : 404),
+	);
+	assert.notEqual(
+		patchRequest,
+		-1,
+		`updater did not make the expected authenticated patch request for ${patchName}`,
 	);
 	assert.equal(
-		requests.some(
+		phaseRequests.some((request) =>
+			request.pathname.startsWith(`/${LEGACY_CHANNEL_ROOT_NAME}-`),
+		),
+		false,
+		"logical production updater unexpectedly requested a physical-root stable artifact",
+	);
+	if (expectedDownloadPath === "patch") {
+		assert.equal(
+			phaseRequests.some(
+				(request) =>
+					request.pathname === archiveName ||
+					request.pathname === `/${basename(toRelease.stableArchivePath)}`,
+			),
+			false,
+			"patch-success update unexpectedly fetched a full archive",
+		);
+	} else {
+		const archiveRequest = phaseRequests.findIndex(
 			(request) =>
 				request.pathname === archiveName &&
-				request.search === `?sha256=${v2.metadata.artifact.sha256}` &&
+				request.search === `?sha256=${toRelease.metadata.artifact.sha256}` &&
 				request.status === 200,
-		),
-		true,
-		`updater never fetched integrity-pinned ${archiveName}`,
+		);
+		assert.equal(
+			archiveRequest > patchRequest,
+			true,
+			`full fallback did not follow the missing patch request for ${patchName}`,
+		);
+	}
+
+	const phaseEvents = recordedEvents().slice(eventStart);
+	const sourceVersion = fromRelease.metadata.version;
+	const targetVersion = toRelease.metadata.version;
+	const expectedStatuses =
+		expectedDownloadPath === "patch"
+			? [
+					{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
+					{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
+					{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
+					{ event: "updater-status", version: sourceVersion, status: "patch-found" },
+					{ event: "updater-status", version: sourceVersion, status: "downloading-patch" },
+					{ event: "updater-status", version: sourceVersion, status: "applying-patch" },
+					{ event: "updater-status", version: sourceVersion, status: "patch-applied" },
+					{
+						event: "updater-status",
+						version: sourceVersion,
+						status: "patch-chain-complete",
+						verify: (entry) =>
+							entry.details?.details?.usedPatchPath === true &&
+							entry.details?.details?.totalPatchesApplied === 1,
+					},
+				]
+			: [
+					{ event: "updater-status", version: sourceVersion, status: "checking-local-tar" },
+					{ event: "updater-status", version: sourceVersion, status: "local-tar-found" },
+					{ event: "updater-status", version: sourceVersion, status: "fetching-patch" },
+					{ event: "updater-status", version: sourceVersion, status: "patch-not-found" },
+					{ event: "updater-status", version: sourceVersion, status: "downloading-full-bundle" },
+				];
+	assertOrderedPhaseEvents(
+		phaseEvents,
+		[
+			{ event: "launched", version: sourceVersion },
+			...expectedStatuses,
+			{
+				event: "updater-status",
+				version: sourceVersion,
+				status: "download-complete",
+				verify: (entry) =>
+					entry.details?.details?.usedPatchPath ===
+					(expectedDownloadPath === "patch"),
+			},
+			{ event: "download-completed", version: sourceVersion },
+			{ event: "launched", version: targetVersion },
+			{ event: "user-data-preserved", version: targetVersion },
+			{ event: "update-result-reconciled", version: targetVersion },
+			{ event: "target-relaunched", version: targetVersion },
+		],
+		`${sourceVersion} -> ${targetVersion}`,
 	);
 	assert.equal(
-		requests.some((request) => request.pathname.endsWith(".patch")),
+		phaseEvents.some(
+			(entry) =>
+				entry.event === "updater-status" &&
+				entry.version === sourceVersion &&
+				entry.details?.status ===
+					(expectedDownloadPath === "patch" ? "downloading-full-bundle" : "patch-applied"),
+		),
 		false,
-		"full-download lifecycle unexpectedly requested a patch",
+		`${sourceVersion} -> ${targetVersion} mixed patch and fallback success paths`,
 	);
-	assertLifecycleEvents();
 	return { resultPath, result };
 }
 
@@ -920,7 +1122,7 @@ async function verifyFirstV2LaunchBootstrap(v2) {
 	await new Promise((resolvePromise) => setTimeout(resolvePromise, 1_000));
 	launchInstalledApp();
 	await waitFor("first-v2-launch integration bootstrap", () =>
-		eventWasRecorded("target-bootstrap-repaired"),
+		eventWasRecorded("target-bootstrap-repaired", PATCH_TARGET_VERSION),
 	);
 	await waitFor("bootstrapped standalone manager", () =>
 		pathExists(manager) && pathExists(manifestPath),
@@ -953,7 +1155,7 @@ async function uninstallAndVerify() {
 	}
 	await platform.verifyUninstalled(
 		identifier,
-		completedUpdateResult,
+		completedUpdateResults,
 		cleanupManifest,
 	);
 	uninstallVerified = true;
@@ -1144,8 +1346,8 @@ function platformAdapter() {
 					);
 				}
 			},
-			async verifyUninstalled(identifierValue, result, manifest) {
-				if (result) {
+			async verifyUninstalled(identifierValue, results, manifest) {
+				for (const result of results) {
 					const task = `ApplicationUpdate_${result.transaction_id.slice(0, 24)}`;
 					assert.notEqual(
 						await runStatus("schtasks.exe", ["/query", "/tn", task]),
@@ -1480,10 +1682,15 @@ async function main() {
 	const baseUrl = await startReleaseServer();
 	const v1 = await buildRelease(INITIAL_VERSION, baseUrl, "v1");
 	let v2;
+	let v3;
 	if (focus === "build" || focus === "update" || focus === "full") {
-		v2 = await buildRelease(TARGET_VERSION, baseUrl, "v2");
-		assert.notEqual(v1.metadata.hash, v2.metadata.hash, "fixture releases produced the same hash");
+		publishRelease(v1);
+		v2 = await buildRelease(PATCH_TARGET_VERSION, baseUrl, "v2", v1);
+		assert.notEqual(v1.metadata.hash, v2.metadata.hash, "v1 and v2 produced the same hash");
 		publishRelease(v2);
+		v3 = await buildRelease(FALLBACK_TARGET_VERSION, baseUrl, "v3", v2);
+		assert.notEqual(v2.metadata.hash, v3.metadata.hash, "v2 and v3 produced the same hash");
+		assert.notEqual(v1.metadata.hash, v3.metadata.hash, "v1 and v3 produced the same hash");
 	}
 	if (focus === "build") return;
 
@@ -1495,11 +1702,53 @@ async function main() {
 	}
 
 	if (migrationEnabled) await migrateInitialInstallToLegacyLayout();
-	launchInstalledApp();
-	await waitFor("v2 relaunch sentinel", () => pathExists(relaunchSentinelPath));
-	await waitFor("durable updater result", () => resultFiles().length === 1);
-	await verifySuccessfulUpdate(v1, v2);
+	const firstRequestStart = requests.length;
+	const firstEventStart = recordedEvents().length;
+	const firstPriorResults = new Set(resultFiles());
+	launchInstalledApp(PATCH_TARGET_VERSION);
+	await waitFor("v2 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath));
+	await waitFor("first durable updater result", () =>
+		resultFiles().some((path) => !firstPriorResults.has(path)),
+	);
+	await verifySuccessfulUpdate({
+		fromRelease: v1,
+		toRelease: v2,
+		relaunchSentinelPath: patchRelaunchSentinelPath,
+		expectedDownloadPath: "patch",
+		requestStart: firstRequestStart,
+		eventStart: firstEventStart,
+		previousResultPaths: firstPriorResults,
+	});
 	await verifyFirstV2LaunchBootstrap(v2);
+
+	publishRelease(v3, { includePatch: false });
+	assert.equal(
+		pathExists(join(serverRoot, basename(v3.patchPath))),
+		false,
+		"fallback patch was unexpectedly published",
+	);
+	assert.equal(
+		pathExists(join(serverRoot, basename(v3.stablePatchPath))),
+		false,
+		"fallback stable patch alias was unexpectedly published",
+	);
+	const secondRequestStart = requests.length;
+	const secondEventStart = recordedEvents().length;
+	const secondPriorResults = new Set(resultFiles());
+	launchInstalledApp(FALLBACK_TARGET_VERSION);
+	await waitFor("v3 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath));
+	await waitFor("second durable updater result", () =>
+		resultFiles().some((path) => !secondPriorResults.has(path)),
+	);
+	await verifySuccessfulUpdate({
+		fromRelease: v2,
+		toRelease: v3,
+		relaunchSentinelPath: fallbackRelaunchSentinelPath,
+		expectedDownloadPath: "full",
+		requestStart: secondRequestStart,
+		eventStart: secondEventStart,
+		previousResultPaths: secondPriorResults,
+	});
 	if (focus === "update") return;
 	await uninstallAndVerify();
 }

@@ -395,7 +395,7 @@ describe("Electrobun template package boundaries", () => {
 		const cargo = readFileSync(
 			join(templatesRoot, "rust-flock-wgpu", "Cargo.toml"),
 			"utf8",
-		);
+		).replaceAll("\r\n", "\n");
 		const config = readFileSync(
 			join(templatesRoot, "rust-flock-wgpu", "electrobun.config.ts"),
 			"utf8",

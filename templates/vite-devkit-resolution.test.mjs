@@ -105,12 +105,19 @@ test(
 				].join("\n"),
 			);
 
-			const npm = process.platform === "win32" ? "npm.cmd" : "npm";
-			const install = run(npm, ["ci", "--no-audit", "--no-fund"], project);
+			const npm =
+				process.platform === "win32"
+					? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd"]]
+					: ["npm", []];
+			const install = run(
+				npm[0],
+				[...npm[1], "ci", "--no-audit", "--no-fund"],
+				project,
+			);
 			assert.equal(
 				install.status,
 				0,
-				`npm ci failed\n${install.stdout}\n${install.stderr}`,
+				`npm ci failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
 			);
 			assert.equal(
 				existsSync(join(project, "node_modules", "electrobun")),
@@ -118,7 +125,11 @@ test(
 				"the external package manager must not install an Electrobun shim",
 			);
 
-			const build = run(npm, ["exec", "--", "vite", "build"], project);
+			const build = run(
+				npm[0],
+				[...npm[1], "exec", "--", "vite", "build"],
+				project,
+			);
 			assert.equal(
 				build.status,
 				0,
