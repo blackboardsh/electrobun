@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 const workflowUrl = new URL("../../.github/workflows/release.yml", import.meta.url);
-const workflow = readFileSync(workflowUrl, "utf8");
+const workflow = readFileSync(workflowUrl, "utf8").replace(/\r\n/g, "\n");
 
 function job(source, name) {
 	const startMarker = `  ${name}:\n`;
