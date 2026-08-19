@@ -26,6 +26,7 @@ function init() {
 
   document.getElementById("createTrayBtn")?.addEventListener("click", createTray);
   document.getElementById("updateTitleBtn")?.addEventListener("click", updateTitle);
+  document.getElementById("updateImageBtn")?.addEventListener("click", updateImage);
   document.getElementById("startCounterBtn")?.addEventListener("click", startCounter);
   document.getElementById("stopCounterBtn")?.addEventListener("click", stopCounter);
   document.getElementById("removeTrayBtn")?.addEventListener("click", removeTray);
@@ -69,6 +70,15 @@ async function updateTitle() {
       title: newTitleInput.value,
     });
     addLog(`Updated title to: "${newTitleInput.value}"`);
+  } catch (err) {
+    addLog(`Error: ${err}`);
+  }
+}
+
+async function updateImage() {
+  try {
+    await (electrobun.rpc as any)?.request.updateImage({});
+    addLog("Updated tray image in place");
   } catch (err) {
     addLog(`Error: ${err}`);
   }

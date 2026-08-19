@@ -10,7 +10,8 @@ export const trayTests = [
     description: "Interactive playground for testing tray icon, title, and menus",
     instructions: [
       "A tray control panel will open",
-      "Configure tray options and click buttons to test",
+      "Create a tray, then drag its icon to a known position in the system tray",
+      "Click Update Image and verify that its position, size, and appearance stay unchanged",
       "Close the window when done to pass the test",
     ],
     interactive: true,
@@ -81,6 +82,15 @@ export const trayTests = [
                   currentTray.setTitle(opts.title);
                   log(`Updated title to: "${opts.title}"`);
                 }
+                return { success: true };
+              },
+
+              updateImage: () => {
+                if (!currentTray) return { success: false };
+                currentTray.setImage(
+                  "views://assets/electrobun-logo-32-template.png",
+                );
+                log("Updated tray image in place");
                 return { success: true };
               },
 
