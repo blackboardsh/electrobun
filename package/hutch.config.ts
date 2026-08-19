@@ -1,4 +1,4 @@
-// @hutch cli=0.19.0 cottontail=0.5.0
+// @hutch cli=0.21.0 cottontail=0.5.0
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -22,6 +22,8 @@ export default {
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
 		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:updater-unit && hutch test:npm-bootstrap && hutch test:release-notes",
+		"pin:latest":
+			"hutch self update && hutch cottontail update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
