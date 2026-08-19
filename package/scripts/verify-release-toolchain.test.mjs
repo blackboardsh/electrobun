@@ -113,8 +113,19 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		assert.match(matrix, new RegExp(`^          - os: ${runner}$`, "m"));
 	}
 
-	assert.match(workflow, /^      EXPECTED_HUTCH_VERSION: '0\.13\.0'$/m);
-	assert.match(workflow, /^      EXPECTED_COTTONTAIL_VERSION: '0\.5\.0'$/m);
+	// The workflow env must mirror the canonical pragma pin, whatever it is.
+	const pins = parseHutchPragma(
+		readFileSync(new URL("../hutch.config.ts", import.meta.url), "utf8"),
+	);
+	const exact = (version) => version.replaceAll(".", "\\.").replaceAll("+", "\\+");
+	assert.match(
+		workflow,
+		new RegExp(`^      EXPECTED_HUTCH_VERSION: '${exact(pins.hutch)}'$`, "m"),
+	);
+	assert.match(
+		workflow,
+		new RegExp(`^      EXPECTED_COTTONTAIL_VERSION: '${exact(pins.cottontail)}'$`, "m"),
+	);
 	for (const lifecycleToken of [
 		"test:linux-extractor",
 		"test:macos-uninstaller",
