@@ -320,7 +320,7 @@ test("rejects missing ABI and compiler-default metadata", () => {
 	}
 });
 
-test("requires exact bundled Bun runtime provenance", () => {
+test("requires an exact default bun toolchain version", () => {
 	for (const version of [
 		undefined,
 		"1.3.13-01",
@@ -329,17 +329,43 @@ test("requires exact bundled Bun runtime provenance", () => {
 		"file:../bun",
 	]) {
 		const manifest = fixture();
-		if (version === undefined) delete manifest.runtimes.bun.version;
-		else manifest.runtimes.bun.version = version;
+		if (version === undefined) delete manifest.toolchains.bun.defaultVersion;
+		else manifest.toolchains.bun.defaultVersion = version;
 		const coreRoot = makeCore(manifest);
 		try {
 			assert.throws(
 				() => validateNativeDevkitManifest({ coreRoot, ...expected }),
-				/runtimes\.bun\.version/,
+				/toolchains\.bun\.defaultVersion/,
 			);
 		} finally {
 			rmSync(coreRoot, { recursive: true, force: true });
 		}
+	}
+});
+
+test("rejects manifests that still distribute a bun runtime", () => {
+	const withRuntimes = fixture();
+	withRuntimes.runtimes = { bun: { version: "1.3.13" } };
+	const runtimesRoot = makeCore(withRuntimes);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot: runtimesRoot, ...expected }),
+			/runtimes was removed/,
+		);
+	} finally {
+		rmSync(runtimesRoot, { recursive: true, force: true });
+	}
+
+	const withLayoutBun = fixture();
+	withLayoutBun.layout.runtime.bun = "bun";
+	const layoutRoot = makeCore(withLayoutBun);
+	try {
+		assert.throws(
+			() => validateNativeDevkitManifest({ coreRoot: layoutRoot, ...expected }),
+			/layout\.runtime\.bun was removed/,
+		);
+	} finally {
+		rmSync(layoutRoot, { recursive: true, force: true });
 	}
 });
 

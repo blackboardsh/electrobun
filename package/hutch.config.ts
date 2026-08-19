@@ -1,4 +1,4 @@
-// @hutch cli=0.13.0 cottontail=0.5.0
+// @hutch cli=0.16.0 cottontail=0.5.0
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -42,7 +42,7 @@ export default {
 		"test:native-symbol-contract":
 			"node scripts/run-cottontail-test.js src/shared/native-symbol-contract.test.ts",
 		"test:devkit-manifest":
-			"node --test scripts/validate-native-devkit.test.mjs scripts/bun-vendor.test.mjs scripts/electrobun-version-runtime.test.mjs",
+			"node --test scripts/validate-native-devkit.test.mjs scripts/electrobun-version-runtime.test.mjs",
 		"test:version-bump":
 			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
 		"test:linux-native-dialog":

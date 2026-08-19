@@ -30,7 +30,6 @@ const targets: Array<{
 			nativeWrapper: "libNativeWrapper.dylib",
 			wgpuLibrary: "libwebgpu_dawn.dylib",
 			wgpuAuxiliaryLibraries: [],
-			bun: "bun",
 		},
 	},
 	{
@@ -53,7 +52,6 @@ const targets: Array<{
 			nativeWrapper: "libNativeWrapper.dll",
 			wgpuLibrary: "webgpu_dawn.dll",
 			wgpuAuxiliaryLibraries: ["d3dcompiler_47.dll"],
-			bun: "bun.exe",
 			zigAsar: "zig-asar/x64/zig-asar.exe",
 		},
 	},
@@ -150,26 +148,26 @@ describe("native devkit manifest", () => {
 			rust: { defaultVersion: RUST_VERSION },
 			go: { defaultVersion: GO_VERSION },
 			odin: { defaultVersion: ODIN_VERSION },
+			bun: { defaultVersion: BUN_VERSION },
 		});
 		expect(Object.keys(manifest.toolchains)).toEqual([
 			"zig",
 			"rust",
 			"go",
 			"odin",
+			"bun",
 		]);
 	});
 
-	it("records the exact bundled Bun runtime independently of toolchains", () => {
+	it("pins the default bun toolchain instead of distributing a runtime", () => {
 		const manifest = createNativeDevkitManifest({
 			productVersion: "2.0.0",
 			target: { os: "linux", arch: "x64" },
 		});
 
-		expect(manifest.runtimes).toEqual({
-			bun: { version: BUN_VERSION },
-		});
-		expect(manifest.toolchains).not.toHaveProperty("bun");
-		expect(manifest.layout.runtime.bun).toBe("bun");
+		expect(manifest.toolchains.bun).toEqual({ defaultVersion: BUN_VERSION });
+		expect(manifest).not.toHaveProperty("runtimes");
+		expect(manifest.layout.runtime).not.toHaveProperty("bun");
 	});
 
 	it("normalizes every Windows host to the shipped x64 runtime", () => {

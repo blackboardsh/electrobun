@@ -34,7 +34,6 @@ import {
 	CHROMIUM_VERSION,
 	DEFAULT_CEF_VERSION_STRING,
 } from "./src/shared/cef-version";
-import { BUN_VERSION } from "./src/shared/bun-version";
 import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
@@ -54,11 +53,6 @@ import {
 	serializeNativeCompileFlags,
 	type NativeCompilePlatform,
 } from "./src/shared/native-compile-flags";
-import {
-	acceptExistingBunVendor,
-	verifyAndRecordBunVendor,
-	verifyBunExecutableVersion,
-} from "./scripts/bun-vendor.mjs";
 
 console.log("building...", platform(), arch());
 
@@ -90,7 +84,6 @@ const ARCH: "arm64" | "x64" = getArch();
 
 const isWindows = platform() === "win32";
 const binExt = OS === "win" ? ".exe" : "";
-const bunBin = isWindows ? "bun.exe" : "bun";
 const zigBinary = OS === "win" ? "zig.exe" : "zig";
 const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
@@ -102,10 +95,6 @@ const macosClangDeploymentFlag = `-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET
 
 // PATHS
 const PATH = {
-	bun: {
-		RUNTIME: join(process.cwd(), "vendors", "bun", bunBin),
-		DIST: join(process.cwd(), "dist", bunBin),
-	},
 	zig: {
 		BIN: join(process.cwd(), "vendors", "zig", zigBinary),
 	},
@@ -658,7 +647,6 @@ async function setup() {
 		recursive: true,
 		force: true,
 	});
-	await vendorBun();
 	await Promise.all([
 		vendorBsdiff(),
 		vendorZstd(),
@@ -765,9 +753,9 @@ function copyMatchingFiles(
 }
 
 async function copyToDist() {
-	// Bun remains an optional application runtime. Hutch and Electrobun's build
-	// pipeline continue to run through Cottontail.
-	cpSync(PATH.bun.RUNTIME, PATH.bun.DIST, { force: true });
+	// Bun is not distributed here: Hutch vendors it as a toolchain and stages
+	// it into app bundles for mainProcess "bun"; the devkit only pins the
+	// default version.
 	// Zig launcher for all platforms
 	cpSync(`src/launcher/zig-out/bin/launcher${binExt}`, `dist/launcher${binExt}`, { force: true });
 	cpSync(`src/extractor/zig-out/bin/extractor${binExt}`, `dist/extractor${binExt}`, { force: true });
@@ -998,9 +986,6 @@ async function copyToDist() {
 		console.log("[done]Copying CEF files for Linux...");
 	}
 
-	// The manifest declares exact Bun runtime provenance, so verify the staged
-	// executable it describes rather than trusting the vendor marker or copy.
-	verifyBunExecutableVersion(PATH.bun.DIST, BUN_VERSION);
 	const nativeDevkitManifest = createNativeDevkitManifest({
 		productVersion: ELECTROBUN_VERSION,
 		target: nativeDevkitTarget(OS, ARCH),
@@ -1018,7 +1003,6 @@ async function copyToDist() {
 function normalizeDistExecutableModes(directory: string) {
 	if (OS === "win") return;
 	for (const filename of [
-		bunBin,
 		"launcher",
 		"extractor",
 		"bsdiff",
@@ -1116,103 +1100,6 @@ async function installPackageDependencies() {
 	await $`npm install`;
 }
 
-async function vendorBun() {
-	const bunDir = join(process.cwd(), "vendors", "bun");
-	const bunVersionFile = join(bunDir, ".bun-version");
-	let rejectedExistingBun: unknown;
-	if (
-		acceptExistingBunVendor({
-			executable: PATH.bun.RUNTIME,
-			marker: bunVersionFile,
-			expectedVersion: BUN_VERSION,
-			onRejected(error) {
-				rejectedExistingBun = error;
-			},
-		})
-	) {
-		return;
-	}
-	if (rejectedExistingBun) {
-		console.log(
-			`Existing Bun runtime failed exact-version verification and will be replaced: ${rejectedExistingBun instanceof Error ? rejectedExistingBun.message : String(rejectedExistingBun)}`,
-		);
-	}
-
-	let assetName: string;
-	let archiveDirectory: string;
-	if (OS === "win") {
-		// Electrobun's Windows target is x64, including on ARM hosts.
-		assetName = "bun-windows-x64-baseline.zip";
-		archiveDirectory = "bun-windows-x64-baseline";
-	} else if (OS === "macos") {
-		assetName = ARCH === "arm64" ? "bun-darwin-aarch64.zip" : "bun-darwin-x64.zip";
-		archiveDirectory = ARCH === "arm64" ? "bun-darwin-aarch64" : "bun-darwin-x64";
-	} else {
-		assetName = ARCH === "arm64" ? "bun-linux-aarch64.zip" : "bun-linux-x64.zip";
-		archiveDirectory = ARCH === "arm64" ? "bun-linux-aarch64" : "bun-linux-x64";
-	}
-
-	mkdirSync(bunDir, { recursive: true });
-	// Stage each download separately so a failed or concurrent extraction cannot
-	// leave partial files that a later run mistakes for the pinned runtime.
-	const stagingDir = mkdtempSync(join(bunDir, ".bun-download-"));
-	const tempZipPath = join(stagingDir, "bun.zip");
-	let installedCandidate = false;
-	try {
-		await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors -o ${tempZipPath} https://github.com/oven-sh/bun/releases/download/bun-v${BUN_VERSION}/${assetName}`;
-		validateDownload(tempZipPath, "bun");
-
-		if (isWindows) {
-			await $`powershell -NoProfile -Command "Expand-Archive -Path '${tempZipPath}' -DestinationPath '${stagingDir}' -Force"`;
-		} else {
-			await $`unzip -o ${tempZipPath} -d ${stagingDir}`;
-		}
-
-		const extractedBinary = join(
-			stagingDir,
-			archiveDirectory,
-			isWindows ? "bun.exe" : "bun",
-		);
-		if (!isWindows) chmodSync(extractedBinary, 0o755);
-
-		// Never expose a downloaded binary in the shared vendor cache until it has
-		// executed and reported the exact pinned version.
-		verifyBunExecutableVersion(extractedBinary, BUN_VERSION);
-		try {
-			renameSync(extractedBinary, PATH.bun.RUNTIME);
-			installedCandidate = true;
-		} catch (installError) {
-			// Windows cannot rename over a file. A concurrent build may have won the
-			// race; accept its runtime only after performing the same exact check.
-			if (
-				acceptExistingBunVendor({
-					executable: PATH.bun.RUNTIME,
-					marker: bunVersionFile,
-					expectedVersion: BUN_VERSION,
-				})
-			) {
-				return;
-			}
-			throw installError;
-		}
-
-		// Re-execute the canonical path, then publish its marker last. This closes
-		// the gap between staging verification and manifest/copy consumers.
-		verifyAndRecordBunVendor({
-			executable: PATH.bun.RUNTIME,
-			marker: bunVersionFile,
-			expectedVersion: BUN_VERSION,
-		});
-	} catch (error) {
-		if (installedCandidate) {
-			rmSync(PATH.bun.RUNTIME, { force: true });
-			rmSync(bunVersionFile, { force: true });
-		}
-		throw error;
-	} finally {
-		rmSync(stagingDir, { recursive: true, force: true });
-	}
-}
 
 function verifyVendoredZig() {
 	const versionOutput = runCaptured(PATH.zig.BIN, ["version"]).trim();

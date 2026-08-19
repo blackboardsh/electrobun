@@ -12,7 +12,6 @@ const runtimePathKeys = [
 	"main",
 	"preloadFull",
 	"preloadSandboxed",
-	"bun",
 	"launcher",
 	"extractor",
 	"coreLibrary",
@@ -202,7 +201,7 @@ export function validateNativeDevkitManifest(options) {
 	validateAbi(abi.sdk, "abi.sdk", "electrobun-sdk");
 
 	const toolchains = object(manifest.toolchains, "toolchains");
-	for (const language of ["zig", "rust", "go"]) {
+	for (const language of ["zig", "rust", "go", "bun"]) {
 		const toolchain = object(toolchains[language], `toolchains.${language}`);
 		exactVersion(
 			toolchain.defaultVersion,
@@ -215,12 +214,15 @@ export function validateNativeDevkitManifest(options) {
 		"toolchains.odin.defaultVersion",
 		isExactOdinRelease,
 	);
-	const runtimes = object(manifest.runtimes, "runtimes");
-	const bunRuntime = object(runtimes.bun, "runtimes.bun");
-	exactVersion(bunRuntime.version, "runtimes.bun.version");
+	if (manifest.runtimes !== undefined) {
+		fail("runtimes was removed; bun is vendored by Hutch as a toolchain");
+	}
 
 	const layout = object(manifest.layout, "layout");
 	const runtime = object(layout.runtime, "layout.runtime");
+	if (runtime.bun !== undefined) {
+		fail("layout.runtime.bun was removed; the devkit does not distribute bun");
+	}
 	const declaredPaths = runtimePathKeys.map((key) =>
 		relativePath(runtime[key], `layout.runtime.${key}`),
 	);

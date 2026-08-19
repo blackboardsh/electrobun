@@ -30,11 +30,9 @@
 		},
 		"odin": {
 			"defaultVersion": "dev-2026-07a"
-		}
-	},
-	"runtimes": {
+		},
 		"bun": {
-			"version": "1.3.13"
+			"defaultVersion": "1.3.13"
 		}
 	},
 	"layout": {
@@ -42,7 +40,6 @@
 			"main": "main.js",
 			"preloadFull": "preload-full.js",
 			"preloadSandboxed": "preload-sandboxed.js",
-			"bun": "bun",
 			"launcher": "launcher",
 			"extractor": "extractor",
 			"coreLibrary": "libElectrobunCore.dylib",

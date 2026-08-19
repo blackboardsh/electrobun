@@ -102,16 +102,13 @@ export interface NativeDevkitManifest {
 		rust: { defaultVersion: string };
 		go: { defaultVersion: string };
 		odin: { defaultVersion: string };
-	};
-	runtimes: {
-		bun: { version: string };
+		bun: { defaultVersion: string };
 	};
 	layout: {
 		runtime: {
 			main: string;
 			preloadFull: string;
 			preloadSandboxed: string;
-			bun: string;
 			launcher: string;
 			extractor: string;
 			coreLibrary: string;
@@ -169,7 +166,6 @@ function targetRuntimeLayout(
 		main: "main.js",
 		preloadFull: "preload-full.js",
 		preloadSandboxed: "preload-sandboxed.js",
-		bun: windows ? "bun.exe" : "bun",
 		launcher: `launcher${extension}`,
 		extractor: `extractor${extension}`,
 		coreLibrary:
@@ -222,7 +218,7 @@ export function createNativeDevkitManifest(options: {
 	const zigVersion = assertStrictSemVer(ZIG_VERSION, "Zig default version");
 	const rustVersion = assertStrictSemVer(RUST_VERSION, "Rust default version");
 	const goVersion = assertStrictSemVer(GO_VERSION, "Go default version");
-	const bunVersion = assertStrictSemVer(BUN_VERSION, "Bun runtime version");
+	const bunVersion = assertStrictSemVer(BUN_VERSION, "Bun default version");
 	const odinVersion = assertExactOdinRelease(
 		ODIN_VERSION,
 		"Odin default version",
@@ -244,9 +240,7 @@ export function createNativeDevkitManifest(options: {
 			rust: { defaultVersion: rustVersion },
 			go: { defaultVersion: goVersion },
 			odin: { defaultVersion: odinVersion },
-		},
-		runtimes: {
-			bun: { version: bunVersion },
+			bun: { defaultVersion: bunVersion },
 		},
 		layout: {
 			runtime: targetRuntimeLayout(options.target),
