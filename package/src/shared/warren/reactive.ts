@@ -363,7 +363,9 @@ function warnZeroDeps(scope: Scope, source?: () => unknown): void {
 	if (!devMode || !scope.hasRun) return;
 	// live(() => { inert(() => ...) }) is the deferred-run-once idiom: the
 	// author explicitly opted out of tracking, so zero deps is the point.
-	if (scope.enteredInert || scope.readStaticMaybe) return;
+	// A scope that registered cleanup() is a lifecycle hook — dropping the
+	// marker would lose the teardown scoping, so it is not redundant either.
+	if (scope.enteredInert || scope.readStaticMaybe || scope.cleanups.length > 0) return;
 	if (scope.sources.length === 0) {
 		// Name the offender: an anonymous warning across hundreds of live()
 		// call sites is unactionable.
