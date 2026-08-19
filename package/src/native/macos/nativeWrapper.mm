@@ -8739,11 +8739,15 @@ extern "C" void setTrayTitle(NSStatusItem *statusItem, const char *title) {
     }
 }
 
-extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
+extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image, bool isTemplate,
+                             uint32_t width, uint32_t height) {
     if (statusItem) {
         NSString *imgPath = [NSString stringWithUTF8String:image ?: ""];
         runOnMainThreadAsyncVoid(^{
-            statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:imgPath];
+            NSImage *trayImage = [[NSImage alloc] initWithContentsOfFile:imgPath];
+            [trayImage setTemplate:isTemplate];
+            trayImage.size = NSMakeSize(width, height);
+            statusItem.button.image = trayImage;
         });
     }
 }
