@@ -90,6 +90,8 @@ class Scope {
 	sources: SubscriberSet[] = [];
 	disposed = false;
 	hasRun = false;
+	enteredInert = false;
+	readStaticMaybe = false;
 
 	constructor(kind: ScopeKind, fn: (() => void) | null, parent: Scope | null) {
 		this.kind = kind;
@@ -355,11 +357,23 @@ export function memo<T>(
 // live
 // ---------------------------------------------------------------------------
 
-function warnZeroDeps(scope: Scope): void {
+const warnedZeroDepSites = new Set<string>();
+
+function warnZeroDeps(scope: Scope, source?: () => unknown): void {
 	if (!devMode || !scope.hasRun) return;
+	// live(() => { inert(() => ...) }) is the deferred-run-once idiom: the
+	// author explicitly opted out of tracking, so zero deps is the point.
+	if (scope.enteredInert || scope.readStaticMaybe) return;
 	if (scope.sources.length === 0) {
+		// Name the offender: an anonymous warning across hundreds of live()
+		// call sites is unactionable.
+		const snippet = source
+			? ` in: ${String(source).replace(/\s+/g, " ").slice(0, 160)}`
+			: "";
+		if (warnedZeroDepSites.has(snippet)) return;
+		warnedZeroDepSites.add(snippet);
 		console.warn(
-			"Warren: live() registered zero dependencies — the wrapped expression is static; drop the marker.",
+			`Warren: live() registered zero dependencies — the wrapped expression is static; drop the marker.${snippet}`,
 		);
 	} else if (scope.sources.every((s) => s.fromSignal)) {
 		// Inside another scope the signal calls would have tracked anyway.
@@ -405,7 +419,7 @@ export function live<T>(fn: () => T): Reactive<T> {
 			binding.fn();
 		};
 		decide.run();
-		warnZeroDeps(decide);
+		warnZeroDeps(decide, binding.fn);
 	};
 	liveQueue.add(decide);
 	scheduleFlush();
@@ -428,7 +442,7 @@ export function claimLive<T>(
 	const scope = new Scope("live", null, currentScope);
 	scope.fn = () => {
 		apply(binding.fn());
-		warnZeroDeps(scope);
+		warnZeroDeps(scope, binding.fn);
 	};
 	liveQueue.add(scope);
 	scheduleFlush();
@@ -448,8 +462,31 @@ export function liveScope(fn: () => void): void {
 // inert / cleanup / roots
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// readMaybe
+// ---------------------------------------------------------------------------
+
+export type MaybeAccessor<T> = T | (() => T);
+
+/**
+ * Reads a maybe-reactive value: call it when it's an accessor, return it
+ * as-is otherwise. Warren component props are eager values; call sites that
+ * need a prop to stay reactive pass an accessor instead, and readMaybe()
+ * lets static call sites keep passing plain values. Reading a plain value
+ * inside live() marks the scope as deliberately maybe-static, so the
+ * zero-dependency dev warning stays quiet for this idiom.
+ */
+export function readMaybe<T>(value: MaybeAccessor<T>): T {
+	if (typeof value === "function") {
+		return (value as () => T)();
+	}
+	if (trackingScope) trackingScope.readStaticMaybe = true;
+	return value;
+}
+
 export function inert<T>(fn: () => T): T {
 	// Outside a scope this is a no-op — inert is already the default there.
+	if (trackingScope) trackingScope.enteredInert = true;
 	inertDepth++;
 	try {
 		return fn();

@@ -10,6 +10,7 @@ import {
 	isLive,
 	live,
 	memo,
+	readMaybe,
 	setDevMode,
 	signal,
 	store,
@@ -404,14 +405,53 @@ describe("dev warnings", () => {
 		expect(warnings.some((w) => w.includes("no scope"))).toBe(true);
 	});
 
-	test("live() with zero dependencies warns", () => {
+	test("live() with zero dependencies warns once per call site, with source", () => {
 		setDevMode(true);
+		const staticLive = () => 42; // static expression, defensive over-wrap
 		const { warnings } = withWarnings(() => {
 			createRoot(() => {
-				live(() => 42); // static expression, defensive over-wrap
+				live(staticLive);
+				live(staticLive); // same site again: deduped
 			});
 		});
-		expect(warnings.some((w) => w.includes("zero dependencies"))).toBe(true);
+		const zeroDep = warnings.filter((w) => w.includes("zero dependencies"));
+		expect(zeroDep.length).toBe(1);
+		expect(zeroDep[0]).toContain("42");
+	});
+
+	test("readMaybe() marks a static read as deliberate and stays reactive for accessors", () => {
+		setDevMode(true);
+		const [count, setCount] = signal(1);
+		const seen: number[] = [];
+		const { warnings } = withWarnings(() => {
+			createRoot(() => {
+				live(() => {
+					seen.push(readMaybe<number>(5)); // static value: no warning
+				});
+				live(() => {
+					seen.push(readMaybe(count)); // accessor: tracked as usual
+				});
+			});
+			setCount(2);
+		});
+		expect(seen).toEqual([5, 1, 2]);
+		expect(warnings.some((w) => w.includes("zero dependencies"))).toBe(false);
+	});
+
+	test("live() wrapping an inert body is the deferred-run-once idiom and stays silent", () => {
+		setDevMode(true);
+		let ran = 0;
+		const { warnings } = withWarnings(() => {
+			createRoot(() => {
+				live(() => {
+					inert(() => {
+						ran++;
+					});
+				});
+			});
+		});
+		expect(ran).toBe(1);
+		expect(warnings.some((w) => w.includes("zero dependencies"))).toBe(false);
 	});
 
 	test("nested live() warns and stays transparent", () => {
