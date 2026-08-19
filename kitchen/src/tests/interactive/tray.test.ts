@@ -21,6 +21,7 @@ export const trayTests = [
 
       await new Promise<void>((resolve) => {
         let currentTray: Tray | null = null;
+        let imageUpdateCount = 0;
         let updateInterval: any = null;
         let winRef: BrowserWindow<any> | null = null;
 
@@ -46,6 +47,7 @@ export const trayTests = [
                   width: 32,
                   height: 32,
                 });
+                imageUpdateCount = 0;
 
                 if (opts.showMenu) {
                   const menu: any[] = [
@@ -87,11 +89,13 @@ export const trayTests = [
 
               updateImage: () => {
                 if (!currentTray) return { success: false };
+                imageUpdateCount++;
                 currentTray.setImage(
                   "views://assets/electrobun-logo-32-template.png",
                 );
-                log("Updated tray image in place");
-                return { success: true };
+                currentTray.setTitle(`Image update #${imageUpdateCount}`);
+                log(`Updated tray image in place (#${imageUpdateCount})`);
+                return { success: true, count: imageUpdateCount };
               },
 
               startCounter: () => {

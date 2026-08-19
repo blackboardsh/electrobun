@@ -77,8 +77,14 @@ async function updateTitle() {
 
 async function updateImage() {
   try {
-    await (electrobun.rpc as any)?.request.updateImage({});
-    addLog("Updated tray image in place");
+    const result = await (electrobun.rpc as any)?.request.updateImage({});
+    if (!result?.success) {
+      addLog("Create a tray before updating its image");
+      return;
+    }
+    const button = document.getElementById("updateImageBtn");
+    if (button) button.textContent = `Update Image (#${result.count})`;
+    addLog(`Updated tray image in place (#${result.count})`);
   } catch (err) {
     addLog(`Error: ${err}`);
   }
