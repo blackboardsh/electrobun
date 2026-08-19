@@ -5,7 +5,9 @@ description: "A concise checklist for moving an existing project to Hutch and Co
 
 Electrobun 2.x moves build orchestration to Hutch and makes Cottontail the
 default JavaScript main process. Application code and RPC schemas usually need
-little or no change; the important migration is the project boundary.
+little or no change. The important migration is replacing the v1 npm-package
+layout with an exact Electrobun release pin and a generated, project-local
+devkit.
 
 ## 1. Install Hutch
 
@@ -19,18 +21,22 @@ On Windows PowerShell:
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-## 2. Move release and task selection to Hutch
+## 2. Create the Hutch project boundary
 
-Remove `electrobun` from application dependencies. The npm package is now an
-optional thin Hutch bootstrap and never contains the runtime or SDK.
+Remove `electrobun` from the application's `dependencies` and
+`devDependencies`, then refresh the package-manager lockfile. The npm package
+is only an optional thin Hutch bootstrap in v2; it does not contain the
+runtime, SDK, or build helpers and is not needed by an existing Hutch project.
 
-Create `hutch.config.ts` with the exact Electrobun release pin, external package
-manager, and project tasks:
+Create `hutch.config.ts`. For reproducible tooling, put the optional version
+pragma on its first line, pin the exact Electrobun release separately, and copy
+the tasks you want Hutch to invoke from `package.json`:
 
 ```ts docs=syntax
+// @hutch cli=0.13.0 cottontail=0.5.0
 export default {
   electrobun: {
-    version: "2.0.1-beta.0",
+    version: "2.0.1-beta.18",
   },
   packageManager: "npm",
   scripts: {
@@ -40,6 +46,15 @@ export default {
   },
 };
 ```
+
+The first-line `// @hutch` pragma selects the Hutch CLI and the Cottontail
+build-time runtime used to load configuration and run Hutch tasks; it does not
+select the packaged application's main process. `electrobun.version` selects
+the app's Electrobun core and devkit, while `build.mainProcess` selects its main
+runtime. An npm version, tag, or range never replaces the exact Electrobun pin.
+Keep the project's existing external package manager by changing
+`packageManager` to `bun`, `pnpm`, or `yarn` when appropriate, and adjust the
+npm-specific `hutch pm ci` install task too.
 
 Keep application and distribution settings in `electrobun.config.ts`:
 
@@ -61,10 +76,142 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-See [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
-for the full responsibility table.
+For the lowest-risk bridge release from a v1 Bun app, keep
+`build.mainProcess: "bun"` and its existing `build.bun.entrypoint`; migrating
+the main process to Cottontail can be a separate change.
 
-## 3. Preserve the deployed updater identity
+Remove the v1-only `build.targets`, `build.useAsar`, `build.asarUnpack`,
+`build.cefVersion`, `build.wgpuVersion`, `build.bunVersion`,
+`build.bunnyBun`, and `build.locales` settings. Hutch builds for the current
+host, the exact Electrobun release supplies its bundled runtime versions, and
+v2 does not expose the ASAR or locale controls. See
+[Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
+the full responsibility table.
+
+## 3. Root each app in its own working directory
+
+In a monorepo, one root `hutch.config.ts` can supply the pragma, Electrobun pin,
+package manager, and tasks to every nested app. Hutch walks upward from the
+current directory and loads the nearest config; it does not merge multiple
+configs. Electrobun commands remain rooted at the directory from which they
+were invoked, not the directory containing the inherited config.
+
+For example, a root task can build two apps like this:
+
+```ts docs=syntax
+// hutch.config.ts (excerpt)
+export default {
+  scripts: {
+    "desktop:build":
+      "cd desktop && hutch electrobun build --env=stable",
+    "worker:build":
+      "cd platform-apps/worker && hutch electrobun build --env=stable",
+  },
+};
+```
+
+Run these sample tasks from the monorepo root because their `cd` paths resolve
+from the invocation directory. Each Electrobun command treats its invocation
+directory as the app root. That directory must contain `electrobun.config.ts`
+and receives its own source-relative build, artifacts, and `.hutch/devkit`
+state. Run `sync`, `dev`, and `build` from the app directory, and ignore every
+generated `.hutch/` directory. Do not run an Electrobun command at the
+monorepo root unless the root itself is an Electrobun app.
+
+## 4. Resolve the generated SDK
+
+Run sync once in each app before editor typechecking or an external bundler
+loads its configuration:
+
+```bash
+hutch electrobun sync
+```
+
+TypeScript projects should extend that app's generated config:
+
+```json
+{
+  "extends": "./.hutch/devkit/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["src", "electrobun.config.ts"]
+}
+```
+
+Hutch injects the selected devkit aliases into Electrobun's own bundles. An
+external bundler has a separate resolver and must receive equivalent aliases.
+For Vite, use the helper projected with the devkit:
+
+```ts docs=syntax
+// vite.config.ts
+import { resolve } from "node:path";
+import { defineConfig } from "vite";
+import { electrobunViteAliases } from "./.hutch/devkit/api/config/electrobun-vite";
+
+export default defineConfig({
+  resolve: {
+    alias: electrobunViteAliases(resolve(__dirname, ".hutch/devkit")),
+  },
+});
+```
+
+For another external bundler, derive exact aliases from the generated
+`.hutch/devkit/package.json` export map and reject targets outside its `api/`
+tree. An application may deliberately map an import to an application-owned
+compatibility module instead. Do not let Electrobun imports fall through to a
+stale `node_modules/electrobun` installation.
+
+## 5. Use `stable`, not `production`
+
+The Electrobun build environments are `dev`, `canary`, and `stable`; packaged
+updater channels are `canary` and `stable`, matching v1. The temporary
+`production` spelling used by earlier 2.x prereleases is retired and is not an
+alias.
+
+Replace `--env=production` with `--env=stable`, and update environment checks,
+script names, upload labels, and updater metadata only where they represent
+the Electrobun channel. Unrelated infrastructure may keep the name
+`production`. During configuration, `ELECTROBUN_BUILD_ENV` is `stable` for a
+stable build. Stable updater metadata, compressed archives, and patches retain
+the `stable-<os>-<arch>-` protocol prefix; stable installer filenames omit the
+channel prefix. The installed application retains its physical `stable` state
+root. If an existing v1 app already has a release URL containing the word
+`production`, preserve that URL for its bridge update as described below; the
+hosted path does not define the Electrobun channel.
+
+## 6. Remove v1 package-layout assumptions
+
+Delete migration helpers that locate or symlink `node_modules/electrobun`, walk
+up from `require.resolve("electrobun")`, or expect platform directories such as
+`dist-macos-arm64`, `dist-linux-x64`, or `dist-win-x64`. Those were v1 npm
+package internals and are not a v2 interface.
+
+Use `.hutch/devkit` for SDK source and types, and invoke builds and managed
+toolchains through Hutch. Make unrelated test executables explicit application
+or CI dependencies. Do not replace the old assumptions with paths into
+`~/.hutch`; that store is also Hutch-owned.
+
+Main-process code should use the runtime-neutral SDK entrypoint:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "My app",
+  url: "views://mainview/index.html",
+});
+
+void win;
+```
+
+The directory may remain `src/bun`; its name does not select the runtime.
+`build.mainProcess: "bun"` remains a first-class option, and
+`packageManager: "bun"` independently keeps Bun as the external dependency
+manager.
+
+## 7. Preserve the deployed updater identity
 
 If users already have a stable app built with Electrobun v1.18.1 or later,
 the first 2.x release can be delivered through that app's existing updater.
@@ -81,45 +228,29 @@ launch preserves the physical `stable` state root and creates the current
 update/uninstall manager records there. Existing user data and browser state do
 not move.
 
-Earlier prereleases used updater or payload layouts that are not universally
-bridgeable. Distribute the normal 2.x installer to those users. See
+Earlier Electrobun 2.x prereleases used updater or payload layouts that are not
+universally bridgeable. Distribute the normal 2.x installer to those users. See
 [Updates](/electrobun/guides/updates/) for the hosted artifact contract.
 
-## 4. Use the runtime-neutral SDK import
+## 8. Sync and verify
 
-Main-process code should import from `electrobun/main`:
-
-```ts
-import { BrowserWindow } from "electrobun/main";
-
-const win = new BrowserWindow({
-  title: "My app",
-  url: "views://mainview/index.html",
-});
-
-void win;
-```
-
-The directory may remain `src/bun`; its name does not select the runtime.
-Cottontail is the default architectural path. `build.mainProcess: "bun"`
-remains a first-class option, and `packageManager: "bun"` independently keeps
-Bun as the external dependency manager.
-
-## 5. Sync and verify
+Install external package-manager dependencies first; sync evaluates
+`electrobun.config.ts`, which may import one of them. For the sample config,
+run `hutch run install`. Then, from each Electrobun app directory:
 
 ```bash
 hutch electrobun sync
-hutch run install
+hutch electrobun config --env=stable
 hutch electrobun dev
 hutch electrobun build --env=canary
+hutch electrobun build --env=stable
 ```
 
 Sync verifies the selected per-platform core archive from the Electrobun GitHub
 Release, installs it under `~/.hutch/releases/electrobun`, and copies its SDKs
-into the generated project `.hutch/devkit` sysroot. Templates ignore `.hutch/`
-by default. Hutch owns this projection and can replace it when the selected
-Electrobun release, target, or manifest changes; direct edits are not a
-supported customization mechanism.
+into the current app's `.hutch/devkit` sysroot. Hutch owns this projection and
+can replace it when the selected release, target, or manifest changes; direct
+edits are not supported.
 
-Hutch builds for the current host. Verify startup, RPC, webviews, signing, and
-updates on native runners for every platform you distribute.
+Hutch builds for the current host. Verify startup, RPC, webviews, signing,
+installers, and updates on native runners for every platform you distribute.
