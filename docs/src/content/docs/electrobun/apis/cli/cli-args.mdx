@@ -147,15 +147,13 @@ a failed build leaves the watcher running for the next edit.
 
 ## Project scripts
 
-A generated `hutch.config.ts` exposes the common commands and can explicitly
-invoke an external package manager:
+A generated `hutch.config.ts` exposes the common commands:
 
 ```ts docs=syntax
 export default {
-  packageManager: "npm",
   scripts: {
-    install: ["hutch", "pm", "ci"],
-    "ui:build": ["hutch", "pm", "exec", "--", "vite", "build"],
+    install: ["hutch", "install", "--frozen-lockfile"],
+    "ui:build": ["node", "node_modules/vite/bin/vite.js", "build"],
     start: ["hutch", "electrobun", "dev"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
@@ -180,14 +178,21 @@ parsing. Hutch does not inspect `package.json`, add `node_modules/.bin` to
 
 ## Package managers
 
-`hutch.config.ts` may select `"npm"`, `"bun"`, `"pnpm"`, `"yarn"`, or a
-custom `{ name, executable? }` package manager. npm is the default. Bun is a
-first-class choice; this setting is independent of `build.mainProcess`, so a
-Cottontail app may use Bun for packages and a Bun main process may use npm.
+Without a selection in `hutch.config.ts`, `hutch install` uses Hutch's
+built-in npm-compatible resolver: `package.json` registry, `file:`, and git
+dependencies install into `hutch.lock`, the only lockfile Hutch reads or
+writes. Foreign lockfiles are ignored, never migrated, and lifecycle scripts
+never run. `--frozen-lockfile` makes installs fail rather than drift from the
+committed lockfile.
 
-`hutch install` delegates to the selected external manager's `install`
-command. `hutch pm ...` forwards the remaining arguments unchanged, which lets
-a reproducible npm project name `hutch pm ci` in its install task:
+`hutch.config.ts` may instead select `"npm"`, `"bun"`, `"pnpm"`, `"yarn"`, or
+a custom `{ name, executable? }` package manager. Selecting `"bun"` without an
+explicit executable uses a Hutch-vendored Bun toolchain. This setting is
+independent of `build.mainProcess`, so a Cottontail app may use Bun for
+packages and a Bun main process may use npm.
+
+With an external manager selected, `hutch install` delegates to its `install`
+command and `hutch pm ...` forwards the remaining arguments unchanged:
 
 ```bash
 hutch install
@@ -196,9 +201,8 @@ hutch pm install zod
 hutch pm exec -- tsc --version
 ```
 
-These commands are process delegation, not a package-manager implementation.
-Hutch does not resolve dependencies, interpret the package manifest, or
-maintain lockfiles. The selected external manager owns that behavior. The same
+The delegation commands are process delegation, not a second resolver; the
+selected external manager owns its dependency graph and lockfile. The same
 boundary applies to Cargo, Go modules, and other language ecosystems: they own
 dependency graphs while Hutch owns Electrobun orchestration, selected devkits,
 and compiler toolchains.

@@ -6,9 +6,12 @@ import { Aside } from "@astrojs/starlight/components";
 
 Hutch is Electrobun 2.x's native build and workspace CLI. It runs project
 scripts, bundles TypeScript, resolves exact Electrobun devkits and compiler
-toolchains, and packages applications for distribution. Your normal language
-package manager still owns application dependencies: npm, Bun, pnpm, or Yarn
-for a JavaScript project; Cargo for Rust; Go modules for Go; and so on.
+toolchains, and packages applications for distribution. It also installs
+JavaScript dependencies with a minimal built-in npm-compatible resolver, so a
+JavaScript project needs no separately installed package manager; projects
+that prefer npm, Bun, pnpm, or Yarn can delegate to them instead. Non-JS
+dependencies stay with their own tools: Cargo for Rust, Go modules for Go,
+and so on.
 
 Hutch is build-time tooling — it's what *you* run. It uses Cottontail for
 TypeScript and shell execution during builds, but that does not select the
@@ -64,7 +67,8 @@ hutch electrobun init --beta
 # Run the project's reproducible install task, if it has one
 hutch run install
 
-# Or delegate a normal install to the configured package manager
+# Install package.json dependencies (built-in resolver, or the
+# delegated manager when hutch.config.ts selects one)
 hutch install
 
 # Run a script declared in hutch.config.ts
@@ -101,10 +105,9 @@ export default {
   electrobun: {
     version: "2.0.1-beta.0",
   },
-  packageManager: "npm",
   scripts: {
-    install: ["hutch", "pm", "ci"],
-    ui: ["hutch", "pm", "exec", "--", "vite", "build"],
+    install: ["hutch", "install", "--frozen-lockfile"],
+    ui: ["node", "node_modules/vite/bin/vite.js", "build"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
   },
@@ -121,16 +124,22 @@ Non-JavaScript projects do not need a `package.json` at all.
 Its first line can also carry the [version pragma](#pin-a-project) that pins
 Hutch and Cottontail per project.
 
-The top-level `packageManager` may be `"npm"` (the default), `"bun"`,
-`"pnpm"`, `"yarn"`, or a custom `{ name, executable? }` selection. Bun is a
-first-class package manager, independent of whether the app's main process runs
-on Cottontail or Bun.
+Without a `packageManager` selection, `hutch install` uses Hutch's built-in
+npm-compatible resolver. It installs `package.json` registry, `file:`, and git
+dependencies (`github:owner/repo#ref` and `git+<url>#ref`, pinned to exact
+commits and installed as checked out) into `hutch.lock` — the only lockfile
+Hutch reads or writes; foreign lockfiles such as `bun.lock` or
+`package-lock.json` are ignored, never migrated. Lifecycle scripts never run:
+no `postinstall`, no `prepare`. Packages that must build on install belong to
+an explicitly selected external manager.
 
-`hutch install` spawns the selected external manager's `install` command;
-`hutch pm ...` forwards raw arguments to it. For example, with npm selected,
-`hutch pm install zod` and `hutch pm exec -- tsc --version` delegate those
-operations to npm. Hutch provides no resolver of its own: it does not interpret
-`package.json`, calculate dependency graphs, or maintain the manager's lockfile.
+The top-level `packageManager` may be `"npm"`, `"bun"`, `"pnpm"`, `"yarn"`, or
+a custom `{ name, executable? }` selection. Selecting `"bun"` without an
+explicit executable uses a Hutch-vendored Bun toolchain, so nothing extra needs
+to be on `PATH`. With an external manager selected, `hutch install` spawns its
+`install` command and `hutch pm ...` forwards raw arguments to it — for
+example, with npm selected, `hutch pm install zod` and
+`hutch pm exec -- tsc --version` delegate those operations to npm.
 
 ## Versions and updates
 
@@ -148,6 +157,12 @@ hutch cottontail update
 
 Interactive use checks for updates periodically. CI and other non-interactive
 invocations never prompt.
+
+Updating moves only the global selection. A project whose pragma pins an exact
+version keeps running that version — `hutch self update` says so and suggests
+`hutch self pin` when the pin now trails the selection it just advanced.
+`hutch status` shows the current directory's pragma, the version it resolves
+to, and the active channel's selection side by side.
 
 ## Local store and cleanup
 
@@ -221,8 +236,9 @@ installed globally? Place an optional pragma on the first line of
 // @hutch cli=production cottontail=production
 ```
 
-Selectors may be `production`, `stable`, `canary`, an exact semantic version,
-or `build:<full-git-revision>`. `stable` resolves to `production`:
+Selectors may be `production`, `stable`, `canary`, `latest`, an exact semantic
+version, or `build:<full-git-revision>`. `stable` and `latest` resolve to
+`production`:
 
 ```ts
 // @hutch cli=0.5.0 cottontail=0.3.0
@@ -230,6 +246,29 @@ or `build:<full-git-revision>`. `stable` resolves to `production`:
 
 The pragma selects versions only for that project. It never rewrites the global
 installation's local selections.
+
+The pin commands rewrite the pragma so it never needs hand editing:
+
+```bash
+# Pin the nearest hutch.config.ts to the exact version currently
+# selected for the active channel
+hutch self pin
+hutch cottontail pin
+
+# Pin an explicit selector, including the floating `latest`
+hutch self pin 0.5.0
+hutch self pin latest
+
+# Walk the tree below the current directory and move every config whose
+# pragma already pins an exact version or build — configs that track a
+# channel or carry no pragma are left alone
+hutch self pin --recursive
+hutch cottontail pin --recursive
+```
+
+The recursive form is made for monorepos with many pinned projects — for
+example, bumping every template in a repository after a Hutch release with one
+command.
 
 ## Select and sync Electrobun
 

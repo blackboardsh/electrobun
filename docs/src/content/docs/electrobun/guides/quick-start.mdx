@@ -117,7 +117,7 @@ my-app/
 |-- electrobun.config.ts
 |-- hutch.config.ts
 |-- package.json
-|-- package-lock.json
+|-- hutch.lock
 `-- tsconfig.json
 ```
 
@@ -125,8 +125,9 @@ The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
 is the **main process** — it runs on Cottontail, owns windows and native
 state, and is where the privileged side of your app lives. `src/mainview/` is
 the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
-webview. `hutch.config.ts` selects the exact Electrobun release, tasks, and
-package manager. `electrobun.config.ts` tells Hutch how to put the two
+webview. `hutch.config.ts` selects the exact Electrobun release and tasks;
+`hutch install` resolves `package.json` into `hutch.lock` with Hutch's
+built-in resolver unless the config selects an external package manager. `electrobun.config.ts` tells Hutch how to put the two
 processes together into an app bundle. The full split is in
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/).
 
