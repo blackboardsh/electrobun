@@ -24,23 +24,31 @@ On Windows PowerShell:
 ## 2. Create the Hutch project boundary
 
 Remove `electrobun` from the application's `dependencies` and
-`devDependencies`, then refresh the package-manager lockfile. The npm package
-is only an optional thin Hutch bootstrap in v2; it does not contain the
-runtime, SDK, or build helpers and is not needed by an existing Hutch project.
+`devDependencies`. The npm package is only an optional thin Hutch bootstrap in
+v2; it does not contain the runtime, SDK, or build helpers and is not needed
+by an existing Hutch project.
+
+Hutch ships its own minimal npm-compatible resolver and uses it by default:
+`hutch install` resolves `package.json`, verifies integrity, and writes
+`hutch.lock`. An existing `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`,
+or `yarn.lock` is ignored — never read, migrated, or modified — so the first
+`hutch install` re-resolves and creates `hutch.lock`; delete the old lockfile
+once you commit it. Developers who explicitly want npm, Bun, pnpm, or yarn as
+their dependency manager declare it with `packageManager` in
+`hutch.config.ts`; that declaration is the only selection Hutch honors.
 
 Create `hutch.config.ts`. For reproducible tooling, put the optional version
 pragma on its first line, pin the exact Electrobun release separately, and copy
 the tasks you want Hutch to invoke from `package.json`:
 
 ```ts docs=syntax
-// @hutch cli=0.13.0 cottontail=0.5.0
+// @hutch cli=0.19.0 cottontail=0.5.0
 export default {
   electrobun: {
-    version: "2.0.1-beta.18",
+    version: "2.0.1-beta.22",
   },
-  packageManager: "npm",
   scripts: {
-    install: ["hutch", "pm", "ci"],
+    install: ["hutch", "install", "--frozen-lockfile"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
   },
@@ -52,9 +60,9 @@ build-time runtime used to load configuration and run Hutch tasks; it does not
 select the packaged application's main process. `electrobun.version` selects
 the app's Electrobun core and devkit, while `build.mainProcess` selects its main
 runtime. An npm version, tag, or range never replaces the exact Electrobun pin.
-Keep the project's existing external package manager by changing
-`packageManager` to `bun`, `pnpm`, or `yarn` when appropriate, and adjust the
-npm-specific `hutch pm ci` install task too.
+To keep an external package manager instead of the built-in resolver, add
+`packageManager: "npm" | "bun" | "pnpm" | "yarn"` and change the install task
+to delegate (for example `install: ["hutch", "pm", "ci"]` for npm).
 
 Keep application and distribution settings in `electrobun.config.ts`:
 
@@ -208,8 +216,8 @@ void win;
 
 The directory may remain `src/bun`; its name does not select the runtime.
 `build.mainProcess: "bun"` remains a first-class option, and
-`packageManager: "bun"` independently keeps Bun as the external dependency
-manager.
+`packageManager: "bun"` independently selects Bun as the dependency manager
+instead of Hutch's built-in resolver.
 
 ## 7. Preserve the deployed updater identity
 

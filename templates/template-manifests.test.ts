@@ -9,9 +9,9 @@ type TemplateManifest = {
 	scripts?: unknown;
 };
 
-type PackageLock = {
+type HutchLock = {
 	lockfileVersion?: number;
-	packages?: Record<
+	workspaces?: Record<
 		string,
 		{
 			dependencies?: Record<string, string>;
@@ -21,12 +21,13 @@ type PackageLock = {
 	>;
 };
 
-type BuiltInPackageManager = "npm" | "bun" | "pnpm" | "yarn";
+type BuiltInPackageManager = "hutch" | "npm" | "bun" | "pnpm" | "yarn";
 
 const packageManagerLockfiles: Record<
 	BuiltInPackageManager,
 	readonly string[]
 > = {
+	hutch: ["hutch.lock"],
 	npm: ["package-lock.json"],
 	bun: ["bun.lock", "bun.lockb"],
 	pnpm: ["pnpm-lock.yaml"],
@@ -149,23 +150,31 @@ describe("Electrobun template package boundaries", () => {
 				}
 				continue;
 			}
-			if (selectedManager === undefined) {
+			// Hutch's built-in resolver is the default; templates only declare
+			// a packageManager to opt out of it.
+			const effectiveManager = selectedManager ?? "hutch";
+			if (!isBuiltInPackageManager(effectiveManager)) {
 				invalidManifests.push(
-					`${templateName}: package-backed template does not select a package manager`,
+					`${templateName}: release template uses unsupported package manager ${effectiveManager}`,
 				);
 				continue;
 			}
-			if (!isBuiltInPackageManager(selectedManager)) {
-				invalidManifests.push(
-					`${templateName}: release template uses unsupported package manager ${selectedManager}`,
-				);
-				continue;
-			}
-			for (const issue of lockfileSelectionIssues(
-				selectedManager,
-				existingLockfiles,
-			)) {
-				invalidManifests.push(`${templateName}: ${issue}`);
+			const hasAnyDependencies = (
+				["dependencies", "devDependencies", "optionalDependencies"] as const
+			).some((field) => Object.keys(manifest[field] ?? {}).length > 0);
+			if (hasAnyDependencies) {
+				for (const issue of lockfileSelectionIssues(
+					effectiveManager,
+					existingLockfiles,
+				)) {
+					invalidManifests.push(`${templateName}: ${issue}`);
+				}
+			} else {
+				for (const lockfile of existingLockfiles) {
+					invalidManifests.push(
+						`${templateName}: dependency-free template contains ${lockfile}`,
+					);
+				}
 			}
 			if (manifest.scripts !== undefined) {
 				invalidManifests.push(`${templateName}: package.json contains scripts`);
@@ -182,18 +191,21 @@ describe("Electrobun template package boundaries", () => {
 				}
 			}
 
-			if (selectedManager !== "npm") {
+			if (effectiveManager !== "hutch") {
 				continue;
 			}
-			const lockPath = join(templateRoot, "package-lock.json");
+			const lockPath = join(templateRoot, "hutch.lock");
 			if (!existsSync(lockPath)) continue;
-			const lock = JSON.parse(readFileSync(lockPath, "utf8")) as PackageLock;
-			if (lock.lockfileVersion !== 3) {
+			// hutch.lock allows trailing commas; strip them before parsing.
+			const lock = JSON.parse(
+				readFileSync(lockPath, "utf8").replace(/,(\s*[}\]])/g, "$1"),
+			) as HutchLock;
+			if (lock.lockfileVersion !== 1) {
 				invalidManifests.push(
-					`${templateName}: expected package-lock v3, received ${lock.lockfileVersion}`,
+					`${templateName}: expected hutch.lock v1, received ${lock.lockfileVersion}`,
 				);
 			}
-			const lockRoot = lock.packages?.[""];
+			const lockRoot = lock.workspaces?.[""];
 			for (const field of [
 				"dependencies",
 				"devDependencies",
@@ -201,7 +213,7 @@ describe("Electrobun template package boundaries", () => {
 			] as const) {
 				if (JSON.stringify(lockRoot?.[field] ?? {}) !== JSON.stringify(manifest[field] ?? {})) {
 					invalidManifests.push(
-						`${templateName}: package-lock ${field} does not match package.json`,
+						`${templateName}: hutch.lock ${field} does not match package.json`,
 					);
 				}
 			}
@@ -251,23 +263,26 @@ describe("Electrobun template package boundaries", () => {
 			}
 			const selectedManager = configuredPackageManager(hutch);
 			const hasInstallTask = /\binstall\s*:/.test(hutch);
-			const hasDelegatedCi = /\binstall\s*:\s*\["hutch", "pm", "ci"\]/.test(
-				hutch,
-			);
+			const hasFrozenInstall =
+				/\binstall\s*:\s*\["hutch", "install", "--frozen-lockfile"\]/.test(
+					hutch,
+				);
 			const hardcodedPackageManagerCommand =
 				/\[\s*["'](?:npm|bun|pnpm|yarn)["']\s*,/.test(hutch) ||
 				/:\s*["'](?:npm|bun|pnpm|yarn)\s+(?:ci|install|exec|x|run)\b/.test(
 					hutch,
 				);
 			if (hasManifest) {
-				if (selectedManager === undefined) {
+				// Templates use Hutch's built-in resolver; selecting an external
+				// package manager is a deliberate opt-out, not the default.
+				if (selectedManager !== undefined) {
 					invalidConfigs.push(
-						`${templateName}: package-backed template does not select a package manager`,
+						`${templateName}: template selects ${selectedManager} instead of the built-in resolver`,
 					);
 				}
-				if (!hasDelegatedCi) {
+				if (!hasFrozenInstall) {
 					invalidConfigs.push(
-						`${templateName}: install does not delegate a frozen install through hutch pm ci`,
+						`${templateName}: install is not a frozen hutch install`,
 					);
 				}
 				if (hardcodedPackageManagerCommand) {

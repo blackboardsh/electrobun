@@ -1,11 +1,10 @@
-// @hutch cli=0.17.0 cottontail=0.5.0
+// @hutch cli=0.19.0 cottontail=0.5.0
 export default {
 	electrobun: {
 		version: "2.0.1-beta.22",
 	},
-	packageManager: "npm",
 	scripts: {
-		install: ["hutch", "pm", "ci"],
+		install: ["hutch", "install", "--frozen-lockfile"],
 		start: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun dev",
 		dev: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun dev --watch",
 		"dev:hmr": ["hutch", "pm", "exec", "--", "concurrently", "hutch run hmr", "hutch run start"],

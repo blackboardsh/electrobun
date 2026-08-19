@@ -105,29 +105,32 @@ test(
 				].join("\n"),
 			);
 
-			const npm =
-				process.platform === "win32"
-					? [process.env.ComSpec || "cmd.exe", ["/d", "/s", "/c", "npm.cmd"]]
-					: ["npm", []];
+			const hutch = process.platform === "win32" ? "hutch.exe" : "hutch";
 			const install = run(
-				npm[0],
-				[...npm[1], "ci", "--no-audit", "--no-fund"],
+				hutch,
+				["install", "--frozen-lockfile"],
 				project,
 			);
 			assert.equal(
 				install.status,
 				0,
-				`npm ci failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
+				`hutch install failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
 			);
 			assert.equal(
 				existsSync(join(project, "node_modules", "electrobun")),
 				false,
-				"the external package manager must not install an Electrobun shim",
+				"the package manager must not install an Electrobun shim",
 			);
 
+			const vite = join(
+				project,
+				"node_modules",
+				".bin",
+				process.platform === "win32" ? "vite.cmd" : "vite",
+			);
 			const build = run(
-				npm[0],
-				[...npm[1], "exec", "--", "vite", "build"],
+				vite,
+				["build"],
 				project,
 			);
 			assert.equal(
