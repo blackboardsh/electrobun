@@ -1264,6 +1264,7 @@ fn extractAdjacentArchive(
         return err;
     };
     progress.complete(true, "The application was installed successfully.");
+    if (installed) launchInstalledApp(allocator, app_dir);
     return installed;
 }
 
@@ -1412,6 +1413,7 @@ fn extractFromSelf(allocator: std.mem.Allocator) !bool {
         return err;
     };
     progress.complete(true, "The application was installed successfully.");
+    if (installed) launchInstalledApp(allocator, app_dir);
     return installed;
 }
 
@@ -2580,6 +2582,46 @@ fn createDesktopShortcut(
         std.debug.print("Warning: No desktop file found in extracted app directory\n", .{});
     }
     return integration;
+}
+
+fn installedLauncherPath(allocator: std.mem.Allocator, app_dir: []const u8) ![]u8 {
+    return std.fs.path.join(allocator, &.{
+        app_dir,
+        "bin",
+        if (builtin.os.tag == .windows) "launcher.exe" else "launcher",
+    });
+}
+
+// A completed interactive install ends with the application running: the
+// user launched the installer expecting the app. macOS reaches the same
+// state by relaunching its replaced bundle.
+fn launchInstalledApp(allocator: std.mem.Allocator, app_dir: []const u8) void {
+    const launcher_path = installedLauncherPath(allocator, app_dir) catch |err| {
+        std.debug.print("Warning: The application was installed, but it could not be launched: {}\n", .{err});
+        return;
+    };
+    defer allocator.free(launcher_path);
+    const argv = [_][]const u8{launcher_path};
+    _ = std.process.spawn(g_io, .{
+        .argv = &argv,
+        .stdin = .ignore,
+        .stdout = .ignore,
+        .stderr = .ignore,
+    }) catch |err| {
+        std.debug.print("Warning: The application was installed, but it could not be launched: {}\n", .{err});
+    };
+}
+
+test "installed launcher path targets the bundle launcher" {
+    const path = try installedLauncherPath(std.testing.allocator, "app-root");
+    defer std.testing.allocator.free(path);
+    const expected = try std.fs.path.join(std.testing.allocator, &.{
+        "app-root",
+        "bin",
+        if (builtin.os.tag == .windows) "launcher.exe" else "launcher",
+    });
+    defer std.testing.allocator.free(expected);
+    try std.testing.expectEqualStrings(expected, path);
 }
 
 fn processExitedSuccessfully(term: std.process.Child.Term) bool {
@@ -8322,9 +8364,12 @@ pub fn main(init: std.process.Init) !void {
         .hash = hashName,
     });
 
-    // Platform-specific app launching
+    // Platform-specific app launching. On macOS the extractor is itself a
+    // live instance of the replaced bundle's identity, so `open` without -n
+    // would only activate this progress window instead of starting the
+    // freshly installed app.
     const argv = switch (builtin.os.tag) {
-        .macos => &[_][]const u8{ "open", APPBUNDLE_PATH },
+        .macos => &[_][]const u8{ "open", "-n", APPBUNDLE_PATH },
         .linux => blk: {
             // On Linux, find the launcher binary inside the app bundle
             const launcher_path = try std.fs.path.join(allocator, &.{ APPBUNDLE_PATH, "bin", "launcher" });

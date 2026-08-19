@@ -1148,7 +1148,7 @@ function platformAdapter() {
 		return {
 			name: "Windows",
 			uninstallManifestHasVersion: false,
-			installerRelaunches: false,
+			installerRelaunches: true,
 			updatePlatform: "win",
 			updateArch: "x64",
 			isInstaller: (name) => name.endsWith(".zip") && name.includes("Setup"),
@@ -1491,7 +1491,7 @@ function platformAdapter() {
 		return {
 			name: "Linux",
 			uninstallManifestHasVersion: true,
-			installerRelaunches: false,
+			installerRelaunches: true,
 			updatePlatform: "linux",
 			updateArch: process.arch === "arm64" ? "arm64" : "x64",
 			isInstaller: (name) => name.endsWith("-Setup.tar.gz"),
