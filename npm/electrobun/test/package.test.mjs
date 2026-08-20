@@ -24,14 +24,7 @@ function gitStdout(args) {
 	return result.stdout;
 }
 
-const platformPackages = [
-	"@electrobun/hutch-darwin-arm64",
-	"@electrobun/hutch-linux-arm64",
-	"@electrobun/hutch-linux-x64",
-	"@electrobun/hutch-win32-x64",
-];
-
-test("shares the product release version and vendors Hutch per platform", () => {
+test("shares the product release version and remains dependency-free", () => {
 	assert.equal(manifest.name, "electrobun");
 	assert.equal(manifest.version, productSourceManifest.version);
 	// One bin, one door: raw Hutch access stays with the machine install
@@ -47,20 +40,6 @@ test("shares the product release version and vendors Hutch per platform", () => 
 		"LICENSE",
 	]);
 
-	// The platform packages carry the Hutch launcher and engine; they are
-	// optional so unsupported hosts still install and fall back to ~/.hutch.
-	assert.deepEqual(
-		Object.keys(manifest.optionalDependencies).sort(),
-		platformPackages,
-	);
-	for (const name of platformPackages) {
-		assert.equal(
-			manifest.optionalDependencies[name],
-			manifest.version,
-			`${name} must be version-locked to the release`,
-		);
-	}
-
 	// Application APIs are not distributed through npm: every import path
 	// resolves to the tombstone that points at the Hutch devkit.
 	assert.deepEqual(manifest.exports, {
@@ -72,6 +51,7 @@ test("shares the product release version and vendors Hutch per platform", () => 
 	for (const field of [
 		"dependencies",
 		"devDependencies",
+		"optionalDependencies",
 		"peerDependencies",
 		"main",
 	]) {
@@ -172,7 +152,11 @@ test("publishes from the unified product release lane before templates", () => {
 	assert.match(productWorkflow, /^  npm-publish:\n    needs: \[release\]$/m);
 	assert.match(
 		productWorkflow,
-		/^  publish-templates:\n    needs: \[npm-publish\]$/m,
+		/^  npm-acceptance:\n    needs: \[npm-publish\]$/m,
+	);
+	assert.match(
+		productWorkflow,
+		/^  publish-templates:\n    needs: \[npm-acceptance\]$/m,
 	);
 	assert.match(
 		productWorkflow,
@@ -190,6 +174,60 @@ test("publishes from the unified product release lane before templates", () => {
 	assert.match(
 		productWorkflow,
 		/npm publish --access public --tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"/,
+	);
+	assert.match(
+		productWorkflow,
+		/node npm\/scripts\/stage-hutch-release-artifacts\.mjs/,
+	);
+	assert.ok(
+		productWorkflow.indexOf("- name: Stage paired Hutch archives") <
+			productWorkflow.indexOf("- name: Create or refresh draft Release"),
+		"paired Hutch assets must be staged before the GitHub Release is created",
+	);
+	assert.match(productWorkflow, /artifacts\/\*\*\/\*\.tar\.gz/);
+	assert.match(productWorkflow, /artifacts\/hutch\/hutch-artifacts\.json/);
+	assert.match(
+		productWorkflow,
+		/node package\/scripts\/verify-release-assets\.mjs[\s\S]*?--actual "\$existing_assets"[\s\S]*?--repository "\$GITHUB_REPOSITORY"[\s\S]*?--tag "\$RELEASE_TAG"/,
+	);
+	assert.match(
+		productWorkflow,
+		/- name: Create or refresh draft Release\n        if: steps\.release-state\.outputs\.upload == 'true'[\s\S]*?          draft: true/,
+	);
+	assert.match(
+		productWorkflow,
+		/node npm\/scripts\/check-published-bootstrap\.mjs[\s\S]*?--tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"/,
+	);
+	assert.match(
+		productWorkflow,
+		/- name: Publish npm bootstrap\n        if: steps\.npm-state\.outputs\.exists != 'true'/,
+	);
+	assert.ok(
+		productWorkflow.indexOf("- name: Publish npm bootstrap") <
+			productWorkflow.indexOf("- name: Verify published npm bootstrap"),
+		"the exact npm integrity and dist-tag must be verified after publication",
+	);
+	assert.match(
+		productWorkflow,
+		/node npm\/scripts\/accept-published-bootstrap\.mjs[\s\S]*?--version "\$\{\{ steps\.release-type\.outputs\.version \}\}"[\s\S]*?--release-tag "\$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}"[\s\S]*?--dist-tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"[\s\S]*?--platform "\$\{\{ matrix\.platform \}\}"/,
+	);
+	for (const runner of [
+		"macos-14",
+		"ubuntu-24.04",
+		"ubuntu-24.04-arm",
+		"windows-2025",
+	]) {
+		assert.match(productWorkflow, new RegExp(`- os: ${runner}`));
+	}
+	assert.equal(
+		(productWorkflow.match(/npm publish /g) ?? []).length,
+		1,
+		"the release must publish exactly one npm package",
+	);
+	assert.doesNotMatch(productWorkflow, /npm\/platform-packages|@electrobun\/hutch-/);
+	assert.equal(
+		existsSync(join(repositoryRoot, "npm", "scripts", "build-platform-packages.mjs")),
+		false,
 	);
 	assert.doesNotMatch(
 		productWorkflow,

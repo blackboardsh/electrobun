@@ -11,18 +11,47 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const templatesRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = dirname(templatesRoot);
+const hutch = process.env.HUTCH_BINARY
+	? resolve(process.env.HUTCH_BINARY)
+	: process.platform === "win32"
+		? "hutch.exe"
+		: "hutch";
+const siblingHutchEngine = process.env.HUTCH_BINARY
+	? join(
+			dirname(hutch),
+			process.platform === "win32" ? "hutch-engine.exe" : "hutch-engine",
+		)
+	: null;
+const hutchEngine = process.env.HUTCH_ENGINE_BINARY
+	? resolve(process.env.HUTCH_ENGINE_BINARY)
+	: siblingHutchEngine && existsSync(siblingHutchEngine)
+		? siblingHutchEngine
+		: null;
+const pathVariable =
+	Object.keys(process.env).find((name) => name.toLowerCase() === "path") ||
+	"PATH";
+const hutchEnvironment = process.env.HUTCH_BINARY
+	? {
+			[pathVariable]: [
+				dirname(hutch),
+				process.env[pathVariable] || "",
+			].join(delimiter),
+			...(hutchEngine ? { HUTCH_ENGINE_BINARY: hutchEngine } : {}),
+		}
+	: {};
 
 function run(command, args, cwd) {
 	return spawnSync(command, args, {
 		cwd,
 		env: {
 			...process.env,
+			...hutchEnvironment,
 			npm_config_audit: "false",
 			npm_config_fund: "false",
 			npm_config_update_notifier: "false",
@@ -50,7 +79,7 @@ test(
 				"a clean scaffold must not rely on a pre-existing devkit projection",
 			);
 
-			// Stand in for the leading `hutch electrobun sync` in every Vite task by
+			// Stand in for the leading `hutch electrobun prepare` in every Vite task by
 			// projecting the SDK from the release source into the clean scaffold.
 			const devkitRoot = join(project, ".hutch", "devkit");
 			const apiRoot = join(devkitRoot, "api");
@@ -105,16 +134,36 @@ test(
 				].join("\n"),
 			);
 
-			const hutch = process.platform === "win32" ? "hutch.exe" : "hutch";
+			const hutchConfigPath = join(project, "hutch.config.ts");
+			const hutchConfig = readFileSync(hutchConfigPath, "utf8");
+			const releaseBuildTask =
+				'build: "hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun build --env=stable",';
+			assert.ok(
+				hutchConfig.includes(releaseBuildTask),
+				"the Vite template build task must prepare the devkit before Hutch's built-in pm exec",
+			);
+			const fixtureBuildTask = [
+				'build: "hutch pm exec -- vite build && hutch run package:stub",',
+				`"package:stub": ${JSON.stringify([
+					"node",
+					"-e",
+					"require('node:fs').writeFileSync('.packaging-stub-ran', '')",
+				])},`,
+			].join("\n\t\t");
+			writeFileSync(
+				hutchConfigPath,
+				hutchConfig.replace(releaseBuildTask, fixtureBuildTask),
+			);
+
 			const install = run(
 				hutch,
-				["install", "--frozen-lockfile"],
+				["run", "install"],
 				project,
 			);
 			assert.equal(
 				install.status,
 				0,
-				`hutch install failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
+				`hutch run install failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
 			);
 			assert.equal(
 				existsSync(join(project, "node_modules", "electrobun")),
@@ -122,21 +171,20 @@ test(
 				"the package manager must not install an Electrobun shim",
 			);
 
-			const vite = join(
-				project,
-				"node_modules",
-				".bin",
-				process.platform === "win32" ? "vite.cmd" : "vite",
-			);
 			const build = run(
-				vite,
-				["build"],
+				hutch,
+				["run", "build"],
 				project,
 			);
 			assert.equal(
 				build.status,
 				0,
-				`Vite build failed\n${build.stdout}\n${build.stderr}`,
+				`hutch run build failed\n${build.error || ""}\n${build.stdout}\n${build.stderr}`,
+			);
+			assert.equal(
+				existsSync(join(project, ".packaging-stub-ran")),
+				true,
+				"the configured build task must continue through its packaging boundary",
 			);
 
 			const assets = join(project, "dist", "assets");
@@ -150,6 +198,34 @@ test(
 				"the output must contain code from the projected Electrobun view SDK",
 			);
 			assert.doesNotMatch(javascript, /from["']electrobun\/view["']/);
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
+	},
+);
+
+test(
+	"the dependency-free tray template accepts its configured frozen install without a lockfile",
+	{ timeout: 60_000 },
+	() => {
+		const fixture = mkdtempSync(join(tmpdir(), "electrobun-tray-install-"));
+		const project = join(fixture, "app");
+		try {
+			cpSync(join(templatesRoot, "tray-app"), project, { recursive: true });
+			assert.equal(existsSync(join(project, "hutch.lock")), false);
+			assert.equal(existsSync(join(project, "node_modules")), false);
+
+			const install = run(hutch, ["run", "install"], project);
+			assert.equal(
+				install.status,
+				0,
+				`tray hutch run install failed\n${install.error || ""}\n${install.stdout}\n${install.stderr}`,
+			);
+			assert.equal(
+				existsSync(join(project, "hutch.lock")),
+				false,
+				"an empty dependency graph must not create an empty lockfile",
+			);
 		} finally {
 			rmSync(fixture, { recursive: true, force: true });
 		}

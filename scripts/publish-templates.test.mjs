@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -88,14 +89,16 @@ test("published templates must float: no pragma, no product pin", () => {
 			),
 		/must not carry a \/\/ @hutch pragma/,
 	);
-	assert.throws(
-		() =>
-			assertFloatingTemplateConfig(
-				"hello-world",
-				'export default { electrobun: { version: "2.0.0" } };\n',
-			),
-		/must not pin electrobun\.version/,
-	);
+	for (const source of [
+		'export default { electrobun: { version: "2.0.0" } };\n',
+		'export default { "electrobun": { note: true, "version": "2.0.0" } };\n',
+		"export default { electrobun: { version: resolveVersion() } };\n",
+	]) {
+		assert.throws(
+			() => assertFloatingTemplateConfig("hello-world", source),
+			/must not pin electrobun\.version/,
+		);
+	}
 });
 
 test("package-free templates receive catalog metadata", () => {
@@ -110,22 +113,50 @@ test("package-free templates receive catalog metadata", () => {
 	});
 });
 
-test("dry-run archives preserve package and package-free template inputs", async () => {
+test("template publication fails closed when checked-out HEAD cannot be resolved", async () => {
+	const pathKey =
+		Object.keys(process.env).find((name) => name.toLowerCase() === "path") ??
+		"PATH";
+	const originalPath = process.env[pathKey];
+	try {
+		process.env[pathKey] = "";
+		await assert.rejects(
+			publishTemplates({ dryRun: true }),
+			/could not resolve the checked-out Git revision/,
+		);
+	} finally {
+		if (originalPath === undefined) delete process.env[pathKey];
+		else process.env[pathKey] = originalPath;
+	}
+});
+
+test("dry-run uses checked-out HEAD and preserves template inputs", async () => {
 	const packageVersion = JSON.parse(
 		readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
 	).version;
+	const checkedOutHead = execFileSync("git", ["rev-parse", "HEAD"], {
+		cwd: repositoryRoot,
+		encoding: "utf8",
+	}).trim();
+	const spoofedRevision = "f".repeat(40);
+	const originalRevision = process.env.GITHUB_SHA;
 	const originalLog = console.log;
 	console.log = () => {};
 	let catalog;
 	try {
+		process.env.GITHUB_SHA = spoofedRevision;
 		catalog = await publishTemplates({
 			dryRun: true,
 			channel: releaseChannel(packageVersion),
 		});
 	} finally {
 		console.log = originalLog;
+		if (originalRevision === undefined) delete process.env.GITHUB_SHA;
+		else process.env.GITHUB_SHA = originalRevision;
 	}
 
+	assert.equal(catalog.revision, checkedOutHead);
+	assert.notEqual(catalog.revision, spoofedRevision);
 	assert.equal(catalog.templates.length, 31);
 	assert.equal(
 		catalog.templates.filter(({ id }) => id === "all").length,
@@ -153,11 +184,11 @@ test("dry-run archives preserve package and package-free template inputs", async
 		assert.doesNotMatch(stagedHutch, /^\/\/\s*@hutch\b/m);
 		assert.doesNotMatch(
 			stagedHutch,
-			/\belectrobun\s*:\s*\{\s*version\s*:/s,
+			/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s,
 		);
 		assert.doesNotMatch(
 			readFileSync(join(stagedRoot, "electrobun.config.ts"), "utf8"),
-			/\belectrobun\s*:\s*\{\s*version\s*:/s,
+			/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s,
 		);
 	}
 });

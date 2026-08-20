@@ -4,12 +4,16 @@ Internal reference for how Electrobun manages CEF (Chromium Embedded Framework) 
 
 ## Tarball Layout
 
-Electrobun releases ship 2 tarballs per platform:
+Electrobun application artifacts include 2 tarballs per platform:
 
 | Tarball | Contents | Source |
 |---------|----------|--------|
 | `electrobun-core-*` | Platform binaries including `process_helper` | `dist/` (excluding `cef/`) |
 | `electrobun-cef-*` | CEF runtime files only (no electrobun code) | `dist/cef/` |
+
+The same GitHub Release also carries the four paired Hutch bootstrap archives
+indexed by `hutch-artifacts.json`; those are separate from the application
+core/CEF payload layout described here.
 
 `process_helper` ships in the **core** tarball, not the CEF tarball. The CEF
 tarball therefore contains only upstream runtime files and can be downloaded
@@ -74,12 +78,13 @@ path: package/src/native/build/process_helper[.exe]
 
 ## Application Artifact Resolution
 
-CEF is owned by the exact Electrobun release selected in
-`hutch.config.ts`; there is no per-project CEF version override. The
-release publishes a verified CEF tarball separately from the core tarball so
-projects that do not enable CEF do not download it. When CEF is enabled and its
-matching payload is not already installed, Hutch fetches the selected release's
-artifact index, verifies the CEF archive, and installs it under
+CEF is owned by the resolved Electrobun release; there is no separate
+per-project CEF version override. An exact `electrobun.version` pin wins over
+the npm-paired or floating channel default. The release publishes a verified
+CEF tarball separately from the core tarball so projects that do not enable CEF
+do not download it. When CEF is enabled and its matching payload is not already
+installed, Hutch fetches the selected release's artifact index, verifies the
+CEF archive, and installs it under
 `~/.hutch/releases/electrobun` before packaging the app. The artifact index is
 fetched fresh and is not stored persistently; an already-installed verified CEF
 payload can be reused offline.

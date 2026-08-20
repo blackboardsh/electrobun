@@ -16,18 +16,20 @@ app. A typical project wires both into `hutch.config.ts`:
 
 ```ts docs=syntax
 export default {
-  electrobun: {
-    version: "2.0.1-beta.0",
-  },
-  packageManager: "npm",
   scripts: {
-    install: ["hutch", "pm", "ci"],
+    install: ["hutch", "install", "--frozen-lockfile"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
     "build:stable": ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
+
+`electrobun.version` is optional: npm-launched commands use the installed
+package's paired version. A direct Hutch project selects the active release
+channel initially, then `prepare`, `build`, `run`, and `dev` preserve its
+projected release; an explicit `sync` advances it. An exact pin overrides all
+of those defaults.
 
 ```bash
 hutch run install

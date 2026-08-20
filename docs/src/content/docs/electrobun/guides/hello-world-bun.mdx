@@ -19,8 +19,9 @@ the Node.js and Bun-compatible APIs used by Electrobun applications. Choose
 Bun when the application intentionally depends on the actual Bun
 runtime — Bun apps get the real Bun API surface, and the two runtimes will
 diverge over time. Hutch bundles source and packages the app in either
-configuration; npm, Bun, or another chosen package manager owns ordinary
-JavaScript dependencies.
+configuration. Hutch's built-in npm-compatible resolver owns ordinary
+JavaScript dependencies by default; select npm, Bun, or another package
+manager explicitly when the project needs it.
 
 ## 1. Create the project
 
@@ -46,7 +47,6 @@ Create `hutch.config.ts`:
 
 ```ts docs=syntax
 export default {
-  electrobun: { version: "2.0.1-beta.0" },
   packageManager: "bun",
   scripts: {
     install: ["hutch", "pm", "install", "--frozen-lockfile"],
@@ -56,8 +56,10 @@ export default {
 };
 ```
 
-There is no `electrobun` package dependency. Hutch supplies its exact SDK and
-core. `packageManager: "bun"` is a first-class, independent choice: it makes
+There is no `electrobun` package dependency in this direct-Hutch example, so an
+explicit sync follows the active release channel; an optional exact
+`electrobun.version` pin would stop it. Hutch supplies the resolved SDK and core.
+`packageManager: "bun"` is a first-class, independent choice: it makes
 `hutch install` and `hutch pm ...` delegate to Bun, while
 `build.mainProcess: "bun"` separately chooses Bun as the application runtime.
 

@@ -6,6 +6,17 @@ import { electrobunViteAliases } from "../config/electrobun-vite";
 import { ELECTROBUN_JAVASCRIPT_SDK_EXPORTS } from "./native-devkit-manifest";
 
 describe("Electrobun Vite aliases", () => {
+	test("points a missing projection at non-advancing preparation", () => {
+		const fixture = mkdtempSync(join(tmpdir(), "electrobun-vite-missing-"));
+		try {
+			expect(() =>
+				electrobunViteAliases(join(fixture, ".hutch", "devkit")),
+			).toThrow("run hutch electrobun prepare before starting Vite");
+		} finally {
+			rmSync(fixture, { recursive: true, force: true });
+		}
+	});
+
 	test("map every public SDK export into the projected API", () => {
 		const fixture = mkdtempSync(join(tmpdir(), "electrobun-vite-aliases-"));
 		try {

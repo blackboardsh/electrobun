@@ -1,4 +1,4 @@
-// @hutch cli=0.23.0 cottontail=0.5.0
+// @hutch cli=0.24.2 cottontail=0.5.0
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -23,7 +23,7 @@ export default {
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
 		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:updater-unit && hutch test:npm-bootstrap && hutch test:release-notes",
 		"pin:latest":
-			"hutch self update && hutch cottontail update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive",
+			"hutch self update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive && node package/scripts/sync-release-toolchain-pins.mjs",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",
 		"push:patch": "hutch check:release && node scripts/push-version.js patch",
 		"push:minor": "hutch check:release && node scripts/push-version.js minor",
@@ -46,7 +46,7 @@ export default {
 		"test:devkit-manifest":
 			"node --test scripts/validate-native-devkit.test.mjs scripts/electrobun-version-runtime.test.mjs",
 		"test:version-bump":
-			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs",
+			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs scripts/verify-release-assets.test.mjs scripts/release-publication-contract.test.mjs scripts/sync-release-toolchain-pins.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": ["hutch", "scripts/test-cef-remote-debugging.ts"],
@@ -70,7 +70,7 @@ export default {
 		"test:updater-lifecycle":
 			"hutch build:release && node scripts/test-updater-lifecycle.mjs",
 		"test:npm-bootstrap":
-			"node --test ../npm/electrobun/test/bootstrap.test.mjs ../npm/electrobun/test/package.test.mjs",
+			"node --test ../npm/electrobun/test/bootstrap.test.mjs ../npm/electrobun/test/package.test.mjs ../npm/scripts/accept-published-bootstrap.test.mjs ../npm/scripts/check-published-bootstrap.test.mjs ../npm/scripts/stage-hutch-release-artifacts.test.mjs",
 		"test:release-notes": "node scripts/release-notes-contract.test.mjs",
 		"test:spell-check": "node --test src/shared/spell-check.test.js",
 		"test:macos-spell-check": "scripts/test-macos-spell-check.sh",

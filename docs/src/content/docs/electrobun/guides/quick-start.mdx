@@ -28,10 +28,11 @@ hutch --version
 ```
 
 That's the only Electrobun-specific global install you need. Hutch handles
-scripts, builds, devkits, toolchains, and releases. A JavaScript project still
-uses its chosen package manager for ordinary dependencies; a Rust or Go project
-uses Cargo or Go modules. When a project needs a compiler, Hutch fetches its
-exact configured version.
+scripts, builds, devkits, toolchains, and releases. Its built-in npm-compatible
+resolver handles ordinary JavaScript dependencies by default; a project can
+explicitly select npm, Bun, pnpm, Yarn, or a custom executable instead. A Rust
+or Go project uses Cargo or Go modules. When a project needs a compiler, Hutch
+fetches its exact configured version.
 
 ## Create a project
 
@@ -59,10 +60,13 @@ hutch electrobun init my-app --beta
 
 :::note
 `bunx electrobun init` and `npx electrobun init` work too. The npm package is a
-thin bootstrap that installs/executes Hutch and forwards every argument. It
-ships under the same Electrobun release version, but defaults to stable
-templates unless you pass `--beta`. The exact Electrobun release, SDK, and
-runtime remain selected by the generated project's `hutch.config.ts` pin.
+single dependency-free bootstrap that downloads and verifies its exact paired
+Hutch archive from the same-version Electrobun GitHub Release, caches it, and
+forwards every argument. It defaults to stable templates unless you pass
+`--beta`; the installed package supplies paired Hutch and Electrobun defaults
+unless the project adds an explicit pin. The initializer also ensures a
+compatible global Hutch launcher is present, so the generated `hutch run ...`
+tasks and the rest of this page work afterward.
 :::
 
 ## Run the app
@@ -75,33 +79,39 @@ hutch run dev
 A window should open on your desktop. That's your app.
 
 `init` already ran the template's explicit `install` task after extraction and
-devkit preparation. For the default JavaScript templates that task delegates
-`ci` to npm; native-only templates do not define it. If you initialized with
-`--skip-install`, run `hutch run install` before `dev` when the selected
-template provides that task. Initialization requires network access for the
-current template catalog and selected template.
+devkit preparation. For the default JavaScript templates that task calls
+Hutch's built-in resolver; native-only templates do not define it. If you
+initialized with `--skip-install`, run `hutch run install` before `dev` when the
+selected template provides that task. Initialization requires network access
+for the current template catalog and selected template.
 
 The `dev` task builds the app, launches it, and rebuilds when you edit source
-files. Hutch resolves both tasks only from `hutch.config.ts`; the configured
-external package manager still owns `package.json`, dependency resolution, and
-its lockfile.
+files. Hutch resolves both tasks only from `hutch.config.ts`. Its built-in
+resolver owns `package.json` dependency resolution and `hutch.lock` unless the
+config explicitly selects an external package manager.
 
-The template's `hutch.config.ts` contains an exact Electrobun release pin:
+The template's `hutch.config.ts` deliberately contains no release pin:
 
 ```ts docs=syntax
 export default {
-  electrobun: {
-    version: "2.0.1-beta.0",
+  scripts: {
+    install: ["hutch", "install", "--frozen-lockfile"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
   },
-  // package manager and project tasks...
 };
 ```
 
-During `init`, Hutch installs that exact core and SDK release under
+During `init`, Hutch resolves the initial release from the npm-paired default
+when supplied, otherwise from the chosen catalog, and installs that exact core
+and SDK release under
 `~/.hutch/releases/electrobun`, copies its SDKs into the generated project
 `.hutch/devkit` sysroot, and resolves any required native compiler under
 `~/.hutch/toolchains`. `dev`, `run`, and `build` refresh that preparation
-automatically; `hutch electrobun sync` does the same work without building.
+automatically. For an unpinned direct-Hutch project, `hutch electrobun sync`
+advances to the active channel head while other commands reuse the projected
+version. An npm-launched command instead uses the installed package's exact
+paired Electrobun default. Add an exact `electrobun.version` only when you want
+to override either default.
 
 A typical project looks like this:
 
@@ -125,9 +135,10 @@ The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
 is the **main process** — it runs on Cottontail, owns windows and native
 state, and is where the privileged side of your app lives. `src/mainview/` is
 the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
-webview. `hutch.config.ts` selects the exact Electrobun release and tasks;
-`hutch install` resolves `package.json` into `hutch.lock` with Hutch's
-built-in resolver unless the config selects an external package manager. `electrobun.config.ts` tells Hutch how to put the two
+webview. `hutch.config.ts` owns tasks and any optional release or package-manager
+override; `hutch install` resolves `package.json` into `hutch.lock` with Hutch's
+built-in resolver unless the config selects an external package manager.
+`electrobun.config.ts` tells Hutch how to put the two
 processes together into an app bundle. The full split is in
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/).
 
@@ -140,8 +151,8 @@ hutch electrobun build --env=canary
 hutch electrobun build --env=stable
 ```
 
-This produces a signed, distributable build — installer, self-extracting
-wrapper, and update metadata included. Canary and stable are independent
+This produces a distributable build — installer, self-extracting wrapper, and
+update metadata included — and signs it when signing is configured. Canary and stable are independent
 channels, so you can ship prerelease builds to testers without touching your
 stable release line.
 

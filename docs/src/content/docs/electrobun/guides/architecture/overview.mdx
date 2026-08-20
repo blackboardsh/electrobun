@@ -17,14 +17,14 @@ self-extractor plus verified transactional updates served from static storage.
 
 Hutch is the only build orchestrator. When you run a build, it:
 
-1. Loads Electrobun release, task, and package-manager selection from
-   `hutch.config.ts`, including the exact `electrobun.version`.
+1. Loads tasks and any optional exact Electrobun or external package-manager
+   override from `hutch.config.ts`.
 2. Loads the app, build, and distribution description from
    `electrobun.config.ts`.
 3. Verifies the selected platform core archive in `~/.hutch` and refreshes the
    generated project `.hutch/devkit` SDK projection.
-4. Bundles TypeScript views using dependencies already installed by the
-   project's external package manager.
+4. Bundles TypeScript views using dependencies already installed by Hutch's
+   built-in resolver or the project's explicitly selected external manager.
 5. Bundles a Cottontail or Bun main process, or compiles a Zig, Rust, Go, or
    Odin main process.
 6. Assembles the platform application bundle.
@@ -36,11 +36,13 @@ Hutch is the only build orchestrator. When you run a build, it:
 Hutch and its compiler toolchains are not shipped inside the finished app —
 what your users download contains only what the app needs to run.
 
-Hutch does not inspect `package.json` or replace a language package manager.
-The top-level `hutch.config.ts` `packageManager` selection may name npm, Bun,
-pnpm, Yarn, or a custom executable. `hutch install` and `hutch pm ...` only
-delegate to that external tool; project tasks may compose those commands,
-Cargo, or another tool explicitly before the Electrobun build.
+Hutch's built-in npm-compatible resolver is the JavaScript default:
+`hutch install` reads `package.json`, writes `hutch.lock`, and `hutch pm exec`
+runs an already-installed binary from the nearest project's
+`node_modules/.bin`. The top-level `hutch.config.ts` `packageManager` selection
+may instead name npm, Bun, pnpm, Yarn, or a custom executable; in that explicit
+mode, `hutch install` and `hutch pm ...` delegate to the selected tool. Cargo,
+Go modules, and other language managers keep their normal ownership.
 
 ## Runtime architecture
 

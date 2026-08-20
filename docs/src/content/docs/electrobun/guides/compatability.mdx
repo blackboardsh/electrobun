@@ -51,9 +51,10 @@ for package names.
 
 Cottontail targets practical Node.js and Bun compatibility and is exercised
 against copied upstream conformance tests on macOS, Windows, and Linux. Runtime
-compatibility is separate from package management. npm, pnpm, Yarn, or Bun owns
-the JavaScript dependency graph and lockfile; Hutch owns Electrobun builds,
-versioned devkits, and compiler toolchains.
+compatibility is separate from package management. Hutch's built-in resolver
+owns the JavaScript dependency graph and `hutch.lock` by default; a project may
+explicitly select npm, pnpm, Yarn, or Bun to own them instead. Hutch also owns
+Electrobun builds, versioned devkits, and compiler toolchains.
 
 Native addons and code that depends on undocumented runtime internals can still
 be platform- or runtime-specific. Test the application on every target before a

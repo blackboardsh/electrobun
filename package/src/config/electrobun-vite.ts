@@ -39,7 +39,7 @@ export function electrobunViteAliases(devkitRoot: string): ViteAlias[] {
 		manifest = JSON.parse(readFileSync(packagePath, "utf8")) as DevkitPackage;
 	} catch (cause) {
 		throw new Error(
-			`Electrobun devkit is unavailable at ${absoluteDevkitRoot}; run hutch electrobun sync`,
+			`Electrobun devkit is unavailable at ${absoluteDevkitRoot}; run hutch electrobun prepare before starting Vite`,
 			{ cause },
 		);
 	}

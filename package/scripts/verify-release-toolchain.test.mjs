@@ -92,6 +92,22 @@ test("release provenance rejects invalid expected production versions before pro
 	}
 });
 
+test("pin:latest bootstraps through the old self-update verb before repinning", () => {
+	const config = readFileSync(
+		new URL("../hutch.config.ts", import.meta.url),
+		"utf8",
+	);
+	// This task is initially interpreted by the repository's old pinned engine.
+	// Keep its first verb compatible with Hutch releases that predate the
+	// user-facing `hutch upgrade` alias.
+	assert.match(
+		config,
+		/"pin:latest":\s*"hutch self update && cd \.\. && hutch self pin --recursive && hutch cottontail pin --recursive && node package\/scripts\/sync-release-toolchain-pins\.mjs"/,
+	);
+	assert.doesNotMatch(config, /"pin:latest":\s*"hutch upgrade\b/);
+	assert.doesNotMatch(config, /\bhutch cottontail update\b/);
+});
+
 test("release CI verifies provenance before all four Kitchen builds", () => {
 	// Normalize CRLF -> LF: on Windows runners Git checks the workflow out with
 	// CRLF, which breaks the explicit `\n` line separators in the regexes below.
@@ -145,7 +161,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	);
 	assert.match(
 		workflow,
-		/^      - name: Install Kitchen dependencies\n        run: hutch run install\n        working-directory: kitchen\n\n      - name: Typecheck Kitchen against local devkit\n        run: \|\n          hutch electrobun sync\n          node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit\n        working-directory: kitchen\n        env:\n          HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist$/m,
+		/^      - name: Install Kitchen dependencies\n        run: hutch run install\n        working-directory: kitchen\n\n      - name: Typecheck Kitchen against local devkit\n        run: \|\n          hutch electrobun prepare\n          node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit\n        working-directory: kitchen\n        env:\n          HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist$/m,
 	);
 	const macCleanupStart = workflow.indexOf(
 		"      - name: Free disk space (macOS)",

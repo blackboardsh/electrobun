@@ -39,4 +39,3 @@ settings.local.json
 
 **/.zig-cache
 **/zig-out
-npm/platform-packages/

@@ -2,12 +2,24 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ProjectInspection } from "./orchestrator";
 
+const PRODUCT_CONFIG_PATTERN =
+	/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/g;
+const PRODUCT_BLOCK_PATTERN =
+	/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:\s*\{([\s\S]*?)\}/;
 const PRODUCT_VERSION_PATTERN =
-	/\belectrobun\s*:\s*\{\s*version\s*:\s*(["'])([^"'\r\n]+)\1/g;
+	/(?:^|,)\s*(?:version|["']version["'])\s*:\s*(["'])([^"'\r\n]+)\1/;
 
 export function configuredElectrobunVersion(source: string): string | null {
-	const matches = [...source.matchAll(PRODUCT_VERSION_PATTERN)];
-	return matches.length === 1 ? (matches[0]?.[2] ?? null) : null;
+	const configured = [...source.matchAll(PRODUCT_CONFIG_PATTERN)];
+	if (configured.length === 0) return null;
+	if (configured.length === 1) {
+		const block = PRODUCT_BLOCK_PATTERN.exec(source)?.[1] ?? "";
+		const version = PRODUCT_VERSION_PATTERN.exec(block)?.[2];
+		if (version) return version;
+	}
+	// Any Electrobun product block violates the floating template contract,
+	// even when its version is malformed, ambiguous, reordered, or dynamic.
+	return "configured (version is not one exact string)";
 }
 
 export function hutchConfigDefinesScript(

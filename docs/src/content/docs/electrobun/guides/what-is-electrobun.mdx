@@ -20,10 +20,11 @@ bundle Chromium when you genuinely want it.
 Electrobun 2.x is a few focused pieces, each doing one job:
 
 - **Hutch** is the build and workspace CLI. It runs project-defined scripts,
-  bundles code, synchronizes exact Electrobun devkits, downloads pinned
-  toolchains, and produces signed distributable builds. npm, Bun, pnpm, Yarn,
-  Cargo, Go modules, and other language package managers remain authoritative
-  for dependencies.
+  bundles code, synchronizes Electrobun devkits, downloads pinned toolchains,
+  and produces distributable builds, signed when signing is configured. Its built-in npm-compatible resolver
+  handles JavaScript dependencies by default; projects may explicitly select
+  npm, Bun, pnpm, or Yarn instead. Cargo, Go modules, and other language package
+  managers remain authoritative for their ecosystems.
 - **Cottontail** is the default main-process runtime for JavaScript and
   TypeScript. It's built with Zig on JavaScriptCore and provides the Node.js
   and Bun-compatible APIs desktop apps actually use — so your existing code
@@ -65,8 +66,8 @@ what it was never given.
 When you build for release, Hutch produces everything distribution needs in
 one pass: the runnable app, a small self-extracting wrapper around it, update
 metadata, a compressed full-update archive, and platform installer artifacts.
-Code signing and notarization are part of the release build, not a separate
-chore. Host the artifacts on any static storage — R2, S3, GitHub Releases —
+When configured, code signing and notarization are part of the release build,
+not a separate chore. Host the artifacts on any static storage — R2, S3, GitHub Releases —
 and the built-in updater takes it from there.
 
 ## Start building
@@ -78,11 +79,13 @@ curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 hutch electrobun init
 ```
 
-If you don't have Hutch yet, the thin npm package will bootstrap it and forward
-all arguments. It defaults to stable templates; pass `--beta` explicitly for
-the beta catalog. The npm package shares the Electrobun release version but
-contains no core or SDK; the generated project's `hutch.config.ts` selects the
-exact Electrobun release:
+If you don't have Hutch yet, the single dependency-free npm package downloads
+and verifies its exact paired Hutch archive from the same-version Electrobun
+GitHub Release, caches it, and forwards all arguments. It defaults to stable
+templates; pass `--beta` explicitly for the beta catalog. The package contains
+no core or SDK and supplies paired Hutch and Electrobun defaults; init also
+ensures a compatible global launcher for the generated project's `hutch` tasks.
+An exact project pin is optional and overrides those defaults:
 
 ```bash
 npx electrobun init

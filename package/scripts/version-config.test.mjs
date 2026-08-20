@@ -113,21 +113,10 @@ test("release bumps keep the thin npm bootstrap on the product version", () => {
 	const updated = JSON.parse(updateNpmBootstrapVersion(source, "2.3.4-beta.5"));
 	assert.equal(updated.name, "electrobun");
 	assert.equal(updated.version, "2.3.4-beta.5");
-	// The version and the version-locked platform packages move together;
-	// everything else is untouched.
-	for (const name of Object.keys(updated.optionalDependencies)) {
-		assert.equal(updated.optionalDependencies[name], "2.3.4-beta.5", name);
-	}
-	const {
-		version: originalVersion,
-		optionalDependencies: _originalPlatform,
-		...originalRest
-	} = original;
-	const {
-		version: updatedVersion,
-		optionalDependencies: _updatedPlatform,
-		...updatedRest
-	} = updated;
+	// Only the single dependency-free bootstrap version moves.
+	assert.equal(updated.optionalDependencies, undefined);
+	const { version: originalVersion, ...originalRest } = original;
+	const { version: updatedVersion, ...updatedRest } = updated;
 	assert.notEqual(originalVersion, updatedVersion);
 	assert.deepEqual(updatedRest, originalRest);
 	assert.throws(
@@ -256,6 +245,19 @@ test("release bumps require every template to float", () => {
 			rmSync(scratch, { recursive: true, force: true });
 		}
 	}, /must not carry a \/\/ @hutch pragma/);
+	assert.throws(() => {
+		const scratch = mkdtempSync(join(tmpdir(), "template-product-pin-"));
+		try {
+			mkdirSync(join(scratch, "pinned"));
+			writeFileSync(
+				join(scratch, "pinned", "hutch.config.ts"),
+				'export default { "electrobun": { note: true, "version": "2.0.0" } };\n',
+			);
+			assertTemplatesFloat(scratch);
+		} finally {
+			rmSync(scratch, { recursive: true, force: true });
+		}
+	}, /must not pin electrobun\.version/);
 });
 
 test("the npm bootstrap paired versions stamp from the repository pragma", () => {
@@ -315,11 +317,7 @@ test("checked-in package, lock, Kitchen, and template product identities agree",
 	assert.doesNotMatch(kitchenSource, /\belectrobun\s*:\s*\{/);
 
 	assertTemplatesFloat(join(repositoryRoot, "templates"));
-	for (const [name, pinned] of Object.entries(
-		npmBootstrapManifest.optionalDependencies ?? {},
-	)) {
-		assert.equal(pinned, version, name);
-	}
+	assert.equal(npmBootstrapManifest.optionalDependencies, undefined);
 
 	for (const update of createRustSdkVersionUpdates(repositoryRoot, version)) {
 		assert.equal(update.source, readFileSync(update.path, "utf8"), update.path);

@@ -38,28 +38,27 @@ Create `package.json`:
 }
 ```
 
-There is deliberately no `electrobun` npm dependency. npm owns ordinary
-JavaScript dependencies and its lockfile; Hutch supplies the versioned
-Electrobun SDK through `.hutch/devkit`.
+There is deliberately no `electrobun` npm dependency in this direct-Hutch
+example. Hutch's built-in resolver owns ordinary JavaScript dependencies and
+`hutch.lock`; Hutch supplies the versioned Electrobun SDK through
+`.hutch/devkit`.
 
 Create `hutch.config.ts` for project tasks:
 
 ```ts docs=syntax
 export default {
-  electrobun: { version: "2.0.1-beta.0" },
-  packageManager: "npm",
   scripts: {
-    install: ["hutch", "pm", "ci"],
+    install: ["hutch", "install", "--frozen-lockfile"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
   },
 };
 ```
 
-Hutch reads scripts and the package-manager selection only from this file. The
-`install` task delegates `ci` to npm; npm still interprets `package.json`,
-resolves packages, and owns the lockfile. See
-[Hutch](/electrobun/guides/hutch/) for the boundary.
+Hutch reads scripts and package-manager overrides only from this file. With no
+`packageManager` field, the `install` task reads `package.json`, resolves
+packages with Hutch's built-in resolver, and owns `hutch.lock`. See
+[Hutch](/electrobun/guides/hutch/) for the boundary and external-manager option.
 
 Create `tsconfig.json` so editors and TypeScript resolve the package-free SDK
 facade that Hutch projects during sync:
@@ -151,8 +150,9 @@ export default {
 Reading it top to bottom: `app` names and identifies the application,
 `mainProcess` selects Cottontail as the runtime, `entrypoint` points at the
 main process you just wrote, and `copy` places the HTML file into the bundle at
-the path the `views://` URL expects. The exact core and SDK release is the
-`electrobun.version` you set in `hutch.config.ts`.
+the path the `views://` URL expects. With no explicit `electrobun.version`, a
+direct Hutch sync resolves the active channel and then reuses that projected
+core and SDK until the next sync.
 
 ## 5. Run the app
 
@@ -162,11 +162,10 @@ hutch electrobun sync
 hutch run dev
 ```
 
-The first command delegates to npm and creates the project lockfile. Sync
-resolves the exact
-Electrobun release under `~/.hutch` and creates `.hutch/devkit`; future clean
-checkouts can use `hutch run install` to delegate `npm ci`. Hutch then builds the
-app, launches it, and a window titled "Hello Electrobun"
+The first command uses Hutch's built-in resolver and creates `hutch.lock`. Sync
+resolves an exact Electrobun release under `~/.hutch` and creates
+`.hutch/devkit`; future clean checkouts can use `hutch run install` with the
+committed lockfile. Hutch then builds the app, launches it, and a window titled "Hello Electrobun"
 opens with your heading in it. Leave it running — edits to watched source
 files trigger a rebuild. Press Ctrl+C to stop.
 

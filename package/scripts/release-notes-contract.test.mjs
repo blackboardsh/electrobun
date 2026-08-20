@@ -28,8 +28,9 @@ function validateReleaseWorkflow(source) {
 	const buildJob = job(source, "build");
 	const releaseJob = job(source, "release");
 	const npmPublishJob = job(source, "npm-publish");
+	const npmAcceptanceJob = job(source, "npm-acceptance");
 	const publishTemplatesJob = job(source, "publish-templates");
-	const createRelease = namedStep(releaseJob, "Create Release");
+	const createRelease = namedStep(releaseJob, "Create or refresh draft Release");
 	const buildVersionCheck = namedStep(buildJob, "Verify release tag and version");
 	const releaseVersionCheck = namedStep(
 		releaseJob,
@@ -38,6 +39,14 @@ function validateReleaseWorkflow(source) {
 	const npmVersionCheck = namedStep(
 		npmPublishJob,
 		"Verify matching npm bootstrap version",
+	);
+	const npmAcceptanceVersionCheck = namedStep(
+		npmAcceptanceJob,
+		"Verify exact published npm acceptance version",
+	);
+	const npmAcceptance = namedStep(
+		npmAcceptanceJob,
+		"Accept public single-package npm bootstrap on ${{ matrix.platform }}",
 	);
 
 	for (const versionCheck of [buildVersionCheck, releaseVersionCheck]) {
@@ -68,6 +77,15 @@ function validateReleaseWorkflow(source) {
 		npmVersionCheck,
 		/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
 	);
+	assert.match(npmAcceptanceVersionCheck, /^        id: release-type$/m);
+	assert.match(
+		npmAcceptanceVersionCheck,
+		/^          RELEASE_PACKAGE_JSON: npm\/electrobun\/package\.json$/m,
+	);
+	assert.match(
+		npmAcceptanceVersionCheck,
+		/^        run: node package\/scripts\/verify-release-version\.mjs$/m,
+	);
 	assert.ok(
 		buildJob.indexOf("- name: Verify release tag and version") <
 			buildJob.indexOf("- name: Install Hutch"),
@@ -83,6 +101,7 @@ function validateReleaseWorkflow(source) {
 		buildJob,
 		releaseJob,
 		npmPublishJob,
+		npmAcceptanceJob,
 		publishTemplatesJob,
 	]) {
 		assert.match(
@@ -94,6 +113,7 @@ function validateReleaseWorkflow(source) {
 
 	assert.match(createRelease, /^        uses: softprops\/action-gh-release@v2$/m);
 	assert.match(createRelease, /^          generate_release_notes: true$/m);
+	assert.match(createRelease, /^          draft: true$/m);
 	assert.doesNotMatch(createRelease, /^          body(?:_path)?:/m);
 	assert.match(
 		createRelease,
@@ -111,11 +131,28 @@ function validateReleaseWorkflow(source) {
 	);
 	assert.ok(
 		releaseJob.indexOf("- name: Verify release notes configuration") <
-			releaseJob.indexOf("- name: Create Release"),
+			releaseJob.indexOf("- name: Create or refresh draft Release"),
 		"release notes verification must run before release creation",
 	);
 	assert.match(npmPublishJob, /^    needs: \[release\]$/m);
-	assert.match(publishTemplatesJob, /^    needs: \[npm-publish\]$/m);
+	assert.match(npmAcceptanceJob, /^    needs: \[npm-publish\]$/m);
+	assert.match(publishTemplatesJob, /^    needs: \[npm-acceptance\]$/m);
+	assert.match(npmAcceptance, /accept-published-bootstrap\.mjs/);
+	assert.match(
+		npmAcceptance,
+		/--version "\$\{\{ steps\.release-type\.outputs\.version \}\}"/,
+	);
+	assert.match(
+		npmAcceptance,
+		/--platform "\$\{\{ matrix\.platform \}\}"/,
+	);
+	assert.ok(
+		source.indexOf("  npm-publish:\n") <
+			source.indexOf("  npm-acceptance:\n") &&
+			source.indexOf("  npm-acceptance:\n") <
+			source.indexOf("  publish-templates:\n"),
+		"public npm acceptance must run after npm publish and before mutable templates",
+	);
 	assert.match(
 		npmPublishJob,
 		/^        working-directory: npm\/electrobun$/m,

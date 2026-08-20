@@ -29,6 +29,8 @@ const templatesRoot = join(repositoryRoot, "templates");
 const packageRoot = join(repositoryRoot, "package");
 const outputRoot = join(repositoryRoot, ".template-release");
 const skippedFiles = new Set([".DS_Store"]);
+const electrobunProductConfigPattern =
+	/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s;
 
 function fail(message) {
 	throw new Error(`Electrobun templates: ${message}`);
@@ -85,7 +87,7 @@ export function assertFloatingTemplateConfig(templateId, source) {
 			`${templateId} hutch.config.ts must not carry a // @hutch pragma; templates float`,
 		);
 	}
-	if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(source)) {
+	if (electrobunProductConfigPattern.test(source)) {
 		fail(
 			`${templateId} hutch.config.ts must not pin electrobun.version; templates float`,
 		);
@@ -97,14 +99,17 @@ function sha256(value) {
 }
 
 function gitRevision() {
-	const revision =
-		process.env.GITHUB_SHA ??
-		execFileSync("git", ["rev-parse", "HEAD"], {
+	let revision;
+	try {
+		revision = execFileSync("git", ["rev-parse", "HEAD"], {
 			cwd: repositoryRoot,
 			encoding: "utf8",
 		}).trim();
+	} catch {
+		fail("could not resolve the checked-out Git revision");
+	}
 	if (!/^[0-9a-f]{40}$/.test(revision)) {
-		fail(`invalid Git revision ${JSON.stringify(revision)}`);
+		fail(`invalid checked-out Git revision ${JSON.stringify(revision)}`);
 	}
 	return revision;
 }
@@ -198,7 +203,7 @@ function stageTemplate({ templateId, version, stageRoot, archiveRoot }) {
 	if (!existsSync(configPath)) fail(`${templateId} is missing electrobun.config.ts`);
 	const configSource = readFileSync(configPath, "utf8");
 	const mainProcess = templateMainProcess(configSource);
-	if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(configSource)) {
+	if (electrobunProductConfigPattern.test(configSource)) {
 		fail(`${templateId} electrobun.config.ts must not select the product version`);
 	}
 

@@ -472,7 +472,7 @@ function renderTemplates(): void {
 		: snapshot.templates.length > 0 &&
 				snapshot.templates.every(({ status }) => status === "pending")
 			? `${snapshot.templates.length} templates pending · press Install all to begin`
-			: `${snapshot.templates.length} projects · setup and builds are serialized`;
+			: `${snapshot.templates.length} projects · setup serialized · dev builds may overlap`;
 }
 
 function renderTemplateFilter(): void {

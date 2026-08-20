@@ -1,8 +1,9 @@
 name: Build and Release
 
 concurrency:
-  group: electrobun-release-${{ github.event.inputs.tag || github.ref_name }}
+  group: electrobun-release
   cancel-in-progress: false
+  queue: max
 
 on:
   push:
@@ -17,6 +18,9 @@ on:
         description: 'Assert that the tag is a pre-release'
         type: boolean
         default: false
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -47,7 +51,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      EXPECTED_HUTCH_VERSION: '0.23.0'
+      EXPECTED_HUTCH_VERSION: '0.24.2'
       EXPECTED_COTTONTAIL_VERSION: '0.5.0'
 
     steps:
@@ -55,6 +59,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Log disk space (job start)
         shell: bash
@@ -288,7 +293,7 @@ jobs:
 
       - name: Typecheck Kitchen against local devkit
         run: |
-          hutch electrobun sync
+          hutch electrobun prepare
           node ../package/node_modules/typescript/bin/tsc --noEmit
         working-directory: kitchen
         env:
@@ -314,10 +319,10 @@ jobs:
         working-directory: kitchen
         env:
           HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
-          ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID || '' }}
-          ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID || '' }}
-          ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS || '' }}
-          ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID || '' }}
+          ELECTROBUN_DEVELOPER_ID: ${{ matrix.platform == 'darwin' && secrets.ELECTROBUN_DEVELOPER_ID || '' }}
+          ELECTROBUN_APPLEID: ${{ matrix.platform == 'darwin' && secrets.ELECTROBUN_APPLEID || '' }}
+          ELECTROBUN_APPLEIDPASS: ${{ matrix.platform == 'darwin' && secrets.ELECTROBUN_APPLEIDPASS || '' }}
+          ELECTROBUN_TEAMID: ${{ matrix.platform == 'darwin' && secrets.ELECTROBUN_TEAMID || '' }}
 
       - name: Validate Kitchen artifacts
         run: >-
@@ -351,6 +356,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - name: Verify release tag and version
         id: release-type
@@ -363,8 +369,37 @@ jobs:
       - name: Verify release notes configuration
         run: node package/scripts/release-notes-contract.test.mjs
 
-      - name: Verify artifact index publisher
-        run: node --test package/scripts/create-artifact-index.test.mjs
+      - name: Verify release publishers
+        run: >-
+          node --test
+          package/scripts/create-artifact-index.test.mjs
+          package/scripts/release-publication-contract.test.mjs
+          package/scripts/verify-release-assets.test.mjs
+          npm/scripts/accept-published-bootstrap.test.mjs
+          npm/scripts/stage-hutch-release-artifacts.test.mjs
+
+      - name: Set up Node for npm integrity
+        uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+
+      - name: Preflight npm channel monotonicity
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: npm/electrobun/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+          NPM_DIST_TAG: ${{ steps.release-type.outputs.dist-tag }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm_state="$(mktemp)"
+          trap 'rm -f -- "$npm_state"' EXIT
+          node package/scripts/verify-release-version.mjs
+          node npm/scripts/check-published-bootstrap.mjs \
+            --manifest npm/electrobun/package.json \
+            --tag "$NPM_DIST_TAG" \
+            --output "$npm_state"
+          grep -Eq '^exists=(true|false)$' "$npm_state"
 
       - name: Download Electrobun release artifacts
         uses: actions/download-artifact@v7
@@ -372,12 +407,14 @@ jobs:
           pattern: electrobun-*
           path: artifacts
 
-      - name: Download Kitchen artifacts
-        uses: actions/download-artifact@v7
-        with:
-          pattern: kitchen-*
-          path: kitchen-artifacts
-          merge-multiple: true
+      - name: Stage paired Hutch archives for the Electrobun release
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: >-
+          node npm/scripts/stage-hutch-release-artifacts.mjs
+          --output artifacts/hutch
+          --repository "$GITHUB_REPOSITORY"
+          --tag "$RELEASE_TAG"
 
       - name: Create immutable Electrobun artifact index
         env:
@@ -390,36 +427,183 @@ jobs:
           --tag "$RELEASE_TAG"
           --expect macos-arm64,linux-arm64,linux-x64,windows-x64
 
-      - name: Refuse to mutate an existing release
+      - name: Reuse or prepare a draft Electrobun release
+        id: release-state
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ steps.release-type.outputs.prerelease }}
         shell: bash
         run: |
-          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $RELEASE_TAG already exists; Electrobun release assets are immutable." >&2
+          set -euo pipefail
+          release_probe="$(mktemp)"
+          release_metadata="$(mktemp)"
+          asset_ids="$(mktemp)"
+          existing_assets="$(mktemp -d)"
+          cleanup() {
+            rm -f -- "$release_probe" "$release_metadata" "$asset_ids"
+            rm -rf -- "$existing_assets"
+          }
+          trap cleanup EXIT
+
+          if ! gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,databaseId,isDraft,isPrerelease,assets \
+            >"$release_metadata" 2>"$release_probe"; then
+            if grep -Eqi 'HTTP 404|release not found' "$release_probe"; then
+              echo "upload=true" >> "$GITHUB_OUTPUT"
+              echo "No release exists for $RELEASE_TAG; a draft will be created."
+              exit 0
+            fi
+            cat "$release_probe" >&2
             exit 1
           fi
 
-      - name: Install Hutch
-        uses: ./.github/actions/install-hutch
+          actual_tag="$(jq -r '.tagName' "$release_metadata")"
+          release_id="$(jq -r '.databaseId' "$release_metadata")"
+          is_draft="$(jq -r '.isDraft' "$release_metadata")"
+          is_prerelease="$(jq -r '.isPrerelease' "$release_metadata")"
+          asset_count="$(jq -r '.assets | length' "$release_metadata")"
+          if [[ "$actual_tag" != "$RELEASE_TAG" || ! "$release_id" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Release metadata does not match $RELEASE_TAG." >&2
+            cat "$release_metadata" >&2
+            exit 1
+          fi
 
-      - name: Publish Kitchen artifacts to R2
-        env:
-          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
-        run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
+          if [[ "$is_draft" == "false" ]]; then
+            if [[ "$is_prerelease" != "$EXPECTED_PRERELEASE" || "$asset_count" == "0" ]]; then
+              echo "Public release $RELEASE_TAG has mismatched metadata or no assets; refusing to mutate it." >&2
+              echo "Delete the public release manually or publish a new version before retrying." >&2
+              exit 1
+            fi
+            if ! gh release download "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --dir "$existing_assets"; then
+              echo "Could not download the existing public release; refusing to mutate it after a transport failure." >&2
+              exit 1
+            fi
+            if node package/scripts/verify-release-assets.mjs \
+              --actual "$existing_assets" \
+              --repository "$GITHUB_REPOSITORY" \
+              --tag "$RELEASE_TAG"; then
+              echo "upload=false" >> "$GITHUB_OUTPUT"
+              echo "Release $RELEASE_TAG is public, complete, and self-consistent; reusing it."
+              exit 0
+            fi
+            echo "Public release $RELEASE_TAG is incomplete or inconsistent; refusing to mutate it." >&2
+            echo "Delete the public release manually or publish a new version before retrying." >&2
+            exit 1
+          fi
+          if [[ "$is_draft" != "true" ]]; then
+            echo "Release $RELEASE_TAG has an invalid draft state: $is_draft" >&2
+            exit 1
+          fi
 
-      - name: Create Release
+          gh release edit "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=true \
+            --prerelease="$EXPECTED_PRERELEASE"
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            >"$release_metadata"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --argjson prerelease "$EXPECTED_PRERELEASE" \
+            '.tagName == $tag and .isDraft == true and .isPrerelease == $prerelease' \
+            "$release_metadata" >/dev/null
+
+          gh api --paginate \
+            "repos/$GITHUB_REPOSITORY/releases/$release_id/assets" \
+            --jq '.[].id' >"$asset_ids"
+          while IFS= read -r asset_id; do
+            [[ -z "$asset_id" ]] || gh api --method DELETE \
+              "repos/$GITHUB_REPOSITORY/releases/assets/$asset_id"
+          done <"$asset_ids"
+          echo "upload=true" >> "$GITHUB_OUTPUT"
+          echo "Draft $RELEASE_TAG is ready for a clean asset upload."
+
+      - name: Create or refresh draft Release
+        if: steps.release-state.outputs.upload == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
           files: |
             artifacts/**/*.tar.gz
             artifacts/electrobun-artifacts.json
+            artifacts/hutch/hutch-artifacts.json
           generate_release_notes: true
+          draft: true
           prerelease: ${{ steps.release-type.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+          overwrite_files: true
+
+      - name: Verify staged draft release
+        if: steps.release-state.outputs.upload == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ steps.release-type.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_metadata="$(mktemp)"
+          staged_assets="$(mktemp -d)"
+          cleanup() {
+            rm -f -- "$release_metadata"
+            rm -rf -- "$staged_assets"
+          }
+          trap cleanup EXIT
+
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            >"$release_metadata"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --argjson prerelease "$EXPECTED_PRERELEASE" \
+            '.tagName == $tag and .isDraft == true and .isPrerelease == $prerelease' \
+            "$release_metadata" >/dev/null
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir "$staged_assets"
+          node package/scripts/verify-release-assets.mjs \
+            --actual "$staged_assets" \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$RELEASE_TAG"
+
+      - name: Finalize verified draft release
+        if: steps.release-state.outputs.upload == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ steps.release-type.outputs.prerelease }}
+        shell: bash
+        run: >-
+          gh release edit "$RELEASE_TAG"
+          --repo "$GITHUB_REPOSITORY"
+          --draft=false
+          --prerelease="$EXPECTED_PRERELEASE"
+
+      - name: Require a complete public release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          EXPECTED_PRERELEASE: ${{ steps.release-type.outputs.prerelease }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_metadata="$(mktemp)"
+          trap 'rm -f -- "$release_metadata"' EXIT
+          gh release view "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json tagName,isDraft,isPrerelease \
+            >"$release_metadata"
+          jq -e \
+            --arg tag "$RELEASE_TAG" \
+            --argjson prerelease "$EXPECTED_PRERELEASE" \
+            '.tagName == $tag and .isDraft == false and .isPrerelease == $prerelease' \
+            "$release_metadata" >/dev/null
 
   npm-publish:
     needs: [release]
@@ -431,6 +615,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -448,38 +633,147 @@ jobs:
       - name: Test and inspect npm bootstrap
         working-directory: npm/electrobun
         run: |
-          node --test test/bootstrap.test.mjs test/package.test.mjs
+          node --test test/bootstrap.test.mjs test/package.test.mjs ../scripts/accept-published-bootstrap.test.mjs ../scripts/check-published-bootstrap.test.mjs
           npm pack --dry-run --ignore-scripts
 
-      - name: Build Hutch platform packages
-        run: node npm/scripts/build-platform-packages.mjs
-
-      - name: Publish Hutch platform packages
-        run: |
-          for package in npm/platform-packages/*/; do
-            npm publish "$package" --access public --tag "${{ steps.release-type.outputs.dist-tag }}"
-          done
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Check existing npm bootstrap
+        id: npm-state
+        run: >-
+          node npm/scripts/check-published-bootstrap.mjs
+          --manifest npm/electrobun/package.json
+          --tag "${{ steps.release-type.outputs.dist-tag }}"
+          --output "$GITHUB_OUTPUT"
 
       - name: Publish npm bootstrap
+        if: steps.npm-state.outputs.exists != 'true'
         working-directory: npm/electrobun
         run: npm publish --access public --tag "${{ steps.release-type.outputs.dist-tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-  publish-templates:
+      - name: Verify published npm bootstrap
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          published_state="$(mktemp)"
+          trap 'rm -f -- "$published_state"' EXIT
+          max_attempts=19
+          for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do
+            : > "$published_state"
+            if node npm/scripts/check-published-bootstrap.mjs \
+              --manifest npm/electrobun/package.json \
+              --tag "${{ steps.release-type.outputs.dist-tag }}" \
+              --output "$published_state" &&
+              grep -Fxq 'exists=true' "$published_state"; then
+              echo "Verified the exact npm bootstrap on attempt $attempt."
+              exit 0
+            fi
+            if (( attempt == max_attempts )); then
+              echo "::error::npm did not converge on the exact published bootstrap after $max_attempts attempts." >&2
+              exit 1
+            fi
+            echo "npm has not converged on the exact bootstrap yet; retrying in 10 seconds ($attempt/$max_attempts)." >&2
+            sleep 10
+          done
+
+  npm-acceptance:
     needs: [npm-publish]
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: windows-2025
+            platform: windows-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Verify exact published npm acceptance version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: npm/electrobun/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
+
+      - name: Accept public single-package npm bootstrap on ${{ matrix.platform }}
+        run: >-
+          node npm/scripts/accept-published-bootstrap.mjs
+          --version "${{ steps.release-type.outputs.version }}"
+          --release-tag "${{ github.event.inputs.tag || github.ref_name }}"
+          --dist-tag "${{ steps.release-type.outputs.dist-tag }}"
+          --repository "${{ github.repository }}"
+          --platform "${{ matrix.platform }}"
+
+  publish-templates:
+    needs: [npm-acceptance]
     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
           node-version: '18'
+
+      - name: Verify matching npm bootstrap version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: npm/electrobun/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
+
+      - name: Download Kitchen artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: kitchen-*
+          path: kitchen-artifacts
+          merge-multiple: true
+
+      - name: Install Hutch
+        uses: ./.github/actions/install-hutch
+
+      - name: Recheck npm channel before mutable publication
+        shell: bash
+        run: |
+          set -euo pipefail
+          published_state="$(mktemp)"
+          trap 'rm -f -- "$published_state"' EXIT
+          node npm/scripts/check-published-bootstrap.mjs \
+            --manifest npm/electrobun/package.json \
+            --tag "${{ steps.release-type.outputs.dist-tag }}" \
+            --output "$published_state"
+          grep -Fxq 'exists=true' "$published_state"
+
+      - name: Publish Kitchen artifacts to R2
+        env:
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+        run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
 
       - name: Validate template publisher
         run: node --test scripts/publish-templates.test.mjs

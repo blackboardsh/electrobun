@@ -2,6 +2,9 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { assertStrictSemVer } from "../src/shared/strict-semver.js";
 
+const electrobunProductConfigPattern =
+	/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s;
+
 function replaceBlockVersion(source, blockName, version) {
 	const pattern = new RegExp(
 		`(${blockName}:\\s*\\{[\\s\\S]*?\\bversion:\\s*)["'][^"']+["']`,
@@ -29,14 +32,6 @@ export function updateNpmBootstrapVersion(source, version) {
 		throw new Error("npm bootstrap package name must be electrobun");
 	}
 	manifest.version = version;
-	// The platform packages vendor the Hutch launcher and are version-locked
-	// to every release.
-	for (const name of Object.keys(manifest.optionalDependencies ?? {})) {
-		if (!name.startsWith("@electrobun/hutch-")) {
-			throw new Error(`unexpected npm bootstrap optionalDependency: ${name}`);
-		}
-		manifest.optionalDependencies[name] = version;
-	}
 	return `${JSON.stringify(manifest, null, "\t")}\n`;
 }
 
@@ -223,7 +218,7 @@ export function assertTemplatesFloat(templatesDir) {
 		if (/^\/\/\s*@hutch\b/m.test(source)) {
 			throw new Error(`${path} must not carry a // @hutch pragma; templates float`);
 		}
-		if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(source)) {
+		if (electrobunProductConfigPattern.test(source)) {
 			throw new Error(`${path} must not pin electrobun.version; templates float`);
 		}
 	}

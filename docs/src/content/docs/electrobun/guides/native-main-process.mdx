@@ -66,8 +66,9 @@ new BrowserWindow({
 ## Bun
 
 Choose Bun only when the application intentionally depends on the actual Bun
-runtime. Hutch bundles source and packages the app; the project's selected
-package manager still owns JavaScript dependencies.
+runtime. Hutch bundles source and packages the app; its built-in resolver owns
+JavaScript dependencies by default, or the project's explicitly selected
+package manager owns them instead.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -144,19 +145,22 @@ hutch electrobun init tree-studio --template=odin-tree-wgpu
 
 ## Toolchain resolution
 
-Each exact `electrobun.version` in `hutch.config.ts` declares default compiler
-versions. A project may override one with the matching
+Each resolved Electrobun devkit declares default compiler versions. The release
+may come from an exact `electrobun.version` pin, the npm-paired default, or the
+active channel. A project may override one with the matching
 `build.<language>.version` field in `electrobun.config.ts`. Hutch checks for an
 exact matching system compiler where supported; otherwise it downloads that
 toolchain into
 `~/.hutch/toolchains/<language>/<version>/<platform>` and reuses it across
 projects. The compiler is not bundled into the finished application.
 
-`hutch electrobun sync` downloads and verifies the matching Electrobun core and
-SDK release under `~/.hutch/releases/electrobun`, copies its SDKs into the
+`hutch electrobun prepare` downloads and verifies the matching Electrobun core
+and SDK release under `~/.hutch/releases/electrobun`, copies its SDKs into the
 project's generated `.hutch/devkit` sysroot, and resolves the native toolchain
-under `~/.hutch/toolchains`. Go builds on Windows also resolve Zig for cgo. `init`,
-`build`, `run`, and `dev` call the same preparation automatically.
+under `~/.hutch/toolchains` without advancing a valid floating projection. Go
+builds on Windows also resolve Zig for cgo. `build`, `run`, and `dev` call the
+same preparation automatically; use `sync` to advance an unpinned direct-Hutch
+project to the current channel head.
 
 ## Native limitations
 

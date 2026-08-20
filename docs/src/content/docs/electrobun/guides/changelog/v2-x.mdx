@@ -32,13 +32,15 @@ sizes.
 
 - Hutch replaces the old project-vendored Electrobun CLI for project scripts,
   devkit synchronization, builds, native toolchains, and distribution.
-- npm, pnpm, Yarn, Bun, Cargo, and Go modules remain authoritative for their
-  own dependency graphs and lockfiles. Hutch invokes them only when a project
-  names an explicit `hutch.config.ts` task.
-- Every project pins an exact `electrobun.version` in `hutch.config.ts`. Hutch
-  verifies the matching platform core archive in `~/.hutch`, then copies its
-  SDKs into the generated project `.hutch/devkit` sysroot for builds and editor
-  tooling.
+- Hutch's built-in npm-compatible resolver owns JavaScript dependencies and
+  `hutch.lock` by default. npm, pnpm, Yarn, or Bun may be selected explicitly;
+  Cargo and Go modules remain authoritative for their ecosystems.
+- `electrobun.version` is an optional exact override in `hutch.config.ts`.
+  Otherwise npm-launched commands use the package's paired release and direct
+  Hutch projects float on the release channel, remaining steady between
+  explicit syncs. Hutch verifies the resolved platform core archive in
+  `~/.hutch`, then copies its SDKs into the generated project `.hutch/devkit`
+  sysroot for builds and editor tooling.
 - Production and canary Hutch installations can coexist globally. Projects can
   pin Hutch and Cottontail independently with a first-line pragma.
 - `hutch electrobun init` now opens an interactive, keyboard-navigable template
@@ -46,9 +48,17 @@ sizes.
   per Electrobun channel and are downloaded on demand instead of increasing the
   Hutch executable size.
 - `npx electrobun init` and `bunx electrobun init` converge on that same
-  initializer. The thin npm bootstrap shares the Electrobun release version,
-  forwards all arguments, and installs Hutch when needed; it carries no
-  Electrobun core or SDK, and the generated Hutch pin remains authoritative.
+  initializer. One dependency-free npm bootstrap shares the Electrobun release
+  version, downloads, verifies, and caches its paired Hutch archive from that
+  GitHub Release when needed, and forwards all arguments. It carries no
+  Electrobun core or SDK; generated templates carry no version pins, and
+  optional project pins remain authoritative.
+- Current floating Vite templates require Hutch 0.24 or later for catalog tool
+  checks and built-in `hutch pm exec`. A global Hutch 0.23 installation cannot
+  enforce that catalog declaration and must be advanced with its legacy
+  `hutch self update production` command before initializing a current template;
+  use `hutch upgrade` for later updates. The npm bootstrap supplies its paired
+  Hutch automatically.
 
 ## Cottontail runtime
 

@@ -12,19 +12,21 @@ work without a Cottontail-based app shipping Node or Bun.
 Why a separate runtime at all? Because a desktop app's runtime has a
 different job than a general-purpose server runtime. Cottontail carries the
 APIs applications actually use and leaves out the rest. Project dependencies
-remain with npm or another package manager, while bundling and native build
-machinery live in Hutch, so the runtime that ships inside every app stays
-small.
+use Hutch's built-in npm-compatible resolver by default, or an explicitly
+selected external package manager. Bundling and native build machinery live in
+Hutch, so the runtime that ships inside every app stays small.
 
 Bun is also a first-class package-manager choice for a Cottontail project: set
-`packageManager: "bun"` in `hutch.config.ts`. That only selects the external
-dependency tool. Separately, Cottontail implements Bun-compatible application
-APIs including the `Bun.$` shell interface.
+`packageManager: "bun"` in `hutch.config.ts`. That explicitly selects the
+external dependency tool. Separately, Cottontail implements Bun-compatible
+application APIs including the `Bun.$` shell interface.
 
-You never manage Cottontail directly. For a Cottontail main process, Hutch
-resolves a pinned release at build time and places it in the application
-bundle; end users don't install anything. A Bun main process bundles Bun
-instead.
+Hutch uses Cottontail in two separate roles. The build-time Cottontail that
+loads config and runs scripts is paired with the Hutch release, unless a project
+pragma overrides it. For a Cottontail main process, the selected Electrobun
+devkit separately pins the exact runtime placed in the application bundle; it
+does not inherit Hutch's build-time pair. End users install neither one. A Bun
+main process bundles the devkit-pinned Bun runtime instead.
 
 ## Select Cottontail
 
@@ -71,7 +73,7 @@ it explains where every capability lives:
 | --- | --- |
 | Execute the bundled TypeScript main process | Cottontail |
 | Node.js and Bun-compatible runtime APIs | Cottontail |
-| Install packages, execute their binaries, and maintain their lockfile | Project package manager |
+| Install packages, execute their binaries, and maintain their lockfile | Hutch by default, or an explicit external package manager |
 | Bundle main-process and webview source | Hutch |
 | Acquire compilers and native platform artifacts | Hutch |
 | Sign, notarize, wrap, and package releases | Hutch |
@@ -84,9 +86,9 @@ Cottontail is built to run existing Node.js and Bun-oriented application
 code, and for typical application code it does. But compatibility isn't the
 same as being interchangeable in every case: native addons, runtime-specific
 implementation details, and uncommon APIs can expose differences. The
-practical advice is the same as for any runtime: commit the lockfile owned by
-your selected package manager and exercise your application on every target
-platform before release.
+practical advice is the same as for any runtime: commit `hutch.lock` or the
+lockfile owned by your explicitly selected package manager, and exercise your
+application on every target platform before release.
 
 <Aside type="tip">
 If your application intentionally depends on the actual Bun runtime, use the
@@ -95,12 +97,17 @@ Bun main-process option — Hutch remains the build tool in that configuration.
 
 ## Pin Cottontail
 
-Most projects don't need a pin: without one, production Hutch selects
-production Cottontail and `hutch-canary` selects canary Cottontail. Pin only
-when reproducibility requires an exact version:
+Most projects don't need a build-time pin: without one, Hutch uses the
+Cottontail version that release was built and tested with, and `hutch upgrade`
+advances the pair. Pin only when the build pipeline needs a different exact
+version:
 
 ```ts
 // @hutch cottontail=0.3.0
 ```
 
 Inspect the active version with `hutch cottontail version`.
+
+This pragma controls build-time execution only. The Cottontail shipped for
+`build.mainProcess: "cottontail"` remains the exact version declared by the
+selected Electrobun devkit.

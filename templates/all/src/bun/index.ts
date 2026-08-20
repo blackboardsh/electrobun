@@ -9,8 +9,8 @@ import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
 	TemplateQaOrchestrator,
-	catalogChannelForVersion,
 	sanitizedTemplateQaEnv,
+	selectedTemplateQaRelease,
 	type CommandSpec,
 	type HutchStoreStatus,
 	type ManagedProcess,
@@ -261,16 +261,12 @@ const runtime: QaRuntime = {
 
 let mainWindow: BrowserWindow | null = null;
 const projectRoot = findTemplateQaProjectRoot();
-const projectVersion = inspectTemplateProject(projectRoot).configuredElectrobunVersion;
-if (!projectVersion) {
-	throw new Error(
-		"Template QA requires one exact electrobun.version in hutch.config.ts",
-	);
-}
-const channel = catalogChannelForVersion(projectVersion);
+const selectedRelease = selectedTemplateQaRelease(
+	inspectTemplateProject(projectRoot),
+);
 const hutchExecutable = resolveTemplateQaHutchExecutable();
 const electrobunDevkitRoot = resolveTemplateQaElectrobunDevkitRoot({
-	version: projectVersion,
+	version: selectedRelease.version,
 	platform: process.platform,
 	arch: process.arch,
 	inheritedRoot: process.env.HUTCH_ELECTROBUN_DEVKIT_ROOT,
@@ -278,7 +274,7 @@ const electrobunDevkitRoot = resolveTemplateQaElectrobunDevkitRoot({
 });
 const orchestrator = new TemplateQaOrchestrator(runtime, {
 	projectRoot,
-	channel,
+	selectedVersion: selectedRelease.version,
 	hutchExecutable,
 	nestedHutchEnv: {
 		HUTCH_ELECTROBUN_DEVKIT_ROOT: electrobunDevkitRoot,
@@ -381,4 +377,6 @@ process.on("exit", () => {
 });
 
 console.log(`Template QA project root: ${projectRoot}`);
-console.log(`Template QA channel: ${channel} (${projectVersion})`);
+console.log(
+	`Template QA channel: ${selectedRelease.channel} (${selectedRelease.version})`,
+);

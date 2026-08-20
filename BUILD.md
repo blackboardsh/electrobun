@@ -53,9 +53,10 @@ uses the GTK-only wrapper. This selection is part of application packaging,
 not the thin npm bootstrap.
 
 Both binaries are published with the versioned Electrobun devkit. Hutch resolves
-the exact `electrobun.version` selected in `hutch.config.ts`, verifies its
-artifacts, and installs them under `~/.hutch/releases/electrobun`. The thin
-`electrobun` npm bootstrap contains no runtime binaries or SDK source.
+the explicit `electrobun.version` when present, otherwise the npm-paired or
+floating channel default, verifies that release's artifacts, and installs them
+under `~/.hutch/releases/electrobun`. The thin `electrobun` npm bootstrap
+contains no runtime binaries or SDK source.
 
 ## Build Commands
 
@@ -84,10 +85,18 @@ published version pin instead.
 
 ## Hutch and Cottontail
 
-Hutch and Cottontail are installed and released independently of Electrobun.
+Canonical Hutch and Cottontail releases are published independently of
+Electrobun. The Electrobun release workflow downloads and verifies the four
+archives from its exact paired upstream Hutch release, then mirrors those same
+bytes into the Electrobun GitHub Release under `electrobun-hutch-*` names. Its
+`hutch-artifacts.json` binds each mirror's immutable URL, byte size, and SHA-256
+digest for the single npm bootstrap; the mirror does not replace the canonical
+Hutch release.
+
 The first-line `// @hutch` pragma in `package/hutch.config.ts` pins the exact
-versions used for reproducible Electrobun builds. Hutch resolves and verifies
-Cottontail, then bundles the selected runtime into each application.
+Hutch and build-time Cottontail versions used for reproducible Electrobun
+builds. The Cottontail bundled into an application is a separate component
+pinned by the selected Electrobun devkit manifest.
 
 For full local-stack development, `hutch dev --local` additionally builds and
 selects the sibling Hutch launcher, Hutch engine, and Cottontail binary without

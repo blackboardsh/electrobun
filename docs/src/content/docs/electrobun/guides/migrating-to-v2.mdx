@@ -5,10 +5,15 @@ description: "Upgrade the npm dependency, run your scripts, and fix what the val
 
 Electrobun 2.x moves build orchestration to Hutch and makes Cottontail the
 default JavaScript main process. Application code and RPC schemas usually need
-little or no change, and the npm package remains the front door: it now
-vendors the Hutch toolchain for your platform, so installing it fully
-provisions a project with no global installer, no shell-profile changes, and
-no postinstall scripts.
+little or no change, and the npm package remains the front door. There is one
+dependency-free package: its first command downloads the exact paired Hutch
+archive from the same-version Electrobun GitHub Release, verifies and caches it,
+then forwards through Hutch. Existing-project npm commands have no prerequisite
+machine-wide Hutch installation, shell-profile change, or postinstall script,
+and there is no separate platform npm package. Initialization is intentional:
+`electrobun init` still ensures a compatible global launcher for the generated
+project's later direct `hutch` tasks, while init itself runs through the exact
+private cache.
 
 ## The short version
 
@@ -17,12 +22,14 @@ npm install electrobun@2      # or: bun add electrobun@2
 npm run dev                   # your existing `electrobun ...` scripts still work
 ```
 
-1. **Bump the dependency.** The 2.x package carries the `electrobun`
-   command plus the Hutch launcher for your platform
-   (`@electrobun/hutch-<os>-<arch>` optional dependencies). Keep it in
-   `devDependencies`; its version now *selects your toolchain* — the paired
-   Hutch, Cottontail, and Electrobun versions ride your lockfile, and
-   updating the dependency updates all of them together.
+1. **Bump the dependency.** Keep the one `electrobun` package in
+   `devDependencies`; its version now *selects your default toolchain*. The
+   command first reads `hutch-artifacts.json` from that version's GitHub Release,
+   then downloads the host's paired Hutch archive and checks the bytes against
+   the index entry's immutable release URL, declared size, and SHA-256 digest.
+   Hutch supplies its tested build-time Cottontail and the paired
+   Electrobun version, so updating the dependency moves the set tracked by your
+   lockfile.
 
 2. **Run your scripts.** `electrobun dev`, `electrobun build`, and friends
    forward through Hutch. On first run the Electrobun core and devkit
@@ -94,7 +101,7 @@ reproducible builds independent of the npm dependency — create
 `hutch.config.ts`:
 
 ```ts docs=syntax
-// @hutch cli=0.23.0 cottontail=0.5.0
+// @hutch cli=0.24.2 cottontail=0.5.0
 export default {
   electrobun: {
     version: "2.1.0",
@@ -113,6 +120,10 @@ default: `hutch install` resolves `package.json` (registry, `file:`, and git
 dependencies), verifies integrity, and writes `hutch.lock`. An existing
 `bun.lock`, `package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock` is ignored
 — never read, migrated, or modified. Lifecycle scripts never run.
+
+With that built-in resolver, `hutch pm exec -- <command> [args...]` runs only a
+matching binary already installed in the nearest package project's
+`node_modules/.bin`; it never downloads one or falls back to `PATH`.
 
 To keep your existing package manager instead, declare it in
 `hutch.config.ts` — the only selection Hutch honors:

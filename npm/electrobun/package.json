@@ -34,11 +34,5 @@
 		".": "./lib/moved.cjs",
 		"./package.json": "./package.json",
 		"./*": "./lib/moved.cjs"
-	},
-	"optionalDependencies": {
-		"@electrobun/hutch-darwin-arm64": "2.0.1-beta.27",
-		"@electrobun/hutch-linux-arm64": "2.0.1-beta.27",
-		"@electrobun/hutch-linux-x64": "2.0.1-beta.27",
-		"@electrobun/hutch-win32-x64": "2.0.1-beta.27"
 	}
 }

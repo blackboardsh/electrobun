@@ -38,6 +38,8 @@ const knownPackageManagerLockfiles = [
 ];
 
 const templatesRoot = import.meta.dirname;
+const electrobunProductConfigPattern =
+	/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s;
 const odinWgpuTemplates = [
 	"odin-alchemy-wgpu",
 	"odin-fluid-wgpu",
@@ -298,12 +300,12 @@ describe("Electrobun template package boundaries", () => {
 			}
 
 			const electrobun = readFileSync(electrobunPath, "utf8");
-			if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(hutch)) {
+			if (electrobunProductConfigPattern.test(hutch)) {
 				invalidConfigs.push(
 					`${templateName}: templates must not pin electrobun.version`,
 				);
 			}
-			if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(electrobun)) {
+			if (electrobunProductConfigPattern.test(electrobun)) {
 				invalidConfigs.push(
 					`${templateName}: electrobun.config.ts contains product selection`,
 				);
@@ -344,7 +346,7 @@ describe("Electrobun template package boundaries", () => {
 				manifest.dependencies?.vite ?? manifest.devDependencies?.vite,
 			);
 			const expected = usesVite
-				? 'build: "hutch electrobun sync && hutch pm exec -- vite build && hutch electrobun build --env=stable"'
+				? 'build: "hutch electrobun prepare && hutch pm exec -- vite build && hutch electrobun build --env=stable"'
 				: 'build: ["hutch", "electrobun", "build", "--env=stable"]';
 
 			if (!hutch.includes(expected)) {
@@ -384,9 +386,9 @@ describe("Electrobun template package boundaries", () => {
 				"utf8",
 			);
 			for (const task of ["start", "dev", "hmr", "build", '"build:canary"']) {
-				if (!hutch.includes(`${task}: "hutch electrobun sync && hutch pm exec -- vite`)) {
+				if (!hutch.includes(`${task}: "hutch electrobun prepare && hutch pm exec -- vite`)) {
 					invalidConfigs.push(
-						`${templateName}: ${task} loads Vite before syncing the devkit`,
+						`${templateName}: ${task} loads Vite before preparing the devkit`,
 					);
 				}
 			}

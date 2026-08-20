@@ -5,38 +5,37 @@ description: "Where Electrobun configuration, SDKs, tasks, and dependencies live
 import { Aside } from "@astrojs/starlight/components";
 
 Electrobun keeps workspace orchestration separate from application
-configuration. The split is intentional: `hutch.config.ts` selects the exact
-Electrobun release, tasks, and package manager, while `electrobun.config.ts`
+configuration. The split is intentional: `hutch.config.ts` owns optional
+release pins, tasks, and package-manager policy, while `electrobun.config.ts`
 describes the application and build that Hutch produces.
 
 ## Responsibility map
 
 | Concern | Owner |
 | --- | --- |
-| Exact Electrobun release | `hutch.config.ts` → `electrobun.version` |
-| Hutch and Cottontail versions | First-line `// @hutch` pragma in `hutch.config.ts` |
+| Electrobun release | Optional exact `hutch.config.ts` → `electrobun.version`; otherwise npm or channel default |
+| Build-time Hutch and Cottontail versions | Optional first-line `// @hutch` pragma; otherwise the invoking launcher's pair |
 | Project tasks | `hutch.config.ts` → `scripts` |
-| External JavaScript package manager | `hutch.config.ts` → `packageManager` |
+| JavaScript package-manager policy | Hutch built-in resolver by default; optional external `hutch.config.ts` → `packageManager` |
 | Native toolchain resolution and shared installations | Hutch |
 | Native compiler version overrides | `electrobun.config.ts` → `build.<language>.version` |
 | App identity and app version | `electrobun.config.ts` → `app` |
 | Main-process choice and build inputs | `electrobun.config.ts` → `build` |
 | Views, copied assets, signing, updates, and distribution | `electrobun.config.ts` |
-| JavaScript dependency graph and lockfile | The selected external package manager |
+| JavaScript dependency graph and lockfile | Hutch (`hutch.lock`) by default, or the explicitly selected external manager |
 | Rust and Go dependencies | Cargo and Go modules |
-| Electrobun runtime and language SDKs | The selected Electrobun GitHub Release |
+| Electrobun runtime and language SDKs | Core assets on the selected Electrobun GitHub Release, installed and projected by Hutch |
 
 A minimal project makes the boundary visible:
 
 ```ts docs=syntax
 // hutch.config.ts
 export default {
-  electrobun: {
-    version: "2.0.1-beta.0",
-  },
-  packageManager: "npm",
+  // Optional exact override:
+  // electrobun: { version: "2.0.1-beta.0" },
   scripts: {
-    install: ["hutch", "pm", "ci"],
+    install: ["hutch", "install"],
+    "build:view": ["hutch", "pm", "exec", "--", "vite", "build"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
   },
@@ -62,17 +61,24 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-The Electrobun version must be exact. The optional npm bootstrap shares that
-release version, but installing it by npm tag or range does not select a
-release for an existing project; the Hutch pin remains authoritative.
+`electrobun.version` may be omitted. npm-launched commands then use the exact
+Electrobun version paired with the installed `electrobun` dependency; direct
+Hutch commands float on the active release channel, while reusing the projected
+version between explicit syncs. When present, `electrobun.version` must be an
+exact release and overrides either default.
 
 ## Where the SDK comes from
 
 Each platform-specific `electrobun-core-*.tar.gz` archive on the selected
 Electrobun GitHub Release contains that platform's runtime, devkit manifest,
 JavaScript API, and Zig, Rust, Go, and Odin SDKs. There is no separate SDK npm
-package. The `electrobun` package on npm is only a thin command that installs
-or invokes Hutch; it never owns or supplies the SDK.
+package. The single dependency-free `electrobun` package on npm is only a thin
+command: it reads `hutch-artifacts.json`, downloads and verifies the host's
+paired Hutch archive from that same GitHub Release when needed, and caches the
+extracted launcher and engine under
+`~/.hutch/npm/electrobun/<electrobun-version>/<platform>/` before invoking it.
+That paired-Hutch asset is separate from the core archive and never owns or
+supplies the SDK.
 
 When Hutch prepares a project, it verifies and stores the selected platform
 archive under `~/.hutch/releases/electrobun`. It then **copies**
@@ -100,14 +106,17 @@ the projection is not a supported customization or dependency-management
 workflow. Do not edit the shared installed release either.
 
 <Aside type="note" title="Installed releases can be reused">
-The current distribution policy keeps published stable Electrobun core
-archives on GitHub Releases and stable Hutch and Cottontail binaries on their
-existing release hosts. Hutch can reuse an exact release and managed toolchains
-that are already installed, including for an offline build, and regenerates the
-project devkit from that installation when needed. Anything missing requires a
-fresh network lookup and download. Remote manifests and indexes are never
-persisted, and template initialization always requires the network. Projects do
-not need to vendor `.hutch/devkit`.
+Each Electrobun GitHub Release keeps its published core archives plus the four
+paired Hutch mirrors. `electrobun-artifacts.json` indexes the core assets and
+`hutch-artifacts.json` indexes the Hutch assets; both bind each archive's
+immutable release URL, byte size, and SHA-256 digest. Canonical Hutch and
+Cottontail channel artifacts remain on their independent release hosts. Hutch
+can reuse an exact release and managed toolchains that are already installed,
+including for an offline build, and regenerates the project devkit from that
+installation when needed. Anything missing requires a fresh network lookup and
+download. Remote manifests and indexes are never persisted, and template
+initialization always requires the network. Projects do not need to vendor
+`.hutch/devkit`.
 </Aside>
 
 ## External bundlers
@@ -117,7 +126,7 @@ An external bundler such as Vite has its own resolver, so use the helper shipped
 inside the projected SDK instead of installing `electrobun` as an application
 dependency.
 
-Run `hutch electrobun sync` before Vite loads its config, then install every
+Run `hutch electrobun prepare` before Vite loads its config, then install every
 project-SDK alias with `electrobunViteAliases()`:
 
 ```ts docs=syntax
@@ -133,14 +142,15 @@ export default defineConfig({
 });
 ```
 
-An explicit Hutch task keeps sync and the compatibility build together:
+An explicit Hutch task keeps non-advancing preparation and the compatibility
+build together:
 
 ```ts docs=syntax
 // hutch.config.ts (excerpt)
 export default {
   scripts: {
     "build:view":
-      "hutch electrobun sync && hutch pm exec -- vite build",
+      "hutch electrobun prepare && hutch pm exec -- vite build",
   },
 };
 ```
@@ -154,6 +164,6 @@ tree. `node_modules` remains outside the SDK path.
 The architectural center of Electrobun is Cottontail-native: Hutch runs project
 TypeScript and shell tasks with Cottontail, and Cottontail is the default
 JavaScript main process. Bun remains a first-class `build.mainProcess` option
-and a separate first-class `packageManager` choice; neither is a legacy mode.
+and a separate, explicit `packageManager` choice; neither is a legacy mode.
 Node-compatible packages, npm, and Vite are supported integration edges, but
 none of them becomes the owner or source of Electrobun's SDK.

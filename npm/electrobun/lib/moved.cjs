@@ -6,7 +6,7 @@
 
 throw new Error(
 	"Electrobun 2.x APIs come from the Hutch devkit, not node_modules. " +
-		"Run `npx electrobun dev` (or `hutch electrobun sync`) so imports " +
+		"Run `npx electrobun dev` (or `hutch electrobun prepare`) so imports " +
 		"resolve from .hutch/devkit, and see the migration guide: " +
 		"https://electrobun.dev/electrobun/guides/migrating-to-v2",
 );

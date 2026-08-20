@@ -4,7 +4,10 @@ description: "Command reference for building and running Electrobun applications
 ---
 
 Hutch is Electrobun 2.x's native build and workspace CLI. Install it globally,
-then run commands from the project root.
+or use the single dependency-free `electrobun` npm bootstrap that downloads,
+verifies, and caches its paired Hutch archive from the Electrobun GitHub
+Release. Run `hutch electrobun ...` directly with the global installation or
+`electrobun ...` through the project dependency, from the project root.
 
 ## `hutch electrobun init`
 
@@ -41,8 +44,10 @@ the `--beta` shorthand selects one explicitly. The thin npm bootstrap adds
 `--channel=stable` when no template channel was requested. `production` and
 `canary` are also accepted as template channel names.
 
-After extracting a template, `init` prepares its exact Electrobun core, devkit,
-and required native toolchain. If the template defines an `install` task in
+After extracting a template, `init` resolves the npm-paired Electrobun default
+when supplied, otherwise the selected catalog release, for its initial
+core/devkit sync. It also prepares any required native toolchain. If the
+template defines an `install` task in
 `hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
 later. Init always requires network access: Hutch fetches the current template
 catalog and selected template instead of keeping persistent copies of either
@@ -58,24 +63,42 @@ hutch electrobun config --env=dev
 hutch electrobun config --env=stable
 ```
 
+## `hutch electrobun prepare`
+
+Resolve the Electrobun release, verify and install its platform core archive
+under `~/.hutch/releases/electrobun`, atomically refresh the project's generated
+`.hutch/devkit` SDK projection, and resolve the configured native compiler
+toolchain without building the application. An exact `electrobun.version` pin
+wins; otherwise an npm command uses its package-paired default, then an existing
+valid project projection wins, and only an unprepared direct-Hutch project
+consults the active release channel:
+
+```bash
+hutch electrobun prepare
+hutch electrobun prepare --env=stable
+```
+
+`build`, `run`, and `dev` perform the same non-advancing preparation implicitly.
+Use the explicit command before Vite, editor tooling, or a standalone typecheck,
+after changing an exact pin, or before a build that will later run without
+network access. Preparation can reuse exact releases and managed toolchains
+that are already installed; anything missing requires a network lookup and
+download.
+
 ## `hutch electrobun sync`
 
-Resolve the exact `electrobun.version` from `hutch.config.ts`, verify and
-install its platform core archive under `~/.hutch/releases/electrobun`,
-atomically refresh the project's generated `.hutch/devkit` SDK projection, and
-resolve the configured native compiler toolchain without building the
-application:
+Perform the same project preparation, but deliberately advance an unpinned
+direct-Hutch project to the active release channel head instead of preserving
+its current valid projection. Exact `electrobun.version` and npm-paired defaults
+remain authoritative:
 
 ```bash
 hutch electrobun sync
 hutch electrobun sync --env=stable
 ```
 
-`init`, `build`, `run`, and `dev` perform the same preparation implicitly. Use
-the explicit command after changing the Electrobun release pin, to prepare
-editor types, or before a build that will later run without network access.
-Sync and builds can reuse exact releases and managed toolchains that are already
-installed; anything missing requires a network lookup and download.
+Use `sync` when you intend to change the selected floating release. `init`
+performs an initial sync to its resolved npm-paired or template-catalog release.
 
 ## `hutch electrobun build`
 
@@ -153,7 +176,8 @@ A generated `hutch.config.ts` exposes the common commands:
 export default {
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
-    "ui:build": ["node", "node_modules/vite/bin/vite.js", "build"],
+    "ui:build":
+      "hutch electrobun prepare && hutch pm exec -- vite build",
     start: ["hutch", "electrobun", "dev"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
     "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
@@ -170,11 +194,11 @@ hutch run build:canary
 hutch run build
 ```
 
-Hutch resolves scripts only from `hutch.config.ts`. A string is interpreted as
+Hutch's task runner resolves scripts only from `hutch.config.ts`. A string is interpreted as
 a shell expression, including operators, expansion, and redirects. An array
 spawns its first element with the rest as exact arguments and performs no shell
-parsing. Hutch does not inspect `package.json`, add `node_modules/.bin` to
-`PATH` itself, or emulate package-manager lifecycle hooks.
+parsing. The task runner does not inspect `package.json` scripts, add
+`node_modules/.bin` to `PATH` itself, or emulate package-manager lifecycle hooks.
 
 ## Package managers
 
@@ -200,6 +224,13 @@ hutch pm ci
 hutch pm install zod
 hutch pm exec -- tsc --version
 ```
+
+Without an external selection, `hutch pm` is the built-in interface. Its
+`hutch pm exec [--] <command> [args...]` form runs only a matching binary from
+the nearest package project's `node_modules/.bin`, preserving argv and exit
+status. It rejects path-like names and never downloads a package or falls back
+to `PATH`; bare `hutch pm` prints help and `hutch pm --version` reports Hutch's
+version.
 
 The delegation commands are process delegation, not a second resolver; the
 selected external manager owns its dependency graph and lockfile. The same

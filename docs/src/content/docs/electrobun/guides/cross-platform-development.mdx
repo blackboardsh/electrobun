@@ -25,10 +25,11 @@ hutch run install
 hutch electrobun build --env=stable
 ```
 
-Here `install` is a project task such as `["hutch", "pm", "ci"]` with
-`packageManager: "npm"`; native-only projects without JavaScript dependencies
-can omit it. Hutch delegates package commands to the configured external
-manager and does not implement dependency resolution itself.
+Here `install` is normally a project task such as
+`["hutch", "install", "--frozen-lockfile"]`; native-only projects without
+JavaScript dependencies can omit it. Hutch's built-in resolver reads
+`package.json` and `hutch.lock` by default. A project may explicitly select npm,
+Bun, pnpm, Yarn, or a custom executable instead.
 
 macOS signing and notarization must run on macOS. Native main-process builds
 also require that language's host toolchain and platform linker.

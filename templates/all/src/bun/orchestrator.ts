@@ -116,7 +116,7 @@ export interface QaRuntime {
 
 export type OrchestratorOptions = {
 	projectRoot: string;
-	channel: CatalogChannel;
+	selectedVersion: string;
 	hutchExecutable?: string;
 	nestedHutchEnv?: Record<string, string>;
 	readinessTimeoutMs?: number;
@@ -158,6 +158,18 @@ export function catalogChannelForVersion(version: string): CatalogChannel {
 		);
 	}
 	return parsed[4] === undefined ? "stable" : "beta";
+}
+
+export function selectedTemplateQaRelease(
+	inspection: ProjectInspection,
+): { version: string; channel: CatalogChannel } {
+	const version = inspection.projectedElectrobunVersion;
+	if (!version) {
+		throw new Error(
+			`Template QA requires a valid project-local Electrobun devkit projection at ${inspection.devkitProjectionPath}`,
+		);
+	}
+	return { version, channel: catalogChannelForVersion(version) };
 }
 
 export function parseTemplateCatalog(
@@ -289,15 +301,15 @@ export function parseHutchStatus(value: unknown): HutchStatusSummary {
 		throw new Error("hutch status returned an unrecognized document");
 	}
 	const home = optionalRecord(root.home);
-	const products = optionalArray(root.products);
+	const releases = optionalArray(root.releases);
 	const toolchains = optionalArray(root.toolchains);
-	const cache = optionalRecord(root.cache);
-	const cacheObjects = optionalArray(cache.objects);
+	const managedStore = optionalRecord(root.managedStore);
+	const managedObjects = optionalArray(managedStore.objects);
 	const totals = optionalRecord(root.totals);
 
-	const productsBytes = totals.productsBytes
-		? optionalNumber(totals.productsBytes)
-		: products.reduce<number>(
+	const releasesBytes = totals.releasesBytes
+		? optionalNumber(totals.releasesBytes)
+		: releases.reduce<number>(
 				(sum, entry) => sum + optionalNumber(optionalRecord(entry).bytes),
 				0,
 			);
@@ -307,32 +319,32 @@ export function parseHutchStatus(value: unknown): HutchStatusSummary {
 				(sum, entry) => sum + optionalNumber(optionalRecord(entry).bytes),
 				0,
 			);
-	const cacheBytes = totals.cacheBytes
-		? optionalNumber(totals.cacheBytes)
-		: optionalNumber(cache.bytes);
+	const managedBytes = totals.managedBytes
+		? optionalNumber(totals.managedBytes)
+		: optionalNumber(managedStore.bytes);
 
 	return {
 		homePath: typeof home.path === "string" ? home.path : "unknown",
 		homeSource: typeof home.source === "string" ? home.source : "unknown",
-		productCount: products.length,
-		productInstallCount: products.reduce<number>(
+		productCount: releases.length,
+		productInstallCount: releases.reduce<number>(
 			(sum, entry) => sum + optionalArray(optionalRecord(entry).installs).length,
 			0,
 		),
-		productsBytes,
+		productsBytes: releasesBytes,
 		toolchainCount: toolchains.length,
 		toolchainsBytes,
-		cacheObjectCount: cache.objectCount
-			? optionalNumber(cache.objectCount)
-			: cacheObjects.length,
-		cacheBytes,
-		prunableObjectCount: cacheObjects.filter((entry) => {
+		cacheObjectCount: managedStore.objectCount
+			? optionalNumber(managedStore.objectCount)
+			: managedObjects.length,
+		cacheBytes: managedBytes,
+		prunableObjectCount: managedObjects.filter((entry) => {
 			const object = optionalRecord(entry);
 			return object.reachable === false && object.inUse !== true;
 		}).length,
 		totalBytes: totals.bytes
 			? optionalNumber(totals.bytes)
-			: productsBytes + toolchainsBytes,
+			: releasesBytes + toolchainsBytes,
 		issueCount: optionalArray(root.issues).length,
 	};
 }
@@ -445,6 +457,7 @@ function resultDescription(result: ProcessResult): string {
 export class TemplateQaOrchestrator {
 	private readonly runtime: QaRuntime;
 	private readonly projectRoot: string;
+	private readonly selectedVersion: string;
 	private readonly channel: CatalogChannel;
 	private readonly hutchExecutable: string;
 	private readonly nestedHutchEnv?: Record<string, string>;
@@ -469,7 +482,8 @@ export class TemplateQaOrchestrator {
 	constructor(runtime: QaRuntime, options: OrchestratorOptions) {
 		this.runtime = runtime;
 		this.projectRoot = options.projectRoot;
-		this.channel = options.channel;
+		this.selectedVersion = options.selectedVersion;
+		this.channel = catalogChannelForVersion(options.selectedVersion);
 		this.hutchExecutable = options.hutchExecutable ?? "hutch";
 		this.nestedHutchEnv = options.nestedHutchEnv
 			? { ...options.nestedHutchEnv }
@@ -492,10 +506,19 @@ export class TemplateQaOrchestrator {
 	}
 
 	private async initializeOnce(): Promise<void> {
-		this.catalog = parseTemplateCatalog(
+		const catalog = parseTemplateCatalog(
 			await this.runtime.loadCatalog(this.channel),
 			this.channel,
 		);
+		if (catalog.version !== this.selectedVersion) {
+			const betaFlag = this.channel === "beta" ? " --beta" : "";
+			const message =
+				`Template QA is projected for Electrobun ${this.selectedVersion}, but the ${this.channel} catalog now selects ${catalog.version}. ` +
+				`Reinstall it in a new directory with \`hutch electrobun init <new-project-name> --template=all${betaFlag}\` and relaunch before installing child templates.`;
+			this.systemLog(META_TEMPLATE_ID, `BLOCKED: ${message}`);
+			throw new Error(message);
+		}
+		this.catalog = catalog;
 		this.runRoot = join(this.projectRoot, "templates");
 		await this.runtime.ensureDirectory(this.runRoot);
 		this.states = this.catalog.templates.map((template) => ({
@@ -515,7 +538,7 @@ export class TemplateQaOrchestrator {
 
 	getSnapshot(): QaSnapshot {
 		return {
-			catalogVersion: this.catalog?.version ?? "Discovering…",
+			catalogVersion: this.catalog?.version ?? this.selectedVersion,
 			channel: this.channel,
 			root: this.runRoot || join(this.projectRoot, "templates"),
 			templates: this.states.map((state) => ({
@@ -842,10 +865,10 @@ export class TemplateQaOrchestrator {
 			this.fail(state, `Could not inspect installed project: ${String(error)}`);
 			return false;
 		}
-		if (inspection.configuredElectrobunVersion !== this.catalog!.version) {
+		if (inspection.configuredElectrobunVersion !== null) {
 			this.fail(
 				state,
-				`Expected the hutch.config.ts product pin to be Electrobun ${this.catalog!.version}, found ${inspection.configuredElectrobunVersion ?? "no exact electrobun.version"}`,
+				`Expected the published floating template to omit electrobun.version, found ${inspection.configuredElectrobunVersion}`,
 			);
 			return false;
 		}
@@ -901,8 +924,8 @@ export class TemplateQaOrchestrator {
 		} catch (error) {
 			return `the existing project could not be inspected (${String(error)})`;
 		}
-		if (inspection.configuredElectrobunVersion !== version) {
-			return `the existing project pins Electrobun ${inspection.configuredElectrobunVersion ?? "nothing"} instead of ${version}`;
+		if (inspection.configuredElectrobunVersion !== null) {
+			return `the existing project unexpectedly pins Electrobun ${inspection.configuredElectrobunVersion}; published templates must float`;
 		}
 		if (inspection.projectedElectrobunVersion !== version) {
 			return `the existing project projects Electrobun ${inspection.projectedElectrobunVersion ?? "nothing"} instead of ${version}`;

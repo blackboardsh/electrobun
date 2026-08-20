@@ -18,9 +18,10 @@ Hutch is the native build and workspace CLI. Cottontail is Electrobun's JSC-base
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
-Install Hutch globally, then use it to create and build a project. Each project
-pins an exact Electrobun release in `hutch.config.ts`; Hutch verifies and
-installs that release's platform archive under
+Install Hutch globally, then use it to create and build a project. An exact
+Electrobun release pin in `hutch.config.ts` is optional; without one, Hutch uses
+an npm-supplied paired default or floats on the active release channel. Hutch
+verifies and installs the resolved release's platform archive under
 `~/.hutch/releases/electrobun` and copies its SDKs into the project's generated
 `.hutch/devkit` sysroot:
 
@@ -33,9 +34,12 @@ Initialization requires network access to fetch the current template catalog
 and selected template. Later builds can reuse exact releases and managed
 toolchains that are already installed.
 
-Or bootstrap the same interactive initializer from npm or Bun. The tiny npm
-package only installs/executes Hutch and forwards the command; it does not carry
-or own the Electrobun runtime or SDKs:
+Or bootstrap the same interactive initializer from npm or Bun. The single,
+dependency-free npm package downloads the exact paired Hutch archive from that
+version's Electrobun GitHub Release when needed, verifies and caches it, and
+forwards the command. The initializer also ensures a compatible global launcher
+for the generated project's `hutch` tasks. It does not carry or own the
+Electrobun runtime or SDKs:
 
 ```bash
 npx electrobun init
@@ -43,11 +47,12 @@ npx electrobun init
 bunx electrobun init
 ```
 
-Application dependencies remain with an external package manager. A project's
-`hutch.config.ts` may select npm (the default), Bun, pnpm, Yarn, or a custom
-executable; `hutch install` and `hutch pm ...` delegate to that tool without
-implementing dependency resolution themselves. This choice is independent of
-whether the app's main process runs on Cottontail or Bun.
+Hutch's built-in npm-compatible resolver installs JavaScript dependencies by
+default and writes `hutch.lock`; `hutch pm exec` runs project-local package
+binaries. A project's `hutch.config.ts` may instead select npm, Bun, pnpm, Yarn,
+or a custom executable, and Hutch delegates package operations to that explicit
+choice. Package management is independent of whether the app's main process
+runs on Cottontail or Bun.
 
 Don't miss our:
 - self-extracting bundles that use Zstandard compression for compact distributables
