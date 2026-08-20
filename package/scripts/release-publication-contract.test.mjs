@@ -25,39 +25,34 @@ function namedStep(source, name) {
 	return next === -1 ? remaining : remaining.slice(0, next);
 }
 
-function stepsUsing(source, action) {
-	const marker = `      - uses: ${action}\n`;
-	const steps = [];
-	let cursor = 0;
-	while (true) {
-		const start = source.indexOf(marker, cursor);
-		if (start === -1) return steps;
+function stepsUsingPattern(source, actionPattern) {
+	const uses = [...source.matchAll(/^      - uses: ([^\n]+)$/gm)].filter(
+		([, action]) => actionPattern.test(action),
+	);
+	return uses.map((match) => {
+		const marker = `${match[0]}\n`;
+		const start = match.index;
 		const remaining = source.slice(start + marker.length);
 		const next = remaining.search(/^      - /m);
-		steps.push(
+		return (
 			next === -1
 				? source.slice(start)
-				: source.slice(start, start + marker.length + next),
+				: source.slice(start, start + marker.length + next)
 		);
-		cursor = start + marker.length;
-	}
+	});
 }
 
 function validatePublicationContract(source) {
 	const header = source.slice(0, source.indexOf("jobs:\n"));
 	assert.match(
 		header,
-		/^permissions:\n  contents: read$/m,
+		/permissions:\n  contents: read\n\n$/,
 		"workflow permissions must default to read-only contents",
 	);
-	assert.equal(
-		(source.match(/^      contents: write$/gm) ?? []).length,
-		1,
-		"only the release job may request write access to repository contents",
-	);
-	const checkoutSteps = stepsUsing(source, "actions/checkout@v6");
+	const checkoutSteps = stepsUsingPattern(source, /^actions\/checkout@/);
 	assert.equal(checkoutSteps.length, 5, "every release job checkout is audited");
 	for (const checkout of checkoutSteps) {
+		assert.match(checkout, /^      - uses: actions\/checkout@\S+$/m);
 		assert.match(
 			checkout,
 			/^          persist-credentials: false$/m,
@@ -125,8 +120,42 @@ function validatePublicationContract(source) {
 		"Publish latest template channel to R2",
 	);
 	const kitchenBuild = namedStep(build, "Build Kitchen");
+	const appleCertificate = namedStep(build, "Install Apple Certificate");
 
-	assert.match(release, /^    permissions:\n      contents: write$/m);
+	assert.equal(
+		(source.match(/^    permissions:$/gm) ?? []).length,
+		3,
+		"only explicitly audited jobs may override workflow permissions",
+	);
+	assert.doesNotMatch(build, /^    permissions:$/m);
+	assert.match(
+		release,
+		/^    permissions:\n      contents: write\n\n    steps:$/m,
+	);
+	assert.match(
+		npmPublish,
+		/^    permissions:\n      contents: read\n\n    steps:$/m,
+	);
+	assert.match(
+		npmAcceptance,
+		/^    permissions:\n      contents: read\n    strategy:$/m,
+	);
+	assert.doesNotMatch(mutablePublication, /^    permissions:$/m);
+	assert.doesNotMatch(source, /secrets\s*\[|toJSON\(secrets\)/);
+	assert.match(appleCertificate, /^        if: matrix\.platform == 'darwin'$/m);
+	for (const secret of ["MACOS_CERTIFICATE", "MACOS_CERTIFICATE_PWD"]) {
+		assert.match(
+			appleCertificate,
+			new RegExp(
+				`^          ${secret}: \\$\\{\\{ secrets\\.${secret} \\}\\}$`,
+				"m",
+			),
+		);
+		assert.equal(
+			(source.match(new RegExp(`secrets\\.${secret}\\b`, "g")) ?? []).length,
+			1,
+		);
+	}
 	for (const secret of [
 		"ELECTROBUN_DEVELOPER_ID",
 		"ELECTROBUN_APPLEID",
@@ -147,6 +176,11 @@ function validatePublicationContract(source) {
 			`${secret} must not be exposed by another step`,
 		);
 	}
+	assert.equal(
+		(kitchenBuild.match(/secrets\./g) ?? []).length,
+		4,
+		"Kitchen may receive only its four Darwin-guarded signing secrets",
+	);
 
 	assert.match(
 		reconcile,
