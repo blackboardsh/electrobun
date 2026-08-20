@@ -1,6 +1,6 @@
 {
 	"name": "electrobun",
-	"version": "2.0.1-beta.26",
+	"version": "2.0.1-beta.27",
 	"private": true,
 	"description": "Build ultra fast, tiny, and cross-platform desktop apps with Typescript.",
 	"license": "MIT",

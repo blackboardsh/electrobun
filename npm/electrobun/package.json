@@ -1,6 +1,6 @@
 {
 	"name": "electrobun",
-	"version": "2.0.1-beta.26",
+	"version": "2.0.1-beta.27",
 	"description": "The lightweight npm bootstrap for Electrobun and Hutch.",
 	"license": "MIT",
 	"author": "Blackboard Technologies Inc.",
@@ -36,9 +36,9 @@
 		"./*": "./lib/moved.cjs"
 	},
 	"optionalDependencies": {
-		"@electrobun/hutch-darwin-arm64": "2.0.1-beta.26",
-		"@electrobun/hutch-linux-arm64": "2.0.1-beta.26",
-		"@electrobun/hutch-linux-x64": "2.0.1-beta.26",
-		"@electrobun/hutch-win32-x64": "2.0.1-beta.26"
+		"@electrobun/hutch-darwin-arm64": "2.0.1-beta.27",
+		"@electrobun/hutch-linux-arm64": "2.0.1-beta.27",
+		"@electrobun/hutch-linux-x64": "2.0.1-beta.27",
+		"@electrobun/hutch-win32-x64": "2.0.1-beta.27"
 	}
 }
