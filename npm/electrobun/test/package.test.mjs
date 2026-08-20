@@ -24,24 +24,55 @@ function gitStdout(args) {
 	return result.stdout;
 }
 
-test("shares the product release version and remains dependency-free", () => {
+const platformPackages = [
+	"@electrobun/hutch-darwin-arm64",
+	"@electrobun/hutch-linux-arm64",
+	"@electrobun/hutch-linux-x64",
+	"@electrobun/hutch-win32-x64",
+];
+
+test("shares the product release version and vendors Hutch per platform", () => {
 	assert.equal(manifest.name, "electrobun");
 	assert.equal(manifest.version, productSourceManifest.version);
+	// One bin, one door: raw Hutch access stays with the machine install
+	// (and the `hutch` bin name stays free for a future standalone package).
 	assert.deepEqual(manifest.bin, {
 		electrobun: "bin/electrobun.cjs",
 	});
 	assert.deepEqual(manifest.files, [
 		"bin/electrobun.cjs",
+		"bin/resolve-hutch.cjs",
+		"lib/moved.cjs",
 		"README.md",
 		"LICENSE",
 	]);
 
+	// The platform packages carry the Hutch launcher and engine; they are
+	// optional so unsupported hosts still install and fall back to ~/.hutch.
+	assert.deepEqual(
+		Object.keys(manifest.optionalDependencies).sort(),
+		platformPackages,
+	);
+	for (const name of platformPackages) {
+		assert.equal(
+			manifest.optionalDependencies[name],
+			manifest.version,
+			`${name} must be version-locked to the release`,
+		);
+	}
+
+	// Application APIs are not distributed through npm: every import path
+	// resolves to the tombstone that points at the Hutch devkit.
+	assert.deepEqual(manifest.exports, {
+		".": "./lib/moved.cjs",
+		"./package.json": "./package.json",
+		"./*": "./lib/moved.cjs",
+	});
+
 	for (const field of [
 		"dependencies",
 		"devDependencies",
-		"optionalDependencies",
 		"peerDependencies",
-		"exports",
 		"main",
 	]) {
 		assert.equal(manifest[field], undefined, `${field} must not be published`);
@@ -74,29 +105,56 @@ test("packs only the allowlisted bootstrap files and stays tiny", () => {
 	const [report] = JSON.parse(result.stdout);
 	assert.deepEqual(
 		report.files.map(({ path }) => path).sort(),
-		["LICENSE", "README.md", "bin/electrobun.cjs", "package.json"],
+		[
+			"LICENSE",
+			"README.md",
+			"bin/electrobun.cjs",
+			"bin/resolve-hutch.cjs",
+			"lib/moved.cjs",
+			"package.json",
+		],
 	);
-	assert.ok(report.size < 16 * 1024, `packed size was ${report.size} bytes`);
+	assert.ok(report.size < 24 * 1024, `packed size was ${report.size} bytes`);
 	assert.ok(
-		report.unpackedSize < 32 * 1024,
+		report.unpackedSize < 64 * 1024,
 		`unpacked size was ${report.unpackedSize} bytes`,
 	);
 });
 
-test("ships an executable CommonJS entry point", () => {
-	const bootstrapPath = join(packageRoot, "bin", "electrobun.cjs");
-	const bootstrapSource = readFileSync(bootstrapPath, "utf8");
-	assert.match(
-		gitStdout([
-			"ls-files",
-			"--stage",
-			"--",
-			"npm/electrobun/bin/electrobun.cjs",
-		]),
-		/^100755 /,
+test("ships executable CommonJS entry points", () => {
+	for (const bin of ["electrobun.cjs"]) {
+		const source = readFileSync(join(packageRoot, "bin", bin), "utf8");
+		assert.match(
+			gitStdout(["ls-files", "--stage", "--", `npm/electrobun/bin/${bin}`]),
+			/^100755 /,
+		);
+		assert.match(source, /^#!\/usr\/bin\/env node\r?\n/);
+	}
+});
+
+test("the stamped paired versions mirror the repository pragma", () => {
+	const resolverSource = readFileSync(
+		join(packageRoot, "bin", "resolve-hutch.cjs"),
+		"utf8",
 	);
-	assert.match(bootstrapSource, /^#!\/usr\/bin\/env node\r?\n/);
-	assert.doesNotMatch(bootstrapSource, /package\.json|packageVersion/);
+	const pragma = readFileSync(
+		join(repositoryRoot, "package", "hutch.config.ts"),
+		"utf8",
+	).split(/\r?\n/, 1)[0];
+	const pins = pragma.match(
+		/^\/\/ @hutch cli=([0-9A-Za-z.\-]+) cottontail=([0-9A-Za-z.\-]+)$/,
+	);
+	assert.ok(pins, `unrecognized pragma: ${pragma}`);
+	assert.match(
+		resolverSource,
+		new RegExp(`const PAIRED_HUTCH_VERSION = "${pins[1].replace(/\./g, "\\.")}";`),
+		"PAIRED_HUTCH_VERSION must equal the repository pragma cli pin",
+	);
+	assert.doesNotMatch(
+		resolverSource,
+		/PAIRED_COTTONTAIL_VERSION|HUTCH_DEFAULT_COTTONTAIL/,
+		"cottontail is paired inside Hutch (build-time) and the Electrobun devkit manifest (bundled runtime), never the shim",
+	);
 });
 
 test("publishes from the unified product release lane before templates", () => {

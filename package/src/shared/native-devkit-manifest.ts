@@ -3,6 +3,7 @@ import { ODIN_VERSION } from "./odin-version";
 import { RUST_VERSION } from "./rust-version";
 import { ZIG_VERSION } from "./build-dependencies";
 import { BUN_VERSION } from "./bun-version";
+import { COTTONTAIL_VERSION } from "./cottontail-version";
 import {
 	assertExactOdinRelease,
 	assertStrictSemVer,
@@ -103,6 +104,7 @@ export interface NativeDevkitManifest {
 		go: { defaultVersion: string };
 		odin: { defaultVersion: string };
 		bun: { defaultVersion: string };
+		cottontail: { defaultVersion: string };
 	};
 	layout: {
 		runtime: {
@@ -219,6 +221,10 @@ export function createNativeDevkitManifest(options: {
 	const rustVersion = assertStrictSemVer(RUST_VERSION, "Rust default version");
 	const goVersion = assertStrictSemVer(GO_VERSION, "Go default version");
 	const bunVersion = assertStrictSemVer(BUN_VERSION, "Bun default version");
+	const cottontailVersion = assertStrictSemVer(
+		COTTONTAIL_VERSION,
+		"Cottontail default version",
+	);
 	const odinVersion = assertExactOdinRelease(
 		ODIN_VERSION,
 		"Odin default version",
@@ -241,6 +247,7 @@ export function createNativeDevkitManifest(options: {
 			go: { defaultVersion: goVersion },
 			odin: { defaultVersion: odinVersion },
 			bun: { defaultVersion: bunVersion },
+			cottontail: { defaultVersion: cottontailVersion },
 		},
 		layout: {
 			runtime: targetRuntimeLayout(options.target),

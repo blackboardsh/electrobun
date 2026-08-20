@@ -47,7 +47,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      EXPECTED_HUTCH_VERSION: '0.21.0'
+      EXPECTED_HUTCH_VERSION: '0.23.0'
       EXPECTED_COTTONTAIL_VERSION: '0.5.0'
 
     steps:
@@ -450,6 +450,17 @@ jobs:
         run: |
           node --test test/bootstrap.test.mjs test/package.test.mjs
           npm pack --dry-run --ignore-scripts
+
+      - name: Build Hutch platform packages
+        run: node npm/scripts/build-platform-packages.mjs
+
+      - name: Publish Hutch platform packages
+        run: |
+          for package in npm/platform-packages/*/; do
+            npm publish "$package" --access public --tag "${{ steps.release-type.outputs.dist-tag }}"
+          done
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish npm bootstrap
         working-directory: npm/electrobun

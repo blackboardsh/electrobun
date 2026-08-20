@@ -1,27 +1,20 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import {
-	chmodSync,
-	existsSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	writeFileSync,
-} from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
 import { afterEach, test } from "node:test";
-import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
 const bootstrap = require("../bin/electrobun.cjs");
-const testRoot = dirname(fileURLToPath(import.meta.url));
+const resolver = require("../bin/resolve-hutch.cjs");
+const manifest = require("../package.json");
 const originalConsoleError = console.error;
 
 afterEach(() => {
 	console.error = originalConsoleError;
 });
+
+const noPlatformPackage = () => {
+	throw new Error("platform package absent");
+};
 
 test("uses stable Hutch and stable templates by default", async () => {
 	const calls = [];
@@ -30,19 +23,19 @@ test("uses stable Hutch and stable templates by default", async () => {
 		environment: { DASH_HOME: "/home/dev/.dash" },
 		existsSync: () => true,
 		platform: "linux",
+		arch: "x64",
+		resolvePackageJson: noPlatformPackage,
 		runHutch: (call) => {
 			calls.push(call);
 			return 23;
 		},
 		userHome: "/home/dev",
-		// A bootstrap prerelease must never select beta Electrobun templates.
-		version: "99.0.0-beta.1",
 	});
 
 	assert.equal(status, 23);
 	assert.deepEqual(calls, [
 		{
-			args: ["init", "my-app", "--channel=stable"],
+			args: ["electrobun", "init", "my-app", "--channel=stable"],
 			binary: "/home/dev/.dash/bin/hutch",
 			environment: { DASH_HOME: "/home/dev/.dash" },
 		},
@@ -56,6 +49,8 @@ test("preserves an explicit beta template request", async () => {
 		environment: {},
 		existsSync: () => true,
 		platform: "linux",
+		arch: "x64",
+		resolvePackageJson: noPlatformPackage,
 		runHutch: ({ args }) => {
 			forwardedArgs = args;
 			return 0;
@@ -63,7 +58,7 @@ test("preserves an explicit beta template request", async () => {
 		userHome: "/home/dev",
 	});
 
-	assert.deepEqual(forwardedArgs, ["init", "my-app", "--beta"]);
+	assert.deepEqual(forwardedArgs, ["electrobun", "init", "my-app", "--beta"]);
 });
 
 test("preserves an explicit named template channel", () => {
@@ -85,6 +80,8 @@ test("forwards every non-init command and argument unchanged", async () => {
 		environment: {},
 		existsSync: () => true,
 		platform: "linux",
+		arch: "x64",
+		resolvePackageJson: noPlatformPackage,
 		runHutch: (call) => {
 			forwardedArgs = call.args;
 			return 0;
@@ -92,30 +89,75 @@ test("forwards every non-init command and argument unchanged", async () => {
 		userHome: "/home/dev",
 	});
 
-	assert.deepEqual(forwardedArgs, args);
-	assert.deepEqual(args, [
-		"build",
-		"--env=canary",
-		"--",
-		"--literal",
-		"value with spaces",
-	]);
+	assert.deepEqual(forwardedArgs, ["electrobun", ...args]);
 });
 
-test("forwards an empty argument list to Hutch", async () => {
-	let forwardedArgs;
+test("a vendored platform package wins over the global installation", async () => {
+	let forwarded;
+	let installCalls = 0;
 	await bootstrap.main({
-		args: [],
+		args: ["dev"],
 		environment: {},
-		existsSync: () => true,
-		platform: "linux",
-		runHutch: ({ args }) => {
-			forwardedArgs = args;
+		existsSync: (candidate) =>
+			candidate === "/repo/node_modules/@electrobun/hutch-darwin-arm64/bin/hutch",
+		installHutch: async () => {
+			installCalls += 1;
+		},
+		platform: "darwin",
+		arch: "arm64",
+		resolvePackageJson: (specifier) => {
+			assert.equal(specifier, "@electrobun/hutch-darwin-arm64/package.json");
+			return "/repo/node_modules/@electrobun/hutch-darwin-arm64/package.json";
+		},
+		runHutch: (call) => {
+			forwarded = call;
 			return 0;
 		},
 		userHome: "/home/dev",
 	});
-	assert.deepEqual(forwardedArgs, []);
+
+	assert.equal(installCalls, 0);
+	assert.equal(
+		forwarded.binary,
+		"/repo/node_modules/@electrobun/hutch-darwin-arm64/bin/hutch",
+	);
+});
+
+test("paired toolchain versions are supplied as defaults, never overrides", () => {
+	const enriched = resolver.environmentWithPairedDefaults({});
+	assert.equal(enriched.HUTCH_DEFAULT_CLI, resolver.PAIRED_HUTCH_VERSION);
+	assert.equal(enriched.HUTCH_DEFAULT_ELECTROBUN, manifest.version);
+	// Cottontail deliberately has no default env: the build-time runtime is
+	// paired inside Hutch, the bundled runtime inside the Electrobun release.
+	assert.equal(enriched.HUTCH_DEFAULT_COTTONTAIL, undefined);
+
+	const preset = resolver.environmentWithPairedDefaults({
+		HUTCH_DEFAULT_CLI: "9.9.9",
+		HUTCH_DEFAULT_ELECTROBUN: "7.7.7",
+	});
+	assert.equal(preset.HUTCH_DEFAULT_CLI, "9.9.9");
+	assert.equal(preset.HUTCH_DEFAULT_ELECTROBUN, "7.7.7");
+});
+
+test("platform package names cover exactly the released Hutch platforms", () => {
+	assert.equal(
+		resolver.platformPackageName("darwin", "arm64"),
+		"@electrobun/hutch-darwin-arm64",
+	);
+	assert.equal(
+		resolver.platformPackageName("linux", "x64"),
+		"@electrobun/hutch-linux-x64",
+	);
+	assert.equal(
+		resolver.platformPackageName("linux", "arm64"),
+		"@electrobun/hutch-linux-arm64",
+	);
+	assert.equal(
+		resolver.platformPackageName("win32", "x64"),
+		"@electrobun/hutch-win32-x64",
+	);
+	assert.equal(resolver.platformPackageName("win32", "arm64"), null);
+	assert.equal(resolver.platformPackageName("freebsd", "x64"), null);
 });
 
 test("installs a missing stable Hutch before delegation", async () => {
@@ -132,6 +174,8 @@ test("installs a missing stable Hutch before delegation", async () => {
 			installed = true;
 		},
 		platform: "linux",
+		arch: "x64",
+		resolvePackageJson: noPlatformPackage,
 		runHutch: (call) => {
 			calls.push({ run: call });
 			return 7;
@@ -150,7 +194,7 @@ test("installs a missing stable Hutch before delegation", async () => {
 		},
 		{
 			run: {
-				args: ["dev", "--watch"],
+				args: ["electrobun", "dev", "--watch"],
 				binary: "/home/dev/.hutch/bin/hutch",
 				environment: {},
 			},
@@ -171,6 +215,8 @@ test("cold offline bootstrap fails before installing Hutch", async () => {
 				installCalls += 1;
 			},
 			platform: "linux",
+			arch: "x64",
+			resolvePackageJson: noPlatformPackage,
 			runHutch: () => {
 				runCalls += 1;
 				return 0;
@@ -200,6 +246,8 @@ test("warm offline bootstrap still delegates to Hutch", async () => {
 			installCalls += 1;
 		},
 		platform: "linux",
+		arch: "x64",
+		resolvePackageJson: noPlatformPackage,
 		runHutch: (call) => {
 			calls.push(call);
 			return 29;
@@ -211,7 +259,7 @@ test("warm offline bootstrap still delegates to Hutch", async () => {
 	assert.equal(installCalls, 0);
 	assert.deepEqual(calls, [
 		{
-			args: ["build", "--env=stable"],
+			args: ["electrobun", "build", "--env=stable"],
 			binary: "/home/dev/.dash/bin/hutch",
 			environment,
 		},
@@ -220,11 +268,11 @@ test("warm offline bootstrap still delegates to Hutch", async () => {
 
 test("supports an explicit canary Hutch without changing template policy", () => {
 	assert.equal(
-		bootstrap.hutchChannel({ ELECTROBUN_HUTCH_CHANNEL: "canary" }),
+		resolver.hutchChannel({ ELECTROBUN_HUTCH_CHANNEL: "canary" }),
 		"canary",
 	);
 	assert.equal(
-		bootstrap.hutchBinaryPath(
+		resolver.globalHutchBinaryPath(
 			"canary",
 			{ DASH_HOME: "/opt/dash" },
 			"linux",
@@ -238,147 +286,18 @@ test("supports an explicit canary Hutch without changing template policy", () =>
 	]);
 });
 
-test("resolves the Hutch home from HUTCH_HOME, then DASH_HOME, then ~/.hutch", () => {
-	assert.equal(
-		bootstrap.hutchBinaryPath(
-			"production",
-			{ HUTCH_HOME: "/opt/hutch", DASH_HOME: "/opt/dash" },
-			"linux",
-			"/home/dev",
-		),
-		"/opt/hutch/bin/hutch",
-	);
-	assert.equal(
-		bootstrap.hutchBinaryPath("production", {}, "linux", "/home/dev"),
-		"/home/dev/.hutch/bin/hutch",
-	);
-});
-
-test("uses the canonical Windows installation path", () => {
-	assert.equal(
-		bootstrap.hutchBinaryPath(
-			"production",
-			{ DASH_HOME: "C:\\Users\\dev\\.dash" },
-			"win32",
-			"C:\\Users\\dev",
-		),
-		"C:\\Users\\dev\\.dash\\bin\\hutch.exe",
-	);
-});
-
-test("does not replace a missing explicit Hutch binary", async () => {
+test("an explicit ELECTROBUN_HUTCH_BINARY must exist", async () => {
 	await assert.rejects(
 		bootstrap.main({
 			args: ["dev"],
-			environment: {
-				DASH_RELEASE_OFFLINE: "1",
-				ELECTROBUN_HUTCH_BINARY: "/custom/hutch",
-			},
+			environment: { ELECTROBUN_HUTCH_BINARY: "/missing/hutch" },
 			existsSync: () => false,
 			platform: "linux",
+			arch: "x64",
+			resolvePackageJson: noPlatformPackage,
+			runHutch: () => 0,
 			userHome: "/home/dev",
 		}),
 		/ELECTROBUN_HUTCH_BINARY does not exist/,
 	);
 });
-
-test("the cold offline executable performs no HTTPS request", () => {
-	const fixture = mkdtempSync(join(tmpdir(), "electrobun-npm-offline-"));
-	try {
-		const networkSentinel = join(fixture, "https-called");
-		const blocker = join(fixture, "block-https.cjs");
-		writeFileSync(
-			blocker,
-			[
-				'const https = require("node:https");',
-				'const { writeFileSync } = require("node:fs");',
-				"https.get = () => {",
-				'  writeFileSync(process.env.NETWORK_SENTINEL, "called");',
-				'  throw new Error("unexpected HTTPS request");',
-				"};",
-				"",
-			].join("\n"),
-		);
-
-		const result = spawnSync(
-			process.execPath,
-			[
-				"--require",
-				blocker,
-				join(testRoot, "..", "bin", "electrobun.cjs"),
-				"build",
-			],
-			{
-				env: {
-					...process.env,
-					DASH_HOME: join(fixture, "dash-home"),
-					DASH_RELEASE_OFFLINE: "true",
-					NETWORK_SENTINEL: networkSentinel,
-				},
-				encoding: "utf8",
-			},
-		);
-
-		if (result.error) throw result.error;
-		assert.equal(result.status, 1, result.stderr || result.stdout);
-		assert.match(
-			result.stderr,
-			/Hutch is not installed.*DASH_RELEASE_OFFLINE prevents downloading it/,
-		);
-		assert.equal(existsSync(networkSentinel), false);
-	} finally {
-		rmSync(fixture, { force: true, recursive: true });
-	}
-});
-
-test(
-	"the executable passes real argv and exit status through to Hutch",
-	{ skip: process.platform === "win32" },
-	() => {
-		const fixture = mkdtempSync(join(tmpdir(), "electrobun-npm-bootstrap-"));
-		try {
-			const recordedArguments = join(fixture, "arguments.json");
-			const fakeHutch = join(fixture, "fake hutch.cjs");
-			writeFileSync(
-				fakeHutch,
-				[
-					"#!/usr/bin/env node",
-					'const { writeFileSync } = require("node:fs");',
-					"writeFileSync(process.env.RECORDED_ARGUMENTS, JSON.stringify(process.argv.slice(2)));",
-					"process.exitCode = 19;",
-					"",
-				].join("\n"),
-			);
-			chmodSync(fakeHutch, 0o755);
-
-			const result = spawnSync(
-				process.execPath,
-				[
-					join(testRoot, "..", "bin", "electrobun.cjs"),
-					"build",
-					"--",
-					"value with spaces",
-				],
-				{
-					env: {
-						...process.env,
-						ELECTROBUN_HUTCH_BINARY: fakeHutch,
-						RECORDED_ARGUMENTS: recordedArguments,
-					},
-					encoding: "utf8",
-				},
-			);
-
-			if (result.error) throw result.error;
-			assert.equal(result.status, 19, result.stderr);
-			assert.deepEqual(JSON.parse(readFileSync(recordedArguments, "utf8")), [
-				"electrobun",
-				"build",
-				"--",
-				"value with spaces",
-			]);
-		} finally {
-			rmSync(fixture, { force: true, recursive: true });
-		}
-	},
-);

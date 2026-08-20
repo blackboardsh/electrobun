@@ -17,6 +17,7 @@ import { ODIN_VERSION } from "./odin-version";
 import { RUST_VERSION } from "./rust-version";
 import { ZIG_VERSION } from "./build-dependencies";
 import { BUN_VERSION } from "./bun-version";
+import { COTTONTAIL_VERSION } from "./cottontail-version";
 
 const targets: Array<{
 	target: NativeDevkitManifest["target"];
@@ -149,6 +150,7 @@ describe("native devkit manifest", () => {
 			go: { defaultVersion: GO_VERSION },
 			odin: { defaultVersion: ODIN_VERSION },
 			bun: { defaultVersion: BUN_VERSION },
+			cottontail: { defaultVersion: COTTONTAIL_VERSION },
 		});
 		expect(Object.keys(manifest.toolchains)).toEqual([
 			"zig",
@@ -156,6 +158,7 @@ describe("native devkit manifest", () => {
 			"go",
 			"odin",
 			"bun",
+			"cottontail",
 		]);
 	});
 

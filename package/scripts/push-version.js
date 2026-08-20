@@ -18,8 +18,10 @@ import { dirname, join, relative } from "path";
 import { fileURLToPath } from "url";
 import { assertStrictSemVer } from "../src/shared/strict-semver.js";
 import {
+	assertTemplatesFloat,
 	createRustSdkVersionUpdates,
-	createTemplateVersionUpdates,
+	parseRepositoryPragmaPins,
+	stampNpmBootstrapPairedVersions,
 	updateKitchenVersions,
 	updateNpmBootstrapVersion,
 } from "./version-config.mjs";
@@ -90,24 +92,35 @@ const kitchenVersions = updateKitchenVersions(
 	readFileSync(kitchenConfigPath, "utf-8"),
 	newVersion,
 );
-const templateConfigs = createTemplateVersionUpdates(templatesDir, newVersion);
+assertTemplatesFloat(templatesDir);
 const npmBootstrap = updateNpmBootstrapVersion(
 	readFileSync(npmBootstrapPath, "utf-8"),
 	newVersion,
+);
+const npmResolverPath = join(
+	repoRoot,
+	"npm",
+	"electrobun",
+	"bin",
+	"resolve-hutch.cjs",
+);
+const npmResolver = stampNpmBootstrapPairedVersions(
+	readFileSync(npmResolverPath, "utf-8"),
+	parseRepositoryPragmaPins(
+		readFileSync(join(packageDir, "hutch.config.ts"), "utf-8"),
+	),
 );
 const rustSdkVersions = createRustSdkVersionUpdates(repoRoot, newVersion);
 
 writeFileSync(kitchenHutchConfigPath, kitchenVersions.hutchConfig);
 writeFileSync(kitchenConfigPath, kitchenVersions.electrobunConfig);
 writeFileSync(npmBootstrapPath, npmBootstrap);
-for (const templateConfig of templateConfigs) {
-	writeFileSync(templateConfig.path, templateConfig.source);
-}
+writeFileSync(npmResolverPath, npmResolver);
 for (const rustSdkVersion of rustSdkVersions) {
 	writeFileSync(rustSdkVersion.path, rustSdkVersion.source);
 }
 console.log(
-	`Updated Kitchen, npm bootstrap, Rust SDK identities, and ${templateConfigs.length} template product versions to ${newVersion}`,
+	`Updated Kitchen, npm bootstrap (with paired toolchain pins), and Rust SDK identities to ${newVersion}; templates float`,
 );
 
 // Git operations from repo root
@@ -122,7 +135,7 @@ execFileSync(
 		"kitchen/hutch.config.ts",
 		"kitchen/electrobun.config.ts",
 		"npm/electrobun/package.json",
-		...templateConfigs.map(({ path }) => relative(repoRoot, path)),
+		"npm/electrobun/bin/resolve-hutch.cjs",
 		...rustSdkVersions.map(({ path }) => relative(repoRoot, path)),
 	],
 	{ cwd: repoRoot, stdio: "inherit" },

@@ -29,7 +29,45 @@ export function updateNpmBootstrapVersion(source, version) {
 		throw new Error("npm bootstrap package name must be electrobun");
 	}
 	manifest.version = version;
+	// The platform packages vendor the Hutch launcher and are version-locked
+	// to every release.
+	for (const name of Object.keys(manifest.optionalDependencies ?? {})) {
+		if (!name.startsWith("@electrobun/hutch-")) {
+			throw new Error(`unexpected npm bootstrap optionalDependency: ${name}`);
+		}
+		manifest.optionalDependencies[name] = version;
+	}
 	return `${JSON.stringify(manifest, null, "\t")}\n`;
+}
+
+// The paired toolchain constants in resolve-hutch.cjs mirror the repository
+// pragma; release provenance rejects any drift.
+export function stampNpmBootstrapPairedVersions(source, pins) {
+	assertStrictSemVer(pins.hutch, "paired Hutch version");
+	let updated = source;
+	for (const [name, value] of [
+		["PAIRED_HUTCH_VERSION", pins.hutch],
+	]) {
+		const pattern = new RegExp(`const ${name} = "[^"]+";`);
+		if (!pattern.test(updated)) {
+			throw new Error(`resolve-hutch.cjs is missing ${name}`);
+		}
+		updated = updated.replace(pattern, `const ${name} = "${value}";`);
+	}
+	return updated;
+}
+
+export function parseRepositoryPragmaPins(hutchConfigSource) {
+	const pins = hutchConfigSource
+		.split(/\r?\n/, 1)[0]
+		.match(/^\/\/ @hutch cli=([^\s]+) cottontail=([^\s]+)$/);
+	if (!pins) {
+		throw new Error("package/hutch.config.ts is missing its // @hutch pragma");
+	}
+	return {
+		hutch: assertStrictSemVer(pins[1], "pragma cli pin"),
+		cottontail: assertStrictSemVer(pins[2], "pragma cottontail pin"),
+	};
 }
 
 export function updateKitchenVersions(hutchSource, electrobunSource, version) {
@@ -170,18 +208,23 @@ export function createRustSdkVersionUpdates(repositoryRoot, version) {
 	}));
 }
 
-export function createTemplateVersionUpdates(templatesDir, version) {
-	return readdirSync(templatesDir, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory())
-		.map((entry) => {
-			const path = join(templatesDir, entry.name, "hutch.config.ts");
-			return {
-				path,
-				source: updateHutchProductVersion(
-					readFileSync(path, "utf8"),
-					version,
-				),
-			};
-		})
-		.sort((left, right) => left.path.localeCompare(right.path));
+// Templates float — no pragma, no product pin — so a release stamps
+// nothing in them; it only refuses to ship a template that regained a pin.
+export function assertTemplatesFloat(templatesDir) {
+	for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const path = join(templatesDir, entry.name, "hutch.config.ts");
+		let source;
+		try {
+			source = readFileSync(path, "utf8");
+		} catch {
+			continue;
+		}
+		if (/^\/\/\s*@hutch\b/m.test(source)) {
+			throw new Error(`${path} must not carry a // @hutch pragma; templates float`);
+		}
+		if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(source)) {
+			throw new Error(`${path} must not pin electrobun.version; templates float`);
+		}
+	}
 }

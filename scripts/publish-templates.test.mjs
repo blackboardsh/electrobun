@@ -6,8 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import {
 	parseHutchPragma,
-	pinElectrobunVersion,
-	pinHutchPragma,
+	assertFloatingTemplateConfig,
 	publishTemplates,
 	releaseChannel,
 	templateArtifactKey,
@@ -73,57 +72,29 @@ test("the release toolchain pins come from the package pragma", () => {
 	}
 });
 
-test("published templates stamp only Hutch release metadata", () => {
-	const source = [
-		"// @hutch cli=0.7.3 cottontail=0.4.4",
-		"export default {",
-		'\tscripts: { install: ["npm", "ci"] },',
-		"};",
-		"",
-	].join("\n");
+test("published templates must float: no pragma, no product pin", () => {
 	assert.equal(
-		pinHutchPragma(source, { hutch: "0.7.3", cottontail: "0.4.4" }),
-		source.replace(
-			"cli=0.7.3 cottontail=0.4.4",
-			"cli=0.7.3 cottontail=0.4.4",
+		assertFloatingTemplateConfig(
+			"hello-world",
+			'export default {\n\tscripts: { install: ["hutch", "install"] },\n};\n',
 		),
+		undefined,
 	);
 	assert.throws(
 		() =>
-			pinHutchPragma("export default {};\n", {
-				hutch: "0.7.3",
-				cottontail: "0.4.4",
-			}),
-		/expected exactly one \/\/ @hutch pragma/,
+			assertFloatingTemplateConfig(
+				"hello-world",
+				"// @hutch cli=0.7.3 cottontail=0.4.4\nexport default {};\n",
+			),
+		/must not carry a \/\/ @hutch pragma/,
 	);
 	assert.throws(
 		() =>
-			pinHutchPragma(source, {
-				hutch: "^0.7.3",
-				cottontail: "0.4.4",
-			}),
-		/Hutch CLI release pin must be an exact SemVer 2\.0\.0/,
-	);
-});
-
-test("published templates stamp the Electrobun product version in Hutch config", () => {
-	const source = [
-		"// @hutch cli=0.7.3 cottontail=0.4.4",
-		"export default {",
-		"\telectrobun: {",
-		'\t\tversion: "2.0.0-rc.1",',
-		"\t},",
-		"\tscripts: {},",
-		"};",
-		"",
-	].join("\n");
-	assert.equal(
-		pinElectrobunVersion(source, "2.0.0"),
-		source.replace("2.0.0-rc.1", "2.0.0"),
-	);
-	assert.throws(
-		() => pinElectrobunVersion("export default {};\n", "2.0.0"),
-		/expected exactly one hutch\.config\.ts electrobun.version/,
+			assertFloatingTemplateConfig(
+				"hello-world",
+				'export default { electrobun: { version: "2.0.0" } };\n',
+			),
+		/must not pin electrobun\.version/,
 	);
 });
 
@@ -173,15 +144,16 @@ test("dry-run archives preserve package and package-free template inputs", async
 				assert.deepEqual(readFileSync(stagedPath), readFileSync(sourcePath));
 			}
 		}
+		// Templates float: the staged config must carry no pragma and no
+		// product pin, byte-identical to the source tree.
 		const stagedHutch = readFileSync(
 			join(stagedRoot, "hutch.config.ts"),
 			"utf8",
 		);
-		assert.equal(
-			stagedHutch.match(
-				/\belectrobun\s*:\s*\{\s*version\s*:\s*["']([^"']+)["']/,
-			)?.[1],
-			packageVersion,
+		assert.doesNotMatch(stagedHutch, /^\/\/\s*@hutch\b/m);
+		assert.doesNotMatch(
+			stagedHutch,
+			/\belectrobun\s*:\s*\{\s*version\s*:/s,
 		);
 		assert.doesNotMatch(
 			readFileSync(join(stagedRoot, "electrobun.config.ts"), "utf8"),

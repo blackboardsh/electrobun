@@ -76,38 +76,20 @@ export function parseHutchPragma(source) {
 	return { hutch: values.cli, cottontail: values.cottontail };
 }
 
-export function pinHutchPragma(source, pins) {
-	const pragmas = source.match(/^\/\/\s*@hutch[^\r\n]*$/gm) ?? [];
-	if (pragmas.length !== 1) {
-		fail(`expected exactly one // @hutch pragma, found ${pragmas.length}`);
-	}
-	parseHutchPragma(pragmas[0]);
-	if (!pins?.hutch || !pins?.cottontail) fail("release toolchain pins are missing");
-	exactSemVer(pins.hutch, "Hutch CLI release pin");
-	exactSemVer(pins.cottontail, "Cottontail release pin");
-
-	const updated = pragmas[0]
-		.replace(/(\bcli=)[^\s]+/, `$1${pins.hutch}`)
-		.replace(/(\bcottontail=)[^\s]+/, `$1${pins.cottontail}`);
-	return source.replace(pragmas[0], updated);
-}
-
-export function pinElectrobunVersion(source, version) {
-	releaseChannel(version);
-	const pattern = /(\belectrobun\s*:\s*\{\s*version\s*:\s*)(["'])([^"'\r\n]+)\2/g;
-	const matches = [...source.matchAll(pattern)];
-	if (matches.length !== 1) {
+// Templates float: a fresh install pairs with the user's toolchain and the
+// current release channel, and a regression in a new release shows up in the
+// templates first. Pins are for applications, not demos.
+export function assertFloatingTemplateConfig(templateId, source) {
+	if (/^\/\/\s*@hutch\b/m.test(source)) {
 		fail(
-			`expected exactly one hutch.config.ts electrobun.version, found ${matches.length}`,
+			`${templateId} hutch.config.ts must not carry a // @hutch pragma; templates float`,
 		);
 	}
-	releaseChannel(matches[0][3]);
-
-	const match = matches[0];
-	const start = match.index;
-	const end = start + match[0].length;
-	const replacement = `${match[1]}${match[2]}${version}${match[2]}`;
-	return `${source.slice(0, start)}${replacement}${source.slice(end)}`;
+	if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(source)) {
+		fail(
+			`${templateId} hutch.config.ts must not pin electrobun.version; templates float`,
+		);
+	}
 }
 
 function sha256(value) {
@@ -202,7 +184,7 @@ function createTemplateArchive(templateId, sourceRoot, archivePath) {
 	}
 }
 
-function stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }) {
+function stageTemplate({ templateId, version, stageRoot, archiveRoot }) {
 	const destination = join(stageRoot, templateId);
 	mkdirSync(destination, { recursive: true });
 	copyTrackedTemplate(templateId, destination);
@@ -222,11 +204,7 @@ function stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }) {
 
 	const hutchConfigPath = join(destination, "hutch.config.ts");
 	if (!existsSync(hutchConfigPath)) fail(`${templateId} is missing hutch.config.ts`);
-	const hutchSource = readFileSync(hutchConfigPath, "utf8");
-	writeFileSync(
-		hutchConfigPath,
-		pinElectrobunVersion(pinHutchPragma(hutchSource, pins), version),
-	);
+	assertFloatingTemplateConfig(templateId, readFileSync(hutchConfigPath, "utf8"));
 
 	const archivePath = join(archiveRoot, `${templateId}.tar.gz`);
 	createTemplateArchive(templateId, stageRoot, archivePath);
@@ -361,7 +339,7 @@ export async function publishTemplates({ dryRun = false, channel: requestedChann
 	mkdirSync(archiveRoot, { recursive: true });
 
 	const staged = templateIds().map((templateId) =>
-		stageTemplate({ templateId, version, pins, stageRoot, archiveRoot }),
+		stageTemplate({ templateId, version, stageRoot, archiveRoot }),
 	);
 	if (staged.length === 0) fail("no templates were found");
 

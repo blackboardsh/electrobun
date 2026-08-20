@@ -21,7 +21,18 @@ Hutch itself stays out of the finished bundle.
 
 ## Install Hutch
 
-Install the current production channel on macOS or Linux:
+An npm project needs no separate installation: the `electrobun` package
+vendors the Hutch launcher and engine for your platform as optional
+dependencies, so `npm install electrobun` (or `bun add electrobun`) fully
+provisions the toolchain — no postinstall scripts, no shell-profile changes,
+nothing global beyond the shared `~/.hutch` artifact store. `npx electrobun`
+and package.json scripts that call `electrobun ...` just work, and the
+paired Hutch/Cottontail/Electrobun versions ride your lockfile. Hutch runs
+underneath; direct `hutch` commands come with the machine-wide install
+below (which `electrobun init` performs automatically when missing).
+
+For machine-wide use outside npm, install the current production channel on
+macOS or Linux:
 
 ```bash
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
@@ -49,11 +60,9 @@ and their exact local selections in `~/.hutch/state/selections.json`. Set
 production channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
-work. The published package is a tiny bootstrap released at the same version
-as Electrobun: it installs Hutch when necessary and forwards every argument to
-`hutch electrobun`. It defaults `init` to stable templates; pass `--beta`
-explicitly for beta templates. The generated project's `hutch.config.ts` pin
-still selects the exact Electrobun release, SDK, and runtime.
+work, defaulting `init` to stable templates; pass `--beta` explicitly for beta
+templates. Templates carry no version pins: a fresh project pairs with your
+installed toolchain and floats on the release channel until you pin it.
 
 ## Everyday commands
 
@@ -87,8 +96,8 @@ hutch electrobun build --env=stable
 
 Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
-After extracting a template, `init` syncs its exact Electrobun release and
-required native toolchain, then runs the template's configured `install` task
+After extracting a template, `init` syncs the channel's current Electrobun
+release and required native toolchain, then runs the template's configured `install` task
 when one exists. Pass `--skip-install` to defer that task. Initialization always
 requires network access because Hutch fetches the current template catalog and
 chosen template instead of keeping persistent copies of either one.
@@ -152,11 +161,19 @@ without replacing your global selection.
 hutch self version
 hutch self update
 hutch cottontail version
-hutch cottontail update
 ```
 
 Interactive use checks for updates periodically. CI and other non-interactive
 invocations never prompt.
+
+Cottontail is paired with the Hutch release: an unpinned project runs the
+Cottontail this launcher was built and tested with, and `hutch self update`
+advances both together. This pairing covers the build-time runtime only —
+the Cottontail bundled into an app by `mainProcess: "cottontail"` is a
+runtime component pinned by the selected Electrobun release's devkit
+manifest, exactly like the bundled Bun. Projects that install through npm
+are versioned by the `electrobun` dependency instead — updating it moves
+the whole paired toolchain, tracked by your lockfile.
 
 Updating moves only the global selection. A project whose pragma pins an exact
 version keeps running that version — `hutch self update` says so and suggests
@@ -246,6 +263,14 @@ version, or `build:<full-git-revision>`. `stable` and `latest` resolve to
 
 The pragma selects versions only for that project. It never rewrites the global
 installation's local selections.
+
+The pragma is optional. Everything floats on tested pairs by default — the
+CLI on the active channel (or the exact version your `electrobun` npm
+dependency supplies), Cottontail on the launcher's paired release, and an
+Electrobun project without an `electrobun.version` pin on the release
+channel, advanced by `hutch electrobun sync` and held steady between syncs.
+Every pin is an explicit act of stopping, and an explicit pin always wins
+over a default.
 
 The pin commands rewrite the pragma so it never needs hand editing:
 

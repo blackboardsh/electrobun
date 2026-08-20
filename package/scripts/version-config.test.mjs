@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
@@ -13,7 +14,9 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
 	createRustSdkVersionUpdates,
-	createTemplateVersionUpdates,
+	assertTemplatesFloat,
+	parseRepositoryPragmaPins,
+	stampNpmBootstrapPairedVersions,
 	updateElectrobunCargoLockVersion,
 	updateElectrobunCargoManifestVersion,
 	updateKitchenVersions,
@@ -110,8 +113,21 @@ test("release bumps keep the thin npm bootstrap on the product version", () => {
 	const updated = JSON.parse(updateNpmBootstrapVersion(source, "2.3.4-beta.5"));
 	assert.equal(updated.name, "electrobun");
 	assert.equal(updated.version, "2.3.4-beta.5");
-	const { version: originalVersion, ...originalRest } = original;
-	const { version: updatedVersion, ...updatedRest } = updated;
+	// The version and the version-locked platform packages move together;
+	// everything else is untouched.
+	for (const name of Object.keys(updated.optionalDependencies)) {
+		assert.equal(updated.optionalDependencies[name], "2.3.4-beta.5", name);
+	}
+	const {
+		version: originalVersion,
+		optionalDependencies: _originalPlatform,
+		...originalRest
+	} = original;
+	const {
+		version: updatedVersion,
+		optionalDependencies: _updatedPlatform,
+		...updatedRest
+	} = updated;
 	assert.notEqual(originalVersion, updatedVersion);
 	assert.deepEqual(updatedRest, originalRest);
 	assert.throws(
@@ -222,35 +238,49 @@ test("Rust release bump plan is limited to the SDK and its two lockfiles", () =>
 	}
 });
 
-test("release bump plan stamps every template Hutch product pin", () => {
+test("release bumps require every template to float", () => {
 	const templatesRoot = fileURLToPath(
 		new URL("../../templates/", import.meta.url),
 	);
-	const templateNames = readdirSync(templatesRoot, { withFileTypes: true })
-		.filter((entry) => entry.isDirectory())
-		.map((entry) => entry.name)
-		.sort();
-	assert.ok(templateNames.length > 0);
-	const updates = createTemplateVersionUpdates(
-		templatesRoot,
-		"2.3.4-beta.5",
-	);
-	assert.equal(updates.length, templateNames.length);
+	assertTemplatesFloat(templatesRoot);
+	assert.throws(() => {
+		const scratch = mkdtempSync(join(tmpdir(), "template-float-"));
+		try {
+			mkdirSync(join(scratch, "pinned"));
+			writeFileSync(
+				join(scratch, "pinned", "hutch.config.ts"),
+				"// @hutch cli=0.7.3 cottontail=0.4.4\nexport default {};\n",
+			);
+			assertTemplatesFloat(scratch);
+		} finally {
+			rmSync(scratch, { recursive: true, force: true });
+		}
+	}, /must not carry a \/\/ @hutch pragma/);
+});
 
-	for (const [index, templateName] of templateNames.entries()) {
-		const updated = updates[index]?.source ?? "";
-		assert.match(
-			updated,
-			/electrobun:\s*\{\s*version:\s*"2\.3\.4-beta\.5"/,
-			templateName,
-		);
-		assert.equal(
-			(updated.match(/2\.3\.4-beta\.5/g) ?? []).length,
-			1,
-			templateName,
-		);
-		assert.equal(basename(updates[index]?.path ?? ""), "hutch.config.ts");
-	}
+test("the npm bootstrap paired versions stamp from the repository pragma", () => {
+	const pins = parseRepositoryPragmaPins(
+		readFileSync(join(repositoryRoot, "package", "hutch.config.ts"), "utf8"),
+	);
+	const resolverSource = readFileSync(
+		join(repositoryRoot, "npm", "electrobun", "bin", "resolve-hutch.cjs"),
+		"utf8",
+	);
+	// The checked-in constants already match the pragma, so stamping is a
+	// fixed point; a mismatched pragma would produce a diff at release time.
+	assert.equal(
+		stampNpmBootstrapPairedVersions(resolverSource, pins),
+		resolverSource,
+	);
+	assert.throws(
+		() => stampNpmBootstrapPairedVersions("// nothing here\n", pins),
+		/missing PAIRED_HUTCH_VERSION/,
+	);
+	assert.throws(
+		() =>
+			parseRepositoryPragmaPins("export default {};\n"),
+		/missing its \/\/ @hutch pragma/,
+	);
 });
 
 test("checked-in package, lock, Kitchen, and template product identities agree", () => {
@@ -284,20 +314,11 @@ test("checked-in package, lock, Kitchen, and template product identities agree",
 	);
 	assert.doesNotMatch(kitchenSource, /\belectrobun\s*:\s*\{/);
 
-	for (const update of createTemplateVersionUpdates(
-		join(repositoryRoot, "templates"),
-		version,
+	assertTemplatesFloat(join(repositoryRoot, "templates"));
+	for (const [name, pinned] of Object.entries(
+		npmBootstrapManifest.optionalDependencies ?? {},
 	)) {
-		assert.equal(update.source, readFileSync(update.path, "utf8"), update.path);
-		const electrobunConfigPath = join(
-			dirname(update.path),
-			"electrobun.config.ts",
-		);
-		assert.doesNotMatch(
-			readFileSync(electrobunConfigPath, "utf8"),
-			/\belectrobun\s*:\s*\{/,
-			electrobunConfigPath,
-		);
+		assert.equal(pinned, version, name);
 	}
 
 	for (const update of createRustSdkVersionUpdates(repositoryRoot, version)) {
@@ -404,13 +425,7 @@ test("push:beta dry semantics produce 2.0.1-beta.0 from 2.0.0", () => {
 			).version,
 			version,
 		);
-		assert.equal(
-			createTemplateVersionUpdates(
-				join(repositoryRoot, "templates"),
-				version,
-			).length,
-			31,
-		);
+		assertTemplatesFloat(join(repositoryRoot, "templates"));
 		assert.equal(createRustSdkVersionUpdates(repositoryRoot, version).length, 3);
 	} finally {
 		rmSync(temporaryRoot, { recursive: true, force: true });

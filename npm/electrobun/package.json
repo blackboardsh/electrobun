@@ -22,10 +22,23 @@
 	},
 	"files": [
 		"bin/electrobun.cjs",
+		"bin/resolve-hutch.cjs",
+		"lib/moved.cjs",
 		"README.md",
 		"LICENSE"
 	],
 	"engines": {
 		"node": ">=18"
+	},
+	"exports": {
+		".": "./lib/moved.cjs",
+		"./package.json": "./package.json",
+		"./*": "./lib/moved.cjs"
+	},
+	"optionalDependencies": {
+		"@electrobun/hutch-darwin-arm64": "2.0.1-beta.25",
+		"@electrobun/hutch-linux-arm64": "2.0.1-beta.25",
+		"@electrobun/hutch-linux-x64": "2.0.1-beta.25",
+		"@electrobun/hutch-win32-x64": "2.0.1-beta.25"
 	}
 }

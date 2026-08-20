@@ -201,7 +201,9 @@ export function validateNativeDevkitManifest(options) {
 	validateAbi(abi.sdk, "abi.sdk", "electrobun-sdk");
 
 	const toolchains = object(manifest.toolchains, "toolchains");
-	for (const language of ["zig", "rust", "go", "bun"]) {
+	// cottontail pins the app runtime bundled by mainProcess: "cottontail",
+	// like bun pins the bundled Bun; the build-time Cottontail is Hutch's.
+	for (const language of ["zig", "rust", "go", "bun", "cottontail"]) {
 		const toolchain = object(toolchains[language], `toolchains.${language}`);
 		exactVersion(
 			toolchain.defaultVersion,

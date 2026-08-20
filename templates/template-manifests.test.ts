@@ -237,14 +237,6 @@ describe("Electrobun template package boundaries", () => {
 
 	test("Hutch owns template tasks and release metadata", () => {
 		const invalidConfigs: string[] = [];
-		const packageVersion = (
-			JSON.parse(
-				readFileSync(join(templatesRoot, "..", "package", "package.json"), "utf8"),
-			) as { version: string }
-		).version;
-		const packagePins = pragmaPins(
-			readFileSync(join(templatesRoot, "..", "package", "hutch.config.ts"), "utf8"),
-		);
 
 		for (const templateName of templateNames) {
 			const templateRoot = join(templatesRoot, templateName);
@@ -258,8 +250,10 @@ describe("Electrobun template package boundaries", () => {
 				continue;
 			}
 			const hutch = readFileSync(hutchPath, "utf8");
-			if (pragmaPins(hutch) !== packagePins) {
-				invalidConfigs.push(`${templateName}: Hutch pins do not match package pins`);
+			// Templates float: a fresh install pairs with the user's toolchain
+			// and the current release channel. Pins are for applications.
+			if (pragmaPins(hutch) !== "") {
+				invalidConfigs.push(`${templateName}: templates must not carry a // @hutch pragma`);
 			}
 			const selectedManager = configuredPackageManager(hutch);
 			const hasInstallTask = /\binstall\s*:/.test(hutch);
@@ -304,14 +298,9 @@ describe("Electrobun template package boundaries", () => {
 			}
 
 			const electrobun = readFileSync(electrobunPath, "utf8");
-			const versions = [
-				...hutch.matchAll(
-					/\belectrobun\s*:\s*\{\s*version\s*:\s*["']([^"']+)["']/g,
-				),
-			];
-			if (versions.length !== 1 || versions[0]?.[1] !== packageVersion) {
+			if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(hutch)) {
 				invalidConfigs.push(
-					`${templateName}: hutch.config.ts electrobun.version must equal ${packageVersion}`,
+					`${templateName}: templates must not pin electrobun.version`,
 				);
 			}
 			if (/\belectrobun\s*:\s*\{\s*version\s*:/s.test(electrobun)) {
