@@ -73,6 +73,7 @@ import {
 	type Pointer,
 } from "bun:ffi";
 import { parseWebviewEventBridgeMessage } from "./eventBridge";
+import { ffiCStringToString } from "./ffiCString";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -98,8 +99,23 @@ function tryDlopenCandidates<T extends Record<string, { args: FFIType[]; returns
 	throw lastError ?? new Error(`Failed to load ${fileName}`);
 }
 
+function normalizeFFIPointer(
+	value: Pointer | bigint | null | undefined,
+): Pointer | null {
+	if (value === null || value === undefined || value === 0 || value === 0n) {
+		return null;
+	}
+	if (typeof value !== "bigint") return value;
+
+	const numericPointer = Number(value);
+	if (!Number.isSafeInteger(numericPointer)) {
+		throw new RangeError("FFI pointer exceeds JavaScript's safe integer range");
+	}
+	return numericPointer as Pointer;
+}
+
 function getWindowPtr(winId: number) {
-	return core?.symbols.getWindowPointer(winId) || null;
+	return normalizeFFIPointer(core?.symbols.getWindowPointer(winId));
 }
 
 function getCoreLastError(): string | null {
@@ -1284,13 +1300,11 @@ function getWindowsNativeWrapperSymbols(): Partial<WindowsNativeWrapperSymbols> 
 core?.symbols.setRuntimeCallbacksAsync(true);
 const queuedHostMessageWebviewIdBuf = new Uint32Array(1);
 
-const readOwnedRuntimeCallbackPayload = (messagePointer: number): string => {
+const readOwnedRuntimeCallbackPayload = (messagePointer: Pointer): string => {
 	try {
-		return new CString(messagePointer as unknown as Pointer).toString();
+		return new CString(messagePointer).toString();
 	} finally {
-		core_.symbols.releaseRuntimeCallbackPayload(
-			messagePointer as unknown as Pointer,
-		);
+		core_.symbols.releaseRuntimeCallbackPayload(messagePointer);
 	}
 };
 
@@ -1933,7 +1947,7 @@ const _ffiImpl = {
 			return webviewId;
 		},
 		getWebviewPointer: (params: { id: number }): Pointer | null => {
-			return core_.symbols.getWebviewPointer(params.id) || null;
+			return normalizeFFIPointer(core_.symbols.getWebviewPointer(params.id));
 		},
 		resizeWebview: (params: {
 			id: number;
@@ -2053,7 +2067,7 @@ const _ffiImpl = {
 			return viewId;
 		},
 		getWGPUViewPointer: (params: { id: number }): Pointer | null => {
-			return core_.symbols.getWGPUViewPointer(params.id) || null;
+			return normalizeFFIPointer(core_.symbols.getWGPUViewPointer(params.id));
 		},
 
 		wgpuViewSetFrame: (params: {
@@ -2095,9 +2109,11 @@ const _ffiImpl = {
 			const setAlphaBlending =
 				getDarwinNativeWrapperSymbols().wgpuViewSetAlphaBlending;
 			if (typeof setAlphaBlending !== "function") return;
-			const ptr = core_.symbols.getWGPUViewPointer(params.id);
-			if (!ptr) return;
-			setAlphaBlending(ptr, params.enabled);
+			const viewPointer = normalizeFFIPointer(
+				core_.symbols.getWGPUViewPointer(params.id),
+			);
+			if (!viewPointer) return;
+			setAlphaBlending(viewPointer, params.enabled);
 		},
 
 		wgpuViewSetPassthrough: (params: {
@@ -2115,7 +2131,9 @@ const _ffiImpl = {
 			core_.symbols.removeWGPUView(params.id);
 		},
 		wgpuViewGetNativeHandle: (params: { id: number }): Pointer | null => {
-			return core_.symbols.getWGPUViewNativeHandle(params.id) || null;
+			return normalizeFFIPointer(
+				core_.symbols.getWGPUViewNativeHandle(params.id),
+			);
 		},
 		runWGPUViewTest: (params: { id: number }) => {
 			core_.symbols.runWGPUViewTest(params.id);
@@ -2722,7 +2740,7 @@ const wgpuPointerCallback = new JSCallback(
 // Key events from WGPU views carrying the layout-produced characters.
 const wgpuKeyCallback = new JSCallback(
 	(viewId, keyCode, modifiers, isDown, isRepeat, charsPtr) => {
-		const chars = charsPtr ? new CString(charsPtr).toString() : "";
+		const chars = ffiCStringToString(charsPtr);
 		electrobunEventEmitter.emit(`wgpu-key-${viewId}`, {
 			keyCode,
 			modifiers,
@@ -2804,11 +2822,16 @@ export const nativeText = {
 		if (!pixelsPtr) return null;
 		const width = dims[0]!;
 		const height = dims[1]!;
-		const data = new Uint8Array(
-			toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4).slice(0),
-		);
-		symbols.freeTextBitmap(pixelsPtr);
-		return { width, height, data };
+		try {
+			// Copy before releasing the native bitmap. Bun 1.4's worker-side FFI
+			// buffer does not consistently expose ArrayBuffer.prototype.slice.
+			const pixels = new Uint8Array(
+				toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4),
+			);
+			return { width, height, data: new Uint8Array(pixels) };
+		} finally {
+			symbols.freeTextBitmap(pixelsPtr);
+		}
 	},
 };
 
@@ -2909,7 +2932,7 @@ const windowKeyCallback = new JSCallback(
 
 const getMimeType = new JSCallback(
 	(filePath) => {
-		const _filePath = new CString(filePath).toString();
+		const _filePath = ffiCStringToString(filePath);
 		const mimeType = Bun.file(_filePath).type; // || "application/octet-stream";
 
 		// For this usecase we generally don't want the charset included in the mimetype
@@ -2947,7 +2970,7 @@ const globalShortcutHandlers = new Map<string, () => void>();
 if (native) {
 	const urlOpenCallback = new JSCallback(
 		(urlPtr) => {
-			const url = new CString(urlPtr).toString();
+			const url = ffiCStringToString(urlPtr);
 			const handler = electrobunEventEmitter.events.app.openUrl;
 			const event = handler({ url });
 			electrobunEventEmitter.emitEvent(event);
@@ -2984,7 +3007,7 @@ if (native) {
 
 	const globalShortcutCallback = new JSCallback(
 		(acceleratorPtr) => {
-			const accelerator = new CString(acceleratorPtr).toString();
+			const accelerator = ffiCStringToString(acceleratorPtr);
 			const handler = globalShortcutHandlers.get(accelerator);
 			if (handler) handler();
 		},
@@ -3355,9 +3378,8 @@ const webviewEventJSCallback = new JSCallback(
 		let detail = "";
 
 		try {
-			// Convert cstring pointers to actual strings
-			eventName = new CString(_eventName).toString();
-			detail = new CString(_detail).toString();
+			eventName = ffiCStringToString(_eventName);
+			detail = ffiCStringToString(_detail);
 		} catch (err) {
 			console.error("[webviewEventJSCallback] Error converting strings:", err);
 			console.error("[webviewEventJSCallback] Raw values:", {
@@ -3379,12 +3401,7 @@ const webviewEventJSCallback = new JSCallback(
 const hostBridgePostmessageHandler = new JSCallback(
 	(id, msg) => {
 		try {
-			const msgStr = new CString(msg);
-
-			if (!msgStr.length) {
-				return;
-			}
-			const rawMessage = msgStr.toString().trim();
+			const rawMessage = ffiCStringToString(msg).trim();
 			if (!rawMessage || (rawMessage[0] !== "{" && rawMessage[0] !== "[")) {
 				return;
 			}
@@ -3415,8 +3432,9 @@ const hostBridgePostmessageHandler = new JSCallback(
 // This is available on ALL webviews including sandboxed ones.
 // It cannot process RPC requests - only event emission.
 const eventBridgeHandler = new JSCallback(
-	(id: number, msg: number) => {
+	(id: number, msg: Pointer | null) => {
 		try {
+			if (!msg) return;
 			const rawMessage = readOwnedRuntimeCallbackPayload(msg).trim();
 			const event = parseWebviewEventBridgeMessage(id, rawMessage);
 			if (event) {
@@ -3427,7 +3445,8 @@ const eventBridgeHandler = new JSCallback(
 		}
 	},
 	{
-		args: [FFIType.u32, FFIType.cstring],
+		// Keep the owned allocation as a pointer so it can be released after use.
+		args: [FFIType.u32, FFIType.ptr],
 		returns: FFIType.void,
 		threadsafe: true,
 	},
@@ -3436,8 +3455,9 @@ const eventBridgeHandler = new JSCallback(
 // internalBridgeHandler: handles internal RPC (webview tags, drag regions, etc.)
 // This is only available on trusted (non-sandboxed) webviews.
 const internalBridgeHandler = new JSCallback(
-	(id: number, msg: number) => {
+	(id: number, msg: Pointer | null) => {
 		try {
+			if (!msg) return;
 			const rawMessage = readOwnedRuntimeCallbackPayload(msg);
 			const event = parseWebviewEventBridgeMessage(id, rawMessage.trim());
 			if (event) {
@@ -3490,7 +3510,8 @@ const internalBridgeHandler = new JSCallback(
 		}
 	},
 	{
-		args: [FFIType.u32, FFIType.cstring],
+		// Keep the owned allocation as a pointer so it can be released after use.
+		args: [FFIType.u32, FFIType.ptr],
 		returns: FFIType.void,
 		threadsafe: true,
 	},
@@ -3506,7 +3527,7 @@ const trayItemHandler = new JSCallback(
 		try {
 			// Note: Some invisible character that doesn't appear in .length
 			// is causing issues
-			const actionString = (new CString(action).toString() || "").trim();
+			const actionString = ffiCStringToString(action).trim();
 
 			// Use shared deserialization method
 			const { action: actualAction, data } = deserializeMenuAction(actionString);
@@ -3534,7 +3555,7 @@ const trayItemHandler = new JSCallback(
 
 const applicationMenuHandler = new JSCallback(
 	(id, action) => {
-		const actionString = new CString(action).toString();
+		const actionString = ffiCStringToString(action);
 
 		// Use shared deserialization method
 		const { action: actualAction, data } = deserializeMenuAction(actionString);
@@ -3557,7 +3578,7 @@ const applicationMenuHandler = new JSCallback(
 
 const contextMenuHandler = new JSCallback(
 	(_id, action) => {
-		const actionString = new CString(action).toString();
+		const actionString = ffiCStringToString(action);
 
 		// Use shared deserialization method
 		const { action: actualAction, data } = deserializeMenuAction(actionString);

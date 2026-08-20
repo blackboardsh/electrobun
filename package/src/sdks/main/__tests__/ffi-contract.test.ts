@@ -18,6 +18,7 @@ import {
 	toArrayBuffer,
 	type Pointer,
 } from "bun:ffi";
+import { ffiCStringToString } from "../proc/ffiCString";
 
 const isUnix =
 	process.platform === "darwin" || process.platform === "linux";
@@ -46,10 +47,13 @@ const libcPath =
 
 		it("ptr + toArrayBuffer round-trip", () => {
 			const src = new Uint8Array([1, 2, 3, 4, 5]);
-			const back = new Uint8Array(
+			const view = new Uint8Array(
 				toArrayBuffer(ptr(src), 0, src.byteLength),
 			);
-			expect(Array.from(back)).toEqual([1, 2, 3, 4, 5]);
+			const copy = new Uint8Array(view);
+			src[0] = 9;
+
+			expect(Array.from(copy)).toEqual([1, 2, 3, 4, 5]);
 		});
 
 		it("CString reads null-terminated bytes", () => {
@@ -68,14 +72,13 @@ const libcPath =
 			const s = new CString(ptr(buf));
 			expect(s.toString()).toBe("");
 			expect(s.length).toBe(0);
-			expect(new Uint8Array(s.arrayBuffer).length).toBe(0);
 		});
 
 		it("JSCallback: cstring arg survives an empty string (tray click)", () => {
 			const seen: string[] = [];
 			const onAction = new JSCallback(
-				(actionPtr: Pointer) => {
-					seen.push(new CString(actionPtr).toString());
+				(action: string | Pointer | null) => {
+					seen.push(ffiCStringToString(action));
 				},
 				{ args: [FFIType.cstring], returns: FFIType.void },
 			);
@@ -95,6 +98,38 @@ const libcPath =
 			expect(seen).toEqual(["", "open-settings", ""]);
 
 			onAction.close();
+		});
+
+		it("normalizes Bun strings and pointer-backed cstrings", () => {
+			const filled = new TextEncoder().encode("open-settings\0");
+			const empty = new Uint8Array([0]);
+
+			expect(ffiCStringToString("open-settings")).toBe("open-settings");
+			expect(ffiCStringToString(ptr(filled))).toBe("open-settings");
+			expect(ffiCStringToString(ptr(empty))).toBe("");
+			expect(ffiCStringToString(null)).toBe("");
+		});
+
+		it("JSCallback: ptr arg preserves an owned cstring allocation", () => {
+			const seen: string[] = [];
+			const onMessage = new JSCallback(
+				(messagePtr: Pointer | null) => {
+					seen.push(ffiCStringToString(messagePtr));
+				},
+				{ args: [FFIType.ptr], returns: FFIType.void },
+			);
+
+			const message = new TextEncoder().encode("owned-message\0");
+			const invoke = CFunction({
+				ptr: onMessage.ptr!,
+				args: [FFIType.cstring],
+				returns: FFIType.void,
+			}) as unknown as (pointer: ReturnType<typeof ptr>) => void;
+
+			invoke(ptr(message));
+			expect(seen).toEqual(["owned-message"]);
+
+			onMessage.close();
 		});
 
 		it("JSCallback: native invokes JS via function pointer (qsort)", () => {

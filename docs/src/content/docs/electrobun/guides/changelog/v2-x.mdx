@@ -17,9 +17,9 @@ large reconciliation of the 1.x issue and pull-request backlog.
   addition to the owned compatibility corpus.
 - Supports six main-process runtimes: Cottontail, Bun, Zig, Rust, Go, and Odin.
 
-Cottontail 0.2.3 is smaller than Bun 1.3.13 on every supported release target
-measured. These figures are extracted executable sizes, not compressed archive
-sizes.
+The original 2.0 size comparison used Cottontail 0.2.3 and Bun 1.3.13.
+Cottontail was smaller on every supported release target measured. These
+figures are extracted executable sizes, not compressed archive sizes.
 
 | Platform | Cottontail | Bun | Reduction |
 | --- | ---: | ---: | ---: |
@@ -67,7 +67,8 @@ sizes.
 - `electrobun/main` is the canonical, runtime-neutral main-process SDK
   namespace. `electrobun/bun` remains available as a deprecated alias.
 - Bun remains an explicit main-process option for applications that need to
-  retain the Bun runtime. Hutch still builds and packages those applications.
+  retain the Bun runtime. Electrobun 2.0 pins Bun 1.4.0 for those applications;
+  Hutch acquires and packages that exact runtime.
 
 ## Native main processes
 

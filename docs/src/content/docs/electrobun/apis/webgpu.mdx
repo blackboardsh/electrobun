@@ -249,7 +249,7 @@ range, and unmaps it:
 ```typescript context="webgpu-readback"
 await readbackBuffer.mapAsync();
 const mapped = readbackBuffer.getMappedRange();
-const result = new Uint8Array(mapped.slice(0));
+const result = new Uint8Array(new Uint8Array(mapped));
 readbackBuffer.unmap();
 ```
 

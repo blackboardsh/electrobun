@@ -323,8 +323,8 @@ test("rejects missing ABI and compiler-default metadata", () => {
 test("requires an exact default bun toolchain version", () => {
 	for (const version of [
 		undefined,
-		"1.3.13-01",
-		"^1.3.13",
+		"1.4.0-01",
+		"^1.4.0",
 		"latest",
 		"file:../bun",
 	]) {
@@ -345,7 +345,7 @@ test("requires an exact default bun toolchain version", () => {
 
 test("rejects manifests that still distribute a bun runtime", () => {
 	const withRuntimes = fixture();
-	withRuntimes.runtimes = { bun: { version: "1.3.13" } };
+	withRuntimes.runtimes = { bun: { version: "1.4.0" } };
 	const runtimesRoot = makeCore(withRuntimes);
 	try {
 		assert.throws(
