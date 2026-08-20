@@ -206,8 +206,11 @@ export function verifyReleaseToolchain(environment = process.env) {
 		);
 	}
 
+	// `hutch self update` advances the tested Hutch+Cottontail pair together;
+	// there is no separate cottontail update. The no-selector cottontail
+	// verbs report the launcher's paired release, which is the provenance
+	// claim this gate exists to check.
 	run("hutch", ["self", "update", "production"], repositoryRoot);
-	run("hutch", ["cottontail", "update", "production"], repositoryRoot);
 	assertEqual(
 		singleLine(run("hutch", ["self", "version"], repositoryRoot), "production Hutch version"),
 		expectedHutch,
@@ -216,10 +219,10 @@ export function verifyReleaseToolchain(environment = process.env) {
 	assertEqual(
 		singleLine(
 			run("hutch", ["cottontail", "version"], repositoryRoot),
-			"production Cottontail version",
+			"paired Cottontail version",
 		),
 		expectedCottontail,
-		"production Cottontail channel",
+		"paired Cottontail release",
 	);
 
 	const hutchExecutable = canonicalPath(
@@ -227,8 +230,8 @@ export function verifyReleaseToolchain(environment = process.env) {
 		"production Hutch path",
 	);
 	const cottontailExecutable = canonicalPath(
-		run("hutch", ["cottontail", "path", "production"], repositoryRoot),
-		"production Cottontail path",
+		run("hutch", ["cottontail", "path"], repositoryRoot),
+		"paired Cottontail path",
 	);
 	assertEqual(
 		singleLine(run(hutchExecutable, ["--version"], repositoryRoot), "Hutch executable version"),
