@@ -1,7 +1,7 @@
 // @hutch cli=0.23.0 cottontail=0.5.0
 export default {
 	electrobun: {
-		version: "2.0.1-beta.25",
+		version: "2.0.1-beta.26",
 	},
 	packageManager: "npm",
 	scripts: {
