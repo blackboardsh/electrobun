@@ -27,7 +27,7 @@ const { homedir, tmpdir } = require("node:os");
 const path = require("node:path");
 
 // Stamped by push-version.js from package/hutch.config.ts.
-const PAIRED_HUTCH_VERSION = "0.24.2";
+const PAIRED_HUTCH_VERSION = "0.24.3";
 const ELECTROBUN_VERSION = require("../package.json").version;
 
 const MINIMUM_DEFAULTS_HUTCH_VERSION = "0.22.0";
