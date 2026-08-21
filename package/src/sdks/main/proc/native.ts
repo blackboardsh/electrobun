@@ -3144,6 +3144,8 @@ export const Screen = {
 	 * Capture a rectangular region of the desktop as row-major RGBA pixels.
 	 * Coordinates and dimensions use Electrobun's logical screen coordinate
 	 * system; fractional origins are aligned down to the logical pixel grid.
+	 * On Wayland, the first call starts the desktop's monitor-sharing portal and
+	 * returns null until the user approves a monitor and its first frame arrives.
 	 * Returns null when capture is unavailable or the rectangle is invalid.
 	 */
 	captureRegion: (rectangle: Rectangle): Uint8Array | null => {

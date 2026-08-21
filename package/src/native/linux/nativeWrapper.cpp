@@ -71,6 +71,7 @@
 #include "../shared/cef_find_session.h"
 #include "../shared/linux_dpi.h"
 #include "../shared/linux_x11_geometry.h"
+#include "wayland_screen_capture.h"
 
 using namespace electrobun;
 
@@ -10509,6 +10510,7 @@ ELECTROBUN_EXPORT void stopEventLoop() {
     printf("[stopEventLoop] Initiating clean event loop exit\n");
 
     runOnMainThreadAsyncVoid([]() {
+        wayland_screen_capture::shutdown();
         if (g_cefInitialized.load()) {
             beginCEFShutdownOnMainThread();
         } else {
@@ -12016,20 +12018,33 @@ ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
 ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
-    return dispatch_sync_main([&]() -> const char* {
+    static thread_local std::string resultStorage;
+
+    resultStorage = dispatch_sync_main([&]() -> std::string {
+        if (wayland_screen_capture::isWaylandSession()) {
+            double portalX = 0;
+            double portalY = 0;
+            if (wayland_screen_capture::getCursorScreenPoint(
+                    &portalX, &portalY)) {
+                std::ostringstream result;
+                result << "{\"x\":" << portalX << ",\"y\":" << portalY << "}";
+                return result.str();
+            }
+        }
+
         GdkDisplay* display = gdk_display_get_default();
         if (!display) {
-            return strdup("{\"x\":0,\"y\":0}");
+            return "{\"x\":0,\"y\":0}";
         }
 
         GdkSeat* seat = gdk_display_get_default_seat(display);
         if (!seat) {
-            return strdup("{\"x\":0,\"y\":0}");
+            return "{\"x\":0,\"y\":0}";
         }
 
         GdkDevice* pointer = gdk_seat_get_pointer(seat);
         if (!pointer) {
-            return strdup("{\"x\":0,\"y\":0}");
+            return "{\"x\":0,\"y\":0}";
         }
 
         int x = 0;
@@ -12038,8 +12053,10 @@ ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
 
         std::ostringstream result;
         result << "{\"x\":" << x << ",\"y\":" << y << "}";
-        return strdup(result.str().c_str());
+        return result.str();
     });
+
+    return resultStorage.c_str();
 }
 
 ELECTROBUN_EXPORT bool captureScreenRegion(
@@ -12087,14 +12104,14 @@ ELECTROBUN_EXPORT bool captureScreenRegion(
     const int64_t requestedTop = static_cast<int64_t>(roundedY);
 
     return dispatch_sync_main([=]() -> bool {
-        const char* sessionType = g_getenv("XDG_SESSION_TYPE");
-        const char* waylandDisplay = g_getenv("WAYLAND_DISPLAY");
-        if ((sessionType && g_ascii_strcasecmp(sessionType, "wayland") == 0) ||
-            (waylandDisplay && *waylandDisplay != '\0')) {
-            // This process forces GDK's X11 backend, but an XWayland root
-            // drawable does not reliably contain native Wayland windows.
-            // Portal/PipeWire capture belongs in a future Wayland backend.
-            return false;
+        if (wayland_screen_capture::isWaylandSession()) {
+            return wayland_screen_capture::captureRegion(
+                static_cast<double>(requestedLeft),
+                static_cast<double>(requestedTop),
+                width,
+                height,
+                out_rgba,
+                out_len);
         }
 
         GdkDisplay* display = gdk_display_get_default();

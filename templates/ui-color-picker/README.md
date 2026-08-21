@@ -23,7 +23,11 @@ hutch run start
 Production packaging: `hutch run build`.
 
 Screen pixels are sampled through Electrobun's native `Screen.captureRegion()`
-API on macOS, Windows, and Linux/X11.
+API on macOS, Windows, Linux/X11, and Linux/Wayland. On Wayland, the first
+sample opens the desktop's monitor-sharing chooser; sampling starts as soon as
+the portal supplies its first PipeWire frame. Ubuntu/Debian systems need the
+PipeWire runtime library (`libpipewire-0.3-0`, or `libpipewire-0.3-0t64` on
+newer releases).
 
 **Permission:** reading screen pixels requires macOS Screen Recording
 permission. The app requests it at startup (system prompt via
@@ -34,7 +38,13 @@ attribute the permission to your terminal app rather than the dev bundle.
 
 ## Prototype limitations
 
-- Linux capture currently follows Electrobun's X11 backend. If native Wayland
-  support is added later, screen capture will need a portal/PipeWire backend.
+- Wayland capture currently shares one selected monitor. Regions outside that
+  monitor are unavailable until the app is restarted and another is selected.
+- Wayland live tracking uses compositor-owned PipeWire cursor metadata, so it
+  continues across native Wayland and XWayland surfaces. Passive global mouse
+  button state is not available, so the template replaces outside-click pick
+  mode with an explicit **freeze sample** button there.
+- After the first Wayland grant, monitor sharing remains active until the app
+  exits; the desktop's sharing indicator shows that state.
 - Drag the loupe (left panel) to move the window.
 - Keyboard mapping uses macOS virtual key codes.

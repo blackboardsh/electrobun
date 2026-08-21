@@ -34,13 +34,15 @@ export default {
 		"test:linux-dpi-native": "hutch scripts/test-linux-dpi-native.js",
 		"test:linux-x11-geometry-native":
 			"hutch scripts/test-linux-x11-geometry-native.js",
+		"test:wayland-screen-capture-frame-native":
+			"hutch scripts/test-wayland-screen-capture-frame-native.js",
 		"test:views-url-native": "hutch scripts/test-views-url-native.js",
 		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:installer-ui":
 			"node scripts/run-cottontail-test.js src/shared/windows-installer-progress.test.ts",
-		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:wayland-screen-capture-frame-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:native-symbol-contract":
 			"node scripts/run-cottontail-test.js src/shared/native-symbol-contract.test.ts",
 		"test:devkit-manifest":

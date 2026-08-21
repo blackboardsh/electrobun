@@ -176,13 +176,16 @@ On Windows PowerShell:
 - cmake
 - webkit2gtk and GTK development packages
 
-On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev`
+On Ubuntu/Debian based distros: `sudo apt install build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev libpipewire-0.3-dev librsvg2-dev`
 
 Linux applications also require the corresponding GTK 3, WebKitGTK 4.1,
 Ayatana AppIndicator, and librsvg runtime packages on end-user systems. See the
 [cross-platform development guide](./docs/src/content/docs/electrobun/guides/cross-platform-development.mdx#linux)
 for distro-specific install commands. The launcher reports the exact missing
 shared library when these dependencies are unavailable.
+Wayland screen-region capture additionally requires a working desktop portal,
+PipeWire, and the `libpipewire-0.3.so.0` runtime library (provided by
+`libpipewire-0.3-0`, or `libpipewire-0.3-0t64` on newer Ubuntu/Debian releases).
 
 ### First-time Setup
 

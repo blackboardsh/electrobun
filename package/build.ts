@@ -1765,7 +1765,7 @@ async function vendorCEF() {
 			await $`rm -f src/native/build/process_helper_mac.o src/native/build/process_helper_win.obj src/native/linux/build/process_helper_linux.o`;
 			await $`rm -f src/native/build/libNativeWrapper.dylib src/native/build/libNativeWrapper.so src/native/build/libNativeWrapper_cef.so`;
 			await $`rm -f src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj`;
-			await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o`;
+			await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o src/native/linux/build/wayland_screen_capture.o src/native/linux/build/wayland_pipewire_capture.o`;
 		}
 	} else if (existsSync(cefDir) && !existsSync(versionFile)) {
 		// CEF dir exists but no version file (legacy state) — force re-vendor
@@ -1777,7 +1777,7 @@ async function vendorCEF() {
 		await $`rm -f src/native/build/process_helper_mac.o src/native/build/process_helper_win.obj src/native/linux/build/process_helper_linux.o`;
 		await $`rm -f src/native/build/libNativeWrapper.dylib src/native/build/libNativeWrapper.so src/native/build/libNativeWrapper_cef.so`;
 		await $`rm -f src/native/win/build/libNativeWrapper.dll src/native/win/build/nativeWrapper.obj`;
-		await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o`;
+		await $`rm -f src/native/macos/build/nativeWrapper.o src/native/linux/build/nativeWrapper.o src/native/linux/build/wayland_screen_capture.o src/native/linux/build/wayland_pipewire_capture.o`;
 	}
 
 	if (OS === "macos") {
@@ -2138,6 +2138,7 @@ async function vendorLinuxDeps() {
 			"libgtk-3-dev",
 			"libwebkit2gtk-4.1-dev",
 			"libayatana-appindicator3-dev",
+			"libpipewire-0.3-dev",
 			"librsvg2-dev",
 			"fuse",
 			"libfuse2",
@@ -2405,6 +2406,8 @@ async function buildNative() {
 			let pkgConfigCflags = "";
 			let pkgConfigLibs = "";
 			let hasAppIndicator = false;
+			let pipewireCflags = "";
+			let hasWaylandScreenCapture = false;
 
 			try {
 				// Try to get flags for all packages
@@ -2438,6 +2441,18 @@ async function buildNative() {
 				}
 			}
 
+			try {
+				const cflagsResult =
+					await $`pkg-config --cflags libpipewire-0.3`.quiet();
+				pipewireCflags = cflagsResult.stdout.toString().trim();
+				hasWaylandScreenCapture = true;
+				console.log("Wayland screen capture enabled via PipeWire");
+			} catch {
+				console.warn(
+					"⚠️  Wayland screen capture disabled: PipeWire development headers not found",
+				);
+			}
+
 			// Compile the main wrapper with WebKitGTK, AppIndicator, and CEF headers
 			await $`mkdir -p src/native/linux/build`;
 			console.log(
@@ -2450,9 +2465,13 @@ async function buildNative() {
 				"-std=c++20",
 				"-fPIC",
 				...pkgConfigCflags.split(/\s+/).filter((f) => f),
+				...pipewireCflags.split(/\s+/).filter((f) => f),
 				`-I${cefInclude}`,
 				...(existsSync(wgpuIncludeDir) ? [`-I${wgpuIncludeDir}`] : []),
 				...(hasAppIndicator ? [] : ["-DNO_APPINDICATOR"]),
+				...(hasWaylandScreenCapture
+					? ["-DELECTROBUN_ENABLE_WAYLAND_SCREEN_CAPTURE"]
+					: []),
 			];
 			writeNativeCompileFlags("linux", compileFlags);
 			const compileCmd = [
@@ -2465,6 +2484,26 @@ async function buildNative() {
 			];
 
 			await $`${compileCmd}`;
+
+			const waylandCaptureCompileCmd = [
+				"g++",
+				"-c",
+				...compileFlags,
+				"-o",
+				"src/native/linux/build/wayland_screen_capture.o",
+				"src/native/linux/wayland_screen_capture.cpp",
+			];
+			await $`${waylandCaptureCompileCmd}`;
+
+			const waylandPipeWireCaptureCompileCmd = [
+				"g++",
+				"-c",
+				...compileFlags,
+				"-o",
+				"src/native/linux/build/wayland_pipewire_capture.o",
+				"src/native/linux/wayland_pipewire_capture.cpp",
+			];
+			await $`${waylandPipeWireCaptureCompileCmd}`;
 
 			// Link with WebKitGTK, AppIndicator, and optionally CEF libraries using weak linking
 			await $`mkdir -p src/native/build`;
@@ -2479,6 +2518,8 @@ async function buildNative() {
 				"-o",
 				"src/native/build/libNativeWrapper.so",
 				"src/native/linux/build/nativeWrapper.o",
+				"src/native/linux/build/wayland_screen_capture.o",
+				"src/native/linux/build/wayland_pipewire_capture.o",
 				asarLib,
 				...pkgConfigLibs.split(/\s+/).filter((f) => f),
 				"-ldl",
@@ -2499,6 +2540,8 @@ async function buildNative() {
 					"-o",
 					"src/native/build/libNativeWrapper_cef.so",
 					"src/native/linux/build/nativeWrapper.o",
+					"src/native/linux/build/wayland_screen_capture.o",
+					"src/native/linux/build/wayland_pipewire_capture.o",
 					"src/native/linux/build/cef_loader.o",
 					asarLib,
 					...pkgConfigLibs.split(/\s+/).filter((f) => f),

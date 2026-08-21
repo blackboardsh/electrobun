@@ -13797,6 +13797,8 @@ extern "C" ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
 extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
+    static thread_local std::string resultStorage;
+
     POINT cursorPos;
     if (GetCursorPos(&cursorPos)) {
         const HMONITOR monitor = MonitorFromPoint(
@@ -13809,10 +13811,12 @@ extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
         std::ostringstream json;
         json << "{\"x\":" << logicalCursor.x
              << ",\"y\":" << logicalCursor.y << "}";
-        return _strdup(json.str().c_str());
+        resultStorage = json.str();
+    } else {
+        resultStorage = "{\"x\":0,\"y\":0}";
     }
 
-    return _strdup("{\"x\":0,\"y\":0}");
+    return resultStorage.c_str();
 }
 
 extern "C" ELECTROBUN_EXPORT bool captureScreenRegion(

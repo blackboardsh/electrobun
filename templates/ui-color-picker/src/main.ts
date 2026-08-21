@@ -48,12 +48,21 @@ const theme = {
 
 const GRID = 11; // odd, so the cursor pixel is the center cell
 const CENTER = Math.floor((GRID * GRID) / 2);
+const CURSOR_POLL_INTERVAL_MS = 16; // near-60 Hz while the pointer is moving
+const POST_MOTION_SAMPLE_BURST_MS = 70;
+const STATIONARY_SAMPLE_INTERVAL_MS = 100;
+const IS_WAYLAND_SESSION =
+	process.platform === "linux" &&
+	(process.env.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ||
+		Boolean(process.env.WAYLAND_DISPLAY));
 
 const [cells, setCells] = signal<Uint32Array>(
 	new Uint32Array(GRID * GRID).fill(0x101010ff),
 	{ equals: false },
 );
-// Sampling state machine, driven by the mode button:
+// Sampling state machine, driven by the mode button. Wayland cannot observe
+// passive global mouse-button state, so its second button freezes immediately
+// instead of arming the outside-click flow:
 //   live  -> click button   -> armed ("pick mode")
 //   armed -> click anywhere outside the window -> frozen
 //   armed -> click button / Escape -> live
@@ -221,7 +230,9 @@ function ZoomGrid() {
 				ui.text(
 					live(() =>
 						!hasScreenAccess() ? "no access - click here"
-						: !captureAvailable() ? "capture unavailable"
+						: !captureAvailable() ?
+								IS_WAYLAND_SESSION ? "share a monitor..."
+								: "capture unavailable"
 						: mode(),
 					),
 					{ size: 9, color: theme.textFaint },
@@ -372,11 +383,15 @@ function ModeButtons() {
 			() => setMode("live"),
 		);
 		StateButton(
-			() => (mode() === "armed" ? "click a pixel..." : "pick mode"),
-			() => mode() === "armed",
-			MODE_COLOR.armed,
-			"#3d2f56",
-			() => setMode("armed"),
+			() =>
+				IS_WAYLAND_SESSION ? "freeze sample"
+				: mode() === "armed" ? "click a pixel..."
+				: "pick mode",
+			() =>
+				mode() === (IS_WAYLAND_SESSION ? "frozen" : "armed"),
+			IS_WAYLAND_SESSION ? MODE_COLOR.frozen : MODE_COLOR.armed,
+			IS_WAYLAND_SESSION ? "#403820" : "#3d2f56",
+			() => setMode(IS_WAYLAND_SESSION ? "frozen" : "armed"),
 		);
 	});
 }
@@ -418,6 +433,7 @@ function ColorPanel() {
 
 const WIDTH = 512;
 const HEIGHT = 336;
+let pickerVisible = true;
 
 const uiWindow = await createUIWindow(
 	{
@@ -452,23 +468,51 @@ const uiWindow = await createUIWindow(
 				setMode(inert(mode) === "frozen" ? "live" : "frozen");
 			} else if (e.keyCode === Key.Escape) {
 				if (inert(mode) === "armed") setMode("live");
-				else uiWindow.window.hide();
+				else setPickerVisible(false);
 			}
 		});
 	},
 );
 
+function setPickerVisible(visible: boolean) {
+	if (visible === pickerVisible) return;
+	pickerVisible = visible;
+	if (visible) uiWindow.window.show();
+	else uiWindow.window.hide();
+}
+
 const tray = new Tray({ title: "◐" });
 tray.on("tray-clicked", () => {
-	if (uiWindow.window.isVisible()) uiWindow.window.hide();
-	else uiWindow.window.show();
+	setPickerVisible(!pickerVisible);
 });
 
-// Sampling loop: idle-cheap, skipped over our own window and while frozen.
+// Poll cursor motion near 60 Hz so the sample tracks the pointer. A short tail
+// after motion consumes asynchronously refreshed frames (notably PipeWire),
+// then capture settles to 10 Hz while stationary. Hidden, frozen, and self-hover
+// states skip the work entirely.
 let warnedCaptureUnavailable = false;
+let lastCursorX = Number.NaN;
+let lastCursorY = Number.NaN;
+let lastCursorMovedAt = Number.NEGATIVE_INFINITY;
+let lastSampleAttemptAt = Number.NEGATIVE_INFINITY;
 setInterval(() => {
-	if (!uiWindow.window.isVisible() || mode() === "frozen") return;
+	if (!pickerVisible || mode() === "frozen") return;
 	const cursor = Screen.getCursorScreenPoint();
+	const cursorMoved = cursor.x !== lastCursorX || cursor.y !== lastCursorY;
+	lastCursorX = cursor.x;
+	lastCursorY = cursor.y;
+
+	const now = performance.now();
+	if (cursorMoved) lastCursorMovedAt = now;
+	const motionBurstActive =
+		now - lastCursorMovedAt < POST_MOTION_SAMPLE_BURST_MS;
+	if (
+		!motionBurstActive &&
+		now - lastSampleAttemptAt < STATIONARY_SAMPLE_INTERVAL_MS
+	) {
+		return;
+	}
+
 	const frame = uiWindow.window.getFrame();
 	const overSelf =
 		cursor.x >= frame.x &&
@@ -476,37 +520,43 @@ setInterval(() => {
 		cursor.x < frame.x + frame.width &&
 		cursor.y < frame.y + frame.height;
 	if (overSelf) return;
+	lastSampleAttemptAt = now;
 	const captured = sampleAround(cursor.x, cursor.y);
 	setCaptureAvailable(captured);
 	if (!captured && !warnedCaptureUnavailable) {
 		console.warn(
-			"[ui-color-picker] Screen pixel capture is unavailable on the current display.",
+			IS_WAYLAND_SESSION ?
+				"[ui-color-picker] Waiting for Wayland monitor sharing and the first frame."
+			: "[ui-color-picker] Screen pixel capture is unavailable on the current display.",
 		);
 	}
 	warnedCaptureUnavailable = !captured;
-}, 150);
+}, CURSOR_POLL_INTERVAL_MS);
 
 // Pick-mode click watcher: fast edge-detect poll while armed; a press
-// outside our window freezes.
-let pickPrevDown = false;
-setInterval(() => {
-	if (mode() !== "armed") {
-		pickPrevDown = false;
-		return;
-	}
-	const down = (Number(Screen.getMouseButtons()) & 1) === 1;
-	if (down && !pickPrevDown) {
-		const cursor = Screen.getCursorScreenPoint();
-		const frame = uiWindow.window.getFrame();
-		const inside =
-			cursor.x >= frame.x &&
-			cursor.y >= frame.y &&
-			cursor.x < frame.x + frame.width &&
-			cursor.y < frame.y + frame.height;
-		if (!inside) setMode("frozen");
-	}
-	pickPrevDown = down;
-}, 30);
+// outside our window freezes. Wayland deliberately uses the immediate freeze
+// button because passive global button observation is compositor-restricted.
+if (!IS_WAYLAND_SESSION) {
+	let pickPrevDown = false;
+	setInterval(() => {
+		if (mode() !== "armed") {
+			pickPrevDown = false;
+			return;
+		}
+		const down = (Number(Screen.getMouseButtons()) & 1) === 1;
+		if (down && !pickPrevDown) {
+			const cursor = Screen.getCursorScreenPoint();
+			const frame = uiWindow.window.getFrame();
+			const inside =
+				cursor.x >= frame.x &&
+				cursor.y >= frame.y &&
+				cursor.x < frame.x + frame.width &&
+				cursor.y < frame.y + frame.height;
+			if (!inside) setMode("frozen");
+		}
+		pickPrevDown = down;
+	}, 30);
+}
 
 // Ask for Screen Recording permission properly: shows the system prompt the
 // first time this app identity runs. After granting in System Settings the

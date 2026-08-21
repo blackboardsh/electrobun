@@ -9257,6 +9257,8 @@ extern "C" const char* getPrimaryDisplay(void) {
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
 extern "C" const char* getCursorScreenPoint(void) {
+    static thread_local std::string resultStorage;
+
     @autoreleasepool {
         NSPoint mouseLocation = [NSEvent mouseLocation];
 
@@ -9272,12 +9274,15 @@ extern "C" const char* getCursorScreenPoint(void) {
         NSError *error = nil;
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:point options:0 error:&error];
         if (error) {
-            return strdup("{\"x\":0,\"y\":0}");
+            resultStorage = "{\"x\":0,\"y\":0}";
+        } else {
+            NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            const char *jsonCString = [jsonString UTF8String];
+            resultStorage = jsonCString ? jsonCString : "{\"x\":0,\"y\":0}";
         }
-
-        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-        return strdup([jsonString UTF8String]);
     }
+
+    return resultStorage.c_str();
 }
 
 // Capture a logical-point screen region as tightly packed, top-to-bottom RGBA.
