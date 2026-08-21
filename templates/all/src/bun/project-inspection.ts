@@ -17,8 +17,8 @@ export function configuredElectrobunVersion(source: string): string | null {
 		const version = PRODUCT_VERSION_PATTERN.exec(block)?.[2];
 		if (version) return version;
 	}
-	// Any Electrobun product block violates the floating template contract,
-	// even when its version is malformed, ambiguous, reordered, or dynamic.
+	// Preserve a non-null marker for malformed, ambiguous, reordered, or dynamic
+	// product configuration so release identity checks fail closed.
 	return "configured (version is not one exact string)";
 }
 
@@ -102,7 +102,8 @@ export function inspectTemplateProject(directory: string): ProjectInspection {
 		productVersion = configuredElectrobunVersion(hutchConfig);
 		hasInstallTask = hutchConfigDefinesScript(hutchConfig, "install");
 	} catch {
-		// The orchestrator reports a missing pin; install remains explicit.
+		// A checked-in local template may be unpinned; published child templates
+		// are validated against the selected catalog by the orchestrator.
 	}
 
 	return {

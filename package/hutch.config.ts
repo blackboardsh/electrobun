@@ -10,8 +10,10 @@ export default {
 		"build:local": ["node", "scripts/build-local.js"],
 		"build:release": "hutch build.ts --release",
 		dev: ["hutch", "scripts/dev.ts"],
+		"dev:template": ["hutch", "scripts/dev-template.ts"],
 		"dev:matrix": ["hutch", "scripts/dev-matrix.ts"],
-		"dev:test": ["hutch", "scripts/dev.test.ts"],
+		"dev:test":
+			"hutch scripts/dev.test.ts && hutch scripts/dev-template.test.ts",
 		"preview:installer-ui": "node scripts/preview-installer-ui.mjs",
 		"preview:installer-ui:error":
 			"node scripts/preview-installer-ui.mjs --error",
@@ -21,7 +23,7 @@ export default {
 		"build:docs:release": "cd ../docs && hutch run build",
 		typecheck:
 			"hutch src/preload/build.ts && node node_modules/typescript/bin/tsc --noEmit",
-		"check:release": "hutch typecheck && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:updater-unit && hutch test:npm-bootstrap && hutch test:release-notes",
+		"check:release": "hutch typecheck && hutch dev:test && hutch test:native-symbol-contract && hutch test:devkit-manifest && hutch test:version-bump && hutch test:templates && hutch test:odin-templates && hutch test:template-publisher && hutch test:signing && hutch test:deployment-target && hutch test:linux-abi && hutch test:installer-ui && hutch test:updater-unit && hutch test:npm-bootstrap && hutch test:release-notes",
 		"pin:latest":
 			"hutch self update && cd .. && hutch self pin --recursive && hutch cottontail pin --recursive && node package/scripts/sync-release-toolchain-pins.mjs",
 		"push:beta": "hutch check:release && node scripts/push-version.js beta",

@@ -132,6 +132,7 @@ type FakeHarness = {
 	commands: CommandSpec[];
 	processes: Array<{ spec: CommandSpec; process: FakeProcess }>;
 	materialized: Set<string>;
+	configuredVersions: Map<string, string | null>;
 	projected: Set<string>;
 	projectedVersions: Map<string, string>;
 	ensured: string[];
@@ -143,7 +144,7 @@ function fakeHarness(
 		failFirstInitFor?: string;
 		omitRunMarkerFor?: string;
 		enableTimeouts?: boolean;
-		configuredVersion?: string;
+		configuredVersion?: string | null;
 		projectedVersion?: string;
 		omitProjectionFor?: string;
 		channel?: CatalogChannel;
@@ -156,6 +157,7 @@ function fakeHarness(
 	const commands: CommandSpec[] = [];
 	const processes: Array<{ spec: CommandSpec; process: FakeProcess }> = [];
 	const materialized = new Set<string>();
+	const configuredVersions = new Map<string, string | null>();
 	const projected = new Set<string>();
 	const projectedVersions = new Map<string, string>();
 	const ensured: string[] = [];
@@ -177,6 +179,7 @@ function fakeHarness(
 		removeDirectory(path) {
 			removed.push(path);
 			materialized.delete(path);
+			configuredVersions.delete(path);
 			projected.delete(path);
 			projectedVersions.delete(path);
 		},
@@ -185,13 +188,18 @@ function fakeHarness(
 		},
 		inspectProject(path) {
 			const id = path.split(/[\\/]/).at(-1)!;
+			const configuredVersion = configuredVersions.has(path)
+				? configuredVersions.get(path)!
+				: options.configuredVersion === undefined
+					? catalogVersion
+					: options.configuredVersion;
 			const projectedVersion =
 				projectedVersions.get(path) ??
 				options.projectedVersion ??
 				catalogVersion;
 			return {
 				hasInstallTask: id === "install-task",
-				configuredElectrobunVersion: options.configuredVersion ?? null,
+				configuredElectrobunVersion: configuredVersion,
 				projectedElectrobunVersion: projected.has(path)
 					? projectedVersion
 					: null,
@@ -214,6 +222,12 @@ function fakeHarness(
 						}
 						const directory = join(spec.cwd, spec.templateId);
 						materialized.add(directory);
+						configuredVersions.set(
+							directory,
+							options.configuredVersion === undefined
+								? catalogVersion
+								: options.configuredVersion,
+						);
 						projectedVersions.set(
 							directory,
 							options.projectedVersion ?? catalogVersion,
@@ -270,6 +284,7 @@ function fakeHarness(
 		commands,
 		processes,
 		materialized,
+		configuredVersions,
 		projected,
 		projectedVersions,
 		ensured,
@@ -489,20 +504,20 @@ describe("Template QA catalog and readiness contracts", () => {
 		}
 	});
 
-	test("selects a freshly published floating all template from its projection", () => {
+	test("selects local unpinned and published pinned all templates from matching projections", () => {
 		const root = mkdtempSync(join(tmpdir(), "template qa inspection "));
 		const devkit = join(root, ".hutch", "devkit");
 		try {
 			mkdirSync(devkit, { recursive: true });
 			expect(existsSync(join(root, "package.json"))).toBe(false);
-			const publishedHutchConfig = readFileSync(
+			const sourceHutchConfig = readFileSync(
 				new URL("./all/hutch.config.ts", import.meta.url),
 				"utf8",
 			);
-			expect(publishedHutchConfig).not.toMatch(
+			expect(sourceHutchConfig).not.toMatch(
 				/\belectrobun\s*:\s*\{\s*version\s*:/s,
 			);
-			writeFileSync(join(root, "hutch.config.ts"), publishedHutchConfig);
+			writeFileSync(join(root, "hutch.config.ts"), sourceHutchConfig);
 			writeFileSync(
 				join(devkit, "projection.json"),
 				JSON.stringify({
@@ -528,6 +543,27 @@ describe("Template QA catalog and readiness contracts", () => {
 				channel: "beta",
 			});
 
+			const publishedHutchConfig = sourceHutchConfig.replace(
+				"export default {",
+				'export default {\n\telectrobun: { version: "2.0.0-beta.7" },',
+			);
+			writeFileSync(join(root, "hutch.config.ts"), publishedHutchConfig);
+			expect(selectedTemplateQaRelease(inspectTemplateProject(root))).toEqual({
+				version: "2.0.0-beta.7",
+				channel: "beta",
+			});
+
+			writeFileSync(
+				join(root, "hutch.config.ts"),
+				publishedHutchConfig.replace("2.0.0-beta.7", "2.0.0-beta.8"),
+			);
+			expect(() =>
+				selectedTemplateQaRelease(inspectTemplateProject(root)),
+			).toThrow(
+				/hutch\.config\.ts selects Electrobun 2\.0\.0-beta\.8.*projection selects 2\.0\.0-beta\.7/,
+			);
+
+			writeFileSync(join(root, "hutch.config.ts"), sourceHutchConfig);
 			writeFileSync(
 				join(devkit, "package.json"),
 				JSON.stringify({ name: "electrobun", version: "2.0.0-beta.8" }),
@@ -610,13 +646,17 @@ describe("Template QA orchestration", () => {
 		expect(warning?.stream).toBe("stderr");
 	});
 
-	test("installs into flat template directories and reinstalls stale projects", async () => {
+	test("installs into flat directories and reinstalls stale pins or projections", async () => {
 		const harness = fakeHarness();
 		const root = "/tmp/template qa";
 		const staleDirectory = join(root, "templates", "install-task");
+		const stalePinDirectory = join(root, "templates", "no-install-task");
 		harness.materialized.add(staleDirectory);
 		harness.projected.add(staleDirectory);
 		harness.projectedVersions.set(staleDirectory, "2.0.0-beta.6");
+		harness.materialized.add(stalePinDirectory);
+		harness.projected.add(stalePinDirectory);
+		harness.configuredVersions.set(stalePinDirectory, "2.0.0-beta.6");
 
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: root,
@@ -635,7 +675,7 @@ describe("Template QA orchestration", () => {
 				expect(command.cwd).toBe(join(root, "templates", command.templateId));
 			}
 		}
-		expect(harness.removed).toEqual([staleDirectory]);
+		expect(harness.removed).toEqual([staleDirectory, stalePinDirectory]);
 		expect(
 			harness.commands
 				.filter(({ kind }) => kind === "init")
@@ -818,7 +858,7 @@ describe("Template QA orchestration", () => {
 		expect(noInstallRun?.process.terminated).toBe(true);
 	});
 
-	test("refuses a child whose published floating config gained a product pin", async () => {
+	test("refuses a child pinned to a different release", async () => {
 		const harness = fakeHarness({ configuredVersion: "2.0.0-beta.8" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",
@@ -831,13 +871,32 @@ describe("Template QA orchestration", () => {
 		const snapshot = orchestrator.getSnapshot();
 		expect(snapshot.templates.every(({ status }) => status === "failed")).toBe(true);
 		expect(snapshot.templates[0]?.lastError).toMatch(
-			/published floating template.*omit electrobun\.version.*2\.0\.0-beta\.8/,
+			/hutch\.config\.ts to pin Electrobun 2\.0\.0-beta\.7.*2\.0\.0-beta\.8/,
 		);
 		expect(harness.commands.some(({ kind }) => kind === "install")).toBe(false);
 		expect(harness.commands.some(({ kind }) => kind === "run")).toBe(false);
 	});
 
-	test("refuses a floating child projected to a different release", async () => {
+	test("refuses a published child without an exact product pin", async () => {
+		const harness = fakeHarness({ configuredVersion: null });
+		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
+			projectRoot: "/tmp/template qa",
+			selectedVersion: "2.0.0-beta.7",
+			readinessTimeoutMs: 1_000,
+			settleMs: 0,
+		});
+
+		await orchestrator.startAll();
+		const snapshot = orchestrator.getSnapshot();
+		expect(snapshot.templates.every(({ status }) => status === "failed")).toBe(true);
+		expect(snapshot.templates[0]?.lastError).toMatch(
+			/hutch\.config\.ts to pin Electrobun 2\.0\.0-beta\.7.*no exact electrobun\.version/,
+		);
+		expect(harness.commands.some(({ kind }) => kind === "install")).toBe(false);
+		expect(harness.commands.some(({ kind }) => kind === "run")).toBe(false);
+	});
+
+	test("refuses a pinned child projected to a different release", async () => {
 		const harness = fakeHarness({ projectedVersion: "2.0.0-beta.8" });
 		const orchestrator = new TemplateQaOrchestrator(harness.runtime, {
 			projectRoot: "/tmp/template qa",

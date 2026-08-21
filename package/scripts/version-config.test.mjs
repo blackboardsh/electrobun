@@ -14,7 +14,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
 	createRustSdkVersionUpdates,
-	assertTemplatesFloat,
+	assertTemplateSourcesUnpinned,
 	parseRepositoryPragmaPins,
 	stampNpmBootstrapPairedVersions,
 	updateElectrobunCargoLockVersion,
@@ -227,11 +227,11 @@ test("Rust release bump plan is limited to the SDK and its two lockfiles", () =>
 	}
 });
 
-test("release bumps require every template to float", () => {
+test("release bumps require every repository template source to remain unpinned", () => {
 	const templatesRoot = fileURLToPath(
 		new URL("../../templates/", import.meta.url),
 	);
-	assertTemplatesFloat(templatesRoot);
+	assertTemplateSourcesUnpinned(templatesRoot);
 	assert.throws(() => {
 		const scratch = mkdtempSync(join(tmpdir(), "template-float-"));
 		try {
@@ -240,11 +240,11 @@ test("release bumps require every template to float", () => {
 				join(scratch, "pinned", "hutch.config.ts"),
 				"// @hutch cli=0.7.3 cottontail=0.4.4\nexport default {};\n",
 			);
-			assertTemplatesFloat(scratch);
+			assertTemplateSourcesUnpinned(scratch);
 		} finally {
 			rmSync(scratch, { recursive: true, force: true });
 		}
-	}, /must not carry a \/\/ @hutch pragma/);
+	}, /repository source must not carry a \/\/ @hutch pragma/);
 	assert.throws(() => {
 		const scratch = mkdtempSync(join(tmpdir(), "template-product-pin-"));
 		try {
@@ -253,11 +253,11 @@ test("release bumps require every template to float", () => {
 				join(scratch, "pinned", "hutch.config.ts"),
 				'export default { "electrobun": { note: true, "version": "2.0.0" } };\n',
 			);
-			assertTemplatesFloat(scratch);
+			assertTemplateSourcesUnpinned(scratch);
 		} finally {
 			rmSync(scratch, { recursive: true, force: true });
 		}
-	}, /must not pin electrobun\.version/);
+	}, /repository source must not pin electrobun\.version/);
 });
 
 test("the npm bootstrap paired versions stamp from the repository pragma", () => {
@@ -316,7 +316,7 @@ test("checked-in package, lock, Kitchen, and template product identities agree",
 	);
 	assert.doesNotMatch(kitchenSource, /\belectrobun\s*:\s*\{/);
 
-	assertTemplatesFloat(join(repositoryRoot, "templates"));
+		assertTemplateSourcesUnpinned(join(repositoryRoot, "templates"));
 	assert.equal(npmBootstrapManifest.optionalDependencies, undefined);
 
 	for (const update of createRustSdkVersionUpdates(repositoryRoot, version)) {
@@ -423,7 +423,7 @@ test("push:beta dry semantics produce 2.0.1-beta.0 from 2.0.0", () => {
 			).version,
 			version,
 		);
-		assertTemplatesFloat(join(repositoryRoot, "templates"));
+		assertTemplateSourcesUnpinned(join(repositoryRoot, "templates"));
 		assert.equal(createRustSdkVersionUpdates(repositoryRoot, version).length, 3);
 	} finally {
 		rmSync(temporaryRoot, { recursive: true, force: true });

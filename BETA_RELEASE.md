@@ -51,8 +51,8 @@ The single release workflow then:
    layout, downloads its paired Hutch from that version's public GitHub
    Release, and proves the warm cache works offline; and
 5. only after that acceptance matrix passes, publishes the Kitchen artifacts
-   to R2, then advances the matching beta
-   template catalog.
+   to R2, stamps the exact release version into each staged template's
+   `hutch.config.ts`, and then advances the matching beta template catalog.
 
 Stable tags use the same path and publish the npm package under `latest` plus
 the stable template catalog. The npm package remains only a small command that

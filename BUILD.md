@@ -72,6 +72,9 @@ hutch build.ts
 # Development build with the kitchen sink test app
 hutch dev
 
+# Build Electrobun and run one repository template against package/dist
+hutch dev:template hello-world
+
 # Release build
 hutch build.ts --release
 
@@ -82,6 +85,12 @@ hutch build.ts --ci
 From `package/`, `hutch dev` builds `package/dist` and launches Kitchen with
 that local Electrobun devkit. Running `hutch dev` from `kitchen/` uses its
 published version pin instead.
+
+`hutch dev:template <template-name>` applies the same local-devkit workflow to
+one source template: it builds `package/dist`, installs the template's configured
+dependencies, and launches its `dev` task with the local Electrobun version and
+bytes. Release publication leaves the repository source unpinned but adds the
+exact release version to the staged template archive.
 
 ## Hutch and Cottontail
 

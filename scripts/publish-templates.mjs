@@ -15,6 +15,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { runInNewContext } from "node:vm";
 import { parseStrictSemVer } from "../package/src/shared/strict-semver.js";
 
 export const TEMPLATE_SCHEMA = 1;
@@ -78,20 +79,104 @@ export function parseHutchPragma(source) {
 	return { hutch: values.cli, cottontail: values.cottontail };
 }
 
-// Templates float: a fresh install pairs with the user's toolchain and the
-// current release channel, and a regression in a new release shows up in the
-// templates first. Pins are for applications, not demos.
-export function assertFloatingTemplateConfig(templateId, source) {
+// Repository templates deliberately carry neither release-toolchain metadata
+// nor a product pin. Local development supplies the exact unpublished devkit
+// out of band; publication turns this canonical source form into a standalone,
+// exact-pinned project only in the staging directory.
+export function assertRepositoryTemplateConfig(templateId, source) {
 	if (/^\/\/\s*@hutch\b/m.test(source)) {
 		fail(
-			`${templateId} hutch.config.ts must not carry a // @hutch pragma; templates float`,
+			`${templateId} repository hutch.config.ts must not carry a // @hutch pragma`,
 		);
 	}
 	if (electrobunProductConfigPattern.test(source)) {
 		fail(
-			`${templateId} hutch.config.ts must not pin electrobun.version; templates float`,
+			`${templateId} repository hutch.config.ts must not select electrobun; publication adds the release pin`,
 		);
 	}
+	const config = evaluateCanonicalTemplateConfig(templateId, source);
+	if (propertyExistsWithoutReading(config, "electrobun")) {
+		fail(
+			`${templateId} repository hutch.config.ts must not select electrobun; publication adds the release pin`,
+		);
+	}
+}
+
+function evaluateCanonicalTemplateConfig(templateId, source) {
+	// Keep the supported source shape intentionally narrow. This is a release
+	// transform, so an unfamiliar or ambiguous config must stop publication
+	// rather than receive a best-effort textual rewrite.
+	const exports = [...source.matchAll(/^export default \{(\r?\n)/gm)];
+	if (exports.length !== 1 || exports[0].index !== 0) {
+		fail(
+			`${templateId} repository hutch.config.ts must begin with exactly one top-level "export default {" line; found ${exports.length}`,
+		);
+	}
+
+	const newline = exports[0][1];
+	if (!source.endsWith(`};${newline}`)) {
+		fail(
+			`${templateId} repository hutch.config.ts must end with a top-level "};" line`,
+		);
+	}
+
+	const expression = source.slice(
+		"export default ".length,
+		-(`;${newline}`).length,
+	);
+	let config;
+	try {
+		config = runInNewContext(`(${expression})`, Object.create(null), {
+			timeout: 1_000,
+		});
+	} catch (error) {
+		fail(
+			`${templateId} repository hutch.config.ts must be a self-contained object literal: ${error instanceof Error ? error.message : String(error)}`,
+		);
+	}
+	if (config === null || typeof config !== "object" || Array.isArray(config)) {
+		fail(`${templateId} repository hutch.config.ts default export must be an object`);
+	}
+	return config;
+}
+
+function propertyExistsWithoutReading(value, key) {
+	let current = value;
+	while (current !== null) {
+		if (Object.getOwnPropertyDescriptor(current, key)) return true;
+		current = Object.getPrototypeOf(current);
+	}
+	return false;
+}
+
+export function pinPublishedTemplateConfig(templateId, source, version) {
+	exactSemVer(version, `${templateId} published Electrobun version`);
+	assertRepositoryTemplateConfig(templateId, source);
+
+	const newline = source.startsWith("export default {\r\n") ? "\r\n" : "\n";
+	const insertion = [
+		"\telectrobun: {",
+		`\t\tversion: ${JSON.stringify(version)},`,
+		"\t},",
+	].join(newline);
+	const closing = `};${newline}`;
+	const pinned = `${source.slice(0, -closing.length)}${insertion}${newline}${closing}`;
+	const config = evaluateCanonicalTemplateConfig(templateId, pinned);
+	const descriptor = Object.getOwnPropertyDescriptor(config, "electrobun");
+	if (
+		!descriptor ||
+		!("value" in descriptor) ||
+		descriptor.value === null ||
+		typeof descriptor.value !== "object" ||
+		Array.isArray(descriptor.value) ||
+		Object.keys(descriptor.value).length !== 1 ||
+		descriptor.value.version !== version
+	) {
+		fail(
+			`${templateId} published hutch.config.ts does not resolve to the exact Electrobun version ${JSON.stringify(version)}`,
+		);
+	}
+	return pinned;
 }
 
 function sha256(value) {
@@ -209,7 +294,11 @@ function stageTemplate({ templateId, version, stageRoot, archiveRoot }) {
 
 	const hutchConfigPath = join(destination, "hutch.config.ts");
 	if (!existsSync(hutchConfigPath)) fail(`${templateId} is missing hutch.config.ts`);
-	assertFloatingTemplateConfig(templateId, readFileSync(hutchConfigPath, "utf8"));
+	const hutchSource = readFileSync(hutchConfigPath, "utf8");
+	writeFileSync(
+		hutchConfigPath,
+		pinPublishedTemplateConfig(templateId, hutchSource, version),
+	);
 
 	const archivePath = join(archiveRoot, `${templateId}.tar.gz`);
 	createTemplateArchive(templateId, stageRoot, archivePath);

@@ -111,7 +111,11 @@ function lockfileSelectionIssues(
 function collectTemplateTextFiles(directory: string): string[] {
 	const files: string[] = [];
 	for (const entry of readdirSync(directory, { withFileTypes: true })) {
-		if (["build", "dist", "node_modules", "vendors"].includes(entry.name)) {
+		if (
+			[".hutch", "build", "dist", "node_modules", "vendors"].includes(
+				entry.name,
+			)
+		) {
 			continue;
 		}
 		const path = join(directory, entry.name);
@@ -252,8 +256,8 @@ describe("Electrobun template package boundaries", () => {
 				continue;
 			}
 			const hutch = readFileSync(hutchPath, "utf8");
-			// Templates float: a fresh install pairs with the user's toolchain
-			// and the current release channel. Pins are for applications.
+			// Repository templates are local-development inputs. Publication
+			// stamps the exact product version into the staged archive copy.
 			if (pragmaPins(hutch) !== "") {
 				invalidConfigs.push(`${templateName}: templates must not carry a // @hutch pragma`);
 			}
@@ -302,7 +306,7 @@ describe("Electrobun template package boundaries", () => {
 			const electrobun = readFileSync(electrobunPath, "utf8");
 			if (electrobunProductConfigPattern.test(hutch)) {
 				invalidConfigs.push(
-					`${templateName}: templates must not pin electrobun.version`,
+					`${templateName}: repository template sources must not pin electrobun.version; publication stamps the staged copy`,
 				);
 			}
 			if (electrobunProductConfigPattern.test(electrobun)) {

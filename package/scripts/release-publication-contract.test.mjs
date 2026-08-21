@@ -115,6 +115,10 @@ function validatePublicationContract(source) {
 		mutablePublication,
 		"Recheck npm channel before mutable publication",
 	);
+	const templateValidation = namedStep(
+		mutablePublication,
+		"Validate template publisher",
+	);
 	const templatePublication = namedStep(
 		mutablePublication,
 		"Publish latest template channel to R2",
@@ -386,12 +390,21 @@ function validatePublicationContract(source) {
 		/--tag "\$\{\{ steps\.release-type\.outputs\.dist-tag \}\}"/,
 	);
 	assert.match(mutableNpmGate, /grep -Fxq 'exists=true'/);
+	assert.match(
+		templateValidation,
+		/node --test scripts\/publish-templates\.test\.mjs/,
+	);
 	assert.match(kitchenPublication, /upload-kitchen-artifacts\.ts kitchen-artifacts/);
 	assert.ok(
 		mutablePublication.indexOf(
 			"- name: Recheck npm channel before mutable publication",
-		) < mutablePublication.indexOf("- name: Publish Kitchen artifacts to R2"),
-		"a job-only rerun must recheck the live npm channel immediately before R2 writes",
+		) < mutablePublication.indexOf("- name: Validate template publisher"),
+		"a job-only rerun must recheck the live npm channel before publisher validation",
+	);
+	assert.ok(
+		mutablePublication.indexOf("- name: Validate template publisher") <
+			mutablePublication.indexOf("- name: Publish Kitchen artifacts to R2"),
+		"template publisher validation must pass before the first mutable R2 write",
 	);
 	assert.ok(
 		mutablePublication.indexOf("- name: Publish Kitchen artifacts to R2") <

@@ -24,11 +24,12 @@ npx electrobun init --beta
 ```
 
 The npm bootstrap supplies the exact Hutch and Electrobun defaults paired with
-its own release version. Those defaults are not overrides: an exact
-`// @hutch` pragma or `electrobun.version` in `hutch.config.ts` always wins.
-Without an explicit Electrobun pin, the installed package version selects the
-toolchain for npm-launched commands, so the single `electrobun` dependency and
-its immutable GitHub Release assets ride the project lockfile together. Hutch
+its own release version. Those defaults are not overrides: published templates
+include an exact `electrobun.version`, and an exact `// @hutch` pragma or
+product pin in `hutch.config.ts` always wins. In an unpinned hand-written
+project, the installed package version selects the toolchain for npm-launched
+commands, so the single `electrobun` dependency and its immutable GitHub Release
+assets ride the project lockfile together. Hutch
 downloads the matching runtime and SDK into the shared
 `~/.hutch/releases/electrobun` store and projects the SDKs into the project's
 `.hutch/devkit` sysroot. Hutch's paired Cottontail is the build-time runtime;

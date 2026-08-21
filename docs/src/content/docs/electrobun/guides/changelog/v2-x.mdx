@@ -51,9 +51,10 @@ figures are extracted executable sizes, not compressed archive sizes.
   initializer. One dependency-free npm bootstrap shares the Electrobun release
   version, downloads, verifies, and caches its paired Hutch archive from that
   GitHub Release when needed, and forwards all arguments. It carries no
-  Electrobun core or SDK; generated templates carry no version pins, and
-  optional project pins remain authoritative.
-- Current floating Vite templates require Hutch 0.24 or later for catalog tool
+  Electrobun core or SDK. Published templates pin the exact release they were
+  tested with; framework contributors run repository templates against the
+  freshly built local devkit.
+- Current Vite templates require Hutch 0.24 or later for catalog tool
   checks and built-in `hutch pm exec`. A global Hutch 0.23 installation cannot
   enforce that catalog declaration and must be advanced with its legacy
   `hutch self update production` command before initializing a current template;

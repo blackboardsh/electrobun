@@ -18,9 +18,10 @@ Hutch is the native build and workspace CLI. Cottontail is Electrobun's JSC-base
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
-Install Hutch globally, then use it to create and build a project. An exact
-Electrobun release pin in `hutch.config.ts` is optional; without one, Hutch uses
-an npm-supplied paired default or floats on the active release channel. Hutch
+Install Hutch globally, then use it to create and build a project. Published
+templates include the exact Electrobun release they were tested with. In a
+hand-written project that pin is optional; without one, Hutch uses an
+npm-supplied paired default or floats on the active release channel. Hutch
 verifies and installs the resolved release's platform archive under
 `~/.hutch/releases/electrobun` and copies its SDKs into the project's generated
 `.hutch/devkit` sysroot:
@@ -205,6 +206,9 @@ cd electrobun/package
 # After making changes to source code
 hutch dev
 
+# Exercise one repository template against the same local package/dist
+hutch dev:template hello-world
+
 # If you need a completely fresh start
 hutch dev:clean
 ```
@@ -212,6 +216,12 @@ hutch dev:clean
 `hutch dev` builds `package/dist` and runs Kitchen against that local
 Electrobun devkit. Running `hutch dev` directly from `kitchen/` continues to
 use the Electrobun version pinned in `kitchen/hutch.config.ts`.
+
+`hutch dev:template <template-name>` builds the same local devkit, runs the
+template's configured dependency installation, and starts its `dev` task against
+those local bytes. Repository templates stay unpinned for this workflow; the
+release publisher injects the shipped Electrobun version into each staged
+template archive.
 
 The native build generates `package/src/native/compile_flags.txt` from the
 compiler flags resolved for the current machine. clangd-compatible editors
@@ -235,6 +245,7 @@ command.
 All commands are run from the `/package` directory:
 
 - `hutch dev:canary` - Build and run kitchen sink in canary mode
+- `hutch dev:template <template-name>` - Build and run one template against the local devkit
 - `hutch build:dev` - Build Electrobun in development mode
 - `hutch build:release` - Build Electrobun in release mode
 

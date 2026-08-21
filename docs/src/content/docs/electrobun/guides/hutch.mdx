@@ -68,12 +68,12 @@ production channel.
 
 Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
 work, defaulting `init` to stable templates; pass `--beta` explicitly for beta
-templates. Templates carry no version pins: npm-launched commands use the
-installed package's exact paired defaults, while direct Hutch commands float on
-the active release channel until you add a pin.
+templates. Each published template pins the exact Electrobun release it was
+tested with. The npm bootstrap still supplies its paired Hutch automatically;
+direct Hutch validates the template catalog and installs the pinned release.
 
 <Aside type="caution" title="Upgrade global Hutch before using current Vite templates">
-The current floating Vite templates require Hutch 0.24 or later for built-in
+The current Vite templates require Hutch 0.24 or later for built-in
 `hutch pm exec` and catalog tool-version checks. Hutch 0.23 does not understand
 those catalog requirements, so existing global users must first run the legacy
 `hutch self update production` command. Once upgraded, prefer `hutch upgrade`
@@ -119,12 +119,15 @@ hutch electrobun build --env=stable
 
 Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
-After extracting a template, `init` syncs the resolved Electrobun release — the
-npm-paired default when supplied, otherwise the selected catalog release — and
-the required native toolchain. It then runs the template's configured `install`
-task when one exists. Pass `--skip-install` to defer that task. Initialization
-always requires network access because Hutch fetches the current template
-catalog and chosen template instead of keeping persistent copies of either one.
+The publisher guarantees that a published template's exact Electrobun pin
+matches its catalog. After extracting it, `init` syncs that release and the
+required native toolchain, then runs the template's configured `install` task
+when one exists.
+Pass `--skip-install` to defer that task. An unpinned hand-written template uses
+the npm-paired default when supplied, otherwise the selected catalog release.
+Initialization always requires network access because Hutch fetches the current
+template catalog and chosen template instead of keeping persistent copies of
+either one.
 
 Scripts come only from the nearest `hutch.config.ts`. Running one does not infer
 `package.json` scripts, add `node_modules/.bin` to `PATH`, or emulate npm
@@ -363,7 +366,8 @@ after changing the version pin, for editor setup, before Vite or a standalone
 typecheck, or for preparing a build that will later run without network access.
 Use `hutch electrobun sync` only when you intend to advance an unpinned
 direct-Hutch project to the current channel head. `init` performs its initial
-sync to its resolved npm-paired or template-catalog release.
+sync to a published template's exact pin; npm or catalog defaults apply only to
+an unpinned template.
 
 Templates ignore `.hutch/` by default. Hutch owns this generated state and may
 replace it during sync; direct SDK edits and committing the projection are not

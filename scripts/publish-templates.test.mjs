@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
 	parseHutchPragma,
-	assertFloatingTemplateConfig,
+	assertRepositoryTemplateConfig,
+	pinPublishedTemplateConfig,
 	publishTemplates,
 	releaseChannel,
 	templateArtifactKey,
@@ -73,32 +74,87 @@ test("the release toolchain pins come from the package pragma", () => {
 	}
 });
 
-test("published templates must float: no pragma, no product pin", () => {
+test("publication exact-pins a canonical repository config without mutating it", () => {
+	const source =
+		'export default {\n\tscripts: { install: ["hutch", "install"] },\n};\n';
+	const original = `${source}`;
+	assert.equal(assertRepositoryTemplateConfig("hello-world", source), undefined);
 	assert.equal(
-		assertFloatingTemplateConfig(
-			"hello-world",
-			'export default {\n\tscripts: { install: ["hutch", "install"] },\n};\n',
-		),
-		undefined,
+		pinPublishedTemplateConfig("hello-world", source, "2.0.0-beta.3+build.4"),
+		[
+			"export default {",
+			"\tscripts: { install: [\"hutch\", \"install\"] },",
+			"\telectrobun: {",
+			'\t\tversion: "2.0.0-beta.3+build.4",',
+			"\t},",
+			"};",
+			"",
+		].join("\n"),
 	);
+	assert.equal(source, original);
+
+	const windowsSource = "export default {\r\n\tscripts: {},\r\n};\r\n";
+	assert.equal(
+		pinPublishedTemplateConfig("hello-world", windowsSource, "2.0.0"),
+		"export default {\r\n\tscripts: {},\r\n\telectrobun: {\r\n\t\tversion: \"2.0.0\",\r\n\t},\r\n};\r\n",
+	);
+});
+
+test("publication rejects non-canonical, ambiguous, or pre-pinned configs", () => {
 	assert.throws(
 		() =>
-			assertFloatingTemplateConfig(
+			pinPublishedTemplateConfig(
 				"hello-world",
 				"// @hutch cli=0.7.3 cottontail=0.4.4\nexport default {};\n",
+				"2.0.0",
 			),
 		/must not carry a \/\/ @hutch pragma/,
 	);
 	for (const source of [
-		'export default { electrobun: { version: "2.0.0" } };\n',
-		'export default { "electrobun": { note: true, "version": "2.0.0" } };\n',
-		"export default { electrobun: { version: resolveVersion() } };\n",
+		'export default {\n\telectrobun: { version: "2.0.0" },\n};\n',
+		'export default {\n\t"electrobun": { note: true, "version": "2.0.0" },\n};\n',
+		"export default {\n\telectrobun: { version: resolveVersion() },\n};\n",
+		'export default {\n\t["electrobun"]: { version: "2.0.0" },\n};\n',
+		'export default {\n\telectrobun /* comment */: { version: "2.0.0" },\n};\n',
+		'export default {\n\t...{ electrobun: { version: "2.0.0" } },\n};\n',
+		'export default {\n\t__proto__: { electrobun: { version: "2.0.0" } },\n};\n',
 	]) {
 		assert.throws(
-			() => assertFloatingTemplateConfig("hello-world", source),
-			/must not pin electrobun\.version/,
+			() => pinPublishedTemplateConfig("hello-world", source, "2.0.0"),
+			/must not select electrobun/,
 		);
 	}
+
+	for (const source of [
+		"export default { scripts: {} };\n",
+		"const config = { scripts: {} };\nexport default config;\n",
+		"\nexport default {\n\tscripts: {},\n};\n",
+		"export default {\n};\nexport default {\n};\n",
+	]) {
+		assert.throws(
+			() => pinPublishedTemplateConfig("hello-world", source, "2.0.0"),
+			/must begin with exactly one top-level "export default \{" line/,
+		);
+	}
+	assert.throws(
+		() =>
+			pinPublishedTemplateConfig(
+				"hello-world",
+				"export default {\n\tscripts: {},\n",
+				"2.0.0",
+			),
+		/must end with a top-level "};" line/,
+	);
+
+	assert.throws(
+		() =>
+			pinPublishedTemplateConfig(
+				"hello-world",
+				"export default {\n\tscripts: {},\n};\n",
+				"latest",
+			),
+		/published Electrobun version must be an exact SemVer 2\.0\.0 version/,
+	);
 });
 
 test("package-free templates receive catalog metadata", () => {
@@ -130,10 +186,25 @@ test("template publication fails closed when checked-out HEAD cannot be resolved
 	}
 });
 
-test("dry-run uses checked-out HEAD and preserves template inputs", async () => {
+test("dry-run pins only staged Hutch configs and preserves repository inputs", async () => {
 	const packageVersion = JSON.parse(
 		readFileSync(join(repositoryRoot, "package", "package.json"), "utf8"),
 	).version;
+	const trackedTemplateFiles = execFileSync(
+		"git",
+		["ls-files", "-z", "--", "templates"],
+		{ cwd: repositoryRoot },
+	)
+		.toString("utf8")
+		.split("\0")
+		.filter(Boolean)
+		.filter((path) => !path.endsWith("/.DS_Store"));
+	const sourceInputsBefore = new Map(
+		trackedTemplateFiles.map((path) => [
+			path,
+			readFileSync(join(repositoryRoot, path)),
+		]),
+	);
 	const checkedOutHead = execFileSync("git", ["rev-parse", "HEAD"], {
 		cwd: repositoryRoot,
 		encoding: "utf8",
@@ -163,29 +234,65 @@ test("dry-run uses checked-out HEAD and preserves template inputs", async () => 
 		1,
 		"the all meta-template must remain a selectable catalog entry",
 	);
+	for (const [path, source] of sourceInputsBefore) {
+		assert.deepEqual(
+			readFileSync(join(repositoryRoot, path)),
+			source,
+			`${path} must remain unchanged by publication`,
+		);
+	}
 	const stageRoot = join(repositoryRoot, ".template-release", "stage");
 	for (const template of catalog.templates) {
 		const sourceRoot = join(repositoryRoot, "templates", template.id);
 		const stagedRoot = join(stageRoot, template.id);
-		for (const file of ["package.json", "package-lock.json", "hutch.config.ts"]) {
-			const sourcePath = join(sourceRoot, file);
-			const stagedPath = join(stagedRoot, file);
-			assert.equal(existsSync(stagedPath), existsSync(sourcePath));
-			if (existsSync(sourcePath)) {
-				assert.deepEqual(readFileSync(stagedPath), readFileSync(sourcePath));
+		const templateFiles = trackedTemplateFiles.filter((path) =>
+			path.startsWith(`templates/${template.id}/`),
+		);
+		assert.ok(templateFiles.length > 0, `${template.id} has tracked inputs`);
+		for (const trackedPath of templateFiles) {
+			const stagedPath = join(
+				stagedRoot,
+				relative(`templates/${template.id}`, trackedPath),
+			);
+			assert.equal(existsSync(stagedPath), true, `${trackedPath} was staged`);
+			if (basename(trackedPath) !== "hutch.config.ts") {
+				assert.deepEqual(
+					readFileSync(stagedPath),
+					sourceInputsBefore.get(trackedPath),
+					`${trackedPath} changed while staging`,
+				);
 			}
 		}
-		// Templates float: the staged config must carry no pragma and no
-		// product pin, byte-identical to the source tree.
+
+		const sourceHutch = readFileSync(join(sourceRoot, "hutch.config.ts"), "utf8");
 		const stagedHutch = readFileSync(
 			join(stagedRoot, "hutch.config.ts"),
 			"utf8",
 		);
-		assert.doesNotMatch(stagedHutch, /^\/\/\s*@hutch\b/m);
+		assert.notEqual(stagedHutch, sourceHutch);
 		assert.doesNotMatch(
-			stagedHutch,
+			sourceHutch,
 			/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s,
 		);
+		assert.doesNotMatch(stagedHutch, /^\/\/\s*@hutch\b/m);
+		const stagedVersions = [
+			...stagedHutch.matchAll(
+				/\belectrobun\s*:\s*\{\s*version\s*:\s*(["'])([^"'\r\n]+)\1/g,
+			),
+		];
+		assert.equal(stagedVersions.length, 1, template.id);
+		assert.equal(stagedVersions[0][2], packageVersion, template.id);
+
+		const archivedHutch = execFileSync(
+			"tar",
+			[
+				"-xOf",
+				join(repositoryRoot, ".template-release", "archives", `${template.id}.tar.gz`),
+				`${template.id}/hutch.config.ts`,
+			],
+			{ cwd: repositoryRoot },
+		);
+		assert.deepEqual(archivedHutch, Buffer.from(stagedHutch), template.id);
 		assert.doesNotMatch(
 			readFileSync(join(stagedRoot, "electrobun.config.ts"), "utf8"),
 			/(?:^|[{,]\s*)(?:electrobun|["']electrobun["'])\s*:/s,

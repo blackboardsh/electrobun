@@ -90,10 +90,14 @@ files. Hutch resolves both tasks only from `hutch.config.ts`. Its built-in
 resolver owns `package.json` dependency resolution and `hutch.lock` unless the
 config explicitly selects an external package manager.
 
-The template's `hutch.config.ts` deliberately contains no release pin:
+The published template's `hutch.config.ts` contains the exact Electrobun
+release it was tested and shipped with:
 
 ```ts docs=syntax
 export default {
+  electrobun: {
+    version: "2.0.0",
+  },
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
     dev: ["hutch", "electrobun", "dev", "--watch"],
@@ -101,17 +105,15 @@ export default {
 };
 ```
 
-During `init`, Hutch resolves the initial release from the npm-paired default
-when supplied, otherwise from the chosen catalog, and installs that exact core
-and SDK release under
+The template publisher guarantees that this pin matches the chosen catalog.
+During `init`, Hutch installs that exact core and SDK release under
 `~/.hutch/releases/electrobun`, copies its SDKs into the generated project
 `.hutch/devkit` sysroot, and resolves any required native compiler under
 `~/.hutch/toolchains`. `dev`, `run`, and `build` refresh that preparation
-automatically. For an unpinned direct-Hutch project, `hutch electrobun sync`
-advances to the active channel head while other commands reuse the projected
-version. An npm-launched command instead uses the installed package's exact
-paired Electrobun default. Add an exact `electrobun.version` only when you want
-to override either default.
+automatically. To upgrade a generated project, change `electrobun.version` to
+the desired exact release and run `hutch electrobun sync`. Hand-written projects
+may omit the pin; those use an npm-launched command's paired default or the
+active direct-Hutch channel.
 
 A typical project looks like this:
 

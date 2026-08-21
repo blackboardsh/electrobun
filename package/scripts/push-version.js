@@ -18,7 +18,7 @@ import { dirname, join, relative } from "path";
 import { fileURLToPath } from "url";
 import { assertStrictSemVer } from "../src/shared/strict-semver.js";
 import {
-	assertTemplatesFloat,
+	assertTemplateSourcesUnpinned,
 	createRustSdkVersionUpdates,
 	parseRepositoryPragmaPins,
 	stampNpmBootstrapPairedVersions,
@@ -92,7 +92,7 @@ const kitchenVersions = updateKitchenVersions(
 	readFileSync(kitchenConfigPath, "utf-8"),
 	newVersion,
 );
-assertTemplatesFloat(templatesDir);
+assertTemplateSourcesUnpinned(templatesDir);
 const npmBootstrap = updateNpmBootstrapVersion(
 	readFileSync(npmBootstrapPath, "utf-8"),
 	newVersion,
@@ -120,7 +120,7 @@ for (const rustSdkVersion of rustSdkVersions) {
 	writeFileSync(rustSdkVersion.path, rustSdkVersion.source);
 }
 console.log(
-	`Updated Kitchen, npm bootstrap (with paired toolchain pins), and Rust SDK identities to ${newVersion}; templates float`,
+	`Updated Kitchen, npm bootstrap (with paired toolchain pins), and Rust SDK identities to ${newVersion}; repository template sources are ready for release stamping`,
 );
 
 // Git operations from repo root

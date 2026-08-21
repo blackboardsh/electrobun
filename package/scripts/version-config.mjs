@@ -203,9 +203,11 @@ export function createRustSdkVersionUpdates(repositoryRoot, version) {
 	}));
 }
 
-// Templates float — no pragma, no product pin — so a release stamps
-// nothing in them; it only refuses to ship a template that regained a pin.
-export function assertTemplatesFloat(templatesDir) {
+// Repository templates are local-development inputs. They deliberately omit
+// release selectors so package/scripts/dev-template.ts can pair them with the
+// freshly built package/dist tree. The template publisher adds the exact
+// product version only to its staged archive copy.
+export function assertTemplateSourcesUnpinned(templatesDir) {
 	for (const entry of readdirSync(templatesDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
 		const path = join(templatesDir, entry.name, "hutch.config.ts");
@@ -216,10 +218,14 @@ export function assertTemplatesFloat(templatesDir) {
 			continue;
 		}
 		if (/^\/\/\s*@hutch\b/m.test(source)) {
-			throw new Error(`${path} must not carry a // @hutch pragma; templates float`);
+			throw new Error(
+				`${path} repository source must not carry a // @hutch pragma`,
+			);
 		}
 		if (electrobunProductConfigPattern.test(source)) {
-			throw new Error(`${path} must not pin electrobun.version; templates float`);
+			throw new Error(
+				`${path} repository source must not pin electrobun.version; publication stamps the staged copy`,
+			);
 		}
 	}
 }

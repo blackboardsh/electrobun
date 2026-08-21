@@ -44,10 +44,12 @@ the `--beta` shorthand selects one explicitly. The thin npm bootstrap adds
 `--channel=stable` when no template channel was requested. `production` and
 `canary` are also accepted as template channel names.
 
-After extracting a template, `init` resolves the npm-paired Electrobun default
-when supplied, otherwise the selected catalog release, for its initial
-core/devkit sync. It also prepares any required native toolchain. If the
-template defines an `install` task in
+The publisher guarantees that a published template's exact Electrobun pin
+matches its catalog. After extracting it, `init` uses that release for its
+initial core/devkit sync. An unpinned hand-written template instead uses the
+npm-paired Electrobun default when supplied, otherwise the selected catalog
+release. It also prepares any required native toolchain. If the template defines
+an `install` task in
 `hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
 later. Init always requires network access: Hutch fetches the current template
 catalog and selected template instead of keeping persistent copies of either
@@ -98,7 +100,8 @@ hutch electrobun sync --env=stable
 ```
 
 Use `sync` when you intend to change the selected floating release. `init`
-performs an initial sync to its resolved npm-paired or template-catalog release.
+performs an initial sync to a published template's exact pin; npm or catalog
+defaults apply only to an unpinned template.
 
 ## `hutch electrobun build`
 

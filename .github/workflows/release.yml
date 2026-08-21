@@ -769,15 +769,15 @@ jobs:
             --output "$published_state"
           grep -Fxq 'exists=true' "$published_state"
 
+      - name: Validate template publisher
+        run: node --test scripts/publish-templates.test.mjs
+
       - name: Publish Kitchen artifacts to R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: hutch scripts/upload-kitchen-artifacts.ts kitchen-artifacts
-
-      - name: Validate template publisher
-        run: node --test scripts/publish-templates.test.mjs
 
       - name: Publish latest template channel to R2
         env:

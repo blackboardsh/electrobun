@@ -85,7 +85,9 @@ GitHub Release, caches it, and forwards all arguments. It defaults to stable
 templates; pass `--beta` explicitly for the beta catalog. The package contains
 no core or SDK and supplies paired Hutch and Electrobun defaults; init also
 ensures a compatible global launcher for the generated project's `hutch` tasks.
-An exact project pin is optional and overrides those defaults:
+Published templates include their exact Electrobun release pin. In a
+hand-written project the pin is optional and, when present, overrides those
+defaults:
 
 ```bash
 npx electrobun init

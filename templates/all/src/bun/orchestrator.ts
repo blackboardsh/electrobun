@@ -169,6 +169,12 @@ export function selectedTemplateQaRelease(
 			`Template QA requires a valid project-local Electrobun devkit projection at ${inspection.devkitProjectionPath}`,
 		);
 	}
+	const configured = inspection.configuredElectrobunVersion;
+	if (configured !== null && configured !== version) {
+		throw new Error(
+			`Template QA hutch.config.ts selects Electrobun ${configured}, but its project-local devkit projection selects ${version}`,
+		);
+	}
 	return { version, channel: catalogChannelForVersion(version) };
 }
 
@@ -865,10 +871,10 @@ export class TemplateQaOrchestrator {
 			this.fail(state, `Could not inspect installed project: ${String(error)}`);
 			return false;
 		}
-		if (inspection.configuredElectrobunVersion !== null) {
+		if (inspection.configuredElectrobunVersion !== this.catalog!.version) {
 			this.fail(
 				state,
-				`Expected the published floating template to omit electrobun.version, found ${inspection.configuredElectrobunVersion}`,
+				`Expected hutch.config.ts to pin Electrobun ${this.catalog!.version}, found ${inspection.configuredElectrobunVersion ?? "no exact electrobun.version"}`,
 			);
 			return false;
 		}
@@ -924,8 +930,8 @@ export class TemplateQaOrchestrator {
 		} catch (error) {
 			return `the existing project could not be inspected (${String(error)})`;
 		}
-		if (inspection.configuredElectrobunVersion !== null) {
-			return `the existing project unexpectedly pins Electrobun ${inspection.configuredElectrobunVersion}; published templates must float`;
+		if (inspection.configuredElectrobunVersion !== version) {
+			return `the existing project pins Electrobun ${inspection.configuredElectrobunVersion ?? "nothing"} instead of ${version}`;
 		}
 		if (inspection.projectedElectrobunVersion !== version) {
 			return `the existing project projects Electrobun ${inspection.projectedElectrobunVersion ?? "nothing"} instead of ${version}`;

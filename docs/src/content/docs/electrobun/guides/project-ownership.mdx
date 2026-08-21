@@ -13,7 +13,7 @@ describes the application and build that Hutch produces.
 
 | Concern | Owner |
 | --- | --- |
-| Electrobun release | Optional exact `hutch.config.ts` → `electrobun.version`; otherwise npm or channel default |
+| Electrobun release | Exact `hutch.config.ts` → `electrobun.version` in published templates; optional in hand-written projects, which may use an npm or channel default |
 | Build-time Hutch and Cottontail versions | Optional first-line `// @hutch` pragma; otherwise the invoking launcher's pair |
 | Project tasks | `hutch.config.ts` → `scripts` |
 | JavaScript package-manager policy | Hutch built-in resolver by default; optional external `hutch.config.ts` → `packageManager` |
@@ -31,8 +31,7 @@ A minimal project makes the boundary visible:
 ```ts docs=syntax
 // hutch.config.ts
 export default {
-  // Optional exact override:
-  // electrobun: { version: "2.0.1-beta.0" },
+  electrobun: { version: "2.0.0" },
   scripts: {
     install: ["hutch", "install"],
     "build:view": ["hutch", "pm", "exec", "--", "vite", "build"],
@@ -61,11 +60,12 @@ export default {
 } satisfies ElectrobunConfig;
 ```
 
-`electrobun.version` may be omitted. npm-launched commands then use the exact
-Electrobun version paired with the installed `electrobun` dependency; direct
-Hutch commands float on the active release channel, while reusing the projected
-version between explicit syncs. When present, `electrobun.version` must be an
-exact release and overrides either default.
+Published templates include an exact `electrobun.version`, making the selected
+runtime and SDK durable in source control. A hand-written project may omit it:
+npm-launched commands then use the exact Electrobun version paired with the
+installed `electrobun` dependency, while direct Hutch commands float on the
+active release channel and reuse the projected version between explicit syncs.
+When present, the exact release pin overrides either default.
 
 ## Where the SDK comes from
 

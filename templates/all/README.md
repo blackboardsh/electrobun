@@ -8,13 +8,18 @@ prepared apps then run `hutch run start` together, so their dev builds can
 overlap. Each child init uses `--skip-install`; if its `hutch.config.ts` exposes
 an `install` task, the dashboard runs that task explicitly before launch.
 
-Like every published template, this project has no source-level Electrobun pin.
-Hutch records the catalog release in `.hutch/devkit` during initialization, and
-the dashboard uses that projection as its exact release identity. If the mutable
-channel catalog has advanced since then, reinstall the QA template in a new
-directory, adding `--beta` again for the beta catalog, before relaunching it. A
-plain sync can follow the launcher's channel instead of the channel originally
-selected for this floating template.
+The checked-in meta-template stays unpinned so repository development can run it
+against a locally built Electrobun devkit. Template publication adds the shipped
+Electrobun version to the staged archive's `hutch.config.ts`. In both modes the
+dashboard uses `.hutch/devkit` as its exact release identity; when a config pin is
+present, it must match that projection. Every child installed from the catalog
+must both pin and project the catalog's exact version, or the dashboard rejects
+or reinstalls it before launch.
+
+If the mutable channel catalog has advanced since this QA project was prepared,
+reinstall it in a new directory, adding `--beta` again for the beta catalog,
+before relaunching it. A source checkout without a pin can follow the launcher's
+channel when explicitly synced.
 
 ```sh
 hutch electrobun init template-qa --template=all
