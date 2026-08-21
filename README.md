@@ -132,7 +132,7 @@ Don't miss our:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=3)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
+[![Star History Chart](https://star-history.dera.page/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=3)](https://star-history.dera.page/#blackboardsh/electrobun&type=date&legend=top-left)
 
 ## Contributing
 Electrobun is one piece of a vision I'm building. I'm optimizing for focus and execution. Issues and PRs can be used to share ideas, but there should be no expectation that I will review, respond to, or merge them.
