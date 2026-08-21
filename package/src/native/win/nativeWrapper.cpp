@@ -17,6 +17,7 @@
 #include <memory>
 #include <thread>
 #include <cmath>
+#include <limits>
 #include <filesystem>
 #include <windows.h>
 #include <atomic>
@@ -13812,6 +13813,93 @@ extern "C" ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
     }
 
     return _strdup("{\"x\":0,\"y\":0}");
+}
+
+extern "C" ELECTROBUN_EXPORT bool captureScreenRegion(
+    double x,
+    double y,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* out_rgba,
+    uint64_t out_len
+) {
+    if (!out_rgba || width == 0 || height == 0 ||
+        !std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    const uint64_t pixelCount =
+        static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    if (pixelCount > std::numeric_limits<uint64_t>::max() / 4) {
+        return false;
+    }
+    const uint64_t requiredLength = pixelCount * 4;
+    if (out_len != requiredLength) return false;
+
+    const auto monitors = electrobun::windowsLogicalMonitors();
+    if (monitors.empty()) return false;
+
+    const auto monitorForLogicalPoint = [&monitors](
+        double logicalX,
+        double logicalY
+    ) -> const electrobun::WindowsLogicalMonitor* {
+        if (!std::isfinite(logicalX) || !std::isfinite(logicalY) ||
+            logicalX < std::numeric_limits<LONG>::min() ||
+            logicalX > std::numeric_limits<LONG>::max() ||
+            logicalY < std::numeric_limits<LONG>::min() ||
+            logicalY > std::numeric_limits<LONG>::max()) {
+            return nullptr;
+        }
+
+        const LONG roundedX = static_cast<LONG>(std::lround(logicalX));
+        const LONG roundedY = static_cast<LONG>(std::lround(logicalY));
+        const electrobun::WindowsLogicalMonitor* firstMatch = nullptr;
+        for (const auto& monitor : monitors) {
+            if (!electrobun::pointInRectInclusive(
+                    monitor.logicalBounds, roundedX, roundedY)) {
+                continue;
+            }
+            if (monitor.primary) return &monitor;
+            if (!firstMatch) firstMatch = &monitor;
+        }
+        return firstMatch;
+    };
+
+    HDC screen = GetDC(nullptr);
+    if (!screen) return false;
+
+    bool succeeded = true;
+    for (uint32_t row = 0; row < height && succeeded; ++row) {
+        for (uint32_t column = 0; column < width; ++column) {
+            const double logicalX = x + static_cast<double>(column);
+            const double logicalY = y + static_cast<double>(row);
+            const auto* monitor =
+                monitorForLogicalPoint(logicalX, logicalY);
+            if (!monitor) {
+                succeeded = false;
+                break;
+            }
+
+            const POINT physical =
+                electrobun::logicalScreenPointToPhysical(
+                    logicalX, logicalY, *monitor);
+            const COLORREF color = GetPixel(screen, physical.x, physical.y);
+            if (color == CLR_INVALID) {
+                succeeded = false;
+                break;
+            }
+
+            const uint64_t outputIndex =
+                (static_cast<uint64_t>(row) * width + column) * 4;
+            out_rgba[outputIndex] = GetRValue(color);
+            out_rgba[outputIndex + 1] = GetGValue(color);
+            out_rgba[outputIndex + 2] = GetBValue(color);
+            out_rgba[outputIndex + 3] = 255;
+        }
+    }
+
+    ReleaseDC(nullptr, screen);
+    return succeeded;
 }
 
 extern "C" ELECTROBUN_EXPORT uint64_t getMouseButtons() {

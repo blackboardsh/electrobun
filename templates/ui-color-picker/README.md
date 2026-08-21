@@ -22,6 +22,9 @@ hutch run start
 
 Production packaging: `hutch run build`.
 
+Screen pixels are sampled through Electrobun's native `Screen.captureRegion()`
+API on macOS, Windows, and Linux/X11.
+
 **Permission:** reading screen pixels requires macOS Screen Recording
 permission. The app requests it at startup (system prompt via
 `Utils.screenCapture.requestAccess()`); if it's not granted the status dot
@@ -31,7 +34,7 @@ attribute the permission to your terminal app rather than the dev bundle.
 
 ## Prototype limitations
 
-- Screen sampling shells out to `screencapture` (~6Hz); production work is a
-  native capture API in Electrobun's core (macOS-only for now).
+- Linux capture currently follows Electrobun's X11 backend. If native Wayland
+  support is added later, screen capture will need a portal/PipeWire backend.
 - Drag the loupe (left panel) to move the window.
 - Keyboard mapping uses macOS virtual key codes.

@@ -14,6 +14,7 @@ import "core:c"
 import "core:dynlib"
 import "core:encoding/json"
 import "core:fmt"
+import "core:math"
 import "core:os"
 import "core:path/filepath"
 import "core:reflect"
@@ -35,6 +36,8 @@ Error :: enum {
 	InvalidJson,
 	FileReadFailed,
 	EnvVarNotFound,
+	InvalidScreenCaptureRegion,
+	AllocationFailed,
 }
 
 // ---------------------------------------------------------------------------
@@ -135,6 +138,51 @@ Rect :: struct {
 	y:      f64,
 	width:  f64,
 	height: f64,
+}
+
+@(private = "file")
+ScreenCaptureLayout :: struct {
+	x:            f64,
+	y:            f64,
+	width:        u32,
+	height:       u32,
+	byte_len:     int,
+	byte_len_u64: u64,
+}
+
+@(private = "file")
+screen_capture_layout :: proc(rectangle: Rect) -> (layout: ScreenCaptureLayout, err: Error) {
+	if math.is_nan(rectangle.x) || math.is_inf(rectangle.x) ||
+	   math.is_nan(rectangle.y) || math.is_inf(rectangle.y) ||
+	   math.is_nan(rectangle.width) || math.is_inf(rectangle.width) ||
+	   math.is_nan(rectangle.height) || math.is_inf(rectangle.height) {
+		return {}, .InvalidScreenCaptureRegion
+	}
+
+	max_dimension := f64(max(u32))
+	if rectangle.width <= 0 || rectangle.height <= 0 ||
+	   rectangle.width != math.floor(rectangle.width) ||
+	   rectangle.height != math.floor(rectangle.height) ||
+	   rectangle.width > max_dimension || rectangle.height > max_dimension {
+		return {}, .InvalidScreenCaptureRegion
+	}
+
+	width := u32(rectangle.width)
+	height := u32(rectangle.height)
+	pixel_count := u64(width) * u64(height)
+	if pixel_count > u64(max(int)) / 4 {
+		return {}, .InvalidScreenCaptureRegion
+	}
+	byte_len_u64 := pixel_count * 4
+
+	return ScreenCaptureLayout{
+		x = math.floor(rectangle.x),
+		y = math.floor(rectangle.y),
+		width = width,
+		height = height,
+		byte_len = int(byte_len_u64),
+		byte_len_u64 = byte_len_u64,
+	}, .None
 }
 
 DEFAULT_RECT :: Rect{0, 0, 800, 600}
@@ -808,6 +856,7 @@ GetTrayBoundsFn :: proc "c" (u32) -> cstring
 SetBoolFn :: proc "c" (bool)
 GetBoolFn :: proc "c" () -> bool
 GetCstringFn :: proc "c" () -> cstring
+CaptureScreenRegionFn :: proc "c" (f64, f64, u32, u32, rawptr, u64) -> bool
 CstringToBoolFn :: proc "c" (cstring) -> bool
 CstringVoidFn :: proc "c" (cstring)
 ShowNotificationFn :: proc "c" (cstring, cstring, cstring, bool)
@@ -912,6 +961,7 @@ Symbols :: struct {
 	getPrimaryDisplay:                      GetCstringFn,
 	getAllDisplays:                         GetCstringFn,
 	getCursorScreenPoint:                   GetCstringFn,
+	captureScreenRegion:                    CaptureScreenRegionFn,
 	moveToTrash:                            CstringToBoolFn,
 	showItemInFolder:                       CstringVoidFn,
 	openExternal:                           CstringToBoolFn,
@@ -1637,6 +1687,31 @@ getCursorScreenPoint :: proc(self: ^Core) -> (point: Point, err: Error) {
 		return {}, .ElectrobunCoreFailure
 	}
 	return parse_point_json(self.allocator, string(json_text))
+}
+
+// Captures a logical desktop rectangle as tightly packed, row-major RGBA
+// pixels. Fractional origins are aligned down to the logical pixel grid.
+// The returned slice uses core.allocator; the caller owns it and must call
+// delete(pixels, core.allocator).
+captureScreenRegion :: proc(self: ^Core, rectangle: Rect) -> (pixels: []u8, err: Error) {
+	layout := screen_capture_layout(rectangle) or_return
+	result, allocator_err := make([]u8, layout.byte_len, self.allocator)
+	if allocator_err != nil {
+		return nil, .AllocationFailed
+	}
+
+	if !self.symbols.captureScreenRegion(
+		layout.x,
+		layout.y,
+		layout.width,
+		layout.height,
+		raw_data(result),
+		layout.byte_len_u64,
+	) {
+		delete(result, self.allocator)
+		return nil, .ElectrobunCoreFailure
+	}
+	return result, .None
 }
 
 moveToTrash :: proc(self: ^Core, path: string) -> bool {

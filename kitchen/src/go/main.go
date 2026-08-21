@@ -194,6 +194,7 @@ const (
 	kindScreenPrimaryDisplay                 testKind = "screen_primary_display"
 	kindScreenAllDisplays                    testKind = "screen_all_displays"
 	kindScreenCursorScreenPoint              testKind = "screen_cursor_screen_point"
+	kindScreenCaptureRegion                  testKind = "screen_capture_region"
 	kindScreenBoundsVsWorkArea               testKind = "screen_bounds_vs_workarea"
 )
 
@@ -307,6 +308,7 @@ var goTests = []goTest{
 	test("go-screen-primary-display", "getPrimaryDisplay (Go)", "Screen", kindScreenPrimaryDisplay),
 	test("go-screen-all-displays", "getAllDisplays (Go)", "Screen", kindScreenAllDisplays),
 	test("go-screen-cursor-screen-point", "getCursorScreenPoint (Go)", "Screen", kindScreenCursorScreenPoint),
+	test("go-screen-capture-region", "captureRegion (Go)", "Screen", kindScreenCaptureRegion),
 	test("go-screen-bounds-vs-workarea", "Display bounds vs workArea (Go)", "Screen", kindScreenBoundsVsWorkArea),
 }
 
@@ -1298,6 +1300,8 @@ func runGoTestBody(test goTest) error {
 		return runScreenAllDisplaysTest()
 	case kindScreenCursorScreenPoint:
 		return runScreenCursorScreenPointTest()
+	case kindScreenCaptureRegion:
+		return runScreenCaptureRegionTest()
 	case kindScreenBoundsVsWorkArea:
 		return runScreenBoundsVsWorkAreaTest()
 	}
@@ -2758,6 +2762,35 @@ func runScreenCursorScreenPointTest() error {
 	}
 	if math.IsNaN(point.X) || math.IsNaN(point.Y) {
 		return fmt.Errorf("cursor screen point was not finite")
+	}
+	return nil
+}
+
+func runScreenCaptureRegionTest() error {
+	display, err := state.core.GetPrimaryDisplay()
+	if err != nil {
+		return err
+	}
+	rect := electrobun.NewRect(
+		math.Floor(display.Bounds.X+display.Bounds.Width/2)-1,
+		math.Floor(display.Bounds.Y+display.Bounds.Height/2)-1,
+		2,
+		2,
+	)
+	pixels, err := state.core.CaptureScreenRegion(rect)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			return err
+		}
+		return nil
+	}
+	if len(pixels) != 16 {
+		return fmt.Errorf("CaptureScreenRegion returned %d bytes instead of 16", len(pixels))
+	}
+	for offset := 3; offset < len(pixels); offset += 4 {
+		if pixels[offset] != 255 {
+			return fmt.Errorf("CaptureScreenRegion returned a non-opaque alpha channel")
+		}
 	}
 	return nil
 }

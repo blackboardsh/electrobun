@@ -777,6 +777,7 @@ type IsDockIconVisibleFn = unsafe extern "C" fn() -> bool;
 type GetPrimaryDisplayFn = unsafe extern "C" fn() -> *mut c_char;
 type GetAllDisplaysFn = unsafe extern "C" fn() -> *mut c_char;
 type GetCursorScreenPointFn = unsafe extern "C" fn() -> *mut c_char;
+type CaptureScreenRegionFn = unsafe extern "C" fn(f64, f64, u32, u32, *mut u8, u64) -> bool;
 type MoveToTrashFn = unsafe extern "C" fn(*const c_char) -> bool;
 type ShowItemInFolderFn = unsafe extern "C" fn(*const c_char);
 type OpenExternalFn = unsafe extern "C" fn(*const c_char) -> bool;
@@ -906,6 +907,7 @@ struct Symbols {
     get_primary_display: GetPrimaryDisplayFn,
     get_all_displays: GetAllDisplaysFn,
     get_cursor_screen_point: GetCursorScreenPointFn,
+    capture_screen_region: CaptureScreenRegionFn,
     move_to_trash: MoveToTrashFn,
     show_item_in_folder: ShowItemInFolderFn,
     open_external: OpenExternalFn,
@@ -1041,6 +1043,7 @@ impl Core {
             get_primary_display: lib.symbol("getPrimaryDisplay")?,
             get_all_displays: lib.symbol("getAllDisplays")?,
             get_cursor_screen_point: lib.symbol("getCursorScreenPoint")?,
+            capture_screen_region: lib.symbol("captureScreenRegion")?,
             move_to_trash: lib.symbol("moveToTrash")?,
             show_item_in_folder: lib.symbol("showItemInFolder")?,
             open_external: lib.symbol("openExternal")?,
@@ -1869,6 +1872,35 @@ impl Core {
         Ok(parse_point_json(&json))
     }
 
+    /// Captures a logical desktop rectangle as tightly packed, row-major RGBA pixels.
+    /// Fractional origins are aligned down to the logical pixel grid.
+    pub fn capture_screen_region(&self, rectangle: Rect) -> Result<Vec<u8>, String> {
+        let layout = screen_capture_layout(rectangle)?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(layout.byte_len).map_err(|_| {
+            format!(
+                "failed to allocate {} bytes for screen capture",
+                layout.byte_len
+            )
+        })?;
+        pixels.resize(layout.byte_len, 0);
+
+        let captured = unsafe {
+            (self.symbols.capture_screen_region)(
+                layout.x,
+                layout.y,
+                layout.width,
+                layout.height,
+                pixels.as_mut_ptr(),
+                layout.byte_len_u64,
+            )
+        };
+        if !captured {
+            return Err("failed to capture screen region".to_string());
+        }
+        Ok(pixels)
+    }
+
     pub fn move_to_trash(&self, path: &str) -> Result<bool, String> {
         let path = to_c_string(path, "path")?;
         Ok(unsafe { (self.symbols.move_to_trash)(path.as_ptr()) })
@@ -2266,6 +2298,57 @@ fn core_library_name() -> &'static str {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct ScreenCaptureLayout {
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+    byte_len: usize,
+    byte_len_u64: u64,
+}
+
+fn screen_capture_layout(rectangle: Rect) -> Result<ScreenCaptureLayout, String> {
+    if !rectangle.x.is_finite() || !rectangle.y.is_finite() {
+        return Err("screen capture origin must be finite".to_string());
+    }
+    if !rectangle.width.is_finite()
+        || !rectangle.height.is_finite()
+        || rectangle.width <= 0.0
+        || rectangle.height <= 0.0
+        || rectangle.width.fract() != 0.0
+        || rectangle.height.fract() != 0.0
+        || rectangle.width > u32::MAX as f64
+        || rectangle.height > u32::MAX as f64
+    {
+        return Err(
+            "screen capture dimensions must be positive integers no greater than u32::MAX"
+                .to_string(),
+        );
+    }
+
+    let width = rectangle.width as u32;
+    let height = rectangle.height as u32;
+    let byte_len_u64 = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| "screen capture byte length overflowed u64".to_string())?;
+    let byte_len = usize::try_from(byte_len_u64)
+        .map_err(|_| "screen capture exceeds the addressable memory size".to_string())?;
+    if byte_len > isize::MAX as usize {
+        return Err("screen capture exceeds the maximum allocation size".to_string());
+    }
+
+    Ok(ScreenCaptureLayout {
+        x: rectangle.x.floor(),
+        y: rectangle.y.floor(),
+        width,
+        height,
+        byte_len,
+        byte_len_u64,
+    })
+}
+
 fn wgpu_library_name() -> &'static str {
     if cfg!(windows) {
         "webgpu_dawn.dll"
@@ -2647,5 +2730,42 @@ mod install_root_name_tests {
             }
             .is_packaged());
         }
+    }
+}
+
+#[cfg(test)]
+mod screen_capture_tests {
+    use super::{screen_capture_layout, Rect};
+
+    #[test]
+    fn validates_and_aligns_capture_rectangle() {
+        let layout = screen_capture_layout(Rect::new(-1.25, 3.99, 2.0, 3.0)).unwrap();
+        assert_eq!(layout.x, -2.0);
+        assert_eq!(layout.y, 3.0);
+        assert_eq!(layout.width, 2);
+        assert_eq!(layout.height, 3);
+        assert_eq!(layout.byte_len, 24);
+        assert_eq!(layout.byte_len_u64, 24);
+    }
+
+    #[test]
+    fn rejects_invalid_capture_rectangles_before_allocation() {
+        for rectangle in [
+            Rect::new(f64::NAN, 0.0, 1.0, 1.0),
+            Rect::new(0.0, f64::INFINITY, 1.0, 1.0),
+            Rect::new(0.0, 0.0, 0.0, 1.0),
+            Rect::new(0.0, 0.0, 1.0, -1.0),
+            Rect::new(0.0, 0.0, 1.5, 1.0),
+            Rect::new(0.0, 0.0, u32::MAX as f64 + 1.0, 1.0),
+        ] {
+            assert!(screen_capture_layout(rectangle).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_capture_byte_length_overflow() {
+        let error = screen_capture_layout(Rect::new(0.0, 0.0, u32::MAX as f64, u32::MAX as f64))
+            .unwrap_err();
+        assert!(error.contains("overflowed u64"));
     }
 }

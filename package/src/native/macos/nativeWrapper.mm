@@ -9,6 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
@@ -56,6 +57,8 @@ static bool wgpuDebugEnabled() {
 #include <string>
 #include <vector>
 #include <list>
+#include <limits>
+#include <cmath>
 #include <cstdint>
 #include <chrono>
 #include <map>
@@ -9274,6 +9277,115 @@ extern "C" const char* getCursorScreenPoint(void) {
 
         NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
         return strdup([jsonString UTF8String]);
+    }
+}
+
+// Capture a logical-point screen region as tightly packed, top-to-bottom RGBA.
+//
+// Screen's public coordinates use the same top-left global coordinate space as
+// CoreGraphics' window-server APIs (getCursorScreenPoint performs the Cocoa
+// bottom-left -> CoreGraphics top-left conversion above). Nominal resolution is
+// intentional: unlike a best-resolution capture, it produces one pixel for
+// each requested logical screen point even on Retina displays and across a
+// mixed-scale multi-display desktop.
+extern "C" bool captureScreenRegion(double x, double y, uint32_t width, uint32_t height,
+                                     uint8_t* out_rgba, uint64_t out_len) {
+    if (!out_rgba || width == 0 || height == 0 ||
+        !std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    const uint64_t width64 = (uint64_t)width;
+    const uint64_t height64 = (uint64_t)height;
+    const uint64_t maxLength = std::numeric_limits<uint64_t>::max();
+    if (height64 > maxLength / width64 ||
+        width64 * height64 > maxLength / 4) {
+        return false;
+    }
+
+    const uint64_t expectedLength = width64 * height64 * 4;
+    if (out_len != expectedLength) {
+        return false;
+    }
+
+    const double maxX = x + (double)width;
+    const double maxY = y + (double)height;
+    if (!std::isfinite(maxX) || !std::isfinite(maxY)) {
+        return false;
+    }
+
+    // Do not return a misleading wallpaper-only/blank capture when TCC has
+    // denied Screen Recording access.
+    if (!CGPreflightScreenCaptureAccess()) {
+        return false;
+    }
+
+    @autoreleasepool {
+        const CGRect screenBounds = CGRectMake((CGFloat)x, (CGFloat)y,
+                                               (CGFloat)width, (CGFloat)height);
+        const CGWindowImageOption imageOptions = (CGWindowImageOption)(
+            kCGWindowImageNominalResolution | kCGWindowImageShouldBeOpaque);
+        CGImageRef image = CGWindowListCreateImage(
+            screenBounds,
+            kCGWindowListOptionOnScreenOnly,
+            kCGNullWindowID,
+            imageOptions);
+        if (!image) {
+            return false;
+        }
+
+        // Nominal-resolution capture is the contract that makes the result one
+        // sample per logical coordinate. Refuse an unexpected result instead of
+        // silently stretching or cropping it into the caller's buffer.
+        if (CGImageGetWidth(image) != (size_t)width ||
+            CGImageGetHeight(image) != (size_t)height) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if (!colorSpace) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        const size_t bytesPerRow = (size_t)width * 4;
+        const CGBitmapInfo bitmapInfo = (CGBitmapInfo)(
+            kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGContextRef context = CGBitmapContextCreate(
+            out_rgba,
+            (size_t)width,
+            (size_t)height,
+            8,
+            bytesPerRow,
+            colorSpace,
+            bitmapInfo);
+        CGColorSpaceRelease(colorSpace);
+        if (!context) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        CGContextSetBlendMode(context, kCGBlendModeCopy);
+        CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+
+        // Bitmap-context row zero is the lower edge in Quartz coordinates,
+        // while this ABI promises row zero is the top edge of the screen.
+        CGContextTranslateCTM(context, 0, (CGFloat)height);
+        CGContextScaleCTM(context, 1, -1);
+        CGContextDrawImage(context,
+                           CGRectMake(0, 0, (CGFloat)width, (CGFloat)height),
+                           image);
+
+        CGContextRelease(context);
+        CGImageRelease(image);
+
+        // The capture requests an opaque image, and the public ABI requires an
+        // opaque result. Make alpha deterministic without touching RGB.
+        for (uint64_t offset = 3; offset < expectedLength; offset += 4) {
+            out_rgba[offset] = 0xff;
+        }
+        return true;
     }
 }
 

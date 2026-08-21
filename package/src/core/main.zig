@@ -3853,6 +3853,29 @@ export fn getCursorScreenPoint() ?[*:0]const u8 {
     return get_cursor_screen_point();
 }
 
+export fn captureScreenRegion(
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+    out_rgba: ?[*]u8,
+    out_len: u64,
+) bool {
+    const CaptureScreenRegionFn = *const fn (
+        f64,
+        f64,
+        u32,
+        u32,
+        ?[*]u8,
+        u64,
+    ) callconv(.c) bool;
+    const capture_screen_region = lookupNativeSymbol(
+        CaptureScreenRegionFn,
+        "captureScreenRegion",
+    ) orelse return false;
+    return capture_screen_region(x, y, width, height, out_rgba, out_len);
+}
+
 export fn getMouseButtons() u64 {
     const GetMouseButtonsFn = *const fn () callconv(.c) u64;
     const get_mouse_buttons = lookupNativeSymbol(GetMouseButtonsFn, "getMouseButtons") orelse return 0;

@@ -128,6 +128,7 @@ enum TestKind {
     ScreenPrimaryDisplay,
     ScreenAllDisplays,
     ScreenCursorScreenPoint,
+    ScreenCaptureRegion,
     ScreenBoundsVsWorkArea,
 }
 
@@ -796,6 +797,14 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Read the current cursor position through the Rust SDK.",
         interactive: false,
         kind: TestKind::ScreenCursorScreenPoint,
+    },
+    RustTest {
+        id: "rust-screen-capture-region",
+        name: "captureRegion (Rust)",
+        category: "Screen",
+        description: "Capture a small screen region as row-major RGBA pixels through the Rust SDK.",
+        interactive: false,
+        kind: TestKind::ScreenCaptureRegion,
     },
     RustTest {
         id: "rust-screen-bounds-vs-workarea",
@@ -1593,6 +1602,7 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         TestKind::ScreenPrimaryDisplay => run_screen_primary_display_test(),
         TestKind::ScreenAllDisplays => run_screen_all_displays_test(),
         TestKind::ScreenCursorScreenPoint => run_screen_cursor_screen_point_test(),
+        TestKind::ScreenCaptureRegion => run_screen_capture_region_test(),
         TestKind::ScreenBoundsVsWorkArea => run_screen_bounds_vs_work_area_test(),
     };
 
@@ -3397,6 +3407,33 @@ fn run_screen_cursor_screen_point_test() -> Result<(), String> {
     let point = app_state().core.get_cursor_screen_point()?;
     if !point.x.is_finite() || !point.y.is_finite() {
         return Err("cursor screen point was not finite".to_string());
+    }
+    Ok(())
+}
+
+fn run_screen_capture_region_test() -> Result<(), String> {
+    let display = app_state().core.get_primary_display()?;
+    let width = 2.0;
+    let height = 2.0;
+    let rectangle = Rect::new(
+        (display.bounds.x + display.bounds.width / 2.0).floor() - 1.0,
+        (display.bounds.y + display.bounds.height / 2.0).floor() - 1.0,
+        width,
+        height,
+    );
+    let pixels = match app_state().core.capture_screen_region(rectangle) {
+        Ok(pixels) => pixels,
+        Err(_) if !cfg!(target_os = "windows") => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if pixels.len() != 16 {
+        return Err(format!(
+            "capture_screen_region returned {} bytes instead of 16",
+            pixels.len()
+        ));
+    }
+    if pixels.iter().skip(3).step_by(4).any(|alpha| *alpha != 255) {
+        return Err("capture_screen_region returned a non-opaque alpha channel".to_string());
     }
     Ok(())
 }

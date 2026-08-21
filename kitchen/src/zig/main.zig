@@ -144,6 +144,7 @@ const TestKind = enum {
     screen_primary_display,
     screen_all_displays,
     screen_cursor_screen_point,
+    screen_capture_region,
     screen_bounds_vs_workarea,
 };
 
@@ -808,6 +809,14 @@ const zig_tests = [_]ZigTest{
         .kind = .screen_cursor_screen_point,
     },
     .{
+        .id = "zig-screen-capture-region",
+        .name = "captureRegion (Zig)",
+        .category = "Screen",
+        .description = "Capture a small screen region as row-major RGBA pixels through the Zig SDK.",
+        .mirrors_bun_test_name = "captureRegion",
+        .kind = .screen_capture_region,
+    },
+    .{
         .id = "zig-screen-bounds-vs-workarea",
         .name = "Display bounds vs workArea (Zig)",
         .category = "Screen",
@@ -1192,6 +1201,7 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .screen_primary_display => runScreenPrimaryDisplayTest(state),
         .screen_all_displays => runScreenAllDisplaysTest(state),
         .screen_cursor_screen_point => runScreenCursorScreenPointTest(state),
+        .screen_capture_region => runScreenCaptureRegionTest(state),
         .screen_bounds_vs_workarea => runScreenBoundsVsWorkAreaTest(state),
     };
 
@@ -4009,6 +4019,26 @@ fn runScreenCursorScreenPointTest(state: *AppState) !void {
     const point = try state.core.getCursorScreenPoint();
     if (!std.math.isFinite(point.x) or !std.math.isFinite(point.y)) {
         return error.InvalidCursorPoint;
+    }
+}
+
+fn runScreenCaptureRegionTest(state: *AppState) !void {
+    const display = try state.core.getPrimaryDisplay();
+    const pixels = state.core.captureScreenRegion(.{
+        .x = @floor(display.bounds.x + display.bounds.width / 2) - 1,
+        .y = @floor(display.bounds.y + display.bounds.height / 2) - 1,
+        .width = 2,
+        .height = 2,
+    }) catch |err| {
+        if (builtin.os.tag == .windows) return err;
+        return;
+    };
+    defer state.core.allocator.free(pixels);
+
+    if (pixels.len != 16) return error.InvalidScreenCaptureLength;
+    var alpha_offset: usize = 3;
+    while (alpha_offset < pixels.len) : (alpha_offset += 4) {
+        if (pixels[alpha_offset] != 255) return error.InvalidScreenCaptureAlpha;
     }
 }
 

@@ -198,6 +198,56 @@ pub const Rect = struct {
     height: f64 = 600,
 };
 
+const ScreenCaptureLayout = struct {
+    x: f64,
+    y: f64,
+    width: u32,
+    height: u32,
+    byte_len: usize,
+    byte_len_u64: u64,
+};
+
+fn screenCaptureLayout(rectangle: Rect) !ScreenCaptureLayout {
+    if (!std.math.isFinite(rectangle.x) or
+        !std.math.isFinite(rectangle.y) or
+        !std.math.isFinite(rectangle.width) or
+        !std.math.isFinite(rectangle.height))
+    {
+        return error.InvalidScreenCaptureRegion;
+    }
+
+    const max_dimension: f64 = @floatFromInt(std.math.maxInt(u32));
+    if (rectangle.width <= 0 or
+        rectangle.height <= 0 or
+        rectangle.width != @floor(rectangle.width) or
+        rectangle.height != @floor(rectangle.height) or
+        rectangle.width > max_dimension or
+        rectangle.height > max_dimension)
+    {
+        return error.InvalidScreenCaptureRegion;
+    }
+
+    const width: u32 = @intFromFloat(rectangle.width);
+    const height: u32 = @intFromFloat(rectangle.height);
+    const pixel_count = @as(u64, width) * @as(u64, height);
+    if (pixel_count > std.math.maxInt(u64) / 4) {
+        return error.InvalidScreenCaptureRegion;
+    }
+    const byte_len_u64 = pixel_count * 4;
+    if (byte_len_u64 > std.math.maxInt(usize)) {
+        return error.InvalidScreenCaptureRegion;
+    }
+
+    return .{
+        .x = @floor(rectangle.x),
+        .y = @floor(rectangle.y),
+        .width = width,
+        .height = height,
+        .byte_len = @intCast(byte_len_u64),
+        .byte_len_u64 = byte_len_u64,
+    };
+}
+
 pub const TrafficLightOffset = struct {
     x: f64 = 0,
     y: f64 = 0,
@@ -836,6 +886,7 @@ pub const Core = struct {
     const GetPrimaryDisplayFn = *const fn () callconv(.c) ?[*:0]const u8;
     const GetAllDisplaysFn = *const fn () callconv(.c) ?[*:0]const u8;
     const GetCursorScreenPointFn = *const fn () callconv(.c) ?[*:0]const u8;
+    const CaptureScreenRegionFn = *const fn (f64, f64, u32, u32, [*]u8, u64) callconv(.c) bool;
     const MoveToTrashFn = *const fn ([*:0]const u8) callconv(.c) bool;
     const ShowItemInFolderFn = *const fn ([*:0]const u8) callconv(.c) void;
     const OpenExternalFn = *const fn ([*:0]const u8) callconv(.c) bool;
@@ -955,6 +1006,7 @@ pub const Core = struct {
         get_primary_display: GetPrimaryDisplayFn,
         get_all_displays: GetAllDisplaysFn,
         get_cursor_screen_point: GetCursorScreenPointFn,
+        capture_screen_region: CaptureScreenRegionFn,
         move_to_trash: MoveToTrashFn,
         show_item_in_folder: ShowItemInFolderFn,
         open_external: OpenExternalFn,
@@ -1093,6 +1145,7 @@ pub const Core = struct {
                 .get_primary_display = lib.lookup(GetPrimaryDisplayFn, "getPrimaryDisplay") orelse return error.MissingCoreSymbol,
                 .get_all_displays = lib.lookup(GetAllDisplaysFn, "getAllDisplays") orelse return error.MissingCoreSymbol,
                 .get_cursor_screen_point = lib.lookup(GetCursorScreenPointFn, "getCursorScreenPoint") orelse return error.MissingCoreSymbol,
+                .capture_screen_region = lib.lookup(CaptureScreenRegionFn, "captureScreenRegion") orelse return error.MissingCoreSymbol,
                 .move_to_trash = lib.lookup(MoveToTrashFn, "moveToTrash") orelse return error.MissingCoreSymbol,
                 .show_item_in_folder = lib.lookup(ShowItemInFolderFn, "showItemInFolder") orelse return error.MissingCoreSymbol,
                 .open_external = lib.lookup(OpenExternalFn, "openExternal") orelse return error.MissingCoreSymbol,
@@ -1805,6 +1858,27 @@ pub const Core = struct {
         return try parseJsonOwned(self.allocator, Point, std.mem.span(json));
     }
 
+    /// Captures a logical desktop rectangle as tightly packed, row-major RGBA
+    /// pixels. Fractional origins are aligned down to the logical pixel grid.
+    /// The returned slice uses `self.allocator`; the caller owns and must free it.
+    pub fn captureScreenRegion(self: *Core, rectangle: Rect) ![]u8 {
+        const layout = try screenCaptureLayout(rectangle);
+        const pixels = try self.allocator.alloc(u8, layout.byte_len);
+        errdefer self.allocator.free(pixels);
+
+        if (!self.symbols.capture_screen_region(
+            layout.x,
+            layout.y,
+            layout.width,
+            layout.height,
+            pixels.ptr,
+            layout.byte_len_u64,
+        )) {
+            return error.ElectrobunCoreFailure;
+        }
+        return pixels;
+    }
+
     pub fn moveToTrash(self: *Core, path: []const u8) !bool {
         const path_z = try self.dupeZ(path);
         defer self.allocator.free(path_z);
@@ -2332,6 +2406,45 @@ test "dialog path JSON preserves commas and escaped characters" {
     try std.testing.expectEqualStrings("/tmp/report,final.txt", paths[0]);
     try std.testing.expectEqualStrings("C:\\Temp\\quoted\"file.txt", paths[1]);
     try std.testing.expectEqualStrings("line\nbreak", paths[2]);
+}
+
+test "screen capture layout floors origins and computes RGBA size" {
+    const layout = try screenCaptureLayout(.{
+        .x = 12.75,
+        .y = -3.125,
+        .width = 2,
+        .height = 3,
+    });
+
+    try std.testing.expectEqual(@as(f64, 12), layout.x);
+    try std.testing.expectEqual(@as(f64, -4), layout.y);
+    try std.testing.expectEqual(@as(u32, 2), layout.width);
+    try std.testing.expectEqual(@as(u32, 3), layout.height);
+    try std.testing.expectEqual(@as(usize, 24), layout.byte_len);
+    try std.testing.expectEqual(@as(u64, 24), layout.byte_len_u64);
+}
+
+test "screen capture layout rejects invalid and overflowing dimensions" {
+    try std.testing.expectError(
+        error.InvalidScreenCaptureRegion,
+        screenCaptureLayout(.{ .width = 0, .height = 1 }),
+    );
+    try std.testing.expectError(
+        error.InvalidScreenCaptureRegion,
+        screenCaptureLayout(.{ .width = 1.5, .height = 1 }),
+    );
+    try std.testing.expectError(
+        error.InvalidScreenCaptureRegion,
+        screenCaptureLayout(.{ .width = 4294967296, .height = 1 }),
+    );
+    try std.testing.expectError(
+        error.InvalidScreenCaptureRegion,
+        screenCaptureLayout(.{ .width = 4294967295, .height = 4294967295 }),
+    );
+    try std.testing.expectError(
+        error.InvalidScreenCaptureRegion,
+        screenCaptureLayout(.{ .x = std.math.inf(f64), .width = 1, .height = 1 }),
+    );
 }
 
 test "build config controls quitting on last window close" {

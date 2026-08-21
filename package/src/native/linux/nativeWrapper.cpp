@@ -22,6 +22,7 @@
 #include <cstring>
 #include <dlfcn.h>
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <thread>
 #include <atomic>
@@ -12038,6 +12039,177 @@ ELECTROBUN_EXPORT const char* getCursorScreenPoint() {
         std::ostringstream result;
         result << "{\"x\":" << x << ",\"y\":" << y << "}";
         return strdup(result.str().c_str());
+    });
+}
+
+ELECTROBUN_EXPORT bool captureScreenRegion(
+    double x,
+    double y,
+    uint32_t width,
+    uint32_t height,
+    uint8_t* out_rgba,
+    uint64_t out_len
+) {
+    if (!out_rgba || width == 0 || height == 0 ||
+        !std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    const uint64_t logicalWidth = static_cast<uint64_t>(width);
+    const uint64_t logicalHeight = static_cast<uint64_t>(height);
+    if (logicalWidth > std::numeric_limits<uint64_t>::max() / logicalHeight) {
+        return false;
+    }
+    const uint64_t logicalPixels = logicalWidth * logicalHeight;
+    if (logicalPixels > std::numeric_limits<uint64_t>::max() / 4) {
+        return false;
+    }
+    const uint64_t requiredOutputBytes = logicalPixels * 4;
+    if (out_len != requiredOutputBytes ||
+        requiredOutputBytes > std::numeric_limits<size_t>::max() ||
+        width > static_cast<uint32_t>(G_MAXINT) ||
+        height > static_cast<uint32_t>(G_MAXINT)) {
+        return false;
+    }
+
+    // Keep the conversion well-defined even for hostile FFI inputs. Screen
+    // coordinates ultimately have gint-sized GDK bounds; use int64_t while
+    // validating before narrowing them for the GDK call.
+    const long double roundedX = std::round(static_cast<long double>(x));
+    const long double roundedY = std::round(static_cast<long double>(y));
+    if (roundedX < static_cast<long double>(std::numeric_limits<int64_t>::min()) ||
+        roundedX > static_cast<long double>(std::numeric_limits<int64_t>::max()) ||
+        roundedY < static_cast<long double>(std::numeric_limits<int64_t>::min()) ||
+        roundedY > static_cast<long double>(std::numeric_limits<int64_t>::max())) {
+        return false;
+    }
+    const int64_t requestedLeft = static_cast<int64_t>(roundedX);
+    const int64_t requestedTop = static_cast<int64_t>(roundedY);
+
+    return dispatch_sync_main([=]() -> bool {
+        const char* sessionType = g_getenv("XDG_SESSION_TYPE");
+        const char* waylandDisplay = g_getenv("WAYLAND_DISPLAY");
+        if ((sessionType && g_ascii_strcasecmp(sessionType, "wayland") == 0) ||
+            (waylandDisplay && *waylandDisplay != '\0')) {
+            // This process forces GDK's X11 backend, but an XWayland root
+            // drawable does not reliably contain native Wayland windows.
+            // Portal/PipeWire capture belongs in a future Wayland backend.
+            return false;
+        }
+
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display || !GDK_IS_X11_DISPLAY(display)) {
+            // GTK is intentionally initialized with GDK_BACKEND=x11. Do not
+            // pretend capture succeeded if that contract ever changes (for
+            // example, on a native Wayland backend without portal capture).
+            return false;
+        }
+
+        GdkWindow* root = gdk_get_default_root_window();
+        if (!root || gdk_window_is_destroyed(root)) {
+            return false;
+        }
+
+        const int rootWidth = gdk_window_get_width(root);
+        const int rootHeight = gdk_window_get_height(root);
+        if (rootWidth <= 0 || rootHeight <= 0) {
+            return false;
+        }
+
+        const int64_t requestedWidth = static_cast<int64_t>(width);
+        const int64_t requestedHeight = static_cast<int64_t>(height);
+        // Screen.getCursorScreenPoint(), display bounds, and GDK's root
+        // drawable share this coordinate space. Negative/clipped XRandR CRTC
+        // coordinates are outside the drawable and therefore fail cleanly.
+        if (requestedLeft < 0 || requestedTop < 0 ||
+            requestedLeft > rootWidth || requestedTop > rootHeight ||
+            requestedWidth > static_cast<int64_t>(rootWidth) - requestedLeft ||
+            requestedHeight > static_cast<int64_t>(rootHeight) - requestedTop) {
+            return false;
+        }
+
+        GdkPixbuf* pixbuf = gdk_pixbuf_get_from_window(
+            root,
+            static_cast<int>(requestedLeft),
+            static_cast<int>(requestedTop),
+            static_cast<int>(width),
+            static_cast<int>(height));
+        if (!pixbuf) {
+            return false;
+        }
+
+        const int pixbufWidth = gdk_pixbuf_get_width(pixbuf);
+        const int pixbufHeight = gdk_pixbuf_get_height(pixbuf);
+        const int channels = gdk_pixbuf_get_n_channels(pixbuf);
+        const int rowstride = gdk_pixbuf_get_rowstride(pixbuf);
+        const bool validFormat =
+            gdk_pixbuf_get_colorspace(pixbuf) == GDK_COLORSPACE_RGB &&
+            gdk_pixbuf_get_bits_per_sample(pixbuf) == 8 &&
+            channels >= 3 &&
+            pixbufWidth > 0 && pixbufHeight > 0 &&
+            pixbufWidth % static_cast<int>(width) == 0 &&
+            pixbufHeight % static_cast<int>(height) == 0;
+        if (!validFormat) {
+            g_object_unref(pixbuf);
+            return false;
+        }
+
+        const int scaleX = pixbufWidth / static_cast<int>(width);
+        const int scaleY = pixbufHeight / static_cast<int>(height);
+        if (scaleX <= 0 || scaleX != scaleY) {
+            g_object_unref(pixbuf);
+            return false;
+        }
+
+        const uint64_t packedRowBytes =
+            static_cast<uint64_t>(pixbufWidth) * static_cast<uint64_t>(channels);
+        if (rowstride <= 0 || static_cast<uint64_t>(rowstride) < packedRowBytes) {
+            g_object_unref(pixbuf);
+            return false;
+        }
+
+        gsize sourceLength = 0;
+        const guchar* source =
+            gdk_pixbuf_get_pixels_with_length(pixbuf, &sourceLength);
+        const uint64_t requiredSourceBytes =
+            static_cast<uint64_t>(pixbufHeight - 1) *
+                static_cast<uint64_t>(rowstride) +
+            packedRowBytes;
+        if (!source || requiredSourceBytes > static_cast<uint64_t>(sourceLength)) {
+            g_object_unref(pixbuf);
+            return false;
+        }
+
+        // The pixbuf is device-resolution (logical dimensions multiplied by
+        // the root window's integer scale). Sample the center device pixel for
+        // each requested logical pixel and always expose opaque RGBA.
+        const int sampleOffset = scaleX / 2;
+        for (uint32_t destinationY = 0; destinationY < height; ++destinationY) {
+            const int sourceY =
+                static_cast<int>(destinationY) * scaleY + sampleOffset;
+            const uint64_t sourceRow =
+                static_cast<uint64_t>(sourceY) * static_cast<uint64_t>(rowstride);
+            const uint64_t destinationRow =
+                static_cast<uint64_t>(destinationY) * logicalWidth * 4;
+
+            for (uint32_t destinationX = 0; destinationX < width; ++destinationX) {
+                const int sourceX =
+                    static_cast<int>(destinationX) * scaleX + sampleOffset;
+                const uint64_t sourceOffset =
+                    sourceRow + static_cast<uint64_t>(sourceX) *
+                        static_cast<uint64_t>(channels);
+                const uint64_t destinationOffset =
+                    destinationRow + static_cast<uint64_t>(destinationX) * 4;
+
+                out_rgba[destinationOffset] = source[sourceOffset];
+                out_rgba[destinationOffset + 1] = source[sourceOffset + 1];
+                out_rgba[destinationOffset + 2] = source[sourceOffset + 2];
+                out_rgba[destinationOffset + 3] = 255;
+            }
+        }
+
+        g_object_unref(pixbuf);
+        return true;
     });
 }
 

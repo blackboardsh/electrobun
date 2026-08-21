@@ -633,6 +633,17 @@ const core = (() => {
 				args: [],
 				returns: FFIType.cstring,
 			},
+			captureScreenRegion: {
+				args: [
+					FFIType.f64,
+					FFIType.f64,
+					FFIType.u32,
+					FFIType.u32,
+					FFIType.ptr,
+					FFIType.u64,
+				],
+				returns: FFIType.bool,
+			},
 			getMouseButtons: {
 				args: [],
 				returns: FFIType.u64,
@@ -3126,6 +3137,49 @@ export const Screen = {
 			return JSON.parse(jsonStr.toString());
 		} catch {
 			return { x: 0, y: 0 };
+		}
+	},
+
+	/**
+	 * Capture a rectangular region of the desktop as row-major RGBA pixels.
+	 * Coordinates and dimensions use Electrobun's logical screen coordinate
+	 * system; fractional origins are aligned down to the logical pixel grid.
+	 * Returns null when capture is unavailable or the rectangle is invalid.
+	 */
+	captureRegion: (rectangle: Rectangle): Uint8Array | null => {
+		const { x, y, width, height } = rectangle;
+		if (
+			!hasFFI ||
+			!Number.isFinite(x) ||
+			!Number.isFinite(y) ||
+			!Number.isSafeInteger(width) ||
+			!Number.isSafeInteger(height) ||
+			width <= 0 ||
+			height <= 0 ||
+			width > 0xffffffff ||
+			height > 0xffffffff
+		) {
+			return null;
+		}
+
+		const byteLength = width * height * 4;
+		if (!Number.isSafeInteger(byteLength)) return null;
+		const originX = Math.floor(x);
+		const originY = Math.floor(y);
+
+		try {
+			const pixels = new Uint8Array(byteLength);
+			const captured = core_.symbols.captureScreenRegion(
+				originX,
+				originY,
+				width,
+				height,
+				ptr(pixels),
+				BigInt(byteLength),
+			);
+			return captured ? pixels : null;
+		} catch {
+			return null;
 		}
 	},
 

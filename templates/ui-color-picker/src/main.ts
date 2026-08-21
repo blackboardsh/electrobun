@@ -4,13 +4,11 @@
 // in several formats — click a row to copy it, or cmd+C to copy your
 // preferred format (persisted across launches).
 //
-// Screen sampling uses the macOS `screencapture` CLI + Electrobun's PNG
-// decoder, so the app needs Screen Recording permission (System Settings →
-// Privacy & Security). Without it you'll see the wallpaper only — that's the
-// permission, not a bug.
+// Screen sampling uses Electrobun's native cross-platform capture API. macOS
+// requires Screen Recording permission; Windows and the current Linux/X11
+// backend do not require a separate app permission prompt.
 
-import { Screen, Tray, Utils, webgpu } from "electrobun/main";
-import { tmpdir } from "node:os";
+import { Screen, Tray, Utils } from "electrobun/main";
 import { join } from "node:path";
 import {
 	live,
@@ -26,6 +24,7 @@ import {
 	Key,
 	Mod,
 } from "electrobun/main/ui";
+import { packRgbaPixels, packedPixelsEqual } from "./colorSampling";
 
 // ---------------------------------------------------------------------------
 // Theme
@@ -66,6 +65,7 @@ const [copied, setCopied] = signal("");
 const [hasScreenAccess, setHasScreenAccess] = signal(
 	Utils.screenCapture.hasAccess(),
 );
+const [captureAvailable, setCaptureAvailable] = signal(true);
 
 const centerColor = memo(() => cells()[CENTER]! >>> 0);
 
@@ -152,58 +152,20 @@ function copy(format: Format) {
 // a row keeps the sampled color) or while frozen (space bar).
 // ---------------------------------------------------------------------------
 
-const capturePath = join(tmpdir(), `ui-color-picker-${process.pid}.png`);
-const { decodePngRGBA } = webgpu.utils;
-let sampling = false;
-
-async function sampleAround(cx: number, cy: number): Promise<void> {
+function sampleAround(cx: number, cy: number): boolean {
 	const half = Math.floor(GRID / 2);
-	const proc = Bun.spawn(
-		[
-			"screencapture",
-			"-x",
-			"-t",
-			"png",
-			"-R",
-			`${cx - half},${cy - half},${GRID},${GRID}`,
-			capturePath,
-		],
-		{ stderr: "ignore", stdout: "ignore" },
-	);
-	await proc.exited;
-	const bytes = new Uint8Array(await Bun.file(capturePath).arrayBuffer());
-	const img = decodePngRGBA(bytes) as {
-		width: number;
-		height: number;
-		data?: Uint8Array;
-		pixels?: Uint8Array;
-	};
-	const data = (img.data ?? img.pixels)!;
-	// Retina captures come back scaled: sample with a stride so the grid is
-	// one cell per requested point.
-	const strideX = img.width / GRID;
-	const strideY = img.height / GRID;
-	const next = new Uint32Array(GRID * GRID);
-	for (let gy = 0; gy < GRID; gy++) {
-		for (let gx = 0; gx < GRID; gx++) {
-			const px = Math.min(img.width - 1, Math.floor((gx + 0.5) * strideX));
-			const py = Math.min(img.height - 1, Math.floor((gy + 0.5) * strideY));
-			const o = (py * img.width + px) * 4;
-			next[gy * GRID + gx] =
-				((data[o]! << 24) | (data[o + 1]! << 16) | (data[o + 2]! << 8) | 0xff) >>> 0;
-		}
-	}
+	const rgba = Screen.captureRegion({
+		x: cx - half,
+		y: cy - half,
+		width: GRID,
+		height: GRID,
+	});
+	if (!rgba) return false;
+	const next = packRgbaPixels(rgba);
 	// Unchanged sample (stationary cursor, static screen): skip the update so
 	// the invalidation-driven renderer stays idle.
-	const prev = cells();
-	let changed = false;
-	for (let i = 0; i < next.length; i++) {
-		if (next[i] !== prev[i]) {
-			changed = true;
-			break;
-		}
-	}
-	if (changed) setCells(next);
+	if (!packedPixelsEqual(next, cells())) setCells(next);
+	return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -246,15 +208,24 @@ function ZoomGrid() {
 				},
 			},
 			() => {
-			ui.box({
-				width: 8,
-				height: 8,
-				radius: 4,
-				bg: live(() => (!hasScreenAccess() ? "#f7768e" : MODE_COLOR[mode()])),
-			});
-			ui.text(live(() => (!hasScreenAccess() ? "no access - click here" : mode())),
-				{ size: 9, color: theme.textFaint },
-			);
+				ui.box({
+					width: 8,
+					height: 8,
+					radius: 4,
+					bg: live(() =>
+						!hasScreenAccess() || !captureAvailable()
+							? "#f7768e"
+							: MODE_COLOR[mode()],
+					),
+				});
+				ui.text(
+					live(() =>
+						!hasScreenAccess() ? "no access - click here"
+						: !captureAvailable() ? "capture unavailable"
+						: mode(),
+					),
+					{ size: 9, color: theme.textFaint },
+				);
 			},
 		);
 	});
@@ -494,8 +465,9 @@ tray.on("tray-clicked", () => {
 });
 
 // Sampling loop: idle-cheap, skipped over our own window and while frozen.
+let warnedCaptureUnavailable = false;
 setInterval(() => {
-	if (!uiWindow.window.isVisible() || mode() === "frozen" || sampling) return;
+	if (!uiWindow.window.isVisible() || mode() === "frozen") return;
 	const cursor = Screen.getCursorScreenPoint();
 	const frame = uiWindow.window.getFrame();
 	const overSelf =
@@ -504,12 +476,14 @@ setInterval(() => {
 		cursor.x < frame.x + frame.width &&
 		cursor.y < frame.y + frame.height;
 	if (overSelf) return;
-	sampling = true;
-	sampleAround(cursor.x, cursor.y)
-		.catch(() => {})
-		.finally(() => {
-			sampling = false;
-		});
+	const captured = sampleAround(cursor.x, cursor.y);
+	setCaptureAvailable(captured);
+	if (!captured && !warnedCaptureUnavailable) {
+		console.warn(
+			"[ui-color-picker] Screen pixel capture is unavailable on the current display.",
+		);
+	}
+	warnedCaptureUnavailable = !captured;
 }, 150);
 
 // Pick-mode click watcher: fast edge-detect poll while armed; a press
@@ -537,14 +511,16 @@ setInterval(() => {
 // Ask for Screen Recording permission properly: shows the system prompt the
 // first time this app identity runs. After granting in System Settings the
 // app must be relaunched for capture to work (macOS TCC behavior).
-if (!Utils.screenCapture.hasAccess()) {
+if (process.platform === "darwin" && !Utils.screenCapture.hasAccess()) {
 	Utils.screenCapture.requestAccess();
 }
 setInterval(() => setHasScreenAccess(Utils.screenCapture.hasAccess()), 3000);
 
 console.log("[ui-color-picker] running (solid-effects-ok)");
-console.log(
-	Utils.screenCapture.hasAccess()
-		? "[ui-color-picker] Screen Recording permission granted."
-		: "[ui-color-picker] Awaiting Screen Recording permission (System Settings -> Privacy & Security). Relaunch after granting.",
-);
+if (process.platform === "darwin") {
+	console.log(
+		Utils.screenCapture.hasAccess()
+			? "[ui-color-picker] Screen Recording permission granted."
+			: "[ui-color-picker] Awaiting Screen Recording permission (System Settings -> Privacy & Security). Relaunch after granting.",
+	);
+}

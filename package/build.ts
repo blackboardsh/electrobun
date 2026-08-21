@@ -730,9 +730,9 @@ async function copyApiFiles() {
 
 	// Odin SDK is a package directory; the CLI exposes its parent as an Odin
 	// collection so user code can `import "electrobun_sdk:electrobun"`.
-	mkdirSync("dist/odin-sdk", { recursive: true });
-	cpSync("src/sdks/odin", "dist/odin-sdk/electrobun", {
-		recursive: true,
+	rmSync("dist/odin-sdk/electrobun", { recursive: true, force: true });
+	mkdirSync("dist/odin-sdk/electrobun", { recursive: true });
+	cpSync("src/sdks/odin/electrobun.odin", "dist/odin-sdk/electrobun/electrobun.odin", {
 		force: true,
 	});
 }

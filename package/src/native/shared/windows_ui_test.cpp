@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cassert>
 #include <atomic>
 #include <cstdint>
@@ -344,6 +345,49 @@ int main(int argc, char** argv) {
         if (!module) {
             std::fprintf(stderr, "LoadLibraryW failed: %lu\n", GetLastError());
             return 2;
+        }
+
+        using CaptureScreenRegionFn = bool (*)(
+            double, double, uint32_t, uint32_t, uint8_t*, uint64_t);
+        auto captureScreenRegion = reinterpret_cast<CaptureScreenRegionFn>(
+            GetProcAddress(module, "captureScreenRegion"));
+        if (!captureScreenRegion) {
+            std::fprintf(stderr, "captureScreenRegion export is unavailable\n");
+            FreeLibrary(module);
+            return 11;
+        }
+
+        uint8_t pixel[4] = {};
+        if (captureScreenRegion(0, 0, 0, 1, pixel, sizeof(pixel)) ||
+            captureScreenRegion(0, 0, 1, 0, pixel, sizeof(pixel)) ||
+            captureScreenRegion(0, 0, 1, 1, nullptr, sizeof(pixel)) ||
+            captureScreenRegion(0, 0, 1, 1, pixel, sizeof(pixel) - 1) ||
+            captureScreenRegion(0, 0, 1, 1, pixel, sizeof(pixel) + 1)) {
+            std::fprintf(stderr, "captureScreenRegion accepted invalid output\n");
+            FreeLibrary(module);
+            return 12;
+        }
+
+        const auto displays = electrobun::windowsLogicalMonitors();
+        const auto primary = std::find_if(
+            displays.begin(), displays.end(), [](const auto& display) {
+                return display.primary;
+            });
+        if (primary == displays.end()) {
+            std::fprintf(stderr, "No primary display is available\n");
+            FreeLibrary(module);
+            return 13;
+        }
+        const double logicalX = primary->logicalBounds.left +
+            (primary->logicalBounds.right - primary->logicalBounds.left) / 2;
+        const double logicalY = primary->logicalBounds.top +
+            (primary->logicalBounds.bottom - primary->logicalBounds.top) / 2;
+        if (!captureScreenRegion(
+                logicalX, logicalY, 1, 1, pixel, sizeof(pixel)) ||
+            pixel[3] != 255) {
+            std::fprintf(stderr, "captureScreenRegion pixel capture failed\n");
+            FreeLibrary(module);
+            return 14;
         }
 
         const std::wstring testAsarPath =

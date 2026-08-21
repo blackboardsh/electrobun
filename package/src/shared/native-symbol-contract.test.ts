@@ -331,6 +331,13 @@ describe("WGPU surface release ABI", () => {
 });
 
 describe("SDK to ElectrobunCore ABI", () => {
+	test("all main-process SDKs load the screen capture symbol", () => {
+		expect(coreExports).toContain("captureScreenRegion");
+		for (const symbols of Object.values(eagerCoreDemands)) {
+			expect(symbols).toContain("captureScreenRegion");
+		}
+	});
+
 	test.each(Object.entries(eagerCoreDemands))(
 		"every eagerly loaded %s symbol is exported by ElectrobunCore",
 		(_sdk, symbols) => {

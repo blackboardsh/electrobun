@@ -178,6 +178,11 @@ static bool eb_call_show_tray(void* fn, uint32_t tray_id) { return ((eb_show_tra
 typedef char* (*eb_string_ret_fn)(void);
 static char* eb_call_string_ret(void* fn) { return ((eb_string_ret_fn)fn)(); }
 
+typedef bool (*eb_capture_screen_region_fn)(double, double, uint32_t, uint32_t, uint8_t*, uint64_t);
+static bool eb_call_capture_screen_region(void* fn, double x, double y, uint32_t width, uint32_t height, uint8_t* out_rgba, uint64_t out_len) {
+	return ((eb_capture_screen_region_fn)fn)(x, y, width, height, out_rgba, out_len);
+}
+
 typedef const char* (*eb_u32_const_string_ret_fn)(uint32_t);
 static const char* eb_call_u32_const_string_ret(void* fn, uint32_t value) { return ((eb_u32_const_string_ret_fn)fn)(value); }
 
@@ -257,6 +262,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -742,6 +748,7 @@ var requiredSymbols = []string{
 	"getPrimaryDisplay",
 	"getAllDisplays",
 	"getCursorScreenPoint",
+	"captureScreenRegion",
 	"moveToTrash",
 	"showItemInFolder",
 	"openExternal",
@@ -1446,6 +1453,86 @@ func (c *Core) GetCursorScreenPoint() (Point, error) {
 		return Point{}, err
 	}
 	return point, nil
+}
+
+// CaptureScreenRegion captures a logical screen rectangle as tightly packed,
+// row-major RGBA pixels. Fractional origins are aligned down to the logical
+// pixel grid. The returned slice is exactly rect.Width * rect.Height * 4 bytes.
+func (c *Core) CaptureScreenRegion(rect Rect) ([]byte, error) {
+	return captureScreenRegionWith(rect, func(
+		originX, originY float64,
+		width, height uint32,
+		pixels []byte,
+	) bool {
+		return bool(C.eb_call_capture_screen_region(
+			c.symbol("captureScreenRegion"),
+			C.double(originX),
+			C.double(originY),
+			C.uint32_t(width),
+			C.uint32_t(height),
+			(*C.uint8_t)(unsafe.Pointer(&pixels[0])),
+			C.uint64_t(len(pixels)),
+		))
+	})
+}
+
+func captureScreenRegionWith(
+	rect Rect,
+	capture func(float64, float64, uint32, uint32, []byte) bool,
+) ([]byte, error) {
+	originX, originY, width, height, byteLength, err := screenCaptureRegionArgs(rect)
+	if err != nil {
+		return nil, err
+	}
+
+	pixels, err := allocateScreenCaptureBuffer(byteLength)
+	if err != nil {
+		return nil, err
+	}
+
+	if !capture(originX, originY, width, height, pixels) {
+		return nil, errors.New("failed to capture screen region")
+	}
+	return pixels, nil
+}
+
+func screenCaptureRegionArgs(rect Rect) (float64, float64, uint32, uint32, uint64, error) {
+	if math.IsNaN(rect.X) || math.IsInf(rect.X, 0) ||
+		math.IsNaN(rect.Y) || math.IsInf(rect.Y, 0) {
+		return 0, 0, 0, 0, 0, errors.New("screen capture origin must be finite")
+	}
+
+	maxUint32 := float64(^uint32(0))
+	if math.IsNaN(rect.Width) || math.IsInf(rect.Width, 0) ||
+		math.IsNaN(rect.Height) || math.IsInf(rect.Height, 0) ||
+		rect.Width <= 0 || rect.Height <= 0 ||
+		math.Trunc(rect.Width) != rect.Width || math.Trunc(rect.Height) != rect.Height ||
+		rect.Width > maxUint32 || rect.Height > maxUint32 {
+		return 0, 0, 0, 0, 0, errors.New("screen capture dimensions must be positive uint32 integers")
+	}
+
+	width := uint32(rect.Width)
+	height := uint32(rect.Height)
+	pixelCount := uint64(width) * uint64(height)
+	if pixelCount > ^uint64(0)/4 {
+		return 0, 0, 0, 0, 0, errors.New("screen capture RGBA byte length overflows uint64")
+	}
+	byteLength := pixelCount * 4
+	if byteLength > uint64(^uint(0)>>1) {
+		return 0, 0, 0, 0, 0, errors.New("screen capture RGBA byte length exceeds Go's maximum slice length")
+	}
+
+	return math.Floor(rect.X), math.Floor(rect.Y), width, height, byteLength, nil
+}
+
+func allocateScreenCaptureBuffer(byteLength uint64) (pixels []byte, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			pixels = nil
+			err = fmt.Errorf("failed to allocate screen capture RGBA buffer: %v", recovered)
+		}
+	}()
+	return make([]byte, int(byteLength)), nil
 }
 
 func (c *Core) MoveToTrash(path string) (bool, error) {

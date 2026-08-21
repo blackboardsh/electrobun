@@ -139,6 +139,7 @@ TestKind :: enum {
 	screen_primary_display,
 	screen_all_displays,
 	screen_cursor_screen_point,
+	screen_capture_region,
 	screen_bounds_vs_workarea,
 }
 
@@ -803,6 +804,14 @@ odin_tests := [?]OdinTest {
 		kind = .screen_cursor_screen_point,
 	},
 	{
+		id = "odin-screen-capture-region",
+		name = "captureRegion (Odin)",
+		category = "Screen",
+		description = "Capture a small screen region as row-major RGBA pixels through the Odin SDK.",
+		mirrors_bun_test_name = "captureRegion",
+		kind = .screen_capture_region,
+	},
+	{
 		id = "odin-screen-bounds-vs-workarea",
 		name = "Display bounds vs workArea (Odin)",
 		category = "Screen",
@@ -902,6 +911,10 @@ errName :: proc(err: electrobun.Error) -> string {
 		return "LibraryLoadFailed"
 	case .ElectrobunCoreFailure:
 		return "ElectrobunCoreFailure"
+	case .InvalidScreenCaptureRegion:
+		return "InvalidScreenCaptureRegion"
+	case .AllocationFailed:
+		return "AllocationFailed"
 	case .InvalidExePath:
 		return "InvalidExePath"
 	case .InvalidRectJson:
@@ -4653,6 +4666,35 @@ runScreenCursorScreenPointTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
+runScreenCaptureRegionTest :: proc(state: ^AppState) -> string {
+	display, display_err := electrobun.getPrimaryDisplay(state.core)
+	if display_err != .None {
+		return errName(display_err)
+	}
+	pixels, capture_err := electrobun.captureScreenRegion(state.core, {
+		x = math.floor(display.bounds.x + display.bounds.width / 2) - 1,
+		y = math.floor(display.bounds.y + display.bounds.height / 2) - 1,
+		width = 2,
+		height = 2,
+	})
+	if capture_err != .None {
+		when ODIN_OS == .Windows {
+			return errName(capture_err)
+		} else {
+			return ""
+		}
+	}
+	defer delete(pixels, state.core.allocator)
+
+	if len(pixels) != 16 {
+		return "InvalidScreenCaptureLength"
+	}
+	if pixels[3] != 255 || pixels[7] != 255 || pixels[11] != 255 || pixels[15] != 255 {
+		return "InvalidScreenCaptureAlpha"
+	}
+	return ""
+}
+
 runScreenBoundsVsWorkAreaTest :: proc(state: ^AppState) -> string {
 	display, display_err := electrobun.getPrimaryDisplay(state.core)
 	if display_err != .None {
@@ -4849,6 +4891,8 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runScreenAllDisplaysTest(state)
 	case .screen_cursor_screen_point:
 		error_name = runScreenCursorScreenPointTest(state)
+	case .screen_capture_region:
+		error_name = runScreenCaptureRegionTest(state)
 	case .screen_bounds_vs_workarea:
 		error_name = runScreenBoundsVsWorkAreaTest(state)
 	}
