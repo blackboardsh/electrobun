@@ -269,8 +269,9 @@ matching Cottontail binary can still disassemble it.
 Two things hold regardless of the setting:
 
 - **Dev builds ignore `bytecode`** (`hutch electrobun dev` / `--env=dev`) and
-  always ship source, so sourcemaps, the debugger, and hot reload keep working.
-  Bytecode applies to canary and stable builds.
+  always ship source, so sourcemaps and the debugger keep working. In watch
+  mode, Hutch rebuilds and relaunches the app from that source. Bytecode applies
+  to canary and stable builds.
 - The bytecode is generated against the **exact Cottontail bundled into your
   app** and regenerated on every build, so it never drifts from the runtime
   that will execute it.
@@ -371,6 +372,10 @@ native build inputs, view entrypoints, and copy sources. Add other source
 locations with `build.watch`; suppress generated or high-churn paths with
 `build.watchIgnore`. `build`, `artifacts`, and
 `node_modules` are always ignored.
+
+Watch mode rebuilds and relaunches the whole app; it is distinct from
+webview-only hot module replacement. See [Hot Reloading](/electrobun/guides/hot-reloading/)
+for the main-process, Vite, and Warren reload boundaries.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";

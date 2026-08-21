@@ -22,6 +22,7 @@ export default defineConfig({
               label: "Getting Started",
               items: [
                 { label: "Quick Start", link: "/electrobun/guides/quick-start/" },
+                { label: "Hot Reloading", link: "/electrobun/guides/hot-reloading/" },
                 { label: "Project Ownership & Devkit", link: "/electrobun/guides/project-ownership/" },
                 { label: "What is Electrobun?", link: "/electrobun/guides/what-is-electrobun/" },
                 {
