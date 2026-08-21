@@ -12168,7 +12168,7 @@ ELECTROBUN_EXPORT bool captureScreenRegion(
             return false;
         }
 
-        gsize sourceLength = 0;
+        guint sourceLength = 0;
         const guchar* source =
             gdk_pixbuf_get_pixels_with_length(pixbuf, &sourceLength);
         const uint64_t requiredSourceBytes =
