@@ -109,6 +109,10 @@ hutch electrobun dev --watch
 # Prepare the selected Electrobun devkit and toolchain without building
 hutch electrobun prepare
 
+# Update the nearest exact Electrobun pin to the latest stable release
+# and sync this app's generated devkit
+hutch electrobun update
+
 # Deliberately advance an unpinned project to the current channel head
 hutch electrobun sync
 
@@ -354,6 +358,13 @@ active release channel: `hutch electrobun sync` advances to its current head,
 while `prepare`, `build`, `run`, and `dev` reuse the version already projected
 into `.hutch/devkit` so builds remain stable between syncs. An explicit pin
 always wins.
+
+Run `hutch electrobun update` from an app directory to upgrade an exact pin.
+Hutch finds the nearest parent `hutch.config.ts`, resolves the latest stable
+Electrobun release, rewrites only its exact `electrobun.version` string literal,
+and then syncs the current app. The command always targets stable even when the
+active Hutch or template channel is canary/beta. It requires network access and
+fails instead of guessing when the pin is missing, computed, or ambiguous.
 
 `hutch electrobun prepare` resolves and verifies the selected release in the global
 `~/.hutch/releases/electrobun` store, then copies its SDKs and editor facade into

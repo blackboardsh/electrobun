@@ -56,8 +56,10 @@ Hutch resolves and verifies the selected release under
 into the generated project `.hutch/devkit` sysroot. Run
 `hutch electrobun prepare` to materialize or refresh that project copy without
 building or advancing a valid floating projection. `build`, `run`, and `dev`
-prepare implicitly; use `hutch electrobun sync` when you deliberately want an
-unpinned direct-Hutch project to follow the current release channel head. See
+prepare implicitly. Run `hutch electrobun update` to move an existing exact pin
+to the latest stable release and sync the app; use `hutch electrobun sync` when
+you deliberately want an unpinned direct-Hutch project to follow the current
+release channel head. See
 [Project Ownership and the Devkit](/electrobun/guides/project-ownership/) for
 the config responsibility table, generated-state lifecycle, and
 external-bundler aliases.

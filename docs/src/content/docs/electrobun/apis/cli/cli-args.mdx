@@ -87,6 +87,24 @@ network access. Preparation can reuse exact releases and managed toolchains
 that are already installed; anything missing requires a network lookup and
 download.
 
+## `hutch electrobun update`
+
+Upgrade a pinned app to the latest stable Electrobun release:
+
+```bash
+hutch electrobun update
+```
+
+Hutch searches upward from the current app directory for the nearest
+`hutch.config.ts`, resolves the stable release catalog to an exact version,
+safely rewrites its existing exact `electrobun.version` string literal, and
+then runs the normal sync path for the current app. Stable is explicit: an
+active canary/beta channel does not change the update target.
+
+The command requires network access. It fails closed when there is no parent
+Hutch config, no exact pin, or the pin is computed or ambiguous; edit those
+non-canonical configurations manually before retrying.
+
 ## `hutch electrobun sync`
 
 Perform the same project preparation, but deliberately advance an unpinned
