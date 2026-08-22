@@ -7405,14 +7405,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                 // ::log("[WebView2] Loaded views file content, creating response");
 
                                                 // Create response (simplified)
-                                                std::string mimeType = "text/html";
-                                                bool isDocument = false;
-                                                if (filePath.find(".js") != std::string::npos) mimeType = "application/javascript";
-                                                else if (filePath.find(".css") != std::string::npos) mimeType = "text/css";
-                                                else if (filePath.find(".png") != std::string::npos) mimeType = "image/png";
-                                                else {
-                                                    isDocument = true; // HTML document
-                                                }
+                                                const std::string mimeType = getMimeTypeForFile(filePath);
+                                                const bool isDocument =
+                                                    mimeType == "text/html";
 
                                                 // For HTML documents (main frame navigation), fire navigation events manually
                                                 // since WebResourceRequested bypasses NavigationStarting/NavigationCompleted

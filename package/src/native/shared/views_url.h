@@ -73,7 +73,12 @@ inline bool normalizeViewsRelativePath(
     };
 
     if (error) *error = ViewsUrlPathError::none;
-    std::string path = url.rfind("views://", 0) == 0 ? url.substr(8) : url;
+    std::string path = url;
+    if (url.rfind("views://", 0) == 0) {
+        path = url.substr(8);
+    } else if (url.rfind("appdata://", 0) == 0) {
+        path = url.substr(10);
+    }
 
     const size_t queryPos = path.find('?');
     const size_t hashPos = path.find('#');

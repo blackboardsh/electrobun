@@ -32,6 +32,8 @@ int main() {
         "folder/hello world#?.txt"
     );
     expectPath("views://unicode/%E2%9C%93.txt", "unicode/\xe2\x9c\x93.txt");
+    expectPath("appdata://fixture.txt", "fixture.txt");
+    expectPath("appdata://folder/asset.png?cache=1", "folder/asset.png");
 
     expectError("views://bad%", ViewsUrlPathError::malformed_percent_encoding);
     expectError("views://bad%2", ViewsUrlPathError::malformed_percent_encoding);
@@ -46,5 +48,7 @@ int main() {
     expectError("views://safe/d:/secret", ViewsUrlPathError::drive_prefix);
     expectError("views://bad/%C0%AF", ViewsUrlPathError::invalid_utf8);
     expectError("views://bad/%FF", ViewsUrlPathError::invalid_utf8);
+    expectError("appdata://../secret", ViewsUrlPathError::traversal);
+    expectError("appdata://safe/%2e%2e/secret", ViewsUrlPathError::traversal);
     return 0;
 }
