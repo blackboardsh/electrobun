@@ -748,7 +748,6 @@ static NSString* canonicalContainedPath(NSString *root, NSString *relativePath) 
         stringByStandardizingPath] stringByResolvingSymlinksInPath];
     NSString *rootPrefix = [canonicalRoot stringByAppendingString:@"/"];
     if (![candidate hasPrefix:rootPrefix]) {
-        NSLog(@"Blocked protocol path outside root %@ -> %@", canonicalRoot, candidate);
         return nil;
     }
     return candidate;
@@ -2193,8 +2192,8 @@ static void schedulePendingResizeDrain() {
                 free((void*)mimeTypePtr);
             }
         } else {
-            NSLog(@"============== ERROR ========== empty response for URL: %@", urlString);         
-            // Notify failure properly to prevent crashes
+            // Missing and rejected paths are normal URL failures. In particular,
+            // traversal tests intentionally reach this branch.
             NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" 
                                                  code:404 
                                              userInfo:@{NSLocalizedDescriptionKey: @"Resource not found"}];
