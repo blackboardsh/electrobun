@@ -1,8 +1,8 @@
 ---
-title: "Bundled Assets"
-description: "Bundle local web content and load it through the views:// protocol."
+title: "Local Webview Assets"
+description: "Load bundled and app-owned files through views:// and appdata://."
 ---
-import { Aside } from "@astrojs/starlight/components";
+import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Electrobun maps files under the packaged `Resources/app/views` directory to the
 `views://` protocol. Use these URLs anywhere a webview accepts a normal URL.
@@ -89,3 +89,137 @@ the entrypoint's filename. In this example, the `mainview` entry becomes
 `Utils.paths.userData`, `Utils.paths.userCache`, or another writable system
 directory.
 </Aside>
+
+## Load mutable files with `appdata://`
+
+`appdata://` maps to the app's fixed, writable `userData` directory. Its exact
+OS-specific location is available as `Utils.paths.userData` in TypeScript and
+the `userData` / `user_data` / `UserData` field of the native SDKs' resolved
+paths. See [Paths](/electrobun/apis/paths/) for the directory layout.
+
+Access is granted per webview and is disabled by default. Enable it when
+creating the `BrowserWindow` or `BrowserView` that needs to read those files:
+
+<Tabs syncKey="runtime">
+<TabItem label="Cottontail">
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  url: "views://mainview/index.html",
+  allowedProtocols: {
+    appData: true,
+  },
+});
+```
+
+</TabItem>
+<TabItem label="Bun">
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  url: "views://mainview/index.html",
+  allowedProtocols: {
+    appData: true,
+  },
+});
+```
+
+</TabItem>
+<TabItem label="Zig">
+
+```zig
+var webview_options = electrobun.WebviewOptions{
+    .window_id = window_id,
+    .url = "views://mainview/index.html",
+    .allowed_protocols = .{ .app_data = true },
+};
+const webview_id = try core.createWebview(webview_options);
+```
+
+</TabItem>
+<TabItem label="Rust">
+
+```rust
+let mut webview_options = WebviewOptions::new(
+    window_id,
+    "views://mainview/index.html",
+    Rect::new(0.0, 0.0, 800.0, 600.0),
+);
+webview_options.allowed_protocols = AllowedProtocols {
+    views: true,
+    app_data: true,
+};
+let webview_id = core.create_webview(webview_options)?;
+```
+
+</TabItem>
+<TabItem label="Go">
+
+```go
+webviewOptions := electrobun.NewWebviewOptions(
+    windowID,
+    "views://mainview/index.html",
+    electrobun.NewRect(0, 0, 800, 600),
+)
+webviewOptions.AllowedProtocols.AppData = true
+webviewID, err := core.CreateWebview(webviewOptions)
+```
+
+</TabItem>
+<TabItem label="Odin">
+
+```odin
+webview_options := electrobun.defaultWebviewOptions(window_id)
+webview_options.url = "views://mainview/index.html"
+webview_options.allowed_protocols.app_data = true
+webview_id, webview_err := electrobun.createWebview(core, webview_options)
+```
+
+</TabItem>
+</Tabs>
+
+Files written beneath `userData` are then available to that webview as normal
+web resources:
+
+```html
+<img src="appdata://images/avatar.png" alt="User avatar" />
+```
+
+```ts
+const response = await fetch("appdata://documents/report.txt");
+if (!response.ok) throw new Error("Could not load report");
+const report = await response.text();
+```
+
+The protocol works from both `views://` pages and remote pages, and its
+responses are CORS-enabled. Permission follows the webview, not the current
+page's origin: if an enabled webview navigates to a remote URL, that remote
+page can also request `appdata://` files.
+
+<Aside type="caution">
+Only enable `appData` on a webview whose content and navigation you trust. For
+remote content, use a separate webview without this permission unless that
+site is deliberately allowed to read the app's shared files.
+</Aside>
+
+Both `views://` and `appdata://` are confined to their respective roots.
+Absolute paths, `..` traversal (including encoded traversal), and symlink
+escapes outside the root are rejected.
+
+## Protocol defaults
+
+The complete per-webview option is:
+
+```ts
+type AllowedProtocols = {
+  views?: boolean;   // defaults to true
+  appData?: boolean; // defaults to false
+};
+```
+
+Set `views: false` for a webview that should not be able to read packaged UI
+assets. Unspecified properties retain their defaults.

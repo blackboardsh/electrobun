@@ -106,6 +106,8 @@ including `stable` and older app-name roots, so app data stays in place.
 Packaged resources are read-only application content. Modifying a macOS app
 bundle invalidates its code signature. Use `Utils.paths.userData`,
 `Utils.paths.userCache`, or another writable system directory for mutable data.
+Webviews can read files beneath `userData` through the opt-in `appdata://`
+protocol; see [Local Webview Assets](/electrobun/apis/bundled-assets/#load-mutable-files-with-appdata).
 
 For installer builds, Electrobun's `App and Data` uninstall action removes the
 three app-scoped paths (`userData`, `userCache`, and `userLogs`) for only the
