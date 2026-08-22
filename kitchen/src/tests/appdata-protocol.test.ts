@@ -31,18 +31,37 @@ function protocolTest(enabled: boolean) {
     name: `appdata protocol ${expectation} access`,
     category: "Protocols",
     description: `Verifies appdata:// is ${expectation === "allows" ? "readable" : "blocked"} when requesting CEF, including the automatic system-webview fallback when CEF is not bundled`,
-    timeout: 20000,
+    timeout: 30000,
     async run({ createWindow, log }) {
       const hasSymlinkFixture = await writeFixture();
       const win = await createWindow({
         url: "views://test-harness/index.html",
         renderer: "cef",
-        rpc: createTestHarnessRPC(),
+        rpc: createTestHarnessRPC(2000),
         allowedProtocols: { views: true, appData: enabled },
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1200));
-      const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+      const rpc = win.webview.rpc;
+      if (!rpc) throw new Error("Expected test harness RPC to be available");
+
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      const readinessDeadline = Date.now() + 15000;
+      let readinessError: unknown;
+      for (;;) {
+        try {
+          if (await rpc.request.multiply({ a: 6, b: 7 }) === 42) break;
+        } catch (error) {
+          readinessError = error;
+        }
+        if (Date.now() >= readinessDeadline) {
+          throw new Error(
+            `Timed out waiting for appdata test harness RPC: ${String(readinessError)}`,
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+
+      const result = await rpc.request.evaluateJavascriptWithResponse({
         script: `return fetch("appdata://${fixtureName}")
           .then(async response => ({ ok: response.ok, status: response.status, text: await response.text() }))
           .catch(error => ({ ok: false, status: 0, text: String(error) }));`,
@@ -56,7 +75,7 @@ function protocolTest(enabled: boolean) {
           `appdata://%2e%2e/${escapeFixtureName}`,
           ...(hasSymlinkFixture ? [`appdata://${symlinkFixtureName}`] : []),
         ];
-        const escapeResults = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+        const escapeResults = await rpc.request.evaluateJavascriptWithResponse({
           script: `return Promise.all(${JSON.stringify(escapeUrls)}.map(url => fetch(url)
             .then(async response => ({ ok: response.ok, text: await response.text() }))
             .catch(error => ({ ok: false, text: String(error) }))));`,

@@ -1094,7 +1094,7 @@ static std::string loadAppDataFile(const std::string& url) {
     if (!electrobun::utf8ToWide(relative, relativeWide) ||
         !electrobun::utf8ToWide(g_electrobunIdentifier, identifierWide) ||
         !electrobun::utf8ToWide(g_electrobunChannel, channelWide)) return "";
-    const std::wstring base = electrobun::getEnvironmentVariableWide(L"APPDATA");
+    const std::wstring base = electrobun::getEnvironmentVariableWide(L"LOCALAPPDATA");
     if (base.empty()) return "";
     std::error_code ec;
     const auto root = std::filesystem::weakly_canonical(
