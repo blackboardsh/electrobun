@@ -151,6 +151,8 @@ const (
 	kindWebviewCreate                        testKind = "webview_create"
 	kindWebviewPageZoom                      testKind = "webview_page_zoom"
 	kindWebviewSpellCheck                    testKind = "webview_spell_check"
+	kindAppDataProtocolAllow                 testKind = "appdata_protocol_allow"
+	kindAppDataProtocolDeny                  testKind = "appdata_protocol_deny"
 	kindWebviewTagPlaygroundIntegration      testKind = "webview_tag_playground_integration"
 	kindWebviewTagPlaygroundInteractive      testKind = "webview_tag_playground_interactive"
 	kindWgpuTagPlaygroundIntegration         testKind = "wgpu_tag_playground_integration"
@@ -230,6 +232,8 @@ var goTests = []goTest{
 	test("go-webview-create", "BrowserView create (Go)", "BrowserView", kindWebviewCreate),
 	test("go-webview-page-zoom", "BrowserView page zoom API (Go)", "BrowserWindow", kindWebviewPageZoom),
 	test("go-webview-spell-check", "BrowserView spell check capability (Go)", "BrowserWindow", kindWebviewSpellCheck),
+	test("go-appdata-protocol-allows-access", "appdata protocol allows access", "Protocols", kindAppDataProtocolAllow),
+	test("go-appdata-protocol-denies-access", "appdata protocol denies access", "Protocols", kindAppDataProtocolDeny),
 	test("go-webview-tag-playground-integration", "Webview Tag playground integration (Go)", "Webview Tag", kindWebviewTagPlaygroundIntegration),
 	interactiveTest("go-webview-tag-playground", "Webview Tag playground (Go)", "Webview Tag (Interactive)", kindWebviewTagPlaygroundInteractive,
 		"A webview tag playground will open",
@@ -1176,6 +1180,10 @@ func runGoTestBody(test goTest) error {
 		return runWebviewPageZoomTest()
 	case kindWebviewSpellCheck:
 		return runWebviewSpellCheckTest()
+	case kindAppDataProtocolAllow:
+		return runAppDataProtocolTest(true)
+	case kindAppDataProtocolDeny:
+		return runAppDataProtocolTest(false)
 	case kindWindowSetTitle:
 		return runWindowSetTitleTest()
 	case kindWindowMinimizeUnminimize:
@@ -2376,6 +2384,61 @@ func runNavigationExecuteJavascriptTest() error {
 	time.Sleep(mediumWait)
 	err = state.core.EvaluateJavaScriptWithNoCompletion(created.webviewID, "document.body.dataset.goExecuteJavascript = 'ok';")
 	return finishWithWindow(created.windowID, err)
+}
+
+func runAppDataProtocolTest(enabled bool) error {
+	const fixtureName = "kitchen-appdata-protocol-go.txt"
+	const fixtureContents = "electrobun-appdata-protocol-ok"
+	paths, err := resolvedPaths()
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(paths.UserData, 0o755); err != nil {
+		return fmt.Errorf("create user data directory: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.UserData, fixtureName), []byte(fixtureContents), 0o644); err != nil {
+		return fmt.Errorf("write appdata fixture: %w", err)
+	}
+
+	frame := electrobun.NewRect(100, 100, 640, 420)
+	windowOptions := electrobun.NewWindowOptions("Go appdata protocol test", frame)
+	windowOptions.Hidden = true
+	windowOptions.Activate = false
+	windowID, err := state.core.CreateWindow(windowOptions)
+	if err != nil {
+		return err
+	}
+	err = func() error {
+		resetCallbackState()
+		options := electrobun.NewWebviewOptions(windowID, testHarnessURL, electrobun.NewRect(0, 0, frame.Width, frame.Height))
+		options.Renderer = electrobun.RendererCEF
+		options.SecretKey = defaultSecretKey
+		options.Sandbox = false
+		options.AllowedProtocols = electrobun.AllowedProtocols{Views: true, AppData: enabled}
+		options.Callbacks = observedHarnessWebviewCallbacks()
+		webviewID, createErr := state.core.CreateWebview(options)
+		if createErr != nil {
+			return createErr
+		}
+		time.Sleep(longWait)
+		resetCallbackState()
+		expected := "false"
+		if enabled {
+			expected = "true"
+		}
+		script := fmt.Sprintf(`fetch("appdata://%s")
+            .then(async response => response.ok && (await response.text()) === "%s")
+            .catch(() => false)
+            .then(readable => location.href = "views://test-harness/index.html?appdataResult=" + (readable === %s ? "ok" : "fail"));`, fixtureName, fixtureContents, expected)
+		if err := state.core.EvaluateJavaScriptWithNoCompletion(webviewID, script); err != nil {
+			return err
+		}
+		if !waitUntil(5*time.Second, func() bool { return lastWebviewDetailContains("appdataResult=ok") }) {
+			return fmt.Errorf("webview did not observe the expected appdata contents/access result")
+		}
+		return nil
+	}()
+	return finishWithWindow(windowID, err)
 }
 
 func runTrayVisibilityToggleAndBoundsTest() error {

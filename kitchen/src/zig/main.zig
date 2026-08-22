@@ -101,6 +101,8 @@ const TestKind = enum {
     webview_create,
     webview_page_zoom,
     webview_spell_check,
+    appdata_protocol_allow,
+    appdata_protocol_deny,
     webview_tag_playground_integration,
     webview_tag_playground_interactive,
     wgpu_tag_playground_integration,
@@ -422,6 +424,22 @@ const zig_tests = [_]ZigTest{
         .category = "Webview Tag",
         .description = "Load the real webview-tag playground in CEF mode and verify nested electrobun-webview tags initialize through the Zig host bridge.",
         .kind = .webview_tag_playground_integration,
+    },
+    .{
+        .id = "zig-appdata-protocol-allows-access",
+        .name = "appdata protocol allows access",
+        .category = "Protocols",
+        .description = "Read exact appdata file contents in a CEF-requested webview.",
+        .mirrors_bun_test_name = "appdata protocol allows access",
+        .kind = .appdata_protocol_allow,
+    },
+    .{
+        .id = "zig-appdata-protocol-denies-access",
+        .name = "appdata protocol denies access",
+        .category = "Protocols",
+        .description = "Block appdata file access in a CEF-requested webview.",
+        .mirrors_bun_test_name = "appdata protocol denies access",
+        .kind = .appdata_protocol_deny,
     },
     .{
         .id = "zig-webview-tag-playground",
@@ -1158,6 +1176,8 @@ fn runZigTest(zig_test: ZigTest) TestResult {
         .webview_create => runWebviewCreateTest(state),
         .webview_page_zoom => runWebviewPageZoomTest(state),
         .webview_spell_check => runWebviewSpellCheckTest(state),
+        .appdata_protocol_allow => runAppDataProtocolTest(state, true),
+        .appdata_protocol_deny => runAppDataProtocolTest(state, false),
         .webview_tag_playground_integration => runWebviewTagPlaygroundIntegrationTest(state),
         .webview_tag_playground_interactive => runWebviewTagPlaygroundInteractiveTest(state),
         .wgpu_tag_playground_integration => runWgpuTagPlaygroundIntegrationTest(state),
@@ -3496,6 +3516,59 @@ fn runNavigationExecuteJavascriptTest(state: *AppState) !void {
         "document.body.innerHTML = '<h1>Modified by executeJavascript</h1>';",
     );
     sleepMs(short_wait_ms);
+}
+
+fn runAppDataProtocolTest(state: *AppState, enabled: bool) !void {
+    const fixture_name = "kitchen-appdata-protocol-zig.txt";
+    const fixture_contents = "electrobun-appdata-protocol-ok";
+    var paths = try electrobun.Paths.resolve(state.allocator, state.app_info);
+    defer paths.deinit(state.allocator);
+    try std.Io.Dir.cwd().createDirPath(electrobun.defaultIo(), paths.userData);
+    const fixture_path = try std.fs.path.join(state.allocator, &.{ paths.userData, fixture_name });
+    defer state.allocator.free(fixture_path);
+    {
+        const file = try std.Io.Dir.createFileAbsolute(electrobun.defaultIo(), fixture_path, .{});
+        defer file.close(electrobun.defaultIo());
+        try file.writeStreamingAll(electrobun.defaultIo(), fixture_contents);
+    }
+
+    const frame: electrobun.Rect = .{ .x = 100, .y = 100, .width = 640, .height = 420 };
+    const window_id = try state.core.createWindow(.{
+        .title = "Zig appdata protocol test",
+        .frame = frame,
+        .hidden = true,
+        .activate = false,
+    });
+    defer state.core.closeWindow(window_id) catch {};
+    resetCallbackState();
+    const webview_id = try state.core.createWebview(.{
+        .window_id = window_id,
+        .renderer = .cef,
+        .url = test_harness_url,
+        .frame = .{ .width = frame.width, .height = frame.height },
+        .secret_key = default_secret_key,
+        .sandbox = false,
+        .allowed_protocols = .{ .views = true, .app_data = enabled },
+        .callbacks = observedHarnessWebviewCallbacks(),
+    });
+    sleepMs(long_wait_ms);
+    resetCallbackState();
+    const expected = if (enabled) "true" else "false";
+    const script = try std.fmt.allocPrint(state.allocator,
+        \\fetch("appdata://{s}")
+        \\  .then(async response => response.ok && (await response.text()) === "{s}")
+        \\  .catch(() => false)
+        \\  .then(readable => location.href = "views://test-harness/index.html?appdataResult=" + (readable === {s} ? "ok" : "fail"));
+    , .{ fixture_name, fixture_contents, expected });
+    defer state.allocator.free(script);
+    try state.core.evaluateJavaScriptWithNoCompletion(webview_id, script);
+    const deadline = nowMs() + 5000;
+    while (!lastWebviewDetailContains("appdataResult=ok") and nowMs() < deadline) {
+        sleepMs(25);
+    }
+    if (!lastWebviewDetailContains("appdataResult=ok")) {
+        return error.AppDataProtocolUnexpectedResult;
+    }
 }
 
 fn runTrayVisibilityToggleAndBoundsTest(state: *AppState) !void {

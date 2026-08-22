@@ -1,6 +1,7 @@
 use electrobun::{
-    self, BundlePaths, Core, NotificationOptions, Paths, Rect, Renderer, TrafficLightOffset,
-    TrayOptions, WGPUViewOptions, WebviewCallbacks, WebviewOptions, WindowOptions,
+    self, AllowedProtocols, BundlePaths, Core, NotificationOptions, Paths, Rect, Renderer,
+    TrafficLightOffset, TrayOptions, WGPUViewOptions, WebviewCallbacks, WebviewOptions,
+    WindowOptions,
 };
 use serde_json::{Map as JsonMap, Value as JsonValue};
 use std::collections::HashMap;
@@ -85,6 +86,8 @@ enum TestKind {
     WebviewCreate,
     WebviewPageZoom,
     WebviewSpellCheck,
+    AppDataProtocolAllow,
+    AppDataProtocolDeny,
     WebviewTagPlaygroundIntegration,
     WebviewTagPlaygroundInteractive,
     WgpuTagPlaygroundIntegration,
@@ -453,6 +456,22 @@ const RUST_TESTS: &[RustTest] = &[
         description: "Report native WKWebView spell-check support through the Rust SDK.",
         interactive: false,
         kind: TestKind::WebviewSpellCheck,
+    },
+    RustTest {
+        id: "rust-appdata-protocol-allows-access",
+        name: "appdata protocol allows access",
+        category: "Protocols",
+        description: "Read exact appdata file contents in a CEF-requested webview.",
+        interactive: false,
+        kind: TestKind::AppDataProtocolAllow,
+    },
+    RustTest {
+        id: "rust-appdata-protocol-denies-access",
+        name: "appdata protocol denies access",
+        category: "Protocols",
+        description: "Block appdata file access in a CEF-requested webview.",
+        interactive: false,
+        kind: TestKind::AppDataProtocolDeny,
     },
     RustTest {
         id: "rust-webview-tag-playground-integration",
@@ -1542,6 +1561,8 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
         TestKind::WebviewCreate => run_webview_create_test(),
         TestKind::WebviewPageZoom => run_webview_page_zoom_test(),
         TestKind::WebviewSpellCheck => run_webview_spell_check_test(),
+        TestKind::AppDataProtocolAllow => run_appdata_protocol_test(true),
+        TestKind::AppDataProtocolDeny => run_appdata_protocol_test(false),
         TestKind::WebviewTagPlaygroundIntegration => run_webview_tag_playground_integration_test(),
         TestKind::WebviewTagPlaygroundInteractive => run_interactive_playground_test(
             "Webview Tag Playground",
@@ -3016,6 +3037,61 @@ fn run_navigation_execute_javascript_test() -> Result<(), String> {
         )
     })();
     finish_with_window(created.window_id, result)
+}
+
+fn run_appdata_protocol_test(enabled: bool) -> Result<(), String> {
+    const FIXTURE_NAME: &str = "kitchen-appdata-protocol-rust.txt";
+    const FIXTURE_CONTENTS: &str = "electrobun-appdata-protocol-ok";
+    let state = app_state();
+    let paths = resolved_paths()?;
+    std::fs::create_dir_all(&paths.user_data)
+        .map_err(|err| format!("failed to create user data directory: {err}"))?;
+    std::fs::write(
+        std::path::Path::new(&paths.user_data).join(FIXTURE_NAME),
+        FIXTURE_CONTENTS,
+    )
+    .map_err(|err| format!("failed to write appdata fixture: {err}"))?;
+
+    reset_callback_state();
+    let frame = Rect::new(100.0, 100.0, 640.0, 420.0);
+    let window_id = state
+        .core
+        .create_window(WindowOptions::new("Rust appdata protocol test", frame))?;
+    let result = (|| {
+        let mut options = WebviewOptions::new(
+            window_id,
+            TEST_HARNESS_URL,
+            Rect::new(0.0, 0.0, frame.width, frame.height),
+        );
+        options.renderer = Renderer::Cef;
+        options.secret_key = DEFAULT_SECRET_KEY;
+        options.sandbox = false;
+        options.allowed_protocols = AllowedProtocols {
+            views: true,
+            app_data: enabled,
+        };
+        options.callbacks = observed_harness_webview_callbacks();
+        let webview_id = state.core.create_webview(options)?;
+        sleep_ms(LONG_WAIT_MS);
+        reset_callback_state();
+        let expected = if enabled { "true" } else { "false" };
+        let script = format!(
+            r#"fetch("appdata://{FIXTURE_NAME}")
+                .then(async response => response.ok && (await response.text()) === "{FIXTURE_CONTENTS}")
+                .catch(() => false)
+                .then(readable => location.href = "views://test-harness/index.html?appdataResult=" + (readable === {expected} ? "ok" : "fail"));"#
+        );
+        state
+            .core
+            .evaluate_javascript_with_no_completion(webview_id, &script)?;
+        if !wait_until(5_000, || last_webview_detail_contains("appdataResult=ok")) {
+            return Err(
+                "webview did not observe the expected appdata contents/access result".to_string(),
+            );
+        }
+        Ok(())
+    })();
+    finish_with_window(window_id, result)
 }
 
 fn run_tray_visibility_toggle_and_bounds_test() -> Result<(), String> {

@@ -96,6 +96,8 @@ TestKind :: enum {
 	webview_create,
 	webview_page_zoom,
 	webview_spell_check,
+	appdata_protocol_allow,
+	appdata_protocol_deny,
 	webview_tag_playground_integration,
 	webview_tag_playground_interactive,
 	wgpu_tag_playground_integration,
@@ -410,6 +412,22 @@ odin_tests := [?]OdinTest {
 		description = "Report native WKWebView spell-check support through the Odin SDK.",
 		mirrors_bun_test_name = "BrowserView spell check capability",
 		kind = .webview_spell_check,
+	},
+	{
+		id = "odin-appdata-protocol-allows-access",
+		name = "appdata protocol allows access",
+		category = "Protocols",
+		description = "Read exact appdata file contents in a CEF-requested webview.",
+		mirrors_bun_test_name = "appdata protocol allows access",
+		kind = .appdata_protocol_allow,
+	},
+	{
+		id = "odin-appdata-protocol-denies-access",
+		name = "appdata protocol denies access",
+		category = "Protocols",
+		description = "Block appdata file access in a CEF-requested webview.",
+		mirrors_bun_test_name = "appdata protocol denies access",
+		kind = .appdata_protocol_deny,
 	},
 	{
 		id = "odin-webview-tag-playground-integration",
@@ -4008,6 +4026,76 @@ runNavigationExecuteJavascriptTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
+runAppDataProtocolTest :: proc(state: ^AppState, enabled: bool) -> string {
+	fixture_name := "kitchen-appdata-protocol-odin.txt"
+	fixture_contents := "electrobun-appdata-protocol-ok"
+
+	paths, paths_err := electrobun.resolvePaths(state.allocator, state.app_info)
+	if paths_err != .None {
+		return errName(paths_err)
+	}
+	defer electrobun.pathsDeinit(&paths, state.allocator)
+
+	fixture_path, _ := filepath.join({paths.userData, fixture_name}, state.allocator)
+	defer delete(fixture_path, state.allocator)
+	if write_err := os.write_entire_file(fixture_path, fixture_contents); write_err != nil {
+		return "CreateAppDataProtocolFixtureFailed"
+	}
+	defer os.remove(fixture_path)
+
+	window_options := electrobun.defaultWindowOptions("AppData Protocol Test")
+	window_options.frame = {320, 320, 500, 360}
+	window_options.hidden = true
+	window_options.activate = false
+
+	window_id, window_err := electrobun.createWindow(state.core, window_options)
+	if window_err != .None {
+		return errName(window_err)
+	}
+	defer electrobun.closeWindow(state.core, window_id)
+
+	resetCallbackState()
+	webview_options := electrobun.defaultWebviewOptions(window_id)
+	webview_options.renderer = .cef
+	webview_options.url = test_harness_url
+	webview_options.frame = {0, 0, 500, 360}
+	webview_options.secret_key = default_secret_key
+	webview_options.allowed_protocols = {views = true, app_data = enabled}
+	webview_options.callbacks = observedHarnessWebviewCallbacks()
+	webview_options.sandbox = false
+
+	webview_id, webview_err := electrobun.createWebview(state.core, webview_options)
+	if webview_err != .None {
+		return errName(webview_err)
+	}
+
+	sleepMs(medium_wait_ms)
+	expected := "false"
+	if enabled {
+		expected = "true"
+	}
+	script := fmt.aprintf(
+		"fetch(\"appdata://%s\").then(async response => response.ok && (await response.text()) === \"%s\").catch(() => false).then(readable => location.href = \"views://test-harness/index.html?appdataResult=\" + (readable === %s ? \"ok\" : \"fail\"));",
+		fixture_name,
+		fixture_contents,
+		expected,
+		allocator = state.allocator,
+	)
+	defer delete(script, state.allocator)
+	if err := electrobun.evaluateJavaScriptWithNoCompletion(state.core, webview_id, script); err != .None {
+		return errName(err)
+	}
+
+	deadline := milliTimestamp() + 5000
+	for !lastWebviewDetailContains("appdataResult=ok") && milliTimestamp() < deadline {
+		sleepMs(25)
+	}
+	if !lastWebviewDetailContains("appdataResult=ok") {
+		return "AppDataProtocolUnexpectedResult"
+	}
+	return ""
+}
+
 runTrayVisibilityToggleAndBoundsTest :: proc(state: ^AppState) -> string {
 	tray_options := electrobun.defaultTrayOptions(tray_template_icon_url)
 	tray_options.title = "Kitchen Tray API Test"
@@ -4805,6 +4893,10 @@ runOdinTest :: proc(odin_test: OdinTest) -> TestResult {
 		error_name = runWebviewPageZoomTest(state)
 	case .webview_spell_check:
 		error_name = runWebviewSpellCheckTest(state)
+	case .appdata_protocol_allow:
+		error_name = runAppDataProtocolTest(state, true)
+	case .appdata_protocol_deny:
+		error_name = runAppDataProtocolTest(state, false)
 	case .webview_tag_playground_integration:
 		error_name = runWebviewTagPlaygroundIntegrationTest(state)
 	case .webview_tag_playground_interactive:
