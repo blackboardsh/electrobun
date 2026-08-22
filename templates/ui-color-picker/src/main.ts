@@ -295,36 +295,39 @@ function CopyFormatSelector() {
 			},
 		);
 		ui.dynamic({ dir: "row", gap: 6 }, () => {
-			if (!expanded()) return;
-			for (const format of FORMATS) {
-				let chipId = 0;
-				chipId = ui.box(
-					{
-						pad: 6,
-						radius: 5,
-						bg: live(() =>
-							ctx.hoveredId() === chipId ? theme.rowHover : theme.row),
-						border: 1,
-						borderColor: live(() =>
-							copyFormat() === format ? theme.accent : theme.line),
-						onClick: () => {
-							batch(() => {
-								setCopyFormat(format);
-								setExpanded(false);
+			const showFormats = expanded();
+			if (!showFormats) return;
+			inert(() => {
+				for (const format of FORMATS) {
+					let chipId = 0;
+					chipId = ui.box(
+						{
+							pad: 6,
+							radius: 5,
+							bg: live(() =>
+								ctx.hoveredId() === chipId ? theme.rowHover : theme.row),
+							border: 1,
+							borderColor: live(() =>
+								copyFormat() === format ? theme.accent : theme.line),
+							onClick: () => {
+								batch(() => {
+									setCopyFormat(format);
+									setExpanded(false);
+								});
+							},
+						},
+						() => {
+							ui.text(format.toUpperCase(), {
+								size: 10,
+								color: live(() =>
+									copyFormat() === format
+										? theme.accent
+										: theme.textMuted),
 							});
 						},
-					},
-					() => {
-						ui.text(format.toUpperCase(), {
-							size: 10,
-							color: live(() =>
-								copyFormat() === format
-									? theme.accent
-									: theme.textMuted),
-						});
-					},
-				);
-			}
+					);
+				}
+			});
 		});
 	});
 }

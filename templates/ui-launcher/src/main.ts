@@ -11,7 +11,6 @@ import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import {
-	createRoot,
 	live,
 	memo,
 	signal,
@@ -146,9 +145,14 @@ const looksLikeMath = (s: string) => /^[\d\s+\-*/%().]+$/.test(s) && /\d/.test(s
 // State
 // ---------------------------------------------------------------------------
 
-const [query, setQuery] = signal("");
+const [query, writeQuery] = signal("");
 const [selected, setSelected] = signal(0);
 const [flash, setFlash] = signal("");
+
+function setQuery(value: string) {
+	writeQuery(value);
+	setSelected(0);
+}
 
 const results = memo<Entry[]>(() => {
 	const q = query().trim();
@@ -194,13 +198,6 @@ function appEntry(app: { name: string; path: string }): Entry {
 	};
 }
 
-createRoot(() => {
-	live(() => {
-		query();
-		setSelected(0);
-	});
-});
-
 function activate(index: number) {
 	const entry = inert(results)[index];
 	entry?.action();
@@ -215,14 +212,9 @@ const ROW_GAP = 2;
 const LIST_H = 5 * (ROW_H + ROW_GAP);
 
 // Follow-scroll: keep the selected row inside the viewport.
-const [listScroll, setListScroll] = signal(0);
-createRoot(() => {
-	live(() => {
-		// Clamp scroll into [top + ROW_H - LIST_H, top]: selected row stays visible.
-		const top = selected() * (ROW_H + ROW_GAP);
-		setListScroll((s) => Math.min(top, Math.max(s, top + ROW_H - LIST_H)));
-	});
-});
+const listScroll = memo(() =>
+	Math.max(0, (selected() + 1) * (ROW_H + ROW_GAP) - LIST_H),
+);
 
 function ResultRow(entry: Entry, index: () => number) {
 	ui.row(
@@ -316,11 +308,11 @@ const uiWindow = await createUIWindow(
 	},
 	() => {
 		ui.dynamic({ grow: 1 }, () => {
-			if (!expanded()) {
-				Pill();
-				return;
-			}
-			Palette();
+			const showPalette = expanded();
+			inert(() => {
+				if (showPalette) Palette();
+				else Pill();
+			});
 		});
 
 		onKey((e) => {
