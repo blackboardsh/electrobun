@@ -17,6 +17,10 @@ const deployWorkflow = readFileSync(
   new URL("../.github/workflows/docs-deploy.yml", projectRoot),
   "utf8",
 );
+const exampleChecker = readFileSync(
+  new URL("scripts/check-code-examples.mjs", projectRoot),
+  "utf8",
+);
 
 test("Hutch owns the reproducible docs install", () => {
   assert.match(configSource, /\bpackageManager:\s*"npm"/);
@@ -34,6 +38,15 @@ test("Hutch owns the reproducible docs install", () => {
   );
   assert.equal(existsSync(new URL("bun.lock", projectRoot)), false);
   assert.match(deployWorkflow, /run:\s*hutch run install\s*\n/);
+});
+
+test("documentation examples own their ambient runtime types", () => {
+  assert.equal(manifest.devDependencies["@types/bun"], "^1.4.0");
+  assert.match(
+    exampleChecker,
+    /typeRoots:\s*\[join\(docsRoot, "node_modules", "@types"\)\]/,
+  );
+  assert.doesNotMatch(exampleChecker, /join\(packageRoot, "node_modules"/);
 });
 
 test("tag deployments use the canonical strict release version gate", () => {

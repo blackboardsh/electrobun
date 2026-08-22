@@ -10,6 +10,7 @@
   },
   "devDependencies": {
     "@astrojs/check": "^0.9.5",
+    "@types/bun": "^1.4.0",
     "parse5": "^7.3.0",
     "postcss": "^8.5.10",
     "remark": "^15.0.1",

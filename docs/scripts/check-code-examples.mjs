@@ -331,7 +331,7 @@ function typecheck() {
 			"electrobun/view": ["package/src/browser/index.ts"],
 		},
 		types: ["bun"],
-		typeRoots: [join(packageRoot, "node_modules", "@types")],
+		typeRoots: [join(docsRoot, "node_modules", "@types")],
 	};
 	const host = ts.createCompilerHost(compilerOptions);
 	const defaultGetSourceFile = host.getSourceFile.bind(host);
