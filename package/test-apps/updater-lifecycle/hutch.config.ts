@@ -1,4 +1,4 @@
-// @hutch cli=0.24.3 cottontail=0.5.0
+// @hutch cli=0.25.0 cottontail=0.5.0
 const electrobunVersion = process.env.ELECTROBUN_UPDATER_E2E_SDK_VERSION;
 
 if (!electrobunVersion) {
