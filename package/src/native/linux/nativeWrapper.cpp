@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <fcntl.h>
 #include <webkit2/webkit2.h>
+#include <libsoup/soup.h>
 #include <jsc/jsc.h>
 #ifndef NO_APPINDICATOR
 #include <libayatana-appindicator/app-indicator.h>
@@ -39,6 +40,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <fstream>
+#include <filesystem>
 #include <set>
 #include <cstdarg>
 #include <sys/socket.h>
@@ -415,6 +417,45 @@ static std::map<uint32_t, std::shared_ptr<AbstractView>> g_wgpuViewMap;
 static std::mutex g_wgpuViewMapMutex;
 static std::map<uint32_t, std::string> g_webviewViewsRoot;
 static std::mutex g_webviewViewsRootMutex;
+struct AllowedProtocols { bool views = true; bool appData = false; };
+static std::map<uint32_t, AllowedProtocols> g_allowedProtocols;
+static std::mutex g_allowedProtocolsMutex;
+
+static bool protocolAllowed(uint32_t webviewId, bool appData) {
+    std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+    auto it = g_allowedProtocols.find(webviewId);
+    return it != g_allowedProtocols.end() && (appData ? it->second.appData : it->second.views);
+}
+
+static std::filesystem::path appDataRoot() {
+    const char* xdg = g_getenv("XDG_DATA_HOME");
+    std::string base;
+    if (xdg && *xdg) base = xdg;
+    else if (const char* home = g_get_home_dir()) base = std::string(home) + "/.local/share";
+    return buildAppDataPath(base, g_electrobunIdentifier, g_electrobunChannel);
+}
+
+static bool readContainedFile(const std::filesystem::path& rootPath,
+                              const std::string& relative,
+                              std::string& data) {
+    if (relative.empty()) return false;
+    std::error_code ec;
+    const auto root = std::filesystem::weakly_canonical(rootPath, ec);
+    if (ec) return false;
+    const auto target = std::filesystem::weakly_canonical(root / relative, ec);
+    if (ec) return false;
+    auto rootIt = root.begin(), targetIt = target.begin();
+    for (; rootIt != root.end(); ++rootIt, ++targetIt) {
+        if (targetIt == target.end() || *rootIt != *targetIt) return false;
+    }
+    if (!std::filesystem::is_regular_file(target, ec) || ec) return false;
+    std::ifstream stream(target, std::ios::binary);
+    if (!stream) return false;
+    data.assign(
+        std::istreambuf_iterator<char>(stream),
+        std::istreambuf_iterator<char>());
+    return true;
+}
 
 // CefShutdown requires every browser to have completed OnBeforeClose first.
 // Track browsers independently of g_webviewMap because a removed view can keep
@@ -625,9 +666,23 @@ public:
     
     bool Open(CefRefPtr<CefRequest> request, bool& handle_request, CefRefPtr<CefCallback> callback) override {
         std::string url = request->GetURL();
+        const bool appData = url.rfind("appdata://", 0) == 0;
+        if (!protocolAllowed(webviewId_, appData)) {
+            handle_request = false;
+            return false;
+        }
         
         // Parse the URI to get everything after views://
         std::string fullPath = normalizeViewsRelativePath(url);
+        if (appData) {
+            if (!readContainedFile(appDataRoot(), fullPath, data_)) {
+                handle_request = false;
+                return false;
+            }
+            mimeType_ = getMimeTypeFromUrl(fullPath);
+            handle_request = true;
+            return true;
+        }
         
         // Check if this is the internal HTML request
         if (fullPath == "internal/index.html") {
@@ -659,17 +714,7 @@ public:
         
         // If viewsRoot is set, try to read from that directory first
         if (!viewsRootPath.empty()) {
-            gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath.c_str(), nullptr);
-            
-            if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-                GError* error = nullptr;
-                gchar* fileContents = nullptr;
-                gsize fileSize = 0;
-                
-                if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
-                    data_ = std::string(fileContents, fileSize);
-                    g_free(fileContents);
-                    
+            if (readContainedFile(viewsRootPath, fullPath, data_)) {
                     // Determine MIME type
                     std::string mimeType = "application/octet-stream";
                     if (fullPath.find(".html") != std::string::npos) mimeType = "text/html";
@@ -684,17 +729,9 @@ public:
                     else if (fullPath.find(".ttf") != std::string::npos) mimeType = "font/ttf";
                     mimeType_ = mimeType;
                     
-                    g_free(filePath);
                     handle_request = true;
                     return true;
-                }
-                
-                if (error) {
-                    g_error_free(error);
-                }
             }
-            
-            g_free(filePath);
         }
 
         // Build paths relative to current directory (bin)
@@ -763,40 +800,16 @@ public:
 
         // Fallback: Read from flat file system (for non-ASAR builds or missing files)
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
-        gchar* filePath = g_build_filename(viewsDir, fullPath.c_str(), nullptr);
-
-
-        // Check if file exists and read it
-        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-            gsize fileSize;
-            gchar* fileContent;
-            GError* error = nullptr;
-
-            if (g_file_get_contents(filePath, &fileContent, &fileSize, &error)) {
-                data_ = std::string(fileContent, fileSize);
-                g_free(fileContent);
-                
-                // Determine MIME type using shared function
+        if (readContainedFile(viewsDir, fullPath, data_)) {
                 mimeType_ = getMimeTypeFromUrl(fullPath);
-                
-                
                 g_free(cwd);
                 g_free(viewsDir);
-                g_free(filePath);
-                
                 handle_request = true;
                 return true;
-            } else {
-                printf("CEF views:// failed to read file: %s\n", error ? error->message : "unknown error");
-                if (error) g_error_free(error);
-            }
-        } else {
-            printf("CEF views:// file not found: %s\n", filePath);
         }
         
         g_free(cwd);
         g_free(viewsDir);
-        g_free(filePath);
         
         handle_request = false;
         return false;
@@ -806,6 +819,10 @@ public:
         response->SetStatus(200);
         response->SetMimeType(mimeType_);
         response->SetStatusText("OK");
+        CefResponse::HeaderMap headers;
+        headers.emplace("Access-Control-Allow-Origin", "*");
+        headers.emplace("X-Content-Type-Options", "nosniff");
+        response->SetHeaderMap(headers);
         response_length = data_.length();
     }
     
@@ -929,6 +946,9 @@ public:
             CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_CSP_BYPASSING |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+        registrar->AddCustomScheme("appdata",
+            CEF_SCHEME_OPTION_STANDARD | CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE | CEF_SCHEME_OPTION_FETCH_ENABLED);
     }
     
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override {
@@ -943,6 +963,7 @@ public:
     
     void OnContextInitialized() override {
         CefRegisterSchemeHandlerFactory("views", "", new ViewsSchemeHandlerFactory());
+        CefRegisterSchemeHandlerFactory("appdata", "", new ViewsSchemeHandlerFactory());
     }
     
     // Render process handler methods
@@ -6118,8 +6139,68 @@ void applyApplicationMenuToX11Window(X11Window* x11win) {
     fflush(stdout);
 }
 
+static uint32_t webviewIdForSchemeRequest(WebKitURISchemeRequest* request) {
+    WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
+    if (!requestingWebView) return 0;
+    std::lock_guard<std::mutex> lock(g_webviewMapMutex);
+    for (auto& [id, view] : g_webviewMap) {
+        auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
+        if (wkImpl && wkImpl->webview == GTK_WIDGET(requestingWebView)) return id;
+    }
+    return 0;
+}
+
+static void finishSchemeResponse(WebKitURISchemeRequest* request,
+                                 gchar* contents,
+                                 gsize size,
+                                 const char* mimeType) {
+    GInputStream* stream = g_memory_input_stream_new_from_data(contents, size, g_free);
+#if WEBKIT_CHECK_VERSION(2, 36, 0)
+    WebKitURISchemeResponse* response = webkit_uri_scheme_response_new(stream, size);
+    webkit_uri_scheme_response_set_content_type(response, mimeType);
+    SoupMessageHeaders* headers = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
+    soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
+    soup_message_headers_append(headers, "X-Content-Type-Options", "nosniff");
+    webkit_uri_scheme_response_set_http_headers(response, headers);
+    soup_message_headers_unref(headers);
+    webkit_uri_scheme_request_finish_with_response(request, response);
+    g_object_unref(response);
+#else
+    webkit_uri_scheme_request_finish(request, stream, size, mimeType);
+#endif
+    g_object_unref(stream);
+}
+
+static void handleAppDataURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
+    const uint32_t webviewId = webviewIdForSchemeRequest(request);
+    if (!protocolAllowed(webviewId, true)) {
+        GError* error = g_error_new(G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "appdata:// is not enabled");
+        webkit_uri_scheme_request_finish_error(request, error);
+        g_error_free(error);
+        return;
+    }
+    const char* uri = webkit_uri_scheme_request_get_uri(request);
+    const std::string relative = normalizeViewsRelativePath(uri ? uri : "");
+    std::string data;
+    if (!readContainedFile(appDataRoot(), relative, data)) {
+        GError* error = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found");
+        webkit_uri_scheme_request_finish_error(request, error);
+        g_error_free(error);
+        return;
+    }
+    gchar* contents = static_cast<gchar*>(g_memdup2(data.data(), data.size()));
+    finishSchemeResponse(request, contents, data.size(), getMimeTypeFromUrl(relative).c_str());
+}
+
 // views:// URI scheme handler callback
 static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_data) {
+    const uint32_t requestingWebviewId = webviewIdForSchemeRequest(request);
+    if (!protocolAllowed(requestingWebviewId, false)) {
+        GError* error = g_error_new(G_IO_ERROR, G_IO_ERROR_PERMISSION_DENIED, "views:// is not enabled");
+        webkit_uri_scheme_request_finish_error(request, error);
+        g_error_free(error);
+        return;
+    }
     const char* uri = webkit_uri_scheme_request_get_uri(request);
     
     // Parse the full URI to get everything after views://
@@ -6199,20 +6280,12 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     
     // If viewsRoot is set, try to read from that directory first
     if (!viewsRootPath.empty()) {
-        gchar* filePath = g_build_filename(viewsRootPath.c_str(), fullPath, nullptr);
-        
-        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-            GError* error = nullptr;
-            if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
-                foundFile = true;
-            } else {
-                if (error) {
-                    g_error_free(error);
-                }
-            }
+        std::string contents;
+        if (readContainedFile(viewsRootPath, fullPath, contents)) {
+            fileContents = static_cast<gchar*>(g_memdup2(contents.data(), contents.size()));
+            fileSize = contents.size();
+            foundFile = true;
         }
-        
-        g_free(filePath);
     }
     
     // Build paths relative to current directory (bin)
@@ -6267,29 +6340,13 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
     // Fallback: Read from flat file system (for non-ASAR builds or missing files)
     if (!foundFile) {
         gchar* viewsDir = g_build_filename(resourcesDir, "app", "views", nullptr);
-        gchar* filePath = g_build_filename(viewsDir, fullPath, nullptr);
-
-        fflush(stdout);
-
-        // Check if file exists and read it
-        if (g_file_test(filePath, G_FILE_TEST_EXISTS)) {
-            GError* error = nullptr;
-            if (g_file_get_contents(filePath, &fileContents, &fileSize, &error)) {
-                foundFile = true;
-            } else {
-                if (error) {
-                    printf("ERROR WebKit: Failed to read file: %s\n", error->message);
-                    fflush(stdout);
-                    g_error_free(error);
-                }
-            }
-        } else {
-            printf("File not found: %s\n", filePath);
-            fflush(stdout);
+        std::string contents;
+        if (readContainedFile(viewsDir, fullPath, contents)) {
+            fileContents = static_cast<gchar*>(g_memdup2(contents.data(), contents.size()));
+            fileSize = contents.size();
+            foundFile = true;
         }
-
         g_free(viewsDir);
-        g_free(filePath);
     }
 
     // Send response if file was found
@@ -6298,10 +6355,8 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
         const char* mimeType = mimeTypeStr.c_str();
 
-        // Create response
-        GInputStream* stream = g_memory_input_stream_new_from_data(fileContents, fileSize, g_free);
-        webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
-        g_object_unref(stream);
+        finishSchemeResponse(request, fileContents, fileSize, mimeType);
+        fileContents = nullptr;
     } else {
         // Return 404 error
         GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
@@ -6659,10 +6714,22 @@ static WebKitWebContext* getContextForPartition(const char* partitionIdentifier)
     static const char* viewsSchemeRegisteredKey =
         "electrobun-views-scheme-registered";
     if (!g_object_get_data(G_OBJECT(context), viewsSchemeRegisteredKey)) {
+        WebKitSecurityManager* securityManager =
+            webkit_web_context_get_security_manager(context);
+        webkit_security_manager_register_uri_scheme_as_secure(securityManager, "views");
+        webkit_security_manager_register_uri_scheme_as_cors_enabled(securityManager, "views");
+        webkit_security_manager_register_uri_scheme_as_secure(securityManager, "appdata");
+        webkit_security_manager_register_uri_scheme_as_cors_enabled(securityManager, "appdata");
         webkit_web_context_register_uri_scheme(
             context,
             "views",
             handleViewsURIScheme,
+            nullptr,
+            nullptr);
+        webkit_web_context_register_uri_scheme(
+            context,
+            "appdata",
+            handleAppDataURIScheme,
             nullptr,
             nullptr);
         g_object_set_data(
@@ -7770,6 +7837,7 @@ static struct {
     bool startTransparent;
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
+static AllowedProtocols g_nextAllowedProtocols = {true, false};
 
 AbstractView* initGTKWebkitWebview(uint32_t webviewId,
                          void* window,
@@ -7852,6 +7920,10 @@ ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPass
     g_nextWebviewFlags.startPassthrough = startPassthrough;
 }
 
+ELECTROBUN_EXPORT void setNextWebviewAllowedProtocols(bool allowViews, bool allowAppData) {
+    g_nextAllowedProtocols = {allowViews, allowAppData};
+}
+
 ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                          void* window,
                          const char* renderer,
@@ -7874,6 +7946,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+    const AllowedProtocols allowedProtocols = g_nextAllowedProtocols;
+    g_nextAllowedProtocols = {true, false};
+    {
+        std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+        g_allowedProtocols[webviewId] = allowedProtocols;
+    }
 
     // TODO: Implement transparent handling for Linux
 
@@ -9326,6 +9404,14 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView* abstractView) {
     if (abstractView) {
         // Get the webview ID before scheduling async removal
         uint32_t webviewId = abstractView->webviewId;
+        {
+            std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+            g_allowedProtocols.erase(webviewId);
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_webviewViewsRootMutex);
+            g_webviewViewsRoot.erase(webviewId);
+        }
         
         // Find the shared_ptr for this view to keep it alive during async removal
         std::shared_ptr<AbstractView> viewPtr;

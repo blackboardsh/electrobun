@@ -349,6 +349,10 @@ const core = (() => {
 				],
 				returns: FFIType.u32,
 			},
+			setNextWebviewAllowedProtocols: {
+				args: [FFIType.bool, FFIType.bool],
+				returns: FFIType.void,
+			},
 			getWebviewPointer: {
 				args: [FFIType.u32],
 				returns: FFIType.ptr,
@@ -1895,6 +1899,7 @@ const _ffiImpl = {
 			partition: string | null;
 			preload: string | null;
 			viewsRoot: string | null;
+			allowedProtocols: { views: boolean; appData: boolean };
 			frame: {
 				x: number;
 				y: number;
@@ -1917,6 +1922,7 @@ const _ffiImpl = {
 				partition,
 				preload,
 				viewsRoot,
+				allowedProtocols,
 				frame: { x, y, width, height },
 				autoResize,
 				sandbox,
@@ -1925,6 +1931,10 @@ const _ffiImpl = {
 				spellCheck,
 			} = params;
 			ensureWebviewRuntimeConfigured();
+			core_.symbols.setNextWebviewAllowedProtocols(
+				allowedProtocols.views,
+				allowedProtocols.appData,
+			);
 
 			const webviewId = core_.symbols.createWebview(
 				windowId,

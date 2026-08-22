@@ -69,6 +69,7 @@ inline CefRefPtr<CefRequestContext> getOrCreateRequestContextForPartition(
     auto registerScheme = [&](CefRefPtr<CefRequestContext> ctx) {
         if (ctx && schemeFactory) {
             ctx->RegisterSchemeHandlerFactory("views", "", schemeFactory);
+            ctx->RegisterSchemeHandlerFactory("appdata", "", schemeFactory);
         }
     };
 

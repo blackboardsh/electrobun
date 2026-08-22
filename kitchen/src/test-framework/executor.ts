@@ -95,6 +95,7 @@ export class TestExecutor {
           titleBarStyle: options.titleBarStyle,
           trafficLightOffset: options.trafficLightOffset,
           sandbox: options.sandbox || false,
+          allowedProtocols: options.allowedProtocols,
           spellCheck: options.spellCheck ?? false,
         });
 

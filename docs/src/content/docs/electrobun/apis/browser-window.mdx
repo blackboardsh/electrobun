@@ -144,6 +144,7 @@ with no argument uses the legacy starter window: title `"Electrobun"`, size
 | `html` | `string \| null` | `null` | HTML string loaded instead of `url`. |
 | `preload` | `string \| null` | `null` | Inline JavaScript or a bundled `views://` script URL. |
 | `viewsRoot` | `string \| null` | `null` | Override for the bundled views root. |
+| `allowedProtocols` | `{ views?: boolean; appData?: boolean }` | `{ views: true, appData: false }` | Grant the initial webview access to Electrobun's filesystem-backed URL schemes. |
 | `renderer` | `"native" \| "cef"` | Platform build default | Renderer for the initial webview. |
 | `rpc` | RPC instance | none | Main-process side of the webview RPC transport. |
 | `titleBarStyle` | `"default" \| "hidden" \| "hiddenInset"` | `"default"` | Native title-bar treatment. |

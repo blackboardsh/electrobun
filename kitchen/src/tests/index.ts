@@ -21,6 +21,7 @@ import { trayApiTests } from "./tray-api.test";
 import { runtimeTests } from "./runtime.test";
 import { opfsTests } from "./opfs.test";
 import { uiRuntimeTests } from "./ui-runtime.test";
+import { appDataProtocolTests } from "./appdata-protocol.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -62,6 +63,7 @@ export const allTests: TestDefinition[] = [
   ...runtimeTests,
   ...opfsTests,
   ...uiRuntimeTests,
+  ...appDataProtocolTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,

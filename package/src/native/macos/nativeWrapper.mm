@@ -731,6 +731,60 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
     return [NSString stringWithUTF8String:relativePath.c_str()];
 }
 
+static NSString* normalizeAppDataRelativePath(NSString *urlString) {
+    if (!urlString || ![urlString hasPrefix:@"appdata://"]) {
+        return nil;
+    }
+
+    NSString *asViewsURL = [@"views://" stringByAppendingString:[urlString substringFromIndex:10]];
+    return normalizeViewsRelativePath(asViewsURL);
+}
+
+static NSString* canonicalContainedPath(NSString *root, NSString *relativePath) {
+    if (!root || !relativePath) return nil;
+
+    NSString *canonicalRoot = [[root stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *candidate = [[[root stringByAppendingPathComponent:relativePath]
+        stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *rootPrefix = [canonicalRoot stringByAppendingString:@"/"];
+    if (![candidate hasPrefix:rootPrefix]) {
+        NSLog(@"Blocked protocol path outside root %@ -> %@", canonicalRoot, candidate);
+        return nil;
+    }
+    return candidate;
+}
+
+static NSString* appDataRootPath(void) {
+    NSString *appSupportPath = [NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    if (!appSupportPath) return nil;
+
+    std::string root = electrobun::buildAppDataPath(
+        [appSupportPath UTF8String],
+        g_electrobunIdentifier,
+        g_electrobunChannel);
+    NSString *rootPath = [NSString stringWithUTF8String:root.c_str()];
+    [[NSFileManager defaultManager] createDirectoryAtPath:rootPath
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    return rootPath;
+}
+
+static NSData* readAppDataFile(const char* appDataUrl) {
+    if (!appDataUrl) return nil;
+    NSString *urlString = [NSString stringWithUTF8String:appDataUrl];
+    NSString *relativePath = normalizeAppDataRelativePath(urlString);
+    NSString *candidate = canonicalContainedPath(appDataRootPath(), relativePath);
+    if (!candidate) return nil;
+
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:candidate isDirectory:&isDirectory] || isDirectory) {
+        return nil;
+    }
+    return [NSData dataWithContentsOfFile:candidate];
+}
+
 NSData* readViewsFile(const char* viewsUrl) {
     if (!viewsUrl) return nil;
 
@@ -796,16 +850,8 @@ NSData* readViewsFileWithRoot(const char* viewsUrl, NSString *viewsRoot) {
         return nil;
     }
 
-    NSString *normalizedRoot = [viewsRoot stringByStandardizingPath];
-    NSString *candidatePath =
-        [[viewsRoot stringByAppendingPathComponent:relativePath] stringByStandardizingPath];
-
-    if (![candidatePath isEqualToString:normalizedRoot] &&
-        ![candidatePath hasPrefix:[normalizedRoot stringByAppendingString:@"/"]]) {
-        NSLog(@"ERROR readViewsFileWithRoot: path escapes root %@ -> %@", normalizedRoot, candidatePath);
-        return nil;
-    }
-
+    NSString *candidatePath = canonicalContainedPath(viewsRoot, relativePath);
+    if (!candidatePath) return nil;
     return [NSData dataWithContentsOfFile:candidatePath];
 }
 
@@ -932,6 +978,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>    
     @property (nonatomic, assign) uint32_t webviewId;
     @property (nonatomic, copy) NSString *viewsRoot;
+    @property (nonatomic, assign) BOOL allowViews;
+    @property (nonatomic, assign) BOOL allowAppData;
 @end
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate>
@@ -983,7 +1031,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol;
 @end
 
 @interface WGPUViewImpl : AbstractView
@@ -2069,7 +2119,7 @@ static void schedulePendingResizeDrain() {
         
         NSString *urlString = url.absoluteString;
         
-        if ([urlString hasPrefix:@"views://"]) {
+        if ([urlString hasPrefix:@"views://"] && self.allowViews) {
             NSString *relativePath = normalizeViewsRelativePath(urlString);
 
             if ([relativePath isEqualToString:@"internal/index.html"]) {
@@ -2099,6 +2149,12 @@ static void schedulePendingResizeDrain() {
                     contentLength = data.length;
                 }
             } 
+        } else if ([urlString hasPrefix:@"appdata://"] && self.allowAppData) {
+            data = readAppDataFile(urlString.UTF8String);
+            if (data) {
+                contentPtr = (const char *)data.bytes;
+                contentLength = data.length;
+            }
         } else {
             NSLog(@"Unknown URL format: %@", urlString);
         }
@@ -2121,10 +2177,13 @@ static void schedulePendingResizeDrain() {
                 mimeType = rawMimeType;
             }
             
-            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                    MIMEType:mimeType
-                                        expectedContentLength:contentLength
-                                            textEncodingName:encodingName];
+            NSDictionary *headers = @{
+                @"Content-Type": mimeType,
+                @"Access-Control-Allow-Origin": @"*",
+                @"X-Content-Type-Options": @"nosniff",
+            };
+            NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc]
+                initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:headers];
             [urlSchemeTask didReceiveResponse:response];
             [urlSchemeTask didReceiveData:data];
             [urlSchemeTask didFinish];
@@ -2597,6 +2656,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol
     {
         self = [super init];
         if (self) {
@@ -2625,7 +2686,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 // TODO: Consider storing views handler globally and not on each AbstractView                
                 assetSchemeHandler.webviewId = webviewId;
                 assetSchemeHandler.viewsRoot = viewsRootString;
+                assetSchemeHandler.allowViews = allowViewsProtocol;
+                assetSchemeHandler.allowAppData = allowAppDataProtocol;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+                [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"appdata"];
                 
                 // create WKWebView
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
@@ -4725,7 +4789,7 @@ public:
         
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        command_line->AppendSwitchWithValue("custom-scheme", "views");
+        command_line->AppendSwitchWithValue("custom-scheme", "views,appdata");
 
         // macOS default flags — can be overridden via chromiumFlags in config
         static const std::vector<electrobun::DefaultFlag> defaults = {
@@ -4746,6 +4810,11 @@ public:
             CEF_SCHEME_OPTION_CORS_ENABLED |
             CEF_SCHEME_OPTION_SECURE | // treat it like https
             CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
+        registrar->AddCustomScheme("appdata",
+            CEF_SCHEME_OPTION_STANDARD |
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
             
     }
@@ -6109,7 +6178,9 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol;
 
 @end
 
@@ -6263,6 +6334,21 @@ bool initializeCEF() {
 }
 
 
+struct WebviewAllowedProtocols {
+    bool views;
+    bool appData;
+};
+static std::map<uint32_t, WebviewAllowedProtocols> webviewAllowedProtocols;
+static std::mutex webviewAllowedProtocolsMutex;
+
+static WebviewAllowedProtocols getWebviewAllowedProtocols(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(webviewAllowedProtocolsMutex);
+    auto it = webviewAllowedProtocols.find(webviewId);
+    return it == webviewAllowedProtocols.end()
+        ? WebviewAllowedProtocols{true, false}
+        : it->second;
+}
+
 // The main scheme handler class
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
@@ -6286,8 +6372,8 @@ public:
             hasResponse_ = false;
             offset_ = 0;
             
-            // If the URL starts with "views://"
-            if (urlStr.find("views://") == 0) {
+            WebviewAllowedProtocols allowed = getWebviewAllowedProtocols(webviewId_);
+            if (urlStr.find("views://") == 0 && allowed.views) {
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
                 NSString *normalizedPath = normalizeViewsRelativePath([NSString stringWithUTF8String:urlStr.c_str()]);
                 std::string relativePath = normalizedPath ? std::string([normalizedPath UTF8String]) : std::string();
@@ -6342,8 +6428,17 @@ public:
                         NSLog(@"DEBUG CEF: Failed to read views file: %s", urlStr.c_str());
                     }
                 }
-            }
-            else {
+            } else if (urlStr.find("appdata://") == 0 && allowed.appData) {
+                NSString *normalizedPath = normalizeAppDataRelativePath(
+                    [NSString stringWithUTF8String:urlStr.c_str()]);
+                NSData *data = normalizedPath ? readAppDataFile(urlStr.c_str()) : nil;
+                if (data) {
+                    mimeTypeBlock = getMimeTypeFromUrl(std::string([normalizedPath UTF8String]));
+                    responseDataBlock.assign((const char*)data.bytes,
+                                             (const char*)data.bytes + data.length);
+                    hasResponseBlock = true;
+                }
+            } else {
                 NSLog(@"Unknown URL format: %s", urlStr.c_str());
             }
         });
@@ -6418,6 +6513,10 @@ static void removeBrowserMappingsForWebview(uint32_t webviewId) {
         } else {
             ++it;
         }
+    }
+    {
+        std::lock_guard<std::mutex> permissionsLock(webviewAllowedProtocolsMutex);
+        webviewAllowedProtocols.erase(webviewId);
     }
 }
 
@@ -6519,11 +6618,17 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             viewsRoot:(const char *)viewsRoot
             transparent:(bool)transparent
             sandbox:(bool)sandbox
+            allowViewsProtocol:(bool)allowViewsProtocol
+            allowAppDataProtocol:(bool)allowAppDataProtocol
     {
         self = [super init];
         if (self) {
             self.webviewId = webviewId;
             self.isSandboxed = sandbox;
+            {
+                std::lock_guard<std::mutex> lock(webviewAllowedProtocolsMutex);
+                webviewAllowedProtocols[webviewId] = {allowViewsProtocol, allowAppDataProtocol};
+            }
             BOOL windowWasVisible = [window isVisible];
 
             if (autoResize) {
@@ -7298,9 +7403,19 @@ static struct {
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
 
+static struct {
+    bool views;
+    bool appData;
+} g_nextWebviewAllowedProtocols = {true, false};
+
 extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
+extern "C" void setNextWebviewAllowedProtocols(bool allowViews, bool allowAppData) {
+    g_nextWebviewAllowedProtocols.views = allowViews;
+    g_nextWebviewAllowedProtocols.appData = allowAppData;
 }
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
@@ -7326,6 +7441,9 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+    bool allowViewsProtocol = g_nextWebviewAllowedProtocols.views;
+    bool allowAppDataProtocol = g_nextWebviewAllowedProtocols.appData;
+    g_nextWebviewAllowedProtocols = {true, false};
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -7367,7 +7485,9 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
                                                customPreloadScript:strdup(customPreloadScript)
                                                            viewsRoot:strdup(viewsRoot)
                                                         transparent:transparent
-                                                            sandbox:sandbox];
+                                                            sandbox:sandbox
+                                                 allowViewsProtocol:allowViewsProtocol
+                                               allowAppDataProtocol:allowAppDataProtocol];
 
         // Store initial state flags — applied later in each impl's deferred creation block
         // (nsView is nil at this point because view creation is async)

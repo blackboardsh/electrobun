@@ -55,6 +55,7 @@ export interface WindowOptions {
   hidden?: boolean;
   activate?: boolean;
   sandbox?: boolean; // When true, disables RPC and only allows event emission
+  allowedProtocols?: { views?: boolean; appData?: boolean };
   spellCheck?: boolean;
 }
 

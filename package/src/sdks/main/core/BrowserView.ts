@@ -42,6 +42,10 @@ export type BrowserViewOptions<T = undefined> = {
 	html: string | null;
 	preload: string | null;
 	viewsRoot: string | null;
+	allowedProtocols: {
+		views?: boolean;
+		appData?: boolean;
+	};
 	renderer: "native" | "cef";
 	partition: string | null;
 	frame: {
@@ -78,6 +82,7 @@ const defaultOptions: Partial<BrowserViewOptions> = {
 	html: null,
 	preload: null,
 	viewsRoot: null,
+	allowedProtocols: { views: true, appData: false },
 	renderer: buildConfig.defaultRenderer,
 	frame: {
 		x: 0,
@@ -95,6 +100,10 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	html: string | null = null;
 	preload: string | null = null;
 	viewsRoot: string | null = null;
+	allowedProtocols: { views: boolean; appData: boolean } = {
+		views: true,
+		appData: false,
+	};
 	partition: string | null = null;
 	autoResize: boolean = true;
 	frame: {
@@ -136,6 +145,10 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		this.html = options.html || defaultOptions.html || null;
 		this.preload = options.preload || defaultOptions.preload || null;
 		this.viewsRoot = options.viewsRoot || defaultOptions.viewsRoot || null;
+		this.allowedProtocols = {
+			views: options.allowedProtocols?.views ?? true,
+			appData: options.allowedProtocols?.appData ?? false,
+		};
 		this.frame = {
 			x: options.frame?.x ?? defaultOptions.frame!.x,
 			y: options.frame?.y ?? defaultOptions.frame!.y,
@@ -180,6 +193,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			url: this.html ? null : this.url,
 			preload: this.preload,
 			viewsRoot: this.viewsRoot,
+			allowedProtocols: this.allowedProtocols,
 			frame: {
 				width: this.frame.width,
 				height: this.frame.height,

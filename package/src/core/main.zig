@@ -3009,6 +3009,16 @@ export fn createWebview(
     return webview_id;
 }
 
+export fn setNextWebviewAllowedProtocols(allow_views: bool, allow_app_data: bool) void {
+    clearLastError();
+    const SetNextWebviewAllowedProtocolsFn = *const fn (bool, bool) callconv(.c) void;
+    const set_allowed_protocols = lookupNativeSymbol(
+        SetNextWebviewAllowedProtocolsFn,
+        "setNextWebviewAllowedProtocols",
+    ) orelse return;
+    set_allowed_protocols(allow_views, allow_app_data);
+}
+
 export fn getWebviewPointer(webview_id: u32) WebviewPtr {
     clearLastError();
     return lookupWebviewPtr(webview_id);

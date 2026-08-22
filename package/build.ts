@@ -1885,11 +1885,24 @@ async function vendorCEF() {
 			"libcef_dll_wrapper",
 			"libcef_dll_wrapper.a",
 		);
-		if (!existsSync(processHelperPath) || !macCefBuildIsCurrent(wrapperPath)) {
+		const helperSourcePath = join(
+			process.cwd(),
+			"src",
+			"native",
+			"macos",
+			"cef_process_helper_mac.cc",
+		);
+		const wrapperNeedsBuild = !macCefBuildIsCurrent(wrapperPath);
+		const helperNeedsBuild = outputMissingOrOlder(processHelperPath, [
+			helperSourcePath,
+		]);
+		if (helperNeedsBuild || wrapperNeedsBuild) {
 			await $`mkdir -p src/native/build`;
-			console.log("Building CEF wrapper library...");
-			await buildMacCefWrapper();
-			console.log("CEF wrapper library built successfully");
+			if (wrapperNeedsBuild) {
+				console.log("Building CEF wrapper library...");
+				await buildMacCefWrapper();
+				console.log("CEF wrapper library built successfully");
+			}
 
 			// build helper
 			await $`xcrun --sdk macosx clang++ ${macosClangDeploymentFlag} -std=c++20 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;

@@ -473,6 +473,15 @@ class AbstractView;
 // browser-only so an equal WGPU ID cannot replace navigation state.
 static std::map<uint32_t, AbstractView*> g_abstractViews;
 static std::mutex g_abstractViewsMutex;
+struct AllowedProtocols { bool views = true; bool appData = false; };
+static std::map<uint32_t, AllowedProtocols> g_allowedProtocols;
+static std::mutex g_allowedProtocolsMutex;
+
+static bool protocolAllowed(uint32_t webviewId, bool appData) {
+    std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+    auto it = g_allowedProtocols.find(webviewId);
+    return it != g_allowedProtocols.end() && (appData ? it->second.appData : it->second.views);
+}
 
 // Forward declaration for navigation rules helper (defined after AbstractView class)
 bool checkNavigationRules(AbstractView* view, const std::string& url);
@@ -788,6 +797,9 @@ public:
             CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_CSP_BYPASSING |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
+        registrar->AddCustomScheme("appdata",
+            CEF_SCHEME_OPTION_STANDARD | CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE | CEF_SCHEME_OPTION_FETCH_ENABLED);
     }
 
 private:
@@ -1075,6 +1087,34 @@ static void EnsureDevToolsWindowClassRegistered() {
 std::string loadViewsFile(const std::string& path);
 std::string getMimeTypeForFile(const std::string& path);
 
+static std::string loadAppDataFile(const std::string& url) {
+    const std::string relative = normalizeViewsRelativePath(url);
+    if (relative.empty()) return "";
+    std::wstring relativeWide, identifierWide, channelWide;
+    if (!electrobun::utf8ToWide(relative, relativeWide) ||
+        !electrobun::utf8ToWide(g_electrobunIdentifier, identifierWide) ||
+        !electrobun::utf8ToWide(g_electrobunChannel, channelWide)) return "";
+    const std::wstring base = electrobun::getEnvironmentVariableWide(L"APPDATA");
+    if (base.empty()) return "";
+    std::error_code ec;
+    const auto root = std::filesystem::weakly_canonical(
+        std::filesystem::path(buildAppDataPath(base, identifierWide, channelWide, L"", L'\\')), ec);
+    if (ec) return "";
+    const auto target = std::filesystem::weakly_canonical(root / relativeWide, ec);
+    if (ec) return "";
+    auto rootIt = root.begin(), targetIt = target.begin();
+    for (; rootIt != root.end(); ++rootIt, ++targetIt) {
+        if (targetIt == target.end() || _wcsicmp(rootIt->c_str(), targetIt->c_str()) != 0) return "";
+    }
+    if (!std::filesystem::is_regular_file(target, ec) || ec) return "";
+    std::ifstream stream(electrobun::windowsExtendedLengthPath(target), std::ios::binary);
+    return stream
+        ? std::string(
+            std::istreambuf_iterator<char>(stream),
+            std::istreambuf_iterator<char>())
+        : "";
+}
+
 // CEF Resource Handler for views:// scheme (based on Mac implementation)
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
@@ -1085,11 +1125,15 @@ public:
         handle_request = true;
 
         std::string url = request->GetURL();
+        const bool appData = url.rfind("appdata://", 0) == 0;
+        if (!protocolAllowed(webviewId_, appData)) return false;
         std::string path = normalizeViewsRelativePath(url);
 
         std::string content;
         // Check for internal/index.html (inline HTML content)
-        if (path == "internal/index.html") {
+        if (appData) {
+            content = loadAppDataFile(url);
+        } else if (path == "internal/index.html") {
             const char* htmlContent = getWebviewHTMLContent(webviewId_);
             if (htmlContent && strlen(htmlContent) > 0) {
                 content = std::string(htmlContent);
@@ -1115,6 +1159,10 @@ public:
     void GetResponseHeaders(CefRefPtr<CefResponse> response, int64_t& response_length, CefString& redirectUrl) override {
         response->SetStatus(200);
         response->SetMimeType(mimeType_);
+        CefResponse::HeaderMap headers;
+        headers.emplace("Access-Control-Allow-Origin", "*");
+        headers.emplace("X-Content-Type-Options", "nosniff");
+        response->SetHeaderMap(headers);
         response_length = static_cast<int64_t>(responseData_.size());
     }
 
@@ -7048,6 +7096,7 @@ ELECTROBUN_EXPORT bool initCEF() {
         g_cef_initialized.store(true);
         // Register the views:// scheme handler factory
         CefRegisterSchemeHandlerFactory("views", "", new ElectrobunSchemeHandlerFactory());
+        CefRegisterSchemeHandlerFactory("appdata", "", new ElectrobunSchemeHandlerFactory());
         
         // We'll start the message pump timer when we create the first browser
     } else {
@@ -7309,6 +7358,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             // Add views:// scheme support - TEST ADDITION
                             webview->AddWebResourceRequestedFilter(L"views://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                            webview->AddWebResourceRequestedFilter(L"appdata://*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
 
                             // Set up WebResourceRequested event handler for views:// scheme
                             webview->add_WebResourceRequested(
@@ -7330,12 +7380,16 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                         
                                         // ::log("[WebView2] Request URI converted successfully");
                                         
-                                        if (uriStr.substr(0, 8) == "views://") {
+                                        const bool isAppData = uriStr.rfind("appdata://", 0) == 0;
+                                        const bool isViews = uriStr.rfind("views://", 0) == 0;
+                                        if ((isViews || isAppData) && protocolAllowed(capturedWebviewId, isAppData)) {
                                             std::string filePath = normalizeViewsRelativePath(uriStr);
                                             std::string content;
 
                                             // Check for internal/index.html (inline HTML content)
-                                            if (filePath == "internal/index.html") {
+                                            if (isAppData) {
+                                                content = loadAppDataFile(uriStr);
+                                            } else if (filePath == "internal/index.html") {
                                                 const char* htmlContent = getWebviewHTMLContent(capturedWebviewId);
                                                 if (htmlContent && strlen(htmlContent) > 0) {
                                                     content = std::string(htmlContent);
@@ -7897,18 +7951,22 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                 // Set allowed origins for the custom scheme
                 const WCHAR* allowedOrigins[1] = {L"*"};
 
-                // Create custom scheme registration for "views"
+                // Register both schemes globally; access is enforced per webview.
                 auto viewsSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"views");
                 viewsSchemeRegistration->put_TreatAsSecure(TRUE);
                 viewsSchemeRegistration->put_HasAuthorityComponent(TRUE); // This allows views://host/path format
                 viewsSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
+                auto appDataSchemeRegistration = Microsoft::WRL::Make<CoreWebView2CustomSchemeRegistration>(L"appdata");
+                appDataSchemeRegistration->put_TreatAsSecure(TRUE);
+                appDataSchemeRegistration->put_HasAuthorityComponent(TRUE);
+                appDataSchemeRegistration->SetAllowedOrigins(1, allowedOrigins);
 
                 // Set the custom scheme registrations
-                ICoreWebView2CustomSchemeRegistration* registrations[1] = {
-                    viewsSchemeRegistration.Get()
+                ICoreWebView2CustomSchemeRegistration* registrations[2] = {
+                    viewsSchemeRegistration.Get(), appDataSchemeRegistration.Get()
                 };
 
-                HRESULT schemeResult = options4->SetCustomSchemeRegistrations(1, registrations);
+                HRESULT schemeResult = options4->SetCustomSchemeRegistrations(2, registrations);
 
                 if (SUCCEEDED(schemeResult)) {
                     // ::log("views:// custom scheme registration set successfully");
@@ -8647,10 +8705,15 @@ static struct {
     bool startTransparent;
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
+static AllowedProtocols g_nextAllowedProtocols = {true, false};
 
 ELECTROBUN_EXPORT void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
+ELECTROBUN_EXPORT void setNextWebviewAllowedProtocols(bool allowViews, bool allowAppData) {
+    g_nextAllowedProtocols = {allowViews, allowAppData};
 }
 
 // Clean, elegant initWebview function - Windows version matching Mac pattern
@@ -8677,6 +8740,12 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+    const AllowedProtocols allowedProtocols = g_nextAllowedProtocols;
+    g_nextAllowedProtocols = {true, false};
+    {
+        std::lock_guard<std::mutex> protocolsLock(g_allowedProtocolsMutex);
+        g_allowedProtocols[webviewId] = allowedProtocols;
+    }
 
     // Serialize webview creation to avoid CEF/WebView2 conflicts
     std::lock_guard<std::mutex> lock(g_webviewCreationMutex);
@@ -10750,6 +10819,10 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
     }
 
     g_pendingResizeQueue.remove(abstractView);
+    {
+        std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+        g_allowedProtocols.erase(abstractView->webviewId);
+    }
     // CEF browser creation and lifecycle callbacks run on the native UI
     // thread. Serialize removal with OnAfterCreated so a pending async browser
     // cannot attach itself to a view while the runtime is releasing it.
@@ -13113,7 +13186,7 @@ void setupViewsSchemeHandler(ICoreWebView2* webview, uint32_t webviewId) {
                 
                 
                 // Check if this is a views:// URL
-                if (wUri.find(L"views://") == 0) {
+                if (wUri.find(L"views://") == 0 && protocolAllowed(webviewId, false)) {
                     handleViewsSchemeRequest(args, wUri, webviewId);
                 }
                 
@@ -13309,9 +13382,20 @@ std::string loadViewsFile(const std::string& path) {
         ::log("ERROR loadViewsFile: Relative path is not valid UTF-8");
         return "";
     }
-    const std::filesystem::path fullPath =
-        resourcesDir / L"app" / L"views" /
-        std::filesystem::path(wideRelativePath);
+    std::error_code ec;
+    const std::filesystem::path viewsRoot = std::filesystem::weakly_canonical(
+        resourcesDir / L"app" / L"views", ec);
+    if (ec) return "";
+    const std::filesystem::path fullPath = std::filesystem::weakly_canonical(
+        viewsRoot / std::filesystem::path(wideRelativePath), ec);
+    if (ec) return "";
+    auto rootIt = viewsRoot.begin(), targetIt = fullPath.begin();
+    for (; rootIt != viewsRoot.end(); ++rootIt, ++targetIt) {
+        if (targetIt == fullPath.end() || _wcsicmp(rootIt->c_str(), targetIt->c_str()) != 0) {
+            ::log("ERROR loadViewsFile: Path escapes views root");
+            return "";
+        }
+    }
     const std::string fullPathLog = electrobun::windowsPathForLog(fullPath);
 
     ::log("DEBUG loadViewsFile: Attempting flat file read: " + fullPathLog);

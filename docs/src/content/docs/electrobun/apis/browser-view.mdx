@@ -172,6 +172,7 @@ The constructor accepts `Partial<BrowserViewOptions>`.
 | `html` | `string \| null` | `null` | HTML string to load instead of `url`. |
 | `preload` | `string \| null` | `null` | Inline JavaScript or a bundled `views://` script URL. |
 | `viewsRoot` | `string \| null` | `null` | Override for the bundled views root. |
+| `allowedProtocols` | `{ views?: boolean; appData?: boolean }` | `{ views: true, appData: false }` | Grant this webview access to Electrobun's filesystem-backed URL schemes. |
 | `renderer` | `"native" \| "cef"` | Platform build default | Webview renderer. |
 | `partition` | `string \| null` | `null` | Persistent storage/session partition. |
 | `frame` | `{ x: number; y: number; width: number; height: number }` | `{ x: 0, y: 0, width: 800, height: 600 }` | Position inside the parent window. |
