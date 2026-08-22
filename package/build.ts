@@ -2077,11 +2077,21 @@ async function vendorCEF() {
 		}
 
 		// Build process_helper binary for Linux
-		if (
-			!existsSync(
-				join(process.cwd(), "src", "native", "build", "process_helper"),
-			)
-		) {
+		const processHelperPath = join(
+			process.cwd(),
+			"src",
+			"native",
+			"build",
+			"process_helper",
+		);
+		const processHelperSourcePath = join(
+			process.cwd(),
+			"src",
+			"native",
+			"linux",
+			"cef_process_helper_linux.cpp",
+		);
+		if (outputMissingOrOlder(processHelperPath, [processHelperSourcePath])) {
 			console.log("Building CEF process helper for Linux...");
 			await $`mkdir -p src/native/build`;
 

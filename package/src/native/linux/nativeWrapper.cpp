@@ -417,6 +417,7 @@ static std::map<uint32_t, std::shared_ptr<AbstractView>> g_wgpuViewMap;
 static std::mutex g_wgpuViewMapMutex;
 static std::map<uint32_t, std::string> g_webviewViewsRoot;
 static std::mutex g_webviewViewsRootMutex;
+static constexpr const char* kWebviewIdDataKey = "electrobun-webview-id";
 struct AllowedProtocols { bool views = true; bool appData = false; };
 static std::map<uint32_t, AllowedProtocols> g_allowedProtocols;
 static std::mutex g_allowedProtocolsMutex;
@@ -913,7 +914,7 @@ public:
     ElectrobunApp() {}
     
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        command_line->AppendSwitchWithValue("custom-scheme", "views");
+        command_line->AppendSwitchWithValue("custom-scheme", "views,appdata");
 
         // Linux default flags — can be overridden via chromiumFlags in config
         // GPU acceleration disabled by default for VM compatibility;
@@ -3067,6 +3068,10 @@ public:
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
+        g_object_set_data(
+            G_OBJECT(webview),
+            kWebviewIdDataKey,
+            GUINT_TO_POINTER(webviewId));
 
         // Connect the session only after the controlled target exists. This
         // prevents WebKitWebDriver from requesting a browsing context during
@@ -6142,6 +6147,9 @@ void applyApplicationMenuToX11Window(X11Window* x11win) {
 static uint32_t webviewIdForSchemeRequest(WebKitURISchemeRequest* request) {
     WebKitWebView* requestingWebView = webkit_uri_scheme_request_get_web_view(request);
     if (!requestingWebView) return 0;
+    const uint32_t storedWebviewId = GPOINTER_TO_UINT(
+        g_object_get_data(G_OBJECT(requestingWebView), kWebviewIdDataKey));
+    if (storedWebviewId != 0) return storedWebviewId;
     std::lock_guard<std::mutex> lock(g_webviewMapMutex);
     for (auto& [id, view] : g_webviewMap) {
         auto* wkImpl = dynamic_cast<WebKitWebViewImpl*>(view.get());
@@ -6162,7 +6170,6 @@ static void finishSchemeResponse(WebKitURISchemeRequest* request,
     soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
     soup_message_headers_append(headers, "X-Content-Type-Options", "nosniff");
     webkit_uri_scheme_response_set_http_headers(response, headers);
-    soup_message_headers_unref(headers);
     webkit_uri_scheme_request_finish_with_response(request, response);
     g_object_unref(response);
 #else
@@ -6355,8 +6362,12 @@ static void handleViewsURIScheme(WebKitURISchemeRequest* request, gpointer user_
         std::string mimeTypeStr = getMimeTypeFromUrl(fullPath);
         const char* mimeType = mimeTypeStr.c_str();
 
-        finishSchemeResponse(request, fileContents, fileSize, mimeType);
-        fileContents = nullptr;
+        GInputStream* stream = g_memory_input_stream_new_from_data(
+            fileContents,
+            fileSize,
+            g_free);
+        webkit_uri_scheme_request_finish(request, stream, fileSize, mimeType);
+        g_object_unref(stream);
     } else {
         // Return 404 error
         GError* responseError = g_error_new(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "File not found: %s", fullPath);
