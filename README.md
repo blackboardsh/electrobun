@@ -121,6 +121,7 @@ Don't miss our:
 - [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
 - [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
 - [whatsapp-reminder](https://github.com/FatahChan/whatsapp-reminder) - managed scheduled WhatsApp messages
+- [WorkBound Mail](https://github.com/ha-sante/WorkBound) - Calm email desktop client - for business or professional. 
 
 ### Video Demos
 
