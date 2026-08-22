@@ -258,6 +258,11 @@ WebviewCallbacks :: struct {
 	internal_bridge:   WebviewPostMessageHandler,
 }
 
+AllowedProtocols :: struct {
+	views:    bool,
+	app_data: bool,
+}
+
 WebviewOptions :: struct {
 	window_id:         u32,
 	host_webview_id:   u32,
@@ -270,6 +275,7 @@ WebviewOptions :: struct {
 	secret_key:        string,
 	preload:           string,
 	views_root:        string,
+	allowed_protocols: AllowedProtocols,
 	sandbox:           bool,
 	start_transparent: bool,
 	start_passthrough: bool,
@@ -285,6 +291,7 @@ defaultWebviewOptions :: proc(window_id: u32) -> WebviewOptions {
 		frame = DEFAULT_RECT,
 		auto_resize = true,
 		partition = "persist:default",
+		allowed_protocols = {views = true},
 		sandbox = true,
 	}
 }
@@ -831,6 +838,7 @@ ConfigureWebviewRuntimeFn :: proc "c" (u32, cstring, cstring) -> bool
 GetWindowStyleFn :: proc "c" (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) -> u32
 CreateWindowFn :: proc "c" (f64, f64, f64, f64, u32, cstring, bool, cstring, bool, bool, bool, f64, f64, WindowCloseHandler, WindowMoveHandler, WindowResizeHandler, WindowFocusHandler, WindowBlurHandler, WindowKeyHandler, WindowShouldCloseHandler) -> u32
 CreateWebviewFn :: proc "c" (u32, u32, cstring, cstring, f64, f64, f64, f64, bool, cstring, DecideNavigationHandler, WebviewEventHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, WebviewPostMessageHandler, cstring, cstring, cstring, bool, bool, bool, bool) -> u32
+SetNextWebviewAllowedProtocolsFn :: proc "c" (bool, bool)
 CreateWGPUViewFn :: proc "c" (u32, f64, f64, f64, f64, bool, bool, bool) -> u32
 SetWindowTitleFn :: proc "c" (u32, cstring)
 WindowIdFn :: proc "c" (u32)
@@ -885,6 +893,7 @@ Symbols :: struct {
 	getWindowStyle:                         GetWindowStyleFn,
 	createWindow:                           CreateWindowFn,
 	createWebview:                          CreateWebviewFn,
+	setNextWebviewAllowedProtocols:         SetNextWebviewAllowedProtocolsFn,
 	createWGPUView:                         CreateWGPUViewFn,
 	setWindowTitle:                         SetWindowTitleFn,
 	minimizeWindow:                         WindowIdFn,
@@ -1296,6 +1305,11 @@ createWebview :: proc(self: ^Core, options: WebviewOptions) -> (webview_id: u32,
 	if host_bridge == nil {
 		host_bridge = options.callbacks.bun_bridge
 	}
+
+	self.symbols.setNextWebviewAllowedProtocols(
+		options.allowed_protocols.views,
+		options.allowed_protocols.app_data,
+	)
 
 	webview_id = self.symbols.createWebview(
 		options.window_id,

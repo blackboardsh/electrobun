@@ -300,6 +300,11 @@ pub const WebviewCallbacks = struct {
     internal_bridge: ?WebviewPostMessageHandler = null,
 };
 
+pub const AllowedProtocols = struct {
+    views: bool = true,
+    app_data: bool = false,
+};
+
 pub const WebviewOptions = struct {
     window_id: u32,
     host_webview_id: u32 = 0,
@@ -312,6 +317,7 @@ pub const WebviewOptions = struct {
     secret_key: []const u8 = "",
     preload: []const u8 = "",
     views_root: []const u8 = "",
+    allowed_protocols: AllowedProtocols = .{},
     sandbox: bool = true,
     start_transparent: bool = false,
     start_passthrough: bool = false,
@@ -810,6 +816,7 @@ pub const Core = struct {
     const GetWindowStyleFn = *const fn (bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool, bool) callconv(.c) u32;
     const CreateWindowFn = *const fn (f64, f64, f64, f64, u32, [*:0]const u8, bool, [*:0]const u8, bool, bool, bool, f64, f64, ?WindowCloseHandler, ?WindowMoveHandler, ?WindowResizeHandler, ?WindowFocusHandler, ?WindowBlurHandler, ?WindowKeyHandler, ?WindowShouldCloseHandler) callconv(.c) u32;
     const CreateWebviewFn = *const fn (u32, u32, [*:0]const u8, [*:0]const u8, f64, f64, f64, f64, bool, [*:0]const u8, ?DecideNavigationHandler, ?WebviewEventHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, ?WebviewPostMessageHandler, [*:0]const u8, [*:0]const u8, [*:0]const u8, bool, bool, bool, bool) callconv(.c) u32;
+    const SetNextWebviewAllowedProtocolsFn = *const fn (bool, bool) callconv(.c) void;
     const CreateWGPUViewFn = *const fn (u32, f64, f64, f64, f64, bool, bool, bool) callconv(.c) u32;
     const SetWindowTitleFn = *const fn (u32, [*:0]const u8) callconv(.c) void;
     const MinimizeWindowFn = *const fn (u32) callconv(.c) void;
@@ -930,6 +937,7 @@ pub const Core = struct {
         get_window_style: GetWindowStyleFn,
         create_window: CreateWindowFn,
         create_webview: CreateWebviewFn,
+        set_next_webview_allowed_protocols: SetNextWebviewAllowedProtocolsFn,
         create_wgpu_view: CreateWGPUViewFn,
         set_window_title: SetWindowTitleFn,
         minimize_window: MinimizeWindowFn,
@@ -1069,6 +1077,7 @@ pub const Core = struct {
                 .get_window_style = lib.lookup(GetWindowStyleFn, "getWindowStyle") orelse return error.MissingCoreSymbol,
                 .create_window = lib.lookup(CreateWindowFn, "createWindow") orelse return error.MissingCoreSymbol,
                 .create_webview = lib.lookup(CreateWebviewFn, "createWebview") orelse return error.MissingCoreSymbol,
+                .set_next_webview_allowed_protocols = lib.lookup(SetNextWebviewAllowedProtocolsFn, "setNextWebviewAllowedProtocols") orelse return error.MissingCoreSymbol,
                 .create_wgpu_view = lib.lookup(CreateWGPUViewFn, "createWGPUView") orelse return error.MissingCoreSymbol,
                 .set_window_title = lib.lookup(SetWindowTitleFn, "setWindowTitle") orelse return error.MissingCoreSymbol,
                 .minimize_window = lib.lookup(MinimizeWindowFn, "minimizeWindow") orelse return error.MissingCoreSymbol,
@@ -1458,6 +1467,11 @@ pub const Core = struct {
         defer self.allocator.free(preload_z);
         const views_root_z = try self.dupeZ(options.views_root);
         defer self.allocator.free(views_root_z);
+
+        self.symbols.set_next_webview_allowed_protocols(
+            options.allowed_protocols.views,
+            options.allowed_protocols.app_data,
+        );
 
         const webview_id = self.symbols.create_webview(
             options.window_id,

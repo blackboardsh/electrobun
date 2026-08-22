@@ -128,6 +128,9 @@ static bool eb_call_u32_bool_bool_ret(void* fn, uint32_t value, bool flag) { ret
 typedef void (*eb_bool_fn)(bool);
 static void eb_call_bool(void* fn, bool flag) { ((eb_bool_fn)fn)(flag); }
 
+typedef void (*eb_bool_bool_fn)(bool, bool);
+static void eb_call_bool_bool(void* fn, bool first, bool second) { ((eb_bool_bool_fn)fn)(first, second); }
+
 typedef bool (*eb_bool_ret_fn)(void);
 static bool eb_call_bool_ret(void* fn) { return ((eb_bool_ret_fn)fn)(); }
 
@@ -383,6 +386,11 @@ type WebviewCallbacks struct {
 	InternalBridge   WebviewPostMessageHandler
 }
 
+type AllowedProtocols struct {
+	Views   bool
+	AppData bool
+}
+
 type WebviewOptions struct {
 	WindowID         uint32
 	HostWebviewID    uint32
@@ -394,6 +402,7 @@ type WebviewOptions struct {
 	SecretKey        string
 	Preload          string
 	ViewsRoot        string
+	AllowedProtocols AllowedProtocols
 	Sandbox          bool
 	StartTransparent bool
 	StartPassthrough bool
@@ -404,11 +413,12 @@ type WebviewOptions struct {
 
 func NewWebviewOptions(windowID uint32, url string, frame Rect) WebviewOptions {
 	return WebviewOptions{
-		WindowID:   windowID,
-		Renderer:   RendererNative,
-		URL:        url,
-		Frame:      frame,
-		AutoResize: true,
+		WindowID:         windowID,
+		Renderer:         RendererNative,
+		URL:              url,
+		Frame:            frame,
+		AutoResize:       true,
+		AllowedProtocols: AllowedProtocols{Views: true},
 	}
 }
 
@@ -673,6 +683,7 @@ var requiredSymbols = []string{
 	"getWindowStyle",
 	"createWindow",
 	"createWebview",
+	"setNextWebviewAllowedProtocols",
 	"createWGPUView",
 	"setWindowTitle",
 	"minimizeWindow",
@@ -1053,6 +1064,11 @@ func (c *Core) CreateWebview(options WebviewOptions) (uint32, error) {
 	if hostBridge == nil {
 		hostBridge = options.Callbacks.BunBridge
 	}
+	C.eb_call_bool_bool(
+		c.symbol("setNextWebviewAllowedProtocols"),
+		cbool(options.AllowedProtocols.Views),
+		cbool(options.AllowedProtocols.AppData),
+	)
 	webviewID := C.eb_call_create_webview(
 		c.symbol("createWebview"),
 		C.uint32_t(options.WindowID),

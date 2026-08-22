@@ -328,6 +328,21 @@ pub struct WebviewCallbacks {
     pub internal_bridge: Option<WebviewPostMessageHandler>,
 }
 
+#[derive(Clone, Copy)]
+pub struct AllowedProtocols {
+    pub views: bool,
+    pub app_data: bool,
+}
+
+impl Default for AllowedProtocols {
+    fn default() -> Self {
+        Self {
+            views: true,
+            app_data: false,
+        }
+    }
+}
+
 pub struct WebviewOptions<'a> {
     pub window_id: u32,
     pub host_webview_id: u32,
@@ -340,6 +355,7 @@ pub struct WebviewOptions<'a> {
     pub secret_key: &'a str,
     pub preload: &'a str,
     pub views_root: &'a str,
+    pub allowed_protocols: AllowedProtocols,
     pub sandbox: bool,
     pub start_transparent: bool,
     pub start_passthrough: bool,
@@ -361,6 +377,7 @@ impl<'a> WebviewOptions<'a> {
             secret_key: "",
             preload: "",
             views_root: "",
+            allowed_protocols: AllowedProtocols::default(),
             sandbox: true,
             start_transparent: false,
             start_passthrough: false,
@@ -695,6 +712,7 @@ type CreateWebviewFn = unsafe extern "C" fn(
     bool,
     bool,
 ) -> u32;
+type SetNextWebviewAllowedProtocolsFn = unsafe extern "C" fn(bool, bool);
 type CreateWGPUViewFn = unsafe extern "C" fn(u32, f64, f64, f64, f64, bool, bool, bool) -> u32;
 type SetWindowTitleFn = unsafe extern "C" fn(u32, *const c_char);
 type MinimizeWindowFn = unsafe extern "C" fn(u32);
@@ -832,6 +850,7 @@ struct Symbols {
     get_window_style: GetWindowStyleFn,
     create_window: CreateWindowFn,
     create_webview: CreateWebviewFn,
+    set_next_webview_allowed_protocols: SetNextWebviewAllowedProtocolsFn,
     create_wgpu_view: CreateWGPUViewFn,
     set_window_title: SetWindowTitleFn,
     minimize_window: MinimizeWindowFn,
@@ -966,6 +985,7 @@ impl Core {
             get_window_style: lib.symbol("getWindowStyle")?,
             create_window: lib.symbol("createWindow")?,
             create_webview: lib.symbol("createWebview")?,
+            set_next_webview_allowed_protocols: lib.symbol("setNextWebviewAllowedProtocols")?,
             create_wgpu_view: lib.symbol("createWGPUView")?,
             set_window_title: lib.symbol("setWindowTitle")?,
             minimize_window: lib.symbol("minimizeWindow")?,
@@ -1361,6 +1381,13 @@ impl Core {
         let secret_key = to_c_string(options.secret_key, "secret key")?;
         let preload = to_c_string(options.preload, "preload")?;
         let views_root = to_c_string(options.views_root, "views root")?;
+
+        unsafe {
+            (self.symbols.set_next_webview_allowed_protocols)(
+                options.allowed_protocols.views,
+                options.allowed_protocols.app_data,
+            );
+        }
 
         let webview_id = unsafe {
             (self.symbols.create_webview)(

@@ -25,18 +25,18 @@ async function writeFixture() {
   }
 }
 
-function protocolTest(renderer: "native" | "cef", enabled: boolean) {
+function protocolTest(enabled: boolean) {
   const expectation = enabled ? "allows" : "denies";
   return defineTest({
-    name: `appdata protocol ${expectation} access (${renderer})`,
+    name: `appdata protocol ${expectation} access`,
     category: "Protocols",
-    description: `Verifies appdata:// is ${expectation === "allows" ? "readable" : "blocked"} for a ${renderer} webview`,
+    description: `Verifies appdata:// is ${expectation === "allows" ? "readable" : "blocked"} when requesting CEF, including the automatic system-webview fallback when CEF is not bundled`,
     timeout: 20000,
     async run({ createWindow, log }) {
       const hasSymlinkFixture = await writeFixture();
       const win = await createWindow({
         url: "views://test-harness/index.html",
-        renderer,
+        renderer: "cef",
         rpc: createTestHarnessRPC(),
         allowedProtocols: { views: true, appData: enabled },
       });
@@ -67,14 +67,12 @@ function protocolTest(renderer: "native" | "cef", enabled: boolean) {
         expect(result?.ok).toBe(false);
         expect(result?.text === fixtureContents).toBe(false);
       }
-      log(`${renderer} appdata access ${expectation}: ${JSON.stringify(result)}`);
+      log(`appdata access ${expectation}: ${JSON.stringify(result)}`);
     },
   });
 }
 
 export const appDataProtocolTests = [
-  protocolTest("native", true),
-  protocolTest("native", false),
-  protocolTest("cef", true),
-  protocolTest("cef", false),
+  protocolTest(true),
+  protocolTest(false),
 ];
