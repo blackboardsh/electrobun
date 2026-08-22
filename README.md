@@ -132,7 +132,11 @@ Don't miss our:
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=blackboardsh/electrobun&type=date&legend=top-left&cache=3)](https://www.star-history.com/#blackboardsh/electrobun&type=date&legend=top-left)
+<p align="center">
+  <img src="./.github/assets/star-history-v1.jpg" alt="Electrobun star history four weeks after the v1 launch">
+  <br>
+  <em>star history 4 weeks after v1 launch</em>
+</p>
 
 ## Contributing
 Electrobun is one piece of a vision I'm building. I'm optimizing for focus and execution. Issues and PRs can be used to share ideas, but there should be no expectation that I will review, respond to, or merge them.
