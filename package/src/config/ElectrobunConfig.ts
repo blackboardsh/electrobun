@@ -178,10 +178,9 @@ export interface ElectrobunConfig {
 			/**
 			 * Cottontail standard-library capabilities to ship with the app.
 			 *
-			 * When omitted, Hutch scans the bundled main-process code and includes
-			 * the capabilities it can identify. When present, this is the explicit
-			 * include list; automatic scanning is disabled. Electrobun may add
-			 * capabilities required by its own runtime (currently `ffi`).
+			 * Hutch scans the final tree-shaken main-process bundle for capability
+			 * usage. Entries here are additive explicit includes for dynamic or
+			 * otherwise unscannable usage.
 			 */
 			capabilities?: string[];
 
