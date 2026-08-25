@@ -37,11 +37,11 @@ function assertEqual(actual, expected, label) {
 	}
 }
 
-function assertStableVersion(value, label) {
+function assertExactVersion(value, label) {
 	const parsed = parseStrictSemVer(value);
-	if (!parsed || parsed.prerelease !== null) {
+	if (!parsed) {
 		fail(
-			`${label} must be an exact stable SemVer 2.0.0 version, got ${JSON.stringify(value)}`,
+			`${label} must be an exact SemVer 2.0.0 version, got ${JSON.stringify(value)}`,
 		);
 	}
 	return value;
@@ -56,8 +56,8 @@ export function parseHutchPragma(source, label = "hutch.config.ts") {
 		fail(`${label} must start with an exact // @hutch cli=... cottontail=... pragma`);
 	}
 	return {
-		hutch: assertStableVersion(match[1], `${label} Hutch pin`),
-		cottontail: assertStableVersion(match[2], `${label} Cottontail pin`),
+		hutch: assertExactVersion(match[1], `${label} Hutch pin`),
+		cottontail: assertExactVersion(match[2], `${label} Cottontail pin`),
 	};
 }
 
@@ -178,8 +178,8 @@ function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }
 export function verifyReleaseToolchain(environment = process.env) {
 	const expectedHutch = environment.EXPECTED_HUTCH_VERSION;
 	const expectedCottontail = environment.EXPECTED_COTTONTAIL_VERSION;
-	assertStableVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
-	assertStableVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
+	assertExactVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
+	assertExactVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
 
 	for (const name of forbiddenOverrides) {
 		if (environment[name] !== undefined) {

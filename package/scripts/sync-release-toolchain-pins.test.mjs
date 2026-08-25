@@ -134,7 +134,7 @@ test("pin synchronization validates every target before mutating any", (t) => {
 	});
 	assert.throws(
 		() => syncReleaseToolchainPins(fixture.root),
-		/PAIRED_HUTCH_VERSION must be an exact stable SemVer 2\.0\.0/,
+		/PAIRED_HUTCH_VERSION must be an exact SemVer 2\.0\.0/,
 	);
 	assert.equal(readFileSync(fixture.paths.workflow, "utf8"), originalWorkflow);
 	assert.equal(readFileSync(fixture.paths.resolver, "utf8"), resolver("latest"));
@@ -150,7 +150,7 @@ test("a malformed documented pin prevents every target mutation", (t) => {
 	});
 	assert.throws(
 		() => syncReleaseToolchainPins(fixture.root),
-		/documented pragma Hutch pin must be an exact stable SemVer 2\.0\.0/,
+		/documented pragma Hutch pin must be an exact SemVer 2\.0\.0/,
 	);
 	assert.equal(readFileSync(fixture.paths.workflow, "utf8"), originalWorkflow);
 	assert.equal(readFileSync(fixture.paths.resolver, "utf8"), originalResolver);
@@ -163,11 +163,11 @@ test("a malformed documented pin prevents every target mutation", (t) => {
 test("pin synchronization rejects malformed canonical pragma pins", (t) => {
 	const fixture = createRepositoryFixture(t, {
 		config:
-			"// @hutch cli=0.24.0-beta.1 cottontail=0.6.0\nexport default {};\n",
+			"// @hutch cli=^0.24.0 cottontail=0.6.0\nexport default {};\n",
 	});
 	assert.throws(
 		() => syncReleaseToolchainPins(fixture.root),
-		/package\/hutch\.config\.ts Hutch pin must be an exact stable SemVer 2\.0\.0/,
+		/package\/hutch\.config\.ts Hutch pin must be an exact SemVer 2\.0\.0/,
 	);
 });
 
@@ -199,10 +199,10 @@ test("workflow synchronization rejects missing, duplicate, and malformed fields"
 	assert.throws(
 		() =>
 			updateReleaseWorkflowPins(
-				workflow().replace("0.23.0", "0.23.0-beta.1"),
+				workflow().replace("0.23.0", "production"),
 				newPins,
 			),
-		/EXPECTED_HUTCH_VERSION must be an exact stable SemVer 2\.0\.0/,
+		/EXPECTED_HUTCH_VERSION must be an exact SemVer 2\.0\.0/,
 	);
 });
 
@@ -228,8 +228,8 @@ test("resolver synchronization rejects missing, duplicate, and malformed constan
 		/must be a quoted const declaration/,
 	);
 	assert.throws(
-		() => updateNpmResolverPin(resolver("0.23.0-rc.1"), newPins.hutch),
-		/PAIRED_HUTCH_VERSION must be an exact stable SemVer 2\.0\.0/,
+		() => updateNpmResolverPin(resolver("latest"), newPins.hutch),
+		/PAIRED_HUTCH_VERSION must be an exact SemVer 2\.0\.0/,
 	);
 });
 
@@ -248,7 +248,7 @@ test("migration-guide synchronization rejects missing, duplicate, and malformed 
 	);
 	assert.throws(
 		() => updateMigrationGuideHutchPin(migrationGuide("latest"), newPins.hutch),
-		/documented pragma Hutch pin must be an exact stable SemVer 2\.0\.0/,
+		/documented pragma Hutch pin must be an exact SemVer 2\.0\.0/,
 	);
 	assert.throws(
 		() =>
@@ -256,6 +256,6 @@ test("migration-guide synchronization rejects missing, duplicate, and malformed 
 				migrationGuide().replace("cottontail=0.5.0", "cottontail=production"),
 				newPins.hutch,
 			),
-		/documented pragma Cottontail pin must be an exact stable SemVer 2\.0\.0/,
+		/documented pragma Cottontail pin must be an exact SemVer 2\.0\.0/,
 	);
 });

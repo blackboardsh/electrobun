@@ -22,7 +22,7 @@ test("release provenance accepts only the exact Hutch pragma format", () => {
 	);
 });
 
-test("release provenance accepts stable SemVer build metadata", () => {
+test("release provenance accepts exact stable and prerelease SemVer", () => {
 	assert.deepEqual(
 		parseHutchPragma(
 			"// @hutch cli=0.5.0+release.01 cottontail=0.3.0+macos-arm64\n",
@@ -32,11 +32,19 @@ test("release provenance accepts stable SemVer build metadata", () => {
 			cottontail: "0.3.0+macos-arm64",
 		},
 	);
+	assert.deepEqual(
+		parseHutchPragma(
+			"// @hutch cli=0.26.0-canary.1 cottontail=0.6.0-canary.5\n",
+		),
+		{
+			hutch: "0.26.0-canary.1",
+			cottontail: "0.6.0-canary.5",
+		},
+	);
 });
 
-test("release provenance rejects non-stable or non-exact Hutch pragma pins", () => {
+test("release provenance rejects non-exact Hutch pragma pins", () => {
 	for (const version of [
-		"0.5.0-beta.1",
 		"0.5.0-beta.01",
 		"^0.5.0",
 		"latest",
@@ -50,7 +58,7 @@ test("release provenance rejects non-stable or non-exact Hutch pragma pins", () 
 				parseHutchPragma(
 					`// @hutch cli=${version} cottontail=0.3.0\n`,
 				),
-			/exact stable SemVer 2\.0\.0/,
+			/exact SemVer 2\.0\.0/,
 			`expected Hutch pin ${JSON.stringify(version)} to be rejected`,
 		);
 		assert.throws(
@@ -58,7 +66,7 @@ test("release provenance rejects non-stable or non-exact Hutch pragma pins", () 
 				parseHutchPragma(
 					`// @hutch cli=0.5.0 cottontail=${version}\n`,
 				),
-			/exact stable SemVer 2\.0\.0/,
+			/exact SemVer 2\.0\.0/,
 			`expected Cottontail pin ${JSON.stringify(version)} to be rejected`,
 		);
 	}
@@ -66,7 +74,6 @@ test("release provenance rejects non-stable or non-exact Hutch pragma pins", () 
 
 test("release provenance rejects invalid expected production versions before probing", () => {
 	for (const version of [
-		"0.5.0-rc.1",
 		"0.5.0-01",
 		"~0.5.0",
 		"production",
@@ -79,7 +86,7 @@ test("release provenance rejects invalid expected production versions before pro
 					EXPECTED_HUTCH_VERSION: version,
 					EXPECTED_COTTONTAIL_VERSION: "0.3.0",
 				}),
-			/EXPECTED_HUTCH_VERSION must be an exact stable SemVer 2\.0\.0/,
+			/EXPECTED_HUTCH_VERSION must be an exact SemVer 2\.0\.0/,
 		);
 		assert.throws(
 			() =>
@@ -87,7 +94,7 @@ test("release provenance rejects invalid expected production versions before pro
 					EXPECTED_HUTCH_VERSION: "0.5.0",
 					EXPECTED_COTTONTAIL_VERSION: version,
 				}),
-			/EXPECTED_COTTONTAIL_VERSION must be an exact stable SemVer 2\.0\.0/,
+			/EXPECTED_COTTONTAIL_VERSION must be an exact SemVer 2\.0\.0/,
 		);
 	}
 });

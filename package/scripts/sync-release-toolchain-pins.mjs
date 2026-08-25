@@ -22,11 +22,11 @@ function fail(message) {
 	throw new Error(`Electrobun toolchain pin sync: ${message}`);
 }
 
-function assertStableVersion(value, label) {
+function assertExactVersion(value, label) {
 	const parsed = parseStrictSemVer(value);
-	if (!parsed || parsed.prerelease !== null) {
+	if (!parsed) {
 		fail(
-			`${label} must be an exact stable SemVer 2.0.0 version, got ${JSON.stringify(value)}`,
+			`${label} must be an exact SemVer 2.0.0 version, got ${JSON.stringify(value)}`,
 		);
 	}
 	return value;
@@ -51,7 +51,7 @@ function replaceWorkflowField(source, name, value) {
 			`.github/workflows/release.yml ${name} must be a single quoted scalar`,
 		);
 	}
-	assertStableVersion(
+	assertExactVersion(
 		exact[3],
 		`.github/workflows/release.yml ${name}`,
 	);
@@ -63,8 +63,8 @@ function replaceWorkflowField(source, name, value) {
 }
 
 export function updateReleaseWorkflowPins(source, pins) {
-	assertStableVersion(pins.hutch, "canonical Hutch pin");
-	assertStableVersion(pins.cottontail, "canonical Cottontail pin");
+	assertExactVersion(pins.hutch, "canonical Hutch pin");
+	assertExactVersion(pins.cottontail, "canonical Cottontail pin");
 	let updated = replaceWorkflowField(
 		source,
 		"EXPECTED_HUTCH_VERSION",
@@ -79,7 +79,7 @@ export function updateReleaseWorkflowPins(source, pins) {
 }
 
 export function updateNpmResolverPin(source, hutchVersion) {
-	assertStableVersion(hutchVersion, "canonical Hutch pin");
+	assertExactVersion(hutchVersion, "canonical Hutch pin");
 	const candidates = [
 		...source.matchAll(
 			/^[\t ]*const[\t ]+PAIRED_HUTCH_VERSION\b.*$/gm,
@@ -100,7 +100,7 @@ export function updateNpmResolverPin(source, hutchVersion) {
 			"npm/electrobun/bin/resolve-hutch.cjs PAIRED_HUTCH_VERSION must be a quoted const declaration ending in a semicolon",
 		);
 	}
-	assertStableVersion(
+	assertExactVersion(
 		exact[3],
 		"npm/electrobun/bin/resolve-hutch.cjs PAIRED_HUTCH_VERSION",
 	);
@@ -112,7 +112,7 @@ export function updateNpmResolverPin(source, hutchVersion) {
 }
 
 export function updateMigrationGuideHutchPin(source, hutchVersion) {
-	assertStableVersion(hutchVersion, "canonical Hutch pin");
+	assertExactVersion(hutchVersion, "canonical Hutch pin");
 	const candidates = [...source.matchAll(/^\/\/ @hutch\b.*$/gm)];
 	if (candidates.length !== 1) {
 		fail(
