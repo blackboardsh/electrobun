@@ -176,6 +176,16 @@ export interface ElectrobunConfig {
 			entrypoint?: string;
 
 			/**
+			 * Cottontail standard-library capabilities to ship with the app.
+			 *
+			 * When omitted, Hutch scans the bundled main-process code and includes
+			 * the capabilities it can identify. When present, this is the explicit
+			 * include list; automatic scanning is disabled. Electrobun may add
+			 * capabilities required by its own runtime (currently `ffi`).
+			 */
+			capabilities?: string[];
+
+			/**
 			 * Ship the main process as precompiled JavaScriptCore bytecode
 			 * instead of (or alongside) source. Cottontail-only.
 			 *
