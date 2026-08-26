@@ -122,6 +122,13 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 		new URL("../../.github/workflows/release.yml", import.meta.url),
 		"utf8",
 	).replace(/\r\n/g, "\n");
+	const installAction = readFileSync(
+		new URL("../../.github/actions/install-hutch/action.yml", import.meta.url),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	assert.match(installAction, /installed_name=hutch[\s\S]*installed_name=hutch-canary/);
+	assert.match(installAction, /printf '#!\/bin\/sh\\nexec "%s" "\$@"\\n'/);
+	assert.match(installAction, /"hutch-canary\.exe"[\s\S]*"hutch\.cmd"/);
 	const matrix = workflow.slice(
 		workflow.indexOf("        include:"),
 		workflow.indexOf("    runs-on:", workflow.indexOf("        include:")),

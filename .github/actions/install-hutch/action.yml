@@ -21,7 +21,15 @@ runs:
           https://hutch.blackboard.sh/hutch/install.sh \
           --output "$installer"
         sh "$installer" --channel "$HUTCH_INSTALL_CHANNEL" --no-modify-path
-        echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+        installed_name=hutch
+        if [[ "$HUTCH_INSTALL_CHANNEL" == canary ]]; then
+          installed_name=hutch-canary
+        fi
+        command_dir="$RUNNER_TEMP/hutch-command"
+        mkdir -p "$command_dir"
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/.hutch/bin/$installed_name" > "$command_dir/hutch"
+        chmod +x "$command_dir/hutch"
+        echo "$command_dir" >> "$GITHUB_PATH"
 
     - name: Install Hutch
       if: runner.os == 'Windows'
@@ -35,4 +43,9 @@ runs:
           -OutFile $installer
         & $installer -Channel $env:HUTCH_INSTALL_CHANNEL
         if ($LASTEXITCODE -ne 0) { throw "Hutch installation failed" }
-        (Join-Path $HOME ".hutch\bin") | Out-File -FilePath $env:GITHUB_PATH -Append
+        $installedName = if ($env:HUTCH_INSTALL_CHANNEL -eq "canary") { "hutch-canary.exe" } else { "hutch.exe" }
+        $commandDir = Join-Path $env:RUNNER_TEMP "hutch-command"
+        New-Item -ItemType Directory -Path $commandDir -Force | Out-Null
+        $installedPath = Join-Path $HOME ".hutch\bin\$installedName"
+        "@`"$installedPath`" %*" | Set-Content -Path (Join-Path $commandDir "hutch.cmd") -Encoding ascii
+        $commandDir | Out-File -FilePath $env:GITHUB_PATH -Append
