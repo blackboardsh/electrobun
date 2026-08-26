@@ -1,6 +1,6 @@
 [package]
 name = "electrobun"
-version = "2.0.2-beta.2"
+version = "2.0.2-beta.3"
 edition = "2021"
 publish = false
 
