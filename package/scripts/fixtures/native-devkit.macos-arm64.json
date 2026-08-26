@@ -35,7 +35,7 @@
 			"defaultVersion": "1.4.0"
 		},
 		"cottontail": {
-			"defaultVersion": "0.5.0"
+			"defaultVersion": "0.6.0-canary.11"
 		}
 	},
 	"layout": {
