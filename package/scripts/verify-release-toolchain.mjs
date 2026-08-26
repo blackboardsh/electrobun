@@ -47,6 +47,12 @@ function assertExactVersion(value, label) {
 	return value;
 }
 
+function releaseChannel(version, label) {
+	const parsed = parseStrictSemVer(version);
+	if (!parsed) fail(`${label} must be an exact SemVer 2.0.0 version`);
+	return parsed.prerelease === null ? "production" : "canary";
+}
+
 export function parseHutchPragma(source, label = "hutch.config.ts") {
 	const firstLine = source.split(/\r?\n/, 1)[0];
 	const match = firstLine.match(
@@ -123,7 +129,7 @@ function cottontailVersion(executable, cwd) {
 	);
 }
 
-function verifyReleaseMetadata({ executable, product, version }) {
+function verifyReleaseMetadata({ executable, product, version, channel }) {
 	const releaseRoot = dirname(dirname(executable));
 	const manifestPath = join(releaseRoot, `${product}-release.json`);
 	if (!existsSync(manifestPath)) fail(`missing release metadata ${manifestPath}`);
@@ -135,7 +141,7 @@ function verifyReleaseMetadata({ executable, product, version }) {
 		fail(`invalid release metadata ${manifestPath}: ${error.message}`);
 	}
 	assertEqual(manifest.product, product, `${product} metadata product`);
-	assertEqual(manifest.channel, "production", `${product} metadata channel`);
+	assertEqual(manifest.channel, channel, `${product} metadata channel`);
 	assertEqual(manifest.version, version, `${product} metadata version`);
 	if (!/^[0-9a-f]{40}$/.test(manifest.revision ?? "")) {
 		fail(`${product} metadata has an invalid revision: ${JSON.stringify(manifest.revision)}`);
@@ -180,10 +186,15 @@ export function verifyReleaseToolchain(environment = process.env) {
 	const expectedCottontail = environment.EXPECTED_COTTONTAIL_VERSION;
 	assertExactVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
 	assertExactVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
+	const expectedHutchChannel = releaseChannel(expectedHutch, "EXPECTED_HUTCH_VERSION");
+	const expectedCottontailChannel = releaseChannel(
+		expectedCottontail,
+		"EXPECTED_COTTONTAIL_VERSION",
+	);
 
 	for (const name of forbiddenOverrides) {
 		if (environment[name] !== undefined) {
-			fail(`${name} must be unset for a production provenance check`);
+			fail(`${name} must be unset for a release provenance check`);
 		}
 	}
 
@@ -210,15 +221,18 @@ export function verifyReleaseToolchain(environment = process.env) {
 	// there is no separate cottontail update. The no-selector cottontail
 	// verbs report the launcher's paired release, which is the provenance
 	// claim this gate exists to check.
-	run("hutch", ["self", "update", "production"], repositoryRoot);
+	run("hutch", ["self", "update", expectedHutchChannel], repositoryRoot);
 	assertEqual(
-		singleLine(run("hutch", ["self", "version"], repositoryRoot), "production Hutch version"),
+		singleLine(
+			run("hutch", ["self", "version", expectedHutchChannel], repositoryRoot),
+			`${expectedHutchChannel} Hutch version`,
+		),
 		expectedHutch,
-		"production Hutch channel",
+		`${expectedHutchChannel} Hutch channel`,
 	);
 	assertEqual(
 		singleLine(
-			run("hutch", ["cottontail", "version"], repositoryRoot),
+			run("hutch", ["cottontail", "version", expectedCottontailChannel], repositoryRoot),
 			"paired Cottontail version",
 		),
 		expectedCottontail,
@@ -226,11 +240,11 @@ export function verifyReleaseToolchain(environment = process.env) {
 	);
 
 	const hutchExecutable = canonicalPath(
-		run("hutch", ["self", "path", "production"], repositoryRoot),
-		"production Hutch path",
+		run("hutch", ["self", "path", expectedHutchChannel], repositoryRoot),
+		`${expectedHutchChannel} Hutch path`,
 	);
 	const cottontailExecutable = canonicalPath(
-		run("hutch", ["cottontail", "path"], repositoryRoot),
+		run("hutch", ["cottontail", "path", expectedCottontailChannel], repositoryRoot),
 		"paired Cottontail path",
 	);
 	assertEqual(
@@ -251,11 +265,13 @@ export function verifyReleaseToolchain(environment = process.env) {
 		executable: hutchExecutable,
 		product: "hutch",
 		version: expectedHutch,
+		channel: expectedHutchChannel,
 	});
 	const cottontailMetadata = verifyReleaseMetadata({
 		executable: cottontailExecutable,
 		product: "cottontail",
 		version: expectedCottontail,
+		channel: expectedCottontailChannel,
 	});
 	console.log(
 		`Hutch ${expectedHutch}: ${hutchExecutable} (revision ${hutchMetadata.revision}, sha256 ${sha256(hutchExecutable)})`,

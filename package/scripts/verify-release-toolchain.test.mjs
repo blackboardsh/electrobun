@@ -164,7 +164,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	}
 	assert.match(
 		workflow,
-		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: production$/m,
+		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: \$\{\{ contains\(env\.EXPECTED_HUTCH_VERSION, '-'\) && 'canary' \|\| 'production' \}\}$/m,
 	);
 	assert.match(
 		workflow,
@@ -194,7 +194,7 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	);
 
 	const provenance = workflow.indexOf(
-		"      - name: Verify production Hutch and Cottontail provenance",
+		"      - name: Verify pinned Hutch and Cottontail provenance",
 	);
 	const build = workflow.indexOf("      - name: Build Kitchen");
 	const validate = workflow.indexOf("      - name: Validate Kitchen artifacts");

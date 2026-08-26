@@ -90,7 +90,7 @@ jobs:
       - name: Install Hutch
         uses: ./.github/actions/install-hutch
         with:
-          channel: production
+          channel: ${{ contains(env.EXPECTED_HUTCH_VERSION, '-') && 'canary' || 'production' }}
 
       - name: Install dependencies
         run: hutch run install
@@ -311,7 +311,7 @@ jobs:
         run: node --test ../package/scripts/verify-release-toolchain.test.mjs
         working-directory: kitchen
 
-      - name: Verify production Hutch and Cottontail provenance
+      - name: Verify pinned Hutch and Cottontail provenance
         run: node ../package/scripts/verify-release-toolchain.mjs
         working-directory: kitchen
 
