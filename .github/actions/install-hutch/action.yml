@@ -30,6 +30,7 @@ runs:
         printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/.hutch/bin/$installed_name" > "$command_dir/hutch"
         chmod +x "$command_dir/hutch"
         echo "$command_dir" >> "$GITHUB_PATH"
+        echo "HUTCH_ACTIVE_CHANNEL=$HUTCH_INSTALL_CHANNEL" >> "$GITHUB_ENV"
 
     - name: Install Hutch
       if: runner.os == 'Windows'
@@ -47,5 +48,6 @@ runs:
         $commandDir = Join-Path $env:RUNNER_TEMP "hutch-command"
         New-Item -ItemType Directory -Path $commandDir -Force | Out-Null
         $installedPath = Join-Path $HOME ".hutch\bin\$installedName"
-        "@`"$installedPath`" %*" | Set-Content -Path (Join-Path $commandDir "hutch.cmd") -Encoding ascii
+        Copy-Item $installedPath (Join-Path $commandDir "hutch.exe")
         $commandDir | Out-File -FilePath $env:GITHUB_PATH -Append
+        "HUTCH_ACTIVE_CHANNEL=$env:HUTCH_INSTALL_CHANNEL" | Out-File -FilePath $env:GITHUB_ENV -Append

@@ -128,7 +128,8 @@ test("release CI verifies provenance before all four Kitchen builds", () => {
 	).replace(/\r\n/g, "\n");
 	assert.match(installAction, /installed_name=hutch[\s\S]*installed_name=hutch-canary/);
 	assert.match(installAction, /printf '#!\/bin\/sh\\nexec "%s" "\$@"\\n'/);
-	assert.match(installAction, /"hutch-canary\.exe"[\s\S]*"hutch\.cmd"/);
+	assert.match(installAction, /"hutch-canary\.exe"[\s\S]*"hutch\.exe"/);
+	assert.equal((installAction.match(/HUTCH_ACTIVE_CHANNEL=/g) ?? []).length, 2);
 	const matrix = workflow.slice(
 		workflow.indexOf("        include:"),
 		workflow.indexOf("    runs-on:", workflow.indexOf("        include:")),

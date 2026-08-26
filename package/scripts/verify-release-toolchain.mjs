@@ -18,7 +18,6 @@ const runtimeProbePath = join(
 );
 const forbiddenOverrides = [
 	"HUTCH_ENGINE_BINARY",
-	"HUTCH_ACTIVE_CHANNEL",
 	"DASH_COTTONTAIL",
 	"COTTONTAIL_BINARY",
 	"DASH_COTTONTAIL_SELECTOR",
@@ -191,6 +190,13 @@ export function verifyReleaseToolchain(environment = process.env) {
 		expectedCottontail,
 		"EXPECTED_COTTONTAIL_VERSION",
 	);
+	if (environment.HUTCH_ACTIVE_CHANNEL !== undefined) {
+		assertEqual(
+			environment.HUTCH_ACTIVE_CHANNEL,
+			expectedHutchChannel,
+			"HUTCH_ACTIVE_CHANNEL",
+		);
+	}
 
 	for (const name of forbiddenOverrides) {
 		if (environment[name] !== undefined) {
