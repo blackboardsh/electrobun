@@ -110,6 +110,7 @@ Don't miss our:
 - [PiBun](https://github.com/khairold/pibun) - desktop GUI for the Pi coding agent with chat, terminal, git integration, and plugin system
 - [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
 - [Prometheus](https://github.com/opensourcectl/prometheus) - desktop utility toolbox for file cleanup, document manipulation, and image processing
+- [qCodelicious](https://github.com/rafaelsouzars/qcodelicious) - A simple code editor.
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
 - [remotecode.io](https://github.com/samuelfaj/remotecode.io) - continue local AI coding sessions (Claude Code or Codex) from your mobile device
 - [sirene](https://github.com/KevinBonnoron/sirene) - self-hosted multi-backend text-to-speech platform with voice cloning
