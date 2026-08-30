@@ -2,4 +2,15 @@
 title: "Unreleased"
 ---
 
-Notes for the next production release will appear here as work lands.
+## Cottontail capabilities
+
+- Cottontail's optional standard-library APIs now ship as capability modules
+  that load on demand through module and namespace surfaces. Apps no longer
+  need to carry every optional module and native library with the core runtime.
+- When `build.mainProcess` is `"cottontail"`, Hutch scans the final tree-shaken
+  main-process bundle for `bun:*`, `node:*`, and `Cottontail.*` usage, reports
+  the capabilities it discovered, and packages only the selected capability
+  bytecode and native libraries.
+- `build.cottontail.capabilities` adds explicit capability modules for computed
+  dynamic imports, generated source, plugin loaders, and other usage the bundle
+  scan cannot see. Explicit entries are additive to Hutch's automatic scan.

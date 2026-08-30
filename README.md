@@ -105,6 +105,7 @@ Don't miss our:
 - [MarkBun](https://github.com/xiaochong/markbun) - fast, beautiful, Typora-like markdown desktop editor
 - [md-browse](https://github.com/needle-tools/md-browse) - a markdown-first browser that converts web pages to clean markdown
 - [moop](https://github.com/zrubinrattet/moop/) - desktop app for batch image optimization for the web
+- [Oursum](https://github.com/CarthyWorks/oursum) - private, offline-first personal expense tracker for importing, categorizing, and splitting transactions
 - [Patchline](https://github.com/adwaithks/Patchline) - lightweight desktop Git client for reading patches and line diffs, then staging and committing changes
 - [peekachu](https://github.com/needle-tools/peekachu) - password manager for AIs; store secrets in your OS keychain and scrub output so AI assistants never see actual values
 - [PiBun](https://github.com/khairold/pibun) - desktop GUI for the Pi coding agent with chat, terminal, git integration, and plugin system

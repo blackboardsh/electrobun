@@ -202,6 +202,64 @@ Cargo manifests, Go modules, or a temporary GOPATH.
 Hutch builds for the current host platform and architecture. Use native CI
 runners when producing the macOS, Windows, and Linux release matrix.
 
+## `build.cottontail`
+
+| Field | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `entrypoint` | `string` | `"src/bun/index.ts"` | Main-process source entrypoint. |
+| `capabilities` | `string[]` | `[]` | Additional capability modules to package when dynamic usage cannot be found by the bundle scan. |
+| `bytecode` | `false \| true \| "obfuscate"` | `false` | Precompile the main process; this option is declared but not yet wired. |
+
+The JavaScript bundler options described below can also be set in this object.
+
+### Capability Modules
+
+Cottontail keeps optional standard-library APIs outside its core executable and
+loads each capability on demand through module imports or `Cottontail.*`
+namespace access. When `build.mainProcess` is `"cottontail"`, Hutch scans the
+final tree-shaken main-process bundle and packages only the capability bytecode
+and native libraries it discovers. Each build reports the automatic result:
+
+```text
+hutch electrobun: Cottontail capabilities discovered by scan: [sqlite, compression]
+```
+
+This message contains the scan result only. Explicit configuration entries are
+merged afterward.
+
+Set `build.cottontail.capabilities` when a capability is reached through a
+computed dynamic import, generated source, a plugin loader, or another path the
+bundle scan cannot see. These entries are additive: Hutch still includes every
+capability found by its scan.
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Dynamic Modules",
+    identifier: "com.example.dynamic-modules",
+    version: "1.0.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+      capabilities: ["sqlite", "compression"],
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Supported capability names are `archive`, `bake`, `build`, `colors`,
+`compression`, `cookies`, `csrf`, `data`, `ffi`, `filesystemRouter`, `glob`,
+`hashing`, `htmlRewriter`, `inspector`, `jscTools`, `json5`, `markdown`,
+`password`, `redis`, `repl`, `s3`, `sea`, `secrets`, `shell`, `sql`, `sqlite`,
+`terminal`, `test`, `text`, `toml`, `uuid`, `websocket`, and `yaml`. Unknown
+names fail the build. If an omitted capability is reached at runtime,
+Cottontail's error identifies the missing name and points back to
+`build.cottontail.capabilities`.
+
 ## Bytecode And Obfuscation
 
 :::caution[Coming soon]
