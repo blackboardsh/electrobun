@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "electrobun"
-version = "2.0.2-beta.13"
+version = "2.0.2-beta.14"
 
 [[package]]
 name = "rust-flock-wgpu"
