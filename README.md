@@ -113,7 +113,7 @@ Don't miss our:
 - [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
 - [Prometheus](https://github.com/opensourcectl/prometheus) - desktop utility toolbox for file cleanup, document manipulation, and image processing
 - [qCodelicious](https://github.com/rafaelsouzars/qcodelicious) - a simple code editor
-- [QoQa Compta](https://github.com/nyg/qoqa-compta) - spending dashboard for Swiss deal site QoQa.ch
+- [QoQa Compta](https://github.com/nyg/qoqa-compta) - spending dashboard for the Swiss deal site QoQa.ch
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
 - [remotecode.io](https://github.com/samuelfaj/remotecode.io) - continue local AI coding sessions (Claude Code or Codex) from your mobile device
 - [sirene](https://github.com/KevinBonnoron/sirene) - self-hosted multi-backend text-to-speech platform with voice cloning
