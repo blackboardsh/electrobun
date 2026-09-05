@@ -3649,7 +3649,7 @@ export fn setTrayTitle(tray_id: u32, title: [*:0]const u8) void {
 export fn setTrayImage(tray_id: u32, image: [*:0]const u8) void {
     clearLastError();
 
-    const SetNativeTrayImageFn = *const fn (TrayPtr, [*:0]const u8) callconv(.c) void;
+    const SetNativeTrayImageFn = *const fn (TrayPtr, [*:0]const u8, bool, u32, u32) callconv(.c) void;
     const state = tray_registry.getPtr(tray_id) orelse return;
     if (!replaceOwnedZ(&state.image, image)) {
         return;
@@ -3657,7 +3657,13 @@ export fn setTrayImage(tray_id: u32, image: [*:0]const u8) void {
 
     if (state.ptr) |tray_ptr| {
         const set_native_tray_image = lookupNativeSymbol(SetNativeTrayImageFn, "setTrayImage") orelse return;
-        set_native_tray_image(tray_ptr, state.image.ptr);
+        set_native_tray_image(
+            tray_ptr,
+            state.image.ptr,
+            state.is_template,
+            state.width,
+            state.height,
+        );
     }
 }
 

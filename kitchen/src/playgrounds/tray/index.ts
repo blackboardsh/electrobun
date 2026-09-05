@@ -26,6 +26,7 @@ function init() {
 
   document.getElementById("createTrayBtn")?.addEventListener("click", createTray);
   document.getElementById("updateTitleBtn")?.addEventListener("click", updateTitle);
+  document.getElementById("updateImageBtn")?.addEventListener("click", updateImage);
   document.getElementById("startCounterBtn")?.addEventListener("click", startCounter);
   document.getElementById("stopCounterBtn")?.addEventListener("click", stopCounter);
   document.getElementById("removeTrayBtn")?.addEventListener("click", removeTray);
@@ -69,6 +70,21 @@ async function updateTitle() {
       title: newTitleInput.value,
     });
     addLog(`Updated title to: "${newTitleInput.value}"`);
+  } catch (err) {
+    addLog(`Error: ${err}`);
+  }
+}
+
+async function updateImage() {
+  try {
+    const result = await (electrobun.rpc as any)?.request.updateImage({});
+    if (!result?.success) {
+      addLog("Create a tray before updating its image");
+      return;
+    }
+    const button = document.getElementById("updateImageBtn");
+    if (button) button.textContent = `Update Image (#${result.count})`;
+    addLog(`Updated tray image in place (#${result.count})`);
   } catch (err) {
     addLog(`Error: ${err}`);
   }

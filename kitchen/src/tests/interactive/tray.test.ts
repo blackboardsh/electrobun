@@ -10,7 +10,8 @@ export const trayTests = [
     description: "Interactive playground for testing tray icon, title, and menus",
     instructions: [
       "A tray control panel will open",
-      "Configure tray options and click buttons to test",
+      "Create a tray, then drag its icon to a known position in the system tray",
+      "Click Update Image and verify that its position, size, and appearance stay unchanged",
       "Close the window when done to pass the test",
     ],
     interactive: true,
@@ -20,6 +21,7 @@ export const trayTests = [
 
       await new Promise<void>((resolve) => {
         let currentTray: Tray | null = null;
+        let imageUpdateCount = 0;
         let updateInterval: any = null;
         let winRef: BrowserWindow<any> | null = null;
 
@@ -45,6 +47,7 @@ export const trayTests = [
                   width: 32,
                   height: 32,
                 });
+                imageUpdateCount = 0;
 
                 if (opts.showMenu) {
                   const menu: any[] = [
@@ -82,6 +85,17 @@ export const trayTests = [
                   log(`Updated title to: "${opts.title}"`);
                 }
                 return { success: true };
+              },
+
+              updateImage: () => {
+                if (!currentTray) return { success: false };
+                imageUpdateCount++;
+                currentTray.setImage(
+                  "views://assets/electrobun-logo-32-template.png",
+                );
+                currentTray.setTitle(`Image update #${imageUpdateCount}`);
+                log(`Updated tray image in place (#${imageUpdateCount})`);
+                return { success: true, count: imageUpdateCount };
               },
 
               startCounter: () => {
