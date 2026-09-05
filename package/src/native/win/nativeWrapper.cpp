@@ -7936,7 +7936,52 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Create WebView2 environment with custom scheme support
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
+
+            // Build the browser arguments dynamically so remote debugging can be
+            // folded in via the WebView2 API below. WebView2 Runtime 150 stopped
+            // honoring the WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS environment variable
+            // for elevated (high-integrity) host processes, which silently breaks
+            // CDP/WebDriver automation (msedgedriver's --remote-debugging-port is
+            // dropped, so the DevTools endpoint never opens). Args passed through the
+            // API are still honored when elevated.
+            // See https://github.com/MicrosoftEdge/WebView2Feedback/issues/5640.
+            std::string additionalBrowserArgs =
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection "
+                "--allow-insecure-localhost --disable-web-security";
+
+            // Resolve the remote-debugging port from the same sources as the CEF
+            // renderer (build.json chromiumFlags["remote-debugging-port"], the
+            // ELECTROBUN_CEF_REMOTE_DEBUGGING_PORT env var, or the dev-build default)
+            // and pass it through the API so it survives elevation.
+            {
+                const std::wstring exePath = electrobun::getModuleFileNameWide();
+                if (!exePath.empty()) {
+                    const std::filesystem::path buildJsonPath =
+                        std::filesystem::path(exePath).parent_path() /
+                        L".." / L"Resources" / L"build.json";
+                    const std::string buildJsonContent =
+                        electrobun::readFileToString(buildJsonPath);
+                    const electrobun::ChromiumFlagConfig chromiumFlags =
+                        electrobun::parseChromiumFlags(buildJsonContent);
+                    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+                        buildJsonContent, chromiumFlags,
+                        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+                    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+                        remoteDebugging, IsPortAvailable);
+                    g_remoteDebugPort = selectedPort;
+                    if (selectedPort != 0) {
+                        additionalBrowserArgs +=
+                            " --remote-debugging-port=" + std::to_string(selectedPort);
+                        std::cout << "[WebView2] Remote debugging enabled on 127.0.0.1:"
+                                  << selectedPort << " ("
+                                  << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                                  << ")" << std::endl;
+                    }
+                }
+            }
+
+            options->put_AdditionalBrowserArguments(
+                StringToWString(additionalBrowserArgs).c_str());
 
             // Get the interface that supports custom scheme registration
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
