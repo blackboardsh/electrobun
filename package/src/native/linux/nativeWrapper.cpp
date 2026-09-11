@@ -10435,7 +10435,8 @@ ELECTROBUN_EXPORT void setTrayTitle(void* statusItem, const char* title) {
     });
 }
 
-ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {
+ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image, bool /*isTemplate*/,
+                                    uint32_t /*width*/, uint32_t /*height*/) {
     dispatch_sync_main_void([&]() {
         // Find the tray by statusItem pointer
         for (auto& [id, tray] : g_trays) {
@@ -10486,7 +10487,7 @@ ELECTROBUN_EXPORT void* createTray(uint32_t trayId, const char* title, const cha
 }
 
 ELECTROBUN_EXPORT void setTrayTitle(void* statusItem, const char* title) {}
-ELECTROBUN_EXPORT void setTrayImage(void* statusItem, const char* image) {}
+ELECTROBUN_EXPORT void setTrayImage(void*, const char*, bool, uint32_t, uint32_t) {}
 ELECTROBUN_EXPORT void setTrayMenuFromJSON(void* statusItem, const char* jsonString) {}
 ELECTROBUN_EXPORT void setTrayMenu(void* statusItem, const char* menuConfig) {}
 ELECTROBUN_EXPORT void removeTray(void* statusItem) {}
