@@ -7133,6 +7133,48 @@ static RECT initialWebView2Bounds(
     return bounds;
 }
 
+// Resolved once per process, not per view: WebView2 rejects a second environment on
+// the same user data folder when AdditionalBrowserArguments differ (0x8007139F), and
+// the dev-build port scan would hand view 2 a different port than view 1 bound.
+// g_remoteDebugPort is left to CEF, which reads it in OpenRemoteDevToolsFrontend.
+static int webView2RemoteDebuggingPort() {
+    static const int port = []() -> int {
+        const std::wstring exePath = electrobun::getModuleFileNameWide();
+        if (exePath.empty()) return 0;
+
+        const std::filesystem::path buildJsonPath =
+            std::filesystem::path(exePath).parent_path() /
+            L".." / L"Resources" / L"build.json";
+        const std::string buildJsonContent =
+            electrobun::readFileToString(buildJsonPath);
+        const electrobun::ChromiumFlagConfig chromiumFlags =
+            electrobun::parseChromiumFlags(buildJsonContent);
+        const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+            buildJsonContent, chromiumFlags,
+            getenv(electrobun::kRemoteDebuggingPortEnvironment));
+        const int selectedPort = electrobun::selectRemoteDebuggingPort(
+            remoteDebugging, IsPortAvailable);
+
+        if (selectedPort != 0) {
+            std::cout << "[WebView2] Remote debugging enabled on 127.0.0.1:"
+                      << selectedPort << " ("
+                      << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                      << ")" << std::endl;
+        } else if (remoteDebugging.enabled()) {
+            std::cout << "[WebView2] Remote debugging disabled: no free port in "
+                      << electrobun::kDefaultRemoteDebuggingPort << "-"
+                      << electrobun::kLastAutomaticRemoteDebuggingPort << std::endl;
+        } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+                   remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+            std::cout << "[WebView2] Remote debugging disabled: "
+                      << electrobun::remoteDebuggingSourceName(remoteDebugging.source)
+                      << std::endl;
+        }
+        return selectedPort;
+    }();
+    return port;
+}
+
 // Internal factory method for creating WebView2 instances
 static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                                  HWND hwnd,
@@ -7936,7 +7978,22 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         // Create WebView2 environment with custom scheme support
         try {
             auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
-            options->put_AdditionalBrowserArguments(L"--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --allow-insecure-localhost --disable-web-security");
+
+            // Runtime 150 stopped honoring WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS for
+            // elevated hosts, so the port has to go through the API instead.
+            // https://github.com/MicrosoftEdge/WebView2Feedback/issues/5640
+            std::string additionalBrowserArgs =
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection "
+                "--allow-insecure-localhost --disable-web-security";
+
+            const int remoteDebugPort = webView2RemoteDebuggingPort();
+            if (remoteDebugPort != 0) {
+                additionalBrowserArgs +=
+                    " --remote-debugging-port=" + std::to_string(remoteDebugPort);
+            }
+
+            options->put_AdditionalBrowserArguments(
+                StringToWString(additionalBrowserArgs).c_str());
 
             // Get the interface that supports custom scheme registration
             Microsoft::WRL::ComPtr<ICoreWebView2EnvironmentOptions4> options4;
