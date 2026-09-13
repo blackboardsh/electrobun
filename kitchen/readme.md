@@ -37,3 +37,20 @@ Each `--with` entry is `<main-process>:<webview>`. Main processes are
 
 `--jobs=N` controls concurrent builds. From `kitchen/`, the equivalent commands
 are `hutch matrix` and `hutch matrix:full` when the local stack is already ready.
+
+## Windows WebView2 initialization regression
+
+The automated test **WebView2 applies pre-controller bounds and reveal** uses a
+real nested native webview and a one-shot controller-creation hold. It verifies
+actual controller bounds and visibility after queued bounds, mask and reveal
+updates, and rejects a later resize that could hide an initialization failure.
+It runs in Windows Kitchen's automated suite (or select that exact test with
+`AUTO_RUN_TEST_NAME`); other platforms report it as skipped. The internal native
+diagnostics are enabled in a local `dev` build. For a packaged release-channel
+test, set `ELECTROBUN_KITCHEN_WEBVIEW2_TEST=1` **before launching** the Kitchen
+executable, alongside `AUTO_RUN_TEST_NAME="WebView2 applies pre-controller bounds and reveal"`.
+The bundled native wrapper must include these diagnostics; missing/disabled
+hooks fail the test, not silently pass it. This verifies native initialization
+state, not screenshot pixels or the separately reported whole-window cutout.
+Use an already-built Kitchen executable for this filtered run; it does not
+prepare or rebuild JSC, Cottontail, or the rest of the local stack.

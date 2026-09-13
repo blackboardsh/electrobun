@@ -22,6 +22,7 @@ import { runtimeTests } from "./runtime.test";
 import { opfsTests } from "./opfs.test";
 import { uiRuntimeTests } from "./ui-runtime.test";
 import { appDataProtocolTests } from "./appdata-protocol.test";
+import { webview2InitializationTests } from "./webview2-initialization.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -64,6 +65,7 @@ export const allTests: TestDefinition[] = [
   ...opfsTests,
   ...uiRuntimeTests,
   ...appDataProtocolTests,
+  ...webview2InitializationTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -111,6 +113,7 @@ export {
   sandboxTests,
   trayApiTests,
   runtimeTests,
+  webview2InitializationTests,
   opfsTests,
   wgpuFfiTests,
   wgpuAdapterTests,

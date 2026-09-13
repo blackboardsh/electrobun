@@ -20,18 +20,34 @@ describe("Windows WebView2 viewport bounds", () => {
 	it("uses the live container client rect when a full-size controller becomes ready", () => {
 		const boundsHelper = sourceBetween(
 			"static RECT initialWebView2Bounds(",
-			"// Internal factory method for creating WebView2 instances",
+			"static bool isCurrentWebView2Container(",
 		);
 		const controllerSetup = sourceBetween(
-			"// Set bounds and visibility. BrowserWindow's full-size view must use",
-			"// Make sure the controller is visible",
+			"// Set initial bounds from the latest requested state.",
+			"view->applyPageZoom();",
 		);
 
-		expect(boundsHelper).toContain("if (fullSize)");
+		expect(boundsHelper).toContain("if (view->fullSize)");
 		expect(boundsHelper).toContain("GetClientRect(containerHwnd, &clientBounds)");
 		expect(controllerSetup).toContain("RECT bounds = initialWebView2Bounds(");
 		expect(controllerSetup).toContain("ctrl->put_Bounds(bounds)");
 		expect(controllerSetup).toContain("view->visualBounds = bounds");
+	});
+
+	it("resolves fixed-size views from their latest logical frame at the current DPI", () => {
+		const boundsHelper = sourceBetween(
+			"static RECT initialWebView2Bounds(",
+			"static bool isCurrentWebView2Container(",
+		);
+
+		expect(boundsHelper).toContain("WebView2View* view");
+		expect(boundsHelper).toContain("view->physicalFrameForDpi(");
+		expect(boundsHelper).toContain("electrobun::windowsDpiForWindow(containerHwnd), bounds");
+		expect(boundsHelper).not.toContain("double x");
+		expect(boundsHelper).not.toContain("double width");
+		expect(boundsHelper.indexOf("view->physicalFrameForDpi(")).toBeLessThan(
+			boundsHelper.indexOf("if (view->fullSize)"),
+		);
 	});
 
 	it("keeps resize handling on the parent client-area path", () => {

@@ -43,3 +43,27 @@ describe("Kitchen test renderer requirements", () => {
     expect(getTestSkipReason(fallbackTest, ["native"])).toBeUndefined();
   });
 });
+
+describe("Kitchen native platform requirements", () => {
+  const windowsTest = defineTest({
+    name: "WebView2 initialization",
+    category: "contract",
+    requires: { platform: "win32" },
+    run: noOpRun,
+  });
+
+  test("reports Windows native coverage skipped on Linux and macOS", () => {
+    expect(getTestSkipReason(windowsTest, ["native"], "linux")).toBe("requires win32, running on linux");
+    expect(getTestSkipReason(windowsTest, ["native", "cef"], "darwin")).toBe("requires win32, running on darwin");
+  });
+
+  test("runs the platform test on Windows without requiring CEF", () => {
+    expect(getTestSkipReason(windowsTest, ["native"], "win32")).toBeUndefined();
+  });
+
+  test("retains independent renderer requirements on the matching platform", () => {
+    const both = { ...windowsTest, requires: { platform: "win32" as const, renderer: "cef" as const } };
+    expect(getTestSkipReason(both, ["native"], "win32")).toContain("requires the CEF renderer");
+    expect(getTestSkipReason(both, ["native", "cef"], "win32")).toBeUndefined();
+  });
+});

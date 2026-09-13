@@ -3705,6 +3705,11 @@ bool checkNavigationRules(AbstractView* view, const std::string& url) {
 }
 
 // WebView2View class - implements AbstractView for WebView2
+// Internal Kitchen regression controls. Only used on the native thread and
+// explicitly armed by a dev/test process; ordinary view creation never waits.
+static bool g_webview2TestHoldNextController = false;
+static std::map<uint32_t, std::function<void()>> g_webview2TestHeldControllers;
+
 class WebView2View : public AbstractView {
 private:
     ComPtr<ICoreWebView2Controller> controller;
@@ -3716,6 +3721,7 @@ private:
     bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
     double pageZoomFactor = 1.0;
+    bool removed = false;
 
 public:
     std::string pendingUrl;
@@ -3792,8 +3798,10 @@ public:
     }
     
     bool isReady() const {
-        return isCreationComplete && !creationFailed;
+        return isCreationComplete && !creationFailed && !removed;
     }
+
+    bool isRemoved() const { return removed; }
     
     // Set up the JavaScript bridge objects in the WebView2 context using hostObjects
     void setupJavaScriptBridges() {
@@ -3921,6 +3929,10 @@ public:
     }
     
     void remove() override {
+        removed = true;
+        isCreationComplete = false;
+        g_pendingResizeQueue.remove(this);
+        g_webview2TestHeldControllers.erase(webviewId);
         for (auto it = g_webview2Views.begin(); it != g_webview2Views.end();) {
             if (it->second == this) {
                 it = g_webview2Views.erase(it);
@@ -3939,7 +3951,12 @@ public:
 
     // Override transparency implementation for WebView2
     void setTransparent(bool transparent) override {
-        if (!controller) {
+        if (removed) return;
+        // This is the latest requested state, not just a creation-time flag.
+        // In particular, a reveal before the asynchronous controller exists
+        // must replace startTransparent=true rather than being discarded.
+        pendingStartTransparent = transparent;
+        if (!controller || !isCreationComplete) {
             return;
         }
 
@@ -3949,6 +3966,8 @@ public:
 
     // Override passthrough implementation for WebView2
     void setPassthrough(bool enable) override {
+        if (removed) return;
+        pendingStartPassthrough = enable;
         AbstractView::setPassthrough(enable); // Call base implementation to set the flag
 
         if (!controller || !containerHwnd) {
@@ -4094,39 +4113,32 @@ public:
     }
 
     void resize(const RECT& frame, const char* masksJson) override {
-        
-        if (controller) {
-            // WebView2 operations must be called from main thread to avoid TYPE_E_BADVARTYPE
-            MainThreadDispatcher::dispatch_async([this, frame]() {
-                HRESULT result = controller->put_Bounds(frame);
-                if (FAILED(result)) {
-                    char errorLog[256];
-                    sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
-                    ::log(errorLog);
-                }
-            });
-            
-            visualBounds = frame;
-            bool maskChanged = false;
-            // Check if masksJson is nullptr, empty, or just "[]" (empty array)
-            if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
-                std::string newMaskJSON = masksJson;
-                if (newMaskJSON != maskJSON) {
-                    maskJSON = newMaskJSON;
-                    maskChanged = true;
-                }
-            } else if (!maskJSON.empty()) {
-                maskJSON = "";
+        if (removed) return;
+        // All callers (the pending-resize drain, WM_SIZE, and DPI handling)
+        // run on the native thread. Retain updates even before controller
+        // creation, and apply COM bounds here, not in a second queued task
+        // that could restore stale geometry or outlive removal.
+        visualBounds = frame;
+        bool maskChanged = false;
+        if (masksJson && strlen(masksJson) > 0 && strcmp(masksJson, "[]") != 0) {
+            std::string newMaskJSON = masksJson;
+            if (newMaskJSON != maskJSON) {
+                maskJSON = newMaskJSON;
                 maskChanged = true;
             }
-
-            // Only apply visual mask if mask data changed
-            if (maskChanged) {
-                applyVisualMask();
-            }
-        } else {
-            ::log("[WebView2] ERROR: Controller is NULL, cannot resize");
+        } else if (!maskJSON.empty()) {
+            maskJSON.clear();
+            maskChanged = true;
         }
+        if (!controller) return;
+
+        HRESULT result = controller->put_Bounds(frame);
+        if (FAILED(result)) {
+            char errorLog[256];
+            sprintf_s(errorLog, "[WebView2] put_Bounds failed for webview %u, HRESULT: 0x%08X", webviewId, result);
+            ::log(errorLog);
+        }
+        if (maskChanged) applyVisualMask();
     }
 
     ComPtr<ICoreWebView2Controller> getController() {
@@ -7113,22 +7125,18 @@ ELECTROBUN_EXPORT bool initCEF() {
 
 static RECT initialWebView2Bounds(
     HWND containerHwnd,
-    bool fullSize,
-    double x,
-    double y,
-    double width,
-    double height) {
-    RECT bounds = electrobun::logicalToPhysicalRect(
-        x,
-        y,
-        width,
-        height,
-        electrobun::windowsDpiForWindow(containerHwnd));
+    WebView2View* view) {
+    RECT bounds = view->visualBounds;
+    // Fixed-size views may have moved/resized while WebView2 was starting.
+    // Resolve the latest logical frame at the current DPI, not the rectangle
+    // captured by the asynchronous creation callback.
+    view->physicalFrameForDpi(
+        electrobun::windowsDpiForWindow(containerHwnd), bounds);
 
     // The window's first WM_SIZE can run before the asynchronous WebView2
     // controller exists. Read the container's current client area here so a
     // full-size view starts with the same bounds used by later WM_SIZE events.
-    if (fullSize) {
+    if (view->fullSize) {
         RECT clientBounds = {};
         if (GetClientRect(containerHwnd, &clientBounds)) {
             bounds = clientBounds;
@@ -7136,6 +7144,125 @@ static RECT initialWebView2Bounds(
     }
 
     return bounds;
+}
+
+static bool isCurrentWebView2Container(WebView2View* view, ContainerView* container) {
+    if (view->isRemoved() || view->creationFailed || g_eventLoopStopping.load() ||
+        !IsWindow(view->parentWindow)) return false;
+    // Pending views are not yet owned by ContainerView. The parent may have
+    // been destroyed before either asynchronous WebView2 callback arrives.
+    const auto current = g_containerViews.find(view->parentWindow);
+    return current != g_containerViews.end() && current->second.get() == container;
+}
+
+// Private native regression seam, not an SDK API. Holding exactly one selected
+// controller lets Kitchen prove pre-ready updates without depending on VM speed.
+// Stable apps cannot arm it accidentally; release test processes must opt in.
+static bool webview2KitchenTestsEnabled() {
+    return g_electrobunChannel == "dev" ||
+        electrobun::getEnvironmentVariableWide(L"ELECTROBUN_KITCHEN_WEBVIEW2_TEST") == L"1";
+}
+
+extern "C" ELECTROBUN_EXPORT bool webview2TestHoldNextController() {
+    return MainThreadDispatcher::dispatch_sync([]() -> bool {
+        if (!webview2KitchenTestsEnabled() || g_webview2TestHoldNextController ||
+            !g_webview2TestHeldControllers.empty()) return false;
+        g_webview2TestHoldNextController = true;
+        return true;
+    });
+}
+
+extern "C" ELECTROBUN_EXPORT bool webview2TestReleaseController(uint32_t webviewId) {
+    return MainThreadDispatcher::dispatch_sync([webviewId]() -> bool {
+        if (!webview2KitchenTestsEnabled()) return false;
+        if (webviewId == 0) {
+            const bool armed = g_webview2TestHoldNextController;
+            g_webview2TestHoldNextController = false;
+            return armed;
+        }
+        const auto held = g_webview2TestHeldControllers.find(webviewId);
+        if (held == g_webview2TestHeldControllers.end() || !held->second) return false;
+        auto createController = std::move(held->second);
+        g_webview2TestHeldControllers.erase(held);
+        createController();
+        return true;
+    });
+}
+
+extern "C" ELECTROBUN_EXPORT bool webview2TestGetState(uint32_t webviewId, char* output, uint32_t capacity) {
+    if (!output || capacity == 0) return false;
+    output[0] = '\0';
+    return MainThreadDispatcher::dispatch_sync([webviewId, output, capacity]() -> bool {
+        if (!webview2KitchenTestsEnabled()) return false;
+        std::shared_ptr<WebView2View> view;
+        {
+            std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+            const auto found = g_retainedAbstractViews.find(webviewId);
+            if (found == g_retainedAbstractViews.end()) return false;
+            view = std::dynamic_pointer_cast<WebView2View>(found->second);
+        }
+        if (!view || view->isRemoved()) return false;
+
+        // Barrier for already-requested resizes, not an injected layout update.
+        // This deterministically exercises the pre-controller queue drain.
+        RECT pendingFrame = {};
+        std::string pendingMasks;
+        if (view->consumePendingResize(pendingFrame, pendingMasks)) {
+            view->resize(pendingFrame, pendingMasks.c_str());
+        }
+        auto rectJSON = [](const RECT& frame) {
+            std::ostringstream result;
+            result << "{\"x\":" << frame.left << ",\"y\":" << frame.top
+                << ",\"width\":" << frame.right - frame.left
+                << ",\"height\":" << frame.bottom - frame.top << "}";
+            return result.str();
+        };
+        auto stringJSON = [](const std::string& value) {
+            std::string result = "\"";
+            constexpr char hex[] = "0123456789abcdef";
+            for (unsigned char character : value) {
+                if (character == '"' || character == '\\') {
+                    result += '\\';
+                    result += character;
+                } else if (character < 0x20) {
+                    result += "\\u00";
+                    result += hex[character >> 4];
+                    result += hex[character & 15];
+                } else {
+                    result += character;
+                }
+            }
+            return result + '"';
+        };
+        RECT requestedBounds = {};
+        view->physicalFrameForDpi(view->parentDpi(), requestedBounds);
+        auto controller = view->getController();
+        std::ostringstream state;
+        state << std::boolalpha
+            << "{\"held\":" << (g_webview2TestHeldControllers.count(webviewId) != 0)
+            << ",\"ready\":" << view->isReady()
+            << ",\"desiredTransparent\":" << view->pendingStartTransparent
+            << ",\"passthrough\":" << view->isMousePassthroughEnabled
+            << ",\"desiredPassthrough\":" << view->pendingStartPassthrough
+            << ",\"resizeRequests\":" << view->pendingResizeGeneration.load()
+            << ",\"dpi\":" << view->parentDpi()
+            << ",\"maskJSON\":" << stringJSON(view->maskJSON)
+            << ",\"requestedBounds\":" << rectJSON(requestedBounds)
+            << ",\"controllerPresent\":" << (controller != nullptr);
+        if (controller) {
+            RECT bounds = {};
+            BOOL visible = FALSE;
+            if (FAILED(controller->get_Bounds(&bounds)) || FAILED(controller->get_IsVisible(&visible))) return false;
+            state << ",\"bounds\":" << rectJSON(bounds) << ",\"visible\":" << (visible != FALSE);
+        } else {
+            state << ",\"bounds\":null,\"visible\":null";
+        }
+        state << "}";
+        const std::string json = state.str();
+        if (json.size() + 1 > capacity) return false;
+        memcpy(output, json.c_str(), json.size() + 1);
+        return true;
+    });
 }
 
 // Internal factory method for creating WebView2 instances
@@ -7195,6 +7322,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
     // Create WebView2 on main thread
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
+        if (g_webview2TestHoldNextController) {
+            g_webview2TestHoldNextController = false;
+            g_webview2TestHeldControllers.emplace(view->webviewId, nullptr);
+        }
         // Initialize COM for this thread
         HRESULT comResult = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
         if (FAILED(comResult) && comResult != RPC_E_CHANGED_MODE) {
@@ -7245,6 +7376,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         
         auto environmentCompletedHandler = Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
             [view, container, x, y, width, height, transparent](HRESULT result, ICoreWebView2Environment* env) -> HRESULT {
+                if (!isCurrentWebView2Container(view.get(), container)) {
+                    g_webview2TestHeldControllers.erase(view->webviewId);
+                    return S_OK;
+                }
                 if (FAILED(result)) {
                     char errorMsg[256];
                     sprintf_s(errorMsg, "ERROR: Failed to create WebView2 environment, HRESULT: 0x%08X", result);
@@ -7265,9 +7400,13 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                     return S_OK;
                 }
 
-                return env->CreateCoreWebView2Controller(targetHwnd,
+                auto controllerCompletedHandler =
                     Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
                         [view, container, x, y, width, height, env, transparent](HRESULT result, ICoreWebView2Controller* controller) -> HRESULT {
+                            if (!isCurrentWebView2Container(view.get(), container)) {
+                                if (controller) controller->Close();
+                                return S_OK;
+                            }
                             if (FAILED(result)) {
                                 char errorMsg[256];
                                 sprintf_s(errorMsg, "ERROR: Failed to create WebView2 controller, HRESULT: 0x%08X", result);
@@ -7279,6 +7418,9 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             
                             // Controller setup with composition fallback
                             ComPtr<ICoreWebView2Controller> ctrl(controller);
+                            // Do not expose the controller until its current
+                            // bounds, input state, and visibility are reconciled.
+                            ctrl->put_IsVisible(FALSE);
                             ComPtr<ICoreWebView2> webview;
                             ctrl->get_CoreWebView2(&webview);
                             
@@ -7320,15 +7462,11 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
                             
-                            // Set bounds and visibility. BrowserWindow's full-size view must use
-                            // the live client area rather than its requested outer-frame size.
+                            // Set initial bounds from the latest requested state.
+                            // Full-size views retain the live client-area path.
                             RECT bounds = initialWebView2Bounds(
                                 container->GetHwnd(),
-                                view->fullSize,
-                                x,
-                                y,
-                                width,
-                                height);
+                                view.get());
                             HRESULT boundsResult = ctrl->put_Bounds(bounds);
                             if (FAILED(boundsResult)) {
                                 char errorLog[256];
@@ -7341,8 +7479,6 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                             }
                             view->visualBounds = bounds;
 
-                            // Make sure the controller is visible
-                            ctrl->put_IsVisible(TRUE);
                             view->applyPageZoom();
 
                             // Set transparent background if requested
@@ -7911,18 +8047,22 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
                                 view->loadURL(view->pendingUrl.c_str());
                             }
                             
-                            view->setCreationComplete(true);
+                            // The resize queue can have been drained before the
+                            // controller existed, or still contain an update.
+                            // Preserve masks in either case and resolve geometry
+                            // once more from the latest logical frame/current DPI.
+                            RECT pendingFrame = {};
+                            std::string pendingMasks;
+                            if (view->consumePendingResize(pendingFrame, pendingMasks)) {
+                                view->resize(pendingFrame, pendingMasks.c_str());
+                            }
+                            bounds = initialWebView2Bounds(container->GetHwnd(), view.get());
+                            view->resize(bounds, view->maskJSON.c_str());
+                            view->applyVisualMask();
                             container->AddAbstractView(view);
-
-                            // Apply deferred initial transparent/passthrough state now that view is ready
-                            if (view->pendingStartTransparent) {
-                                view->setTransparent(true);
-                                view->pendingStartTransparent = false;
-                            }
-                            if (view->pendingStartPassthrough) {
-                                view->setPassthrough(true);
-                                view->pendingStartPassthrough = false;
-                            }
+                            view->setPassthrough(view->pendingStartPassthrough);
+                            ctrl->put_IsVisible(view->pendingStartTransparent ? FALSE : TRUE);
+                            view->setCreationComplete(true);
 
                             // Register in global AbstractView map for navigation rules
                             trackAbstractView(view.get());
@@ -7933,7 +8073,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
 
                             return S_OK;
-                        }).Get());
+                        });
+
+                const auto held = g_webview2TestHeldControllers.find(view->webviewId);
+                if (held != g_webview2TestHeldControllers.end()) {
+                    ComPtr<ICoreWebView2Environment> environment(env);
+                    held->second = [view, container, targetHwnd, environment, controllerCompletedHandler]() {
+                        if (!isCurrentWebView2Container(view.get(), container)) return;
+                        const HRESULT hr = environment->CreateCoreWebView2Controller(
+                            targetHwnd, controllerCompletedHandler.Get());
+                        if (FAILED(hr)) view->setCreationFailed(true);
+                    };
+                    return S_OK;
+                }
+                return env->CreateCoreWebView2Controller(targetHwnd, controllerCompletedHandler.Get());
             });
         
         
