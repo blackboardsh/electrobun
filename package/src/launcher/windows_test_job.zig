@@ -82,10 +82,8 @@ extern "kernel32" fn TerminateJobObject(
     job: windows.HANDLE,
     exit_code: windows.UINT,
 ) callconv(.winapi) windows.BOOL;
-extern "kernel32" fn WaitForSingleObject(
-    handle: windows.HANDLE,
-    milliseconds: windows.DWORD,
-) callconv(.winapi) windows.DWORD;
+extern "kernel32" fn GetTickCount64() callconv(.winapi) u64;
+extern "kernel32" fn Sleep(milliseconds: windows.DWORD) callconv(.winapi) void;
 extern "kernel32" fn WaitForMultipleObjects(
     handle_count: windows.DWORD,
     handles: [*]const windows.HANDLE,
@@ -144,13 +142,14 @@ fn activeProcessCount(job: windows.HANDLE) !windows.DWORD {
 }
 
 fn waitForEmpty(job: windows.HANDLE, timeout_ms: windows.DWORD) !void {
-    switch (WaitForSingleObject(job, timeout_ms)) {
-        wait_object_0 => {},
-        wait_timeout => return error.JobSettlementTimedOut,
-        wait_failed => return error.JobWaitFailed,
-        else => return error.UnexpectedJobWaitResult,
+    // Job handles do not signal merely because their process count becomes
+    // zero. Query the exact owned Job against a monotonic deadline instead.
+    const started = GetTickCount64();
+    while (true) {
+        if (try activeProcessCount(job) == 0) return;
+        if (GetTickCount64() -% started >= timeout_ms) return error.JobSettlementTimedOut;
+        Sleep(10);
     }
-    if (try activeProcessCount(job) != 0) return error.JobStillActive;
 }
 
 fn terminateAndProveEmpty(job: windows.HANDLE, timeout_ms: windows.DWORD) !void {
