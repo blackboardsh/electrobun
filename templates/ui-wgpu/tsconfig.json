@@ -19,7 +19,8 @@
 		"jsxImportSource": "electrobun/main/ui"
 	},
 	"include": [
-		"src"
+		"src",
+		"./electrobun.config.ts"
 	],
 	"exclude": [
 		"node_modules",
