@@ -1,0 +1,48 @@
+{
+    "compilerOptions": {
+        "lib": ["ESNext", "DOM"],
+        "target": "ESNext",
+        "module": "ESNext",
+        "moduleDetection": "force",
+        "jsx": "react-jsx",
+        "allowJs": true,
+        "moduleResolution": "bundler",
+        "allowImportingTsExtensions": true,
+        "verbatimModuleSyntax": true,
+        "noEmit": true,
+        "strict": true,
+        "skipLibCheck": true,
+        "types": ["bun", "vite/client"],
+        "noFallthroughCasesInSwitch": true,
+        "noUnusedLocals": true,
+        "noUnusedParameters": true,
+        "noPropertyAccessFromIndexSignature": true,
+
+        "paths": {
+            "@mainview/*": ["./src/mainview/*"],
+            "@shared/*": ["./src/shared/*"],
+
+            // The extends'd devkit tsconfig already maps `electrobun/*`, but
+            // setting your own `paths` REPLACES any inherited mapping entirely
+            // (TypeScript does not merge `paths` across `extends`). In theory
+            // you don't need to specify these entries, yet once you add your
+            // own alias (e.g. `@/*`) the electrobun types would break, so they
+            // must be redeclared here alongside your app aliases.
+            //
+            // Note: the devkit tsconfig carries `baseUrl`, which TypeScript 7
+            // removed and flags as an error. Because an inherited baseUrl can't
+            // be unset, this config no longer extends the devkit tsconfig.
+            // All paths below are relative to this file and keep the same
+            // electrobun entry points available.
+            "electrobun": ["./.hutch/devkit/api/sdks/main/index.ts"],
+            "electrobun/main": ["./.hutch/devkit/api/sdks/main/index.ts"],
+            "electrobun/bun": ["./.hutch/devkit/api/sdks/main/index.ts"],
+            "electrobun/view": ["./.hutch/devkit/api/browser/index.ts"],
+            "electrobun/browser/ui": [
+                "./.hutch/devkit/api/browser/ui/index.ts",
+            ],
+        },
+    },
+    "include": ["src/**/*", "vite.config.ts", "electrobun.config.ts"],
+    "exclude": ["node_modules", "dist", "build", "../../package/dist"],
+}
