@@ -1,0 +1,130 @@
+---
+title: "Electrobun"
+description: "Build ultra fast, tiny, cross-platform desktop apps with TypeScript."
+template: splash
+hero:
+  tagline: "Everything you need to build ultra fast, tiny, cross-platform desktop applications with TypeScript."
+  actions:
+    - text: "Quick Start"
+      link: "/electrobun/guides/quick-start/"
+      icon: right-arrow
+      variant: primary
+    - text: "View on GitHub"
+      link: "https://github.com/blackboardsh/electrobun"
+      icon: external
+      variant: minimal
+---
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+
+```bash
+hutch electrobun init
+```
+
+```typescript
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "My App",
+  url: "views://mainview/index.html",
+});
+```
+
+## Why Electrobun
+
+<CardGrid>
+  <Card title="Tiny and fast" icon="rocket">
+    System webviews and the Cottontail runtime instead of a bundled Chromium
+    and Node — apps measured in megabytes, not hundreds of them. CEF stays
+    available as an option when you want a pinned browser engine.
+  </Card>
+  <Card title="One build tool" icon="setting">
+    Hutch handles scripts, devkits, bundling, pinned toolchains, signing, and
+    releases. Its built-in resolver handles JavaScript dependencies by default;
+    external package managers remain an explicit option.
+  </Card>
+  <Card title="TypeScript first, native when you want it" icon="seti:typescript">
+    Write your main process in TypeScript on Cottontail — or swap in Bun,
+    Zig, Rust, Go, or Odin and keep the same workflow.
+  </Card>
+  <Card title="Native bindings" icon="laptop">
+    Windows, menus, trays, dialogs, and GPU surfaces implemented in C++,
+    Objective-C, and Zig across macOS, Windows, and Linux.
+  </Card>
+  <Card title="Built-in updates" icon="download">
+    Verified updates served from static storage, with transactional replacement
+    and rollback across Windows, macOS, and Linux.
+  </Card>
+  <Card title="Independent channels" icon="approve-check">
+    Build stable and canary releases side by side, each with its own
+    installers and update line.
+  </Card>
+</CardGrid>
+
+## Start here
+
+<CardGrid>
+  <LinkCard
+    title="Quick Start"
+    description="Install Hutch, scaffold a template, and run your first app in minutes."
+    href="/electrobun/guides/quick-start/"
+  />
+  <LinkCard
+    title="What is Electrobun?"
+    description="The framework, the 2.x stack, and why it's shaped this way."
+    href="/electrobun/guides/what-is-electrobun/"
+  />
+  <LinkCard
+    title="Hello World"
+    description="Build the smallest possible app from scratch and see what every file is for."
+    href="/electrobun/guides/hello-world/"
+  />
+  <LinkCard
+    title="Migrate to 2.x"
+    description="Move an existing app to the Hutch and Cottontail project model."
+    href="/electrobun/guides/migrating-to-v2/"
+  />
+</CardGrid>
+
+## Go deeper
+
+<CardGrid>
+  <LinkCard
+    title="Hutch"
+    description="Scripts, devkit sync, builds, toolchains, channels, and project pins."
+    href="/electrobun/guides/hutch/"
+  />
+  <LinkCard
+    title="Cottontail"
+    description="Electrobun's default TypeScript runtime and how it relates to Node and Bun."
+    href="/electrobun/guides/cottontail/"
+  />
+  <LinkCard
+    title="Main Process Runtimes"
+    description="Cottontail, Bun, Zig, Rust, Go, and Odin — and how to choose."
+    href="/electrobun/guides/native-main-process/"
+  />
+  <LinkCard
+    title="Creating UI"
+    description="Host pages, the webview tag, and embedding isolated content."
+    href="/electrobun/guides/creating-ui/"
+  />
+  <LinkCard
+    title="Architecture Overview"
+    description="How Hutch, runtimes, Electrobun Core, and webviews fit together."
+    href="/electrobun/guides/architecture/overview/"
+  />
+  <LinkCard
+    title="Bundling & Distribution"
+    description="Installers, update archives, delta patches, and release hosting."
+    href="/electrobun/guides/bundling-and-distribution/"
+  />
+</CardGrid>
+
+## Community & support
+
+Electrobun is open source and built in the open.
+
+- [GitHub repository](https://github.com/blackboardsh/electrobun) — source,
+  issues, and releases.
+- [Discord](https://discord.gg/ueKE4tjaCE) — questions, feedback, and show
+  and tell.

@@ -1,0 +1,83 @@
+---
+title: "BuildConfig"
+description: "Read packaged build and runtime metadata in the main process."
+---
+
+`BuildConfig` reads `Resources/build.json` and `Resources/version.json`, then
+caches the result.
+
+```ts
+import { BuildConfig } from "electrobun/main";
+
+const config = await BuildConfig.get();
+
+console.log(config.mainProcess);
+console.log(config.defaultRenderer);
+console.log(config.availableRenderers);
+console.log(config.channel);
+console.log(config.isPackaged);
+```
+
+## Access methods
+
+- `await BuildConfig.get()` loads the files once and returns
+  `Promise<BuildConfigType>`.
+- `BuildConfig.getSync()` performs the first load synchronously when necessary.
+- `BuildConfig.getCached()` returns `BuildConfigType | null` without loading.
+
+```ts
+import { BuildConfig } from "electrobun/main";
+
+const startupConfig = BuildConfig.getSync();
+const sameConfig = BuildConfig.getCached();
+
+if (sameConfig?.availableRenderers.includes("cef")) {
+  console.log("CEF is bundled");
+}
+
+void startupConfig;
+```
+
+Missing metadata falls back to a development configuration with the native
+renderer only.
+
+## Returned fields
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `mainProcess` | `"bun" \| "cottontail" \| "zig" \| "rust" \| "go" \| "odin" \| undefined` | Packaged main-process runtime. |
+| `defaultRenderer` | `"native" \| "cef"` | Renderer used when a window or view does not select one. |
+| `availableRenderers` | `("native" \| "cef")[]` | Renderers included in the app bundle. |
+| `buildEnvironment` | `"dev" \| "canary" \| "stable" \| undefined` | Environment recorded in `build.json`. |
+| `channel` | `string` | Runtime release channel from `version.json`. |
+| `isPackaged` | `boolean` | `false` only for the `dev` channel. |
+| `chromiumFlags` | `Record<string, string \| boolean> \| undefined` | CEF switches selected for the target platform. |
+| `autoGrantPermissions` | permission array or `undefined` | Windows WebView2 permissions included at build time. |
+| `runtime` | object or `undefined` | Runtime options, including `exitOnLastWindowClosed` and custom values. |
+
+## Renderer selection
+
+```ts
+import { BrowserWindow, BuildConfig } from "electrobun/main";
+
+const build = BuildConfig.getSync();
+
+const mainWindow = new BrowserWindow({
+  title: "Default renderer",
+  url: "views://main/index.html",
+});
+
+if (build.availableRenderers.includes("cef")) {
+  const cefWindow = new BrowserWindow({
+    title: "CEF renderer",
+    url: "views://cef/index.html",
+    renderer: "cef",
+  });
+  void cefWindow;
+}
+
+void mainWindow;
+```
+
+See [Build Configuration](/electrobun/apis/cli/build-configuration/) for the
+settings that produce this metadata.

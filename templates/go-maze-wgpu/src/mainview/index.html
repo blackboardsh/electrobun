@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Go Maze WGPU</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app">
+			<section class="stage">
+				<header class="topbar">
+					<div>
+						<h1>Go Maze WGPU</h1>
+						<p id="status">Waiting for surface</p>
+					</div>
+					<div class="readout">
+						<span>fps</span>
+						<strong id="fps-stat">--</strong>
+					</div>
+				</header>
+				<div class="surface-shell">
+					<div class="hud">
+						<strong id="cell-stat">--</strong>
+						<span>cells</span>
+					</div>
+					<electrobun-wgpu id="maze-surface"></electrobun-wgpu>
+				</div>
+			</section>
+			<aside class="controls">
+				<label>
+					<span>Columns</span>
+					<input id="columns" type="range" min="20" max="84" step="2" value="62" />
+				</label>
+				<label>
+					<span>Rows</span>
+					<input id="rows" type="range" min="14" max="52" step="2" value="38" />
+				</label>
+				<label>
+					<span>Generate speed</span>
+					<input id="generate-speed" type="range" min="1" max="900" step="1" value="180" />
+				</label>
+				<label>
+					<span>Solve speed</span>
+					<input id="solve-speed" type="range" min="1" max="900" step="1" value="240" />
+				</label>
+				<label>
+					<span>Shortcuts</span>
+					<input id="shortcuts" type="range" min="0" max="80" step="1" value="18" />
+				</label>
+				<div class="actions">
+					<button id="generate" type="button">Generate</button>
+					<button id="solve" type="button">Solve</button>
+				</div>
+				<div class="stats">
+					<div>
+						<span>Grid</span>
+						<strong id="grid-stat">--</strong>
+					</div>
+					<div>
+						<span>Frontier</span>
+						<strong id="frontier-stat">--</strong>
+					</div>
+					<div>
+						<span>Path</span>
+						<strong id="path-stat">--</strong>
+					</div>
+				</div>
+			</aside>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>

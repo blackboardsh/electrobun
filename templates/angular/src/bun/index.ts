@@ -1,4 +1,4 @@
-import { BrowserWindow, Updater } from "electrobun/bun";
+import { BrowserWindow, Updater } from "electrobun/main";
 
 const DEV_SERVER_PORT = 5173;
 const DEV_SERVER_URL = `http://localhost:${DEV_SERVER_PORT}`;
@@ -12,7 +12,7 @@ async function getMainViewUrl(): Promise<string> {
 			return DEV_SERVER_URL;
 		} catch {
 			console.log(
-				"Vite dev server not running. Run 'bun run dev:hmr' for HMR support.",
+				"Vite dev server not running. Run 'hutch run dev:hmr' for HMR support.",
 			);
 		}
 	}

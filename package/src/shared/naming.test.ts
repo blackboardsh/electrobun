@@ -43,9 +43,13 @@ describe("getAppFileName", () => {
 		expect(getAppFileName("My App", "dev")).toBe("MyApp-dev");
 	});
 
-	it("handles custom channels", () => {
-		expect(getAppFileName("My App", "beta")).toBe("MyApp-beta");
-		expect(getAppFileName("My App", "nightly")).toBe("MyApp-nightly");
+	it("rejects non-canonical channels", () => {
+		expect(() => getAppFileName("My App", "production" as never)).toThrow(
+			"Unsupported build environment",
+		);
+		expect(() =>
+			getPlatformPrefix("production" as never, "win", "x64"),
+		).toThrow("Unsupported build environment");
 	});
 });
 

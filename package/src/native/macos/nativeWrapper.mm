@@ -9,6 +9,7 @@
 #import <Cocoa/Cocoa.h>
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonCrypto.h>
+#import <CoreGraphics/CoreGraphics.h>
 #import <QuartzCore/QuartzCore.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <Metal/Metal.h>
@@ -31,7 +32,9 @@ static bool wgpuDebugEnabled() {
 #include <signal.h>
 #include <atomic>
 #include <mutex>
+#include "inspector_layout.h"
 #include "../shared/pending_resize_queue.h"
+#include "spell_check.h"
 
 // CEF includes
 #include "include/base/cef_ref_counted.h"
@@ -54,6 +57,8 @@ static bool wgpuDebugEnabled() {
 #include <string>
 #include <vector>
 #include <list>
+#include <limits>
+#include <cmath>
 #include <cstdint>
 #include <chrono>
 #include <map>
@@ -64,6 +69,8 @@ static bool wgpuDebugEnabled() {
 #include "../shared/glob_match.h"
 #include "../shared/callbacks.h"
 #include "../shared/permissions.h"
+#include "../shared/permissions_cef.h"
+#include "../shared/partition_context.h"
 #include "../shared/mime_types.h"
 #include "../shared/asar.h"
 #include "../shared/config.h"
@@ -77,6 +84,10 @@ static bool wgpuDebugEnabled() {
 #include "../shared/app_paths.h"
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
+#include "../shared/cache_migration.h"
+#include "../shared/views_url.h"
+#include "../shared/console_forwarding.h"
+#include "../shared/dialog_paths.h"
 
 using namespace electrobun;
 
@@ -103,7 +114,7 @@ static CGFloat offsetY = 0.0;
 static id mouseDraggedMonitor = nil;
 static id mouseUpMonitor = nil;
 
-static int g_remoteDebugPort = 9222;
+static int g_remoteDebugPort = 0;
 
 // Menu role to selector mapping
 // This maps Electrobun role strings to their corresponding Objective-C selectors.
@@ -299,16 +310,6 @@ static bool IsPortAvailable(int port) {
     return result == 0;
 }
 
-static int FindAvailableRemoteDebugPort(int startPort, int endPort) {
-    for (int port = startPort; port <= endPort; ++port) {
-        if (IsPortAvailable(port)) {
-            return port;
-        }
-    }
-    return 0;
-}
-
-
 // Forward declare the CEF classes
 class CefApp;
 class CefClient;
@@ -370,7 +371,7 @@ private:
 // Type definitions
 // Core callback types are defined in shared/callbacks.h
 // Platform-specific aliases for Objective-C compatibility
-typedef BOOL (*HandlePostMessageObjC)(uint32_t webviewId, const char* message);
+typedef void (*HandlePostMessageObjC)(uint32_t webviewId, const char* message);
 typedef void (*callAsyncJavascriptCompletionHandler)(const char *messageId, uint32_t webviewId, uint32_t hostWebviewId, const char *responseJSON);
 
 static dispatch_queue_t jsWorkerQueue = NULL;
@@ -499,13 +500,118 @@ typedef struct {
     NSRect frame;
     uint32_t styleMask;
     const char *titleBarStyle;
+    double trafficLightOffsetX;
+    double trafficLightOffsetY;
 } createNSWindowWithFrameAndStyleParams;
+
+static const void *kTrafficLightOffsetXKey = &kTrafficLightOffsetXKey;
+static const void *kTrafficLightOffsetYKey = &kTrafficLightOffsetYKey;
+static const void *kTrafficLightDefaultPositionXKey = &kTrafficLightDefaultPositionXKey;
+static const void *kTrafficLightDefaultPositionYKey = &kTrafficLightDefaultPositionYKey;
+
+static const void *kTrafficLightTitleBarStyleKey = &kTrafficLightTitleBarStyleKey;
+
+static void applyWindowButtonPosition(NSWindow *window, double x, double y);
+
+static bool shouldManageTrafficLights(NSWindow *window) {
+    if (!window) {
+        return false;
+    }
+
+    NSString *titleBarStyle = objc_getAssociatedObject(window, kTrafficLightTitleBarStyleKey);
+    return [titleBarStyle isEqualToString:@"hiddenInset"];
+}
+
+static void applyTrafficLightOffset(NSWindow *window) {
+    if (!shouldManageTrafficLights(window)) {
+        return;
+    }
+
+    NSNumber *offsetXValue = objc_getAssociatedObject(window, kTrafficLightOffsetXKey);
+    NSNumber *offsetYValue = objc_getAssociatedObject(window, kTrafficLightOffsetYKey);
+    const double offsetX = offsetXValue ? offsetXValue.doubleValue : 0;
+    const double offsetY = offsetYValue ? offsetYValue.doubleValue : 0;
+
+    if (offsetX == 0 && offsetY == 0) {
+        return;
+    }
+
+    NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+    NSView *titlebarView = closeButton.superview;
+    if (!closeButton || !titlebarView) {
+        return;
+    }
+
+    NSNumber *defaultXValue = objc_getAssociatedObject(window, kTrafficLightDefaultPositionXKey);
+    NSNumber *defaultYValue = objc_getAssociatedObject(window, kTrafficLightDefaultPositionYKey);
+    const double defaultX = defaultXValue
+        ? defaultXValue.doubleValue
+        : NSMinX(closeButton.frame);
+    const double defaultY = defaultYValue
+        ? defaultYValue.doubleValue
+        : NSHeight(titlebarView.bounds) - NSMaxY(closeButton.frame);
+
+    if (!defaultXValue) {
+        objc_setAssociatedObject(window, kTrafficLightDefaultPositionXKey, @(defaultX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    if (!defaultYValue) {
+        objc_setAssociatedObject(window, kTrafficLightDefaultPositionYKey, @(defaultY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
+    applyWindowButtonPosition(window, defaultX + offsetX, defaultY + offsetY);
+}
+
+static void applyTrafficLightOffsetFromDefault(NSWindow *window) {
+    applyTrafficLightOffset(window);
+}
+
+static void applyWindowButtonPosition(NSWindow *window, double x, double y) {
+    NSButton *closeBtn = [window standardWindowButton:NSWindowCloseButton];
+    NSButton *minimizeBtn = [window standardWindowButton:NSWindowMiniaturizeButton];
+    NSButton *zoomBtn = [window standardWindowButton:NSWindowZoomButton];
+
+    if (!closeBtn || !minimizeBtn || !zoomBtn) return;
+
+    NSView *titlebarView = [closeBtn superview];
+    if (!titlebarView) return;
+
+    NSView *titlebarContainerView = [titlebarView superview];
+    if (!titlebarContainerView) return;
+
+    const CGFloat normalizedX = MAX(0, x);
+    const CGFloat normalizedY = MAX(0, y);
+    CGFloat buttonSpacing = 20.0;
+    CGFloat buttonHeight = closeBtn.frame.size.height;
+    CGFloat requiredHeight = MAX(NSHeight(titlebarView.frame), normalizedY + buttonHeight);
+
+    NSRect containerFrame = titlebarContainerView.frame;
+    const CGFloat containerTop = NSMaxY(containerFrame);
+    containerFrame.size.height = requiredHeight;
+    containerFrame.origin.y = containerTop - requiredHeight;
+    [titlebarContainerView setFrame:containerFrame];
+
+    NSRect titlebarFrame = titlebarView.frame;
+    titlebarFrame.size.height = requiredHeight;
+    titlebarFrame.origin.y = 0;
+    [titlebarView setFrame:titlebarFrame];
+
+    CGFloat adjustedY = requiredHeight - normalizedY - buttonHeight;
+    [closeBtn setFrameOrigin:NSMakePoint(normalizedX, adjustedY)];
+    [minimizeBtn setFrameOrigin:NSMakePoint(normalizedX + buttonSpacing, adjustedY)];
+    [zoomBtn setFrameOrigin:NSMakePoint(normalizedX + 2 * buttonSpacing, adjustedY)];
+}
 
 // Window, tray, menu, and snapshot callbacks are defined in shared/callbacks.h
 // Platform-specific aliases
 typedef SnapshotCallback zigSnapshotCallback;
 typedef StatusItemHandler ZigStatusItemHandler;
 static URLOpenHandler g_urlOpenHandler = nullptr;
+// Buffer for URLs received before the handler is registered (cold-launch race).
+// The NSApp delegate fires on the main thread as soon as the event loop starts,
+// but the Bun Worker thread may not have registered its handler yet.
+// NOTE: This buffering fixes a pre-existing race in URL handling (not just file handling).
+static std::vector<std::string> g_pendingUrlOpenPaths;
+static std::mutex g_urlOpenMutex;
 static AppReopenHandler g_appReopenHandler = nullptr;
 static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
@@ -616,12 +722,66 @@ static NSString* normalizeViewsRelativePath(NSString *urlString) {
         return nil;
     }
 
-    NSString *relativePath = [urlString substringFromIndex:8];
-    while ([relativePath hasPrefix:@"/"]) {
-        relativePath = [relativePath substringFromIndex:1];
+    std::string relativePath;
+    if (!electrobun::normalizeViewsRelativePath(
+            std::string([urlString UTF8String]),
+            relativePath)) {
+        return nil;
+    }
+    return [NSString stringWithUTF8String:relativePath.c_str()];
+}
+
+static NSString* normalizeAppDataRelativePath(NSString *urlString) {
+    if (!urlString || ![urlString hasPrefix:@"appdata://"]) {
+        return nil;
     }
 
-    return relativePath;
+    NSString *asViewsURL = [@"views://" stringByAppendingString:[urlString substringFromIndex:10]];
+    return normalizeViewsRelativePath(asViewsURL);
+}
+
+static NSString* canonicalContainedPath(NSString *root, NSString *relativePath) {
+    if (!root || !relativePath) return nil;
+
+    NSString *canonicalRoot = [[root stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *candidate = [[[root stringByAppendingPathComponent:relativePath]
+        stringByStandardizingPath] stringByResolvingSymlinksInPath];
+    NSString *rootPrefix = [canonicalRoot stringByAppendingString:@"/"];
+    if (![candidate hasPrefix:rootPrefix]) {
+        return nil;
+    }
+    return candidate;
+}
+
+static NSString* appDataRootPath(void) {
+    NSString *appSupportPath = [NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    if (!appSupportPath) return nil;
+
+    std::string root = electrobun::buildAppDataPath(
+        [appSupportPath UTF8String],
+        g_electrobunIdentifier,
+        g_electrobunChannel);
+    NSString *rootPath = [NSString stringWithUTF8String:root.c_str()];
+    [[NSFileManager defaultManager] createDirectoryAtPath:rootPath
+                              withIntermediateDirectories:YES
+                                               attributes:nil
+                                                    error:nil];
+    return rootPath;
+}
+
+static NSData* readAppDataFile(const char* appDataUrl) {
+    if (!appDataUrl) return nil;
+    NSString *urlString = [NSString stringWithUTF8String:appDataUrl];
+    NSString *relativePath = normalizeAppDataRelativePath(urlString);
+    NSString *candidate = canonicalContainedPath(appDataRootPath(), relativePath);
+    if (!candidate) return nil;
+
+    BOOL isDirectory = NO;
+    if (![[NSFileManager defaultManager] fileExistsAtPath:candidate isDirectory:&isDirectory] || isDirectory) {
+        return nil;
+    }
+    return [NSData dataWithContentsOfFile:candidate];
 }
 
 NSData* readViewsFile(const char* viewsUrl) {
@@ -689,16 +849,8 @@ NSData* readViewsFileWithRoot(const char* viewsUrl, NSString *viewsRoot) {
         return nil;
     }
 
-    NSString *normalizedRoot = [viewsRoot stringByStandardizingPath];
-    NSString *candidatePath =
-        [[viewsRoot stringByAppendingPathComponent:relativePath] stringByStandardizingPath];
-
-    if (![candidatePath isEqualToString:normalizedRoot] &&
-        ![candidatePath hasPrefix:[normalizedRoot stringByAppendingString:@"/"]]) {
-        NSLog(@"ERROR readViewsFileWithRoot: path escapes root %@ -> %@", normalizedRoot, candidatePath);
-        return nil;
-    }
-
+    NSString *candidatePath = canonicalContainedPath(viewsRoot, relativePath);
+    if (!candidatePath) return nil;
     return [NSData dataWithContentsOfFile:candidatePath];
 }
 
@@ -730,6 +882,8 @@ void releaseObjCObject(id objcObject) {
     @property (nonatomic, assign) BOOL isSandboxed;  // When true, only eventBridge is active (no RPC)
     @property (nonatomic, assign) BOOL pendingStartTransparent;
     @property (nonatomic, assign) BOOL pendingStartPassthrough;
+    @property (nonatomic, assign) BOOL pendingSpellCheckConfigured;
+    @property (nonatomic, assign) BOOL pendingSpellCheckEnabled;
     @property (nonatomic, strong) CALayer *storedLayerMask;
     @property (nonatomic, strong) NSArray<NSString *> *navigationRules;
     @property (atomic, assign) uint32_t resizeGeneration;
@@ -742,8 +896,12 @@ void releaseObjCObject(id objcObject) {
     - (void)remove;
 
     - (void)setTransparent:(BOOL)transparent;
+    - (void)setAlphaBlending:(BOOL)enabled;
     - (void)setPassthrough:(BOOL)enable;
     - (void)setHidden:(BOOL)hidden;
+    - (void)toggleMirrorMode:(BOOL)enable;
+    - (BOOL)shouldSuppressMirrorMode;
+    - (BOOL)setSpellCheck:(BOOL)enabled;
 
     - (BOOL)canGoBack;
     - (BOOL)canGoForward;
@@ -819,6 +977,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 @interface MyURLSchemeHandler : NSObject <WKURLSchemeHandler>    
     @property (nonatomic, assign) uint32_t webviewId;
     @property (nonatomic, copy) NSString *viewsRoot;
+    @property (nonatomic, assign) BOOL allowViews;
+    @property (nonatomic, assign) BOOL allowAppData;
 @end
 
 @interface MyNavigationDelegate : NSObject <WKNavigationDelegate, WKDownloadDelegate>
@@ -827,6 +987,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) uint32_t webviewId;
     @property (nonatomic, strong) NSMutableDictionary<NSValue *, NSString *> *downloadPaths;
     @property (nonatomic, strong) NSMutableSet<WKDownload *> *observedDownloads;
+    @property (nonatomic, assign) BOOL spellCheckConfigured;
+    @property (nonatomic, assign) BOOL spellCheckEnabled;
+    @property (nonatomic, assign) BOOL hasFinishedNavigation;
 @end
 
 @interface MyWebViewUIDelegate : NSObject <WKUIDelegate>
@@ -841,6 +1004,10 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface MyScriptMessageHandlerWithReply : NSObject <WKScriptMessageHandlerWithReply>
     @property (nonatomic, assign) HandlePostMessageWithReply zigCallback;
+    @property (nonatomic, assign) uint32_t webviewId;
+@end
+
+@interface ConsoleScriptMessageHandler : NSObject <WKScriptMessageHandler>
     @property (nonatomic, assign) uint32_t webviewId;
 @end
 
@@ -863,7 +1030,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol;
 @end
 
 @interface WGPUViewImpl : AbstractView
@@ -888,6 +1057,7 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
 
 @interface WindowDelegate : NSObject <NSWindowDelegate>
     @property (nonatomic, assign) WindowCloseHandler closeHandler;
+    @property (nonatomic, assign) WindowShouldCloseHandler shouldCloseHandler;
     @property (nonatomic, assign) WindowMoveHandler moveHandler;
     @property (nonatomic, assign) WindowResizeHandler resizeHandler;
     @property (nonatomic, assign) WindowFocusHandler focusHandler;
@@ -895,6 +1065,9 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews = ni
     @property (nonatomic, assign) WindowKeyHandler keyHandler;
     @property (nonatomic, assign) uint32_t windowId;
     @property (nonatomic, strong) NSWindow *window;
+    @property (nonatomic, assign) BOOL hasCustomButtonPosition;
+    @property (nonatomic, assign) double buttonPositionX;
+    @property (nonatomic, assign) double buttonPositionY;
 @end
 
 @interface StatusItemTarget : NSObject
@@ -1180,9 +1353,41 @@ NSArray<NSValue *> *addOverlapRects(NSArray<NSDictionary *> *rectsArray, CGFloat
         }
     }
 
+    // Alpha compositing: unlike setTransparent (which hides the layer for the
+    // webview-tag show/hide dance), this keeps the layer visible and lets the
+    // surface's alpha channel composite against whatever is behind the view —
+    // what a transparent GPU-rendered window needs for rounded corners.
+    - (void)setAlphaBlending:(BOOL)enabled {
+        if (!self.nsView) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.nsView setWantsLayer:YES];
+            self.nsView.layer.opacity = 1;
+            self.nsView.layer.opaque = enabled ? NO : YES;
+            self.nsView.layer.backgroundColor = [[NSColor clearColor] CGColor];
+            if ([self.nsView.layer isKindOfClass:[CAMetalLayer class]]) {
+                CAMetalLayer *metalLayer = (CAMetalLayer *)self.nsView.layer;
+                metalLayer.opaque = enabled ? NO : YES;
+                metalLayer.backgroundColor = [[NSColor clearColor] CGColor];
+            }
+        });
+    }
+
+    - (BOOL)shouldSuppressMirrorMode {
+        return NO;
+    }
+
+    - (BOOL)setSpellCheck:(BOOL)enabled {
+        (void)enabled;
+        return NO;
+    }
+
 
     - (void)toggleMirrorMode:(BOOL)enable {
         NSView *subview = self.nsView;
+
+        if ([self shouldSuppressMirrorMode]) {
+            enable = NO;
+        }
 
         if (self.mirrorModeEnabled == enable) {
             return;
@@ -1913,7 +2118,7 @@ static void schedulePendingResizeDrain() {
         
         NSString *urlString = url.absoluteString;
         
-        if ([urlString hasPrefix:@"views://"]) {
+        if ([urlString hasPrefix:@"views://"] && self.allowViews) {
             NSString *relativePath = normalizeViewsRelativePath(urlString);
 
             if ([relativePath isEqualToString:@"internal/index.html"]) {
@@ -1943,6 +2148,12 @@ static void schedulePendingResizeDrain() {
                     contentLength = data.length;
                 }
             } 
+        } else if ([urlString hasPrefix:@"appdata://"] && self.allowAppData) {
+            data = readAppDataFile(urlString.UTF8String);
+            if (data) {
+                contentPtr = (const char *)data.bytes;
+                contentLength = data.length;
+            }
         } else {
             NSLog(@"Unknown URL format: %@", urlString);
         }
@@ -1965,10 +2176,13 @@ static void schedulePendingResizeDrain() {
                 mimeType = rawMimeType;
             }
             
-            NSURLResponse *response = [[NSURLResponse alloc] initWithURL:url
-                                                    MIMEType:mimeType
-                                        expectedContentLength:contentLength
-                                            textEncodingName:encodingName];
+            NSDictionary *headers = @{
+                @"Content-Type": mimeType,
+                @"Access-Control-Allow-Origin": @"*",
+                @"X-Content-Type-Options": @"nosniff",
+            };
+            NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc]
+                initWithURL:url statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:headers];
             [urlSchemeTask didReceiveResponse:response];
             [urlSchemeTask didReceiveData:data];
             [urlSchemeTask didFinish];
@@ -1978,8 +2192,8 @@ static void schedulePendingResizeDrain() {
                 free((void*)mimeTypePtr);
             }
         } else {
-            NSLog(@"============== ERROR ========== empty response for URL: %@", urlString);         
-            // Notify failure properly to prevent crashes
+            // Missing and rejected paths are normal URL failures. In particular,
+            // traversal tests intentionally reach this branch.
             NSError *error = [NSError errorWithDomain:@"MyURLSchemeHandler" 
                                                  code:404 
                                              userInfo:@{NSLocalizedDescriptionKey: @"Resource not found"}];
@@ -2040,6 +2254,11 @@ static void schedulePendingResizeDrain() {
     }
 
     - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
+        self.hasFinishedNavigation = YES;
+        if (self.spellCheckConfigured) {
+            electrobun::setContinuousSpellChecking(webView, self.spellCheckEnabled);
+        }
+
         NSString *urlString = webView.URL.absoluteString ?: @"";
         if (urlString.length > 0) {
             self.zigEventHandler(self.webviewId, strdup("did-navigate"), strdup(urlString.UTF8String));
@@ -2255,9 +2474,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         
         NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
         std::string originStd = [originString UTF8String];
-        
+
         NSLog(@"WKWebView: Media capture permission requested for %@ (type: %ld)", originString, (long)type);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if ([origin.protocol isEqualToString:@"views"]) {
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::USER_MEDIA);
         
@@ -2325,9 +2550,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         
         NSString *originString = [NSString stringWithFormat:@"%@://%@", origin.protocol, origin.host];
         std::string originStd = [originString UTF8String];
-        
+
         NSLog(@"WKWebView: Geolocation permission requested for %@", originString);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if ([origin.protocol isEqualToString:@"views"]) {
+            decisionHandler(WKPermissionDecisionGrant);
+            return;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(originStd, PermissionType::GEOLOCATION);
         
@@ -2384,19 +2615,18 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 @implementation MyScriptMessageHandler
     - (void)userContentController:(WKUserContentController *)userContentController
         didReceiveScriptMessage:(WKScriptMessage *)message {
-        NSString *body = message.body;
-        const char *bodyCStr = strdup(body.UTF8String);
-        self.zigCallback(self.webviewId, bodyCStr); 
+        if (!self.zigCallback || ![message.body isKindOfClass:[NSString class]]) return;
+        const char *body = [(NSString *)message.body UTF8String];
+        if (body) self.zigCallback(self.webviewId, body);
+    }
+@end
 
-        // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
-        // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
-        // ends up getting garbage.
-
-        // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
-        // before freeing the memory
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            free((void*)bodyCStr);
-        });              
+@implementation ConsoleScriptMessageHandler
+    - (void)userContentController:(WKUserContentController *)userContentController
+        didReceiveScriptMessage:(WKScriptMessage *)message {
+        if ([message.body isKindOfClass:[NSString class]]) {
+            printWebviewConsoleMessage(self.webviewId, [(NSString *)message.body UTF8String]);
+        }
     }
 @end
 
@@ -2404,6 +2634,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
 
 @implementation WKWebViewImpl
+
+    - (BOOL)shouldSuppressMirrorMode {
+        return !electrobunShouldEnableMirrorMode(self.webView, YES);
+    }
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
                             window:(NSWindow *)window
@@ -2421,6 +2655,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
                 sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol
     {
         self = [super init];
         if (self) {
@@ -2449,7 +2685,10 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 // TODO: Consider storing views handler globally and not on each AbstractView                
                 assetSchemeHandler.webviewId = webviewId;
                 assetSchemeHandler.viewsRoot = viewsRootString;
+                assetSchemeHandler.allowViews = allowViewsProtocol;
+                assetSchemeHandler.allowAppData = allowAppDataProtocol;
                 [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"views"];
+                [configuration setURLSchemeHandler:assetSchemeHandler forURLScheme:@"appdata"];
                 
                 // create WKWebView
                 self.webView = [[WKWebView alloc] initWithFrame:frame configuration:configuration];
@@ -2479,6 +2718,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                 navigationDelegate.zigCallback = navigationCallback;                
                 navigationDelegate.zigEventHandler = webviewEventHandler;
                 navigationDelegate.webviewId = webviewId;
+                navigationDelegate.spellCheckConfigured = self.pendingSpellCheckConfigured;
+                navigationDelegate.spellCheckEnabled = self.pendingSpellCheckEnabled;
                 self.webView.navigationDelegate = navigationDelegate;
                 objc_setAssociatedObject(self.webView, "NavigationDelegate", navigationDelegate, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -2490,6 +2731,22 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
                 // postmessage handlers
 
+                if (shouldForwardWebviewConsole(g_electrobunChannel)) {
+                    ConsoleScriptMessageHandler *consoleHandler = [[ConsoleScriptMessageHandler alloc] init];
+                    consoleHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController
+                        addScriptMessageHandler:consoleHandler
+                        name:@"electrobunConsole"];
+                    objc_setAssociatedObject(self.webView, "consoleHandler", consoleHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+                    NSString *consoleScriptSource = [NSString stringWithUTF8String:webviewConsoleForwardingScript()];
+                    WKUserScript *consoleScript = [[WKUserScript alloc]
+                        initWithSource:consoleScriptSource
+                        injectionTime:WKUserScriptInjectionTimeAtDocumentStart
+                        forMainFrameOnly:false];
+                    [self.webView.configuration.userContentController addUserScript:consoleScript];
+                }
+
                 // eventBridge - event-only bridge (always set up for all webviews, including sandboxed)
                 MyScriptMessageHandler *eventHandler = [[MyScriptMessageHandler alloc] init];
                 eventHandler.zigCallback = eventBridgeHandler;
@@ -2498,12 +2755,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                                                                                 name:[NSString stringWithUTF8String:"eventBridge"]];
                 objc_setAssociatedObject(self.webView, "eventBridgeHandler", eventHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-                // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
+                // hostBridge/bunBridge aliases and internalBridge - RPC bridges (only for non-sandboxed webviews)
                 if (!sandbox) {
-                    // bunBridge - user RPC bridge
+                    // hostBridge/bunBridge - user RPC bridge
                     MyScriptMessageHandler *bunHandler = [[MyScriptMessageHandler alloc] init];
                     bunHandler.zigCallback = bunBridgeHandler;
                     bunHandler.webviewId = webviewId;
+                    [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
+                                                                                    name:[NSString stringWithUTF8String:"hostBridge"]];
                     [self.webView.configuration.userContentController addScriptMessageHandler:bunHandler
                                                                                     name:[NSString stringWithUTF8String:"bunBridge"]];
                     objc_setAssociatedObject(self.webView, "bunBridgeHandler", bunHandler, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2590,6 +2849,29 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         return self;
     }
 
+    - (BOOL)setSpellCheck:(BOOL)enabled {
+        self.pendingSpellCheckConfigured = YES;
+        self.pendingSpellCheckEnabled = enabled;
+
+        SEL selector = electrobun::continuousSpellCheckingSelector();
+        if (![WKWebView instancesRespondToSelector:selector]) {
+            return NO;
+        }
+
+        if (!self.webView) {
+            return YES;
+        }
+
+        MyNavigationDelegate *navigationDelegate =
+            (MyNavigationDelegate *)objc_getAssociatedObject(self.webView, "NavigationDelegate");
+        navigationDelegate.spellCheckConfigured = YES;
+        navigationDelegate.spellCheckEnabled = enabled;
+        if (navigationDelegate.hasFinishedNavigation) {
+            return electrobun::setContinuousSpellChecking(self.webView, enabled);
+        }
+        return YES;
+    }
+
     - (void)loadURL:(const char *)urlString {
         // Copy the string since we're dispatching async
         NSString *urlNSString = (urlString ? [NSString stringWithUTF8String:urlString] : @"");
@@ -2673,6 +2955,7 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
             // these handlers, preventing WKWebView deallocation
             WKUserContentController *ucc = webViewToClean.configuration.userContentController;
             @try { [ucc removeScriptMessageHandlerForName:@"eventBridge"]; } @catch (NSException *e) {}
+            @try { [ucc removeScriptMessageHandlerForName:@"hostBridge"]; } @catch (NSException *e) {}
             @try { [ucc removeScriptMessageHandlerForName:@"bunBridge"]; } @catch (NSException *e) {}
             @try { [ucc removeScriptMessageHandlerForName:@"internalBridge"]; } @catch (NSException *e) {}
             // Remove all user scripts as well
@@ -2870,6 +3153,9 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
     - (void)openDevTools {
         dispatch_async(dispatch_get_main_queue(), ^{
+            // WebKit owns the inspected view's frame while its inspector is
+            // docked. Restore the real view before WebKit computes that layout.
+            [self toggleMirrorMode:NO];
             // WKWebView doesn't have public DevTools API, but we can use private API if available
             if ([self.webView respondsToSelector:@selector(_inspector)]) {
                 id inspector = [self.webView performSelector:@selector(_inspector)];
@@ -2913,7 +3199,134 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 @end
 
 // ----------------------- WGPUViewImpl -----------------------
+
+// Native pointer events for WGPU views. Event types:
+// 0 move, 1 down, 2 up, 3 wheel, 4 enter, 5 exit.
+// x/y are view-local points with a top-left origin. For down/up, buttonOrDx
+// carries the button number (0 left, 1 right, 2 middle); for wheel,
+// buttonOrDx/dy carry precise scroll deltas.
+typedef void (*WGPUPointerHandler)(uint32_t viewId,
+                                   uint32_t eventType,
+                                   double x, double y,
+                                   double buttonOrDx, double dy,
+                                   uint32_t modifiers);
+static WGPUPointerHandler g_wgpuPointerHandler = nullptr;
+
+extern "C" void setWGPUPointerHandler(WGPUPointerHandler handler) {
+    g_wgpuPointerHandler = handler;
+}
+
+// Key events with the characters the keyboard layout produced (NSEvent
+// characters), so text input does not need a hardcoded keymap. The cstring
+// is only valid during the callback.
+typedef void (*WGPUKeyHandler)(uint32_t viewId,
+                               uint32_t keyCode,
+                               uint32_t modifiers,
+                               uint32_t isDown,
+                               uint32_t isRepeat,
+                               const char* characters);
+static WGPUKeyHandler g_wgpuKeyHandler = nullptr;
+
+extern "C" void setWGPUKeyHandler(WGPUKeyHandler handler) {
+    g_wgpuKeyHandler = handler;
+}
+
+// ----------------------- Text measurement & rasterization -----------------
+// CoreText-backed text for the UI runtime: measure a single-line string and
+// rasterize it (white glyphs on transparent, alpha = coverage) at a given
+// scale so the GPU can tint it with the text color.
+
+static CTFontRef uiCreateFont(const char* fontName, double size) {
+    if (fontName && fontName[0] != '\0') {
+        CFStringRef name = CFStringCreateWithCString(kCFAllocatorDefault, fontName, kCFStringEncodingUTF8);
+        if (name) {
+            CTFontRef font = CTFontCreateWithName(name, size, NULL);
+            CFRelease(name);
+            if (font) return font;
+        }
+    }
+    return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, size, NULL);
+}
+
+static CTLineRef uiCreateLine(const char* text, CTFontRef font) {
+    CFStringRef string = CFStringCreateWithCString(kCFAllocatorDefault, text ? text : "", kCFStringEncodingUTF8);
+    if (!string) return NULL;
+    CGColorRef white = CGColorCreateGenericRGB(1, 1, 1, 1);
+    const void* keys[] = { kCTFontAttributeName, kCTForegroundColorAttributeName };
+    const void* values[] = { font, white };
+    CFDictionaryRef attrs = CFDictionaryCreate(kCFAllocatorDefault, keys, values, 2,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFAttributedStringRef attributed = CFAttributedStringCreate(kCFAllocatorDefault, string, attrs);
+    CTLineRef line = CTLineCreateWithAttributedString(attributed);
+    CFRelease(attributed);
+    CFRelease(attrs);
+    CGColorRelease(white);
+    CFRelease(string);
+    return line;
+}
+
+extern "C" void uiMeasureText(const char* text, const char* fontName, double size,
+                              double* outWidth, double* outHeight, double* outAscent) {
+    CTFontRef font = uiCreateFont(fontName, size);
+    CTLineRef line = uiCreateLine(text, font);
+    CGFloat ascent = 0, descent = 0, leading = 0;
+    double width = 0;
+    if (line) {
+        width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+        CFRelease(line);
+    } else {
+        ascent = CTFontGetAscent(font);
+        descent = CTFontGetDescent(font);
+    }
+    if (outWidth) *outWidth = width;
+    if (outHeight) *outHeight = (double)(ascent + descent);
+    if (outAscent) *outAscent = (double)ascent;
+    CFRelease(font);
+}
+
+// Rasterize at `scale` device pixels per point. Returns a malloc'd RGBA
+// buffer (premultiplied white-on-transparent); caller frees with uiFreeTextBitmap.
+extern "C" uint8_t* uiRasterizeText(const char* text, const char* fontName, double size,
+                                    double scale,
+                                    int32_t* outWidth, int32_t* outHeight) {
+    CTFontRef font = uiCreateFont(fontName, size);
+    CTLineRef line = uiCreateLine(text, font);
+    if (!line) {
+        CFRelease(font);
+        if (outWidth) *outWidth = 0;
+        if (outHeight) *outHeight = 0;
+        return NULL;
+    }
+    CGFloat ascent = 0, descent = 0, leading = 0;
+    double width = CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
+    int32_t w = (int32_t)ceil(width * scale);
+    int32_t h = (int32_t)ceil((ascent + descent) * scale);
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+    uint8_t* pixels = (uint8_t*)calloc((size_t)w * (size_t)h * 4, 1);
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef ctx = CGBitmapContextCreate(pixels, w, h, 8, (size_t)w * 4, colorSpace,
+        kCGImageAlphaPremultipliedLast);
+    CGColorSpaceRelease(colorSpace);
+    if (ctx) {
+        CGContextScaleCTM(ctx, scale, scale);
+        CGContextSetTextPosition(ctx, 0, descent);
+        CTLineDraw(line, ctx);
+        CGContextRelease(ctx);
+    }
+    CFRelease(line);
+    CFRelease(font);
+    if (outWidth) *outWidth = w;
+    if (outHeight) *outHeight = h;
+    return pixels;
+}
+
+extern "C" void uiFreeTextBitmap(uint8_t* pixels) {
+    free(pixels);
+}
+
 @interface WGPUInputView : NSView
+@property (nonatomic, assign) uint32_t wgpuViewId;
 @end
 
 @implementation WGPUInputView
@@ -2963,6 +3376,15 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         return YES;
     }
     - (void)keyDown:(NSEvent*)event {
+        if (g_wgpuKeyHandler) {
+            const char *chars = [[event characters] UTF8String];
+            g_wgpuKeyHandler(self.wgpuViewId,
+                             (uint32_t)[event keyCode],
+                             [self modifierMaskFromEvent:event],
+                             1,
+                             [event isARepeat] ? 1 : 0,
+                             chars ? chars : "");
+        }
         WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
         if (delegate && delegate.keyHandler) {
             delegate.keyHandler(delegate.windowId,
@@ -2973,6 +3395,14 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
         }
     }
     - (void)keyUp:(NSEvent*)event {
+        if (g_wgpuKeyHandler) {
+            g_wgpuKeyHandler(self.wgpuViewId,
+                             (uint32_t)[event keyCode],
+                             [self modifierMaskFromEvent:event],
+                             0,
+                             0,
+                             "");
+        }
         WindowDelegate *delegate = (WindowDelegate *)self.window.delegate;
         if (delegate && delegate.keyHandler) {
             delegate.keyHandler(delegate.windowId,
@@ -2981,6 +3411,53 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
                                 0,
                                 0);
         }
+    }
+
+    // ---- Pointer events ----
+
+    - (void)updateTrackingAreas {
+        [super updateTrackingAreas];
+        for (NSTrackingArea *area in [self.trackingAreas copy]) {
+            [self removeTrackingArea:area];
+        }
+        NSTrackingArea *area = [[NSTrackingArea alloc]
+            initWithRect:NSZeroRect
+                 options:(NSTrackingMouseMoved | NSTrackingMouseEnteredAndExited |
+                          NSTrackingActiveAlways | NSTrackingInVisibleRect)
+                   owner:self
+                userInfo:nil];
+        [self addTrackingArea:area];
+    }
+
+    - (void)emitPointer:(uint32_t)type event:(NSEvent*)event dx:(double)dx dy:(double)dy {
+        if (!g_wgpuPointerHandler) return;
+        NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+        double localY = self.isFlipped ? p.y : self.bounds.size.height - p.y;
+        g_wgpuPointerHandler(self.wgpuViewId, type, p.x, localY, dx, dy,
+                             [self modifierMaskFromEvent:event]);
+    }
+
+    - (void)mouseMoved:(NSEvent*)event   { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)mouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)rightMouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)otherMouseDragged:(NSEvent*)event { [self emitPointer:0 event:event dx:0 dy:0]; }
+    - (void)mouseDown:(NSEvent*)event    { [self emitPointer:1 event:event dx:0 dy:0]; }
+    - (void)rightMouseDown:(NSEvent*)event { [self emitPointer:1 event:event dx:1 dy:0]; }
+    - (void)otherMouseDown:(NSEvent*)event { [self emitPointer:1 event:event dx:2 dy:0]; }
+    - (void)mouseUp:(NSEvent*)event      { [self emitPointer:2 event:event dx:0 dy:0]; }
+    - (void)rightMouseUp:(NSEvent*)event { [self emitPointer:2 event:event dx:1 dy:0]; }
+    - (void)otherMouseUp:(NSEvent*)event { [self emitPointer:2 event:event dx:2 dy:0]; }
+    - (void)mouseEntered:(NSEvent*)event { [self emitPointer:4 event:event dx:0 dy:0]; }
+    - (void)mouseExited:(NSEvent*)event  { [self emitPointer:5 event:event dx:0 dy:0]; }
+
+    - (void)scrollWheel:(NSEvent*)event {
+        double dx = [event scrollingDeltaX];
+        double dy = [event scrollingDeltaY];
+        if (![event hasPreciseScrollingDeltas]) {
+            dx *= 10.0;
+            dy *= 10.0;
+        }
+        [self emitPointer:3 event:event dx:dx dy:dy];
     }
 @end
 
@@ -2996,7 +3473,8 @@ runOpenPanelWithParameters:(WKOpenPanelParameters *)parameters
 
             dispatch_async(dispatch_get_main_queue(), ^{
                 id<MTLDevice> device = MTLCreateSystemDefaultDevice();
-                NSView *view = [[WGPUInputView alloc] initWithFrame:frame];
+                WGPUInputView *view = [[WGPUInputView alloc] initWithFrame:frame];
+                view.wgpuViewId = webviewId;
                 view.wantsLayer = YES;
                 view.layer.backgroundColor = [[NSColor clearColor] CGColor];
 
@@ -3200,6 +3678,64 @@ static void runOnMainThreadSyncVoid(void (^block)(void)) {
     dispatch_sync(dispatch_get_main_queue(), ^{
         block();
     });
+}
+
+extern "C" void runNativeEventLoopTick(int timeoutMs) {
+    int clampedTimeoutMs = timeoutMs;
+    if (clampedTimeoutMs < 0) clampedTimeoutMs = 0;
+    if (clampedTimeoutMs > 50) clampedTimeoutMs = 50;
+
+    runOnMainThreadSyncVoid(^{
+        @autoreleasepool {
+            NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)clampedTimeoutMs / 1000.0];
+            [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:deadline];
+        }
+    });
+}
+
+static bool runOnMainThreadSyncBool(bool (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        return block();
+    }
+    __block bool result = false;
+    dispatch_sync(dispatch_get_main_queue(), ^{
+        result = block();
+    });
+    return result;
+}
+
+static void runOnMainThreadAsyncVoid(void (^block)(void)) {
+    if ([NSThread isMainThread]) {
+        block();
+        return;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        block();
+    });
+}
+
+static bool waitForMainThreadAsyncCompletion(int64_t timeoutNanoseconds, void (^startOperation)(dispatch_semaphore_t completionSemaphore)) {
+    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
+
+    if ([NSThread isMainThread]) {
+        startOperation(completionSemaphore);
+
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:(double)timeoutNanoseconds / (double)NSEC_PER_SEC];
+        while (dispatch_semaphore_wait(completionSemaphore, DISPATCH_TIME_NOW) != 0) {
+            if ([deadline timeIntervalSinceNow] <= 0) {
+                return false;
+            }
+            @autoreleasepool {
+                [[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+            }
+        }
+        return true;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        startOperation(completionSemaphore);
+    });
+    return dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, timeoutNanoseconds)) == 0;
 }
 
 extern "C" void* wgpuInstanceCreateSurfaceMainThread(void* instance, void* descriptor) {
@@ -3577,6 +4113,13 @@ static bool ensureWgpuTestSymbols() {
     return true;
 }
 
+extern "C" void wgpuSurfaceCapabilitiesFreeMembersShim(void* capabilitiesPtr) {
+    if (!capabilitiesPtr || !ensureWgpuTestSymbols()) return;
+    WGPUSurfaceCapabilities* capabilities = (WGPUSurfaceCapabilities*)capabilitiesPtr;
+    p_wgpuSurfaceCapabilitiesFreeMembers(*capabilities);
+    *capabilities = {};
+}
+
 extern "C" void wgpuCreateAdapterDeviceMainThread(void* instancePtr, void* surfacePtr, void* outAdapterDevice) {
     if (!ensureWgpuTestSymbols()) return;
     runOnMainThreadSyncVoid(^{
@@ -3657,14 +4200,17 @@ struct GPUTestState {
     WGPUAdapter adapter = nullptr;
     WGPUDevice device = nullptr;
     WGPUQueue queue = nullptr;
-    WGPURenderPipeline pipeline = nullptr;
+    WGPURenderPipeline pipelineA = nullptr;
+    WGPURenderPipeline pipelineB = nullptr;
     WGPUBuffer vertexBuffer = nullptr;
     WGPUTextureFormat surfaceFormat = WGPUTextureFormat_BGRA8UnormSrgb;
     WGPUCompositeAlphaMode alphaMode = WGPUCompositeAlphaMode_Opaque;
     CAMetalLayer* layer = nil;
+    NSView* nsView = nil;
     dispatch_source_t timer = nullptr;
     float angle = 0.0f;
     CGSize lastDrawable = {0, 0};
+    bool useAlt = false;
     bool running = false;
 };
 
@@ -3691,6 +4237,10 @@ static const float kCubeVertices[] = {
     -0.5f,-0.5f,-0.5f,  0.5f,-0.5f, 0.5f, -0.5f,-0.5f, 0.5f,
 };
 
+static constexpr size_t kCubeFloatCount = sizeof(kCubeVertices) / sizeof(float);
+static constexpr size_t kCubeVertexCount = kCubeFloatCount / 3;
+static constexpr size_t kGpuTestStrideFloats = 7;
+
 static void buildRotatedVertices(float angle, float* out, size_t count) {
     const float sinY = sinf(angle);
     const float cosY = cosf(angle);
@@ -3709,6 +4259,54 @@ static void buildRotatedVertices(float angle, float* out, size_t count) {
         out[i] = x1 * proj;
         out[i + 1] = y1 * proj;
         out[i + 2] = 0.0f;
+    }
+}
+
+static float clamp01f(float value) {
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
+}
+
+static void getMouseState(GPUTestState* state, float* outX, float* outY, float* outDown) {
+    if (outX) *outX = 0.5f;
+    if (outY) *outY = 0.5f;
+    if (outDown) *outDown = 0.0f;
+    if (!state || !state->nsView) return;
+
+    NSWindow* window = state->nsView.window;
+    if (!window) return;
+
+    NSPoint windowPoint = [window mouseLocationOutsideOfEventStream];
+    NSPoint localPoint = [state->nsView convertPoint:windowPoint fromView:nil];
+    const CGFloat width = MAX(state->lastDrawable.width, 1.0);
+    const CGFloat height = MAX(state->lastDrawable.height, 1.0);
+
+    if (outX) *outX = clamp01f((float)(localPoint.x / width));
+    if (outY) *outY = clamp01f((float)(localPoint.y / height));
+    if (outDown) *outDown = ([NSEvent pressedMouseButtons] & 1) ? 1.0f : 0.0f;
+}
+
+static void buildInterleavedVertices(
+    float angle,
+    float mouseX,
+    float mouseY,
+    float mouseDown,
+    float timeValue,
+    float* out
+) {
+    float positions[kCubeFloatCount];
+    buildRotatedVertices(angle, positions, kCubeFloatCount);
+    for (size_t vertexIndex = 0; vertexIndex < kCubeVertexCount; vertexIndex++) {
+        const size_t positionIndex = vertexIndex * 3;
+        const size_t outputIndex = vertexIndex * kGpuTestStrideFloats;
+        out[outputIndex] = positions[positionIndex];
+        out[outputIndex + 1] = positions[positionIndex + 1];
+        out[outputIndex + 2] = positions[positionIndex + 2];
+        out[outputIndex + 3] = mouseX;
+        out[outputIndex + 4] = mouseY;
+        out[outputIndex + 5] = mouseDown;
+        out[outputIndex + 6] = timeValue;
     }
 }
 
@@ -3738,26 +4336,8 @@ static void configureSurface(GPUTestState* state) {
     p_wgpuSurfaceConfigure(state->surface, &config);
 }
 
-static void setupPipeline(GPUTestState* state) {
-    if (!state->device) return;
-    const char* shaderSrc = R"WGSL(
-struct VSOut {
-  @builtin(position) position : vec4<f32>,
-};
-
-@vertex
-fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
-  var out: VSOut;
-  out.position = vec4<f32>(position, 1.0);
-  return out;
-}
-
-@fragment
-fn fs_main() -> @location(0) vec4<f32> {
-  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
-}
-)WGSL";
-
+static WGPURenderPipeline createTestPipeline(GPUTestState* state, const char* shaderSrc) {
+    if (!state->device) return nullptr;
     WGPUShaderSourceWGSL wgsl = {};
     wgsl.chain.sType = WGPUSType_ShaderSourceWGSL;
     wgsl.code.data = shaderSrc;
@@ -3769,20 +4349,24 @@ fn fs_main() -> @location(0) vec4<f32> {
     WGPUShaderModule shader = p_wgpuDeviceCreateShaderModule(state->device, &shaderDesc);
     if (!shader) {
         NSLog(@"WGPU test: failed to create shader module");
+        return nullptr;
     }
 
     WGPUStringView vsEntry = { "vs_main", WGPU_STRLEN };
     WGPUStringView fsEntry = { "fs_main", WGPU_STRLEN };
 
-    WGPUVertexAttribute attr = {};
-    attr.format = WGPUVertexFormat_Float32x3;
-    attr.offset = 0;
-    attr.shaderLocation = 0;
+    WGPUVertexAttribute attrs[2] = {};
+    attrs[0].format = WGPUVertexFormat_Float32x3;
+    attrs[0].offset = 0;
+    attrs[0].shaderLocation = 0;
+    attrs[1].format = WGPUVertexFormat_Float32x4;
+    attrs[1].offset = sizeof(float) * 3;
+    attrs[1].shaderLocation = 1;
 
     WGPUVertexBufferLayout vbuf = {};
-    vbuf.arrayStride = sizeof(float) * 3;
-    vbuf.attributeCount = 1;
-    vbuf.attributes = &attr;
+    vbuf.arrayStride = sizeof(float) * kGpuTestStrideFloats;
+    vbuf.attributeCount = 2;
+    vbuf.attributes = attrs;
     vbuf.stepMode = WGPUVertexStepMode_Vertex;
 
     WGPUVertexState vstate = {};
@@ -3819,26 +4403,88 @@ fn fs_main() -> @location(0) vec4<f32> {
     rpDesc.multisample = ms;
     rpDesc.fragment = &fstate;
 
-    state->pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
-    if (!state->pipeline) {
+    WGPURenderPipeline pipeline = p_wgpuDeviceCreateRenderPipeline(state->device, &rpDesc);
+    if (!pipeline) {
         NSLog(@"WGPU test: failed to create render pipeline");
     }
+    return pipeline;
+}
+
+static void setupPipeline(GPUTestState* state) {
+    if (!state->device) return;
+    const char* shaderSrcA = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+};
+
+@vertex
+fn vs_main(@location(0) position: vec3<f32>) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  return out;
+}
+
+@fragment
+fn fs_main() -> @location(0) vec4<f32> {
+  return vec4<f32>(0.1, 0.9, 0.4, 1.0);
+}
+)WGSL";
+
+    const char* shaderSrcB = R"WGSL(
+struct VSOut {
+  @builtin(position) position : vec4<f32>,
+  @location(0) local_pos : vec3<f32>,
+  @location(1) mouse_state : vec4<f32>,
+};
+
+@vertex
+fn vs_main(
+  @location(0) position: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> VSOut {
+  var out: VSOut;
+  out.position = vec4<f32>(position, 1.0);
+  out.local_pos = position;
+  out.mouse_state = mouse_state;
+  return out;
+}
+
+@fragment
+fn fs_main(
+  @location(0) local_pos: vec3<f32>,
+  @location(1) mouse_state: vec4<f32>
+) -> @location(0) vec4<f32> {
+  let cursor = vec2<f32>(mouse_state.x * 2.0 - 1.0, (1.0 - mouse_state.y) * 2.0 - 1.0);
+  let dist = distance(local_pos.xy, cursor);
+  let wave = 0.5 + 0.5 * sin(mouse_state.w * 3.0 - dist * 14.0);
+  let pulse = select(wave, 1.0 - wave, mouse_state.z > 0.5);
+  let base = vec3<f32>(0.25 + cursor.x * 0.35, 0.35 + cursor.y * 0.25, 0.75);
+  let highlight = vec3<f32>(1.0, 0.45, 0.15);
+  let color = max(mix(base, highlight, pulse), vec3<f32>(0.05));
+  let alpha = 0.7 + 0.3 * pulse;
+  return vec4<f32>(color, alpha);
+}
+)WGSL";
+
+    state->pipelineA = createTestPipeline(state, shaderSrcA);
+    state->pipelineB = createTestPipeline(state, shaderSrcB);
 
     WGPUBufferDescriptor bufDesc = {};
     bufDesc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
-    bufDesc.size = sizeof(kCubeVertices);
+    bufDesc.size = kCubeVertexCount * kGpuTestStrideFloats * sizeof(float);
     bufDesc.mappedAtCreation = false;
     state->vertexBuffer = p_wgpuDeviceCreateBuffer(state->device, &bufDesc);
 
-    float initialVerts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(0.0f, initialVerts, sizeof(kCubeVertices) / sizeof(float));
+    float initialVerts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(0.0f, 0.5f, 0.5f, 0.0f, 0.0f, initialVerts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, initialVerts, sizeof(initialVerts));
 }
 
 static void renderFrame(GPUTestState* state) {
     if (!state->device || !state->surface || !state->queue) return;
     if (!state->layer) return;
-    if (!state->pipeline) return;
+    WGPURenderPipeline pipeline = state->useAlt && state->pipelineB ? state->pipelineB : state->pipelineA;
+    if (!pipeline) return;
 
     CGSize drawable = state->layer.drawableSize;
     if (drawable.width <= 1 || drawable.height <= 1) return;
@@ -3847,8 +4493,12 @@ static void renderFrame(GPUTestState* state) {
     }
 
     state->angle += 0.02f;
-    float verts[sizeof(kCubeVertices) / sizeof(float)];
-    buildRotatedVertices(state->angle, verts, sizeof(kCubeVertices) / sizeof(float));
+    float mouseX = 0.5f;
+    float mouseY = 0.5f;
+    float mouseDown = 0.0f;
+    getMouseState(state, &mouseX, &mouseY, &mouseDown);
+    float verts[kCubeVertexCount * kGpuTestStrideFloats];
+    buildInterleavedVertices(state->angle, mouseX, mouseY, mouseDown, state->angle * 1.5f, verts);
     p_wgpuQueueWriteBuffer(state->queue, state->vertexBuffer, 0, verts, sizeof(verts));
 
     static bool loggedDrawable = false;
@@ -3885,9 +4535,15 @@ static void renderFrame(GPUTestState* state) {
 
     WGPUCommandEncoder encoder = p_wgpuDeviceCreateCommandEncoder(state->device, nullptr);
     WGPURenderPassEncoder pass = p_wgpuCommandEncoderBeginRenderPass(encoder, &passDesc);
-    p_wgpuRenderPassEncoderSetPipeline(pass, state->pipeline);
-    p_wgpuRenderPassEncoderSetVertexBuffer(pass, 0, state->vertexBuffer, 0, sizeof(kCubeVertices));
-    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)(sizeof(kCubeVertices) / (sizeof(float) * 3)), 1, 0, 0);
+    p_wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+    p_wgpuRenderPassEncoderSetVertexBuffer(
+        pass,
+        0,
+        state->vertexBuffer,
+        0,
+        kCubeVertexCount * kGpuTestStrideFloats * sizeof(float)
+    );
+    p_wgpuRenderPassEncoderDraw(pass, (uint32_t)kCubeVertexCount, 1, 0, 0);
     p_wgpuRenderPassEncoderEnd(pass);
 
     WGPUCommandBuffer cmd = p_wgpuCommandEncoderFinish(encoder, nullptr);
@@ -3984,6 +4640,8 @@ extern "C" void wgpuRunGPUTest(AbstractView* abstractView) {
         }
         CAMetalLayer* layer = (CAMetalLayer*)nsView.layer;
         g_gpuTest.layer = layer;
+        g_gpuTest.nsView = nsView;
+        g_gpuTest.useAlt = false;
         if (!g_gpuTest.instance) {
             g_gpuTest.instance = p_wgpuCreateInstance(nullptr);
         }
@@ -4008,6 +4666,17 @@ extern "C" void wgpuRunGPUTest(AbstractView* abstractView) {
         cbInfo.callback = requestAdapterCallback;
         cbInfo.userdata1 = &g_gpuTest;
         p_wgpuInstanceRequestAdapter(g_gpuTest.instance, &opts, cbInfo);
+    });
+}
+
+extern "C" void wgpuToggleGPUTestShader(AbstractView* abstractView) {
+    if (!abstractView) return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSView* nsView = [abstractView nsView];
+        if (!nsView) return;
+        if (g_gpuTest.nsView == nsView) {
+            g_gpuTest.useAlt = !g_gpuTest.useAlt;
+        }
     });
 }
 
@@ -4119,7 +4788,7 @@ public:
         
     }
     void OnBeforeCommandLineProcessing(const CefString& process_type, CefRefPtr<CefCommandLine> command_line) override {
-        command_line->AppendSwitchWithValue("custom-scheme", "views");
+        command_line->AppendSwitchWithValue("custom-scheme", "views,appdata");
 
         // macOS default flags — can be overridden via chromiumFlags in config
         static const std::vector<electrobun::DefaultFlag> defaults = {
@@ -4140,6 +4809,11 @@ public:
             CEF_SCHEME_OPTION_CORS_ENABLED |
             CEF_SCHEME_OPTION_SECURE | // treat it like https
             CEF_SCHEME_OPTION_CSP_BYPASSING | // allow things like crypto.subtle
+            CEF_SCHEME_OPTION_FETCH_ENABLED);
+        registrar->AddCustomScheme("appdata",
+            CEF_SCHEME_OPTION_STANDARD |
+            CEF_SCHEME_OPTION_CORS_ENABLED |
+            CEF_SCHEME_OPTION_SECURE |
             CEF_SCHEME_OPTION_FETCH_ENABLED);
             
     }
@@ -4470,6 +5144,11 @@ private:
     }
 
     void OpenRemoteDevToolsFrontend(CefRefPtr<CefBrowser> browser) {
+        if (g_remoteDebugPort == 0) {
+            NSLog(@"[CEF] Remote DevTools unavailable because remote debugging is disabled");
+            return;
+        }
+
         int target_id = static_cast<int>(webview_id_);
         std::string targetUrl;
         if (browser && browser->GetMainFrame()) {
@@ -4915,13 +5594,20 @@ public:
 
     virtual void OnLoadStart(CefRefPtr<CefBrowser> browser,
                            CefRefPtr<CefFrame> frame,
-                           TransitionType transition_type) override {    
+                           TransitionType transition_type) override {
+        if (frame->IsMain() && webview_event_handler_) {
+            std::string url = frame->GetURL().ToString();
+            char* eventCopy = strdup("did-commit-navigation");
+            char* urlCopy = strdup(url.c_str());
+            webview_event_handler_(webview_id_, eventCopy, urlCopy);
 
-        std::string frameUrl = frame->GetURL().ToString();
-        std::string scriptUrl = GetScriptExecutionUrl(frameUrl);
-
-        // NSLog(@"OnLoadStart %s", frameUrl.c_str());//, electrobun_script_.code.c_str());           
-    }   
+            // The FFI callback may marshal to another thread before reading the strings.
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                free((void*)eventCopy);
+                free((void*)urlCopy);
+            });
+        }
+    }
 
     void OnLoadEnd(CefRefPtr<CefBrowser> browser,
                   CefRefPtr<CefFrame> frame,
@@ -4948,34 +5634,23 @@ public:
     std::string messageName = message->GetName().ToString();
     std::string messageContent = message->GetArgumentList()->GetString(0).ToString();
     
-    char* contentCopy = strdup(messageContent.c_str());
     bool result = false;
 
     // eventBridge - event-only bridge (always process for all webviews, including sandboxed)
     if (messageName == "EventBridgeMessage") {
-        event_bridge_handler_(webview_id_, contentCopy);
+        event_bridge_handler_(webview_id_, messageContent.c_str());
         result = true;
     }
     // bunBridge and internalBridge - RPC bridges (only for non-sandboxed webviews)
     else if (!is_sandboxed_) {
         if (messageName == "BunBridgeMessage") {
-            bun_bridge_handler_(webview_id_, contentCopy);
+            bun_bridge_handler_(webview_id_, messageContent.c_str());
             result = true;
         } else if (messageName == "internalMessage") {
-            webview_tag_handler_(webview_id_, contentCopy);
+            webview_tag_handler_(webview_id_, messageContent.c_str());
             result = true;
         }
     }
-
-    // Note: threadsafe JSCallbacks are invoked on the js worker thread, When called frequently they
-    // can build up and take longer. Meanwhile objc GC auto free's the message body and the callback
-    // ends up getting garbage.
-
-    // So we duplicate it and give it plenty of time to execute (1 second delay vs. 0.1ms execution per invocation)
-    // before freeing the memory
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        free((void*)contentCopy);
-    });   
     
     return result;
 }
@@ -5110,7 +5785,13 @@ public:
         
         std::string origin = requesting_origin.ToString();
         NSLog(@"CEF: Media access permission requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        if (origin.find("views://") == 0) {
+            callback->Continue(requested_permissions);
+            return true;
+        }
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, PermissionType::USER_MEDIA);
         
@@ -5163,12 +5844,20 @@ public:
         
         std::string origin = requesting_origin.ToString();
         NSLog(@"CEF: Permission prompt requested for %s (permissions: %u)", origin.c_str(), requested_permissions);
-        
+
+        // views:// is the app's own bundled-asset shell — always trusted, never prompt.
+        // This also covers Chromium's new Loopback/Local Network Access gate triggered
+        // by the per-webview RPC websocket to ws://localhost:<port>.
+        if (origin.find("views://") == 0) {
+            callback->Continue(CEF_PERMISSION_RESULT_ACCEPT);
+            return true;
+        }
+
         // Handle different permission types
         PermissionType permType = PermissionType::OTHER;
-        NSString *message = @"This page is requesting additional permissions.\n\nDo you want to allow this?";
-        NSString *title = @"Permission Request";
-        
+        NSString *message = nil;
+        NSString *title = nil;
+
         // Check for specific permission types
         if (requested_permissions & CEF_PERMISSION_TYPE_CAMERA_STREAM ||
             requested_permissions & CEF_PERMISSION_TYPE_MIC_STREAM) {
@@ -5183,8 +5872,16 @@ public:
             permType = PermissionType::NOTIFICATIONS;
             message = @"This page wants to show notifications.\n\nDo you want to allow this?";
             title = @"Notification Permission";
+        } else {
+            // Unrecognized permission type — name what's being requested instead of
+            // a generic "additional permissions" dialog so the user can decide.
+            std::string names = electrobun::describeCefPermissions(requested_permissions);
+            message = [NSString stringWithFormat:
+                @"This page is requesting permission for: %s.\n\nDo you want to allow this?",
+                names.c_str()];
+            title = @"Permission Request";
         }
-        
+
         // Check cache first
         PermissionStatus cachedStatus = getPermissionFromCache(origin, permType);
         
@@ -5458,6 +6155,11 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
     @property (nonatomic, assign) CefRefPtr<ElectrobunClient> client;
     @property (nonatomic, strong) CEFOSRView *osrView;  // For transparent/OSR mode
     @property (nonatomic, assign) BOOL isOSRMode;
+    @property (nonatomic, copy) NSString *pendingURLString;
+    @property (nonatomic, copy) NSString *pendingHTMLString;
+    @property (nonatomic, copy) NSString *lastFindSearchText;
+    @property (nonatomic, assign) BOOL lastFindMatchCase;
+    @property (nonatomic, assign) BOOL hasActiveFindSession;
 
 
     - (instancetype)initWithWebviewId:(uint32_t)webviewId
@@ -5475,7 +6177,9 @@ void RemoteDevToolsClosed(void* ctx, int target_id) {
                 customPreloadScript:(const char *)customPreloadScript
                 viewsRoot:(const char *)viewsRoot
                 transparent:(bool)transparent
-                sandbox:(bool)sandbox;
+                sandbox:(bool)sandbox
+                allowViewsProtocol:(bool)allowViewsProtocol
+                allowAppDataProtocol:(bool)allowAppDataProtocol;
 
 @end
 
@@ -5501,8 +6205,9 @@ bool initializeCEF() {
 
     // Read user-defined chromium flags from build.json
     NSString* buildJsonPath = [[NSBundle mainBundle] pathForResource:@"build" ofType:@"json"];
+    std::string buildJsonContent;
     if (buildJsonPath) {
-        std::string buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
+        buildJsonContent = electrobun::readFileToString([buildJsonPath UTF8String]);
         g_userChromiumFlags = electrobun::parseChromiumFlags(buildJsonContent);
     }
 
@@ -5510,14 +6215,28 @@ bool initializeCEF() {
     settings.no_sandbox = true;
     settings.multi_threaded_message_loop = false; // Use single threaded message loop on macOS
     settings.windowless_rendering_enabled = true; // Required for OSR/transparent windows
-    // Remote DevTools port with simple scan for availability.
-    int selectedPort = FindAvailableRemoteDebugPort(9222, 9232);
-    if (selectedPort == 0) {
-        selectedPort = 9222;
-        NSLog(@"[CEF] Remote DevTools: no free port in 9222-9232, falling back to 9222");
-    }
+    const auto remoteDebugging = electrobun::resolveRemoteDebugging(
+        buildJsonContent,
+        g_userChromiumFlags,
+        getenv(electrobun::kRemoteDebuggingPortEnvironment));
+    const int selectedPort = electrobun::selectRemoteDebuggingPort(
+        remoteDebugging,
+        IsPortAvailable);
     g_remoteDebugPort = selectedPort;
-    settings.remote_debugging_port = selectedPort;
+    if (selectedPort != 0) {
+        settings.remote_debugging_port = selectedPort;
+        NSLog(@"[CEF] Remote debugging enabled on 127.0.0.1:%d (%s)",
+              selectedPort,
+              electrobun::remoteDebuggingSourceName(remoteDebugging.source));
+    } else if (remoteDebugging.enabled()) {
+        NSLog(@"[CEF] Remote debugging disabled: no free port in %d-%d",
+              electrobun::kDefaultRemoteDebuggingPort,
+              electrobun::kLastAutomaticRemoteDebuggingPort);
+    } else if (remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_configuration ||
+               remoteDebugging.source == electrobun::RemoteDebuggingSource::invalid_environment) {
+        NSLog(@"[CEF] Remote debugging disabled: %s",
+              electrobun::remoteDebuggingSourceName(remoteDebugging.source));
+    }
     // settings.log_severity = LOGSEVERITY_VERBOSE;
 
     // Set explicit paths to avoid bundle lookup issues in newer CEF builds.
@@ -5534,12 +6253,24 @@ bool initializeCEF() {
         CefString(&settings.framework_dir_path) = [frameworkPath UTF8String];
     }
 
-    // This prevents multiple apps from sharing the same helper.
-    NSString* helperPath =
-        [[NSBundle mainBundle] pathForAuxiliaryExecutable:@"bun Helper.app/Contents/MacOS/bun Helper"];
-    if (helperPath) {
+    // Match the helper name to the actual host executable. Native modes launch
+    // a different host binary than Cottontail.
+    NSString* executablePath = [[[NSProcessInfo processInfo] arguments] firstObject];
+    NSString* executableName = [[executablePath lastPathComponent] stringByDeletingPathExtension];
+    NSString* helperPath = nil;
+    if (bundlePath && executableName.length > 0) {
+        NSString* helperRelativePath = [NSString stringWithFormat:
+            @"Contents/Frameworks/%@ Helper.app/Contents/MacOS/%@ Helper",
+            executableName,
+            executableName
+        ];
+        helperPath = [bundlePath stringByAppendingPathComponent:helperRelativePath];
+    }
+    if (helperPath && [[NSFileManager defaultManager] isExecutableFileAtPath:helperPath]) {
         CefString(&settings.browser_subprocess_path) = [helperPath UTF8String];
         NSLog(@"[CEF] Using helper at: %@", helperPath);
+    } else {
+        NSLog(@"[CEF] Helper not found for executable '%@' at %@", executableName, helperPath);
     }
     
     // Add cache path to prevent warnings and potential issues
@@ -5555,6 +6286,11 @@ bool initializeCEF() {
     );
     NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
     NSLog(@"[CEF] Using path: %s", cachePathStr.c_str());
+
+    // One-shot wipe if Electrobun's cache format version has been bumped
+    // since the user's last launch. See cache_migration.h.
+    electrobun::migrateCacheFolderIfNeeded(cachePathStr);
+
     CefString(&settings.root_cache_path) = [cachePath UTF8String];
 
     // Set log file path for debugging
@@ -5597,6 +6333,21 @@ bool initializeCEF() {
 }
 
 
+struct WebviewAllowedProtocols {
+    bool views;
+    bool appData;
+};
+static std::map<uint32_t, WebviewAllowedProtocols> webviewAllowedProtocols;
+static std::mutex webviewAllowedProtocolsMutex;
+
+static WebviewAllowedProtocols getWebviewAllowedProtocols(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(webviewAllowedProtocolsMutex);
+    auto it = webviewAllowedProtocols.find(webviewId);
+    return it == webviewAllowedProtocols.end()
+        ? WebviewAllowedProtocols{true, false}
+        : it->second;
+}
+
 // The main scheme handler class
 class ElectrobunSchemeHandler : public CefResourceHandler {
 public:
@@ -5620,11 +6371,11 @@ public:
             hasResponse_ = false;
             offset_ = 0;
             
-            // If the URL starts with "views://"
-            if (urlStr.find("views://") == 0) {
+            WebviewAllowedProtocols allowed = getWebviewAllowedProtocols(webviewId_);
+            if (urlStr.find("views://") == 0 && allowed.views) {
                 NSLog(@"DEBUG CEF: Processing views:// URL: %s", urlStr.c_str());
-                // Remove the prefix (8 characters for "views://") - FIXED VERSION v2
-                std::string relativePath = urlStr.substr(8);
+                NSString *normalizedPath = normalizeViewsRelativePath([NSString stringWithUTF8String:urlStr.c_str()]);
+                std::string relativePath = normalizedPath ? std::string([normalizedPath UTF8String]) : std::string();
                 NSLog(@"DEBUG CEF FIXED: relativePath = '%s'", relativePath.c_str());
                 
                 // Check if this is the internal HTML request.
@@ -5676,8 +6427,17 @@ public:
                         NSLog(@"DEBUG CEF: Failed to read views file: %s", urlStr.c_str());
                     }
                 }
-            }
-            else {
+            } else if (urlStr.find("appdata://") == 0 && allowed.appData) {
+                NSString *normalizedPath = normalizeAppDataRelativePath(
+                    [NSString stringWithUTF8String:urlStr.c_str()]);
+                NSData *data = normalizedPath ? readAppDataFile(urlStr.c_str()) : nil;
+                if (data) {
+                    mimeTypeBlock = getMimeTypeFromUrl(std::string([normalizedPath UTF8String]));
+                    responseDataBlock.assign((const char*)data.bytes,
+                                             (const char*)data.bytes + data.length);
+                    hasResponseBlock = true;
+                }
+            } else {
                 NSLog(@"Unknown URL format: %s", urlStr.c_str());
             }
         });
@@ -5744,6 +6504,21 @@ public:
 static std::map<int, uint32_t> browserToWebviewMap;
 static std::mutex browserMapMutex;
 
+static void removeBrowserMappingsForWebview(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(browserMapMutex);
+    for (auto it = browserToWebviewMap.begin(); it != browserToWebviewMap.end();) {
+        if (it->second == webviewId) {
+            it = browserToWebviewMap.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> permissionsLock(webviewAllowedProtocolsMutex);
+        webviewAllowedProtocols.erase(webviewId);
+    }
+}
+
 // The factory class that creates scheme handlers
 class ElectrobunSchemeHandlerFactory : public CefSchemeHandlerFactory {
 public:
@@ -5785,50 +6560,40 @@ public:
 
 
 
+// Platform implementation for partition_context.h — builds the on-disk
+// cache_path for a persistent partition under the macOS Application Support
+// directory, ensuring the directory exists.
+namespace electrobun {
+std::string buildAndEnsurePartitionCachePath(const std::string& partitionName) {
+    NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(
+        NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
+    if (!appSupportPath) return "";
+
+    std::string cachePathStr = buildCEFPartitionPath(
+        [appSupportPath UTF8String],
+        g_electrobunIdentifier,
+        g_electrobunChannel,
+        "CEF",
+        partitionName);
+
+    NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
+    NSFileManager* fileManager = [NSFileManager defaultManager];
+    if (![fileManager fileExistsAtPath:cachePath]) {
+        [fileManager createDirectoryAtPath:cachePath
+               withIntermediateDirectories:YES
+                                attributes:nil
+                                     error:nil];
+    }
+    return cachePathStr;
+}
+} // namespace electrobun
+
 CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partitionIdentifier,
                                                                uint32_t webviewId) {
-  NSLog(@"DEBUG CEF: CreateRequestContextForPartition called for webview %u, partition: %s", webviewId, partitionIdentifier ? partitionIdentifier : "null");
-  CefRequestContextSettings settings;
-  if (!partitionIdentifier || !partitionIdentifier[0]) {
-    settings.persist_session_cookies = false;
-  } else {
-    std::string identifier(partitionIdentifier);
-    bool isPersistent = identifier.substr(0, 8) == "persist:";
-
-    if (isPersistent) {
-      std::string partitionName = identifier.substr(8);
-      NSString* appSupportPath = [NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES) firstObject];
-
-      // Build path with identifier/channel structure to match root_cache_path logic
-      std::string cachePathStr = buildPartitionPath(
-          [appSupportPath UTF8String],
-          g_electrobunIdentifier,
-          g_electrobunChannel,
-          "CEF",
-          partitionName
-      );
-      NSString* cachePath = [NSString stringWithUTF8String:cachePathStr.c_str()];
-      NSFileManager *fileManager = [NSFileManager defaultManager];
-      if (![fileManager fileExistsAtPath:cachePath]) {
-        [fileManager createDirectoryAtPath:cachePath withIntermediateDirectories:YES attributes:nil error:nil];
-      }
-      settings.persist_session_cookies = true;
-      CefString(&settings.cache_path).FromString([cachePath UTF8String]);
-    } else {
-      settings.persist_session_cookies = false;
-    }
-  }
-
-  CefRefPtr<CefRequestContext> context = CefRequestContext::CreateContext(settings, nullptr);
-
-  // Register scheme handler factory for this request context
-  // Note: Each CefRequestContext needs its own registration - it's not global
-  static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory = new ElectrobunSchemeHandlerFactory();
-  bool registered = context->RegisterSchemeHandlerFactory("views", "", schemeFactory);
-  NSLog(@"DEBUG CEF: Registered scheme handler factory for partition '%s' - success: %s",
-        partitionIdentifier ? partitionIdentifier : "(default)", registered ? "yes" : "no");
-
-  return context;
+    static CefRefPtr<ElectrobunSchemeHandlerFactory> schemeFactory =
+        new ElectrobunSchemeHandlerFactory();
+    return electrobun::getOrCreateRequestContextForPartition(
+        partitionIdentifier, webviewId, schemeFactory);
 }
 
 // ----------------------- CEFWebViewImpl -----------------------
@@ -5852,11 +6617,18 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             viewsRoot:(const char *)viewsRoot
             transparent:(bool)transparent
             sandbox:(bool)sandbox
+            allowViewsProtocol:(bool)allowViewsProtocol
+            allowAppDataProtocol:(bool)allowAppDataProtocol
     {
         self = [super init];
         if (self) {
             self.webviewId = webviewId;
             self.isSandboxed = sandbox;
+            {
+                std::lock_guard<std::mutex> lock(webviewAllowedProtocolsMutex);
+                webviewAllowedProtocols[webviewId] = {allowViewsProtocol, allowAppDataProtocol};
+            }
+            BOOL windowWasVisible = [window isVisible];
 
             if (autoResize) {
                 self.fullSize = YES;
@@ -5865,7 +6637,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             }
 
             void (^createCEFBrowser)(void) = ^{
-                [window makeKeyAndOrderFront:nil];
+                if (windowWasVisible) {
+                    [window makeKeyAndOrderFront:nil];
+                }
                 CefBrowserSettings browserSettings;
 
                 // Set transparent background if requested
@@ -5995,8 +6769,21 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     [self setPassthrough:YES];
                 }
 
-                if (url && url[0] != '\0') {
-                    self.browser->GetMainFrame()->LoadURL(CefString(url));
+                if (self.browser) {
+                    if (self.pendingHTMLString.length > 0) {
+                        NSString *htmlString = self.pendingHTMLString;
+                        self.pendingHTMLString = nil;
+                        [self loadHTML:[htmlString UTF8String]];
+                    } else if (self.pendingURLString.length > 0) {
+                        NSString *pendingUrl = self.pendingURLString;
+                        self.pendingURLString = nil;
+                        [self loadURL:[pendingUrl UTF8String]];
+                    } else if (url && url[0] != '\0') {
+                        self.browser->GetMainFrame()->LoadURL(CefString(url));
+                    }
+                } else if (!self.browser) {
+                    NSLog(@"ERROR CEF: CreateBrowserSync returned null for webview %u (partition: %s) — initial URL not loaded",
+                          webviewId, partitionIdentifier ? partitionIdentifier : "(default)");
                 }
             };
             
@@ -6020,7 +6807,9 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
                     }
                 }];
             }
-            [window makeKeyAndOrderFront:nil];
+            if (windowWasVisible) {
+                [window makeKeyAndOrderFront:nil];
+            }
 
             // Force trigger window update to ensure CEF browser is created immediately
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -6052,18 +6841,38 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         return self;
     }
 
+    - (void)resizeWithFrame:(NSRect)frame parsedMasks:(NSArray *)parsedMasks {
+        [super resizeWithFrame:frame parsedMasks:parsedMasks];
+
+        // CEFOSRView::setFrameSize handles windowless rendering separately.
+        if (!self.isOSRMode && self.browser) {
+            CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
+            if (host) {
+                host->WasResized();
+            }
+        }
+    }
+
 
     - (void)loadURL:(const char *)urlString {
-        if (!self.browser)
+        if (!self.browser) {
+            self.pendingHTMLString = nil;
+            self.pendingURLString = urlString ? [NSString stringWithUTF8String:urlString] : @"";
+            NSLog(@"DEBUG CEF: Browser not ready for webview %u, queueing URL load: %s", self.webviewId, urlString ?: "");
             return;
+        }
 
         CefString cefUrl = urlString ? urlString : "";
         self.browser->GetMainFrame()->LoadURL(cefUrl);
     }
 
     - (void)loadHTML:(const char *)htmlString {
-        if (!self.browser)
+        if (!self.browser) {
+            self.pendingURLString = nil;
+            self.pendingHTMLString = htmlString ? [NSString stringWithUTF8String:htmlString] : @"";
+            NSLog(@"DEBUG CEF: Browser not ready for webview %u, queueing HTML load", self.webviewId);
             return;
+        }
 
         NSLog(@"DEBUG CEF: Loading HTML content directly: %.50s...", htmlString);
         // Store HTML content in the global map for the scheme handler
@@ -6089,6 +6898,8 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
     - (void)remove {
         
+        removeBrowserMappingsForWebview(self.webviewId);
+
         // Stop loading, close the browser, remove from superview, etc.
         if (self.browser) {
             NSLog(@"CEFWebViewImpl remove: closing CEF browser for webview %u", self.webviewId);
@@ -6212,18 +7023,32 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
         if (!host) return;
 
         if (!searchText || strlen(searchText) == 0) {
-            // Stop find and clear highlights
             host->StopFinding(true);
+            self.lastFindSearchText = nil;
+            self.lastFindMatchCase = NO;
+            self.hasActiveFindSession = NO;
             return;
         }
 
-        // CEF Find flags
-        bool findNext = false; // Will be set based on direction changes
+        NSString *searchTextString = [NSString stringWithUTF8String:searchText];
+        BOOL sameSearch =
+            self.hasActiveFindSession &&
+            self.lastFindSearchText != nil &&
+            [self.lastFindSearchText isEqualToString:searchTextString] &&
+            self.lastFindMatchCase == matchCase;
+
+        if (!sameSearch) {
+            host->StopFinding(true);
+        }
+
+        bool findNext = sameSearch ? true : false;
         bool forwardDirection = forward ? true : false;
         bool caseSensitive = matchCase ? true : false;
 
-        // Use CEF's native find functionality
         host->Find(CefString(searchText), forwardDirection, caseSensitive, findNext);
+        self.lastFindSearchText = searchTextString;
+        self.lastFindMatchCase = matchCase;
+        self.hasActiveFindSession = YES;
     }
 
     - (void)stopFindInPage {
@@ -6231,8 +7056,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
         CefRefPtr<CefBrowserHost> host = self.browser->GetHost();
         if (host) {
-            host->StopFinding(true); // true = clear selection
+            host->StopFinding(true);
         }
+        self.lastFindSearchText = nil;
+        self.lastFindMatchCase = NO;
+        self.hasActiveFindSession = NO;
     }
 
     - (void)openDevTools {
@@ -6284,11 +7112,13 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
     // Handle URLs opened via custom URL schemes (deep linking)
     - (void)application:(NSApplication *)application openURLs:(NSArray<NSURL *> *)urls {
+        std::lock_guard<std::mutex> lock(g_urlOpenMutex);
         for (NSURL *url in urls) {
             if (g_urlOpenHandler) {
                 g_urlOpenHandler([[url absoluteString] UTF8String]);
             } else {
-                NSLog(@"[URL Handler] Received URL but no handler registered: %@", url);
+                // Buffer the URL — the Bun Worker hasn't registered its handler yet.
+                g_pendingUrlOpenPaths.push_back(std::string([[url absoluteString] UTF8String]));
             }
         }
     }
@@ -6308,7 +7138,11 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
 
 @implementation WindowDelegate
     - (BOOL)windowShouldClose:(NSWindow *)sender {
-    return YES;
+        if (self.shouldCloseHandler) {
+            self.shouldCloseHandler(self.windowId);
+            return NO;
+        }
+        return YES;
     }
     - (void)windowWillClose:(NSNotification *)notification {
         NSWindow *window = [notification object];
@@ -6316,7 +7150,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             self.closeHandler(self.windowId);
         }
     }
-   - (void)windowDidResize:(NSNotification *)notification {
+    - (void)windowDidResize:(NSNotification *)notification {
         NSWindow *window = [notification object];
         NSRect windowFrame = [window frame];
         ContainerView *containerView = [window contentView];
@@ -6337,6 +7171,31 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
             NSRect contentRect = [window contentRectForFrameRect:windowFrame];
             self.resizeHandler(self.windowId, windowFrame.origin.x, windowFrame.origin.y,
                                contentRect.size.width, contentRect.size.height);
+        }
+
+        if (self.hasCustomButtonPosition) {
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+        } else {
+            applyTrafficLightOffsetFromDefault(window);
+        }
+    }
+    - (void)windowWillExitFullScreen:(NSNotification *)notification {
+        if (self.hasCustomButtonPosition) {
+            NSWindow *window = [notification object];
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:YES];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:YES];
+        }
+    }
+    - (void)windowDidExitFullScreen:(NSNotification *)notification {
+        NSWindow *window = [notification object];
+        if (self.hasCustomButtonPosition) {
+            applyWindowButtonPosition(window, self.buttonPositionX, self.buttonPositionY);
+            [[window standardWindowButton:NSWindowCloseButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowMiniaturizeButton] setHidden:NO];
+            [[window standardWindowButton:NSWindowZoomButton] setHidden:NO];
+        } else {
+            applyTrafficLightOffsetFromDefault(window);
         }
     }
     - (void)windowDidMove:(NSNotification *)notification {
@@ -6377,7 +7236,7 @@ CefRefPtr<CefRequestContext> CreateRequestContextForPartition(const char* partit
  * =============================================================================
  */
 
-// Note: This is executed from the main bun thread
+// Note: This is executed from the main runtime thread.
 // Note: `name` parameter is accepted for API consistency with Windows but not used on macOS
 // Forward declaration - stopEventLoop is defined after startEventLoop
 extern "C" void stopEventLoop();
@@ -6543,9 +7402,19 @@ static struct {
     bool startPassthrough;
 } g_nextWebviewFlags = {false, false};
 
+static struct {
+    bool views;
+    bool appData;
+} g_nextWebviewAllowedProtocols = {true, false};
+
 extern "C" void setNextWebviewFlags(bool startTransparent, bool startPassthrough) {
     g_nextWebviewFlags.startTransparent = startTransparent;
     g_nextWebviewFlags.startPassthrough = startPassthrough;
+}
+
+extern "C" void setNextWebviewAllowedProtocols(bool allowViews, bool allowAppData) {
+    g_nextWebviewAllowedProtocols.views = allowViews;
+    g_nextWebviewAllowedProtocols.appData = allowAppData;
 }
 
 extern "C" AbstractView* initWebview(uint32_t webviewId,
@@ -6571,6 +7440,9 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
     bool startTransparent = g_nextWebviewFlags.startTransparent;
     bool startPassthrough = g_nextWebviewFlags.startPassthrough;
     g_nextWebviewFlags = {false, false};
+    bool allowViewsProtocol = g_nextWebviewAllowedProtocols.views;
+    bool allowAppDataProtocol = g_nextWebviewAllowedProtocols.appData;
+    g_nextWebviewAllowedProtocols = {true, false};
 
     // Validate frame values - use defaults if NaN or invalid
     if (isnan(x) || isinf(x)) {
@@ -6594,31 +7466,34 @@ extern "C" AbstractView* initWebview(uint32_t webviewId,
 
     __block AbstractView *impl = nil;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    impl = (__bridge AbstractView *)runOnMainThreadSyncPtr(^{
         Class ImplClass = (strcmp(renderer, "cef") == 0 && useCEF) ? [CEFWebViewImpl class] : [WKWebViewImpl class];
 
-        impl = [[ImplClass alloc] initWithWebviewId:webviewId
-                                        window:window
-                                        url:strdup(url)
-                                        frame:frame
-                                        autoResize:autoResize
-                                        partitionIdentifier:strdup(partitionIdentifier)
-                                        navigationCallback:navigationCallback
-                                        webviewEventHandler:webviewEventHandler
-                                        eventBridgeHandler:eventBridgeHandler
-                                        bunBridgeHandler:bunBridgeHandler
-                                        internalBridgeHandler:internalBridgeHandler
-                                        electrobunPreloadScript:strdup(electrobunPreloadScript)
-                                        customPreloadScript:strdup(customPreloadScript)
-                                        viewsRoot:strdup(viewsRoot)
-                                        transparent:transparent
-                                        sandbox:sandbox];
+        AbstractView *created = [[ImplClass alloc] initWithWebviewId:webviewId
+                                                              window:window
+                                                                 url:strdup(url)
+                                                               frame:frame
+                                                          autoResize:autoResize
+                                                 partitionIdentifier:strdup(partitionIdentifier)
+                                                navigationCallback:navigationCallback
+                                                webviewEventHandler:webviewEventHandler
+                                                  eventBridgeHandler:eventBridgeHandler
+                                                    bunBridgeHandler:bunBridgeHandler
+                                               internalBridgeHandler:internalBridgeHandler
+                                            electrobunPreloadScript:strdup(electrobunPreloadScript)
+                                               customPreloadScript:strdup(customPreloadScript)
+                                                           viewsRoot:strdup(viewsRoot)
+                                                        transparent:transparent
+                                                            sandbox:sandbox
+                                                 allowViewsProtocol:allowViewsProtocol
+                                               allowAppDataProtocol:allowAppDataProtocol];
 
         // Store initial state flags — applied later in each impl's deferred creation block
         // (nsView is nil at this point because view creation is async)
-        impl.pendingStartTransparent = startTransparent;
-        impl.pendingStartPassthrough = startPassthrough;
+        created.pendingStartTransparent = startTransparent;
+        created.pendingStartPassthrough = startPassthrough;
 
+        return (__bridge void *)created;
     });
 
     return impl;
@@ -6642,13 +7517,14 @@ extern "C" AbstractView* initWGPUView(uint32_t webviewId,
 
     __block AbstractView *impl = nil;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        impl = [[WGPUViewImpl alloc] initWithWebviewId:webviewId
-                                                window:window
-                                                 frame:frame
-                                            autoResize:autoResize];
-        impl.pendingStartTransparent = startTransparent;
-        impl.pendingStartPassthrough = startPassthrough;
+    impl = (__bridge AbstractView *)runOnMainThreadSyncPtr(^{
+        AbstractView *created = [[WGPUViewImpl alloc] initWithWebviewId:webviewId
+                                                                 window:window
+                                                                  frame:frame
+                                                             autoResize:autoResize];
+        created.pendingStartTransparent = startTransparent;
+        created.pendingStartPassthrough = startPassthrough;
+        return (__bridge void *)created;
     });
 
     return impl;
@@ -6714,7 +7590,7 @@ extern "C" void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView goBack];
     });
 }
@@ -6732,28 +7608,43 @@ extern "C" void wgpuViewSetFrame(AbstractView *abstractView, double x, double y,
 
 extern "C" void wgpuViewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
     if (!abstractView) return;
-    [abstractView setTransparent:transparent];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setTransparent:transparent];
+    });
 }
 
-extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
+extern "C" void wgpuViewSetAlphaBlending(AbstractView *abstractView, BOOL enabled) {
     if (!abstractView) return;
-    [abstractView setPassthrough:enablePassthrough];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setAlphaBlending:enabled];
+    });
+}
+
+extern "C" void wgpuViewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+    if (!abstractView) return;
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setPassthrough:enablePassthrough];
+    });
 }
 
 extern "C" void wgpuViewSetHidden(AbstractView *abstractView, BOOL hidden) {
     if (!abstractView) return;
-    [abstractView setHidden:hidden];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setHidden:hidden];
+    });
 }
 
 extern "C" void wgpuViewRemove(AbstractView *abstractView) {
     if (!abstractView) return;
-    [abstractView remove];
+    runOnMainThreadAsyncVoid(^{
+        [abstractView remove];
+    });
 }
 
 extern "C" void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
     if (!abstractView) return nullptr;
     __block void* result = nullptr;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (!abstractView.nsView) return;
         CALayer *layer = abstractView.nsView.layer;
         if ([layer isKindOfClass:[CAMetalLayer class]]) {
@@ -6775,7 +7666,7 @@ extern "C" void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView goForward];
     });
 }
@@ -6792,7 +7683,7 @@ extern "C" void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView reload];
     });
 }
@@ -6924,61 +7815,75 @@ extern "C" const char* getBodyFromScriptMessage(WKScriptMessage *message) {
 }
 
 extern "C" void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {    
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setTransparent:transparent];    
     });
 }
 
 extern "C" void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {    
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setPassthrough:enablePassthrough];    
     });
 }
 
 extern "C" void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView setHidden:hidden];
     });
 }
 
+extern "C" bool webviewSetSpellCheck(AbstractView *abstractView, bool enabled) {
+    if (!abstractView) {
+        return false;
+    }
+    return runOnMainThreadSyncBool(^bool {
+        return [abstractView setSpellCheck:enabled ? YES : NO] == YES;
+    });
+}
+
 extern "C" void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView setNavigationRulesFromJSON:rulesJson];
+    char *rulesJsonCopy = rulesJson ? strdup(rulesJson) : nullptr;
+    runOnMainThreadAsyncVoid(^{
+        [abstractView setNavigationRulesFromJSON:rulesJsonCopy];
+        if (rulesJsonCopy) {
+            free(rulesJsonCopy);
+        }
     });
 }
 
 extern "C" void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [abstractView findInPage:searchText forward:forward matchCase:matchCase];
+    NSString *searchTextCopy = searchText ? [NSString stringWithUTF8String:searchText] : nil;
+    runOnMainThreadAsyncVoid(^{
+        [abstractView findInPage:searchTextCopy ? searchTextCopy.UTF8String : "" forward:forward matchCase:matchCase];
     });
 }
 
 extern "C" void webviewStopFind(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView stopFindInPage];
     });
 }
 
 extern "C" void webviewOpenDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView openDevTools];
     });
 }
 
 extern "C" void webviewCloseDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView closeDevTools];
     });
 }
 
 extern "C" void webviewToggleDevTools(AbstractView *abstractView) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         [abstractView toggleDevTools];
     });
 }
 
 extern "C" void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
             WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
             if (wkImpl.webView) {
@@ -6995,13 +7900,9 @@ extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
     if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
         WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
         if (wkImpl.webView) {
-            if ([NSThread isMainThread]) {
+            runOnMainThreadSyncVoid(^{
                 zoomLevel = wkImpl.webView.pageZoom;
-            } else {
-                dispatch_sync(dispatch_get_main_queue(), ^{
-                    zoomLevel = wkImpl.webView.pageZoom;
-                });
-            }
+            });
         }
     }
     return zoomLevel;
@@ -7028,7 +7929,8 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                      WindowResizeHandler zigResizeHandler,
                                                      WindowFocusHandler zigFocusHandler,
                                                      WindowBlurHandler zigBlurHandler,
-                                                     WindowKeyHandler zigKeyHandler) {
+                                                     WindowKeyHandler zigKeyHandler,
+                                                     WindowShouldCloseHandler zigShouldCloseHandler) {
     
     NSScreen *primaryScreen = [NSScreen screens][0];
     NSRect screenFrame = [primaryScreen frame];
@@ -7041,12 +7943,19 @@ NSWindow *createNSWindowWithFrameAndStyle(uint32_t windowId,
                                                              screen:primaryScreen];
     
     [window setFrameTopLeftPoint:config.frame.origin];
+    // Allow hidden titlebar windows to participate in native fullscreen.
+    [window setCollectionBehavior:
+        [window collectionBehavior] | NSWindowCollectionBehaviorFullScreenPrimary];
     if (strcmp(config.titleBarStyle, "hiddenInset") == 0) {
         window.titlebarAppearsTransparent = YES;
         window.titleVisibility = NSWindowTitleHidden;
     }
+    objc_setAssociatedObject(window, kTrafficLightTitleBarStyleKey, [NSString stringWithUTF8String:config.titleBarStyle ?: "default"], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetXKey, @(config.trafficLightOffsetX), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(window, kTrafficLightOffsetYKey, @(config.trafficLightOffsetY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     WindowDelegate *delegate = [[WindowDelegate alloc] init];
     delegate.closeHandler = zigCloseHandler;
+    delegate.shouldCloseHandler = zigShouldCloseHandler;
     delegate.resizeHandler = zigResizeHandler;
     delegate.moveHandler = zigMoveHandler;
     delegate.focusHandler = zigFocusHandler;
@@ -7080,12 +7989,15 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
   uint32_t styleMask,
   const char* titleBarStyle,
   bool transparent,
+  double trafficLightOffsetX,
+  double trafficLightOffsetY,
   WindowCloseHandler zigCloseHandler,
   WindowMoveHandler zigMoveHandler,
   WindowResizeHandler zigResizeHandler,
   WindowFocusHandler zigFocusHandler,
   WindowBlurHandler zigBlurHandler,
-  WindowKeyHandler zigKeyHandler
+  WindowKeyHandler zigKeyHandler,
+  WindowShouldCloseHandler zigShouldCloseHandler
   ) {
 
     // Validate frame values - use defaults if NaN or invalid
@@ -7100,12 +8012,14 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     createNSWindowWithFrameAndStyleParams config = {
         .frame = frame,
         .styleMask = styleMask,
-        .titleBarStyle = titleBarStyle
+        .titleBarStyle = titleBarStyle,
+        .trafficLightOffsetX = trafficLightOffsetX,
+        .trafficLightOffsetY = trafficLightOffsetY
     };
 
     // Use a dispatch semaphore to wait for the window creation to complete
     __block NSWindow* window = nil;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         window = createNSWindowWithFrameAndStyle(
             windowId,
             config,
@@ -7114,7 +8028,8 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
             zigResizeHandler,
             zigFocusHandler,
             zigBlurHandler,
-            zigKeyHandler
+            zigKeyHandler,
+            zigShouldCloseHandler
         );
 
         // Handle transparent window background
@@ -7141,55 +8056,90 @@ extern "C" NSWindow *createWindowWithFrameAndStyleFromWorker(
     return window;
 }
 
-extern "C" void showWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        // First ensure the window is visible
-        [window orderFront:nil];
-        
-        // Make the window key and bring to front
+extern "C" void showWindow(NSWindow *window, bool activate) {
+    runOnMainThreadSyncVoid(^{
+        if (activate) {
+            [window orderFront:nil];
+            [window makeKeyAndOrderFront:nil];
+            [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
+        } else {
+            [window orderFrontRegardless];
+        }
+
+        runOnMainThreadAsyncVoid(^{
+            WindowDelegate *delegate = (WindowDelegate *)[window delegate];
+            if (delegate && delegate.hasCustomButtonPosition) {
+                applyWindowButtonPosition(window, delegate.buttonPositionX, delegate.buttonPositionY);
+            } else {
+                applyTrafficLightOffset(window);
+            }
+        });
+    });
+}
+
+extern "C" void activateWindow(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        if (![window isVisible]) {
+            return;
+        }
+
         [window makeKeyAndOrderFront:nil];
-        
-        // Activate the application to ensure it can receive focus
-        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];    
+        [[NSApplication sharedApplication] activateIgnoringOtherApps:YES];
+    });
+}
+
+extern "C" void hideWindow(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        [window orderOut:nil];
+    });
+}
+
+extern "C" bool isWindowVisible(NSWindow *window) {
+    return runOnMainThreadSyncBool(^{
+        return [window isVisible] ? true : false;
     });
 }
 
 extern "C" void setWindowTitle(NSWindow *window, const char *title) {
     NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window setTitle:titleString];
     });
 }
 
 extern "C" void closeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window close];
     });
 }
 
+extern "C" void requestWindowClose(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        [window performClose:nil];
+    });
+}
+
 extern "C" void minimizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window miniaturize:nil];
     });
 }
 
 extern "C" void restoreWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         [window deminiaturize:nil];
     });
 }
 
 extern "C" bool isWindowMinimized(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window isMiniaturized];
+    return runOnMainThreadSyncBool(^{
+        return [window isMiniaturized] ? true : false;
     });
-    return result;
 }
 
 extern "C" void maximizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         // Only zoom if not already zoomed
         if (![window isZoomed]) {
             [window zoom:nil];
@@ -7198,7 +8148,7 @@ extern "C" void maximizeWindow(NSWindow *window) {
 }
 
 extern "C" void unmaximizeWindow(NSWindow *window) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         // Only unzoom if currently zoomed
         if ([window isZoomed]) {
             [window zoom:nil];
@@ -7207,15 +8157,13 @@ extern "C" void unmaximizeWindow(NSWindow *window) {
 }
 
 extern "C" bool isWindowMaximized(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window isZoomed];
+    return runOnMainThreadSyncBool(^{
+        return [window isZoomed] ? true : false;
     });
-    return result;
 }
 
 extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         bool isCurrentlyFullScreen = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
         if (fullScreen != isCurrentlyFullScreen) {
             [window toggleFullScreen:nil];
@@ -7224,15 +8172,13 @@ extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
 }
 
 extern "C" bool isWindowFullScreen(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
+    return runOnMainThreadSyncBool(^{
+        return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
     });
-    return result;
 }
 
 extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (alwaysOnTop) {
             [window setLevel:NSFloatingWindowLevel];
         } else {
@@ -7242,15 +8188,13 @@ extern "C" void setWindowAlwaysOnTop(NSWindow *window, bool alwaysOnTop) {
 }
 
 extern "C" bool isWindowAlwaysOnTop(NSWindow *window) {
-    __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
-        result = [window level] >= NSFloatingWindowLevel;
+    return runOnMainThreadSyncBool(^{
+        return [window level] >= NSFloatingWindowLevel;
     });
-    return result;
 }
 
 extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         // macOS uses bottom-left origin, so we need to convert from top-left
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7262,8 +8206,63 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
     });
 }
 
+extern "C" void centerWindow(NSWindow *window) {
+    runOnMainThreadSyncVoid(^{
+        if (!window) return;
+
+        const CGDirectDisplayID primaryDisplayId = CGMainDisplayID();
+        NSScreen *primaryScreen = nil;
+        for (NSScreen *screen in [NSScreen screens]) {
+            NSNumber *screenNumber = [screen deviceDescription][@"NSScreenNumber"];
+            if (screenNumber && screenNumber.unsignedIntValue == primaryDisplayId) {
+                primaryScreen = screen;
+                break;
+            }
+        }
+        primaryScreen = primaryScreen ?: [NSScreen mainScreen];
+        if (!primaryScreen) return;
+
+        const NSRect workArea = primaryScreen.visibleFrame;
+        NSRect frame = window.frame;
+        frame.origin.x = NSMinX(workArea) + (NSWidth(workArea) - NSWidth(frame)) / 2.0;
+        frame.origin.y = NSMinY(workArea) + (NSHeight(workArea) - NSHeight(frame)) / 2.0;
+        [window setFrameOrigin:frame.origin];
+    });
+}
+
+extern "C" void setWindowButtonPosition(NSWindow *window, double x, double y) {
+    runOnMainThreadAsyncVoid(^{
+        if (!window) return;
+
+        WindowDelegate *delegate = (WindowDelegate *)[window delegate];
+        if (delegate) {
+            delegate.hasCustomButtonPosition = YES;
+            delegate.buttonPositionX = x;
+            delegate.buttonPositionY = y;
+        }
+
+        applyWindowButtonPosition(window, x, y);
+    });
+}
+
+extern "C" void getWindowButtonPosition(NSWindow *window, double *x, double *y) {
+    if (x) *x = 0;
+    if (y) *y = 0;
+
+    runOnMainThreadSyncVoid(^{
+        if (!window) return;
+
+        NSButton *closeButton = [window standardWindowButton:NSWindowCloseButton];
+        NSView *titlebarView = closeButton.superview;
+        if (!closeButton || !titlebarView) return;
+
+        if (x) *x = NSMinX(closeButton.frame);
+        if (y) *y = NSHeight(titlebarView.bounds) - NSMaxY(closeButton.frame);
+    });
+}
+
 extern "C" void setWindowSize(NSWindow *window, double width, double height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         NSRect frame = window.frame;
         // Keep the top-left corner fixed when resizing
@@ -7277,7 +8276,7 @@ extern "C" void setWindowSize(NSWindow *window, double width, double height) {
 }
 
 extern "C" void setWindowFrame(NSWindow *window, double x, double y, double width, double height) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (!window) return;
         // macOS uses bottom-left origin, convert from top-left
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7291,7 +8290,7 @@ extern "C" void setWindowFrame(NSWindow *window, double x, double y, double widt
 extern "C" void getWindowFrame(NSWindow *window, double *outX, double *outY, double *outWidth, double *outHeight) {
     __block NSRect frame = NSZeroRect;
     __block CGFloat screenHeight = 0;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         if (!window) return;
         frame = window.frame;
         NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
@@ -7539,22 +8538,16 @@ extern "C" const char *openFileDialog(const char *startingFolder,
                                       BOOL canChooseFiles,
                                       BOOL canChooseDirectories,
                                       BOOL allowsMultipleSelection) {
-
-
-    __block NSOpenPanel *panel;
-    __block NSInteger result = NSModalResponseCancel;
-    __block NSString *concatenatedPaths = nil;
-    
-    dispatch_sync(dispatch_get_main_queue(), ^{        
-        panel = [NSOpenPanel openPanel];        
-        [panel setCanChooseFiles:canChooseFiles];        
-        [panel setCanChooseDirectories:canChooseDirectories];        
-        [panel setAllowsMultipleSelection:allowsMultipleSelection];        
+    return (const char *)runOnMainThreadSyncPtr(^{
+        NSOpenPanel *panel = [NSOpenPanel openPanel];
+        [panel setCanChooseFiles:canChooseFiles];
+        [panel setCanChooseDirectories:canChooseDirectories];
+        [panel setAllowsMultipleSelection:allowsMultipleSelection];
 
         NSString *startFolder = [NSString stringWithUTF8String:startingFolder ?: ""];
-        [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];        
-        
-        if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {            
+        [panel setDirectoryURL:[NSURL fileURLWithPath:startFolder]];
+
+        if (allowedFileTypes && strcmp(allowedFileTypes, "*") != 0 && strcmp(allowedFileTypes, "") != 0) {
             NSString *allowedTypesStr = [NSString stringWithUTF8String:allowedFileTypes];
             NSArray *fileTypesArray = [allowedTypesStr componentsSeparatedByString:@","];
             #pragma clang diagnostic push
@@ -7562,21 +8555,24 @@ extern "C" const char *openFileDialog(const char *startingFolder,
             [panel setAllowedFileTypes:fileTypesArray];
             #pragma clang diagnostic pop
         }
-                
-        result = [panel runModal]; // Run the modal dialog on the main thread        
-        
-        if (result == NSModalResponseOK) {            
-            NSArray<NSURL *> *selectedFileURLs = [panel URLs];
-            NSMutableArray<NSString *> *pathStrings = [NSMutableArray array];
-            for (NSURL *u in selectedFileURLs) {
-                [pathStrings addObject:u.path];
+
+        NSModalResponse response = [panel runModal];
+        if (response != NSModalResponseOK) {
+            return (void *)strdup("[]");
+        }
+
+        NSArray<NSURL *> *selectedFileURLs = [panel URLs];
+        std::vector<std::string> pathStrings;
+        pathStrings.reserve(selectedFileURLs.count);
+        for (NSURL *u in selectedFileURLs) {
+            const char *path = u.path.UTF8String;
+            if (path) {
+                pathStrings.emplace_back(path);
             }
-            concatenatedPaths = [pathStrings componentsJoinedByString:@","];
-        }        
+        }
+        const std::string payload = serializeDialogPaths(pathStrings);
+        return (void *)strdup(payload.c_str());
     });
-    
-    // Return the result after the dispatch_sync completes
-    return (concatenatedPaths) ? strdup([concatenatedPaths UTF8String]) : NULL;
 }
 
 // showMessageBox - Display a native message box dialog with custom buttons
@@ -7590,9 +8586,7 @@ extern "C" int showMessageBox(const char *type,
                               const char *buttons,
                               int defaultId,
                               int cancelId) {
-    __block int result = -1;
-
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    return (int)(intptr_t)runOnMainThreadSyncPtr(^{
         NSAlert *alert = [[NSAlert alloc] init];
 
         // Set the message and informative text
@@ -7636,10 +8630,8 @@ extern "C" int showMessageBox(const char *type,
 
         // Convert NSModalResponse to button index (0-based)
         // NSAlertFirstButtonReturn = 1000, NSAlertSecondButtonReturn = 1001, etc.
-        result = (int)(response - NSAlertFirstButtonReturn);
+        return (void *)(intptr_t)(response - NSAlertFirstButtonReturn);
     });
-
-    return result;
 }
 
 // ============================================================================
@@ -7651,7 +8643,7 @@ extern "C" int showMessageBox(const char *type,
 extern "C" const char* clipboardReadText() {
     __block const char* result = NULL;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         NSString *text = [pasteboard stringForType:NSPasteboardTypeString];
         if (text) {
@@ -7666,7 +8658,7 @@ extern "C" const char* clipboardReadText() {
 extern "C" void clipboardWriteText(const char *text) {
     if (!text) return;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
         [pasteboard setString:[NSString stringWithUTF8String:text] forType:NSPasteboardTypeString];
@@ -7679,7 +8671,7 @@ extern "C" const uint8_t* clipboardReadImage(size_t *outSize) {
     __block const uint8_t* result = NULL;
     __block size_t size = 0;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
 
         // Try to read image data (supports PNG, TIFF, etc.)
@@ -7721,7 +8713,7 @@ extern "C" const uint8_t* clipboardReadImage(size_t *outSize) {
 extern "C" void clipboardWriteImage(const uint8_t *pngData, size_t size) {
     if (!pngData || size == 0) return;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
 
@@ -7732,7 +8724,7 @@ extern "C" void clipboardWriteImage(const uint8_t *pngData, size_t size) {
 
 // clipboardClear - Clear the clipboard
 extern "C" void clipboardClear() {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         [pasteboard clearContents];
     });
@@ -7743,7 +8735,7 @@ extern "C" void clipboardClear() {
 extern "C" const char* clipboardAvailableFormats() {
     __block const char* result = NULL;
 
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSPasteboard *pasteboard = [NSPasteboard generalPasteboard];
         NSMutableArray *formats = [NSMutableArray array];
 
@@ -7779,9 +8771,19 @@ extern "C" const char* clipboardAvailableFormats() {
 // URL Scheme / Deep Linking API
 // ============================================================================
 
-// setURLOpenHandler - Set the callback for handling URLs opened via custom URL schemes
+// setURLOpenHandler - Set the callback for handling URLs opened via custom URL schemes.
+// Flushes any URLs that arrived before the handler was registered (cold-launch).
 extern "C" void setURLOpenHandler(URLOpenHandler handler) {
-    g_urlOpenHandler = handler;
+    std::vector<std::string> pending;
+    {
+        std::lock_guard<std::mutex> lock(g_urlOpenMutex);
+        g_urlOpenHandler = handler;
+        pending = std::move(g_pendingUrlOpenPaths);
+    }
+    // Deliver outside the lock to avoid holding it during the FFI call into Bun
+    for (const auto& url : pending) {
+        handler(url.c_str());
+    }
 }
 
 extern "C" void setAppReopenHandler(AppReopenHandler handler) {
@@ -7789,7 +8791,7 @@ extern "C" void setAppReopenHandler(AppReopenHandler handler) {
 }
 
 extern "C" void setDockIconVisible(bool visible) {
-    void (^applyVisibility)(void) = ^{
+    runOnMainThreadAsyncVoid(^{
         NSApplication *app = [NSApplication sharedApplication];
         if (visible) {
             [app setActivationPolicy:NSApplicationActivationPolicyRegular];
@@ -7797,28 +8799,16 @@ extern "C" void setDockIconVisible(bool visible) {
         } else {
             [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         }
-    };
-
-    if ([NSThread isMainThread]) {
-        applyVisibility();
-    } else {
-        dispatch_async(dispatch_get_main_queue(), applyVisibility);
-    }
+    });
 }
 
 extern "C" bool isDockIconVisible() {
     __block bool isVisible = true;
 
-    void (^readVisibility)(void) = ^{
+    runOnMainThreadSyncVoid(^{
         NSApplication *app = [NSApplication sharedApplication];
         isVisible = [app activationPolicy] == NSApplicationActivationPolicyRegular;
-    };
-
-    if ([NSThread isMainThread]) {
-        readVisibility();
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), readVisibility);
-    }
+    });
 
     return isVisible;
 }
@@ -7828,7 +8818,7 @@ extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const ch
     
     __block NSStatusItem* trayPtr;
     
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSString *pathToImageString = [NSString stringWithUTF8String:pathToImage ?: ""];    
         NSString *titleString = [NSString stringWithUTF8String:title ?: ""];    
         NSStatusItem *statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
@@ -7864,14 +8854,19 @@ extern "C" NSStatusItem* createTray(uint32_t trayId, const char *title, const ch
 
 extern "C" void setTrayTitle(NSStatusItem *statusItem, const char *title) {
     if (statusItem) {
-        statusItem.button.title = [NSString stringWithUTF8String:title ?: ""];
+        NSString *titleString = [NSString stringWithUTF8String:title ?: ""];
+        runOnMainThreadAsyncVoid(^{
+            statusItem.button.title = titleString;
+        });
     }
 }
 
 extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
     if (statusItem) {
         NSString *imgPath = [NSString stringWithUTF8String:image ?: ""];
-        statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:imgPath];
+        runOnMainThreadAsyncVoid(^{
+            statusItem.button.image = [[NSImage alloc] initWithContentsOfFile:imgPath];
+        });
     }
 }
 
@@ -7879,7 +8874,7 @@ extern "C" void setTrayImage(NSStatusItem *statusItem, const char *image) {
 extern "C" void setTrayMenuFromJSON(NSStatusItem *statusItem, const char *jsonString) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         if (statusItem) {
             StatusItemTarget *target = objc_getAssociatedObject(statusItem.button, "statusItemTarget");
             NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
@@ -7906,7 +8901,7 @@ extern "C" void setTrayMenu(NSStatusItem *statusItem, const char *menuConfig) {
 
 extern "C" void removeTray(NSStatusItem *statusItem) {
     if (statusItem) {
-        dispatch_async(dispatch_get_main_queue(), ^{
+        runOnMainThreadAsyncVoid(^{
             [[NSStatusBar systemStatusBar] removeStatusItem:statusItem];
         });
     }
@@ -7919,7 +8914,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
 
     __block NSString *json = nil;
 
-    void (^readBounds)(void) = ^{
+    runOnMainThreadSyncVoid(^{
         NSStatusBarButton *button = statusItem.button;
         if (!button || !button.window) {
             json = @"{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
@@ -7933,13 +8928,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
             frameOnScreen.origin.y,
             frameOnScreen.size.width,
             frameOnScreen.size.height];
-    };
-
-    if ([NSThread isMainThread]) {
-        readBounds();
-    } else {
-        dispatch_sync(dispatch_get_main_queue(), readBounds);
-    }
+    });
 
     return strdup([json UTF8String]);
 }
@@ -7947,7 +8936,7 @@ extern "C" const char* getTrayBounds(NSStatusItem *statusItem) {
 extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler zigTrayItemHandler) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
@@ -7968,7 +8957,7 @@ extern "C" void setApplicationMenu(const char *jsonString, ZigStatusItemHandler 
 extern "C" void showContextMenu(const char *jsonString, ZigStatusItemHandler contextMenuHandler) {
     // Copy the string before dispatch_async since the JS-side buffer may be GC'd
     char *jsonCopy = strdup(jsonString);
-    dispatch_async(dispatch_get_main_queue(), ^{
+    runOnMainThreadAsyncVoid(^{
         NSData *jsonData = [NSData dataWithBytes:jsonCopy length:strlen(jsonCopy)];
         NSError *error;
         NSArray *menuArray = [NSJSONSerialization JSONObjectWithData:jsonData options:0 error:&error];
@@ -8387,6 +9376,8 @@ extern "C" const char* getPrimaryDisplay(void) {
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}
 extern "C" const char* getCursorScreenPoint(void) {
+    static thread_local std::string resultStorage;
+
     @autoreleasepool {
         NSPoint mouseLocation = [NSEvent mouseLocation];
 
@@ -8402,11 +9393,123 @@ extern "C" const char* getCursorScreenPoint(void) {
         NSError *error = nil;
         NSData *jsonData = [NSJSONSerialization dataWithJSONObject:point options:0 error:&error];
         if (error) {
-            return strdup("{\"x\":0,\"y\":0}");
+            resultStorage = "{\"x\":0,\"y\":0}";
+        } else {
+            NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
+            const char *jsonCString = [jsonString UTF8String];
+            resultStorage = jsonCString ? jsonCString : "{\"x\":0,\"y\":0}";
+        }
+    }
+
+    return resultStorage.c_str();
+}
+
+// Capture a logical-point screen region as tightly packed, top-to-bottom RGBA.
+//
+// Screen's public coordinates use the same top-left global coordinate space as
+// CoreGraphics' window-server APIs (getCursorScreenPoint performs the Cocoa
+// bottom-left -> CoreGraphics top-left conversion above). Nominal resolution is
+// intentional: unlike a best-resolution capture, it produces one pixel for
+// each requested logical screen point even on Retina displays and across a
+// mixed-scale multi-display desktop.
+extern "C" bool captureScreenRegion(double x, double y, uint32_t width, uint32_t height,
+                                     uint8_t* out_rgba, uint64_t out_len) {
+    if (!out_rgba || width == 0 || height == 0 ||
+        !std::isfinite(x) || !std::isfinite(y)) {
+        return false;
+    }
+
+    const uint64_t width64 = (uint64_t)width;
+    const uint64_t height64 = (uint64_t)height;
+    const uint64_t maxLength = std::numeric_limits<uint64_t>::max();
+    if (height64 > maxLength / width64 ||
+        width64 * height64 > maxLength / 4) {
+        return false;
+    }
+
+    const uint64_t expectedLength = width64 * height64 * 4;
+    if (out_len != expectedLength) {
+        return false;
+    }
+
+    const double maxX = x + (double)width;
+    const double maxY = y + (double)height;
+    if (!std::isfinite(maxX) || !std::isfinite(maxY)) {
+        return false;
+    }
+
+    // Do not return a misleading wallpaper-only/blank capture when TCC has
+    // denied Screen Recording access.
+    if (!CGPreflightScreenCaptureAccess()) {
+        return false;
+    }
+
+    @autoreleasepool {
+        const CGRect screenBounds = CGRectMake((CGFloat)x, (CGFloat)y,
+                                               (CGFloat)width, (CGFloat)height);
+        const CGWindowImageOption imageOptions = (CGWindowImageOption)(
+            kCGWindowImageNominalResolution | kCGWindowImageShouldBeOpaque);
+        CGImageRef image = CGWindowListCreateImage(
+            screenBounds,
+            kCGWindowListOptionOnScreenOnly,
+            kCGNullWindowID,
+            imageOptions);
+        if (!image) {
+            return false;
         }
 
-        NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
-        return strdup([jsonString UTF8String]);
+        // Nominal-resolution capture is the contract that makes the result one
+        // sample per logical coordinate. Refuse an unexpected result instead of
+        // silently stretching or cropping it into the caller's buffer.
+        if (CGImageGetWidth(image) != (size_t)width ||
+            CGImageGetHeight(image) != (size_t)height) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        CGColorSpaceRef colorSpace = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
+        if (!colorSpace) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        const size_t bytesPerRow = (size_t)width * 4;
+        const CGBitmapInfo bitmapInfo = (CGBitmapInfo)(
+            kCGBitmapByteOrder32Big | kCGImageAlphaPremultipliedLast);
+        CGContextRef context = CGBitmapContextCreate(
+            out_rgba,
+            (size_t)width,
+            (size_t)height,
+            8,
+            bytesPerRow,
+            colorSpace,
+            bitmapInfo);
+        CGColorSpaceRelease(colorSpace);
+        if (!context) {
+            CGImageRelease(image);
+            return false;
+        }
+
+        CGContextSetBlendMode(context, kCGBlendModeCopy);
+        CGContextSetInterpolationQuality(context, kCGInterpolationNone);
+
+        // Bitmap-context row zero is the lower edge in Quartz coordinates,
+        // while this ABI promises row zero is the top edge of the screen.
+        CGContextTranslateCTM(context, 0, (CGFloat)height);
+        CGContextScaleCTM(context, 1, -1);
+        CGContextDrawImage(context,
+                           CGRectMake(0, 0, (CGFloat)width, (CGFloat)height),
+                           image);
+
+        CGContextRelease(context);
+        CGImageRelease(image);
+
+        // The capture requests an opaque image, and the public ABI requires an
+        // opaque result. Make alpha deterministic without touching RGB.
+        for (uint64_t offset = 3; offset < expectedLength; offset += 4) {
+            out_rgba[offset] = 0xff;
+        }
+        return true;
     }
 }
 
@@ -8447,9 +9550,7 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
     NSString *filterStr = filterJson ? [NSString stringWithUTF8String:filterJson] : @"{}";
 
     __block char* result = strdup("[]");
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             NSData *filterData = [filterStr dataUsingEncoding:NSUTF8StringEncoding];
             NSError *parseError = nil;
@@ -8461,7 +9562,6 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
             NSString *filterUrl = filter[@"url"];
             NSString *filterDomain = filter[@"domain"];
 
-            // Get the data store for this partition
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
 
@@ -8511,8 +9611,6 @@ extern "C" const char* sessionGetCookies(const char* partitionIdentifier, const 
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     return result;
 }
 
@@ -8574,9 +9672,7 @@ extern "C" bool sessionSetCookie(const char* partitionIdentifier, const char* co
     }
 
     __block bool success = false;
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
@@ -8587,8 +9683,6 @@ extern "C" bool sessionSetCookie(const char* partitionIdentifier, const char* co
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     return success;
 }
 
@@ -8607,9 +9701,7 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
     }
 
     __block bool found = false;
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
             WKHTTPCookieStore *cookieStore = dataStore.httpCookieStore;
@@ -8617,7 +9709,6 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
             [cookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
                 for (NSHTTPCookie *cookie in cookies) {
                     if ([cookie.name isEqualToString:name]) {
-                        // Check if domain matches
                         NSString *host = nsUrl.host;
                         NSString *cookieDomain = cookie.domain;
                         BOOL domainMatches = NO;
@@ -8641,8 +9732,6 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
         }
     });
 
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-
     return found;
 }
 
@@ -8650,9 +9739,7 @@ extern "C" bool sessionRemoveCookie(const char* partitionIdentifier, const char*
 extern "C" void sessionClearCookies(const char* partitionIdentifier) {
     NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
 
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(5 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
@@ -8664,8 +9751,6 @@ extern "C" void sessionClearCookies(const char* partitionIdentifier) {
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
 }
 
 // Clear all storage data for a partition (WKWebView)
@@ -8674,9 +9759,7 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
     NSString *partitionStr = partitionIdentifier ? [NSString stringWithUTF8String:partitionIdentifier] : @"";
     NSString *typesStr = storageTypesJson ? [NSString stringWithUTF8String:storageTypesJson] : @"";
 
-    dispatch_semaphore_t completionSemaphore = dispatch_semaphore_create(0);
-
-    dispatch_async(dispatch_get_main_queue(), ^{
+    waitForMainThreadAsyncCompletion(10 * NSEC_PER_SEC, ^(dispatch_semaphore_t completionSemaphore) {
         @autoreleasepool {
             WKWebsiteDataStore *dataStore = createDataStoreForPartition([partitionStr UTF8String]);
 
@@ -8703,7 +9786,6 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
                     }
                 }
             } else {
-                // Clear all
                 dataTypes = [NSMutableSet setWithSet:[WKWebsiteDataStore allWebsiteDataTypes]];
             }
 
@@ -8719,8 +9801,6 @@ extern "C" void sessionClearStorageData(const char* partitionIdentifier, const c
             }];
         }
     });
-
-    dispatch_semaphore_wait(completionSemaphore, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
 }
 
 // Window icon - Linux only, no-op for macOS (macOS uses app bundle icon)
@@ -8729,7 +9809,7 @@ extern "C" void setWindowIcon(void* window, const char* iconPath) {
 }
 
 extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) {
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         NSWindowCollectionBehavior behavior = [window collectionBehavior];
         if (visible) {
             behavior |= NSWindowCollectionBehaviorCanJoinAllSpaces;
@@ -8742,7 +9822,7 @@ extern "C" void setWindowVisibleOnAllWorkspaces(NSWindow *window, bool visible) 
 
 extern "C" bool isWindowVisibleOnAllWorkspaces(NSWindow *window) {
     __block bool result = false;
-    dispatch_sync(dispatch_get_main_queue(), ^{
+    runOnMainThreadSyncVoid(^{
         result = ([window collectionBehavior] & NSWindowCollectionBehaviorCanJoinAllSpaces) != 0;
     });
     return result;

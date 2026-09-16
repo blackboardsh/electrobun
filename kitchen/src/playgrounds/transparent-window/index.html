@@ -23,8 +23,18 @@
             padding: 20px;
         }
 
+        .transparent-drag-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 0;
+            background: rgba(255, 255, 255, 0);
+            -webkit-app-region: drag;
+        }
+
         /* Floating card with custom shape */
         .floating-card {
+            position: relative;
+            z-index: 1;
             background: rgba(30, 30, 50, 0.95);
             border-radius: 16px;
             padding: 20px;
@@ -79,6 +89,7 @@
                 0 10px 40px rgba(74, 222, 128, 0.4),
                 0 0 0 2px rgba(255, 255, 255, 0.2);
             cursor: move;
+            z-index: 1;
         }
 
         .status-indicator .icon {
@@ -94,6 +105,8 @@
 
         /* Notification-style card */
         .notification-card {
+            position: relative;
+            z-index: 1;
             background: linear-gradient(135deg, rgba(99, 102, 241, 0.95), rgba(139, 92, 246, 0.95));
             border-radius: 12px;
             padding: 16px 20px;
@@ -152,6 +165,7 @@
                 0 8px 30px rgba(239, 68, 68, 0.4),
                 0 0 0 2px rgba(255, 255, 255, 0.2);
             transition: transform 0.15s, background 0.15s;
+            z-index: 2;
         }
 
         .close-btn:hover {
@@ -170,6 +184,7 @@
             padding: 16px;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+            z-index: 1;
         }
 
         .info-panel h3 {
@@ -198,6 +213,7 @@
     </style>
 </head>
 <body>
+    <div class="transparent-drag-overlay" aria-hidden="true"></div>
     <!-- Circular status indicator -->
     <div class="status-indicator electrobun-webkit-app-region-drag">
         <span class="icon">&#x2714;</span>

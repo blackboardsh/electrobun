@@ -1,6 +1,52 @@
 // Navigation Tests - Tests for BrowserView navigation and events
 
 import { defineTest, expect } from "../test-framework/types";
+import { createTestHarnessRPC } from "./rpc.test";
+
+async function assertViewsUrlWithSuffixLoads(
+  url: string,
+  expectedSearch: string,
+  expectedHash: string,
+  createWindow: any,
+  log: (message: string) => void,
+) {
+  const rpc = createTestHarnessRPC();
+  let domReadyFired = false;
+
+  const win = await createWindow({
+    url,
+    rpc,
+    // Keep this explicit: system-only builds must exercise CEF-request fallback.
+    renderer: "cef",
+    title: "Views URL Suffix Test",
+  });
+
+  win.webview.on("dom-ready", () => {
+    domReadyFired = true;
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+
+  const h1 = await win.webview.rpc?.request.getElementText({
+    selector: "h1",
+  });
+  const locationInfo = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
+    script: `return {
+      href: window.location.href,
+      search: window.location.search,
+      hash: window.location.hash,
+      title: document.title
+    }`,
+  });
+
+  expect(h1).toBe("Test Harness");
+  expect(locationInfo?.search).toBe(expectedSearch);
+  expect(locationInfo?.hash).toBe(expectedHash);
+  expect(locationInfo?.title).toBe("Test Harness");
+  log(
+    `Loaded views URL suffix; dom-ready=${domReadyFired}, href=${locationInfo?.href}`,
+  );
+}
 
 export const navigationTests = [
   defineTest({
@@ -35,6 +81,38 @@ export const navigationTests = [
 
       expect(willNavigateFired).toBe(true);
       log("loadURL successfully triggered navigation");
+    },
+  }),
+
+  defineTest({
+    name: "views:// URL with query strips file lookup suffix",
+    category: "Navigation",
+    description: "Test views:// file lookup ignores everything to the right of a query marker",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      await assertViewsUrlWithSuffixLoads(
+        "views://test-harness/index.html?env=dev&dashWindowId=main",
+        "?env=dev&dashWindowId=main",
+        "",
+        createWindow,
+        log,
+      );
+    },
+  }),
+
+  defineTest({
+    name: "views:// URL with hash strips file lookup suffix",
+    category: "Navigation",
+    description: "Test views:// file lookup ignores everything to the right of a hash marker when no query is present",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      await assertViewsUrlWithSuffixLoads(
+        "views://test-harness/index.html#section",
+        "",
+        "#section",
+        createWindow,
+        log,
+      );
     },
   }),
 
@@ -85,7 +163,7 @@ export const navigationTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Allowlist Test",
-        renderer: 'cef', // Use CEF renderer
+        renderer: 'cef', // Intentionally falls back in a system-only build.
       });
 
       // Wait for initial load
@@ -142,7 +220,7 @@ export const navigationTests = [
       const win = await createWindow({
         url: "views://test-harness/index.html",
         title: "Nav Rules Block Test",
-        renderer: 'cef', // Use CEF renderer
+        renderer: 'cef', // Intentionally falls back in a system-only build.
       });
 
       // Wait for initial load
@@ -169,10 +247,10 @@ export const navigationTests = [
         log(`did-navigate fired for: ${url}`);
       });
 
-      log("Setting navigation rules: block all except example.com");
+      log("Setting navigation rules: block all except blackboard.sh");
       win.webview.setNavigationRules([
         "^*", // Block all
-        "*://example.com/*", // Allow only example.com  
+        "*://blackboard.sh/*", // Allow only blackboard.sh
         "views://*", // Allow views protocol for current page
       ]);
 
@@ -279,6 +357,46 @@ export const navigationTests = [
   }),
 
   defineTest({
+    name: "did-commit-navigation event",
+    category: "Navigation",
+    description: "Test that navigation commits before the page finishes loading",
+    timeout: 15000,
+    async run({ createWindow, log }) {
+      const lifecycle: string[] = [];
+      let committedUrl = "";
+
+      const win = await createWindow({
+        url: "views://test-harness/index.html",
+        title: "Did Commit Navigation Test",
+        renderer: "cef", // Intentionally falls back in a system-only build.
+      });
+
+      win.webview.on("did-commit-navigation", (event: any) => {
+        lifecycle.push("commit");
+        committedUrl = event.data?.detail || "";
+      });
+      win.webview.on("did-navigate", () => {
+        lifecycle.push("finish");
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      lifecycle.length = 0;
+      committedUrl = "";
+
+      win.webview.loadURL("views://test-runner/index.html");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      const commitIndex = lifecycle.indexOf("commit");
+      const finishIndex = lifecycle.indexOf("finish");
+      log(`Navigation lifecycle: ${lifecycle.join(" -> ")}; URL: ${committedUrl}`);
+
+      expect(commitIndex).toBeGreaterThanOrEqual(0);
+      expect(finishIndex).toBeGreaterThan(commitIndex);
+      expect(committedUrl).toContain("test-runner");
+    },
+  }),
+
+  defineTest({
     name: "will-navigate event with response control",
     category: "Navigation",
     description: "Test that will-navigate can block navigation",
@@ -302,7 +420,7 @@ export const navigationTests = [
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       log("Attempting navigation (will be blocked by event handler)");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
       expect(willNavigateFired).toBe(true);

@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils, type RPCSchema } from "electrobun/main";
 import Database from "bun:sqlite";
 import { join } from "path";
 import { mkdirSync, existsSync } from "fs";

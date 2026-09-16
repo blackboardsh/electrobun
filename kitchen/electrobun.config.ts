@@ -1,20 +1,50 @@
 import type { ElectrobunConfig } from "electrobun";
+import {
+	kitchenVariantKey,
+	readKitchenVariant,
+} from "./scripts/kitchen-matrix-plan";
+
+const matrixVariant = readKitchenVariant(process.env);
+const mainProcess = matrixVariant?.mainProcess ?? "cottontail";
+const defaultRenderer = matrixVariant?.renderer ?? "native";
+const bundleCEF = matrixVariant ? defaultRenderer === "cef" : true;
+const variantKey = matrixVariant ? kitchenVariantKey(matrixVariant) : null;
+const appName = variantKey
+	? `Electrobun Kitchen Sink (${variantKey})`
+	: "Electrobun Kitchen Sink";
+const appIdentifier = variantKey
+	? `sh.blackboard.electrobun-kitchen.${variantKey}`
+	: "sh.blackboard.electrobun-kitchen";
 
 export default {
 	app: {
-		name: "Electrobun Kitchen Sink",
-		identifier: "sh.blackboard.electrobun-kitchen",
-		version: "1.17.3-beta.2",
+		name: appName,
+		identifier: appIdentifier,
+		version: "2.0.2-beta.27",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {
 		// exitOnLastWindowClosed: false,
 	},
 	build: {
-		useAsar: true,
+		mainProcess,
+		buildFolder: variantKey ? `build/matrix/${variantKey}` : "build",
+		artifactFolder: variantKey ? `artifacts/matrix/${variantKey}` : "artifacts",
 		// cefVersion: "144.0.12+g1a1008c+chromium-144.0.7559.110",
-		// bunVersion: "1.3.7",
 		bun: {
+			entrypoint: "src/bun/index.ts",
+		},
+		rust: {
+			manifest: "Cargo.toml",
+			binary: "main",
+		},
+		go: {
+			package: "./src/go",
+		},
+		odin: {
+			entrypoint: "src/odin/main.odin",
+		},
+		cottontail: {
 			entrypoint: "src/bun/index.ts",
 		},
 		views: {
@@ -82,12 +112,20 @@ export default {
 			"playgrounds/wgpu-tag": {
 				entrypoint: "src/playgrounds/wgpu-tag/index.ts",
 			},
+			"playgrounds/warren-dom": {
+				entrypoint: "src/playgrounds/warren-dom/index.tsx",
+			},
 		},
 		copy: {
+			"src/zig-view/index.html": "views/zig/index.html",
+			"src/playgrounds/warren-dom/index.html":
+				"views/playgrounds/warren-dom/index.html",
 			"src/test-runner/index.html": "views/test-runner/index.html",
 			"src/test-runner/index.css": "views/test-runner/index.css",
 			"src/test-harness/index.html": "views/test-harness/index.html",
 			"src/test-oopif/index.html": "views/test-oopif/index.html",
+			"src/test-oopif-navigation/index.html":
+				"views/test-oopif-navigation/index.html",
 			"src/playgrounds/file-dialog/index.html":
 				"views/playgrounds/file-dialog/index.html",
 			"src/playgrounds/file-dialog/index.css":
@@ -120,6 +158,8 @@ export default {
 				"views/playgrounds/context-menu/index.css",
 			"src/playgrounds/webviewtag/index.html":
 				"views/playgrounds/webviewtag/index.html",
+			"src/playgrounds/webviewtag/find-test.html":
+				"views/playgrounds/webviewtag/find-test.html",
 			"src/playgrounds/webviewtag/host-message-test.html":
 				"views/playgrounds/webviewtag/host-message-test.html",
 			"src/playgrounds/webviewtag/electrobun.png":
@@ -152,11 +192,14 @@ export default {
 				"views/playgrounds/webview-cleanup/assets/bunny.png",
 			"src/playgrounds/wgpu-tag/index.html":
 				"views/playgrounds/wgpu-tag/index.html",
+			"src/playgrounds/fullsize-frame-repro/index.html":
+				"views/playgrounds/fullsize-frame-repro/index.html",
 		},
 		mac: {
 			codesign: true,
 			notarize: true,
-			bundleCEF: true,
+			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			entitlements: {},
 			chromiumFlags: {
@@ -166,7 +209,8 @@ export default {
 			},
 		},
 		linux: {
-			bundleCEF: true,
+			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
@@ -176,7 +220,8 @@ export default {
 			},
 		},
 		win: {
-			bundleCEF: true,
+			bundleCEF,
+			defaultRenderer,
 			bundleWGPU: true,
 			icon: "icon.iconset/icon_256x256.png",
 			chromiumFlags: {
@@ -190,7 +235,7 @@ export default {
 		postBuild: "./buildScript.ts",
 	},
 	release: {
-		baseUrl: "https://electrobun-kitchen.blackboard.sh/",
+		baseUrl: "https://electrobun-artifacts.blackboard.sh/kitchen/",
 		generatePatch: true,
 	},
 } satisfies ElectrobunConfig;

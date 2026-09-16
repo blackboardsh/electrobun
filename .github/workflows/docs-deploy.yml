@@ -1,0 +1,82 @@
+name: Deploy Docs
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Where to publish'
+        required: true
+        type: choice
+        default: staging
+        options:
+          - staging
+          - production
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout electrobun
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Verify release tag and version
+        if: github.event_name == 'push'
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_PACKAGE_JSON: package/package.json
+        run: node package/scripts/verify-release-version.mjs
+
+      - name: Resolve Cloudflare Pages branch
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        id: deploy-branch
+        shell: bash
+        env:
+          DEPLOY_ENVIRONMENT: ${{ github.event.inputs.environment || 'production' }}
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "push" ]]; then
+            echo "branch=main" >> $GITHUB_OUTPUT
+          elif [[ "${DEPLOY_ENVIRONMENT}" == "production" ]]; then
+            echo "branch=main" >> $GITHUB_OUTPUT
+          else
+            echo "branch=preview" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install Hutch
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        uses: ./.github/actions/install-hutch
+
+      - name: Install docs dependencies
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        run: hutch run install
+        working-directory: docs
+
+      - name: Check docs
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        run: hutch run check
+        working-directory: docs
+
+      - name: Build docs
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        run: hutch run build
+        working-directory: docs
+
+      - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PAGES_BRANCH: ${{ steps.deploy-branch.outputs.branch }}
+        run: hutch run deploy
+        working-directory: docs

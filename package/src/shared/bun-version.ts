@@ -1,3 +1,2 @@
-// Default Bun version shipped with this Electrobun release.
-// All platforms use the same version. Update this when bumping Bun.
-export const BUN_VERSION = "1.3.11";
+// Bun is an optional Electrobun application runtime. Hutch itself uses Cottontail.
+export const BUN_VERSION = "1.4.0";

@@ -1,24 +1,33 @@
 // Interactive WGPU Tag Tests - Playground for <electrobun-wgpu>
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow } from "electrobun/bun";
+import { BrowserView, BrowserWindow } from "electrobun/main";
 import { WgpuTagRenderer } from "../../bun/wgpuTagRenderer";
 
-export const wgpuTagTests = [
-  defineTest({
-    name: "WGPU Tag playground",
+function createWgpuTagTest(name: string, transparent: boolean) {
+  return defineTest({
+    name,
     category: "WGPU Tag (Interactive)",
-    description: "Test WGPU view positioning, transparency, passthrough, and resizing",
+    description: transparent
+      ? "Test WGPU tag rendering in a transparent window"
+      : "Test WGPU view positioning, transparency, passthrough, and resizing",
+    instructions: transparent ? [
+      "A transparent window with a WGPU tag will open",
+      "The desktop should be visible behind the HTML content",
+      "The WGPU surface should render correctly within the page",
+      ...(process.platform === "linux" ? [
+        "Linux note: passthrough/mask interaction for WGPU tags inside transparent windows is not supported; verify rendering and resize only",
+      ] : []),
+      "Close the window when done to pass the test",
+    ] : [
+      "A WGPU tag playground will open",
+      "Use the controls to toggle transparency/passthrough and resize",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A WGPU tag playground will open",
-        "Use the controls to toggle transparency/passthrough and resize",
-        "Close the window when done to pass the test",
-      ]);
-
-      log("Opening WGPU tag playground window");
+    async run({ log }) {
+      log(`Opening ${transparent ? "transparent " : ""}WGPU tag playground`);
 
       await new Promise<void>((resolve) => {
         let winRef: BrowserWindow<any> | null = null;
@@ -29,15 +38,16 @@ export const wgpuTagTests = [
           handlers: {
             requests: {
               closeWindow: () => {
-                // Stop renderer before closing window
                 renderer.stopAll();
                 winRef?.close();
                 return { success: true };
               },
               wgpuTagReady: ({ id, rect }: { id: number; rect: { x: number; y: number; width: number; height: number } }) => {
                 if (!winRef) return { success: false };
+                log(`WGPU tag ${id} ready at ${Math.round(rect.width)}x${Math.round(rect.height)}`);
                 try {
                   renderer.start(id, winRef, rect);
+                  log(`WGPU tag ${id} renderer started`);
                   return { success: true };
                 } catch (err: any) {
                   log(`WGPU tag start failed: ${String(err?.message ?? err)}`);
@@ -58,10 +68,13 @@ export const wgpuTagTests = [
         });
 
         winRef = new BrowserWindow({
-          title: "WGPU Tag Playground",
+          title: transparent ? "Transparent WGPU Tag" : "WGPU Tag Playground",
           url: "views://playgrounds/wgpu-tag/index.html",
-          renderer: "native", // Use native instead of CEF since bundling is off
+          // Request CEF for the host page; system-only builds exercise the
+          // normal webview fallback. <electrobun-wgpu> is a native overlay.
+          renderer: "cef",
           frame: { width: 860, height: 720, x: 120, y: 60 },
+          transparent,
           rpc,
         });
 
@@ -69,12 +82,16 @@ export const wgpuTagTests = [
         const win = winRef;
 
         win.on("close", () => {
-          // Also stop renderer here in case window is closed via X button
           renderer.stopAll();
           log("Playground closed - test complete");
           resolve();
         });
       });
     },
-  }),
+  });
+}
+
+export const wgpuTagTests = [
+  createWgpuTagTest("WGPU Tag playground", false),
+  createWgpuTagTest("Transparent WGPU Tag", true),
 ];

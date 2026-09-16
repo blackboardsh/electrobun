@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Webview Tag Find Test</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 24px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+      background: linear-gradient(180deg, #0f172a 0%, #16233b 100%);
+      color: #e5eefc;
+    }
+
+    h1, h2 {
+      margin: 0 0 12px 0;
+    }
+
+    p {
+      max-width: 70ch;
+      margin: 0 0 14px 0;
+    }
+
+    .card {
+      margin: 18px 0;
+      padding: 16px 18px;
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .keyword {
+      color: #fbbf24;
+      font-weight: 700;
+    }
+
+    a {
+      color: #93c5fd;
+    }
+  </style>
+</head>
+<body>
+  <h1>OOPIF Find Test Page</h1>
+  <p>
+    This bundled page exists so the webview-tag playground has deterministic content for
+    <span class="keyword">find in page</span>.
+    Try searching for <span class="keyword">searchterm</span>, <span class="keyword">Electrobun</span>,
+    or <span class="keyword">bunnies</span>.
+  </p>
+
+  <div class="card">
+    <h2>Search Target A</h2>
+    <p>
+      The word <span class="keyword">searchterm</span> appears here near the top of the document.
+      Electrobun apps can embed OOPIF content, and this page gives that OOPIF a reliable
+      body of text for search highlighting.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Search Target B</h2>
+    <p>
+      Another <span class="keyword">searchterm</span> is here. Move between results with Find Next
+      and Find Prev. The word <span class="keyword">Electrobun</span> also appears multiple times so
+      case sensitivity is easy to test.
+    </p>
+  </div>
+
+  <div class="card">
+    <h2>Search Target C</h2>
+    <p>
+      The kitchen sink uses this page to validate that <span class="keyword">searchterm</span> can be
+      found repeatedly inside a nested browser. Powered by <span class="keyword">bunnies</span>.
+    </p>
+    <p>
+      You can still navigate away with the playground buttons if you want to test external pages
+      afterward.
+    </p>
+  </div>
+
+  <p>
+    External links for navigation tests:
+    <a href="https://electrobun.dev">Electrobun</a>,
+    <a href="https://eggbun.sh">Eggbun</a>,
+    <a href="https://github.com/blackboardsh/electrobun">GitHub</a>.
+  </p>
+</body>
+</html>

@@ -2,19 +2,17 @@
 // Interactive WGPUView tests
 
 import { defineTest } from "../../test-framework/types";
+import * as babylon from "@babylonjs/core";
+import * as three from "three";
 import {
 	GpuWindow,
 	Screen,
 	WGPU,
 	WGPUBridge,
-	three,
-	babylon,
 	webgpu,
-} from "electrobun/bun";
-import { ptr, CString } from "bun:ffi";
+} from "electrobun/main";
+import { ptr, toArrayBuffer } from "bun:ffi";
 import { inflateSync } from "zlib";
-
-const WGPU_KEEPALIVE: any[] = [];
 
 const WGPUNative = WGPU.native;
 
@@ -64,6 +62,11 @@ function writeU32(view: DataView, offset: number, value: number) {
 
 function writeU64(view: DataView, offset: number, value: bigint) {
 	view.setBigUint64(offset, value, true);
+}
+
+function makeCString(value: string) {
+	const buffer = new TextEncoder().encode(`${value}\0`);
+	return { buffer, ptr: ptr(buffer) };
 }
 
 function makeRequestAdapterOptions(surfacePtr: number) {
@@ -486,9 +489,7 @@ function pickSurfaceFormatAlpha(
 	let format = preferredFormat;
 	if (formatCount && formatPtr) {
 		const formats = new Uint32Array(
-			(ptr as any)(formatPtr).buffer,
-			(ptr as any)(formatPtr).byteOffset,
-			formatCount,
+			toArrayBuffer(formatPtr, 0, formatCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (formats.length) {
 			format = formats[0]!;
@@ -500,9 +501,7 @@ function pickSurfaceFormatAlpha(
 	let alphaMode = WGPUCompositeAlphaMode_Opaque;
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		if (alphas.length) {
 			alphaMode = alphas[0]!;
@@ -517,9 +516,7 @@ function pickAlphaMode(capsView: DataView) {
 	const alphaPtr = readPtr(capsView, 56);
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		const preferred = [
 			WGPUCompositeAlphaMode_Unpremultiplied,
@@ -542,9 +539,7 @@ function pickAlphaModeTransparent(capsView: DataView) {
 	const alphaPtr = readPtr(capsView, 56);
 	if (alphaCount && alphaPtr) {
 		const alphas = new Uint32Array(
-			(ptr as any)(alphaPtr).buffer,
-			(ptr as any)(alphaPtr).byteOffset,
-			alphaCount,
+			toArrayBuffer(alphaPtr, 0, alphaCount * Uint32Array.BYTES_PER_ELEMENT),
 		);
 		const preferred = [
 			WGPUCompositeAlphaMode_Unpremultiplied,
@@ -726,38 +721,207 @@ function buildRotatedVertices(angle: number) {
 	return out;
 }
 
+function trackGpuWindowLifecycle(
+	win: GpuWindow,
+	resolve: () => void,
+	reject: (error: unknown) => void,
+) {
+	let settled = false;
+	let closed = false;
+	const cleanups = new Set<() => void>();
+
+	const runCleanup = () => {
+		for (const cleanup of cleanups) {
+			try {
+				cleanup();
+			} catch {}
+		}
+		cleanups.clear();
+	};
+
+	const closeSafely = () => {
+		if (closed) return;
+		try {
+			win.close();
+		} catch {}
+	};
+
+	const complete = (closeWindow = false) => {
+		if (settled) return;
+		settled = true;
+		runCleanup();
+		if (closeWindow) closeSafely();
+		resolve();
+	};
+
+	const fail = (error: unknown) => {
+		if (settled) return;
+		settled = true;
+		runCleanup();
+		closeSafely();
+		reject(error);
+	};
+
+	const stopTrackingClose = win.on("close", () => {
+		closed = true;
+		complete();
+	});
+	cleanups.add(stopTrackingClose);
+	const addCleanup = (cleanup: () => void) => {
+		if (settled) {
+			try {
+				cleanup();
+			} catch {}
+			return;
+		}
+		cleanups.add(cleanup);
+	};
+
+	return {
+		isActive: () => !settled && !closed,
+		addCleanup,
+		schedule(callback: () => void, delay: number) {
+			let timer: ReturnType<typeof setTimeout>;
+			const cancel = () => clearTimeout(timer);
+			timer = setTimeout(() => {
+				cleanups.delete(cancel);
+				if (settled) return;
+				callback();
+			}, delay);
+			addCleanup(cancel);
+			return timer;
+		},
+		delay(delay: number) {
+			return new Promise<boolean>((resolveDelay) => {
+				if (settled) {
+					resolveDelay(false);
+					return;
+				}
+				let finished = false;
+				let timer: ReturnType<typeof setTimeout>;
+				const finish = (active: boolean) => {
+					if (finished) return;
+					finished = true;
+					cleanups.delete(cancel);
+					clearTimeout(timer);
+					resolveDelay(active);
+				};
+				const cancel = () => finish(false);
+				timer = setTimeout(() => finish(!settled), delay);
+				addCleanup(cancel);
+			});
+		},
+		complete,
+		fail,
+	};
+}
+
+function trackRawWgpuResources() {
+	let cleaned = false;
+	let configuredSurface = 0;
+	let releaseSurface: (() => void) | undefined;
+	let renderInterval: ReturnType<typeof setInterval> | undefined;
+	const releases: Array<() => void> = [];
+	const keepAlive: any[] = [];
+
+	return {
+		keepAlive,
+		trackRelease(release: () => void) {
+			if (cleaned) {
+				try {
+					release();
+				} catch {}
+				return;
+			}
+			releases.push(release);
+		},
+		trackSurface(surface: number) {
+			let released = false;
+			const release = () => {
+				if (released) return;
+				WGPUNative.symbols.wgpuSurfaceRelease(surface);
+				released = true;
+			};
+			releaseSurface = release;
+			if (cleaned) {
+				release();
+				return;
+			}
+			releases.push(release);
+		},
+		setConfiguredSurface(surface: number) {
+			configuredSurface = surface;
+		},
+		setRenderInterval(interval: ReturnType<typeof setInterval>) {
+			if (cleaned) {
+				clearInterval(interval);
+				return;
+			}
+			renderInterval = interval;
+		},
+		cleanup() {
+			if (cleaned) return;
+			cleaned = true;
+			if (renderInterval !== undefined) {
+				clearInterval(renderInterval);
+				renderInterval = undefined;
+			}
+			if (configuredSurface) {
+				try {
+					WGPUNative.symbols.wgpuSurfaceUnconfigure(configuredSurface);
+				} catch {}
+				configuredSurface = 0;
+			}
+			if (process.platform === "linux" && releaseSurface) {
+				try {
+					releaseSurface();
+				} catch {}
+				releaseSurface = undefined;
+			}
+			for (let i = releases.length - 1; i >= 0; i -= 1) {
+				try {
+					releases[i]!();
+				} catch {}
+			}
+			releases.length = 0;
+			keepAlive.length = 0;
+		},
+	};
+}
+
 export const wgpuViewTests = [
   defineTest({
     name: "WGPUView native cube",
 		category: "WGPUView (Interactive)",
 		description: "Render a rotating cube using native WGPU on the main thread",
+		instructions: [
+			"A GPU window will open",
+			"You should see a rotating cube",
+			"Close the window when done",
+		],
 		interactive: true,
 		timeout: 120000,
-		async run({ log, showInstructions }) {
-			if (!process.env["AUTO_RUN_WGPU"]) {
-				await showInstructions([
-					"A GPU window will open",
-					"You should see a rotating cube",
-					"Close the window when done",
-				]);
-			}
-
+		async run({ log }) {
 			log("Opening WGPUView native cube window");
 
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				const win = new GpuWindow({
 					title: "WGPU Native Cube",
 					frame: { width: 500, height: 400, x: 240, y: 160 },
 					titleBarStyle: "default",
 					transparent: false,
 				});
+				const lifecycle = trackGpuWindowLifecycle(win, resolve, reject);
 
-				win.setAlwaysOnTop(true);
-
-				WGPUBridge.runTest(win.wgpuViewId);
-				log("WGPU native test started");
-
-				win.on("close", () => resolve());
+				try {
+					win.setAlwaysOnTop(true);
+					if (!lifecycle.isActive()) return;
+					WGPUBridge.runTest(win.wgpuViewId);
+					log("WGPU native test started");
+				} catch (error) {
+					log(`WGPU native test setup failed: ${String(error)}`);
+					lifecycle.fail(error);
+				}
 			});
 		},
   }),
@@ -765,16 +929,15 @@ export const wgpuViewTests = [
 		name: "Three.js WGPU playground",
 		category: "WGPUView (Interactive)",
 		description: "Use three.js math + raycasting with WGPU rendering",
+		instructions: [
+			"A GPU window will open",
+			"Click and drag across the cube to fling it",
+			"Move the mouse over the cube to make the hovered faces sparkle",
+			"Close the window when done",
+		],
 		interactive: true,
 		timeout: 120000,
-		async run({ log, showInstructions }) {
-			await showInstructions([
-				"A GPU window will open",
-				"Click and drag across the cube to fling it",
-				"Move the mouse over the cube to change the background",
-				"Close the window when done",
-			]);
-
+		async run({ log }) {
 			log("Opening Three.js playground window");
 
 			await new Promise<void>((resolve, reject) => {
@@ -784,25 +947,41 @@ export const wgpuViewTests = [
 					titleBarStyle: "default",
 					transparent: false,
 				});
+				const lifecycle = trackGpuWindowLifecycle(win, resolve, reject);
 
-				win.setAlwaysOnTop(true);
+				try {
+					win.setAlwaysOnTop(true);
+				} catch (error) {
+					log(`Three.js window setup failed: ${String(error)}`);
+					lifecycle.fail(error);
+					return;
+				}
+				if (!lifecycle.isActive()) return;
 
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
-					resolve();
+					lifecycle.complete(true);
 					return;
 				}
 
 				const start = async () => {
+					const rawResources = trackRawWgpuResources();
+					lifecycle.addCleanup(() => rawResources.cleanup());
 					const instance = WGPUNative.symbols.wgpuCreateInstance(0);
+					if (!instance) {
+						throw new Error("WGPU: instance is null");
+					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuInstanceRelease(instance),
+					);
 					const surface = WGPUBridge.createSurfaceForView(
 						instance as number,
 						win.wgpuView.ptr as number,
 					);
 					if (!surface) {
-						log("Failed to create WGPU surface");
-						return;
+						throw new Error("Failed to create WGPU surface");
 					}
+					rawResources.trackSurface(surface as number);
 
 					const adapterDevice = new BigUint64Array(2);
 					WGPUBridge.createAdapterDeviceMainThread(
@@ -812,15 +991,38 @@ export const wgpuViewTests = [
 					);
 					const adapter = Number(adapterDevice[0]);
 					const device = Number(adapterDevice[1]);
+					if (adapter) {
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuAdapterRelease(adapter),
+						);
+					}
+					if (device) {
+						rawResources.trackRelease(() => {
+							WGPUNative.symbols.wgpuDeviceDestroy(device);
+							WGPUNative.symbols.wgpuDeviceRelease(device);
+						});
+					}
 					if (!adapter || !device) {
-						log("WGPU: adapter/device is null");
-						return;
+						throw new Error("WGPU: adapter/device is null");
 					}
 
 					const queue = WGPUNative.symbols.wgpuDeviceGetQueue(device);
+					if (!queue) {
+						throw new Error("WGPU: queue is null");
+					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuQueueRelease(queue),
+					);
 
 					const size = win.getSize();
 					const caps = makeSurfaceCapabilities();
+					let capsFreed = false;
+					const freeCaps = () => {
+						if (capsFreed) return;
+						WGPUBridge.surfaceCapabilitiesFreeMembers(caps.ptr);
+						capsFreed = true;
+					};
+					rawResources.trackRelease(freeCaps);
 					WGPUNative.symbols.wgpuSurfaceGetCapabilities(
 						surface,
 						adapter,
@@ -830,6 +1032,7 @@ export const wgpuViewTests = [
 						caps.view,
 						WGPUTextureFormat_BGRA8Unorm,
 					);
+					freeCaps();
 					const surfaceConfig = makeSurfaceConfiguration(
 						device,
 						size.width,
@@ -841,6 +1044,7 @@ export const wgpuViewTests = [
 						surface as number,
 						surfaceConfig.ptr as number,
 					);
+					rawResources.setConfiguredSurface(surface as number);
 
 					const geometry = new three.BoxGeometry(
 						0.55,
@@ -852,6 +1056,10 @@ export const wgpuViewTests = [
 						geometry,
 						new three.MeshBasicMaterial({ color: 0x00ff88 }),
 					);
+					rawResources.trackRelease(() => {
+						geometry.dispose();
+						(mesh.material as three.Material).dispose();
+					});
 					const camera = new three.PerspectiveCamera(
 						50,
 						size.width / size.height,
@@ -877,8 +1085,8 @@ export const wgpuViewTests = [
 						const nx = normals[i]!;
 						const ny = normals[i + 1]!;
 						const nz = normals[i + 2]!;
-            const faceMask =
-              nz > 0.9 || nz < -0.9 || nx > 0.9 || nx < -0.9 ? 1 : 0;
+						const faceMask =
+							nz > 0.9 || nz < -0.9 || nx > 0.9 || nx < -0.9 ? 1 : 0;
 						masks[i / 3] = faceMask;
 					}
 					const projected = new Float32Array(positions.length);
@@ -931,7 +1139,7 @@ fn fs_main(
           `;
 					const shaderBytes = new TextEncoder().encode(shaderText + "\0");
 					const shaderBuf = new Uint8Array(shaderBytes);
-					WGPU_KEEPALIVE.push(shaderBuf);
+					rawResources.keepAlive.push(shaderBuf);
 					const shaderPtr = ptr(shaderBuf);
 					const shaderSource = makeShaderSourceWGSL(shaderPtr, WGPU_STRLEN);
 					const shaderDesc = makeShaderModuleDescriptor(
@@ -942,13 +1150,15 @@ fn fs_main(
 						shaderDesc.ptr as number,
 					);
 					if (!shaderModule) {
-						log("WGPU: shaderModule is null");
-						return;
+						throw new Error("WGPU: shaderModule is null");
 					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuShaderModuleRelease(shaderModule),
+					);
 
-					const entryPoint = new CString("vs_main");
-					const fragEntryPoint = new CString("fs_main");
-					WGPU_KEEPALIVE.push(entryPoint, fragEntryPoint);
+					const entryPoint = makeCString("vs_main");
+					const fragEntryPoint = makeCString("fs_main");
+					rawResources.keepAlive.push(entryPoint, fragEntryPoint);
 					const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x3);
 					const normalAttr = makeVertexAttribute(
 						12,
@@ -971,7 +1181,7 @@ fn fs_main(
 					new Uint8Array(attrBuf, 96, 32).set(new Uint8Array(maskAttr.buffer));
 					new Uint8Array(attrBuf, 128, 32).set(new Uint8Array(colorAttr.buffer));
 					const attrPtr = ptr(attrBuf);
-					WGPU_KEEPALIVE.push(attrBuf);
+					rawResources.keepAlive.push(attrBuf);
 					const vertexLayout = makeVertexBufferLayout(
 						attrPtr as number,
 						5,
@@ -1005,9 +1215,11 @@ fn fs_main(
 						pipelineDesc.ptr as number,
 					);
 					if (!pipeline) {
-						log("WGPU: pipeline is null");
-						return;
+						throw new Error("WGPU: pipeline is null");
 					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuRenderPipelineRelease(pipeline),
+					);
 
 					const packed = new Float32Array((positions.length / 3) * 12);
 					for (let i = 0; i < positions.length; i += 3) {
@@ -1038,9 +1250,12 @@ fn fs_main(
 						bufferDesc.ptr as number,
 					);
 					if (!vertexBuffer) {
-						log("WGPU: vertexBuffer is null");
-						return;
+						throw new Error("WGPU: vertexBuffer is null");
 					}
+					rawResources.trackRelease(() => {
+						WGPUNative.symbols.wgpuBufferDestroy(vertexBuffer);
+						WGPUNative.symbols.wgpuBufferRelease(vertexBuffer);
+					});
 
 					const logoBytes = Buffer.from(LOGO_PNG_BASE64, "base64");
 					const logo = decodePngRGBA(logoBytes);
@@ -1065,21 +1280,33 @@ fn fs_main(
 						logoTextureDesc.ptr as number,
 					);
 					if (!logoTexture) {
-						log("WGPU: logo texture is null");
-						return;
+						throw new Error("WGPU: logo texture is null");
 					}
+					rawResources.trackRelease(() => {
+						WGPUNative.symbols.wgpuTextureDestroy(logoTexture);
+						WGPUNative.symbols.wgpuTextureRelease(logoTexture);
+					});
 					const logoTextureView = WGPUNative.symbols.wgpuTextureCreateView(
 						logoTexture,
 						0,
 					);
+					if (logoTextureView) {
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuTextureViewRelease(logoTextureView),
+						);
+					}
 					const samplerDesc = makeSamplerDescriptor();
 					const logoSampler = WGPUNative.symbols.wgpuDeviceCreateSampler(
 						device,
 						samplerDesc.ptr as number,
 					);
+					if (logoSampler) {
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuSamplerRelease(logoSampler),
+						);
+					}
 					if (!logoSampler || !logoTextureView) {
-						log("WGPU: logo sampler/view is null");
-						return;
+						throw new Error("WGPU: logo sampler/view is null");
 					}
 
 					const copyTex = makeTexelCopyTextureInfo(logoTexture);
@@ -1099,6 +1326,12 @@ fn fs_main(
 							pipeline,
 							0,
 						);
+					if (!bindGroupLayout) {
+						throw new Error("WGPU: bind group layout is null");
+					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuBindGroupLayoutRelease(bindGroupLayout),
+					);
 					const samplerEntry = makeBindGroupEntrySampler(0, logoSampler);
 					const textureEntry = makeBindGroupEntryTexture(1, logoTextureView);
 					const entriesBuf = new ArrayBuffer(56 * 2);
@@ -1109,7 +1342,7 @@ fn fs_main(
 						new Uint8Array(textureEntry.buffer),
 					);
 					const entriesPtr = ptr(entriesBuf);
-					WGPU_KEEPALIVE.push(entriesBuf);
+					rawResources.keepAlive.push(entriesBuf);
 					const bindGroupDesc = makeBindGroupDescriptor(
 						bindGroupLayout,
 						entriesPtr as number,
@@ -1120,9 +1353,11 @@ fn fs_main(
 						bindGroupDesc.ptr as number,
 					);
 					if (!bindGroup) {
-						log("WGPU: bindGroup is null");
-						return;
+						throw new Error("WGPU: bindGroup is null");
 					}
+					rawResources.trackRelease(() =>
+						WGPUNative.symbols.wgpuBindGroupRelease(bindGroup),
+					);
 
 					const encoderDesc = makeCommandEncoderDescriptor();
 					const v = new three.Vector3();
@@ -1174,7 +1409,7 @@ fn fs_main(
 							dragVel.set(0, 0);
 							if (autoRunThree && !autoClosedAfterDrag) {
 								autoClosedAfterDrag = true;
-								setTimeout(() => win.close(), 500);
+								lifecycle.schedule(() => lifecycle.complete(true), 500);
 							}
 						}
 
@@ -1243,87 +1478,112 @@ fn fs_main(
 							surfaceTexture.ptr as number,
 						);
 
-						const status = surfaceTexture.view.getUint32(16, true);
-						if (status !== 1 && status !== 2) return;
 						const texPtr = Number(surfaceTexture.view.getBigUint64(8, true));
+						const status = surfaceTexture.view.getUint32(16, true);
+						if (status !== 1 && status !== 2) {
+							if (texPtr) WGPUNative.symbols.wgpuTextureRelease(texPtr);
+							return;
+						}
 						if (!texPtr) return;
+						let textureView = 0;
+						let encoder = 0;
+						let pass = 0;
+						let commandBuffer = 0;
+						try {
+							textureView = Number(
+								WGPUNative.symbols.wgpuTextureCreateView(texPtr, 0),
+							);
+							if (!textureView) return;
 
-						const textureView = WGPUNative.symbols.wgpuTextureCreateView(
-							texPtr,
-							0,
-						);
-						if (!textureView) return;
+							const clear = { r: 0.02, g: 0.02, b: 0.04, a: 1.0 };
+							const colorAttachment = makeRenderPassColorAttachment(
+								textureView,
+								clear,
+							);
+							const renderPassDesc = makeRenderPassDescriptor(
+								colorAttachment.ptr as number,
+							);
 
-						const clear = { r: 0.02, g: 0.02, b: 0.04, a: 1.0 };
+							encoder = Number(
+								WGPUNative.symbols.wgpuDeviceCreateCommandEncoder(
+									device,
+									encoderDesc.ptr as number,
+								),
+							);
+							if (!encoder) throw new Error("WGPU: command encoder is null");
+							pass = Number(
+								WGPUNative.symbols.wgpuCommandEncoderBeginRenderPass(
+									encoder,
+									renderPassDesc.ptr as number,
+								),
+							);
+							if (!pass) throw new Error("WGPU: render pass is null");
+							WGPUNative.symbols.wgpuRenderPassEncoderSetPipeline(pass, pipeline);
+							WGPUNative.symbols.wgpuRenderPassEncoderSetBindGroup(
+								pass,
+								0,
+								bindGroup,
+								0,
+								0,
+							);
+							WGPUNative.symbols.wgpuRenderPassEncoderSetVertexBuffer(
+								pass,
+								0,
+								vertexBuffer,
+								0,
+								packedProjected.byteLength,
+							);
+							WGPUNative.symbols.wgpuRenderPassEncoderDraw(
+								pass,
+								positions.length / 3,
+								1,
+								0,
+								0,
+							);
+							WGPUNative.symbols.wgpuRenderPassEncoderEnd(pass);
 
-						const colorAttachment = makeRenderPassColorAttachment(
-							textureView,
-							clear,
-						);
-						const renderPassDesc = makeRenderPassDescriptor(
-							colorAttachment.ptr as number,
-						);
-
-						const encoder = WGPUNative.symbols.wgpuDeviceCreateCommandEncoder(
-							device,
-							encoderDesc.ptr as number,
-						);
-						const pass = WGPUNative.symbols.wgpuCommandEncoderBeginRenderPass(
-							encoder,
-							renderPassDesc.ptr as number,
-						);
-						WGPUNative.symbols.wgpuRenderPassEncoderSetPipeline(pass, pipeline);
-						WGPUNative.symbols.wgpuRenderPassEncoderSetBindGroup(
-							pass,
-							0,
-							bindGroup,
-							0,
-							0,
-						);
-						WGPUNative.symbols.wgpuRenderPassEncoderSetVertexBuffer(
-							pass,
-							0,
-							vertexBuffer,
-							0,
-							packedProjected.byteLength,
-						);
-						WGPUNative.symbols.wgpuRenderPassEncoderDraw(
-							pass,
-							positions.length / 3,
-							1,
-							0,
-							0,
-						);
-						WGPUNative.symbols.wgpuRenderPassEncoderEnd(pass);
-
-						const commandBuffer = WGPUNative.symbols.wgpuCommandEncoderFinish(
-							encoder,
-							0,
-						);
-						const commandArray = makeCommandBufferArray(commandBuffer);
-						WGPUNative.symbols.wgpuQueueSubmit(
-							queue,
-							1,
-							commandArray.ptr as number,
-						);
-						WGPUBridge.surfacePresent(surface as number);
-
-						WGPUNative.symbols.wgpuTextureViewRelease(textureView);
-						WGPUNative.symbols.wgpuTextureRelease(texPtr);
-						WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
-						WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
+							commandBuffer = Number(
+								WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0),
+							);
+							if (!commandBuffer) {
+								throw new Error("WGPU: command buffer is null");
+							}
+							const commandArray = makeCommandBufferArray(commandBuffer);
+							WGPUNative.symbols.wgpuQueueSubmit(
+								queue,
+								1,
+								commandArray.ptr as number,
+							);
+							WGPUBridge.surfacePresent(surface as number);
+						} finally {
+							if (pass) WGPUNative.symbols.wgpuRenderPassEncoderRelease(pass);
+							if (commandBuffer) {
+								WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
+							}
+							if (encoder) WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
+							if (textureView) {
+								WGPUNative.symbols.wgpuTextureViewRelease(textureView);
+							}
+							WGPUNative.symbols.wgpuTextureRelease(texPtr);
+						}
 					};
 
-					const interval = setInterval(renderFrame, 16);
-					win.on("close", () => {
-						clearInterval(interval);
-						resolve();
-					});
+					const interval = setInterval(() => {
+						if (!lifecycle.isActive()) return;
+						try {
+							renderFrame();
+						} catch (error) {
+							log(`Three.js render failed: ${String(error)}`);
+							lifecycle.fail(error);
+						}
+					}, 16);
+					rawResources.setRenderInterval(interval);
 				};
 
 				start().catch((err) => {
+					if (!lifecycle.isActive()) return;
 					log(`Three.js render setup failed: ${String(err)}`);
-					reject(err);
+					lifecycle.fail(err);
 				});
 			});
 		},
@@ -1332,15 +1592,14 @@ fn fs_main(
 		name: "Babylon.js WGPU playground",
 		category: "WGPUView (Interactive)",
 		description: "Use Babylon WebGPUEngine with Electrobun WebGPU adapter",
+		instructions: [
+			"A GPU window will open",
+			"You should see a rotating cube lit with a simple shader",
+			"Close the window when done",
+		],
 		interactive: true,
 		timeout: 120000,
-		async run({ log, showInstructions }) {
-			await showInstructions([
-				"A GPU window will open",
-				"You should see a rotating cube lit with a simple shader",
-				"Close the window when done",
-			]);
-
+		async run({ log }) {
 			log("Opening Babylon.js playground window");
 
 			await new Promise<void>((resolve, reject) => {
@@ -1350,11 +1609,42 @@ fn fs_main(
 					titleBarStyle: "default",
 					transparent: false,
 				});
+				const lifecycle = trackGpuWindowLifecycle(win, resolve, reject);
+				let engine: babylon.WebGPUEngine | undefined;
+				let scene: babylon.Scene | undefined;
+				const cleanupBabylon = () => {
+					if (engine) {
+						try {
+							engine.stopRenderLoop();
+						} catch {}
+					}
+					if (scene) {
+						try {
+							scene.dispose();
+						} catch {}
+						scene = undefined;
+					}
+					if (engine) {
+						try {
+							engine.dispose();
+						} catch {}
+						engine = undefined;
+					}
+				};
+				lifecycle.addCleanup(cleanupBabylon);
 
-				win.setAlwaysOnTop(true);
+				try {
+					win.setAlwaysOnTop(true);
+				} catch (error) {
+					log(`Babylon.js window setup failed: ${String(error)}`);
+					lifecycle.fail(error);
+					return;
+				}
+				if (!lifecycle.isActive()) return;
 
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
+					lifecycle.complete(true);
 					return;
 				}
 
@@ -1390,13 +1680,19 @@ fn fs_main(
 							clearTimeout(id);
 					}
 
-					const engine = new babylon.WebGPUEngine(canvas as any, {
+					const createdEngine = new babylon.WebGPUEngine(canvas as any, {
 						antialias: false,
 					});
-					await engine.initAsync();
+					engine = createdEngine;
+					await createdEngine.initAsync();
+					if (!lifecycle.isActive()) {
+						cleanupBabylon();
+						return;
+					}
 
-					const scene = new babylon.Scene(engine);
-					scene.clearColor = new babylon.Color4(0.12, 0.12, 0.14, 1);
+					const createdScene = new babylon.Scene(createdEngine);
+					scene = createdScene;
+					createdScene.clearColor = new babylon.Color4(0.12, 0.12, 0.14, 1);
 
 					const camera = new babylon.ArcRotateCamera(
 						"camera",
@@ -1404,67 +1700,69 @@ fn fs_main(
 						Math.PI / 3,
 						2.5,
 						new babylon.Vector3(0, 0, 0),
-						scene,
+						createdScene,
 					);
 					camera.attachControl(canvas as any, true);
 
 					const light = new babylon.HemisphericLight(
 						"light",
 						new babylon.Vector3(0.4, 1, 0.6),
-						scene,
+						createdScene,
 					);
 					light.intensity = 0.9;
 
 					const box = babylon.MeshBuilder.CreateBox(
 						"box",
 						{ size: 0.7 },
-						scene,
+						createdScene,
 					);
-					const material = new babylon.StandardMaterial("mat", scene);
+					const material = new babylon.StandardMaterial("mat", createdScene);
 					material.diffuseColor = new babylon.Color3(0.12, 0.12, 0.12);
 					material.specularColor = new babylon.Color3(0.4, 0.4, 0.5);
 					box.material = material;
 
 					let renderedFirstFrame = false;
-					engine.runRenderLoop(() => {
-						box.rotation.y += 0.012;
-						box.rotation.x += 0.007;
-						scene.render();
-						if (!renderedFirstFrame) {
-							renderedFirstFrame = true;
-							log("Babylon first frame rendered");
-							if (
-								process.env["AUTO_RUN_TEST_NAME"] ===
-								"Babylon.js WGPU playground"
-							) {
-								setTimeout(() => win.close(), 1500);
+					createdEngine.runRenderLoop(() => {
+						if (!lifecycle.isActive()) return;
+						try {
+							box.rotation.y += 0.012;
+							box.rotation.x += 0.007;
+							createdScene.render();
+							if (!renderedFirstFrame) {
+								renderedFirstFrame = true;
+								log("Babylon first frame rendered");
+								if (
+									process.env["AUTO_RUN_TEST_NAME"] ===
+									"Babylon.js WGPU playground"
+								) {
+									lifecycle.schedule(
+										() => lifecycle.complete(true),
+										1500,
+									);
+								}
 							}
+						} catch (error) {
+							log(`Babylon.js render failed: ${String(error)}`);
+							lifecycle.fail(error);
 						}
 					});
 
-					win.on("resize", () => {
+					const stopTrackingResize = win.on("resize", () => {
+						if (!lifecycle.isActive()) return;
 						const next = win.getSize();
 						canvas.width = next.width;
 						canvas.height = next.height;
 						canvas.clientWidth = next.width;
 						canvas.clientHeight = next.height;
-						engine.resize();
+						createdEngine.resize();
 					});
-
-					win.on("close", () => {
-						engine.stopRenderLoop();
-						scene.dispose();
-						engine.dispose();
-						resolve();
-					});
+					lifecycle.addCleanup(stopTrackingResize);
 				};
 
 				start().catch((err) => {
+					if (!lifecycle.isActive()) return;
 					log(`Babylon.js render setup failed: ${String(err)}`);
-					try {
-						win.close();
-					} catch {}
-					reject(err);
+					lifecycle.fail(err);
 				});
 			});
 		},
@@ -1473,87 +1771,128 @@ fn fs_main(
 		name: "WGPUView basic window",
 		category: "WGPUView (Interactive)",
 		description: "Open a GPU-backed window and verify it appears",
+		instructions: [
+			"A GPU-only window will open with an animated blue shader effect",
+			"Verify the animation renders smoothly without a webview",
+			"Wait for the view to resize once",
+			"Close the window when done",
+		],
 		interactive: true,
 		timeout: 120000,
-		async run({ log, showInstructions, waitForUserVerification }) {
-			await showInstructions([
-				"A blank GPU window will open",
-				"You should see an empty window (no webview)",
-				"Wait for the view to resize once",
-				"Close the window when done",
-				"Click Pass if the window opened and resized without crashing",
-			]);
-
+		async run({ log }) {
 			log("Opening WGPUView test window");
 
-			await new Promise<void>((resolve) => {
+			await new Promise<void>((resolve, reject) => {
 				const win = new GpuWindow({
 					title: "WGPUView Test",
 					frame: { width: 500, height: 400, x: 200, y: 120 },
 					titleBarStyle: "default",
 					transparent: false,
 				});
+				const lifecycle = trackGpuWindowLifecycle(win, resolve, reject);
 
-				win.setAlwaysOnTop(true);
+				try {
+					win.setAlwaysOnTop(true);
+				} catch (error) {
+					log(`WGPU window setup failed: ${String(error)}`);
+					lifecycle.fail(error);
+					return;
+				}
+				if (!lifecycle.isActive()) return;
 
 				if (!WGPUNative.available) {
 					log("WGPU native library not available");
+					lifecycle.complete(true);
+					return;
 				} else {
-						const startRendering = async () => {
-							log("WGPU: creating instance + surface");
-							await new Promise((resolve) => setTimeout(resolve, 100));
-							const instance = WGPUNative.symbols.wgpuCreateInstance(0);
-							const surface = WGPUBridge.createSurfaceForView(
-								instance as number,
-								win.wgpuView.ptr as number,
-							);
-							if (!surface) {
-								log("Failed to create WGPU surface");
-								return;
-							}
+					const startRendering = async () => {
+						log("WGPU: creating instance + surface");
+						if (!(await lifecycle.delay(100))) return;
+						const rawResources = trackRawWgpuResources();
+						lifecycle.addCleanup(() => rawResources.cleanup());
+						const instance = WGPUNative.symbols.wgpuCreateInstance(0);
+						if (!instance) {
+							throw new Error("WGPU: instance is null");
+						}
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuInstanceRelease(instance),
+						);
+						const surface = WGPUBridge.createSurfaceForView(
+							instance as number,
+							win.wgpuView.ptr as number,
+						);
+						if (!surface) {
+							throw new Error("Failed to create WGPU surface");
+						}
+						rawResources.trackSurface(surface as number);
 
-							const adapterDevice = new BigUint64Array(2);
-							WGPUBridge.createAdapterDeviceMainThread(
-								instance as number,
-								surface as number,
-								ptr(adapterDevice),
+						const adapterDevice = new BigUint64Array(2);
+						WGPUBridge.createAdapterDeviceMainThread(
+							instance as number,
+							surface as number,
+							ptr(adapterDevice),
+						);
+						const adapter = Number(adapterDevice[0]);
+						const device = Number(adapterDevice[1]);
+						log(`WGPU: adapter=${adapter} device=${device}`);
+						if (adapter) {
+							rawResources.trackRelease(() =>
+								WGPUNative.symbols.wgpuAdapterRelease(adapter),
 							);
-							const adapter = Number(adapterDevice[0]);
-							const device = Number(adapterDevice[1]);
-							log(`WGPU: adapter=${adapter} device=${device}`);
-							if (!adapter || !device) {
-								log("WGPU: adapter/device is null");
-								return;
-							}
-							const queue = WGPUNative.symbols.wgpuDeviceGetQueue(device);
+						}
+						if (device) {
+							rawResources.trackRelease(() => {
+								WGPUNative.symbols.wgpuDeviceDestroy(device);
+								WGPUNative.symbols.wgpuDeviceRelease(device);
+							});
+						}
+						if (!adapter || !device) {
+							throw new Error("WGPU: adapter/device is null");
+						}
+						const queue = WGPUNative.symbols.wgpuDeviceGetQueue(device);
+						if (!queue) {
+							throw new Error("WGPU: queue is null");
+						}
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuQueueRelease(queue),
+						);
 
-							const size = win.getSize();
-							const caps = makeSurfaceCapabilities();
-							WGPUNative.symbols.wgpuSurfaceGetCapabilities(
-								surface,
-								adapter,
-								caps.ptr as number,
-							);
-							const pick = pickSurfaceFormatAlpha(
-								caps.view,
-								WGPUTextureFormat_BGRA8Unorm,
-							);
-							log(
-								`WGPU: surface format=${pick.format} alpha=${pick.alphaMode}`,
-							);
-							const surfaceConfig = makeSurfaceConfiguration(
-								device,
-								size.width,
-								size.height,
-								pick.format,
-								pick.alphaMode,
-							);
-							WGPUBridge.surfaceConfigure(
-								surface as number,
-								surfaceConfig.ptr as number,
-							);
+						const size = win.getSize();
+						const caps = makeSurfaceCapabilities();
+						let capsFreed = false;
+						const freeCaps = () => {
+							if (capsFreed) return;
+							WGPUBridge.surfaceCapabilitiesFreeMembers(caps.ptr);
+							capsFreed = true;
+						};
+						rawResources.trackRelease(freeCaps);
+						WGPUNative.symbols.wgpuSurfaceGetCapabilities(
+							surface,
+							adapter,
+							caps.ptr as number,
+						);
+						const pick = pickSurfaceFormatAlpha(
+							caps.view,
+							WGPUTextureFormat_BGRA8Unorm,
+						);
+						freeCaps();
+						log(
+							`WGPU: surface format=${pick.format} alpha=${pick.alphaMode}`,
+						);
+						const surfaceConfig = makeSurfaceConfiguration(
+							device,
+							size.width,
+							size.height,
+							pick.format,
+							pick.alphaMode,
+						);
+						WGPUBridge.surfaceConfigure(
+							surface as number,
+							surfaceConfig.ptr as number,
+						);
+						rawResources.setConfiguredSurface(surface as number);
 
-							const shaderText = `
+						const shaderText = `
 var<private> gTime: f32 = 0.0;
 const REPEAT: f32 = 5.0;
 
@@ -1683,134 +2022,144 @@ fn fs_main(
   return vec4<f32>(col, alpha);
 }
             `;
-							const shaderBytes = new TextEncoder().encode(shaderText + "\0");
-							const shaderBuf = new Uint8Array(shaderBytes);
-							WGPU_KEEPALIVE.push(shaderBuf);
-							const shaderPtr = ptr(shaderBuf);
-							const shaderSource = makeShaderSourceWGSL(shaderPtr, WGPU_STRLEN);
-							const shaderDesc = makeShaderModuleDescriptor(
-								shaderSource.ptr as number,
-							);
-							const shaderModule =
-								WGPUNative.symbols.wgpuDeviceCreateShaderModule(
-									device,
-									shaderDesc.ptr as number,
-								);
-							if (!shaderModule) {
-								log("WGPU: shaderModule is null");
-								return;
-							}
-
-							const drawEnabled = true;
-							const vsName = "vs_main";
-							const fsName = "fs_main";
-							const entryPoint = new CString(vsName);
-							const fragEntryPoint = new CString(fsName);
-							WGPU_KEEPALIVE.push(entryPoint, fragEntryPoint);
-							const vsLen = WGPU_STRLEN;
-							const fsLen = WGPU_STRLEN;
-							const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x2);
-							const timeAttr = makeVertexAttribute(8, 1, WGPUVertexFormat_Float32);
-							const resAttr = makeVertexAttribute(12, 2, WGPUVertexFormat_Float32x2);
-							const attrBuf = new ArrayBuffer(32 * 3);
-							new Uint8Array(attrBuf, 0, 32).set(new Uint8Array(posAttr.buffer));
-							new Uint8Array(attrBuf, 32, 32).set(new Uint8Array(timeAttr.buffer));
-							new Uint8Array(attrBuf, 64, 32).set(new Uint8Array(resAttr.buffer));
-							const attrPtr = ptr(attrBuf);
-							WGPU_KEEPALIVE.push(attrBuf);
-							const vertexLayout = makeVertexBufferLayout(attrPtr as number, 3, 20n);
-							const vertexState = makeVertexState(
-								shaderModule,
-								entryPoint.ptr,
-								vsLen,
-								vertexLayout.ptr as number,
-							);
-							const colorTarget = makeColorTargetState(pick.format);
-							const fragmentState = makeFragmentState(
-								shaderModule,
-								fragEntryPoint.ptr,
-								fsLen,
-								colorTarget.ptr as number,
-							);
-							const primitiveState = makePrimitiveState();
-							const multisampleState = makeMultisampleState();
-							const pipelineDesc = makeRenderPipelineDescriptor(
-								0,
-								vertexState,
-								primitiveState,
-								multisampleState,
-								fragmentState,
-							);
-
-							const pipeline =
-								WGPUNative.symbols.wgpuDeviceCreateRenderPipeline(
-									device,
-									pipelineDesc.ptr as number,
-								);
-							if (!pipeline) {
-								log("WGPU: pipeline is null");
-								return;
-							}
-
-							const vertexCount = 3;
-							const bufferDesc = makeBufferDescriptor(vertexCount * 5 * 4);
-							const vertexBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(
+						const shaderBytes = new TextEncoder().encode(shaderText + "\0");
+						const shaderBuf = new Uint8Array(shaderBytes);
+						rawResources.keepAlive.push(shaderBuf);
+						const shaderPtr = ptr(shaderBuf);
+						const shaderSource = makeShaderSourceWGSL(shaderPtr, WGPU_STRLEN);
+						const shaderDesc = makeShaderModuleDescriptor(
+							shaderSource.ptr as number,
+						);
+						const shaderModule =
+							WGPUNative.symbols.wgpuDeviceCreateShaderModule(
 								device,
-								bufferDesc.ptr as number,
+								shaderDesc.ptr as number,
 							);
-							if (!vertexBuffer) {
-								log("WGPU: vertexBuffer is null");
-								return;
+						if (!shaderModule) {
+							throw new Error("WGPU: shaderModule is null");
+						}
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuShaderModuleRelease(shaderModule),
+						);
+
+						const drawEnabled = true;
+						const vsName = "vs_main";
+						const fsName = "fs_main";
+						const entryPoint = makeCString(vsName);
+						const fragEntryPoint = makeCString(fsName);
+						rawResources.keepAlive.push(entryPoint, fragEntryPoint);
+						const vsLen = WGPU_STRLEN;
+						const fsLen = WGPU_STRLEN;
+						const posAttr = makeVertexAttribute(0, 0, WGPUVertexFormat_Float32x2);
+						const timeAttr = makeVertexAttribute(8, 1, WGPUVertexFormat_Float32);
+						const resAttr = makeVertexAttribute(12, 2, WGPUVertexFormat_Float32x2);
+						const attrBuf = new ArrayBuffer(32 * 3);
+						new Uint8Array(attrBuf, 0, 32).set(new Uint8Array(posAttr.buffer));
+						new Uint8Array(attrBuf, 32, 32).set(new Uint8Array(timeAttr.buffer));
+						new Uint8Array(attrBuf, 64, 32).set(new Uint8Array(resAttr.buffer));
+						const attrPtr = ptr(attrBuf);
+						rawResources.keepAlive.push(attrBuf);
+						const vertexLayout = makeVertexBufferLayout(attrPtr as number, 3, 20n);
+						const vertexState = makeVertexState(
+							shaderModule,
+							entryPoint.ptr,
+							vsLen,
+							vertexLayout.ptr as number,
+						);
+						const colorTarget = makeColorTargetState(pick.format);
+						const fragmentState = makeFragmentState(
+							shaderModule,
+							fragEntryPoint.ptr,
+							fsLen,
+							colorTarget.ptr as number,
+						);
+						const primitiveState = makePrimitiveState();
+						const multisampleState = makeMultisampleState();
+						const pipelineDesc = makeRenderPipelineDescriptor(
+							0,
+							vertexState,
+							primitiveState,
+							multisampleState,
+							fragmentState,
+						);
+
+						const pipeline =
+							WGPUNative.symbols.wgpuDeviceCreateRenderPipeline(
+								device,
+								pipelineDesc.ptr as number,
+							);
+						if (!pipeline) {
+							throw new Error("WGPU: pipeline is null");
+						}
+						rawResources.trackRelease(() =>
+							WGPUNative.symbols.wgpuRenderPipelineRelease(pipeline),
+						);
+
+						const vertexCount = 3;
+						const bufferDesc = makeBufferDescriptor(vertexCount * 5 * 4);
+						const vertexBuffer = WGPUNative.symbols.wgpuDeviceCreateBuffer(
+							device,
+							bufferDesc.ptr as number,
+						);
+						if (!vertexBuffer) {
+							throw new Error("WGPU: vertexBuffer is null");
+						}
+						rawResources.trackRelease(() => {
+							WGPUNative.symbols.wgpuBufferDestroy(vertexBuffer);
+							WGPUNative.symbols.wgpuBufferRelease(vertexBuffer);
+						});
+
+						const encoderDesc = makeCommandEncoderDescriptor();
+
+						let frameCount = 0;
+						const renderFrame = () => {
+							const sizeNow = win.getSize();
+							const t = performance.now() * 0.001;
+							const positions = [-1, -1, 3, -1, -1, 3];
+							const packed = new Float32Array(vertexCount * 5);
+							for (let i = 0; i < vertexCount; i += 1) {
+								const idx = i * 5;
+								packed[idx] = positions[i * 2]!;
+								packed[idx + 1] = positions[i * 2 + 1]!;
+								packed[idx + 2] = t;
+								packed[idx + 3] = sizeNow.width;
+								packed[idx + 4] = sizeNow.height;
 							}
+							WGPUNative.symbols.wgpuQueueWriteBuffer(
+								queue,
+								vertexBuffer,
+								0,
+								ptr(packed),
+								packed.byteLength,
+							);
 
-							const encoderDesc = makeCommandEncoderDescriptor();
+							WGPUNative.symbols.wgpuInstanceProcessEvents(instance);
 
-							let frameCount = 0;
-							const renderFrame = () => {
-								const sizeNow = win.getSize();
-								const t = performance.now() * 0.001;
-								const positions = [-1, -1, 3, -1, -1, 3];
-								const packed = new Float32Array(vertexCount * 5);
-								for (let i = 0; i < vertexCount; i += 1) {
-									const idx = i * 5;
-									packed[idx] = positions[i * 2]!;
-									packed[idx + 1] = positions[i * 2 + 1]!;
-									packed[idx + 2] = t;
-									packed[idx + 3] = sizeNow.width;
-									packed[idx + 4] = sizeNow.height;
-								}
-								WGPUNative.symbols.wgpuQueueWriteBuffer(
-									queue,
-									vertexBuffer,
-									0,
-									ptr(packed),
-									packed.byteLength,
-								);
-
-								WGPUNative.symbols.wgpuInstanceProcessEvents(instance);
-
-								const surfaceTexture = makeSurfaceTexture();
-								WGPUBridge.surfaceGetCurrentTexture(
-									surface as number,
-									surfaceTexture.ptr as number,
-								);
-
-								const status = surfaceTexture.view.getUint32(16, true);
-								if (status !== 1 && status !== 2) {
-									return;
-								}
+							const surfaceTexture = makeSurfaceTexture();
+							WGPUBridge.surfaceGetCurrentTexture(
+								surface as number,
+								surfaceTexture.ptr as number,
+							);
 
 								const texPtr = Number(
 									surfaceTexture.view.getBigUint64(8, true),
 								);
-								if (!texPtr) {
-									if (frameCount === 0) log("WGPU: surface texture is null");
+								const status = surfaceTexture.view.getUint32(16, true);
+								if (status !== 1 && status !== 2) {
+									if (texPtr) WGPUNative.symbols.wgpuTextureRelease(texPtr);
 									return;
 								}
-
-								const textureView = WGPUNative.symbols.wgpuTextureCreateView(
-									texPtr,
-									0,
+							if (!texPtr) {
+								if (frameCount === 0) log("WGPU: surface texture is null");
+								return;
+							}
+							let textureView = 0;
+							let encoder = 0;
+							let pass = 0;
+							let commandBuffer = 0;
+							try {
+								textureView = Number(
+									WGPUNative.symbols.wgpuTextureCreateView(texPtr, 0),
 								);
 								if (!textureView) {
 									if (frameCount === 0) log("WGPU: textureView is null");
@@ -1822,17 +2171,20 @@ fn fs_main(
 									colorAttachment.ptr as number,
 								);
 
-								const encoder =
+								encoder = Number(
 									WGPUNative.symbols.wgpuDeviceCreateCommandEncoder(
 										device,
 										encoderDesc.ptr as number,
-									);
-
-								const pass =
+									),
+								);
+								if (!encoder) throw new Error("WGPU: command encoder is null");
+								pass = Number(
 									WGPUNative.symbols.wgpuCommandEncoderBeginRenderPass(
 										encoder,
 										renderPassDesc.ptr as number,
-									);
+									),
+								);
+								if (!pass) throw new Error("WGPU: render pass is null");
 								if (drawEnabled) {
 									WGPUNative.symbols.wgpuRenderPassEncoderSetPipeline(
 										pass,
@@ -1855,11 +2207,11 @@ fn fs_main(
 								}
 								WGPUNative.symbols.wgpuRenderPassEncoderEnd(pass);
 
-								const commandBuffer =
-									WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0);
+								commandBuffer = Number(
+									WGPUNative.symbols.wgpuCommandEncoderFinish(encoder, 0),
+								);
 								if (!commandBuffer) {
-									if (frameCount === 0) log("WGPU: commandBuffer is null");
-									return;
+									throw new Error("WGPU: command buffer is null");
 								}
 								const commandArray = makeCommandBufferArray(commandBuffer);
 								WGPUNative.symbols.wgpuQueueSubmit(
@@ -1868,27 +2220,40 @@ fn fs_main(
 									commandArray.ptr as number,
 								);
 								WGPUBridge.surfacePresent(surface as number);
-
-								WGPUNative.symbols.wgpuTextureViewRelease(textureView);
-								WGPUNative.symbols.wgpuTextureRelease(texPtr);
-								WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
-								WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
 								frameCount += 1;
-							};
-
-							const interval = setInterval(renderFrame, 16);
-
-							win.on("close", () => {
-								clearInterval(interval);
-							});
+							} finally {
+								if (pass) WGPUNative.symbols.wgpuRenderPassEncoderRelease(pass);
+								if (commandBuffer) {
+									WGPUNative.symbols.wgpuCommandBufferRelease(commandBuffer);
+								}
+								if (encoder) WGPUNative.symbols.wgpuCommandEncoderRelease(encoder);
+								if (textureView) {
+									WGPUNative.symbols.wgpuTextureViewRelease(textureView);
+								}
+								WGPUNative.symbols.wgpuTextureRelease(texPtr);
+							}
 						};
 
-						startRendering().catch((err) => {
-							log(`WGPU render setup failed: ${String(err)}`);
-						});
+						const interval = setInterval(() => {
+							if (!lifecycle.isActive()) return;
+							try {
+								renderFrame();
+							} catch (error) {
+								log(`WGPU render failed: ${String(error)}`);
+								lifecycle.fail(error);
+							}
+						}, 16);
+						rawResources.setRenderInterval(interval);
+					};
+
+					startRendering().catch((err) => {
+						if (!lifecycle.isActive()) return;
+						log(`WGPU render setup failed: ${String(err)}`);
+						lifecycle.fail(err);
+					});
 				}
 
-				setTimeout(() => {
+				lifecycle.schedule(() => {
 					try {
 						win.wgpuView.setFrame(20, 20, 300, 200);
 						log("Resized WGPUView to 300x200");
@@ -1897,7 +2262,7 @@ fn fs_main(
 					}
 				}, 1000);
 
-				setTimeout(() => {
+				lifecycle.schedule(() => {
 					try {
 						win.wgpuView.setFrame(0, 0, 500, 400);
 						log("Resized WGPUView back to full size");
@@ -1905,14 +2270,42 @@ fn fs_main(
 						log(`Resize failed: ${String(err)}`);
 					}
 				}, 2000);
-
-				win.on("close", () => {
-					log("WGPUView window closed");
-					resolve();
-				});
 			});
+		},
+	}),
+	defineTest({
+		name: "Transparent window WGPU cube",
+		category: "WGPUView (Interactive)",
+		description: "Render a rotating cube in a transparent window (DComp compositing test)",
+		instructions: [
+			"A transparent GPU window will open",
+			"You should see a rotating cube with the desktop visible behind it",
+			"Close the window when done",
+		],
+		interactive: true,
+		timeout: 120000,
+		async run({ log }) {
+			log("Opening transparent WGPUView cube window");
 
-			await waitForUserVerification();
+			await new Promise<void>((resolve, reject) => {
+				const win = new GpuWindow({
+					title: "Transparent WGPU Cube",
+					frame: { width: 500, height: 400, x: 240, y: 160 },
+					titleBarStyle: "hiddenInset",
+					transparent: true,
+				});
+				const lifecycle = trackGpuWindowLifecycle(win, resolve, reject);
+
+				try {
+					win.setAlwaysOnTop(true);
+					if (!lifecycle.isActive()) return;
+					WGPUBridge.runTest(win.wgpuViewId);
+					log("Transparent WGPU cube started");
+				} catch (error) {
+					log(`Transparent WGPU cube setup failed: ${String(error)}`);
+					lifecycle.fail(error);
+				}
+			});
 		},
 	}),
 ];

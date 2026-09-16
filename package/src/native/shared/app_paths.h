@@ -41,6 +41,30 @@ inline std::string buildAppDataPath(
     return result;
 }
 
+inline std::wstring buildAppDataPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& suffix = L"",
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring appId = !identifier.empty() ? identifier : L"Electrobun";
+    std::wstring channelPath = !channel.empty() ? channel : L"default";
+
+    std::wstring result = basePath;
+    result += pathSeparator;
+    result += appId;
+    result += pathSeparator;
+    result += channelPath;
+
+    if (!suffix.empty()) {
+        result += pathSeparator;
+        result += suffix;
+    }
+
+    return result;
+}
+
 /**
  * Build a partition-specific path under the app data directory.
  *
@@ -63,6 +87,68 @@ inline std::string buildPartitionPath(
     std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
     base += pathSeparator;
     base += "Partitions";
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
+inline std::wstring buildPartitionPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& renderer,
+    const std::wstring& partitionName,
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring base = buildAppDataPath(
+        basePath, identifier, channel, renderer, pathSeparator);
+    base += pathSeparator;
+    base += L"Partitions";
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
+/**
+ * Build a CEF partition-specific path as a direct child of the renderer root.
+ *
+ * CEF's Chrome runtime requires persistent profile directories to live directly
+ * under root_cache_path. The reserved `persist:default` partition is handled by
+ * CEF's global request context, so named persistent partitions do not need a
+ * nested directory to avoid its auto-created `Default` profile.
+ *
+ * @param basePath The base application support/data path
+ * @param identifier The app identifier
+ * @param channel The release channel
+ * @param renderer The renderer type (typically "CEF")
+ * @param partitionName The partition name
+ * @param pathSeparator The path separator to use
+ * @return The full path: basePath/identifier/channel/renderer/partitionName
+ */
+inline std::string buildCEFPartitionPath(
+    const std::string& basePath,
+    const std::string& identifier,
+    const std::string& channel,
+    const std::string& renderer,
+    const std::string& partitionName,
+    char pathSeparator = '/'
+) {
+    std::string base = buildAppDataPath(basePath, identifier, channel, renderer, pathSeparator);
+    base += pathSeparator;
+    base += partitionName;
+    return base;
+}
+
+inline std::wstring buildCEFPartitionPath(
+    const std::wstring& basePath,
+    const std::wstring& identifier,
+    const std::wstring& channel,
+    const std::wstring& renderer,
+    const std::wstring& partitionName,
+    wchar_t pathSeparator = L'/'
+) {
+    std::wstring base = buildAppDataPath(
+        basePath, identifier, channel, renderer, pathSeparator);
     base += pathSeparator;
     base += partitionName;
     return base;

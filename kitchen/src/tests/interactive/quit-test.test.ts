@@ -1,7 +1,7 @@
 // Interactive Quit/Shutdown Tests - Playground
 
 import { defineTest } from "../../test-framework/types";
-import Electrobun, { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import Electrobun, { BrowserView, BrowserWindow, Utils } from "electrobun/main";
 
 // Register the beforeQuit handler globally so it's active for all quit paths
 let beforeQuitRegistered = false;
@@ -11,8 +11,9 @@ function ensureBeforeQuitHandler() {
   if (beforeQuitRegistered) return;
   beforeQuitRegistered = true;
 
-  Electrobun.events.on("before-quit", (_event: any) => {
+  Electrobun.events.on("before-quit", (event: any) => {
     console.log("before-quit handler running");
+    const playgroundIsActive = activeRpc !== null;
     
     // Send message to the UI so the user can see it fired
     try {
@@ -31,13 +32,19 @@ function ensureBeforeQuitHandler() {
 
     try {
       activeRpc?.send.beforeQuitDone({
-        message: "beforeQuit cleanup complete (2s elapsed). Quitting now.",
+        message: playgroundIsActive
+          ? "beforeQuit cleanup complete (2s elapsed). Quit cancelled for playground mode."
+          : "beforeQuit cleanup complete (2s elapsed). Quitting now.",
       });
     } catch {
       // RPC may not be available during shutdown
     }
 
-    // Allow the quit to proceed (don't set event.response = { allow: false })
+    // Keep the kitchen alive while demonstrating quit from the playground.
+    // Once its window closes, the persistent handler allows real app quit.
+    if (playgroundIsActive) {
+      event.response = { allow: false };
+    }
   });
 }
 
@@ -47,18 +54,17 @@ export const quitTests = [
     category: "Quit (Interactive)",
     description:
       "Interactive playground for testing quit modes and verifying beforeQuit handler fires correctly",
+    instructions: [
+      "A quit test control panel will open",
+      "Use both programmatic quit buttons and verify each quit is cancelled",
+      "The beforeQuit handler will log to the event log and wait 2 seconds before cancelling",
+      "Close the window when done exploring to pass the test",
+    ],
     interactive: true,
     timeout: 600000,
-    async run({ log, showInstructions }) {
+    async run({ log }) {
       // Ensure the beforeQuit handler is registered
       ensureBeforeQuitHandler();
-
-      await showInstructions([
-        "A quit test control panel will open",
-        "Use buttons to test programmatic quit, or follow instructions for system quit",
-        "The beforeQuit handler will log to the event log and wait 2 seconds",
-        "Close the window when done exploring to pass the test",
-      ]);
 
       log("Opening quit test playground window");
 
@@ -87,7 +93,10 @@ export const quitTests = [
                   }, 100);
                 }
 
-                return { success: true, message: `${mode} will execute shortly` };
+                return {
+                  success: true,
+                  message: `${mode} will trigger before-quit and be cancelled for playground mode`,
+                };
               },
             },
             messages: {

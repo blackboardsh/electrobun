@@ -1,0 +1,188 @@
+---
+title: "Warren Reactivity"
+description: "Warren's reactivity model: signal, store, live, memo, inert, cleanup, batch."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Warren is experimental and its APIs may change between releases.
+</Aside>
+
+Warren's reactivity has one rule: **nothing is reactive unless you can see
+why.** Component bodies, event handlers, and helpers are inert. Reactivity
+exists only inside a scope you can see — `live()` or `memo()` — and within a
+scope, tracking follows the dynamic extent: signal calls and store property
+reads both subscribe, including inside helpers called from the scope.
+
+## Seven primitives
+
+Every one is a bare verb that takes a function.
+
+| | |
+| --- | --- |
+| `signal(v)` | reactive value. returns `[get, set]` |
+| `store(obj)` | nested reactive state. returns `[proxy, setter]`. proxy is **read-only** |
+| `live(fn)` | creates a reactive scope. deferred — runs after commit |
+| `memo(fn)` | caching reactive scope. dependents never observe it stale |
+| `inert(fn)` | reads without subscribing, inside a scope |
+| `cleanup(fn)` | registers teardown for the enclosing scope |
+| `batch(fn)` | defers notification until the outermost batch exits |
+
+There is no `createEffect` — an effect is a `live` whose return value nobody
+uses. There is no `produce` — store setters take a mutator function; that
+behavior is the default.
+
+## Component bodies run once
+
+The body is not a render function. It executes a single time, at mount.
+Everything reactive lives in a scope:
+
+```tsx
+function Profile() {
+  const [tab, setTab] = signal("info");
+
+  const joined = state.user.joinedAt;   // inert. snapshot, taken once.
+
+  live(() => {
+    analytics.page(tab());              // tracks — inside a scope
+  });
+
+  return (
+    <column>
+      <text size={11}>Since {joined}</text>            {/* renders once */}
+      <text size={18}>{live(() => state.user.name)}</text>  {/* live */}
+      <box
+        bg={live(() => (tab() === "info" ? "#232336" : "#1b1b28"))}
+        onClick={() => setTab("billing")}
+      />
+    </column>
+  );
+}
+```
+
+Scanning top to bottom, every dynamic value is marked and everything
+unmarked is provably static. Search a file for `live(` to find every
+reactive boundary.
+
+## live in three positions
+
+Same primitive, same mechanism — a reactive scope:
+
+```tsx
+// 1. statement position — an effect. return value discarded.
+live(() => {
+  setTitle(`${count()} unread`);
+  cleanup(() => resetTitle());
+});
+
+// 2. JSX position — a binding. the value becomes the node or attribute.
+<text>{live(() => state.user.name)}</text>
+// In the DOM renderer a live child may also return elements — the region
+// remounts on change: <div>{live(() => open() && <Panel/>)}</div>
+
+// 3. nested inside another tracked scope — redundant (that scope already
+//    tracks the dynamic extent); Warren warns and passes the value through.
+//    Component bodies are inert, so a live() there is never "nested" — it
+//    is a real binding even when the component mounts inside a region.
+```
+
+A JSX `live` is disposed when its node unmounts; a body-level `live` when
+its component does. Cleanups run before every re-run, not only at disposal.
+
+## memo vs live
+
+They run in different phases, and that is the load-bearing difference:
+
+- **`memo`** derives values. Dependents — including `live` scopes — never
+  observe a stale memo (no glitches). Memos are pure: `cleanup()` inside a
+  memo is a hard error.
+- **`live`** owns resources and side effects. It is deferred — it runs after
+  commit, observing a settled graph.
+
+```ts docs=syntax
+const socketUrl = memo(() => `wss://${region()}/feed`);   // pure. just a value.
+
+live(() => {
+  const ws = new WebSocket(socketUrl());
+  cleanup(() => ws.close());                              // owns the resource
+});
+```
+
+## inert — the escape hatch
+
+Suppresses subscription for a read inside a scope:
+
+```ts docs=syntax
+live(() => {
+  const plan = inert(() => state.user.plan);   // read, don't subscribe
+  log(`${state.user.name} · ${plan}`);         // subscribes to .name only
+});
+```
+
+`inert` outside a scope is a no-op — inert is already the default there, so
+there is no need to sprinkle it at component top level.
+
+## Stores
+
+A signal is one independent value; a store is a group of related values.
+Both return tuples, so read and write access separate at the import site:
+
+```ts docs=syntax
+export const [state, setState] = store({ user: null, threads: [] });
+```
+
+The proxy is **read-only everywhere — enforced in production, not dev-only**.
+The setter passes a writable draft and batches that store's writes into one
+propagation. Mutation is direct: no immutability, no structural sharing, no
+tree copying.
+
+```ts docs=syntax
+setState((s) => {
+  s.user.name = "ada";
+  s.unread = 0;
+});   // one propagation
+```
+
+## batch
+
+Defers **notification**, never mutation — values are always current inside a
+batch; only propagation is queued. Batches nest and collapse to the
+outermost exit. `batch` is a rare escape hatch: store setters already batch
+their own store, and repeatedly reaching for `batch` to coordinate multiple
+stores is a sign those stores want to be one store.
+
+```ts docs=syntax
+batch(() => {
+  for (const item of items) {
+    setTotal((t) => t + item.price);   // each read sees the last write
+  }
+});   // one propagation
+```
+
+Warren never catches or logs exceptions from your functions — they propagate
+untouched — but its own ambient state (batch depth, tracking stack, inert
+flag) is always restored, so a throw can't silently freeze propagation or
+leak phantom subscriptions.
+
+## Hard errors
+
+| Condition | Why |
+| --- | --- |
+| write to a store proxy outside its setter | enforced in prod |
+| `cleanup()` with no argument | it registers teardown; it does not "clean up now" |
+| `cleanup()` outside a scope | no scope to tear down |
+| `cleanup()` inside a `memo` | memos are pure; the phase boundary is structural |
+| `live()` outside JSX and outside any scope | no coherent meaning |
+
+## Dev-mode warnings
+
+These make "unmarked means static" a guarantee rather than a hope:
+
+1. **Signal read during render with no scope on the stack** — the
+   forgotten-`live` case: `{count()}` would render once and silently freeze.
+2. **`live()` that registered zero dependencies** — defensive over-wrapping;
+   the expression is static, drop the marker.
+3. **Nested `live()`** — the enclosing scope already tracks these reads; the
+   marker is redundant there.
+
+Disable with `setDevMode(false)`.

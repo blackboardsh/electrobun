@@ -1,0 +1,53 @@
+name: Install Hutch
+description: Install a published Hutch channel for Electrobun builds
+
+inputs:
+  channel:
+    description: Hutch release channel
+    required: false
+    default: production
+
+runs:
+  using: composite
+  steps:
+    - name: Install Hutch
+      if: runner.os != 'Windows'
+      shell: bash
+      env:
+        HUTCH_INSTALL_CHANNEL: ${{ inputs.channel }}
+      run: |
+        installer="$RUNNER_TEMP/install-hutch.sh"
+        curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+          https://hutch.blackboard.sh/hutch/install.sh \
+          --output "$installer"
+        sh "$installer" --channel "$HUTCH_INSTALL_CHANNEL" --no-modify-path
+        installed_name=hutch
+        if [[ "$HUTCH_INSTALL_CHANNEL" == canary ]]; then
+          installed_name=hutch-canary
+        fi
+        command_dir="$RUNNER_TEMP/hutch-command"
+        mkdir -p "$command_dir"
+        printf '#!/bin/sh\nexec "%s" "$@"\n' "$HOME/.hutch/bin/$installed_name" > "$command_dir/hutch"
+        chmod +x "$command_dir/hutch"
+        echo "$command_dir" >> "$GITHUB_PATH"
+        echo "HUTCH_ACTIVE_CHANNEL=$HUTCH_INSTALL_CHANNEL" >> "$GITHUB_ENV"
+
+    - name: Install Hutch
+      if: runner.os == 'Windows'
+      shell: pwsh
+      env:
+        HUTCH_INSTALL_CHANNEL: ${{ inputs.channel }}
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP "install-hutch.ps1"
+        Invoke-WebRequest -UseBasicParsing `
+          -Uri "https://hutch.blackboard.sh/hutch/install.ps1" `
+          -OutFile $installer
+        & $installer -Channel $env:HUTCH_INSTALL_CHANNEL
+        if ($LASTEXITCODE -ne 0) { throw "Hutch installation failed" }
+        $installedName = if ($env:HUTCH_INSTALL_CHANNEL -eq "canary") { "hutch-canary.exe" } else { "hutch.exe" }
+        $commandDir = Join-Path $env:RUNNER_TEMP "hutch-command"
+        New-Item -ItemType Directory -Path $commandDir -Force | Out-Null
+        $installedPath = Join-Path $HOME ".hutch\bin\$installedName"
+        Copy-Item $installedPath (Join-Path $commandDir "hutch.exe")
+        $commandDir | Out-File -FilePath $env:GITHUB_PATH -Append
+        "HUTCH_ACTIVE_CHANNEL=$env:HUTCH_INSTALL_CHANNEL" | Out-File -FilePath $env:GITHUB_ENV -Append

@@ -5,7 +5,8 @@ This document describes Electrobun's build system and cross-platform compilation
 ## Overview
 
 Electrobun uses a custom build system (`build.ts`) that handles:
-- Vendoring dependencies (Bun, Zig, CEF, WebView2)
+- Resolving the globally installed Hutch and its selected Cottontail runtime
+- Resolving application toolchains and platform artifacts such as Zig, CEF, and WebView2
 - Building native wrappers for each platform
 - Creating distribution packages
 
@@ -44,18 +45,18 @@ Unlike macOS and Windows, Linux doesn't have reliable weak linking for shared li
 2. **Flexibility** - Same codebase supports both system WebKitGTK and CEF rendering
 3. **Reliability** - No runtime linking failures or undefined symbols
 
-#### CLI Binary Selection
+#### Build-Time Binary Selection
 
-The Electrobun CLI automatically copies the appropriate binary based on the `bundleCEF` setting:
+The native devkit manifest identifies both wrappers. Hutch selects and stages
+the CEF-enabled wrapper only when `build.linux.bundleCEF` is true; otherwise it
+uses the GTK-only wrapper. This selection is part of application packaging,
+not the thin npm bootstrap.
 
-```typescript
-const useCEF = config.build.linux?.bundleCEF;
-const nativeWrapperSource = useCEF 
-  ? PATHS.NATIVE_WRAPPER_LINUX_CEF 
-  : PATHS.NATIVE_WRAPPER_LINUX;
-```
-
-Both binaries are included in the distributed `electrobun` npm package, ensuring developers can toggle CEF support without recompilation.
+Both binaries are published with the versioned Electrobun devkit. Hutch resolves
+the explicit `electrobun.version` when present, otherwise the npm-paired or
+floating channel default, verifies that release's artifacts, and installs them
+under `~/.hutch/releases/electrobun`. The thin `electrobun` npm bootstrap
+contains no runtime binaries or SDK source.
 
 ## Build Commands
 
@@ -63,23 +64,56 @@ All commands are run from the `/package` directory:
 
 ```bash
 cd electrobun/package
+npm ci
 
 # Full build with all platforms
-bun build.ts
+hutch build.ts
 
 # Development build with the kitchen sink test app
-bun dev
+hutch dev
+
+# Build Electrobun and run one repository template against package/dist
+hutch dev:template hello-world
 
 # Release build
-bun build.ts --release
+hutch build.ts --release
 
 # CI build
-bun build.ts --ci
+hutch build.ts --ci
 ```
+
+From `package/`, `hutch dev` builds `package/dist` and launches Kitchen with
+that local Electrobun devkit. Running `hutch dev` from `kitchen/` uses its
+published version pin instead.
+
+`hutch dev:template <template-name>` applies the same local-devkit workflow to
+one source template: it builds `package/dist`, installs the template's configured
+dependencies, and launches its `dev` task with the local Electrobun version and
+bytes. Release publication leaves the repository source unpinned but adds the
+exact release version to the staged template archive.
+
+## Hutch and Cottontail
+
+Canonical Hutch and Cottontail releases are published independently of
+Electrobun. The Electrobun release workflow downloads and verifies the four
+archives from its exact paired upstream Hutch release, then mirrors those same
+bytes into the Electrobun GitHub Release under `electrobun-hutch-*` names. Its
+`hutch-artifacts.json` binds each mirror's immutable URL, byte size, and SHA-256
+digest for the single npm bootstrap; the mirror does not replace the canonical
+Hutch release.
+
+The first-line `// @hutch` pragma in `package/hutch.config.ts` pins the exact
+Hutch and build-time Cottontail versions used for reproducible Electrobun
+builds. The Cottontail bundled into an application is a separate component
+pinned by the selected Electrobun devkit manifest.
+
+For full local-stack development, `hutch dev --local` additionally builds and
+selects the sibling Hutch launcher, Hutch engine, and Cottontail binary without
+changing the published version pins.
 
 ## Architecture Support
 
-- **macOS**: ARM64 (Apple Silicon), x64 (Intel) 
+- **macOS**: ARM64 (Apple Silicon)
 - **Windows**: x64 only (ARM Windows users run via automatic emulation)
 - **Linux**: x64, ARM64
 

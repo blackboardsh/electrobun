@@ -1,8 +1,6 @@
 import Electrobun, { Electroview } from "electrobun/view";
 
-// RPC setup - use long timeout since file dialogs can take a while
 const rpc = Electroview.defineRPC<any>({
-  maxRequestTime: 600000, // 10 minutes - users can browse for a while
   handlers: {
     requests: {},
     messages: {},
@@ -76,7 +74,10 @@ async function openDialog() {
   openDialogBtn.textContent = "Dialog Open...";
 
   try {
-    const result = await (electrobun.rpc as any)?.request.openFileDialog(options);
+    const result = await (electrobun.rpc as any)?.request.openFileDialog(
+      options,
+      { maxRequestTime: Infinity },
+    );
 
     // Store in history
     resultHistory.unshift({

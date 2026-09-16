@@ -70,24 +70,34 @@ document.addEventListener("DOMContentLoaded", () => {
     wgpu.style.height = "350px";
   });
 
-  if (wgpu?.on) {
-    wgpu.on("ready", async (e: any) => {
-      if (statusEl) statusEl.textContent = `Status: ready (id ${e.detail.id})`;
-      const rect = wgpu.getBoundingClientRect();
-      try {
-        await (electrobun.rpc as any)?.request.wgpuTagReady({
-          id: e.detail.id,
-          rect: {
-            x: rect.x,
-            y: rect.y,
-            width: rect.width,
-            height: rect.height,
-          },
-        });
-      } catch (err) {
-        console.error("[wgpuTag:view] wgpuTagReady FAILED:", err);
-      }
+  let rendererStarted = false;
+  const startRenderer = async (id: number) => {
+    if (rendererStarted) return;
+    rendererStarted = true;
+    if (statusEl) statusEl.textContent = `Status: ready (id ${id})`;
+    const rect = wgpu.getBoundingClientRect();
+    try {
+      await (electrobun.rpc as any)?.request.wgpuTagReady({
+        id,
+        rect: {
+          x: rect.x,
+          y: rect.y,
+          width: rect.width,
+          height: rect.height,
+        },
+      });
       sendRect();
+    } catch (err) {
+      rendererStarted = false;
+      console.error("[wgpuTag:view] wgpuTagReady FAILED:", err);
+    }
+  };
+
+  if (wgpu?.wgpuViewId != null) {
+    void startRenderer(wgpu.wgpuViewId);
+  } else if (wgpu?.on) {
+    wgpu.on("ready", (e: any) => {
+      void startRenderer(e.detail.id);
     });
   }
 

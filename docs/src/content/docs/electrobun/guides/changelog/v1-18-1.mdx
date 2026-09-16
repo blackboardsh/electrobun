@@ -1,0 +1,12 @@
+---
+title: "v1.18.1"
+---
+              <p><em>Released 2026-05-04.</em></p>
+
+## Bug Fixes
+
+              <ul>
+                <li>Fix Windows updater applying updates to the wrong path on canary/beta channels.</li>
+                <li>Fix Windows update cleanup race that could leave the new app installed inside the old app folder.</li>
+                <li>Fix bspatch crashes on Windows after a recent Windows OS update (bumped bundled <code>zig-bsdiff</code>; <code>libsais</code> is now built with <code>zig cc</code> for a baseline-safe x86_64 ISA).</li>
+              </ul>

@@ -1,7 +1,7 @@
 // Screen API Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import { Screen } from "electrobun/bun";
+import { Screen } from "electrobun/main";
 
 export const screenTests = [
   defineTest({
@@ -58,6 +58,40 @@ export const screenTests = [
       expect(typeof point.y).toBe("number");
 
       log(`Cursor position: (${point.x}, ${point.y})`);
+    },
+  }),
+
+  defineTest({
+    name: "captureRegion",
+    category: "Screen",
+    description: "Capture a small screen region as row-major RGBA pixels",
+    async run({ log }) {
+      const primary = Screen.getPrimaryDisplay();
+      const width = 2;
+      const height = 2;
+      const pixels = Screen.captureRegion({
+        x: Math.floor(primary.bounds.x + primary.bounds.width / 2) - 1,
+        y: Math.floor(primary.bounds.y + primary.bounds.height / 2) - 1,
+        width,
+        height,
+      });
+
+      if (pixels === null) {
+        if (process.platform === "win32") {
+          throw new Error("captureRegion unexpectedly returned null on Windows");
+        }
+        log(
+          "Screen capture is unavailable (permission not granted or unsupported display backend)",
+        );
+        return;
+      }
+
+      expect(pixels).toBeInstanceOf(Uint8Array);
+      expect(pixels.length).toBe(width * height * 4);
+      for (let offset = 3; offset < pixels.length; offset += 4) {
+        expect(pixels[offset]).toBe(255);
+      }
+      log(`Captured ${width}x${height} RGBA pixels`);
     },
   }),
 

@@ -1,0 +1,119 @@
+---
+title: "Updater"
+description: "Check, download, apply, and observe Electrobun application updates."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="note">
+The Updater API is available in the Cottontail and Bun runtimes only. Native
+main processes (Zig, Rust, Go, Odin) currently ship without an update API —
+see [Native main process](/electrobun/guides/native-main-process/).
+</Aside>
+
+Hutch stable and canary builds create update metadata plus a compressed full
+bundle. When a previous release is available, Hutch also creates a delta patch.
+Publish the artifact directory
+to a static host and configure its public base URL:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Updater Example",
+    identifier: "dev.example.updater",
+    version: "1.0.0",
+  },
+  release: {
+    baseUrl: "https://downloads.example.com/my-app",
+  },
+} satisfies ElectrobunConfig;
+```
+
+## Check and install
+
+```ts
+import { Updater } from "electrobun/main";
+
+const local = await Updater.getLocalInfo();
+console.log(`Running ${local.version} (${local.channel})`);
+
+const update = await Updater.checkForUpdate();
+if (update.updateAvailable) {
+  await Updater.downloadUpdate();
+
+  if (Updater.updateInfo().updateReady) {
+    await Updater.applyUpdate();
+  }
+}
+```
+
+`applyUpdate()` first asks the normal `before-quit` handlers for permission. If
+they allow the quit, a native post-exit helper validates the downloaded bundle,
+replaces the installed app transactionally, refreshes platform integration,
+and launches the new version. A failed replacement restores the previous app.
+It does nothing until a prepared download is ready.
+
+`downloadUpdate()` starts with the retained local archive and requests the
+patch named after its current hash. After each successful patch it reads the
+next hash from the resulting tar and continues until it reaches the latest hash
+from `update.json`. If any patch is missing or fails, the updater discards the
+attempted chain and downloads the latest full archive instead.
+
+<Aside type="note">
+The `dev` channel never reports an available update. Exercise updater behavior
+with a packaged canary or stable build.
+</Aside>
+
+## Local and update metadata
+
+`getLocalInfo()` returns the packaged `version.json` data:
+
+```ts
+import { Updater } from "electrobun/main";
+
+const info = await Updater.getLocalInfo();
+
+const version: string = info.version;
+const hash: string = info.hash;
+const baseUrl: string = info.baseUrl;
+const channel: string = info.channel;
+const name: string = info.name;
+const identifier: string = info.identifier;
+
+void version;
+void hash;
+void baseUrl;
+void channel;
+void name;
+void identifier;
+```
+
+`checkForUpdate()` and `updateInfo()` expose `version`, `hash`,
+`updateAvailable`, `updateReady`, and `error`.
+
+Convenience methods under `Updater.localInfo` return the current `version`,
+`hash`, `channel`, and `baseUrl`. `channelBucketUrl()` returns the base URL, and
+`appDataFolder()` returns the physical installed update workspace. Stable
+Electrobun v1.18.1+ and 2.0 apps use the same `stable` root.
+
+## Status reporting
+
+```ts
+import { Updater, type UpdateStatusEntry } from "electrobun/main";
+
+Updater.onStatusChange((entry: UpdateStatusEntry) => {
+  console.log(entry.status, entry.message, entry.details);
+});
+
+const history = Updater.getStatusHistory();
+Updater.clearStatusHistory();
+Updater.onStatusChange(null);
+
+void history;
+```
+
+Statuses cover checking, patch-chain attempts and fallback, full-bundle
+download progress, preparation, handoff, relaunch, completion, and errors.
+`UpdateStatusEntry` contains `status`, `message`, `timestamp`, and optional
+structured `details`.

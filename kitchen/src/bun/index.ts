@@ -8,8 +8,12 @@ import Electrobun, {
 	Utils,
 	BuildConfig,
 	Updater,
-} from "electrobun/bun";
+} from "electrobun/main";
 import { executor } from "../test-framework/executor";
+import {
+	autoRunExitCode,
+	scheduleAutoRunExit,
+} from "../test-framework/auto-run-exit";
 import { allTests } from "../tests";
 import type { TestRunnerRPC, UpdateInfo } from "../test-runner/rpc";
 import { mkdir, readFile, writeFile } from "fs/promises";
@@ -78,7 +82,7 @@ const saveTestRunnerPreferences = async (
 };
 
 // Update state
-const localInfo = await Updater.getLocallocalInfo();
+const localInfo = await Updater.getLocalInfo();
 let updateState: UpdateInfo = {
 	status: "checking",
 	currentVersion: localInfo.version,
@@ -195,10 +199,17 @@ ApplicationMenu.setApplicationMenu([
 ]);
 
 Electrobun.events.on("application-menu-clicked", async (e) => {
-	if (e.data.action === "run-all-automated") {
-		await executor.runAllAutomated();
-	} else if (e.data.action === "run-interactive") {
-		await executor.runInteractiveTests();
+	try {
+		if (e.data.action === "run-all-automated") {
+			await executor.runAllAutomated();
+		} else if (e.data.action === "run-interactive") {
+			await executor.runInteractiveTests();
+		}
+	} catch (error) {
+		// Application-menu actions do not have an RPC caller to receive errors.
+		// Keep an overlapping shortcut invocation from becoming an unhandled
+		// rejection; TestExecutor reports which run is already active.
+		console.error("Unable to start test run from application menu:", error);
 	}
 });
 
@@ -213,6 +224,7 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 					name: t.name,
 					category: t.category,
 					description: t.description,
+					instructions: t.instructions,
 					interactive: t.interactive,
 				}));
 			},
@@ -231,18 +243,6 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 
 			runInteractiveTests: async () => {
 				return await executor.runInteractiveTests();
-			},
-
-			submitInteractiveResult: ({ testId, passed, notes }) => {
-				executor.submitInteractiveResult(testId, passed, notes);
-			},
-
-			submitReady: ({ testId }) => {
-				executor.submitReady(testId);
-			},
-
-			submitVerification: ({ testId, action, notes }) => {
-				executor.submitVerification(testId, action, notes);
 			},
 
 			applyUpdate: () => {
@@ -278,7 +278,7 @@ const testRunnerRPC = BrowserView.defineRPC<TestRunnerRPC>({
 testRunnerWindow = new BrowserWindow({
 	title: "Electrobun Integration Tests",
 	url: "views://test-runner/index.html",
-	renderer: "cef",
+	renderer: buildConfig.defaultRenderer,
 	frame: {
 		width: 1200,
 		height: 800,
@@ -296,8 +296,8 @@ testRunnerWindow.webview.on("dom-ready", () => {
 	testRunnerWindow!.webview.rpc?.send.buildConfig({
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
-		cefVersion: buildConfig.cefVersion,
-		bunVersion: buildConfig.bunVersion,
+		mainProcess: buildConfig.mainProcess ?? "cottontail",
+		bunVersion: buildConfig.mainProcess === "bun" ? Bun.version : undefined,
 	});
 	// Send current update status
 	testRunnerWindow!.webview.rpc?.send.updateStatus(updateState);
@@ -336,25 +336,6 @@ executor.onEvent((event) => {
 			});
 			break;
 
-		case "interactive-waiting":
-			testRunnerWindow.webview.rpc?.send.interactiveWaiting({
-				testId: event.testId!,
-				instructions: event.instructions!,
-			});
-			break;
-
-		case "interactive-ready":
-			testRunnerWindow.webview.rpc?.send.interactiveReady({
-				testId: event.testId!,
-				instructions: event.instructions!,
-			});
-			break;
-
-		case "interactive-verify":
-			testRunnerWindow.webview.rpc?.send.interactiveVerify({
-				testId: event.testId!,
-			});
-			break;
 	}
 });
 
@@ -372,24 +353,21 @@ console.log(
 
 // Auto-run tests if AUTO_RUN environment variable is set
 // Usage: AUTO_RUN=1 electrobun dev
-console.log(`DEBUG: AUTO_RUN env var = "${process.env["AUTO_RUN"]}"`);
 const autoRun = !!process.env["AUTO_RUN"];
-console.log(`DEBUG: autoRun = ${autoRun}`);
 if (autoRun) {
 	console.log("Auto-running automated tests in 3 seconds...\n");
 	setTimeout(async () => {
-		const results = await executor.runAllAutomated();
+		let exitCode = 1;
+		try {
+			const results = await executor.runAllAutomated();
+			exitCode = autoRunExitCode(results);
+		} catch (error) {
+			console.error("Auto-run failed unexpectedly:", error);
+		}
 
-		// Exit with appropriate code when auto-run is complete
-		const failedCount = results.filter((r) => r.status === "failed").length;
-		const exitCode = failedCount > 0 ? 1 : 0;
 		console.log(`\nAuto-run complete. Exiting with code ${exitCode}...`);
-
-		// Give a moment for final logs to flush
-		setTimeout(() => {
-			// Use Utils.quit() for graceful shutdown with proper CEF cleanup
-			Utils.quit();
-		}, 500);
+		// Give final logs time to flush, then use graceful native cleanup.
+		scheduleAutoRunExit(exitCode, Utils.quit);
 	}, 3000);
 }
 
@@ -402,9 +380,18 @@ if (autoRunTestName) {
 			.find((candidate) => candidate.name === autoRunTestName);
 		if (!test) {
 			console.error(`Failed to find test "${autoRunTestName}"`);
+			scheduleAutoRunExit(1, Utils.quit);
 			return;
 		}
-		await executor.runTest(test);
+		let exitCode = 1;
+		try {
+			const result = await executor.runTest(test);
+			exitCode = autoRunExitCode([result]);
+		} catch (error) {
+			console.error("Auto-run test failed unexpectedly:", error);
+		}
+		console.log(`\nAuto-run test complete. Exiting with code ${exitCode}...`);
+		scheduleAutoRunExit(exitCode, Utils.quit);
 	}, 2000);
 }
 

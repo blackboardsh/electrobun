@@ -1,7 +1,7 @@
 // Updater API Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import Electrobun from "electrobun/bun";
+import Electrobun from "electrobun/main";
 
 export const updaterTests = [
   defineTest({

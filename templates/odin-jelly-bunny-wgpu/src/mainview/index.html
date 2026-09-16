@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Jelly Bunny Lab</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app">
+			<section class="stage">
+				<header class="topbar">
+					<div>
+						<p class="eyebrow">ODIN / WGPU</p>
+						<h1>Jelly Bunny Lab</h1>
+					</div>
+					<p id="status" class="status" data-state="waiting">Waiting for surface</p>
+				</header>
+				<div id="surface-shell" class="surface-shell">
+					<div class="hud" aria-live="polite">
+						<div><strong id="fps-stat">--</strong><span>fps</span></div>
+						<div><strong id="physics-stat">--</strong><span>solver</span></div>
+						<div><strong id="grab-stat">free</strong><span>state</span></div>
+					</div>
+					<electrobun-wgpu id="jelly-surface" passthrough></electrobun-wgpu>
+				</div>
+			</section>
+			<aside class="controls">
+				<div class="control-heading">
+					<span>Material</span>
+					<strong id="material-label">Jelly</strong>
+				</div>
+				<label>
+					<span>Gravity <output id="gravity-value">55</output></span>
+					<input id="gravity" type="range" min="0" max="100" step="1" value="55" />
+				</label>
+				<label>
+					<span>Squish <output id="squish-value">68</output></span>
+					<input id="squish" type="range" min="0" max="100" step="1" value="68" />
+				</label>
+				<label>
+					<span>Stiffness <output id="stiffness-value">72</output></span>
+					<input id="stiffness" type="range" min="0" max="100" step="1" value="72" />
+				</label>
+				<div class="actions">
+					<button id="pause-button" type="button">Pause</button>
+					<button id="reset-button" type="button" class="secondary">Reset</button>
+				</div>
+				<div class="telemetry">
+					<div><span>Frame</span><strong id="frame-stat">--</strong></div>
+					<div><span>Surface</span><strong id="surface-stat">--</strong></div>
+					<div><span>WGPU view</span><strong id="view-stat">--</strong></div>
+				</div>
+			</aside>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>

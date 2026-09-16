@@ -1,24 +1,24 @@
 // Test executor - runs tests in the bun context
 
-import { BrowserWindow } from "electrobun/bun";
+import { BrowserWindow, BuildConfig } from "electrobun/main";
 import type {
   TestDefinition,
   TestResult,
   TestContext,
   TestWindow,
   WindowOptions,
-  InteractiveResult,
 } from "./types";
+import { ExclusiveRunCoordinator } from "./exclusive-run";
+import { getTestSkipReason } from "./requirements";
 
 type TestEventHandler = (event: TestEvent) => void;
 
 export interface TestEvent {
-  type: 'test-started' | 'test-completed' | 'test-log' | 'all-completed' | 'interactive-waiting' | 'interactive-ready' | 'interactive-verify';
+  type: 'test-started' | 'test-completed' | 'test-log' | 'all-completed';
   testId?: string;
   name?: string;
   result?: TestResult;
   message?: string;
-  instructions?: string[];
   results?: TestResult[];
 }
 
@@ -27,10 +27,7 @@ export class TestExecutor {
   private results: Map<string, TestResult> = new Map();
   private eventHandlers: TestEventHandler[] = [];
   private testWindows: Map<string, TestWindow[]> = new Map();
-  private interactiveResolver: ((result: { passed: boolean; notes?: string }) => void) | null = null;
-  private readyResolver: (() => void) | null = null;
-  private verificationResolver: ((result: InteractiveResult) => void) | null = null;
-  private currentTestId: string | null = null;
+  private runCoordinator = new ExclusiveRunCoordinator();
 
   constructor() {}
 
@@ -74,30 +71,6 @@ export class TestExecutor {
     }
   }
 
-  // Submit result for interactive test (legacy)
-  submitInteractiveResult(testId: string, passed: boolean, notes?: string) {
-    if (this.interactiveResolver && this.currentTestId === testId) {
-      this.interactiveResolver({ passed, notes });
-      this.interactiveResolver = null;
-    }
-  }
-
-  // User clicked "Start" after reading instructions
-  submitReady(testId: string) {
-    if (this.readyResolver && this.currentTestId === testId) {
-      this.readyResolver();
-      this.readyResolver = null;
-    }
-  }
-
-  // User submitted verification result (pass/fail/retest)
-  submitVerification(testId: string, action: 'pass' | 'fail' | 'retest', notes?: string) {
-    if (this.verificationResolver && this.currentTestId === testId) {
-      this.verificationResolver({ action, notes });
-      this.verificationResolver = null;
-    }
-  }
-
   private createTestContext(testId: string): TestContext {
     const logs: string[] = [];
     const windows: TestWindow[] = [];
@@ -110,8 +83,11 @@ export class TestExecutor {
           url: options.url || undefined,
           html: options.html || undefined,
           preload: options.preload || undefined,
-          renderer: options.renderer || 'cef', // Default to CEF, allow override
+          // Request CEF by default. When CEF is not bundled, BrowserWindow
+          // deliberately exercises Electrobun's system-webview fallback.
+          renderer: options.renderer ?? 'cef',
           hidden: options.hidden || false,
+          activate: options.activate ?? true,
           frame: {
             width: options.width || 800,
             height: options.height || 600,
@@ -120,7 +96,10 @@ export class TestExecutor {
           },
           rpc: options.rpc,
           titleBarStyle: options.titleBarStyle,
+          trafficLightOffset: options.trafficLightOffset,
           sandbox: options.sandbox || false,
+          allowedProtocols: options.allowedProtocols,
+          spellCheck: options.spellCheck ?? false,
         });
 
         // Wait a bit for window to be created
@@ -145,45 +124,6 @@ export class TestExecutor {
         this.emit({ type: 'test-log', testId, message });
       },
 
-      // Show instructions and wait for user to click "Start"
-      showInstructions: async (instructions: string[]): Promise<void> => {
-        if (
-          process.env["AUTO_RUN_TEST_NAME"] ||
-          process.env["AUTO_RUN_WGPU"] ||
-          process.env["AUTO_ACCEPT_INTERACTIVE"]
-        ) {
-          instructions.forEach((instruction) => {
-            const timestamp = new Date().toISOString().split('T')[1]!.split('.')[0]!;
-            console.log(`  [${timestamp}] ${instruction}`);
-          });
-          return;
-        }
-        this.emit({ type: 'interactive-ready', testId, instructions });
-        this.currentTestId = testId;
-
-        return new Promise((resolve) => {
-          this.readyResolver = resolve;
-        });
-      },
-
-      // Wait for user to verify the result (pass/fail/retest)
-      waitForUserVerification: async (): Promise<InteractiveResult> => {
-        this.emit({ type: 'interactive-verify', testId });
-
-        return new Promise((resolve) => {
-          this.verificationResolver = resolve;
-        });
-      },
-
-      // Legacy - combines show + verify
-      waitForUserAction: async (instructions: string[]): Promise<{ passed: boolean; notes?: string }> => {
-        this.emit({ type: 'interactive-waiting', testId, instructions });
-
-        return new Promise((resolve) => {
-          this.interactiveResolver = resolve;
-          this.currentTestId = testId;
-        });
-      },
     };
   }
 
@@ -208,22 +148,53 @@ export class TestExecutor {
   }
 
   async runTest(test: TestDefinition): Promise<TestResult> {
+    return this.runCoordinator.run(`test "${test.name}"`, () =>
+      this.runTestInternal(test)
+    );
+  }
+
+  private async runTestInternal(test: TestDefinition): Promise<TestResult> {
     const startTime = Date.now();
     const logs: string[] = [];
 
     console.log(`\n  Running: ${test.name}`);
     this.emit({ type: 'test-started', testId: test.id, name: test.name });
 
+    const skipReason = getTestSkipReason(
+      test,
+      BuildConfig.getSync().availableRenderers,
+    );
+    if (skipReason) {
+      const result: TestResult = {
+        testId: test.id,
+        name: test.name,
+        status: 'skipped',
+        duration: Date.now() - startTime,
+        logs: [skipReason],
+      };
+      this.results.set(test.id, result);
+      console.log(`  \x1b[33m- SKIPPED\x1b[0m: ${skipReason}`);
+      this.emit({ type: 'test-completed', testId: test.id, result });
+      return result;
+    }
+
     const context = this.createTestContext(test.id);
 
     try {
-      // Run with timeout
-      await Promise.race([
-        test.run(context),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error(`Test timed out after ${test.timeout}ms`)), test.timeout)
-        ),
-      ]);
+      if (test.interactive) {
+        // Interactive tests own their completion through a dialog response or
+        // natural window close. An outer timeout cannot cancel direct
+        // BrowserWindow/GpuWindow work, so racing one would orphan the active
+        // test and allow the next test to overlap it.
+        await test.run(context);
+      } else {
+        await Promise.race([
+          test.run(context),
+          new Promise((_, reject) =>
+            setTimeout(() => reject(new Error(`Test timed out after ${test.timeout}ms`)), test.timeout)
+          ),
+        ]);
+      }
 
       const result: TestResult = {
         testId: test.id,
@@ -249,6 +220,9 @@ export class TestExecutor {
 
       this.results.set(test.id, result);
       console.log(`  \x1b[31m✗ FAILED\x1b[0m: ${result.error}`);
+      if (typeof error?.stack === "string" && error.stack !== result.error) {
+        console.log(error.stack);
+      }
       this.emit({ type: 'test-completed', testId: test.id, result });
       return result;
     } finally {
@@ -257,6 +231,12 @@ export class TestExecutor {
   }
 
   async runAllAutomated(): Promise<TestResult[]> {
+    return this.runCoordinator.run("the automated test suite", () =>
+      this.runAllAutomatedInternal()
+    );
+  }
+
+  private async runAllAutomatedInternal(): Promise<TestResult[]> {
     const automated = this.getAutomatedTests();
     console.log(`\n${'='.repeat(60)}`);
     console.log(`Running ${automated.length} automated tests...`);
@@ -279,7 +259,7 @@ export class TestExecutor {
       // Run tests in this category sequentially to avoid resource exhaustion
       // Running 30+ CEF browser instances in parallel causes crashes on Linux
       for (const test of tests) {
-        const result = await this.runTest(test);
+        const result = await this.runTestInternal(test);
         results.push(result);
       }
     }
@@ -287,12 +267,19 @@ export class TestExecutor {
     // Summary
     const passed = results.filter(r => r.status === 'passed').length;
     const failed = results.filter(r => r.status === 'failed').length;
+    const skipped = results.filter(r => r.status === 'skipped').length;
 
     console.log(`\n${'='.repeat(60)}`);
     if (failed === 0) {
-      console.log(`\x1b[32mAll ${passed} automated tests passed!\x1b[0m`);
+      console.log(
+        `\x1b[32mAll ${passed} runnable automated tests passed!\x1b[0m` +
+          (skipped > 0 ? ` \x1b[33m${skipped} skipped\x1b[0m` : ''),
+      );
     } else {
-      console.log(`\x1b[31m${failed} failed\x1b[0m, \x1b[32m${passed} passed\x1b[0m`);
+      console.log(
+        `\x1b[31m${failed} failed\x1b[0m, \x1b[32m${passed} passed\x1b[0m` +
+          (skipped > 0 ? `, \x1b[33m${skipped} skipped\x1b[0m` : ''),
+      );
       console.log('\nFailed tests:');
       for (const result of results.filter(r => r.status === 'failed')) {
         console.log(`  - ${result.name}: ${result.error}`);
@@ -305,6 +292,12 @@ export class TestExecutor {
   }
 
   async runInteractiveTests(): Promise<TestResult[]> {
+    return this.runCoordinator.run("the interactive test suite", () =>
+      this.runInteractiveTestsInternal()
+    );
+  }
+
+  private async runInteractiveTestsInternal(): Promise<TestResult[]> {
     const interactive = this.getInteractiveTests();
     console.log(`\n${'='.repeat(60)}`);
     console.log(`Running ${interactive.length} interactive tests...`);
@@ -313,7 +306,7 @@ export class TestExecutor {
     const results: TestResult[] = [];
 
     for (const test of interactive) {
-      const result = await this.runTest(test);
+      const result = await this.runTestInternal(test);
       results.push(result);
     }
 
@@ -324,12 +317,13 @@ export class TestExecutor {
     return Array.from(this.results.values());
   }
 
-  getSummary(): { total: number; passed: number; failed: number; pending: number } {
+  getSummary(): { total: number; passed: number; failed: number; skipped: number; pending: number } {
     const results = this.getResults();
     return {
       total: this.tests.length,
       passed: results.filter(r => r.status === 'passed').length,
       failed: results.filter(r => r.status === 'failed').length,
+      skipped: results.filter(r => r.status === 'skipped').length,
       pending: this.tests.length - results.length,
     };
   }

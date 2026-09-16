@@ -1,0 +1,38 @@
+{
+	"name": "electrobun",
+	"version": "2.0.2-beta.27",
+	"description": "The lightweight npm bootstrap for Electrobun and Hutch.",
+	"license": "MIT",
+	"author": "Blackboard Technologies Inc.",
+	"homepage": "https://electrobun.dev",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/blackboardsh/electrobun.git",
+		"directory": "npm/electrobun"
+	},
+	"keywords": [
+		"desktop",
+		"app",
+		"cross-platform",
+		"typescript",
+		"hutch"
+	],
+	"bin": {
+		"electrobun": "bin/electrobun.cjs"
+	},
+	"files": [
+		"bin/electrobun.cjs",
+		"bin/resolve-hutch.cjs",
+		"lib/moved.cjs",
+		"README.md",
+		"LICENSE"
+	],
+	"engines": {
+		"node": ">=18"
+	},
+	"exports": {
+		".": "./lib/moved.cjs",
+		"./package.json": "./package.json",
+		"./*": "./lib/moved.cjs"
+	}
+}

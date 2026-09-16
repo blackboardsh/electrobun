@@ -1,15 +1,11 @@
 {
-	"scripts": {
-		"start": "electrobun run",
-		"dev": "electrobun dev",
-		"build:canary": "electrobun build --env=canary",
-		"build:stable": "electrobun build --env=stable",
-		"start:canary": "electrobun dev --env=canary"
-	},
 	"dependencies": {
-		"electrobun": "file:../package"
+		"@babylonjs/core": "^7.45.0",
+		"three": "^0.165.0"
 	},
 	"devDependencies": {
+		"@types/bun": "^1.4.0",
+		"@types/three": "^0.165.0",
 		"typescript": "^5.9.3"
 	}
 }

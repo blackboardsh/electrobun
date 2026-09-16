@@ -45,8 +45,8 @@
                 </span>
                 <span class="build-config-separator">|</span>
                 <span class="build-config-item">
-                    <span class="build-config-label">Bun:</span>
-                    <span class="build-config-value" id="bun-version">loading...</span>
+                    <span class="build-config-label">Host:</span>
+                    <span class="build-config-value" id="host-runtime-version">loading...</span>
                 </span>
                 <span class="build-config-separator">|</span>
                 <span class="build-config-item">
@@ -58,6 +58,7 @@
                 <span class="total">Total: <strong id="total-count">0</strong></span>
                 <span class="passed">Passed: <strong id="passed-count">0</strong></span>
                 <span class="failed">Failed: <strong id="failed-count">0</strong></span>
+                <span class="skipped">Skipped: <strong id="skipped-count">0</strong></span>
                 <span class="pending">Pending: <strong id="pending-count">0</strong></span>
             </div>
         </header>
@@ -72,7 +73,7 @@
                 id="test-search"
                 class="search-input"
                 type="search"
-                placeholder="Search tests (fuzzy by name, category, description)"
+                placeholder="Search tests (fuzzy by name, category, description, instructions)"
                 autocomplete="off"
                 spellcheck="false"
             >
@@ -83,23 +84,6 @@
             <!-- Tests will be populated here -->
         </div>
 
-        <!-- Modal for interactive test instructions -->
-        <div class="modal" id="interactive-modal" style="display: none;">
-            <div class="modal-content">
-                <h2 id="modal-title">Interactive Test</h2>
-                <div id="modal-instructions"></div>
-                <div class="modal-actions" id="modal-buttons">
-                    <button id="btn-start" class="btn btn-primary" style="display: none;">Start Test</button>
-                    <button id="btn-pass" class="btn btn-success">Pass</button>
-                    <button id="btn-fail" class="btn btn-danger">Fail</button>
-                    <button id="btn-retest" class="btn btn-secondary" style="display: none;">Re-test</button>
-                </div>
-                <div class="modal-notes">
-                    <label for="notes-input">Notes (optional):</label>
-                    <input type="text" id="notes-input" placeholder="Add notes about the result...">
-                </div>
-            </div>
-        </div>
     </div>
 </body>
 </html>

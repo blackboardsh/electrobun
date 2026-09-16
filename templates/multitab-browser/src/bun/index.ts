@@ -1,4 +1,4 @@
-import { BrowserWindow, BrowserView } from "electrobun/bun";
+import { BrowserWindow, BrowserView } from "electrobun/main";
 
 console.log("🌐 Multitab Browser starting...");
 

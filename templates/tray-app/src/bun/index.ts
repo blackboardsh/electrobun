@@ -1,4 +1,4 @@
-import { Tray, Utils } from "electrobun/bun";
+import { Tray, Utils } from "electrobun/main";
 
 // Create a system tray icon
 const tray = new Tray({

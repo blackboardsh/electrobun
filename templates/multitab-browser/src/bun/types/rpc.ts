@@ -1,4 +1,4 @@
-import type { RPCSchema } from "electrobun/bun";
+import type { RPCSchema } from "electrobun/main";
 
 export type Tab = {
 	id: string;

@@ -1,0 +1,27 @@
+// @hutch cli=0.27.0-canary.8 cottontail=0.7.0-canary.10
+export default {
+	electrobun: {
+		version: "2.0.2-beta.27",
+	},
+	packageManager: "npm",
+	scripts: {
+		install: ["hutch", "pm", "ci"],
+		start: ["hutch", "electrobun", "run"],
+		dev: ["hutch", "electrobun", "dev"],
+		matrix: ["hutch", "scripts/kitchen-matrix.ts"],
+		"matrix:full": ["hutch", "scripts/kitchen-matrix.ts", "--full"],
+		"matrix:test": ["hutch", "test", "scripts/kitchen-matrix.test.ts"],
+		"package-boundary:test": [
+			"node",
+			"--test",
+			"scripts/package-boundary.test.mjs",
+		],
+		"check:zig-mirrors": ["hutch", "scripts/check-zig-test-mirrors.ts"],
+		"check:odin-mirrors": ["hutch", "scripts/check-odin-test-mirrors.ts"],
+		"build:canary":
+			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
+		"build:stable":
+			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=stable",
+		"start:canary": ["hutch", "electrobun", "dev", "--env=canary"],
+	},
+};

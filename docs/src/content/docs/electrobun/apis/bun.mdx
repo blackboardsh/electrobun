@@ -1,0 +1,24 @@
+---
+title: "Bun SDK Alias"
+description: "Compatibility guidance for the deprecated electrobun/bun import path."
+---
+
+`electrobun/bun` is a deprecated alias for `electrobun/main`. It resolves to
+the same SDK and remains supported for source compatibility. Only the SDK
+namespace is deprecated: Bun remains a first-class main-process runtime and a
+first-class `hutch.config.ts` package-manager selection.
+
+Use the runtime-neutral namespace in new and migrated code:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "My app",
+  url: "views://mainview/index.html",
+});
+
+void win;
+```
+
+See the [Main Process API](/electrobun/apis/main/) for the current API guide.

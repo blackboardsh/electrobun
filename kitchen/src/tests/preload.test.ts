@@ -52,7 +52,7 @@ export const preloadTests = [
       // Create window with external URL and preload
       // We're just testing that this combination doesn't error
       const win = await createWindow({
-        url: "https://example.com",
+        url: "https://blackboard.sh",
         preload: `data:text/javascript;base64,${btoa(preloadScript)}`,
         title: "Preload External URL Test",
         renderer: 'cef',

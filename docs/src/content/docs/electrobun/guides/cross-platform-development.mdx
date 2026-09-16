@@ -1,0 +1,136 @@
+---
+title: "Cross-Platform Development"
+description: "Build and test Electrobun applications on macOS, Windows, and Linux."
+---
+
+Electrobun applications share configuration and application source across
+platforms, but Hutch builds for the operating system and architecture on which
+it is running. Produce and test each release on a native runner.
+
+## Supported Release Targets
+
+| Platform | Architecture | System renderer |
+| --- | --- | --- |
+| macOS | ARM64 | WKWebView |
+| Windows | x64 | WebView2 |
+| Linux | x64 and ARM64 | GTK WebKit 4.1 |
+
+Windows on ARM runs the x64 application through Windows emulation. The current
+Electrobun release workflow does not publish a macOS x64 core artifact.
+
+On each runner, install Hutch and execute the same stable-release command:
+
+```bash
+hutch run install
+hutch electrobun build --env=stable
+```
+
+Here `install` is normally a project task such as
+`["hutch", "install", "--frozen-lockfile"]`; native-only projects without
+JavaScript dependencies can omit it. Hutch's built-in resolver reads
+`package.json` and `hutch.lock` by default. A project may explicitly select npm,
+Bun, pnpm, Yarn, or a custom executable instead.
+
+macOS signing and notarization must run on macOS. Native main-process builds
+also require that language's host toolchain and platform linker.
+
+## Platform Configuration
+
+Use the `mac`, `win`, and `linux` objects for differences that belong in the
+package rather than branching application code:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Cross Platform App",
+    identifier: "com.example.cross-platform-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      icons: "App.icon",
+    },
+    win: {
+      icon: "assets/icon.ico",
+    },
+    linux: {
+      icon: "assets/icon.png",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Runtime branches should use standard platform detection only when behavior
+cannot be expressed as build configuration:
+
+```typescript
+const platform = process.platform;
+
+if (platform === "darwin") console.log("macOS");
+else if (platform === "win32") console.log("Windows");
+else if (platform === "linux") console.log("Linux");
+```
+
+## Renderer Differences
+
+System webviews are different browser engines and versions. Test layout,
+media permissions, keyboard handling, downloads, context menus, and any API
+that is sensitive to browser-engine behavior on all three platforms.
+
+Bundle CEF when the application needs a pinned Chromium engine or advanced
+native overlay behavior. macOS and Windows can mix CEF and native views when
+CEF is bundled. A Linux process uses either its CEF wrapper or GTK WebKit
+wrapper, so do not depend on mixed renderers there.
+
+Native overlay surfaces also have renderer-specific transparency,
+passthrough, and mask constraints. See the
+[`<electrobun-webview>`](/electrobun/apis/browser/electrobun-webview-tag) and
+[`<electrobun-wgpu>`](/electrobun/apis/browser/electrobun-wgpu-tag) references.
+
+## Linux Runtime Packages
+
+Electrobun's Linux native wrapper links GTK 3, WebKitGTK 4.1, Ayatana
+AppIndicator, and librsvg, including in CEF-enabled builds. Install the runtime
+packages for the target distribution:
+
+```bash
+# Ubuntu or Debian
+sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2
+
+# Fedora or RHEL
+sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 librsvg2
+
+# Arch or Manjaro
+sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg
+```
+
+If startup fails, the launcher reports recognized missing libraries and these
+package commands. Use `ldd path/to/libNativeWrapper.so` to inspect the full
+dynamic dependency set for a distribution.
+
+## Windows Console Output
+
+Packaged Windows applications use the GUI subsystem and do not open a console
+window. Hutch dev launches attach to the invoking terminal. To expose output
+from a canary or stable executable for diagnosis, set
+`ELECTROBUN_CONSOLE=1` before launch:
+
+```powershell
+$env:ELECTROBUN_CONSOLE = "1"
+& ".\Cross Platform App.exe"
+```
+
+This override has no effect on macOS or Linux, where terminal launches already
+inherit standard output and error.
+
+## Test Matrix
+
+Automated tests should cover the four published targets. Interactive tests
+that exercise renderer output need a display session and should cover system
+webviews everywhere plus CEF where the application enables it. Native
+main-process SDKs share the Electrobun core, but each wrapper should retain a
+smoke test for initialization, RPC, event dispatch, and shutdown.

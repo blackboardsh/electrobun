@@ -1,7 +1,7 @@
 // Event System Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import Electrobun, { Utils } from "electrobun/bun";
+import Electrobun, { Utils } from "electrobun/main";
 
 export const eventsTests = [
   defineTest({
@@ -29,7 +29,7 @@ export const eventsTests = [
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       log("Triggering navigation");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 1000));
 
@@ -134,7 +134,7 @@ export const eventsTests = [
       await new Promise((resolve) => setTimeout(resolve, 300));
 
       log("Attempting navigation (should be blocked)");
-      win.webview.loadURL("https://example.com");
+      win.webview.loadURL("https://blackboard.sh");
 
       await new Promise((resolve) => setTimeout(resolve, 500));
 

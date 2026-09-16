@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Tree Studio</title>
+		<link rel="stylesheet" href="index.css" />
+	</head>
+	<body>
+		<main class="app">
+			<section class="stage">
+				<electrobun-wgpu
+					id="tree-surface"
+					masks=".titlebar,.scene-hud,.surface-badge"
+				></electrobun-wgpu>
+				<header class="titlebar">
+					<div class="brand-mark" aria-hidden="true"><span></span></div>
+					<div>
+						<h1>Tree Studio</h1>
+						<p id="status">Preparing native canvas</p>
+					</div>
+				</header>
+				<div class="scene-hud" aria-live="polite">
+					<div><strong id="branch-stat">--</strong><span>branches</span></div>
+					<div><strong id="leaf-stat">--</strong><span>leaves</span></div>
+					<div><strong id="growth-stat">--</strong><span>grown</span></div>
+				</div>
+				<div class="surface-badge"><span></span> Odin + WGPU</div>
+			</section>
+
+			<aside class="controls">
+				<div class="panel-heading">
+					<div>
+						<span class="eyebrow">Botanical model</span>
+						<h2>Growth controls</h2>
+					</div>
+					<button id="restart-button" type="button" class="icon-button" title="Restart growth" aria-label="Restart growth">&#8634;</button>
+				</div>
+
+				<label class="field">
+					<span>Species profile</span>
+					<select id="species">
+						<option value="0">Field oak</option>
+						<option value="1">Silver birch</option>
+						<option value="2">Alpine pine</option>
+					</select>
+				</label>
+
+				<div class="seed-field">
+					<label class="field">
+						<span>Seed</span>
+						<input id="seed" type="number" min="1" max="4294967295" step="1" value="1847" />
+					</label>
+					<button id="regenerate-button" type="button">Regenerate</button>
+				</div>
+
+				<div class="slider-group">
+					<label class="range-field">
+						<span>Branching <strong id="branching-value">68</strong></span>
+						<input id="branching" type="range" min="20" max="100" step="1" value="68" />
+					</label>
+					<label class="range-field">
+						<span>Leaf density <strong id="density-value">76</strong></span>
+						<input id="density" type="range" min="10" max="100" step="1" value="76" />
+					</label>
+					<label class="range-field">
+						<span>Growth speed <strong id="growth-value">55</strong></span>
+						<input id="growth" type="range" min="5" max="100" step="1" value="55" />
+					</label>
+					<label class="range-field">
+						<span>Wind <strong id="wind-value">32</strong></span>
+						<input id="wind" type="range" min="0" max="100" step="1" value="32" />
+					</label>
+				</div>
+
+				<div class="footer-stats">
+					<div><span>Frame</span><strong id="frame-stat">--</strong></div>
+					<div><span>Surface</span><strong id="surface-stat">--</strong></div>
+				</div>
+			</aside>
+		</main>
+		<script type="module" src="./index.js"></script>
+	</body>
+</html>

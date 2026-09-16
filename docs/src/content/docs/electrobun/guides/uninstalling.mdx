@@ -1,0 +1,127 @@
+---
+title: "Uninstalling"
+description: "How Electrobun removes an installed application and its managed data."
+---
+
+Electrobun installer builds include an uninstaller that remains available even
+when the application bundle cannot start. It is a standalone manager, separate
+from the app bundle and runtime: uninstalling never needs to execute your app
+or load its dependencies.
+
+## The uninstall prompt
+
+Launching the installed uninstaller interactively shows the same choices on
+macOS, Windows, and Linux:
+
+- **Title:** `Uninstall <App>?`
+- **Message:** `The application will be removed.`
+- **Actions:** `App`, `App and Data`, and `Cancel`
+
+`App` is the default, safe choice. It removes the installed application,
+Electrobun's installation/update state, and Electrobun-owned system integration
+such as shortcuts, while keeping the user's data. `Cancel` or closing the
+prompt leaves the installation unchanged.
+
+Choose `App and Data` to also remove the app's managed per-user directories.
+It removes only the directories recorded for this app's packaged identifier
+and physical install root:
+
+| Managed directory | API path |
+| --- | --- |
+| Application data | `Utils.paths.userData` |
+| Cache | `Utils.paths.userCache` |
+| Logs | `Utils.paths.userLogs` |
+
+Those paths resolve under their platform's normal data, cache, and log roots
+as `<base>/<identifier>/<install-root>`:
+
+| Platform | `userData` | `userCache` | `userLogs` |
+| --- | --- | --- | --- |
+| macOS | `~/Library/Application Support` | `~/Library/Caches` | `~/Library/Logs` |
+| Windows | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` | `%LOCALAPPDATA%` |
+| Linux | `$XDG_DATA_HOME` | `$XDG_CACHE_HOME` | `$XDG_STATE_HOME` |
+
+On Windows, all three APIs name the same channel root, so `App and Data`
+removes that root once. Linux uses `~/.local/share`, `~/.cache`, and
+`~/.local/state` when the corresponding XDG variable is unavailable or not a
+valid absolute root. The Linux installer records the roots it used so changing
+the environment later does not redirect uninstall cleanup.
+
+The install-root name normally matches the app's release channel. A supported
+Electrobun v1 install keeps its existing physical root after updating to 2.x.
+The uninstaller follows that recorded root so the migrated app and its data
+remain one installation.
+
+Other applications, other identifiers, and separately installed channel roots
+are never removed. See [Paths](/electrobun/apis/paths/) for the path API and
+layout.
+
+Electrobun records the managed-root policy with the installation so a newer
+runtime can continue to clean up earlier Electrobun-managed locations if that
+policy changes in a future release. It does not scan arbitrary files or run
+application configuration during uninstall.
+
+## Launching an uninstall
+
+The installed standalone manager is the reliable entry point. As a convenience,
+an installed application may also be launched with `--uninstall`; the launcher
+hands that request to the standalone manager before starting the application.
+
+The manager is installed at:
+
+| Platform | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/<identifier>/<install-root>/uninstall` |
+| Windows | `%LOCALAPPDATA%\<identifier>\<install-root>\uninstall.exe` |
+| Linux | `$XDG_DATA_HOME/<identifier>/<install-root>/uninstall` |
+
+The Linux location falls back to
+`~/.local/share/<identifier>/<install-root>/uninstall`. The manager is tied to
+that installation and should not be moved or copied elsewhere.
+
+For non-interactive automation, use:
+
+```bash
+# Remove the application and Electrobun installation state; preserve data.
+<uninstaller> --quiet
+
+# Also remove this identifier and channel's managed data, cache, and logs.
+<uninstaller> --quiet --delete-data
+```
+
+`--quiet` intentionally has the same conservative meaning as selecting
+`App`. Automated jobs must opt in to data deletion with `--delete-data`, which
+is only accepted after `--quiet`. Unknown, reordered, duplicate, or incomplete
+uninstall arguments are rejected before cleanup begins.
+
+## Platform integration
+
+The unified standalone manager, interactive choices, and quiet flags are
+available in macOS, Windows, and Linux installer builds.
+
+On Windows, Electrobun registers each identifier and release channel separately
+in Windows Installed Apps. Choosing Uninstall there opens the same native Task
+Dialog. The registered quiet uninstall action uses the conservative `App`
+behavior and preserves user data. Migrated apps retain their validated
+physical install root in the registration metadata.
+
+On Linux, Electrobun uses KDialog first on KDE/Plasma and Zenity first on other
+desktops, then tries the other graphical helper if necessary. If neither helper
+works, it offers the same choices in an attached terminal. With neither a
+working graphical helper nor a terminal, interactive uninstall exits without
+changing anything and asks for an explicit `--quiet` invocation.
+
+Package-managed distributions, such as Flatpak, should be removed through
+their package manager rather than Electrobun's standalone installer manager.
+
+## Application cleanup
+
+There is no `electrobun.config.ts` setting for arbitrary uninstall paths.
+Electrobun deliberately limits cleanup to its app-scoped managed directories,
+which keeps an uninstall from deleting unrelated user files. Store removable
+application data under `Utils.paths.userData`, `Utils.paths.userCache`, or
+`Utils.paths.userLogs`; users can then choose whether that data is removed.
+
+If your application writes data elsewhere, document its removal separately for
+your users. Support for additional declarative cleanup locations is deferred;
+it will be constrained to paths beneath Electrobun-managed app roots.

@@ -269,6 +269,7 @@ header {
 .summary .total { color: #aaa; }
 .summary .passed { color: #4ade80; }
 .summary .failed { color: #f87171; }
+.summary .skipped { color: #c4b5fd; }
 .summary .pending { color: #fbbf24; }
 
 .controls {
@@ -307,24 +308,6 @@ header {
 
 .btn-secondary:hover:not(:disabled) {
   background: #374151;
-}
-
-.btn-success {
-  background: #22c55e;
-  color: white;
-}
-
-.btn-success:hover:not(:disabled) {
-  background: #16a34a;
-}
-
-.btn-danger {
-  background: #ef4444;
-  color: white;
-}
-
-.btn-danger:hover:not(:disabled) {
-  background: #dc2626;
 }
 
 .search-row {
@@ -446,6 +429,11 @@ header {
   color: #fca5a5;
 }
 
+.test-status.skipped {
+  background: #4c1d95;
+  color: #c4b5fd;
+}
+
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -477,6 +465,17 @@ header {
   color: #888;
 }
 
+.test-instructions {
+  margin: 7px 0 0 18px;
+  color: #b8c1d1;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.test-instructions li + li {
+  margin-top: 2px;
+}
+
 .test-meta {
   display: flex;
   align-items: center;
@@ -497,81 +496,12 @@ header {
   white-space: nowrap;
 }
 
-/* Modal */
-.modal {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.8);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-}
-
-.modal-content {
-  background: #1a1a2e;
-  border-radius: 12px;
-  padding: 24px;
-  max-width: 500px;
-  width: 90%;
-  border: 1px solid #333;
-}
-
-.modal-content h2 {
-  margin-bottom: 16px;
-  font-size: 1.2rem;
-}
-
-#modal-instructions {
-  background: #16213e;
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 20px;
-}
-
-#modal-instructions ol {
-  margin: 0;
-  padding-left: 20px;
-}
-
-#modal-instructions li {
-  margin-bottom: 8px;
-  line-height: 1.5;
-}
-
-.modal-actions {
-  display: flex;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.modal-actions .btn {
-  flex: 1;
-  padding: 12px;
-}
-
-.modal-notes label {
-  display: block;
-  font-size: 0.85rem;
-  color: #888;
-  margin-bottom: 6px;
-}
-
-.modal-notes input {
-  width: 100%;
-  padding: 10px;
-  border: 1px solid #333;
-  border-radius: 6px;
-  background: #0f0f1a;
-  color: #eee;
-  font-size: 0.9rem;
-}
-
-.modal-notes input::placeholder {
-  color: #555;
+.test-skip-reason {
+  color: #c4b5fd;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Running state */

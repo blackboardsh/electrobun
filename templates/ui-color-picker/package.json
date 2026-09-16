@@ -1,0 +1,10 @@
+{
+	"name": "electrobun-ui-color-picker",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Tray color picker in a transparent, always-on-top Cottontail UI window — zoomed pixel loupe, multi-format copy, persistent preferences",
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}

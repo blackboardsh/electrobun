@@ -1,7 +1,7 @@
 // Session/Cookie API Tests
 
 import { defineTest, expect } from "../test-framework/types";
-import { Session } from "electrobun/bun";
+import { Session } from "electrobun/main";
 
 export const sessionTests = [
   defineTest({

@@ -211,7 +211,12 @@ class PhotoBooth {
 
 			if (videoDevices.length > 0) {
 				this.startCameraBtn.style.display = "flex";
+				this.startCameraBtn.disabled = false;
 			} else {
+				// No capture hardware (common in VMs). Disable the control so the
+				// user can't trigger a confusing OverconstrainedError from WebKit.
+				this.startCameraBtn.style.display = "none";
+				this.startCameraBtn.disabled = true;
 				this.setStatus("No cameras found on this device", false);
 			}
 		} catch (error) {
@@ -245,8 +250,22 @@ class PhotoBooth {
 			this.startCameraBtn.style.display = "none";
 		} catch (error) {
 			console.error("Error starting camera:", error);
-			this.setStatus(`Camera error: ${(error as Error).message}`, false);
+			this.setStatus(`Camera error: ${this.describeCameraError(error)}`, false);
 		}
+	}
+
+	// WebKit reports zero-camera machines as OverconstrainedError("Invalid
+	// constraint") rather than NotFoundError, which reads as a bug in the app.
+	// Translate it into something actionable.
+	private describeCameraError(error: unknown): string {
+		const err = error as { name?: string; message?: string };
+		if (err?.name === "OverconstrainedError" || err?.name === "NotFoundError") {
+			return "No camera was found on this device";
+		}
+		if (err?.name === "NotAllowedError") {
+			return "Camera access was denied";
+		}
+		return err?.message ?? String(error);
 	}
 
 	private async switchCamera(deviceId: string) {

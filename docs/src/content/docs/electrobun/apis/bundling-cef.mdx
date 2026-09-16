@@ -1,0 +1,167 @@
+---
+title: "Bundling CEF"
+description: "Ship Chromium Embedded Framework as an Electrobun renderer."
+---
+
+Electrobun uses the operating system webview by default: WKWebView on macOS,
+WebView2 on Windows, and GTK WebKit on Linux. Bundling CEF ships a tested
+Chromium renderer with the application for consistent browser behavior and
+the native-layer features that require it.
+
+CEF materially increases the application download and installed size. System
+webviews remain the better default when their browser behavior and compositing
+support meet the application's requirements.
+
+## Configuration
+
+Enable CEF independently for each target platform. `defaultRenderer` controls
+the renderer used when a window or view does not set one explicitly.
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "CEF App",
+    identifier: "com.example.cef-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      bundleCEF: true,
+      defaultRenderer: "cef",
+    },
+    win: {
+      bundleCEF: true,
+      defaultRenderer: "cef",
+    },
+    linux: {
+      bundleCEF: true,
+      defaultRenderer: "cef",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Hutch downloads Electrobun's pinned CEF artifact and packages its libraries,
+helper processes, resources, and locales. A CEF renderer is unavailable when
+`bundleCEF` is false.
+
+## Select A Renderer
+
+On macOS and Windows, a bundled application can mix native and CEF views.
+
+```typescript
+import { BrowserWindow } from "electrobun/main";
+
+const browserWindow = new BrowserWindow({
+  title: "Chromium Window",
+  url: "views://main/index.html",
+  frame: { width: 1200, height: 800 },
+  renderer: "cef",
+});
+
+const settingsWindow = new BrowserWindow({
+  title: "Native Settings",
+  url: "views://settings/index.html",
+  frame: { width: 800, height: 600 },
+  renderer: "native",
+});
+
+void browserWindow;
+void settingsWindow;
+```
+
+Embedded views accept the same renderer choice:
+
+```html
+<electrobun-webview
+  src="https://example.com"
+  renderer="cef"
+  sandbox
+  style="display: block; width: 100%; height: 500px"
+></electrobun-webview>
+
+<electrobun-webview
+  src="https://example.org"
+  renderer="native"
+  sandbox
+  style="display: block; width: 100%; height: 300px"
+></electrobun-webview>
+```
+
+On Linux, the packaged native wrapper selects one webview implementation for
+the process. When CEF is bundled, its views use CEF; without it, views use GTK
+WebKit. Do not design a Linux window around mixed native and CEF children.
+
+## Runtime Detection
+
+Read the packaged renderer metadata instead of assuming a renderer exists:
+
+```typescript
+import { BuildConfig } from "electrobun/main";
+
+const build = await BuildConfig.get();
+console.log({
+  defaultRenderer: build.defaultRenderer,
+  availableRenderers: build.availableRenderers,
+});
+
+if (!build.availableRenderers.includes("cef")) {
+  throw new Error("This application was built without CEF");
+}
+```
+
+## Platform Guidance
+
+### macOS
+
+The native renderer is WKWebView and has the smallest distribution. Bundle
+CEF when the application needs pinned Chromium behavior or CEF-specific
+features. Both renderers can coexist in one process.
+
+### Windows
+
+The native renderer is WebView2, which is Chromium-based and updated by the
+system. CEF is useful when the application must pin its browser version or use
+Electrobun overlay behavior that WebView2 cannot provide. In particular,
+`<electrobun-webview>` masks and input passthrough require CEF on Windows.
+
+### Linux
+
+GTK WebKit keeps the bundle small. CEF is recommended for consistent Chromium
+behavior and native overlay compositing. A transparent CEF `BrowserWindow` has
+additional passthrough and mask limitations documented on the
+[`<electrobun-webview>` page](/electrobun/apis/browser/electrobun-webview-tag).
+
+## Chromium Flags
+
+Set CEF command-line flags per platform with `chromiumFlags`. Keys omit the
+`--` prefix; values are strings, `true`, or `false`.
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "CEF Debug App",
+    identifier: "com.example.cef-debug-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      bundleCEF: true,
+      chromiumFlags: {
+        "show-paint-rects": true,
+        "user-agent": "CEF Debug App/1.0",
+      },
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Development builds automatically expose CEF debugging on an available local
+port. Packaged canary and stable builds disable it unless an explicit
+`"remote-debugging-port"` is configured. See [Build
+Configuration](/electrobun/apis/cli/build-configuration#chromium-flags) for
+the security and override details.

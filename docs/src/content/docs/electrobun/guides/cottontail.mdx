@@ -1,0 +1,113 @@
+---
+title: "Cottontail"
+description: "Understand Electrobun's default JavaScript runtime."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+Cottontail is the default runtime for a TypeScript main process. It's built
+with Zig on JavaScriptCore and provides the Node.js and Bun-compatible APIs
+Electrobun applications need — which means existing code and npm packages can
+work without a Cottontail-based app shipping Node or Bun.
+
+Why a separate runtime at all? Because a desktop app's runtime has a
+different job than a general-purpose server runtime. Cottontail carries the
+APIs applications actually use and leaves out the rest. Project dependencies
+use Hutch's built-in npm-compatible resolver by default, or an explicitly
+selected external package manager. Bundling and native build machinery live in
+Hutch, so the runtime that ships inside every app stays small.
+
+Bun is also a first-class package-manager choice for a Cottontail project: set
+`packageManager: "bun"` in `hutch.config.ts`. That explicitly selects the
+external dependency tool. Separately, Cottontail implements Bun-compatible
+application APIs including the `Bun.$` shell interface.
+
+Hutch uses Cottontail in two separate roles. The build-time Cottontail that
+loads config and runs scripts is paired with the Hutch release, unless a project
+pragma overrides it. For a Cottontail main process, the selected Electrobun
+devkit separately pins the exact runtime placed in the application bundle; it
+does not inherit Hutch's build-time pair. End users install neither one. A Bun
+main process bundles the devkit-pinned Bun runtime instead.
+
+## Select Cottontail
+
+New projects use Cottontail by default. Spelled out explicitly, the
+configuration is:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Cottontail App",
+    identifier: "dev.example.cottontail-app",
+    version: "0.1.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+One naming note: the conventional `src/bun` directory does not select the
+runtime. `electrobun/main` is the canonical, runtime-neutral SDK import. With
+the configuration above, Cottontail executes this code:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+new BrowserWindow({
+  title: "My App",
+  url: "views://mainview/index.html",
+});
+```
+
+## Runtime and build ownership
+
+The clean split between Cottontail and Hutch is worth internalizing, because
+it explains where every capability lives:
+
+| Concern | Owner |
+| --- | --- |
+| Execute the bundled TypeScript main process | Cottontail |
+| Node.js and Bun-compatible runtime APIs | Cottontail |
+| Install packages, execute their binaries, and maintain their lockfile | Hutch by default, or an explicit external package manager |
+| Bundle main-process and webview source | Hutch |
+| Acquire compilers and native platform artifacts | Hutch |
+| Sign, notarize, wrap, and package releases | Hutch |
+
+Everything build-related stays out of the runtime shipped to every user.
+
+## Runtime compatibility
+
+Cottontail is built to run existing Node.js and Bun-oriented application
+code, and for typical application code it does. But compatibility isn't the
+same as being interchangeable in every case: native addons, runtime-specific
+implementation details, and uncommon APIs can expose differences. The
+practical advice is the same as for any runtime: commit `hutch.lock` or the
+lockfile owned by your explicitly selected package manager, and exercise your
+application on every target platform before release.
+
+<Aside type="tip">
+If your application intentionally depends on the actual Bun runtime, use the
+Bun main-process option — Hutch remains the build tool in that configuration.
+</Aside>
+
+## Pin Cottontail
+
+Most projects don't need a build-time pin: without one, Hutch uses the
+Cottontail version that release was built and tested with, and `hutch upgrade`
+advances the pair. Pin only when the build pipeline needs a different exact
+version:
+
+```ts
+// @hutch cottontail=0.3.0
+```
+
+Inspect the active version with `hutch cottontail version`.
+
+This pragma controls build-time execution only. The Cottontail shipped for
+`build.mainProcess: "cottontail"` remains the exact version declared by the
+selected Electrobun devkit.

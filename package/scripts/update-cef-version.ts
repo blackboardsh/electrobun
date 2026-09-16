@@ -1,5 +1,3 @@
-#!/usr/bin/env bun
-
 /**
  * Checks Spotify CDN for the latest stable CEF version and compares it
  * with the version in src/shared/cef-version.ts.

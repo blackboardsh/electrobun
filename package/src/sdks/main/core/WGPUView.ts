@@ -1,0 +1,202 @@
+import { ffi } from "../proc/native";
+import electrobunEventEmitter from "../events/eventEmitter";
+import { type Pointer } from "bun:ffi";
+import { releaseWebgpuContext } from "../webgpuContextRegistry";
+import { BeforeRemoveHooks } from "./beforeRemoveHooks";
+
+const WGPUViewMap: {
+	[id: number]: WGPUView;
+} = {};
+
+export type WGPUViewOptions = {
+	frame: {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	};
+	autoResize: boolean;
+	windowId: number;
+	startTransparent: boolean;
+	startPassthrough: boolean;
+};
+
+const defaultOptions: Partial<WGPUViewOptions> = {
+	frame: {
+		x: 0,
+		y: 0,
+		width: 800,
+		height: 600,
+	},
+	autoResize: true,
+	startTransparent: false,
+	startPassthrough: false,
+};
+
+export class WGPUView {
+	id: number = 0;
+	windowId!: number;
+	autoResize: boolean = true;
+	frame: {
+		x: number;
+		y: number;
+		width: number;
+		height: number;
+	} = {
+		x: 0,
+		y: 0,
+		width: 800,
+		height: 600,
+	};
+	startTransparent: boolean = false;
+	startPassthrough: boolean = false;
+	isRemoved: boolean = false;
+	private beforeRemoveHooks = new BeforeRemoveHooks();
+
+	get ptr(): Pointer | null {
+		if (this.isRemoved) {
+			return null;
+		}
+		return ffi.request.getWGPUViewPointer({ id: this.id }) as Pointer | null;
+	}
+
+	constructor(options: Partial<WGPUViewOptions> = defaultOptions) {
+		this.frame = {
+			x: options.frame?.x ?? defaultOptions.frame!.x,
+			y: options.frame?.y ?? defaultOptions.frame!.y,
+			width: options.frame?.width ?? defaultOptions.frame!.width,
+			height: options.frame?.height ?? defaultOptions.frame!.height,
+		};
+		this.windowId = options.windowId ?? 0;
+		this.autoResize = options.autoResize === false ? false : true;
+		this.startTransparent = options.startTransparent ?? false;
+		this.startPassthrough = options.startPassthrough ?? false;
+
+		this.id = this.init() as number;
+		WGPUViewMap[this.id] = this;
+	}
+
+	init() {
+		return ffi.request.createWGPUView({
+			windowId: this.windowId,
+			frame: {
+				width: this.frame.width,
+				height: this.frame.height,
+				x: this.frame.x,
+				y: this.frame.y,
+			},
+			autoResize: this.autoResize,
+			startTransparent: this.startTransparent,
+			startPassthrough: this.startPassthrough,
+		});
+	}
+
+	setFrame(x: number, y: number, width: number, height: number) {
+		this.frame = { x, y, width, height };
+		ffi.request.wgpuViewSetFrame({ id: this.id, x, y, width, height });
+	}
+
+	setTransparent(transparent: boolean) {
+		ffi.request.wgpuViewSetTransparent({ id: this.id, transparent });
+	}
+
+	/**
+	 * Enable alpha compositing: the surface's alpha channel blends against
+	 * whatever is behind the view (unlike setTransparent, which hides the
+	 * layer entirely). Required for transparent GPU-rendered windows.
+	 */
+	setAlphaBlending(enabled: boolean) {
+		ffi.request.wgpuViewSetAlphaBlending({ id: this.id, enabled });
+	}
+
+	setPassthrough(passthrough: boolean) {
+		ffi.request.wgpuViewSetPassthrough({ id: this.id, passthrough });
+	}
+
+	setHidden(hidden: boolean) {
+		ffi.request.wgpuViewSetHidden({ id: this.id, hidden });
+	}
+
+	on(name: "frame-updated", handler: (event: unknown) => void) {
+		const specificName = `${name}-${this.id}`;
+		electrobunEventEmitter.on(specificName, handler);
+	}
+
+	/**
+	 * Run teardown synchronously while the native view and WebGPU context still
+	 * exist. The returned callback removes this subscription.
+	 */
+	onBeforeRemove(handler: () => void): () => void {
+		if (this.isRemoved) return () => {};
+		return this.beforeRemoveHooks.subscribe(handler);
+	}
+
+	remove() {
+		if (this.isRemoved) {
+			return;
+		}
+
+		this.isRemoved = true;
+		delete WGPUViewMap[this.id];
+		const hookErrors = this.beforeRemoveHooks.run();
+		// Release the adapter-owned surface/instance while an explicit removal
+		// still has a live native view. On natural window close this is also
+		// idempotently invoked when GpuWindow drains its child wrappers.
+		try {
+			releaseWebgpuContext(this.id);
+		} catch (e) {
+			console.error(`Error releasing WebGPU context for view ${this.id}:`, e);
+		}
+
+		try {
+			ffi.request.wgpuViewRemove({ id: this.id });
+		} catch (e) {
+			console.error(`Error removing WGPU view ${this.id}:`, e);
+		}
+
+		for (const error of hookErrors) {
+			console.error(`Error before removing WGPU view ${this.id}:`, error);
+		}
+	}
+
+	getNativeHandle() {
+		return ffi.request.wgpuViewGetNativeHandle({ id: this.id });
+	}
+
+	static getById(id: number) {
+		return WGPUViewMap[id];
+	}
+
+	static adoptExisting(id: number, options: Partial<WGPUViewOptions> = {}) {
+		const existing = WGPUViewMap[id];
+		if (existing) {
+			return existing;
+		}
+
+		const ptr = ffi.request.getWGPUViewPointer({ id }) as Pointer | null;
+		if (!ptr) {
+			return undefined;
+		}
+
+		const view = Object.create(WGPUView.prototype) as WGPUView;
+		view.id = id;
+		view.windowId = options.windowId ?? 0;
+		view.autoResize = options.autoResize === false ? false : true;
+		view.frame = {
+			x: options.frame?.x ?? defaultOptions.frame!.x,
+			y: options.frame?.y ?? defaultOptions.frame!.y,
+			width: options.frame?.width ?? defaultOptions.frame!.width,
+			height: options.frame?.height ?? defaultOptions.frame!.height,
+		};
+		view.startTransparent = options.startTransparent ?? false;
+		view.startPassthrough = options.startPassthrough ?? false;
+		view.isRemoved = false;
+		view.beforeRemoveHooks = new BeforeRemoveHooks();
+		WGPUViewMap[id] = view;
+		return view;
+	}
+
+	static getAll() {
+		return Object.values(WGPUViewMap);
+	}
+}

@@ -1,0 +1,47 @@
+// Type declarations for Electrobun preload globals
+// These are set dynamically per-webview before the preload script runs
+
+declare global {
+	interface Window {
+		__electrobunPlatform: "linux" | "macos" | "windows";
+		__electrobunWebviewId: number;
+		__electrobunWindowId: number;
+		__electrobunRpcSocketPort: number;
+		__electrobunHostSocketPort?: number;
+		__electrobunPlaintextHostSocket?: boolean;
+		__electrobunSecretKeyBytes: number[];
+		// Event-only bridge (all webviews, including sandboxed)
+		__electrobunEventBridge?: {
+			postMessage: (message: string) => void;
+		};
+		// Internal RPC bridge (trusted webviews only)
+		__electrobunInternalBridge?: {
+			postMessage: (message: string) => void;
+		};
+		// User RPC bridge (trusted webviews only)
+		__electrobunHostBridge?: {
+			postMessage: (message: string) => void;
+		};
+		__electrobunBunBridge?: {
+			postMessage: (message: string) => void;
+		};
+		__electrobun_encrypt: (
+			plaintext: string,
+		) => Promise<{ encryptedData: string; iv: string; tag: string }>;
+		__electrobun_decrypt: (
+			encryptedData: string,
+			iv: string,
+			tag: string,
+		) => Promise<string>;
+		__electrobunSendToHost: (message: unknown) => void;
+		__electrobunPendingHostMessages?: unknown[];
+		__electrobun: {
+			receiveMessageFromHost: (msg: unknown) => void;
+			receiveInternalMessageFromHost: (msg: unknown) => void;
+			receiveMessageFromBun: (msg: unknown) => void;
+			receiveInternalMessageFromBun: (msg: unknown) => void;
+		};
+	}
+}
+
+export {};

@@ -1,0 +1,239 @@
+---
+title: "UI Components"
+description: "Every Electrobun UI element and its props."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and its APIs may change between releases.
+</Aside>
+
+This page documents the **GPU renderer's** element vocabulary
+(`electrobun/main/ui`). The [DOM renderer](/electrobun/apis/ui/browser-dom/)
+(`electrobun/browser/ui`) shares the same reactivity and control flow but
+speaks HTML — any tag works there.
+
+In JSX, elements are the intrinsics `<box>`, `<row>`, `<column>`, `<text>`,
+and `<spacer>`; everything else here (`each`, `dynamic`, `textInput`,
+`webview`, `wgpuSurface`) is a builder function used inside a JSX
+builder-escape child: `{() => ui.each(...)}`. The same functions are also a
+complete JSX-free API for plain `.ts` files — see
+[What the JSX becomes](/electrobun/guides/electrobun-ui/#what-the-jsx-becomes).
+
+```tsx
+import { live, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
+```
+
+Any prop typed `Reactive<T>` accepts a plain value or a `live()` scope:
+`bg={live(() => hover() ? "#232336" : "#1b1b28")}` re-runs only when its
+dependencies change and updates only that property. Bare functions in value
+positions throw — so `live(` is a complete, greppable index of a component's
+reactivity. Event handlers and builder-escape children stay plain functions.
+Control-flow components (`<Show>`, `<For>`, `<Switch>`/`<Match>`) follow the
+same rule: a `live()` prop reconciles; a plain value is a frozen snapshot.
+
+## ui.box(props, children?)
+
+The universal building block: a flex container, an optionally painted
+rectangle, and an input target.
+
+**Layout props**
+
+| Prop | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `dir` | `"row" \| "column"` | `"row"` | Main axis. |
+| `gap` | `Reactive<number>` | `0` | Space between children. |
+| `pad` | `Reactive<number>` | `0` | Uniform padding. |
+| `width`, `height` | `Reactive<number>` | auto | Fixed size; auto sizes to content. |
+| `grow` | `Reactive<number>` | `0` | Share of leftover main-axis space. |
+| `justify` | `"start" \| "center" \| "end" \| "between"` | `"start"` | Main-axis distribution. |
+| `align` | `"start" \| "center" \| "end" \| "stretch"` | `"stretch"` | Cross-axis placement. Stretch fills auto-sized, non-text children (flexbox rule). |
+| `overflow` | `"visible" \| "scroll"` | `"visible"` | `"scroll"` clips children and offsets them by `scroll` on the main axis. |
+| `scroll` | `Reactive<number>` | `0` | Scroll offset for `overflow: "scroll"` boxes. |
+
+**Paint props**
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `bg` | `Reactive<string \| number>` | Background color; alpha 0 paints nothing. |
+| `radius` | `Reactive<number>` | Corner radius (SDF, antialiased). |
+| `border` | `Reactive<number>` | Border width. |
+| `borderColor` | `Reactive<string \| number>` | Border color. |
+
+**Interaction props**
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `onClick`, `onPointerDown`, `onPointerUp`, `onPointerEnter`, `onPointerLeave` | `(e: PointerEventInfo) => void` | Pointer handlers; any handler makes the node hittable. |
+| `onKeyDown` | `(e: KeyEventInfo) => boolean \| void` | Receives keys while this node (or a descendant) is focused; return `true` to stop bubbling. |
+| `focusable` | `boolean` | Click-to-focus target; participates in focused key routing. |
+| `windowDrag` | `boolean` | Dragging this node moves the host window; a still click delivers `onClick`. |
+
+## ui.row / ui.column
+
+`ui.box` with `dir` preset. `ui.column({ pad: 16 }, () => { ... })`.
+
+## ui.text(content, props?)
+
+Single-line text. `content` is `Reactive<string | number>`.
+
+| Prop | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `size` | `Reactive<number>` | `14` | Glyph height in points. |
+| `color` | `Reactive<string \| number>` | white | Text color. |
+
+Text measures its intrinsic size; there is no wrapping or truncation yet, so
+size strings to their containers.
+
+## ui.spacer(grow?)
+
+Flexible (default `grow: 1`) or weighted empty space on the main axis.
+`ui.row({}, () => { left(); ui.spacer(); right(); })` right-aligns `right()`.
+
+## ui.dynamic(props, builder)
+
+A reactive region: `builder` re-runs — and the subtree rebuilds — whenever a
+signal it reads changes. Props are `ui.box` props. Use it for conditionals
+and small lists; prefer `ui.each` for keyed lists.
+
+```tsx
+<column>
+  {() =>
+    ui.dynamic({}, () => {
+      if (!loggedIn()) ui.text("Sign in");
+      else ui.text("Welcome back");
+    })
+  }
+</column>
+```
+
+## ui.each(props, items, key, render)
+
+Keyed list reconciliation. Rows are diffed by key: unchanged rows keep their
+subtree (and any per-row state) across filters and reorders; removed rows are
+disposed with their reactive scope.
+
+```tsx
+<column grow={1}>
+  {() =>
+    ui.each(
+      { dir: "column", gap: 4 },
+      () => state.todos,          // Accessor<readonly T[]>
+      (todo) => todo.id,          // stable key
+      (todo, index) => {          // index is a reactive accessor
+        ui.row({ pad: 8, bg: live(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
+          ui.text(todo.title);
+        });
+      },
+    )
+  }
+</column>
+```
+
+## ui.anchor(props)
+
+A layout-only rectangle that paints nothing and reports its computed frame —
+the primitive that native layers build on.
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
+| `onFrame` | `(rect: { x, y, width, height }) => void` | Called whenever layout moves or resizes the anchor. |
+
+## wgpuSurface(props)
+
+A real Dawn [`WGPUView`](/electrobun/apis/webgpu/) positioned by the layout —
+the UIWindow equivalent of the
+[`<electrobun-wgpu>` tag](/electrobun/apis/browser/electrobun-wgpu-tag/). The
+view is created lazily on first layout and removed with its reactive scope.
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
+| `transparent` | `boolean` | Start the native view transparent. |
+| `onReady` | `(view: WGPUView) => void` | Called once, after first layout. Render into the view with the [WebGPU adapter](/electrobun/apis/webgpu/). |
+| `onFrame` | `(view, rect) => void` | Called on every subsequent layout move/resize. |
+
+## webview(props)
+
+An out-of-process webview positioned by the layout — the UIWindow equivalent
+of the [`<electrobun-webview>` tag](/electrobun/apis/browser/electrobun-webview-tag/).
+Created lazily on first layout, removed with its scope.
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `url` | `string` | Remote or `views://` URL. |
+| `html` | `string` | Inline HTML instead of `url`. |
+| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
+| `partition` | `string` | Session partition (see [BrowserView](/electrobun/apis/browser-view/)). |
+| `sandbox` | `boolean` | Sandboxed (events-only) webview. |
+| `onReady` | `(view: BrowserView) => void` | The created `BrowserView` — use it for RPC, navigation, etc. |
+
+## textInput(props)
+
+A controlled single-line text input: focus ring, caret with blink, editing
+(insert, backspace, word/line navigation via alt/cmd), placeholder, submit.
+
+```tsx
+const [query, setQuery] = createSignal("");
+
+<column pad={10}>
+  {() =>
+    textInput({
+      value: query,
+      onInput: setQuery,
+      onSubmit: (value) => run(value),
+      placeholder: "Search...",
+      autofocus: true,
+    })
+  }
+</column>
+```
+
+| Prop | Type | Purpose |
+| --- | --- | --- |
+| `value` | `() => string` | Controlled value accessor. |
+| `onInput` | `(next: string) => void` | Called with each edit. |
+| `onSubmit` | `(value: string) => void` | Enter. |
+| `placeholder` | `string` | Shown while empty. |
+| `autofocus` | `boolean` | Focus on mount. |
+| `size` | `number` | Font size (default 14). |
+| `grow`, `width`, `pad`, `radius`, `bg`, `border`, `borderColor` | `Reactive<...>` | Container styling. |
+| `focusBorderColor` | `Reactive<string \| number>` | Border while focused. |
+| `color`, `placeholderColor`, `caretColor` | `string` | Text/caret colors. |
+
+Unhandled keys (arrows up/down, Escape) bubble to window-level `onKey`
+handlers — which is how list navigation under an input works.
+
+## Control flow: Show, For, Switch/Match
+
+```tsx
+<Show when={live(() => state.threads.length > 0)} fallback={<text>empty</text>}>
+  <For each={live(() => state.threads)}>
+    {(thread) => <text size={12}>{thread.subject}</text>}
+  </For>
+</Show>
+```
+
+Both forms are valid on every control-flow prop: `when={live(...)}` /
+`each={live(...)}` reconcile on change, while a plain value —
+`<For each={state.threads}>` — renders a frozen snapshot once and never
+updates. `<For>` accepts `key={(item) => id}` (defaults to item identity) and
+`fallback`; `<Switch fallback={...}>` picks the first `<Match when={...}>`
+whose condition is truthy.
+
+## Window-level keyboard: onKey(handler)
+
+```ts docs=syntax
+import { onKey, Key, Mod } from "electrobun/main/ui";
+
+onKey((e) => {
+  if (e.keyCode === Key.Escape) close();
+  if (e.modifiers & Mod.Cmd && charForKey(e.keyCode, 0) === "c") copy();
+});
+```
+
+`Key` (Return, Tab, Space, Backspace, Escape, arrows) and `Mod` (Shift, Ctrl,
+Alt, Cmd) are exported constants; `charForKey(keyCode, modifiers)` maps key
+codes to characters (US layout), and `applyEditKey` is the pure text-editing
+reducer `textInput` uses — both usable for custom widgets.

@@ -1,8 +1,8 @@
-#!/usr/bin/env bun
+#!/usr/bin/env node
 /**
  * Version bump, commit, tag, and push script
  *
- * Usage: bun scripts/push-version.js <type>
+ * Usage: node scripts/push-version.js <type>
  *
  * Types:
  *   beta   - prerelease bump (0.5.0-beta.0 -> 0.5.0-beta.1)
@@ -12,26 +12,49 @@
  *   stable - patch bump without beta (0.5.0 -> 0.5.1)
  */
 
-import { execSync } from "child_process";
+import { execFileSync, execSync } from "child_process";
 import { readFileSync, writeFileSync } from "fs";
-import { join } from "path";
+import { dirname, join, relative } from "path";
+import { fileURLToPath } from "url";
+import { assertStrictSemVer } from "../src/shared/strict-semver.js";
+import {
+	assertTemplateSourcesUnpinned,
+	createRustSdkVersionUpdates,
+	parseRepositoryPragmaPins,
+	stampNpmBootstrapPairedVersions,
+	updateKitchenVersions,
+	updateNpmBootstrapVersion,
+} from "./version-config.mjs";
+import {
+	assertReleaseGitState,
+	pushReleaseAtomically,
+} from "./release-git.mjs";
 
 const type = process.argv[2];
 
 if (!type || !["beta", "patch", "minor", "major", "stable"].includes(type)) {
 	console.error(
-		"Usage: bun scripts/push-version.js <beta|patch|minor|major|stable>",
+		"Usage: node scripts/push-version.js <beta|patch|minor|major|stable>",
 	);
 	process.exit(1);
 }
 
-const packageDir = import.meta.dir.replace("/scripts", "");
+const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const repoRoot = join(packageDir, "..");
 const packageJsonPath = join(packageDir, "package.json");
+const templatesDir = join(repoRoot, "templates");
+const npmBootstrapPath = join(repoRoot, "npm", "electrobun", "package.json");
 
 // Read current version
 const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-const currentVersion = packageJson.version;
+const currentVersion = assertStrictSemVer(
+	packageJson.version,
+	"package/package.json version",
+);
+
+// Refuse to mutate release identities unless this checkout is the clean branch
+// that the exact commit and tag will be published from.
+assertReleaseGitState(repoRoot);
 
 // Determine npm version command
 const versionCmd = {
@@ -53,32 +76,77 @@ execSync(`npm version ${versionCmd} --no-git-tag-version`, {
 
 // Read new version
 const updatedPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf-8"));
-const newVersion = updatedPackageJson.version;
+const newVersion = assertStrictSemVer(
+	updatedPackageJson.version,
+	"npm version result",
+);
 const tagName = `v${newVersion}`;
 
 console.log(`New version: ${newVersion}`);
 
 // Update kitchen sink version to match
 const kitchenConfigPath = join(repoRoot, "kitchen", "electrobun.config.ts");
-let kitchenConfig = readFileSync(kitchenConfigPath, "utf-8");
-kitchenConfig = kitchenConfig.replace(
-	/version:\s*["'].*["']/,
-	`version: "${newVersion}"`,
+const kitchenHutchConfigPath = join(repoRoot, "kitchen", "hutch.config.ts");
+const kitchenVersions = updateKitchenVersions(
+	readFileSync(kitchenHutchConfigPath, "utf-8"),
+	readFileSync(kitchenConfigPath, "utf-8"),
+	newVersion,
 );
-writeFileSync(kitchenConfigPath, kitchenConfig);
-console.log(`Updated kitchen/electrobun.config.ts version to ${newVersion}`);
+assertTemplateSourcesUnpinned(templatesDir);
+const npmBootstrap = updateNpmBootstrapVersion(
+	readFileSync(npmBootstrapPath, "utf-8"),
+	newVersion,
+);
+const npmResolverPath = join(
+	repoRoot,
+	"npm",
+	"electrobun",
+	"bin",
+	"resolve-hutch.cjs",
+);
+const npmResolver = stampNpmBootstrapPairedVersions(
+	readFileSync(npmResolverPath, "utf-8"),
+	parseRepositoryPragmaPins(
+		readFileSync(join(packageDir, "hutch.config.ts"), "utf-8"),
+	),
+);
+const rustSdkVersions = createRustSdkVersionUpdates(repoRoot, newVersion);
+
+writeFileSync(kitchenHutchConfigPath, kitchenVersions.hutchConfig);
+writeFileSync(kitchenConfigPath, kitchenVersions.electrobunConfig);
+writeFileSync(npmBootstrapPath, npmBootstrap);
+writeFileSync(npmResolverPath, npmResolver);
+for (const rustSdkVersion of rustSdkVersions) {
+	writeFileSync(rustSdkVersion.path, rustSdkVersion.source);
+}
+console.log(
+	`Updated Kitchen, npm bootstrap (with paired toolchain pins), and Rust SDK identities to ${newVersion}; repository template sources are ready for release stamping`,
+);
 
 // Git operations from repo root
 console.log(`Creating commit and tag: ${tagName}`);
 
-execSync(`git add package/package.json kitchen/electrobun.config.ts`, {
+execFileSync(
+	"git",
+	[
+		"add",
+		"package/package.json",
+		"package/package-lock.json",
+		"kitchen/hutch.config.ts",
+		"kitchen/electrobun.config.ts",
+		"npm/electrobun/package.json",
+		"npm/electrobun/bin/resolve-hutch.cjs",
+		...rustSdkVersions.map(({ path }) => relative(repoRoot, path)),
+	],
+	{ cwd: repoRoot, stdio: "inherit" },
+);
+execFileSync("git", ["commit", "-m", tagName], {
 	cwd: repoRoot,
 	stdio: "inherit",
 });
-execSync(`git commit -m "${tagName}"`, { cwd: repoRoot, stdio: "inherit" });
-execSync(`git tag ${tagName}`, { cwd: repoRoot, stdio: "inherit" });
+execFileSync("git", ["tag", tagName], { cwd: repoRoot, stdio: "inherit" });
 
 console.log(`Pushing to origin...`);
-execSync(`git push origin main --tags`, { cwd: repoRoot, stdio: "inherit" });
+pushReleaseAtomically(repoRoot, tagName);
 
 console.log(`\n✓ Successfully pushed ${tagName}`);

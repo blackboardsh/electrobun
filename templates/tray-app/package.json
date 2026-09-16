@@ -2,13 +2,5 @@
 	"name": "electrobun-tray-app",
 	"private": true,
 	"version": "0.0.1",
-	"type": "module",
-	"scripts": {
-		"start": "electrobun dev",
-		"dev": "electrobun dev --watch",
-		"build:canary": "electrobun build --env=canary"
-	},
-	"dependencies": {
-		"electrobun": "file:../../package"
-	}
+	"type": "module"
 }

@@ -1,0 +1,178 @@
+---
+title: "Quick Start"
+description: "Create and run an Electrobun 2.x app with Hutch."
+---
+
+This page takes you from nothing to a running desktop app. You'll install
+Hutch — Electrobun's build and workspace CLI — scaffold a project from a
+template, and run it. A couple of minutes, start to finish.
+
+## Install Hutch
+
+On macOS or Linux:
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
+
+Restart the terminal if needed, then check that it's on your path:
+
+```bash
+hutch --version
+```
+
+That's the only Electrobun-specific global install you need. Hutch handles
+scripts, builds, devkits, toolchains, and releases. Its built-in npm-compatible
+resolver handles ordinary JavaScript dependencies by default; a project can
+explicitly select npm, Bun, pnpm, Yarn, or a custom executable instead. A Rust
+or Go project uses Cargo or Go modules. When a project needs a compiler, Hutch
+fetches its exact configured version.
+
+## Create a project
+
+```bash
+hutch electrobun init
+```
+
+This opens an interactive picker: arrow keys to browse templates, Enter to
+choose. Hutch downloads the current stable template catalog and creates
+the project. Templates range from a minimal hello-world to full app skeletons
+with React, Solid, Vue, Svelte, or GPU-rendered UI — the picker is a nice way
+to browse what exists.
+
+Already know what you want? Skip the picker:
+
+```bash
+hutch electrobun init my-app --template=hello-world
+```
+
+Add `--beta` to scaffold from the latest **beta** templates instead of stable:
+
+```bash
+hutch electrobun init my-app --beta
+```
+
+:::note
+`bunx electrobun init` and `npx electrobun init` work too. The npm package is a
+single dependency-free bootstrap that downloads and verifies its exact paired
+Hutch archive from the same-version Electrobun GitHub Release, caches it, and
+forwards every argument. It defaults to stable templates unless you pass
+`--beta`; the installed package supplies paired Hutch and Electrobun defaults
+unless the project adds an explicit pin. The initializer also ensures a
+compatible global Hutch launcher is present, so the generated `hutch run ...`
+tasks and the rest of this page work afterward.
+:::
+
+## Run the app
+
+```bash
+cd my-app
+hutch run dev
+```
+
+A window should open on your desktop. That's your app.
+
+`init` already ran the template's explicit `install` task after extraction and
+devkit preparation. For the default JavaScript templates that task calls
+Hutch's built-in resolver; native-only templates do not define it. If you
+initialized with `--skip-install`, run `hutch run install` before `dev` when the
+selected template provides that task. Initialization requires network access
+for the current template catalog and selected template.
+
+The `dev` task builds the app, launches it, and rebuilds when you edit source
+files. Hutch resolves both tasks only from `hutch.config.ts`. Its built-in
+resolver owns `package.json` dependency resolution and `hutch.lock` unless the
+config explicitly selects an external package manager.
+
+The published template's `hutch.config.ts` contains the exact Electrobun
+release it was tested and shipped with:
+
+```ts docs=syntax
+export default {
+  electrobun: {
+    version: "2.0.0",
+  },
+  scripts: {
+    install: ["hutch", "install", "--frozen-lockfile"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+  },
+};
+```
+
+The template publisher guarantees that this pin matches the chosen catalog.
+During `init`, Hutch installs that exact core and SDK release under
+`~/.hutch/releases/electrobun`, copies its SDKs into the generated project
+`.hutch/devkit` sysroot, and resolves any required native compiler under
+`~/.hutch/toolchains`. `dev`, `run`, and `build` refresh that preparation
+automatically. To upgrade a generated project to the latest stable release, run
+`hutch electrobun update` from the app directory. Hutch updates the nearest
+parent `hutch.config.ts` exact pin and syncs the app. Hand-written projects may
+omit the pin; those use an npm-launched command's paired default or the active
+direct-Hutch channel.
+
+A typical project looks like this:
+
+```text
+my-app/
+|-- src/
+|   |-- bun/
+|   |   `-- index.ts        # Cottontail main process
+|   `-- mainview/
+|       |-- index.html
+|       |-- index.css
+|       `-- index.ts
+|-- electrobun.config.ts
+|-- hutch.config.ts
+|-- package.json
+|-- hutch.lock
+`-- tsconfig.json
+```
+
+The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
+is the **main process** — it runs on Cottontail, owns windows and native
+state, and is where the privileged side of your app lives. `src/mainview/` is
+the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
+webview. `hutch.config.ts` owns tasks and any optional release or package-manager
+override; `hutch install` resolves `package.json` into `hutch.lock` with Hutch's
+built-in resolver unless the config selects an external package manager.
+`electrobun.config.ts` tells Hutch how to put the two
+processes together into an app bundle. The full split is in
+[Project Ownership and the Devkit](/electrobun/guides/project-ownership/).
+
+## Build a release
+
+When you're ready to share it:
+
+```bash
+hutch electrobun build --env=canary
+hutch electrobun build --env=stable
+```
+
+This produces a distributable build — installer, self-extracting wrapper, and
+update metadata included — and signs it when signing is configured. Canary and stable are independent
+channels, so you can ship prerelease builds to testers without touching your
+stable release line.
+
+Hutch builds for the operating system and architecture it's running on, so a
+complete cross-platform release means running the build on native CI runners
+for each target.
+
+## Next steps
+
+- [Hello World](/electrobun/guides/hello-world/) builds the smallest app from
+  scratch, so you see what every file is for.
+- [Hutch](/electrobun/guides/hutch/) explains commands, channels, and project
+  pins.
+- [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
+  explains the config split, generated SDK projection, and external bundlers.
+- [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.
+- [Main Process Runtimes](/electrobun/guides/native-main-process/) covers
+  Cottontail, Bun, Zig, Rust, Go, and Odin.
+- [Bundling and Distribution](/electrobun/guides/bundling-and-distribution/)
+  covers signed release artifacts and updates.

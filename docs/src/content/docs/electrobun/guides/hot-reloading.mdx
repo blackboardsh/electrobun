@@ -1,0 +1,169 @@
+---
+title: "Hot Reloading"
+description: "Understand hot module replacement, webview reloads, and whole-app watch mode in Electrobun."
+---
+
+Electrobun supports two development loops that are often both called "hot
+reload," but they have different behavior:
+
+- **Whole-app watch mode** rebuilds and relaunches the application. It works
+  with every main-process runtime and with bundled webview assets.
+- **Webview hot module replacement (HMR)** updates browser modules through a
+  development server such as Vite without relaunching the application.
+
+The important boundary is the main process. It owns native windows, menus,
+trays, RPC, and application lifecycle. Webviews are isolated browsing contexts,
+so their UI can reload independently from the main process.
+
+## At a glance
+
+| Code being edited | Development loop | What happens after save |
+| --- | --- | --- |
+| Cottontail or Bun main process | `hutch electrobun dev --watch` | The app is rebuilt and relaunched. Main-process state resets. |
+| Zig, Rust, Go, or Odin main process | `hutch electrobun dev --watch` | The native main process is rebuilt and the app is relaunched. State resets. |
+| Webview bundled by Hutch | `hutch electrobun dev --watch` | The view bundle is rebuilt and the app is relaunched. |
+| Webview served by Vite | `hutch run dev:hmr` in a Vite template | Vite applies HMR when the change is accepted, or reloads the page otherwise. The native app is not relaunched. |
+| Warren native UI (`electrobun/main/ui`) | `hutch electrobun dev --watch` | The main process and its GPU-rendered UI restart together. |
+| Warren DOM UI (`electrobun/browser/ui`) | Your webview bundler's development server | It can use the webview reload pipeline, but Electrobun does not currently provide Warren-specific state-preserving HMR. |
+
+## Whole-app watch mode
+
+Run the watched development build directly:
+
+```bash
+hutch electrobun dev --watch
+```
+
+Published templates expose the same command as a task:
+
+```bash
+hutch run dev
+```
+
+Hutch builds and launches the app, watches its inputs, and then stops, rebuilds,
+and relaunches the app after a change. This is reliable across Cottontail, Bun,
+Zig, Rust, Go, and Odin main processes, but it is not in-process HMR. Expect
+main-process memory, open windows, and other transient application state to
+reset.
+
+On macOS and Linux, Hutch stops the running development app before rebuilding.
+On Windows, it currently asks you to close the app so it can rebuild without
+leaving a runtime process behind.
+
+The default watch set includes the configured main-process source, native build
+inputs, view entrypoint directories, and files in `build.copy`. Add other inputs
+with `build.watch` and exclude generated or high-churn paths with
+`build.watchIgnore`:
+
+```ts docs=syntax
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Watched App",
+    identifier: "com.example.watched-app",
+    version: "0.1.0",
+  },
+  build: {
+    watch: ["scripts", "vendor/native-library"],
+    watchIgnore: ["**/*.generated.*", "data/cache/**"],
+  },
+} satisfies ElectrobunConfig;
+```
+
+See the [`dev --watch` CLI reference](/electrobun/apis/cli/cli-args/#hutch-electrobun-dev)
+and [watch configuration](/electrobun/apis/cli/build-configuration/#watch-mode)
+for the complete input and ignore rules.
+
+### Cottontail and Bun runtime reload modes
+
+Cottontail and Bun both have runtime-level reload modes for standalone scripts.
+Electrobun does not currently pass those modes to an application main process.
+The supported Electrobun main-process development loop is the whole-app
+rebuild/relaunch described above.
+
+This distinction also applies when the main process is TypeScript: choosing
+Cottontail or Bun changes the bundled runtime, not the lifecycle of
+`hutch electrobun dev --watch`. See [Cottontail](/electrobun/guides/cottontail/)
+and [main-process runtimes](/electrobun/guides/native-main-process/).
+
+## Webview HMR with Vite
+
+For a browser-framework UI, use one of the Vite templates and run:
+
+```bash
+hutch run dev:hmr
+```
+
+`dev:hmr` is a task supplied by those templates, not a built-in Hutch command.
+The template starts a Vite development server on `http://localhost:5173`, then
+starts Electrobun in development mode. The main process detects the server and
+loads it instead of the packaged `views://` URL. Vite can then replace changed
+view modules without restarting the native application. Vite and the selected
+framework plugin decide whether a change is accepted through HMR or requires a
+full page reload, and whether component state can be preserved.
+
+The template catalog includes HMR setups for:
+
+- `angular`
+- `react-tailwind-vite`
+- `solid`
+- `svelte`
+- `tailwind-vanilla`
+- `vanilla-vite`
+- `vue`
+
+For example:
+
+```bash
+hutch electrobun init my-app --template=react-tailwind-vite
+cd my-app
+hutch run dev:hmr
+```
+
+The React and Svelte templates include a walkthrough of the setup in their
+project README. The underlying pattern is the same in all seven templates. For
+external-bundler SDK aliases, see
+[Project Ownership and Devkit: External bundlers](/electrobun/guides/project-ownership/#external-bundlers).
+
+### What `dev:hmr` does not watch
+
+The stock `dev:hmr` task is webview-only. It starts the main process once while
+Vite watches the browser UI. After changing main-process code, stop and rerun
+the task. Conversely, ordinary `hutch run dev` in a Vite template builds the
+view once, then watches main-process and other Electrobun-owned inputs. It
+relaunches the app for those changes, but does not keep rebuilding the Vite UI.
+
+Production and canary builds never depend on the development server. They load
+the webview assets copied into the application bundle through `views://` URLs.
+
+## Warren UI
+
+[Warren](/electrobun/guides/electrobun-ui/) has two renderers with different
+reload boundaries:
+
+- `electrobun/main/ui` renders native GPU UI from the main process. Changes use
+  whole-app watch mode and reset the UI with the rest of the main process.
+- [`electrobun/browser/ui`](/electrobun/apis/ui/browser-dom/) renders DOM inside
+  a webview. It can be served by Vite like other browser code, but there is no
+  first-party Warren HMR adapter that promises component-state preservation.
+
+The `ui-wgpu`, `ui-color-picker`, and `ui-launcher` templates demonstrate native
+Warren UI. Use `hutch run dev` in those projects for automatic rebuild and
+relaunch.
+
+## Which loop should I use?
+
+- Use **`hutch run dev`** for main-process work, native main-process languages,
+  native Warren UI, or a simple project that does not need browser HMR.
+- Use **`hutch run dev:hmr`** in a Vite template when most edits are in the
+  webview and you want the fastest UI feedback loop.
+- Restart **`dev:hmr`** after changing main-process code or configuration.
+- Restart either development loop after changing `electrobun.config.ts` or
+  `hutch.config.ts`.
+- Test a normal bundled build before release. HMR uses an HTTP development
+  server, while shipped applications use packaged `views://` assets.
+
+For the broader project setup, see the [Quick Start](/electrobun/guides/quick-start/),
+[Creating UI](/electrobun/guides/creating-ui/), and
+[Bundling and Distribution](/electrobun/guides/bundling-and-distribution/).

@@ -4,7 +4,7 @@ import {
 	Screen,
 	Utils,
 	type RPCSchema,
-} from "electrobun/bun";
+} from "electrobun/main";
 
 const display = Screen.getPrimaryDisplay();
 const workArea = display.workArea;
@@ -43,7 +43,7 @@ const rpc = BrowserView.defineRPC<BunnyRPC>({
 		requests: {},
 		messages: {
 			bunnyClicked: () => {
-				Utils.openExternal("https://blackboard.sh/electrobun");
+				Utils.openExternal("https://framework.blackboard.sh/electrobun/");
 			},
 		},
 	},
@@ -54,7 +54,6 @@ const win = new BrowserWindow({
 	url: "views://mainview/index.html",
 	titleBarStyle: "hidden",
 	transparent: true,
-	passthrough: true,
 	frame: { width: size, height: size, x, y },
 	rpc,
 });

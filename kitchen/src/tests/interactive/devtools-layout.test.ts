@@ -1,0 +1,56 @@
+import { BrowserWindow } from "electrobun/main";
+import { defineTest } from "../../test-framework/types";
+
+export const devtoolsLayoutTests = [
+  defineTest({
+    name: "macOS docked Web Inspector layout",
+    category: "Layout (Interactive)",
+    description:
+      "Verifies that focusing and closing a docked system WebKit inspector does not shift or gray the app content",
+    instructions: [
+      "A hidden-inset native window will open and show its Web Inspector.",
+      "Dock the inspector to the bottom if it opens in a separate window.",
+      "Move the pointer over the inspector and click several tabs and controls.",
+      "Verify the red/green app content remains aligned and never turns gray.",
+      "Close the inspector and verify the app content fills the window again.",
+      "Close the test window when done to pass the test.",
+    ],
+    interactive: true,
+    timeout: 180000,
+    async run({ log }) {
+      if (process.platform !== "darwin") {
+        log("Skipping: docked WKWebView inspector is macOS-specific");
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        const win = new BrowserWindow({
+          title: "Docked Web Inspector Layout",
+          renderer: "native",
+          titleBarStyle: "hiddenInset",
+          frame: { width: 900, height: 700, x: 180, y: 100 },
+          html: `<!doctype html>
+            <style>
+              * { box-sizing: border-box; }
+              html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+              body { display: grid; grid-template-rows: 72px 1fr 72px; font: 600 18px system-ui; }
+              header { padding: 34px 24px 12px; color: white; background: #c73535; }
+              main { display: grid; place-items: center; background: white; color: #202020; }
+              footer { display: grid; place-items: center; color: white; background: #18864b; }
+            </style>
+            <header>TOP EDGE</header>
+            <main>Content must remain aligned while hovering the docked inspector.</main>
+            <footer>BOTTOM EDGE</footer>`,
+        });
+
+        const openDevToolsTimer = setTimeout(() => win.webview.openDevTools(), 500);
+        win.on("close", () => {
+          clearTimeout(openDevToolsTimer);
+          resolve();
+        });
+      });
+
+      log("Docked inspector layout remained stable through hover and close");
+    },
+  }),
+];

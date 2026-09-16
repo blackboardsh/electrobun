@@ -1,0 +1,157 @@
+---
+title: "Code Signing"
+description: "Sign and notarize Electrobun releases on macOS."
+---
+
+Hutch can sign, notarize, and staple macOS canary and stable builds. Dev
+builds are not signed even when `build.mac.codesign` is enabled.
+
+Windows release signing is not currently part of Hutch's packaging pipeline.
+
+## Apple Prerequisites
+
+Install Xcode and its command-line tools, then add your Apple Developer account
+under Xcode Settings > Accounts. Create or install a **Developer ID
+Application** certificate whose private key is present in the login keychain.
+
+Confirm that macOS can use the identity:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+The value for `ELECTROBUN_DEVELOPER_ID` is the identity printed by that command,
+for example `Developer ID Application: Example Corp (AB12C3D4E5)`.
+
+## Configuration
+
+Enable signing and notarization in `electrobun.config.ts`:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Signed App",
+    identifier: "com.example.signed-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      createDmg: true,
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Hutch signs nested Mach-O files and code bundles before signing the outer app.
+It verifies the result with `codesign`, submits the app and DMG when
+notarization is enabled, staples the accepted ticket, and validates it.
+
+## Signing Identity
+
+Signing always requires:
+
+```bash
+export ELECTROBUN_DEVELOPER_ID="Developer ID Application: Example Corp (AB12C3D4E5)"
+```
+
+Store credentials in the CI secret manager rather than committing them or
+placing them in project files.
+
+## Notarization Credentials
+
+Choose one authentication method. App Store Connect API credentials are the
+preferred CI option.
+
+### App Store Connect API Key
+
+Create a key in App Store Connect under Users and Access > Integrations. Save
+the downloaded `.p8` file and configure all three variables:
+
+```bash
+export ELECTROBUN_APPLEAPIKEYPATH="$HOME/private_keys/AuthKey_ABC123DEFG.p8"
+export ELECTROBUN_APPLEAPIKEY="ABC123DEFG"
+export ELECTROBUN_APPLEAPIISSUER="01234567-89ab-cdef-0123-456789abcdef"
+```
+
+`ELECTROBUN_APPLEAPIKEYPATH` must identify an existing file on the build
+machine.
+
+### Apple ID And App-Specific Password
+
+Alternatively, create an app-specific password at account.apple.com and set:
+
+```bash
+export ELECTROBUN_APPLEID="developer@example.com"
+export ELECTROBUN_APPLEIDPASS="xxxx-xxxx-xxxx-xxxx"
+export ELECTROBUN_TEAMID="AB12C3D4E5"
+```
+
+The team ID is the ten-character Apple Developer team identifier. These three
+variables are used together; a partial set is not sufficient.
+
+## Build A Signed Release
+
+Code signing runs for canary and stable builds:
+
+```bash
+hutch electrobun build --env=canary
+hutch electrobun build --env=stable
+```
+
+To diagnose packaging without submitting to Apple, retain `notarize: true` in
+the checked configuration and disable notarization for one invocation:
+
+```bash
+ELECTROBUN_SKIP_NOTARIZATION=1 hutch electrobun build --env=canary
+```
+
+This still signs the release when `codesign` is enabled.
+
+## Entitlements
+
+Electrobun supplies the JIT and dynamic-library entitlements needed by its
+runtime by default. Add application-specific entitlements under
+`build.mac.entitlements`; Hutch writes them into the generated entitlements
+file used for executable and app signing.
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Camera App",
+    identifier: "com.example.camera-app",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      codesign: true,
+      notarize: true,
+      entitlements: {
+        "com.apple.security.device.camera": true,
+        "com.apple.security.device.microphone": true,
+      },
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+An entitlement does not replace the matching usage-description metadata or
+application permission flow.
+
+## Unsigned Downloads
+
+Gatekeeper may reject an unsigned app downloaded from the internet because
+the browser adds a quarantine attribute. For internal testing, the recipient
+can explicitly remove it:
+
+```bash
+xattr -cr /Applications/Signed\ App.app
+```
+
+Do not treat this as a production distribution flow. User-facing macOS apps
+should be signed and notarized.

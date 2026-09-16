@@ -1,0 +1,184 @@
+---
+title: "Bundling And Distribution"
+description: "Create stable and canary installers, update archives, and patches."
+---
+
+When your app is ready to leave your machine, one command produces everything
+distribution needs: the application bundle, a compressed update archive, a
+platform installer, update metadata, and optionally a delta patch from your
+previous release. This page explains what those artifacts are, what they're
+named, and where to put them.
+
+Hutch builds for the current host platform. Use canary builds for testing and
+stable builds for user-facing releases — the two channels are
+independent, so testers can run prerelease builds alongside the stable
+app. A typical project wires both into `hutch.config.ts`:
+
+```ts docs=syntax
+export default {
+  scripts: {
+    install: ["hutch", "install", "--frozen-lockfile"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
+    "build:stable": ["hutch", "electrobun", "build", "--env=stable"],
+  },
+};
+```
+
+`electrobun.version` is optional: npm-launched commands use the installed
+package's paired version. A direct Hutch project selects the active release
+channel initially, then `prepare`, `build`, `run`, and `dev` preserve its
+projected release; an explicit `sync` advances it. An exact pin overrides all
+of those defaults.
+
+```bash
+hutch run install
+hutch run build:canary
+hutch run build:stable
+```
+
+## Release Host
+
+Artifacts are flat files and can be served from R2, S3, another object store,
+or any static HTTP host. Configure the public folder URL:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My Cool App",
+    identifier: "com.example.my-cool-app",
+    version: "1.0.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: { entrypoint: "src/bun/index.ts" },
+  },
+  release: {
+    baseUrl: "https://releases.example.com/my-cool-app",
+    generatePatch: true,
+  },
+} satisfies ElectrobunConfig;
+```
+
+Upload the contents of `artifacts/` without renaming the files. The Updater
+constructs URLs from this base and the channel/platform prefix.
+
+## Host-Native Matrix
+
+Run the same build on each published target:
+
+| Runner | Stable installer prefix | Stable updater prefix |
+| --- | --- | --- |
+| macOS ARM64 | `macos-arm64-` | `stable-macos-arm64-` |
+| Windows x64 | `win-x64-` | `stable-win-x64-` |
+| Linux x64 | `linux-x64-` | `stable-linux-x64-` |
+| Linux ARM64 | `linux-arm64-` | `stable-linux-arm64-` |
+
+Canary builds prepend `canary-` to both prefixes. Windows ARM uses
+the x64 artifact through system emulation. Electrobun's current release matrix
+does not publish a macOS x64 core artifact.
+
+## Artifact Names
+
+Hutch removes ASCII spaces from the app name in artifact filenames. For an app
+named `My Cool App`, a macOS ARM64 canary build produces:
+
+```text
+artifacts/
+|-- canary-macos-arm64-update.json
+|-- canary-macos-arm64-MyCoolApp-canary.dmg
+|-- canary-macos-arm64-MyCoolApp-canary.app.tar.zst
+`-- canary-macos-arm64-<previous-hash>.patch
+```
+
+A Windows x64 canary build produces:
+
+```text
+artifacts/
+|-- canary-win-x64-update.json
+|-- canary-win-x64-MyCoolApp-Setup-canary.zip
+|-- canary-win-x64-MyCoolApp-canary.tar.zst
+`-- canary-win-x64-<previous-hash>.patch
+```
+
+The Windows zip contains the visible setup executable and a hidden installer
+payload. The executable retains the display name's spaces.
+
+A Linux x64 canary build produces:
+
+```text
+artifacts/
+|-- canary-linux-x64-update.json
+|-- canary-linux-x64-MyCoolApp-canary-Setup.tar.gz
+|-- canary-linux-x64-MyCoolApp-canary.tar.zst
+`-- canary-linux-x64-<previous-hash>.patch
+```
+
+The Linux installer archive contains an executable named `installer` and a
+README. Stable installer names omit both the channel prefix and `-canary`:
+
+```text
+macos-arm64-MyCoolApp.dmg
+win-x64-MyCoolApp-Setup.zip
+linux-x64-MyCoolApp-Setup.tar.gz
+```
+
+Stable update JSON, compressed archives, and patches retain the
+`stable-<os>-<arch>-` protocol prefix used by compatible Electrobun v1.18.1+
+clients. Installer artifacts do not use that prefix. Keep the app name,
+identifier, and existing update base URL unchanged for the first 2.0 release;
+see [Updates](/electrobun/guides/updates/).
+
+## Delta Patches
+
+When `release.generatePatch` is true and `release.baseUrl` is present, Hutch:
+
+1. Fetches `<channel>-<os>-<arch>-update.json` from the release host.
+2. Downloads that release's `.tar.zst` update archive.
+3. Decompresses it and creates a binary patch to the new uncompressed tar.
+4. Names the patch after the previous bundle hash.
+
+The first release has no predecessor and therefore no patch. A missing or
+invalid previous artifact also skips patch generation while preserving the
+full update archive. Set `generatePatch: false` for an intentional build that
+must not consult the release host.
+
+Each release contributes one `<previous-hash>.patch`. Static hosts that retain
+those immutable files form a patch trail, so an app several releases behind can
+apply successive patches until its current hash equals `update.json.hash`. A
+missing or failed patch falls back to the full archive named in the metadata.
+
+See [Updater](/electrobun/apis/updater) for application-side checks, downloads,
+and installation.
+
+See [Uninstalling](/electrobun/guides/uninstalling/) for the standalone
+uninstaller included with installer builds and how it treats application data.
+
+## Platform Packaging
+
+### macOS
+
+Hutch emits a DMG by default and an `.app.tar.zst` update archive. Release
+signing and notarization run when configured. Set `build.mac.createDmg: false`
+when a release only needs the app and update archive.
+
+### Windows
+
+Hutch emits a zip containing a setup executable and adjacent hidden payload.
+The installed application is a GUI-subsystem executable; dev launches attach
+to the invoking console.
+
+### Linux
+
+Hutch emits a `.tar.gz` installer containing a self-extracting setup and a
+`.tar.zst` update archive. Optional Flatpak configuration emits a separate
+expanded payload and `flatpak-builder` manifest; Hutch does not run
+`flatpak-builder`.
+
+## Build Hooks
+
+`preBuild`, `postBuild`, `postWrap`, and `postPackage` can validate inputs or
+augment the package at defined stages. Their exact timing and environment are
+documented in [Build Configuration](/electrobun/apis/cli/build-configuration#build-hooks).

@@ -1,0 +1,209 @@
+---
+title: "Warren (Electrobun UI)"
+description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no build tooling."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Warren — Electrobun's UI framework — is experimental. APIs may change between releases. See
+[current limitations](#current-limitations).
+</Aside>
+
+Warren is a small, reactive UI framework that renders through Dawn
+(WebGPU) directly from the main process. There is no webview, no browser
+DOM, and no build tooling: you write `.tsx` against `electrobun/main/ui`,
+and Cottontail's built-in transpiler — the same one that already handles
+your TypeScript — does the rest. Nothing gets added to your toolchain.
+
+```text
+signals / stores (signal, store with mutator setters)
+        ↓  explicit live() scopes, one binding per expression
+retained UI tree
+        ↓
+layout + hit testing
+        ↓
+one instanced draw call → Dawn surface
+```
+
+Rendering is invalidation-driven: layout, paint, and the GPU draw only run
+when something changed. An idle window costs almost nothing, and a hidden
+window costs literally nothing.
+
+## Hello world
+
+Point the Cottontail entrypoint at a `.tsx` file:
+
+```ts
+// electrobun.config.ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: { entrypoint: "src/main.tsx" },
+    mac: { bundleCEF: false, bundleWGPU: true },
+    linux: { bundleCEF: false, bundleWGPU: true },
+    win: { bundleCEF: false, bundleWGPU: true },
+  },
+} satisfies ElectrobunConfig;
+```
+
+Tell TypeScript (your editor and `tsc`) which JSX types to use. This is
+type-checking configuration, not a build step — Cottontail transpiles `.tsx`
+natively either way:
+
+```jsonc
+// tsconfig.json (for editor/typechecking only)
+{ "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/main/ui" } }
+```
+
+Then write components:
+
+```tsx
+// src/main.tsx
+import { live, signal, createUIWindow } from "electrobun/main/ui";
+
+function Counter() {
+  const [count, setCount] = signal(0);
+  return (
+    <column grow={1} justify="center" align="center" gap={16}>
+      <text size={32} color="#e4e4f0">{live(() => `Count: ${count()}`)}</text>
+      <box
+        pad={12}
+        radius={8}
+        bg="#1b1b28"
+        border={1}
+        borderColor="#3b3b58"
+        onClick={() => setCount((c) => c + 1)}
+      >
+        <text size={14} color="#e4e4f0">Click me</text>
+      </box>
+    </column>
+  );
+}
+
+await createUIWindow({ title: "Hello UI", width: 420, height: 240 }, () => <Counter />);
+```
+
+Run it with `hutch electrobun dev`. Three rules cover everything:
+
+- **Reactivity is explicit.** `live(() => ...)` creates a reactive scope —
+  one binding updating exactly one thing when its dependencies change.
+  Static values stay bare (`bg="#1b1b28"`), and bare functions in value
+  positions are an error. Search a file for `live(` to find every reactive
+  boundary; see [Warren reactivity](/electrobun/apis/ui/reactivity/).
+- **Components are plain functions** called once with their props — no
+  re-rendering, no hooks rules, no registration.
+- **Handlers are plain functions** (`onClick={() => ...}`) — never tracked.
+
+## What the JSX becomes
+
+There is exactly one transform, and Cottontail's transpiler applies it
+automatically: each JSX tag becomes a `jsx()` call that returns a lazy
+element, and mounting runs those elements against the retained tree. This:
+
+```tsx
+<column gap={16}>
+  <text size={32}>{live(() => `Count: ${count()}`)}</text>
+</column>
+```
+
+is transpiled to (and behaves identically to):
+
+```ts docs=syntax
+jsx("column", {
+  gap: 16,
+  children: jsx("text", { size: 32, children: live(() => `Count: ${count()}`) }),
+});
+```
+
+which, when mounted, drives the underlying builder API —
+`ui.column(...)` / `ui.text(...)` — the same functions you can call directly
+from plain `.ts` if you prefer no JSX at all. The two styles are one API.
+
+## Embedding a webview
+
+The UI tree can position real out-of-process webviews. A bare function child
+is a *builder escape* — it runs builder-API code (here the `webview`
+element) at that spot in the tree:
+
+```tsx
+import { webview, createUIWindow } from "electrobun/main/ui";
+
+await createUIWindow({ title: "Hybrid", width: 900, height: 600 }, () => (
+  <row grow={1}>
+    <column width={240} pad={16} gap={8} bg="#16161e">
+      <text size={13} color="#e4e4f0">GPU-rendered sidebar</text>
+    </column>
+    {() => webview({ grow: 1, url: "https://electrobun.dev" })}
+  </row>
+));
+```
+
+Resize the window and both panes reflow together: the sidebar is drawn by
+the UI runtime, the page is a real webview, and one layout tree owns both
+rectangles. `webview` also accepts `html`, `partition`, and `sandbox` like
+[`BrowserView`](/electrobun/apis/browser-view/).
+
+## Embedding a WGPU layer
+
+`wgpuSurface` gives you a raw Dawn view positioned by the layout — your own
+render pipeline inside a UI-managed rectangle:
+
+```tsx
+import { webgpu } from "electrobun/main";
+import { wgpuSurface, createUIWindow } from "electrobun/main/ui";
+
+await createUIWindow({ title: "GPU panel", width: 720, height: 480 }, () => (
+  <column grow={1} pad={12} gap={8}>
+    <text size={12} color="#8c8ca8">Custom WGPU below</text>
+    {() =>
+      wgpuSurface({
+        grow: 1,
+        onReady: async (view) => {
+          const { context } = webgpu.createContext(view);
+          const adapter = await webgpu.navigator.requestAdapter({
+            compatibleSurface: context,
+          });
+          const device = await adapter.requestDevice();
+          context.configure({ device, format: "bgra8unorm" });
+          // ...create your pipeline, render into context.getCurrentTexture()...
+        },
+      })
+    }
+  </column>
+));
+```
+
+The `view` handed to `onReady` is a regular
+[`WGPUView`](/electrobun/apis/webgpu/) — everything in the WebGPU adapter
+API works against it. The `ui-wgpu` template renders an animated Mandelbrot
+this way.
+
+## Where to go next
+
+- [UI overview](/electrobun/apis/ui/overview/) — windows, mounting, and how
+  rendering works.
+- [Components](/electrobun/apis/ui/components/) — every element and its props.
+- [Warren reactivity](/electrobun/apis/ui/reactivity/) — signal, store, live, memo.
+- [Warren in the browser](/electrobun/apis/ui/browser-dom/) — the DOM
+  renderer (`electrobun/browser/ui`): same reactivity and JSX, rendered into
+  real DOM inside a webview.
+- [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/) — layering reactive
+  native UI on top of web content.
+- Templates: `ui-wgpu` (JSX counter + embedded webview + Mandelbrot),
+  `ui-color-picker` (tray eyedropper), `ui-launcher` (command palette).
+
+## Current limitations
+
+- On macOS, text renders with system fonts (CoreText) and input is native
+  events (pointer, wheel scrolling, keyboard-layout characters). Other
+  platforms currently fall back to a built-in 5x7 bitmap font and polled
+  input with a US-layout keymap.
+- No text wrapping or truncation yet: long strings widen layout instead of
+  clipping. Size strings to their containers.
+- Layout is a flex subset: row/column, gap, padding, fixed/auto sizes,
+  grow, justify, align, and scroll containers (wheel-scrollable on macOS).
+- Electrobun UI runs in the privileged main process — use it for trusted
+  application UI, not untrusted content (that's what webviews are for).

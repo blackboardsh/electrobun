@@ -1,0 +1,198 @@
+---
+title: "Creating UI"
+description: "Bundle a browser view and embed isolated web content."
+---
+
+This guide extends [Hello World](/electrobun/guides/hello-world) into a small
+working web browser, and in doing so teaches the UI pattern you'll use
+constantly in Electrobun: a **host page** you own — plain HTML, CSS, and
+TypeScript — with isolated content embedded inside it through
+`<electrobun-webview>`. The host page renders the toolbar and controls; the
+webview tag holds the untrusted remote page, composited into your layout like
+any other element but fully isolated from it.
+
+## Browser Code
+
+The host page's script wires the toolbar to the embedded view: navigate on
+Go or Enter, move through history with Back and Forward, and keep the URL bar
+in sync as the page navigates. Create `src/main-ui/index.ts`:
+
+```typescript
+import "electrobun/view";
+
+const input = document.querySelector<HTMLInputElement>("#url-input");
+const goButton = document.querySelector<HTMLButtonElement>("#go");
+const backButton = document.querySelector<HTMLButtonElement>("#back");
+const forwardButton = document.querySelector<HTMLButtonElement>("#forward");
+const webview = document.querySelector("electrobun-webview");
+
+if (!input || !goButton || !backButton || !forwardButton || !webview) {
+  throw new Error("Browser UI is incomplete");
+}
+
+const urlInput = input;
+const embeddedView = webview;
+
+function navigate() {
+  const value = urlInput.value.trim();
+  if (!value) return;
+  const url = /^[a-z][a-z0-9+.-]*:/i.test(value)
+    ? value
+    : `https://${value}`;
+  embeddedView.loadURL(url);
+}
+
+goButton.addEventListener("click", navigate);
+urlInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") navigate();
+});
+backButton.addEventListener("click", () => embeddedView.goBack());
+forwardButton.addEventListener("click", () => embeddedView.goForward());
+
+embeddedView.on("did-navigate", (event) => {
+  if (typeof event.detail === "string") urlInput.value = event.detail;
+});
+```
+
+The side-effect import adds Electrobun's browser types to TypeScript. The
+native preload registers the custom element before application code runs.
+
+## HTML
+
+Create `src/main-ui/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>My Browser</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <nav class="toolbar">
+      <button id="back" type="button" aria-label="Back">Back</button>
+      <button id="forward" type="button" aria-label="Forward">Forward</button>
+      <input id="url-input" type="url" value="https://example.com" />
+      <button id="go" type="button">Go</button>
+    </nav>
+    <electrobun-webview src="https://example.com" sandbox></electrobun-webview>
+    <script src="index.js" type="module"></script>
+  </body>
+</html>
+```
+
+Create `src/main-ui/index.css`:
+
+```css
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.toolbar {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  padding: 8px;
+}
+
+electrobun-webview {
+  height: 100%;
+  width: 100%;
+}
+```
+
+The webview tag must have stable non-zero dimensions. CSS is preferable to
+the obsolete HTML `width` and `height` attributes.
+
+## Build Configuration
+
+Two new things appear in the config compared to Hello World: a `views` entry,
+which tells Hutch to bundle the TypeScript for this view, and additional
+`copy` lines for its HTML and CSS:
+
+```typescript
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My Browser",
+    identifier: "dev.example.my-browser",
+    version: "0.1.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+    },
+    views: {
+      "main-ui": {
+        entrypoint: "src/main-ui/index.ts",
+      },
+    },
+    copy: {
+      "src/main-ui/index.html": "views/main-ui/index.html",
+      "src/main-ui/index.css": "views/main-ui/index.css",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+## Main Process
+
+Load the copied host page from `src/bun/index.ts`:
+
+```typescript
+import { ApplicationMenu, BrowserWindow } from "electrobun/main";
+
+ApplicationMenu.setApplicationMenu([
+  {
+    label: "App",
+    submenu: [{ role: "quit" }],
+  },
+  {
+    label: "Edit",
+    submenu: [
+      { role: "undo" },
+      { role: "redo" },
+      { type: "separator" },
+      { role: "cut" },
+      { role: "copy" },
+      { role: "paste" },
+      { role: "selectAll" },
+    ],
+  },
+]);
+
+const win = new BrowserWindow({
+  title: "My Browser",
+  url: "views://main-ui/index.html",
+  frame: { width: 1000, height: 700 },
+});
+
+void win;
+```
+
+Native edit-menu roles enable the expected system copy, paste, undo, and
+selection shortcuts in editable web content.
+
+## Run
+
+```bash
+hutch run dev
+```
+
+You now have a working browser: type a URL, hit Enter, navigate back and
+forward. Not bad for two source files and a config.
+
+If you want to take the browser idea further — multiple tabs, partitions,
+navigation rules, persistent bookmarks — start from the `multitab-browser`
+template rather than extending this minimal example ad hoc.

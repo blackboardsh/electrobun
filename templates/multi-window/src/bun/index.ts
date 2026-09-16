@@ -1,4 +1,4 @@
-import { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/bun";
+import { BrowserView, BrowserWindow, type RPCSchema } from "electrobun/main";
 
 // Track child windows
 const childWindows: Map<number, BrowserWindow> = new Map();

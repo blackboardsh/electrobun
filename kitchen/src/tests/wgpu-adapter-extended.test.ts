@@ -1,5 +1,5 @@
 import { defineTest, expect } from "../test-framework/types";
-import { GpuWindow, webgpu } from "electrobun/bun";
+import { GpuWindow, webgpu } from "electrobun/main";
 
 const BufferUsage = {
   MapRead: 0x1,

@@ -1,0 +1,42 @@
+---
+title: "Unreleased"
+---
+
+## Windows profiles and lifecycle
+
+- WebView2 partitions now use compact SHA-256 directory components for unsafe,
+  uppercase, Unicode, or long names, leaving room for Chromium's temporary
+  preference files. Safe, non-reserved lowercase ASCII names of at most 80
+  characters keep their existing directories. Other names select new storage
+  directories; existing directories are neither migrated nor deleted.
+- WebView2 controllers close on the native UI thread before the app quits,
+  allowing browser profile state to be saved during shutdown.
+- Windows launchers preserve the full 32-bit process exit status and log the
+  child PID with its kernel creation time. Crash statuses are no longer
+  truncated to their low byte, and logs distinguish reused process IDs.
+
+## Portable compression
+
+- Cottontail's compression capability links Brotli and Zstandard statically.
+  App updates no longer depend on separately installed Homebrew compression
+  libraries.
+
+## macOS certificate trust
+
+- Cottontail apps now use macOS's system certificate bundle for default TLS
+  connections. This fixes HTTPS and update checks failing with
+  `unable to get local issuer certificate` on Macs without Homebrew's
+  certificate files, while preserving certificate verification and custom CAs.
+
+## Cottontail capabilities
+
+- Cottontail's optional standard-library APIs now ship as capability modules
+  that load on demand through module and namespace surfaces. Apps no longer
+  need to carry every optional module and native library with the core runtime.
+- When `build.mainProcess` is `"cottontail"`, Hutch scans the final tree-shaken
+  main-process bundle for `bun:*`, `node:*`, and `Cottontail.*` usage, reports
+  the capabilities it discovered, and packages only the selected capability
+  bytecode and native libraries.
+- `build.cottontail.capabilities` adds explicit capability modules for computed
+  dynamic imports, generated source, plugin loaders, and other usage the bundle
+  scan cannot see. Explicit entries are additive to Hutch's automatic scan.

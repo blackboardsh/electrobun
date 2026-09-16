@@ -1,22 +1,21 @@
 // Interactive Global Shortcut Tests - Playground
 
 import { defineTest, expect } from "../../test-framework/types";
-import { BrowserView, BrowserWindow, GlobalShortcut, Utils } from "electrobun/bun";
+import { BrowserView, BrowserWindow, GlobalShortcut, Utils } from "electrobun/main";
 
 export const shortcutTests = [
   defineTest({
     name: "Global shortcuts playground",
     category: "Shortcuts (Interactive)",
     description: "Interactive playground for testing global keyboard shortcuts",
+    instructions: [
+      "A shortcuts control panel will open",
+      "Register shortcuts and press them anywhere to test",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000, // 10 minutes for exploration
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A shortcuts control panel will open",
-        "Register shortcuts and press them anywhere to test",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening shortcuts playground window");
 
       await new Promise<void>((resolve) => {

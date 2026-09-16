@@ -1,0 +1,72 @@
+---
+title: "Application Icons"
+description: "Configure packaged application icons on macOS, Windows, and Linux."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+Set platform icon sources in `electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Icon Example",
+    identifier: "dev.example.icons",
+    version: "1.0.0",
+  },
+  build: {
+    mac: {
+      icons: "icon.iconset",
+    },
+    win: {
+      icon: "assets/icon.ico",
+    },
+    linux: {
+      icon: "assets/icon.png",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+## macOS
+
+`build.mac.icons` accepts either a traditional `.iconset` directory or a
+modern `.icon` file created by Apple's Icon Composer.
+
+An iconset normally contains:
+
+```text
+icon_16x16.png
+icon_16x16@2x.png
+icon_32x32.png
+icon_32x32@2x.png
+icon_128x128.png
+icon_128x128@2x.png
+icon_256x256.png
+icon_256x256@2x.png
+icon_512x512.png
+icon_512x512@2x.png
+```
+
+Electrobun converts `.iconset` directories with `iconutil`. Compiling `.icon`
+files uses `actool` and therefore requires a full Xcode installation, not only
+Command Line Tools. See [Apple's app icon
+documentation](https://developer.apple.com/documentation/xcode/configuring-your-app-icon).
+
+## Windows
+
+`build.win.icon` accepts `.ico` or `.png`. Hutch converts PNG input to ICO and
+embeds the icon into packaged executables and the installer. Use a 256 x 256 or
+larger PNG, or a multi-resolution ICO containing 16, 32, 48, and 256 pixel
+variants.
+
+## Linux
+
+`build.linux.icon` accepts PNG. Hutch includes it in the app bundle and generated
+desktop entry. A 256 x 256 or larger source is recommended.
+
+<Aside type="tip">
+A high-resolution PNG from the macOS iconset can also be the Windows and Linux
+source when a platform-specific design is not required.
+</Aside>

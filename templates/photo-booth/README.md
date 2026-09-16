@@ -27,19 +27,24 @@ src/
 
 ## Getting Started
 
+### Install Dependencies
+```bash
+hutch run install
+```
+
 ### Development Mode
 ```bash
-bun dev
+hutch run dev
 ```
 
 ### Build for Production
 ```bash
-bun build
+hutch run build
 ```
 
-### Run the Built App
+### Start without File Watching
 ```bash
-bun start
+hutch run start
 ```
 
 ## How It Works

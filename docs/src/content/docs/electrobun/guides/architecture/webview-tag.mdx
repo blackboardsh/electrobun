@@ -1,0 +1,72 @@
+---
+title: "Webview Tag Architecture"
+description: "How Electrobun maps a DOM anchor to an isolated native BrowserView."
+---
+
+`<electrobun-webview>` is Electrobun's native iframe-style primitive.
+The custom element is an anchor in the host DOM; its content is rendered by a
+separate native `BrowserView`, not as a DOM descendant.
+
+```html
+<electrobun-webview
+  src="https://example.com"
+  sandbox
+  style="display: block; width: 100%; height: 500px"
+></electrobun-webview>
+```
+
+## Creation
+
+Electrobun injects a preload into each host webview. That preload registers the
+custom element and, after it enters the document, sends its initial URL, HTML,
+renderer, partition, sandbox state, navigation rules, and bounding rectangle
+to the main process. The native core creates the matching `BrowserView` and
+returns its numeric ID.
+
+The element remains a lightweight anchor. Removing it destroys the native
+view; reinserting it creates a new view and ID.
+
+## Geometry
+
+An overlay controller observes layout and synchronizes the anchor's viewport
+rectangle with the native view. It uses animation, resize, scroll, and periodic
+checks so ordinary DOM and CSS layout can position the embedded view.
+
+The native surface is a distinct layer. Host `z-index` cannot paint an element
+over it. Mask selectors solve this by sending rectangles for matching host DOM
+elements to native code, which cuts corresponding holes in the overlay.
+
+## Navigation And Events
+
+Changing `src` or `html`, or invoking methods such as `loadURL()`, sends a
+navigation command to the native view. Calls made before initialization are
+queued until the native ID exists.
+
+Native navigation, loading, download, new-window, and host-message events are
+routed back to the custom element's `on()` listeners. Event payloads cross a
+serialization boundary; the embedded page is not directly accessible through
+the host DOM.
+
+## Communication
+
+Trusted embedded content can use Electrobun's typed RPC transport. A sandboxed
+tag disables application RPC but retains native lifecycle events and the
+event-only `window.__electrobunSendToHost()` bridge. This distinction lets an
+application observe untrusted content without exposing its request handlers.
+
+Sandbox mode is one layer of the security model, not a blanket guarantee. Use
+navigation rules, validate every message payload, avoid injecting secrets into
+preloads, and treat remote content as untrusted.
+
+## Renderer Model
+
+The concrete process model belongs to the renderer. WKWebView, WebView2, GTK
+WebKit, and CEF use different browser and renderer process arrangements;
+Electrobun does not promise one operating-system process per tag. The stable
+contract is that the embedded document has its own native webview and browsing
+context rather than being a child DOM document.
+
+On macOS and Windows, CEF and native views can coexist when CEF is bundled. A
+Linux build selects CEF or GTK WebKit for the process. Renderer-specific mask,
+passthrough, and transparent-window constraints are documented in the
+[`<electrobun-webview>` API](/electrobun/apis/browser/electrobun-webview-tag).

@@ -18,6 +18,11 @@ import { preloadTests } from "./preload.test";
 import { updaterTests } from "./updater.test";
 import { sandboxTests } from "./sandbox.test";
 import { trayApiTests } from "./tray-api.test";
+import { runtimeTests } from "./runtime.test";
+import { opfsTests } from "./opfs.test";
+import { uiRuntimeTests } from "./ui-runtime.test";
+import { appDataProtocolTests } from "./appdata-protocol.test";
+import { webview2InitializationTests } from "./webview2-initialization.test";
 
 // Interactive tests
 import { dialogTests } from "./interactive/dialogs.test";
@@ -35,6 +40,12 @@ import { webviewCleanupTests } from "./interactive/webview-cleanup.test";
 import { wgpuViewTests } from "./interactive/wgpu-view.test";
 import { wgpuTagTests } from "./interactive/wgpu-tag.test";
 import { fullsizeFrameReproTests } from "./interactive/fullsize-frame-repro.test";
+import { permissionTests } from "./interactive/permissions.test";
+import { devtoolsLayoutTests } from "./interactive/devtools-layout.test";
+import { cottontailUiTests } from "./interactive/cottontail-ui.test";
+import { uiTagTests } from "./interactive/ui-tag.test";
+import { uiInputEventTests } from "./interactive/ui-input-events.test";
+import { uiDomTests } from "./interactive/ui-dom.test";
 
 // Collect all tests
 export const allTests: TestDefinition[] = [
@@ -50,6 +61,11 @@ export const allTests: TestDefinition[] = [
   ...updaterTests,
   ...sandboxTests,
   ...trayApiTests,
+  ...runtimeTests,
+  ...opfsTests,
+  ...uiRuntimeTests,
+  ...appDataProtocolTests,
+  ...webview2InitializationTests,
   ...wgpuFfiTests,
   ...wgpuAdapterTests,
   ...babylonAdapterTests,
@@ -71,6 +87,12 @@ export const allTests: TestDefinition[] = [
   ...wgpuViewTests,
   ...wgpuTagTests,
   ...fullsizeFrameReproTests,
+  ...permissionTests,
+  ...devtoolsLayoutTests,
+  ...cottontailUiTests,
+  ...uiTagTests,
+  ...uiInputEventTests,
+  ...uiDomTests,
 ];
 
 // Export by category for selective running
@@ -90,6 +112,9 @@ export {
   updaterTests,
   sandboxTests,
   trayApiTests,
+  runtimeTests,
+  webview2InitializationTests,
+  opfsTests,
   wgpuFfiTests,
   wgpuAdapterTests,
   babylonAdapterTests,
@@ -109,4 +134,6 @@ export {
   wgpuViewTests,
   wgpuTagTests,
   fullsizeFrameReproTests,
+  permissionTests,
+  devtoolsLayoutTests,
 };

@@ -1,0 +1,157 @@
+---
+title: "Hello World (Bun)"
+description: "Build a minimal Electrobun app with the Bun main-process runtime."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+This guide creates a minimal Electrobun app with **Bun** as the main-process
+runtime. The steps mirror the
+[Cottontail Hello World](/electrobun/guides/hello-world/) — the TypeScript
+SDK is identical for both JavaScript runtimes — only the
+`electrobun.config.ts` selects Bun. See
+[Main Process Runtimes](/electrobun/guides/native-main-process/) for every
+runtime option.
+
+## When to choose Bun
+
+Cottontail is the default main process: it executes TypeScript and supports
+the Node.js and Bun-compatible APIs used by Electrobun applications. Choose
+Bun when the application intentionally depends on the actual Bun
+runtime — Bun apps get the real Bun API surface, and the two runtimes will
+diverge over time. Hutch bundles source and packages the app in either
+configuration. Hutch's built-in npm-compatible resolver owns ordinary
+JavaScript dependencies by default; select npm, Bun, or another package
+manager explicitly when the project needs it.
+
+## 1. Create the project
+
+```bash
+mkdir my-app
+cd my-app
+```
+
+Create `package.json`:
+
+```json
+{
+  "name": "my-app",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@types/bun": "latest"
+  }
+}
+```
+
+Create `hutch.config.ts`:
+
+```ts docs=syntax
+export default {
+  packageManager: "bun",
+  scripts: {
+    install: ["hutch", "pm", "install", "--frozen-lockfile"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    build: ["hutch", "electrobun", "build", "--env=stable"],
+  },
+};
+```
+
+There is no `electrobun` package dependency in this direct-Hutch example, so an
+explicit sync follows the active release channel; an optional exact
+`electrobun.version` pin would stop it. Hutch supplies the resolved SDK and core.
+`packageManager: "bun"` is a first-class, independent choice: it makes
+`hutch install` and `hutch pm ...` delegate to Bun, while
+`build.mainProcess: "bun"` separately chooses Bun as the application runtime.
+
+Create `tsconfig.json` so editors and TypeScript resolve the package-free SDK
+facade that Hutch projects during sync:
+
+```json
+{
+  "extends": "./.hutch/devkit/tsconfig.json"
+}
+```
+
+## 2. Add a webview
+
+Create `src/mainview/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Hello Electrobun</title>
+  </head>
+  <body>
+    <h1>Hello from Electrobun</h1>
+  </body>
+</html>
+```
+
+## 3. Add the main process
+
+Create `src/bun/index.ts`:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+new BrowserWindow({
+  title: "Hello Electrobun",
+  url: "views://mainview/index.html",
+  frame: {
+    width: 800,
+    height: 600,
+    x: 200,
+    y: 200,
+  },
+});
+```
+
+<Aside type="note">
+The `electrobun/main` import path is the same TypeScript Electrobun SDK used
+with Cottontail. The main-process API is documented in the
+[Main API reference](/electrobun/apis/main/).
+</Aside>
+
+## 4. Configure the build
+
+Create `electrobun.config.ts`. This is the step that selects the Bun runtime:
+`build.mainProcess` is `"bun"` and the entrypoint moves to the `bun` config
+field.
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "My App",
+    identifier: "dev.example.my-app",
+    version: "0.0.1",
+  },
+  build: {
+    mainProcess: "bun",
+    bun: {
+      entrypoint: "src/bun/index.ts",
+    },
+    copy: {
+      "src/mainview/index.html": "views/mainview/index.html",
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+## 5. Run the app
+
+```bash
+hutch install
+hutch electrobun sync
+hutch run dev
+```
+
+The first command delegates to Bun and creates `bun.lock`; commit it. Future
+clean checkouts can run the configured `install` task with
+`hutch run install`, which delegates `bun install --frozen-lockfile`. Hutch
+builds and launches the app, then rebuilds it when watched source files change.
+Press Ctrl+C to stop it.

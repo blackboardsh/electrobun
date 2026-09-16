@@ -1,0 +1,295 @@
+---
+title: "Hutch Commands"
+description: "Command reference for building and running Electrobun applications with Hutch."
+---
+
+Hutch is Electrobun 2.x's native build and workspace CLI. Install it globally,
+or use the single dependency-free `electrobun` npm bootstrap that downloads,
+verifies, and caches its paired Hutch archive from the Electrobun GitHub
+Release. Run `hutch electrobun ...` directly with the global installation or
+`electrobun ...` through the project dependency, from the project root.
+
+## `hutch electrobun init`
+
+Create a project from the current Electrobun template catalog.
+
+```bash
+# Interactive project name and template selection
+hutch electrobun init
+
+# Select a template directly
+hutch electrobun init my-app --template=hello-world
+
+# Use the beta template catalog
+hutch electrobun init my-app --template=solid --beta
+
+# Select stable instead of the invoking launcher's default catalog
+hutch electrobun init my-app --template=solid --channel=stable
+
+# Leave the template's install task for later
+hutch electrobun init my-app --template=solid --skip-install
+```
+
+Usage:
+
+```text
+hutch electrobun init [project-name] [--template=name]
+  [--channel=stable|beta] [--beta] [--skip-install]
+```
+
+Without `--template`, Hutch displays an interactive arrow-key selector. The
+stable and beta catalogs are published independently. Direct Hutch invocation
+chooses the catalog associated with the invoking launcher unless `--channel` or
+the `--beta` shorthand selects one explicitly. The thin npm bootstrap adds
+`--channel=stable` when no template channel was requested. `production` and
+`canary` are also accepted as template channel names.
+
+The publisher guarantees that a published template's exact Electrobun pin
+matches its catalog. After extracting it, `init` uses that release for its
+initial core/devkit sync. An unpinned hand-written template instead uses the
+npm-paired Electrobun default when supplied, otherwise the selected catalog
+release. It also prepares any required native toolchain. If the template defines
+an `install` task in
+`hutch.config.ts`, `init` then runs it. `--skip-install` leaves that task for
+later. Init always requires network access: Hutch fetches the current template
+catalog and selected template instead of keeping persistent copies of either
+one.
+
+## `hutch electrobun config`
+
+Load `electrobun.config.ts` and print the normalized build configuration. This
+is useful for validating a dynamically constructed config without building.
+
+```bash
+hutch electrobun config --env=dev
+hutch electrobun config --env=stable
+```
+
+## `hutch electrobun prepare`
+
+Resolve the Electrobun release, verify and install its platform core archive
+under `~/.hutch/releases/electrobun`, atomically refresh the project's generated
+`.hutch/devkit` SDK projection, and resolve the configured native compiler
+toolchain without building the application. An exact `electrobun.version` pin
+wins; otherwise an npm command uses its package-paired default, then an existing
+valid project projection wins, and only an unprepared direct-Hutch project
+consults the active release channel:
+
+```bash
+hutch electrobun prepare
+hutch electrobun prepare --env=stable
+```
+
+`build`, `run`, and `dev` perform the same non-advancing preparation implicitly.
+Use the explicit command before Vite, editor tooling, or a standalone typecheck,
+after changing an exact pin, or before a build that will later run without
+network access. Preparation can reuse exact releases and managed toolchains
+that are already installed; anything missing requires a network lookup and
+download.
+
+## `hutch electrobun update`
+
+Upgrade a pinned app to the latest stable Electrobun release:
+
+```bash
+hutch electrobun update
+```
+
+Hutch searches upward from the current app directory for the nearest
+`hutch.config.ts`, resolves the stable release catalog to an exact version,
+safely rewrites its existing exact `electrobun.version` string literal, and
+then runs the normal sync path for the current app. Stable is explicit: an
+active canary/beta channel does not change the update target.
+
+The command requires network access. It fails closed when there is no parent
+Hutch config, no exact pin, or the pin is computed or ambiguous; edit those
+non-canonical configurations manually before retrying.
+
+## `hutch electrobun sync`
+
+Perform the same project preparation, but deliberately advance an unpinned
+direct-Hutch project to the active release channel head instead of preserving
+its current valid projection. Exact `electrobun.version` and npm-paired defaults
+remain authoritative:
+
+```bash
+hutch electrobun sync
+hutch electrobun sync --env=stable
+```
+
+Use `sync` when you intend to change the selected floating release. `init`
+performs an initial sync to a published template's exact pin; npm or catalog
+defaults apply only to an unpinned template.
+
+## `hutch electrobun build`
+
+Build the application for the current host platform and architecture.
+
+```bash
+hutch electrobun build --env=dev
+hutch electrobun build --env=canary
+hutch electrobun build --env=stable
+```
+
+| Environment | Result |
+| --- | --- |
+| `dev` | Runnable inner app bundle with terminal diagnostics; no distribution artifacts |
+| `canary` | Optimized canary app, wrapper, update metadata, and platform installer |
+| `stable` | Optimized stable app, wrapper, update metadata, and platform installer |
+
+Canary app names include `-canary`. Production names are unsuffixed. Signing,
+notarization, patch generation, CEF, WGPU, and installer behavior come from
+`electrobun.config.ts`.
+
+`stable` is the canonical main release environment. Canary remains a separate
+release channel.
+
+Hutch does not cross-compile an Electrobun release. Run the command on native
+macOS, Windows, and Linux CI workers for a complete matrix.
+
+## `hutch electrobun run`
+
+Launch an existing application bundle for the selected environment without
+building it again:
+
+```bash
+hutch electrobun run --env=dev
+```
+
+Main-process inspection is available for Cottontail and Bun:
+
+```bash
+hutch electrobun run --inspect
+hutch electrobun run --inspect=9229
+hutch electrobun run --inspect-wait=127.0.0.1:9229
+hutch electrobun run --inspect-brk=9229
+```
+
+The CLI flag overrides `ELECTROBUN_INSPECT`, which overrides
+`runtime.mainProcessInspector` in the config. Pass `--no-inspect` to disable
+configured inspection for one invocation.
+
+## `hutch electrobun dev`
+
+Build a dev bundle and launch it:
+
+```bash
+hutch electrobun dev
+hutch electrobun dev --watch
+```
+
+With `--watch`, Hutch rebuilds and relaunches after changes to:
+
+- configured main-process source and native build inputs, such as `build.zig`,
+  Cargo manifests/project source, Go module/package files, or the Odin package
+- view entrypoint directories
+- sources in `build.copy`
+- additional paths in `build.watch`
+
+Use `build.watchIgnore` to exclude generated output. Changes are debounced, and
+a failed build leaves the watcher running for the next edit.
+
+## Project scripts
+
+A generated `hutch.config.ts` exposes the common commands:
+
+```ts docs=syntax
+export default {
+  scripts: {
+    install: ["hutch", "install", "--frozen-lockfile"],
+    "ui:build":
+      "hutch electrobun prepare && hutch pm exec -- vite build",
+    start: ["hutch", "electrobun", "dev"],
+    dev: ["hutch", "electrobun", "dev", "--watch"],
+    "build:canary": ["hutch", "electrobun", "build", "--env=canary"],
+    build: ["hutch", "electrobun", "build", "--env=stable"],
+  },
+};
+```
+
+Run them through Hutch:
+
+```bash
+hutch run dev
+hutch run build:canary
+hutch run build
+```
+
+Hutch's task runner resolves scripts only from `hutch.config.ts`. A string is interpreted as
+a shell expression, including operators, expansion, and redirects. An array
+spawns its first element with the rest as exact arguments and performs no shell
+parsing. The task runner does not inspect `package.json` scripts, add
+`node_modules/.bin` to `PATH` itself, or emulate package-manager lifecycle hooks.
+
+## Package managers
+
+Without a selection in `hutch.config.ts`, `hutch install` uses Hutch's
+built-in npm-compatible resolver: `package.json` registry, `file:`, and git
+dependencies install into `hutch.lock`, the only lockfile Hutch reads or
+writes. Foreign lockfiles are ignored, never migrated, and lifecycle scripts
+never run. `--frozen-lockfile` makes installs fail rather than drift from the
+committed lockfile.
+
+`hutch.config.ts` may instead select `"npm"`, `"bun"`, `"pnpm"`, `"yarn"`, or
+a custom `{ name, executable? }` package manager. Selecting `"bun"` without an
+explicit executable uses a Hutch-vendored Bun toolchain. This setting is
+independent of `build.mainProcess`, so a Cottontail app may use Bun for
+packages and a Bun main process may use npm.
+
+With an external manager selected, `hutch install` delegates to its `install`
+command and `hutch pm ...` forwards the remaining arguments unchanged:
+
+```bash
+hutch install
+hutch pm ci
+hutch pm install zod
+hutch pm exec -- tsc --version
+```
+
+Without an external selection, `hutch pm` is the built-in interface. Its
+`hutch pm exec [--] <command> [args...]` form runs only a matching binary from
+the nearest package project's `node_modules/.bin`, preserving argv and exit
+status. It rejects path-like names and never downloads a package or falls back
+to `PATH`; bare `hutch pm` prints help and `hutch pm --version` reports Hutch's
+version.
+
+The delegation commands are process delegation, not a second resolver; the
+selected external manager owns its dependency graph and lockfile. The same
+boundary applies to Cargo, Go modules, and other language ecosystems: they own
+dependency graphs while Hutch owns Electrobun orchestration, selected devkits,
+and compiler toolchains.
+
+## Store maintenance
+
+`hutch prune --dry-run` lists every installed release and managed toolchain that
+is not protected by the currently executing Hutch release, a local selection, a
+resolvable registered project, or a live lease. `hutch prune` removes that same
+set immediately, with no age threshold. Missing projects and project dependency
+records that cannot be resolved protect nothing.
+
+Hutch also performs a lazy cleanup on every ordinary invocation, but retains an
+object for 10 days from when it first becomes unreachable. The dry run does not
+mutate Hutch state. `hutch reset` recreates the Hutch home immediately and
+without a prompt. It preserves the launcher, engine, and exact Hutch selection
+used to invoke reset so the command remains usable, while removing every other
+Hutch-managed release, toolchain, and state object. These commands never remove
+project files or dependency caches owned by external package managers. See
+[Hutch: Local store and cleanup](/electrobun/guides/hutch/#local-store-and-cleanup)
+for the on-disk layout and offline boundary.
+
+## Lifecycle hook environment
+
+Build hooks receive:
+
+| Variable | Value |
+| --- | --- |
+| `ELECTROBUN_BUILD_ENV` | `dev`, `canary`, or `stable` |
+| `ELECTROBUN_OS` | `macos`, `win`, or `linux` |
+| `ELECTROBUN_ARCH` | `arm64` or `x64` |
+| `ELECTROBUN_BUILD_DIR` | Build output path |
+| `ELECTROBUN_ARTIFACT_DIR` | Distribution artifact path |
+| `ELECTROBUN_APP_NAME` | Environment-specific app name |
+| `ELECTROBUN_APP_VERSION` | Version from the config |
+| `ELECTROBUN_APP_IDENTIFIER` | Application identifier |
+
+`postWrap` also receives `ELECTROBUN_WRAPPER_BUNDLE_PATH`.

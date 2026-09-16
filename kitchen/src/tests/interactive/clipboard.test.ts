@@ -1,22 +1,21 @@
 // Interactive Clipboard Tests - Playground
 
 import { defineTest } from "../../test-framework/types";
-import { BrowserView, BrowserWindow, Utils } from "electrobun/bun";
+import { BrowserView, BrowserWindow, Utils } from "electrobun/main";
 
 export const clipboardInteractiveTests = [
   defineTest({
     name: "Clipboard playground",
     category: "Clipboard (Interactive)",
     description: "Interactive playground for testing clipboard read/write functionality",
+    instructions: [
+      "A clipboard control panel will open",
+      "Test reading and writing to the clipboard",
+      "Close the window when done to pass the test",
+    ],
     interactive: true,
     timeout: 600000, // 10 minutes for exploration
-    async run({ log, showInstructions }) {
-      await showInstructions([
-        "A clipboard control panel will open",
-        "Test reading and writing to the clipboard",
-        "Close the window when done to pass the test",
-      ]);
-
+    async run({ log }) {
       log("Opening clipboard playground window");
 
       await new Promise<void>((resolve) => {

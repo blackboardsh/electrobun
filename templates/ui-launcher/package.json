@@ -1,0 +1,10 @@
+{
+	"name": "electrobun-ui-launcher",
+	"version": "1.0.0",
+	"type": "module",
+	"description": "Command palette in a Cottontail UI window — global shortcut, fuzzy app launcher, inline calculator; no resident webview",
+	"devDependencies": {
+		"@types/bun": "latest",
+		"typescript": "^5.7.2"
+	}
+}
