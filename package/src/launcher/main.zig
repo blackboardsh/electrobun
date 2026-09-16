@@ -178,14 +178,16 @@ pub fn main() !void {
     // Create an instance of ChildProcess
     var child_process = std.process.Child.init(argv, alloc);
     child_process.cwd = exe_dir;
+    // Child.env_map is a borrowed pointer used later by spawn(). Keep the map
+    // in this function scope; assigning a branch-local map leaves a dangling
+    // stack pointer once that branch ends (observed as EnvMap.copy SIGSEGV).
+    var env_map = try std.process.getEnvMap(arena_alloc);
 
     // Handle platform-specific environment setup
     if (builtin.os.tag == .linux) {
         // Check for CEF libraries that need LD_PRELOAD
         const cef_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libcef.so" });
         const swiftshader_lib_path = try std.fs.path.join(arena_alloc, &.{ exe_dir, "libvk_swiftshader.so" });
-
-        var env_map = try std.process.getEnvMap(arena_alloc);
 
         // Set LD_LIBRARY_PATH to include current directory
         if (env_map.get("LD_LIBRARY_PATH")) |existing_ld_path| {
@@ -222,17 +224,11 @@ pub fn main() !void {
         // Set ICU_DATA for external ICU data file (Linux)
         try env_map.put("ICU_DATA", exe_dir);
 
-        child_process.env_map = &env_map;
     } else if (builtin.os.tag == .windows) {
         // On Windows, get environment and set ICU_DATA for external ICU data
-        var env_map = try std.process.getEnvMap(arena_alloc);
         try env_map.put("ICU_DATA", exe_dir);
-        child_process.env_map = &env_map;
-    } else {
-        // On macOS, get environment and inherit it (uses system ICU)
-        var env_map = try std.process.getEnvMap(arena_alloc);
-        child_process.env_map = &env_map;
     }
+    child_process.env_map = &env_map;
 
     std.debug.print("Spawning: {s} {s}\n", .{ argv[0], if (argv.len > 1) argv[1] else "" });
 
