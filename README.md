@@ -87,6 +87,7 @@ Don't miss our:
 - [codlogs](https://github.com/tobitege/codlogs) - search and export local Codex sessions via CLI or desktop app
 - [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
 - [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
+- [Cropped](https://www.cropped.app/) - desktop app for resizing, compressing, and cropping images and videos locally
 - [Deskdown](https://github.com/guarana-studio/deskdown) - transform any web address into a desktop app in under 20 seconds
 - [Dictate](https://github.com/siddhantparadox/dictate) - Windows dictation app with local and BYOK cloud transcription
 - [dev-3.0](https://github.com/h0x91b/dev-3.0) - helps you not get lost while managing multiple AI agents across projects
