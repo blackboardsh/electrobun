@@ -17,7 +17,7 @@ const zig = process.env.ZIG_BINARY || join(packageRoot, "vendors", "zig", proces
 async function initializeSdkWakeup(versions, fd = 42) {
   // Exercise the actual SDK initialization without loading the desktop GUI or
   // its FFI library. A compatibility version must not select a polling loop.
-  const source = await readFile(join(packageRoot, "src", "sdks", "main", "proc", "native.ts"), "utf8");
+  const source = (await readFile(join(packageRoot, "src", "sdks", "main", "proc", "native.ts"), "utf8")).replace(/\r\n/g, "\n");
   const start = source.indexOf("if (core) {\n\tconst wakeupReadFd");
   const end = source.indexOf("\nconst _ffiImpl =", start);
   assert.ok(start >= 0 && end > start, "SDK host message initialization must be present");
