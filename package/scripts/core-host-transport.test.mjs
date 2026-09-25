@@ -6,12 +6,61 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
+import { runInNewContext } from "node:vm";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const zig = process.env.ZIG_BINARY || join(packageRoot, "vendors", "zig", process.platform === "win32" ? "zig.exe" : "zig");
+
+async function initializeSdkWakeup(versions, fd = 42) {
+  // Exercise the actual SDK initialization without loading the desktop GUI or
+  // its FFI library. A compatibility version must not select a polling loop.
+  const source = await readFile(join(packageRoot, "src", "sdks", "main", "proc", "native.ts"), "utf8");
+  const start = source.indexOf("if (core) {\n\tconst wakeupReadFd");
+  const end = source.indexOf("\nconst _ffiImpl =", start);
+  assert.ok(start >= 0 && end > start, "SDK host message initialization must be present");
+  const state = { polling: 0, drains: 0, destroyed: false, streamOptions: null, listeners: new Map() };
+  const stream = {
+    on(event, callback) { state.listeners.set(event, callback); return stream; },
+    destroy() { state.destroyed = true; },
+  };
+  runInNewContext(source.slice(start, end), {
+    core: true,
+    core_: { symbols: { getHostMessageWakeupReadFD: () => fd } },
+    process: { versions },
+    createReadStream(path, options) {
+      assert.equal(path, "/dev/null");
+      state.streamOptions = { ...options };
+      return stream;
+    },
+    startHostMessagePolling() { state.polling++; },
+    drainQueuedHostMessages() { state.drains++; },
+  });
+  return state;
+}
+
+test("Cottontail uses readiness notifications even when it exposes a Bun compatibility version", async () => {
+  const state = await initializeSdkWakeup({ cottontail: "0.7.0-canary.13", bun: "1.3.10" });
+  assert.equal(state.polling, 0, "An idle Cottontail host must not install the 16 ms polling fallback");
+  assert.deepEqual(state.streamOptions, { fd: 42, autoClose: false });
+  assert.equal(state.drains, 1, "Drain messages already queued before the readiness listener attached");
+  state.listeners.get("data")();
+  assert.equal(state.drains, 2, "Readiness must deliver subsequent messages without a timer");
+  state.listeners.get("error")(new Error("readiness stream unavailable"));
+  assert.equal(state.destroyed, true);
+  assert.equal(state.polling, 1, "A failed readiness stream must retain the existing polling fallback");
+});
+
+test("Bun and hosts without a readiness descriptor retain the polling fallback", async () => {
+  for (const [versions, fd] of [[{ bun: "1.3.10" }, 42], [{ cottontail: "0.7.0-canary.13", bun: "1.3.10" }, -1]]) {
+    const state = await initializeSdkWakeup(versions, fd);
+    assert.equal(state.polling, 1);
+    assert.equal(state.streamOptions, null);
+  }
+});
+
 const nativeFixture = `
 // Only this temporary test library exports synthetic view registration.
 export fn testInstallTransportWebview(webview_id: u32, key_byte: u8) bool {

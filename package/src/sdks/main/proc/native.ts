@@ -1437,7 +1437,9 @@ const startHostMessagePolling = (error?: unknown) => {
 
 if (core) {
 	const wakeupReadFd = core_.symbols.getHostMessageWakeupReadFD();
-	const isRealBunRuntime = typeof process.versions?.bun === "string";
+	// Cottontail exposes a Bun compatibility version as well as its own identity.
+	const isRealBunRuntime = typeof process.versions?.["cottontail"] !== "string"
+		&& typeof process.versions?.bun === "string";
 
 	if (isRealBunRuntime) {
 		startHostMessagePolling();
