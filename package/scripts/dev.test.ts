@@ -5,7 +5,8 @@ import { createMatrixDevCommands } from "./dev-matrix.ts";
 import {
 	createVmTestCommands,
 	runVmTestCommands,
-	VM_CEF_MAIN_PROCESSES,
+	VM_MAIN_PROCESSES,
+	VM_WEBVIEWS,
 } from "./test-vm.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -145,65 +146,58 @@ assert(
 );
 
 const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir });
-const cefMainProcesses = [...VM_CEF_MAIN_PROCESSES];
+const mainProcesses = [...VM_MAIN_PROCESSES];
 assertArray(
-	cefMainProcesses,
+	mainProcesses,
 	["cottontail", "bun", "zig", "rust", "go", "odin"],
-	"VM tests should run every main-process backend against CEF",
+	"VM tests should cover every main-process backend",
+);
+assertArray([...VM_WEBVIEWS], ["system", "cef"], "VM tests should cover both webviews");
+const vmVariants = VM_WEBVIEWS.flatMap((webview) =>
+	mainProcesses.map((main) => `${main}:${webview}`),
 );
 assert(
-	vmTestCommands.length === 4 + cefMainProcesses.length,
-	"VM test plan should have system, CEF build, per-backend CEF, updater, and release stages",
+	vmTestCommands.length === 5 + vmVariants.length,
+	"VM test plan should have build, per-variant Kitchen, unit, Kitchen tooling, updater, and release stages",
 );
+const kitchenBuild = vmTestCommands[0];
 assertArray(
-	vmTestCommands[0]?.args ?? [],
-	["dev:matrix", "--with=cottontail:system", "--timeout=1200"],
-	"Kitchen automated test argv",
+	kitchenBuild?.args ?? [],
+	["dev:matrix", "--build-only", `--with=${vmVariants.join(",")}`],
+	"Kitchen build argv",
 );
-assert(
-	vmTestCommands[0]?.env?.AUTO_RUN === "1",
-	"Kitchen automated tests should receive AUTO_RUN=1",
-);
-const cefBuild = vmTestCommands[1];
-assertArray(
-	cefBuild?.args ?? [],
-	[
-		"scripts/kitchen-matrix.ts",
-		"--build-only",
-		"--with=cottontail:cef,bun:cef,zig:cef,rust:cef,go:cef,odin:cef",
-	],
-	"Kitchen CEF build argv",
-);
-assert(cefBuild?.cwd === kitchenDir, "Kitchen CEF build should run in Kitchen");
-assert(
-	cefBuild?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT === join(packageDir, "dist"),
-	"Kitchen CEF build should reuse the local Electrobun devkit",
-);
-assert(cefBuild?.env?.AUTO_RUN === undefined, "Builds should not auto-run");
-cefMainProcesses.forEach((main, index) => {
-	const command = vmTestCommands[2 + index];
+assert(kitchenBuild?.cwd === packageDir, "Kitchen build should run dev:matrix from package");
+assert(kitchenBuild?.env?.AUTO_RUN === undefined, "Builds should not auto-run");
+vmVariants.forEach((variant, index) => {
+	const command = vmTestCommands[1 + index];
 	assertArray(
 		command?.args ?? [],
-		[
-			"scripts/kitchen-matrix.ts",
-			"--launch-only",
-			`--with=${main}:cef`,
-			"--timeout=600",
-		],
-		`Kitchen ${main} CEF launch argv`,
+		["scripts/kitchen-matrix.ts", "--launch-only", `--with=${variant}`, "--timeout=1200"],
+		`Kitchen ${variant} launch argv`,
 	);
-	assert(command?.env?.AUTO_RUN === "1", `${main}:cef should receive AUTO_RUN=1`);
+	assert(command?.cwd === kitchenDir, `${variant} should launch from Kitchen`);
+	assert(command?.env?.AUTO_RUN === "1", `${variant} should receive AUTO_RUN=1`);
 	assert(
 		command?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT === join(packageDir, "dist"),
-		`${main}:cef should reuse the local Electrobun devkit`,
+		`${variant} should reuse the local Electrobun devkit`,
 	);
 	assert(
-		command?.requires === cefBuild?.label,
-		`${main}:cef should be skipped when the CEF build fails`,
+		command?.requires === kitchenBuild?.label,
+		`${variant} should be skipped when the Kitchen build fails`,
 	);
 });
-const updaterStage = vmTestCommands[2 + cefMainProcesses.length];
-const releaseStage = vmTestCommands[3 + cefMainProcesses.length];
+assert(
+	vmTestCommands[1]?.label === "Kitchen automated tests (Cottontail + system webview)",
+	"System-webview launches should be labeled by backend and renderer",
+);
+const unitStage = vmTestCommands[1 + vmVariants.length];
+const kitchenToolingStage = vmTestCommands[2 + vmVariants.length];
+const updaterStage = vmTestCommands[3 + vmVariants.length];
+const releaseStage = vmTestCommands[4 + vmVariants.length];
+assertArray(unitStage?.args ?? [], ["test:unit"], "Unit and native test argv");
+assert(unitStage?.cwd === packageDir, "Unit tests should run from package");
+assertArray(kitchenToolingStage?.args ?? [], ["test:tooling"], "Kitchen tooling test argv");
+assert(kitchenToolingStage?.cwd === kitchenDir, "Kitchen tooling tests should run from Kitchen");
 assertArray(updaterStage?.args ?? [], ["test:updater-lifecycle"], "Updater lifecycle argv");
 assertArray(releaseStage?.args ?? [], ["check:release"], "Release check argv");
 
@@ -219,7 +213,7 @@ const vmFailures = await runVmTestCommands(
 assertArray(
 	attemptedVmStages,
 	vmTestCommands
-		.filter((command) => command.requires !== cefBuild?.label)
+		.filter((command) => command.requires !== kitchenBuild?.label)
 		.map((command) => command.label),
 	"VM runner should attempt every independent stage after failures and skip dependents",
 );
@@ -240,7 +234,7 @@ const failuresAfterBuild = await runVmTestCommands(
 assertArray(
 	attemptedAfterBuild,
 	vmTestCommands.map((command) => command.label),
-	"VM runner should launch every CEF variant once the build succeeds",
+	"VM runner should launch every variant once the build succeeds",
 );
 assertArray(
 	failuresAfterBuild.map((failure) => failure.command.label),

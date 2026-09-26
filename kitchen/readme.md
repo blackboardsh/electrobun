@@ -13,7 +13,7 @@ pass, not full renderer coverage: CEF delivers bridge callbacks on different
 threads and message-pump states than the system webview, and each SDK handles
 them differently (for example, the Zig and Rust Kitchens create webview tags
 synchronously inside a CEF process-message callback). `hutch test:vm` therefore
-runs every backend's automated suite against CEF as well.
+runs every backend's automated suite against both the system webview and CEF.
 
 Use the full 6 x 2 matrix after changes to renderer selection, build metadata,
 or an SDK's renderer handling:

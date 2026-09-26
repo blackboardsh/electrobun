@@ -24,13 +24,15 @@ For a complete pre-release pass on each desktop VM, run this from `package`:
 hutch test:vm
 ```
 
-It runs the Kitchen automated tests for the Cottontail + system-webview matrix
-entry (without bundled CEF), builds every main-process backend with CEF and runs
-each one's automated suite in turn, runs the complete install/update/uninstall
-lifecycle, and then runs `check:release`. Every stage runs even if an earlier
-stage fails (CEF launches are skipped, and reported, only when their build
-failed); the task prints a combined failure summary and exits nonzero at the
-end.
+It builds the package and every Kitchen main-process backend (Cottontail, Bun,
+Zig, Rust, Go, Odin) against both the system webview (without bundled CEF) and
+CEF, then runs each variant's automated suite one at a time. It then runs
+`test:unit` (unit tests plus the desktop-only native tests), Kitchen's
+`test:tooling`, the complete install/update/uninstall lifecycle, and finally
+`check:release`. Every stage
+runs even if an earlier stage fails (Kitchen launches are skipped, and
+reported, only when the build stage failed, so stale builds are never tested);
+the task prints a combined failure summary and exits nonzero at the end.
 
 Each Kitchen launch runs under a watchdog (`--timeout`): an app that deadlocks
 or never finishes is killed with its CEF helpers and reported as a failed stage

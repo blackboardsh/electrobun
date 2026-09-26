@@ -26,7 +26,7 @@ describe("Windows webview socket ownership", () => {
 			"export fn setWebviewHTMLContent",
 		);
 
-		expect(connectionHandler).toContain("defer stream.close()");
+		expect(connectionHandler).toMatch(/defer stream\.close\((?:io)?\)/);
 		expect(webviewRemove).toContain("if (builtin.os.tag != .windows)");
 		expect(webviewRemove).toContain("shutdownSocketHandle(handle)");
 		expect(webviewRemove.indexOf("if (builtin.os.tag != .windows)")).toBeLessThan(

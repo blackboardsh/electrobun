@@ -1,18 +1,39 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 const testFilePattern = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
+const nodeTestImportPattern = /\bfrom\s+["']node:test["']/;
 
-export function collectTestFiles(directory, readDirectory = readdirSync) {
+// node:test suites run under Node's own runner (their own hutch tasks);
+// Cottontail has no node:test module, so skip them when expanding directories.
+export function usesNodeTestRunner(path, readFile = readFileSync) {
+	try {
+		return nodeTestImportPattern.test(readFile(path, "utf8"));
+	} catch {
+		return false;
+	}
+}
+
+export function collectTestFiles(
+	directory,
+	readDirectory = readdirSync,
+	readFile = readFileSync,
+) {
 	const files = [];
 	for (const entry of readDirectory(directory, { withFileTypes: true }).sort(
 		(a, b) => a.name.localeCompare(b.name),
 	)) {
 		const path = join(directory, entry.name);
-		if (entry.isDirectory()) files.push(...collectTestFiles(path, readDirectory));
-		else if (entry.isFile() && testFilePattern.test(entry.name)) files.push(path);
+		if (entry.isDirectory()) files.push(...collectTestFiles(path, readDirectory, readFile));
+		else if (
+			entry.isFile() &&
+			testFilePattern.test(entry.name) &&
+			!usesNodeTestRunner(path, readFile)
+		) {
+			files.push(path);
+		}
 	}
 	return files;
 }

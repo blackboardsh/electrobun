@@ -136,7 +136,12 @@ export const eventsTests = [
       log("Attempting navigation (should be blocked)");
       win.webview.loadURL("https://blackboard.sh");
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      // The navigation-policy callback crosses into the main process
+      // asynchronously; a fixed short sleep raced it on slower VMs.
+      const deadline = Date.now() + 5000;
+      while (!blocked && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
 
       expect(blocked).toBe(true);
       log("Navigation was blocked via event response");

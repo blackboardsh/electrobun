@@ -50,11 +50,15 @@ function readLinuxPaths(overrides: Record<string, string>) {
 			userCache: paths.userCache,
 			userLogs: paths.userLogs,
 		}));
+		// Utils installs process-lifetime handlers (quit/signal handling), so
+		// the child would otherwise stay alive after printing.
+		process.exit(0);
 	`;
 	const result = spawnSync(process.execPath, ["--eval", script], {
 		cwd: runtimeDirectory,
 		encoding: "utf8",
 		env: { ...process.env, ...overrides },
+		timeout: 60_000,
 	});
 	expect(result.error).toBeUndefined();
 	expect(result.status).toBe(0);

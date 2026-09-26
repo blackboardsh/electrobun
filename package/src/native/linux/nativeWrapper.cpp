@@ -302,6 +302,45 @@ struct X11Window {
     ContainerView* containerView = nullptr;  // Associated container for webview management
     bool transparent = false;  // Track if window is transparent
 
+    // The WM applies move/resize requests asynchronously, so an immediate
+    // XGetWindowAttributes still reports the old geometry. Report the latest
+    // request until a ConfigureNotify confirms it (or a WM adjustment wins).
+    struct RequestedGeometry {
+        bool hasPosition = false;
+        bool hasSize = false;
+        double x = 0, y = 0, width = 0, height = 0;
+        gint64 requestedAtUs = 0;
+    } requestedGeometry;
+
+    void requestPosition(double newX, double newY) {
+        requestedGeometry.hasPosition = true;
+        requestedGeometry.x = newX;
+        requestedGeometry.y = newY;
+        requestedGeometry.requestedAtUs = g_get_monotonic_time();
+    }
+
+    void requestSize(double newWidth, double newHeight) {
+        requestedGeometry.hasSize = true;
+        requestedGeometry.width = newWidth;
+        requestedGeometry.height = newHeight;
+        requestedGeometry.requestedAtUs = g_get_monotonic_time();
+    }
+
+    // Called with WM-confirmed geometry from ConfigureNotify.
+    void settleRequestedGeometry(double actualX, double actualY, double actualWidth, double actualHeight) {
+        auto near = [](double a, double b) { return std::abs(a - b) <= 1.0; };
+        const bool expired =
+            g_get_monotonic_time() - requestedGeometry.requestedAtUs > 1000000;
+        if (requestedGeometry.hasPosition &&
+            (expired || (near(actualX, requestedGeometry.x) && near(actualY, requestedGeometry.y)))) {
+            requestedGeometry.hasPosition = false;
+        }
+        if (requestedGeometry.hasSize &&
+            (expired || (near(actualWidth, requestedGeometry.width) && near(actualHeight, requestedGeometry.height)))) {
+            requestedGeometry.hasSize = false;
+        }
+    }
+
     X11Window() : display(nullptr), window(0), windowId(0), x(0), y(0), width(800), height(600), closeCallback(nullptr), shouldCloseCallback(nullptr), moveCallback(nullptr), resizeCallback(nullptr), focusCallback(nullptr), blurCallback(nullptr), keyCallback(nullptr), transparent(false) {}
 };
 
@@ -1047,6 +1086,7 @@ private:
     std::function<void(CefRefPtr<CefBrowser>)> browser_created_callback_;
     std::function<void()> browser_close_callback_;  // Callback to clear parent webview browser
     std::function<void()> load_end_callback_;  // Callback for page load completion
+    std::function<void()> load_commit_callback_;  // Callback after a main-frame commit
     std::atomic<bool> owner_detached_{false};
     std::atomic<bool> initial_browser_creation_pending_{false};
     guint layout_interval_source_id_ = 0;
@@ -1146,6 +1186,11 @@ public:
         load_end_callback_ = callback;
     }
 
+    void SetLoadCommitCallback(std::function<void()> callback) {
+        if (owner_detached_.load()) return;
+        load_commit_callback_ = callback;
+    }
+
     void CancelLayoutInterval() {
         const guint sourceId = layout_interval_source_id_;
         layout_interval_source_id_ = 0;
@@ -1161,6 +1206,7 @@ public:
         browser_created_callback_ = nullptr;
         browser_close_callback_ = nullptr;
         load_end_callback_ = nullptr;
+        load_commit_callback_ = nullptr;
         positioning_callback_ = nullptr;
     }
     
@@ -1470,6 +1516,9 @@ public:
         if (frame->IsMain() && webview_event_handler_) {
             std::string url = frame->GetURL().ToString();
             webview_event_handler_(webview_id_, strdup("did-commit-navigation"), strdup(url.c_str()));
+        }
+        if (frame->IsMain() && !owner_detached_.load() && load_commit_callback_) {
+            load_commit_callback_();
         }
     }
 
@@ -3080,6 +3129,10 @@ public:
             fprintf(stderr, "ERROR: Failed to create WebKit webview\n");
             throw std::runtime_error("Failed to create WebKit webview");
         }
+        // Destroying the parent window destroys and finalizes this widget
+        // without going through remove(). The weak pointer clears `webview`
+        // when that happens so no later call touches a freed widget.
+        g_object_add_weak_pointer(G_OBJECT(webview), reinterpret_cast<gpointer*>(&webview));
         g_object_set_data(
             G_OBJECT(webview),
             kWebviewIdDataKey,
@@ -3221,6 +3274,10 @@ public:
     
     ~WebKitWebViewImpl() {
         releasePartitionContextIfNeeded();
+        if (webview) {
+            g_object_remove_weak_pointer(G_OBJECT(webview), reinterpret_cast<gpointer*>(&webview));
+            webview = nullptr;
+        }
 
         // Don't destroy widgets here - they should be destroyed in remove()
         // Just clean up the manager
@@ -3304,31 +3361,28 @@ public:
         isRemoved = true;
         
         if (webview) {
+            // Non-null means still alive (weak pointer). Stop tracking it and
+            // hold a reference until the deferred destroy below.
             GtkWidget* widget_to_destroy = webview;
+            g_object_remove_weak_pointer(G_OBJECT(webview), reinterpret_cast<gpointer*>(&webview));
             webview = nullptr;  // Clear our reference immediately
             
-            // gtk_widget_destroy on the parent window recursively destroys all
-            // children, so the webview widget may already be invalid by the time
-            // this idle callback runs. Guard every GTK call with GTK_IS_WIDGET.
+            // The parent window may still destroy this widget before the idle
+            // callback runs; the reference keeps its memory valid until then.
+            g_object_ref(widget_to_destroy);
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
-                
-                if (!GTK_IS_WIDGET(widget)) {
-                    // Already destroyed by parent window teardown — nothing to do.
-                    return G_SOURCE_REMOVE;
-                }
-                
+
                 // Only try to unparent if the widget still has a live parent.
                 GtkWidget* parent = gtk_widget_get_parent(widget);
                 if (parent && GTK_IS_CONTAINER(parent)) {
                     gtk_container_remove(GTK_CONTAINER(parent), widget);
                 }
-                
-                // Final destroy (no-op if GTK already freed it via the parent).
-                if (GTK_IS_WIDGET(widget)) {
-                    gtk_widget_destroy(widget);
-                }
-                
+
+                // Idempotent if the parent's teardown already destroyed it.
+                gtk_widget_destroy(widget);
+                g_object_unref(widget);
+
                 return G_SOURCE_REMOVE;
             }, widget_to_destroy);
         }
@@ -4511,6 +4565,18 @@ public:
     LogicalRect logicalBounds = {};
     LogicalRect pendingFrame = {};
     bool hasPendingFrame = false;
+
+    // Page zoom factor last requested through the API; 0 = none. Chromium
+    // zoom is per-host and resets when a navigation commits, while the public
+    // API (and WebKitGTK) is per-view, so it is re-applied after each commit.
+    double requestedPageZoom = 0;
+
+    void applyRequestedPageZoom() {
+        if (browser && requestedPageZoom > 0) {
+            // Chromium zoom levels are logarithmic: factor = 1.2^level.
+            browser->GetHost()->SetZoomLevel(std::log(requestedPageZoom) / std::log(1.2));
+        }
+    }
     
     // For popup reparenting approach
     unsigned long parentXWindow = 0;
@@ -4700,9 +4766,13 @@ public:
         
         // Create CEF browser immediately as child of X11 window
         CefWindowInfo window_info;
-        // Linux embedding is more reliable with Chrome style when using an
-        // external X11 parent. Alloy is still used automatically for OSR.
-        window_info.runtime_style = CEF_RUNTIME_STYLE_CHROME;
+        // Alloy style, matching Windows and macOS. Chrome style hosts an
+        // external-parent child browser through CEF's Views
+        // ChildWindowDelegate, which on Linux keeps a dangling platform
+        // delegate after the browser closes (it is only cleared on Windows) and
+        // crashes in OnWindowBoundsChanged when the child window then receives
+        // a geometry update. DevTools windows keep Chrome style.
+        window_info.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
         
         const LinuxPhysicalRect physicalBounds = toX11BoundsRect(initialBounds);
         CefRect cef_rect(
@@ -4780,6 +4850,8 @@ public:
             }
             hasPendingFrame = false;
             resizeLogical(finalBounds, maskJSON.c_str());
+
+            this->applyRequestedPageZoom();
             
             // Apply deferred initial transparent/passthrough state now that browser is ready
             // Don't apply transparency immediately - wait for page load to complete
@@ -4812,7 +4884,12 @@ public:
         });
         
         // Set up load end callback for deferred transparency and passthrough application
+        client->SetLoadCommitCallback([this]() {
+            this->applyRequestedPageZoom();
+        });
+
         client->SetLoadEndCallback([this]() {
+            this->applyRequestedPageZoom();
             if (this->pendingStartTransparent) {
                 this->setTransparent(true);
                 this->pendingStartTransparent = false;
@@ -5094,15 +5171,16 @@ public:
             }
         }
         
-        // Destroy widget asynchronously. The parent window may have already
-        // destroyed this widget via gtk_widget_destroy cascade — guard accordingly.
+        // Destroy widget asynchronously. The parent window may destroy this
+        // widget via gtk_widget_destroy cascade first; the reference keeps its
+        // memory valid until this callback runs (destroy is then idempotent).
         if (widget_to_destroy) {
+            g_object_ref(widget_to_destroy);
             g_idle_add([](gpointer data) -> gboolean {
                 GtkWidget* widget = static_cast<GtkWidget*>(data);
-                if (GTK_IS_WIDGET(widget)) {
-                    gtk_widget_hide(widget);
-                    gtk_widget_destroy(widget);
-                }
+                gtk_widget_hide(widget);
+                gtk_widget_destroy(widget);
+                g_object_unref(widget);
                 return G_SOURCE_REMOVE;
             }, widget_to_destroy);
         }
@@ -5812,8 +5890,12 @@ public:
         : trayId(id), indicator(nullptr), menu(nullptr), clickHandler(handler),
           title(title ? title : ""), imagePath(pathToImage ? pathToImage : "") {
         
-        // Create unique indicator ID
-        std::string indicatorId = "electrobun-tray-" + std::to_string(id);
+        // Hide/show recreates the native tray while the previous indicator
+        // may still be registered on D-Bus, so the ID must be unique per
+        // instance, not per tray: AppIndicator derives its object path from it.
+        static std::atomic<uint64_t> nextIndicatorInstance{0};
+        std::string indicatorId = "electrobun-tray-" + std::to_string(id) + "-" +
+            std::to_string(nextIndicatorInstance.fetch_add(1));
         
         // Create app indicator
         indicator = app_indicator_new(indicatorId.c_str(), 
@@ -5835,10 +5917,14 @@ public:
     ~TrayItem() {
         if (indicator) {
             app_indicator_set_status(indicator, APP_INDICATOR_STATUS_PASSIVE);
-            g_object_unref(indicator);
         }
+        // The indicator may own the menu's last reference, so destroy the menu
+        // before releasing the indicator.
         if (menu) {
             gtk_widget_destroy(menu);
+        }
+        if (indicator) {
+            g_object_unref(indicator);
         }
     }
     
@@ -7091,6 +7177,8 @@ gboolean process_x11_events(gpointer data) {
             x11win->y = geometryChange.geometry.y;
             x11win->width = geometryChange.geometry.width;
             x11win->height = geometryChange.geometry.height;
+            x11win->settleRequestedGeometry(
+                x11win->x, x11win->y, x11win->width, x11win->height);
 
             if (moved && x11win->moveCallback) {
                 x11win->moveCallback(
@@ -9666,6 +9754,14 @@ ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView* abstractView, double zoo
         auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(abstractView);
         if (webKitView && webKitView->webview) {
             webkit_web_view_set_zoom_level(WEBKIT_WEB_VIEW(webKitView->webview), zoomLevel);
+            return;
+        }
+        auto* cefView = dynamic_cast<CEFWebViewImpl*>(abstractView);
+        if (cefView && zoomLevel > 0) {
+            // The browser is created asynchronously and navigations reset
+            // Chromium's zoom, so keep the request and apply it when possible.
+            cefView->requestedPageZoom = zoomLevel;
+            cefView->applyRequestedPageZoom();
         }
     });
 }
@@ -9678,6 +9774,13 @@ ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView* abstractView) {
         auto* webKitView = dynamic_cast<WebKitWebViewImpl*>(abstractView);
         if (webKitView && webKitView->webview) {
             zoomLevel = webkit_web_view_get_zoom_level(WEBKIT_WEB_VIEW(webKitView->webview));
+            return;
+        }
+        auto* cefView = dynamic_cast<CEFWebViewImpl*>(abstractView);
+        if (cefView && cefView->browser) {
+            zoomLevel = std::pow(1.2, cefView->browser->GetHost()->GetZoomLevel());
+        } else if (cefView && cefView->requestedPageZoom > 0) {
+            zoomLevel = cefView->requestedPageZoom;
         }
     });
     return zoomLevel;
@@ -11004,7 +11107,25 @@ ELECTROBUN_EXPORT void restoreWindow(void* window) {
                 
                 XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
                           SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-                
+
+                // _NET_WM_STATE_HIDDEN is WM-owned (EWMH), so the removal
+                // above is only advisory; EWMH WMs (Mutter included)
+                // de-iconify on _NET_ACTIVE_WINDOW. Source indication 2
+                // (pager) bypasses focus-stealing prevention for this
+                // explicit restore.
+                XEvent activate;
+                memset(&activate, 0, sizeof(activate));
+                activate.type = ClientMessage;
+                activate.xclient.window = x11win->window;
+                activate.xclient.message_type =
+                    XInternAtom(x11win->display, "_NET_ACTIVE_WINDOW", False);
+                activate.xclient.format = 32;
+                activate.xclient.data.l[0] = 2;
+                activate.xclient.data.l[1] = CurrentTime;
+                activate.xclient.data.l[2] = 0;
+                XSendEvent(x11win->display, DefaultRootWindow(x11win->display), False,
+                          SubstructureRedirectMask | SubstructureNotifyMask, &activate);
+
                 XFlush(x11win->display);
             }
         }
@@ -11368,6 +11489,7 @@ ELECTROBUN_EXPORT void setWindowPosition(void* window, double x, double y) {
             if (x11win && x11win->display && x11win->window) {
                 // Set window position, accounting for window manager
                 XMoveWindow(x11win->display, x11win->window, (int)x, (int)y);
+                x11win->requestPosition(x, y);
                 
                 // Also send a ConfigureRequest event to ensure window manager compliance
                 XEvent event;
@@ -11407,6 +11529,7 @@ ELECTROBUN_EXPORT void centerWindow(void* window) {
             const int x = workarea.x + std::max(0, (workarea.width - attributes.width) / 2);
             const int y = workarea.y + std::max(0, (workarea.height - attributes.height) / 2);
             XMoveWindow(x11win->display, x11win->window, x, y);
+            x11win->requestPosition(x, y);
             XFlush(x11win->display);
             return;
         }
@@ -11448,6 +11571,7 @@ ELECTROBUN_EXPORT void setWindowSize(void* window, double width, double height) 
             X11Window* x11win = static_cast<X11Window*>(window);
             if (x11win && x11win->display && x11win->window) {
                 XResizeWindow(x11win->display, x11win->window, (unsigned int)width, (unsigned int)height);
+                x11win->requestSize(width, height);
                 XFlush(x11win->display);
             }
         }
@@ -11468,6 +11592,8 @@ ELECTROBUN_EXPORT void setWindowFrame(void* window, double x, double y, double w
             X11Window* x11win = static_cast<X11Window*>(window);
             if (x11win && x11win->display && x11win->window) {
                 XMoveResizeWindow(x11win->display, x11win->window, (int)x, (int)y, (unsigned int)width, (unsigned int)height);
+                x11win->requestPosition(x, y);
+                x11win->requestSize(width, height);
                 XFlush(x11win->display);
             }
         }
@@ -11535,6 +11661,15 @@ ELECTROBUN_EXPORT void getWindowFrame(void* window, double* outX, double* outY, 
                     *outY = (double)abs_y;
                     *outWidth = (double)attrs.width;
                     *outHeight = (double)attrs.height;
+                    const auto& requested = x11win->requestedGeometry;
+                    if (requested.hasPosition) {
+                        *outX = requested.x;
+                        *outY = requested.y;
+                    }
+                    if (requested.hasSize) {
+                        *outWidth = requested.width;
+                        *outHeight = requested.height;
+                    }
                 } else {
                     *outX = 0;
                     *outY = 0;

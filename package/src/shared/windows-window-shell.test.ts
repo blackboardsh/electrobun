@@ -235,8 +235,15 @@ describe("Windows per-monitor DPI and window shell", () => {
 		);
 		const dpiChange = sourceBetween("case WM_DPICHANGED:", "case WM_NCCALCSIZE:");
 
-		expect(initialWebView2Bounds).toContain("logicalToPhysicalRect(");
+		// The initial bounds resolve the latest logical frame at the container's
+		// DPI through the view's shared DIP-to-pixel helper.
+		const physicalFrameForDpi = sourceBetween(
+			"bool physicalFrameForDpi(UINT dpi, RECT& frame)",
+			"UINT parentDpi() const",
+		);
+		expect(initialWebView2Bounds).toContain("physicalFrameForDpi(");
 		expect(initialWebView2Bounds).toContain("windowsDpiForWindow(containerHwnd)");
+		expect(physicalFrameForDpi).toContain("logicalToPhysicalRect(");
 		expect(resizeWebview).toContain("setLogicalFrame(x, y, width, height)");
 		expect(resizeWebview).toContain("logicalToPhysicalRect(");
 		expect(resizeWebview).toContain("abstractView->parentDpi()");

@@ -2,10 +2,19 @@
 // directly (what the transpiler emits for .tsx files).
 
 import { describe, expect, test } from "bun:test";
-import { createRoot, live, signal } from "../reactive";
+import { createRoot, live, signal, store } from "../reactive";
 import { NodeKind, Prop, UiTree } from "../tree";
 import { createUiContext, ui, withUiContext, type UiContext } from "../ui";
-import { Fragment, jsx, isUIElement, type UIElement } from "../jsx-runtime";
+import {
+	For,
+	Fragment,
+	jsx,
+	isUIElement,
+	Match,
+	Show,
+	Switch,
+	type UIElement,
+} from "../jsx-runtime";
 import { parseColor } from "../paint";
 
 function mountApp(app: () => UIElement): { ctx: UiContext; dispose: () => void } {
@@ -146,21 +155,28 @@ describe("jsx runtime", () => {
 	});
 });
 
+// Use the ESM imports above: require() can load a second module instance
+// whose scope state never sees createRoot's scope.
 describe("control flow", () => {
-	const { For, Show, Switch, Match } = require("../jsx-runtime");
-	const { live, signal, store } = require("../reactive");
+	// jsx() accepts loosely typed components (props: Record<string, unknown>);
+	// the control-flow components declare their required props precisely.
+	type JsxComponent = Parameters<typeof jsx>[0];
+	const ShowC = Show as unknown as JsxComponent;
+	const ForC = For as unknown as JsxComponent;
+	const SwitchC = Switch as unknown as JsxComponent;
+	const MatchC = Match as unknown as JsxComponent;
 
 	test("<Show when={live(...)}> toggles; static when is frozen", () => {
 		const [on, setOn] = signal(false);
 		const { ctx } = mountApp(() =>
 			jsx("column", {
 				children: [
-					jsx(Show, {
+					jsx(ShowC, {
 						when: live(() => on()),
 						children: jsx("text", { children: "live-on" }),
 						fallback: jsx("text", { children: "live-off" }),
 					}),
-					jsx(Show, {
+					jsx(ShowC, {
 						when: false,
 						children: jsx("text", { children: "static-on" }),
 						fallback: jsx("text", { children: "static-off" }),
@@ -188,11 +204,11 @@ describe("control flow", () => {
 		const { ctx } = mountApp(() =>
 			jsx("column", {
 				children: [
-					jsx(For, {
+					jsx(ForC, {
 						each: live(() => state.items),
 						children: (item: string) => jsx("text", { children: item }),
 					}),
-					jsx(For, {
+					jsx(ForC, {
 						each: frozen,
 						children: (item: string) => jsx("text", { children: item }),
 					}),
@@ -217,14 +233,14 @@ describe("control flow", () => {
 		const [status, setStatus] = signal("urgent");
 		const { ctx } = mountApp(() =>
 			jsx("column", {
-				children: jsx(Switch, {
+				children: jsx(SwitchC, {
 					fallback: jsx("text", { children: "none" }),
 					children: [
-						jsx(Match, {
+						jsx(MatchC, {
 							when: live(() => status() === "urgent"),
 							children: jsx("text", { children: "fire" }),
 						}),
-						jsx(Match, {
+						jsx(MatchC, {
 							when: live(() => status() === "waiting"),
 							children: jsx("text", { children: "clock" }),
 						}),

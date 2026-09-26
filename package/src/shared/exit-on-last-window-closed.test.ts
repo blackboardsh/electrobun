@@ -99,8 +99,9 @@ describe("exit on last window closed contract", () => {
 		expect(rust).toContain(
 			'json_bool_field(runtime_object, "exitOnLastWindowClosed")',
 		);
-		expect(rust).toContain(
-			"exit_on_last_window_closed_from_build_config(&bundle_paths)",
+		// rustfmt may wrap the call's argument onto its own line.
+		expect(rust).toMatch(
+			/exit_on_last_window_closed_from_build_config\(\s*&bundle_paths,?\s*\)/,
 		);
 	});
 
@@ -122,7 +123,7 @@ describe("exit on last window closed contract", () => {
 		expect(zig).toContain("core.symbols.set_quit_requested_handler(quitRequestedTrampoline);");
 
 		const rust = read("sdks/rust/electrobun.rs");
-		expect(rust).toContain("QUIT_REQUESTED_STOP_EVENT_LOOP.store(");
+		expect(rust).toMatch(/QUIT_REQUESTED_STOP_EVENT_LOOP\s*\.store\(/);
 		expect(rust).toContain(
 			"(symbols.set_quit_requested_handler)(Some(quit_requested_trampoline));",
 		);

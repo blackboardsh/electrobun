@@ -273,6 +273,16 @@ import (
 	"unsafe"
 )
 
+// The native event loop must run on the process's main OS thread: AppKit
+// requires it on macOS, and on Linux Chromium's GLib message pump only drives
+// the default main context there (off-main it creates a private context, so
+// work queued for the UI thread never runs and window creation deadlocks).
+// Package init runs on the main goroutine while it is on the main thread;
+// locking here keeps main(), and so RunMainThread, on that thread.
+func init() {
+	runtime.LockOSThread()
+}
+
 type Renderer string
 
 const (
@@ -1930,6 +1940,8 @@ func (c *Core) WgpuSurfacePresentMainThread(surface unsafe.Pointer) (int, error)
 	return int(status), nil
 }
 
+// RunMainThread runs the native event loop until the app quits. Call it from
+// main() (the main goroutine, which this package pins to the main OS thread).
 func (c *Core) RunMainThread(appInfo AppInfo) error {
 	identifier, freeIdentifier, err := cString(appInfo.Identifier, "app identifier")
 	if err != nil {

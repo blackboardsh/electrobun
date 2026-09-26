@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import test from "node:test";
 
 import {
+	collectTestFiles,
 	isDirectEntry,
 	resolveTestArgs,
 	runTestsIndividually,
@@ -103,4 +104,19 @@ test("returns success only when every invocation succeeds", () => {
 	});
 	assert.deepEqual(failures, []);
 	assert.equal(testExitCode(failures), 0);
+});
+
+test("leaves node:test suites to Node's runner when expanding directories", () => {
+	const entry = (name) => ({ name, isDirectory: () => false, isFile: () => true });
+	const sources = {
+		"suite/cottontail.test.ts": 'import { test } from "bun:test";',
+		"suite/node.test.js": 'import { test } from "node:test";',
+		"suite/helper.ts": "",
+	};
+	const files = collectTestFiles(
+		"suite",
+		() => [entry("node.test.js"), entry("cottontail.test.ts"), entry("helper.ts")],
+		(path) => sources[path],
+	);
+	assert.deepEqual(files, ["suite/cottontail.test.ts"]);
 });

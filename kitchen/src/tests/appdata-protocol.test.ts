@@ -25,10 +25,12 @@ async function writeFixture() {
   }
 }
 
-function protocolTest(enabled: boolean) {
+// Take the name as the first argument so scripts/check-*-test-mirrors.ts can
+// resolve the literal test names that native Kitchens mirror.
+function protocolTest(name: string, enabled: boolean) {
   const expectation = enabled ? "allows" : "denies";
   return defineTest({
-    name: `appdata protocol ${expectation} access`,
+    name,
     category: "Protocols",
     description: `Verifies appdata:// is ${expectation === "allows" ? "readable" : "blocked"} when requesting CEF, including the automatic system-webview fallback when CEF is not bundled`,
     timeout: 30000,
@@ -92,6 +94,6 @@ function protocolTest(enabled: boolean) {
 }
 
 export const appDataProtocolTests = [
-  protocolTest(true),
-  protocolTest(false),
+  protocolTest("appdata protocol allows access", true),
+  protocolTest("appdata protocol denies access", false),
 ];

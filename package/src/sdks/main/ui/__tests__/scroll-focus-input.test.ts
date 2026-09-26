@@ -322,7 +322,9 @@ describe("focus and textInput", () => {
 		expect(submitted).toBe("h");
 	});
 
-	test("textInput handles Win32 virtual keys when native chars are present", () => {
+	// textInput normalizes Win32 virtual keys only on win32; elsewhere 0x08 is
+	// the macOS keycode for "c".
+	test.skipIf(process.platform !== "win32")("textInput handles Win32 virtual keys when native chars are present", () => {
 		const [value, setValue] = signal("");
 		const { ctx } = build(() => {
 			textInput({ value, onInput: setValue, autofocus: true });

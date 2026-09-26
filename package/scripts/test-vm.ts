@@ -11,12 +11,13 @@ type CreateVmTestCommandsOptions = {
 	kitchenDir?: string;
 };
 
-// Every main-process SDK bridges renderer callbacks differently, and CEF
-// delivers them on threads/message-pump states the system webview never does
-// (for example re-entrant webview-tag creation from a CEF process message).
-// The system-webview pass alone cannot catch those, so each backend also runs
-// its automated suite against CEF.
-export const VM_CEF_MAIN_PROCESSES = [
+// Every main-process SDK bridges renderer callbacks differently, so each
+// backend runs its automated suite against both renderers. CEF delivers
+// callbacks on threads/message-pump states the system webview never does (for
+// example re-entrant webview-tag creation from a CEF process message), and
+// system variants are built without CEF so renderer-neutral tests exercise
+// the CEF-to-system fallback.
+export const VM_MAIN_PROCESSES = [
 	"cottontail",
 	"bun",
 	"zig",
@@ -24,19 +25,23 @@ export const VM_CEF_MAIN_PROCESSES = [
 	"go",
 	"odin",
 ] as const;
+export const VM_WEBVIEWS = ["system", "cef"] as const;
 
 // A deadlocked app never exits on its own; fail the stage instead of hanging
 // the whole VM run.
-export const VM_KITCHEN_SYSTEM_TIMEOUT_SECONDS = 1200;
-export const VM_KITCHEN_CEF_TIMEOUT_SECONDS = 600;
+export const VM_KITCHEN_TIMEOUT_SECONDS = 1200;
 
-const displayNames: Record<(typeof VM_CEF_MAIN_PROCESSES)[number], string> = {
+const displayNames: Record<(typeof VM_MAIN_PROCESSES)[number], string> = {
 	cottontail: "Cottontail",
 	bun: "Bun",
 	zig: "Zig",
 	rust: "Rust",
 	go: "Go",
 	odin: "Odin",
+};
+const webviewNames: Record<(typeof VM_WEBVIEWS)[number], string> = {
+	system: "system webview",
+	cef: "CEF",
 };
 
 export type VmTestCommand = DevCommand & {
@@ -58,51 +63,54 @@ export function createVmTestCommands({
 	packageDir,
 	kitchenDir = join(packageDir, "..", "kitchen"),
 }: CreateVmTestCommandsOptions): VmTestCommand[] {
-	// The first stage builds the package devkit; later Kitchen stages reuse it
-	// through the same override dev:matrix uses instead of rebuilding it.
+	// The build stage builds the package devkit and every Kitchen variant;
+	// launch stages reuse both through the same override dev:matrix uses.
 	const kitchenEnv = { HUTCH_ELECTROBUN_DEVKIT_ROOT: join(packageDir, "dist") };
-	const cefVariants = VM_CEF_MAIN_PROCESSES.map((main) => `${main}:cef`);
-	const cefBuildLabel = "Build Kitchen CEF variants";
+	const variants = VM_WEBVIEWS.flatMap((webview) =>
+		VM_MAIN_PROCESSES.map((main) => ({ main, webview })),
+	);
+	const buildLabel = "Build Electrobun package and Kitchen variants";
 	return [
 		{
-			label: "Kitchen automated tests (Cottontail + system webview)",
+			label: buildLabel,
 			command: hutchBinary,
-			// Keep the explicit system-only matrix entry: plain `hutch dev`
-			// bundles CEF and would not exercise CEF-request fallback.
 			args: [
 				"dev:matrix",
-				"--with=cottontail:system",
-				`--timeout=${VM_KITCHEN_SYSTEM_TIMEOUT_SECONDS}`,
+				"--build-only",
+				`--with=${variants.map(({ main, webview }) => `${main}:${webview}`).join(",")}`,
 			],
 			cwd: packageDir,
-			env: { AUTO_RUN: "1" },
 		},
-		{
-			label: cefBuildLabel,
-			command: hutchBinary,
-			args: [
-				"scripts/kitchen-matrix.ts",
-				"--build-only",
-				`--with=${cefVariants.join(",")}`,
-			],
-			cwd: kitchenDir,
-			env: kitchenEnv,
-		},
-		// Launch one at a time: concurrent CEF apps contend for focus, the
+		// Launch one at a time: concurrent apps contend for focus, the CEF
 		// remote-debugging port, and window-manager state that tests assert.
-		...VM_CEF_MAIN_PROCESSES.map((main) => ({
-			label: `Kitchen automated tests (${displayNames[main]} + CEF)`,
+		...variants.map(({ main, webview }) => ({
+			label: `Kitchen automated tests (${displayNames[main]} + ${webviewNames[webview]})`,
 			command: hutchBinary,
 			args: [
 				"scripts/kitchen-matrix.ts",
 				"--launch-only",
-				`--with=${main}:cef`,
-				`--timeout=${VM_KITCHEN_CEF_TIMEOUT_SECONDS}`,
+				`--with=${main}:${webview}`,
+				`--timeout=${VM_KITCHEN_TIMEOUT_SECONDS}`,
 			],
 			cwd: kitchenDir,
 			env: { ...kitchenEnv, AUTO_RUN: "1" },
-			requires: cefBuildLabel,
+			requires: buildLabel,
 		})),
+		{
+			// Includes the desktop-only native tests (dialogs, DPI, X11 geometry,
+			// Wayland capture, views URLs, WebView2, Windows UI) that need a real
+			// session; they skip themselves on other platforms.
+			label: "Unit and native tests",
+			command: hutchBinary,
+			args: ["test:unit"],
+			cwd: packageDir,
+		},
+		{
+			label: "Kitchen tooling tests",
+			command: hutchBinary,
+			args: ["test:tooling"],
+			cwd: kitchenDir,
+		},
 		{
 			label: "Full install/update/uninstall lifecycle",
 			command: hutchBinary,

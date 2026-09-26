@@ -59,6 +59,7 @@ test("Kitchen resolves tasks and SDK types through Hutch", () => {
 		"package-boundary:test",
 		"start",
 		"start:canary",
+		"test:tooling",
 	]);
 	for (const command of [
 		'install: ["hutch", "pm", "ci"]',
