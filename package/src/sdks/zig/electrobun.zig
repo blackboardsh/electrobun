@@ -924,6 +924,7 @@ pub const Core = struct {
     const StopEventLoopFn = *const fn () callconv(.c) void;
     const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;
     const ForceExitFn = *const fn (c_int) callconv(.c) void;
+    const QuitGracefullyFn = *const fn (c_int, c_int) callconv(.c) void;
     const WgpuCreateSurfaceForViewFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
     const WgpuCreateAdapterDeviceMainThreadFn = *const fn (?*anyopaque, ?*anyopaque, ?*anyopaque) callconv(.c) void;
     const WgpuSurfaceConfigureMainThreadFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) void;
@@ -1045,6 +1046,7 @@ pub const Core = struct {
         stop_event_loop: StopEventLoopFn,
         wait_for_shutdown_complete: WaitForShutdownCompleteFn,
         force_exit: ForceExitFn,
+        quit_gracefully: QuitGracefullyFn,
         wgpu_create_surface_for_view: WgpuCreateSurfaceForViewFn,
         wgpu_create_adapter_device_main_thread: WgpuCreateAdapterDeviceMainThreadFn,
         wgpu_surface_configure_main_thread: WgpuSurfaceConfigureMainThreadFn,
@@ -1185,6 +1187,7 @@ pub const Core = struct {
                 .stop_event_loop = lib.lookup(StopEventLoopFn, "stopEventLoop") orelse return error.MissingCoreSymbol,
                 .wait_for_shutdown_complete = lib.lookup(WaitForShutdownCompleteFn, "waitForShutdownComplete") orelse return error.MissingCoreSymbol,
                 .force_exit = lib.lookup(ForceExitFn, "forceExit") orelse return error.MissingCoreSymbol,
+                .quit_gracefully = lib.lookup(QuitGracefullyFn, "quitGracefully") orelse return error.MissingCoreSymbol,
                 .wgpu_create_surface_for_view = lib.lookup(WgpuCreateSurfaceForViewFn, "wgpuCreateSurfaceForView") orelse return error.MissingCoreSymbol,
                 .wgpu_create_adapter_device_main_thread = lib.lookup(WgpuCreateAdapterDeviceMainThreadFn, "wgpuCreateAdapterDeviceMainThread") orelse return error.MissingCoreSymbol,
                 .wgpu_surface_configure_main_thread = lib.lookup(WgpuSurfaceConfigureMainThreadFn, "wgpuSurfaceConfigureMainThread") orelse return error.MissingCoreSymbol,
@@ -2117,8 +2120,9 @@ pub const Core = struct {
     }
 
     pub fn quitGracefully(self: *Core, code: c_int) noreturn {
-        self.stopEventLoop() catch {};
-        self.waitForShutdownComplete(5000) catch {};
+        // Core records the code before stopping the loop so the main thread,
+        // which exits as soon as the loop returns, reports it too.
+        self.symbols.quit_gracefully(code, 5000);
         self.forceExit(code);
     }
 

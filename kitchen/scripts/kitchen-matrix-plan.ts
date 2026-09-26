@@ -36,9 +36,10 @@ export function createKitchenMatrix(
 		);
 	}
 
-	// Renderer behavior lives below the main-process SDK bridges. Exercise every
-	// bridge against the system renderer, then cover CEF through the first-class
-	// Cottontail path. Use --full when renderer or build-config plumbing changes.
+	// Quick interactive pass: every bridge against the system renderer, plus CEF
+	// through the first-class Cottontail path. SDK bridges do interact with
+	// CEF's callback threading, so `hutch test:vm` auto-runs every backend with
+	// CEF; use --full here when renderer or build-config plumbing changes.
 	return [
 		{ mainProcess: "cottontail", renderer: "native" },
 		{ mainProcess: "cottontail", renderer: "cef" },

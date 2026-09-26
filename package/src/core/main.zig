@@ -2636,6 +2636,18 @@ fn managedQuitRequestedTrampoline() callconv(.c) void {
     }
 }
 
+// quitGracefully stops the event loop from another thread, which returns
+// start_event_loop on the main thread. Record the requested code first so
+// that thread exits with it instead of racing the quit caller with the
+// run-main-thread default (usually 0).
+const no_pending_exit_code: i64 = std.math.minInt(i64);
+var pending_graceful_exit_code = std.atomic.Value(i64).init(no_pending_exit_code);
+
+fn mainThreadExitCode(default_code: c_int) c_int {
+    const pending = pending_graceful_exit_code.load(.acquire);
+    return if (pending == no_pending_exit_code) default_code else @intCast(pending);
+}
+
 export fn electrobun_core_run_main_thread(
     identifier: [*:0]const u8,
     name: [*:0]const u8,
@@ -2655,8 +2667,17 @@ export fn electrobun_core_run_main_thread(
         name,
         if (install_root_name) |value| value.ptr else channel,
     );
-    native_wrapper_state.force_exit(exit_code);
+    native_wrapper_state.force_exit(mainThreadExitCode(exit_code));
     return 0;
+}
+
+test "main thread exits with a pending graceful quit code" {
+    defer pending_graceful_exit_code.store(no_pending_exit_code, .release);
+    try std.testing.expectEqual(@as(c_int, 0), mainThreadExitCode(0));
+    pending_graceful_exit_code.store(1, .release);
+    try std.testing.expectEqual(@as(c_int, 1), mainThreadExitCode(0));
+    pending_graceful_exit_code.store(0, .release);
+    try std.testing.expectEqual(@as(c_int, 0), mainThreadExitCode(7));
 }
 
 test "native profile root override accepts only a safe root leaf" {
@@ -4303,6 +4324,7 @@ export fn setExitOnLastWindowClosed(enabled: bool) void {
 
 export fn quitGracefully(code: c_int, timeout_ms: c_int) void {
     clearLastError();
+    pending_graceful_exit_code.store(code, .release);
 
     const StopEventLoopFn = *const fn () callconv(.c) void;
     const WaitForShutdownCompleteFn = *const fn (c_int) callconv(.c) void;

@@ -6,6 +6,7 @@ import {
 	readFileSync,
 	rmSync,
 	writeFileSync,
+	chmodSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -22,6 +23,7 @@ import {
 	parseKitchenMatrixArguments,
 	prepareKitchenVariantWorkspace,
 	publishKitchenVariantWorkspace,
+	runKitchenMatrix,
 	stopChildProcessTree,
 } from "./kitchen-matrix";
 
@@ -160,6 +162,54 @@ describe("kitchen matrix", () => {
 			parseKitchenMatrixArguments(["--build-only", "--launch-only"], 3),
 		).toThrow("cannot be used together");
 	});
+
+	it("parses a launch timeout for unattended runs", () => {
+		expect(parseKitchenMatrixArguments([], 3)).toMatchObject({
+			launchTimeoutSeconds: null,
+		});
+		expect(
+			parseKitchenMatrixArguments(["--timeout=900", "--launch-only"], 3),
+		).toMatchObject({ launchTimeoutSeconds: 900, launchOnly: true });
+		expect(parseKitchenMatrixArguments(["--timeout", "30"], 3)).toMatchObject({
+			launchTimeoutSeconds: 30,
+		});
+		for (const value of ["0", "-1", "abc", "1.5"]) {
+			expect(() =>
+				parseKitchenMatrixArguments([`--timeout=${value}`], 3),
+			).toThrow("--timeout must be a positive number of seconds");
+		}
+	});
+
+	it.skipIf(process.platform === "win32")(
+		"fails and reaps a launched variant that never exits",
+		async () => {
+			// Models a deadlocked app: the launcher never exits and owns a
+			// descendant process that must not outlive the matrix run.
+			const fixtureRoot = mkdtempSync(join(tmpdir(), "electrobun-kitchen-hang-"));
+			const grandchildPidFile = join(fixtureRoot, "grandchild.pid");
+			const fakeHutch = join(fixtureRoot, "hutch");
+			writeFileSync(
+				fakeHutch,
+				`#!/bin/sh\nsleep 1000 &\necho $! > "${grandchildPidFile}"\nwait\n`,
+			);
+			chmodSync(fakeHutch, 0o755);
+			const previousHutch = process.env["HUTCH_BINARY"];
+			process.env["HUTCH_BINARY"] = fakeHutch;
+			try {
+				const startedAt = Date.now();
+				await expect(
+					runKitchenMatrix(["--launch-only", "--with=zig:cef", "--timeout=1"]),
+				).rejects.toThrow("zig-cef: Hutch run timed out after 1s");
+				expect(Date.now() - startedAt).toBeLessThan(5000);
+				const grandchildPid = Number(readFileSync(grandchildPidFile, "utf8"));
+				expect(() => process.kill(grandchildPid, 0)).toThrow();
+			} finally {
+				if (previousHutch === undefined) delete process.env["HUTCH_BINARY"];
+				else process.env["HUTCH_BINARY"] = previousHutch;
+				rmSync(fixtureRoot, { recursive: true, force: true });
+			}
+		},
+	);
 
 	it("parses an exact comma-separated variant list", () => {
 		expect(

@@ -8,9 +8,12 @@ hutch dev:matrix --local
 ```
 
 The reduced matrix has seven variants: every main-process backend with the
-platform system renderer, plus Cottontail with CEF. The renderer implementation
-lives below the SDK bridges, so this covers the useful interactive boundaries
-without requiring the full Cartesian product on every pass.
+platform system renderer, plus Cottontail with CEF. It is a quick interactive
+pass, not full renderer coverage: CEF delivers bridge callbacks on different
+threads and message-pump states than the system webview, and each SDK handles
+them differently (for example, the Zig and Rust Kitchens create webview tags
+synchronously inside a CEF process-message callback). `hutch test:vm` therefore
+runs every backend's automated suite against CEF as well.
 
 Use the full 6 x 2 matrix after changes to renderer selection, build metadata,
 or an SDK's renderer handling:
@@ -35,7 +38,9 @@ hutch dev:matrix --local --with=go:system,rust:cef,go:cef
 Each `--with` entry is `<main-process>:<webview>`. Main processes are
 `cottontail,bun,zig,rust,go,odin`; webviews are `system,cef`.
 
-`--jobs=N` controls concurrent builds. From `kitchen/`, the equivalent commands
+`--jobs=N` controls concurrent builds. `--timeout=SECONDS` fails and kills any
+launched variant still running after that long; use it with `AUTO_RUN=1` so a
+deadlocked app fails the run instead of hanging it. From `kitchen/`, the equivalent commands
 are `hutch matrix` and `hutch matrix:full` when the local stack is already ready.
 
 ## Windows WebView2 initialization regression

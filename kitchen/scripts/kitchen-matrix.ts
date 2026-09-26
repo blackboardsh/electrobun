@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
 	copyFileSync,
 	cpSync,
@@ -32,6 +32,7 @@ export type KitchenMatrixOptions = {
 	list: boolean;
 	help: boolean;
 	jobs: number;
+	launchTimeoutSeconds: number | null;
 	selectedVariants: KitchenVariant[] | null;
 };
 
@@ -153,6 +154,14 @@ function parseJobCount(value: string): number {
 	return jobs;
 }
 
+function parseTimeoutSeconds(value: string): number {
+	const seconds = Number.parseInt(value, 10);
+	if (!Number.isInteger(seconds) || seconds < 1 || String(seconds) !== value.trim()) {
+		throw new Error(`--timeout must be a positive number of seconds, received ${JSON.stringify(value)}`);
+	}
+	return seconds;
+}
+
 function parseSelectedVariants(value: string): KitchenVariant[] {
 	const variants: KitchenVariant[] = [];
 	const keys = new Set<string>();
@@ -201,6 +210,7 @@ export function parseKitchenMatrixArguments(
 		list: false,
 		help: false,
 		jobs: defaultJobs,
+		launchTimeoutSeconds: null,
 		selectedVariants: null,
 	};
 
@@ -224,6 +234,13 @@ export function parseKitchenMatrixArguments(
 			const value = args[index + 1];
 			if (!value) throw new Error("--jobs requires a value");
 			options.jobs = parseJobCount(value);
+			index += 1;
+		} else if (arg.startsWith("--timeout=")) {
+			options.launchTimeoutSeconds = parseTimeoutSeconds(arg.slice("--timeout=".length));
+		} else if (arg === "--timeout") {
+			const value = args[index + 1];
+			if (!value) throw new Error("--timeout requires a value");
+			options.launchTimeoutSeconds = parseTimeoutSeconds(value);
 			index += 1;
 		} else {
 			throw new Error(`Unknown matrix option: ${arg}`);
@@ -250,6 +267,8 @@ Options:
   --build-only    Build variants without launching them
   --launch-only   Launch existing variants without rebuilding
   --jobs N        Maximum concurrent builds (default: up to 4)
+  --timeout SECS  Fail and kill any launched variant still running after SECS
+                  (for AUTO_RUN; a deadlocked app otherwise never exits)
   --list          Print the selected variants and exit
   -h, --help      Show this help
 
@@ -275,16 +294,23 @@ function pipePrefixed(stream: Readable, prefix: string, target: NodeJS.WriteStre
 	});
 }
 
+const LAUNCH_TIMEOUT_KILL_GRACE_MS = 5000;
+
 function runHutchForVariant(
 	hutchBinary: string,
 	workingRoot: string,
 	variant: KitchenVariant,
 	command: "build" | "run",
+	timeoutSeconds: number | null = null,
 ): Promise<void> {
 	const key = kitchenVariantKey(variant);
 	return new Promise((resolvePromise, rejectPromise) => {
+		// A timed run is unattended, so it may leave the terminal's foreground
+		// group; the isolated group lets the watchdog reap launcher, app, and
+		// CEF helpers together.
 		const isolatedProcessGroup =
-			command === "build" && process.platform !== "win32";
+			(command === "build" || timeoutSeconds !== null) &&
+			process.platform !== "win32";
 		const child = spawn(hutchBinary, ["electrobun", command], {
 			cwd: workingRoot,
 			env: kitchenVariantEnvironment(process.env, variant),
@@ -299,9 +325,29 @@ function runHutchForVariant(
 		if (child.stderr) pipePrefixed(child.stderr, `[${key}] `, process.stderr);
 
 		let settled = false;
+		let timedOut = false;
+		let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+		let killTimer: ReturnType<typeof setTimeout> | null = null;
+		const clearTimers = () => {
+			if (timeoutTimer) clearTimeout(timeoutTimer);
+			if (killTimer) clearTimeout(killTimer);
+		};
+		if (timeoutSeconds !== null) {
+			timeoutTimer = setTimeout(() => {
+				timedOut = true;
+				console.error(
+					`[${key}] still running after ${timeoutSeconds}s; stopping it (likely hung).`,
+				);
+				forceStopChildProcessTree(child, isolatedProcessGroup, "SIGTERM");
+				killTimer = setTimeout(() => {
+					forceStopChildProcessTree(child, isolatedProcessGroup, "SIGKILL");
+				}, LAUNCH_TIMEOUT_KILL_GRACE_MS);
+			}, timeoutSeconds * 1000);
+		}
 		const reject = (error: Error) => {
 			if (settled) return;
 			settled = true;
+			clearTimers();
 			activeChildren.delete(child);
 			rejectPromise(error);
 		};
@@ -312,8 +358,13 @@ function runHutchForVariant(
 		child.on("close", (code, signal) => {
 			if (settled) return;
 			settled = true;
+			clearTimers();
 			activeChildren.delete(child);
-			if (code === 0) resolvePromise();
+			if (timedOut) {
+				rejectPromise(
+					new Error(`${key}: Hutch ${command} timed out after ${timeoutSeconds}s`),
+				);
+			} else if (code === 0) resolvePromise();
 			else {
 				rejectPromise(
 					new Error(
@@ -376,6 +427,31 @@ export function stopChildProcessTree(
 		}
 	}
 	child.kill(platform === "win32" ? undefined : signal);
+}
+
+// Unlike stopChildProcessTree, also reaps the tree on Windows and when the
+// direct child already exited but left its process group running.
+function forceStopChildProcessTree(
+	child: ChildProcess,
+	isolatedProcessGroup: boolean,
+	signal: NodeJS.Signals,
+): void {
+	if (process.platform === "win32") {
+		if (child.pid) {
+			spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+				stdio: "ignore",
+				windowsHide: true,
+			});
+		}
+		return;
+	}
+	if (isolatedProcessGroup && child.pid) {
+		try {
+			process.kill(-child.pid, signal);
+		} catch {}
+		return;
+	}
+	stopChildProcessTree(child, false, signal);
 }
 
 function stopChildren(signal: NodeJS.Signals = "SIGTERM"): void {
@@ -461,6 +537,7 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 						kitchenRoot,
 						variant,
 						"run",
+						options.launchTimeoutSeconds,
 					);
 					return null;
 				} catch (error) {

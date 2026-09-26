@@ -880,6 +880,7 @@ SetURLOpenHandlerFn :: proc "c" (URLOpenHandler)
 SetAppReopenHandlerFn :: proc "c" (AppReopenHandler)
 SetQuitRequestedHandlerFn :: proc "c" (QuitRequestedHandler)
 IntVoidFn :: proc "c" (c.int)
+QuitGracefullyFn :: proc "c" (c.int, c.int)
 WgpuCreateSurfaceForViewFn :: proc "c" (rawptr, rawptr) -> rawptr
 WgpuTwoPtrVoidFn :: proc "c" (rawptr, rawptr)
 WgpuThreePtrVoidFn :: proc "c" (rawptr, rawptr, rawptr)
@@ -1001,6 +1002,7 @@ Symbols :: struct {
 	stopEventLoop:                          VoidFn,
 	waitForShutdownComplete:                IntVoidFn,
 	forceExit:                              IntVoidFn,
+	quitGracefully:                         QuitGracefullyFn,
 	wgpuCreateSurfaceForView:               WgpuCreateSurfaceForViewFn,
 	wgpuCreateAdapterDeviceMainThread:      WgpuThreePtrVoidFn,
 	wgpuSurfaceConfigureMainThread:         WgpuTwoPtrVoidFn,
@@ -1976,8 +1978,9 @@ forceExit :: proc(self: ^Core, code: c.int) -> ! {
 }
 
 quitGracefully :: proc(self: ^Core, code: c.int) -> ! {
-	_ = stopEventLoop(self)
-	_ = waitForShutdownComplete(self, 5000)
+	// Core records the code before stopping the loop so the main thread, which
+	// exits as soon as the loop returns, reports it too.
+	self.symbols.quitGracefully(code, 5000)
 	forceExit(self, code)
 }
 

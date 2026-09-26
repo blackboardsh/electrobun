@@ -93,6 +93,18 @@ static QuitRequestedHandler g_quitRequestedHandler = nullptr;
 static std::atomic<bool> g_shutdownComplete{false};
 static std::atomic<bool> g_eventLoopStopping{false};
 
+// Thread that runs the UI event loop. GLib context ownership alone cannot
+// identify it: CefRunMessageLoop runs Chromium tasks (process messages,
+// browser callbacks) outside GLib dispatch, where the default context is not
+// owned. Re-entrant SDK calls from those callbacks must run inline instead of
+// queueing onto the loop they are blocking.
+static std::atomic<std::thread::id> g_eventLoopThreadId{std::thread::id()};
+
+static bool isEventLoopThread() {
+    return g_main_context_is_owner(g_main_context_default()) ||
+           g_eventLoopThreadId.load(std::memory_order_acquire) == std::this_thread::get_id();
+}
+
 // Self-pipe for async-signal-safe signal handling.
 // Signal handler writes to pipe, GLib IO watch reads and dispatches.
 static int g_signal_pipe[2] = {-1, -1};
@@ -6424,7 +6436,7 @@ auto dispatch_sync_main(Func&& func) -> decltype(func()) {
     using ReturnType = decltype(func());
     
     // If already on main thread, just execute
-    if (g_main_context_is_owner(g_main_context_default())) {
+    if (isEventLoopThread()) {
         return func();
     }
     
@@ -6490,7 +6502,7 @@ auto dispatch_sync_main(Func&& func) -> decltype(func()) {
 template<typename Func>
 typename std::enable_if<std::is_void<decltype(std::declval<Func>()())>::value>::type
 dispatch_sync_main_void(Func&& func) {
-    if (g_main_context_is_owner(g_main_context_default())) {
+    if (isEventLoopThread()) {
         func();
         return;
     }
@@ -6547,7 +6559,7 @@ dispatch_sync_main_void(Func&& func) {
 
 template<typename Func>
 void dispatch_async_main_void(Func&& func) {
-    if (g_main_context_is_owner(g_main_context_default())) {
+    if (isEventLoopThread()) {
         func();
         return;
     }
@@ -7195,6 +7207,7 @@ void runGTKEventLoop() {
 }
 
 void runEventLoop() {    
+    g_eventLoopThreadId.store(std::this_thread::get_id(), std::memory_order_release);
     if (isCEFAvailable()) {      
         runCEFEventLoop();
     } else {  

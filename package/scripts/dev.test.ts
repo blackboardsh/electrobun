@@ -2,7 +2,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createDevCommands, parseDevArgs } from "./dev.ts";
 import { createMatrixDevCommands } from "./dev-matrix.ts";
-import { createVmTestCommands, runVmTestCommands } from "./test-vm.ts";
+import {
+	createVmTestCommands,
+	runVmTestCommands,
+	VM_CEF_MAIN_PROCESSES,
+} from "./test-vm.ts";
 
 function assert(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message);
@@ -141,41 +145,107 @@ assert(
 );
 
 const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir });
-assert(vmTestCommands.length === 3, "VM test plan should have three stages");
+const cefMainProcesses = [...VM_CEF_MAIN_PROCESSES];
+assertArray(
+	cefMainProcesses,
+	["cottontail", "bun", "zig", "rust", "go", "odin"],
+	"VM tests should run every main-process backend against CEF",
+);
+assert(
+	vmTestCommands.length === 4 + cefMainProcesses.length,
+	"VM test plan should have system, CEF build, per-backend CEF, updater, and release stages",
+);
 assertArray(
 	vmTestCommands[0]?.args ?? [],
-	["dev:matrix", "--with=cottontail:system"],
+	["dev:matrix", "--with=cottontail:system", "--timeout=1200"],
 	"Kitchen automated test argv",
 );
 assert(
 	vmTestCommands[0]?.env?.AUTO_RUN === "1",
 	"Kitchen automated tests should receive AUTO_RUN=1",
 );
+const cefBuild = vmTestCommands[1];
 assertArray(
-	vmTestCommands[1]?.args ?? [],
-	["test:updater-lifecycle"],
-	"Updater lifecycle argv",
+	cefBuild?.args ?? [],
+	[
+		"scripts/kitchen-matrix.ts",
+		"--build-only",
+		"--with=cottontail:cef,bun:cef,zig:cef,rust:cef,go:cef,odin:cef",
+	],
+	"Kitchen CEF build argv",
 );
-assertArray(
-	vmTestCommands[2]?.args ?? [],
-	["check:release"],
-	"Release check argv",
+assert(cefBuild?.cwd === kitchenDir, "Kitchen CEF build should run in Kitchen");
+assert(
+	cefBuild?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT === join(packageDir, "dist"),
+	"Kitchen CEF build should reuse the local Electrobun devkit",
 );
+assert(cefBuild?.env?.AUTO_RUN === undefined, "Builds should not auto-run");
+cefMainProcesses.forEach((main, index) => {
+	const command = vmTestCommands[2 + index];
+	assertArray(
+		command?.args ?? [],
+		[
+			"scripts/kitchen-matrix.ts",
+			"--launch-only",
+			`--with=${main}:cef`,
+			"--timeout=600",
+		],
+		`Kitchen ${main} CEF launch argv`,
+	);
+	assert(command?.env?.AUTO_RUN === "1", `${main}:cef should receive AUTO_RUN=1`);
+	assert(
+		command?.env?.HUTCH_ELECTROBUN_DEVKIT_ROOT === join(packageDir, "dist"),
+		`${main}:cef should reuse the local Electrobun devkit`,
+	);
+	assert(
+		command?.requires === cefBuild?.label,
+		`${main}:cef should be skipped when the CEF build fails`,
+	);
+});
+const updaterStage = vmTestCommands[2 + cefMainProcesses.length];
+const releaseStage = vmTestCommands[3 + cefMainProcesses.length];
+assertArray(updaterStage?.args ?? [], ["test:updater-lifecycle"], "Updater lifecycle argv");
+assertArray(releaseStage?.args ?? [], ["check:release"], "Release check argv");
 
 const attemptedVmStages: string[] = [];
 const vmFailures = await runVmTestCommands(
 	vmTestCommands,
 	async (command) => {
 		attemptedVmStages.push(command.label);
-		if (command !== vmTestCommands[2]) throw new Error(`${command.label} failed`);
+		if (command !== releaseStage) throw new Error(`${command.label} failed`);
 	},
 	() => {},
 );
 assertArray(
 	attemptedVmStages,
-	vmTestCommands.map((command) => command.label),
-	"VM runner should attempt every stage after failures",
+	vmTestCommands
+		.filter((command) => command.requires !== cefBuild?.label)
+		.map((command) => command.label),
+	"VM runner should attempt every independent stage after failures and skip dependents",
 );
-assert(vmFailures.length === 2, "VM runner should collect every stage failure");
+assert(
+	vmFailures.length === vmTestCommands.length - 1,
+	"VM runner should collect every stage failure, including skipped dependents",
+);
+
+const attemptedAfterBuild: string[] = [];
+const failuresAfterBuild = await runVmTestCommands(
+	vmTestCommands,
+	async (command) => {
+		attemptedAfterBuild.push(command.label);
+		if (command.label.includes("Zig + CEF")) throw new Error("zig:cef hung");
+	},
+	() => {},
+);
+assertArray(
+	attemptedAfterBuild,
+	vmTestCommands.map((command) => command.label),
+	"VM runner should launch every CEF variant once the build succeeds",
+);
+assertArray(
+	failuresAfterBuild.map((failure) => failure.command.label),
+	["Kitchen automated tests (Zig + CEF)"],
+	"VM runner should report the failing CEF backend by name",
+);
 
 console.log("Electrobun dev command plan passed");

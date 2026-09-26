@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	resolveHutchBinary,
 	runCommandWithSignalForwarding,
@@ -8,30 +8,101 @@ import {
 type CreateVmTestCommandsOptions = {
 	hutchBinary: string;
 	packageDir: string;
+	kitchenDir?: string;
+};
+
+// Every main-process SDK bridges renderer callbacks differently, and CEF
+// delivers them on threads/message-pump states the system webview never does
+// (for example re-entrant webview-tag creation from a CEF process message).
+// The system-webview pass alone cannot catch those, so each backend also runs
+// its automated suite against CEF.
+export const VM_CEF_MAIN_PROCESSES = [
+	"cottontail",
+	"bun",
+	"zig",
+	"rust",
+	"go",
+	"odin",
+] as const;
+
+// A deadlocked app never exits on its own; fail the stage instead of hanging
+// the whole VM run.
+export const VM_KITCHEN_SYSTEM_TIMEOUT_SECONDS = 1200;
+export const VM_KITCHEN_CEF_TIMEOUT_SECONDS = 600;
+
+const displayNames: Record<(typeof VM_CEF_MAIN_PROCESSES)[number], string> = {
+	cottontail: "Cottontail",
+	bun: "Bun",
+	zig: "Zig",
+	rust: "Rust",
+	go: "Go",
+	odin: "Odin",
+};
+
+export type VmTestCommand = DevCommand & {
+	// Label of an earlier stage whose failure makes this one meaningless (for
+	// example, launching variants whose build failed would run stale output).
+	requires?: string;
 };
 
 export type VmTestFailure = {
-	command: DevCommand;
+	command: VmTestCommand;
 	error: unknown;
 };
 
-type VmCommandRunner = (command: DevCommand) => Promise<void>;
+type VmCommandRunner = (command: VmTestCommand) => Promise<void>;
 type VmFailureReporter = (failure: VmTestFailure) => void;
 
 export function createVmTestCommands({
 	hutchBinary,
 	packageDir,
-}: CreateVmTestCommandsOptions): DevCommand[] {
+	kitchenDir = join(packageDir, "..", "kitchen"),
+}: CreateVmTestCommandsOptions): VmTestCommand[] {
+	// The first stage builds the package devkit; later Kitchen stages reuse it
+	// through the same override dev:matrix uses instead of rebuilding it.
+	const kitchenEnv = { HUTCH_ELECTROBUN_DEVKIT_ROOT: join(packageDir, "dist") };
+	const cefVariants = VM_CEF_MAIN_PROCESSES.map((main) => `${main}:cef`);
+	const cefBuildLabel = "Build Kitchen CEF variants";
 	return [
 		{
 			label: "Kitchen automated tests (Cottontail + system webview)",
 			command: hutchBinary,
 			// Keep the explicit system-only matrix entry: plain `hutch dev`
 			// bundles CEF and would not exercise CEF-request fallback.
-			args: ["dev:matrix", "--with=cottontail:system"],
+			args: [
+				"dev:matrix",
+				"--with=cottontail:system",
+				`--timeout=${VM_KITCHEN_SYSTEM_TIMEOUT_SECONDS}`,
+			],
 			cwd: packageDir,
 			env: { AUTO_RUN: "1" },
 		},
+		{
+			label: cefBuildLabel,
+			command: hutchBinary,
+			args: [
+				"scripts/kitchen-matrix.ts",
+				"--build-only",
+				`--with=${cefVariants.join(",")}`,
+			],
+			cwd: kitchenDir,
+			env: kitchenEnv,
+		},
+		// Launch one at a time: concurrent CEF apps contend for focus, the
+		// remote-debugging port, and window-manager state that tests assert.
+		...VM_CEF_MAIN_PROCESSES.map((main) => ({
+			label: `Kitchen automated tests (${displayNames[main]} + CEF)`,
+			command: hutchBinary,
+			args: [
+				"scripts/kitchen-matrix.ts",
+				"--launch-only",
+				`--with=${main}:cef`,
+				`--timeout=${VM_KITCHEN_CEF_TIMEOUT_SECONDS}`,
+			],
+			cwd: kitchenDir,
+			env: { ...kitchenEnv, AUTO_RUN: "1" },
+			requires: cefBuildLabel,
+		})),
 		{
 			label: "Full install/update/uninstall lifecycle",
 			command: hutchBinary,
@@ -63,12 +134,24 @@ function defaultFailureReporter(failure: VmTestFailure): void {
 }
 
 export async function runVmTestCommands(
-	commands: DevCommand[],
+	commands: VmTestCommand[],
 	runCommand: VmCommandRunner = runCommandWithSignalForwarding,
 	reportFailure: VmFailureReporter = defaultFailureReporter,
 ): Promise<VmTestFailure[]> {
 	const failures: VmTestFailure[] = [];
 	for (const command of commands) {
+		if (
+			command.requires &&
+			failures.some((failure) => failure.command.label === command.requires)
+		) {
+			const failure = {
+				command,
+				error: new Error(`Skipped because "${command.requires}" failed.`),
+			};
+			failures.push(failure);
+			reportFailure(failure);
+			continue;
+		}
 		try {
 			await runCommand(command);
 		} catch (error) {
