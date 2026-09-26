@@ -17,6 +17,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { parseStrictSemVer } from "../package/src/shared/strict-semver.js";
+import { systemTarBinary } from "../package/scripts/windows-tar.mjs";
 
 export const TEMPLATE_SCHEMA = 1;
 export const TEMPLATE_BUCKET = "electrobun-artifacts";
@@ -261,7 +262,7 @@ function copyTrackedTemplate(templateId, destination) {
 
 function createTemplateArchive(templateId, sourceRoot, archivePath) {
 	const result = spawnSync(
-		"tar",
+		systemTarBinary(),
 		["-czf", archivePath, "-C", sourceRoot, templateId],
 		{
 			cwd: repositoryRoot,

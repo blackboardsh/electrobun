@@ -15,6 +15,7 @@ import {
 	templateChannelKey,
 	templateMetadata,
 } from "./publish-templates.mjs";
+import { systemTarBinary } from "../package/scripts/windows-tar.mjs";
 
 const repositoryRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -284,7 +285,7 @@ test("dry-run pins only staged Hutch configs and preserves repository inputs", a
 		assert.equal(stagedVersions[0][2], packageVersion, template.id);
 
 		const archivedHutch = execFileSync(
-			"tar",
+			systemTarBinary(),
 			[
 				"-xOf",
 				join(repositoryRoot, ".template-release", "archives", `${template.id}.tar.gz`),
