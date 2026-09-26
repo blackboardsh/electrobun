@@ -161,9 +161,15 @@ assert(
 	"VM test plan should have build, per-variant Kitchen, unit, Kitchen tooling, updater, and release stages",
 );
 const kitchenBuild = vmTestCommands[0];
+const expectedBuildArgs = [
+	"dev:matrix",
+	"--build-only",
+	`--with=${vmVariants.join(",")}`,
+	...(process.platform === "win32" ? ["--jobs=1"] : []),
+];
 assertArray(
 	kitchenBuild?.args ?? [],
-	["dev:matrix", "--build-only", `--with=${vmVariants.join(",")}`],
+	expectedBuildArgs,
 	"Kitchen build argv",
 );
 assert(kitchenBuild?.cwd === packageDir, "Kitchen build should run dev:matrix from package");

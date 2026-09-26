@@ -70,15 +70,22 @@ export function createVmTestCommands({
 		VM_MAIN_PROCESSES.map((main) => ({ main, webview })),
 	);
 	const buildLabel = "Build Electrobun package and Kitchen variants";
+	// On Windows, concurrent Kitchen builds deadlock: Go's cgo shells out to
+	// `zig cc` and the Rust variants likewise vendor `zig` for their C
+	// dependencies, so multiple variants race on Zig's shared global cache
+	// and freeze `link.exe`. Build variants serially there; other hosts keep
+	// the default parallelism.
+	const buildArgs = [
+		"dev:matrix",
+		"--build-only",
+		`--with=${variants.map(({ main, webview }) => `${main}:${webview}`).join(",")}`,
+		...(process.platform === "win32" ? ["--jobs=1"] : []),
+	];
 	return [
 		{
 			label: buildLabel,
 			command: hutchBinary,
-			args: [
-				"dev:matrix",
-				"--build-only",
-				`--with=${variants.map(({ main, webview }) => `${main}:${webview}`).join(",")}`,
-			],
+			args: buildArgs,
 			cwd: packageDir,
 		},
 		// Launch one at a time: concurrent apps contend for focus, the CEF
