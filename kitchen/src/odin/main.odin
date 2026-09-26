@@ -4036,6 +4036,9 @@ runAppDataProtocolTest :: proc(state: ^AppState, enabled: bool) -> string {
 	}
 	defer electrobun.pathsDeinit(&paths, state.allocator)
 
+	if mkdir_err := os.make_directory_all(paths.userData); mkdir_err != nil && mkdir_err != .Exist {
+		return "CreateAppDataProtocolFixtureFailed"
+	}
 	fixture_path, _ := filepath.join({paths.userData, fixture_name}, state.allocator)
 	defer delete(fixture_path, state.allocator)
 	if write_err := os.write_entire_file(fixture_path, fixture_contents); write_err != nil {
@@ -4681,6 +4684,9 @@ runUtilsMoveToTrashTest :: proc(state: ^AppState) -> string {
 	}
 	defer electrobun.pathsDeinit(&paths, state.allocator)
 
+	if mkdir_err := os.make_directory_all(paths.userData); mkdir_err != nil && mkdir_err != .Exist {
+		return "CreateTrashTestFileFailed"
+	}
 	test_file_name := fmt.aprintf("electrobun-odin-trash-%d.txt", milliTimestamp(), allocator = state.allocator)
 	defer delete(test_file_name, state.allocator)
 	test_file, _ := filepath.join({paths.userData, test_file_name}, state.allocator)

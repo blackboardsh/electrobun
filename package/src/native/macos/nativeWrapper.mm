@@ -4797,6 +4797,9 @@ public:
             {"enable-fullscreen", ""},
             {"remote-allow-origins", "*"},
             {"allow-insecure-localhost", ""},
+            // Occlusion is tracked in the browser process; without this a
+            // freshly shown window can report hidden and throttle its timers.
+            {"disable-backgrounding-occluded-windows", ""},
         };
         electrobun::applyDefaultFlags(defaults, g_userChromiumFlags.skip, command_line);
 
