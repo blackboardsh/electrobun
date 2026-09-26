@@ -1,6 +1,7 @@
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
-const kitchenRoot = import.meta.dir.endsWith("/scripts")
+// Windows path separators differ, so the suffix match must be OS-agnostic.
+const kitchenRoot = basename(import.meta.dir) === "scripts"
 	? join(import.meta.dir, "..")
 	: import.meta.dir;
 

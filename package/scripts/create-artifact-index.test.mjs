@@ -13,6 +13,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { createArtifactIndex } from "./create-artifact-index.mjs";
+import { systemTarBinary } from "./windows-tar.mjs";
 
 const version = "2.0.0-beta.7";
 
@@ -38,7 +39,7 @@ function writeCore(root, releaseName, target, overrides) {
 		JSON.stringify(manifest(target, overrides)),
 	);
 	const archive = join(root, `electrobun-core-${releaseName}.tar.gz`);
-	execFileSync("tar", ["-czf", archive, "-C", staging, "native-devkit.json"]);
+	execFileSync(systemTarBinary(), ["-czf", archive, "-C", staging, "native-devkit.json"]);
 	return archive;
 }
 

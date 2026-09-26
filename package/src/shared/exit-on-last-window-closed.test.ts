@@ -4,9 +4,12 @@ import { join } from "node:path";
 
 const packageRoot = join(import.meta.dirname, "..");
 const repoRoot = join(packageRoot, "..", "..");
-const read = (path: string) => readFileSync(join(packageRoot, path), "utf8");
+// Windows Git checkouts default to CRLF; normalize source reads so `\n`
+// patterns in this contract test remain host-agnostic.
+const normalize = (source: string) => source.replace(/\r\n/g, "\n");
+const read = (path: string) => normalize(readFileSync(join(packageRoot, path), "utf8"));
 const readTemplate = (path: string) =>
-	readFileSync(join(repoRoot, "templates", path), "utf8");
+	normalize(readFileSync(join(repoRoot, "templates", path), "utf8"));
 
 describe("exit on last window closed contract", () => {
 	it("asks the quit-requested handler to quit when the last window closes", () => {

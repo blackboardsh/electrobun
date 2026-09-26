@@ -21,6 +21,8 @@ import { basename, dirname, join, parse, resolve } from "node:path";
 import { afterEach, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
+import { systemTarBinary } from "../../../package/scripts/windows-tar.mjs";
+
 const require = createRequire(import.meta.url);
 const bootstrap = require("../bin/electrobun.cjs");
 const resolver = require("../bin/resolve-hutch.cjs");
@@ -139,7 +141,7 @@ function makeArchive(
 		chmodSync(join(root, "bin", "hutch-engine"), binaryMode);
 	}
 	const archivePath = join(temporary, "hutch.tar.gz");
-	execFileSync("tar", ["-czf", archivePath, "-C", staging, rootName]);
+	execFileSync(systemTarBinary(), ["-czf", archivePath, "-C", staging, rootName]);
 	return readFileSync(archivePath);
 }
 
@@ -598,7 +600,7 @@ test("uses the Windows system tar for a Linux archive on a Windows host", () => 
 			environment: { SystemRoot: "C:\\Windows" },
 			execute: (command, args, options) => {
 				commands.push(command);
-				return execFileSync("tar", args, options);
+				return execFileSync(systemTarBinary(), args, options);
 			},
 			hostPlatform: "win32",
 			platform: "linux",
@@ -633,7 +635,7 @@ test("Windows archive commands keep Unicode cache paths out of tar argv", () => 
 			platform: "win32",
 			platformKey: "windows-x64",
 			root,
-			tarExecutable: "tar",
+			tarExecutable: systemTarBinary(),
 		});
 		assert.equal(readFileSync(binary, "utf8"), "downloaded");
 		assert.equal(calls.length, 6);

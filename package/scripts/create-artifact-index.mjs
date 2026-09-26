@@ -15,6 +15,7 @@ import { basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { isStrictSemVer } from "../src/shared/strict-semver.js";
+import { systemTarBinary } from "./windows-tar.mjs";
 
 export const ARTIFACT_INDEX_FILENAME = "electrobun-artifacts.json";
 export const ARTIFACT_INDEX_SCHEMA_VERSION = 1;
@@ -116,7 +117,7 @@ function readNativeDevkitManifest(coreArchive) {
 	let contents;
 	try {
 		contents = execFileSync(
-			"tar",
+			systemTarBinary(),
 			["-xOzf", coreArchive, "native-devkit.json"],
 			{ encoding: "utf8", maxBuffer: 1024 * 1024 },
 		);

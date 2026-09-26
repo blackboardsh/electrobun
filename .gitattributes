@@ -1,0 +1,58 @@
+# Normalize text file line endings to LF on checkout, regardless of the
+# consumer's core.autocrlf. Source tests read these files and assert against
+# `\n`-delimited patterns; CRLF checkouts on Windows would fail those tests.
+* text=auto eol=lf
+
+# Explicit LF for source and text formats used by contract tests.
+*.zig     text eol=lf
+*.rs      text eol=lf
+*.go      text eol=lf
+*.odin    text eol=lf
+*.cpp     text eol=lf
+*.hpp     text eol=lf
+*.h       text eol=lf
+*.c       text eol=lf
+*.m       text eol=lf
+*.mm      text eol=lf
+*.swift   text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.jsx     text eol=lf
+*.mjs     text eol=lf
+*.cjs     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.mdx     text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.toml    text eol=lf
+*.html    text eol=lf
+*.css     text eol=lf
+*.svg     text eol=lf
+
+# Windows-only assets stay CRLF where the tooling expects it.
+*.bat     text eol=crlf
+*.cmd     text eol=crlf
+*.ps1     text eol=crlf
+
+# Binary formats bypass any conversion.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.icns    binary
+*.pdf     binary
+*.dll     binary
+*.dylib   binary
+*.so      binary
+*.exe     binary
+*.zip     binary
+*.tar     binary
+*.gz      binary
+*.xz      binary
+*.zst     binary
+*.wasm    binary
+*.woff    binary
+*.woff2   binary

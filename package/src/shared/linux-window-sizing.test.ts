@@ -2,10 +2,12 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+// Windows Git checkouts default to CRLF; normalize so multiline patterns in
+// this contract test are matched independently of the host's newline style.
 const nativeWrapper = readFileSync(
 	join(import.meta.dirname, "../native/linux/nativeWrapper.cpp"),
 	"utf8",
-);
+).replace(/\r\n/g, "\n");
 
 describe("Linux GTK window sizing source contract", () => {
 	it("does not turn full-size child allocations into window minimums", () => {

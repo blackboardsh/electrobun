@@ -52,7 +52,7 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     env:
-      EXPECTED_HUTCH_VERSION: '0.27.0-canary.14'
+      EXPECTED_HUTCH_VERSION: '0.27.0-canary.16'
       EXPECTED_COTTONTAIL_VERSION: '0.7.0-canary.15'
       EXPECTED_APP_COTTONTAIL_VERSION: '0.7.0-canary.15'
 

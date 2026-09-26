@@ -24,6 +24,8 @@ import { homedir, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { systemTarBinary } from "./windows-tar.mjs";
+
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
 const INTERMEDIATE_VERSION = "2.0.0";
@@ -1188,7 +1190,7 @@ function platformAdapter() {
 			async install(installer, profileValue) {
 				const staging = join(temporaryRoot, "windows-installer");
 				mkdirSync(staging, { recursive: true });
-				await run("tar.exe", ["-xf", installer, "-C", staging], {
+				await run(systemTarBinary(), ["-xf", installer, "-C", staging], {
 					cwd: temporaryRoot,
 					label: "unpack Windows installer",
 				});
@@ -1528,7 +1530,7 @@ function platformAdapter() {
 			async install(installer, profileValue) {
 				const staging = join(temporaryRoot, "linux-installer");
 				mkdirSync(staging, { recursive: true });
-				await run("tar", ["-xzf", installer, "-C", staging], {
+				await run(systemTarBinary(), ["-xzf", installer, "-C", staging], {
 					cwd: temporaryRoot,
 					label: "unpack Linux installer",
 				});

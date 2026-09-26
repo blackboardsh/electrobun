@@ -20,6 +20,7 @@ import {
 	readPairedHutchVersion,
 	stageHutchReleaseArtifacts,
 } from "./stage-hutch-release-artifacts.mjs";
+import { systemTarBinary } from "../../package/scripts/windows-tar.mjs";
 
 const hutchVersion = "1.2.3-beta.4";
 const electrobunVersion = "2.0.0-beta.7";
@@ -75,7 +76,7 @@ function hutchArchive(temporary, platform, metadataOverrides = {}, extra = false
 	);
 	if (extra) writeFileSync(join(root, "unexpected.txt"), "unexpected");
 	const archivePath = join(temporary, `hutch-${platform}-${Math.random()}.tar.gz`);
-	execFileSync("tar", ["-czf", archivePath, "-C", staging, rootName]);
+	execFileSync(systemTarBinary(), ["-czf", archivePath, "-C", staging, rootName]);
 	return readFileSync(archivePath);
 }
 

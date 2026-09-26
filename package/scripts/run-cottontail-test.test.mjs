@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
@@ -108,15 +109,20 @@ test("returns success only when every invocation succeeds", () => {
 
 test("leaves node:test suites to Node's runner when expanding directories", () => {
 	const entry = (name) => ({ name, isDirectory: () => false, isFile: () => true });
+	// path.join uses the host separator, so both the fixture keys and the
+	// expected result must be built with join() to work on Windows and POSIX.
+	const cottontailPath = join("suite", "cottontail.test.ts");
+	const nodePath = join("suite", "node.test.js");
+	const helperPath = join("suite", "helper.ts");
 	const sources = {
-		"suite/cottontail.test.ts": 'import { test } from "bun:test";',
-		"suite/node.test.js": 'import { test } from "node:test";',
-		"suite/helper.ts": "",
+		[cottontailPath]: 'import { test } from "bun:test";',
+		[nodePath]: 'import { test } from "node:test";',
+		[helperPath]: "",
 	};
 	const files = collectTestFiles(
 		"suite",
 		() => [entry("node.test.js"), entry("cottontail.test.ts"), entry("helper.ts")],
 		(path) => sources[path],
 	);
-	assert.deepEqual(files, ["suite/cottontail.test.ts"]);
+	assert.deepEqual(files, [cottontailPath]);
 });
