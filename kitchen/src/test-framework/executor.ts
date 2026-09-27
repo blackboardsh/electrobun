@@ -102,8 +102,36 @@ export class TestExecutor {
           spellCheck: options.spellCheck ?? false,
         });
 
-        // Wait a bit for window to be created
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for the window's initial navigation to complete before
+        // returning. Slow CEF hosts (Windows VMs, cold starts) load the
+        // opening view well after the 100ms guard we used to sleep for, and
+        // callers that then invoke `loadURL` immediately end up aborting the
+        // in-flight load — dom-ready and did-navigate never fire, and tests
+        // that race the initial view flake (Navigation rules - block,
+        // dom-ready event, BrowserView.getAll).
+        //
+        // Waiting on the first `did-navigate` gives every platform a
+        // consistent baseline. The fallback keeps URL-less windows and
+        // pages whose main frame does not complete (test-oopif waits for
+        // its nested webview) from blocking the test forever.
+        await new Promise<void>((resolve) => {
+          const shouldAwaitInitialLoad = Boolean(options.url || options.html);
+          if (!shouldAwaitInitialLoad) {
+            setTimeout(resolve, 100);
+            return;
+          }
+          let settled = false;
+          const settle = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          const fallback = setTimeout(settle, 2500);
+          win.webview.on("did-navigate", () => {
+            clearTimeout(fallback);
+            settle();
+          });
+        });
 
         const testWindow: TestWindow = {
           id: win.id,
