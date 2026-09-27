@@ -94,6 +94,22 @@ export class AssertionError extends Error {
   }
 }
 
+// Slow Windows-VM CEF hosts fire OnLoadStart/OnLoadEnd 3-4x later than
+// Linux/macOS CEF. Tests use fixed setTimeout waits (500 ms, 1500 ms,
+// 2000 ms) that are safe on the developer laptop but leave the harness
+// racing the initial page load in CI. `sleep(ms)` scales its argument by
+// a platform-aware factor so callers can keep expressing waits in
+// "Linux/macOS milliseconds" while still passing on the Windows VM.
+const isWindows =
+  typeof process !== "undefined" && process.platform === "win32";
+const SLOW_PLATFORM_WAIT_SCALE = isWindows ? 3 : 1;
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) =>
+    setTimeout(resolve, Math.round(ms * SLOW_PLATFORM_WAIT_SCALE)),
+  );
+}
+
 // Simple expect assertions
 export function expect<T>(actual: T, label?: string) {
   const prefix = label ? `[${label}] ` : '';

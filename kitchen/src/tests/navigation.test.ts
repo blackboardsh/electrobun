@@ -1,6 +1,6 @@
 // Navigation Tests - Tests for BrowserView navigation and events
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { createTestHarnessRPC } from "./rpc.test";
 
 async function assertViewsUrlWithSuffixLoads(
@@ -224,16 +224,16 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Reset any existing navigation rules first
       log("Clearing any existing navigation rules");
       win.webview.setNavigationRules([]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       // Use webview-specific events for better isolation
       let navigatedUrls: string[] = [];
-      
+
       win.webview.on("will-navigate", (e: any) => {
         willNavigateFired = true;
         blockedUrl = e.data?.detail || e.detail || "";
@@ -254,11 +254,11 @@ export const navigationTests = [
         "views://*", // Allow views protocol for current page
       ]);
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       log("Attempting to load google.com (should be blocked)");
       win.webview.loadURL("https://google.com");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       // will-navigate should fire (navigation attempt detected)
       expect(willNavigateFired).toBe(true);
@@ -300,14 +300,14 @@ export const navigationTests = [
       });
 
       // Wait for initial dom-ready from creating the window
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Initial load should have triggered dom-ready
       // Now navigate to another internal URL to trigger another dom-ready
       log("Navigating to test-runner to trigger dom-ready");
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       expect(domReadyCount).toBeGreaterThan(0);
       log(`dom-ready event fired ${domReadyCount} time(s)`);
@@ -335,12 +335,12 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Navigating to test-runner view");
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       log(`did-navigate fired: ${didNavigateFired}, URL: ${navigatedUrl}`);
       
@@ -379,12 +379,12 @@ export const navigationTests = [
         lifecycle.push("finish");
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       lifecycle.length = 0;
       committedUrl = "";
 
       win.webview.loadURL("views://test-runner/index.html");
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       const commitIndex = lifecycle.indexOf("commit");
       const finishIndex = lifecycle.indexOf("finish");
