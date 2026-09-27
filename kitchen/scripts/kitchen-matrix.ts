@@ -121,8 +121,36 @@ export function prepareKitchenVariantWorkspace(
 
 function replacePublishedOutput(source: string, destination: string): void {
 	mkdirSync(dirname(destination), { recursive: true });
-	rmSync(destination, { recursive: true, force: true });
+	// Windows keeps just-terminated child processes' file handles for a brief
+	// window after exit (CEF helpers, antivirus, indexer). `rmSync` with
+	// `force: true` still surfaces those as `EACCES`/`EBUSY`, so retry with
+	// backoff until the OS releases the handles.
+	rmSyncWithWindowsRetries(destination);
 	renameSync(source, destination);
+}
+
+const rmRetryWaiter = new Int32Array(new SharedArrayBuffer(4));
+
+function rmSyncWithWindowsRetries(target: string): void {
+	if (process.platform !== "win32") {
+		rmSync(target, { recursive: true, force: true });
+		return;
+	}
+	const retryableCodes = new Set(["EACCES", "EPERM", "EBUSY", "ENOTEMPTY"]);
+	const maxAttempts = 25;
+	for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+		try {
+			rmSync(target, { recursive: true, force: true });
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "";
+			if (!retryableCodes.has(code) || attempt === maxAttempts - 1) throw error;
+			// Defender / CEF helpers usually release handles within a few hundred
+			// milliseconds; Atomics.wait blocks synchronously without spinning.
+			const delayMs = Math.min(50 * (attempt + 1), 1000);
+			Atomics.wait(rmRetryWaiter, 0, 0, delayMs);
+		}
+	}
 }
 
 export function publishKitchenVariantWorkspace(
