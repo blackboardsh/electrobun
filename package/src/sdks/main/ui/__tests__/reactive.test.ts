@@ -64,6 +64,38 @@ describe("tracking tiers", () => {
 		expect(seen).toEqual(["ada", "grace"]);
 	});
 
+	test("store writes unwrap draft and read proxies instead of nesting them", () => {
+		const item = { id: 1 };
+		const initial: { items: Array<{ id: number }>; selected: { id: number } | null } = {
+			items: [item],
+			selected: null,
+		};
+		const [state, setState] = store(initial);
+
+		// Draft array methods hand back element drafts; re-assigning the
+		// result used to wrap those proxies again on every update until
+		// reads overflowed the stack.
+		for (let i = 0; i < 20000; i++) {
+			setState((s) => {
+				s.items = s.items.filter(() => true);
+			});
+		}
+		expect(state.items[0]!.id).toBe(1);
+		setState((s) => {
+			s.items[0]!.id = 2;
+		});
+		expect(item.id).toBe(2);
+		expect(state.items[0]!.id).toBe(2);
+
+		for (let i = 0; i < 20000; i++) {
+			setState((s) => {
+				s.selected = state.items[0]!;
+			});
+		}
+		expect(initial.selected).toBe(item);
+		expect(state.selected!.id).toBe(2);
+	});
+
 	test("dynamic extent: helper property reads track inside live", () => {
 		const [state, setState] = store({ user: { name: "ada", plan: "pro" } });
 		const label = (u: { name: string; plan: string }) => `${u.name} · ${u.plan}`;

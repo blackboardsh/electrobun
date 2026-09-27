@@ -568,6 +568,15 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 	const raw = initial;
 	const pathSubs = new Map<string, SubscriberSet>();
 	const readProxies = new WeakMap<object, object>();
+	// Every read or draft proxy of this store maps to its raw target. Writes
+	// store raw values and wraps always start from raw, so a proxy assigned
+	// back into the store never becomes the target of another proxy —
+	// otherwise each update adds a layer and every read walks the chain.
+	const proxyTargets = new WeakMap<object, object>();
+	const unwrapStoreValue = <V>(value: V): V => {
+		if (value === null || typeof value !== "object") return value;
+		return (proxyTargets.get(value) as V | undefined) ?? value;
+	};
 
 	const trackPath = (path: string) => {
 		// Property reads are inert outside scopes: one flag check, no
@@ -585,6 +594,7 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 		path ? `${path}.${key}` : key;
 
 	const readProxyFor = (target: object, path: string): object => {
+		target = unwrapStoreValue(target);
 		const existing = readProxies.get(target);
 		if (existing) return existing;
 		const proxy = new Proxy(target, {
@@ -613,6 +623,7 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 			},
 		});
 		readProxies.set(target, proxy);
+		proxyTargets.set(proxy, target);
 		return proxy;
 	};
 
@@ -638,8 +649,9 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 		target: object,
 		path: string,
 		changed: Set<string>,
-	): object =>
-		new Proxy(target, {
+	): object => {
+		target = unwrapStoreValue(target);
+		const draft = new Proxy(target, {
 			get(t: any, key) {
 				if (typeof key === "symbol") return t[key];
 				const value = t[key];
@@ -652,6 +664,7 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 				return value;
 			},
 			set(t: any, key, value) {
+				value = unwrapStoreValue(value);
 				const p = childPath(path, String(key));
 				if (t[key] !== value) {
 					const prevLength = Array.isArray(t) ? t.length : -1;
@@ -672,6 +685,9 @@ export function store<T extends object>(initial: T): [T, StoreSetter<T>] {
 				return true;
 			},
 		});
+		proxyTargets.set(draft, target);
+		return draft;
+	};
 
 	// The setter is a mutator scope: the draft is writable, mutation is
 	// direct (no structural sharing), and the store's writes batch into one
