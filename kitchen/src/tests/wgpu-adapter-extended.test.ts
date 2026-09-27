@@ -1,4 +1,4 @@
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { GpuWindow, webgpu } from "electrobun/main";
 
 const BufferUsage = {
@@ -15,9 +15,6 @@ const TextureUsage = {
   RenderAttachment: 0x10,
 };
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 async function createDeviceWithContext(win: GpuWindow) {
   webgpu.install();

@@ -25,7 +25,7 @@ async function assertViewsUrlWithSuffixLoads(
     domReadyFired = true;
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await sleep(1500);
 
   const h1 = await win.webview.rpc?.request.getElementText({
     selector: "h1",
@@ -65,19 +65,19 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Use will-navigate to verify loadURL triggers navigation
       win.webview.on("will-navigate", () => {
         willNavigateFired = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       log("Loading test-runner URL");
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       expect(willNavigateFired).toBe(true);
       log("loadURL successfully triggered navigation");
@@ -129,21 +129,21 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Listen for will-navigate event to confirm navigation happened
       win.webview.on("will-navigate", () => {
         willNavigateFired = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       const customHtml =
         "<html><body><h1 id='test-heading'>Custom HTML Content</h1></body></html>";
       log("Loading custom HTML");
       win.webview.loadHTML(customHtml);
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       // Verify HTML was loaded - will-navigate fires when loadHTML triggers navigation
       expect(willNavigateFired).toBe(true);
@@ -167,12 +167,12 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Reset any existing navigation rules first
       log("Clearing any existing navigation rules");
       win.webview.setNavigationRules([]);
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       log("Setting navigation rules: allow only views://test-runner/*");
       win.webview.setNavigationRules([
@@ -191,11 +191,11 @@ export const navigationTests = [
         didNavigateFired = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       log("Loading test-runner (should succeed)");
       win.webview.loadURL("views://test-runner/index.html");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       // Both events should fire for allowed navigation
       expect(willNavigateFired).toBe(true);
@@ -409,7 +409,7 @@ export const navigationTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       win.webview.on("will-navigate", (e: any) => {
         willNavigateFired = true;
@@ -417,12 +417,12 @@ export const navigationTests = [
         e.response = { allow: false };
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
 
       log("Attempting navigation (will be blocked by event handler)");
       win.webview.loadURL("https://blackboard.sh");
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       expect(willNavigateFired).toBe(true);
       log("will-navigate event fired and blocked navigation");
     },
@@ -438,7 +438,7 @@ export const navigationTests = [
         title: "Execute JS Test",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Executing JS to modify DOM");
       // Just verify this doesn't throw - we can't verify the result without RPC
@@ -446,7 +446,7 @@ export const navigationTests = [
         'document.body.innerHTML = "<h1>Modified by executeJavascript</h1>"'
       );
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       log("executeJavascript completed without error");
     },
   }),
@@ -461,7 +461,7 @@ export const navigationTests = [
         title: "Find In Page Test",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Load HTML with searchable content
       const longHtml = `
@@ -475,12 +475,12 @@ export const navigationTests = [
         </html>
       `;
       win.webview.loadHTML(longHtml);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Searching for 'searchterm'");
       win.webview.findInPage("searchterm", { forward: true, matchCase: false });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Stopping find");
       win.webview.stopFindInPage();

@@ -1,7 +1,7 @@
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { Tray, Utils } from "electrobun/main";
 
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
 
 export const trayApiTests = [
   defineTest({
@@ -21,9 +21,9 @@ export const trayApiTests = [
       try {
         tray.setMenu([{ type: "normal", label: "Ping", action: "ping" }]);
         tray.setVisible(false);
-        await wait(100);
+        await sleep(100);
         tray.setVisible(true);
-        await wait(100);
+        await sleep(100);
 
         const bounds = tray.getBounds();
         expect(typeof bounds.x).toBe("number");
@@ -52,16 +52,16 @@ export const trayApiTests = [
       try {
         if (process.platform === "darwin") {
           Utils.setDockIconVisible(false);
-          await wait(200);
+          await sleep(200);
           expect(Utils.isDockIconVisible()).toBe(false);
 
           Utils.setDockIconVisible(true);
-          await wait(200);
+          await sleep(200);
           expect(Utils.isDockIconVisible()).toBe(true);
           log("Dock icon visibility toggled successfully on macOS");
         } else {
           Utils.setDockIconVisible(false);
-          await wait(50);
+          await sleep(50);
           const afterToggle = Utils.isDockIconVisible();
           expect(typeof afterToggle).toBe("boolean");
           log(

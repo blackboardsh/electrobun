@@ -1,7 +1,7 @@
 // CEF Origin Private File System (OPFS) integration regression.
 
 import { BrowserView, BuildConfig } from "electrobun/main";
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 
 type OpfsOperation =
   | { action: "read"; name: string }
@@ -80,9 +80,6 @@ self.onmessage = async ({ data }) => {
   }
 };
 `;
-
-const sleep = (ms: number) =>
-  new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const opfsPage = `<!doctype html>
 <html>

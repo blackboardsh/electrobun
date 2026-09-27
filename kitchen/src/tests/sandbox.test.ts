@@ -1,7 +1,7 @@
 // Sandbox Tests - Tests for sandbox mode security features
 // Sandbox mode disables RPC and only allows event emission for untrusted content
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { BrowserView, BuildConfig } from "electrobun/main";
 import type { TestHarnessRPC } from "../test-harness/index";
 
@@ -48,7 +48,7 @@ export const sandboxTests = [
       });
 
       // Wait for window to load
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       log("Attempting RPC call to sandboxed window (should timeout)...");
 
@@ -85,7 +85,7 @@ export const sandboxTests = [
       });
 
       // Wait for window to load
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       log("Attempting RPC call to non-sandboxed window (should succeed)...");
 
@@ -124,13 +124,13 @@ export const sandboxTests = [
       });
 
       // Wait for initial load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Navigate to trigger will-navigate
       log("Navigating to test-runner");
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       expect(willNavigateFired).toBe(true);
       log("Events work correctly in sandbox mode");
@@ -155,7 +155,7 @@ export const sandboxTests = [
       expect(win.webviewId).toBeGreaterThan(0);
 
       // Wait for load
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log(`Created sandboxed window id=${win.id}, webviewId=${win.webviewId}`);
     },
@@ -173,13 +173,13 @@ export const sandboxTests = [
         sandbox: true,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Navigation should still work
       log("Testing loadURL in sandbox mode");
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Navigation controls work in sandbox mode");
     },
@@ -204,12 +204,12 @@ export const sandboxTests = [
         domReadyFired = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Navigate to trigger events
       win.webview.loadURL("views://test-runner/index.html");
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       log(`dom-ready fired: ${domReadyFired}`);
       // Note: domReadyFired may or may not be true depending on timing
@@ -238,7 +238,7 @@ export const sandboxTests = [
       });
 
       // Wait for the page to load and webview tag to attempt initialization
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await sleep(4000);
 
       // Check BrowserView count
       const viewsAfter = BrowserView.getAll().length;
@@ -275,7 +275,7 @@ export const sandboxTests = [
       });
 
       // Wait for the page to load and webview tag to initialize
-      await new Promise((resolve) => setTimeout(resolve, 4000));
+      await sleep(4000);
 
       // Check BrowserView count
       const viewsAfter = BrowserView.getAll().length;
@@ -312,7 +312,7 @@ export const sandboxTests = [
         height: 520,
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 5000));
+      await sleep(5000);
 
       const nestedUrls = BrowserView.getAll()
         .filter((view) => !viewsBefore.has(view.id))

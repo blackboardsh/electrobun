@@ -1,6 +1,6 @@
 // RPC Tests - Tests for bidirectional RPC communication
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { BrowserView, BuildConfig } from "electrobun/main";
 import type {
   SocketSendSummary,
@@ -9,10 +9,6 @@ import type {
   TestHarnessRPC,
 } from "../test-harness/index";
 import { waitForHostSocketOpen } from "./rpc-stress-readiness";
-
-function sleep(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
 
 function createStressMessageCollector() {
   const ids = new Set<number>();
@@ -211,7 +207,7 @@ export const rpcTests = [
 
       // Wait longer for webview to be ready when running in parallel
       // CEF takes longer to initialize under heavy load
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       log("Calling webview.multiply({ a: 6, b: 7 })");
       const result = await win.webview.rpc?.request.multiply({ a: 6, b: 7 });
@@ -234,7 +230,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       // Execute JS in webview to call bun's add method
       log("Triggering webview to call bun.add({ a: 100, b: 23 })");
@@ -301,7 +297,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       const testString = "Hello, Electrobun!";
       log(`Testing echo with: "${testString}"`);
@@ -373,7 +369,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       const size = 1024 * 1024; // 1MB
       log(`Sending ${size} bytes to bun`);
@@ -403,7 +399,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Evaluating: 2 + 2");
       const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
@@ -430,7 +426,7 @@ export const rpcTests = [
 
       // Wait longer for webview to be ready when running in parallel
       // CEF takes longer to initialize under heavy load
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       log("Evaluating async script with 200ms delay");
       const startTime = Date.now();
@@ -463,7 +459,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Getting H1 content via JS evaluation");
       const result = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
@@ -488,7 +484,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Getting document title via RPC");
       const title = await win.webview.rpc?.request.getDocumentTitle({});
@@ -738,7 +734,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const viewsAfter = BrowserView.getAll();
       log(`Views after creating 2 windows: ${viewsAfter.length}`);
@@ -770,7 +766,7 @@ export const rpcTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const webviewId = win.webview.id;
       log(`Looking up webview with ID: ${webviewId}`);

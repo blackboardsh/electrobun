@@ -1,4 +1,4 @@
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { GpuWindow, WGPU, webgpu } from "electrobun/main";
 
 const WGPUNative = WGPU.native;
@@ -9,9 +9,6 @@ const TextureUsage = {
   RenderAttachment: 0x10,
 };
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 export const wgpuAdapterTests = [
   defineTest({

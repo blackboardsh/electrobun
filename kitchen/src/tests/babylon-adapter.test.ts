@@ -1,5 +1,5 @@
 // @ts-nocheck
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import * as babylon from "@babylonjs/core";
 import { GpuWindow, webgpu } from "electrobun/main";
 
@@ -7,9 +7,6 @@ const TextureUsage = {
   RenderAttachment: 0x10,
 };
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function createCanvasShim(win: GpuWindow) {
   const size = win.getSize();

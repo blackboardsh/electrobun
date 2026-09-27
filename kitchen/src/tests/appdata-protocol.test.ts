@@ -1,7 +1,7 @@
 import { mkdir, rm, symlink, writeFile } from "fs/promises";
 import { dirname, join } from "path";
 import { Utils } from "electrobun/main";
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { createTestHarnessRPC } from "./rpc.test";
 
 const fixtureName = "kitchen-appdata-protocol.txt";
@@ -46,7 +46,7 @@ function protocolTest(name: string, enabled: boolean) {
       const rpc = win.webview.rpc;
       if (!rpc) throw new Error("Expected test harness RPC to be available");
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
       const readinessDeadline = Date.now() + 15000;
       let readinessError: unknown;
       for (;;) {
@@ -60,7 +60,7 @@ function protocolTest(name: string, enabled: boolean) {
             `Timed out waiting for appdata test harness RPC: ${String(readinessError)}`,
           );
         }
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await sleep(100);
       }
 
       const result = await rpc.request.evaluateJavascriptWithResponse({

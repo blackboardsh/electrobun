@@ -2,7 +2,7 @@
 // mounting a UIWindow, reactive tree updates, hit testing, and the
 // native-layer elements (wgpuSurface, webview) positioned by layout.
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import type { WGPUView, BrowserView } from "electrobun/main";
 import {
 	live,
@@ -15,7 +15,6 @@ import {
 	wgpuSurface,
 } from "electrobun/main/ui";
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // A couple of frame ticks (tick is 8ms) plus scheduling slack.
 const TICKS = 120;
 

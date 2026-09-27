@@ -1,6 +1,6 @@
 // Utils Tests - Tests for utility functions (clipboard, notifications, etc.)
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { Utils } from "electrobun/main";
 import { mkdtemp, writeFile, access } from "fs/promises";
 import { homedir, tmpdir } from "os";
@@ -75,7 +75,7 @@ export const utilsTests = [
       });
 
       // Give notification time to show
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       log("Notification sent (verify visually if needed)");
     },
   }),

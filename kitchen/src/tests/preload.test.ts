@@ -1,6 +1,6 @@
 // Preload Script Tests
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 
 export const preloadTests = [
   defineTest({
@@ -32,7 +32,7 @@ export const preloadTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Verify window was created
       expect(win.id).toBeGreaterThan(0);
@@ -58,7 +58,7 @@ export const preloadTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
 
       // Verify window was created
       expect(win.id).toBeGreaterThan(0);
@@ -95,7 +95,7 @@ export const preloadTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       // Verify window was created
       expect(win.id).toBeGreaterThan(0);

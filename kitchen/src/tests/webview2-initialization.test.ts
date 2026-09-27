@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import { createTestHarnessRPC } from "./rpc.test";
 import {
   assertHeldWebview2State, assertReadyWebview2State,
@@ -10,8 +10,6 @@ import {
 const selector = '[data-kitchen-webview2-initialization="child"]';
 const finalFrame = { x: 41, y: 49, width: 181, height: 129 };
 const finalMasks = JSON.stringify([{ x: 11, y: 13, width: 17, height: 19 }]);
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
-
 export const webview2InitializationTests = [
   defineTest({
     name: "WebView2 applies pre-controller bounds and reveal",

@@ -1,6 +1,6 @@
 // Event System Tests
 
-import { defineTest, expect } from "../test-framework/types";
+import { defineTest, expect, sleep } from "../test-framework/types";
 import Electrobun, { Utils } from "electrobun/main";
 
 export const eventsTests = [
@@ -26,12 +26,12 @@ export const eventsTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Triggering navigation");
       win.webview.loadURL("https://blackboard.sh");
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       // Cleanup
       Electrobun.events.off("will-navigate", handler);
@@ -68,7 +68,7 @@ export const eventsTests = [
       });
 
       // Wait for window to stabilize after creation
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       
       // Reset count in case focus events fired during window creation
       count = 0;
@@ -79,18 +79,18 @@ export const eventsTests = [
       win.window.on("focus", handler1);
       win.window.on("focus", handler2);
 
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       log("Triggering focus event");
       win.window.focus();
 
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
 
       if (count === 0) {
         log("Focus event didn't fire, trying to activate window...");
         win.window.show();
         win.window.focus();
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await sleep(1000);
       }
 
       log(`Handler1 fired ${handler1Count} times`);
@@ -131,7 +131,7 @@ export const eventsTests = [
         blocked = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Attempting navigation (should be blocked)");
       win.webview.loadURL("https://blackboard.sh");
@@ -140,7 +140,7 @@ export const eventsTests = [
       // asynchronously; a fixed short sleep raced it on slower VMs.
       const deadline = Date.now() + 5000;
       while (!blocked && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await sleep(50);
       }
 
       expect(blocked).toBe(true);
@@ -173,7 +173,7 @@ export const eventsTests = [
       });
 
       // Clear any initial focus events from window creation
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       
       win1.window.on("focus", () => {
         win1Events++;
@@ -184,24 +184,24 @@ export const eventsTests = [
         log(`Win2 focus event fired (total: ${win2Events})`);
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       log("Focusing window 1");
       win1.window.focus();
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
 
       log("Focusing window 2");
       win2.window.focus();
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
 
       if (win1Events === 0 && win2Events === 0) {
         log("No focus events fired, trying to activate windows...");
         win1.window.show();
         win1.window.focus();
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await sleep(500);
         win2.window.show();
         win2.window.focus();
-        await new Promise((resolve) => setTimeout(resolve, 500));
+        await sleep(500);
       }
 
       log(`Win1 events: ${win1Events}, Win2 events: ${win2Events}`);
@@ -256,7 +256,7 @@ export const eventsTests = [
       log("Calling Utils.quit() with before-quit handler that cancels");
       Utils.quit();
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       Electrobun.events.off("before-quit", handler);
 
@@ -288,12 +288,12 @@ export const eventsTests = [
         order.push("specific");
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Closing window");
       win.window.close();
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       Electrobun.events.off("close", globalHandler);
 

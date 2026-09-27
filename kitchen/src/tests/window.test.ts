@@ -1,6 +1,6 @@
 // BrowserWindow Tests - Tests for window creation and management
 
-import { defineTest, expect, type TitleBarStyle } from "../test-framework/types";
+import { defineTest, expect, sleep, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
 
@@ -47,11 +47,11 @@ export const windowTests = [
         renderer: "native",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       const initialViewport = await readViewportSize(win.webview);
 
       win.window.setSize(resizedOuterSize.width, resizedOuterSize.height);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const resizedViewport = await readViewportSize(win.webview);
 
       expect(resizedViewport.width).toBeGreaterThan(initialViewport.width);
@@ -59,7 +59,7 @@ export const windowTests = [
 
       // Returning to the original outer size must reproduce the initial viewport.
       win.window.setSize(initialOuterSize.width, initialOuterSize.height);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const restoredViewport = await readViewportSize(win.webview);
 
       expect(Math.abs(restoredViewport.width - initialViewport.width)).toBeLessThan(2);
@@ -111,11 +111,11 @@ export const windowTests = [
       log("Hidden window created");
 
       win.window.show();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
       expect(win.window.isVisible()).toBe(true);
 
       win.window.hide();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
       expect(win.window.isVisible()).toBe(false);
       log("Native window visibility transitions completed");
     },
@@ -127,7 +127,7 @@ export const windowTests = [
     description: "Test creating a window without activation and toggling inactive/active show paths",
     async run({ createWindow, log }) {
       log("Focus another app now if you want to observe initial create with activate: false");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       const win = await createWindow({
         url: "views://test-harness/index.html",
@@ -143,12 +143,12 @@ export const windowTests = [
       log("Window created with activate: false");
 
       log("Focus another app now if you want to observe runtime showInactive() behavior");
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       win.window.showInactive();
       log("showInactive() succeeded");
 
-      await new Promise((resolve) => setTimeout(resolve, 700));
+      await sleep(700);
 
       win.window.activate();
       log("activate() succeeded");
@@ -170,7 +170,7 @@ export const windowTests = [
 
       const targetZoom = 1.25;
       win.window.setPageZoom(targetZoom);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       const zoom = win.window.getPageZoom();
       expect(typeof zoom).toBe("number");
@@ -196,7 +196,7 @@ export const windowTests = [
 
       const targetZoom = 1.1;
       win.webview.setPageZoom(targetZoom);
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       const zoom = win.webview.getPageZoom();
       expect(typeof zoom).toBe("number");
@@ -245,7 +245,7 @@ export const windowTests = [
       win.window.setTitle("New Title From Test");
 
       // Give native side time to update
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      await sleep(100);
       log("Title set successfully");
     },
   }),
@@ -262,19 +262,19 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
 
       log("Checking initial state");
       expect(win.window.isMinimized()).toBe(false);
 
       log("Minimizing window");
       win.window.minimize();
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      await sleep(2000);
       expect(win.window.isMinimized()).toBe(true);
 
       log("Unminimizing window");
       win.window.unminimize();
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await sleep(3000);
       
       let finalState = win.window.isMinimized();
       log(`State after unminimize: ${finalState}`);
@@ -283,7 +283,7 @@ export const windowTests = [
       // or minimize/unminimize might not be fully supported
       if (finalState) {
         log("Window still reports as minimized, waiting longer...");
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        await sleep(2000);
         finalState = win.window.isMinimized();
         log(`State after extended wait: ${finalState}`);
         
@@ -314,19 +314,19 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Checking initial state");
       expect(win.window.isMaximized()).toBe(false);
 
       log("Maximizing window");
       win.window.maximize();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
       expect(win.window.isMaximized()).toBe(true);
 
       log("Unmaximizing window");
       win.window.unmaximize();
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      await sleep(1500);
       expect(win.window.isMaximized()).toBe(false);
 
       log("Maximize/unmaximize cycle completed");
@@ -345,19 +345,19 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Checking initial fullscreen state");
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Entering fullscreen");
       win.window.setFullScreen(true);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen");
       win.window.setFullScreen(false);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Fullscreen toggle completed");
@@ -382,19 +382,19 @@ export const windowTests = [
         titleBarStyle: "hidden",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Checking initial fullscreen state");
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Entering fullscreen with hidden titlebar");
       win.window.setFullScreen(true);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen with hidden titlebar");
       win.window.setFullScreen(false);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
       expect(win.window.isFullScreen()).toBe(false);
     },
   }),
@@ -410,20 +410,20 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Checking initial alwaysOnTop state");
       expect(win.window.isAlwaysOnTop()).toBe(false);
 
       log("Setting alwaysOnTop to true");
       win.window.setAlwaysOnTop(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
       
       let isOnTop = win.window.isAlwaysOnTop();
       log(`AlwaysOnTop state after setting to true: ${isOnTop}`);
       if (!isOnTop) {
         log("Waiting additional time for window manager to update state...");
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        await sleep(1000);
         isOnTop = win.window.isAlwaysOnTop();
         log(`AlwaysOnTop state after extended wait: ${isOnTop}`);
         
@@ -438,7 +438,7 @@ export const windowTests = [
 
       log("Setting alwaysOnTop to false");
       win.window.setAlwaysOnTop(false);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       expect(win.window.isAlwaysOnTop()).toBe(false);
 
       log("AlwaysOnTop toggle completed");
@@ -461,19 +461,19 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Checking initial visibleOnAllWorkspaces state");
       expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
 
       log("Setting visibleOnAllWorkspaces to true");
       win.window.setVisibleOnAllWorkspaces(true);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
       expect(win.window.isVisibleOnAllWorkspaces()).toBe(true);
 
       log("Setting visibleOnAllWorkspaces to false");
       win.window.setVisibleOnAllWorkspaces(false);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       expect(win.window.isVisibleOnAllWorkspaces()).toBe(false);
 
       log("VisibleOnAllWorkspaces toggle completed");
@@ -501,15 +501,15 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Focusing window 1");
       win1.window.focus();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       log("Focusing window 2");
       win2.window.focus();
-      await new Promise((resolve) => setTimeout(resolve, 200));
+      await sleep(200);
 
       win2.close();
       log("Focus operations completed");
@@ -533,12 +533,12 @@ export const windowTests = [
         closeEventFired = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Closing window");
       win.window.close();
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       expect(closeEventFired).toBe(true);
       log("Close event fired successfully");
     },
@@ -568,16 +568,16 @@ export const windowTests = [
         closed = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       win.window.requestClose();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       expect(closeRequests).toBe(1);
       expect(closed).toBe(false);
       expect(win.window.getFrame().width).toBeGreaterThan(0);
 
       win.window.requestClose();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       expect(closeRequests).toBe(2);
       expect(closed).toBe(true);
@@ -604,11 +604,11 @@ export const windowTests = [
         resizeData = event.data;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Maximizing to trigger resize");
       win.window.maximize();
-      await new Promise((resolve) => setTimeout(resolve, 600));
+      await sleep(600);
 
       expect(resizeData).toBeTruthy();
       expect(resizeData.width).toBeGreaterThan(400);
@@ -636,7 +636,7 @@ export const windowTests = [
 
       win1.window.on("blur", () => { blurEventFired = true; });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       log("Creating second window to steal focus");
       const win2 = await createWindow({
@@ -649,12 +649,12 @@ export const windowTests = [
       win2.window.on("focus", () => { focusEventFired = true; });
 
       win1.window.focus();
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
 
       win2.window.focus();
 
       // Give time for blur/focus events to fire
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      await sleep(800);
 
       expect(blurEventFired).toBe(true);
       expect(focusEventFired).toBe(true);
@@ -695,7 +695,7 @@ export const windowTests = [
       });
 
       expect(win.id).toBeGreaterThan(0);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       log("Window with inset titlebar style created successfully");
     },
   }),
@@ -719,7 +719,7 @@ export const windowTests = [
         renderer: "native",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const baselinePosition = baseline.window.getWindowButtonPosition();
 
       const offset = { x: 24, y: 18 };
@@ -734,7 +734,7 @@ export const windowTests = [
       });
 
       expect(win.id).toBeGreaterThan(0);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const offsetPosition = win.window.getWindowButtonPosition();
       expect(Math.abs(offsetPosition.x - baselinePosition.x - offset.x)).toBeLessThan(0.5);
       expect(Math.abs(offsetPosition.y - baselinePosition.y - offset.y)).toBeLessThan(0.5);
@@ -743,13 +743,13 @@ export const windowTests = [
       );
 
       win.window.setWindowButtonPosition(52, 22);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const runtimePosition = win.window.getWindowButtonPosition();
       expect(Math.abs(runtimePosition.x - 52)).toBeLessThan(0.5);
       expect(Math.abs(runtimePosition.y - 22)).toBeLessThan(0.5);
 
       win.window.setSize(540, 380);
-      await new Promise((resolve) => setTimeout(resolve, 300));
+      await sleep(300);
       const resizedPosition = win.window.getWindowButtonPosition();
       expect(Math.abs(resizedPosition.x - 52)).toBeLessThan(0.5);
       expect(Math.abs(resizedPosition.y - 22)).toBeLessThan(0.5);
@@ -772,7 +772,7 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Getting initial frame");
       const initialFrame = win.window.getFrame();
@@ -780,7 +780,7 @@ export const windowTests = [
 
       log("Moving window to (200, 200)");
       win.window.setPosition(200, 200);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const newFrame = win.window.getFrame();
       log(`New position: (${newFrame.x}, ${newFrame.y})`);
@@ -850,7 +850,7 @@ export const windowTests = [
         renderer: "cef", // This assertion covers the CEF viewport, not renderer fallback.
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await sleep(1000);
 
       log("Getting initial frame");
       const initialFrame = win.window.getFrame();
@@ -861,7 +861,7 @@ export const windowTests = [
 
       log("Resizing window to 600x500");
       win.window.setSize(600, 500);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const newFrame = win.window.getFrame();
       const newViewport = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
@@ -896,16 +896,16 @@ export const windowTests = [
         renderer: "native",
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
       win.window.setSize(600, 500);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const grownFrame = win.window.getFrame();
       expect(Math.abs(grownFrame.width - 600)).toBeLessThan(50);
       expect(Math.abs(grownFrame.height - 500)).toBeLessThan(50);
 
       win.window.setSize(320, 240);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const shrunkFrame = win.window.getFrame();
       expect(Math.abs(shrunkFrame.width - 320)).toBeLessThan(50);
@@ -929,7 +929,7 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       log("Getting initial frame");
       const initialFrame = win.window.getFrame();
@@ -937,7 +937,7 @@ export const windowTests = [
 
       log("Setting frame to (300, 250) 500x400");
       win.window.setFrame(300, 250, 500, 400);
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const newFrame = win.window.getFrame();
       log(`New frame: (${newFrame.x}, ${newFrame.y}) ${newFrame.width}x${newFrame.height}`);
@@ -967,7 +967,7 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const frame = win.window.getFrame();
       log(`Frame: (${frame.x}, ${frame.y}) ${frame.width}x${frame.height}`);
@@ -1001,7 +1001,7 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const pos = win.window.getPosition();
       log(`Position: (${pos.x}, ${pos.y})`);
@@ -1032,7 +1032,7 @@ export const windowTests = [
         renderer: 'cef',
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 500));
+      await sleep(500);
 
       const size = win.window.getSize();
       log(`Size: ${size.width}x${size.height}`);
