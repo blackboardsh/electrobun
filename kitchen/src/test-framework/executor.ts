@@ -1,6 +1,6 @@
 // Test executor - runs tests in the bun context
 
-import { BrowserWindow, BuildConfig } from "electrobun/main";
+import { BrowserView, BrowserWindow, BuildConfig } from "electrobun/main";
 import type {
   TestDefinition,
   TestResult,
@@ -102,8 +102,34 @@ export class TestExecutor {
           spellCheck: options.spellCheck ?? false,
         });
 
-        // Wait a bit for window to be created
-        await new Promise(resolve => setTimeout(resolve, 100));
+        // Wait for the window's initial navigation to complete before
+        // returning. Slow CEF hosts (Windows VMs, cold starts) load the
+        // opening view well after the 100ms guard we used to sleep for, and
+        // callers that then invoke `loadURL` immediately end up aborting the
+        // in-flight load — dom-ready and did-navigate never fire, and every
+        // test that races the initial view flakes.
+        //
+        // Waiting on the first `did-navigate` gives every platform a
+        // consistent baseline, while the fallback timeout keeps tests that
+        // create windows without a URL from hanging.
+        await new Promise<void>((resolve) => {
+          const shouldAwaitInitialLoad = Boolean(options.url || options.html);
+          if (!shouldAwaitInitialLoad) {
+            setTimeout(resolve, 100);
+            return;
+          }
+          let settled = false;
+          const settle = () => {
+            if (settled) return;
+            settled = true;
+            resolve();
+          };
+          const fallback = setTimeout(settle, 5000);
+          win.webview.on("did-navigate", () => {
+            clearTimeout(fallback);
+            settle();
+          });
+        });
 
         const testWindow: TestWindow = {
           id: win.id,
@@ -129,8 +155,12 @@ export class TestExecutor {
 
   private async cleanupTestWindows(testId: string) {
     const windows = this.testWindows.get(testId) || [];
+    const closedWebviewIds: number[] = [];
     for (const win of windows) {
       try {
+        if (win.webview?.id !== undefined) {
+          closedWebviewIds.push(win.webview.id);
+        }
         // Check if window still exists before closing
         if (win.window && typeof win.window.close === 'function') {
           win.close();
@@ -141,9 +171,28 @@ export class TestExecutor {
       }
     }
     this.testWindows.delete(testId);
-    
-    // Add delay to let CEF/WebKit finish async cleanup before next test
-    // This prevents X11 race conditions when tests run back-to-back
+
+    // Windowed CEF close is async — the native side eventually fires a
+    // teardown callback that removes the BrowserView from BrowserViewMap.
+    // Wait until every closed webview is actually gone (or a generous
+    // fallback expires) so the next test sees a consistent view roster.
+    // Falling back to a fixed timer was the source of BrowserView.getAll
+    // flakes on slow Windows CEF VMs where the callback lands after the
+    // 200ms sleep.
+    if (closedWebviewIds.length > 0) {
+      const started = Date.now();
+      const timeoutMs = 3000;
+      while (Date.now() - started < timeoutMs) {
+        const stillPresent = closedWebviewIds.some(
+          (id) => BrowserView.getById(id) !== undefined,
+        );
+        if (!stillPresent) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+    }
+
+    // Small additional delay covers the render-process side of the teardown
+    // (X11 unmap, CEF helper exits) that BrowserViewMap doesn't reflect.
     await new Promise(resolve => setTimeout(resolve, 200));
   }
 
