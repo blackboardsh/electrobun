@@ -1311,8 +1311,19 @@ CallbackState :: struct {
 
 g_callback_state: CallbackState
 
+// Slow Windows-VM CEF fires OnLoadStart/OnLoadEnd ~3x later than
+// Linux/macOS CEF, so scale every hard-coded sleep budget in the Odin
+// harness with the same factor the JS/Rust/Go harnesses use.
+slow_platform_scale :: proc() -> u64 {
+	when ODIN_OS == .Windows {
+		return 3
+	} else {
+		return 1
+	}
+}
+
 sleepMs :: proc(ms: u64) {
-	time.sleep(time.Duration(ms) * time.Millisecond)
+	time.sleep(time.Duration(ms * slow_platform_scale()) * time.Millisecond)
 }
 
 approxEq :: proc(a: f64, b: f64, tolerance: f64) -> bool {
@@ -3985,7 +3996,12 @@ runNavigationDidCommitNavigationEventTest :: proc(state: ^AppState) -> string {
 	}
 	defer electrobun.closeWindow(state.core, created.window_id)
 
-	sleepMs(medium_wait_ms)
+	// Wait past the harness's own OnLoadStart before switching to
+	// test-runner. On Windows CEF the initial load's OnLoadStart takes
+	// ~3s (vs ~0.5s on Linux/mac); calling loadURL before it fires ends
+	// up aborting the pending navigation without CEF ever committing the
+	// follow-up view.
+	sleepMs(long_wait_ms)
 	resetCallbackState()
 	if err := electrobun.loadURLInWebview(state.core, created.webview_id, "views://test-runner/index.html"); err != .None {
 		return errName(err)
@@ -4072,7 +4088,11 @@ runAppDataProtocolTest :: proc(state: ^AppState, enabled: bool) -> string {
 		return errName(webview_err)
 	}
 
-	sleepMs(medium_wait_ms)
+	// Wait past the initial harness OnLoadEnd before scripting fetch —
+	// on Windows CEF the initial load runs ~3s, and issuing the fetch
+	// before the harness commits leaves the script racing an
+	// in-flight navigation.
+	sleepMs(long_wait_ms)
 	expected := "false"
 	if enabled {
 		expected = "true"
@@ -4089,7 +4109,9 @@ runAppDataProtocolTest :: proc(state: ^AppState, enabled: bool) -> string {
 		return errName(err)
 	}
 
-	deadline := milliTimestamp() + 5000
+	// Scale the fetch-completion deadline the same way sleepMs is scaled
+	// on Windows so the slow VM's ~3x navigation timing still fits.
+	deadline := milliTimestamp() + i64(5000 * slow_platform_scale())
 	for !lastWebviewDetailContains("appdataResult=ok") && milliTimestamp() < deadline {
 		sleepMs(25)
 	}

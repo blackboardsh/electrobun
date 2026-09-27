@@ -21,10 +21,23 @@ const (
 	testHarnessURL      = "views://test-harness/index.html"
 	goViewURL           = "views://zig/index.html"
 	trayTemplateIconURL = "views://assets/electrobun-logo-32-template.png"
-	shortWait           = 150 * time.Millisecond
-	mediumWait          = 500 * time.Millisecond
-	longWait            = 1200 * time.Millisecond
 )
+
+// Wait budgets are scaled on Windows (see slowPlatformScale) so the
+// Go harness gets the same 3x headroom as the JS and Rust harnesses on
+// the slow Windows CI VM.
+var (
+	shortWait  = time.Duration(150*slowPlatformScaleFactor()) * time.Millisecond
+	mediumWait = time.Duration(500*slowPlatformScaleFactor()) * time.Millisecond
+	longWait   = time.Duration(1200*slowPlatformScaleFactor()) * time.Millisecond
+)
+
+func slowPlatformScaleFactor() int64 {
+	if runtime.GOOS == "windows" {
+		return 3
+	}
+	return 1
+}
 
 type appState struct {
 	core              *electrobun.Core
@@ -1366,6 +1379,14 @@ func runWebviewCreateTest() error {
 	return closeErr
 }
 
+// Slow Windows-VM CEF fires OnLoadStart/OnLoadEnd ~3x later than
+// Linux/macOS CEF. The shortWait/mediumWait/longWait vars near the top
+// of the file are already scaled by slowPlatformScaleFactor, so plain
+// `time.Sleep(mediumWait)` picks up the extra headroom automatically.
+// waitUntil scales its own timeout because callers pass raw durations
+// (e.g. `waitUntil(3*time.Second, ...)`), which must grow the same way
+// on the slow platform.
+
 func sleep(ms time.Duration) {
 	time.Sleep(ms)
 }
@@ -1376,7 +1397,8 @@ func approxEq(left, right, tolerance float64) bool {
 
 func waitUntil(timeout time.Duration, predicate func() bool) bool {
 	started := time.Now()
-	for time.Since(started) < timeout {
+	scaledTimeout := time.Duration(slowPlatformScaleFactor()) * timeout
+	for time.Since(started) < scaledTimeout {
 		if predicate() {
 			return true
 		}
@@ -2358,7 +2380,12 @@ func runNavigationDidCommitNavigationEventTest() error {
 		return err
 	}
 	err = func() error {
-		time.Sleep(mediumWait)
+		// Wait past the harness's own OnLoadStart before switching to
+		// goViewURL. On Windows CEF the initial load's OnLoadStart takes
+		// ~3s (vs ~0.5s on Linux/mac), and calling LoadURLInWebview before
+		// it fires ends up aborting the pending navigation without CEF
+		// ever committing the follow-up view.
+		time.Sleep(longWait)
 		resetCallbackState()
 		if err := state.core.LoadURLInWebview(created.webviewID, goViewURL); err != nil {
 			return err

@@ -155,7 +155,9 @@ export class TestExecutor {
     // 200ms sleep.
     if (closedWebviewIds.length > 0) {
       const started = Date.now();
-      const timeoutMs = 3000;
+      const timeoutMs =
+        3000 *
+        (typeof process !== "undefined" && process.platform === "win32" ? 3 : 1);
       while (Date.now() - started < timeoutMs) {
         const stillPresent = closedWebviewIds.some(
           (id) => BrowserView.getById(id) !== undefined,
@@ -211,10 +213,19 @@ export class TestExecutor {
         // test and allow the next test to overlap it.
         await test.run(context);
       } else {
+        // Slow Windows-VM CEF fires OnLoadStart/OnLoadEnd 3x later than
+        // Linux/macOS, and the `sleep()` helper already scales its own
+        // waits accordingly. Scale each test's timeout by the same factor
+        // so a test written for 10s of Linux waits gets the full 30s on
+        // the Windows VM instead of getting killed mid-sleep.
+        const scaledTimeout = Math.round(
+          test.timeout *
+            (typeof process !== "undefined" && process.platform === "win32" ? 3 : 1),
+        );
         await Promise.race([
           test.run(context),
           new Promise((_, reject) =>
-            setTimeout(() => reject(new Error(`Test timed out after ${test.timeout}ms`)), test.timeout)
+            setTimeout(() => reject(new Error(`Test timed out after ${scaledTimeout}ms`)), scaledTimeout)
           ),
         ]);
       }

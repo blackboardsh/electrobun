@@ -379,7 +379,11 @@ export const navigationTests = [
         lifecycle.push("finish");
       });
 
-      await sleep(500);
+      // Wait past the initial harness's did-navigate before resetting so
+      // the lifecycle we assert on only reflects the follow-up loadURL,
+      // not the tail end of the harness load (which takes ~3s on Windows
+      // CEF vs ~0.5s on Linux/mac).
+      await sleep(1500);
       lifecycle.length = 0;
       committedUrl = "";
 

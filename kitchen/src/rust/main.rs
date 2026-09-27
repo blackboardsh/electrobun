@@ -1702,8 +1702,19 @@ struct WindowWithWebview {
     webview_id: u32,
 }
 
+// Slow Windows-VM CEF fires OnLoadStart/OnLoadEnd ~3x later than
+// Linux/macOS CEF, so every hard-coded sleep/wait budget in the Rust
+// harness needs the same scale factor its JS counterpart already gets.
+const fn slow_platform_scale() -> u64 {
+    if cfg!(target_os = "windows") {
+        3
+    } else {
+        1
+    }
+}
+
 fn sleep_ms(ms: u64) {
-    thread::sleep(Duration::from_millis(ms));
+    thread::sleep(Duration::from_millis(ms * slow_platform_scale()));
 }
 
 fn approx_eq(left: f64, right: f64, tolerance: f64) -> bool {
@@ -1711,12 +1722,15 @@ fn approx_eq(left: f64, right: f64, tolerance: f64) -> bool {
 }
 
 fn wait_until(timeout_ms: u64, mut predicate: impl FnMut() -> bool) -> bool {
+    let scaled_timeout = timeout_ms * slow_platform_scale();
     let started = Instant::now();
-    while started.elapsed() < Duration::from_millis(timeout_ms) {
+    while started.elapsed() < Duration::from_millis(scaled_timeout) {
         if predicate() {
             return true;
         }
-        sleep_ms(25);
+        // sleep_ms already applies the scale — pass a raw 25ms so we don't
+        // double-scale the polling interval.
+        thread::sleep(Duration::from_millis(25));
     }
     predicate()
 }
@@ -3004,7 +3018,12 @@ fn run_navigation_did_commit_navigation_event_test() -> Result<(), String> {
         observed_harness_webview_callbacks(),
     )?;
     let result = (|| {
-        sleep_ms(MEDIUM_WAIT_MS);
+        // Wait past the harness's own OnLoadStart before switching to
+        // ZIG_VIEW_URL. On Windows CEF the initial load's OnLoadStart
+        // takes ~3s (vs ~0.5s on Linux/mac), and calling load_url before
+        // it fires ends up aborting the pending navigation without CEF
+        // ever committing the follow-up view.
+        sleep_ms(LONG_WAIT_MS);
         reset_callback_state();
         app_state()
             .core

@@ -1316,8 +1316,16 @@ const CallbackState = struct {
 
 var g_callback_state = CallbackState{};
 
+// Slow Windows-VM CEF fires OnLoadStart/OnLoadEnd ~3x later than
+// Linux/macOS CEF, so scale every hard-coded sleep budget in the Zig
+// harness with the same factor the JS/Rust/Go/Odin harnesses use.
+inline fn slowPlatformScale() u64 {
+    return if (@import("builtin").os.tag == .windows) 3 else 1;
+}
+
 fn sleepMs(ms: u64) void {
-    electrobun.defaultIo().sleep(.fromMilliseconds(@intCast(ms)), .awake) catch {};
+    const scaled = ms * slowPlatformScale();
+    electrobun.defaultIo().sleep(.fromMilliseconds(@intCast(scaled)), .awake) catch {};
 }
 
 fn approxEq(a: f64, b: f64, tolerance: f64) bool {
@@ -3487,7 +3495,12 @@ fn runNavigationDidCommitNavigationEventTest(state: *AppState) !void {
     );
     defer state.core.closeWindow(created.window_id) catch {};
 
-    sleepMs(medium_wait_ms);
+    // Wait past the harness's OnLoadStart before switching to
+    // test-runner. On Windows CEF the initial load's OnLoadStart takes
+    // ~3s (vs ~0.5s on Linux/mac); calling loadURL before it fires ends
+    // up aborting the pending navigation without CEF ever committing the
+    // follow-up view.
+    sleepMs(long_wait_ms);
     resetCallbackState();
     try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
     sleepMs(2000);
