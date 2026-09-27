@@ -1,7 +1,7 @@
 // @hutch cli=0.27.0-canary.16 cottontail=0.7.0-canary.15
 export default {
 	electrobun: {
-		version: "2.0.2-beta.31",
+		version: "2.0.2-beta.32",
 	},
 	packageManager: "npm",
 	scripts: {
