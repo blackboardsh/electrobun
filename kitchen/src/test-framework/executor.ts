@@ -219,7 +219,7 @@ export class TestExecutor {
         // so a test written for 10s of Linux waits gets the full 30s on
         // the Windows VM instead of getting killed mid-sleep.
         const scaledTimeout = Math.round(
-          test.timeout *
+          (test.timeout ?? 10000) *
             (typeof process !== "undefined" && process.platform === "win32" ? 3 : 1),
         );
         await Promise.race([
