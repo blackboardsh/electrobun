@@ -50,7 +50,7 @@ function validatePublicationContract(source) {
 		"workflow permissions must default to read-only contents",
 	);
 	const checkoutSteps = stepsUsingPattern(source, /^actions\/checkout@/);
-	assert.equal(checkoutSteps.length, 5, "every release job checkout is audited");
+	assert.equal(checkoutSteps.length, 6, "every release job checkout is audited");
 	for (const checkout of checkoutSteps) {
 		assert.match(checkout, /^      - uses: actions\/checkout@\S+$/m);
 		assert.match(
@@ -77,6 +77,15 @@ function validatePublicationContract(source) {
 	const npmPublish = job(source, "npm-publish");
 	const npmAcceptance = job(source, "npm-acceptance");
 	const mutablePublication = job(source, "publish-templates");
+	const templateAcceptance = job(source, "template-acceptance");
+	assert.match(templateAcceptance, /^    needs: \[publish-templates\]$/m);
+	assert.match(templateAcceptance, /^    timeout-minutes: 25$/m);
+	for (const platform of ["macos-arm64", "linux-x64", "linux-arm64", "windows-x64"]) {
+		assert.ok(templateAcceptance.includes(`platform: ${platform}`));
+	}
+	assert.match(templateAcceptance, /xvfb-run -a node scripts\/accept-published-template\.mjs/);
+	assert.match(templateAcceptance, /--version "\$\{\{ steps\.release-type\.outputs\.version \}\}"/);
+	assert.match(templateAcceptance, /name: Retain template acceptance reports\n        if: always\(\)/);
 	const reconcile = namedStep(
 		release,
 		"Reuse or prepare a draft Electrobun release",

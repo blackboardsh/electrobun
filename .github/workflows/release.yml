@@ -832,3 +832,68 @@ jobs:
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: node scripts/publish-templates.mjs
+
+  template-acceptance:
+    needs: [publish-templates]
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: windows-2025
+            platform: windows-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '18'
+      - name: Verify template acceptance version
+        id: release-type
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          RELEASE_PACKAGE_JSON: package/package.json
+          EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
+        run: node package/scripts/verify-release-version.mjs
+      - name: Test template acceptance harness
+        run: node --test scripts/accept-published-template.test.mjs
+      - name: Install Linux webview and virtual display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 xvfb xauth
+      - name: Accept published templates on Linux
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        run: >-
+          xvfb-run -a node scripts/accept-published-template.mjs
+          --version "${{ steps.release-type.outputs.version }}"
+          --platform "${{ matrix.platform }}"
+          --output template-acceptance-results
+      - name: Accept published templates on desktop
+        if: runner.os != 'Linux'
+        run: >-
+          node scripts/accept-published-template.mjs
+          --version "${{ steps.release-type.outputs.version }}"
+          --platform "${{ matrix.platform }}"
+          --output template-acceptance-results
+      - name: Retain template acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: template-acceptance-${{ matrix.platform }}
+          path: |
+            template-acceptance-results/*.log
+            template-acceptance-results/*.json
+          if-no-files-found: warn

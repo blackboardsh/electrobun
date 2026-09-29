@@ -109,6 +109,12 @@ export function createTemplateTestCommands({
 			args: ["--test", "../templates/vite-devkit-resolution.test.mjs"],
 			cwd: packageDir,
 		},
+		{
+			label: "Published template acceptance harness tests",
+			command: "node",
+			args: ["--test", "../scripts/accept-published-template.test.mjs"],
+			cwd: packageDir,
+		},
 	];
 }
 

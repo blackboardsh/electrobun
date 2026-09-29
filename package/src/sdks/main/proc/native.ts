@@ -1,5 +1,6 @@
 import { dirname, join } from "path";
-import { createReadStream } from "node:fs";
+import { closeSync } from "node:fs";
+import { Socket } from "node:net";
 import electrobunEventEmitter from "../events/eventEmitter";
 import ElectrobunEvent from "../events/event";
 import {
@@ -457,6 +458,10 @@ const core = (() => {
 				returns: FFIType.ptr,
 			},
 			getHostMessageWakeupReadFD: {
+				args: [],
+				returns: FFIType.int,
+			},
+			duplicateHostMessageWakeupReadFD: {
 				args: [],
 				returns: FFIType.int,
 			},
@@ -1444,19 +1449,25 @@ if (core) {
 	if (isRealBunRuntime) {
 		startHostMessagePolling();
 	} else if (typeof wakeupReadFd === "number" && wakeupReadFd >= 0) {
+		const ownedFd = core_.symbols.duplicateHostMessageWakeupReadFD();
+		let wakeupStream: Socket | undefined;
 		try {
-			const wakeupStream = createReadStream("/dev/null", {
-				fd: wakeupReadFd,
-				autoClose: false,
-			});
+			if (ownedFd < 0) throw new Error("could not duplicate host message readiness descriptor");
+			// A pipe needs readiness-based reads: fs.ReadStream can report EAGAIN
+			// on an idle pipe, or interpret a short notification read as EOF.
+			wakeupStream = new Socket({ fd: ownedFd, readable: true, writable: false });
 			wakeupStream.on("data", () => {
 				drainQueuedHostMessages();
 			});
 			wakeupStream.on("error", (error) => {
-				wakeupStream.destroy();
+				wakeupStream?.destroy();
 				startHostMessagePolling(error);
 			});
+			wakeupStream.on("end", () => startHostMessagePolling());
+			wakeupStream.on("close", () => startHostMessagePolling());
 		} catch (error) {
+			if (wakeupStream) wakeupStream.destroy();
+			else if (ownedFd >= 0) { try { closeSync(ownedFd); } catch {} }
 			startHostMessagePolling(error);
 		}
 	} else {

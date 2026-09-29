@@ -98,8 +98,8 @@ assertArray(
 
 const templateCommands = createTemplateTestCommands(options);
 assert(
-	templateCommands.length === 2,
-	"test:templates should expose both independent checks",
+	templateCommands.length === 3,
+	"test:templates should expose three independent checks",
 );
 
 const attempted: string[] = [];

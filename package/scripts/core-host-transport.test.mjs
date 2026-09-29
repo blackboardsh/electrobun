@@ -21,20 +21,17 @@ async function initializeSdkWakeup(versions, fd = 42) {
   const start = source.indexOf("if (core) {\n\tconst wakeupReadFd");
   const end = source.indexOf("\nconst _ffiImpl =", start);
   assert.ok(start >= 0 && end > start, "SDK host message initialization must be present");
-  const state = { polling: 0, drains: 0, destroyed: false, streamOptions: null, listeners: new Map() };
+  const state = { polling: 0, drains: 0, destroyed: false, streamOptions: null, duplicated: 0, listeners: new Map() };
   const stream = {
     on(event, callback) { state.listeners.set(event, callback); return stream; },
     destroy() { state.destroyed = true; },
   };
-  runInNewContext(source.slice(start, end), {
+  runInNewContext(source.slice(start, end).replace(": Socket | undefined", ""), {
     core: true,
-    core_: { symbols: { getHostMessageWakeupReadFD: () => fd } },
+    core_: { symbols: { getHostMessageWakeupReadFD: () => fd, duplicateHostMessageWakeupReadFD: () => { state.duplicated++; return fd + 1; } } },
     process: { versions },
-    createReadStream(path, options) {
-      assert.equal(path, "/dev/null");
-      state.streamOptions = { ...options };
-      return stream;
-    },
+    Socket: class { constructor(options) { state.streamOptions = { ...options }; return stream; } },
+    closeSync() { throw new Error("unexpected raw descriptor close"); },
     startHostMessagePolling() { state.polling++; },
     drainQueuedHostMessages() { state.drains++; },
   });
@@ -44,7 +41,8 @@ async function initializeSdkWakeup(versions, fd = 42) {
 test("Cottontail uses readiness notifications even when it exposes a Bun compatibility version", async () => {
   const state = await initializeSdkWakeup({ cottontail: "0.7.0-canary.13", bun: "1.3.10" });
   assert.equal(state.polling, 0, "An idle Cottontail host must not install the 16 ms polling fallback");
-  assert.deepEqual(state.streamOptions, { fd: 42, autoClose: false });
+  assert.deepEqual(state.streamOptions, { fd: 43, readable: true, writable: false });
+  assert.equal(state.duplicated, 1, "The stream must own a duplicate, not the core descriptor");
   assert.equal(state.drains, 1, "Drain messages already queued before the readiness listener attached");
   state.listeners.get("data")();
   assert.equal(state.drains, 2, "Readiness must deliver subsequent messages without a timer");
@@ -58,6 +56,7 @@ test("Bun and hosts without a readiness descriptor retain the polling fallback",
     const state = await initializeSdkWakeup(versions, fd);
     assert.equal(state.polling, 1);
     assert.equal(state.streamOptions, null);
+    assert.equal(state.duplicated, 0);
   }
 });
 
@@ -110,8 +109,8 @@ async function buildFixture(directory) {
   return library;
 }
 
-function startPeer(binary, library, keyByte, port = 0) {
-  const child = spawn(binary, [join(packageRoot, "scripts", "fixtures", "core-host-transport-peer.ts"), library, String(keyByte), String(port)], { stdio: ["pipe", "pipe", "pipe"] });
+function startPeer(binary, library, keyByte, port = 0, readiness = false) {
+  const child = spawn(binary, [join(packageRoot, "scripts", "fixtures", "core-host-transport-peer.ts"), library, String(keyByte), String(port), readiness ? "readiness" : "poll"], { stdio: ["pipe", "pipe", "pipe"] });
   let stderr = "";
   let nextId = 0;
   const pending = new Map();
@@ -149,12 +148,12 @@ function startPeer(binary, library, keyByte, port = 0) {
   });
   return {
     ready,
-    drain() {
+    drain(closeWatcher = false) {
       const id = ++nextId;
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => { pending.delete(id); reject(new Error("Core peer drain timed out")); }, 3_000);
         pending.set(id, { resolve, reject, timer });
-        child.stdin.write(`${JSON.stringify({ type: "drain", id })}\n`);
+        child.stdin.write(`${JSON.stringify({ type: "drain", id, closeWatcher })}\n`);
       });
     },
     async stop() {
@@ -194,6 +193,34 @@ function encryptedRequest(keyByte, id, owner) {
   const encrypted = Buffer.concat([cipher.update(JSON.stringify(message)), cipher.final()]);
   return JSON.stringify({ encryptedData: encrypted.toString("base64"), iv: iv.toString("base64"), tag: cipher.getAuthTag().toString("base64") });
 }
+
+test("readiness survives idle periods and closing its stream preserves core draining", { timeout: 90_000, skip: process.platform === "win32" }, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "electrobun-wakeup-"));
+  let peer, socket;
+  try {
+    const library = await buildFixture(directory);
+    peer = startPeer(runtimeBinary(), library, 17, 0, true);
+    const ready = await peer.ready;
+    socket = await connect(ready.port);
+    for (let id = 1; id <= 3; id++) {
+      await delay(100); // Empty nonblocking pipe must not fail or stop watching.
+      socket.send(encryptedRequest(17, id, "readiness"));
+      let result;
+      const deadline = Date.now() + 3000;
+      do { await delay(20); result = await peer.drain(); } while (result.messages.length === 0 && Date.now() < deadline);
+      assert.equal(result.messages[0]?.message.id, id);
+      assert.ok(result.wakeups >= id, "every separated notification must reach the readiness listener");
+    }
+    await peer.drain(true); // Also asserts the core-owned descriptor is still valid.
+    socket.send(encryptedRequest(17, 4, "fallback"));
+    await delay(100);
+    assert.equal((await peer.drain()).messages[0]?.message.id, 4, "fallback can drain after the stream closes");
+  } finally {
+    socket?.close();
+    await peer?.stop();
+    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
 
 test("two native cores own distinct loopback ports and decrypt only their own webview RPC", { timeout: 90_000 }, async () => {
   const directory = await mkdtemp(join(tmpdir(), "electrobun-core-transport-"));

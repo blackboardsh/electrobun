@@ -2,4 +2,15 @@
 title: "Unreleased"
 ---
 
-No unreleased changes yet. See [v2.0.2](/electrobun/guides/changelog/v2-0-2/) for the latest release.
+Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/).
+
+- Fixed Cottontail webview RPC hangs when an idle readiness pipe produced
+  `EAGAIN`. The notification stream now waits for pipe readiness and owns a
+  separate descriptor, so closing it cannot invalidate the native core's pipe.
+  Notification handling continues across multiple messages and idle periods;
+  stream errors or closure safely fall back to polling.
+- Added published-template acceptance checks on macOS ARM64, Windows x64,
+  and Linux x64/ARM64. They initialize, install, build, and launch the public
+  `hello-world` template, then exercise modular Cottontail APIs and a webview
+  RPC round trip in a separate CI fixture. These checks run after publication
+  and retain logs and reports on failure.

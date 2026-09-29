@@ -1,5 +1,7 @@
 import { CString, dlopen, ptr } from "bun:ffi";
 import { createInterface } from "node:readline";
+import { Socket } from "node:net";
+import { fstatSync } from "node:fs";
 
 // Runs in its own process, like each Desktop host. The test-only library adds
 // registration for a synthetic webview; listener, AES, framing, and queue code
@@ -11,6 +13,8 @@ const library = dlopen(process.argv[2]!, {
   popNextQueuedHostMessage: { args: ["ptr"], returns: "ptr" },
   getHostTransportDebugJSON: { args: [], returns: "ptr" },
   freeCoreString: { args: ["ptr"], returns: "void" },
+  getHostMessageWakeupReadFD: { args: [], returns: "int" },
+  duplicateHostMessageWakeupReadFD: { args: [], returns: "int" },
 });
 const core = library.symbols;
 const emptyPreload = Buffer.from("\0");
@@ -22,13 +26,10 @@ if (!started) {
 if (!core.testInstallTransportWebview(2, Number(process.argv[3]))) {
   throw new Error("Failed to register the test webview");
 }
-process.stdout.write(`${JSON.stringify({ started: true, port: core.testHostTransportPort() })}\n`);
-
-for await (const line of createInterface({ input: process.stdin })) {
-  const command = JSON.parse(line);
-  if (command.type === "stop") process.exit(0);
-  if (command.type !== "drain") throw new Error("Unknown fixture command");
-  const messages = [];
+const messages: unknown[] = [];
+let wakeups = 0;
+let watcher: Socket | undefined;
+function drain() {
   const webviewId = new Uint32Array(1);
   while (true) {
     const payload = core.popNextQueuedHostMessage(ptr(webviewId));
@@ -39,10 +40,28 @@ for await (const line of createInterface({ input: process.stdin })) {
       core.freeCoreString(payload);
     }
   }
+}
+if (process.argv[5] === "readiness" && process.platform !== "win32") {
+  watcher = new Socket({ fd: core.duplicateHostMessageWakeupReadFD(), readable: true, writable: false });
+  watcher.on("data", () => { wakeups++; drain(); });
+  watcher.on("error", error => { throw error; });
+}
+process.stdout.write(`${JSON.stringify({ started: true, port: core.testHostTransportPort() })}\n`);
+
+for await (const line of createInterface({ input: process.stdin })) {
+  const command = JSON.parse(line);
+  if (command.type === "stop") process.exit(0);
+  if (command.type !== "drain") throw new Error("Unknown fixture command");
+  if (command.closeWatcher && watcher) {
+    await new Promise<void>(resolve => { watcher!.once("close", resolve); watcher!.destroy(); });
+    fstatSync(core.getHostMessageWakeupReadFD());
+  }
+  if (!watcher || watcher.destroyed) drain();
   const diagnostics = core.getHostTransportDebugJSON();
   try {
     const debug = diagnostics ? JSON.parse(new CString(diagnostics).toString()) : null;
-    process.stdout.write(`${JSON.stringify({ id: command.id, messages, debug })}\n`);
+    process.stdout.write(`${JSON.stringify({ id: command.id, messages, debug, wakeups })}\n`);
+    messages.length = 0;
   } finally {
     if (diagnostics) core.freeCoreString(diagnostics);
   }

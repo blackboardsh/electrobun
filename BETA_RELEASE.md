@@ -78,7 +78,31 @@ The single release workflow then:
    Release, and proves the warm cache works offline; and
 5. only after that acceptance matrix passes, publishes the Kitchen artifacts
    to R2, stamps the exact release version into each staged template's
-   `hutch.config.ts`, and then advances the matching beta template catalog.
+   `hutch.config.ts`, and then advances the matching beta template catalog;
+6. runs template acceptance on macOS ARM64, Windows x64, and Linux x64/ARM64.
+   From an isolated Hutch home it resolves the published release's paired Hutch,
+   uses `hutch electrobun init` to download and install the public `hello-world`
+   template, checks the generated pins, builds it, and observes native startup.
+   A separate CI fixture goes through `init` using a loopback catalog and the
+   real published devkit/runtime. It verifies the install hook, SQL/SQLite
+   capability detection, an explicit hashing capability override, and a system
+   webview RPC round trip before exiting successfully. Linux runs under Xvfb.
+
+Template acceptance tests the published channel, so it runs **after** publication:
+a failure marks the release workflow red but does not roll back public artifacts.
+It does not replace the full template QA dashboard or `test:vm` (including CEF).
+Every command has a deadline; reports and stage logs are retained as CI artifacts.
+To run the same acceptance test locally against a published release:
+
+```sh
+node scripts/accept-published-template.mjs --version 2.0.2 --platform macos-arm64 --output /tmp/template-acceptance
+```
+
+Use `windows-x64`, `linux-x64`, or `linux-arm64` for the other supported hosts.
+The exact version must still be current in its stable/beta template catalog;
+the harness fails rather than silently testing a different release. A desktop
+session (or Xvfb on Linux) is required. The private fixture lives under
+`scripts/fixtures/template-acceptance` and is not listed in the public catalog.
 
 Stable tags use the same path and publish the npm package under `latest` plus
 the stable template catalog. The npm package remains only a small command that

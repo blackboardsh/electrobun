@@ -845,6 +845,15 @@ export fn getHostMessageWakeupReadFD() c_int {
     return @intCast(host_message_wakeup_state.read_fd orelse return -1);
 }
 
+// The runtime stream owns this duplicate. It may close it on error or EOF
+// without invalidating the descriptor used to drain the core's wakeup pipe.
+export fn duplicateHostMessageWakeupReadFD() c_int {
+    if (builtin.os.tag == .windows) return -1;
+    const fd = getHostMessageWakeupReadFD();
+    if (fd < 0) return -1;
+    return std.c.fcntl(fd, std.c.F.DUPFD_CLOEXEC, @as(c_int, 0));
+}
+
 fn ensureWebviewRuntimeConfigured() bool {
     if (!webview_runtime_state.configured) {
         setLastError("Webview runtime is not configured", .{});
