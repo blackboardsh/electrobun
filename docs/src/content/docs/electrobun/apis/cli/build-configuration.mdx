@@ -217,20 +217,35 @@ The JavaScript bundler options described below can also be set in this object.
 Cottontail keeps optional standard-library APIs outside its core executable and
 loads each capability on demand through module imports or `Cottontail.*`
 namespace access. When `build.mainProcess` is `"cottontail"`, Hutch scans the
-final tree-shaken main-process bundle and packages only the capability bytecode
-and native libraries it discovers. Each build reports the automatic result:
+final tree-shaken main-process bundle for recognized `bun:*`, `node:*`, and
+`Cottontail.*` references. It packages the core runtime plus the selected
+capability bytecode and native libraries, including transitive dependencies
+declared by the runtime's capability manifest. Each build reports the automatic
+result:
 
 ```text
 hutch electrobun: Cottontail capabilities discovered by scan: [sqlite, compression]
 ```
 
 This message contains the scan result only. Explicit configuration entries are
-merged afterward.
+merged afterward, followed by dependency expansion. This is not a complete
+inventory of the packaged runtime.
+
+Detection matches known text in the bundle rather than evaluating JavaScript.
+For example, `bun:sqlite`, `node:sqlite`, and `Cottontail.sqlite` select
+`sqlite`; `node:zlib` and `Cottontail.compression` select `compression`.
+The scan includes bundled dependency code, but cannot reliably infer aliased
+or destructured namespaces, computed property access, or code loaded later.
+Global Bun compatibility APIs are not all scan markers: `Bun.SQL` alone, for
+example, needs an explicit `sql` include or a recognized `bun:sql` import.
 
 Set `build.cottontail.capabilities` when a capability is reached through a
 computed dynamic import, generated source, a plugin loader, or another path the
 bundle scan cannot see. These entries are additive: Hutch still includes every
-capability found by its scan.
+capability found by its scan. An empty list does not disable detection, and
+the list cannot exclude automatically selected modules. This is a packaging
+setting, not a runtime permission policy, and does not change Hutch's build-time
+runtime or a Bun main process.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -261,6 +276,10 @@ Cottontail's error identifies the missing name and points back to
 `build.cottontail.capabilities`.
 
 ## Bytecode And Obfuscation
+
+The precompiled standard-library capability modules above are already packaged
+by Hutch. The setting below concerns compilation of your application's own
+main-process source, which is separate.
 
 :::caution[Coming soon]
 This option is declared but **not yet wired** — setting `build.cottontail.bytecode`

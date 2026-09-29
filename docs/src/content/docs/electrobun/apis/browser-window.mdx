@@ -161,6 +161,11 @@ with no argument uses the legacy starter window: title `"Electrobun"`, size
 Only bundle and select CEF when the app needs it. See
 [Bundling CEF](/electrobun/apis/bundling-cef/) for the build configuration.
 
+`allowedProtocols` applies to this window's initial webview. Enable `appData`
+only when its content and navigation are trusted; permission persists across
+navigation. Additional `BrowserView` instances have their own settings. See
+[Bundled and app-owned assets](/electrobun/apis/bundled-assets/) for examples.
+
 ```ts
 import { BrowserWindow } from "electrobun/main";
 

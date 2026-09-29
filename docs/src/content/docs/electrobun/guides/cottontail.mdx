@@ -64,6 +64,58 @@ new BrowserWindow({
 });
 ```
 
+## Modular standard library
+
+Cottontail 0.6.0 and later separate optional standard-library APIs into
+capability modules. Hutch always packages the core runtime. It scans the final,
+tree-shaken main-process bundle for recognized module specifiers and namespace
+accesses, then includes the selected capabilities and their dependencies from
+the runtime's manifest. At runtime, capabilities load on demand.
+
+For example, `import { Database } from "bun:sqlite"` selects `sqlite`, and
+`import { gzipSync } from "node:zlib"` selects `compression`. Direct
+`Cottontail.sqlite` and `Cottontail.compression` accesses are also recognized.
+Your application's bundled dependencies participate in the same scan.
+
+The scanner matches known text in the output bundle; it does not execute your
+code or infer every JavaScript access. Computed imports, aliased namespaces,
+destructuring, and files loaded later may hide usage. In particular, do not
+assume a global compatibility access such as `Bun.SQL` selects `sql`.
+Use a recognized module import or explicitly include the capability in
+`electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Plugin App",
+    identifier: "dev.example.plugin-app",
+    version: "0.1.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+      capabilities: ["sqlite", "sql"],
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+The list is **additive**: it keeps everything automatically detected and adds
+these modules. An empty list does not disable scanning, and there is no
+exclusion list. Capability names describe packaging, not a permissions sandbox.
+This setting affects Cottontail app bundles, not Bun main processes or Hutch's
+build-time runtime.
+
+Each build logs the capabilities discovered by the scan, before explicit
+includes and transitive dependencies are added. If a packaged app reports a
+missing capability, add the name to this list, rebuild, and exercise that path
+in the resulting app on each target platform. See the
+[configuration reference](/electrobun/apis/cli/build-configuration/#capability-modules)
+for the full list of names.
+
 ## Runtime and build ownership
 
 The clean split between Cottontail and Hutch is worth internalizing, because
@@ -103,7 +155,7 @@ advances the pair. Pin only when the build pipeline needs a different exact
 version:
 
 ```ts
-// @hutch cottontail=0.3.0
+// @hutch cottontail=0.7.1
 ```
 
 Inspect the active version with `hutch cottontail version`.

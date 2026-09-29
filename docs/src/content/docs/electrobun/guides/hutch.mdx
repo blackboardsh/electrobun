@@ -123,6 +123,11 @@ hutch electrobun build --env=stable
 
 Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
+Template channels are separate from Hutch's release channel. Electrobun beta
+templates can require stable Hutch; `--beta` selects the template catalog,
+not a canary toolchain. Follow any minimum-version error from init and upgrade
+the appropriate launcher. See [init's channel behavior](/electrobun/apis/cli/cli-args/#hutch-electrobun-init).
+
 The publisher guarantees that a published template's exact Electrobun pin
 matches its catalog. After extracting it, `init` syncs that release and the
 required native toolchain, then runs the template's configured `install` task
@@ -300,7 +305,7 @@ version, or `build:<full-git-revision>`. `stable` and `latest` resolve to
 `production`:
 
 ```ts
-// @hutch cli=0.5.0 cottontail=0.3.0
+// @hutch cli=0.27.1 cottontail=0.7.1
 ```
 
 The pragma selects versions only for that project. It never rewrites the global

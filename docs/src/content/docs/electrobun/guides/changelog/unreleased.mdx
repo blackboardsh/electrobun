@@ -2,6 +2,151 @@
 title: "Unreleased"
 ---
 
+Changes since **Electrobun 2.0.1**, through **2.0.2-beta.36**. The upcoming
+Electrobun release uses stable Hutch and Cottontail releases:
+
+| Component | Electrobun 2.0.1 | Current beta |
+| --- | --- | --- |
+| Hutch release toolchain | 0.24.3 | 0.27.1 |
+| Bundled Cottontail app runtime | 0.5.0 | 0.7.1 |
+
+Hutch's build-time Cottontail and the runtime bundled into your application
+are separate selections. Hutch 0.27.1 is paired with Cottontail 0.7.1; this
+Electrobun beta also pins 0.7.1 for Cottontail app bundles. A `// @hutch`
+pragma changes build-time execution, not the devkit's bundled app runtime.
+
+## Modular Cottontail runtime
+
+- Optional standard-library APIs now ship as capability modules that load on
+  demand. Apps package the core runtime plus the optional modules they use,
+  instead of carrying every optional module and native library.
+- For `build.mainProcess: "cottontail"`, Hutch scans the final tree-shaken
+  main-process bundle for recognized `bun:*`, `node:*`, and `Cottontail.*`
+  references. It reports the detected capabilities and packages their bytecode,
+  native libraries, and dependencies declared by the runtime's manifest.
+- `build.cottontail.capabilities` explicitly adds modules for computed imports,
+  plugin loaders, and other usage the scan cannot see. Includes are additive;
+  they cannot remove automatically detected capabilities. Unknown names fail
+  the build, and a missing capability at runtime reports the name to include.
+- Bundled capability bytecode is included in macOS code signing.
+
+See the [Cottontail guide](/electrobun/guides/cottontail/#modular-standard-library)
+and [config reference](/electrobun/apis/cli/build-configuration/#capability-modules)
+for examples, supported names, and scan limitations. Capability bytecode is
+separate from the still-unwired option to precompile your application's own
+main-process source.
+
+## Runtime performance and reliability
+
+### Cottontail 0.7.1 runtime fixes
+
+Cottontail 0.7.1 fixes regressions in standalone launch and modular
+standard-library imports:
+
+- Direct `Bun.SQL`/`Bun.sql`/`Bun.postgres` startup and SQL preconnect load the
+  SQL capability instead of importing its removed embedded source.
+- Comment-only and otherwise-empty modules retain the ESM initializer needed
+  for namespace registration.
+- Static imports of Inspector, Inspector promises, REPL, and SEA use their
+  capability modules, including bare Inspector and REPL aliases.
+- The native bundler recognizes the supported SQL, Redis, S3, JSON5, color,
+  YAML, TOML, DNS, and socket `bun:*` imports when mixed with dynamic imports
+  and `require()`.
+- External built-in imports preserve their `bun:` prefix in generated bundles
+  and worker module loading.
+- Repeated `bun:dns` loads retain the same public API instead of returning
+  an internal wrapper after the first load.
+- `bun:test`, `Bun.jest()`, and Node test reporters share their lazy API
+  wrappers across import paths.
+
+These fixes are included in the published Cottontail 0.7.1 runtime pinned by
+Electrobun 2.0.2-beta.36.
+
+### Startup benchmark (Cottontail 0.7.1)
+
+Median elapsed time in milliseconds; lower is better. Cottontail 0.7.1 is the
+macOS ARM64 artifact built by [release CI](https://github.com/blackboardsh/cottontail/actions/runs/36507672117),
+verified against its archive checksum and release commit. The published stable
+archive is byte-for-byte identical to the benchmarked CI artifact. Cottontail 0.5.0 is the
+pre-modularity release used by Electrobun 2.0.1. Bun is the published 1.4.0 binary.
+
+| Benchmark | Cottontail 0.5.0 | Cottontail 0.7.1 | Bun 1.4.0 |
+| --- | ---: | ---: | ---: |
+| Empty startup (wall) | 19.68 | 18.15 | 9.79 |
+| Startup accessing `Bun.SQL` (wall) | 323.49 | 124.60 | 13.63 |
+| Module resolution (wall) | 317.83 | 270.31 | 11.89 |
+| Loop (wall) | 74.82 | 58.51 | 11.35 |
+| JSON (wall) | 71.81 | 59.41 | 12.69 |
+| Async (wall) | 71.91 | 57.29 | 10.31 |
+| Module resolution (work only) | 1.376 | 1.778 | 1.879 |
+| Loop (work only) | 1.402 | 1.396 | 0.989 |
+| JSON (work only) | 2.427 | 2.284 | 2.020 |
+| Async (work only) | 0.514 | 0.680 | 0.576 |
+
+Measured on macOS ARM64, Darwin 24.6.0, an Apple M4 Max (Virtual),
+on 2026-09-29 (UTC). These are standalone CLI launches, including bundling and
+runtime initialization—not packaged Electrobun application startup. The SQL
+fixture accesses `Bun.SQL`; it does not connect to a database or load every
+optional standard-library module. “Work only” uses the fixture’s internal timer
+and excludes startup.
+
+The fixtures are unchanged from Cottontail’s `scripts/bench.js`: 20 samples for
+empty startup, 12 each for SQL startup and the loop, and 8 each for module
+resolution, JSON, and async work. Each fixture/runtime has one excluded warmup;
+subsequent samples use warm caches. Runtime order rotates between samples, and
+each runtime has a separate working directory and cache. Medians use the lower
+middle sample. These measurements describe this host and workload, not a
+cross-platform performance guarantee.
+
+Cottontail 0.7.1 improves all six wall-time measurements against 0.5.0 in this run;
+Bun 1.4.0 remains faster on all six. Internal work timings are mixed.
+
+[Raw samples and binary/fixture SHA-256 hashes](/benchmarks/cottontail-0.7.1.json).
+To reproduce from the Electrobun repository with complete runtime distributions:
+
+```bash
+node docs/scripts/benchmark-cottontail.mjs /path/to/cottontail results.json \
+  "Cottontail 0.5.0=/path/to/0.5.0/bin/cottontail" \
+  "Cottontail 0.7.1=/path/to/0.7.1/bin/cottontail" \
+  "Bun 1.4.0=/path/to/bun-1.4.0/bun"
+```
+
+### Changes included in the current beta
+
+Cottontail's changes here span **0.5.0 → 0.7.1**, including the modular runtime
+introduced in 0.6.0:
+
+- Reduced native namespace dispatch overhead, idle event-loop polling, and
+  temporary allocations during idle polling.
+- Idle UDP sockets now wait for readiness instead of repeatedly polling.
+  Receiving peer errors no longer disables subsequent UDP reads on Linux;
+  Windows handles departed UDP peers without invalidating the local socket.
+- Electrobun now recognizes Cottontail even when it exposes a Bun compatibility
+  version and uses native host-message readiness notifications. This avoids
+  the 16 ms polling fallback when a readiness descriptor is available.
+- Fixed duplicate delivery to worker global message handlers, delayed worker
+  termination, detached JavaScriptCore timer references, and worker/socket
+  ownership during teardown.
+- Fixed networking after stdin activity and preserved inherited standard-stream
+  offsets. Hutch waits for foreground script cleanup after Ctrl-C.
+- Shared ESM instances across imports and `require`, corrected `node:test`
+  aliases, and fixed Windows import and crypto behavior.
+
+## App-owned files in webviews
+
+- Added the opt-in `appdata://` protocol on macOS, Windows, and Linux, for both
+  native webviews and CEF. It reads files from the application's writable
+  `userData` directory, such as downloaded images or generated documents.
+- `BrowserWindow` and `BrowserView` accept per-view `allowedProtocols` settings,
+  with equivalent options in the Zig, Rust, Go, and Odin SDKs. Defaults remain
+  `{ views: true, appData: false }`.
+- URL paths are normalized, and filesystem-backed protocol requests reject
+  traversal and symlink escapes outside their roots. Protocol permission
+  follows the webview across navigation; enable app-data access only for
+  content and navigation you trust.
+
+See [Bundled and app-owned assets](/electrobun/apis/bundled-assets/).
+
 ## Windows profiles and lifecycle
 
 - WebView2 partitions now use compact SHA-256 directory components for unsafe,
@@ -11,32 +156,68 @@ title: "Unreleased"
   directories; existing directories are neither migrated nor deleted.
 - WebView2 controllers close on the native UI thread before the app quits,
   allowing browser profile state to be saved during shutdown.
+- Bounds, masks, visibility, and pointer passthrough set before asynchronous
+  WebView2 creation now survive until the controller is ready. Initial geometry
+  uses the current DPI, and late callbacks do not revive removed views.
 - Windows launchers preserve the full 32-bit process exit status and log the
   child PID with its kernel creation time. Crash statuses are no longer
   truncated to their low byte, and logs distinguish reused process IDs.
+- CEF opts out of window-occlusion timer throttling.
 
-## Portable compression
+## Linux windows and webviews
 
-- Cottontail's compression capability links Brotli and Zstandard statically.
-  App updates no longer depend on separately installed Homebrew compression
-  libraries.
+- Fixed reentrant native SDK calls from CEF callbacks blocking the UI thread.
+- The Go SDK pins the main goroutine to the main OS thread, preventing CEF
+  window-creation deadlocks when running the native event loop.
+- Fixed webview teardown touching destroyed GTK widgets and CEF child-window
+  geometry updates accessing a closed browser's platform delegate.
+- CEF page zoom now survives navigation and can be set before browser creation.
+- Window geometry getters reflect pending move/resize requests while the window
+  manager applies them. Restoring minimized windows now requests activation.
+- Tray hide/show uses a fresh AppIndicator identity and releases its menu safely.
+- Guarded null WGPU texture releases in generated Linux bindings.
 
-## macOS certificate trust
+## macOS portability
 
-- Cottontail apps now use macOS's system certificate bundle for default TLS
-  connections. This fixes HTTPS and update checks failing with
+- Cottontail uses macOS's system certificate bundle for default TLS connections.
+  This fixes HTTPS and update checks failing with
   `unable to get local issuer certificate` on Macs without Homebrew's
   certificate files, while preserving certificate verification and custom CAs.
+- Cottontail's compression capability links Brotli and Zstandard statically.
+  App updates no longer depend on separately installed Homebrew compression
+  libraries. Bundled Linux compression symbols are private to avoid collisions.
+- CEF disables backgrounding of occluded windows in the browser process,
+  preventing newly created windows from being treated as hidden and throttled.
 
-## Cottontail capabilities
+## UI state and native transport
 
-- Cottontail's optional standard-library APIs now ship as capability modules
-  that load on demand through module and namespace surfaces. Apps no longer
-  need to carry every optional module and native library with the core runtime.
-- When `build.mainProcess` is `"cottontail"`, Hutch scans the final tree-shaken
-  main-process bundle for `bun:*`, `node:*`, and `Cottontail.*` usage, reports
-  the capabilities it discovered, and packages only the selected capability
-  bytecode and native libraries.
-- `build.cottontail.capabilities` adds explicit capability modules for computed
-  dynamic imports, generated source, plugin loaders, and other usage the bundle
-  scan cannot see. Explicit entries are additive to Hutch's automatic scan.
+- Fixed Warren stores retaining nested proxies when assigning values derived
+  from existing state, such as `s.items = s.items.filter(...)`. Repeated updates
+  no longer build an ever-growing proxy chain that can drive long-running UIs
+  to high CPU usage. This applies to shared main-process and browser UI stores.
+- Native RPC listeners are isolated between app processes; Windows reserves
+  host transport ports exclusively.
+- Graceful quit preserves the requested exit code when the main event loop
+  returns. Zig and Odin SDK graceful-quit paths now use the core's shared
+  shutdown implementation so the exit code is recorded before stopping the loop.
+
+## Hutch builds and updates
+
+- Added `hutch electrobun update` to advance a project to the latest stable
+  Electrobun release and refresh its devkit. See the
+  [command reference](/electrobun/apis/cli/cli-args/#hutch-electrobun-update)
+  for pin and channel behavior.
+- Generated projects retain the published template's exact toolchain pins.
+  Release checks verify Hutch's paired Cottontail and the separate bundled
+  Cottontail runtime pin.
+- Builds can reuse cached Electrobun artifacts while apps are running.
+  Concurrent installs wait for cache ownership initialization.
+- Improved redirected build logs and explicit local-runtime selection.
+- Fixed Windows cache writes, command routing, package patching, and transient
+  toolchain rename failures. Archive extraction uses the Windows system tar.
+- Rust's Cargo target directory is anchored under the bundle build root.
+
+For the implementation history, see the
+[Electrobun comparison](https://github.com/blackboardsh/electrobun/compare/v2.0.1...v2.0.2-beta.36),
+[Cottontail comparison](https://github.com/blackboardsh/cottontail/compare/v0.5.0...v0.7.1),
+and [Hutch comparison](https://github.com/blackboardsh/hutch/compare/v0.24.3...v0.27.1).

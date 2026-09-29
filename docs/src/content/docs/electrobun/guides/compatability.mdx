@@ -59,3 +59,10 @@ Electrobun builds, versioned devkits, and compiler toolchains.
 Native addons and code that depends on undocumented runtime internals can still
 be platform- or runtime-specific. Test the application on every target before a
 production release.
+
+Cottontail's optional standard-library APIs are packaged as capability modules.
+Hutch detects recognized references in the bundled main process and includes
+their dependencies. Dynamic usage may need additive
+`build.cottontail.capabilities` entries; runtime API support does not by itself
+guarantee that a module is included in a particular app bundle. See the
+[modular runtime guide](/electrobun/guides/cottontail/#modular-standard-library).

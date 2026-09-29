@@ -170,6 +170,16 @@ the same main-process SDK; use `electrobun/view` inside browser bundles. The
 former `electrobun/bun` namespace remains a deprecated alias for
 `electrobun/main` so imports can migrate incrementally.
 
+### Cottontail standard-library APIs
+
+The Electrobun SDK and Cottontail's standard library are separate surfaces.
+For Cottontail apps, Hutch scans the bundled main process and includes optional
+standard-library capabilities used by the SDK, your code, and bundled
+dependencies. Computed imports or namespace access may need an explicit,
+additive `build.cottontail.capabilities` entry in `electrobun.config.ts`.
+See [Cottontail's modular standard library](/electrobun/guides/cottontail/#modular-standard-library)
+for examples and detection limits.
+
 ## Runtime coverage
 
 The TypeScript SDK has the broadest high-level surface. The native SDKs

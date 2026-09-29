@@ -1,0 +1,923 @@
+{
+  "generatedAt": "2026-09-29T01:41:59.689Z",
+  "host": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Max (Virtual)",
+    "osRelease": "24.6.0",
+    "node": "v24.11.1"
+  },
+  "methodology": "Unmodified scripts/bench.js fixtures and sample counts; one excluded warmup per fixture/runtime; runtime order rotated per sample; separate working directories and caches. p50 is the lower median. Wall includes process launch, bundling, runtime initialization, execution and exit; internal excludes startup. Warm-cache standalone CLI launches, not packaged Electrobun app startup.",
+  "runtimes": [
+    {
+      "label": "Cottontail 0.5.0",
+      "sha256": "ec86cb8b82fbbef9aab3172aa6072830c02ade0bebbca09ee3337b6d97a0e7e2"
+    },
+    {
+      "label": "Cottontail 0.7.1",
+      "sha256": "84428a0f30babd9a1aedfcb5b75b0027e6ea53cfd5153d80e593da745cc65822",
+      "release": {
+        "version": "0.7.1",
+        "revision": "dcb0129b83ac80dcb203d2946cb770bace703cf1",
+        "ciRunUrl": "https://github.com/blackboardsh/cottontail/actions/runs/36507672117",
+        "archiveSha256": "fad7fa5cfd9c194a22b799acab183bd9603e10c41a43366075204ba211509e33",
+        "manifestUrl": "https://electrobun-artifacts.blackboard.sh/cottontail/releases/0.7.1/manifest.json",
+        "archiveUrl": "https://electrobun-artifacts.blackboard.sh/cottontail/builds/dcb0129b83ac80dcb203d2946cb770bace703cf1/macos-arm64/cottontail.tar.gz"
+      }
+    },
+    {
+      "label": "Bun 1.4.0",
+      "sha256": "539598c775882420b9d8deb7dc14d845f20f7d26f5600c50ab067dde6ac3f3bf"
+    }
+  ],
+  "benchmarks": [
+    {
+      "name": "startup-empty",
+      "fixture": "empty.js",
+      "fixtureSha256": "c6fdc8688baefb2a743640aa7e8450cba27151cb8915150daa3bb114926450a2",
+      "samplesPerRuntime": 20,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 19.675166,
+          "samples": [
+            {
+              "wallMs": 19.776291
+            },
+            {
+              "wallMs": 27.493292
+            },
+            {
+              "wallMs": 17.461084
+            },
+            {
+              "wallMs": 19.988167
+            },
+            {
+              "wallMs": 23.528167
+            },
+            {
+              "wallMs": 16.961542
+            },
+            {
+              "wallMs": 21.01325
+            },
+            {
+              "wallMs": 19.675166
+            },
+            {
+              "wallMs": 17.461583
+            },
+            {
+              "wallMs": 27.9205
+            },
+            {
+              "wallMs": 21.546833
+            },
+            {
+              "wallMs": 19.550792
+            },
+            {
+              "wallMs": 16.185792
+            },
+            {
+              "wallMs": 17.661042
+            },
+            {
+              "wallMs": 20.791
+            },
+            {
+              "wallMs": 19.181292
+            },
+            {
+              "wallMs": 22.298334
+            },
+            {
+              "wallMs": 19.890833
+            },
+            {
+              "wallMs": 18.410042
+            },
+            {
+              "wallMs": 16.923917
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 18.154791,
+          "samples": [
+            {
+              "wallMs": 16.760041
+            },
+            {
+              "wallMs": 18.906416
+            },
+            {
+              "wallMs": 16.680042
+            },
+            {
+              "wallMs": 16.68425
+            },
+            {
+              "wallMs": 20.88275
+            },
+            {
+              "wallMs": 17.704875
+            },
+            {
+              "wallMs": 20.670291
+            },
+            {
+              "wallMs": 17.605459
+            },
+            {
+              "wallMs": 17.812458
+            },
+            {
+              "wallMs": 18.62325
+            },
+            {
+              "wallMs": 18.635417
+            },
+            {
+              "wallMs": 18.652625
+            },
+            {
+              "wallMs": 15.742916
+            },
+            {
+              "wallMs": 17.304417
+            },
+            {
+              "wallMs": 18.717125
+            },
+            {
+              "wallMs": 18.154791
+            },
+            {
+              "wallMs": 20.866709
+            },
+            {
+              "wallMs": 21.672292
+            },
+            {
+              "wallMs": 19.390416
+            },
+            {
+              "wallMs": 16.199
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 9.793833,
+          "samples": [
+            {
+              "wallMs": 12.086208
+            },
+            {
+              "wallMs": 12.023875
+            },
+            {
+              "wallMs": 9.32975
+            },
+            {
+              "wallMs": 9.751958
+            },
+            {
+              "wallMs": 12.429208
+            },
+            {
+              "wallMs": 9.314708
+            },
+            {
+              "wallMs": 8.760834
+            },
+            {
+              "wallMs": 9.731125
+            },
+            {
+              "wallMs": 11.511833
+            },
+            {
+              "wallMs": 10.769958
+            },
+            {
+              "wallMs": 13.894792
+            },
+            {
+              "wallMs": 8.208959
+            },
+            {
+              "wallMs": 7.731166
+            },
+            {
+              "wallMs": 8.7875
+            },
+            {
+              "wallMs": 11.20825
+            },
+            {
+              "wallMs": 9.624833
+            },
+            {
+              "wallMs": 10.484167
+            },
+            {
+              "wallMs": 11.170458
+            },
+            {
+              "wallMs": 11.7815
+            },
+            {
+              "wallMs": 9.793833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "startup-sql",
+      "fixture": "full-runtime.js",
+      "fixtureSha256": "b40c2cdbad9ae713a1cc6d410ee1a52c038e5ee9cec52aec4d95b8e0546e7a1a",
+      "samplesPerRuntime": 12,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 323.48825,
+          "samples": [
+            {
+              "wallMs": 368.803459
+            },
+            {
+              "wallMs": 306.513875
+            },
+            {
+              "wallMs": 323.48825
+            },
+            {
+              "wallMs": 368.121583
+            },
+            {
+              "wallMs": 339.713166
+            },
+            {
+              "wallMs": 306.530875
+            },
+            {
+              "wallMs": 324.8755
+            },
+            {
+              "wallMs": 342.291375
+            },
+            {
+              "wallMs": 315.420292
+            },
+            {
+              "wallMs": 328.087667
+            },
+            {
+              "wallMs": 312.846666
+            },
+            {
+              "wallMs": 322.076459
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 124.601958,
+          "samples": [
+            {
+              "wallMs": 124.344375
+            },
+            {
+              "wallMs": 123.918166
+            },
+            {
+              "wallMs": 149.449541
+            },
+            {
+              "wallMs": 132.925417
+            },
+            {
+              "wallMs": 136.58625
+            },
+            {
+              "wallMs": 122.316875
+            },
+            {
+              "wallMs": 118.42375
+            },
+            {
+              "wallMs": 121.954208
+            },
+            {
+              "wallMs": 130.37825
+            },
+            {
+              "wallMs": 146.570166
+            },
+            {
+              "wallMs": 124.601958
+            },
+            {
+              "wallMs": 131.216667
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 13.625083,
+          "samples": [
+            {
+              "wallMs": 12.945167
+            },
+            {
+              "wallMs": 15.614
+            },
+            {
+              "wallMs": 13.771375
+            },
+            {
+              "wallMs": 14.059875
+            },
+            {
+              "wallMs": 28.848291
+            },
+            {
+              "wallMs": 14.801458
+            },
+            {
+              "wallMs": 12.716792
+            },
+            {
+              "wallMs": 17.522125
+            },
+            {
+              "wallMs": 13.625083
+            },
+            {
+              "wallMs": 12.41875
+            },
+            {
+              "wallMs": 13.611208
+            },
+            {
+              "wallMs": 11.653833
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "module-resolve",
+      "fixture": "module-resolve.js",
+      "fixtureSha256": "f01b65d0e6bb8a687b6e2eddadaed3d1c6b9eccfd5a56e04cf7a61bd3f811636",
+      "samplesPerRuntime": 8,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 317.828916,
+          "p50InternalMs": 1.376,
+          "samples": [
+            {
+              "wallMs": 323.592292,
+              "internalMs": 1.353
+            },
+            {
+              "wallMs": 355.459583,
+              "internalMs": 2.624
+            },
+            {
+              "wallMs": 305.661917,
+              "internalMs": 1.424
+            },
+            {
+              "wallMs": 302.588959,
+              "internalMs": 1.271
+            },
+            {
+              "wallMs": 302.084541,
+              "internalMs": 1.46
+            },
+            {
+              "wallMs": 317.828916,
+              "internalMs": 1.265
+            },
+            {
+              "wallMs": 330.976,
+              "internalMs": 1.461
+            },
+            {
+              "wallMs": 335.998459,
+              "internalMs": 1.376
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 270.310542,
+          "p50InternalMs": 1.778,
+          "samples": [
+            {
+              "wallMs": 271.352375,
+              "internalMs": 1.803
+            },
+            {
+              "wallMs": 263.7615,
+              "internalMs": 1.589
+            },
+            {
+              "wallMs": 270.310542,
+              "internalMs": 1.959
+            },
+            {
+              "wallMs": 255.207708,
+              "internalMs": 1.693
+            },
+            {
+              "wallMs": 286.547875,
+              "internalMs": 1.897
+            },
+            {
+              "wallMs": 267.925625,
+              "internalMs": 1.892
+            },
+            {
+              "wallMs": 282.589333,
+              "internalMs": 1.74
+            },
+            {
+              "wallMs": 293.511375,
+              "internalMs": 1.778
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 11.886084,
+          "p50InternalMs": 1.879,
+          "samples": [
+            {
+              "wallMs": 13.754625,
+              "internalMs": 2.0005
+            },
+            {
+              "wallMs": 12.859708,
+              "internalMs": 1.8935
+            },
+            {
+              "wallMs": 11.843792,
+              "internalMs": 1.821334
+            },
+            {
+              "wallMs": 11.35075,
+              "internalMs": 1.770084
+            },
+            {
+              "wallMs": 11.4225,
+              "internalMs": 1.879
+            },
+            {
+              "wallMs": 12.694209,
+              "internalMs": 1.89475
+            },
+            {
+              "wallMs": 12.209166,
+              "internalMs": 1.831833
+            },
+            {
+              "wallMs": 11.886084,
+              "internalMs": 1.885875
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "loop",
+      "fixture": "loop.js",
+      "fixtureSha256": "0a239af7e109120b76413eab52006828404890149d4c0bbcf7ca681b2839ffdf",
+      "samplesPerRuntime": 12,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 74.823875,
+          "p50InternalMs": 1.402,
+          "samples": [
+            {
+              "wallMs": 71.796708,
+              "internalMs": 1.727
+            },
+            {
+              "wallMs": 75.994916,
+              "internalMs": 1.237
+            },
+            {
+              "wallMs": 68.94375,
+              "internalMs": 1.411
+            },
+            {
+              "wallMs": 75.978083,
+              "internalMs": 1.472
+            },
+            {
+              "wallMs": 84.940166,
+              "internalMs": 1.394
+            },
+            {
+              "wallMs": 89.522708,
+              "internalMs": 1.402
+            },
+            {
+              "wallMs": 67.989166,
+              "internalMs": 1.444
+            },
+            {
+              "wallMs": 71.482792,
+              "internalMs": 1.309
+            },
+            {
+              "wallMs": 76.694334,
+              "internalMs": 1.396
+            },
+            {
+              "wallMs": 69.430583,
+              "internalMs": 1.612
+            },
+            {
+              "wallMs": 76.627916,
+              "internalMs": 1.45
+            },
+            {
+              "wallMs": 74.823875,
+              "internalMs": 1.242
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 58.512917,
+          "p50InternalMs": 1.396,
+          "samples": [
+            {
+              "wallMs": 58.279083,
+              "internalMs": 1.696
+            },
+            {
+              "wallMs": 53.373459,
+              "internalMs": 1.394
+            },
+            {
+              "wallMs": 55.921834,
+              "internalMs": 1.364
+            },
+            {
+              "wallMs": 61.47875,
+              "internalMs": 1.721
+            },
+            {
+              "wallMs": 58.512917,
+              "internalMs": 1.474
+            },
+            {
+              "wallMs": 97.826458,
+              "internalMs": 1.457
+            },
+            {
+              "wallMs": 52.81425,
+              "internalMs": 1.336
+            },
+            {
+              "wallMs": 51.422958,
+              "internalMs": 1.118
+            },
+            {
+              "wallMs": 58.590709,
+              "internalMs": 1.396
+            },
+            {
+              "wallMs": 71.957875,
+              "internalMs": 1.502
+            },
+            {
+              "wallMs": 84.001459,
+              "internalMs": 1.366
+            },
+            {
+              "wallMs": 62.489834,
+              "internalMs": 1.652
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 11.346625,
+          "p50InternalMs": 0.988625,
+          "samples": [
+            {
+              "wallMs": 11.195041,
+              "internalMs": 1.10725
+            },
+            {
+              "wallMs": 11.412417,
+              "internalMs": 0.972709
+            },
+            {
+              "wallMs": 11.346625,
+              "internalMs": 1.081875
+            },
+            {
+              "wallMs": 12.904,
+              "internalMs": 0.988625
+            },
+            {
+              "wallMs": 12.590542,
+              "internalMs": 1.247916
+            },
+            {
+              "wallMs": 10.68275,
+              "internalMs": 0.987292
+            },
+            {
+              "wallMs": 11.907834,
+              "internalMs": 1.056792
+            },
+            {
+              "wallMs": 11.295042,
+              "internalMs": 0.863625
+            },
+            {
+              "wallMs": 15.062625,
+              "internalMs": 1.601458
+            },
+            {
+              "wallMs": 12.247625,
+              "internalMs": 0.947917
+            },
+            {
+              "wallMs": 10.950125,
+              "internalMs": 1.018959
+            },
+            {
+              "wallMs": 10.751,
+              "internalMs": 0.8205
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "json",
+      "fixture": "json.js",
+      "fixtureSha256": "489a3686a3bd7cac0df6dead1231eacd48c2fce2ee7a99482c419903217ae2fe",
+      "samplesPerRuntime": 8,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 71.80525,
+          "p50InternalMs": 2.427,
+          "samples": [
+            {
+              "wallMs": 88.228917,
+              "internalMs": 3.084
+            },
+            {
+              "wallMs": 87.99275,
+              "internalMs": 3.649
+            },
+            {
+              "wallMs": 97.166708,
+              "internalMs": 2.488
+            },
+            {
+              "wallMs": 80.8525,
+              "internalMs": 2.565
+            },
+            {
+              "wallMs": 71.61,
+              "internalMs": 1.972
+            },
+            {
+              "wallMs": 69.7085,
+              "internalMs": 2.427
+            },
+            {
+              "wallMs": 69.553209,
+              "internalMs": 2.315
+            },
+            {
+              "wallMs": 71.80525,
+              "internalMs": 2.387
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 59.409208,
+          "p50InternalMs": 2.284,
+          "samples": [
+            {
+              "wallMs": 76.131375,
+              "internalMs": 2.607
+            },
+            {
+              "wallMs": 69.428834,
+              "internalMs": 2.673
+            },
+            {
+              "wallMs": 62.406291,
+              "internalMs": 2.227
+            },
+            {
+              "wallMs": 61.47775,
+              "internalMs": 2.513
+            },
+            {
+              "wallMs": 55.83625,
+              "internalMs": 2.169
+            },
+            {
+              "wallMs": 54.068958,
+              "internalMs": 2.276
+            },
+            {
+              "wallMs": 57.765209,
+              "internalMs": 2.284
+            },
+            {
+              "wallMs": 59.409208,
+              "internalMs": 2.351
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 12.685917,
+          "p50InternalMs": 2.019542,
+          "samples": [
+            {
+              "wallMs": 14.455041,
+              "internalMs": 2.229
+            },
+            {
+              "wallMs": 17.527834,
+              "internalMs": 2.104583
+            },
+            {
+              "wallMs": 13.521541,
+              "internalMs": 2.019542
+            },
+            {
+              "wallMs": 14.720041,
+              "internalMs": 2.329542
+            },
+            {
+              "wallMs": 12.574,
+              "internalMs": 1.778459
+            },
+            {
+              "wallMs": 12.685917,
+              "internalMs": 2.105083
+            },
+            {
+              "wallMs": 12.187541,
+              "internalMs": 1.894792
+            },
+            {
+              "wallMs": 11.953292,
+              "internalMs": 1.788333
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "async",
+      "fixture": "async.js",
+      "fixtureSha256": "03d5c9e818bd7be80bbf3055e381f6d3467f374530211fb421a2ed075a83599a",
+      "samplesPerRuntime": 8,
+      "results": [
+        {
+          "label": "Cottontail 0.5.0",
+          "p50WallMs": 71.905042,
+          "p50InternalMs": 0.514,
+          "samples": [
+            {
+              "wallMs": 73.487083,
+              "internalMs": 0.514
+            },
+            {
+              "wallMs": 71.657583,
+              "internalMs": 0.494
+            },
+            {
+              "wallMs": 74.105834,
+              "internalMs": 0.492
+            },
+            {
+              "wallMs": 68.312459,
+              "internalMs": 0.575
+            },
+            {
+              "wallMs": 68.774708,
+              "internalMs": 0.475
+            },
+            {
+              "wallMs": 71.905042,
+              "internalMs": 0.825
+            },
+            {
+              "wallMs": 76.760833,
+              "internalMs": 0.758
+            },
+            {
+              "wallMs": 78.839958,
+              "internalMs": 0.597
+            }
+          ]
+        },
+        {
+          "label": "Cottontail 0.7.1",
+          "p50WallMs": 57.288833,
+          "p50InternalMs": 0.68,
+          "samples": [
+            {
+              "wallMs": 58.338834,
+              "internalMs": 0.721
+            },
+            {
+              "wallMs": 57.288833,
+              "internalMs": 0.818
+            },
+            {
+              "wallMs": 51.197083,
+              "internalMs": 0.68
+            },
+            {
+              "wallMs": 51.451333,
+              "internalMs": 0.56
+            },
+            {
+              "wallMs": 55.618834,
+              "internalMs": 0.563
+            },
+            {
+              "wallMs": 60.14925,
+              "internalMs": 0.744
+            },
+            {
+              "wallMs": 69.581167,
+              "internalMs": 0.746
+            },
+            {
+              "wallMs": 59.703792,
+              "internalMs": 0.648
+            }
+          ]
+        },
+        {
+          "label": "Bun 1.4.0",
+          "p50WallMs": 10.310042,
+          "p50InternalMs": 0.5755,
+          "samples": [
+            {
+              "wallMs": 11.390125,
+              "internalMs": 0.576375
+            },
+            {
+              "wallMs": 10.310042,
+              "internalMs": 0.574708
+            },
+            {
+              "wallMs": 10.165916,
+              "internalMs": 0.528875
+            },
+            {
+              "wallMs": 10.1375,
+              "internalMs": 0.5755
+            },
+            {
+              "wallMs": 9.495584,
+              "internalMs": 0.567583
+            },
+            {
+              "wallMs": 12.292625,
+              "internalMs": 0.623292
+            },
+            {
+              "wallMs": 30.110417,
+              "internalMs": 0.800167
+            },
+            {
+              "wallMs": 12.445666,
+              "internalMs": 0.732584
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

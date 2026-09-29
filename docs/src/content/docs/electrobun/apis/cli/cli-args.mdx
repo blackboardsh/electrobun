@@ -44,6 +44,13 @@ the `--beta` shorthand selects one explicitly. The thin npm bootstrap adds
 `--channel=stable` when no template channel was requested. `production` and
 `canary` are also accepted as template channel names.
 
+The template channel and Hutch's own release channel are independent. A beta
+catalog can require a stable Hutch release; `--beta` does not mean that
+`hutch-canary` is required or sufficiently recent. If init reports a minimum
+Hutch version, upgrade the matching launcher before retrying. For example,
+the 2.0.2-beta.35 catalog requires Hutch 0.27.0, so use `hutch upgrade` followed
+by `hutch electrobun init --beta`; 0.27.0-canary.17 predates 0.27.0.
+
 The publisher guarantees that a published template's exact Electrobun pin
 matches its catalog. After extracting it, `init` uses that release for its
 initial core/devkit sync. An unpinned hand-written template instead uses the

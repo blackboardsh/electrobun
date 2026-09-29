@@ -37,6 +37,20 @@ hutch run build:canary
 hutch run build:stable
 ```
 
+## Cottontail capability packaging
+
+For `build.mainProcess: "cottontail"`, Hutch scans the final main-process bundle
+and packages the core runtime plus selected standard-library capabilities and
+their dependencies. Unused optional modules stay out of the app. Keep the
+generated runtime directories with the executable when distributing a bundle.
+
+Code loaded dynamically may need explicit includes in
+`build.cottontail.capabilities` in `electrobun.config.ts`. These add to automatic
+detection; they do not replace it. Before publishing, exercise those code paths
+in the built app on every supported platform. See the
+[Cottontail guide](/electrobun/guides/cottontail/#modular-standard-library)
+for examples and troubleshooting.
+
 ## Release Host
 
 Artifacts are flat files and can be served from R2, S3, another object store,
