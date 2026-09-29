@@ -110,6 +110,7 @@ export default defineConfig({
               items: [
                 { label: "All releases", link: "/electrobun/guides/changelog/" },
                 { label: "Unreleased", link: "/electrobun/guides/changelog/unreleased/" },
+                { label: "v2.0.2", link: "/electrobun/guides/changelog/v2-0-2/" },
                 { label: "v2.x", link: "/electrobun/guides/changelog/v2-x/" },
                 { label: "v1.18.1", link: "/electrobun/guides/changelog/v1-18-1/" },
                 { label: "v1.18.0", link: "/electrobun/guides/changelog/v1-18-0/" },
