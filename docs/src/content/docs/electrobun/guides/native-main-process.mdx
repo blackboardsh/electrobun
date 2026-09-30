@@ -166,7 +166,8 @@ project to the current channel head.
 
 - Native main processes currently build for the host operating system and
   architecture. Use native CI runners for a release matrix.
-- Windows targets are x64. Windows on ARM runs the x64 build through emulation.
+- Windows supports x64 and, in beta releases, ARM64 for Zig, Rust and Go main
+  processes. Odin remains Windows x64-only.
 - Windows Rust and Odin builds require Visual Studio Build Tools and the Windows
   SDK.
 - macOS needs Xcode Command Line Tools. Linux needs the platform compiler and

@@ -2,7 +2,7 @@
 
 // Resolve the exact Hutch release paired with this electrobun npm version.
 // The single npm package stays platform-neutral: each Electrobun GitHub
-// Release carries the four Hutch archives, and this shim verifies and caches
+// Release carries the five Hutch archives, and this shim verifies and caches
 // the host archive on first use. A compatible machine-wide launcher remains
 // a fallback, but Hutch before 0.22 cannot honor the paired default variables.
 
@@ -27,7 +27,7 @@ const { homedir, tmpdir } = require("node:os");
 const path = require("node:path");
 
 // Stamped by push-version.js from package/hutch.config.ts.
-const PAIRED_HUTCH_VERSION = "0.27.1";
+const PAIRED_HUTCH_VERSION = "0.27.2-canary.1";
 const ELECTROBUN_VERSION = require("../package.json").version;
 
 const MINIMUM_DEFAULTS_HUTCH_VERSION = "0.22.0";
@@ -67,6 +67,7 @@ const releasedPlatforms = {
 	"linux-arm64": "linux-arm64",
 	"linux-x64": "linux-x64",
 	"win32-x64": "windows-x64",
+	"win32-arm64": "windows-arm64",
 };
 
 function normalizeHutchChannel(value) {

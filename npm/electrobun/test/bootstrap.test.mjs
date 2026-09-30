@@ -152,6 +152,7 @@ function artifactIndex(baseUrl, selectedPlatform, selectedArchive) {
 		"linux-arm64",
 		"linux-x64",
 		"windows-x64",
+		"windows-arm64",
 	]) {
 		const bytes = platform === selectedPlatform ? selectedArchive : Buffer.from(platform);
 		const filename = `electrobun-hutch-${platform}.tar.gz`;
@@ -293,13 +294,13 @@ test("paired-version probes cannot inherit a shared-temp Hutch project config", 
 	}
 });
 
-test("maps exactly the four published Hutch release platforms", () => {
+test("maps exactly the five published Hutch release platforms", () => {
 	assert.equal(resolver.hutchPlatformKey("darwin", "arm64"), "macos-arm64");
 	assert.equal(resolver.hutchPlatformKey("linux", "arm64"), "linux-arm64");
 	assert.equal(resolver.hutchPlatformKey("linux", "x64"), "linux-x64");
 	assert.equal(resolver.hutchPlatformKey("win32", "x64"), "windows-x64");
 	assert.equal(resolver.hutchPlatformKey("darwin", "x64"), null);
-	assert.equal(resolver.hutchPlatformKey("win32", "arm64"), null);
+	assert.equal(resolver.hutchPlatformKey("win32", "arm64"), "windows-arm64");
 });
 
 test("downloads, verifies, safely extracts, and reuses the exact cached release offline", async () => {

@@ -94,6 +94,19 @@ test("indexes exact-version core and optional CEF assets by devkit target", () =
 	}
 });
 
+test("indexes the Windows ARM64 devkit and rejects x64 contents under its name", () => {
+	const root = mkdtempSync(join(tmpdir(), "electrobun-arm64-index-"));
+	const options = { artifactRoot: root, repository: "blackboardsh/electrobun", tag: `v${version}`, version, expectedPlatforms: ["windows-arm64"] };
+	try {
+		writeCore(root, "win-arm64", { os: "win", arch: "arm64" });
+		assert.deepEqual(createArtifactIndex(options).platforms["windows-arm64"].target, { os: "win", arch: "arm64" });
+		writeCore(root, "win-arm64", { os: "win", arch: "x64" });
+		assert.throws(() => createArtifactIndex(options), /does not match archive target/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rejects an archive whose native devkit target disagrees with its name", () => {
 	const root = fixture();
 	try {

@@ -54,7 +54,7 @@ function hutchArchive(temporary, platform, metadataOverrides = {}, extra = false
 	const rootName = `hutch-v${hutchVersion}-${platform}`;
 	const staging = join(temporary, `staging-${platform}-${Math.random()}`);
 	const root = join(staging, rootName);
-	const extension = platform === "windows-x64" ? ".exe" : "";
+	const extension = platform.startsWith("windows-") ? ".exe" : "";
 	mkdirSync(join(root, "bin"), { recursive: true });
 	writeFileSync(join(root, "bin", `hutch${extension}`), `launcher:${platform}`);
 	writeFileSync(

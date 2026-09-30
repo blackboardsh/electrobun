@@ -8,12 +8,15 @@ import process from "process";
 import { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
 import { validateNativeDevkitManifest } from "./validate-native-devkit.mjs";
 import { parseAppCottontailVersion } from "./verify-release-toolchain.mjs";
+import { validateWindowsReleaseArchitecture } from "./windows-binary-architecture.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const platform = process.platform;
-const arch = process.arch;
+const arch = process.env.ELECTROBUN_BUILD_ARCH || process.arch;
+if (!["x64", "arm64"].includes(arch)) throw new Error(`Unsupported build architecture: ${arch}`);
+if (platform !== "win32" && arch !== process.arch) throw new Error("Cross-compilation is currently supported only on Windows");
 
 // Map Node.js platform/arch to our naming
 const platformMap = {
@@ -28,8 +31,7 @@ const archMap = {
 };
 
 const platformName = platformMap[platform] || platform;
-// Always use x64 for Windows since we only build x64 Windows binaries
-const archName = platform === "win32" ? "x64" : archMap[arch] || arch;
+const archName = archMap[arch] || arch;
 const devkitTarget = {
 	os: platform === "darwin" ? "macos" : platform === "win32" ? "win" : "linux",
 	arch: archName,
@@ -43,7 +45,7 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 console.log("Building full release...");
 try {
 	const hutchBinary = process.env.HUTCH_BINARY || "hutch";
-	execFileSync(hutchBinary, ["build.ts", "--release", "--core-only"], {
+	execFileSync(hutchBinary, ["build.ts", "--release", "--core-only", `--arch=${archName}`], {
 		cwd: path.join(__dirname, ".."),
 		stdio: "inherit",
 	});
@@ -100,6 +102,12 @@ if (platform === "linux") {
 	console.log(
 		"Verified all release ELF files support the Ubuntu 24.04 ABI baseline",
 	);
+}
+
+if (platform === "win32") {
+	const count = validateWindowsReleaseArchitecture(distPath, archName);
+	if (count === 0) throw new Error("Windows release contains no PE binaries");
+	console.log(`Verified ${count} Windows ${archName} executables and DLLs`);
 }
 
 // Create a tar.gz file using system tar (preserves file permissions)

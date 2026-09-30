@@ -30,9 +30,7 @@ export const ELECTROBUN_SDK_ABI = {
 
 export type NativeDevkitTargetOS = "macos" | "linux" | "win";
 export type NativeDevkitTargetArch = "arm64" | "x64";
-export type NativeDevkitTarget =
-	| { os: "win"; arch: "x64" }
-	| { os: Exclude<NativeDevkitTargetOS, "win">; arch: NativeDevkitTargetArch };
+export type NativeDevkitTarget = { os: NativeDevkitTargetOS; arch: NativeDevkitTargetArch };
 
 /**
  * The JS SDK export table lives in the devkit, not in Hutch or Cottontail.
@@ -142,6 +140,7 @@ export interface NativeDevkitManifest {
 				module: typeof ELECTROBUN_GO_SDK_MODULE;
 			};
 			odin: {
+				supported?: boolean;
 				root: string;
 				entrypoint: string;
 				collection: string;
@@ -155,7 +154,7 @@ export function nativeDevkitTarget(
 	os: NativeDevkitTargetOS,
 	hostArch: NativeDevkitTargetArch,
 ): NativeDevkitTarget {
-	return os === "win" ? { os, arch: "x64" } : { os, arch: hostArch };
+	return { os, arch: hostArch };
 }
 
 function targetRuntimeLayout(
@@ -204,7 +203,7 @@ function targetRuntimeLayout(
 		processHelper: `process_helper${extension}`,
 		bsdiff: `bsdiff${extension}`,
 		bspatch: `bspatch${extension}`,
-		zigAsar: windows ? "zig-asar/x64/zig-asar.exe" : "zig-asar",
+		zigAsar: windows ? `zig-asar/${target.arch}/zig-asar.exe` : "zig-asar",
 		zigZstd: `zig-zstd${extension}`,
 	};
 }
@@ -274,6 +273,7 @@ export function createNativeDevkitManifest(options: {
 					module: ELECTROBUN_GO_SDK_MODULE,
 				},
 				odin: {
+					...(options.target.os === "win" && options.target.arch === "arm64" ? { supported: false } : {}),
 					root: "odin-sdk/electrobun",
 					entrypoint: "odin-sdk/electrobun/electrobun.odin",
 					collection: "odin-sdk",

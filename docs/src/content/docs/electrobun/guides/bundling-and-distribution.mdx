@@ -87,12 +87,14 @@ Run the same build on each published target:
 | --- | --- | --- |
 | macOS ARM64 | `macos-arm64-` | `stable-macos-arm64-` |
 | Windows x64 | `win-x64-` | `stable-win-x64-` |
+| Windows ARM64 (beta) | `win-arm64-` | `stable-win-arm64-` |
 | Linux x64 | `linux-x64-` | `stable-linux-x64-` |
 | Linux ARM64 | `linux-arm64-` | `stable-linux-arm64-` |
 
-Canary builds prepend `canary-` to both prefixes. Windows ARM uses
-the x64 artifact through system emulation. Electrobun's current release matrix
-does not publish a macOS x64 core artifact.
+Canary builds prepend `canary-` to both prefixes. Windows ARM64 is available
+with the Electrobun beta and Hutch canary toolchain. The updater keeps the
+installed architecture, so an existing x64 app needs an explicit ARM64 install.
+Electrobun's current release matrix does not publish a macOS x64 core artifact.
 
 ## Artifact Names
 

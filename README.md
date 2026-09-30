@@ -266,7 +266,13 @@ All commands are run from the `/package` directory:
 | OS | Status |
 |---|---|
 | macOS 14+ | Official |
-| Windows 11+ | Official |
+| Windows 11+ x64 | Official |
+| Windows 11+ ARM64 | Beta |
 | Ubuntu 24.04+ | Official |
 | Other Linux distros (gtk3, webkit2gtk-4.1) | Community |
 | Raspberry Pi | Unofficial fork: [kortexa-ai/electrobun (linux-wpe)](https://github.com/kortexa-ai/electrobun/tree/kortexa/linux-wpe) — follow the author [@francip](https://x.com/francip/status/2050149256053539059?s=20) |
+
+Windows ARM64 supports JavaScript, Zig, Rust, and Go main processes with the
+system webview or CEF. Odin is currently unavailable on this target. The paired
+Cottontail canary uses interpreter-only JavaScriptCore without JIT or WebAssembly;
+benchmark JavaScript workloads before migrating an existing x64 app.

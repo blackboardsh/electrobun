@@ -9,11 +9,13 @@ description: "Supported operating systems, architectures, runtimes, and webview 
 | --- | --- | --- | --- |
 | macOS | arm64 | WKWebView | CEF |
 | Windows | x64 | WebView2 | CEF |
+| Windows | arm64 (beta) | WebView2 | CEF |
 | Linux | x64 | WebKitGTK 4.1 | CEF |
 | Linux | arm64 | WebKitGTK 4.1 | CEF |
 
-Windows on ARM runs Electrobun's x64 build through Windows emulation. Windows
-ARM64 is not a separate build target.
+Windows ARM64 is available in Electrobun beta releases with Hutch and
+Cottontail canary releases. Existing x64 installations continue to run under
+emulation; install the ARM64 build explicitly to switch architectures.
 
 Hutch builds for the current host operating system and architecture. Produce a
 cross-platform release with native CI runners; native main-process compilers do
@@ -29,6 +31,10 @@ not currently cross-compile Electrobun apps.
 | Rust | Supported | Pinned Rust 1.88.0 toolchain |
 | Go | Supported | Pinned Go 1.26.4 toolchain |
 | Odin | Supported | Pinned pre-1.0 Odin dev-2026-07a toolchain |
+
+Odin does not support the Windows ARM64 target. Cottontail on Windows ARM64
+uses JavaScriptCore's C-loop interpreter, with JIT and WebAssembly disabled.
+Benchmark JavaScript-heavy applications before moving them from emulated x64.
 
 Hutch accepts an exact matching system compiler. Otherwise it downloads the
 pinned compiler into its shared global toolchain store.

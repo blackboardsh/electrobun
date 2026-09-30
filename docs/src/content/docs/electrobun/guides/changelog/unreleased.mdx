@@ -4,6 +4,11 @@ title: "Unreleased"
 
 Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/).
 
+- Added native Windows ARM64 beta devkits, WebView2 and CEF artifacts, and
+  Zig, Rust and Go main-process builds. The paired Hutch and Cottontail
+  releases are canaries. Cottontail uses the JSC C-loop interpreter without
+  JIT or WebAssembly; Odin remains unsupported on Windows ARM64.
+
 - Fixed Cottontail webview RPC hangs when an idle readiness pipe produced
   `EAGAIN`. The notification stream now waits for pipe readiness and owns a
   separate descriptor, so closing it cannot invalidate the native core's pipe.

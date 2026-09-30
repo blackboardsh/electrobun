@@ -44,6 +44,10 @@ const productPlatforms = {
 		archiveTarget: "win-x64",
 		target: { os: "win", arch: "x64" },
 	},
+	"windows-arm64": {
+		archiveTarget: "win-arm64",
+		target: { os: "win", arch: "arm64" },
+	},
 };
 const platformKeys = Object.keys(productPlatforms).sort();
 

@@ -27,6 +27,7 @@ const defaultExpectedPlatforms = [
 	"linux-x64",
 	"macos-arm64",
 	"windows-x64",
+	"windows-arm64",
 ];
 
 function fail(message) {
@@ -75,8 +76,8 @@ function targetForArchive(platform, arch) {
 	if (platform === "linux") {
 		return { key: `linux-${arch}`, target: { os: "linux", arch } };
 	}
-	if (platform === "win" && arch === "x64") {
-		return { key: "windows-x64", target: { os: "win", arch: "x64" } };
+	if (platform === "win") {
+		return { key: `windows-${arch}`, target: { os: "win", arch } };
 	}
 	fail(`unsupported release target ${platform}-${arch}`);
 }
