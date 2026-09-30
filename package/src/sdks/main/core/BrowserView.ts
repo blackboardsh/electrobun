@@ -21,7 +21,7 @@ const BrowserViewMap: {
 const webviewTagCreatedEvent = Symbol("webview-tag-browser-view-created");
 
 type QueuedWebviewMessage = {
-	message: unknown;
+	message: string;
 	markSent: () => void;
 	enqueuedAt: number;
 	bytes: number;
@@ -479,31 +479,14 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			return;
 		}
 
-		const fallbackMessages: Array<{
-			message: string;
-			markSent: () => void;
-		}> = [];
-
-		for (const queuedMessage of queuedMessages) {
-			try {
-				fallbackMessages.push({
-					message: queuedMessage.message as string,
-					markSent: queuedMessage.markSent,
-				});
-			} catch (error) {
-				console.error("host: failed to serialize message to webview", error);
-				queuedMessage.markSent();
-			}
-		}
-
 		try {
 			this.sendHostMessagesToWebviewViaExecute(
-				fallbackMessages.map(({ message }) => message),
+				queuedMessages.map(({ message }) => message),
 			);
 		} catch (error) {
 			console.error("host: failed to send messages to webview", error);
 		} finally {
-			for (const { markSent } of fallbackMessages) markSent();
+			for (const { markSent } of queuedMessages) markSent();
 		}
 	}
 
@@ -551,12 +534,12 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 	private resolveQueuedHostMessages() {
 		this.hostMessageQueuedBytes = 0;
-		while (this.hostResponseSendQueue.length > 0) {
-			this.hostResponseSendQueue.shift()!.markSent();
-		}
-		while (this.hostMessageSendQueue.length > 0) {
-			this.hostMessageSendQueue.shift()!.markSent();
-		}
+		const responses = this.hostResponseSendQueue;
+		const messages = this.hostMessageSendQueue;
+		this.hostResponseSendQueue = [];
+		this.hostMessageSendQueue = [];
+		for (const entry of responses) entry.markSent();
+		for (const entry of messages) entry.markSent();
 	}
 
 	remove() {
