@@ -115,3 +115,16 @@ describe("createRPC request timeouts", () => {
 		});
 	});
 });
+
+
+describe("RPC message backpressure", () => {
+	it("returns the transport handoff promise to message producers", async () => {
+		let finish!: () => void;
+		const handoff = new Promise<void>(resolve => { finish = resolve; });
+		const rpc = createRPC({ transport: { send: () => handoff } });
+		const delivery = (rpc.send as any)("terminalOutput", { data: "hello" });
+		expect(delivery).toBe(handoff);
+		finish();
+		await delivery;
+	});
+});

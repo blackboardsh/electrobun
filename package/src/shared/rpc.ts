@@ -136,7 +136,7 @@ type RPCMessagesProxy<MS extends RPCMessagesSchema> = {
 			: undefined extends MS[K]
 				? [payload?: MS[K]]
 				: [payload: MS[K]]
-	) => void;
+	) => void | PromiseLike<void>;
 };
 
 // ---- Transport ----
@@ -364,7 +364,7 @@ export function createRPC<
 			payload,
 		};
 		debugHooks.onSend?.(rpcMessage);
-		transport.send(rpcMessage);
+		return transport.send(rpcMessage);
 	}
 
 	const send = new Proxy(sendFn, {

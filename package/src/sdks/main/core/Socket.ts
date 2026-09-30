@@ -11,9 +11,10 @@ export const sendMessageToWebviewViaSocket = (
 	webviewId: number,
 	message: unknown,
 	secretKey?: Uint8Array,
+	serialized = false,
 ): boolean => {
 	try {
-		const messageJson = JSON.stringify(message);
+		const messageJson = serialized ? message as string : JSON.stringify(message);
 		if (process.platform === "linux" && secretKey?.byteLength === 32) {
 			const encryptedPacket = encryptHostTransportPacket(messageJson, secretKey);
 			if (

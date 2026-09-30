@@ -134,7 +134,7 @@ describe("Windows RPC Unicode transport source contract", () => {
 			'const HOST_MESSAGE_SOCKET_AVAILABLE = process.platform !== "win32";',
 		);
 		expect(browserView).toContain(
-			"message: JSON.stringify(queuedMessage.message)",
+			"serialized = JSON.stringify(message)",
 		);
 		expect(browserView).toContain("sendHostMessagesToWebviewViaExecute(");
 		expect(browserView).toContain(

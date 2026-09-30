@@ -23,9 +23,13 @@ const webviewTagCreatedEvent = Symbol("webview-tag-browser-view-created");
 type QueuedWebviewMessage = {
 	message: unknown;
 	markSent: () => void;
+	enqueuedAt: number;
+	bytes: number;
 };
 
-const HOST_MESSAGE_SEND_BATCH_SIZE = 32;
+const HOST_MESSAGE_SEND_BATCH_SIZE = 256;
+const HOST_MESSAGE_SEND_BATCH_BYTES = 512 * 1024;
+const HOST_MESSAGE_SEND_TURN_MS = 8;
 const HOST_MESSAGE_SOCKET_AVAILABLE = process.platform !== "win32";
 const HOST_MESSAGE_RESPONSE_PRIORITY = process.platform === "linux";
 
@@ -123,6 +127,11 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 	hostMessageSendQueue: QueuedWebviewMessage[] = [];
 	hostResponseSendQueue: QueuedWebviewMessage[] = [];
 	flushingHostMessageSendQueue: boolean = false;
+	private hostMessageQueuedBytes = 0;
+	private hostMessageEnqueued = 0;
+	private hostMessageDrained = 0;
+	private hostMessagePeakQueuedBytes = 0;
+	private hostMessagePeakQueuedCount = 0;
 	navigationRules: string | null = null;
 	// Sandbox mode disables RPC and only allows event emission (for untrusted content)
 	sandbox: boolean = false;
@@ -391,7 +400,23 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 				HOST_MESSAGE_RESPONSE_PRIORITY && isRpcResponsePacket(message)
 					? this.hostResponseSendQueue
 					: this.hostMessageSendQueue;
-			queue.push({ message, markSent });
+			// Serialize once when queued: retain the wire packet rather than its
+			// potentially much larger application object graph.
+			let serialized: string;
+			try {
+				serialized = JSON.stringify(message);
+				if (serialized === undefined) throw new TypeError("RPC packet is not JSON serializable");
+			} catch (error) {
+				console.error("host: failed to serialize message to webview", error);
+				markSent();
+				return;
+			}
+			const bytes = Buffer.byteLength(serialized, "utf8");
+			queue.push({ message: serialized, markSent, enqueuedAt: Date.now(), bytes });
+			this.hostMessageQueuedBytes += bytes;
+			this.hostMessageEnqueued++;
+			this.hostMessagePeakQueuedBytes = Math.max(this.hostMessagePeakQueuedBytes, this.hostMessageQueuedBytes);
+			this.hostMessagePeakQueuedCount = Math.max(this.hostMessagePeakQueuedCount, this.hostMessageSendQueue.length + this.hostResponseSendQueue.length);
 			this.scheduleHostMessageFlush();
 		});
 	}
@@ -408,7 +433,18 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 			this.hostResponseSendQueue.length > 0
 				? this.hostResponseSendQueue
 				: this.hostMessageSendQueue;
-		return queue.splice(0, HOST_MESSAGE_SEND_BATCH_SIZE);
+		let count = 0;
+		let bytes = 0;
+		while (count < queue.length && count < HOST_MESSAGE_SEND_BATCH_SIZE) {
+			const nextBytes = queue[count]!.bytes;
+			// A single oversized packet must still make progress.
+			if (count > 0 && bytes + nextBytes > HOST_MESSAGE_SEND_BATCH_BYTES) break;
+			bytes += nextBytes;
+			count++;
+		}
+		this.hostMessageQueuedBytes -= bytes;
+		this.hostMessageDrained += count;
+		return queue.splice(0, count);
 	}
 
 	private scheduleHostMessageFlush() {
@@ -429,6 +465,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 							this.id,
 							queuedMessage.message,
 							this.secretKey,
+							true,
 						)
 					) {
 						this.sendHostMessageToWebviewViaExecute(queuedMessage.message);
@@ -450,7 +487,7 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		for (const queuedMessage of queuedMessages) {
 			try {
 				fallbackMessages.push({
-					message: JSON.stringify(queuedMessage.message),
+					message: queuedMessage.message as string,
 					markSent: queuedMessage.markSent,
 				});
 			} catch (error) {
@@ -472,12 +509,16 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 
 	async flushHostMessageSendQueue() {
 		try {
+			let turnStarted = performance.now();
 			while (this.hasQueuedHostMessages() && !this.isRemoved) {
 				const batch = this.takeQueuedHostMessageBatch();
 				this.sendQueuedHostMessageBatch(batch);
 
-				if (this.hasQueuedHostMessages()) {
-					await new Promise((resolve) => setTimeout(resolve, 0));
+				if (this.hasQueuedHostMessages() && performance.now() - turnStarted >= HOST_MESSAGE_SEND_TURN_MS) {
+					// Yield to I/O without paying Windows timer granularity after
+					// every 32 packets. Limit each turn so input remains responsive.
+					await new Promise<void>((resolve) => setImmediate(resolve));
+					turnStarted = performance.now();
 				}
 			}
 		} finally {
@@ -490,7 +531,26 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		}
 	}
 
+	/** Host queue only; bytes are serialized UTF-8, not retained heap size.
+	 * Drained means handed to the native transport, not rendered by the WebView. */
+	getHostMessageQueueStats() {
+		const oldest = Math.min(
+			this.hostMessageSendQueue[0]?.enqueuedAt ?? Infinity,
+			this.hostResponseSendQueue[0]?.enqueuedAt ?? Infinity,
+		);
+		return {
+			queuedMessages: this.hostMessageSendQueue.length + this.hostResponseSendQueue.length,
+			queuedBytes: this.hostMessageQueuedBytes,
+			oldestMessageAgeMs: Number.isFinite(oldest) ? Math.max(0, Date.now() - oldest) : 0,
+			enqueuedMessages: this.hostMessageEnqueued,
+			drainedMessages: this.hostMessageDrained,
+			peakQueuedMessages: this.hostMessagePeakQueuedCount,
+			peakQueuedBytes: this.hostMessagePeakQueuedBytes,
+		};
+	}
+
 	private resolveQueuedHostMessages() {
+		this.hostMessageQueuedBytes = 0;
 		while (this.hostResponseSendQueue.length > 0) {
 			this.hostResponseSendQueue.shift()!.markSent();
 		}
@@ -570,6 +630,14 @@ export class BrowserView<T extends RPCWithTransport = RPCWithTransport> {
 		view.secretKey = new Uint8Array(0);
 		view.rpc = options.rpc;
 		view.rpcHandler = undefined;
+		view.hostMessageSendQueue = [];
+		view.hostResponseSendQueue = [];
+		view.flushingHostMessageSendQueue = false;
+		view.hostMessageQueuedBytes = 0;
+		view.hostMessageEnqueued = 0;
+		view.hostMessageDrained = 0;
+		view.hostMessagePeakQueuedBytes = 0;
+		view.hostMessagePeakQueuedCount = 0;
 		view.autoResize = options.autoResize === false ? false : true;
 		view.navigationRules = options.navigationRules ?? null;
 		view.sandbox = options.sandbox ?? false;
