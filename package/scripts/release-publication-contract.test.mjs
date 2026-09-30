@@ -80,7 +80,7 @@ function validatePublicationContract(source) {
 	const templateAcceptance = job(source, "template-acceptance");
 	assert.match(templateAcceptance, /^    needs: \[publish-templates\]$/m);
 	assert.match(templateAcceptance, /^    timeout-minutes: 25$/m);
-	for (const platform of ["macos-arm64", "linux-x64", "linux-arm64", "windows-x64"]) {
+	for (const platform of ["macos-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"]) {
 		assert.ok(templateAcceptance.includes(`platform: ${platform}`));
 	}
 	assert.match(templateAcceptance, /xvfb-run -a node scripts\/accept-published-template\.mjs/);
@@ -352,6 +352,7 @@ function validatePublicationContract(source) {
 		["ubuntu-24.04", "linux-x64"],
 		["ubuntu-24.04-arm", "linux-arm64"],
 		["windows-2025", "windows-x64"],
+		["windows-11-arm", "windows-arm64"],
 	]) {
 		assert.match(
 			npmAcceptance,

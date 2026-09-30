@@ -1,5 +1,9 @@
 import { join, resolve } from "node:path";
 import {
+	KITCHEN_MAIN_PROCESSES,
+	supportedKitchenMainProcesses,
+} from "../../kitchen/scripts/kitchen-matrix-plan";
+import {
 	resolveHutchBinary,
 	runCommandWithSignalForwarding,
 	type DevCommand,
@@ -9,6 +13,8 @@ type CreateVmTestCommandsOptions = {
 	hutchBinary: string;
 	packageDir: string;
 	kitchenDir?: string;
+	platform?: NodeJS.Platform;
+	arch?: string;
 };
 
 // Every main-process SDK bridges renderer callbacks differently, so each
@@ -17,14 +23,7 @@ type CreateVmTestCommandsOptions = {
 // example re-entrant webview-tag creation from a CEF process message), and
 // system variants are built without CEF so renderer-neutral tests exercise
 // the CEF-to-system fallback.
-export const VM_MAIN_PROCESSES = [
-	"cottontail",
-	"bun",
-	"zig",
-	"rust",
-	"go",
-	"odin",
-] as const;
+export const VM_MAIN_PROCESSES = KITCHEN_MAIN_PROCESSES;
 export const VM_WEBVIEWS = ["system", "cef"] as const;
 
 // A deadlocked app never exits on its own; fail the stage instead of hanging
@@ -62,12 +61,14 @@ export function createVmTestCommands({
 	hutchBinary,
 	packageDir,
 	kitchenDir = join(packageDir, "..", "kitchen"),
+	platform = process.platform,
+	arch = process.arch,
 }: CreateVmTestCommandsOptions): VmTestCommand[] {
 	// The build stage builds the package devkit and every Kitchen variant;
 	// launch stages reuse both through the same override dev:matrix uses.
 	const kitchenEnv = { HUTCH_ELECTROBUN_DEVKIT_ROOT: join(packageDir, "dist") };
 	const variants = VM_WEBVIEWS.flatMap((webview) =>
-		VM_MAIN_PROCESSES.map((main) => ({ main, webview })),
+		supportedKitchenMainProcesses(platform, arch).map((main) => ({ main, webview })),
 	);
 	const buildLabel = "Build Electrobun package and Kitchen variants";
 	// On Windows, concurrent Kitchen builds deadlock: Go's cgo shells out to
@@ -79,7 +80,7 @@ export function createVmTestCommands({
 		"dev:matrix",
 		"--build-only",
 		`--with=${variants.map(({ main, webview }) => `${main}:${webview}`).join(",")}`,
-		...(process.platform === "win32" ? ["--jobs=1"] : []),
+		...(platform === "win32" ? ["--jobs=1"] : []),
 	];
 	return [
 		{

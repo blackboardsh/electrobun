@@ -91,7 +91,7 @@ describe("kitchen matrix", () => {
 	});
 
 	it("uses the reduced seven-variant interactive matrix by default", () => {
-		const matrix = createKitchenMatrix(false);
+		const matrix = createKitchenMatrix(false, undefined, "win32", "x64");
 		expect(matrix).toHaveLength(7);
 		expect(new Set(matrix.map(kitchenVariantKey)).size).toBe(7);
 		for (const mainProcess of KITCHEN_MAIN_PROCESSES) {
@@ -103,7 +103,7 @@ describe("kitchen matrix", () => {
 	});
 
 	it("can expand to the complete twelve-variant matrix", () => {
-		const matrix = createKitchenMatrix(true);
+		const matrix = createKitchenMatrix(true, undefined, "win32", "x64");
 		expect(matrix).toHaveLength(12);
 		expect(new Set(matrix.map(kitchenVariantKey)).size).toBe(12);
 		for (const mainProcess of KITCHEN_MAIN_PROCESSES) {
@@ -122,6 +122,18 @@ describe("kitchen matrix", () => {
 			{ mainProcess: "go", renderer: "native" },
 			{ mainProcess: "rust", renderer: "cef" },
 		]);
+	});
+
+	it("covers both renderers for every supported Windows ARM64 backend", () => {
+		const matrix = createKitchenMatrix(true, undefined, "win32", "arm64");
+		expect(matrix).toHaveLength(10);
+		expect(matrix.some(({ mainProcess }) => mainProcess === "odin")).toBe(false);
+		for (const mainProcess of ["cottontail", "bun", "zig", "rust", "go"]) {
+			for (const renderer of ["native", "cef"]) {
+				expect(matrix).toContainEqual({ mainProcess, renderer });
+			}
+		}
+		expect(() => createKitchenMatrix(false, [{ mainProcess: "odin", renderer: "native" }], "win32", "arm64")).toThrow("unsupported on win32-arm64");
 	});
 
 	it("requires a complete and valid environment override", () => {

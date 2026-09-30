@@ -20,10 +20,10 @@ test("Windows launcher gate uses the packaged GUI launcher before artifact publi
   assert.match(section, /if \(\$LASTEXITCODE -ne 0\)/);
   assert.ok(start < workflow.indexOf("      - name: Upload core artifact"));
   assert.match(integration, /assert\.ok\(launcher,/);
-  assert.match(integration, /assert\.equal\(process\.arch, "x64"/);
+  assert.match(integration, /assertWindowsBinaryArchitecture\(launcher, process\.arch\)/);
 });
 
-test("Windows profile path and lifecycle source regressions are release gates with explicit x64 native coverage", () => {
+test("Windows profile path and lifecycle source regressions are release gates with native architecture coverage", () => {
   const start = workflow.indexOf("      - name: Test Windows profile paths and WebView2 teardown");
   assert.ok(start > workflow.indexOf("        run: node scripts/package-release.js"));
   const section = workflow.slice(start, workflow.indexOf("      - name:", start + 12));
@@ -31,6 +31,6 @@ test("Windows profile path and lifecycle source regressions are release gates wi
   assert.match(section, /node scripts\/test-windows-profile-paths\.mjs/);
   assert.match(section, /node scripts\/run-cottontail-test\.js src\/shared\/windows-webview2-lifecycle\.test\.ts/);
   assert.equal((section.match(/if \(\$LASTEXITCODE -ne 0\)/g) || []).length, 2);
-  assert.match(nativeRunner, /"-target", "x86_64-windows-gnu"/);
+  assert.match(nativeRunner, /process\.arch === "arm64" \? "aarch64-windows-gnu" : "x86_64-windows-gnu"/);
   assert.match(nativeRunner, /run\(executable, \[\]\)/);
 });

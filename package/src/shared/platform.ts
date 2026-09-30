@@ -21,13 +21,8 @@ export const OS: SupportedOS = (() => {
 	}
 })();
 
-// Determine ARCH once, with Windows override
+// Runtime architecture follows the executing binary, including under emulation.
 export const ARCH: SupportedArch = (() => {
-	// Always use x64 for Windows since we only build x64 Windows binaries
-	if (OS === "win") {
-		return "x64";
-	}
-
 	switch (archName) {
 		case "arm64":
 			return "arm64";

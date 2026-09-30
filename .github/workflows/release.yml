@@ -48,10 +48,18 @@ jobs:
             arch: x64
             platform_name: win
             artifact_platform: win
+          # Build with the x64 Zig compiler under emulation, then execute the
+          # ARM64 launcher, profile-path and Kitchen checks on this runner.
+          - os: windows-11-arm
+            platform: win32
+            arch: arm64
+            platform_name: win
+            artifact_platform: win
 
     runs-on: ${{ matrix.os }}
 
     env:
+      ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
       EXPECTED_HUTCH_VERSION: '0.28.0-canary.1'
       EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.3'
       EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2-canary.3'
@@ -71,7 +79,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24'
           cache: npm
           cache-dependency-path: package/package-lock.json
 
@@ -120,7 +128,7 @@ jobs:
         if: matrix.platform == 'win32'
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: x64
+          arch: ${{ matrix.arch }}
 
       - name: Free disk space (Linux)
         if: matrix.platform == 'linux'
@@ -475,7 +483,7 @@ jobs:
           --output artifacts/electrobun-artifacts.json
           --repository "$GITHUB_REPOSITORY"
           --tag "$RELEASE_TAG"
-          --expect macos-arm64,linux-arm64,linux-x64,windows-x64
+          --expect macos-arm64,linux-arm64,linux-x64,windows-x64,windows-arm64
 
       - name: Reuse or prepare a draft Electrobun release
         id: release-state
@@ -743,6 +751,8 @@ jobs:
             platform: linux-arm64
           - os: windows-2025
             platform: windows-x64
+          - os: windows-11-arm
+            platform: windows-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -754,7 +764,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify exact published npm acceptance version
@@ -852,6 +862,8 @@ jobs:
             platform: linux-arm64
           - os: windows-2025
             platform: windows-x64
+          - os: windows-11-arm
+            platform: windows-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -860,7 +872,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24'
       - name: Verify template acceptance version
         id: release-type
         env:

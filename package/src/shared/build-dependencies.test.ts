@@ -10,6 +10,10 @@ describe("owned build dependency artifacts", () => {
 		["zig-bsdiff", "macos", "arm64", "zig-bsdiff-darwin-arm64.tar.gz"],
 		["zig-zstd", "linux", "x64", "zig-zstd-linux-x64.tar.gz"],
 		["zig-asar", "win", "x64", "zig-asar-win32-x64.tar.gz"],
+		["zig-asar", "win", "arm64", "zig-asar-win32-arm64.tar.gz"],
+		["zig-bsdiff", "win", "arm64", "zig-bsdiff-win32-arm64.tar.gz"],
+		["zig-zstd", "win", "arm64", "zig-zstd-win32-arm64.tar.gz"],
+		["electrobun-dawn", "win", "arm64", "electrobun-dawn-win32-arm64.tar.gz"],
 		[
 			"electrobun-dawn",
 			"linux",
@@ -42,7 +46,7 @@ describe("owned build dependency artifacts", () => {
 		);
 
 		expect(artifact.url).toBe(
-			"https://artifacts.example.test/zig-bsdiff/releases/0.1.23/zig-bsdiff-linux-x64.tar.gz",
+			`https://artifacts.example.test/zig-bsdiff/releases/${OWNED_BUILD_DEPENDENCY_VERSIONS["zig-bsdiff"]}/zig-bsdiff-linux-x64.tar.gz`,
 		);
 	});
 });
