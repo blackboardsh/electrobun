@@ -80,6 +80,9 @@ export function runTestsIndividually(
 		// resolved file/filter makes selection portable and keeps later tests running.
 		const result = spawn(cottontailBinary, ["test", testArg], {
 			stdio: "inherit",
+			// Cottontail's GitHub reporter currently reports zero collected tests
+			// for these suites. Use the ordinary reporter while retaining CI guards.
+			env: { ...process.env, GITHUB_ACTIONS: "false" },
 		});
 		if (result.error || result.status !== 0) {
 			failures.push({ testArg, result });

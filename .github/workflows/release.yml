@@ -102,10 +102,6 @@ jobs:
         run: hutch test:npm-bootstrap
         working-directory: package
 
-      - name: Test host WebView delivery and RPC backpressure
-        run: node scripts/run-cottontail-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
-        working-directory: package
-
       - name: Test macOS docked Web Inspector layout
         if: matrix.platform == 'darwin'
         run: hutch test:macos-inspector-layout
@@ -241,6 +237,10 @@ jobs:
 
       - name: Build for ${{ matrix.platform_name }}-${{ matrix.arch }}
         run: node scripts/package-release.js
+        working-directory: package
+
+      - name: Test host WebView delivery and RPC backpressure
+        run: node scripts/run-cottontail-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
         working-directory: package
 
       - name: Test Windows release validation contract
