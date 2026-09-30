@@ -145,7 +145,11 @@ assert(
 	"Kitchen matrix should preserve the local Electrobun devkit override",
 );
 
-const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir });
+const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir, arch: "x64" });
+const armVmCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "win32", arch: "arm64" });
+assert(armVmCommands.length === 15, "Windows ARM64 should test ten supported Kitchen variants and five common stages");
+assert(armVmCommands[0]!.args.includes("--jobs=1"), "Windows ARM64 builds run serially");
+assert(!armVmCommands[0]!.args.some((arg) => arg.includes("odin:")), "Windows ARM64 must not schedule unsupported Odin variants");
 const mainProcesses = [...VM_MAIN_PROCESSES];
 assertArray(
 	mainProcesses,

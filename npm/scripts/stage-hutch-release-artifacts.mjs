@@ -19,6 +19,7 @@ export const HUTCH_RELEASE_PLATFORMS = [
 	"linux-arm64",
 	"linux-x64",
 	"windows-x64",
+	"windows-arm64",
 ];
 export const HUTCH_ARTIFACT_INDEX_FILENAME = "hutch-artifacts.json";
 export const HUTCH_ARTIFACT_INDEX_SCHEMA_VERSION = 1;
@@ -38,6 +39,7 @@ const runtimePlatforms = {
 	"linux-arm64": "linux",
 	"linux-x64": "linux",
 	"windows-x64": "win32",
+	"windows-arm64": "win32",
 };
 
 function fail(message) {

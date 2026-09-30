@@ -19,7 +19,7 @@ function run(command, args) {
   if (result.status !== 0) throw new Error(`Windows profile path test failed: ${result.status ?? result.signal}`);
 }
 try {
-  run(zig, ["c++", "-target", "x86_64-windows-gnu", "-std=c++20", "-DUNICODE", "-D_UNICODE",
+  run(zig, ["c++", "-target", process.arch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu", "-std=c++20", "-DUNICODE", "-D_UNICODE",
     join(packageRoot, "src", "native", "shared", "windows_profile_paths_test.cpp"), "-o", executable]);
   run(executable, []);
 } finally {

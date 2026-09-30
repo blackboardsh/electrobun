@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import test, { after, before } from "node:test";
+import { assertWindowsBinaryArchitecture } from "../../scripts/windows-binary-architecture.mjs";
 
 // This is a launcher test, not Desktop runtime coverage. A copied Node binary
 // supplies an independent process.pid oracle and a deterministic exit fixture.
@@ -16,11 +17,12 @@ let supervisorDirectory;
 let supervisor;
 before(async () => {
   if (!available) return;
+  assertWindowsBinaryArchitecture(launcher, process.arch);
   supervisorDirectory = await mkdtemp(join(tmpdir(), "electrobun-test-job-"));
   supervisor = join(supervisorDirectory, "supervisor.exe");
   const zig = process.env.ZIG_BINARY || join(packageRoot, "vendors/zig/zig.exe");
   const result = spawnSync(zig, ["build-exe", join(packageRoot, "src/launcher/windows_test_job.zig"),
-    "-target", "x86_64-windows-gnu", "-O", "ReleaseSafe", `-femit-bin=${supervisor}`], {
+    "-target", process.arch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu", "-O", "ReleaseSafe", `-femit-bin=${supervisor}`], {
     cwd: supervisorDirectory, stdio: "inherit", timeout: 180_000, windowsHide: true,
   });
   assert.ifError(result.error);
@@ -56,7 +58,7 @@ async function runInJob(command, args, options, timeoutMs = 20_000) {
 
 if (process.env.ELECTROBUN_REQUIRE_TEST_LAUNCHER === "1") {
   assert.equal(process.platform, "win32", "the required launcher gate needs Windows");
-  assert.equal(process.arch, "x64", "the release launcher gate targets Windows x64");
+  assert.ok(["x64", "arm64"].includes(process.arch), "the release launcher gate needs Windows x64 or ARM64");
   assert.ok(launcher, "ELECTROBUN_TEST_LAUNCHER must select the freshly built release launcher");
 }
 for (const channel of ["dev", "stable"]) {

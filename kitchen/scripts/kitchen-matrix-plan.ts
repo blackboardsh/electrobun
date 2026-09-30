@@ -24,14 +24,33 @@ export function kitchenVariantKey(variant: KitchenVariant): string {
 	return `${variant.mainProcess}-${variant.renderer}`;
 }
 
+export function supportedKitchenMainProcesses(
+	platform = process.platform,
+	arch: string = process.arch,
+): KitchenMainProcess[] {
+	return KITCHEN_MAIN_PROCESSES.filter(
+		(main) => !(platform === "win32" && arch === "arm64" && main === "odin"),
+	);
+}
+
 export function createKitchenMatrix(
 	full: boolean,
 	selectedVariants?: readonly KitchenVariant[],
+	platform = process.platform,
+	arch: string = process.arch,
 ): KitchenVariant[] {
-	if (selectedVariants) return selectedVariants.map((variant) => ({ ...variant }));
+	const mainProcesses = supportedKitchenMainProcesses(platform, arch);
+	if (selectedVariants) {
+		for (const variant of selectedVariants) {
+			if (!mainProcesses.includes(variant.mainProcess)) {
+				throw new Error(`${variant.mainProcess} is unsupported on ${platform}-${arch}`);
+			}
+		}
+		return selectedVariants.map((variant) => ({ ...variant }));
+	}
 
 	if (full) {
-		return KITCHEN_MAIN_PROCESSES.flatMap((mainProcess) =>
+		return mainProcesses.flatMap((mainProcess) =>
 			KITCHEN_RENDERERS.map((renderer) => ({ mainProcess, renderer })),
 		);
 	}
@@ -43,7 +62,7 @@ export function createKitchenMatrix(
 	return [
 		{ mainProcess: "cottontail", renderer: "native" },
 		{ mainProcess: "cottontail", renderer: "cef" },
-		...KITCHEN_MAIN_PROCESSES.slice(1).map((mainProcess) => ({
+		...mainProcesses.slice(1).map((mainProcess) => ({
 			mainProcess,
 			renderer: "native" as const,
 		})),
