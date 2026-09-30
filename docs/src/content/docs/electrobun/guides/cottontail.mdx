@@ -28,6 +28,14 @@ devkit separately pins the exact runtime placed in the application bundle; it
 does not inherit Hutch's build-time pair. End users install neither one. A Bun
 main process bundles the devkit-pinned Bun runtime instead.
 
+## Windows ARM64 preview
+
+The Windows ARM64 canary uses JavaScriptCore's C-loop interpreter. JIT and
+WebAssembly are disabled on this target. JavaScript-heavy workloads may be
+slower than an x64 build running under Windows emulation, so benchmark your
+application before switching. Native npm addons also need Windows ARM64
+binaries or a working build from source.
+
 ## Select Cottontail
 
 New projects use Cottontail by default. Spelled out explicitly, the
