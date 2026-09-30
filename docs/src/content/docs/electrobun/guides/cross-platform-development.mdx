@@ -12,11 +12,14 @@ it is running. Produce and test each release on a native runner.
 | Platform | Architecture | System renderer |
 | --- | --- | --- |
 | macOS | ARM64 | WKWebView |
-| Windows | x64 | WebView2 |
+| Windows | x64 and ARM64 (beta) | WebView2 |
 | Linux | x64 and ARM64 | GTK WebKit 4.1 |
 
-Windows on ARM runs the x64 application through Windows emulation. The current
-Electrobun release workflow does not publish a macOS x64 core artifact.
+Windows ARM64 builds require the Electrobun beta and Hutch canary toolchain.
+The Zig host compiler runs under x64 emulation and produces native ARM64
+applications. Test both WebView2 and CEF on ARM64 hardware. Existing x64
+applications remain emulated until the ARM64 build is explicitly installed.
+The current release workflow does not publish a macOS x64 core artifact.
 
 On each runner, install Hutch and execute the same stable-release command:
 
