@@ -234,7 +234,7 @@ test("release CI verifies provenance before all five Kitchen builds", () => {
 		assert.match(
 			workflow,
 			new RegExp(
-				`^      - name: ${name}\\n        if: \\$\\{\\{ !cancelled\\(\\) \\}\\}\\n        run: hutch test ${testFile.replaceAll("/", "\\/").replaceAll(".", "\\.")}\\n        working-directory: kitchen$`,
+				`^      - name: ${name}\\n        if: \\$\\{\\{ !cancelled\\(\\) \\}\\}\\n        run: node \\.\\./package/scripts/run-cottontail-test\\.js ${testFile.replaceAll("/", "\\/").replaceAll(".", "\\.")}\\n        working-directory: kitchen$`,
 				"m",
 			),
 			`${testFile} should run independently on every release build platform`,

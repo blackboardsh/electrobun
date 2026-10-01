@@ -9,6 +9,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
+import { assertWindowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
 
 if (process.platform !== "win32") {
 	console.log("Skipping Windows native UI test on non-Windows host");
@@ -17,8 +18,6 @@ if (process.platform !== "win32") {
 
 const packageRoot = resolve(import.meta.dirname, "..");
 const requireNativeWrapper = process.argv.includes("--require-native-wrapper");
-const zig =
-	process.env["ZIG_BINARY"] ?? join(packageRoot, "vendors", "zig", "zig.exe");
 const source = join(
 	packageRoot,
 	"src",
@@ -26,10 +25,6 @@ const source = join(
 	"shared",
 	"windows_ui_test.cpp",
 );
-
-if (!existsSync(zig)) {
-	throw new Error(`Vendored Zig was not found at ${zig}`);
-}
 
 const temporaryDirectory = mkdtempSync(join(tmpdir(), "electrobun-windows-ui-"));
 const binary = join(temporaryDirectory, "windows-ui-test.exe");
@@ -103,12 +98,13 @@ function createUnicodeAsar(directory) {
 		packageRoot,
 		"vendors",
 		"zig-asar",
-		"x64",
+		process.arch,
 		"zig-asar.exe",
 	);
 	if (!existsSync(zigAsar)) {
 		throw new Error(`Vendored zig-asar was not found at ${zigAsar}`);
 	}
+	assertWindowsBinaryArchitecture(zigAsar, process.arch);
 	const asarDirectory = join(
 		directory,
 		"\u8d44\u6e90-\u0434\u0430\u043d\u043d\u044b\u0435",
@@ -135,26 +131,37 @@ function createUnicodeAsar(directory) {
 
 try {
 	const compile = spawnSync(
-		zig,
+		"cl.exe",
 		[
-			"c++",
-			"-std=c++20",
+			"/nologo",
+			"/std:c++20",
+			"/EHsc",
+			"/utf-8",
+			"/DNOMINMAX",
+			"/DUNICODE",
+			"/D_UNICODE",
+			"/UNDEBUG",
 			source,
-			"-o",
-			binary,
-			"-luser32",
-			"-lcomctl32",
+			`/Fo${join(temporaryDirectory, "windows-ui-test.obj")}`,
+			`/Fe${binary}`,
+			"user32.lib",
+			"comctl32.lib",
 		],
-		{ cwd: packageRoot, stdio: "inherit" },
+		{ cwd: packageRoot, stdio: "inherit", windowsHide: true, timeout: 180_000 },
 	);
+	if (compile.error?.code === "ENOENT") {
+		throw new Error(`Run this test in an MSVC developer environment targeting ${process.arch}.`, { cause: compile.error });
+	}
 	if (compile.error) throw compile.error;
 	if (compile.status !== 0) {
 		throw new Error(
 			`Windows native UI test compilation exited with ${compile.status ?? 1}`,
 		);
 	}
+	assertWindowsBinaryArchitecture(binary, process.arch);
 
 	const nativeWrapper = resolveNativeWrapper();
+	if (nativeWrapper) assertWindowsBinaryArchitecture(nativeWrapper, process.arch);
 	const testArguments = nativeWrapper ? [nativeWrapper] : [];
 	if (!nativeWrapper) {
 		if (requireNativeWrapper) {

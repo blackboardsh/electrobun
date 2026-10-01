@@ -96,6 +96,9 @@ describe("Windows Unicode native UI source contract", () => {
 		expect(nativeUiTestScript).toContain("windows_ui_test.cpp");
 		expect(nativeUiTestScript).toContain("ELECTROBUN_NATIVE_WRAPPER_DLL");
 		expect(nativeUiTestScript).toContain("libNativeWrapper.dll");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(binary, process.arch)");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(nativeWrapper, process.arch)");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(zigAsar, process.arch)");
 	});
 });
 

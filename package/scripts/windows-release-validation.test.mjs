@@ -31,6 +31,9 @@ test("Windows profile path and lifecycle source regressions are release gates wi
   assert.match(section, /node scripts\/test-windows-profile-paths\.mjs/);
   assert.match(section, /node scripts\/run-cottontail-test\.js src\/shared\/windows-webview2-lifecycle\.test\.ts/);
   assert.equal((section.match(/if \(\$LASTEXITCODE -ne 0\)/g) || []).length, 2);
-  assert.match(nativeRunner, /process\.arch === "arm64" \? "aarch64-windows-gnu" : "x86_64-windows-gnu"/);
+  assert.match(nativeRunner, /run\("cl\.exe",/);
+  assert.match(nativeRunner, /"\/UNDEBUG"/);
+  assert.match(nativeRunner, /assertWindowsBinaryArchitecture\(executable, process\.arch\)/);
+  assert.ok(nativeRunner.indexOf("assertWindowsBinaryArchitecture(executable, process.arch)") < nativeRunner.indexOf("run(executable, [])"));
   assert.match(nativeRunner, /run\(executable, \[\]\)/);
 });

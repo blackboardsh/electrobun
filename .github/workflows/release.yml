@@ -346,22 +346,22 @@ jobs:
 
       - name: Test Kitchen AUTO_RUN exit propagation
         if: ${{ !cancelled() }}
-        run: hutch test src/test-framework/auto-run-exit.test.ts
+        run: node ../package/scripts/run-cottontail-test.js src/test-framework/auto-run-exit.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen renderer requirements
         if: ${{ !cancelled() }}
-        run: hutch test src/test-framework/requirements.test.ts
+        run: node ../package/scripts/run-cottontail-test.js src/test-framework/requirements.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen result summary
         if: ${{ !cancelled() }}
-        run: hutch test src/test-runner/test-summary.test.ts
+        run: node ../package/scripts/run-cottontail-test.js src/test-runner/test-summary.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen quit exit codes
         if: ${{ !cancelled() }}
-        run: hutch test ../package/src/sdks/main/__tests__/utils-quit-exit-code.test.ts
+        run: node ../package/scripts/run-cottontail-test.js ../package/src/sdks/main/__tests__/utils-quit-exit-code.test.ts
         working-directory: kitchen
 
       - name: Test release toolchain provenance contract
