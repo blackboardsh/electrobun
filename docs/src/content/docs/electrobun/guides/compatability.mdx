@@ -33,8 +33,7 @@ not currently cross-compile Electrobun apps.
 | Odin | Supported | Pinned pre-1.0 Odin dev-2026-07a toolchain |
 
 Odin does not support the Windows ARM64 target. Cottontail on Windows ARM64
-uses JavaScriptCore's C-loop interpreter, with JIT and WebAssembly disabled.
-Benchmark JavaScript-heavy applications before moving them from emulated x64.
+supports JavaScriptCore's Baseline, DFG, and FTL JIT tiers and WebAssembly.
 
 Hutch accepts an exact matching system compiler. Otherwise it downloads the
 pinned compiler into its shared global toolchain store.

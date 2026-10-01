@@ -30,11 +30,10 @@ main process bundles the devkit-pinned Bun runtime instead.
 
 ## Windows ARM64 preview
 
-The Windows ARM64 canary uses JavaScriptCore's C-loop interpreter. JIT and
-WebAssembly are disabled on this target. JavaScript-heavy workloads may be
-slower than an x64 build running under Windows emulation, so benchmark your
-application before switching. Native npm addons also need Windows ARM64
-binaries or a working build from source.
+The Windows ARM64 canary supports JavaScriptCore's Baseline, DFG, and FTL
+JIT tiers and WebAssembly. Native npm addons also need Windows ARM64 binaries
+or a working build from source. Existing x64 installations keep receiving x64
+updates; users can download and install your ARM64 build to switch architectures.
 
 ## Select Cottontail
 

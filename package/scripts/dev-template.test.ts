@@ -189,7 +189,7 @@ try {
 	});
 	assert.deepEqual(hostDevkitTarget("win32", "arm64"), {
 		os: "win",
-		arch: "x64",
+		arch: "arm64",
 	});
 	assert.throws(
 		() => hostDevkitTarget("aix", "x64"),

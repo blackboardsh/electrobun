@@ -152,7 +152,7 @@ test("the packaging entrypoint rejects stale app metadata before creating archiv
 	const sharedRoot = join(packageRoot, "src", "shared");
 	mkdirSync(scriptsRoot, { recursive: true });
 	mkdirSync(sharedRoot, { recursive: true });
-	for (const name of ["package-release.js", "validate-native-devkit.mjs", "verify-release-toolchain.mjs", "macos-release.js"]) {
+	for (const name of ["package-release.js", "validate-native-devkit.mjs", "verify-release-toolchain.mjs", "macos-release.js", "windows-binary-architecture.mjs"]) {
 		cpSync(new URL(`./${name}`, import.meta.url), join(scriptsRoot, name));
 	}
 	cpSync(new URL("../src/shared/strict-semver.js", import.meta.url), join(sharedRoot, "strict-semver.js"));
@@ -164,10 +164,11 @@ test("the packaging entrypoint rejects stale app metadata before creating archiv
 	for (const name of ["verify-macho-deployment-target.js", "verify-macho-code-signing.js", "verify-linux-elf-abi.js"]) {
 		writeFileSync(join(scriptsRoot, name), "// Native ABI verification is outside this metadata fixture.\n");
 	}
+	writeFileSync(join(scriptsRoot, "windows-binary-architecture.mjs"), "export function validateWindowsReleaseArchitecture() { return 1; }\n");
 	const manifest = fixture();
 	manifest.target = {
 		os: process.platform === "darwin" ? "macos" : process.platform === "win32" ? "win" : "linux",
-		arch: process.platform === "win32" ? "x64" : process.arch,
+		arch: process.arch,
 	};
 	manifest.toolchains.cottontail.defaultVersion = "0.7.0-canary.6";
 	const originalCore = makeCore(manifest);

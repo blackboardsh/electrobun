@@ -1152,7 +1152,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: false,
 			installerRelaunches: true,
 			updatePlatform: "win",
-			updateArch: "x64",
+			updateArch: process.arch === "arm64" ? "arm64" : "x64",
 			isInstaller: (name) => name.endsWith(".zip") && name.includes("Setup"),
 			createProfile(root, identifierValue) {
 				const value = commonProfile(root, identifierValue);
