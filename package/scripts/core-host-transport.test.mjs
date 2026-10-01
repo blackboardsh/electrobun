@@ -9,7 +9,7 @@ import { createInterface } from "node:readline";
 import { runInNewContext } from "node:vm";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import test from "node:test";
+import test, { after, before } from "node:test";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const zig = process.env.ZIG_BINARY || join(packageRoot, "vendors", "zig", process.platform === "win32" ? "zig.exe" : "zig");
@@ -99,7 +99,12 @@ async function buildFixture(directory) {
   await writeFile(source, await readFile(join(packageRoot, "src", "core", "main.zig"), "utf8") + nativeFixture);
   const extension = process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
   const library = join(directory, `libCoreTransportTest.${extension}`);
-  const child = spawn(zig, ["build-lib", source, "-dynamic", "-lc", "-O", "Debug", `-femit-bin=${library}`], { stdio: ["ignore", "pipe", "pipe"] });
+  // Windows ARM64 uses an emulated x64 Zig compiler. The fixture must match
+  // the native runtime that loads it, independently of the compiler's host.
+  const target = process.platform === "win32"
+    ? ["-target", process.arch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu"]
+    : [];
+  const child = spawn(zig, ["build-lib", source, ...target, "-dynamic", "-lc", "-O", "Debug", `-femit-bin=${library}`], { stdio: ["ignore", "pipe", "pipe"], timeout: 540_000 });
   let output = "";
   for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output += chunk; });
   await new Promise((resolve, reject) => {
@@ -108,6 +113,21 @@ async function buildFixture(directory) {
   });
   return library;
 }
+
+let fixtureDirectory;
+let fixtureLibrary;
+before(async () => {
+  // Cold cross-compilation can outlast the runtime deadline, especially with
+  // the x64 Zig compiler under ARM64 emulation. Compile once with its own bound;
+  // each transport test below retains its independent 90-second deadline.
+  fixtureDirectory = await mkdtemp(join(tmpdir(), "electrobun-core-transport-"));
+  fixtureLibrary = await buildFixture(fixtureDirectory);
+}, { timeout: 600_000 });
+after(async () => {
+  if (fixtureDirectory) {
+    await rm(fixtureDirectory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+});
 
 function startPeer(binary, library, keyByte, port = 0, readiness = false) {
   const child = spawn(binary, [join(packageRoot, "scripts", "fixtures", "core-host-transport-peer.ts"), library, String(keyByte), String(port), readiness ? "readiness" : "poll"], { stdio: ["pipe", "pipe", "pipe"] });
@@ -195,10 +215,9 @@ function encryptedRequest(keyByte, id, owner) {
 }
 
 test("readiness survives idle periods and closing its stream preserves core draining", { timeout: 90_000, skip: process.platform === "win32" }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "electrobun-wakeup-"));
   let peer, socket;
   try {
-    const library = await buildFixture(directory);
+    const library = fixtureLibrary;
     peer = startPeer(runtimeBinary(), library, 17, 0, true);
     const ready = await peer.ready;
     socket = await connect(ready.port);
@@ -218,16 +237,14 @@ test("readiness survives idle periods and closing its stream preserves core drai
   } finally {
     socket?.close();
     await peer?.stop();
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 
 test("two native cores own distinct loopback ports and decrypt only their own webview RPC", { timeout: 90_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "electrobun-core-transport-"));
   const peers = [];
   const sockets = [];
   try {
-    const library = await buildFixture(directory);
+    const library = fixtureLibrary;
     const binary = runtimeBinary();
     const a = startPeer(binary, library, 17);
     peers.push(a);
@@ -267,9 +284,5 @@ test("two native cores own distinct loopback ports and decrypt only their own we
   } finally {
     for (const socket of sockets) socket.close();
     await Promise.all(peers.map((peer) => peer.stop()));
-    // Windows can retain the just-unloaded test DLL briefly after every peer
-    // exits. Let fs.rm retry transient EPERM/EBUSY failures before failing the
-    // test; these options are harmless on platforms that unlink immediately.
-    await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
