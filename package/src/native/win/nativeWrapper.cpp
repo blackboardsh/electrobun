@@ -12996,7 +12996,8 @@ ELECTROBUN_EXPORT void setTrayTitle(NSStatusItem *statusItem, const char *title)
     });
 }
 
-ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image) {
+ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image, bool /*isTemplate*/,
+                                    uint32_t width, uint32_t height) {
     if (!statusItem) return;
     
     MainThreadDispatcher::dispatch_sync([=]() {
@@ -13009,7 +13010,7 @@ ELECTROBUN_EXPORT void setTrayImage(NSStatusItem *statusItem, const char *image)
             std::wstring wImagePath;
             if (electrobun::utf8ToWide(image, wImagePath)) {
                 statusItem->nid.hIcon = (HICON)LoadImageW(NULL, wImagePath.c_str(), IMAGE_ICON,
-                                                         0, 0, LR_LOADFROMFILE | LR_DEFAULTSIZE);
+                                                         width, height, LR_LOADFROMFILE);
             }
         }
         
