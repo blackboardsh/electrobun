@@ -13,6 +13,6 @@
 		"moduleResolution": "bundler",
 		"skipLibCheck": true
 	},
-	"include": ["src"],
+	"include": ["src", "./electrobun.config.ts"],
 	"exclude": ["dist", "build", "templates", "../../package/dist"]
 }
