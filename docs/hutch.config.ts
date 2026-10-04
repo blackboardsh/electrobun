@@ -15,7 +15,5 @@ export default {
       "scripts/project-boundary.test.mjs",
     ],
     clean: "rm -rf dist .astro",
-    deploy:
-      'hutch pm exec -- wrangler pages deploy dist --project-name=framework-docs --branch="$PAGES_BRANCH"',
   },
 };

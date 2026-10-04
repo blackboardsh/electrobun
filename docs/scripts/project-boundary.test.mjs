@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { parse as parseYaml } from "yaml";
 
 const projectRoot = new URL("../", import.meta.url);
 const configSource = readFileSync(
@@ -13,10 +14,11 @@ const manifest = JSON.parse(
 const lockfile = JSON.parse(
   readFileSync(new URL("package-lock.json", projectRoot), "utf8"),
 );
-const deployWorkflow = readFileSync(
+const docsWorkflow = readFileSync(
   new URL("../.github/workflows/docs-deploy.yml", projectRoot),
   "utf8",
 );
+const workflow = parseYaml(docsWorkflow);
 const exampleChecker = readFileSync(
   new URL("scripts/check-code-examples.mjs", projectRoot),
   "utf8",
@@ -37,7 +39,7 @@ test("Hutch owns the reproducible docs install", () => {
     manifest.devDependencies,
   );
   assert.equal(existsSync(new URL("bun.lock", projectRoot)), false);
-  assert.match(deployWorkflow, /run:\s*hutch run install\s*\n/);
+  assert.match(docsWorkflow, /run:\s*hutch run install\s*\n/);
 });
 
 test("documentation examples own their ambient runtime types", () => {
@@ -49,41 +51,60 @@ test("documentation examples own their ambient runtime types", () => {
   assert.doesNotMatch(exampleChecker, /join\(packageRoot, "node_modules"/);
 });
 
-test("tag deployments use the canonical strict release version gate", () => {
-  assert.match(
-    deployWorkflow,
-    /^      - name: Verify release tag and version\n        if: github\.event_name == 'push'\n        id: release-type$/m,
-  );
-  assert.match(
-    deployWorkflow,
-    /^        run: node package\/scripts\/verify-release-version\.mjs$/m,
-  );
-  assert.ok(
-    deployWorkflow.indexOf("- name: Verify release tag and version") <
-      deployWorkflow.indexOf("- name: Install docs dependencies"),
-  );
-
-  const stableOrManual =
-    "if: github.event_name == 'workflow_dispatch' || steps.release-type.outputs.prerelease != 'true'";
-  for (const step of [
-    "Install docs dependencies",
-    "Check docs",
-    "Build docs",
-    "Deploy to Cloudflare Pages",
-  ]) {
-    const start = deployWorkflow.indexOf(`      - name: ${step}\n`);
-    assert.notEqual(start, -1, `missing ${step}`);
-    const next = deployWorkflow.indexOf("\n      - ", start + 1);
-    const stepSource = deployWorkflow.slice(
-      start,
-      next === -1 ? undefined : next,
-    );
-    assert.ok(
-      stepSource.includes(stableOrManual),
-      `${step} must skip SemVer prereleases but run for manual dispatches`,
-    );
+test("local docs validation covers pull requests, main, tags, and manual runs", () => {
+  assert.ok(Object.hasOwn(workflow.on, "workflow_dispatch"));
+  assert.deepEqual(workflow.on.push.branches, ["main"]);
+  assert.deepEqual(workflow.on.push.tags, ["v*"]);
+  for (const event of ["push", "pull_request"]) {
+    for (const path of [
+      "docs/**",
+      "package/src/**",
+      ".github/workflows/docs-deploy.yml",
+    ]) {
+      assert.ok(
+        workflow.on[event].paths.includes(path),
+        `${event} must validate changes to ${path}`,
+      );
+    }
   }
-  assert.doesNotMatch(deployWorkflow, /contains\(github\.ref_name/);
+
+  const steps = workflow.jobs.check.steps;
+  assert.ok(steps.some((step) => step.uses === "./.github/actions/install-hutch"));
+  for (const command of ["install", "test:project-boundary", "check", "build"]) {
+    const step = steps.find(
+      (candidate) => candidate.run === `hutch run ${command}`,
+    );
+    assert.ok(step, `missing docs ${command} step`);
+    assert.equal(step["working-directory"], "docs");
+    assert.equal(step.if, undefined, `${command} must validate all supported events`);
+  }
+});
+
+test("only tag pushes use the canonical strict release version gate", () => {
+  const steps = workflow.jobs.check.steps;
+  const gate = steps.find((step) => step.id === "release-type");
+  assert.ok(gate);
+  assert.equal(
+    gate.if,
+    "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')",
+  );
+  assert.equal(gate.run, "node package/scripts/verify-release-version.mjs");
+  assert.equal(gate.env.RELEASE_TAG, "${{ github.ref_name }}");
+  assert.equal(gate.env.RELEASE_PACKAGE_JSON, "package/package.json");
+  assert.ok(
+    steps.indexOf(gate) <
+      steps.findIndex((step) => step.run === "hutch run install"),
+  );
+});
+
+test("the private framework-docs site owns deployment", () => {
+  assert.deepEqual(workflow.permissions, { contents: "read" });
+  assert.deepEqual(Object.keys(workflow.jobs), ["check"]);
+  assert.doesNotMatch(
+    docsWorkflow,
+    /CLOUDFLARE_|hutch run deploy|wrangler|workflow_dispatch:\s*\n\s*inputs:/,
+  );
+  assert.doesNotMatch(configSource, /\bdeploy\s*:|wrangler\s+pages\s+deploy/);
 });
 
 test("docs tools delegate explicitly to the selected npm executable", () => {
@@ -92,7 +113,6 @@ test("docs tools delegate explicitly to the selected npm executable", () => {
     "hutch pm exec -- astro build",
     "hutch pm exec -- astro preview",
     "hutch pm exec -- astro check",
-    "hutch pm exec -- wrangler pages deploy",
   ]) {
     assert.match(configSource, new RegExp(command.replaceAll(" ", "\\s+")));
   }
