@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import test from "node:test";
 
 import {
 	parseAppCottontailVersion,
 	parseHutchPragma,
+	resolvePinnedHutchExecutable,
 	verifyAppCottontailVersion,
 	verifyReleaseToolchain,
 } from "./verify-release-toolchain.mjs";
@@ -165,6 +166,31 @@ test("pin:latest bootstraps through the old self-update verb before repinning", 
 	);
 	assert.doesNotMatch(config, /"pin:latest":\s*"hutch upgrade\b/);
 	assert.doesNotMatch(config, /\bhutch cottontail update\b/);
+});
+
+test("release provenance resolves the exact pin when the channel has advanced", () => {
+	const pinned = "0.28.0-canary.3";
+	const latest = "0.28.0-canary.4";
+	const executable = realpathSync(process.execPath);
+	const calls = [];
+	const run = (command, args) => {
+		calls.push([command, args]);
+		if (command === "hutch" && args[0] === "self" && args[1] === "path") {
+			assert.equal(args[2], pinned, `must not select the channel now at ${latest}`);
+			return executable;
+		}
+		assert.equal(command, executable);
+		assert.deepEqual(args, ["--version"]);
+		return pinned;
+	};
+	assert.equal(resolvePinnedHutchExecutable(pinned, run), executable);
+	assert.equal(calls.length, 2);
+});
+
+test("release provenance rejects a resolved executable with the wrong version", () => {
+	assert.throws(() => resolvePinnedHutchExecutable("0.28.0-canary.3", (command) =>
+		command === "hutch" ? process.execPath : "0.28.0-canary.4"),
+	/Hutch executable: expected "0\.28\.0-canary\.3", got "0\.28\.0-canary\.4"/);
 });
 
 test("release provenance probes the exact Hutch engine's compiled Cottontail pair", () => {

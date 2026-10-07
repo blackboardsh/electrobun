@@ -200,6 +200,22 @@ function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }
 	);
 }
 
+export function resolvePinnedHutchExecutable(expectedHutch, runCommand = run) {
+	assertExactVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
+	// Resolving an exact path installs the release if needed without advancing
+	// a channel alias. A newer channel release must not invalidate this pin.
+	const executable = canonicalPath(
+		runCommand("hutch", ["self", "path", expectedHutch], repositoryRoot),
+		"pinned Hutch path",
+	);
+	assertEqual(
+		singleLine(runCommand(executable, ["--version"], repositoryRoot), "Hutch executable version"),
+		expectedHutch,
+		"Hutch executable",
+	);
+	return executable;
+}
+
 export function verifyReleaseToolchain(environment = process.env) {
 	const expectedHutch = environment.EXPECTED_HUTCH_VERSION;
 	const expectedCottontail = environment.EXPECTED_COTTONTAIL_VERSION;
@@ -257,28 +273,9 @@ export function verifyReleaseToolchain(environment = process.env) {
 	});
 	console.log(`App Cottontail ${expectedAppCottontail}: ${appSourcePath} and ${devkitPath}`);
 
-	// `hutch self update` advances the tested Hutch+Cottontail pair together;
-	// there is no separate cottontail update. The no-selector cottontail
-	// verbs report the launcher's paired release, which is the provenance
-	// claim this gate exists to check.
-	run("hutch", ["self", "update", expectedHutchChannel], repositoryRoot);
-	assertEqual(
-		singleLine(
-			run("hutch", ["self", "version", expectedHutchChannel], repositoryRoot),
-			`${expectedHutchChannel} Hutch version`,
-		),
-		expectedHutch,
-		`${expectedHutchChannel} Hutch channel`,
-	);
-	const hutchExecutable = canonicalPath(
-		run("hutch", ["self", "path", expectedHutchChannel], repositoryRoot),
-		`${expectedHutchChannel} Hutch path`,
-	);
-	assertEqual(
-		singleLine(run(hutchExecutable, ["--version"], repositoryRoot), "Hutch executable version"),
-		expectedHutch,
-		"Hutch executable",
-	);
+	// The no-selector Cottontail verbs report this exact engine's compiled
+	// pair, independently of whichever release currently heads its channel.
+	const hutchExecutable = resolvePinnedHutchExecutable(expectedHutch);
 	assertEqual(
 		singleLine(
 			run(hutchExecutable, ["cottontail", "version"], repositoryRoot),
