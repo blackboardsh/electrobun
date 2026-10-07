@@ -37,6 +37,8 @@ export default {
 		"test:linux-dpi-native": "hutch scripts/test-linux-dpi-native.js",
 		"test:linux-x11-geometry-native":
 			"hutch scripts/test-linux-x11-geometry-native.js",
+		"test:linux-window-resize-native":
+			"node scripts/test-linux-window-resize-native.js",
 		"test:wayland-screen-capture-frame-native":
 			"hutch scripts/test-wayland-screen-capture-frame-native.js",
 		"test:views-url-native": "hutch scripts/test-views-url-native.js",

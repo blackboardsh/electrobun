@@ -38,7 +38,8 @@ export type WindowOptionsType<T = undefined> = {
 	// titleBarStyle options:
 	// - 'default': normal titlebar with native window controls
 	// - 'hidden': no titlebar, no native window controls (for fully custom chrome)
-	// - 'hiddenInset': transparent titlebar with inset native controls
+	// - 'hiddenInset': inset native controls on macOS; resize handles without
+	//   a system titlebar on Windows and Linux's native GTK backend
 	titleBarStyle: "hidden" | "hiddenInset" | "default";
 	// transparent: when true, window background is transparent (see-through)
 	transparent: boolean;

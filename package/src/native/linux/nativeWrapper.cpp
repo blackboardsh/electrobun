@@ -74,6 +74,7 @@
 #include "../shared/linux_dpi.h"
 #include "../shared/linux_x11_geometry.h"
 #include "wayland_screen_capture.h"
+#include "window_resize_handles.h"
 
 using namespace electrobun;
 
@@ -7511,10 +7512,13 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Handle titleBarStyle for custom titlebars
-        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
-            // Remove window decorations for borderless windows
+        if (titleBarStyle && (strcmp(titleBarStyle, "hidden") == 0 ||
+                             strcmp(titleBarStyle, "hiddenInset") == 0)) {
+            // Both custom-titlebar styles need client resize handles when
+            // server decorations are disabled. In particular, existing apps
+            // using hidden must not need a style change to become resizable.
             gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
-            printf("GTK: Created window without decorations (custom titlebar)\n");
+            attachGtkWindowResizeHandles(window);
         }
         
         // Handle transparency
