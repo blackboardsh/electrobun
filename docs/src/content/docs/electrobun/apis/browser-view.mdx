@@ -233,6 +233,38 @@ void spellCheckChanged;
 `executeJavascript()` does not return the evaluated value. Use typed RPC when
 the browser must return data to the main process.
 
+## Host message queue diagnostics
+
+In the current 2.0.3 betas, `getHostMessageQueueStats()` reports the main
+process's outgoing queue for this view. Use it to investigate a backlog when
+sending bursts of RPC messages:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "Queue diagnostics",
+  url: "views://mainview/index.html",
+});
+
+console.log(win.webview.getHostMessageQueueStats());
+```
+
+| Field | Meaning |
+| --- | --- |
+| `queuedMessages` | Messages and RPC responses currently waiting in the host queue. |
+| `queuedBytes` | Serialized UTF-8 bytes currently queued. |
+| `oldestMessageAgeMs` | Age of the oldest queued message, or `0` when empty. |
+| `enqueuedMessages` | Total messages added to this view's host queue. |
+| `drainedMessages` | Total messages removed from the queue for transport. |
+| `peakQueuedMessages` | Highest recorded queued message count. |
+| `peakQueuedBytes` | Highest recorded serialized byte count. |
+
+These are host queue measurements. Byte counts are not retained heap usage,
+and draining a message does not acknowledge delivery or rendering in the
+WebView. Delivery uses byte-limited batches and yields between turns to keep
+I/O responsive under load; the diagnostics do not impose a queue size limit.
+
 ## Find in page
 
 ```ts

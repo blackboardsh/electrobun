@@ -3,8 +3,9 @@ title: "Migrate to Electrobun 2.x"
 description: "Upgrade the npm dependency, run your scripts, and fix what the validator reports."
 ---
 
-Electrobun 2.x moves build orchestration to Hutch and uses Bun as the
-default JavaScript main process. Application code and RPC schemas usually need
+Electrobun 2.x moves build orchestration to Hutch. Current 2.0.3 betas use Bun
+as the default JavaScript main process; stable 2.0.2 defaults to Cottontail.
+Application code and RPC schemas usually need
 little or no change, and the npm package remains the front door. There is one
 dependency-free package: its first command downloads the exact paired Hutch
 archive from the same-version Electrobun GitHub Release, verifies and caches it,
@@ -52,6 +53,36 @@ npm run dev                   # your existing `electrobun ...` scripts still wor
 
 That's the whole migration for most apps. The sections below cover the
 details and the situational cases.
+
+## Upgrading from 2.0.2 to the current beta
+
+Install the beta dependency:
+
+```bash
+npm install --save-dev electrobun@beta
+```
+
+If `hutch.config.ts` pins `electrobun.version`, update that exact pin to the
+beta you installed as well. An explicit project pin wins over the npm version;
+`hutch electrobun update` targets stable, so it does not select the beta for you.
+
+Choose the app runtime explicitly when migrating:
+
+- To adopt the new default, set `build.mainProcess: "bun"` and move the entrypoint
+  and shared bundler options from `build.cottontail` into `build.bun`. Omit
+  Cottontail-only `capabilities` and bytecode settings.
+- To retain experimental Cottontail, set `build.mainProcess: "cottontail"` and
+  keep `build.cottontail`.
+
+An older config that omits `mainProcess` and supplies only a `cottontail` or
+`main` block now fails with a migration error. The conventional `src/bun`
+source directory and runtime-neutral `electrobun/main` imports can stay as they
+are. Existing explicitly selected runtimes remain explicit.
+
+The paired Hutch also defaults scripts, tests, shell tasks, and build hooks to
+Bun. App runtime selection does not change that runner. Use
+`HUTCH_RUNTIME=cottontail` for scripts that intentionally require Cottontail;
+putting `cottontail=...` in the version pragma does not select it.
 
 ## Configuration: what changed
 
@@ -101,10 +132,10 @@ reproducible builds independent of the npm dependency — create
 `hutch.config.ts`:
 
 ```ts docs=syntax
-// @hutch cli=0.28.0-canary.6 cottontail=0.7.2-canary.4
+// @hutch cli=0.28.0-canary.6 cottontail=0.7.2-canary.6
 export default {
   electrobun: {
-    version: "2.0.2-beta.36",
+    version: "2.0.3-beta.14",
   },
 };
 ```

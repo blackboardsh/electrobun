@@ -30,9 +30,9 @@ Cottontail. Hutch stays out of the finished application bundle.
 
 Regular npm commands need no separate machine-wide installation. There is one
 dependency-free `electrobun` package, with no `@electrobun/hutch-*` platform
-packages and no postinstall script. Each Electrobun GitHub Release carries four
-mirrors from its exact paired Hutch release. `hutch-artifacts.json` binds every
-host archive to its immutable GitHub Release URL, declared byte size, and
+packages and no postinstall script. Current Electrobun beta releases carry five
+platform archives from their exact paired Hutch release, including Windows
+ARM64. `hutch-artifacts.json` binds every host archive to its immutable GitHub Release URL, declared byte size, and
 SHA-256 digest. On first use the npm command reads that index, downloads and
 verifies the host archive, safely caches the extracted launcher and engine, then
 runs it.
@@ -215,10 +215,11 @@ hutch cottontail version
 Interactive use checks for updates periodically. CI and other non-interactive
 invocations never prompt.
 
-Cottontail is paired with the Hutch release: an unpinned project runs the
-Cottontail this launcher was built and tested with, and `hutch upgrade`
-advances both together. (`hutch self update` remains as the explicit long
-form of `hutch upgrade`.) This pairing covers the build-time runtime only —
+The build-time Cottontail is paired with the Hutch release. Unless its version
+is explicitly pinned, internal build helpers use the Cottontail this launcher
+was built and tested with, and `hutch upgrade` advances the pair together.
+Ordinary scripts still use Bun by default. (`hutch self update` remains as the
+explicit long form of `hutch upgrade`.) This pairing covers the build-time runtime only —
 the Cottontail bundled into an app by `mainProcess: "cottontail"` is a
 runtime component pinned by the selected Electrobun release's devkit
 manifest, exactly like the bundled Bun. Projects that install through npm

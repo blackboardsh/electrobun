@@ -2,20 +2,69 @@
 title: "Unreleased"
 ---
 
-Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/).
+Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
+2.0.3 beta series. These changes are not yet in the stable release.
 
-- Added native Windows ARM64 beta devkits, WebView2 and CEF artifacts, and
-  Zig, Rust and Go main-process builds. The paired Hutch and Cottontail
-  releases are canaries. Cottontail uses the JSC C-loop interpreter without
-  JIT or WebAssembly; Odin remains unsupported on Windows ARM64.
+## Runtime defaults and migration
 
-- Fixed Cottontail webview RPC hangs when an idle readiness pipe produced
-  `EAGAIN`. The notification stream now waits for pipe readiness and owns a
-  separate descriptor, so closing it cannot invalidate the native core's pipe.
-  Notification handling continues across multiple messages and idle periods;
-  stream errors or closure safely fall back to polling.
-- Added published-template acceptance checks on macOS ARM64, Windows x64,
-  and Linux x64/ARM64. They initialize, install, build, and launch the public
-  `hello-world` template, then exercise modular Cottontail APIs and a webview
-  RPC round trip in a separate CI fixture. These checks run after publication
-  and retain logs and reports on failure.
+- Bun is now the default JavaScript/TypeScript main process. Kitchen Sink and
+  all JavaScript templates, including the experimental Electrobun UI templates,
+  use Bun. Zig, Rust, Go, and Odin main processes remain explicit choices.
+- Cottontail remains supported as an experimental opt-in runtime. Select
+  `build.mainProcess: "cottontail"` and configure `build.cottontail` to retain it.
+  To use Bun, select `"bun"` and move the entrypoint and shared bundler options
+  into `build.bun`. Cottontail-only capability and bytecode options do not apply
+  to Bun. Older configs that omit `mainProcess` and provide only `cottontail`
+  or `main` now report a migration error instead of silently changing runtimes.
+- The paired Hutch release defaults scripts, tests, shell tasks, and build hooks
+  to Bun. `HUTCH_RUNTIME=cottontail` remains an explicit override; a Cottontail
+  version pragma alone does not select the script runner. Internal config
+  loading and bundling still use Hutch's paired Cottontail.
+- The current beta pairs Hutch `0.28.0-canary.6` with build-time Cottontail
+  `0.7.2-canary.6`; packaged apps use Bun `1.4.0` by default or the devkit's
+  Cottontail `0.7.2-canary.6` when explicitly selected. The script runner and
+  app runtime are independent selections. See the
+  [migration guide](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-the-current-beta).
+
+## Platforms and runtime improvements
+
+- Added native Windows ARM64 beta devkits, WebView2 and CEF artifacts, npm
+  bootstrap support, and Zig, Rust, and Go main-process builds. The pinned
+  Cottontail canary supports JavaScriptCore's Baseline, DFG, and FTL JIT tiers
+  and WebAssembly on ARM64. Odin remains unsupported on Windows ARM64.
+  Existing x64 installations require an explicit ARM64 installation to switch
+  architectures.
+- Updated the optional Cottontail runtime with reduced long-lived memory
+  retention, smaller worker bootstraps, reuse of bundled builtin modules, and
+  improved reclamation of native allocator memory on Linux.
+- Fixed edge and corner resizing for frameless Linux GTK windows with
+  `titleBarStyle: "hidden"`, without adding a system titlebar.
+
+## Messaging and updates
+
+- Fixed Cottontail WebView RPC hangs when an idle readiness pipe produced
+  `EAGAIN`. The notification stream waits for pipe readiness and owns a separate
+  descriptor, so closing it cannot invalidate the native core's pipe. Stream
+  errors or closure fall back to polling.
+- Improved host-to-WebView burst delivery with byte-limited batches and bounded
+  work per event-loop turn. Removed duplicate fallback records and quadratic
+  queue cleanup. `BrowserView.getHostMessageQueueStats()` exposes queue depth,
+  serialized byte counts, message age, and peak usage for diagnostics; it does
+  not measure WebView rendering or delivery acknowledgements.
+- Fixed update-archive inspection on Bun so an asynchronous stream cleanup
+  cannot close a file descriptor already reused by another operation. The
+  archive reader now owns and closes its descriptor exactly once.
+
+## Release validation
+
+- Added public npm bootstrap and template acceptance across all five release
+  platforms, including Windows ARM64. Template checks initialize, install,
+  build, and launch the public `hello-world` template, then exercise optional
+  Cottontail capabilities and a WebView RPC round trip in a separate fixture.
+- Verify exact pinned Hutch, script runtime, and packaged runtime provenance
+  independently of later channel updates. Runtime tests use real Bun while
+  retaining explicit Cottontail compatibility coverage.
+- Fixed Kitchen artifact publication under Bun by using signed single PUTs
+  instead of the stalled multipart upload path, with per-file completion logs
+  and five-minute upload deadlines. The standard release workflow validates the
+  uploader before publishing Kitchen and the matching template catalog.
