@@ -29,6 +29,12 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: ${{ matrix.arch }}
+      - name: Install dependencies
+        working-directory: package
+        run: hutch run install
+      - name: Build SDK preload dependencies
+        working-directory: package
+        run: hutch src/preload/build.ts
       - name: Test CEF find behavior
         working-directory: package
         run: node scripts/run-bun-test.js src/shared/cef-find-session.test.ts
