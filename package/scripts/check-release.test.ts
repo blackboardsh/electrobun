@@ -90,7 +90,7 @@ assertArray(
 		"scripts/dev.test.ts",
 		"scripts/dev-template.test.ts",
 		"scripts/clean-template-artifacts.test.mjs",
-		"scripts/run-cottontail-test.test.mjs",
+		"scripts/run-bun-test.test.mjs",
 		"scripts/check-release.test.ts",
 	],
 	"Development test command order",

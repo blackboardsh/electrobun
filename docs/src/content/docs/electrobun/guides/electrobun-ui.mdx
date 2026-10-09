@@ -12,7 +12,7 @@ Warren — Electrobun's UI framework — is experimental. APIs may change betwee
 Warren is a small, reactive UI framework that renders through Dawn
 (WebGPU) directly from the main process. There is no webview, no browser
 DOM, and no build tooling: you write `.tsx` against `electrobun/main/ui`,
-and Cottontail's built-in transpiler — the same one that already handles
+and Hutch's transpiler — the same one that already handles
 your TypeScript — does the rest. Nothing gets added to your toolchain.
 
 ```text
@@ -31,7 +31,7 @@ window costs literally nothing.
 
 ## Hello world
 
-Point the Cottontail entrypoint at a `.tsx` file:
+Point the Bun entrypoint at a `.tsx` file:
 
 ```ts
 // electrobun.config.ts
@@ -40,8 +40,8 @@ import type { ElectrobunConfig } from "electrobun";
 export default {
   app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
   build: {
-    mainProcess: "cottontail",
-    cottontail: { entrypoint: "src/main.tsx" },
+    mainProcess: "bun",
+    bun: { entrypoint: "src/main.tsx" },
     mac: { bundleCEF: false, bundleWGPU: true },
     linux: { bundleCEF: false, bundleWGPU: true },
     win: { bundleCEF: false, bundleWGPU: true },
@@ -50,7 +50,7 @@ export default {
 ```
 
 Tell TypeScript (your editor and `tsc`) which JSX types to use. This is
-type-checking configuration, not a build step — Cottontail transpiles `.tsx`
+type-checking configuration, not a build step — Hutch transpiles `.tsx`
 natively either way:
 
 ```jsonc

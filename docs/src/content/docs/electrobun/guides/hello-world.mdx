@@ -1,12 +1,12 @@
 ---
 title: "Hello World"
-description: "Build a minimal Cottontail-based Electrobun app from scratch."
+description: "Build a minimal Bun-based Electrobun app from scratch."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 This guide builds a minimal Electrobun app by hand, without a template, so you
 can see exactly what each piece is for. The main process
-runs on **Cottontail**, the default TypeScript runtime. Every runtime has its
+runs on **Bun**, the default TypeScript runtime. Every runtime has its
 own version of this walkthrough:
 [Bun](/electrobun/guides/hello-world-bun/),
 [Zig](/electrobun/guides/hello-world-zig/),
@@ -70,9 +70,8 @@ facade that Hutch projects during sync:
 ```
 
 <Aside type="note">
-The `electrobun/main` import path and `@types/bun` package are compatibility
-names. Cottontail executes this main process unless the config explicitly
-selects Bun.
+The `electrobun/main` import path is runtime-neutral. Bun executes this main
+process by default. Experimental Cottontail requires an explicit selection.
 </Aside>
 
 ## 2. Add a webview
@@ -99,7 +98,7 @@ you like. For hello world, a heading is plenty.
 
 ## 3. Add the main process
 
-The main process is the privileged side of your app — it runs on Cottontail,
+The main process is the privileged side of your app — it runs on Bun,
 not in the webview, and it's what creates windows. Create `src/bun/index.ts`:
 
 ```ts
@@ -136,8 +135,8 @@ export default {
     version: "0.0.1",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
     copy: {
@@ -148,7 +147,7 @@ export default {
 ```
 
 Reading it top to bottom: `app` names and identifies the application,
-`mainProcess` selects Cottontail as the runtime, `entrypoint` points at the
+`mainProcess` selects Bun as the runtime, `entrypoint` points at the
 main process you just wrote, and `copy` places the HTML file into the bundle at
 the path the `views://` URL expects. With no explicit `electrobun.version`, a
 direct Hutch sync resolves the active channel and then reuses that projected

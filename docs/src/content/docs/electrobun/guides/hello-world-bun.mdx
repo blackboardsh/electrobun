@@ -6,19 +6,16 @@ import { Aside } from "@astrojs/starlight/components";
 
 This guide creates a minimal Electrobun app with **Bun** as the main-process
 runtime. The steps mirror the
-[Cottontail Hello World](/electrobun/guides/hello-world/) — the TypeScript
-SDK is identical for both JavaScript runtimes — only the
-`electrobun.config.ts` selects Bun. See
+[Hello World](/electrobun/guides/hello-world/) — the TypeScript
+SDK is identical for both JavaScript runtimes — Bun is selected by default. See
 [Main Process Runtimes](/electrobun/guides/native-main-process/) for every
 runtime option.
 
 ## When to choose Bun
 
-Cottontail is the default main process: it executes TypeScript and supports
-the Node.js and Bun-compatible APIs used by Electrobun applications. Choose
-Bun when the application intentionally depends on the actual Bun
-runtime — Bun apps get the real Bun API surface, and the two runtimes will
-diverge over time. Hutch bundles source and packages the app in either
+Bun is the default main process and provides the full Bun API surface.
+Cottontail is an experimental alternative selected explicitly in the build config.
+Hutch bundles source and packages the app in either
 configuration. Hutch's built-in npm-compatible resolver owns ordinary
 JavaScript dependencies by default; select npm, Bun, or another package
 manager explicitly when the project needs it.

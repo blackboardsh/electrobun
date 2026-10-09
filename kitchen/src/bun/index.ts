@@ -296,7 +296,7 @@ testRunnerWindow.webview.on("dom-ready", () => {
 	testRunnerWindow!.webview.rpc?.send.buildConfig({
 		defaultRenderer: buildConfig.defaultRenderer,
 		availableRenderers: buildConfig.availableRenderers,
-		mainProcess: buildConfig.mainProcess ?? "cottontail",
+		mainProcess: buildConfig.mainProcess ?? "bun",
 		bunVersion: buildConfig.mainProcess === "bun" ? Bun.version : undefined,
 	});
 	// Send current update status

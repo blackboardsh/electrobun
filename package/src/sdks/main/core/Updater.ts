@@ -4,7 +4,7 @@ import {
 	chmodSync,
 	closeSync,
 	constants as fsConstants,
-	createReadStream,
+	read,
 	fchmodSync,
 	fstatSync,
 	fsyncSync,
@@ -1456,11 +1456,26 @@ function tarEntrySpan(size: number): number {
 	return span;
 }
 
+// Keep descriptor ownership here: stream iterator cancellation can close an
+// externally supplied fd asynchronously on Bun, racing a later close/reuse.
+async function* readTarChunks(fd: number): AsyncGenerator<Uint8Array> {
+	for (;;) {
+		const buffer = new Uint8Array(64 * 1024);
+		const count = await new Promise<number>((resolve, reject) => {
+			read(fd, buffer, 0, buffer.length, null, (error, bytesRead) => {
+				if (error) reject(error);
+				else resolve(bytesRead);
+			});
+		});
+		if (count === 0) return;
+		yield buffer.subarray(0, count);
+	}
+}
+
 /** Read only the small version metadata entry while streaming over the TAR. */
 export async function readUpdateHashFromTar(path: string): Promise<string> {
 	let fileDescriptor: number | undefined;
 	let reader: TarStreamReader | undefined;
-	let stream: ReturnType<typeof createReadStream> | undefined;
 	try {
 		fileDescriptor = openSync(
 			path,
@@ -1470,12 +1485,7 @@ export async function readUpdateHashFromTar(path: string): Promise<string> {
 		if (!stat.isFile() || stat.size < 512) {
 			throw new Error("Patched update archive is not a regular TAR file");
 		}
-		stream = createReadStream(path, {
-			fd: fileDescriptor,
-			autoClose: false,
-			highWaterMark: 64 * 1024,
-		});
-		reader = new TarStreamReader(stream);
+		reader = new TarStreamReader(readTarChunks(fileDescriptor));
 		let globalPax: Record<string, string> = {};
 		let localPax: Record<string, string> | undefined;
 		let longName: string | undefined;
@@ -1539,16 +1549,7 @@ export async function readUpdateHashFromTar(path: string): Promise<string> {
 		throw new Error("Update archive metadata was not found");
 	} finally {
 		await reader?.close();
-		stream?.destroy();
-		if (fileDescriptor !== undefined) {
-			try {
-				closeSync(fileDescriptor);
-			} catch (error) {
-				// Bun may close the supplied descriptor when an async iterator is
-				// returned even with autoClose:false; Cottontail leaves it open.
-				if ((error as NodeJS.ErrnoException).code !== "EBADF") throw error;
-			}
-		}
+		if (fileDescriptor !== undefined) closeSync(fileDescriptor);
 	}
 }
 

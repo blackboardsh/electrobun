@@ -9,7 +9,7 @@ import { BrowserWindow } from "electrobun/main";
 export const uiDomTests = [
 	defineTest({
 		name: "Warren DOM renderer in a webview",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"electrobun/browser/ui renders JSX into real DOM: signals, memo, keyed For, Portal, input. The page's self-test banner must show PASS.",
 		instructions: [

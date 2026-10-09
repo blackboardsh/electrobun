@@ -93,6 +93,18 @@ function runtimeBinary() {
   return result.stdout.trim();
 }
 
+function bunRuntimeBinary() {
+  const result = spawnSync(process.env.HUTCH_BINARY || "hutch", ["-p", "process.execPath"], {
+    encoding: "utf8", env: { ...process.env, HUTCH_RUNTIME: "bun" },
+  });
+  assert.equal(result.status, 0, `Locate Bun: ${result.stderr || result.error || ""}`);
+  const binary = result.stdout.trim();
+  assert.ok(binary, "Hutch must return a Bun executable");
+  const identity = spawnSync(binary, ["-e", "if (!process.versions.bun || process.versions.cottontail) process.exit(1)"], { encoding: "utf8" });
+  assert.equal(identity.status, 0, "The default transport test must run real Bun");
+  return binary;
+}
+
 async function buildFixture(directory) {
   assert.ok(existsSync(zig), "Install the repository Zig toolchain or set ZIG_BINARY");
   const source = join(directory, "core.zig");
@@ -240,12 +252,13 @@ test("readiness survives idle periods and closing its stream preserves core drai
   }
 });
 
-test("two native cores own distinct loopback ports and decrypt only their own webview RPC", { timeout: 90_000 }, async () => {
+for (const [runtime, resolveRuntime] of [["Bun", bunRuntimeBinary], ["Cottontail", runtimeBinary]]) {
+test(`${runtime}: two native cores own distinct loopback ports and decrypt only their own webview RPC`, { timeout: 90_000 }, async () => {
   const peers = [];
   const sockets = [];
   try {
     const library = fixtureLibrary;
-    const binary = runtimeBinary();
+    const binary = resolveRuntime();
     const a = startPeer(binary, library, 17);
     peers.push(a);
     const readyA = await a.ready;
@@ -286,3 +299,5 @@ test("two native cores own distinct loopback ports and decrypt only their own we
     await Promise.all(peers.map((peer) => peer.stop()));
   }
 });
+
+}

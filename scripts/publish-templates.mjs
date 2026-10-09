@@ -245,7 +245,7 @@ export function templateMetadata(templateId, manifest = {}) {
 
 function templateMainProcess(source) {
 	return source.match(/\bmainProcess\s*:\s*["']([^"']+)["']/)?.[1] ??
-		"cottontail";
+		"bun";
 }
 
 function copyTrackedTemplate(templateId, destination) {

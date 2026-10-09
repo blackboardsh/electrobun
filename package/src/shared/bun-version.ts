@@ -1,2 +1,2 @@
-// Bun is an optional Electrobun application runtime. Hutch itself uses Cottontail.
+// Bun is the default Electrobun application runtime. Hutch scripts also default to Bun.
 export const BUN_VERSION = "1.4.0";

@@ -14,7 +14,7 @@
 ## What is Electrobun?
 
 Electrobun aims to be a complete **solution-in-a-box** for building, updating, and shipping fast, compact, cross-platform desktop applications written in TypeScript.
-Hutch is the native build and workspace CLI. Cottontail is Electrobun's JSC-based default JavaScript runtime. Electrobun's platform layer combines Zig, Objective-C, and C++.
+Hutch is the native build and workspace CLI. Bun is Electrobun's default JavaScript runtime. Cottontail is an experimental JSC-based alternative. Electrobun's platform layer combines Zig, Objective-C, and C++.
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
@@ -60,7 +60,7 @@ Don't miss our:
 - a Zig-optimized BSDIFF implementation that can produce kilobyte-scale updates
 - `bundleCEF` flag to bundle and pin Chromium for those that want that tradeoff of consistency over file size
 - `bundleWGPU` that lets you use Bun Typescript -> WGPU to control a native GPU surface without a webview
-- Our Three.js and Babylon.js adapters that work directly in the Cottontail main process
+- Our Three.js and Babylon.js adapters that work directly in the Bun main process
 - Our `<electrobun-webview>` and `<electrobun-wgpu>` HTML elements that let you composite isolated webviews and native GPU surfaces into your UIs
 - so much more.
 

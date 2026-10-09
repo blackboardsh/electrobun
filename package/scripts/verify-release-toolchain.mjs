@@ -17,6 +17,7 @@ const runtimeProbePath = join(
 	"release-runtime-probe.mjs",
 );
 const forbiddenOverrides = [
+	"HUTCH_RUNTIME",
 	"HUTCH_ENGINE_BINARY",
 	"DASH_COTTONTAIL",
 	"COTTONTAIL_BINARY",
@@ -84,6 +85,14 @@ export function verifyAppCottontailVersion({ source, manifest, expectedVersion }
 	assertExactVersion(emittedVersion, "emitted app Cottontail pin");
 	assertEqual(emittedVersion, expectedVersion, "emitted app Cottontail pin");
 	return emittedVersion;
+}
+
+export function verifyAppBunVersion({ source, manifest }) {
+  const matches = [...source.matchAll(/^export const BUN_VERSION = "([^"]+)";$/gm)];
+  if (matches.length !== 1) fail("Expected one exact BUN_VERSION source pin");
+  const version = assertExactVersion(matches[0][1], "source app Bun pin");
+  assertEqual(manifest?.toolchains?.bun?.defaultVersion, version, "emitted app Bun pin");
+  return version;
 }
 
 function run(command, args, cwd, environment = {}) {
@@ -176,7 +185,10 @@ function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }
 	);
 	assertEqual(selectedHutch, expectedHutch, `${directory} selected Hutch`);
 
-	const probeOutput = run("hutch", [runtimeProbePath], directory);
+  const scriptIdentity = JSON.parse(run("hutch", ["-p", 'JSON.stringify({bun:process.versions.bun,cottontail:process.versions.cottontail})'], directory));
+  assertExactVersion(scriptIdentity.bun, `${directory} default Bun script runner`);
+  if (scriptIdentity.cottontail !== undefined) fail(`${directory} scripts must default to Bun`);
+	const probeOutput = run("hutch", [runtimeProbePath], directory, { HUTCH_RUNTIME: "cottontail" });
 	const marker = "ELECTROBUN_RUNTIME_PROVENANCE=";
 	const probeLine = probeOutput
 		.split(/\r?\n/)
@@ -266,6 +278,11 @@ export function verifyReleaseToolchain(environment = process.env) {
 	// Cottontail that executes the build through Hutch's pragma.
 	const appSourcePath = join(repositoryRoot, "package", "src", "shared", "cottontail-version.ts");
 	const devkitPath = join(repositoryRoot, "package", "dist", "native-devkit.json");
+  const appBunVersion = verifyAppBunVersion({
+    source: readFileSync(join(repositoryRoot, "package", "src", "shared", "bun-version.ts"), "utf8"),
+    manifest: JSON.parse(readFileSync(devkitPath, "utf8")),
+  });
+  console.log(`Default app Bun ${appBunVersion}: source pin and ${devkitPath}`);
 	verifyAppCottontailVersion({
 		source: readFileSync(appSourcePath, "utf8"),
 		manifest: JSON.parse(readFileSync(devkitPath, "utf8")),

@@ -301,7 +301,7 @@ Options:
   -h, --help      Show this help
 
 The default matrix launches all six main-process backends with the system
-renderer, plus Cottontail with CEF. Use --with for a focused pass or --full
+renderer, plus Bun with CEF. Use --with for a focused pass or --full
 after renderer-plumbing changes.`);
 }
 

@@ -1,5 +1,5 @@
-// Cottontail UI showcase, JSX edition — no compiler beyond the transpiler
-// Cottontail already ships (tsconfig: jsx react-jsx, jsxImportSource
+// Electrobun UI showcase, JSX edition — no compiler beyond the transpiler
+// Hutch already ships (tsconfig: jsx react-jsx, jsxImportSource
 // electrobun/main/ui). Reactivity stays explicit: live() marks every reactive
 // expression; bare function children are builder escapes.
 
@@ -130,7 +130,7 @@ function Header(props: { sizeLabel: Reactive<string> }): UIElement {
 		<row pad={14} align="center" gap={8}>
 			<box width={62} />
 			<text size={15} color={theme.textPrimary}>
-				Cottontail UI
+				Electrobun UI
 			</text>
 			<text size={11} color={theme.textFaint}>
 				jsx edition
@@ -343,7 +343,7 @@ const [sizeLabel, setSizeLabel] = signal("");
 
 const uiWindow = await createUIWindow(
 	{
-		title: "Cottontail UI",
+		title: "Electrobun UI",
 		width: 900,
 		height: 540,
 		background: theme.background,
@@ -385,4 +385,4 @@ const updateSizeLabel = () => {
 updateSizeLabel();
 uiWindow.window.on("resize", updateSizeLabel);
 
-console.log("[ui-wgpu] Cottontail UI prototype running (solid-effects-ok, jsx)");
+console.log("[ui-wgpu] Electrobun UI prototype running (solid-effects-ok, jsx)");

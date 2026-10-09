@@ -1,10 +1,11 @@
 ---
 title: "Cottontail"
-description: "Understand Electrobun's default JavaScript runtime."
+description: "Use Electrobun's experimental JavaScript runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Cottontail is the default runtime for a TypeScript main process. It's built
+Bun is the default runtime for TypeScript main processes and Hutch scripts.
+Cottontail is an experimental, opt-in alternative. It's built
 with Zig on JavaScriptCore and provides the Node.js and Bun-compatible APIs
 Electrobun applications need — which means existing code and npm packages can
 work without a Cottontail-based app shipping Node or Bun.
@@ -22,7 +23,7 @@ external dependency tool. Separately, Cottontail implements Bun-compatible
 application APIs including the `Bun.$` shell interface.
 
 Hutch uses Cottontail in two separate roles. The build-time Cottontail that
-loads config and runs scripts is paired with the Hutch release, unless a project
+loads internal build config and bundles code is paired with the Hutch release, unless a project
 pragma overrides it. For a Cottontail main process, the selected Electrobun
 devkit separately pins the exact runtime placed in the application bundle; it
 does not inherit Hutch's build-time pair. End users install neither one. A Bun
@@ -37,8 +38,8 @@ updates; users can download and install your ARM64 build to switch architectures
 
 ## Select Cottontail
 
-New projects use Cottontail by default. Spelled out explicitly, the
-configuration is:
+To opt into experimental Cottontail for an application, set both
+`build.mainProcess` and its entrypoint configuration explicitly:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";

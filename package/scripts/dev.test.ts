@@ -153,7 +153,7 @@ assert(!armVmCommands[0]!.args.some((arg) => arg.includes("odin:")), "Windows AR
 const mainProcesses = [...VM_MAIN_PROCESSES];
 assertArray(
 	mainProcesses,
-	["cottontail", "bun", "zig", "rust", "go", "odin"],
+	["bun", "cottontail", "zig", "rust", "go", "odin"],
 	"VM tests should cover every main-process backend",
 );
 assertArray([...VM_WEBVIEWS], ["system", "cef"], "VM tests should cover both webviews");
@@ -197,7 +197,7 @@ vmVariants.forEach((variant, index) => {
 	);
 });
 assert(
-	vmTestCommands[1]?.label === "Kitchen automated tests (Cottontail + system webview)",
+	vmTestCommands[1]?.label === "Kitchen automated tests (Bun + system webview)",
 	"System-webview launches should be labeled by backend and renderer",
 );
 const unitStage = vmTestCommands[1 + vmVariants.length];

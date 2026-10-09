@@ -230,6 +230,11 @@ test("dry-run pins only staged Hutch configs and preserves repository inputs", a
 	assert.equal(catalog.revision, checkedOutHead);
 	assert.notEqual(catalog.revision, spoofedRevision);
 	assert.equal(catalog.templates.length, 31);
+	const javascriptTemplates = catalog.templates.filter(
+		({ mainProcess }) => !["zig", "rust", "go", "odin"].includes(mainProcess),
+	);
+	assert.equal(javascriptTemplates.length, 23);
+	assert.ok(javascriptTemplates.every(({ mainProcess }) => mainProcess === "bun"));
 	assert.equal(
 		catalog.templates.filter(({ id }) => id === "all").length,
 		1,

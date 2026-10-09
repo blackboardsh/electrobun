@@ -3,6 +3,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import test from "node:test";
 
 import {
+	verifyAppBunVersion,
 	parseAppCottontailVersion,
 	parseHutchPragma,
 	resolvePinnedHutchExecutable,
@@ -260,7 +261,7 @@ test("release CI verifies provenance before all five Kitchen builds", () => {
 		assert.match(
 			workflow,
 			new RegExp(
-				`^      - name: ${name}\\n        if: \\$\\{\\{ !cancelled\\(\\) \\}\\}\\n        run: node \\.\\./package/scripts/run-cottontail-test\\.js ${testFile.replaceAll("/", "\\/").replaceAll(".", "\\.")}\\n        working-directory: kitchen$`,
+				`^      - name: ${name}\\n        if: \\$\\{\\{ !cancelled\\(\\) \\}\\}\\n        run: node \\.\\./package/scripts/run-bun-test\\.js ${testFile.replaceAll("/", "\\/").replaceAll(".", "\\.")}\\n        working-directory: kitchen$`,
 				"m",
 			),
 			`${testFile} should run independently on every release build platform`,
@@ -357,4 +358,10 @@ test("release CI verifies provenance before all five Kitchen builds", () => {
 		2,
 		"the local devkit override must remain scoped to Kitchen typechecking and building",
 	);
+});
+
+test("default app Bun provenance matches the devkit independently of Cottontail", () => {
+  const source = 'export const BUN_VERSION = "1.4.0";';
+  assert.equal(verifyAppBunVersion({source, manifest:{toolchains:{bun:{defaultVersion:"1.4.0"}}}}), "1.4.0");
+  assert.throws(() => verifyAppBunVersion({source, manifest:{toolchains:{bun:{defaultVersion:"1.3.10"}}}}), /emitted app Bun pin/);
 });

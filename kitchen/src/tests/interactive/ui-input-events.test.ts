@@ -53,8 +53,8 @@ function modString(modifiers: number): string {
 
 export const uiInputEventTests = [
 	defineTest({
-		name: "Cottontail UI input event monitor",
-		category: "Cottontail UI",
+		name: "Electrobun UI input event monitor",
+		category: "Electrobun UI",
 		description:
 			"Visualizes the raw native pointer/key event stream and UI-level dispatch (hover, click, focus, drag, wheel).",
 		instructions: [

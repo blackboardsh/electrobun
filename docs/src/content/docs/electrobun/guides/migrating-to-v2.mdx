@@ -3,7 +3,7 @@ title: "Migrate to Electrobun 2.x"
 description: "Upgrade the npm dependency, run your scripts, and fix what the validator reports."
 ---
 
-Electrobun 2.x moves build orchestration to Hutch and makes Cottontail the
+Electrobun 2.x moves build orchestration to Hutch and uses Bun as the
 default JavaScript main process. Application code and RPC schemas usually need
 little or no change, and the npm package remains the front door. There is one
 dependency-free package: its first command downloads the exact paired Hutch
@@ -67,8 +67,8 @@ export default {
     version: "2.0.0",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -77,7 +77,7 @@ export default {
 
 For the lowest-risk bridge release from a v1 Bun app, keep
 `build.mainProcess: "bun"` and its existing `build.bun.entrypoint`; migrating
-the main process to Cottontail can be a separate change. The directory may
+the main process to experimental Cottontail is optional. The directory may
 remain `src/bun` — its name does not select the runtime.
 
 Remove the v1-only `build.targets`, `build.useAsar`, `build.asarUnpack`,

@@ -1,6 +1,6 @@
 export const KITCHEN_MAIN_PROCESSES = [
-	"cottontail",
 	"bun",
+	"cottontail",
 	"zig",
 	"rust",
 	"go",
@@ -56,12 +56,12 @@ export function createKitchenMatrix(
 	}
 
 	// Quick interactive pass: every bridge against the system renderer, plus CEF
-	// through the first-class Cottontail path. SDK bridges do interact with
+	// through the default Bun path. SDK bridges do interact with
 	// CEF's callback threading, so `hutch test:vm` auto-runs every backend with
 	// both renderers; use --full here when renderer or build-config plumbing changes.
 	return [
-		{ mainProcess: "cottontail", renderer: "native" },
-		{ mainProcess: "cottontail", renderer: "cef" },
+		{ mainProcess: "bun", renderer: "native" },
+		{ mainProcess: "bun", renderer: "cef" },
 		...mainProcesses.slice(1).map((mainProcess) => ({
 			mainProcess,
 			renderer: "native" as const,

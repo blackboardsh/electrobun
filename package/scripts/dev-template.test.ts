@@ -233,6 +233,7 @@ try {
 		assert.equal(command.command, "/tools/hutch");
 		assert.equal(command.cwd, resolve(validTemplate));
 		assert.deepEqual(command.env, {
+            ...(command === plan.verifyCottontail ? { HUTCH_RUNTIME: "cottontail" } : {}),
 			HUTCH_ELECTROBUN_DEVKIT_ROOT: join(resolve(packageDir), "dist"),
 			HUTCH_DEFAULT_ELECTROBUN: "2.0.1-beta.31",
 			HUTCH_DEFAULT_CLI: "0.24.3",

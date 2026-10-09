@@ -13,11 +13,18 @@ that prefer npm, Bun, pnpm, or Yarn can delegate to them instead. Non-JS
 dependencies stay with their own tools: Cargo for Rust, Go modules for Go,
 and so on.
 
-Hutch is build-time tooling — it's what *you* run. It uses Cottontail for
-TypeScript and shell execution during builds, but that does not select the
-application runtime. Cottontail ships as the default JavaScript main process;
-when `build.mainProcess` selects Bun, the actual Bun runtime ships instead.
-Hutch itself stays out of the finished bundle.
+Hutch defaults to Bun for JavaScript/TypeScript scripts, tests, and string
+shell tasks. Electrobun also defaults to Bun for the packaged application main
+process. These are independent selections: changing the script runner does not
+change `build.mainProcess`.
+
+Cottontail remains an experimental option. Set `HUTCH_RUNTIME=cottontail` for
+Hutch scripts, or `build.mainProcess: "cottontail"` with a `build.cottontail`
+entrypoint for an application. `HUTCH_RUNTIME=bun` explicitly selects Bun even
+when a local Cottontail override is present. The `// @hutch ... cottontail=...`
+pragma pins a Cottontail version; it does not opt scripts into that runtime.
+Hutch's internal config loading and Electrobun bundling still use its paired
+Cottontail. Hutch stays out of the finished application bundle.
 
 ## Install Hutch
 

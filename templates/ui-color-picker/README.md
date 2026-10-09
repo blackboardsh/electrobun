@@ -1,4 +1,4 @@
-# ui-color-picker — tray eyedropper in a Cottontail UI window
+# ui-color-picker — tray eyedropper in a Electrobun UI window
 
 The "webview is too much, raw GpuWindow is too little" showcase: a color
 picker that lives in the system tray. The window is transparent with rounded

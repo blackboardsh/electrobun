@@ -98,7 +98,7 @@ describe("kitchen matrix", () => {
 			expect(matrix).toContainEqual({ mainProcess, renderer: "native" });
 		}
 		expect(matrix.filter((variant) => variant.renderer === "cef")).toEqual([
-			{ mainProcess: "cottontail", renderer: "cef" },
+			{ mainProcess: "bun", renderer: "cef" },
 		]);
 	});
 

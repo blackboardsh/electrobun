@@ -5,7 +5,7 @@ import {
 } from "./scripts/kitchen-matrix-plan";
 
 const matrixVariant = readKitchenVariant(process.env);
-const mainProcess = matrixVariant?.mainProcess ?? "cottontail";
+const mainProcess = matrixVariant?.mainProcess ?? "bun";
 const defaultRenderer = matrixVariant?.renderer ?? "native";
 const bundleCEF = matrixVariant ? defaultRenderer === "cef" : true;
 const variantKey = matrixVariant ? kitchenVariantKey(matrixVariant) : null;

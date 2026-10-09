@@ -604,3 +604,16 @@ describe("Electrobun template package boundaries", () => {
 		expect(bunnyMain).not.toMatch(/\bpassthrough:\s*true\b/);
 	});
 });
+
+ test("JavaScript templates explicitly select Bun and preserve their entrypoints", async () => {
+   for (const entry of readdirSync(templatesRoot, { withFileTypes: true })) {
+     if (!entry.isDirectory()) continue;
+     const configPath = join(templatesRoot, entry.name, "electrobun.config.ts");
+     if (!existsSync(configPath)) continue;
+     const { default: config } = await import(configPath);
+     if (["zig", "rust", "go", "odin"].includes(config.build.mainProcess)) continue;
+     expect(config.build.mainProcess).toBe("bun");
+     expect(config.build.cottontail).toBeUndefined();
+     expect(existsSync(join(templatesRoot, entry.name, config.build.bun.entrypoint))).toBe(true);
+   }
+ });

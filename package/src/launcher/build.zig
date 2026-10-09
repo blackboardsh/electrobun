@@ -90,7 +90,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_uninstall_tests = b.addRunArtifact(uninstall_tests);
 
+    const runtime_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main_process.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
     const test_step = b.step("test", "Run launcher tests");
+    test_step.dependOn(&b.addRunArtifact(runtime_tests).step);
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_automation_tests.step);
     test_step.dependOn(&run_windows_spawn_tests.step);

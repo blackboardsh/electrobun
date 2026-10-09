@@ -11,9 +11,8 @@ menus, trays, auto-updates, WebGPU surfaces, and platform integration.
 The trade most desktop web frameworks make is size and speed: they ship a full
 copy of Chromium and Node with every app. Electrobun doesn't. By default your
 app renders with the webview already on the user's machine and runs its main
-process on Cottontail, a small runtime built for exactly this job. The result
-is an app measured in megabytes, not hundreds of them — with the option to
-bundle Chromium when you genuinely want it.
+process on Bun. Chromium can be bundled when an application needs it.
+Cottontail is an experimental alternative main-process runtime.
 
 ## The 2.x stack
 
@@ -25,10 +24,10 @@ Electrobun 2.x is a few focused pieces, each doing one job:
   handles JavaScript dependencies by default; projects may explicitly select
   npm, Bun, pnpm, or Yarn instead. Cargo, Go modules, and other language package
   managers remain authoritative for their ecosystems.
-- **Cottontail** is the default main-process runtime for JavaScript and
-  TypeScript. It's built with Zig on JavaScriptCore and provides the Node.js
-  and Bun-compatible APIs desktop apps actually use — so your existing code
-  and dependencies work, in a runtime that's smaller than either.
+- **Bun** is the default main-process runtime for JavaScript and TypeScript,
+  and the default runner for Hutch scripts and tests.
+- **Cottontail** is an experimental, opt-in runtime built with Zig on
+  JavaScriptCore. It provides Node.js and Bun-compatible APIs.
 - **Electrobun Core** is the native layer: cross-platform windows, views, RPC,
   menus, trays, updates, and OS integration.
 - **System webviews** render your UI by default — WKWebView on macOS, WebView2

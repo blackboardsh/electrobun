@@ -391,7 +391,7 @@ export function createTemplateDevPlan(options: {
 				'process.stdout.write(process.versions.cottontail ?? "")',
 			],
 			cwd: templateDir,
-			env: { ...localDevkitEnvironment },
+			env: { ...localDevkitEnvironment, HUTCH_RUNTIME: "cottontail" },
 		},
 		install: {
 			label: "Install template dependencies",

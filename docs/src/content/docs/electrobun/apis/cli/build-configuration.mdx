@@ -11,6 +11,14 @@ belong in `hutch.config.ts`; the release and external package-manager fields are
 optional. This file owns the app, build, tool overrides, and distribution
 description.
 
+Bun is the default `build.mainProcess`. Use `build.bun` for its entrypoint and
+bundler options. Cottontail is experimental and requires an explicit
+`mainProcess: "cottontail"` selection. When migrating an older implicit
+Cottontail configuration, move its entrypoint and shared bundler options into
+`build.bun`; Cottontail-only capability and bytecode options do not apply to Bun.
+Hutch scripts and tests also default to Bun; internal build helpers still use
+Cottontail.
+
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
 
@@ -21,8 +29,8 @@ export default {
     version: "1.0.0",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
     views: {
@@ -628,7 +636,8 @@ console.log(config.runtime?.serviceEndpoint);
 ## Build Hooks
 
 Hook paths are relative to the project root. Hutch transpiles each TypeScript
-or JavaScript file and executes it with the host-platform Cottontail binary.
+or JavaScript file and executes it with the pinned host-platform Bun binary
+by default. Set `HUTCH_RUNTIME=cottontail` to use experimental Cottontail for hooks.
 
 | Hook | Timing |
 | --- | --- |

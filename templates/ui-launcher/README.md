@@ -1,4 +1,4 @@
-# ui-launcher — command palette in a Cottontail UI window
+# ui-launcher — command palette in a Electrobun UI window
 
 A Raycast-style palette that lives as a small always-on-top pill you can
 drag anywhere on screen. Click the pill (or hit the global shortcut — it

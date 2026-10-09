@@ -74,9 +74,9 @@ export function createDevTestCommands({
 			cwd: packageDir,
 		},
 		{
-			label: "Cottontail test wrapper tests",
+			label: "Runtime test wrapper tests",
 			command: "node",
-			args: ["--test", "scripts/run-cottontail-test.test.mjs"],
+			args: ["--test", "scripts/run-cottontail-test.test.mjs", "scripts/run-bun-test.test.mjs"],
 			cwd: packageDir,
 		},
 		{
@@ -93,10 +93,10 @@ export function createTemplateTestCommands({
 }: CreateCheckCommandsOptions): DevCommand[] {
 	return [
 		{
-			label: "Cottontail template tests",
+			label: "Bun template tests",
 			command: "node",
 			args: [
-				"scripts/run-cottontail-test.js",
+				"scripts/run-bun-test.js",
 				"../templates/template-manifests.test.ts",
 				"../templates/all-template-orchestrator.test.ts",
 				"src/shared/ui-color-picker.test.ts",

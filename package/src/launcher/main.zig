@@ -122,14 +122,8 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     return false;
 }
 
-const MainProcess = enum {
-    bun,
-    cottontail,
-    zig,
-    rust,
-    go,
-    odin,
-};
+const main_process_config = @import("main_process.zig");
+const MainProcess = main_process_config.MainProcess;
 
 fn uninstallPlatform() uninstall.Platform {
     return switch (builtin.os.tag) {
@@ -327,37 +321,13 @@ fn delegateUninstall(
 }
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
-    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
+    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .bun;
     defer allocator.free(build_path);
 
-    const content = std.Io.Dir.cwd().readFileAlloc(g_io, build_path, allocator, .limited(1024 * 10)) catch return .cottontail;
+    const content = std.Io.Dir.cwd().readFileAlloc(g_io, build_path, allocator, .limited(1024 * 10)) catch return .bun;
     defer allocator.free(content);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .cottontail;
-    defer parsed.deinit();
-
-    if (parsed.value.object.get("mainProcess")) |main_process_value| {
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "bun")) {
-            return .bun;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "cottontail")) {
-            return .cottontail;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
-            return .zig;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "rust")) {
-            return .rust;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "go")) {
-            return .go;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "odin")) {
-            return .odin;
-        }
-    }
-
-    return .cottontail;
+    return main_process_config.fromMetadata(allocator, content);
 }
 
 fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: *std.process.Environ.Map) !void {

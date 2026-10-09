@@ -203,7 +203,7 @@ jobs:
             pkg-config
 
       - name: Test portable CEF find behavior
-        run: node scripts/run-cottontail-test.js src/shared/cef-find-session.test.ts
+        run: node scripts/run-bun-test.js src/shared/cef-find-session.test.ts
         working-directory: package
 
       - name: Test cross-platform native symbol contracts
@@ -248,7 +248,7 @@ jobs:
         working-directory: package
 
       - name: Test host WebView delivery and RPC backpressure
-        run: node scripts/run-cottontail-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
+        run: node scripts/run-bun-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
         working-directory: package
 
       - name: Test Windows release validation contract
@@ -263,7 +263,7 @@ jobs:
         run: |
           node scripts/test-windows-profile-paths.mjs
           if ($LASTEXITCODE -ne 0) { throw "Windows profile path tests failed" }
-          node scripts/run-cottontail-test.js src/shared/windows-webview2-lifecycle.test.ts
+          node scripts/run-bun-test.js src/shared/windows-webview2-lifecycle.test.ts
           if ($LASTEXITCODE -ne 0) { throw "Windows WebView2 lifecycle tests failed" }
 
       - name: Test Windows release launcher identity and full exit status
@@ -346,22 +346,22 @@ jobs:
 
       - name: Test Kitchen AUTO_RUN exit propagation
         if: ${{ !cancelled() }}
-        run: node ../package/scripts/run-cottontail-test.js src/test-framework/auto-run-exit.test.ts
+        run: node ../package/scripts/run-bun-test.js src/test-framework/auto-run-exit.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen renderer requirements
         if: ${{ !cancelled() }}
-        run: node ../package/scripts/run-cottontail-test.js src/test-framework/requirements.test.ts
+        run: node ../package/scripts/run-bun-test.js src/test-framework/requirements.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen result summary
         if: ${{ !cancelled() }}
-        run: node ../package/scripts/run-cottontail-test.js src/test-runner/test-summary.test.ts
+        run: node ../package/scripts/run-bun-test.js src/test-runner/test-summary.test.ts
         working-directory: kitchen
 
       - name: Test Kitchen quit exit codes
         if: ${{ !cancelled() }}
-        run: node ../package/scripts/run-cottontail-test.js ../package/src/sdks/main/__tests__/utils-quit-exit-code.test.ts
+        run: node ../package/scripts/run-bun-test.js ../package/src/sdks/main/__tests__/utils-quit-exit-code.test.ts
         working-directory: kitchen
 
       - name: Test release toolchain provenance contract

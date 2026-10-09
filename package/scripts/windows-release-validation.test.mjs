@@ -29,7 +29,7 @@ test("Windows profile path and lifecycle source regressions are release gates wi
   const section = workflow.slice(start, workflow.indexOf("      - name:", start + 12));
   assert.match(section, /if: matrix\.platform == 'win32'/);
   assert.match(section, /node scripts\/test-windows-profile-paths\.mjs/);
-  assert.match(section, /node scripts\/run-cottontail-test\.js src\/shared\/windows-webview2-lifecycle\.test\.ts/);
+  assert.match(section, /node scripts\/run-bun-test\.js src\/shared\/windows-webview2-lifecycle\.test\.ts/);
   assert.equal((section.match(/if \(\$LASTEXITCODE -ne 0\)/g) || []).length, 2);
   assert.match(nativeRunner, /run\("cl\.exe",/);
   assert.match(nativeRunner, /"\/UNDEBUG"/);
