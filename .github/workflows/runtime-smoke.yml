@@ -1,0 +1,38 @@
+name: Runtime smoke checks
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Test CEF find behavior
+        working-directory: package
+        run: node scripts/run-bun-test.js src/shared/cef-find-session.test.ts
+      - name: Test quit exit codes
+        if: ${{ !cancelled() }}
+        working-directory: package
+        run: node scripts/run-bun-test.js src/sdks/main/__tests__/utils-quit-exit-code.test.ts
