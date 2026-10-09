@@ -52,6 +52,27 @@ export const kitchenArtifactKey = (filePath: string): string => {
 export const isKitchenUpdateManifest = (key: string): boolean =>
 	key.endsWith("-update.json");
 
+// Keep publication bounded even when the storage service stops responding.
+export async function putKitchenArtifact(
+	client: Pick<InstanceType<typeof Bun.S3Client>, "presign">,
+	key: string,
+	file: ReturnType<typeof Bun.file>,
+) {
+	// Use one signed PUT per artifact. Bun's S3Client.write switches large
+	// files to multipart uploads; that path stalled against R2 in release CI.
+	const url = client.presign(key, { method: "PUT", expiresIn: 3600 });
+	const response = await fetch(url, {
+		method: "PUT",
+		body: file,
+		headers: { "content-type": file.type || "application/octet-stream" },
+		signal: AbortSignal.timeout(5 * 60 * 1000),
+	});
+	if (!response.ok) {
+		throw new Error(`R2 upload failed for ${key}: HTTP ${response.status}`);
+	}
+	await response.arrayBuffer();
+}
+
 async function main() {
 	const artifactsDir = process.argv[2];
 	const dryRun = process.argv.includes("--dry-run");
@@ -121,14 +142,11 @@ async function main() {
 		console.log(`  ${key} (${size} bytes)`);
 
 		if (client) {
-			await client.write(
-				key,
-				file,
-				file.type ? { type: file.type } : undefined,
-			);
+			await putKitchenArtifact(client, key, file);
 		}
 
 		uploadedCount += 1;
+		console.log(`  ${dryRun ? "Validated" : "Uploaded"} ${key}`);
 	};
 
 	const uploadBatch = async (batch: typeof uploads) => {
