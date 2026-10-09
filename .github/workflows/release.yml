@@ -833,6 +833,10 @@ jobs:
       - name: Validate template publisher
         run: node --test scripts/publish-templates.test.mjs
 
+      - name: Validate Kitchen uploader
+        working-directory: package
+        run: hutch test ../scripts/upload-kitchen-artifacts.test.ts
+
       - name: Publish Kitchen artifacts to R2
         env:
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
