@@ -25,13 +25,13 @@ if (process.platform !== "win32") {
     assert.equal(run(zig, ["version"], 10_000).trim(), ZIG_VERSION, "Use the pinned release compiler");
     for (const optimize of ["ReleaseFast", "ReleaseSmall"]) {
       const executable = join(directory, `${optimize}.exe`);
-      run(zig, ["build-exe", join(packageRoot, "scripts/fixtures/windows-threaded-shutdown.zig"),
-        "-lc", "-target", target, "-O", optimize, `-femit-bin=${executable}`], 240_000);
+      run(zig, ["test", join(packageRoot, "scripts/fixtures/windows-threaded-shutdown.zig"),
+        "-lc", "-target", target, "-O", optimize, "--test-no-exec", `-femit-bin=${executable}`], 240_000);
       assertWindowsBinaryArchitecture(executable, process.arch);
-      // Fresh processes vary scheduling/address layout; each child also repeats
-      // teardown to expose lost wakeups. No child creates descendant processes.
-      for (let batch = 0; batch < 4; batch++) {
-        assert.match(run(executable, [], 30_000), /completed 50 startup\/shutdown cycles/);
+      // Reproduce the native test allocator and fresh-process layout that
+      // exposed lost shutdown wakeups. No child creates descendant processes.
+      for (let cycle = 0; cycle < 200; cycle++) {
+        assert.match(run(executable, [], 10_000), /completed startup\/shutdown cycle/);
       }
       console.log(`Windows ${process.arch} ${optimize}: 200 Threaded startup/shutdown cycles passed.`);
     }
