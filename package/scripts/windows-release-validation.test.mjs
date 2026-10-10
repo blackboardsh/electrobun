@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
@@ -12,11 +13,24 @@ const build = readFileSync(resolve(packageRoot, "build.ts"), "utf8");
 
 test("Windows Zig compiler uses host architecture and rejects a stale emulated vendor", () => {
   const vendor = build.slice(build.indexOf("async function vendorZig()"), build.indexOf("function getRustHostTriple()"));
-  assert.match(vendor, /const zigArch = HOST_ARCH === "arm64" \? "aarch64" : "x86_64"/);
+  assert.match(vendor, /const zigArch = ZIG_HOST_ARCH === "arm64" \? "aarch64" : "x86_64"/);
   assert.match(vendor, /zig-\$\{zigArch\}-windows-\$\{ZIG_VERSION\}/);
   const verify = build.slice(build.indexOf("function verifyVendoredZig()"), build.indexOf("async function vendorZig()"));
-  assert.match(verify, /assertWindowsBinaryArchitecture\(PATH\.zig\.BIN, HOST_ARCH\)/);
+  assert.match(verify, /assertWindowsBinaryArchitecture\(PATH\.zig\.BIN, ZIG_HOST_ARCH\)/);
   assert.ok(vendor.indexOf("verifyVendoredZig()") < vendor.indexOf("return;"));
+});
+
+test("an emulated JS runtime selects the native Windows ARM64 compiler", () => {
+  for (const [machine, env] of [
+    ["ARM64", {}],
+    ["x86_64", { PROCESSOR_ARCHITEW6432: "ARM64", PROCESSOR_ARCHITECTURE: "AMD64" }],
+    ["x86_64", { PROCESSOR_ARCHITECTURE: "ARM64" }],
+  ]) assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine, env }), "arm64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "arm64", machine: "x86_64", env: {} }), "arm64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine: "AMD64", env: {} }), "x64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "linux", processArch: "x64", machine: "x86_64", env: { PROCESSOR_ARCHITECTURE: "ARM64" } }), "x64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "darwin", processArch: "arm64", machine: "arm64", env: {} }), "arm64");
+  assert.throws(() => zigCompilerHostArchitecture({ platform: "win32", processArch: "ia32", machine: "i686", env: {} }), /Unsupported/);
 });
 
 test("Windows launcher gate uses the packaged GUI launcher before artifact publication and cannot skip", () => {

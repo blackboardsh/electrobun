@@ -40,6 +40,7 @@ import { ODIN_VERSION } from "./src/shared/odin-version";
 import { ELECTROBUN_VERSION } from "./src/shared/electrobun-version";
 import { resolveBuildArch, windowsBuildTarget } from "./src/shared/windows-build-target";
 import { assertWindowsBinaryArchitecture } from "./scripts/windows-binary-architecture.mjs";
+import { zigCompilerHostArchitecture } from "./scripts/zig-compiler-host.mjs";
 import {
 	NATIVE_DEVKIT_MANIFEST_FILENAME,
 	createNativeDevkitManifest,
@@ -85,6 +86,7 @@ const CORE_ONLY_BUILD = args["core-only"] || false;
 const OS: "win" | "linux" | "macos" = getPlatform();
 const ARCH: "arm64" | "x64" = getArch();
 const HOST_ARCH = resolveBuildArch(arch());
+const ZIG_HOST_ARCH = zigCompilerHostArchitecture();
 const WINDOWS_TARGET = windowsBuildTarget(ARCH);
 
 const isWindows = platform() === "win32";
@@ -1098,7 +1100,7 @@ async function installPackageDependencies() {
 
 
 function verifyVendoredZig() {
-	if (OS === "win") assertWindowsBinaryArchitecture(PATH.zig.BIN, HOST_ARCH);
+	if (OS === "win") assertWindowsBinaryArchitecture(PATH.zig.BIN, ZIG_HOST_ARCH);
 	const versionOutput = runCaptured(PATH.zig.BIN, ["version"]).trim();
 	if (versionOutput !== ZIG_VERSION) {
 		throw new Error(
@@ -1134,7 +1136,7 @@ async function vendorZig() {
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.tar.xz | tar -xJ --strip-components=1 -C vendors/zig ${zigFolder}/zig ${zigFolder}/lib ${zigFolder}/doc`;
 	} else if (OS === "win") {
 		// Compiler architecture follows the host, independently of --arch.
-		const zigArch = HOST_ARCH === "arm64" ? "aarch64" : "x86_64";
+		const zigArch = ZIG_HOST_ARCH === "arm64" ? "aarch64" : "x86_64";
 		const zigFolder = `zig-${zigArch}-windows-${ZIG_VERSION}`;
 		await $`rm -rf vendors/zig-temp vendors/zig.zip`;
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
