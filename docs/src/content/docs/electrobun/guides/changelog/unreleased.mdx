@@ -13,6 +13,9 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
   retain GUI startup through the C runtime, and native update readers use the
   compiler's corrected file-handle behavior. Projects with an explicit
   `build.zig.version` pin must select `0.17.0` for the updated Zig SDK.
+- Bundled archive and update tools now use Zig `0.17.0`: `zig-asar` `0.2.8`,
+  `zig-zstd` `0.1.9`, and `zig-bsdiff` `0.1.26`. Archive and patch formats
+  remain compatible with existing releases, and macOS 14 remains supported.
 - Bun is now the default JavaScript/TypeScript main process. Kitchen Sink and
   all JavaScript templates, including the experimental Electrobun UI templates,
   use Bun. Zig, Rust, Go, and Odin main processes remain explicit choices.
