@@ -51,6 +51,7 @@ const expectedReleaseTasks = [
 	"typecheck",
 	"dev:test",
 	"test:core-host-transport",
+	"test:windows-threaded-shutdown",
 	"test:native-symbol-contract",
 	"test:devkit-manifest",
 	"test:version-bump",

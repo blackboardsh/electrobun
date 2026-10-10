@@ -277,6 +277,12 @@ jobs:
           node --test src/launcher/windows_process_identity.integration.test.mjs
           if ($LASTEXITCODE -ne 0) { throw "Windows release launcher identity tests failed" }
 
+      - name: Test Windows native Threaded startup and shutdown
+        if: matrix.platform == 'win32'
+        timeout-minutes: 12
+        run: node scripts/test-windows-threaded-shutdown.mjs
+        working-directory: package
+
       - name: Test CEF remote debugging policy
         run: hutch test:cef-debug
         working-directory: package

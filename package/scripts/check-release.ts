@@ -10,6 +10,7 @@ export const releaseCheckTasks = [
 	["Typecheck", "typecheck"],
 	["Development command tests", "dev:test"],
 	["Core host transport tests", "test:core-host-transport"],
+	["Windows Threaded shutdown stress", "test:windows-threaded-shutdown"],
 	["Native symbol contract tests", "test:native-symbol-contract"],
 	["Native devkit manifest tests", "test:devkit-manifest"],
 	["Version bump tests", "test:version-bump"],
