@@ -115,6 +115,7 @@ Don't miss our:
 - [qCodelicious](https://github.com/rafaelsouzars/qcodelicious) - a simple code editor
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
 - [remotecode.io](https://github.com/samuelfaj/remotecode.io) - continue local AI coding sessions (Claude Code or Codex) from your mobile device
+- [RoadRaven](https://github.com/Shuffzord/RoadRaven) - local-first roadmap tree that Claude Code and other MCP hosts keep up to date live over a localhost WebSocket
 - [sirene](https://github.com/KevinBonnoron/sirene) - self-hosted multi-backend text-to-speech platform with voice cloning
 - [Sideleaf](https://sideleaf.xyz/) - simple Markdown and text editor with previews and notes
 - [StoryForge](https://github.com/vrrdnt/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
