@@ -111,7 +111,7 @@ async function buildFixture(directory) {
   await writeFile(source, await readFile(join(packageRoot, "src", "core", "main.zig"), "utf8") + nativeFixture);
   const extension = process.platform === "darwin" ? "dylib" : process.platform === "win32" ? "dll" : "so";
   const library = join(directory, `libCoreTransportTest.${extension}`);
-  // Windows ARM64 uses an emulated x64 Zig compiler. The fixture must match
+  // Compiler host architecture may differ from the requested fixture. Match
   // the native runtime that loads it, independently of the compiler's host.
   const target = process.platform === "win32"
     ? ["-target", process.arch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu"]
@@ -130,7 +130,8 @@ let fixtureDirectory;
 let fixtureLibrary;
 before(async () => {
   // Cold cross-compilation can outlast the runtime deadline, especially with
-  // the x64 Zig compiler under ARM64 emulation. Compile once with its own bound;
+  // an emulated compiler selected by a development override. Compile once with
+  // its own bound;
   // each transport test below retains its independent 90-second deadline.
   fixtureDirectory = await mkdtemp(join(tmpdir(), "electrobun-core-transport-"));
   fixtureLibrary = await buildFixture(fixtureDirectory);

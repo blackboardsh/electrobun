@@ -39,6 +39,7 @@ import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
 import { ELECTROBUN_VERSION } from "./src/shared/electrobun-version";
 import { resolveBuildArch, windowsBuildTarget } from "./src/shared/windows-build-target";
+import { assertWindowsBinaryArchitecture } from "./scripts/windows-binary-architecture.mjs";
 import {
 	NATIVE_DEVKIT_MANIFEST_FILENAME,
 	createNativeDevkitManifest,
@@ -1097,6 +1098,7 @@ async function installPackageDependencies() {
 
 
 function verifyVendoredZig() {
+	if (OS === "win") assertWindowsBinaryArchitecture(PATH.zig.BIN, HOST_ARCH);
 	const versionOutput = runCaptured(PATH.zig.BIN, ["version"]).trim();
 	if (versionOutput !== ZIG_VERSION) {
 		throw new Error(
@@ -1131,8 +1133,8 @@ async function vendorZig() {
 		const zigFolder = `zig-${zigArch}-macos-${ZIG_VERSION}`;
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.tar.xz | tar -xJ --strip-components=1 -C vendors/zig ${zigFolder}/zig ${zigFolder}/lib ${zigFolder}/doc`;
 	} else if (OS === "win") {
-		// The x64 Zig compiler can produce either target and runs under ARM64 emulation.
-		const zigArch = "x86_64";
+		// Compiler architecture follows the host, independently of --arch.
+		const zigArch = HOST_ARCH === "arm64" ? "aarch64" : "x86_64";
 		const zigFolder = `zig-${zigArch}-windows-${ZIG_VERSION}`;
 		await $`rm -rf vendors/zig-temp vendors/zig.zip`;
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;

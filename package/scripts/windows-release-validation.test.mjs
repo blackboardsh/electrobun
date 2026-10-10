@@ -8,6 +8,16 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
 const integration = readFileSync(resolve(packageRoot, "src/launcher/windows_process_identity.integration.test.mjs"), "utf8");
 const nativeRunner = readFileSync(resolve(packageRoot, "scripts/test-windows-profile-paths.mjs"), "utf8");
+const build = readFileSync(resolve(packageRoot, "build.ts"), "utf8");
+
+test("Windows Zig compiler uses host architecture and rejects a stale emulated vendor", () => {
+  const vendor = build.slice(build.indexOf("async function vendorZig()"), build.indexOf("function getRustHostTriple()"));
+  assert.match(vendor, /const zigArch = HOST_ARCH === "arm64" \? "aarch64" : "x86_64"/);
+  assert.match(vendor, /zig-\$\{zigArch\}-windows-\$\{ZIG_VERSION\}/);
+  const verify = build.slice(build.indexOf("function verifyVendoredZig()"), build.indexOf("async function vendorZig()"));
+  assert.match(verify, /assertWindowsBinaryArchitecture\(PATH\.zig\.BIN, HOST_ARCH\)/);
+  assert.ok(vendor.indexOf("verifyVendoredZig()") < vendor.indexOf("return;"));
+});
 
 test("Windows launcher gate uses the packaged GUI launcher before artifact publication and cannot skip", () => {
   const start = workflow.indexOf("      - name: Test Windows release launcher identity and full exit status");
