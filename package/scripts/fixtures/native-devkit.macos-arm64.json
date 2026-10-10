@@ -20,7 +20,7 @@
 	},
 	"toolchains": {
 		"zig": {
-			"defaultVersion": "0.16.0"
+			"defaultVersion": "0.17.0"
 		},
 		"rust": {
 			"defaultVersion": "1.88.0"

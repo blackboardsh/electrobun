@@ -33,7 +33,7 @@ fn installRootNameOverride() ?[:0]u8 {
     const value = processEnviron().getAlloc(allocator, install_root_name_environment_variable) catch return null;
     defer allocator.free(value);
     if (!isSafeInstallRootName(value)) return null;
-    return allocator.dupeZ(u8, value) catch null;
+    return allocator.dupeSentinel(u8, value, 0) catch null;
 }
 
 // Lazily-initialized event-loop-free Io implementation. The library keeps its
@@ -456,7 +456,7 @@ fn setLastError(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn dupeZ(input: [*:0]const u8) ![:0]u8 {
-    return allocator.dupeZ(u8, std.mem.span(input));
+    return allocator.dupeSentinel(u8, std.mem.span(input), 0);
 }
 
 fn replaceOwnedZ(target: *[:0]u8, input: [*:0]const u8) bool {
@@ -623,7 +623,7 @@ fn dispatchRuntimePostMessage(
     webview_id: u32,
     message: []const u8,
 ) void {
-    const owned_message = allocator.dupeZ(u8, message) catch return;
+    const owned_message = allocator.dupeSentinel(u8, message, 0) catch return;
 
     if (!runtime_callbacks_async) {
         defer allocator.free(owned_message);
@@ -755,7 +755,7 @@ export fn popQueuedHostMessageBatch(max_count: u32, out_length: *u32) ?[*:0]u8 {
         setLastError("Queued host message batch exceeds the ABI length limit", .{});
         return null;
     }
-    const owned_batch_json = allocator.dupeZ(u8, batch_json) catch |err| {
+    const owned_batch_json = allocator.dupeSentinel(u8, batch_json, 0) catch |err| {
         out_length.* = host_message_batch_error_length;
         setLastError("Failed to own queued host message batch: {s}", .{@errorName(err)});
         return null;
@@ -828,7 +828,7 @@ export fn getHostTransportDebugJSON() ?[*:0]u8 {
         return null;
     };
     defer allocator.free(json);
-    return allocator.dupeZ(u8, json) catch |err| {
+    return allocator.dupeSentinel(u8, json, 0) catch |err| {
         setLastError("Failed to allocate host transport debug JSON: {s}", .{@errorName(err)});
         return null;
     };
@@ -870,7 +870,7 @@ fn ensureWebviewRuntimeConfigured() bool {
 
 fn parseWebviewSecretKey(secret_key: [*:0]const u8) ?WebviewSecretKey {
     const input = std.mem.trim(u8, std.mem.span(secret_key), " \t\r\n");
-    var parsed: WebviewSecretKey = [_]u8{0} ** Aes256Gcm.key_length;
+    var parsed: WebviewSecretKey = @splat(0);
     var iterator = std.mem.splitScalar(u8, input, ',');
     var index: usize = 0;
 
@@ -1415,7 +1415,7 @@ fn enqueueHostTransportPlaintext(webview_id: u32, context: WebviewTransportConte
         markWebviewTransportReady(webview_id, socket_handle);
     }
 
-    const message_z = allocator.dupeZ(u8, plaintext) catch return;
+    const message_z = allocator.dupeSentinel(u8, plaintext, 0) catch return;
     defer allocator.free(message_z);
 
     enqueuePendingHostMessage(webview_id, message_z.ptr);
@@ -2017,7 +2017,7 @@ fn jsonF64(value: std.json.Value) ?f64 {
 }
 
 fn duplicateSentinelString(value: []const u8) ?[:0]u8 {
-    return allocator.dupeZ(u8, value) catch null;
+    return allocator.dupeSentinel(u8, value, 0) catch null;
 }
 
 const InternalRect = struct {
@@ -2075,9 +2075,9 @@ fn dispatchStoredWebviewEvent(source_webview_id: u32, payload: std.json.Value) v
     const event_name = jsonString(payload_object.get("eventName") orelse return) orelse return;
     const detail = jsonString(payload_object.get("detail") orelse return) orelse return;
 
-    const event_name_z = allocator.dupeZ(u8, event_name) catch return;
+    const event_name_z = allocator.dupeSentinel(u8, event_name, 0) catch return;
     defer allocator.free(event_name_z);
-    const detail_z = allocator.dupeZ(u8, detail) catch return;
+    const detail_z = allocator.dupeSentinel(u8, detail, 0) catch return;
     defer allocator.free(detail_z);
 
     handler(webview_id, event_name_z.ptr, detail_z.ptr);

@@ -7,6 +7,12 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
 
 ## Runtime defaults and migration
 
+- Native Zig builds and the Zig WGPU template now use Zig `0.17.0`. Updated
+  the core, launcher, installer, SDK, and Kitchen Zig sources for the new
+  compiler APIs and array initialization syntax. Windows launchers and installers
+  retain GUI startup through the C runtime, and native update readers use the
+  compiler's corrected file-handle behavior. Projects with an explicit
+  `build.zig.version` pin must select `0.17.0` for the updated Zig SDK.
 - Bun is now the default JavaScript/TypeScript main process. Kitchen Sink and
   all JavaScript templates, including the experimental Electrobun UI templates,
   use Bun. Zig, Rust, Go, and Odin main processes remain explicit choices.
@@ -20,7 +26,7 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
   to Bun. `HUTCH_RUNTIME=cottontail` remains an explicit override; a Cottontail
   version pragma alone does not select the script runner. Internal config
   loading and bundling still use Hutch's paired Cottontail.
-- The current beta pairs Hutch `0.28.0-canary.6` with build-time Cottontail
+- The current beta pairs Hutch `0.28.0-canary.7` with build-time Cottontail
   `0.7.2-canary.6`; packaged apps use Bun `1.4.0` by default or the devkit's
   Cottontail `0.7.2-canary.6` when explicitly selected. The script runner and
   app runtime are independent selections. See the

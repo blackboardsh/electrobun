@@ -183,7 +183,7 @@ export default {
   build: {
     mainProcess: "zig",
     zig: {
-      version: "0.16.0",
+      version: "0.17.0",
     },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
@@ -248,7 +248,7 @@ hutch electrobun init my-app --template=zig-wgpu
 
 ## Toolchain
 
-Electrobun 2.0.0 defaults to Zig **0.16.0**. Override it exactly with
+Electrobun defaults to Zig **0.17.0**. Override it exactly with
 `build.zig.version`. Hutch uses a system Zig only on an exact version match;
 otherwise it downloads the selected toolchain into
 `~/.hutch/toolchains/zig/<version>/<platform>` and reuses it across projects. The

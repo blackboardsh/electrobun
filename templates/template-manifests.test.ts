@@ -491,7 +491,7 @@ describe("Electrobun template package boundaries", () => {
 		expect(threeSource).toContain('import * as three from "three";');
 	});
 
-	test("Zig WGPU owns its Zig 0.16 build graph", () => {
+	test("Zig WGPU owns its Zig 0.17 build graph", () => {
 		const templateRoot = join(templatesRoot, "zig-wgpu");
 		const buildPath = join(templateRoot, "build.zig");
 		expect(existsSync(buildPath)).toBe(true);
@@ -510,7 +510,7 @@ describe("Electrobun template package boundaries", () => {
 			join(templateRoot, "electrobun.config.ts"),
 			"utf8",
 		);
-		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.16\.0"/);
+		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.17\.0"/);
 		expect(config).not.toContain('entrypoint: "src/zig/main.zig"');
 	});
 

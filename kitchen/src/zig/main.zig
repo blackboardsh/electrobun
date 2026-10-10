@@ -1285,9 +1285,9 @@ const CallbackState = struct {
     before_quit_count: u32 = 0,
     reopen_count: u32 = 0,
     url_open_count: u32 = 0,
-    last_open_url: [1024]u8 = [_]u8{0} ** 1024,
+    last_open_url: [1024]u8 = @splat(0),
     last_open_url_len: usize = 0,
-    last_webview_detail: [1024]u8 = [_]u8{0} ** 1024,
+    last_webview_detail: [1024]u8 = @splat(0),
     last_webview_detail_len: usize = 0,
 
     fn reset(self: *CallbackState) void {

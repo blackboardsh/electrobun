@@ -65,7 +65,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 test "reads the subsystem from a PE32+ image" {
-    var fixture = [_]u8{0} ** 256;
+    var fixture: [256]u8 = @splat(0);
     fixture[0] = 'M';
     fixture[1] = 'Z';
     fixture[0x3c] = 0x80;

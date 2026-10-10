@@ -36,9 +36,12 @@ pub fn build(b: *std.Build) void {
     // For production Windows builds, use GUI subsystem to hide console window
     // For dev builds (Debug mode), use default console subsystem for CLI interaction
     const is_windows = target.result.os.tag == .windows;
-    const is_production = optimize != .Debug;
+    const is_production = optimize != .debug;
     if (is_windows and is_production) {
-        exe.subsystem = .Windows;
+        exe.subsystem = .windows;
+        // Zig's libc entry point exports main; select its CRT startup even
+        // though the packaged launcher intentionally has no console window.
+        exe.entry = .{ .symbol_name = "mainCRTStartup" };
     }
 
     b.installArtifact(exe);

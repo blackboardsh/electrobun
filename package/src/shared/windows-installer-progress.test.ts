@@ -51,7 +51,7 @@ describe("Windows installer native progress UI contract", () => {
 		expect(extractorBuild).toContain('"windows-console"');
 		expect(extractorBuild).toMatch(/windows_console[\s\S]*orelse false/);
 		expect(extractorBuild).toContain(
-			"exe.subsystem = if (windows_console) .Console else .Windows;",
+			"exe.subsystem = if (windows_console) .console else .windows;",
 		);
 		expect(extractorBuild).toContain('b.path("windows_uninstall_prompt.c")');
 		expect(extractorBuild).toContain('linkSystemLibrary("comctl32"');

@@ -169,8 +169,8 @@ pub fn shouldPreferKdialog(environ_map: *const std.process.Environ.Map) bool {
     };
     for (desktop_keys) |key| {
         const value = environ_map.get(key) orelse continue;
-        if (std.ascii.indexOfIgnoreCase(value, "kde") != null or
-            std.ascii.indexOfIgnoreCase(value, "plasma") != null)
+        if (std.ascii.findIgnoreCase(value, "kde") != null or
+            std.ascii.findIgnoreCase(value, "plasma") != null)
         {
             return true;
         }
@@ -289,7 +289,7 @@ fn hasDisplayConnectionDiagnostic(stderr: []const u8) bool {
         "could not connect to display",
     };
     for (diagnostics) |diagnostic| {
-        if (std.ascii.indexOfIgnoreCase(stderr, diagnostic) != null) return true;
+        if (std.ascii.findIgnoreCase(stderr, diagnostic) != null) return true;
     }
     return false;
 }

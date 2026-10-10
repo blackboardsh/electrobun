@@ -28,7 +28,7 @@ in every language, including a per-feature coverage matrix.
 | --- | --- | --- | --- |
 | Cottontail (experimental) | `"cottontail"` | `src/bun/index.ts` | Downloaded runtime |
 | Bun (default) | `"bun"` | `src/bun/index.ts` | Downloaded runtime |
-| Zig | `"zig"` | `build.zig` | Zig 0.16.0 |
+| Zig | `"zig"` | `build.zig` | Zig 0.17.0 |
 | Rust | `"rust"` | `Cargo.toml` / binary `main` | Rust 1.88.0 |
 | Go | `"go"` | `go.mod` / package `./src/go` | Go 1.26.4 |
 | Odin | `"odin"` | package containing `src/odin/main.odin` | Odin dev-2026-07a |
@@ -106,7 +106,7 @@ export default {
   },
   build: {
     mainProcess: "zig",
-    zig: { version: "0.16.0" },
+    zig: { version: "0.17.0" },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
     },

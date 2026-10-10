@@ -73,7 +73,7 @@ export fn testInstallTransportWebview(webview_id: u32, key_byte: u8) bool {
         .webview_event_handler = null,
         .event_bridge_handler = null,
         .internal_bridge_handler = null,
-        .secret_key = [_]u8{key_byte} ** Aes256Gcm.key_length,
+        .secret_key = @splat(key_byte),
         .socket_handle = null,
         .transport_ready = false,
         .plaintext_transport = false,

@@ -18,7 +18,7 @@ test "missing or invalid metadata defaults to Bun" {
 }
 
 test "explicit Cottontail and native backends retain their launch selection" {
-    inline for (@typeInfo(MainProcess).@"enum".fields) |field| {
-        try std.testing.expectEqual(@field(MainProcess, field.name), fromMetadata(std.testing.allocator, "{\"mainProcess\":\"" ++ field.name ++ "\"}"));
+    inline for (@typeInfo(MainProcess).@"enum".field_names) |name| {
+        try std.testing.expectEqual(@field(MainProcess, name), fromMetadata(std.testing.allocator, "{\"mainProcess\":\"" ++ name ++ "\"}"));
     }
 }

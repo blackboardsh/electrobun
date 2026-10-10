@@ -6,11 +6,19 @@ const uninstall = @import("uninstall.zig");
 const windows_spawn = @import("windows_spawn.zig");
 const windows_process_identity = @import("windows_process_identity.zig");
 const launcher_pid_environment_variable = "ELECTROBUN_LAUNCHER_PID";
-const c = @cImport({
-    @cInclude("signal.h");
-    @cInclude("unistd.h");
-    @cInclude("stdlib.h");
-});
+// Signal handlers use the POSIX libc ABI and Zig's target-specific signal values.
+const c = if (builtin.os.tag == .windows) struct {} else struct {
+    const SignalHandler = ?*const fn (c_int) callconv(.c) void;
+    const SIGINT: c_int = @backingInt(std.c.SIG.INT);
+    const SIGTERM: c_int = @backingInt(std.c.SIG.TERM);
+    const SIGHUP: c_int = @backingInt(std.c.SIG.HUP);
+    const SIGALRM: c_int = @backingInt(std.c.SIG.ALRM);
+    const SIGKILL: c_int = @backingInt(std.c.SIG.KILL);
+    const alarm = std.c.alarm;
+    const getpid = std.c.getpid;
+    extern "c" fn signal(sig: c_int, handler: SignalHandler) SignalHandler;
+    extern "c" fn kill(pid: std.c.pid_t, sig: c_int) c_int;
+};
 
 // Initialized at the top of main().
 var g_io: std.Io = undefined;
@@ -315,7 +323,7 @@ fn delegateUninstall(
     const result = try manager.wait(io);
     switch (result) {
         .exited => |code| if (code != 0) std.process.exit(code),
-        .signal => |signal| std.process.exit(@intCast(128 + @intFromEnum(signal))),
+        .signal => |signal| std.process.exit(@intCast(128 + @backingInt(signal))),
         else => std.process.exit(1),
     }
 }
@@ -706,7 +714,7 @@ pub fn main(init: std.process.Init) !void {
                 }
             },
             .signal => |sig| {
-                const sig_value: u32 = @intFromEnum(sig);
+                const sig_value: u32 = @backingInt(sig);
                 // Don't print on SIGINT/SIGTERM - these are expected during graceful shutdown
                 if (builtin.os.tag != .windows and sig_value != c.SIGINT and sig_value != c.SIGTERM) {
                     std.debug.print("Child process terminated by signal: {d}\n", .{sig_value});
