@@ -10,6 +10,7 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const workflow = readFileSync(resolve(packageRoot, "../.github/workflows/release.yml"), "utf8");
 const integration = readFileSync(resolve(packageRoot, "src/launcher/windows_process_identity.integration.test.mjs"), "utf8");
 const nativeRunner = readFileSync(resolve(packageRoot, "scripts/test-windows-profile-paths.mjs"), "utf8");
+const webview2Runner = readFileSync(resolve(packageRoot, "scripts/test-windows-webview2-window.mjs"), "utf8");
 const build = readFileSync(resolve(packageRoot, "build.ts"), "utf8");
 
 test("Windows Zig compiler uses host architecture and rejects a stale emulated vendor", () => {
@@ -55,12 +56,30 @@ test("Windows profile path and lifecycle source regressions are release gates wi
   assert.match(section, /if: matrix\.platform == 'win32'/);
   assert.match(section, /node scripts\/test-windows-profile-paths\.mjs/);
   assert.match(section, /node scripts\/run-bun-test\.js src\/shared\/windows-webview2-lifecycle\.test\.ts/);
-  assert.equal((section.match(/if \(\$LASTEXITCODE -ne 0\)/g) || []).length, 2);
+  assert.equal((section.match(/if \(\$LASTEXITCODE -ne 0\)/g) || []).length, 4);
   assert.match(nativeRunner, /run\("cl\.exe",/);
   assert.match(nativeRunner, /"\/UNDEBUG"/);
   assert.match(nativeRunner, /assertWindowsBinaryArchitecture\(executable, process\.arch\)/);
   assert.ok(nativeRunner.indexOf("assertWindowsBinaryArchitecture(executable, process.arch)") < nativeRunner.indexOf("run(executable, [])"));
   assert.match(nativeRunner, /run\(executable, \[\]\)/);
+});
+
+test("real WebView2 ownership and presentation assertion regressions gate Windows publication", () => {
+  const start = workflow.indexOf("      - name: Test Windows profile paths and WebView2 teardown");
+  const section = workflow.slice(start, workflow.indexOf("      - name:", start + 12));
+  assert.match(section, /node scripts\/test-windows-webview2-window\.mjs --install-missing-runtime/);
+  assert.match(section, /windows-webview2-lifecycle\.test\.ts src\/shared\/windows-webview2-initialization\.test\.ts/);
+  assert.match(section, /webview2-initialization-state\.test\.ts .*webview2-stacking-state\.test\.ts/);
+  assert.ok(start < workflow.indexOf("      - name: Upload core artifact"));
+  assert.doesNotMatch(section, /continue-on-error/);
+  assert.match(webview2Runner, /assertWindowsBinaryArchitecture\(executable, process\.arch\)/);
+  assert.match(webview2Runner, /ensureWebview2Runtime/);
+  assert.match(webview2Runner, /allowInstall: process\.argv\.includes\("--install-missing-runtime"\)/);
+  assert.match(workflow, /node --test scripts\/windows-release-validation\.test\.mjs scripts\/webview2-runtime\.test\.mjs/);
+  assert.match(webview2Runner, /--legacy-coordinate-control/);
+  assert.match(webview2Runner, /assert\.equal\(negative\.status, 1/);
+  assert.match(webview2Runner, /zero-size target must be exact top sibling/);
+  assert.match(webview2Runner, /assert\.equal\(fixed\.status, 0/);
 });
 
 test("Core synchronization must pass on every release target before artifacts can publish", () => {

@@ -72,6 +72,7 @@
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/webview2_permissions.h"
+#include "../shared/webview2_window.h"
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
 #include "../shared/console_forwarding.h"
@@ -3723,6 +3724,7 @@ private:
     HandlePostMessage internalBridgeCallbackHandler;
     bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
+    electrobun::WebView2Window nativeWindow;
     double pageZoomFactor = 1.0;
     bool removed = false;
 
@@ -3757,6 +3759,18 @@ public:
 
     void setContainerHwnd(HWND hwnd) {
         containerHwnd = hwnd;
+    }
+
+    HRESULT bindNativeChildWindow() {
+        return nativeWindow.bind(controller.Get(), containerHwnd);
+    }
+
+    HWND getNativeChildWindow() const {
+        return nativeWindow.get(containerHwnd);
+    }
+
+    void bringNativeChildWindowToFront() {
+        nativeWindow.bringToFront(containerHwnd);
     }
 
     ComPtr<ICoreWebView2> getWebView() const {
@@ -3934,6 +3948,7 @@ public:
     void remove() override {
         removed = true;
         isCreationComplete = false;
+        nativeWindow.reset();
         g_pendingResizeQueue.remove(this);
         g_webview2TestHeldControllers.erase(webviewId);
         for (auto it = g_webview2Views.begin(); it != g_webview2Views.end();) {
@@ -3963,6 +3978,9 @@ public:
             return;
         }
 
+        // Revealing a previously hidden tab must restore its own stacking
+        // position without raising a sibling that happens to share its bounds.
+        if (!transparent) bringNativeChildWindowToFront();
         // Use WebView2's built-in visibility control
         controller->put_IsVisible(transparent ? FALSE : TRUE);
     }
@@ -3977,54 +3995,7 @@ public:
             return;
         }
 
-        // Get the bounds of this WebView to identify its child windows
-        RECT viewBounds;
-        controller->get_Bounds(&viewBounds);
-
-        // Find WebView2's Chrome child windows and apply/remove WS_EX_TRANSPARENT
-        struct PassthroughEnumData {
-            RECT targetBounds;
-            HWND containerHwnd;
-            bool enablePassthrough;
-        };
-
-        PassthroughEnumData enumData;
-        enumData.targetBounds = viewBounds;
-        enumData.containerHwnd = containerHwnd;
-        enumData.enablePassthrough = enable;
-
-        EnumChildWindows(containerHwnd, [](HWND child, LPARAM lParam) -> BOOL {
-            PassthroughEnumData* data = (PassthroughEnumData*)lParam;
-
-            char className[256];
-            GetClassNameA(child, className, sizeof(className));
-
-            // Look for WebView2/Chrome child windows
-            if (strstr(className, "Chrome_WidgetWin") ||
-                strstr(className, "Chrome_RenderWidgetHostHWND")) {
-
-                RECT childRect;
-                GetWindowRect(child, &childRect);
-
-                // Convert to container coordinates
-                POINT topLeft = {childRect.left, childRect.top};
-                ScreenToClient(data->containerHwnd, &topLeft);
-
-                // Check if this matches our WebView's bounds (with some tolerance)
-                if (abs(topLeft.x - data->targetBounds.left) < 5 &&
-                    abs(topLeft.y - data->targetBounds.top) < 5) {
-                    // This is our WebView's child window - apply WS_EX_TRANSPARENT
-                    LONG exStyle = GetWindowLong(child, GWL_EXSTYLE);
-                    if (data->enablePassthrough) {
-                        SetWindowLong(child, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
-                    } else {
-                        SetWindowLong(child, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
-                    }
-                    return FALSE; // Stop enumeration
-                }
-            }
-            return TRUE; // Continue enumeration
-        }, (LPARAM)&enumData);
+        nativeWindow.setPassthrough(containerHwnd, enable);
     }
 
     bool canGoBack() override {
@@ -5205,57 +5176,9 @@ private:
     }
     
 
-    struct EnumChildData {
-        RECT targetBounds;
-        HWND containerHwnd;
-    };
-    
-    static BOOL CALLBACK EnumChildCallback(HWND child, LPARAM lParam) {
-        EnumChildData* data = (EnumChildData*)lParam;
-        
-        char className[256];
-        GetClassNameA(child, className, sizeof(className));
-        
-        // Look for WebView2/Chrome child windows
-        if (strstr(className, "Chrome_WidgetWin") || 
-            strstr(className, "Chrome_RenderWidgetHostHWND")) {
-            
-            RECT childRect;
-            GetWindowRect(child, &childRect);
-            
-            // Convert to container coordinates
-            POINT topLeft = {childRect.left, childRect.top};
-            POINT bottomRight = {childRect.right, childRect.bottom};
-            ScreenToClient(data->containerHwnd, &topLeft);
-            ScreenToClient(data->containerHwnd, &bottomRight);
-            
-            // Check if this matches our WebView's bounds (with some tolerance)
-            if (abs(topLeft.x - data->targetBounds.left) < 5 && 
-                abs(topLeft.y - data->targetBounds.top) < 5) {
-                // This is likely our WebView's child window
-                SetWindowPos(child, HWND_TOP, 0, 0, 0, 0,
-                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                return FALSE; // Stop enumeration
-            }
-        }
-        return TRUE; // Continue enumeration
-    }
-    
     void BringWebView2ChildWindowToFront(AbstractView* view) {
-        // Cast to WebView2View to access controller
         auto webview2 = dynamic_cast<WebView2View*>(view);
-        if (!webview2 || !webview2->getController()) return;
-        
-        // Get the bounds of this WebView to identify its child window
-        RECT viewBounds;
-        webview2->getController()->get_Bounds(&viewBounds);
-        
-        EnumChildData enumData;
-        enumData.targetBounds = viewBounds;
-        enumData.containerHwnd = m_hwnd;
-        
-        // Find and bring the WebView2's child window to front
-        EnumChildWindows(m_hwnd, EnumChildCallback, (LPARAM)&enumData);
+        if (webview2) webview2->bringNativeChildWindowToFront();
     }
     
     void BringCEFChildWindowToFront(AbstractView* view) {
@@ -7260,6 +7183,54 @@ extern "C" ELECTROBUN_EXPORT bool webview2TestGetState(uint32_t webviewId, char*
         } else {
             state << ",\"bounds\":null,\"visible\":null";
         }
+        const HWND child = view->getNativeChildWindow();
+        state << ",\"childOwned\":" << (child != nullptr);
+        if (child) {
+            const HWND parent = GetParent(child);
+            auto handleJSON = [](HWND handle) {
+                std::ostringstream result;
+                result << "\"0x" << std::hex << reinterpret_cast<uintptr_t>(handle) << "\"";
+                return result.str();
+            };
+            int siblingIndex = 0;
+            HWND sibling = GetWindow(parent, GW_CHILD);
+            while (sibling && sibling != child) {
+                ++siblingIndex;
+                sibling = GetWindow(sibling, GW_HWNDNEXT);
+            }
+            state << ",\"childHwnd\":" << handleJSON(child)
+                << ",\"childParentHwnd\":" << handleJSON(parent)
+                << ",\"childVisible\":" << (IsWindowVisible(child) != FALSE)
+                << ",\"childExStyle\":" << static_cast<uint32_t>(GetWindowLongPtrW(child, GWL_EXSTYLE))
+                << ",\"childSiblingIndex\":" << (sibling == child ? siblingIndex : -1);
+            // Observe actual desktop composition, including sibling occlusion.
+            // CapturePreview/PrintWindow could report a rendered but covered
+            // guest as visible and would miss this regression.
+            RECT bounds = {};
+            COLORREF pixel = CLR_INVALID;
+            if (controller && SUCCEEDED(controller->get_Bounds(&bounds)) &&
+                bounds.right > bounds.left && bounds.bottom > bounds.top) {
+                POINT center = {bounds.left + (bounds.right - bounds.left) / 2,
+                    bounds.top + (bounds.bottom - bounds.top) / 2};
+                if (ClientToScreen(parent, &center)) {
+                    const HDC desktop = GetDC(nullptr);
+                    if (desktop) {
+                        pixel = GetPixel(desktop, center.x, center.y);
+                        ReleaseDC(nullptr, desktop);
+                    }
+                }
+            }
+            if (pixel == CLR_INVALID) {
+                state << ",\"screenPixel\":null";
+            } else {
+                state << ",\"screenPixel\":{\"r\":" << static_cast<unsigned>(GetRValue(pixel))
+                    << ",\"g\":" << static_cast<unsigned>(GetGValue(pixel))
+                    << ",\"b\":" << static_cast<unsigned>(GetBValue(pixel)) << "}";
+            }
+        } else {
+            state << ",\"childHwnd\":null,\"childParentHwnd\":null,\"childVisible\":null"
+                << ",\"childExStyle\":null,\"childSiblingIndex\":null,\"screenPixel\":null";
+        }
         state << "}";
         const std::string json = state.str();
         if (json.size() + 1 > capacity) return false;
@@ -7461,6 +7432,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             // Store container HWND for masking support
                             view->setContainerHwnd(container->GetHwnd());
+
+                            // Associate this controller with its own native
+                            // child before any stacking or input changes.
+                            const HRESULT nativeWindowResult = view->bindNativeChildWindow();
+                            if (FAILED(nativeWindowResult)) {
+                                char errorLog[256];
+                                sprintf_s(errorLog,
+                                    "[WebView2] Native child ownership failed for webview %u, HRESULT: 0x%08X",
+                                    view->webviewId, nativeWindowResult);
+                                ::log(errorLog);
+                                view->setCreationFailed(true);
+                                view->remove();
+                                return nativeWindowResult;
+                            }
 
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();

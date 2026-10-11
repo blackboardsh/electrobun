@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { defineTest, expect, sleep } from "../test-framework/types";
 import { createTestHarnessRPC } from "./rpc.test";
+import { webview2StackingTest } from "./webview2-stacking.test";
 import {
   assertHeldWebview2State, assertReadyWebview2State,
   parseWebview2InitializationState, physicalRect,
@@ -173,4 +174,5 @@ export const webview2InitializationTests = [
       }
     },
   }),
+  webview2StackingTest,
 ];

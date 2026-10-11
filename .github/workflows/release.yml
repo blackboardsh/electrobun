@@ -253,7 +253,7 @@ jobs:
 
       - name: Test Windows release validation contract
         if: matrix.platform == 'win32'
-        run: node --test scripts/windows-release-validation.test.mjs
+        run: node --test scripts/windows-release-validation.test.mjs scripts/webview2-runtime.test.mjs
         working-directory: package
 
       - name: Test Windows profile paths and WebView2 teardown
@@ -263,8 +263,12 @@ jobs:
         run: |
           node scripts/test-windows-profile-paths.mjs
           if ($LASTEXITCODE -ne 0) { throw "Windows profile path tests failed" }
-          node scripts/run-bun-test.js src/shared/windows-webview2-lifecycle.test.ts
+          node scripts/run-bun-test.js src/shared/windows-webview2-lifecycle.test.ts src/shared/windows-webview2-initialization.test.ts
           if ($LASTEXITCODE -ne 0) { throw "Windows WebView2 lifecycle tests failed" }
+          node scripts/test-windows-webview2-window.mjs --install-missing-runtime
+          if ($LASTEXITCODE -ne 0) { throw "Windows WebView2 controller ownership tests failed" }
+          node scripts/run-bun-test.js ../kitchen/src/tests/webview2-initialization-state.test.ts ../kitchen/src/tests/webview2-stacking-state.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Windows WebView2 presentation assertion tests failed" }
 
       - name: Test Windows release launcher identity and full exit status
         if: matrix.platform == 'win32'
