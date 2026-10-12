@@ -39,6 +39,7 @@ import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
 import { ELECTROBUN_VERSION } from "./src/shared/electrobun-version";
 import { resolveBuildArch, windowsBuildTarget } from "./src/shared/windows-build-target";
+import { goHostTuple, rustHostTriple, verifyGoToolchain, verifyRustToolchain } from "./src/shared/vendored-toolchain-host";
 import { assertWindowsBinaryArchitecture } from "./scripts/windows-binary-architecture.mjs";
 import { zigCompilerHostArchitecture } from "./scripts/zig-compiler-host.mjs";
 import {
@@ -69,6 +70,12 @@ const { values: args } = parseArgs({
 			type: "boolean",
 		},
 		"core-only": {
+			type: "boolean",
+		},
+		"vendor-rust-only": {
+			type: "boolean",
+		},
+		"vendor-go-only": {
 			type: "boolean",
 		},
 		arch: { type: "string" },
@@ -210,7 +217,19 @@ function outputMissingOrOlder(outputPath: string, inputPaths: string[]): boolean
 
 // TODO: setup file watchers
 try {
-	if (IS_NPM_BUILD) {
+	if (args["vendor-rust-only"] || args["vendor-go-only"]) {
+		// Core release archives deliberately omit SDK compilers. Allow native
+		// regression gates to provision this exact toolchain without building
+		// Electrobun again or downloading the other SDK toolchains.
+		if (args["vendor-rust-only"]) {
+			console.log(`Preparing pinned Rust ${RUST_VERSION} only...`);
+			await vendorRust();
+		}
+		if (args["vendor-go-only"]) {
+			console.log(`Preparing pinned Go ${GO_VERSION} only...`);
+			await vendorGo();
+		}
+	} else if (IS_NPM_BUILD) {
 		console.log("Building for npm (JS/TS files only)...");
 		await buildForNpm();
 	} else {
@@ -1152,27 +1171,12 @@ async function vendorZig() {
 }
 
 function getRustHostTriple(): string {
-	if (OS === "macos") {
-		return ARCH === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
-	}
-	if (OS === "linux") {
-		return ARCH === "arm64"
-			? "aarch64-unknown-linux-gnu"
-			: "x86_64-unknown-linux-gnu";
-	}
-	if (OS === "win") {
-		return HOST_ARCH === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc";
-	}
-	throw new Error(`Unsupported platform: ${OS}`);
+	return rustHostTriple({ os: OS, arch: HOST_ARCH });
 }
 
 async function verifyVendoredRust() {
-	const versionOutput = runCaptured(PATH.rust.BIN, ["--version"]).trim();
-	if (!versionOutput.startsWith(`rustc ${RUST_VERSION}`)) {
-		throw new Error(
-			`Vendored Rust version mismatch: expected rustc ${RUST_VERSION}, got "${versionOutput}"`,
-		);
-	}
+	const versionOutput = runCaptured(PATH.rust.BIN, ["-vV"]);
+	verifyRustToolchain(versionOutput, RUST_VERSION, { os: OS, arch: HOST_ARCH });
 }
 
 async function vendorRust() {
@@ -1180,23 +1184,20 @@ async function vendorRust() {
 	const rustVersionFile = join(rustDir, ".rust-version");
 
 	if (existsSync(PATH.rust.BIN)) {
-		if (existsSync(rustVersionFile)) {
-			const vendoredVersion = readFileSync(rustVersionFile, "utf-8").trim();
+		try {
+			const vendoredVersion = existsSync(rustVersionFile)
+				? readFileSync(rustVersionFile, "utf-8").trim()
+				: RUST_VERSION;
 			if (vendoredVersion === RUST_VERSION) {
 				await verifyVendoredRust();
+				writeFileSync(rustVersionFile, RUST_VERSION);
 				return;
 			}
 			console.log(
 				`Rust version mismatch: vendored "${vendoredVersion}" vs expected "${RUST_VERSION}"`,
 			);
-		} else {
-			try {
-				await verifyVendoredRust();
-				writeFileSync(rustVersionFile, RUST_VERSION);
-				return;
-			} catch {
-				console.log("Rust vendor directory found without a valid version stamp.");
-			}
+		} catch (error) {
+			console.log(`Existing Rust toolchain is not valid for this host: ${error instanceof Error ? error.message : error}`);
 		}
 
 		console.log("Cleaning stale Rust toolchain and re-vendoring...");
@@ -1255,18 +1256,12 @@ async function vendorRust() {
 }
 
 function getGoHostTuple(): { goOS: string; goArch: string } {
-	const goOS = OS === "macos" ? "darwin" : OS === "win" ? "windows" : "linux";
-	const goArch = HOST_ARCH === "arm64" ? "arm64" : "amd64";
-	return { goOS, goArch };
+	return goHostTuple({ os: OS, arch: HOST_ARCH });
 }
 
 async function verifyVendoredGo() {
-	const versionOutput = runCaptured(PATH.go.BIN, ["version"]).trim();
-	if (!versionOutput.startsWith(`go version go${GO_VERSION} `)) {
-		throw new Error(
-			`Vendored Go version mismatch: expected go${GO_VERSION}, got "${versionOutput}"`,
-		);
-	}
+	const versionOutput = runCaptured(PATH.go.BIN, ["version"]);
+	verifyGoToolchain(versionOutput, GO_VERSION, { os: OS, arch: HOST_ARCH });
 }
 
 async function vendorGo() {
@@ -1274,23 +1269,20 @@ async function vendorGo() {
 	const goVersionFile = join(goDir, ".go-version");
 
 	if (existsSync(PATH.go.BIN)) {
-		if (existsSync(goVersionFile)) {
-			const vendoredVersion = readFileSync(goVersionFile, "utf-8").trim();
+		try {
+			const vendoredVersion = existsSync(goVersionFile)
+				? readFileSync(goVersionFile, "utf-8").trim()
+				: GO_VERSION;
 			if (vendoredVersion === GO_VERSION) {
 				await verifyVendoredGo();
+				writeFileSync(goVersionFile, GO_VERSION);
 				return;
 			}
 			console.log(
 				`Go version mismatch: vendored "${vendoredVersion}" vs expected "${GO_VERSION}"`,
 			);
-		} else {
-			try {
-				await verifyVendoredGo();
-				writeFileSync(goVersionFile, GO_VERSION);
-				return;
-			} catch {
-				console.log("Go vendor directory found without a valid version stamp.");
-			}
+		} catch (error) {
+			console.log(`Existing Go toolchain is not valid for this host: ${error instanceof Error ? error.message : error}`);
 		}
 
 		console.log("Cleaning stale Go toolchain and re-vendoring...");

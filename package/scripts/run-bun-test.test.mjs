@@ -27,3 +27,20 @@ test("an old Hutch cannot silently run application tests on Cottontail", () => {
 test("empty test selection fails without invoking the runtime", () => {
 	assert.equal(runBunTests([], { spawn() { throw new Error("unexpected spawn"); }, report() {} }), 1);
 });
+
+test("Bun probes and tests inherit the same launcher, with explicit overrides taking precedence", () => {
+	for (const environment of [
+		{ HUTCH_LAUNCHER_PATH: "C:\\ARM tools\\hutch-canary.exe" },
+		{ HUTCH_LAUNCHER_PATH: "C:\\ARM tools\\hutch-canary.exe", HUTCH_BINARY: "/local/hutch" },
+		{},
+	]) {
+		const expected = environment.HUTCH_BINARY || environment.HUTCH_LAUNCHER_PATH || "hutch";
+		const calls = [];
+		assert.equal(runBunTests(["suite.test.ts"], {
+			environment: Object.freeze(environment),
+			spawn(...args) { calls.push(args); return { status: 0 }; },
+		}), 0);
+		assert.deepEqual(calls.map(([binary]) => binary), [expected, expected]);
+		assert.deepEqual(calls[1][2].env, { ...environment, HUTCH_RUNTIME: "bun" });
+	}
+});

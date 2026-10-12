@@ -9,6 +9,7 @@ import { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
 import { validateNativeDevkitManifest } from "./validate-native-devkit.mjs";
 import { parseAppCottontailVersion } from "./verify-release-toolchain.mjs";
 import { validateWindowsReleaseArchitecture } from "./windows-binary-architecture.mjs";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -44,7 +45,7 @@ console.log(`Packaging Electrobun for ${platformName}-${archName}...`);
 
 console.log("Building full release...");
 try {
-	const hutchBinary = process.env.HUTCH_BINARY || "hutch";
+	const hutchBinary = selectHutchBinary();
 	execFileSync(hutchBinary, ["build.ts", "--release", "--core-only", `--arch=${archName}`], {
 		cwd: path.join(__dirname, ".."),
 		stdio: "inherit",

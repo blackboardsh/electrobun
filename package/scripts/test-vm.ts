@@ -8,6 +8,7 @@ import {
 	runCommandWithSignalForwarding,
 	type DevCommand,
 } from "./dev";
+import { createTestRunDiagnostics } from "./test-run-diagnostics.mjs";
 
 type CreateVmTestCommandsOptions = {
 	hutchBinary: string;
@@ -185,7 +186,23 @@ async function main(): Promise<void> {
 	const packageDir = resolve(import.meta.dirname, "..");
 	const hutchBinary = resolveHutchBinary(packageDir);
 	const commands = createVmTestCommands({ hutchBinary, packageDir });
-	const failures = await runVmTestCommands(commands);
+	const diagnostics = createTestRunDiagnostics("test-vm", commands);
+	console.log(`[test:vm] Logs and runtime details: ${diagnostics.summaryPath}`);
+	let failures: VmTestFailure[];
+	try {
+		failures = await runVmTestCommands(commands,
+			(command) => diagnostics.run(command, runCommandWithSignalForwarding),
+			(failure) => {
+				diagnostics.recordFailure(failure);
+				defaultFailureReporter(failure);
+			},
+		);
+		diagnostics.finish(failures);
+	} catch (error) {
+		diagnostics.finish([], error);
+		console.error(`[test:vm] Logs and runtime details: ${diagnostics.summaryPath}`);
+		throw error;
+	}
 
 	if (failures.length === 0) {
 		console.log("[test:vm] All VM test stages passed.");
@@ -195,7 +212,7 @@ async function main(): Promise<void> {
 	console.error(
 		`[test:vm] ${failures.length} of ${commands.length} stages failed:\n${failures
 			.map((failure) => `  - ${failure.command.label}`)
-			.join("\n")}`,
+			.join("\n")}\n[test:vm] Logs and runtime details: ${diagnostics.summaryPath}`,
 	);
 	process.exitCode = 1;
 }

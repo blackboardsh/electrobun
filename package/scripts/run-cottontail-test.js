@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 const testFilePattern = /\.(?:test|spec)\.[cm]?[jt]sx?$/;
 const nodeTestImportPattern = /\bfrom\s+["']node:test["']/;
@@ -118,7 +119,7 @@ function main() {
 
 	let cottontailBinary = process.env.COTTONTAIL_BINARY;
 	if (!cottontailBinary) {
-		const hutchBinary = process.env.HUTCH_BINARY || "hutch";
+		const hutchBinary = selectHutchBinary();
 		const located = spawnSync(hutchBinary, ["cottontail", "path"], {
 			encoding: "utf8",
 		});

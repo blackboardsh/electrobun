@@ -30,8 +30,8 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
   version pragma alone does not select the script runner. Internal config
   loading and bundling still use Hutch's paired Cottontail.
 - The current beta pairs Hutch `0.28.0-canary.8` with build-time Cottontail
-  `0.7.2-canary.6`; packaged apps use Bun `1.4.0` by default or the devkit's
-  Cottontail `0.7.2-canary.6` when explicitly selected. The script runner and
+  `0.7.2-canary.7`; packaged apps use Bun `1.4.0` by default or the devkit's
+  Cottontail `0.7.2-canary.7` when explicitly selected. The script runner and
   app runtime are independent selections. See the
   [migration guide](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-the-current-beta).
 
@@ -46,11 +46,17 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
 - Updated the optional Cottontail runtime with reduced long-lived memory
   retention, smaller worker bootstraps, reuse of bundled builtin modules, and
   improved reclamation of native allocator memory on Linux.
+- Fixed a Cottontail import-resolution crash caused by growing its directory
+  cache while recursive resolution still used an earlier entry. Cache entries
+  now retain stable addresses, including during Vite template builds.
 - Fixed edge and corner resizing for frameless Linux GTK windows with
   `titleBarStyle: "hidden"`, without adding a system titlebar.
 
 ## Messaging and updates
 
+- Fixed a Windows WebView2 crash when a view closed before its queued
+  navigation ran. Queued navigation and other dispatched WebView operations
+  retain their target and discard work for a removed view.
 - Windows Core queues and registries now use native Windows locks and condition
   variables. This avoids a parking handoff failure reproduced under x64
   emulation on ARM64 that could leave WebView messages, navigation, and graceful
@@ -70,6 +76,14 @@ Changes since [v2.0.2](/electrobun/guides/changelog/v2-0-2/), available in the
 
 ## Release validation
 
+- VM and release checks now retain each stage's output, command, exit status,
+  and runtime details, and print the log location on failure.
+- Nested builds and tests preserve the selected Hutch launcher, so native
+  ARM64 runs cannot silently switch to an x64 `hutch` on PATH. Rust and Go
+  compiler caches validate the host architecture as well as the version.
+- Kitchen's Rust, Go, and Zig navigation tests isolate callback evidence by
+  view, event, and URL, preventing delayed callbacks from affecting another
+  test. Deterministic regression tests cover those callback orderings.
 - Added public npm bootstrap and template acceptance across all five release
   platforms, including Windows ARM64. Template checks initialize, install,
   build, and launch the public `hello-world` template, then exercise optional

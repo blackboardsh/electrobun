@@ -152,7 +152,7 @@ test("the packaging entrypoint rejects stale app metadata before creating archiv
 	const sharedRoot = join(packageRoot, "src", "shared");
 	mkdirSync(scriptsRoot, { recursive: true });
 	mkdirSync(sharedRoot, { recursive: true });
-	for (const name of ["package-release.js", "validate-native-devkit.mjs", "verify-release-toolchain.mjs", "macos-release.js", "windows-binary-architecture.mjs"]) {
+	for (const name of ["package-release.js", "hutch-launcher.mjs", "validate-native-devkit.mjs", "verify-release-toolchain.mjs", "macos-release.js", "windows-binary-architecture.mjs"]) {
 		cpSync(new URL(`./${name}`, import.meta.url), join(scriptsRoot, name));
 	}
 	cpSync(new URL("../src/shared/strict-semver.js", import.meta.url), join(sharedRoot, "strict-semver.js"));

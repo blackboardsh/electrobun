@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import { prepareLocalStack } from "./local-stack.js";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 export type DevCommand = {
 	label: string;
@@ -73,14 +74,22 @@ function isAbsoluteExecutablePath(value: string) {
 	return isAbsolute(value) || /^[A-Za-z]:[\\/]/.test(value) || /^\\\\/.test(value);
 }
 
-export function resolveHutchBinary(packageDir: string, configuredBinary = process.env.HUTCH_BINARY) {
-	if (!configuredBinary) return "hutch";
-
-	const candidate = isAbsoluteExecutablePath(configuredBinary)
-		? configuredBinary
-		: resolve(packageDir, configuredBinary);
+export function resolveHutchBinary(
+	packageDir: string,
+	configuredBinary = process.env.HUTCH_BINARY,
+	launcherPath = process.env.HUTCH_LAUNCHER_PATH,
+) {
+	if (!configuredBinary && !launcherPath) return "hutch";
+	const selectedBinary = selectHutchBinary({
+		HUTCH_BINARY: configuredBinary,
+		HUTCH_LAUNCHER_PATH: launcherPath,
+	});
+	const candidate = isAbsoluteExecutablePath(selectedBinary)
+		? selectedBinary
+		: resolve(packageDir, selectedBinary);
 	if (!existsSync(candidate)) {
-		throw new Error(`HUTCH_BINARY points to a missing executable: ${candidate}`);
+		const source = configuredBinary ? "HUTCH_BINARY" : "HUTCH_LAUNCHER_PATH";
+		throw new Error(`${source} points to a missing executable: ${candidate}`);
 	}
 	return candidate;
 }
@@ -128,13 +137,31 @@ function signalExitStatus(signal: NodeJS.Signals): number {
 
 export async function runCommandWithSignalForwarding(
 	command: DevCommand,
+	options: {
+		onOutput?: (stream: "stdout" | "stderr", chunk: Buffer) => void;
+	} = {},
 ): Promise<void> {
 	console.log(`[dev] ${command.label}...`);
 	const child = spawn(command.command, command.args, {
 		cwd: command.cwd,
 		env: command.env ? { ...process.env, ...command.env } : process.env,
-		stdio: "inherit",
+		stdio: options.onOutput ? ["inherit", "pipe", "pipe"] : "inherit",
 	});
+	let outputError: Error | null = null;
+	if (options.onOutput) {
+		for (const stream of ["stdout", "stderr"] as const) {
+			child[stream]!.on("data", (chunk: Buffer) => {
+				process[stream].write(chunk);
+				if (outputError) return;
+				try {
+					options.onOutput!(stream, chunk);
+				} catch (error) {
+					outputError = error instanceof Error ? error : new Error(String(error));
+					child.kill("SIGKILL");
+				}
+			});
+		}
+	}
 	let interruptedBy: NodeJS.Signals | null = null;
 	const forwardSignal = (signal: NodeJS.Signals) => {
 		if (interruptedBy) return;
@@ -171,24 +198,32 @@ export async function runCommandWithSignalForwarding(
 	});
 
 	if (result.error) {
-		throw new Error(
+		const failure = new Error(
 			`[dev] Failed to start ${formatCommand(command)} in ${command.cwd}: ${result.error.message}`,
-		);
+			{ cause: result.error },
+		) as Error & { code?: string };
+		failure.code = (result.error as NodeJS.ErrnoException).code;
+		throw failure;
 	}
 	if (interruptedBy) {
 		const interruption = new Error(
 			`[dev] ${command.label} interrupted by ${interruptedBy}`,
-		) as Error & { status?: number };
+		) as Error & { status?: number; signal?: NodeJS.Signals };
 		interruption.status = signalExitStatus(interruptedBy);
+		interruption.signal = interruptedBy;
 		throw interruption;
+	}
+	if (outputError) {
+		throw new Error(`[dev] Could not record output for ${command.label}`, { cause: outputError });
 	}
 	if (result.status !== 0) {
 		const failure = new Error(
 			`[dev] ${command.label} failed with ${result.signal ? `signal ${result.signal}` : `exit status ${formatExitStatus(result.status)}`}\n` +
 				`Command: ${formatCommand(command)}\n` +
 				`Working directory: ${command.cwd}`,
-		) as Error & { status?: number | null };
+		) as Error & { status?: number | null; signal?: NodeJS.Signals | null };
 		failure.status = result.status;
+		failure.signal = result.signal;
 		throw failure;
 	}
 }

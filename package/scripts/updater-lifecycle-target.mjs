@@ -1,4 +1,9 @@
 import assert from "node:assert/strict";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
+
+export function updaterLifecycleHutchBinary(environment = process.env) {
+	return environment.ELECTROBUN_UPDATER_E2E_HUTCH || selectHutchBinary(environment);
+}
 
 // The Node runner and Hutch can have different executable architectures on
 // Windows ARM. The already-built devkit defines the fixture's artifact target.

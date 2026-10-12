@@ -85,6 +85,7 @@ function resolveNativeWrapper() {
 	const nativeInputs = [
 		join(packageRoot, "src", "native", "win", "nativeWrapper.cpp"),
 		...[
+			"retained_view_callback.h",
 			"windows_dialog_options.h",
 			"windows_dpi.h",
 			"windows_resource_paths.h",

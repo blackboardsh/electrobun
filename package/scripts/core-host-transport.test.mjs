@@ -11,6 +11,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import test, { after, before } from "node:test";
 import { assertWindowsBinaryArchitecture, windowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const zig = process.env.ZIG_BINARY || join(packageRoot, "vendors", "zig", process.platform === "win32" ? "zig.exe" : "zig");
@@ -88,14 +89,14 @@ export fn testHostTransportPort() u32 {
 
 function runtimeBinary() {
   if (process.env.COTTONTAIL_BINARY) return process.env.COTTONTAIL_BINARY;
-  const result = spawnSync(process.env.HUTCH_BINARY || "hutch", ["cottontail", "path"], { encoding: "utf8" });
+  const result = spawnSync(selectHutchBinary(), ["cottontail", "path"], { encoding: "utf8" });
   assert.equal(result.status, 0, `Locate Cottontail: ${result.stderr || result.error || ""}`);
   assert.ok(result.stdout.trim(), "Hutch must return a Cottontail executable");
   return result.stdout.trim();
 }
 
 function bunRuntimeBinary() {
-  const result = spawnSync(process.env.HUTCH_BINARY || "hutch", ["-p", "process.execPath"], {
+  const result = spawnSync(selectHutchBinary(), ["-p", "process.execPath"], {
     encoding: "utf8", env: { ...process.env, HUTCH_RUNTIME: "bun" },
   });
   assert.equal(result.status, 0, `Locate Bun: ${result.stderr || result.error || ""}`);

@@ -15,14 +15,16 @@ import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { parseRepositoryPragmaPins } from "../package/scripts/version-config.mjs";
+import { selectHutchBinary } from "../package/scripts/hutch-launcher.mjs";
 
 const templatesRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = dirname(templatesRoot);
+const selectedHutch = selectHutchBinary();
 const hutch = process.env.HUTCH_BINARY
-	? resolve(process.env.HUTCH_BINARY)
-	: process.platform === "win32"
+	? resolve(selectedHutch)
+	: selectedHutch === "hutch" && process.platform === "win32"
 		? "hutch.exe"
-		: "hutch";
+		: selectedHutch;
 const siblingHutchEngine = process.env.HUTCH_BINARY
 	? join(
 			dirname(hutch),
@@ -87,6 +89,7 @@ test(
 	() => {
 		const fixture = mkdtempSync(join(tmpdir(), "electrobun-vite-devkit-"));
 		const project = join(fixture, "app");
+		let passed = false;
 		try {
 			cpSync(join(templatesRoot, "vanilla-vite"), project, {
 				recursive: true,
@@ -218,8 +221,10 @@ test(
 				"the output must contain code from the projected Electrobun view SDK",
 			);
 			assert.doesNotMatch(javascript, /from["']electrobun\/view["']/);
+			passed = true;
 		} finally {
-			rmSync(fixture, { recursive: true, force: true });
+			if (passed) rmSync(fixture, { recursive: true, force: true });
+			else console.error(`Vite test failure fixture retained at ${fixture}`);
 		}
 	},
 );
@@ -230,6 +235,7 @@ test(
 	() => {
 		const fixture = mkdtempSync(join(tmpdir(), "electrobun-tray-install-"));
 		const project = join(fixture, "app");
+		let passed = false;
 		try {
 			cpSync(join(templatesRoot, "tray-app"), project, { recursive: true });
 			pinFixtureToolchain(project);
@@ -247,8 +253,10 @@ test(
 				false,
 				"an empty dependency graph must not create an empty lockfile",
 			);
+			passed = true;
 		} finally {
-			rmSync(fixture, { recursive: true, force: true });
+			if (passed) rmSync(fixture, { recursive: true, force: true });
+			else console.error(`Tray test failure fixture retained at ${fixture}`);
 		}
 	},
 );

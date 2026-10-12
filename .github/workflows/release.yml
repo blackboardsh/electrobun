@@ -61,8 +61,8 @@ jobs:
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
       EXPECTED_HUTCH_VERSION: '0.28.0-canary.8'
-      EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.6'
-      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2-canary.6'
+      EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.7'
+      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2-canary.7'
 
     steps:
       - uses: actions/checkout@v6
@@ -250,6 +250,22 @@ jobs:
       - name: Test host WebView delivery and RPC backpressure
         run: node scripts/run-bun-test.js src/shared/rpc.test.ts src/shared/windows-unicode-ui.test.ts src/sdks/main/core/BrowserViewHostMessageQueue.test.ts
         working-directory: package
+
+      - name: Prepare pinned compilers for callback isolation tests
+        run: hutch build.ts --vendor-rust-only --vendor-go-only
+        working-directory: package
+
+      - name: Test Rust Kitchen callback isolation
+        run: node scripts/test-rust-webview-observations.mjs
+        working-directory: kitchen
+
+      - name: Test Go Kitchen callback isolation
+        run: node scripts/test-go-webview-observations.mjs
+        working-directory: kitchen
+
+      - name: Test Zig Kitchen callback isolation
+        run: node scripts/test-zig-webview-observations.mjs
+        working-directory: kitchen
 
       - name: Test Windows release validation contract
         if: matrix.platform == 'win32'

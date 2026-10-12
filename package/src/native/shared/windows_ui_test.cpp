@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "windows_dpi.h"
 #include "windows_resource_paths.h"
 #include "windows_utf.h"
+#include "retained_view_callback.h"
 #include <commctrl.h>
 
 #ifdef _WIN32
@@ -72,7 +74,57 @@ static BOOL CALLBACK probeTaskDialogWindow(HWND window, LPARAM context) {
     return TRUE;
 }
 
+static void testQueuedViewLifetime() {
+    struct View {
+        unsigned& destroyed;
+        explicit View(unsigned& count) : destroyed(count) {}
+        ~View() { ++destroyed; }
+    };
+    unsigned destroyed = 0;
+    unsigned applied = 0;
+    unsigned discarded = 0;
+    auto registered = std::make_shared<View>(destroyed);
+    std::weak_ptr<View> original = registered;
+    auto current = [&registered](View* view) { return registered.get() == view; };
+    std::vector<std::function<void()>> queue;
+    queue.emplace_back(electrobun::retainedViewCallback(registered, current,
+        [&applied](View*) { ++applied; }, [&discarded]() { ++discarded; }));
+
+    // Model a window close processed ahead of an already queued navigation.
+    registered.reset();
+    assert(!original.expired()); // queued work must retain its target
+    assert(destroyed == 0);
+    queue.front()();
+    assert(applied == 0 && discarded == 1);
+    queue.clear();
+    assert(original.expired() && destroyed == 1);
+
+    registered = std::make_shared<View>(destroyed);
+    queue.emplace_back(electrobun::retainedViewCallback(registered, current,
+        [&applied](View*) { ++applied; }, [&discarded]() { ++discarded; }));
+    queue.front()();
+    assert(applied == 1 && discarded == 1);
+    queue.clear();
+
+    // Reusing a registry slot must not transfer old operations to a new view.
+    queue.emplace_back(electrobun::retainedViewCallback(registered, current,
+        [&applied](View*) { ++applied; }, [&discarded]() { ++discarded; }));
+    registered = std::make_shared<View>(destroyed);
+    queue.front()();
+    assert(applied == 1 && discarded == 2);
+    queue.clear();
+
+    // Unknown handles return the API's fallback without invoking the operation.
+    auto query = electrobun::retainedViewCallback(std::shared_ptr<View>{}, current,
+        [](View*) { return 2.0; }, []() { return 1.0; });
+    assert(query() == 1.0);
+    registered.reset();
+    assert(destroyed == 3);
+    std::puts("PASS: queued view ownership, removal, replacement and query fallback");
+}
+
 int main(int argc, char** argv) {
+    testQueuedViewLifetime();
     const std::string mixedUtf8 =
         "Bulgarian: \xD0\x91\xD1\x8A\xD0\xBB\xD0\xB3\xD0\xB0\xD1\x80\xD1\x81\xD0\xBA\xD0\xB8; "
         "Greek: \xCE\x95\xCE\xBB\xCE\xBB\xCE\xB7\xCE\xBD\xCE\xB9\xCE\xBA\xCE\xAC; "

@@ -92,10 +92,18 @@ assertArray(
 		"scripts/dev.test.ts",
 		"scripts/dev-template.test.ts",
 		"scripts/clean-template-artifacts.test.mjs",
-		"scripts/run-bun-test.test.mjs",
+		"scripts/test-run-diagnostics.test.mjs",
 		"scripts/check-release.test.ts",
 	],
 	"Development test command order",
+);
+assert(
+	devCommands.some((command) => command.args.includes("scripts/dev-output.test.mjs")),
+	"dev:test should exercise real subprocess output capture and signal forwarding",
+);
+assert(
+	devCommands.some((command) => command.args.includes("scripts/hutch-launcher.test.mjs")),
+	"dev:test should exercise Hutch launcher and architecture handoff",
 );
 
 const templateCommands = createTemplateTestCommands(options);

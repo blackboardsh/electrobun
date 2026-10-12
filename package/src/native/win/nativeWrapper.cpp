@@ -22,6 +22,7 @@
 #include <windows.h>
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
+#include "../shared/retained_view_callback.h"
 #include "dawn/webgpu.h"
 #include "dawn/native/D3D12Backend.h"
 #include <wrl.h>
@@ -3629,6 +3630,37 @@ static void retainAbstractView(std::shared_ptr<AbstractView> view) {
     g_retainedAbstractViews[view->webviewId] = view;
 }
 
+static std::shared_ptr<AbstractView> findRetainedAbstractView(AbstractView* handle) {
+    // The core can race a window close before reaching the native dispatcher.
+    // Compare opaque addresses without dereferencing a possibly retired handle.
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    for (const auto& [id, view] : g_retainedAbstractViews) {
+        if (view.get() == handle) return view;
+    }
+    return nullptr;
+}
+
+template <typename Operation, typename OnRemoved>
+static auto retainedWebviewCallback(AbstractView* handle, Operation operation,
+                                   OnRemoved onRemoved) {
+    return electrobun::retainedViewCallback(
+        findRetainedAbstractView(handle),
+        [](AbstractView* view) { return findRetainedAbstractView(view) != nullptr; },
+        std::move(operation), std::move(onRemoved));
+}
+
+template <typename Operation, typename OnRemoved>
+static auto dispatchWebviewOperation(AbstractView* handle, Operation operation,
+                                    OnRemoved onRemoved) {
+    return MainThreadDispatcher::dispatch_sync(retainedWebviewCallback(
+        handle, std::move(operation), std::move(onRemoved)));
+}
+
+template <typename Operation>
+static void dispatchWebviewOperation(AbstractView* handle, Operation operation) {
+    dispatchWebviewOperation(handle, std::move(operation), []() {});
+}
+
 static void releaseRetainedAbstractView(AbstractView* view) {
     if (!view) return;
 
@@ -3892,19 +3924,21 @@ public:
         std::string urlStr(urlString);
 
         // Navigate must happen on the UI thread — WebView2 APIs are single-threaded
-        MainThreadDispatcher::dispatch_async([this, urlStr]() {
-            if (webview) {
+        MainThreadDispatcher::dispatch_async(retainedWebviewCallback(this, [urlStr](AbstractView* target) {
+            auto* view = static_cast<WebView2View*>(target);
+            if (view->removed) return;
+            if (view->webview) {
                 std::wstring url;
                 if (!electrobun::utf8ToWide(urlStr, url)) {
                     ::log("[WebView2] Refusing navigation URL that is not valid UTF-8");
                     return;
                 }
-                webview->Navigate(url.c_str());
+                view->webview->Navigate(url.c_str());
             } else {
                 // WebView2 not ready — store URL for creation callback to load
-                pendingUrl = urlStr;
+                view->pendingUrl = urlStr;
             }
-        });
+        }, []() {}));
     }
     
     void loadHTML(const char* htmlString) override {
@@ -3912,19 +3946,21 @@ public:
         std::string htmlCopy(htmlString);
         // Dispatch to main thread to avoid race with async WebView2 creation callback.
         // Both this and the creation callback run on the main thread, so they can't interleave.
-        MainThreadDispatcher::dispatch_async([this, htmlCopy]() {
-            if (webview) {
+        MainThreadDispatcher::dispatch_async(retainedWebviewCallback(this, [htmlCopy](AbstractView* target) {
+            auto* view = static_cast<WebView2View*>(target);
+            if (view->removed) return;
+            if (view->webview) {
                 std::wstring html;
                 if (!electrobun::utf8ToWide(htmlCopy, html)) {
                     ::log("[WebView2] Refusing HTML that is not valid UTF-8");
                     return;
                 }
-                webview->NavigateToString(html.c_str());
+                view->webview->NavigateToString(html.c_str());
             } else {
                 // WebView2 not ready — creation callback will load this
-                pendingHtml = htmlCopy;
+                view->pendingHtml = htmlCopy;
             }
-        });
+        }, []() {}));
     }
     
     void goBack() override {
@@ -5410,6 +5446,14 @@ public:
         // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
+            // Retire handles before Close() can pump another queued operation.
+            // The container keeps each object alive throughout teardown.
+            if (dynamic_cast<WGPUView*>(view.get())) {
+                releaseRetainedWGPUView(view.get());
+            } else {
+                untrackAbstractView(view.get());
+                releaseRetainedAbstractView(view.get());
+            }
             if (g_eventLoopStopping.load()) {
                 if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
                     // The parent hierarchy is already being destroyed by the
@@ -5421,12 +5465,6 @@ public:
                 }
             } else {
                 view->remove();
-            }
-            if (dynamic_cast<WGPUView*>(view.get())) {
-                releaseRetainedWGPUView(view.get());
-            } else {
-                untrackAbstractView(view.get());
-                releaseRetainedAbstractView(view.get());
             }
         }
         if (m_hwnd) {
@@ -7267,6 +7305,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         view->pendingStartTransparent = startTransparent;
         view->pendingStartPassthrough = startPassthrough;
         view->setCreationFailed(true);
+        retainAbstractView(view);
         return view;
     }
     if (versionInfo) {
@@ -7293,6 +7332,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->pendingUrl = urlString;
     view->electrobunScript = electrobunScript;
     view->customScript = customScript;
+
+    // A controller callback may run before the creating FFI thread resumes.
+    // Register before scheduling it so its initial navigation has an owner.
+    retainAbstractView(view);
 
     // Create WebView2 on main thread
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
@@ -8942,7 +8985,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                               electrobunPreloadScript, customPreloadScript,
                                               startTransparent, startPassthrough,
                                               transparent, sandbox);
-        retainAbstractView(webview2View);
         view = webview2View.get();
     }
 
@@ -9066,7 +9108,7 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     }
     
     const std::string url(urlString);
-    MainThreadDispatcher::dispatch_sync([abstractView, url]() {
+    dispatchWebviewOperation(abstractView, [url](AbstractView* abstractView) {
         abstractView->loadURL(url.c_str());
     });
 }
@@ -10944,7 +10986,7 @@ ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char 
     }
 
     const std::string html(htmlString);
-    MainThreadDispatcher::dispatch_sync([abstractView, html]() {
+    dispatchWebviewOperation(abstractView, [html](AbstractView* abstractView) {
         abstractView->loadHTML(html.c_str());
     });
 }
@@ -10955,7 +10997,7 @@ ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->goBack();
     });
 }
@@ -10966,7 +11008,7 @@ ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->goForward();
     });
 }
@@ -10977,7 +11019,7 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->reload();
     });
 }
@@ -10988,19 +11030,21 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
 
-    g_pendingResizeQueue.remove(abstractView);
-    {
-        std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
-        g_allowedProtocols.erase(abstractView->webviewId);
-    }
     // CEF browser creation and lifecycle callbacks run on the native UI
     // thread. Serialize removal with OnAfterCreated so a pending async browser
     // cannot attach itself to a view while the runtime is releasing it.
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
+        g_pendingResizeQueue.remove(abstractView);
+        {
+            std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+            g_allowedProtocols.erase(abstractView->webviewId);
+        }
+        // Retire before calling COM/CEF: close can pump messages reentrantly.
+        // The dispatch callback retains ownership through the entire removal.
+        untrackAbstractView(abstractView);
+        releaseRetainedAbstractView(abstractView);
         abstractView->remove();
     });
-    untrackAbstractView(abstractView);
-    releaseRetainedAbstractView(abstractView);
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
@@ -11009,9 +11053,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> BOOL {
         return abstractView->canGoBack() ? TRUE : FALSE;
-    });
+    }, []() -> BOOL { return FALSE; });
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
@@ -11020,9 +11064,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> BOOL {
         return abstractView->canGoForward() ? TRUE : FALSE;
-    });
+    }, []() -> BOOL { return FALSE; });
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
@@ -11032,7 +11076,7 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
     }
 
     const std::string scriptCopy(script);
-    MainThreadDispatcher::dispatch_sync([abstractView, scriptCopy]() {
+    dispatchWebviewOperation(abstractView, [scriptCopy](AbstractView* abstractView) {
         if (abstractView->hasCreationFailed()) {
             ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
             return;
@@ -11060,7 +11104,7 @@ ELECTROBUN_EXPORT void callAsyncJavaScript(const char *messageId,
 
 ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView *abstractView, const char *scriptContent, BOOL forMainFrameOnly) {
     if (abstractView && scriptContent) {
-        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+        dispatchWebviewOperation(abstractView, [scriptContent](AbstractView* abstractView) {
             abstractView->addPreloadScriptToWebView(scriptContent);
         });
     }
@@ -11071,7 +11115,7 @@ ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView *abstractView,
                                  const char *scriptContent,
                                  BOOL forMainFrameOnly) {
     if (abstractView && scriptContent) {
-        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+        dispatchWebviewOperation(abstractView, [scriptContent](AbstractView* abstractView) {
             abstractView->updateCustomPreloadScript(scriptContent);
         });
     }
@@ -11099,7 +11143,7 @@ ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
 ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, transparent]() {
+        dispatchWebviewOperation(abstractView, [transparent](AbstractView* abstractView) {
             abstractView->setTransparent(transparent);
         });
     }
@@ -11108,7 +11152,7 @@ ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL tr
 ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, enablePassthrough]() {
+        dispatchWebviewOperation(abstractView, [enablePassthrough](AbstractView* abstractView) {
             abstractView->setPassthrough(enablePassthrough);
         });
     }
@@ -11117,7 +11161,7 @@ ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL en
 ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
+        dispatchWebviewOperation(abstractView, [hidden](AbstractView* abstractView) {
             abstractView->setTransparent(hidden);
         });
     }
@@ -11133,7 +11177,7 @@ ELECTROBUN_EXPORT bool webviewSetSpellCheck(AbstractView* abstractView, bool ena
 ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, rulesJson]() {
+        dispatchWebviewOperation(abstractView, [rulesJson](AbstractView* abstractView) {
             abstractView->setNavigationRulesFromJSON(rulesJson);
         });
     }
@@ -11141,7 +11185,7 @@ ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, con
 
 ELECTROBUN_EXPORT void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView, searchText, forward, matchCase]() {
+        dispatchWebviewOperation(abstractView, [searchText, forward, matchCase](AbstractView* abstractView) {
             abstractView->findInPage(searchText, forward, matchCase);
         });
     }
@@ -11167,7 +11211,7 @@ void toggleRemoteDevTools(uint32_t webviewId) {
 
 ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->stopFindInPage();
         });
     }
@@ -11175,7 +11219,7 @@ ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->openDevTools();
         });
     }
@@ -11183,7 +11227,7 @@ ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->closeDevTools();
         });
     }
@@ -11191,7 +11235,7 @@ ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->toggleDevTools();
         });
     }
@@ -11200,7 +11244,7 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
     if (!abstractView) return;
 
-    MainThreadDispatcher::dispatch_sync([abstractView, zoomLevel]() {
+    dispatchWebviewOperation(abstractView, [zoomLevel](AbstractView* abstractView) {
         if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
             webview2->setPageZoom(zoomLevel);
             return;
@@ -11218,7 +11262,7 @@ ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoo
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
     if (!abstractView) return 1.0;
 
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> double {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> double {
         if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
             return webview2->getPageZoom();
         }
@@ -11231,7 +11275,7 @@ ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
         }
 
         return 1.0;
-    });
+    }, []() { return 1.0; });
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {

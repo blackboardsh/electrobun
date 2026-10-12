@@ -25,7 +25,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import { systemTarBinary } from "./windows-tar.mjs";
-import { updaterLifecycleBuildTarget } from "./updater-lifecycle-target.mjs";
+import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -69,7 +69,7 @@ const fallbackRelaunchSentinelPath = join(signalDirectory, "v4-relaunched.json")
 const updateActivationPath = join(signalDirectory, "activate-update");
 const bootstrapVerificationPath = join(signalDirectory, "verify-v2-bootstrap");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-let hutchLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH || "hutch";
+let hutchLauncher = updaterLifecycleHutchBinary();
 let hutchEngine = process.env.HUTCH_ENGINE_BINARY;
 const timeoutMs = Number(
 	process.env.ELECTROBUN_UPDATER_E2E_TIMEOUT_MS || DEFAULT_TIMEOUT_MS,
@@ -271,7 +271,7 @@ function run(command, args = [], options = {}) {
 }
 
 async function prepareHutch() {
-	const explicitLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH;
+	const explicitLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH || process.env.HUTCH_BINARY;
 	if (explicitLauncher) {
 		hutchLauncher = resolve(explicitLauncher);
 		if (!hutchEngine) {

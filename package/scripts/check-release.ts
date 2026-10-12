@@ -4,6 +4,7 @@ import {
 	runCommandWithSignalForwarding,
 	type DevCommand,
 } from "./dev";
+import { createTestRunDiagnostics } from "./test-run-diagnostics.mjs";
 
 export const releaseCheckTasks = [
 	["Clean template artifacts", "clean:templates"],
@@ -78,7 +79,14 @@ export function createDevTestCommands({
 		{
 			label: "Runtime test wrapper tests",
 			command: "node",
-			args: ["--test", "scripts/run-cottontail-test.test.mjs", "scripts/run-bun-test.test.mjs"],
+			args: [
+				"--test",
+				"scripts/run-cottontail-test.test.mjs",
+				"scripts/run-bun-test.test.mjs",
+				"scripts/dev-output.test.mjs",
+				"scripts/hutch-launcher.test.mjs",
+				"scripts/test-run-diagnostics.test.mjs",
+			],
 			cwd: packageDir,
 		},
 		{
@@ -178,7 +186,19 @@ async function main(): Promise<void> {
 			: suite === "templates"
 				? createTemplateTestCommands(options)
 				: createReleaseCheckCommands(options);
-	const failures = await runCheckCommands(commands);
+	const diagnostics = createTestRunDiagnostics(`check-${suite}`, commands);
+	console.log(`[check:release] Logs and runtime details: ${diagnostics.summaryPath}`);
+	let failures: CheckFailure[];
+	try {
+		failures = await runCheckCommands(commands, (command) =>
+			diagnostics.run(command, runCommandWithSignalForwarding),
+		);
+		diagnostics.finish(failures);
+	} catch (error) {
+		diagnostics.finish([], error);
+		console.error(`[check:release] Logs and runtime details: ${diagnostics.summaryPath}`);
+		throw error;
+	}
 
 	if (checkExitCode(failures) === 0) {
 		console.log(`[check:release] All ${suite} checks passed.`);
@@ -188,7 +208,7 @@ async function main(): Promise<void> {
 	console.error(
 		`[check:release] ${failures.length} of ${commands.length} ${suite} checks failed:\n${failures
 			.map((failure) => `  - ${failure.command.label}`)
-			.join("\n")}`,
+			.join("\n")}\n[check:release] Logs and runtime details: ${diagnostics.summaryPath}`,
 	);
 	process.exitCode = checkExitCode(failures);
 }

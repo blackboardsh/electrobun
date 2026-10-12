@@ -1,6 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { updaterLifecycleBuildTarget } from "./updater-lifecycle-target.mjs";
+import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
+
+test("lifecycle builds retain their Hutch launcher and prioritize explicit overrides", () => {
+	const inherited = Object.freeze({ HUTCH_LAUNCHER_PATH: "C:\\tools\\hutch-canary.exe" });
+	assert.equal(updaterLifecycleHutchBinary(inherited), inherited.HUTCH_LAUNCHER_PATH);
+	assert.equal(updaterLifecycleHutchBinary({ ...inherited, HUTCH_BINARY: "./local-hutch.exe" }), "./local-hutch.exe");
+	assert.equal(updaterLifecycleHutchBinary({
+		...inherited,
+		HUTCH_BINARY: "./local-hutch.exe",
+		ELECTROBUN_UPDATER_E2E_HUTCH: "./lifecycle-hutch.exe",
+	}), "./lifecycle-hutch.exe");
+	assert.equal(updaterLifecycleHutchBinary({}), "hutch");
+});
 
 const manifest = (os, arch) => ({
 	schemaVersion: 1,

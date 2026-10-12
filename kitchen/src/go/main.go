@@ -59,21 +59,17 @@ type appState struct {
 }
 
 type callbackState struct {
-	windowCloseCount           uint32
-	windowShouldCloseCount     uint32
-	windowResizeCount          uint32
-	windowFocusCount           uint32
-	webviewWillNavigate        uint32
-	webviewDidNavigate         uint32
-	webviewDidCommitNavigation uint32
-	webviewDomReady            uint32
-	webviewTagInit             uint32
-	wgpuTagInit                uint32
-	wgpuTagReady               uint32
-	beforeQuitCount            uint32
-	lastResizeWidth            float64
-	lastResizeHeight           float64
-	lastWebviewDetail          string
+	windowCloseCount       uint32
+	windowShouldCloseCount uint32
+	windowResizeCount      uint32
+	windowFocusCount       uint32
+	webviewEvents          webviewObservations
+	webviewTagInit         uint32
+	wgpuTagInit            uint32
+	wgpuTagReady           uint32
+	beforeQuitCount        uint32
+	lastResizeWidth        float64
+	lastResizeHeight       float64
 }
 
 type testKind string
@@ -1156,6 +1152,7 @@ func executeSingleTestAndBroadcast(webviewID uint32, test goTest) (string, bool)
 	sendTestLog(webviewID, test.ID, "Running Go native test")
 	result := runGoTest(test)
 	if result.Error != "" {
+		fmt.Fprintf(os.Stderr, "[kitchen go] failed test: %s (%s): %s\n", test.Name, test.ID, result.Error)
 		sendTestLog(webviewID, test.ID, result.Error)
 	}
 	resultJSON := testResultJSON(test, result)
@@ -2320,7 +2317,7 @@ func runNavigationLoadURLTest() error {
 			return err
 		}
 		if !waitUntil(3*time.Second, func() bool {
-			return callbackCount(func(c callbackState) uint32 { return c.webviewDidNavigate }) > 0 || lastWebviewDetailContains("views://zig")
+			return observedWebviewEventContains(created.webviewID, "did-navigate", goViewURL)
 		}) {
 			return fmt.Errorf("did-navigate did not fire after loadURL")
 		}
@@ -2347,7 +2344,7 @@ func runNavigationDomReadyEventTest() error {
 	if err != nil {
 		return err
 	}
-	if !waitUntil(3*time.Second, func() bool { return callbackCount(func(c callbackState) uint32 { return c.webviewDomReady }) > 0 }) {
+	if !waitUntil(3*time.Second, func() bool { return observedWebviewEventContains(created.webviewID, "dom-ready", "") }) {
 		err = fmt.Errorf("dom-ready did not fire")
 	}
 	return finishWithWindow(created.windowID, err)
@@ -2364,7 +2361,7 @@ func runNavigationDidNavigateEventTest() error {
 			return err
 		}
 		if !waitUntil(3*time.Second, func() bool {
-			return callbackCount(func(c callbackState) uint32 { return c.webviewDidNavigate }) > 0 || lastWebviewDetailContains("views://zig")
+			return observedWebviewEventContains(created.webviewID, "did-navigate", goViewURL)
 		}) {
 			return fmt.Errorf("did-navigate did not fire")
 		}
@@ -2391,12 +2388,9 @@ func runNavigationDidCommitNavigationEventTest() error {
 			return err
 		}
 		if !waitUntil(3*time.Second, func() bool {
-			return callbackCount(func(c callbackState) uint32 { return c.webviewDidCommitNavigation }) > 0
+			return observedWebviewEventContains(created.webviewID, "did-commit-navigation", goViewURL)
 		}) {
-			return fmt.Errorf("did-commit-navigation did not fire")
-		}
-		if !lastWebviewDetailContains("views://zig") {
-			return fmt.Errorf("did-commit-navigation URL was not forwarded")
+			return fmt.Errorf("did-commit-navigation did not forward the expected URL")
 		}
 		return nil
 	}()
@@ -2460,7 +2454,9 @@ func runAppDataProtocolTest(enabled bool) error {
 		if err := state.core.EvaluateJavaScriptWithNoCompletion(webviewID, script); err != nil {
 			return err
 		}
-		if !waitUntil(5*time.Second, func() bool { return lastWebviewDetailContains("appdataResult=ok") }) {
+		if !waitUntil(5*time.Second, func() bool {
+			return observedWebviewEventContains(webviewID, "will-navigate", "appdataResult=ok")
+		}) {
 			return fmt.Errorf("webview did not observe the expected appdata contents/access result")
 		}
 		return nil
@@ -2913,7 +2909,7 @@ func playgroundInternalBridge(hostWebviewID uint32, message string) {
 			Detail    string `json:"detail"`
 		}
 		_ = json.Unmarshal(object.Payload, &payload)
-		recordObservedWebviewEvent(payload.EventName, payload.Detail)
+		recordObservedWebviewEvent(hostWebviewID, payload.EventName, payload.Detail)
 		return
 	}
 	var packets []string
@@ -3240,7 +3236,8 @@ func sendRPCResponseError(webviewID uint32, requestID uint64, errorMessage strin
 
 func resetCallbackState() {
 	callbacksMu.Lock()
-	callbacks = callbackState{}
+	callbacks.webviewEvents.clear()
+	callbacks = callbackState{webviewEvents: callbacks.webviewEvents}
 	callbacksMu.Unlock()
 }
 
@@ -3256,10 +3253,10 @@ func lastResizeSize() (float64, float64) {
 	return callbacks.lastResizeWidth, callbacks.lastResizeHeight
 }
 
-func lastWebviewDetailContains(needle string) bool {
+func observedWebviewEventContains(webviewID uint32, eventName, detail string) bool {
 	callbacksMu.Lock()
 	defer callbacksMu.Unlock()
-	return strings.Contains(callbacks.lastWebviewDetail, needle)
+	return callbacks.webviewEvents.contains(webviewID, eventName, detail)
 }
 
 func observedWindowClose(windowID uint32) {
@@ -3295,11 +3292,11 @@ func observedWindowFocus(uint32) {
 	callbacksMu.Unlock()
 }
 
-func observedWebviewEvent(_ uint32, eventName, detail string) {
-	recordObservedWebviewEvent(eventName, detail)
+func observedWebviewEvent(webviewID uint32, eventName, detail string) {
+	recordObservedWebviewEvent(webviewID, eventName, detail)
 }
 
-func observedWebviewBridge(_ uint32, message string) {
+func observedWebviewBridge(webviewID uint32, message string) {
 	var packet struct {
 		ID        string          `json:"id"`
 		EventName string          `json:"eventName"`
@@ -3311,24 +3308,14 @@ func observedWebviewBridge(_ uint32, message string) {
 			packet.EventName = stringField(string(packet.Payload), "eventName")
 			packet.Detail = stringField(string(packet.Payload), "detail")
 		}
-		recordObservedWebviewEvent(packet.EventName, packet.Detail)
+		recordObservedWebviewEvent(webviewID, packet.EventName, packet.Detail)
 	}
 }
 
-func recordObservedWebviewEvent(eventName, detail string) {
+func recordObservedWebviewEvent(webviewID uint32, eventName, detail string) {
 	callbacksMu.Lock()
 	defer callbacksMu.Unlock()
-	switch eventName {
-	case "will-navigate":
-		callbacks.webviewWillNavigate++
-	case "did-navigate":
-		callbacks.webviewDidNavigate++
-	case "did-commit-navigation":
-		callbacks.webviewDidCommitNavigation++
-	case "dom-ready":
-		callbacks.webviewDomReady++
-	}
-	callbacks.lastWebviewDetail = detail
+	callbacks.webviewEvents.record(webviewID, eventName, detail)
 }
 
 func recordWebviewTagInit() {

@@ -1,12 +1,13 @@
 import { spawnSync } from "node:child_process";
 import { isDirectEntry, resolveTestArgs } from "./run-cottontail-test.js";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 // Keep node:test suites on their dedicated Node tasks. Hutch resolves its
 // pinned Bun; an explicit selection also overrides local Cottontail tooling.
 export function runBunTests(paths, {
 	spawn = spawnSync,
-	hutch = process.env.HUTCH_BINARY || "hutch",
 	environment = process.env,
+	hutch = selectHutchBinary(environment),
 	report = console.error,
 } = {}) {
 	if (paths.length === 0) {
