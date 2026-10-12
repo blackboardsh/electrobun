@@ -10,6 +10,7 @@ import {
 	parseHutchPragma,
 	resolvePinnedHutchExecutable,
 	resolvePairedCottontailVersion,
+	runReleaseToolchainCli,
 	verifyAppCottontailVersion,
 	verifyReleaseToolchain,
 } from "./verify-release-toolchain.mjs";
@@ -222,10 +223,10 @@ function createProvenanceFixture(t, options = {}) {
 	const root = mkdtempSync(join(tmpdir(), "electrobun-provenance-"));
 	t.after(() => rmSync(root, { recursive: true, force: true }));
 	const environment = {
-		EXPECTED_HUTCH_VERSION: "0.28.0-canary.8",
-		EXPECTED_PAIRED_COTTONTAIL_VERSION: "0.7.2-canary.6",
+		EXPECTED_HUTCH_VERSION: options.hutchVersion ?? "0.28.0-canary.9",
+		EXPECTED_PAIRED_COTTONTAIL_VERSION: options.expectedPairedVersion ?? "0.7.2-canary.7",
 		EXPECTED_COTTONTAIL_VERSION: "0.7.2-canary.7",
-		EXPECTED_APP_COTTONTAIL_VERSION: "0.7.2-canary.7",
+		EXPECTED_APP_COTTONTAIL_VERSION: options.appVersion ?? "0.7.2-canary.7",
 	};
 	function write(path, contents) {
 		mkdirSync(dirname(path), { recursive: true });
@@ -282,18 +283,42 @@ function createProvenanceFixture(t, options = {}) {
 	return { root, environment, runCommand, selectedProjects };
 }
 
-test("release provenance accepts compiled Cottontail .6 and explicitly selected project/app .7", (t) => {
+test("release provenance accepts Hutch .9 paired with catalog Cottontail .7", (t) => {
 	const fixture = createProvenanceFixture(t);
 	verifyReleaseToolchain(fixture.environment, { ...fixture, log() {} });
 	assert.deepEqual(fixture.selectedProjects, ["package", "kitchen", "docs"].map(project => join(fixture.root, project)));
 });
 
+test("template publication rejects Hutch .8 paired with .6 despite a valid explicit project/app .7 selector", (t) => {
+	const fixture = createProvenanceFixture(t, { hutchVersion: "0.28.0-canary.8", expectedPairedVersion: "0.7.2-canary.6" });
+	const mismatch = /template catalog requires Cottontail 0\.7\.2-canary\.7, but Hutch 0\.28\.0-canary\.8 is paired with 0\.7\.2-canary\.6/;
+	assert.throws(() => verifyReleaseToolchain(fixture.environment, { ...fixture, log() {} }), mismatch);
+	assert.throws(() => runReleaseToolchainCli(["--template-pairing"], fixture.environment, { ...fixture, log() {} }), mismatch);
+	assert.deepEqual(fixture.selectedProjects, [], "incompatibility must stop publication before project runtime probes");
+});
+
+test("early template CLI verifies the actual compiled pair without dependencies or built devkit", (t) => {
+	const fixture = createProvenanceFixture(t);
+	rmSync(join(fixture.root, "package", "dist", "native-devkit.json"));
+	rmSync(join(fixture.root, "package", "src", "shared", "cottontail-version.ts"));
+	runReleaseToolchainCli(["--template-pairing"], fixture.environment, { ...fixture, log() {} });
+	assert.deepEqual(fixture.selectedProjects, []);
+	const wrongPair = createProvenanceFixture(t, { pairedVersion: "0.7.2-canary.6" });
+	assert.throws(() => runReleaseToolchainCli(["--template-pairing"], wrongPair.environment, { ...wrongPair, log() {} }), /paired Cottontail release: expected "0\.7\.2-canary\.7", got "0\.7\.2-canary\.6"/);
+	assert.throws(() => runReleaseToolchainCli(["--unknown"], fixture.environment), /usage:/);
+});
+
+test("template compatibility leaves the separately selected app runtime independent", (t) => {
+	const fixture = createProvenanceFixture(t, { appVersion: "0.7.2-canary.6" });
+	verifyReleaseToolchain(fixture.environment, { ...fixture, log() {} });
+});
+
 test("independent compiled-pair provenance rejects wrong versions and missing or wrong-channel metadata", (t) => {
 	for (const [options, expectedError] of [
-		[{ pairedVersion: "0.7.2-canary.7" }, /paired Cottontail release: expected/],
-		[{ executableVersion: "0.7.2-canary.7" }, /paired Cottontail executable: expected/],
+		[{ pairedVersion: "0.7.2-canary.6" }, /paired Cottontail release: expected/],
+		[{ executableVersion: "0.7.2-canary.6" }, /paired Cottontail executable: expected/],
 		[{ missingMetadata: true }, /missing release metadata/],
-		[{ metadataVersion: "0.7.2-canary.7" }, /cottontail metadata version: expected/],
+		[{ metadataVersion: "0.7.2-canary.6" }, /cottontail metadata version: expected/],
 		[{ metadataChannel: "production" }, /cottontail metadata channel: expected/],
 	]) {
 		const fixture = createProvenanceFixture(t, options);
@@ -427,6 +452,11 @@ test("release CI verifies provenance before all five Kitchen builds", () => {
 		workflow,
 		/^      - name: Install Hutch\n        uses: \.\/\.github\/actions\/install-hutch\n        with:\n          channel: \$\{\{ contains\(env\.EXPECTED_HUTCH_VERSION, '-'\) && 'canary' \|\| 'production' \}\}$/m,
 	);
+	assert.match(workflow, /^      - name: Verify template toolchain compatibility\n        run: node package\/scripts\/verify-release-toolchain\.mjs --template-pairing$/m);
+	const templateCompatibility = workflow.indexOf("      - name: Verify template toolchain compatibility");
+	assert.ok(templateCompatibility > workflow.indexOf("      - name: Install Hutch"));
+	assert.ok(templateCompatibility < workflow.indexOf("      - name: Install dependencies"),
+		"Hutch init's catalog contract must be verified before dependency installation and native builds");
 	assert.match(
 		workflow,
 		/^      - name: Install Kitchen dependencies\n        run: hutch run install\n        working-directory: kitchen\n\n      - name: Typecheck Kitchen against local devkit\n        run: \|\n          hutch electrobun prepare\n          node \.\.\/package\/node_modules\/typescript\/bin\/tsc --noEmit\n        working-directory: kitchen\n        env:\n          HUTCH_ELECTROBUN_DEVKIT_ROOT: \$\{\{ github\.workspace \}\}\/package\/dist$/m,

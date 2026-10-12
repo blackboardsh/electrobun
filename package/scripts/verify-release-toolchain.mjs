@@ -236,6 +236,40 @@ export function resolvePairedCottontailVersion(expectedHutch, runCommand = run, 
 	), "paired Cottontail version");
 }
 
+export function verifyTemplateToolchainCompatibility({ hutch, cottontail, pairedCottontail }) {
+	assertExactVersion(hutch, "template Hutch pin");
+	assertExactVersion(cottontail, "template catalog Cottontail pin");
+	assertExactVersion(pairedCottontail, "paired Cottontail pin");
+	// Hutch init validates catalog.tools.cottontail against its compiled pair
+	// before creating a project. An existing project's explicit runtime selector
+	// cannot make a mismatched published template catalog compatible.
+	if (cottontail !== pairedCottontail) {
+		fail(`template catalog requires Cottontail ${cottontail}, but Hutch ${hutch} is paired with ${pairedCottontail}; publish with a Hutch release paired with the catalog runtime`);
+	}
+}
+
+export function verifyTemplateReleaseToolchain(environment = process.env, {
+	root = repositoryRoot, runCommand = run, log = console.log,
+} = {}) {
+	const expectedHutch = assertExactVersion(environment.EXPECTED_HUTCH_VERSION, "EXPECTED_HUTCH_VERSION");
+	const expectedCottontail = assertExactVersion(environment.EXPECTED_COTTONTAIL_VERSION, "EXPECTED_COTTONTAIL_VERSION");
+	const expectedPairedCottontail = assertExactVersion(environment.EXPECTED_PAIRED_COTTONTAIL_VERSION, "EXPECTED_PAIRED_COTTONTAIL_VERSION");
+	for (const name of forbiddenOverrides) {
+		if (environment[name] !== undefined) fail(`${name} must be unset for a release provenance check`);
+	}
+	if (environment.HUTCH_ACTIVE_CHANNEL !== undefined) {
+		assertEqual(environment.HUTCH_ACTIVE_CHANNEL, releaseChannel(expectedHutch, "EXPECTED_HUTCH_VERSION"), "HUTCH_ACTIVE_CHANNEL");
+	}
+	// The template publisher derives catalog.tools from this same source pragma.
+	const pins = parseHutchPragma(readFileSync(join(root, "package", "hutch.config.ts"), "utf8"), "package/hutch.config.ts");
+	assertEqual(pins.hutch, expectedHutch, "template catalog Hutch pin");
+	assertEqual(pins.cottontail, expectedCottontail, "template catalog Cottontail pin");
+	const pairedCottontail = resolvePairedCottontailVersion(expectedHutch, runCommand, root);
+	assertEqual(pairedCottontail, expectedPairedCottontail, "paired Cottontail release");
+	verifyTemplateToolchainCompatibility({ ...pins, pairedCottontail });
+	log(`Template toolchain compatibility verified: Hutch ${pins.hutch}, compiled and catalog Cottontail ${pairedCottontail}.`);
+}
+
 export function verifyReleaseToolchain(environment = process.env, {
 	root = repositoryRoot, runCommand = run, log = console.log,
 } = {}) {
@@ -247,6 +281,9 @@ export function verifyReleaseToolchain(environment = process.env, {
 	assertExactVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
 	assertExactVersion(expectedAppCottontail, "EXPECTED_APP_COTTONTAIL_VERSION");
 	assertExactVersion(expectedPairedCottontail, "EXPECTED_PAIRED_COTTONTAIL_VERSION");
+	verifyTemplateToolchainCompatibility({
+		hutch: expectedHutch, cottontail: expectedCottontail, pairedCottontail: expectedPairedCottontail,
+	});
 	const expectedHutchChannel = releaseChannel(expectedHutch, "EXPECTED_HUTCH_VERSION");
 	const expectedPairedCottontailChannel = releaseChannel(
 		expectedPairedCottontail,
@@ -304,7 +341,8 @@ export function verifyReleaseToolchain(environment = process.env, {
 
 	// The no-selector Cottontail verbs report this exact engine's compiled
 	// pair, independently of whichever release currently heads its channel.
-	// A project pragma may deliberately select a newer Cottontail runtime.
+	// Existing projects can select a different runtime, but the template catalog
+	// published by this release must also satisfy Hutch init's exact-pair contract.
 	const hutchExecutable = resolvePinnedHutchExecutable(expectedHutch, runCommand, root);
 	assertEqual(
 		singleLine(
@@ -360,10 +398,18 @@ export function verifyReleaseToolchain(environment = process.env, {
 	log("Electrobun release toolchain provenance verified.");
 }
 
+export function runReleaseToolchainCli(args, environment = process.env, options = {}) {
+	if (args.length === 0) return verifyReleaseToolchain(environment, options);
+	if (args.length === 1 && args[0] === "--template-pairing") {
+		return verifyTemplateReleaseToolchain(environment, options);
+	}
+	fail("usage: verify-release-toolchain.mjs [--template-pairing]");
+}
+
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
 if (invokedPath === import.meta.url) {
 	try {
-		verifyReleaseToolchain();
+		runReleaseToolchainCli(process.argv.slice(2));
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);
 		process.exit(1);
