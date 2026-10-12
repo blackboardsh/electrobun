@@ -61,6 +61,8 @@ jobs:
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
       EXPECTED_HUTCH_VERSION: '0.28.0-canary.8'
+      # Hutch's compiled default is independent of the project-selected runtime.
+      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.2-canary.6'
       EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.7'
       EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2-canary.7'
 

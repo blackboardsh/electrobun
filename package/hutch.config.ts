@@ -60,7 +60,7 @@ export default {
 		"test:devkit-manifest":
 			"node scripts/run-bun-test.js src/shared/native-devkit-manifest.test.ts && node --test scripts/validate-native-devkit.test.mjs scripts/electrobun-version-runtime.test.mjs",
 		"test:version-bump":
-			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs scripts/verify-release-assets.test.mjs scripts/release-publication-contract.test.mjs scripts/sync-release-toolchain-pins.test.mjs scripts/windows-release-validation.test.mjs",
+			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs scripts/verify-release-assets.test.mjs scripts/release-publication-contract.test.mjs scripts/sync-release-toolchain-pins.test.mjs scripts/verify-release-toolchain.test.mjs scripts/windows-release-validation.test.mjs",
 		"test:linux-native-dialog":
 			"node scripts/run-bun-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": ["hutch", "scripts/test-cef-remote-debugging.ts"],

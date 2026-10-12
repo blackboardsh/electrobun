@@ -139,11 +139,11 @@ function sha256(path) {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function cottontailVersion(executable, cwd) {
+function cottontailVersion(executable, cwd, runCommand = run) {
 	if (process.platform !== "win32") {
-		return run(executable, ["--version"], cwd);
+		return runCommand(executable, ["--version"], cwd);
 	}
-	return run(
+	return runCommand(
 		"powershell.exe",
 		[
 			"-NoLogo",
@@ -178,17 +178,17 @@ function verifyReleaseMetadata({ executable, product, version, channel }) {
 	return { manifestPath, revision: manifest.revision };
 }
 
-function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }) {
+function verifyProjectSelection({ directory, expectedHutch, expectedCottontail, runCommand = run, probePath = runtimeProbePath, log = console.log }) {
 	const selectedHutch = singleLine(
-		run("hutch", ["--version"], directory),
+		runCommand("hutch", ["--version"], directory),
 		`${directory} Hutch version`,
 	);
 	assertEqual(selectedHutch, expectedHutch, `${directory} selected Hutch`);
 
-  const scriptIdentity = JSON.parse(run("hutch", ["-p", 'JSON.stringify({bun:process.versions.bun,cottontail:process.versions.cottontail})'], directory));
+  const scriptIdentity = JSON.parse(runCommand("hutch", ["-p", 'JSON.stringify({bun:process.versions.bun,cottontail:process.versions.cottontail})'], directory));
   assertExactVersion(scriptIdentity.bun, `${directory} default Bun script runner`);
   if (scriptIdentity.cottontail !== undefined) fail(`${directory} scripts must default to Bun`);
-	const probeOutput = run("hutch", [runtimeProbePath], directory, { HUTCH_RUNTIME: "cottontail" });
+	const probeOutput = runCommand("hutch", [probePath], directory, { HUTCH_RUNTIME: "cottontail" });
 	const marker = "ELECTROBUN_RUNTIME_PROVENANCE=";
 	const probeLine = probeOutput
 		.split(/\r?\n/)
@@ -207,38 +207,50 @@ function verifyProjectSelection({ directory, expectedHutch, expectedCottontail }
 		`${directory} selected Cottontail`,
 	);
 
-	console.log(
+	log(
 		`${directory}: Hutch ${selectedHutch}, Cottontail ${provenance.cottontail}`,
 	);
 }
 
-export function resolvePinnedHutchExecutable(expectedHutch, runCommand = run) {
+export function resolvePinnedHutchExecutable(expectedHutch, runCommand = run, cwd = repositoryRoot) {
 	assertExactVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
 	// Resolving an exact path installs the release if needed without advancing
 	// a channel alias. A newer channel release must not invalidate this pin.
 	const executable = canonicalPath(
-		runCommand("hutch", ["self", "path", expectedHutch], repositoryRoot),
+		runCommand("hutch", ["self", "path", expectedHutch], cwd),
 		"pinned Hutch path",
 	);
 	assertEqual(
-		singleLine(runCommand(executable, ["--version"], repositoryRoot), "Hutch executable version"),
+		singleLine(runCommand(executable, ["--version"], cwd), "Hutch executable version"),
 		expectedHutch,
 		"Hutch executable",
 	);
 	return executable;
 }
 
-export function verifyReleaseToolchain(environment = process.env) {
+export function resolvePairedCottontailVersion(expectedHutch, runCommand = run, cwd = repositoryRoot) {
+	const executable = resolvePinnedHutchExecutable(expectedHutch, runCommand, cwd);
+	return assertExactVersion(singleLine(
+		runCommand(executable, ["cottontail", "version"], cwd),
+		"paired Cottontail version",
+	), "paired Cottontail version");
+}
+
+export function verifyReleaseToolchain(environment = process.env, {
+	root = repositoryRoot, runCommand = run, log = console.log,
+} = {}) {
 	const expectedHutch = environment.EXPECTED_HUTCH_VERSION;
 	const expectedCottontail = environment.EXPECTED_COTTONTAIL_VERSION;
 	const expectedAppCottontail = environment.EXPECTED_APP_COTTONTAIL_VERSION;
+	const expectedPairedCottontail = environment.EXPECTED_PAIRED_COTTONTAIL_VERSION;
 	assertExactVersion(expectedHutch, "EXPECTED_HUTCH_VERSION");
 	assertExactVersion(expectedCottontail, "EXPECTED_COTTONTAIL_VERSION");
 	assertExactVersion(expectedAppCottontail, "EXPECTED_APP_COTTONTAIL_VERSION");
+	assertExactVersion(expectedPairedCottontail, "EXPECTED_PAIRED_COTTONTAIL_VERSION");
 	const expectedHutchChannel = releaseChannel(expectedHutch, "EXPECTED_HUTCH_VERSION");
-	const expectedCottontailChannel = releaseChannel(
-		expectedCottontail,
-		"EXPECTED_COTTONTAIL_VERSION",
+	const expectedPairedCottontailChannel = releaseChannel(
+		expectedPairedCottontail,
+		"EXPECTED_PAIRED_COTTONTAIL_VERSION",
 	);
 	if (environment.HUTCH_ACTIVE_CHANNEL !== undefined) {
 		assertEqual(
@@ -256,8 +268,8 @@ export function verifyReleaseToolchain(environment = process.env) {
 
 	const projects = ["package", "kitchen", "docs"].map((name) => ({
 		name,
-		directory: join(repositoryRoot, name),
-		config: join(repositoryRoot, name, "hutch.config.ts"),
+		directory: join(root, name),
+		config: join(root, name, "hutch.config.ts"),
 	}));
 	for (const project of projects) {
 		if (!existsSync(project.config)) fail(`missing ${project.config}`);
@@ -276,42 +288,43 @@ export function verifyReleaseToolchain(environment = process.env) {
 	// The SDK's application runtime is an independent release component. Verify
 	// both its source pin and the emitted devkit, without equating it to the
 	// Cottontail that executes the build through Hutch's pragma.
-	const appSourcePath = join(repositoryRoot, "package", "src", "shared", "cottontail-version.ts");
-	const devkitPath = join(repositoryRoot, "package", "dist", "native-devkit.json");
+	const appSourcePath = join(root, "package", "src", "shared", "cottontail-version.ts");
+	const devkitPath = join(root, "package", "dist", "native-devkit.json");
   const appBunVersion = verifyAppBunVersion({
-    source: readFileSync(join(repositoryRoot, "package", "src", "shared", "bun-version.ts"), "utf8"),
+    source: readFileSync(join(root, "package", "src", "shared", "bun-version.ts"), "utf8"),
     manifest: JSON.parse(readFileSync(devkitPath, "utf8")),
   });
-  console.log(`Default app Bun ${appBunVersion}: source pin and ${devkitPath}`);
+  log(`Default app Bun ${appBunVersion}: source pin and ${devkitPath}`);
 	verifyAppCottontailVersion({
 		source: readFileSync(appSourcePath, "utf8"),
 		manifest: JSON.parse(readFileSync(devkitPath, "utf8")),
 		expectedVersion: expectedAppCottontail,
 	});
-	console.log(`App Cottontail ${expectedAppCottontail}: ${appSourcePath} and ${devkitPath}`);
+	log(`App Cottontail ${expectedAppCottontail}: ${appSourcePath} and ${devkitPath}`);
 
 	// The no-selector Cottontail verbs report this exact engine's compiled
 	// pair, independently of whichever release currently heads its channel.
-	const hutchExecutable = resolvePinnedHutchExecutable(expectedHutch);
+	// A project pragma may deliberately select a newer Cottontail runtime.
+	const hutchExecutable = resolvePinnedHutchExecutable(expectedHutch, runCommand, root);
 	assertEqual(
 		singleLine(
-			run(hutchExecutable, ["cottontail", "version"], repositoryRoot),
+			runCommand(hutchExecutable, ["cottontail", "version"], root),
 			"paired Cottontail version",
 		),
-		expectedCottontail,
+		expectedPairedCottontail,
 		"paired Cottontail release",
 	);
 	const cottontailExecutable = canonicalPath(
-		run(hutchExecutable, ["cottontail", "path"], repositoryRoot),
+		runCommand(hutchExecutable, ["cottontail", "path"], root),
 		"paired Cottontail path",
 	);
 	assertEqual(
 		singleLine(
-			cottontailVersion(cottontailExecutable, repositoryRoot),
+			cottontailVersion(cottontailExecutable, root, runCommand),
 			"Cottontail executable version",
 		),
-		expectedCottontail,
-		"Cottontail executable",
+		expectedPairedCottontail,
+		"paired Cottontail executable",
 	);
 
 	const hutchMetadata = verifyReleaseMetadata({
@@ -323,14 +336,14 @@ export function verifyReleaseToolchain(environment = process.env) {
 	const cottontailMetadata = verifyReleaseMetadata({
 		executable: cottontailExecutable,
 		product: "cottontail",
-		version: expectedCottontail,
-		channel: expectedCottontailChannel,
+		version: expectedPairedCottontail,
+		channel: expectedPairedCottontailChannel,
 	});
-	console.log(
+	log(
 		`Hutch ${expectedHutch}: ${hutchExecutable} (revision ${hutchMetadata.revision}, sha256 ${sha256(hutchExecutable)})`,
 	);
-	console.log(
-		`Cottontail ${expectedCottontail}: ${cottontailExecutable} (revision ${cottontailMetadata.revision}, sha256 ${sha256(cottontailExecutable)})`,
+	log(
+		`Paired Cottontail ${expectedPairedCottontail}: ${cottontailExecutable} (revision ${cottontailMetadata.revision}, sha256 ${sha256(cottontailExecutable)})`,
 	);
 
 	for (const project of projects) {
@@ -338,10 +351,13 @@ export function verifyReleaseToolchain(environment = process.env) {
 			directory: project.directory,
 			expectedHutch,
 			expectedCottontail,
+			runCommand,
+			probePath: join(root, "package", "scripts", "release-runtime-probe.mjs"),
+			log,
 		});
 	}
 
-	console.log("Electrobun release toolchain provenance verified.");
+	log("Electrobun release toolchain provenance verified.");
 }
 
 const invokedPath = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : "";
