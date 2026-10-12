@@ -14,12 +14,12 @@ const success = "PASS: contention=8000000 broadcast=4 idle-queue=1000";
 // Windows ARM runners must exercise both native execution and the x64
 // emulation that exposed the parking handoff failure. Elsewhere use native.
 export function synchronizationTargets({ platform = process.platform, processArch = process.arch,
-  machine: hostMachine = machine(), env = process.env, target } = {}) {
+  machine: hostMachine = machine(), env = process.env, target, queryWindowsArchitecture } = {}) {
   if (platform !== "win32") {
     assert.ok(!target || target === "native", "Non-Windows synchronization tests run the native target");
     return [{ target: "native", arch: processArch }];
   }
-  const host = zigCompilerHostArchitecture({ platform, processArch, machine: hostMachine, env });
+  const host = zigCompilerHostArchitecture({ platform, processArch, machine: hostMachine, env, queryWindowsArchitecture });
   const targets = host === "arm64"
     ? [{ target: "aarch64-windows-gnu", arch: "arm64" }, { target: "x86_64-windows-gnu", arch: "x64" }]
     : [{ target: "x86_64-windows-gnu", arch: "x64" }];
@@ -137,7 +137,9 @@ async function main() {
   } finally {
     report.completedAt = new Date().toISOString();
     await save();
-    if (options.outputDirectory) console.log(`Core synchronization results: ${join(directory, "results.json")}`);
+    // Keep failure evidence even when check:release/test:vm was invoked without
+    // an explicit output directory. Their final summaries omit the root cause.
+    if (options.outputDirectory || report.status === "failed") console.log(`Core synchronization results: ${join(directory, "results.json")}`);
     else {
       // This is only the unique directory created above, never a caller path.
       assert.equal(dirname(resolve(directory)), resolve(tmpdir()));

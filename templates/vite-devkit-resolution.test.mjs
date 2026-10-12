@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parseRepositoryPragmaPins } from "../package/scripts/version-config.mjs";
 
 const templatesRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = dirname(templatesRoot);
@@ -62,6 +63,24 @@ function run(command, args, cwd) {
 	});
 }
 
+function pinFixtureToolchain(project) {
+	// Source templates deliberately have no release pins. A copied test fixture
+	// lives outside the repository, so it must carry the repository's toolchain
+	// pin instead of selecting the user's global Hutch release. Explicit local
+	// launcher/engine overrides retain their existing behavior.
+	if (process.env.HUTCH_BINARY || process.env.HUTCH_ENGINE_BINARY) return;
+	const pins = parseRepositoryPragmaPins(
+		readFileSync(join(repositoryRoot, "package", "hutch.config.ts"), "utf8"),
+	);
+	const configPath = join(project, "hutch.config.ts");
+	const config = readFileSync(configPath, "utf8");
+	assert.doesNotMatch(config, /^\/\/\s*@hutch\b/m, "source templates must remain unpinned");
+	writeFileSync(configPath, `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\n${config}`);
+	const selected = run(hutch, ["--version"], project);
+	assert.equal(selected.status, 0, `fixture Hutch selection failed\n${selected.error || ""}\n${selected.stderr}`);
+	assert.equal(selected.stdout.trim(), pins.hutch, "the fixture must select the repository's pinned Hutch");
+}
+
 test(
 	"a clean Vite template bundles electrobun/view from the projected devkit",
 	{ timeout: 240_000 },
@@ -72,6 +91,7 @@ test(
 			cpSync(join(templatesRoot, "vanilla-vite"), project, {
 				recursive: true,
 			});
+			pinFixtureToolchain(project);
 			assert.equal(existsSync(join(project, "node_modules")), false);
 			assert.equal(
 				existsSync(join(project, ".hutch")),
@@ -212,6 +232,7 @@ test(
 		const project = join(fixture, "app");
 		try {
 			cpSync(join(templatesRoot, "tray-app"), project, { recursive: true });
+			pinFixtureToolchain(project);
 			assert.equal(existsSync(join(project, "hutch.lock")), false);
 			assert.equal(existsSync(join(project, "node_modules")), false);
 

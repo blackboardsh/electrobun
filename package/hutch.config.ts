@@ -44,12 +44,12 @@ export default {
 		"test:views-url-native": "hutch scripts/test-views-url-native.js",
 		"test:core-host-transport": "node --test scripts/core-host-transport.test.mjs",
 		"test:core-synchronization": "node scripts/core-synchronization-stress.mjs",
-		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
+		"test:windows-ui-native": "node --test scripts/windows-msvc-environment.test.mjs && hutch scripts/test-windows-ui-native.js",
 		"test:windows-profile-paths": "node scripts/test-windows-profile-paths.mjs",
 		"test:windows-webview2-window": "node scripts/test-windows-webview2-window.mjs",
 		"test:windows-launcher-identity": "node --test src/launcher/windows_process_identity.integration.test.mjs",
 		"test:windows-threaded-shutdown": "node scripts/test-windows-threaded-shutdown.mjs",
-		"test:windows-release-contract": "node --test scripts/windows-release-validation.test.mjs scripts/webview2-runtime.test.mjs",
+		"test:windows-release-contract": "node --test scripts/windows-release-validation.test.mjs scripts/webview2-runtime.test.mjs scripts/windows-msvc-environment.test.mjs scripts/updater-lifecycle-target.test.mjs",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:installer-ui":
@@ -80,7 +80,7 @@ export default {
 		"test:windows-uninstaller":
 			"node scripts/test-windows-uninstaller.mjs",
 		"test:updater-unit":
-			"node scripts/run-bun-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts",
+			"node scripts/run-bun-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts && node --test scripts/updater-lifecycle-target.test.mjs",
 		"test:updater-lifecycle":
 			"hutch build:release && node scripts/test-updater-lifecycle.mjs",
 		"test:npm-bootstrap":

@@ -86,9 +86,9 @@ describe("Windows Unicode native UI source contract", () => {
 	});
 
 	test("wires native Unicode UI coverage without compiling it off Windows", () => {
-		expect(hutchConfig).toContain(
-			'"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js"',
-		);
+		const task = hutchConfig.match(/"test:windows-ui-native": "([^"\r\n]+)"/)?.[1] ?? "";
+		expect(task).toContain("node --test scripts/windows-msvc-environment.test.mjs");
+		expect(task).toContain("&& hutch scripts/test-windows-ui-native.js");
 		expect(hutchConfig).toContain("hutch test:windows-ui-native");
 		expect(nativeUiTestScript).toContain(
 			'if (process.platform !== "win32")',

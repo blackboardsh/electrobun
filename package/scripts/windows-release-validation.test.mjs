@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
+import { nativeWindowsArchitecture, zigCompilerHostArchitecture } from "./zig-compiler-host.mjs";
 import { synchronizationTargets } from "./core-synchronization-stress.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -23,16 +23,65 @@ test("Windows Zig compiler uses host architecture and rejects a stale emulated v
 });
 
 test("an emulated JS runtime selects the native Windows ARM64 compiler", () => {
+  const noProbe = () => { throw new Error("Native query was unnecessary"); };
   for (const [machine, env] of [
     ["ARM64", {}],
     ["x86_64", { PROCESSOR_ARCHITEW6432: "ARM64", PROCESSOR_ARCHITECTURE: "AMD64" }],
     ["x86_64", { PROCESSOR_ARCHITECTURE: "ARM64" }],
-  ]) assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine, env }), "arm64");
-  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "arm64", machine: "x86_64", env: {} }), "arm64");
-  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine: "AMD64", env: {} }), "x64");
-  assert.equal(zigCompilerHostArchitecture({ platform: "linux", processArch: "x64", machine: "x86_64", env: { PROCESSOR_ARCHITECTURE: "ARM64" } }), "x64");
-  assert.equal(zigCompilerHostArchitecture({ platform: "darwin", processArch: "arm64", machine: "arm64", env: {} }), "arm64");
-  assert.throws(() => zigCompilerHostArchitecture({ platform: "win32", processArch: "ia32", machine: "i686", env: {} }), /Unsupported/);
+  ]) assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine, env, queryWindowsArchitecture: noProbe }), "arm64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "arm64", machine: "x86_64", env: {}, queryWindowsArchitecture: noProbe }), "arm64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "win32", processArch: "x64", machine: "AMD64", env: {}, queryWindowsArchitecture: () => "x64" }), "x64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "linux", processArch: "x64", machine: "x86_64", env: { PROCESSOR_ARCHITECTURE: "ARM64" }, queryWindowsArchitecture: noProbe }), "x64");
+  assert.equal(zigCompilerHostArchitecture({ platform: "darwin", processArch: "arm64", machine: "arm64", env: {}, queryWindowsArchitecture: noProbe }), "arm64");
+  assert.throws(() => zigCompilerHostArchitecture({ platform: "win32", processArch: "ia32", machine: "i686", env: {}, queryWindowsArchitecture: noProbe }), /Unsupported/);
+});
+
+test("x64 runtimes with no ARM hints use the native machine query, independently of the app target", () => {
+  const env = { PROCESSOR_ARCHITECTURE: "AMD64", HUTCH_ELECTROBUN_TARGET_ARCH: "x64" };
+  const host = { platform: "win32", processArch: "x64", machine: "x86_64", env };
+  let queries = 0;
+  assert.equal(zigCompilerHostArchitecture({ ...host, queryWindowsArchitecture(options) {
+    queries++;
+    assert.equal(options.env, env);
+    return "arm64";
+  } }), "arm64");
+  assert.equal(queries, 1);
+  assert.equal(env.HUTCH_ELECTROBUN_TARGET_ARCH, "x64");
+  assert.equal(zigCompilerHostArchitecture({ ...host, queryWindowsArchitecture: () => "x64" }), "x64");
+  assert.throws(() => zigCompilerHostArchitecture({ ...host, queryWindowsArchitecture: () => "ia32" }), /Unsupported native Windows/);
+  assert.throws(() => zigCompilerHostArchitecture({ ...host, queryWindowsArchitecture() { throw new Error("query timeout"); } }), /query timeout/);
+});
+
+test("native Windows query invokes IsWow64Process2 with a hidden bounded process and parses native architecture", () => {
+  for (const [stdout, expected] of [["aa64\r\n", "arm64"], ["8664\n", "x64"], ["AA64\n", "arm64"]]) {
+    assert.equal(nativeWindowsArchitecture({ env: { SystemRoot: "C:\\Windows" }, run(executable, args, options) {
+      assert.equal(executable, "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe");
+      assert.deepEqual(args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-EncodedCommand"]);
+      assert.equal(args.length, 4);
+      const program = Buffer.from(args[3], "base64").toString("utf16le");
+      assert.match(program, /IsWow64Process2\(\[IntPtr\]::new\(-1\), \[ref\]\$processMachine, \[ref\]\$nativeMachine\)/);
+      assert.match(program, /Write-Output \('\{0:x4\}' -f \$nativeMachine\)/);
+      assert.doesNotMatch(program, /GetNativeSystemInfo/);
+      assert.deepEqual(options, { encoding: "utf8", windowsHide: true, timeout: 15_000, maxBuffer: 4096 });
+      return { status: 0, stdout };
+    } }), expected);
+  }
+});
+
+test("native Windows query fails clearly instead of silently selecting an emulated compiler", () => {
+  for (const result of [
+    { status: null, error: { code: "ETIMEDOUT" } },
+    { status: null, error: { code: "ENOENT" } },
+    { status: 1, stdout: "aa64" },
+    { status: null, signal: "SIGTERM" },
+    { status: 0, stdout: "" },
+    { status: 0, stdout: "014c" },
+    { status: 0, stdout: "8664\naa64" },
+    { status: 0, stdout: "aa64 unexpected" },
+  ]) assert.throws(() => nativeWindowsArchitecture({ env: { SystemRoot: "C:\\Windows" }, run: () => result }), /Cannot determine native Windows Zig compiler host/);
+  for (const env of [{}, { SystemRoot: "relative\\Windows" }]) {
+    assert.throws(() => nativeWindowsArchitecture({ env, run() { assert.fail("Invalid path must not spawn a process"); } }), /SystemRoot is not an absolute path/);
+  }
 });
 
 test("Windows launcher gate uses the packaged GUI launcher before artifact publication and cannot skip", () => {
@@ -109,11 +158,12 @@ test("Windows ARM synchronization covers native and emulated binaries even with 
     { processArch: "arm64", machine: "ARM64", env: {} },
     { processArch: "x64", machine: "ARM64", env: {} },
     { processArch: "x64", machine: "AMD64", env: { PROCESSOR_ARCHITEW6432: "ARM64" } },
+    { processArch: "x64", machine: "x86_64", env: { PROCESSOR_ARCHITECTURE: "AMD64" }, queryWindowsArchitecture: () => "arm64" },
   ]) assert.deepEqual(synchronizationTargets({ platform: "win32", ...host }), expected);
 });
 
 test("synchronization targets stay executable on each host and reject incompatible overrides", () => {
-  const windowsX64 = { platform: "win32", processArch: "x64", machine: "AMD64", env: {} };
+  const windowsX64 = { platform: "win32", processArch: "x64", machine: "AMD64", env: {}, queryWindowsArchitecture: () => "x64" };
   assert.deepEqual(synchronizationTargets(windowsX64), [{ target: "x86_64-windows-gnu", arch: "x64" }]);
   assert.throws(() => synchronizationTargets({ ...windowsX64, target: "aarch64-windows-gnu" }), /cannot run/);
   for (const [platform, processArch] of [["linux", "x64"], ["linux", "arm64"], ["darwin", "arm64"]]) {

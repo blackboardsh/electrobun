@@ -25,6 +25,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import { systemTarBinary } from "./windows-tar.mjs";
+import { updaterLifecycleBuildTarget } from "./updater-lifecycle-target.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -98,6 +99,9 @@ assert.equal(
 	true,
 	`local Electrobun devkit is missing at ${devkitRoot}; run hutch build:release first`,
 );
+const fixtureTarget = updaterLifecycleBuildTarget({
+	manifest: readJson(join(devkitRoot, "native-devkit.json")),
+});
 
 const platform = platformAdapter();
 const profile = platform.createProfile(temporaryRoot, identifier);
@@ -440,7 +444,7 @@ function createFixtureProject(projectRoot, builtVersion) {
 
 function buildEnvironment(version, baseUrl) {
 	const environment = {
-		...process.env,
+		...fixtureTarget.environment,
 		HUTCH_ELECTROBUN_DEVKIT_ROOT: devkitRoot,
 		ELECTROBUN_UPDATER_E2E_SDK_VERSION: packageJson.version,
 		ELECTROBUN_UPDATER_E2E_VERSION: version,
@@ -1152,7 +1156,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: false,
 			installerRelaunches: true,
 			updatePlatform: "win",
-			updateArch: process.arch === "arm64" ? "arm64" : "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith(".zip") && name.includes("Setup"),
 			createProfile(root, identifierValue) {
 				const value = commonProfile(root, identifierValue);
@@ -1375,7 +1379,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: true,
 			installerRelaunches: true,
 			updatePlatform: "macos",
-			updateArch: process.arch === "arm64" ? "arm64" : "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith(".dmg"),
 			createProfile(_root, identifierValue) {
 				const home = resolve(homedir());
@@ -1495,7 +1499,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: true,
 			installerRelaunches: true,
 			updatePlatform: "linux",
-			updateArch: process.arch === "arm64" ? "arm64" : "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith("-Setup.tar.gz"),
 			createProfile(root, identifierValue) {
 				const value = commonProfile(root, identifierValue);
@@ -1588,6 +1592,7 @@ function platformAdapter() {
 
 async function main() {
 	console.log(`[updater-e2e] platform=${platform.name} focus=${focus}`);
+	console.log(`[updater-e2e] devkit target=${fixtureTarget.os}-${fixtureTarget.arch}; runner=${process.arch}`);
 	console.log(`[updater-e2e] isolated root=${temporaryRoot}`);
 	await prepareHutch();
 	const baseUrl = await startReleaseServer();
