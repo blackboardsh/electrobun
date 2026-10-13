@@ -2162,7 +2162,11 @@ func runWebviewPageZoomTest() error {
 		if err := state.core.SetWebviewPageZoom(created.webviewID, 1.25); err != nil {
 			return err
 		}
-		time.Sleep(shortWait)
+		// On macOS the getter must serialize with deferred view creation and
+		// the preceding setter, even when called immediately after creation.
+		if runtime.GOOS != "darwin" {
+			time.Sleep(shortWait)
+		}
 		zoom := state.core.GetWebviewPageZoom(created.webviewID)
 		if !approxEq(zoom, 1.25, 0.01) {
 			return fmt.Errorf("unexpected page zoom %v", zoom)
@@ -2327,14 +2331,30 @@ func runNavigationLoadURLTest() error {
 }
 
 func runNavigationLoadHTMLTest() error {
+	resetCallbackState()
 	created, err := createWindowWithHarnessCustom("Go Navigation HTML Test", electrobun.NewRect(100, 100, 640, 420), true, false, "default", electrobun.WindowCallbacks{}, observedHarnessWebviewCallbacks())
 	if err != nil {
 		return err
 	}
-	err = state.core.LoadHTMLInWebview(created.webviewID, "<html><body><h1>Go loadHTML</h1></body></html>")
-	if err == nil {
-		time.Sleep(mediumWait)
-	}
+	// Load immediately: the constructor's initial URL must not overwrite this
+	// request, and the native layer must retain HTML after the SDK frees it.
+	err = func() error {
+		const renderedURL = "views://test-harness/index.html?loadHtml=go-rendered"
+		html := `<html><body><h1>Go loadHTML ✓</h1><script>
+			if (document.querySelector("h1").textContent === "Go loadHTML ✓") {
+				location.href = "` + renderedURL + `";
+			}
+		</script></body></html>`
+		if err := state.core.LoadHTMLInWebview(created.webviewID, html); err != nil {
+			return err
+		}
+		if !waitUntil(3*time.Second, func() bool {
+			return observedWebviewEventContains(created.webviewID, "did-navigate", renderedURL)
+		}) {
+			return fmt.Errorf("loadHTML did not render the supplied document after immediate creation")
+		}
+		return nil
+	}()
 	return finishWithWindow(created.windowID, err)
 }
 

@@ -1087,6 +1087,8 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews =
 @interface WKWebViewImpl : AbstractView
 @property(nonatomic, strong) WKWebView *webView;
 
+- (void)loadURLOnMainThread:(NSString *)urlString;
+
 - (instancetype)initWithWebviewId:(uint32_t)webviewId
                            window:(NSWindow *)window
                               url:(const char *)url
@@ -3198,7 +3200,9 @@ static void schedulePendingResizeDrain() {
 
       // Only load URL if it's provided and no HTML content exists
       if (url && strlen(url) > 0) {
-        [self loadURL:url];
+        // Initialization already owns the main queue. Start this navigation
+        // before any loadURL/loadHTML calls queued immediately after creation.
+        [self loadURLOnMainThread:[NSString stringWithUTF8String:url]];
       }
 
       // associate
@@ -3244,35 +3248,43 @@ static void schedulePendingResizeDrain() {
   NSString *urlNSString =
       (urlString ? [NSString stringWithUTF8String:urlString] : @"");
 
-  // Ensure URL loading happens on the main queue (WKWebView requirement)
+  // Keep public navigation calls in order, including calls from the main
+  // thread interleaved with loadHTML.
   dispatch_async(dispatch_get_main_queue(), ^{
-    if (!self.webView) {
-      NSLog(@"ERROR: WKWebView loadURL called but webview is nil for webview "
-            @"ID: %u",
-            self.webviewId);
-      return;
-    }
-
-    NSURL *url = [NSURL URLWithString:urlNSString];
-    if (!url) {
-      NSLog(@"ERROR: WKWebView loadURL invalid URL for webview ID: %u",
-            self.webviewId);
-      return;
-    }
-    if (url.isFileURL) {
-      NSURL *readAccessURL = [url URLByDeletingLastPathComponent];
-      if (!readAccessURL) {
-        readAccessURL = url;
-      }
-      [self.webView loadFileURL:url allowingReadAccessToURL:readAccessURL];
-    } else {
-      NSURLRequest *request = [NSURLRequest requestWithURL:url];
-      [self.webView loadRequest:request];
-    }
+    [self loadURLOnMainThread:urlNSString];
   });
 }
 
+- (void)loadURLOnMainThread:(NSString *)urlString {
+  if (!self.webView) {
+    NSLog(@"ERROR: WKWebView loadURL called but webview is nil for webview "
+          @"ID: %u",
+          self.webviewId);
+    return;
+  }
+
+  NSURL *url = [NSURL URLWithString:urlString];
+  if (!url) {
+    NSLog(@"ERROR: WKWebView loadURL invalid URL for webview ID: %u",
+          self.webviewId);
+    return;
+  }
+  if (url.isFileURL) {
+    NSURL *readAccessURL = [url URLByDeletingLastPathComponent];
+    if (!readAccessURL) {
+      readAccessURL = url;
+    }
+    [self.webView loadFileURL:url allowingReadAccessToURL:readAccessURL];
+  } else {
+    NSURLRequest *request = [NSURLRequest requestWithURL:url];
+    [self.webView loadRequest:request];
+  }
+}
+
 - (void)loadHTML:(const char *)htmlString {
+  // The caller's FFI buffer may be freed as soon as this method returns.
+  NSString *htmlNSString =
+      (htmlString ? [NSString stringWithUTF8String:htmlString] : @"");
   // Ensure the HTML loading happens on the main queue after webview is
   // initialized
   dispatch_async(dispatch_get_main_queue(), ^{
@@ -3283,10 +3295,8 @@ static void schedulePendingResizeDrain() {
       return;
     }
 
-    NSString *htmlNSString =
-        (htmlString ? [NSString stringWithUTF8String:htmlString] : @"");
     NSLog(@"DEBUG WKWebView: Loading HTML content for webview %u: %.50s...",
-          self.webviewId, htmlString);
+          self.webviewId, htmlNSString.UTF8String);
     [self.webView loadHTMLString:htmlNSString baseURL:nil];
     NSLog(@"DEBUG WKWebView: loadHTMLString completed for webview ID: %u",
           self.webviewId);
@@ -8834,14 +8844,16 @@ extern "C" void webviewSetPageZoom(AbstractView *abstractView,
 
 extern "C" double webviewGetPageZoom(AbstractView *abstractView) {
   __block double zoomLevel = 1.0;
-  if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
-    WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
-    if (wkImpl.webView) {
-      runOnMainThreadSyncVoid(^{
+  // Wait behind pending initialization and zoom changes before checking the
+  // native view. A worker-thread nil check can otherwise return the default.
+  runOnMainThreadSyncVoid(^{
+    if ([abstractView isKindOfClass:[WKWebViewImpl class]]) {
+      WKWebViewImpl *wkImpl = (WKWebViewImpl *)abstractView;
+      if (wkImpl.webView) {
         zoomLevel = wkImpl.webView.pageZoom;
-      });
+      }
     }
-  }
+  });
   return zoomLevel;
 }
 

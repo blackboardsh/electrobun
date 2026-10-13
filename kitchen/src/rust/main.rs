@@ -2771,7 +2771,11 @@ fn run_webview_page_zoom_test() -> Result<(), String> {
         app_state()
             .core
             .set_webview_page_zoom(created.webview_id, 1.25)?;
-        sleep_ms(SHORT_WAIT_MS);
+        // On macOS the getter must serialize with deferred view creation and
+        // the preceding setter, even when called immediately after creation.
+        if std::env::consts::OS != "macos" {
+            sleep_ms(SHORT_WAIT_MS);
+        }
         let zoom = app_state().core.get_webview_page_zoom(created.webview_id);
         if !approx_eq(zoom, 1.25, 0.01) {
             return Err(format!("unexpected page zoom {zoom}"));
@@ -2934,11 +2938,26 @@ fn run_navigation_load_html_test() -> Result<(), String> {
         observed_harness_webview_callbacks(),
     )?;
     let result = (|| {
-        app_state().core.load_html_in_webview(
-            created.webview_id,
-            "<html><body><h1>Rust loadHTML</h1></body></html>",
-        )?;
-        sleep_ms(MEDIUM_WAIT_MS);
+        // Load immediately: the constructor's initial URL must not overwrite
+        // this request, and HTML must survive the SDK's temporary CString.
+        const RENDERED_URL: &str = "views://test-harness/index.html?loadHtml=rust-rendered";
+        let html = format!(
+            r#"<html><body><h1>Rust loadHTML ✓</h1><script>
+                if (document.querySelector("h1").textContent === "Rust loadHTML ✓") {{
+                    location.href = "{RENDERED_URL}";
+                }}
+            </script></body></html>"#
+        );
+        app_state()
+            .core
+            .load_html_in_webview(created.webview_id, &html)?;
+        if !wait_until(3_000, || {
+            observed_webview_event_contains(created.webview_id, "did-navigate", Some(RENDERED_URL))
+        }) {
+            return Err(
+                "loadHTML did not render the supplied document after immediate creation".to_string(),
+            );
+        }
         Ok(())
     })();
     finish_with_window(created.window_id, result)
