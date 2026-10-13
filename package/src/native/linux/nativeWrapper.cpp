@@ -4759,7 +4759,7 @@ public:
         rememberLogicalBounds(initialBounds);
         
         // Store the parameters
-        this->deferredUrl = url ? url : "";
+        this->deferredUrl = url && url[0] ? url : "https://www.wikipedia.org";
         this->deferredX = initialBounds.x;
         this->deferredY = initialBounds.y;
         this->deferredWidth = initialBounds.width;
@@ -4874,6 +4874,11 @@ public:
                 registerOSRClientForWindow(x11win->windowId, this->client);
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
+
+            // Creation is asynchronous: loadURL/loadHTML may have replaced the
+            // initial URL before this callback. Start only the latest request.
+            browser->GetMainFrame()->LoadURL(CefString(this->deferredUrl));
+            this->deferredUrl.clear();
         });
         
         // Set up browser close callback to clear browser reference
@@ -4915,7 +4920,6 @@ public:
         }
         
         // Create the browser with partition-specific request context
-        std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(partition.c_str(), webviewId);
         if (!requestContext) {
             printf("CEF: ERROR - CreateRequestContextForPartition returned null\n");
@@ -4928,7 +4932,9 @@ public:
         extra_info->SetBool("sandbox", isSandboxed);
 
         client->MarkInitialBrowserCreationPending();
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        // Navigate in the creation callback so an initial URL scheduled by CEF
+        // cannot overwrite a loadURL request made while creation was pending.
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, "", browser_settings, extra_info, requestContext);
         
         if (!create_result) {
             client->ResolveInitialBrowserCreationPending();
@@ -5069,25 +5075,22 @@ public:
     
     void loadURL(const char* urlString) override {
         OperationGuard guard;
-        if (!guard.isValid()) return;
+        if (!guard.isValid() || !urlString) return;
         
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
         if (browser) {
             browser->GetMainFrame()->LoadURL(CefString(urlString));
+        } else {
+            deferredUrl = urlString;
         }
     }
     
     void loadHTML(const char* htmlString) override {
-        OperationGuard guard;
-        if (!guard.isValid() || !htmlString) return;
-        
-        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-        if (browser) {
-            // Create a data URI for the HTML content
-            std::string dataUri = "data:text/html;charset=utf-8,";
-            dataUri += htmlString;
-            browser->GetMainFrame()->LoadURL(CefString(dataUri));
-        }
+        if (!htmlString) return;
+        // Use the same pending-navigation path as loadURL during creation.
+        std::string dataUri = "data:text/html;charset=utf-8,";
+        dataUri += htmlString;
+        loadURL(dataUri.c_str());
     }
     
     void goBack() override {
