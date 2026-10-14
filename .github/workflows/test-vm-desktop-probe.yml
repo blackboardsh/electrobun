@@ -123,6 +123,39 @@ jobs:
           if (-not $script:pixelMatches) { throw 'Probe window is not visible on the desktop.' }
           if (-not $script:trayWorks) { throw 'Native tray registration failed.' }
           exit 0
+      - name: Verify scheduled-task temporary directory
+        shell: powershell
+        run: |
+          $outputPath = Join-Path $env:RUNNER_TEMP 'desktop-probe\task-environment.json'
+          $taskName = 'ElectrobunEnvironmentProbe_' + [Guid]::NewGuid().ToString('N')
+          $script = "@{ temp = `$env:TEMP; tmp = `$env:TMP } | ConvertTo-Json | Set-Content -LiteralPath '$outputPath'"
+          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+          try {
+            schtasks.exe /create /tn $taskName /tr "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded" /sc once /st 00:00 /f
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create task.' }
+            $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+            Set-ScheduledTask -TaskName $taskName -Settings $settings | Out-Null
+            schtasks.exe /run /tn $taskName
+            if ($LASTEXITCODE -ne 0) { throw 'Could not start task.' }
+            $deadline = (Get-Date).AddSeconds(30)
+            while (-not (Test-Path $outputPath)) {
+              if ((Get-Date) -gt $deadline) { throw 'Task did not write its environment.' }
+              Start-Sleep -Milliseconds 500
+            }
+            $taskEnv = Get-Content -Raw $outputPath | ConvertFrom-Json
+            $userTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
+            if ([string]::IsNullOrWhiteSpace($userTemp)) {
+              $userTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+            }
+            $userTemp = [Environment]::ExpandEnvironmentVariables($userTemp)
+            Write-Host "Job TEMP=$env:TEMP; RUNNER_TEMP=$env:RUNNER_TEMP"
+            Write-Host "Scheduled task TEMP=$($taskEnv.temp); configured user TEMP=$userTemp"
+            if ([IO.Path]::GetFullPath($taskEnv.temp).TrimEnd('\') -ine [IO.Path]::GetFullPath($userTemp).TrimEnd('\')) {
+              throw 'Configured user TEMP does not match Task Scheduler.'
+            }
+          } finally {
+            schtasks.exe /delete /tn $taskName /f
+          }
       - uses: actions/upload-artifact@v6
         if: always()
         with:
