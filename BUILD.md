@@ -92,6 +92,33 @@ dependencies, and launches its `dev` task with the local Electrobun version and
 bytes. Release publication leaves the repository source unpinned but adds the
 exact release version to the staged template archive.
 
+## Hosted VM test experiment
+
+`.github/workflows/test-vm.yml` runs `hutch test:vm` independently of release
+publication. The experiment runs on pushes to `ci/test-vm-matrix` that change
+the workflow, local actions, package, or Kitchen. It also declares a manual
+trigger for use once the workflow is available on the default branch.
+
+Its runner matrix matches the release build: `macos-14`, `ubuntu-24.04`,
+`ubuntu-24.04-arm`, `windows-2025`, and `windows-11-arm`. Each job builds the
+local devkit and runs all supported Kitchen main processes with system and CEF
+webviews, then the unit/native tests, Kitchen tooling, updater lifecycle, and
+release checks. Existing platform exclusions still apply, including Odin on
+Windows ARM64. Matrix jobs do not fail fast.
+
+Linux runs inside an Xvfb display with an Openbox window manager and a D-Bus
+session. macOS and Windows use their hosted desktop sessions. The workflow
+installs Hutch through the existing repository action; the package pragma
+selects the exact Hutch and Cottontail versions.
+
+Each finished job uploads a `test-vm-<runner>` diagnostic artifact. The
+`electrobun-test-vm-*` directory contains `summary.json` and combined/stdout/
+stderr logs per stage; nested release-check diagnostics are included too.
+Use the first failing stage's log to distinguish a build/setup failure from
+an application assertion or timeout. Launches are skipped if the build stage
+fails, as in local `test:vm` runs. A successful workflow run is required before
+using this experiment as a release gate.
+
 ## Hutch and Cottontail
 
 Canonical Hutch and Cottontail releases are published independently of
