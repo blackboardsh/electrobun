@@ -78,19 +78,27 @@ jobs:
             try {
               $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
               $point = $form.PointToScreen((New-Object System.Drawing.Point 200,150))
-              Write-Host "Probe center pixel: $($bitmap.GetPixel($point.X-$bounds.X, $point.Y-$bounds.Y)) expected R=19 G=201 B=87"
+              $pixel = $bitmap.GetPixel($point.X-$bounds.X, $point.Y-$bounds.Y)
+              $script:pixelMatches = $pixel.R -eq 19 -and $pixel.G -eq 201 -and $pixel.B -eq 87
+              Write-Host "Probe center pixel: $pixel expected R=19 G=201 B=87"
               $bitmap.Save((Join-Path $outputDir "$label.png"))
             } finally {
               $graphics.Dispose(); $bitmap.Dispose(); $icon.Dispose(); $form.Close(); $form.Dispose()
             }
           }
           Inspect-Desktop 'before'
-          if ([DesktopProbe]::WTSGetActiveConsoleSessionId() -ne $runnerSession) {
-            & "$env:WINDIR\System32\tscon.exe" $runnerSession /dest:console
-            Write-Host "tscon exit code: $LASTEXITCODE"
-            Start-Sleep -Seconds 3
+          foreach ($root in @('HKLM:', 'HKCU:')) {
+            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
+            New-Item -Path $policy -Force | Out-Null
+            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
           }
+          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
+          $setupProcesses | Select-Object Id, ProcessName, Path | Format-Table
+          $setupProcesses | Stop-Process -Force
+          Start-Sleep -Seconds 3
           Inspect-Desktop 'after'
+          if (-not $script:pixelMatches) { throw 'Probe window is not visible on the desktop.' }
+          exit 0
       - uses: actions/upload-artifact@v6
         if: always()
         with:
