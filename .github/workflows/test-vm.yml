@@ -38,10 +38,6 @@ jobs:
     timeout-minutes: 330
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      # Keep stage logs in a known location on all three operating systems.
-      TMPDIR: ${{ runner.temp }}
-      TMP: ${{ runner.temp }}
-      TEMP: ${{ runner.temp }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -52,6 +48,12 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: package/package-lock.json
+      - name: Set diagnostics temporary directory
+        shell: bash
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
