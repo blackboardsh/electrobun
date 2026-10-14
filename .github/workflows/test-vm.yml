@@ -61,19 +61,15 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          # Update helpers start through Task Scheduler, which does not inherit
-          # this job's environment. Match its user TEMP so helper validation
-          # sees the same directory as the app that copied the helper.
-          $userTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
-          if ([string]::IsNullOrWhiteSpace($userTemp)) {
-            $userTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+          # Task Scheduler uses the runner's original user TEMP, not RUNNER_TEMP.
+          # Preserve its exact spelling (including an 8.3 username): the native
+          # helper checks its parent against TEMP before resolving physical paths.
+          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
+            throw 'The Windows runner must provide its default user TEMP'
           }
-          $userTemp = [Environment]::ExpandEnvironmentVariables($userTemp)
-          New-Item -ItemType Directory -Force -Path $userTemp | Out-Null
-          "TEMP=$userTemp" >> $env:GITHUB_ENV
-          "TMP=$userTemp" >> $env:GITHUB_ENV
-          "TMPDIR=$userTemp" >> $env:GITHUB_ENV
-          "ELECTROBUN_DIAGNOSTICS_TEMP=$userTemp" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+          "TMPDIR=$env:TEMP" >> $env:GITHUB_ENV
+          "ELECTROBUN_DIAGNOSTICS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
