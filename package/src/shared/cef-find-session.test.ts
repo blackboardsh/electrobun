@@ -38,7 +38,9 @@ function compileAndRunBehaviorProgram() {
 		const vendoredZig = join(import.meta.dirname, "../../vendors/zig/zig.exe");
 		const compiler =
 			process.env["CXX"] ||
-			(process.platform === "win32" && existsSync(vendoredZig)
+			(process.platform === "win32" && process.env["VCToolsInstallDir"]
+				? "cl.exe"
+				: process.platform === "win32" && existsSync(vendoredZig)
 				? vendoredZig
 				: process.platform === "win32"
 					? "cl.exe"

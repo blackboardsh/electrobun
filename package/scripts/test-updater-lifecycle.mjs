@@ -1704,6 +1704,17 @@ try {
 } catch (error) {
 	failure = error;
 	console.error(`[updater-e2e] FAIL: ${error.stack || error}`);
+	// Cleanup removes the fixture tree. Preserve its small event/sentinel files
+	// separately so CI can explain a relaunch failure after uninstalling it.
+	if (existsSync(signalDirectory)) {
+		try {
+			const diagnosticsRoot = mkdtempSync(join(temporaryBase, "updater-lifecycle-e2e-diagnostics-"));
+			cpSync(signalDirectory, join(diagnosticsRoot, "signals"), { recursive: true });
+			console.error(`[updater-e2e] Failure signals: ${diagnosticsRoot}`);
+		} catch (diagnosticError) {
+			console.error(`[updater-e2e] Could not preserve failure signals: ${diagnosticError}`);
+		}
+	}
 } finally {
 	try {
 		await bestEffortCleanup();

@@ -154,6 +154,32 @@ jobs:
             hutch test:vm
           '
 
+      - name: Prepare Windows desktop shell
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class DesktopShell {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string title);
+          }
+          '@
+          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
+          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            Write-Host 'Starting Explorer for notification-area tests.'
+            Start-Process "$env:WINDIR\explorer.exe"
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            if ((Get-Date) -gt $deadline) {
+              throw 'Windows shell notification area is unavailable in the runner session.'
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          Write-Host 'Windows shell notification area is ready.'
+
       - name: Run full VM suite (macOS and Windows desktop)
         timeout-minutes: 300
         if: runner.os != 'Linux'
