@@ -7863,17 +7863,19 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   if (!jsString)
     return;
 
-  CefRefPtr<CefFrame> mainFrame = self.browser->GetMainFrame();
-
-  if (!mainFrame) {
-    NSLog(@"[CEF] Failed to get main frame for JavaScript evaluation");
-    return;
-  }
-
-  // Execute in the main context
-  mainFrame->ExecuteJavaScript(CefString(jsString), mainFrame->GetURL(),
-                               0 // Line number for debugging
-  );
+  // Browser creation runs on the main thread. An RPC message can arrive
+  // before creation finishes, so check readiness on that same thread.
+  // Copy the caller's temporary buffer before crossing the thread boundary.
+  std::string script(jsString);
+  dispatch_async(dispatch_get_main_queue(), ^{
+    CefRefPtr<CefBrowser> browser = self.browser;
+    if (!browser)
+      return;
+    CefRefPtr<CefFrame> mainFrame = browser->GetMainFrame();
+    if (!mainFrame)
+      return;
+    mainFrame->ExecuteJavaScript(CefString(script), mainFrame->GetURL(), 0);
+  });
 }
 
 - (void)callAsyncJavascript:(const char *)messageId
