@@ -60,7 +60,7 @@ jobs:
 
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      EXPECTED_HUTCH_VERSION: '0.28.0-canary.9'
+      EXPECTED_HUTCH_VERSION: '0.28.0-canary.10'
       # Track the compiled pair explicitly; the published template catalog must match it.
       EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.2-canary.7'
       EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.7'
