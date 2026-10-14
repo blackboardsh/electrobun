@@ -176,8 +176,28 @@ jobs:
 
       - name: Prepare Windows desktop shell
         if: runner.os == 'Windows'
-        shell: pwsh
+        shell: powershell
         run: |
+          # Windows ARM images can leave first-sign-in privacy setup covering
+          # all app windows and blocking Shell_NotifyIcon, even with Explorer
+          # running. Suppress that experience on this disposable CI machine.
+          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
+          foreach ($root in @('HKLM:', 'HKCU:')) {
+            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
+            New-Item -Path $policy -Force | Out-Null
+            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+          }
+          $runnerSession = (Get-Process -Id $PID).SessionId
+          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
+          if ($setupProcesses) {
+            $setupProcesses | Stop-Process -Force
+            Start-Sleep -Seconds 3
+          }
+          # First-login setup can leave a Start menu flyout covering the apps.
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Seconds 1
           Add-Type @'
           using System;
           using System.Runtime.InteropServices;
