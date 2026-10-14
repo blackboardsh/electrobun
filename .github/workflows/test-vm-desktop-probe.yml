@@ -33,6 +33,7 @@ jobs:
             [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool GetUserObjectInformation(IntPtr h, int index, StringBuilder data, int length, out int needed);
             [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
           }
+          '@
           $outputDir = Join-Path $env:RUNNER_TEMP 'desktop-probe'
           New-Item -ItemType Directory -Force $outputDir | Out-Null
           $runnerSession = (Get-Process -Id $PID).SessionId
