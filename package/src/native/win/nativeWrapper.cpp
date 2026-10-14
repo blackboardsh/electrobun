@@ -11140,7 +11140,9 @@ ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
     return emptyString;
 }
 
-ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+// These exports use C++ bool to match the core and SDK FFI declarations.
+// Win32 BOOL reads four bytes; a bool caller only guarantees the low byte.
+ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, bool transparent) {
     if (abstractView) {
         // UI operations must be performed on the main thread
         dispatchWebviewOperation(abstractView, [transparent](AbstractView* abstractView) {
@@ -11149,7 +11151,7 @@ ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL tr
     }
 }
 
-ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, bool enablePassthrough) {
     if (abstractView) {
         // UI operations must be performed on the main thread
         dispatchWebviewOperation(abstractView, [enablePassthrough](AbstractView* abstractView) {
@@ -11158,7 +11160,7 @@ ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL en
     }
 }
 
-ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
+ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, bool hidden) {
     if (abstractView) {
         // UI operations must be performed on the main thread
         dispatchWebviewOperation(abstractView, [hidden](AbstractView* abstractView) {
