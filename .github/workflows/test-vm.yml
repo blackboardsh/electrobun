@@ -133,7 +133,7 @@ jobs:
             build-essential \
             cmake \
             pkg-config \
-            xvfb xauth openbox dbus-x11 mesa-utils
+            xvfb xauth openbox dbus-x11 mesa-utils mesa-vulkan-drivers vulkan-tools
 
       - name: Install dependencies
         working-directory: package
@@ -151,6 +151,7 @@ jobs:
         run: |
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
             openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            vulkaninfo --summary
             hutch test:vm
           '
 

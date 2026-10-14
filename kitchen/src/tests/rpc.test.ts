@@ -339,14 +339,18 @@ export const rpcTests = [
         (_, index) => `${index}:${scripts}\n`,
       ).join("");
 
+      log("Checking native RPC readiness with a short Unicode echo");
+      expect(await webviewRpc.request.echoFromHost({ value: scripts })).toBe(scripts);
       for (let round = 0; round < 3; round++) {
         // Leave the transport idle between requests. This is safe to automate
         // while still exercising the resume-sensitive native transport path.
         await sleep(250);
+        log(`Native Unicode round ${round + 1}: sending ${boundaryPayload.length} UTF-16 code units`);
         const result = await webviewRpc.request.echoFromHost({
           value: `${round}:${boundaryPayload}`,
         });
         expect(result).toBe(`${round}:${boundaryPayload}`);
+        log(`Native Unicode round ${round + 1}: exact echo received`);
       }
 
       log(

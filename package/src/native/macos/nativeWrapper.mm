@@ -8047,12 +8047,17 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   }
 }
 - (void)finishFullscreenTransitionForWindow:(NSWindow *)window {
-  self.fullscreenTransitioning = NO;
-  if (self.hasPendingFullscreenTarget) {
-    BOOL target = self.pendingFullscreenTarget;
-    self.hasPendingFullscreenTarget = NO;
-    [self requestFullscreen:target forWindow:window];
-  }
+  // AppKit is still unwinding the transition when it invokes the delegate.
+  // A reversal from inside that callback can still be rejected; let the
+  // notification return before draining the latest requested target.
+  dispatch_async(dispatch_get_main_queue(), ^{
+    self.fullscreenTransitioning = NO;
+    if (self.hasPendingFullscreenTarget) {
+      BOOL target = self.pendingFullscreenTarget;
+      self.hasPendingFullscreenTarget = NO;
+      [self requestFullscreen:target forWindow:window];
+    }
+  });
 }
 - (void)windowWillEnterFullScreen:(NSNotification *)notification {
   self.fullscreenTransitioning = YES;
