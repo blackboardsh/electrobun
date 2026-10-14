@@ -24,6 +24,22 @@ jobs:
           using System.Runtime.InteropServices;
           using System.Text;
           public static class DesktopProbe {
+            [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
+            public struct NotifyIconData {
+              public uint size; public IntPtr hwnd; public uint id; public uint flags; public uint callback; public IntPtr icon;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=128)] public string tip;
+              public uint state; public uint mask;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=256)] public string info;
+              public uint version;
+              [MarshalAs(UnmanagedType.ByValTStr, SizeConst=64)] public string title;
+              public uint infoFlags; public Guid guid; public IntPtr balloon;
+            }
+            [DllImport("shell32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool Shell_NotifyIcon(uint message, ref NotifyIconData data);
+            public static bool TestTray(IntPtr hwnd, IntPtr icon) {
+              var data = new NotifyIconData(); data.size=(uint)Marshal.SizeOf(typeof(NotifyIconData));
+              data.hwnd=hwnd; data.id=4242; data.flags=7; data.callback=1025; data.icon=icon; data.tip="Electrobun native tray probe";
+              bool added=Shell_NotifyIcon(0, ref data); if(added) Shell_NotifyIcon(2, ref data); return added;
+            }
             [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
             [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
             [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder text, int count);
@@ -67,6 +83,8 @@ jobs:
             $form.TopMost = $true
             $form.Show()
             $form.Activate()
+            $script:trayWorks = [DesktopProbe]::TestTray($form.Handle, [System.Drawing.SystemIcons]::Application.Handle)
+            Write-Host "Native tray registration: $script:trayWorks"
             $icon = New-Object System.Windows.Forms.NotifyIcon
             $icon.Icon = [System.Drawing.SystemIcons]::Application
             $icon.Text = 'Electrobun desktop probe'
@@ -96,8 +114,14 @@ jobs:
           $setupProcesses | Select-Object Id, ProcessName, Path | Format-Table
           $setupProcesses | Stop-Process -Force
           Start-Sleep -Seconds 3
+          # Dismissing first-login setup can leave the Start menu open above
+          # topmost application windows. Close that shell flyout before testing.
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Seconds 1
           Inspect-Desktop 'after'
           if (-not $script:pixelMatches) { throw 'Probe window is not visible on the desktop.' }
+          if (-not $script:trayWorks) { throw 'Native tray registration failed.' }
           exit 0
       - uses: actions/upload-artifact@v6
         if: always()
