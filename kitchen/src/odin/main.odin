@@ -5046,6 +5046,7 @@ executeSingleTestAndBroadcast :: proc(webview_id: u32, odin_test: OdinTest) -> T
 
 	result := runOdinTest(odin_test)
 	if message, has_error := result.error.?; has_error {
+		fmt.eprintf("[kitchen odin] failed test: %s: %s\n", odin_test.name, message)
 		sendTestLog(webview_id, odin_test.id, message)
 	}
 

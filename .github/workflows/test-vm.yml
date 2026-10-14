@@ -15,7 +15,8 @@ permissions:
 
 concurrency:
   group: test-vm-${{ github.ref }}
-  cancel-in-progress: true
+  # Preserve diagnostics from every started matrix while iterating on failures.
+  cancel-in-progress: false
 
 jobs:
   test:

@@ -2,7 +2,7 @@
 
 import { defineTest, expect, sleep } from "../test-framework/types";
 import { Utils } from "electrobun/main";
-import { mkdtemp, writeFile, access } from "fs/promises";
+import { mkdir, mkdtemp, writeFile, access } from "fs/promises";
 import { homedir, tmpdir } from "os";
 import { join } from "path";
 
@@ -120,6 +120,7 @@ export const utilsTests = [
     async run({ log }) {
       // Use the app's data filesystem: Linux does not support trashing files
       // from system-internal mounts such as /tmp.
+      await mkdir(Utils.paths.userData, { recursive: true });
       const tempDir = await mkdtemp(
         join(Utils.paths.userData, "electrobun-test-"),
       );

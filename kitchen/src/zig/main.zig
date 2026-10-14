@@ -4114,6 +4114,7 @@ fn executeSingleTestAndBroadcast(webview_id: u32, zig_test: ZigTest) TestResult 
 
     const result = runZigTest(zig_test);
     if (result.@"error") |message| {
+        std.debug.print("[kitchen zig] failed test: {s}: {s}\n", .{ zig_test.name, message });
         sendTestLog(webview_id, zig_test.id, message);
     }
 

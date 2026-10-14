@@ -288,8 +288,11 @@ testRunnerWindow = new BrowserWindow({
 	rpc: testRunnerRPC,
 });
 
-// Keep test runner on top so results are visible while tests run
-testRunnerWindow.setAlwaysOnTop(true);
+// Keep interactive results visible, but let automated test windows become
+// unobscured. Covering them throttles browser timers and animation frames.
+if (!process.env["AUTO_RUN"] && !process.env["AUTO_RUN_TEST_NAME"]) {
+	testRunnerWindow.setAlwaysOnTop(true);
+}
 
 // Send build config and update status to the UI when ready
 testRunnerWindow.webview.on("dom-ready", () => {

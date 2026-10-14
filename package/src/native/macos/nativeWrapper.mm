@@ -1139,6 +1139,11 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews =
 @property(nonatomic, assign) uint32_t windowId;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, assign) BOOL hasCustomButtonPosition;
+@property(nonatomic, assign) BOOL fullscreenTransitioning;
+@property(nonatomic, assign) BOOL hasPendingFullscreenTarget;
+@property(nonatomic, assign) BOOL pendingFullscreenTarget;
+- (void)requestFullscreen:(BOOL)fullscreen forWindow:(NSWindow *)window;
+- (void)finishFullscreenTransitionForWindow:(NSWindow *)window;
 @property(nonatomic, assign) double buttonPositionX;
 @property(nonatomic, assign) double buttonPositionY;
 @end
@@ -8028,6 +8033,39 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
 @end
 
 @implementation WindowDelegate
+- (void)requestFullscreen:(BOOL)fullscreen forWindow:(NSWindow *)window {
+  if (self.fullscreenTransitioning) {
+    self.hasPendingFullscreenTarget = YES;
+    self.pendingFullscreenTarget = fullscreen;
+    return;
+  }
+  BOOL current = (window.styleMask & NSWindowStyleMaskFullScreen) != 0;
+  if (current != fullscreen) {
+    [window toggleFullScreen:nil];
+  }
+}
+- (void)finishFullscreenTransitionForWindow:(NSWindow *)window {
+  self.fullscreenTransitioning = NO;
+  if (self.hasPendingFullscreenTarget) {
+    BOOL target = self.pendingFullscreenTarget;
+    self.hasPendingFullscreenTarget = NO;
+    [self requestFullscreen:target forWindow:window];
+  }
+}
+- (void)windowWillEnterFullScreen:(NSNotification *)notification {
+  self.fullscreenTransitioning = YES;
+}
+- (void)windowDidEnterFullScreen:(NSNotification *)notification {
+  [self finishFullscreenTransitionForWindow:notification.object];
+}
+- (void)windowDidFailToEnterFullScreen:(NSWindow *)window {
+  self.fullscreenTransitioning = NO;
+  self.hasPendingFullscreenTarget = NO;
+}
+- (void)windowDidFailToExitFullScreen:(NSWindow *)window {
+  self.fullscreenTransitioning = NO;
+  self.hasPendingFullscreenTarget = NO;
+}
 - (BOOL)windowShouldClose:(NSWindow *)sender {
   if (self.shouldCloseHandler) {
     self.shouldCloseHandler(self.windowId);
@@ -8036,6 +8074,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   return YES;
 }
 - (void)windowWillClose:(NSNotification *)notification {
+  self.hasPendingFullscreenTarget = NO;
   NSWindow *window = [notification object];
   if (self.closeHandler) {
     self.closeHandler(self.windowId);
@@ -8074,6 +8113,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   }
 }
 - (void)windowWillExitFullScreen:(NSNotification *)notification {
+  self.fullscreenTransitioning = YES;
   if (self.hasCustomButtonPosition) {
     NSWindow *window = [notification object];
     [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
@@ -8092,6 +8132,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   } else {
     applyTrafficLightOffsetFromDefault(window);
   }
+  [self finishFullscreenTransitionForWindow:window];
 }
 - (void)windowDidMove:(NSNotification *)notification {
   if (self.moveHandler) {
@@ -9110,11 +9151,11 @@ extern "C" bool isWindowMaximized(NSWindow *window) {
 
 extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
   runOnMainThreadSyncVoid(^{
-    bool isCurrentlyFullScreen =
-        ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
-    if (fullScreen != isCurrentlyFullScreen) {
-      [window toggleFullScreen:nil];
-    }
+    // The style mask changes before AppKit finishes the Space animation.
+    // Queue a reversal until the delegate reports completion; toggling during
+    // that animation can otherwise be ignored with "not in fullscreen state".
+    WindowDelegate *delegate = (WindowDelegate *)window.delegate;
+    [delegate requestFullscreen:fullScreen forWindow:window];
   });
 }
 
