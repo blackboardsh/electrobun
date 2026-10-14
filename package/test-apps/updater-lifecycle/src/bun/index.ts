@@ -61,6 +61,10 @@ const reconciledComplete = new Promise<UpdateStatusEntry>((resolvePromise) => {
 
 const recordStatus = (entry: UpdateStatusEntry) => {
 	appendEvent("updater-status", runningVersion, entry);
+	if (entry.status === "error") {
+		fail(new Error(`Updater reported failure: ${entry.message}`), runningVersion);
+		return;
+	}
 	if (entry.status === "complete") resolveReconciledComplete?.(entry);
 };
 

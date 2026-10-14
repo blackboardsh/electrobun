@@ -50,11 +50,30 @@ jobs:
           cache: npm
           cache-dependency-path: package/package-lock.json
       - name: Set diagnostics temporary directory
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "ELECTROBUN_DIAGNOSTICS_TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - name: Use the scheduled-task user temporary directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Update helpers start through Task Scheduler, which does not inherit
+          # this job's environment. Match its user TEMP so helper validation
+          # sees the same directory as the app that copied the helper.
+          $userTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
+          if ([string]::IsNullOrWhiteSpace($userTemp)) {
+            $userTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
+          }
+          $userTemp = [Environment]::ExpandEnvironmentVariables($userTemp)
+          New-Item -ItemType Directory -Force -Path $userTemp | Out-Null
+          "TEMP=$userTemp" >> $env:GITHUB_ENV
+          "TMP=$userTemp" >> $env:GITHUB_ENV
+          "TMPDIR=$userTemp" >> $env:GITHUB_ENV
+          "ELECTROBUN_DIAGNOSTICS_TEMP=$userTemp" >> $env:GITHUB_ENV
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
@@ -196,9 +215,9 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
           path: |
-            ${{ runner.temp }}/electrobun-test-vm-*/**
-            ${{ runner.temp }}/electrobun-check-release-*/**
-            ${{ runner.temp }}/electrobun-core-sync-*/**
-            ${{ runner.temp }}/updater-lifecycle-e2e-*/signals/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-test-vm-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-check-release-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
             ${{ runner.temp }}/openbox.log
             kitchen/test-results/**
