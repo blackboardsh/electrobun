@@ -1,4 +1,4 @@
-name: Windows ARM desktop probe
+name: Windows desktop probe
 
 on:
   push:
@@ -11,7 +11,11 @@ permissions:
 
 jobs:
   probe:
-    runs-on: windows-11-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-2025, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     steps:
       - name: Inspect desktop and console attachment
@@ -144,15 +148,10 @@ jobs:
               Start-Sleep -Milliseconds 500
             }
             $taskEnv = Get-Content -Raw $outputPath | ConvertFrom-Json
-            $userTemp = [Environment]::GetEnvironmentVariable('TEMP', 'User')
-            if ([string]::IsNullOrWhiteSpace($userTemp)) {
-              $userTemp = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) 'Temp'
-            }
-            $userTemp = [Environment]::ExpandEnvironmentVariables($userTemp)
             Write-Host "Job TEMP=$env:TEMP; RUNNER_TEMP=$env:RUNNER_TEMP"
-            Write-Host "Scheduled task TEMP=$($taskEnv.temp); configured user TEMP=$userTemp"
-            if ([IO.Path]::GetFullPath($taskEnv.temp).TrimEnd('\') -ine [IO.Path]::GetFullPath($userTemp).TrimEnd('\')) {
-              throw 'Configured user TEMP does not match Task Scheduler.'
+            Write-Host "Scheduled task TEMP=$($taskEnv.temp)"
+            if ($taskEnv.temp.TrimEnd('\') -ine $env:TEMP.TrimEnd('\')) {
+              throw 'Original runner TEMP spelling does not match Task Scheduler.'
             }
           } finally {
             schtasks.exe /delete /tn $taskName /f
@@ -160,5 +159,5 @@ jobs:
       - uses: actions/upload-artifact@v6
         if: always()
         with:
-          name: windows-arm-desktop-probe
+          name: desktop-probe-${{ matrix.runner }}
           path: ${{ runner.temp }}/desktop-probe/**
