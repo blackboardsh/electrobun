@@ -1,0 +1,167 @@
+name: VM test matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/test-vm-matrix]
+    paths:
+      - '.github/workflows/test-vm.yml'
+      - '.github/actions/**'
+      - 'package/**'
+      - 'kitchen/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-vm-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test:vm (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: ubuntu-24.04
+            arch: x64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 330
+    env:
+      ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
+      # Keep stage logs in a known location on all three operating systems.
+      TMPDIR: ${{ runner.temp }}
+      TMP: ${{ runner.temp }}
+      TEMP: ${{ runner.temp }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove large preinstalled software we don't need
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Keep the selected Xcode, but remove the other full Xcode installs
+          # preloaded on GitHub's macOS image. Kitchen only needs the selected
+          # macOS SDK and its multiple signed bundles otherwise exhaust the
+          # runner disk while hdiutil creates the final image.
+          selected_xcode_root="$(cd "$(xcode-select -p)/../.." && pwd -P)"
+          case "$selected_xcode_root" in
+            /Applications/Xcode*.app) ;;
+            *)
+              echo "Refusing to remove Xcode installs: unexpected selected Xcode root: $selected_xcode_root" >&2
+              exit 1
+              ;;
+          esac
+          echo "Preserving selected Xcode: $selected_xcode_root"
+          for xcode_root in /Applications/Xcode_*.app; do
+            [[ -d "$xcode_root" && ! -L "$xcode_root" ]] || continue
+            resolved_xcode_root="$(cd "$xcode_root" && pwd -P)"
+            case "$resolved_xcode_root" in
+              /Applications/Xcode_*.app) ;;
+              *)
+                echo "Refusing to remove unexpected Xcode root: $resolved_xcode_root" >&2
+                exit 1
+                ;;
+            esac
+            if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then
+              echo "Removing unused Xcode: $resolved_xcode_root"
+              sudo rm -rf "$resolved_xcode_root"
+            fi
+          done
+          # Remove Xcode caches and simulators to free space.
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
+          rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
+          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+          # Clear common caches.
+          rm -rf "$HOME/Library/Caches" || true
+          rm -rf "$HOME/Library/Logs" || true
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libpipewire-0.3-dev \
+            build-essential \
+            cmake \
+            pkg-config \
+            xvfb xauth openbox dbus-x11 mesa-utils
+
+      - name: Install dependencies
+        working-directory: package
+        run: hutch run install
+
+      - name: Run full VM suite (Linux desktop)
+        if: runner.os == 'Linux'
+        working-directory: package
+        shell: bash
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
+            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            hutch test:vm
+          '
+
+      - name: Run full VM suite (macOS and Windows desktop)
+        if: runner.os != 'Linux'
+        working-directory: package
+        run: hutch test:vm
+
+      - name: Upload test diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-vm-${{ matrix.runner }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/electrobun-test-vm-*/**
+            ${{ runner.temp }}/electrobun-check-release-*/**
+            ${{ runner.temp }}/electrobun-core-sync-*/**
+            ${{ runner.temp }}/updater-lifecycle-e2e-*/signals/**
+            ${{ runner.temp }}/openbox.log
+            kitchen/test-results/**
