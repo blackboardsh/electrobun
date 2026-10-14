@@ -1,0 +1,97 @@
+name: Windows ARM desktop probe
+
+on:
+  push:
+    branches: [ci/test-vm-desktop-probe]
+    paths: ['.github/workflows/test-vm-desktop-probe.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - name: Inspect desktop and console attachment
+        shell: powershell
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -AssemblyName System.Drawing
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          using System.Text;
+          public static class DesktopProbe {
+            [DllImport("kernel32.dll")] public static extern uint WTSGetActiveConsoleSessionId();
+            [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder text, int count);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string name, string title);
+            [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint process);
+            [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr OpenInputDesktop(uint flags, bool inherit, uint access);
+            [DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)] public static extern bool GetUserObjectInformation(IntPtr h, int index, StringBuilder data, int length, out int needed);
+            [DllImport("user32.dll")] public static extern bool CloseDesktop(IntPtr h);
+          }
+          $outputDir = Join-Path $env:RUNNER_TEMP 'desktop-probe'
+          New-Item -ItemType Directory -Force $outputDir | Out-Null
+          $runnerSession = (Get-Process -Id $PID).SessionId
+          function Inspect-Desktop([string]$label) {
+            $console = [DesktopProbe]::WTSGetActiveConsoleSessionId()
+            Write-Host "$label runner session=$runnerSession console session=$console"
+            query session
+            Get-Process explorer -ErrorAction SilentlyContinue | Select-Object Id, SessionId, ProcessName | Format-Table
+            $foreground = [DesktopProbe]::GetForegroundWindow()
+            $title = New-Object System.Text.StringBuilder 512
+            [void][DesktopProbe]::GetWindowText($foreground, $title, 512)
+            Write-Host "Foreground: $foreground $title"
+            $desktop = [DesktopProbe]::OpenInputDesktop(0, $false, 1)
+            $desktopName = New-Object System.Text.StringBuilder 512
+            $needed = 0
+            if ($desktop -ne [IntPtr]::Zero) {
+              [void][DesktopProbe]::GetUserObjectInformation($desktop, 2, $desktopName, 1024, [ref]$needed)
+              [void][DesktopProbe]::CloseDesktop($desktop)
+            }
+            Write-Host "Input desktop: $desktopName; error=$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+            $tray = [DesktopProbe]::FindWindow('Shell_TrayWnd', $null)
+            [uint32]$trayPid = 0
+            [void][DesktopProbe]::GetWindowThreadProcessId($tray, [ref]$trayPid)
+            Write-Host "Tray HWND=$tray process=$trayPid"
+            $form = New-Object System.Windows.Forms.Form
+            $form.Text = 'Electrobun desktop probe'
+            $form.StartPosition = 'Manual'
+            $form.Location = New-Object System.Drawing.Point 100,100
+            $form.ClientSize = New-Object System.Drawing.Size 400,300
+            $form.BackColor = [System.Drawing.Color]::FromArgb(19,201,87)
+            $form.TopMost = $true
+            $form.Show()
+            $form.Activate()
+            $icon = New-Object System.Windows.Forms.NotifyIcon
+            $icon.Icon = [System.Drawing.SystemIcons]::Application
+            $icon.Text = 'Electrobun desktop probe'
+            $icon.Visible = $true
+            for ($i=0; $i -lt 30; $i++) { [System.Windows.Forms.Application]::DoEvents(); Start-Sleep -Milliseconds 100 }
+            $bounds = [System.Windows.Forms.SystemInformation]::VirtualScreen
+            $bitmap = New-Object System.Drawing.Bitmap $bounds.Width,$bounds.Height
+            $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+            try {
+              $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+              $point = $form.PointToScreen((New-Object System.Drawing.Point 200,150))
+              Write-Host "Probe center pixel: $($bitmap.GetPixel($point.X-$bounds.X, $point.Y-$bounds.Y)) expected R=19 G=201 B=87"
+              $bitmap.Save((Join-Path $outputDir "$label.png"))
+            } finally {
+              $graphics.Dispose(); $bitmap.Dispose(); $icon.Dispose(); $form.Close(); $form.Dispose()
+            }
+          }
+          Inspect-Desktop 'before'
+          if ([DesktopProbe]::WTSGetActiveConsoleSessionId() -ne $runnerSession) {
+            & "$env:WINDIR\System32\tscon.exe" $runnerSession /dest:console
+            Write-Host "tscon exit code: $LASTEXITCODE"
+            Start-Sleep -Seconds 3
+          }
+          Inspect-Desktop 'after'
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: windows-arm-desktop-probe
+          path: ${{ runner.temp }}/desktop-probe/**
