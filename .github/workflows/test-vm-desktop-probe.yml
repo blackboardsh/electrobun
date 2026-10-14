@@ -129,9 +129,10 @@ jobs:
           $outputPath = Join-Path $env:RUNNER_TEMP 'desktop-probe\task-environment.json'
           $taskName = 'ElectrobunEnvironmentProbe_' + [Guid]::NewGuid().ToString('N')
           $script = "@{ temp = `$env:TEMP; tmp = `$env:TMP } | ConvertTo-Json | Set-Content -LiteralPath '$outputPath'"
-          $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
+          $scriptPath = Join-Path $env:RUNNER_TEMP 'task-env.ps1'
+          Set-Content -LiteralPath $scriptPath -Value $script
           try {
-            schtasks.exe /create /tn $taskName /tr "powershell.exe -NoProfile -NonInteractive -EncodedCommand $encoded" /sc once /st 00:00 /f
+            schtasks.exe /create /tn $taskName /tr "powershell.exe -NoProfile -NonInteractive -File $scriptPath" /sc once /st 00:00 /f
             if ($LASTEXITCODE -ne 0) { throw 'Could not create task.' }
             $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
             Set-ScheduledTask -TaskName $taskName -Settings $settings | Out-Null
