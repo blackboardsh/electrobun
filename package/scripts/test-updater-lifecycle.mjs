@@ -361,9 +361,28 @@ function assertLauncherHealthy(description) {
 	}
 }
 
+async function logWindowsUpdateDiagnostics(description) {
+	if (process.platform !== "win32" || process.env.ELECTROBUN_UPDATER_E2E_DIAGNOSTICS !== "1") return;
+	try {
+		console.log(`[updater-e2e] ${description}; app TEMP=${profile.environment.TEMP}; relaunch limit=${relaunchTimeoutMs}ms`);
+		await run("powershell.exe", [
+			"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+			"-File", join(packageRoot, "scripts", "updater-windows-diagnostics.ps1"),
+			"-ChannelRoot", channelRoot,
+		], { timeout: 20_000, echo: true, label: "Windows updater task/process snapshot" });
+	} catch (error) {
+		console.error(`[updater-e2e] Diagnostic snapshot failed: ${error.message}`);
+	}
+}
+
 async function waitFor(description, predicate, limit = timeoutMs) {
 	const deadline = Date.now() + limit;
+	let nextDiagnostic = Date.now() + 30_000;
 	while (Date.now() < deadline) {
+		if (description.includes("relaunch") && Date.now() >= nextDiagnostic) {
+			await logWindowsUpdateDiagnostics(`Waiting for ${description}`);
+			nextDiagnostic = Date.now() + 60_000;
+		}
 		assertLauncherHealthy(description);
 		if (pathExists(failurePath)) {
 			throw new Error(
@@ -1714,6 +1733,7 @@ try {
 	);
 } catch (error) {
 	failure = error;
+	await logWindowsUpdateDiagnostics("Failure before cleanup");
 	console.error(`[updater-e2e] FAIL: ${error.stack || error}`);
 	// Cleanup removes the fixture tree. Preserve its small event/sentinel files
 	// separately so CI can explain a relaunch failure after uninstalling it.

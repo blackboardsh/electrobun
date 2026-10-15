@@ -1,0 +1,146 @@
+name: Windows updater lifecycle
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ci/test-updater-windows]
+    paths:
+      - '.github/workflows/test-updater-windows.yml'
+      - '.github/actions/**'
+      - 'package/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: updater-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  updater:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
+      ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS: '900000'
+      ELECTROBUN_UPDATER_E2E_DIAGNOSTICS: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
+      - name: Preserve scheduled-task user temporary directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Scheduled helpers validate against the original user TEMP spelling.
+          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
+            throw 'The Windows runner must provide its default user TEMP'
+          }
+          "ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
+      - name: Set diagnostics temporary directory
+        shell: bash
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "ELECTROBUN_DIAGNOSTICS_TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Prepare Windows desktop shell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Windows ARM images can leave first-sign-in privacy setup covering
+          # all app windows and blocking Shell_NotifyIcon, even with Explorer
+          # running. Suppress that experience on this disposable CI machine.
+          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
+          foreach ($root in @('HKLM:', 'HKCU:')) {
+            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
+            New-Item -Path $policy -Force | Out-Null
+            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+          }
+          $runnerSession = (Get-Process -Id $PID).SessionId
+          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
+          if ($setupProcesses) {
+            $setupProcesses | Stop-Process -Force
+            Start-Sleep -Seconds 3
+          }
+          # First-login setup can leave a Start menu flyout covering the apps.
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Seconds 1
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class DesktopShell {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string title);
+          }
+          '@
+          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
+          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            Write-Host 'Starting Explorer for notification-area tests.'
+            Start-Process "$env:WINDIR\explorer.exe"
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            if ((Get-Date) -gt $deadline) {
+              throw 'Windows shell notification area is unavailable in the runner session.'
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          Write-Host 'Windows shell notification area is ready.'
+
+      - name: Install dependencies
+        working-directory: package
+        run: hutch run install
+      - name: Enable Task Scheduler history
+        shell: powershell
+        run: |
+          wevtutil.exe sl Microsoft-Windows-TaskScheduler/Operational /e:true
+          if ($LASTEXITCODE -ne 0) { throw 'Could not enable Task Scheduler history' }
+      - name: Build and test updater lifecycle
+        working-directory: package
+        shell: pwsh
+        run: |
+          hutch test:updater-lifecycle 2>&1 | Tee-Object -FilePath "$env:RUNNER_TEMP/updater-lifecycle.log"
+          exit $LASTEXITCODE
+      - name: Collect Task Scheduler history
+        if: always()
+        shell: powershell
+        run: |
+          Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-TaskScheduler/Operational'; StartTime=(Get-Date).AddHours(-2)} -ErrorAction SilentlyContinue |
+            Where-Object { $_.Message -match 'ApplicationUpdate_' } |
+            Select-Object TimeCreated, Id, LevelDisplayName, Message |
+            ConvertTo-Json -Depth 4 | Set-Content "$env:RUNNER_TEMP/updater-task-history.json"
+      - name: Upload updater diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: updater-${{ matrix.runner }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/updater-lifecycle.log
+            ${{ runner.temp }}/updater-task-history.json
+            ${{ runner.temp }}/updater-lifecycle-e2e-diagnostics-*/**
