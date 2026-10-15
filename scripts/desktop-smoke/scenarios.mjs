@@ -16,9 +16,9 @@ export const templateScenarios = [
     { move: [0.3, 0.5], expectChange: true },
     { move: [0.6, 0.7], expectChange: true },
   ] },
-  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Generate', actions: [
-    { click: 'Generate', expectChange: true, settle: 3 },
-    { click: 'Solve', expectChange: true, settle: 3 },
+  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Ready', actions: [
+    { click: 'Generate', expectText: 'Ready', expectChange: true },
+    { click: 'Solve', expectText: 'Solved', expectChange: true },
   ] },
   { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [
     { click: '+ 1', expectText: 'incremented to 1', expectChange: true },
@@ -34,6 +34,9 @@ export function skipReason(scenario, platform) {
 export const kitchenScenarios = [
   { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'OOPIF Find Test Page', actions: [
     { click: 'Add Mask Selector', expectText: 'Mask Overlay 2', expectChange: true },
+    { doubleClick: 'Mask Overlay 2', expectSelection: 'Overlay' },
+    { scrollHost: -2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'OOPIF Find Test Page', expectChange: true },
+    { scrollHost: 2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'OOPIF Find Test Page', expectChange: true },
     { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
   ] },
   { id: 'kitchen-cottontail-ui', title: 'Electrobun UI (kitchen)', test: 'Electrobun UI demo window', readyText: 'reactive GPU chrome', actions: [

@@ -75,6 +75,7 @@ def inspect_app(plan):
 
     def capture(label):
         image = gui.screenshot()
+        label = f'{len(shots) + 1:02d}-{label}'
         image.save(output / f'{label}.png')
         shots.append(f'{label}.png')
         # Convert logical desktop coordinates to screenshot pixels (Retina).
@@ -85,8 +86,16 @@ def inspect_app(plan):
         crop.save(output / f'{label}-window.png')
         return crop
 
+    def ocr_regions(image):
+        yield image, 0, '--psm 11'
+        # Sparse-page OCR drops text inside filled buttons. Short overlapping
+        # bands retain those labels without treating an animated GPU view as text.
+        for top in range(0, image.height, 120):
+            yield image.crop((0, top, image.width, min(top + 180, image.height))), top, '--psm 6'
+
     def text(image):
-        return pytesseract.image_to_string(image, config='--psm 11')
+        return '\n'.join(pytesseract.image_to_string(region, config=config)
+                         for region, _, config in ocr_regions(image))
 
     def await_text(expected, limit=45):
         deadline = time.monotonic() + limit
@@ -104,25 +113,26 @@ def inspect_app(plan):
             time.sleep(1)
         raise AssertionError(f'Visible text {expected!r} not found. Last OCR: {last}')
 
-    def click_text(label):
-        image = capture('target-' + re.sub(r'\W+', '-', label))
-        data = pytesseract.image_to_data(image, config='--psm 11', output_type=pytesseract.Output.DICT)
-        words = label.casefold().split()
-        tokens = [word.casefold().strip() for word in data['text']]
-        for start in range(len(tokens)):
-            indices = []
-            for i in range(start, len(tokens)):
-                if tokens[i]:
-                    indices.append(i)
-                if len(''.join(tokens[j] for j in indices)) >= len(''.join(words)):
-                    break
-            if ''.join(tokens[i] for i in indices) == ''.join(words):
-                first, last = indices[0], indices[-1]
-                x = (data['left'][first] + data['left'][last] + data['width'][last]) / 2
-                y = data['top'][first] + data['height'][first] / 2
-                scale = gui.screenshot().width / gui.size().width
-                gui.click(rect[0] + x / scale, rect[1] + y / scale)
-                return
+    def locate_text(label, image=None):
+        if image is None:
+            image = capture('target-' + re.sub(r'\W+', '-', label))
+        for region, top, config in ocr_regions(image):
+            data = pytesseract.image_to_data(region, config=config, output_type=pytesseract.Output.DICT)
+            words = label.casefold().split()
+            tokens = [word.casefold().strip() for word in data['text']]
+            for start in range(len(tokens)):
+                indices = []
+                for i in range(start, len(tokens)):
+                    if tokens[i]:
+                        indices.append(i)
+                    if len(''.join(tokens[j] for j in indices)) >= len(''.join(words)):
+                        break
+                if ''.join(tokens[i] for i in indices) == ''.join(words):
+                    first, last = indices[0], indices[-1]
+                    x = (data['left'][first] + data['left'][last] + data['width'][last]) / 2
+                    y = top + data['top'][first] + data['height'][first] / 2
+                    scale = gui.screenshot().width / gui.size().width
+                    return rect[0] + x / scale, rect[1] + y / scale
         raise AssertionError(f'Could not locate clickable text {label!r}: {tokens}')
 
     try:
@@ -151,7 +161,40 @@ def inspect_app(plan):
             checks.append('nonblank-desktop-capture')
             for index, action in enumerate(plan['actions']):
                 if 'click' in action:
-                    click_text(action['click'])
+                    gui.click(*locate_text(action['click']))
+                if 'doubleClick' in action:
+                    import pyperclip
+                    pyperclip.copy('smoke-no-selection')
+                    gui.doubleClick(*locate_text(action['doubleClick']), interval=0.12)
+                    time.sleep(0.5)
+                    capture('mask-text-selected')
+                    gui.hotkey('command' if sys.platform == 'darwin' else 'ctrl', 'c')
+                    time.sleep(0.5)
+                    selected = pyperclip.paste().strip()
+                    if selected != action['expectSelection']:
+                        raise AssertionError(f'Expected selected mask text {action["expectSelection"]!r}, copied {selected!r}')
+                    checks.append('mask-received-double-click:' + selected)
+                if 'scrollHost' in action:
+                    # Track one host label and one embedded-page label. Both must
+                    # move by the same distance; scrolling inside the OOPIF fails.
+                    host = action['hostAnchor']
+                    child = action['childAnchor']
+                    frame = capture('before-host-scroll')
+                    host_before = locate_text(host, frame)
+                    child_before = locate_text(child, frame)
+                    gui.moveTo(*host_before)
+                    gui.scroll(action['scrollHost'])
+                    time.sleep(2)
+                    frame = capture('after-host-scroll')
+                    host_after = locate_text(host, frame)
+                    child_after = locate_text(child, frame)
+                    host_delta = host_after[1] - host_before[1]
+                    child_delta = child_after[1] - child_before[1]
+                    if abs(host_delta) < 10 or host_delta * action['scrollHost'] <= 0:
+                        raise AssertionError(f'Host did not scroll as requested: {host_delta}')
+                    if abs(host_delta - child_delta) > 8 or abs(child_after[0] - child_before[0]) > 8:
+                        raise AssertionError(f'OOPIF did not follow host: host={host_delta}, child={child_delta}')
+                    checks.append(f'oopif-follows-host-scroll:host={host_delta:.1f},child={child_delta:.1f}')
                 if 'clickAt' in action:
                     x, y = action['clickAt']
                     gui.click(rect[0] + rect[2] * x, rect[1] + rect[3] * y)
