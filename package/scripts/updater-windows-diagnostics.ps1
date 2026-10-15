@@ -19,7 +19,8 @@ foreach ($id in ($transactionIds | Select-Object -Unique)) {
     [pscustomobject]@{
       TaskName = $taskName; State = [string]$task.State
       LastRunTime = $info.LastRunTime; LastTaskResult = $info.LastTaskResult
-      Actions = $task.Actions; Principal = $task.Principal
+      Actions = @($task.Actions | Select-Object Execute, Arguments, WorkingDirectory)
+      Principal = $task.Principal | Select-Object UserId, LogonType, RunLevel
     } | ConvertTo-Json -Depth 5
   } else {
     Write-Output "Task no longer registered: $taskName"

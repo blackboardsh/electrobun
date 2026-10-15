@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import {
 	createWindowsUpdateTaskName,
@@ -28,11 +30,12 @@ describe("Windows native update task", () => {
 			helperPath,
 			planPath,
 		);
-		expect(plan.create.args).toContain(
-			`"${helperPath}" --apply-update "${planPath}" --quiet`,
-		);
-		expect(plan.create.args.join(" ")).not.toContain("cmd.exe");
-		expect(plan.create.args.join(" ")).not.toContain(".bat");
+		const script = Buffer.from(plan.create.args.at(-1)!, "base64").toString("utf16le");
+		expect(plan.create.executable).toBe("powershell.exe");
+		expect(script).toContain(`-Execute '${helperPath}'`);
+		expect(script).toContain(`-Argument '--apply-update "${planPath}" --quiet'`);
+		expect(script).not.toContain("cmd.exe");
+		expect(script).not.toContain(".bat");
 		expect(plan.configure.args.at(-1)).toContain("-AllowStartIfOnBatteries");
 		expect(plan.configure.args.at(-1)).toContain(
 			"-DontStopIfGoingOnBatteries",
@@ -137,3 +140,26 @@ describe("Windows native update task", () => {
 		expect((thrown as AggregateError).errors).toHaveLength(2);
 	});
 });
+
+// Exercise real registration: string-only tests cannot detect dropped arguments.
+test.skipIf(process.platform !== "win32")("registered task preserves long Unicode paths and trailing --quiet", () => {
+	const name = createWindowsUpdateTaskName(randomBytes(16).toString("hex"));
+	const directory = "C:\\Users\\Test User's $literal 测试\\" + "long-directory-".repeat(8);
+	const helper = `${directory}\\electrobun-update-${transactionId}.exe`;
+	const file = `${directory}\\.electrobun-update-${transactionId}.json`;
+	const plan = createWindowsUpdateTaskPlan(name, helper, file);
+	const execute = (command: WindowsUpdateTaskCommand) => execFileSync(command.executable, command.args, { windowsHide: true });
+	let created = false;
+	try {
+		execute(plan.create);
+		created = true;
+		execute(plan.configure);
+		const saved = JSON.parse(execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+			`[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); $a = (Get-ScheduledTask -TaskName '${name}').Actions; @{execute=$a.Execute; arguments=$a.Arguments} | ConvertTo-Json -Compress`,
+		], { encoding: "utf8", windowsHide: true }));
+		expect(saved.execute).toBe(helper);
+		expect(saved.arguments).toBe(`--apply-update "${file}" --quiet`);
+	} finally {
+		if (created) execute(plan.deleteTask);
+	}
+}, 30000);

@@ -114,6 +114,9 @@ jobs:
       - name: Install dependencies
         working-directory: package
         run: hutch run install
+      - name: Verify Windows task registration
+        working-directory: package
+        run: node scripts/run-bun-test.js src/sdks/main/core/WindowsUpdateTask.test.ts
       - name: Enable Task Scheduler history
         shell: powershell
         run: |

@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { win32 } from "node:path";
 
 export interface WindowsUpdateTaskCommand {
@@ -46,7 +47,16 @@ export function createWindowsUpdateTaskPlan(
 	requireSafeAbsolutePath(helperPath, "helper");
 	requireSafeAbsolutePath(planPath, "plan");
 
-	const taskAction = `"${helperPath}" --apply-update "${planPath}" --quiet`;
+	// Register executable and arguments separately. schtasks /tr can lose trailing
+	// arguments on long command lines; the native helper requires --quiet.
+	const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+	const taskArguments = `--apply-update "${planPath}" --quiet`;
+	const createScript = [
+		"$ErrorActionPreference = 'Stop'",
+		`$action = New-ScheduledTaskAction -Execute ${literal(helperPath)} -Argument ${literal(taskArguments)}`,
+		"$principal = New-ScheduledTaskPrincipal -UserId ([System.Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited",
+		`Register-ScheduledTask -TaskName '${taskName}' -Action $action -Principal $principal -Force | Out-Null`,
+	].join("; ");
 	const settingsScript = [
 		"$ErrorActionPreference = 'Stop'",
 		"$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries",
@@ -55,19 +65,8 @@ export function createWindowsUpdateTaskPlan(
 
 	return {
 		create: {
-			executable: "schtasks.exe",
-			args: [
-				"/create",
-				"/tn",
-				taskName,
-				"/tr",
-				taskAction,
-				"/sc",
-				"once",
-				"/st",
-				"00:00",
-				"/f",
-			],
+			executable: "powershell.exe",
+			args: ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(createScript, "utf16le").toString("base64")],
 		},
 		configure: {
 			executable: "powershell.exe",
