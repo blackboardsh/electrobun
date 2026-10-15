@@ -20,8 +20,8 @@ export const templateScenarios = [
     { click: 'Generate', occurrence: 'last', expectText: 'Solved', expectChange: true },
   ] },
   { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [
-    { click: '+ 1', aliases: ['+ i', '+ l'], expectText: 'incremented to 1', expectChange: true },
-    { click: 'Reset', expectText: 'reset to 0', expectChange: true },
+    { click: '+ 1', aliases: ['+ i', '+ l'], expectCounter: 'incremented', expectChange: true },
+    { click: 'Reset', expectCounter: 'reset', expectChange: true },
   ] },
 ];
 
