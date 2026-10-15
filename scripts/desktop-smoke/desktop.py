@@ -221,6 +221,7 @@ def inspect_app(plan):
             checks.append('visible-window')
             gui.moveTo(max(2, rect[0] - 20), max(2, rect[1] - 20))
             if plan.get('initialScrollHost'):
+                await_text(plan['scrollReadyText'])
                 # The right-hand host margin stays outside the 600px OOPIF.
                 gui.moveTo(rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4)
                 gui.scroll(plan['initialScrollHost'])

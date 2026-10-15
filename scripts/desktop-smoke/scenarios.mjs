@@ -31,7 +31,7 @@ export function skipReason(scenario, platform) {
 }
 
 export const kitchenScenarios = [
-  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'Search Target A', initialScrollHost: -1, actions: [
+  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'Search Target A', initialScrollHost: -1, scrollReadyText: 'Mask & Passthrough Controls', actions: [
     { click: 'Add Mask Selector', expectText: 'Mask Overlay 2', expectChange: true },
     { doubleClick: 'Mask Overlay 2' },
     { scrollHost: -2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'Search Target A', expectChange: true },
