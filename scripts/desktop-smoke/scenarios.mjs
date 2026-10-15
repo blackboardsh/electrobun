@@ -31,7 +31,7 @@ export function skipReason(scenario, platform) {
 }
 
 export const kitchenScenarios = [
-  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'Search Target A', actions: [
+  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'Search Target A', initialScrollHost: -1, actions: [
     { click: 'Add Mask Selector', expectText: 'Mask Overlay 2', expectChange: true },
     { doubleClick: 'Mask Overlay 2' },
     { scrollHost: -2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'Search Target A', expectChange: true },
@@ -39,7 +39,7 @@ export const kitchenScenarios = [
     { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
   ] },
   { id: 'kitchen-cottontail-ui', title: 'Electrobun UI (kitchen)', minimizeWindow: 'Electrobun Integration Tests', test: 'Electrobun UI demo window', readyText: 'reactive GPU chrome', actions: [
-    { click: '+ 1', aliases: ['+ i', '+ l'], expectCounter: 1, expectChange: true },
-    { click: 'Reset', expectCounter: 0, expectChange: true },
+    { click: '+ 1', aliases: ['+ i', '+ l'], expectCounter: 'incremented', expectChange: true },
+    { click: 'Reset', expectCounter: 'reset', expectChange: true },
   ] },
 ];

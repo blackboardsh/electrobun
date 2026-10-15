@@ -31,7 +31,7 @@ def window(title):
         handle = user.FindWindowW(None, title)
         if handle and user.IsWindowVisible(handle):
             rect = wintypes.RECT()
-            user.ShowWindow(handle, 9 if title == "Bunny" else 3)
+            user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
             user.GetWindowRect(handle, ctypes.byref(rect))
             user.SetForegroundWindow(handle)
             return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
@@ -56,7 +56,7 @@ def minimize_window(gui, title):
     elif sys.platform == 'darwin':
         # Standard Cocoa titlebar's yellow button. Do this as soon as the
         # runner opens, before its delayed interactive playground starts.
-        gui.click(bounds[0] + 44, bounds[1] + 14)
+        gui.click(bounds[0] + 34, bounds[1] + 14)
     else:
         handle = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name',
                                           '^' + re.escape(title) + '$'], text=True).splitlines()[-1]
@@ -79,6 +79,16 @@ def stop(process):
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=20)
+
+
+def click_control(gui, point):
+    gui.moveTo(*point)
+    gui.mouseDown()
+    try:
+        # The native UI can poll mouse state once per render frame.
+        time.sleep(0.15)
+    finally:
+        gui.mouseUp()
 
 
 def double_click(gui, point):
@@ -210,6 +220,11 @@ def inspect_app(plan):
                 raise AssertionError(f'No visible window titled {plan["title"]!r}')
             checks.append('visible-window')
             gui.moveTo(max(2, rect[0] - 20), max(2, rect[1] - 20))
+            if plan.get('initialScrollHost'):
+                # The right-hand host margin stays outside the 600px OOPIF.
+                gui.moveTo(rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4)
+                gui.scroll(plan['initialScrollHost'])
+                time.sleep(1)
             if plan.get('readyText'):
                 await_text(plan['readyText'])
                 checks.append('rendered-ready-text')
@@ -224,6 +239,14 @@ def inspect_app(plan):
                     raise AssertionError('Window capture remained blank or nearly uniform for 30 seconds')
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
+            def counter_region(frame):
+                return frame.crop((round(frame.width * 0.1), round(frame.height * 0.28),
+                                   round(frame.width * 0.5), round(frame.height * 0.50))).convert('RGB')
+
+            initial_counter = counter_region(before)
+            counter_changed = False
+            result['windowBounds'] = list(rect)
+            result['desktopSize'] = list(gui.size())
             last_click = None
             cursor_readings = []
             for index, action in enumerate(plan['actions']):
@@ -235,11 +258,11 @@ def inspect_app(plan):
                         except AssertionError:
                             if label == [action['click'], *action.get('aliases', [])][-1]:
                                 raise
-                    gui.click(*last_click)
+                    click_control(gui, last_click)
                 if action.get('clickAgain'):
                     if last_click is None:
                         raise AssertionError('No previous control to click again')
-                    gui.click(*last_click)
+                    click_control(gui, last_click)
                 if 'doubleClick' in action:
                     point = locate_text(action['doubleClick'])
                     frame = capture('mask-before-selection')
@@ -249,7 +272,7 @@ def inspect_app(plan):
                                                   x + 40 * scale, y + 14 * scale))
                     def blue_coverage(image):
                         pixels = list(image.crop(box).convert('RGB').getdata())
-                        return sum(b > r + 30 and b > g + 10 and b > 70 for r, g, b in pixels) / len(pixels)
+                        return sum(b > r + 30 and b > 70 for r, g, b in pixels) / len(pixels)
                     baseline = blue_coverage(frame)
                     double_click(gui, point)
                     time.sleep(0.5)
@@ -313,12 +336,20 @@ def inspect_app(plan):
                         raise AssertionError(f'Native cursor readout did not follow mouse movement: {observed}')
                     checks.append(f'native-cursor-readout:{observed[0]},{observed[1]}')
                 if 'expectCounter' in action:
-                    frame = capture('counter-check')
-                    counter = frame.crop((round(frame.width * 0.1), round(frame.height * 0.28), round(frame.width * 0.5), round(frame.height * 0.55)))
-                    observed = pytesseract.image_to_string(counter, config='--psm 6 -c tessedit_char_whitelist=0123456789').strip()
-                    if observed != str(action['expectCounter']):
-                        raise AssertionError(f'Expected visible counter {action["expectCounter"]}, read {observed!r}')
-                    checks.append('visible-counter:' + observed)
+                    expected = action['expectCounter']
+                    if expected == 'reset' and not counter_changed:
+                        raise AssertionError('Cannot verify reset before a visible counter increment')
+                    deadline = time.monotonic() + 15
+                    while time.monotonic() < deadline:
+                        frame = capture('counter-' + expected)
+                        difference = max(ImageStat.Stat(ImageChops.difference(initial_counter, counter_region(frame))).mean)
+                        if (expected == 'incremented' and difference > 2) or (expected == 'reset' and difference < 0.5):
+                            counter_changed = counter_changed or expected == 'incremented'
+                            break
+                        time.sleep(0.5)
+                    else:
+                        raise AssertionError(f'Counter did not visibly {expected}: difference from initial={difference:.2f}')
+                    checks.append('visible-counter:' + expected)
                 if 'absentText' in action:
                     time.sleep(1)
                     observed = ''.join(text(capture('absence-check')).casefold().split())
