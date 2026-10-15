@@ -239,8 +239,13 @@ static std::string deriveLinuxWindowClass(
         result = "Electrobun";
     }
     if (!channel.empty() && channel != "stable") {
-        result += "-";
-        result += channel;
+        // version.json.name is already the channel-qualified bundle name.
+        // Also accept unqualified names from callers supplying AppInfo directly.
+        const std::string suffix = "-" + channel;
+        if (result.size() < suffix.size() ||
+            result.compare(result.size() - suffix.size(), suffix.size(), suffix) != 0) {
+            result += suffix;
+        }
     }
     return result;
 }
