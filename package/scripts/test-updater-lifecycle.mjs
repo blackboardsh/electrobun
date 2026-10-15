@@ -74,6 +74,9 @@ let hutchEngine = process.env.HUTCH_ENGINE_BINARY;
 const timeoutMs = Number(
 	process.env.ELECTROBUN_UPDATER_E2E_TIMEOUT_MS || DEFAULT_TIMEOUT_MS,
 );
+const relaunchTimeoutMs = Number(
+	process.env.ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS || timeoutMs,
+);
 const keepTemporary = process.env.ELECTROBUN_UPDATER_E2E_KEEP === "1";
 const v1CompatibilitySimulationEnabled =
 	process.env.ELECTROBUN_UPDATER_E2E_MIGRATION !== "0";
@@ -93,6 +96,11 @@ assert.equal(
 	Number.isFinite(timeoutMs) && timeoutMs >= 10_000,
 	true,
 	"ELECTROBUN_UPDATER_E2E_TIMEOUT_MS must be at least 10000",
+);
+assert.equal(
+	Number.isFinite(relaunchTimeoutMs) && relaunchTimeoutMs >= 10_000,
+	true,
+	"ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS must be at least 10000",
 );
 assert.equal(
 	existsSync(join(devkitRoot, "native-devkit.json")),
@@ -1643,7 +1651,7 @@ async function main() {
 	const firstEventStart = recordedEvents().length;
 	const firstPriorResults = new Set(resultFiles());
 	launchInstalledApp(PATCH_TARGET_VERSION);
-	await waitFor("v3 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath));
+	await waitFor("v3 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath), relaunchTimeoutMs);
 	await waitFor("first durable updater result", () =>
 		resultFiles().some((path) => !firstPriorResults.has(path)),
 	);
@@ -1680,7 +1688,7 @@ async function main() {
 	const secondEventStart = recordedEvents().length;
 	const secondPriorResults = new Set(resultFiles());
 	launchInstalledApp(FALLBACK_TARGET_VERSION);
-	await waitFor("v4 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath));
+	await waitFor("v4 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath), relaunchTimeoutMs);
 	await waitFor("second durable updater result", () =>
 		resultFiles().some((path) => !secondPriorResults.has(path)),
 	);

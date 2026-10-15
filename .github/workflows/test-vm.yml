@@ -39,6 +39,8 @@ jobs:
     timeout-minutes: 330
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
+      # Windows hosted VMs can take longer to relaunch after an update.
+      ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS: ${{ startsWith(matrix.runner, 'windows-') && '900000' || '300000' }}
     steps:
       - uses: actions/checkout@v6
         with:
