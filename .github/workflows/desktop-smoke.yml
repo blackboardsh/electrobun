@@ -96,6 +96,11 @@ jobs:
           "SMOKE_TESSERACT=C:\Program Files\Tesseract-OCR\tesseract.exe" >> $env:GITHUB_ENV
       - name: Install desktop driver
         run: python -m pip install -r scripts/desktop-smoke/requirements.txt
+      - name: Check desktop driver regressions
+        shell: bash
+        run: |
+          python scripts/desktop-smoke/test_desktop.py
+          python scripts/desktop-smoke/test_picker.py
       - name: Prepare Windows desktop shell
         if: runner.os == 'Windows'
         shell: powershell

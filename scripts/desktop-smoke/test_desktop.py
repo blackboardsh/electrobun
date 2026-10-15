@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from desktop import stop
+from desktop import stop, counter_difference
 
 
 class CleanupTests(unittest.TestCase):
@@ -48,6 +48,27 @@ while True: time.sleep(0.1)
                         os.killpg(int(ready.read_text()), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+
+class CounterImageTests(unittest.TestCase):
+    # Crops from the actual Windows smoke run 38688347101: zero at startup,
+    # then one after a keyboard increment. No DOM or generated reference image.
+    def setUp(self):
+        from PIL import Image
+        fixtures = Path(__file__).parent / 'fixtures'
+        self.zero = Image.open(fixtures / 'counter-zero.png').convert('RGB')
+        self.one = Image.open(fixtures / 'counter-one.png').convert('RGB')
+
+    def test_real_counter_increment_changes_pixels(self):
+        self.assertGreater(counter_difference(self.zero, self.one), 2)
+
+    def test_unchanged_counter_cannot_pass_increment(self):
+        self.assertEqual(counter_difference(self.zero, self.zero.copy()), 0)
+
+    def test_blank_counter_is_not_a_valid_change(self):
+        from PIL import Image
+        with self.assertRaisesRegex(AssertionError, 'missing'):
+            counter_difference(self.zero, Image.new('RGB', self.zero.size, '#13131c'))
 
 
 if __name__ == '__main__':

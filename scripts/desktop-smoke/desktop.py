@@ -81,6 +81,23 @@ def stop(process):
     process.wait(timeout=20)
 
 
+def counter_region(frame):
+    return frame.crop((round(frame.width * 0.15), round(frame.height * 0.28),
+                       round(frame.width * 0.45), round(frame.height * 0.50))).convert('RGB')
+
+
+def counter_difference(initial, current):
+    from PIL import ImageChops, ImageStat
+    # Both tested states use the demo's purple counter accent. Require visible
+    # glyph pixels so a disappearing counter cannot count as an increment.
+    for frame in (initial, current):
+        accent_pixels = sum(b > r + 20 and r > g + 20 and b > 110
+                            for r, g, b in frame.getdata())
+        if accent_pixels < 30:
+            raise AssertionError('Counter glyph is missing or not rendered')
+    return max(ImageStat.Stat(ImageChops.difference(initial, current)).mean)
+
+
 def click_control(gui, point):
     gui.moveTo(*point)
     gui.mouseDown()
@@ -240,10 +257,6 @@ def inspect_app(plan):
                     raise AssertionError('Window capture remained blank or nearly uniform for 30 seconds')
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
-            def counter_region(frame):
-                return frame.crop((round(frame.width * 0.1), round(frame.height * 0.28),
-                                   round(frame.width * 0.5), round(frame.height * 0.50))).convert('RGB')
-
             initial_counter = counter_region(before)
             counter_changed = False
             result['windowBounds'] = list(rect)
@@ -343,7 +356,7 @@ def inspect_app(plan):
                     deadline = time.monotonic() + 15
                     while time.monotonic() < deadline:
                         frame = capture('counter-' + expected)
-                        difference = max(ImageStat.Stat(ImageChops.difference(initial_counter, counter_region(frame))).mean)
+                        difference = counter_difference(initial_counter, counter_region(frame))
                         if (expected == 'incremented' and difference > 2) or (expected == 'reset' and difference < 0.5):
                             counter_changed = counter_changed or expected == 'incremented'
                             break
