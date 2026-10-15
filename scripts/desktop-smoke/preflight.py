@@ -1,6 +1,7 @@
 """Fail quickly if the hosted desktop cannot capture pixels or receive input."""
 from pathlib import Path
 import sys
+import subprocess
 import time
 import tkinter as tk
 import pyautogui as gui
@@ -21,6 +22,13 @@ try:
     while time.monotonic() < deadline:
         root.update()
         time.sleep(0.05)
+    # Fresh Xvfb sessions can leave the pointer at (0, 0), which is a
+    # PyAutoGUI emergency-stop corner. Initialize it before the first action;
+    # keep the failsafe enabled throughout the actual desktop tests.
+    if sys.platform == 'linux' and tuple(gui.position()) in gui.FAILSAFE_POINTS:
+        subprocess.run(['xdotool', 'mousemove', '--sync',
+                        str(button.winfo_rootx() + button.winfo_width() // 2),
+                        str(button.winfo_rooty() + button.winfo_height() // 2)], check=True)
     gui.click(button.winfo_rootx() + button.winfo_width() / 2,
               button.winfo_rooty() + button.winfo_height() / 2)
     deadline = time.monotonic() + 3
