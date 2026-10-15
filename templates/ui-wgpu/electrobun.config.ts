@@ -7,8 +7,8 @@ export default {
 		version: "0.0.1",
 	},
 	build: {
-		mainProcess: "bun",
-		bun: {
+		mainProcess: "cottontail",
+		cottontail: {
 			entrypoint: "src/main.tsx",
 		},
 		mac: {

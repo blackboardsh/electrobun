@@ -21,11 +21,6 @@ on:
         description: Comma-separated scenario IDs for diagnostics, or all
         type: string
         default: all
-  push:
-    branches: [ci/release-desktop-smoke]
-    paths:
-      - 'scripts/desktop-smoke/**'
-      - '.github/workflows/desktop-smoke.yml'
 
 permissions:
   contents: read

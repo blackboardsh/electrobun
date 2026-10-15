@@ -75,6 +75,7 @@ import {
 } from "bun:ffi";
 import { parseWebviewEventBridgeMessage } from "./eventBridge";
 import { ffiCStringToString } from "./ffiCString";
+import { rasterizeNativeText } from "./nativeTextBitmap";
 
 function getElectrobunLibraryPathCandidates(fileName: string) {
 	const candidates = new Set<string>();
@@ -1291,8 +1292,8 @@ type DarwinNativeWrapperSymbols = {
 		ascent: Pointer,
 	) => void;
 	uiRasterizeText: (
-		text: CString,
-		fontName: CString,
+		text: Pointer,
+		fontName: Pointer,
 		size: number,
 		scale: number,
 		width: Pointer,
@@ -2895,28 +2896,7 @@ export const nativeText = {
 		const symbols = getNativeTextSymbols();
 		if (!symbols) return null;
 
-		const dims = new Int32Array(2);
-		const pixelsPtr = symbols.rasterizeText(
-			toCString(text),
-			toCString(fontName),
-			size,
-			scale,
-			ptr(dims),
-			ptr(dims.subarray(1)),
-		);
-		if (!pixelsPtr) return null;
-		const width = dims[0]!;
-		const height = dims[1]!;
-		try {
-			// Copy before releasing the native bitmap. Bun 1.4's worker-side FFI
-			// buffer does not consistently expose ArrayBuffer.prototype.slice.
-			const pixels = new Uint8Array(
-				toArrayBuffer(pixelsPtr as Pointer, 0, width * height * 4),
-			);
-			return { width, height, data: new Uint8Array(pixels) };
-		} finally {
-			symbols.freeTextBitmap(pixelsPtr);
-		}
+		return rasterizeNativeText(symbols, text, fontName, size, scale);
 	},
 };
 

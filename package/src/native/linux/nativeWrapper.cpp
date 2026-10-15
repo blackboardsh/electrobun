@@ -12162,22 +12162,83 @@ ELECTROBUN_EXPORT bool isGlobalShortcutRegistered(const char* accelerator) {
 
 // Get all displays as JSON array
 ELECTROBUN_EXPORT const char* getAllDisplays() {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) {
-        return strdup("[]");
-    }
+    waitForGTKInit();
+    return dispatch_sync_main([]() -> const char* {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return strdup("[]");
+        }
 
-    int numMonitors = gdk_display_get_n_monitors(display);
-    GdkMonitor* primaryMonitor = gdk_display_get_primary_monitor(display);
+        int numMonitors = gdk_display_get_n_monitors(display);
+        GdkMonitor* primaryMonitor = gdk_display_get_primary_monitor(display);
 
-    std::ostringstream result;
-    result << "[";
+        std::ostringstream result;
+        result << "[";
 
-    for (int i = 0; i < numMonitors; i++) {
-        GdkMonitor* monitor = gdk_display_get_monitor(display, i);
-        if (!monitor) continue;
+        for (int i = 0; i < numMonitors; i++) {
+            GdkMonitor* monitor = gdk_display_get_monitor(display, i);
+            if (!monitor) continue;
 
-        if (i > 0) result << ",";
+            if (i > 0) result << ",";
+
+            // Get geometry (full bounds)
+            GdkRectangle geometry;
+            gdk_monitor_get_geometry(monitor, &geometry);
+
+            // Get work area (excludes panels/taskbars)
+            GdkRectangle workarea;
+            gdk_monitor_get_workarea(monitor, &workarea);
+
+            // Get scale factor
+            int scaleFactor = gdk_monitor_get_scale_factor(monitor);
+
+            // Check if primary
+            bool isPrimary = (monitor == primaryMonitor);
+
+            // Use monitor index as ID (GdkMonitor doesn't have a persistent ID)
+            result << "{";
+            result << "\"id\":" << i << ",";
+            result << "\"bounds\":{";
+            result << "\"x\":" << geometry.x << ",";
+            result << "\"y\":" << geometry.y << ",";
+            result << "\"width\":" << geometry.width << ",";
+            result << "\"height\":" << geometry.height;
+            result << "},";
+            result << "\"workArea\":{";
+            result << "\"x\":" << workarea.x << ",";
+            result << "\"y\":" << workarea.y << ",";
+            result << "\"width\":" << workarea.width << ",";
+            result << "\"height\":" << workarea.height;
+            result << "},";
+            result << "\"scaleFactor\":" << scaleFactor << ",";
+            result << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+            result << "}";
+        }
+
+        result << "]";
+        return strdup(result.str().c_str());
+    });
+}
+
+// Get primary display as JSON
+ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
+    waitForGTKInit();
+    return dispatch_sync_main([]() -> const char* {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return strdup("{}");
+        }
+
+        GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+        if (!monitor) {
+            // Fallback to first monitor if no primary is set
+            if (gdk_display_get_n_monitors(display) > 0) {
+                monitor = gdk_display_get_monitor(display, 0);
+            }
+            if (!monitor) {
+                return strdup("{}");
+            }
+        }
 
         // Get geometry (full bounds)
         GdkRectangle geometry;
@@ -12190,12 +12251,9 @@ ELECTROBUN_EXPORT const char* getAllDisplays() {
         // Get scale factor
         int scaleFactor = gdk_monitor_get_scale_factor(monitor);
 
-        // Check if primary
-        bool isPrimary = (monitor == primaryMonitor);
-
-        // Use monitor index as ID (GdkMonitor doesn't have a persistent ID)
+        std::ostringstream result;
         result << "{";
-        result << "\"id\":" << i << ",";
+        result << "\"id\":0,";
         result << "\"bounds\":{";
         result << "\"x\":" << geometry.x << ",";
         result << "\"y\":" << geometry.y << ",";
@@ -12209,63 +12267,11 @@ ELECTROBUN_EXPORT const char* getAllDisplays() {
         result << "\"height\":" << workarea.height;
         result << "},";
         result << "\"scaleFactor\":" << scaleFactor << ",";
-        result << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+        result << "\"isPrimary\":true";
         result << "}";
-    }
 
-    result << "]";
-    return strdup(result.str().c_str());
-}
-
-// Get primary display as JSON
-ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) {
-        return strdup("{}");
-    }
-
-    GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
-    if (!monitor) {
-        // Fallback to first monitor if no primary is set
-        if (gdk_display_get_n_monitors(display) > 0) {
-            monitor = gdk_display_get_monitor(display, 0);
-        }
-        if (!monitor) {
-            return strdup("{}");
-        }
-    }
-
-    // Get geometry (full bounds)
-    GdkRectangle geometry;
-    gdk_monitor_get_geometry(monitor, &geometry);
-
-    // Get work area (excludes panels/taskbars)
-    GdkRectangle workarea;
-    gdk_monitor_get_workarea(monitor, &workarea);
-
-    // Get scale factor
-    int scaleFactor = gdk_monitor_get_scale_factor(monitor);
-
-    std::ostringstream result;
-    result << "{";
-    result << "\"id\":0,";
-    result << "\"bounds\":{";
-    result << "\"x\":" << geometry.x << ",";
-    result << "\"y\":" << geometry.y << ",";
-    result << "\"width\":" << geometry.width << ",";
-    result << "\"height\":" << geometry.height;
-    result << "},";
-    result << "\"workArea\":{";
-    result << "\"x\":" << workarea.x << ",";
-    result << "\"y\":" << workarea.y << ",";
-    result << "\"width\":" << workarea.width << ",";
-    result << "\"height\":" << workarea.height;
-    result << "},";
-    result << "\"scaleFactor\":" << scaleFactor << ",";
-    result << "\"isPrimary\":true";
-    result << "}";
-
-    return strdup(result.str().c_str());
+        return strdup(result.str().c_str());
+    });
 }
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}

@@ -17,7 +17,35 @@ const FLOATS_PER_VERTEX: usize = 6;
 const VERTEX_STRIDE: u64 = (FLOATS_PER_VERTEX * std::mem::size_of::<f32>()) as u64;
 const VERTEX_BUFFER_SIZE: u64 =
     (MAX_AGENTS * VERTICES_PER_AGENT * FLOATS_PER_VERTEX * std::mem::size_of::<f32>()) as u64;
-const SURFACE_FORMAT: u32 = 0x0000001c;
+#[repr(C)]
+struct SurfaceCapabilities {
+    next_in_chain: *mut c_void,
+    usages: u64,
+    format_count: usize,
+    formats: *const u32,
+    present_mode_count: usize,
+    present_modes: *const u32,
+    alpha_mode_count: usize,
+    alpha_modes: *const u32,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SurfaceSettings { format: u32, alpha_mode: u32 }
+
+fn select_surface_settings(api: &WgpuApi, context: WgpuContext) -> Result<SurfaceSettings, String> {
+    unsafe {
+        let mut caps: SurfaceCapabilities = std::mem::zeroed();
+        let status = (api.surface_get_capabilities)(context.surface_ptr, context.adapter_ptr, &mut caps);
+        let result = if status == 1 && caps.format_count > 0 && !caps.formats.is_null()
+            && caps.alpha_mode_count > 0 && !caps.alpha_modes.is_null() {
+            Ok(SurfaceSettings { format: *caps.formats, alpha_mode: *caps.alpha_modes })
+        } else {
+            Err("Surface has no supported format or alpha mode".to_string())
+        };
+        (api.surface_capabilities_free_members)(caps);
+        result
+    }
+}
 
 static APP_STATE: OnceLock<AppState> = OnceLock::new();
 static HOST_QUEUE_RUNNING: AtomicBool = AtomicBool::new(false);
@@ -416,6 +444,8 @@ impl Lcg {
 }
 
 struct WgpuApi {
+    surface_get_capabilities: unsafe extern "C" fn(*mut c_void, *mut c_void, *mut SurfaceCapabilities) -> u32,
+    surface_capabilities_free_members: unsafe extern "C" fn(SurfaceCapabilities),
     device_create_shader_module: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void,
     device_create_render_pipeline: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void,
     device_create_buffer: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void,
@@ -441,6 +471,8 @@ struct WgpuApi {
 impl WgpuApi {
     fn load(native: &WgpuNative) -> Result<Self, String> {
         Ok(Self {
+            surface_get_capabilities: native.symbol("wgpuSurfaceGetCapabilities")?,
+            surface_capabilities_free_members: native.symbol("wgpuSurfaceCapabilitiesFreeMembers")?,
             device_create_shader_module: native.symbol("wgpuDeviceCreateShaderModule")?,
             device_create_render_pipeline: native.symbol("wgpuDeviceCreateRenderPipeline")?,
             device_create_buffer: native.symbol("wgpuDeviceCreateBuffer")?,
@@ -728,6 +760,7 @@ fn flock_render_loop() {
     let mut context: Option<WgpuContext> = None;
     let mut pipeline: Option<GpuPipeline> = None;
     let mut queue: *mut c_void = std::ptr::null_mut();
+    let mut settings = SurfaceSettings::default();
     let mut configured_width = 0_u32;
     let mut configured_height = 0_u32;
     let mut frame = 0_u64;
@@ -758,7 +791,15 @@ fn flock_render_loop() {
                             continue;
                         }
                     };
-                    pipeline = match create_flock_pipeline(&api, new_context) {
+                    settings = match select_surface_settings(&api, new_context) {
+                        Ok(settings) => settings,
+                        Err(err) => {
+                            eprintln!("[rust-flock-wgpu] failed to query surface capabilities: {err}");
+                            thread::sleep(Duration::from_millis(250));
+                            continue;
+                        }
+                    };
+                    pipeline = match create_flock_pipeline(&api, new_context, settings.format) {
                         Ok(pipeline) => Some(pipeline),
                         Err(err) => {
                             eprintln!("[rust-flock-wgpu] failed to create WGPU pipeline: {err}");
@@ -786,7 +827,7 @@ fn flock_render_loop() {
         if configured_width != config.width || configured_height != config.height {
             if let Some(context) = context {
                 if let Err(err) =
-                    configure_surface(state.core, context, config.width, config.height)
+                    configure_surface(state.core, context, config.width, config.height, settings)
                 {
                     eprintln!("[rust-flock-wgpu] failed to configure surface: {err}");
                     thread::sleep(Duration::from_millis(250));
@@ -862,27 +903,27 @@ fn configure_surface(
     context: WgpuContext,
     width: u32,
     height: u32,
+    settings: SurfaceSettings,
 ) -> Result<(), String> {
     const WGPU_TEXTURE_USAGE_RENDER_ATTACHMENT: u64 = 0x0000000000000010;
-    const WGPU_COMPOSITE_ALPHA_MODE_OPAQUE: u32 = 0x00000001;
     const WGPU_PRESENT_MODE_FIFO: u32 = 0x00000001;
 
     let mut config = [0_u8; 64];
     write_ptr(&mut config, 0, std::ptr::null_mut());
     write_ptr(&mut config, 8, context.device_ptr);
-    write_u32(&mut config, 16, SURFACE_FORMAT);
+    write_u32(&mut config, 16, settings.format);
     write_u32(&mut config, 20, 0);
     write_u64(&mut config, 24, WGPU_TEXTURE_USAGE_RENDER_ATTACHMENT);
     write_u32(&mut config, 32, width);
     write_u32(&mut config, 36, height);
     write_u64(&mut config, 40, 0);
     write_ptr(&mut config, 48, std::ptr::null_mut());
-    write_u32(&mut config, 56, WGPU_COMPOSITE_ALPHA_MODE_OPAQUE);
+    write_u32(&mut config, 56, settings.alpha_mode);
     write_u32(&mut config, 60, WGPU_PRESENT_MODE_FIFO);
     core.wgpu_surface_configure_main_thread(context.surface_ptr, ptr_from_bytes(&mut config))
 }
 
-fn create_flock_pipeline(api: &WgpuApi, context: WgpuContext) -> Result<GpuPipeline, String> {
+fn create_flock_pipeline(api: &WgpuApi, context: WgpuContext, surface_format: u32) -> Result<GpuPipeline, String> {
     const WGPU_VERTEX_FORMAT_FLOAT32X2: u32 = 0x0000001d;
     const WGPU_VERTEX_FORMAT_FLOAT32X4: u32 = 0x0000001f;
     let shader_code = std::ffi::CString::new(FLOCK_SHADER).map_err(|err| err.to_string())?;
@@ -911,7 +952,7 @@ fn create_flock_pipeline(api: &WgpuApi, context: WgpuContext) -> Result<GpuPipel
         vs_entry.as_ptr() as *const c_void,
         ptr_from_bytes(&mut vertex_layout),
     );
-    let mut color_target = make_color_target_state(SURFACE_FORMAT);
+    let mut color_target = make_color_target_state(surface_format);
     let mut fragment_state = make_fragment_state(
         shader_module,
         fs_entry.as_ptr() as *const c_void,
