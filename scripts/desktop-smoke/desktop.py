@@ -119,6 +119,13 @@ def click_control(gui, point):
         gui.mouseUp()
 
 
+def scroll_host(gui, notches):
+    # PyAutoGUI 0.9.54 forwards the value directly as mouse_event dwData on
+    # Windows, where a wheel notch is WHEEL_DELTA (120), not one unit.
+    # https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-mouse_event
+    gui.scroll(notches * 120 if sys.platform == 'win32' else notches)
+
+
 def double_click(gui, point):
     if sys.platform != 'darwin':
         gui.doubleClick(*point, interval=0.12)
@@ -269,7 +276,7 @@ def inspect_app(plan):
                 await_text(plan['scrollReadyText'])
                 # The right-hand host margin stays outside the 600px OOPIF.
                 click_control(gui, (rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4))
-                gui.scroll(plan['initialScrollHost'])
+                scroll_host(gui, plan['initialScrollHost'])
                 time.sleep(1)
             if plan.get('readyText'):
                 await_text(plan['readyText'])
@@ -337,7 +344,7 @@ def inspect_app(plan):
                     host_before = locate_text(host, frame)
                     child_before = locate_text(child, frame)
                     click_control(gui, host_before)
-                    gui.scroll(action['scrollHost'])
+                    scroll_host(gui, action['scrollHost'])
                     time.sleep(2)
                     frame = capture('after-host-scroll')
                     host_after = locate_text(host, frame)
