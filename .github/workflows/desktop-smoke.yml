@@ -148,8 +148,8 @@ jobs:
             python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
             node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results" --scenarios "$SMOKE_SCENARIOS"
           '
-      - name: Smoke published templates (macOS and Windows)
-        if: runner.os != 'Linux'
+      - name: Smoke published templates (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
@@ -159,6 +159,20 @@ jobs:
           mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
           python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
           node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results" --scenarios "$SMOKE_SCENARIOS"
+      - name: Smoke published templates (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SMOKE_PLATFORM: ${{ matrix.platform }}
+          SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          python scripts/desktop-smoke/preflight.py "$output" 2>&1 | Tee-Object -FilePath "$output/preflight.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/desktop-smoke/run.mjs --version "$env:RELEASE_VERSION" --platform "$env:SMOKE_PLATFORM" --output "$output" --scenarios "$env:SMOKE_SCENARIOS"
+          exit $LASTEXITCODE
       - name: Upload screenshots and logs
         if: always()
         id: artifact
