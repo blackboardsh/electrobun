@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from desktop import stop, counter_difference
+from desktop import stop, counter_difference, ocr_regions
 
 
 class CleanupTests(unittest.TestCase):
@@ -69,6 +69,21 @@ class CounterImageTests(unittest.TestCase):
         from PIL import Image
         with self.assertRaisesRegex(AssertionError, 'missing'):
             counter_difference(self.zero, Image.new('RGB', self.zero.size, '#13131c'))
+
+
+class ButtonOCRTests(unittest.TestCase):
+    def test_colored_buttons_from_real_ci_screenshots(self):
+        # macOS Zig and Linux Odin from published smoke run 38692395840.
+        from PIL import Image
+        import pytesseract
+        if os.environ.get('SMOKE_TESSERACT'):
+            pytesseract.pytesseract.tesseract_cmd = os.environ['SMOKE_TESSERACT']
+        for fixture, label in [('zig-toggle.png', 'Toggle'), ('odin-resume.png', 'Resume')]:
+            with self.subTest(label=label):
+                frame = Image.open(Path(__file__).parent / 'fixtures' / fixture)
+                texts = [pytesseract.image_to_string(region, config=config)
+                         for region, _, config in ocr_regions(frame)]
+                self.assertIn(label, '\n'.join(texts))
 
 
 if __name__ == '__main__':

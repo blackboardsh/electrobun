@@ -129,6 +129,18 @@ def double_click(gui, point):
         time.sleep(0.08)
 
 
+def ocr_regions(image):
+    yield image, 0, '--psm 11'
+    # Sparse-page OCR drops text inside filled buttons. Short overlapping
+    # bands retain those labels without treating an animated GPU view as text.
+    for top in range(0, image.height, 120):
+        band = image.crop((0, top, image.width, min(top + 180, image.height)))
+        yield band, top, '--psm 6'
+        # Filled buttons can disappear into the surrounding dark gradient in
+        # Tesseract's adaptive threshold. Keep a fixed-contrast pass as well.
+        yield band.convert('L').point(lambda value: 255 if value > 140 else 0), top, '--psm 6'
+
+
 def inspect_app(plan):
     import pyautogui as gui
     import pytesseract
@@ -172,13 +184,6 @@ def inspect_app(plan):
         crop = image.crop(box)
         crop.save(output / f'{label}-window.png')
         return crop
-
-    def ocr_regions(image):
-        yield image, 0, '--psm 11'
-        # Sparse-page OCR drops text inside filled buttons. Short overlapping
-        # bands retain those labels without treating an animated GPU view as text.
-        for top in range(0, image.height, 120):
-            yield image.crop((0, top, image.width, min(top + 180, image.height))), top, '--psm 6'
 
     def text(image):
         return '\n'.join(pytesseract.image_to_string(region, config=config)
