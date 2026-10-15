@@ -85,6 +85,13 @@ def stop(process):
     process.wait(timeout=20)
 
 
+def rendered_surface(frame, region):
+    from PIL import ImageStat
+    box = tuple(round(value * (frame.width if i % 2 == 0 else frame.height))
+                for i, value in enumerate(region))
+    return max(ImageStat.Stat(frame.crop(box).convert('RGB')).stddev) >= 10
+
+
 def counter_region(frame):
     return frame.crop((round(frame.width * 0.15), round(frame.height * 0.28),
                        round(frame.width * 0.45), round(frame.height * 0.50))).convert('RGB')
@@ -272,12 +279,17 @@ def inspect_app(plan):
             while True:
                 require_running()
                 before = capture('rendered')
-                if max(ImageStat.Stat(before.convert('RGB')).stddev) >= 5:
+                visible = max(ImageStat.Stat(before.convert('RGB')).stddev) >= 5
+                if plan.get('gpuRegion'):
+                    visible = visible and rendered_surface(before, plan['gpuRegion'])
+                if visible:
                     break
                 if time.monotonic() >= render_deadline:
-                    raise AssertionError('Window capture remained blank or nearly uniform for 30 seconds')
+                    raise AssertionError('Window or required GPU surface remained blank or nearly uniform for 30 seconds')
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
+            if plan.get('gpuRegion'):
+                checks.append('rendered-gpu-surface')
             initial_counter = counter_region(before)
             counter_changed = False
             result['windowBounds'] = list(rect)

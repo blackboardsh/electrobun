@@ -4,19 +4,19 @@ export const templateScenarios = [
     { move: [0.5, 0.5], expectChange: true },
     { move: [0.9, 0.9], expectChange: true },
   ] },
-  { id: 'zig-wgpu', title: 'Zig WGPU', readyText: 'Surface ready', actions: [
+  { id: 'zig-wgpu', title: 'Zig WGPU', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Surface ready', actions: [
     { click: 'Toggle', expectText: 'Julia', expectChange: true },
     { clickAgain: true, expectText: 'Mandelbrot', expectChange: true },
   ] },
-  { id: 'odin-particles-wgpu', title: 'Odin Particles', readyText: 'Pause', actions: [
+  { id: 'odin-particles-wgpu', title: 'Odin Particles', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Pause', actions: [
     { click: 'Pause', expectText: 'Resume', expectChange: true },
     { click: 'Resume', expectText: 'Pause', expectChange: true },
   ] },
-  { id: 'rust-flock-wgpu', title: 'Rust Flock WGPU', readyText: 'Surface ready', actions: [
+  { id: 'rust-flock-wgpu', title: 'Rust Flock WGPU', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Surface ready', actions: [
     { move: [0.3, 0.5], expectCursor: true, expectChange: true },
     { move: [0.6, 0.7], expectCursor: true, expectChange: true },
   ] },
-  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Solved', actions: [
+  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Solved', actions: [
     { click: 'Generate', occurrence: 'last', expectText: 'Solved', expectChange: true },
   ] },
   { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [

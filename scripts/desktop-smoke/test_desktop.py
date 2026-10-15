@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from desktop import stop, counter_difference, ocr_regions
+from desktop import stop, counter_difference, ocr_regions, rendered_surface
 
 
 class CleanupTests(unittest.TestCase):
@@ -69,6 +69,14 @@ class CounterImageTests(unittest.TestCase):
         from PIL import Image
         with self.assertRaisesRegex(AssertionError, 'missing'):
             counter_difference(self.zero, Image.new('RGB', self.zero.size, '#13131c'))
+
+
+class SurfaceImageTests(unittest.TestCase):
+    def test_visible_controls_do_not_hide_a_blank_gpu_surface(self):
+        from PIL import Image, ImageDraw
+        frame = Image.new('RGB', (1000, 700), 'white')
+        ImageDraw.Draw(frame).text((10, 10), 'Surface ready - Toggle', fill='black')
+        self.assertFalse(rendered_surface(frame, [0.08, 0.25, 0.60, 0.85]))
 
 
 class ButtonOCRTests(unittest.TestCase):
