@@ -508,3 +508,38 @@ test("contract rejects mutable Kitchen publication before the npm gate", () => {
 		{ code: "ERR_ASSERTION" },
 	);
 });
+
+function validateReleaseTestGates(source) {
+	const release = job(source, "release");
+	const vm = job(source, "test-vm");
+	const smoke = job(source, "desktop-smoke");
+	const dependencies = (body) => {
+		const match = body.match(/^    needs: \[([^\]]+)\]$/m);
+		assert.ok(match, "release test gates must declare their dependencies");
+		return match[1].split(",").map((item) => item.trim());
+	};
+	assert.ok(dependencies(release).includes("build"));
+	assert.ok(dependencies(release).includes("test-vm"), "publication must wait for VM tests");
+	assert.ok(dependencies(smoke).includes("npm-publish"), "desktop smoke must wait for npm");
+	assert.ok(dependencies(smoke).includes("publish-templates"), "desktop smoke must wait for templates");
+	assert.match(vm, /uses: \.\/\.github\/workflows\/test-vm\.yml/);
+	assert.match(smoke, /uses: \.\/\.github\/workflows\/desktop-smoke\.yml/);
+	const buildRef = job(source, "build").match(/^          ref: (.+)$/m)?.[1];
+	assert.ok(buildRef, "release build must select an exact source ref");
+	assert.equal(vm.match(/^      ref: (.+)$/m)?.[1], buildRef, "VM tests must build the same release ref");
+	assert.match(smoke, /version: \$\{\{ github\.event\.inputs\.tag \|\| github\.ref_name \}\}/);
+}
+
+test("release VM gate and post-publication desktop smoke use the release being published", () => {
+	validateReleaseTestGates(workflow);
+});
+
+test("test gate contract rejects early publication or premature desktop smoke", () => {
+	for (const [before, after] of [
+		["needs: [build, test-vm]", "needs: [build]"],
+		["needs: [npm-publish, publish-templates]", "needs: [npm-publish]"],
+		["needs: [npm-publish, publish-templates]", "needs: [publish-templates]"],
+	]) {
+		assert.throws(() => validateReleaseTestGates(workflow.replace(before, after)), { code: "ERR_ASSERTION" });
+	}
+});

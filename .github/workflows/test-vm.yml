@@ -1,6 +1,12 @@
 name: VM test matrix
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release tag or commit to build and test
+        type: string
+        required: true
   workflow_dispatch:
     inputs:
       windows_arm_only:
@@ -39,6 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
           persist-credentials: false
       - uses: actions/setup-node@v6

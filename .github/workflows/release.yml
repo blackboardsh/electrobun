@@ -23,6 +23,11 @@ permissions:
   contents: read
 
 jobs:
+  test-vm:
+    uses: ./.github/workflows/test-vm.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
   build:
     strategy:
       fail-fast: false
@@ -441,7 +446,7 @@ jobs:
           rm -rf kitchen/build
 
   release:
-    needs: build
+    needs: [build, test-vm]
     runs-on: ubuntu-latest
     permissions:
       contents: write
