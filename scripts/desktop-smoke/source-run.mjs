@@ -8,12 +8,12 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { run } from '../accept-published-template.mjs';
 import { validateNativeDevkitManifest } from '../../package/scripts/validate-native-devkit.mjs';
-import { templateScenarios } from './scenarios.mjs';
+import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const output = resolve(process.argv[2]);
 mkdirSync(output, { recursive: true });
-const scratch = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ebs-src-'));
+const scratch = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ebs-'));
 const version = JSON.parse(readFileSync(join(root, 'package/package.json'), 'utf8')).version;
 const os = { darwin: 'macos', linux: 'linux', win32: 'win' }[process.platform];
 validateNativeDevkitManifest({ coreRoot: join(root, 'package/dist'), expectedVersion: version, expectedTarget: { os, arch: process.arch } });
@@ -36,7 +36,9 @@ for (const id of ['ui-color-picker', 'ui-launcher']) {
     results.push({ name: `${id} (build)`, status: 'failed', error: error.message });
   }
 }
-for (const scenario of templateScenarios.filter(s => ['bunny', 'zig-wgpu', 'rust-flock-wgpu', 'ui-wgpu'].includes(s.id))) {
+for (const scenario of templateScenarios) {
+  const reason = skipReason(scenario, `${process.platform === 'win32' ? 'windows' : os}-${process.arch}`);
+  if (reason) { results.push({ name: scenario.id, status: 'skipped', reason }); continue; }
   const work = join(output, scenario.id), project = join(scratch, scenario.id);
   mkdirSync(work);
   try {
@@ -54,6 +56,37 @@ for (const scenario of templateScenarios.filter(s => ['bunny', 'zig-wgpu', 'rust
     console.error(`[source-smoke] ${scenario.id}: ${error.message}`);
   }
 }
+// Exercise the same interactive Kitchen scenarios against this source devkit.
+// A short workspace keeps Windows resource-update paths below MAX_PATH.
+const kitchen = join(scratch, 'kitchen');
+let kitchenBuildError;
+try {
+  cpSync(join(root, 'kitchen'), kitchen, { recursive: true, filter: path => !/(?:^|[/\\])(?:node_modules|build|artifacts|\.hutch|target|test-results)(?:[/\\]|$)/.test(path) });
+  mkdirSync(join(scratch, 'package/scripts'), { recursive: true });
+  cpSync(join(root, 'package/scripts/hutch-launcher.mjs'), join(scratch, 'package/scripts/hutch-launcher.mjs'));
+  await run(hutch, ['run', 'install'], { cwd: kitchen, env, log: join(output, 'kitchen-install.log') });
+  await run(hutch, ['scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--build-only'],
+    { cwd: kitchen, env, log: join(output, 'kitchen-build.log'), timeout: 1_200_000 });
+} catch (error) { kitchenBuildError = error.message; }
+for (const scenario of kitchenScenarios) {
+  const work = join(output, scenario.id);
+  mkdirSync(work);
+  try {
+    if (kitchenBuildError) throw new Error(kitchenBuildError);
+    const plan = { ...scenario, name: scenario.id, output: work, cwd: kitchen,
+      command: [hutch, 'scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--launch-only', '--timeout=300'],
+      env: { AUTO_RUN_TEST_NAME: scenario.test } };
+    const planPath = join(work, 'desktop-plan.json');
+    writeFileSync(planPath, JSON.stringify(plan));
+    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: kitchen, env, log: join(work, 'desktop-driver.log'), timeout: 330_000 });
+    const result = JSON.parse(readFileSync(join(work, 'result.json'), 'utf8'));
+    assert.equal(result.ok, true);
+    results.push({ name: scenario.id, status: 'passed' });
+  } catch (error) {
+    results.push({ name: scenario.id, status: 'failed', error: error.message });
+    console.error(`[source-smoke] ${scenario.id}: ${error.message}`);
+  }
+}
 writeFileSync(join(output, 'summary.json'), JSON.stringify({ source: process.env.GITHUB_SHA, version, results }, null, 2));
 if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, '# Source desktop smoke tests\n\n' + results.map(r => `- ${r.name}: ${r.status}`).join('\n') + '\n');
-assert.ok(results.every(r => r.status === 'passed'), 'Source desktop smoke tests failed; see screenshots and logs');
+assert.ok(results.every(r => r.status === 'passed' || r.status === 'skipped'), 'Source desktop smoke tests failed; see screenshots and logs');
