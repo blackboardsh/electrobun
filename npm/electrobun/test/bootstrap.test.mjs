@@ -1076,9 +1076,14 @@ test("a prepared claim retries when the winning lock is released before recheck"
 	const lockPath = `${root}.install-lock`;
 	mkdirSync(temporary, { recursive: true });
 	let injectedWinner = false;
+	let clock = 0;
+	let sleeps = 0;
 	try {
 		const acquired = resolver.acquireCacheLock({
 			expectedHutchVersion: resolver.PAIRED_HUTCH_VERSION,
+			// Filesystem speed is unrelated to the simulated claim race.
+			now: () => clock,
+			sleep: (ms) => { clock += ms; sleeps += 1; },
 			platform: "linux",
 			platformKey: "linux-x64",
 			rename: (source, destination) => {
@@ -1096,6 +1101,7 @@ test("a prepared claim retries when the winning lock is released before recheck"
 			timeoutMs: 100,
 		});
 		assert.equal(injectedWinner, true);
+		assert.equal(sleeps, 1);
 		assert.equal(existsSync(lockPath), true);
 		acquired.release();
 		assert.equal(existsSync(lockPath), false);

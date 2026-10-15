@@ -2,6 +2,11 @@ name: VM test matrix
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_arm_only:
+        description: Run only Windows ARM when verifying a platform-specific fix
+        type: boolean
+        default: false
   push:
     branches: [ci/test-vm-matrix]
     paths:
@@ -24,17 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: macos-14
-            arch: arm64
-          - runner: ubuntu-24.04
-            arch: x64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-          - runner: windows-2025
-            arch: x64
-          - runner: windows-11-arm
-            arch: arm64
+        include: ${{ fromJSON(inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     env:
