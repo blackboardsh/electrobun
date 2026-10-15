@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { acceptanceEnvironment, run, validateCatalog } from '../accept-published-template.mjs';
@@ -18,8 +18,9 @@ export async function prepareRelease({ version, platform, output }) {
   const channel = releaseChannel(version);
   const work = resolve(output);
   mkdirSync(work, { recursive: true });
-  const scratch = join(work, `scratch-${randomUUID()}`);
-  mkdirSync(scratch);
+  // Keep Win32 resource-update paths below MAX_PATH. Kitchen's variant
+  // workspace adds several directories after this root. Artifacts stay in work.
+  const scratch = mkdtempSync(join(process.env.RUNNER_TEMP || tmpdir(), 'ebs-'));
   writeFileSync(join(scratch, 'empty.npmrc'), '');
   const env = acceptanceEnvironment(process.env, scratch);
   // Keep tooling paths, but no developer devkit/runtime/catalog overrides.
