@@ -65,6 +65,14 @@ class CounterImageTests(unittest.TestCase):
     def test_unchanged_counter_cannot_pass_increment(self):
         self.assertEqual(counter_difference(self.zero, self.zero.copy()), 0)
 
+    def test_real_template_reset_survives_layout_shift(self):
+        from PIL import Image
+        fixtures = Path(__file__).parent / 'fixtures'
+        # Actual Linux captures from run 38694841883 before and after reset.
+        initial = Image.open(fixtures / 'template-counter-zero.png')
+        reset = Image.open(fixtures / 'template-counter-reset.png')
+        self.assertEqual(counter_difference(initial, reset), 0)
+
     def test_blank_counter_is_not_a_valid_change(self):
         from PIL import Image
         with self.assertRaisesRegex(AssertionError, 'missing'):

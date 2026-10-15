@@ -99,20 +99,43 @@ def rendered_surface(frame, region):
 
 
 def counter_region(frame):
-    return frame.crop((round(frame.width * 0.15), round(frame.height * 0.28),
-                       round(frame.width * 0.45), round(frame.height * 0.50))).convert('RGB')
+    return frame.crop((round(frame.width * 0.15), round(frame.height * 0.25),
+                       round(frame.width * 0.45), round(frame.height * 0.55))).convert('RGB')
+
+
+def counter_glyph(frame):
+    from PIL import Image
+    # The remote webview can change layout height after startup. Compare the
+    # counter's silhouette independently of its position, leaving labels and
+    # the hover border of the button outside the largest accent component.
+    frame = frame.convert('RGB')
+    pixels = frame.load()
+    remaining = {(x, y) for y in range(frame.height) for x in range(frame.width)
+                 if (lambda r, g, b: b > r + 20 and r > g + 20 and b > 110)(*pixels[x, y])}
+    largest = set()
+    while remaining:
+        seed = remaining.pop()
+        component, pending = {seed}, [seed]
+        while pending:
+            x, y = pending.pop()
+            for point in ((x-1, y), (x+1, y), (x, y-1), (x, y+1)):
+                if point in remaining:
+                    remaining.remove(point)
+                    component.add(point)
+                    pending.append(point)
+        if len(component) > len(largest):
+            largest = component
+    if len(largest) < 30:
+        raise AssertionError('Counter glyph is missing or not rendered')
+    mask = Image.new('L', frame.size)
+    for point in largest:
+        mask.putpixel(point, 255)
+    return mask.crop(mask.getbbox()).resize((64, 96), Image.Resampling.NEAREST)
 
 
 def counter_difference(initial, current):
     from PIL import ImageChops, ImageStat
-    # Both tested states use the demo's purple counter accent. Require visible
-    # glyph pixels so a disappearing counter cannot count as an increment.
-    for frame in (initial, current):
-        accent_pixels = sum(b > r + 20 and r > g + 20 and b > 110
-                            for r, g, b in frame.getdata())
-        if accent_pixels < 30:
-            raise AssertionError('Counter glyph is missing or not rendered')
-    return max(ImageStat.Stat(ImageChops.difference(initial, current)).mean)
+    return ImageStat.Stat(ImageChops.difference(counter_glyph(initial), counter_glyph(current))).mean[0]
 
 
 def click_control(gui, point):
@@ -379,7 +402,13 @@ def inspect_app(plan):
                     previous_observed = None
                     while time.monotonic() < deadline:
                         frame = capture('cursor-check')
-                        cx, cy = locate_text('Cursor', frame)
+                        sidebar = frame.copy()
+                        sidebar.paste((0, 0, 0), (0, 0, round(frame.width * 0.75), frame.height))
+                        try:
+                            cx, cy = locate_text('Cursor', sidebar)
+                        except AssertionError:
+                            time.sleep(1)
+                            continue
                         scale = frame.width / rect[2]
                         left, top = (cx - rect[0]) * scale, (cy - rect[1]) * scale
                         readout = frame.crop((round(left - 45 * scale), round(top + 5 * scale),
