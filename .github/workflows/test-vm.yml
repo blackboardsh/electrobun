@@ -49,27 +49,22 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: package/package-lock.json
+      - name: Preserve scheduled-task user temporary directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Scheduled helpers validate against the original user TEMP spelling.
+          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
+            throw 'The Windows runner must provide its default user TEMP'
+          }
+          "ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
       - name: Set diagnostics temporary directory
-        if: runner.os != 'Windows'
         shell: bash
         run: |
           echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
           echo "ELECTROBUN_DIAGNOSTICS_TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
-      - name: Use the scheduled-task user temporary directory (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          # Task Scheduler uses the runner's original user TEMP, not RUNNER_TEMP.
-          # Preserve its exact spelling (including an 8.3 username): the native
-          # helper checks its parent against TEMP before resolving physical paths.
-          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
-            throw 'The Windows runner must provide its default user TEMP'
-          }
-          New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
-          "TMPDIR=$env:TEMP" >> $env:GITHUB_ENV
-          "ELECTROBUN_DIAGNOSTICS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary

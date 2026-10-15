@@ -107,6 +107,7 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
 
 // Create RPC config for test harness
 type StressHandlers = {
+  ready?: () => void;
   bunStressMessages?: ReturnType<typeof createStressMessageCollector>;
   webviewMessageSummary?: StressValueCollector<StressMessageStats>;
   webviewRequestSummary?: StressValueCollector<StressRequestSummary>;
@@ -132,6 +133,7 @@ export function createTestHarnessRPC(
         },
       },
       messages: {
+        ready: () => stressHandlers.ready?.(),
         ping: ({ timestamp }) => {
           console.log(`Received ping at ${timestamp}`);
         },
@@ -318,7 +320,8 @@ export const rpcTests = [
       "Verify mixed-script UTF-8 remains exact across the Windows native RPC fallback after idle periods",
     timeout: 30000,
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC(20000);
+      const ready = createStressValueCollector<boolean>();
+      const rpc = createTestHarnessRPC(20000, { ready: () => ready.set(true) });
       const win = await createWindow({
         url: "views://test-harness/index.html",
         rpc,
@@ -331,7 +334,7 @@ export const rpcTests = [
         throw new Error("Expected webview RPC to be available");
       }
 
-      await sleep(1000);
+      await ready.wait("native test harness initialization");
       const scripts =
         "Български Ελληνικά 日本語 测试 한국어 café 🧪🚀";
       const boundaryPayload = Array.from(

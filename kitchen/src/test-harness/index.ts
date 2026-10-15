@@ -163,6 +163,7 @@ export type TestHarnessRPC = {
       };
     };
     messages: {
+      ready: {};
       ping: { timestamp: number };
       stressMessageToBun: { id: number; payload?: string };
       stressWebviewMessageSummary: StressMessageStats;
@@ -445,3 +446,4 @@ function runRpcStress(config: {
 (window as any).testHarnessReady = true;
 
 console.log("Test harness initialized");
+electrobun.rpc.send.ready({});

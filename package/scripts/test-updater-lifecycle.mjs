@@ -1168,7 +1168,9 @@ function platformAdapter() {
 					process.env.APPDATA ||
 						join(process.env.USERPROFILE || process.env.HOME || "", "AppData", "Roaming"),
 				);
-				const temp = resolve(process.env.TEMP || process.env.TMP || join(localAppData, "Temp"));
+				// Only the installed app and its helpers need the Task Scheduler TEMP.
+				// Keep build fixtures and diagnostics in the suite's short workspace temp.
+				const temp = resolve(process.env.ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP || process.env.TEMP || process.env.TMP || join(localAppData, "Temp"));
 				for (const path of [localAppData, roaming, temp]) {
 					assert.equal(resolve(path).length > 3, true, `unsafe Windows profile path: ${path}`);
 				}
@@ -1182,6 +1184,7 @@ function platformAdapter() {
 						APPDATA: roaming,
 						TEMP: temp,
 						TMP: temp,
+						TMPDIR: temp,
 						ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1",
 					},
 				};
@@ -1710,6 +1713,14 @@ try {
 		try {
 			const diagnosticsRoot = mkdtempSync(join(temporaryBase, "updater-lifecycle-e2e-diagnostics-"));
 			cpSync(signalDirectory, join(diagnosticsRoot, "signals"), { recursive: true });
+			// Keep the native manager's result before uninstall removes the app.
+			for (const path of resultFiles()) {
+				copyFileSync(path, join(diagnosticsRoot, "signals", basename(path)));
+				console.error(`[updater-e2e] Native update result: ${readFileSync(path, "utf8")}`);
+			}
+			if (existsSync(eventLogPath)) {
+				console.error(`[updater-e2e] Fixture events:\n${readFileSync(eventLogPath, "utf8")}`);
+			}
 			console.error(`[updater-e2e] Failure signals: ${diagnosticsRoot}`);
 		} catch (diagnosticError) {
 			console.error(`[updater-e2e] Could not preserve failure signals: ${diagnosticError}`);
