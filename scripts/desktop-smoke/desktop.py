@@ -173,15 +173,21 @@ def double_click(gui, point):
 
 
 def ocr_regions(image):
-    yield image, 0, '--psm 11'
+    yield image, 0, '--psm 11', 1
     # Sparse-page OCR drops text inside filled buttons. Short overlapping
     # bands retain those labels without treating an animated GPU view as text.
     for top in range(0, image.height, 120):
         band = image.crop((0, top, image.width, min(top + 180, image.height)))
-        yield band, top, '--psm 6'
+        yield band, top, '--psm 6', 1
         # Filled buttons can disappear into the surrounding dark gradient in
         # Tesseract's adaptive threshold. Keep a fixed-contrast pass as well.
-        yield band.convert('L').point(lambda value: 255 if value > 140 else 0), top, '--psm 6'
+        yield band.convert('L').point(lambda value: 255 if value > 140 else 0), top, '--psm 6', 1
+
+    # Small Windows ClearType labels need enlarged, compact line regions.
+    # Keep their scale so click coordinates still map to the original pixels.
+    for top in range(20, image.height, 40):
+        band = image.crop((0, top, image.width, min(top + 80, image.height)))
+        yield band.resize((band.width * 2, band.height * 2)), top, '--psm 6', 2
 
 
 def inspect_app(plan):
@@ -230,7 +236,7 @@ def inspect_app(plan):
 
     def text(image):
         return '\n'.join(pytesseract.image_to_string(region, config=config)
-                         for region, _, config in ocr_regions(image))
+                         for region, _, config, _ in ocr_regions(image))
 
     def await_text(expected, limit=45):
         deadline = time.monotonic() + limit
@@ -252,7 +258,7 @@ def inspect_app(plan):
         candidates = []
         if image is None:
             image = capture('target-' + re.sub(r'\W+', '-', label))
-        for region, top, config in ocr_regions(image):
+        for region, top, config, ocr_scale in ocr_regions(image):
             data = pytesseract.image_to_data(region, config=config, output_type=pytesseract.Output.DICT)
             words = label.casefold().split()
             tokens = [word.casefold().strip().strip('.,;:!?') for word in data['text']]
@@ -265,8 +271,8 @@ def inspect_app(plan):
                         break
                 if ''.join(tokens[i] for i in indices) == ''.join(words):
                     first, last = indices[0], indices[-1]
-                    x = (data['left'][first] + data['left'][last] + data['width'][last]) / 2
-                    y = top + data['top'][first] + data['height'][first] / 2
+                    x = (data['left'][first] + data['left'][last] + data['width'][last]) / (2 * ocr_scale)
+                    y = top + (data['top'][first] + data['height'][first] / 2) / ocr_scale
                     scale = gui.screenshot().width / gui.size().width
                     point = (rect[0] + x / scale, rect[1] + y / scale)
                     if occurrence == "first":

@@ -94,11 +94,11 @@ class ButtonOCRTests(unittest.TestCase):
         import pytesseract
         if os.environ.get('SMOKE_TESSERACT'):
             pytesseract.pytesseract.tesseract_cmd = os.environ['SMOKE_TESSERACT']
-        for fixture, label in [('zig-toggle.png', 'Toggle'), ('odin-resume.png', 'Resume')]:
+        for fixture, label in [('zig-toggle.png', 'Toggle'), ('odin-resume.png', 'Resume'), ('windows-odin-pause.png', 'Pause')]:
             with self.subTest(label=label):
                 frame = Image.open(Path(__file__).parent / 'fixtures' / fixture)
                 texts = [pytesseract.image_to_string(region, config=config)
-                         for region, _, config in ocr_regions(frame)]
+                         for region, _, config, _ in ocr_regions(frame)]
                 self.assertIn(label, '\n'.join(texts))
 
 
