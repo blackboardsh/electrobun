@@ -19,8 +19,10 @@ const os = { darwin: 'macos', linux: 'linux', win32: 'win' }[process.platform];
 validateNativeDevkitManifest({ coreRoot: join(root, 'package/dist'), expectedVersion: version, expectedTarget: { os, arch: process.arch } });
 const pragma = readFileSync(join(root, 'package/hutch.config.ts'), 'utf8').split('\n')[0];
 const cli = pragma.match(/cli=(\S+)/)[1];
-const hutch = (await run('hutch', ['self', 'path'], { cwd: join(root, 'package') })).trim();
+const hutch = (await run('hutch', ['self', 'path', cli], { cwd: join(root, 'package'), env: { ...process.env, HUTCH_DEFAULT_CLI: cli } })).trim();
 const env = { ...process.env, HUTCH_ELECTROBUN_DEVKIT_ROOT: join(root, 'package/dist'), HUTCH_DEFAULT_ELECTROBUN: version, HUTCH_DEFAULT_CLI: cli, HUTCH_ENGINE_BINARY: hutch };
+assert.equal((await run(hutch, ['--version'], { cwd: scratch, env })).trim(), cli,
+  'Source smoke must use the package-pinned Hutch, not the installed channel head');
 const results = [];
 // The other UI templates are tray utilities; verify their Cottontail builds
 // without granting screen-recording permissions or opening system settings.
@@ -47,7 +49,9 @@ for (const scenario of templateScenarios) {
     const plan = { ...scenario, name: scenario.id, output: work, cwd: project, command: [hutch, 'run', 'dev'] };
     const planPath = join(work, 'desktop-plan.json');
     writeFileSync(planPath, JSON.stringify(plan));
-    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: project, env, log: join(work, 'desktop-driver.log'), timeout: 900_000 });
+    // Screenshot tools may create temporary files in cwd; keep them out of
+    // the application's watched sources. The app cwd is specified in plan.
+    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: scratch, env, log: join(work, 'desktop-driver.log'), timeout: 900_000 });
     const result = JSON.parse(readFileSync(join(work, 'result.json'), 'utf8'));
     assert.equal(result.ok, true);
     results.push({ name: scenario.id, status: 'passed' });
@@ -78,7 +82,9 @@ for (const scenario of kitchenScenarios) {
       env: { AUTO_RUN_TEST_NAME: scenario.test } };
     const planPath = join(work, 'desktop-plan.json');
     writeFileSync(planPath, JSON.stringify(plan));
-    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: kitchen, env, log: join(work, 'desktop-driver.log'), timeout: 330_000 });
+    // Screenshot tools may create temporary files in cwd; keep them out of
+    // the application's watched sources. The app cwd is specified in plan.
+    await run('python', [join(root, 'scripts/desktop-smoke/desktop.py'), planPath], { cwd: scratch, env, log: join(work, 'desktop-driver.log'), timeout: 330_000 });
     const result = JSON.parse(readFileSync(join(work, 'result.json'), 'utf8'));
     assert.equal(result.ok, true);
     results.push({ name: scenario.id, status: 'passed' });
