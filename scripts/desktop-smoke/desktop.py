@@ -29,6 +29,8 @@ def window(title, activate=True):
         user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
         user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
         user.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
+                                     ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
         handle = user.FindWindowW(None, title)
         if handle and user.IsWindowVisible(handle):
             rect = wintypes.RECT()
@@ -36,6 +38,10 @@ def window(title, activate=True):
                 user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
             user.GetWindowRect(handle, ctypes.byref(rect))
             if activate:
+                # Hosted ARM runners can open background console windows after
+                # startup. Keep the app under test above them for actual input
+                # and screenshots; the process teardown removes this window.
+                user.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002)
                 user.SetForegroundWindow(handle)
             return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
     else:
