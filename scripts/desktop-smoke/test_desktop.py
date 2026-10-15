@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from desktop import stop, counter_difference, ocr_regions, rendered_surface
+from desktop import stop, counter_difference, ocr_regions, rendered_surface, app_failure
 
 
 class CleanupTests(unittest.TestCase):
@@ -48,6 +48,22 @@ while True: time.sleep(0.1)
                         os.killpg(int(ready.read_text()), signal.SIGKILL)
                     except ProcessLookupError:
                         pass
+
+
+class AppExitTests(unittest.TestCase):
+    def test_rust_stack_overflow_is_not_hidden_by_watch_mode(self):
+        # Actual Windows x64 source run 38714107840. The watcher remained
+        # alive for ten minutes after its child exited before creating a window.
+        log = """[electrobun dev --watch] Watching for changes...
+Child process spawned with PID 6396
+thread 'main' has overflowed its stack
+Child process exited with code: 3221225725
+"""
+        self.assertIn('stack overflow', app_failure(log))
+        self.assertIsNone(app_failure('Child process spawned with PID 6396'))
+
+    def test_clean_early_exit_is_not_a_running_app(self):
+        self.assertIsNotNone(app_failure('Child process exited with code: 0'))
 
 
 class CounterImageTests(unittest.TestCase):

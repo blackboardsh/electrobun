@@ -215,6 +215,16 @@ def ocr_regions(image):
             yield button.resize((button.width*2, button.height*2)), top-10, '--psm 7', 2, left-10
 
 
+def app_failure(log_text):
+    if 'Uncaught exception in worker:' in log_text:
+        return 'App worker crashed; see dev.log'
+    if 'has overflowed its stack' in log_text:
+        return 'App stack overflow; see dev.log'
+    if 'Child process exited with code:' in log_text:
+        return 'App exited while the dev watcher was still running; see dev.log'
+    return None
+
+
 def inspect_app(plan):
     import pyautogui as gui
     import pytesseract
@@ -235,8 +245,9 @@ def inspect_app(plan):
             raise RuntimeError(f'dev command exited with {process.returncode}')
         # Watch mode can survive a fatal exception in the launched app.
         log_text = (output / 'dev.log').read_text(encoding='utf-8', errors='replace')
-        if 'Uncaught exception in worker:' in log_text:
-            raise RuntimeError('App worker crashed; see dev.log')
+        failure = app_failure(log_text)
+        if failure:
+            raise RuntimeError(failure)
 
     def refresh_bounds():
         nonlocal rect
