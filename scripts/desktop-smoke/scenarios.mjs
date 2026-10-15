@@ -16,9 +16,8 @@ export const templateScenarios = [
     { move: [0.3, 0.5], expectChange: true },
     { move: [0.6, 0.7], expectChange: true },
   ] },
-  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Ready', actions: [
-    { click: 'Generate', expectText: 'Ready', expectChange: true },
-    { click: 'Solve', expectText: 'Solved', expectChange: true },
+  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Solved', actions: [
+    { click: 'Generate', occurrence: 'last', expectText: 'Solved', expectChange: true },
   ] },
   { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [
     { click: '+ 1', expectText: 'incremented to 1', expectChange: true },

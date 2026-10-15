@@ -52,8 +52,10 @@ export async function smokeRelease(options) {
   try {
     const { scratch, env, hutch, catalog, channel } = await prepareRelease(options);
     const python = process.env.SMOKE_PYTHON || 'python';
-    const selected = options.templates ? options.templates.split(',') : templateScenarios.map(s => s.id);
-    assert.ok(selected.every(id => templateScenarios.some(s => s.id === id)), 'Unknown smoke template');
+    const allScenarios = [...templateScenarios, ...kitchenScenarios];
+    const selection = options.scenarios || options.templates || 'all';
+    const selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
+    assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
     for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
       const output = join(work, scenario.id);
       mkdirSync(output);
@@ -91,7 +93,8 @@ export async function smokeRelease(options) {
     }
     // Build the exact tagged Kitchen sources against the published devkit. Do
     // not use this checkout's unpublished package/dist or a local runtime.
-    if (!options.templates) {
+    const selectedKitchen = kitchenScenarios.filter(s => selected.includes(s.id));
+    if (selectedKitchen.length) {
       const source = join(scratch, 'release-source');
       mkdirSync(source);
       const git = async args => run('git', args, { cwd: source, env, log: join(work, `git-${args[0]}.log`) });
@@ -107,7 +110,7 @@ export async function smokeRelease(options) {
       await run(hutch, ['run', 'install'], { cwd: kitchen, env, log: join(work, 'kitchen-install.log') });
       await run(hutch, ['scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--build-only'],
         { cwd: kitchen, env, log: join(work, 'kitchen-build.log'), timeout: 1_200_000 });
-      for (const scenario of kitchenScenarios) {
+      for (const scenario of selectedKitchen) {
         const output = join(work, scenario.id);
         mkdirSync(output);
         console.log(`[desktop-smoke] ${scenario.id}`);
@@ -149,7 +152,7 @@ export async function smokeRelease(options) {
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const args = process.argv.slice(2), options = {};
   for (let i = 0; i < args.length; i += 2) {
-    assert.ok(['--version', '--platform', '--output', '--templates'].includes(args[i]) && args[i + 1], 'Expected --version VERSION --platform PLATFORM --output DIRECTORY [--templates IDS]');
+    assert.ok(['--version', '--platform', '--output', '--templates', '--scenarios'].includes(args[i]) && args[i + 1], 'Expected --version VERSION --platform PLATFORM --output DIRECTORY [--scenarios all|IDS]');
     options[args[i].slice(2)] = args[i + 1];
   }
   await smokeRelease(options);

@@ -73,6 +73,14 @@ def inspect_app(plan):
     rect = None
     process = None
 
+    def require_running():
+        if process.poll() is not None:
+            raise RuntimeError(f'dev command exited with {process.returncode}')
+        # Watch mode can survive a fatal exception in the launched app.
+        log_text = (output / 'dev.log').read_text(encoding='utf-8', errors='replace')
+        if 'Uncaught exception in worker:' in log_text:
+            raise RuntimeError('App worker crashed; see dev.log')
+
     def capture(label):
         image = gui.screenshot()
         label = f'{len(shots) + 1:02d}-{label}'
@@ -101,8 +109,7 @@ def inspect_app(plan):
         deadline = time.monotonic() + limit
         last = ''
         while time.monotonic() < deadline:
-            if process.poll() is not None:
-                raise RuntimeError(f'app exited with {process.returncode}')
+            require_running()
             image = gui.screenshot()
             scale = image.width / gui.size().width
             x, y, w, h = rect
@@ -113,7 +120,8 @@ def inspect_app(plan):
             time.sleep(1)
         raise AssertionError(f'Visible text {expected!r} not found. Last OCR: {last}')
 
-    def locate_text(label, image=None):
+    def locate_text(label, image=None, occurrence="first"):
+        candidates = []
         if image is None:
             image = capture('target-' + re.sub(r'\W+', '-', label))
         for region, top, config in ocr_regions(image):
@@ -132,7 +140,12 @@ def inspect_app(plan):
                     x = (data['left'][first] + data['left'][last] + data['width'][last]) / 2
                     y = top + data['top'][first] + data['height'][first] / 2
                     scale = gui.screenshot().width / gui.size().width
-                    return rect[0] + x / scale, rect[1] + y / scale
+                    point = (rect[0] + x / scale, rect[1] + y / scale)
+                    if occurrence == "first":
+                        return point
+                    candidates.append(point)
+        if candidates:
+            return max(candidates, key=lambda point: point[1])
         raise AssertionError(f'Could not locate clickable text {label!r}: {tokens}')
 
     try:
@@ -141,8 +154,7 @@ def inspect_app(plan):
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=sys.platform != 'win32')
             deadline = time.monotonic() + plan.get('startupTimeout', 600)
             while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise RuntimeError(f'dev command exited with {process.returncode}')
+                require_running()
                 rect = window(plan['title'])
                 if rect:
                     break
@@ -155,13 +167,19 @@ def inspect_app(plan):
                 await_text(plan['readyText'])
                 checks.append('rendered-ready-text')
             time.sleep(2)
-            before = capture('01-rendered')
-            if max(ImageStat.Stat(before.convert('RGB')).stddev) < 5:
-                raise AssertionError('Window capture is blank or nearly uniform')
+            render_deadline = time.monotonic() + 30
+            while True:
+                require_running()
+                before = capture('rendered')
+                if max(ImageStat.Stat(before.convert('RGB')).stddev) >= 5:
+                    break
+                if time.monotonic() >= render_deadline:
+                    raise AssertionError('Window capture remained blank or nearly uniform for 30 seconds')
+                time.sleep(2)
             checks.append('nonblank-desktop-capture')
             for index, action in enumerate(plan['actions']):
                 if 'click' in action:
-                    gui.click(*locate_text(action['click']))
+                    gui.click(*locate_text(action['click'], occurrence=action.get('occurrence', 'first')))
                 if 'doubleClick' in action:
                     import pyperclip
                     pyperclip.copy('smoke-no-selection')
