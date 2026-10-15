@@ -376,6 +376,7 @@ def inspect_app(plan):
                 if action.get('expectCursor'):
                     deadline = time.monotonic() + 15
                     observed = None
+                    previous_observed = None
                     while time.monotonic() < deadline:
                         frame = capture('cursor-check')
                         cx, cy = locate_text('Cursor', frame)
@@ -388,10 +389,18 @@ def inspect_app(plan):
                         if pair:
                             observed = tuple(map(int, pair.groups()))
                             pointer = tuple(gui.position())
-                            if not cursor_readings or all(abs((observed[i] - cursor_readings[-1][0][i]) -
-                                                               (pointer[i] - cursor_readings[-1][1][i])) <= 8 for i in (0, 1)):
+                            # The displayed value can lag the OS cursor while
+                            # moveTo animates. Do not anchor the delta to an
+                            # intermediate position from the first screenshot.
+                            stable = observed == previous_observed
+                            follows = not cursor_readings or all(
+                                abs((observed[i] - cursor_readings[-1][0][i]) -
+                                    (pointer[i] - cursor_readings[-1][1][i])) <= 8 for i in (0, 1))
+                            if stable and follows:
                                 cursor_readings.append((observed, pointer))
+                                result['cursorReadings'] = cursor_readings
                                 break
+                            previous_observed = observed
                         time.sleep(1)
                     else:
                         raise AssertionError(f'Native cursor readout did not follow mouse movement: {observed}')
