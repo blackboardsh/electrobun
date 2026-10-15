@@ -149,6 +149,7 @@ jobs:
         run: |
           dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
             openbox > "$RUNNER_TEMP/openbox-smoke.log" 2>&1 &
+            python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results"
             node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results"
           '
       - name: Smoke published templates (macOS and Windows)
@@ -157,7 +158,9 @@ jobs:
         env:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           SMOKE_PLATFORM: ${{ matrix.platform }}
-        run: node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results"
+        run: |
+          python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results"
+          node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results"
       - name: Upload screenshots and logs
         if: always()
         id: artifact

@@ -10,16 +10,17 @@ import unittest
 
 @unittest.skipIf(sys.platform == 'win32', 'POSIX fake executable; real ConPTY is exercised in CI')
 class PickerTests(unittest.TestCase):
-    def run_picker(self, fail=False):
+    def run_picker(self, fail=False, channel="beta"):
+        expected_args = ["electrobun", "init"] + (["--beta"] if channel == "beta" else [])
         with tempfile.TemporaryDirectory() as work:
             root = Path(work)
             fake = root / 'hutch'
-            fake.write_text('#!' + sys.executable + '\n' + '''import os, sys, termios, tty
-assert sys.argv[1:] == ['electrobun', 'init', '--beta']
+            fake.write_text('#!' + sys.executable + '\n' + 'expected_args = ' + repr(expected_args) + '\n' + 'channel = ' + repr(channel) + '\n' + '''import os, sys, termios, tty
+assert sys.argv[1:] == expected_args
 assert sys.stdin.isatty() and sys.stdout.isatty()
 old = termios.tcgetattr(0)
 tty.setraw(0)
-print('Choose an Electrobun beta template', flush=True)
+print(f'Choose an Electrobun {channel} template', flush=True)
 keys = b''
 while not keys.endswith(b'\\r'):
     keys += os.read(0, 1)
@@ -32,13 +33,17 @@ assert name == 'smoke-bunny', repr(name)
 print('Downloading bunny from Electrobun 2.0.3-beta.25 (beta)...', flush=True)
 ''' + ("sys.exit(1)\n" if fail else "print('Created Electrobun project at /tmp/smoke-bunny', flush=True)\n"))
             fake.chmod(0o755)
-            plan = dict(hutch=str(fake), channel='beta', cwd=work, index=2, id='bunny', label='Bunny', projectName='smoke-bunny', version='2.0.3-beta.25', log=str(root / 'picker.log'))
+            plan = dict(hutch=str(fake), channel=channel, cwd=work, index=2, id='bunny', label='Bunny', projectName='smoke-bunny', version='2.0.3-beta.25', log=str(root / 'picker.log'))
             path = root / 'plan.json'
             path.write_text(json.dumps(plan))
             return subprocess.run([sys.executable, str(Path(__file__).with_name('picker.py')), str(path)], capture_output=True, text=True, timeout=15)
 
     def test_picker_uses_beta_arrows_and_name_prompt(self):
         result = self.run_picker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_stable_picker_omits_beta_flag(self):
+        result = self.run_picker(channel="stable")
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_init_failure_is_not_accepted(self):

@@ -31,8 +31,8 @@ def window(title):
         handle = user.FindWindowW(None, title)
         if handle and user.IsWindowVisible(handle):
             rect = wintypes.RECT()
+            user.ShowWindow(handle, 9 if title == "Bunny" else 3)
             user.GetWindowRect(handle, ctypes.byref(rect))
-            user.ShowWindow(handle, 9)
             user.SetForegroundWindow(handle)
             return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
     else:
@@ -99,7 +99,7 @@ def inspect_app(plan):
             x, y, w, h = rect
             image = image.crop(tuple(round(n * scale) for n in (x, y, x+w, y+h)))
             last = text(image)
-            if expected.casefold() in last.casefold():
+            if ' '.join(expected.casefold().split()) in ' '.join(last.casefold().split()):
                 return image
             time.sleep(1)
         raise AssertionError(f'Visible text {expected!r} not found. Last OCR: {last}')
@@ -110,8 +110,13 @@ def inspect_app(plan):
         words = label.casefold().split()
         tokens = [word.casefold().strip() for word in data['text']]
         for start in range(len(tokens)):
-            indices = [i for i in range(start, len(tokens)) if tokens[i]][:len(words)]
-            if [tokens[i] for i in indices] == words:
+            indices = []
+            for i in range(start, len(tokens)):
+                if tokens[i]:
+                    indices.append(i)
+                if len(''.join(tokens[j] for j in indices)) >= len(''.join(words)):
+                    break
+            if ''.join(tokens[i] for i in indices) == ''.join(words):
                 first, last = indices[0], indices[-1]
                 x = (data['left'][first] + data['left'][last] + data['width'][last]) / 2
                 y = data['top'][first] + data['height'][first] / 2
@@ -147,6 +152,9 @@ def inspect_app(plan):
             for index, action in enumerate(plan['actions']):
                 if 'click' in action:
                     click_text(action['click'])
+                if 'clickAt' in action:
+                    x, y = action['clickAt']
+                    gui.click(rect[0] + rect[2] * x, rect[1] + rect[3] * y)
                 if 'key' in action:
                     gui.press(action['key'])
                 if 'move' in action:
@@ -155,6 +163,19 @@ def inspect_app(plan):
                 if 'expectText' in action:
                     await_text(action['expectText'])
                     checks.append('visible-text:' + action['expectText'])
+                if 'expectCounter' in action:
+                    frame = capture('counter-check')
+                    counter = frame.crop((round(frame.width * 0.1), round(frame.height * 0.28), round(frame.width * 0.5), round(frame.height * 0.55)))
+                    observed = pytesseract.image_to_string(counter, config='--psm 6 -c tessedit_char_whitelist=0123456789').strip()
+                    if observed != str(action['expectCounter']):
+                        raise AssertionError(f'Expected visible counter {action["expectCounter"]}, read {observed!r}')
+                    checks.append('visible-counter:' + observed)
+                if 'absentText' in action:
+                    time.sleep(1)
+                    observed = ' '.join(text(capture('absence-check')).casefold().split())
+                    if action['absentText'].casefold() in observed:
+                        raise AssertionError(f'Text should be occluded: {action["absentText"]}')
+                    checks.append('occluded-text:' + action['absentText'])
                 time.sleep(action.get('settle', 1))
                 after = capture(f'{index + 2:02d}-interaction')
                 if action.get('expectChange'):

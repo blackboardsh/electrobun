@@ -21,7 +21,7 @@ export const templateScenarios = [
     { click: 'Solve', expectChange: true, settle: 3 },
   ] },
   { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [
-    { key: 'space', expectText: 'incremented to 1', expectChange: true },
+    { click: '+ 1', expectText: 'incremented to 1', expectChange: true },
     { click: 'Reset', expectText: 'reset to 0', expectChange: true },
   ] },
 ];
@@ -30,3 +30,14 @@ export function skipReason(scenario, platform) {
   return platform === 'windows-arm64' && scenario.id.startsWith('odin-')
     ? 'The published Odin toolchain does not support Windows ARM64.' : null;
 }
+
+export const kitchenScenarios = [
+  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'OOPIF Find Test Page', actions: [
+    { click: 'Add Mask Selector', expectText: 'Mask Overlay 2', expectChange: true },
+    { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
+  ] },
+  { id: 'kitchen-cottontail-ui', title: 'Electrobun UI (kitchen)', test: 'Electrobun UI demo window', readyText: 'reactive GPU chrome', actions: [
+    { click: '+ 1', expectCounter: 1, expectChange: true },
+    { click: 'Reset', expectCounter: 0, expectChange: true },
+  ] },
+];

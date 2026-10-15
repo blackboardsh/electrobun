@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { acceptanceEnvironment, run, validateCatalog } from '../accept-published-template.mjs';
 import { npmInvocation, validateRunnerPlatform } from '../../npm/scripts/accept-published-bootstrap.mjs';
 import { parseHutchPragma, releaseChannel } from '../publish-templates.mjs';
-import { templateScenarios, skipReason } from './scenarios.mjs';
+import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templates';
@@ -87,6 +87,46 @@ export async function smokeRelease(options) {
         const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : {};
         results.push({ ...report, name: scenario.id, status: 'failed', error: error.message });
         console.error(`[desktop-smoke] ${scenario.id}: ${error.message}`);
+      }
+    }
+    // Build the exact tagged Kitchen sources against the published devkit. Do
+    // not use this checkout's unpublished package/dist or a local runtime.
+    if (!options.templates) {
+      const source = join(scratch, 'release-source');
+      mkdirSync(source);
+      const git = async args => run('git', args, { cwd: source, env, log: join(work, `git-${args[0]}.log`) });
+      await git(['init']);
+      await git(['remote', 'add', 'origin', 'https://github.com/blackboardsh/electrobun.git']);
+      await git(['sparse-checkout', 'set', 'kitchen', 'package/scripts']);
+      await git(['fetch', '--depth=1', '--filter=blob:none', 'origin', `refs/tags/v${options.version}`]);
+      await git(['checkout', '--detach', 'FETCH_HEAD']);
+      const kitchen = join(source, 'kitchen');
+      const kitchenConfig = readFileSync(join(kitchen, 'hutch.config.ts'), 'utf8');
+      assert.deepEqual(parseHutchPragma(kitchenConfig), catalog.tools);
+      assert.ok(kitchenConfig.includes(`version: "${options.version}"`), 'Tagged Kitchen product pin differs from release');
+      await run(hutch, ['run', 'install'], { cwd: kitchen, env, log: join(work, 'kitchen-install.log') });
+      await run(hutch, ['scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--build-only'],
+        { cwd: kitchen, env, log: join(work, 'kitchen-build.log'), timeout: 1_200_000 });
+      for (const scenario of kitchenScenarios) {
+        const output = join(work, scenario.id);
+        mkdirSync(output);
+        console.log(`[desktop-smoke] ${scenario.id}`);
+        try {
+          const plan = { ...scenario, name: scenario.id, output, cwd: kitchen,
+            command: [hutch, 'scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--launch-only', '--timeout=300'],
+            env: { AUTO_RUN_TEST_NAME: scenario.test } };
+          const planPath = join(output, 'desktop-plan.json');
+          writeFileSync(planPath, JSON.stringify(plan));
+          await run(python, [join(here, 'desktop.py'), planPath], { cwd: scratch, env, log: join(output, 'desktop-driver.log'), timeout: 330_000 });
+          const result = JSON.parse(readFileSync(join(output, 'result.json'), 'utf8'));
+          assert.equal(result.ok, true);
+          results.push({ ...result, status: 'passed' });
+        } catch (error) {
+          const reportPath = join(output, 'result.json');
+          const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : {};
+          results.push({ ...report, name: scenario.id, status: 'failed', error: error.message });
+          console.error(`[desktop-smoke] ${scenario.id}: ${error.message}`);
+        }
       }
     }
   } catch (error) {
