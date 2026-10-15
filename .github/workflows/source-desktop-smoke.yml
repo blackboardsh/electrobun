@@ -2,9 +2,11 @@ name: Source desktop smoke diagnostics
 
 on:
   workflow_dispatch:
-  push:
-    branches: [ci/release-desktop-smoke]
-    paths: ['.github/workflows/source-desktop-smoke.yml']
+    inputs:
+      mac_windows_only:
+        description: Retry macOS and Windows setup without repeating Linux builds
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -15,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         # Windows ARM uses x64 Python for pywinpty; Hutch and apps stay ARM64.
-        include: ${{ fromJSON('[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+        include: ${{ fromJSON(inputs.mac_windows_only && '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     steps:
@@ -96,7 +98,7 @@ jobs:
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev libpipewire-0.3-dev build-essential cmake pkg-config libvulkan1 mesa-vulkan-drivers xvfb xauth openbox dbus-x11 xdotool scrot python3-tk tesseract-ocr
       - name: Install macOS OCR
         if: runner.os == 'macOS'
-        run: brew install tesseract
+        uses: ./.github/actions/install-macos-ocr
       - name: Install Windows OCR
         if: runner.os == 'Windows'
         shell: pwsh
@@ -166,7 +168,6 @@ jobs:
           arch: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
       - name: Build source devkit
         working-directory: package
-        shell: bash
         env:
           ELECTROBUN_BUILD_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
         run: |
@@ -190,13 +191,23 @@ jobs:
             python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
             node scripts/desktop-smoke/source-run.mjs "$RUNNER_TEMP/desktop-smoke-results"
           '
-      - name: Smoke source templates (macOS and Windows)
-        if: runner.os != 'Linux'
+      - name: Smoke source templates (macOS)
+        if: runner.os == 'macOS'
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
           python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
           node scripts/desktop-smoke/source-run.mjs "$RUNNER_TEMP/desktop-smoke-results"
+      - name: Smoke source templates (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          python scripts/desktop-smoke/preflight.py "$output" 2>&1 | Tee-Object -FilePath "$output/preflight.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/desktop-smoke/source-run.mjs "$output"
+          exit $LASTEXITCODE
       - name: Upload screenshots and logs
         if: always()
         id: artifact
