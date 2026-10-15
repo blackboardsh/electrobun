@@ -34,7 +34,7 @@ int main() {
     assert(deriveLinuxWindowClass("", "dev") == "Electrobun-dev");
 }
 `);
-			const compile = spawnSync(process.env.CXX || "c++", ["-std=c++17", input, "-o", binary], { encoding: "utf8" });
+			const compile = spawnSync(process.env["CXX"] || "c++", ["-std=c++17", input, "-o", binary], { encoding: "utf8" });
 			expect(compile.stderr).toBe("");
 			expect(compile.status).toBe(0);
 			expect(spawnSync(binary).status).toBe(0);

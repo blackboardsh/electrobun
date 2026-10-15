@@ -605,15 +605,16 @@ describe("Electrobun template package boundaries", () => {
 	});
 });
 
- test("JavaScript templates explicitly select Bun and preserve their entrypoints", async () => {
+ test("JavaScript templates select Cottontail for UI and Bun otherwise, preserving entrypoints", async () => {
    for (const entry of readdirSync(templatesRoot, { withFileTypes: true })) {
      if (!entry.isDirectory()) continue;
      const configPath = join(templatesRoot, entry.name, "electrobun.config.ts");
      if (!existsSync(configPath)) continue;
      const { default: config } = await import(configPath);
      if (["zig", "rust", "go", "odin"].includes(config.build.mainProcess)) continue;
-     expect(config.build.mainProcess).toBe("bun");
-     expect(config.build.cottontail).toBeUndefined();
-     expect(existsSync(join(templatesRoot, entry.name, config.build.bun.entrypoint))).toBe(true);
+     const runtime = entry.name.startsWith("ui-") ? "cottontail" : "bun";
+     expect(config.build.mainProcess).toBe(runtime);
+     expect(config.build[runtime === "bun" ? "cottontail" : "bun"]).toBeUndefined();
+     expect(existsSync(join(templatesRoot, entry.name, config.build[runtime].entrypoint))).toBe(true);
    }
  });

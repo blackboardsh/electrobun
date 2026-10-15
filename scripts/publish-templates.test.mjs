@@ -234,7 +234,9 @@ test("dry-run pins only staged Hutch configs and preserves repository inputs", a
 		({ mainProcess }) => !["zig", "rust", "go", "odin"].includes(mainProcess),
 	);
 	assert.equal(javascriptTemplates.length, 23);
-	assert.ok(javascriptTemplates.every(({ mainProcess }) => mainProcess === "bun"));
+	for (const { id, mainProcess } of javascriptTemplates) {
+		assert.equal(mainProcess, id.startsWith("ui-") ? "cottontail" : "bun", id);
+	}
 	assert.equal(
 		catalog.templates.filter(({ id }) => id === "all").length,
 		1,
