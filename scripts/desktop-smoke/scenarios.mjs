@@ -8,7 +8,7 @@ export const templateScenarios = [
     { click: 'Toggle', expectText: 'Julia', expectChange: true },
     { clickAgain: true, expectText: 'Mandelbrot', expectChange: true },
   ] },
-  { id: 'odin-particles-wgpu', title: 'Odin Particles', gpuRegion: [0.08, 0.25, 0.60, 0.85], readyText: 'Pause', actions: [
+  { id: 'odin-fluid-wgpu', title: 'Neon Fluid Lab', gpuRegion: [0.08, 0.25, 0.85, 0.65], readyText: 'Odin solver online', actions: [
     { click: 'Pause', expectText: 'Resume', expectChange: true },
     { click: 'Resume', expectText: 'Pause', expectChange: true },
   ] },
