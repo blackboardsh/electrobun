@@ -8,7 +8,7 @@ import tempfile
 import time
 import unittest
 
-from desktop import stop, counter_difference, ocr_regions, rendered_surface, app_failure
+from desktop import stop, counter_difference, ocr_regions, ocr_token, rendered_surface, app_failure
 
 
 class CleanupTests(unittest.TestCase):
@@ -116,6 +116,24 @@ class SurfaceImageTests(unittest.TestCase):
 
 
 class ButtonOCRTests(unittest.TestCase):
+    def test_windows_rust_cursor_label_and_coordinates(self):
+        # Real Windows x64 run 38719590710: OCR read the label as ‘CURSOR.
+        from PIL import Image
+        import pytesseract
+        if os.environ.get('SMOKE_TESSERACT'):
+            pytesseract.pytesseract.tesseract_cmd = os.environ['SMOKE_TESSERACT']
+        self.assertEqual(ocr_token('‘CURSOR'), 'cursor')
+        frame = Image.open(Path(__file__).parent / 'fixtures' / 'windows-rust-cursor.png')
+        data = pytesseract.image_to_data(frame, config='--psm 11', output_type=pytesseract.Output.DICT)
+        labels = [i for i, word in enumerate(data['text']) if ocr_token(word) == 'cursor']
+        self.assertTrue(labels, data['text'])
+        i = labels[0]
+        x = data['left'][i] + data['width'][i] / 2
+        y = data['top'][i] + data['height'][i] / 2
+        readout = frame.crop((round(x - 45), round(y + 5), round(x + 150), round(y + 45)))
+        value = pytesseract.image_to_string(readout, config='--psm 6 -c tessedit_char_whitelist=0123456789,')
+        self.assertEqual(value.strip().replace(' ', ''), '312,290')
+
     def test_colored_buttons_from_real_ci_screenshots(self):
         # macOS Zig and Linux Odin from published smoke run 38692395840.
         from PIL import Image

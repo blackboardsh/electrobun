@@ -178,6 +178,12 @@ def double_click(gui, point):
         time.sleep(0.08)
 
 
+def ocr_token(value):
+    # Small antialiased labels can acquire leading quotation marks in OCR.
+    # Preserve letters/digits so label matching remains exact.
+    return value.casefold().strip().strip('.,;:!?\'"‘’“”')
+
+
 def ocr_regions(image):
     from PIL import ImageOps
     yield image, 0, '--psm 11', 1, 0
@@ -297,7 +303,7 @@ def inspect_app(plan):
         for region, top, config, ocr_scale, left in ocr_regions(image):
             data = pytesseract.image_to_data(region, config=config, output_type=pytesseract.Output.DICT)
             words = label.casefold().split()
-            tokens = [word.casefold().strip().strip('.,;:!?') for word in data['text']]
+            tokens = [ocr_token(word) for word in data['text']]
             for start in range(len(tokens)):
                 indices = []
                 for i in range(start, len(tokens)):
