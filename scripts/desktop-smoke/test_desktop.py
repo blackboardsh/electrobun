@@ -97,9 +97,22 @@ class ButtonOCRTests(unittest.TestCase):
         for fixture, label in [('zig-toggle.png', 'Toggle'), ('odin-resume.png', 'Resume'), ('windows-odin-pause.png', 'Pause')]:
             with self.subTest(label=label):
                 frame = Image.open(Path(__file__).parent / 'fixtures' / fixture)
+                # Maximized Windows bounds include an offscreen border.
+                if label == 'Pause':
+                    frame = frame.crop((-8, -8, frame.width+8, frame.height+8))
                 texts = [pytesseract.image_to_string(region, config=config)
-                         for region, _, config, _ in ocr_regions(frame)]
+                         for region, _, config, _, _ in ocr_regions(frame)]
                 self.assertIn(label, '\n'.join(texts))
+                if label == 'Pause':
+                    points = []
+                    for region, top, config, scale, left in ocr_regions(frame):
+                        data = pytesseract.image_to_data(region, config=config,
+                                                        output_type=pytesseract.Output.DICT)
+                        for i, word in enumerate(data['text']):
+                            if word == 'Pause':
+                                points.append((left + (data['left'][i] + data['width'][i]/2)/scale,
+                                               top + (data['top'][i] + data['height'][i]/2)/scale))
+                    self.assertTrue(any(554 < x < 631 and 62 < y < 105 for x, y in points), points)
 
 
 if __name__ == '__main__':

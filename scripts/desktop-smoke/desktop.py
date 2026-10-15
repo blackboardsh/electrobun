@@ -173,21 +173,40 @@ def double_click(gui, point):
 
 
 def ocr_regions(image):
-    yield image, 0, '--psm 11', 1
+    from PIL import ImageOps
+    yield image, 0, '--psm 11', 1, 0
     # Sparse-page OCR drops text inside filled buttons. Short overlapping
     # bands retain those labels without treating an animated GPU view as text.
     for top in range(0, image.height, 120):
         band = image.crop((0, top, image.width, min(top + 180, image.height)))
-        yield band, top, '--psm 6', 1
+        yield band, top, '--psm 6', 1, 0
         # Filled buttons can disappear into the surrounding dark gradient in
         # Tesseract's adaptive threshold. Keep a fixed-contrast pass as well.
-        yield band.convert('L').point(lambda value: 255 if value > 140 else 0), top, '--psm 6', 1
+        yield band.convert('L').point(lambda value: 255 if value > 140 else 0), top, '--psm 6', 1, 0
 
-    # Small Windows ClearType labels need enlarged, compact line regions.
-    # Keep their scale so click coordinates still map to the original pixels.
-    for top in range(20, image.height, 40):
-        band = image.crop((0, top, image.width, min(top + 80, image.height)))
-        yield band.resize((band.width * 2, band.height * 2)), top, '--psm 6', 2
+    # Detect light button backgrounds, then OCR each label without unrelated
+    # text or animated pixels. Work at quarter resolution to keep this cheap.
+    small = image.convert('RGB').resize((max(1, image.width // 4), max(1, image.height // 4)))
+    pixels = small.load()
+    remaining = {(x, y) for y in range(small.height) for x in range(small.width)
+                 if min(pixels[x, y]) > 120}
+    while remaining:
+        seed = remaining.pop()
+        component, pending = [seed], [seed]
+        while pending:
+            x, y = pending.pop()
+            for point in ((x-1, y), (x+1, y), (x, y-1), (x, y+1)):
+                if point in remaining:
+                    remaining.remove(point)
+                    component.append(point)
+                    pending.append(point)
+        xs, ys = zip(*component)
+        left, top, right, bottom = min(xs)*4, min(ys)*4, (max(xs)+1)*4, (max(ys)+1)*4
+        if 35 <= right-left <= 300 and 18 <= bottom-top <= 100:
+            left, top = left+2, top+2
+            button = image.crop((left, top, right-2, bottom-2)).convert('L')
+            button = ImageOps.expand(button, 10, fill=255)
+            yield button.resize((button.width*2, button.height*2)), top-10, '--psm 7', 2, left-10
 
 
 def inspect_app(plan):
@@ -236,7 +255,7 @@ def inspect_app(plan):
 
     def text(image):
         return '\n'.join(pytesseract.image_to_string(region, config=config)
-                         for region, _, config, _ in ocr_regions(image))
+                         for region, _, config, _, _ in ocr_regions(image))
 
     def await_text(expected, limit=45):
         deadline = time.monotonic() + limit
@@ -258,7 +277,7 @@ def inspect_app(plan):
         candidates = []
         if image is None:
             image = capture('target-' + re.sub(r'\W+', '-', label))
-        for region, top, config, ocr_scale in ocr_regions(image):
+        for region, top, config, ocr_scale, left in ocr_regions(image):
             data = pytesseract.image_to_data(region, config=config, output_type=pytesseract.Output.DICT)
             words = label.casefold().split()
             tokens = [word.casefold().strip().strip('.,;:!?') for word in data['text']]
@@ -271,7 +290,7 @@ def inspect_app(plan):
                         break
                 if ''.join(tokens[i] for i in indices) == ''.join(words):
                     first, last = indices[0], indices[-1]
-                    x = (data['left'][first] + data['left'][last] + data['width'][last]) / (2 * ocr_scale)
+                    x = left + (data['left'][first] + data['left'][last] + data['width'][last]) / (2 * ocr_scale)
                     y = top + (data['top'][first] + data['height'][first] / 2) / ocr_scale
                     scale = gui.screenshot().width / gui.size().width
                     point = (rect[0] + x / scale, rect[1] + y / scale)
