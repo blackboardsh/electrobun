@@ -134,8 +134,14 @@ def counter_glyph(frame):
 
 
 def counter_difference(initial, current):
-    from PIL import ImageChops, ImageStat
-    return ImageStat.Stat(ImageChops.difference(counter_glyph(initial), counter_glyph(current))).mean[0]
+    from PIL import ImageChops, ImageFilter, ImageStat
+    before, after = counter_glyph(initial), counter_glyph(current)
+    # Native fonts can move across a subpixel boundary after layout changes.
+    # Ignore a one-pixel contour variation, but retain differences inside the
+    # glyph (for example the empty center of 0 versus the stem of 1).
+    extra = ImageChops.subtract(after, before.filter(ImageFilter.MaxFilter(3)))
+    missing = ImageChops.subtract(before, after.filter(ImageFilter.MaxFilter(3)))
+    return ImageStat.Stat(ImageChops.lighter(extra, missing)).mean[0]
 
 
 def click_control(gui, point):

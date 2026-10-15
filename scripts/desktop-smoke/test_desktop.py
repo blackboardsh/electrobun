@@ -73,6 +73,18 @@ class CounterImageTests(unittest.TestCase):
         reset = Image.open(fixtures / 'template-counter-reset.png')
         self.assertEqual(counter_difference(initial, reset), 0)
 
+    def test_native_font_reset_tolerates_subpixel_edges(self):
+        from PIL import Image
+        fixtures = Path(__file__).parent / 'fixtures'
+        # Real macOS source run 38714107840: the visible event log confirms
+        # increment to 1 and reset to 0; layout shifts change antialiased edges.
+        initial = Image.open(fixtures / 'macos-counter-zero.png')
+        incremented = Image.open(fixtures / 'macos-counter-one.png')
+        reset = Image.open(fixtures / 'macos-counter-reset.png')
+        self.assertGreater(counter_difference(initial, incremented), 2)
+        self.assertLess(counter_difference(initial, reset), 0.5)
+        self.assertGreater(counter_difference(incremented, reset), 2)
+
     def test_blank_counter_is_not_a_valid_change(self):
         from PIL import Image
         with self.assertRaisesRegex(AssertionError, 'missing'):
