@@ -887,6 +887,14 @@ jobs:
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
         run: node scripts/publish-templates.mjs
 
+  desktop-smoke:
+    # Use the public install path only after both npm and the template catalog
+    # have been published. Existing acceptance checks still run independently.
+    needs: [npm-publish, publish-templates]
+    uses: ./.github/workflows/desktop-smoke.yml
+    with:
+      version: ${{ github.event.inputs.tag || github.ref_name }}
+
   template-acceptance:
     needs: [publish-templates]
     timeout-minutes: 25

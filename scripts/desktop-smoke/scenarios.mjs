@@ -1,0 +1,32 @@
+// Real published templates; each interaction names an observable UI response.
+export const templateScenarios = [
+  { id: 'bunny', title: 'Bunny', actions: [
+    { move: [0.5, 0.5], expectChange: true },
+    { move: [0.9, 0.9], expectChange: true },
+  ] },
+  { id: 'zig-wgpu', title: 'Zig WGPU', readyText: 'Surface ready', actions: [
+    { click: 'Toggle', expectText: 'Julia', expectChange: true },
+    { click: 'Toggle', expectText: 'Mandelbrot', expectChange: true },
+  ] },
+  { id: 'odin-particles-wgpu', title: 'Odin Particles', readyText: 'Pause', actions: [
+    { click: 'Pause', expectText: 'Resume', expectChange: true },
+    { click: 'Resume', expectText: 'Pause', expectChange: true },
+  ] },
+  { id: 'rust-flock-wgpu', title: 'Rust Flock WGPU', readyText: 'Surface ready', actions: [
+    { move: [0.3, 0.5], expectChange: true },
+    { move: [0.6, 0.7], expectChange: true },
+  ] },
+  { id: 'go-maze-wgpu', title: 'Go Maze WGPU', readyText: 'Generate', actions: [
+    { click: 'Generate', expectChange: true, settle: 3 },
+    { click: 'Solve', expectChange: true, settle: 3 },
+  ] },
+  { id: 'ui-wgpu', title: 'Electrobun UI', readyText: 'Reset', actions: [
+    { key: 'space', expectText: 'incremented to 1', expectChange: true },
+    { click: 'Reset', expectText: 'reset to 0', expectChange: true },
+  ] },
+];
+
+export function skipReason(scenario, platform) {
+  return platform === 'windows-arm64' && scenario.id.startsWith('odin-')
+    ? 'The published Odin toolchain does not support Windows ARM64.' : null;
+}
