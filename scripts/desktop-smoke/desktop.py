@@ -52,9 +52,14 @@ def stop(process):
     else:
         import signal
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            # The Kitchen matrix owns detached app groups and forwards SIGTERM
+            # to them. SIGKILL would strand CEF and lock its profile for the next app.
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=20)
         except ProcessLookupError:
             pass
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=20)
 
 
@@ -115,7 +120,7 @@ def inspect_app(plan):
             x, y, w, h = rect
             image = image.crop(tuple(round(n * scale) for n in (x, y, x+w, y+h)))
             last = text(image)
-            if ' '.join(expected.casefold().split()) in ' '.join(last.casefold().split()):
+            if ''.join(expected.casefold().split()) in ''.join(last.casefold().split()):
                 return image
             time.sleep(1)
         raise AssertionError(f'Visible text {expected!r} not found. Last OCR: {last}')
@@ -177,9 +182,15 @@ def inspect_app(plan):
                     raise AssertionError('Window capture remained blank or nearly uniform for 30 seconds')
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
+            last_click = None
             for index, action in enumerate(plan['actions']):
                 if 'click' in action:
-                    gui.click(*locate_text(action['click'], occurrence=action.get('occurrence', 'first')))
+                    last_click = locate_text(action['click'], occurrence=action.get('occurrence', 'first'))
+                    gui.click(*last_click)
+                if action.get('clickAgain'):
+                    if last_click is None:
+                        raise AssertionError('No previous control to click again')
+                    gui.click(*last_click)
                 if 'doubleClick' in action:
                     import pyperclip
                     pyperclip.copy('smoke-no-selection')

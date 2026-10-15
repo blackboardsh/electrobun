@@ -6,7 +6,7 @@ export const templateScenarios = [
   ] },
   { id: 'zig-wgpu', title: 'Zig WGPU', readyText: 'Surface ready', actions: [
     { click: 'Toggle', expectText: 'Julia', expectChange: true },
-    { click: 'Toggle', expectText: 'Mandelbrot', expectChange: true },
+    { clickAgain: true, expectText: 'Mandelbrot', expectChange: true },
   ] },
   { id: 'odin-particles-wgpu', title: 'Odin Particles', readyText: 'Pause', actions: [
     { click: 'Pause', expectText: 'Resume', expectChange: true },
@@ -31,11 +31,11 @@ export function skipReason(scenario, platform) {
 }
 
 export const kitchenScenarios = [
-  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'OOPIF Find Test Page', actions: [
+  { id: 'kitchen-oopif-masks', title: 'Webview Tag Playground', test: 'Webview Tag playground', readyText: 'Search Target A', actions: [
     { click: 'Add Mask Selector', expectText: 'Mask Overlay 2', expectChange: true },
     { doubleClick: 'Mask Overlay 2', expectSelection: 'Overlay' },
-    { scrollHost: -2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'OOPIF Find Test Page', expectChange: true },
-    { scrollHost: 2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'OOPIF Find Test Page', expectChange: true },
+    { scrollHost: -2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'Search Target A', expectChange: true },
+    { scrollHost: 2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'Search Target A', expectChange: true },
     { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
   ] },
   { id: 'kitchen-cottontail-ui', title: 'Electrobun UI (kitchen)', test: 'Electrobun UI demo window', readyText: 'reactive GPU chrome', actions: [
