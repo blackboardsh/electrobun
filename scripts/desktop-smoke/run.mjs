@@ -49,12 +49,13 @@ export async function smokeRelease(options) {
   const work = resolve(options.output);
   mkdirSync(work, { recursive: true });
   let preparationError;
+  let selected = [];
   try {
     const { scratch, env, hutch, catalog, channel } = await prepareRelease(options);
     const python = process.env.SMOKE_PYTHON || 'python';
     const allScenarios = [...templateScenarios, ...kitchenScenarios];
     const selection = options.scenarios || options.templates || 'all';
-    const selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
+    selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
     assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
     for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
       const output = join(work, scenario.id);
@@ -136,17 +137,23 @@ export async function smokeRelease(options) {
     preparationError = error.message;
     throw error;
   } finally {
+    for (const id of selected) {
+      if (!results.some(result => result.name === id)) {
+        results.push({ name: id, status: 'not-run', reason: preparationError || 'Scenario did not finish' });
+      }
+    }
     const report = { version: options.version, platform: options.platform, results, preparationError };
     writeFileSync(join(work, 'summary.json'), JSON.stringify(report, null, 2));
     const lines = [`# Published release desktop smoke test`, '', `Release: ${options.version}; runner: ${options.platform}`, '',
+      ...(preparationError ? [`Preparation failed: ${preparationError}`, ''] : []),
       '| Scenario | Result |', '| --- | --- |', ...results.map(r => `| ${r.name} | ${r.status}${r.reason ? `: ${r.reason}` : ''} |`), '',
       'Desktop screenshots and per-template logs are in this job’s smoke artifact.'];
     writeFileSync(join(work, 'index.md'), lines.join('\n'));
     const escape = value => String(value).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('"', '&quot;');
-    writeFileSync(join(work, 'index.html'), `<!doctype html><meta charset="utf-8"><title>Release smoke screenshots</title><style>body{font:16px system-ui;margin:2rem;background:#17191e;color:#eee}img{max-width:100%;border:1px solid #777}section{margin:3rem 0}a{color:#8cc8ff}</style><h1>Electrobun ${escape(options.version)} — ${escape(options.platform)}</h1>` + results.map(r => `<section><h2>${escape(r.name)}: ${escape(r.status)}</h2><p>${escape(r.error || r.reason || '')}</p>` + (r.screenshots || []).map(file => `<figure><a href="${escape(r.name)}/${escape(file)}"><img src="${escape(r.name)}/${escape(file)}"></a><figcaption>${escape(file)}</figcaption></figure>`).join('') + '</section>').join(''));
+    writeFileSync(join(work, 'index.html'), `<!doctype html><meta charset="utf-8"><title>Release smoke screenshots</title><style>body{font:16px system-ui;margin:2rem;background:#17191e;color:#eee}img{max-width:100%;border:1px solid #777}section{margin:3rem 0}a{color:#8cc8ff}</style><h1>Electrobun ${escape(options.version)} — ${escape(options.platform)}</h1>${preparationError ? `<p>Preparation failed: ${escape(preparationError)}</p>` : ''}` + results.map(r => `<section><h2>${escape(r.name)}: ${escape(r.status)}</h2><p>${escape(r.error || r.reason || '')}</p>` + (r.screenshots || []).map(file => `<figure><a href="${escape(r.name)}/${escape(file)}"><img src="${escape(r.name)}/${escape(file)}"></a><figcaption>${escape(file)}</figcaption></figure>`).join('') + '</section>').join(''));
     if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, lines.join('\n') + '\n');
   }
-  assert.ok(results.length > 0 && results.every(r => r.status !== 'failed'), 'Desktop smoke tests failed; see summary.json and screenshots');
+  assert.ok(results.length > 0 && results.every(r => r.status === 'passed' || r.status === 'skipped'), 'Desktop smoke tests failed; see summary.json and screenshots');
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
