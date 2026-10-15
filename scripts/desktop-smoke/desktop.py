@@ -240,7 +240,7 @@ def inspect_app(plan):
             if plan.get('initialScrollHost'):
                 await_text(plan['scrollReadyText'])
                 # The right-hand host margin stays outside the 600px OOPIF.
-                gui.moveTo(rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4)
+                click_control(gui, (rect[0] + rect[2] * 0.9, rect[1] + rect[3] * 0.4))
                 gui.scroll(plan['initialScrollHost'])
                 time.sleep(1)
             if plan.get('readyText'):
@@ -302,7 +302,7 @@ def inspect_app(plan):
                     frame = capture('before-host-scroll')
                     host_before = locate_text(host, frame)
                     child_before = locate_text(child, frame)
-                    gui.moveTo(*host_before)
+                    click_control(gui, host_before)
                     gui.scroll(action['scrollHost'])
                     time.sleep(2)
                     frame = capture('after-host-scroll')
