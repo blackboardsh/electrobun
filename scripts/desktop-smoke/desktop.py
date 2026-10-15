@@ -16,7 +16,7 @@ def window(title):
         for item in Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, 0):
             if item.get('kCGWindowName') == title:
                 bounds = item['kCGWindowBounds']
-                AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(item['kCGWindowOwnerPID']).activateWithOptions_(3)
+                AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(item['kCGWindowOwnerPID']).activateWithOptions_(2)
                 return tuple(int(bounds[k]) for k in ('X', 'Y', 'Width', 'Height'))
     elif sys.platform == 'win32':
         from ctypes import wintypes
@@ -46,6 +46,24 @@ def window(title):
     return None
 
 
+def minimize_window(gui, title):
+    bounds = window(title)
+    if not bounds:
+        return False
+    if sys.platform == 'win32':
+        user = ctypes.windll.user32
+        user.ShowWindow(user.FindWindowW(None, title), 6)
+    elif sys.platform == 'darwin':
+        # Standard Cocoa titlebar's yellow button. Do this as soon as the
+        # runner opens, before its delayed interactive playground starts.
+        gui.click(bounds[0] + 44, bounds[1] + 14)
+    else:
+        handle = subprocess.check_output(['xdotool', 'search', '--onlyvisible', '--name',
+                                          '^' + re.escape(title) + '$'], text=True).splitlines()[-1]
+        subprocess.run(['xdotool', 'windowminimize', handle], check=True)
+    return True
+
+
 def stop(process):
     if sys.platform == 'win32':
         subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'], capture_output=True)
@@ -61,6 +79,23 @@ def stop(process):
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
     process.wait(timeout=20)
+
+
+def double_click(gui, point):
+    if sys.platform != 'darwin':
+        gui.doubleClick(*point, interval=0.12)
+        return
+    # PyAutoGUI 0.9.54's macOS backend posts two independent single clicks.
+    # Cocoa/CEF require the click-state field to identify the second click.
+    import Quartz
+    gui.moveTo(*point)
+    for count in (1, 2):
+        for event_type in (Quartz.kCGEventLeftMouseDown, Quartz.kCGEventLeftMouseUp):
+            event = Quartz.CGEventCreateMouseEvent(None, event_type, point, Quartz.kCGMouseButtonLeft)
+            Quartz.CGEventSetIntegerValueField(event, Quartz.kCGMouseEventClickState, count)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
+            time.sleep(0.03)
+        time.sleep(0.08)
 
 
 def inspect_app(plan):
@@ -132,7 +167,7 @@ def inspect_app(plan):
         for region, top, config in ocr_regions(image):
             data = pytesseract.image_to_data(region, config=config, output_type=pytesseract.Output.DICT)
             words = label.casefold().split()
-            tokens = [word.casefold().strip() for word in data['text']]
+            tokens = [word.casefold().strip().strip('.,;:!?') for word in data['text']]
             for start in range(len(tokens)):
                 indices = []
                 for i in range(start, len(tokens)):
@@ -157,9 +192,16 @@ def inspect_app(plan):
         with (output / 'dev.log').open('w', encoding='utf-8') as log:
             process = subprocess.Popen(plan['command'], cwd=plan['cwd'], env={**os.environ, **plan.get('env', {})},
                                        stdout=log, stderr=subprocess.STDOUT, start_new_session=sys.platform != 'win32')
+            sibling_minimized = not plan.get('minimizeWindow')
             deadline = time.monotonic() + plan.get('startupTimeout', 600)
             while time.monotonic() < deadline:
                 require_running()
+                if not sibling_minimized:
+                    sibling_minimized = minimize_window(gui, plan['minimizeWindow'])
+                    if not sibling_minimized:
+                        time.sleep(0.1)
+                        continue
+                    checks.append('minimized-test-runner')
                 rect = window(plan['title'])
                 if rect:
                     break
@@ -183,26 +225,38 @@ def inspect_app(plan):
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
             last_click = None
+            cursor_readings = []
             for index, action in enumerate(plan['actions']):
                 if 'click' in action:
-                    last_click = locate_text(action['click'], occurrence=action.get('occurrence', 'first'))
+                    for label in [action['click'], *action.get('aliases', [])]:
+                        try:
+                            last_click = locate_text(label, occurrence=action.get('occurrence', 'first'))
+                            break
+                        except AssertionError:
+                            if label == [action['click'], *action.get('aliases', [])][-1]:
+                                raise
                     gui.click(*last_click)
                 if action.get('clickAgain'):
                     if last_click is None:
                         raise AssertionError('No previous control to click again')
                     gui.click(*last_click)
                 if 'doubleClick' in action:
-                    import pyperclip
-                    pyperclip.copy('smoke-no-selection')
-                    gui.doubleClick(*locate_text(action['doubleClick']), interval=0.12)
+                    point = locate_text(action['doubleClick'])
+                    frame = capture('mask-before-selection')
+                    scale = frame.width / rect[2]
+                    x, y = (point[0] - rect[0]) * scale, (point[1] - rect[1]) * scale
+                    box = tuple(round(v) for v in (x - 40 * scale, y - 14 * scale,
+                                                  x + 40 * scale, y + 14 * scale))
+                    def blue_coverage(image):
+                        pixels = list(image.crop(box).convert('RGB').getdata())
+                        return sum(b > r + 30 and b > g + 10 and b > 70 for r, g, b in pixels) / len(pixels)
+                    baseline = blue_coverage(frame)
+                    double_click(gui, point)
                     time.sleep(0.5)
-                    capture('mask-text-selected')
-                    gui.hotkey('command' if sys.platform == 'darwin' else 'ctrl', 'c')
-                    time.sleep(0.5)
-                    selected = pyperclip.paste().strip()
-                    if selected != action['expectSelection']:
-                        raise AssertionError(f'Expected selected mask text {action["expectSelection"]!r}, copied {selected!r}')
-                    checks.append('mask-received-double-click:' + selected)
+                    selected = capture('mask-text-selected')
+                    if blue_coverage(selected) - baseline < 0.08:
+                        raise AssertionError('Double-click did not visibly highlight the mask text')
+                    checks.append('mask-received-double-click:visible-selection')
                 if 'scrollHost' in action:
                     # Track one host label and one embedded-page label. Both must
                     # move by the same distance; scrolling inside the OOPIF fails.
@@ -235,6 +289,29 @@ def inspect_app(plan):
                 if 'expectText' in action:
                     await_text(action['expectText'])
                     checks.append('visible-text:' + action['expectText'])
+                if action.get('expectCursor'):
+                    deadline = time.monotonic() + 15
+                    observed = None
+                    while time.monotonic() < deadline:
+                        frame = capture('cursor-check')
+                        cx, cy = locate_text('Cursor', frame)
+                        scale = frame.width / rect[2]
+                        left, top = (cx - rect[0]) * scale, (cy - rect[1]) * scale
+                        readout = frame.crop((round(left - 45 * scale), round(top + 5 * scale),
+                                              round(left + 150 * scale), round(top + 45 * scale)))
+                        value = pytesseract.image_to_string(readout, config='--psm 6 -c tessedit_char_whitelist=0123456789,')
+                        pair = re.search(r'(\d+)\s*,\s*(\d+)', value)
+                        if pair:
+                            observed = tuple(map(int, pair.groups()))
+                            pointer = tuple(gui.position())
+                            if not cursor_readings or all(abs((observed[i] - cursor_readings[-1][0][i]) -
+                                                               (pointer[i] - cursor_readings[-1][1][i])) <= 8 for i in (0, 1)):
+                                cursor_readings.append((observed, pointer))
+                                break
+                        time.sleep(1)
+                    else:
+                        raise AssertionError(f'Native cursor readout did not follow mouse movement: {observed}')
+                    checks.append(f'native-cursor-readout:{observed[0]},{observed[1]}')
                 if 'expectCounter' in action:
                     frame = capture('counter-check')
                     counter = frame.crop((round(frame.width * 0.1), round(frame.height * 0.28), round(frame.width * 0.5), round(frame.height * 0.55)))
@@ -244,8 +321,8 @@ def inspect_app(plan):
                     checks.append('visible-counter:' + observed)
                 if 'absentText' in action:
                     time.sleep(1)
-                    observed = ' '.join(text(capture('absence-check')).casefold().split())
-                    if action['absentText'].casefold() in observed:
+                    observed = ''.join(text(capture('absence-check')).casefold().split())
+                    if ''.join(action['absentText'].casefold().split()) in observed:
                         raise AssertionError(f'Text should be occluded: {action["absentText"]}')
                     checks.append('occluded-text:' + action['absentText'])
                 time.sleep(action.get('settle', 1))

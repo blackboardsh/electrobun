@@ -83,7 +83,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 libvulkan1 mesa-vulkan-drivers xvfb xauth openbox dbus-x11 xdotool xclip scrot python3-tk tesseract-ocr
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 libvulkan1 mesa-vulkan-drivers xvfb xauth openbox dbus-x11 xdotool scrot python3-tk tesseract-ocr
       - name: Install macOS OCR
         if: runner.os == 'macOS'
         run: brew install tesseract
