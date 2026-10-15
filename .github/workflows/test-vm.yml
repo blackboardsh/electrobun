@@ -9,6 +9,14 @@ on:
         required: true
   workflow_dispatch:
     inputs:
+      ref:
+        description: Exact tag or commit to test (defaults to workflow commit)
+        type: string
+        default: ''
+      macos_only:
+        description: Run only macOS when collecting startup crash diagnostics
+        type: boolean
+        default: false
       windows_arm_only:
         description: Run only Windows ARM when verifying a platform-specific fix
         type: boolean
@@ -35,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+        include: ${{ fromJSON(inputs.macos_only && '[{"runner":"macos-14","arch":"arm64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     env:
@@ -221,6 +229,19 @@ jobs:
         working-directory: package
         run: hutch test:vm
 
+      - name: Collect macOS crash reports
+        if: always() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/macos-crash-reports/user" "$RUNNER_TEMP/macos-crash-reports/system"
+          if [[ -d "$HOME/Library/Logs/DiagnosticReports" ]]; then
+            cp -R "$HOME/Library/Logs/DiagnosticReports/." "$RUNNER_TEMP/macos-crash-reports/user/"
+          fi
+          if [[ -d /Library/Logs/DiagnosticReports ]]; then
+            sudo cp -R /Library/Logs/DiagnosticReports/. "$RUNNER_TEMP/macos-crash-reports/system/"
+            sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/macos-crash-reports/system"
+          fi
+
       - name: Upload test diagnostics
         if: always()
         timeout-minutes: 10
@@ -235,4 +256,5 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
             ${{ runner.temp }}/openbox.log
+            ${{ runner.temp }}/macos-crash-reports/**
             kitchen/test-results/**
