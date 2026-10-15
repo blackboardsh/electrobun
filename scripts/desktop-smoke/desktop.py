@@ -9,14 +9,15 @@ import sys
 import time
 
 
-def window(title):
+def window(title, activate=True):
     if sys.platform == 'darwin':
         import Quartz
         import AppKit
         for item in Quartz.CGWindowListCopyWindowInfo(Quartz.kCGWindowListOptionOnScreenOnly, 0):
             if item.get('kCGWindowName') == title:
                 bounds = item['kCGWindowBounds']
-                AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(item['kCGWindowOwnerPID']).activateWithOptions_(2)
+                if activate:
+                    AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(item['kCGWindowOwnerPID']).activateWithOptions_(2)
                 return tuple(int(bounds[k]) for k in ('X', 'Y', 'Width', 'Height'))
     elif sys.platform == 'win32':
         from ctypes import wintypes
@@ -31,15 +32,18 @@ def window(title):
         handle = user.FindWindowW(None, title)
         if handle and user.IsWindowVisible(handle):
             rect = wintypes.RECT()
-            user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
+            if activate:
+                user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
             user.GetWindowRect(handle, ctypes.byref(rect))
-            user.SetForegroundWindow(handle)
+            if activate:
+                user.SetForegroundWindow(handle)
             return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
     else:
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^' + re.escape(title) + '$'], capture_output=True, text=True)
         if found.returncode == 0:
             handle = found.stdout.splitlines()[-1]
-            subprocess.run(['xdotool', 'windowactivate', '--sync', handle], check=True)
+            if activate:
+                subprocess.run(['xdotool', 'windowactivate', '--sync', handle], check=True)
             geometry = subprocess.check_output(['xdotool', 'getwindowgeometry', '--shell', handle], text=True)
             values = dict(line.split('=', 1) for line in geometry.splitlines() if '=' in line)
             return tuple(int(values[k]) for k in ('X', 'Y', 'WIDTH', 'HEIGHT'))
@@ -148,7 +152,15 @@ def inspect_app(plan):
         if 'Uncaught exception in worker:' in log_text:
             raise RuntimeError('App worker crashed; see dev.log')
 
+    def refresh_bounds():
+        nonlocal rect
+        current = window(plan['title'], activate=False)
+        if not current:
+            raise AssertionError('App window is no longer visible')
+        rect = current
+
     def capture(label):
+        refresh_bounds()
         image = gui.screenshot()
         label = f'{len(shots) + 1:02d}-{label}'
         image.save(output / f'{label}.png')
@@ -177,6 +189,7 @@ def inspect_app(plan):
         last = ''
         while time.monotonic() < deadline:
             require_running()
+            refresh_bounds()
             image = gui.screenshot()
             scale = image.width / gui.size().width
             x, y, w, h = rect
@@ -236,6 +249,9 @@ def inspect_app(plan):
             if not rect:
                 raise AssertionError(f'No visible window titled {plan["title"]!r}')
             checks.append('visible-window')
+            # Maximize and the app's startup positioning can complete asynchronously.
+            time.sleep(2)
+            refresh_bounds()
             gui.moveTo(max(2, rect[0] - 20), max(2, rect[1] - 20))
             if plan.get('initialScrollHost'):
                 await_text(plan['scrollReadyText'])
@@ -264,6 +280,7 @@ def inspect_app(plan):
             last_click = None
             cursor_readings = []
             for index, action in enumerate(plan['actions']):
+                refresh_bounds()
                 if 'click' in action:
                     for label in [action['click'], *action.get('aliases', [])]:
                         try:
