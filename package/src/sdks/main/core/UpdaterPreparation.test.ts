@@ -14,6 +14,7 @@ import { getPlatformPrefix } from "../../../shared/naming";
 import { ARCH, OS } from "../../../shared/platform";
 import {
 	Updater,
+	isUpdateDiskFullError,
 	addUpdateArtifactCacheBuster,
 	atomicWriteFile,
 	applyDeltaPatch,
@@ -524,6 +525,160 @@ describe("v2 update preparation contracts", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+
+	test("releases consumed patches and archives between hops in a long chain", async () => {
+		const root = fixtureRoot();
+		try {
+			const originalPath = join(root, "hash0.tar");
+			const retainedTarPath = join(root, "hash13.tar");
+			writeFileSync(originalPath, "retained original");
+			let hop = 0;
+			let activePath = originalPath;
+			let patchPathForValidation = "";
+			const filesBeforeFetch: string[][] = [];
+			const expectedBeforeFetch: string[][] = [];
+			const validationFiles: boolean[] = [];
+			const result = await preparePatchChainForUpdate(
+				{
+					info: {
+						...validManifest(), hash: "hash0", name: "Example",
+						baseUrl: "https://updates.example.test/releases",
+					},
+					manifest: validateUpdateManifest({ ...validManifest(), hash: "hash13" }, expected),
+					extractionFolder: root,
+					transactionId: "d".repeat(32),
+					retainedTarPath,
+				},
+				{
+					fetchResponse: async () => {
+						filesBeforeFetch.push(readdirSync(root).map((name) => join(root, name)).sort());
+						expectedBeforeFetch.push([...new Set([originalPath, activePath])].sort());
+						return new Response(`hash${++hop}`);
+					},
+					applyPatch: ({ currentTarPath, patchPath, outputPath }) => {
+						activePath = currentTarPath;
+						patchPathForValidation = patchPath;
+						writeFileSync(outputPath, updateTar(readFileSync(patchPath, "utf8")));
+					},
+					readNextHash: async (outputPath) => {
+						// Keep the input until its successor has been validated.
+						validationFiles.push(existsSync(activePath) && existsSync(patchPathForValidation));
+						const hash = await readUpdateHashFromTar(outputPath);
+						activePath = outputPath;
+						return hash;
+					},
+				},
+			);
+			expect(result).toEqual({ completed: true, patchesApplied: 13 });
+			expect(validationFiles).toEqual(Array(13).fill(true));
+			expect(filesBeforeFetch).toEqual(expectedBeforeFetch);
+			expect(readdirSync(root).sort()).toEqual(["hash0.tar", "hash13.tar"]);
+			expect(readFileSync(originalPath, "utf8")).toBe("retained original");
+			await expect(readUpdateHashFromTar(retainedTarPath)).resolves.toBe("hash13");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("captures native patcher disk-full diagnostics and removes its partial output", () => {
+		const root = fixtureRoot();
+		try {
+			// Use Bun as a small failing child process to exercise the real executor.
+			const currentTarPath = join(root, "failing-patcher.js");
+			const patchPath = join(root, "update.patch");
+			const outputPath = join(root, "output.tar");
+			writeFileSync(currentTarPath, `
+				require("node:fs").writeFileSync(process.argv[2], "partial");
+				console.error("error: NoSpaceLeft");
+				process.exit(1);
+			`);
+			writeFileSync(patchPath, "patch");
+			let failure: unknown;
+			try {
+				applyDeltaPatch({ bspatchPath: process.execPath, currentTarPath, patchPath, outputPath });
+			} catch (error) {
+				failure = error;
+			}
+			expect(isUpdateDiskFullError(failure)).toBe(true);
+			expect(existsSync(outputPath)).toBe(false);
+			expect(existsSync(currentTarPath)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("recognizes explicit disk-full errors without treating other failures as disk exhaustion", () => {
+		for (const error of [
+			Object.assign(new Error("write failed"), { code: "ENOSPC" }),
+			{ code: "ERROR_DISK_FULL" },
+			{ code: "ERROR_HANDLE_DISK_FULL" },
+			{ stderr: Buffer.from("error: NoSpaceLeft\n") },
+			{ stderr: "error: DiskFull" },
+			new Error("No space left on device"),
+			{ stderr: "There is not enough space on the disk." },
+		]) expect(isUpdateDiskFullError(error)).toBe(true);
+		for (const error of [
+			null, undefined, { status: 1 },
+			Object.assign(new Error("permission denied"), { code: "EACCES" }),
+			new Error("Patch is corrupt"),
+			{ stderr: "error: UnexpectedEndOfStream" },
+		]) expect(isUpdateDiskFullError(error)).toBe(false);
+	});
+
+	for (const stage of ["download", "patch"] as const) {
+		for (const diskFull of [true, false]) {
+			test(`${stage} failure ${diskFull ? "reclaims" : "preserves"} the original archive before full-bundle fallback`, async () => {
+				const root = fixtureRoot();
+				try {
+					const originalPath = join(root, "oldhash.tar");
+					writeFileSync(originalPath, "original");
+					writeFileSync(join(root, "unrelated.tar"), "unrelated");
+					const error = stage === "download"
+						? Object.assign(new Error("write failed"), { code: diskFull ? "ENOSPC" : "EACCES" })
+						: Object.assign(new Error("bspatch failed"), {
+							stderr: Buffer.from(diskFull ? "error: NoSpaceLeft" : "error: InvalidPatch"),
+						});
+					let hop = 0;
+					const result = await preparePatchChainForUpdate(
+						{
+							info: {
+								...validManifest(), hash: "oldhash", name: "Example",
+								baseUrl: "https://updates.example.test/releases",
+							},
+							manifest: validateUpdateManifest({ ...validManifest(), hash: "newhash" }, expected),
+							extractionFolder: root,
+							transactionId: "e".repeat(32),
+							retainedTarPath: join(root, "newhash.tar"),
+						},
+						{
+							fetchResponse: async () => {
+								hop++;
+								if (hop === 2 && stage === "download") {
+									return new Response(new ReadableStream({
+										pull(controller) { controller.error(error); },
+									}));
+								}
+								return new Response("patch");
+							},
+							applyPatch: ({ outputPath }) => {
+								writeFileSync(outputPath, updateTar("middlehash"));
+								if (hop === 2) throw error;
+							},
+						},
+					);
+					expect(result).toEqual({ completed: false, patchesApplied: 1 });
+					expect(readdirSync(root).sort()).toEqual(
+						diskFull ? ["unrelated.tar"] : ["oldhash.tar", "unrelated.tar"],
+					);
+					if (!diskFull) expect(readFileSync(originalPath, "utf8")).toBe("original");
+					expect(readFileSync(join(root, "unrelated.tar"), "utf8")).toBe("unrelated");
+				} finally {
+					rmSync(root, { recursive: true, force: true });
+				}
+			});
+		}
+	}
 
 	test("discards all intermediates when a later patch is missing", async () => {
 		const root = fixtureRoot();

@@ -1239,7 +1239,8 @@ export function applyDeltaPatch(
 	},
 	execute: DeltaPatchExecutor = (executable, args) => {
 		execFileSync(executable, [...args], {
-			stdio: "ignore",
+			stdio: ["ignore", "ignore", "pipe"],
+			maxBuffer: 64 * 1024,
 			windowsHide: true,
 			timeout: 10 * 60_000,
 		});
@@ -1870,6 +1871,20 @@ interface PatchChainDependencies {
 	bspatchPath?: string;
 }
 
+// Node filesystem errors and the native Zig patcher's disk-full diagnostics.
+// Do not infer disk exhaustion from a generic patch failure or exit status.
+export function isUpdateDiskFullError(error: unknown): boolean {
+	if (!error || typeof error !== "object") return false;
+	const failure = error as { code?: unknown; stderr?: unknown; message?: unknown };
+	if (failure.code === "ENOSPC" || failure.code === "ERROR_DISK_FULL" ||
+		failure.code === "ERROR_HANDLE_DISK_FULL") return true;
+	const diagnostic = failure.stderr instanceof Uint8Array
+		? new TextDecoder().decode(failure.stderr)
+		: typeof failure.stderr === "string" ? failure.stderr
+		: typeof failure.message === "string" ? failure.message : "";
+	return /\b(?:ENOSPC|NoSpaceLeft|DiskFull|ERROR_DISK_FULL|ERROR_HANDLE_DISK_FULL)\b|no space left on device|there is not enough space on the disk/i.test(diagnostic);
+}
+
 export async function preparePatchChainForUpdate(
 	options: {
 		info: LocalUpdateInfo;
@@ -2017,6 +2032,16 @@ export async function preparePatchChainForUpdate(
 			if (seenHashes.has(nextHash)) {
 				throw new Error(`Patch chain contains a cycle at ${nextHash}`);
 			}
+			// The patcher needs separate input/output files. Once the output is
+			// validated, release consumed transaction files before the next hop.
+			// Preserve the installed archive so a failed chain can be retried.
+			rmSync(patchPath, { force: true });
+			transactionPaths.delete(patchPath);
+			transactionPaths.delete(patchPartialPath);
+			if (transactionPaths.has(activeTarPath)) {
+				rmSync(activeTarPath, { force: true });
+				transactionPaths.delete(activeTarPath);
+			}
 			seenHashes.add(nextHash);
 			patchesApplied += 1;
 			emitStatus("patch-applied", "Patch applied successfully", {
@@ -2042,6 +2067,11 @@ export async function preparePatchChainForUpdate(
 		});
 		return { completed: true, patchesApplied };
 	} catch (error) {
+		if (isUpdateDiskFullError(error)) {
+			// This archive is only a patch source, not the installed application.
+			// Sacrifice future delta retries to make room for the full bundle.
+			rmSync(currentTarPath, { force: true });
+		}
 		emitStatus(
 			"patch-failed",
 			`Patch failed for ${currentHash.slice(0, 8)}, will download full bundle`,
