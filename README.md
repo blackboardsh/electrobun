@@ -119,6 +119,7 @@ Don't miss our:
 - [Sideleaf](https://sideleaf.xyz/) - simple Markdown and text editor with previews and notes
 - [StoryForge](https://github.com/vrrdnt/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
 - [Tensamin Client](https://github.com/Tensamin/Client) - web, desktop, and mobile app for accessing Tensamin
+- [ThinkRail](https://thinkrail.ai/) - agentic IDE built around the Pi coding agent that learns your project through living specs and reusable skills
 - [tokenpass-desktop](https://github.com/b-open-io/tokenpass-desktop) - desktop app that runs the Sigma Identity stack locally for Bitcoin-backed authentication
 - [typsmthng-desktop](https://github.com/aaditagrawal/typsmthng-desktop) - experimental desktop typing application
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
