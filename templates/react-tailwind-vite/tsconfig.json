@@ -17,6 +17,6 @@
 		"noUnusedParameters": true,
 		"noFallthroughCasesInSwitch": true
 	},
-	"include": ["src"],
+	"include": ["src", "./electrobun.config.ts"],
 	"exclude": ["node_modules", "dist", "build", "../../package/dist"]
 }
