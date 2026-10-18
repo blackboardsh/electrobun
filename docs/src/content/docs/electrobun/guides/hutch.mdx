@@ -77,7 +77,8 @@ Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
 work, defaulting `init` to stable templates; pass `--beta` explicitly for beta
 templates. Each published template pins the exact Electrobun release it was
 tested with. The npm bootstrap still supplies its paired Hutch automatically;
-direct Hutch validates the template catalog and installs the pinned release.
+direct Hutch validates the template catalog and, when needed, downloads its
+matching Hutch toolchain before initializing the project.
 
 <Aside type="caution" title="Upgrade global Hutch before using current Vite templates">
 The current Vite templates require Hutch 0.24 or later for built-in

@@ -67,7 +67,11 @@ to the paired Hutch toolchain since `0.27.1` and Cottontail runtime since `0.7.1
 ## Hutch and Cottontail
 
 - Fixed memory growth in long-running Hutch watch sessions by releasing each
-  filesystem scan's temporary allocations before starting the next scan.
+  filesystem scan's temporary allocations and reclaiming each build's state
+  after its app process stops. Regression tests cover repeated scans and rebuilds.
+- Template initialization automatically uses the catalog's matching Hutch
+  toolchain when needed, allowing stable and beta templates to keep working
+  while Hutch and Electrobun are released independently.
 - Hutch now preserves native Zig compiler caches under the project's
   `.hutch/cache/zig/<os>-<arch>` directory across clean bundle builds.
 - Linux release archives use USTAR so installed updaters can extract them;
