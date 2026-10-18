@@ -76,6 +76,8 @@ Don't miss our:
 - Provide everything you need in one tightly integrated workflow to start writing code in 5 minutes and distribute in 10.
 
 ## Apps Built with Electrobun
+
+- [Dash](https://blackboard.sh/dash/) - desktop workspace for files, terminals, scripts, models, and agents across your machines
 - [24agents](https://github.com/jhsu/24agents) - Hyperprompter
 - [act-track-ai](https://github.com/IrdanGu/act-track-ai) - personal desktop productivity tracker
 - [Agents Council](https://github.com/MrLesk/agents-council) - agent-to-agent MCP communication tool for feedback requests
@@ -83,10 +85,8 @@ Don't miss our:
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
 - [aueio-player-desktop](https://github.com/tuomashatakka/aueio-player-desktop) - beautiful, minimal cross-platform audio player
 - [bestdiff](https://github.com/tesmond/bestdiff) - a git diff checker with curved connectors
-- [BuddyWriter](https://github.com/OxFrancesco/BuddyWriter) - BuddyWriter desktop and mobile apps
 - [burns](https://github.com/l3wi/burns) - a Smithers manager
 - [cbx-tool](https://github.com/jebin2/cbx-tool) - desktop app for reading and editing comic book archives (.cbz/.cbr)
-- [Co(lab)](https://blackboard.sh/colab/) - a hybrid web browser + code editor for deep work
 - [codlogs](https://github.com/tobitege/codlogs) - search and export local Codex sessions via CLI or desktop app
 - [Codex Agents Composer](https://github.com/MrLesk/codex-agents-composer) - desktop app for managing your Codex agents and their skills
 - [codex-devtools](https://github.com/gulivan/codex-devtools) - desktop inspector for Codex session data; browse conversations, search messages, and analyze agent activity
@@ -113,17 +113,12 @@ Don't miss our:
 - [Patchline](https://github.com/adwaithks/Patchline) - lightweight desktop Git client for reading patches and line diffs, then staging and committing changes
 - [peekachu](https://github.com/needle-tools/peekachu) - password manager for AIs; store secrets in your OS keychain and scrub output so AI assistants never see actual values
 - [PiBun](https://github.com/khairold/pibun) - desktop GUI for the Pi coding agent with chat, terminal, git integration, and plugin system
-- [PLEXI](https://github.com/ianjamesburke/PLEXI) - a multi-dimensional terminal multiplexer for the agentic era
-- [Prometheus](https://github.com/opensourcectl/prometheus) - desktop utility toolbox for file cleanup, document manipulation, and image processing
 - [qCodelicious](https://github.com/rafaelsouzars/qcodelicious) - a simple code editor
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
-- [remotecode.io](https://github.com/samuelfaj/remotecode.io) - continue local AI coding sessions (Claude Code or Codex) from your mobile device
-- [sirene](https://github.com/KevinBonnoron/sirene) - self-hosted multi-backend text-to-speech platform with voice cloning
 - [Sideleaf](https://sideleaf.xyz/) - simple Markdown and text editor with previews and notes
-- [StoryForge](https://github.com/vrrdnt/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
-- [Tensamin Client](https://github.com/Tensamin/Client) - web, desktop, and mobile app for accessing Tensamin
+- [StoryForge](https://github.com/StoryForgeApp/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
 - [tokenpass-desktop](https://github.com/b-open-io/tokenpass-desktop) - desktop app that runs the Sigma Identity stack locally for Bitcoin-backed authentication
-- [typsmthng-desktop](https://github.com/aaditagrawal/typsmthng-desktop) - experimental desktop typing application
+- [Toonflow](https://github.com/HBAI-Ltd/Toonflow-app) - AI video creation app with scriptwriting, storyboarding, and image and video generation on an infinite canvas
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
 - [VoiceVault](https://github.com/PJH720/VoiceVault) - AI-powered voice recorder with transcription, summarization, and RAG search
 - [warren](https://github.com/Loa212/warren) - open-source, peer-to-peer terminal mesh for accessing your machines from any device without SSH keys or config files
