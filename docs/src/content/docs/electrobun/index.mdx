@@ -14,11 +14,58 @@ hero:
       icon: external
       variant: minimal
 ---
-import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { Card, CardGrid, LinkCard, Tabs, TabItem } from "@astrojs/starlight/components";
+
+## Get started
+
+Install Hutch:
+
+<Tabs syncKey="hutch-install">
+  <TabItem label="macOS / Linux">
+
+```bash
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+  </TabItem>
+  <TabItem label="Windows PowerShell">
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
+
+  </TabItem>
+</Tabs>
+
+Then open the template picker. Restart your terminal first if `hutch` isn't found.
 
 ```bash
 hutch electrobun init
 ```
+
+Already use Bun or npm? You can start with either command instead:
+
+<Tabs syncKey="electrobun-init">
+  <TabItem label="Bun">
+
+```bash
+bunx electrobun init
+```
+
+  </TabItem>
+  <TabItem label="npm">
+
+```bash
+npx electrobun init
+```
+
+  </TabItem>
+</Tabs>
+
+Choose a template, then follow the [Quick Start](/electrobun/guides/quick-start/#run-the-app)
+to run your app.
+
+## A window in TypeScript
 
 ```typescript
 import { BrowserWindow } from "electrobun/main";
@@ -33,9 +80,8 @@ const win = new BrowserWindow({
 
 <CardGrid>
   <Card title="Tiny and fast" icon="rocket">
-    System webviews and the Cottontail runtime instead of a bundled Chromium
-    and Node — apps measured in megabytes, not hundreds of them. CEF stays
-    available as an option when you want a pinned browser engine.
+    System webviews keep app bundles small. Add CEF when you want to ship
+    a pinned Chromium browser engine.
   </Card>
   <Card title="One build tool" icon="setting">
     Hutch handles scripts, devkits, bundling, pinned toolchains, signing, and
@@ -43,7 +89,7 @@ const win = new BrowserWindow({
     external package managers remain an explicit option.
   </Card>
   <Card title="TypeScript first, native when you want it" icon="seti:typescript">
-    Write your main process in TypeScript on Cottontail — or swap in Bun,
+    Write your main process in TypeScript on Bun — or choose Cottontail,
     Zig, Rust, Go, or Odin and keep the same workflow.
   </Card>
   <Card title="Native bindings" icon="laptop">
@@ -80,7 +126,7 @@ const win = new BrowserWindow({
   />
   <LinkCard
     title="Migrate to 2.x"
-    description="Move an existing app to the Hutch and Cottontail project model."
+    description="Update an existing app to Electrobun 2.x and Hutch."
     href="/electrobun/guides/migrating-to-v2/"
   />
 </CardGrid>
@@ -95,7 +141,7 @@ const win = new BrowserWindow({
   />
   <LinkCard
     title="Cottontail"
-    description="Electrobun's default TypeScript runtime and how it relates to Node and Bun."
+    description="An experimental JavaScriptCore-based runtime for TypeScript apps."
     href="/electrobun/guides/cottontail/"
   />
   <LinkCard

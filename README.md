@@ -4,12 +4,40 @@
 
 <h1 align="center">Electrobun</h1>
 
-<div align="center">
-  Get started with a template <br />
-  <code><strong>hutch electrobun init</strong></code>
-</div>
+Build fast, compact, cross-platform desktop apps with TypeScript, Zig, Rust, Go,
+or Odin.
 
+## Get started
 
+Install Hutch on **macOS or Linux**:
+
+```sh
+curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+```
+
+Or on **Windows PowerShell**:
+
+```powershell
+& ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+```
+
+Then open the template picker. Restart your terminal first if `hutch` isn't found.
+
+```sh
+hutch electrobun init
+```
+
+Already use Bun or npm? You can start with either command instead:
+
+```sh
+bunx electrobun init
+# or
+npx electrobun init
+```
+
+Choose a template, then follow the
+[Quick Start](https://framework.blackboard.sh/electrobun/guides/quick-start/#run-the-app)
+to run your app.
 
 ## What is Electrobun?
 
@@ -18,35 +46,10 @@ Hutch is the native build and workspace CLI. Bun is Electrobun's default JavaScr
 
 Visit <a href="https://framework.blackboard.sh/electrobun/">https://framework.blackboard.sh/electrobun/</a> to see api documentation, guides, and more.
 
-Install Hutch globally, then use it to create and build a project. Published
-templates include the exact Electrobun release they were tested with. In a
-hand-written project that pin is optional; without one, Hutch uses an
-npm-supplied paired default or floats on the active release channel. Hutch
-verifies and installs the resolved release's platform archive under
-`~/.hutch/releases/electrobun` and copies its SDKs into the project's generated
-`.hutch/devkit` sysroot:
-
-```bash
-curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
-hutch electrobun init
-```
-
-Initialization requires network access to fetch the current template catalog
-and selected template. Later builds can reuse exact releases and managed
-toolchains that are already installed.
-
-Or bootstrap the same interactive initializer from npm or Bun. The single,
-dependency-free npm package downloads the exact paired Hutch archive from that
-version's Electrobun GitHub Release when needed, verifies and caches it, and
-forwards the command. The initializer also ensures a compatible global launcher
-for the generated project's `hutch` tasks. It does not carry or own the
-Electrobun runtime or SDKs:
-
-```bash
-npx electrobun init
-# or
-bunx electrobun init
-```
+Published templates include the Electrobun version they were tested with. Hutch
+manages the SDKs and toolchains needed to build them. See the
+[Hutch guide](https://framework.blackboard.sh/electrobun/guides/hutch/) for
+project configuration and version management.
 
 Hutch's built-in npm-compatible resolver installs JavaScript dependencies by
 default and writes `hutch.lock`; `hutch pm exec` runs project-local package

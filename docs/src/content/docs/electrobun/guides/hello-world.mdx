@@ -1,22 +1,18 @@
 ---
-title: "Hello World"
-description: "Build a minimal Bun-based Electrobun app from scratch."
+title: "Hello World (Cottontail)"
+description: "Build a minimal Electrobun app with the Cottontail main-process runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 This guide builds a minimal Electrobun app by hand, without a template, so you
 can see exactly what each piece is for. The main process
-runs on **Bun**, the default TypeScript runtime. Every runtime has its
+runs on **Cottontail**. Every runtime has its
 own version of this walkthrough:
 [Bun](/electrobun/guides/hello-world-bun/),
 [Zig](/electrobun/guides/hello-world-zig/),
 [Rust](/electrobun/guides/hello-world-rust/),
 [Go](/electrobun/guides/hello-world-go/), and
 [Odin](/electrobun/guides/hello-world-odin/).
-
-If you just want a running app, `hutch electrobun init my-app
---template=hello-world` gets you the same result in one command — this guide
-is for understanding what that command sets up.
 
 ## 1. Create the project
 
@@ -70,8 +66,9 @@ facade that Hutch projects during sync:
 ```
 
 <Aside type="note">
-The `electrobun/main` import path is runtime-neutral. Bun executes this main
-process by default. Experimental Cottontail requires an explicit selection.
+Cottontail is experimental. This guide selects it explicitly in the build
+configuration. See the [Cottontail guide](/electrobun/guides/cottontail/) for
+supported APIs.
 </Aside>
 
 ## 2. Add a webview
@@ -98,8 +95,8 @@ you like. For hello world, a heading is plenty.
 
 ## 3. Add the main process
 
-The main process is the privileged side of your app — it runs on Bun,
-not in the webview, and it's what creates windows. Create `src/bun/index.ts`:
+The main process runs on Cottontail and creates your app's windows.
+Create `src/main/index.ts`:
 
 ```ts
 import { BrowserWindow } from "electrobun/main";
@@ -135,9 +132,9 @@ export default {
     version: "0.0.1",
   },
   build: {
-    mainProcess: "bun",
-    bun: {
-      entrypoint: "src/bun/index.ts",
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/main/index.ts",
     },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
@@ -147,7 +144,8 @@ export default {
 ```
 
 Reading it top to bottom: `app` names and identifies the application,
-`mainProcess` selects Bun as the runtime, `entrypoint` points at the
+`mainProcess: "cottontail"` selects Cottontail as the runtime,
+`cottontail.entrypoint` points at the
 main process you just wrote, and `copy` places the HTML file into the bundle at
 the path the `views://` URL expects. With no explicit `electrobun.version`, a
 direct Hutch sync resolves the active channel and then reuses that projected
