@@ -103,6 +103,20 @@ physical install-root name. That root normally matches the packaged release
 channel. Supported Electrobun v1 updates keep their existing physical root,
 including `stable` and older app-name roots, so app data stays in place.
 
+Path getters resolve locations; they do not guarantee that the directories
+already exist. Create app-owned directories before writing files or calling
+`mkdtemp` beneath them, especially on a first launch:
+
+```ts
+import { mkdir, mkdtemp } from "node:fs/promises";
+import { join } from "node:path";
+import { Utils } from "electrobun/main";
+
+await mkdir(Utils.paths.userData, { recursive: true });
+const workingDirectory = await mkdtemp(join(Utils.paths.userData, "work-"));
+console.log(workingDirectory);
+```
+
 Packaged resources are read-only application content. Modifying a macOS app
 bundle invalidates its code signature. Use `Utils.paths.userData`,
 `Utils.paths.userCache`, or another writable system directory for mutable data.

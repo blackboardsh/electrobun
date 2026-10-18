@@ -199,9 +199,8 @@ process owns its geometry.
 and protocol boundaries.
 
 On Windows WebView2, unsafe, uppercase, Unicode, reserved, or over-80-character
-partition names now map to hashed profile directories. Existing safe lowercase
-ASCII names retain their paths; other names start in new directories without
-migrating or deleting their old data. See the
+partition names map to hashed profile directories. Safe lowercase ASCII names
+use their original paths. For migration of existing profiles, see the
 [Electrobun 2.0.2 migration notes](/electrobun/guides/changelog/v2-0-2/#windows-profiles-and-lifecycle).
 
 ```ts
@@ -233,9 +232,20 @@ void spellCheckChanged;
 `executeJavascript()` does not return the evaluated value. Use typed RPC when
 the browser must return data to the main process.
 
+Navigation and JavaScript evaluation are asynchronous native operations.
+Wait for the target document's readiness (for example `dom-ready`, or an
+application-level RPC readiness message) before evaluating code that depends
+on it. `executeJavascript()` is not a readiness barrier or a promise of
+execution: a view without a native browser/frame can discard the request.
+
+While Linux CEF creates its browser, it retains the latest `loadURL()` or
+`loadHTML()` request and starts that navigation when the browser is ready.
+On macOS, WKWebView uses file-URL loading for local files. `getPageZoom()` reads
+on the main thread after pending initialization and zoom changes.
+
 ## Host message queue diagnostics
 
-In the current 2.0.3 betas, `getHostMessageQueueStats()` reports the main
+`getHostMessageQueueStats()` reports the main
 process's outgoing queue for this view. Use it to investigate a backlog when
 sending bursts of RPC messages:
 

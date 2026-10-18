@@ -9,13 +9,12 @@ description: "Supported operating systems, architectures, runtimes, and webview 
 | --- | --- | --- | --- |
 | macOS | arm64 | WKWebView | CEF |
 | Windows | x64 | WebView2 | CEF |
-| Windows | arm64 (beta) | WebView2 | CEF |
+| Windows | arm64 | WebView2 | CEF |
 | Linux | x64 | WebKitGTK 4.1 | CEF |
 | Linux | arm64 | WebKitGTK 4.1 | CEF |
 
-Windows ARM64 is available in Electrobun beta releases with Hutch and
-Cottontail canary releases. Existing x64 installations continue to run under
-emulation; install the ARM64 build explicitly to switch architectures.
+Windows ARM64 builds run natively. Existing x64 installations continue to run
+under emulation; install the ARM64 build explicitly to switch architectures.
 
 Hutch builds for the current host operating system and architecture. Produce a
 cross-platform release with native CI runners; native main-process compilers do
@@ -23,8 +22,8 @@ not currently cross-compile Electrobun apps.
 
 ## Main process runtimes
 
-These defaults describe the current 2.0.3 betas. Stable 2.0.2 defaults to
-Cottontail; see the [beta migration notes](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-the-current-beta).
+Bun is the default JavaScript main process. For existing applications, see the
+[2.0.3 migration guide](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-203).
 
 | Runtime | Status | Notes |
 | --- | --- | --- |

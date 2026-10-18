@@ -11,6 +11,10 @@ Warren is experimental and its APIs may change between releases.
 Everything lives in the `electrobun/main/ui` entrypoint. It is import-gated:
 apps that never import it pay nothing for it.
 
+The Cottontail UI templates configure `build.mainProcess: "cottontail"` and
+`build.cottontail.entrypoint`. Follow the
+[Warren setup guide](/electrobun/guides/electrobun-ui/#hello-world).
+
 ```ts
 import { live, signal, ui, createUIWindow } from "electrobun/main/ui";
 ```

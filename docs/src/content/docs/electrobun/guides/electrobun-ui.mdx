@@ -31,7 +31,8 @@ window costs literally nothing.
 
 ## Hello world
 
-Point the Bun entrypoint at a `.tsx` file:
+The `ui-wgpu`, `ui-color-picker`, and `ui-launcher` templates use Cottontail.
+Point the Cottontail entrypoint at a `.tsx` file:
 
 ```ts
 // electrobun.config.ts
@@ -40,8 +41,8 @@ import type { ElectrobunConfig } from "electrobun";
 export default {
   app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
   build: {
-    mainProcess: "bun",
-    bun: { entrypoint: "src/main.tsx" },
+    mainProcess: "cottontail",
+    cottontail: { entrypoint: "src/main.tsx" },
     mac: { bundleCEF: false, bundleWGPU: true },
     linux: { bundleCEF: false, bundleWGPU: true },
     win: { bundleCEF: false, bundleWGPU: true },
