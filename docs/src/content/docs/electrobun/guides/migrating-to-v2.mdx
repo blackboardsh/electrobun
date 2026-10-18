@@ -3,7 +3,7 @@ title: "Migrate to Electrobun 2.x"
 description: "Upgrade the npm dependency, run your scripts, and fix what the validator reports."
 ---
 
-Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.3 uses Bun
+Electrobun 2.x moves build orchestration to Hutch. Electrobun 2.0.4 uses Bun
 as the default JavaScript main process; 2.0.2 defaulted to Cottontail.
 Application code and RPC schemas usually need
 little or no change, and the npm package remains the front door. There is one
@@ -54,18 +54,18 @@ npm run dev                   # your existing `electrobun ...` scripts still wor
 That's the whole migration for most apps. The sections below cover the
 details and the situational cases.
 
-## Upgrading from 2.0.2 to 2.0.3
+## Upgrading from 2.0.2 to 2.0.4
 
 Install the release dependency:
 
 ```bash
-npm install --save-dev electrobun@2.0.3
+npm install --save-dev electrobun@2.0.4
 ```
 
 If `hutch.config.ts` pins `electrobun.version`, update that exact pin to the
 release you installed as well. An explicit project pin wins over the npm
 version. `hutch electrobun update` updates the project to the latest stable
-release; set `electrobun.version` to `2.0.3` to select this release exactly.
+release; set `electrobun.version` to `2.0.4` to select this release exactly.
 
 Choose the app runtime explicitly when migrating:
 
@@ -139,7 +139,7 @@ reproducible builds independent of the npm dependency — create
 // @hutch cli=0.28.1 cottontail=0.7.2
 export default {
   electrobun: {
-    version: "2.0.3",
+    version: "2.0.4",
   },
 };
 ```

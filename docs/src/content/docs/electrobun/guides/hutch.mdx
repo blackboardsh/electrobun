@@ -156,7 +156,7 @@ manager. When a name is unambiguous, `hutch <name>` works as shorthand:
 // hutch.config.ts
 export default {
   // Optional exact override:
-  // electrobun: { version: "2.0.3" },
+  // electrobun: { version: "2.0.4" },
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
     ui: ["hutch", "pm", "exec", "--", "vite", "build"],
@@ -369,7 +369,7 @@ alongside tasks and an optional external package-manager selection:
 ```ts docs=syntax
 export default {
   // Optional: omit this object to use the npm or channel default.
-  electrobun: { version: "2.0.3" },
+  electrobun: { version: "2.0.4" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
   },
