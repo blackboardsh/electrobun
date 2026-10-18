@@ -65,11 +65,11 @@ jobs:
 
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      EXPECTED_HUTCH_VERSION: '0.28.0-canary.10'
+      EXPECTED_HUTCH_VERSION: '0.28.0'
       # Track the compiled pair explicitly; the published template catalog must match it.
-      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.2-canary.7'
-      EXPECTED_COTTONTAIL_VERSION: '0.7.2-canary.7'
-      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2-canary.7'
+      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.2'
+      EXPECTED_COTTONTAIL_VERSION: '0.7.2'
+      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.2'
 
     steps:
       - uses: actions/checkout@v6
@@ -949,6 +949,7 @@ jobs:
           xvfb-run -a node scripts/accept-published-template.mjs
           --version "${{ steps.release-type.outputs.version }}"
           --platform "${{ matrix.platform }}"
+          --hutch-source "${{ steps.release-type.outputs.prerelease == 'false' && 'production-installer' || 'npm' }}"
           --output template-acceptance-results
       - name: Accept published templates on desktop
         if: runner.os != 'Linux'
@@ -956,6 +957,7 @@ jobs:
           node scripts/accept-published-template.mjs
           --version "${{ steps.release-type.outputs.version }}"
           --platform "${{ matrix.platform }}"
+          --hutch-source "${{ steps.release-type.outputs.prerelease == 'false' && 'production-installer' || 'npm' }}"
           --output template-acceptance-results
       - name: Retain template acceptance reports
         if: always()

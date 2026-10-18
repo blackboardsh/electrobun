@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { appendFileSync, cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { dirname, delimiter, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { dirname, delimiter, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { npmInvocation, validateRunnerPlatform } from "../npm/scripts/accept-published-bootstrap.mjs";
 import { parseStrictSemVer } from "../package/src/shared/strict-semver.js";
@@ -33,10 +34,61 @@ export function validateReport(report, token) {
 
 export function acceptanceEnvironment(base, work) {
 	const env = Object.fromEntries(Object.entries(base).filter(([key]) =>
-		!/^(HUTCH_|COTTONTAIL_|ELECTROBUN_|DASH_RELEASE_|NPM_CONFIG_|NPM_TOKEN$|NODE_AUTH_TOKEN$|NODE_PATH$|NODE_OPTIONS$)/i.test(key)));
+		!/^(HUTCH_|COTTONTAIL_|ELECTROBUN_|DASH_RELEASE_|DASH_ARTIFACTS_BASE_URL$|DASH_HOME$|NPM_CONFIG_|NPM_TOKEN$|NODE_AUTH_TOKEN$|NODE_PATH$|NODE_OPTIONS$)/i.test(key)));
 	return { ...env, HUTCH_HOME: join(work, "hutch-home"), HUTCH_ACTIVE_CHANNEL: "production", HUTCH_NO_UPDATE_CHECK: "1",
 		npm_config_cache: join(work, "npm-cache"), npm_config_userconfig: join(work, "empty.npmrc"),
 		npm_config_registry: "https://registry.npmjs.org", CI: "1" };
+}
+
+export function validateHutchSource(source, version, pins) {
+	assert.ok(["npm", "production-installer"].includes(source), "Hutch source must be npm or production-installer");
+	if (source === "production-installer") {
+		for (const [name, value] of Object.entries({ electrobun: version, ...pins })) {
+			assert.equal(releaseChannel(value), "stable", `production installer acceptance requires stable ${name}`);
+		}
+	}
+}
+
+export async function withAcceptanceScratch(action, temporaryDirectory = tmpdir()) {
+	const scratch = mkdtempSync(join(temporaryDirectory, "electrobun-template-acceptance-"));
+	try {
+		// Stop parent config discovery, including stray configs in shared temp.
+		// This boundary contains no pragma or product pin: installation and init
+		// still use the public production defaults.
+		writeFileSync(join(scratch, "hutch.config.ts"), "export default {};\n");
+		writeFileSync(join(scratch, "empty.npmrc"), "");
+		return await action(scratch);
+	} finally {
+		try { rmSync(scratch, { recursive: true, force: true, maxRetries: 6, retryDelay: 500 }); }
+		catch (error) { console.warn(`[template-acceptance] could not remove temporary directory ${scratch}: ${error.message}`); }
+	}
+}
+
+// Exercise exactly the public installation route, without choosing a release
+// version or overriding the default production channel. Keep it isolated from
+// the runner's existing Hutch installation and shell configuration.
+export async function installProductionHutch({ scratch, env, work, expectedVersion, platform = process.platform },
+	{ fetchInstaller = fetch, runInstaller = run } = {}) {
+	const windows = platform === "win32";
+	const script = join(scratch, windows ? "hutch-install.ps1" : "hutch-install.sh");
+	const url = `https://hutch.blackboard.sh/hutch/install.${windows ? "ps1" : "sh"}`;
+	console.log(`[template-acceptance] install production Hutch from ${url}`);
+	const response = await fetchInstaller(url, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
+	assert.equal(response.ok, true, `public Hutch installer HTTP ${response.status}`);
+	writeFileSync(script, await response.text());
+	const args = windows
+		? ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script, "-NoModifyPath"]
+		: [script, "--no-modify-path"];
+	await runInstaller(windows ? "powershell.exe" : "sh", args,
+		{ cwd: scratch, env, log: join(work, "hutch-install.log") });
+	const hutch = join(env.HUTCH_HOME, "bin", windows ? "hutch.exe" : "hutch");
+	assert.ok(existsSync(hutch), "public Hutch installer did not create the production launcher");
+	const neutralCwd = parse(resolve(scratch)).root;
+	const version = await runInstaller(hutch, ["--version"],
+		{ cwd: neutralCwd, env: { ...env, PWD: neutralCwd }, log: join(work, "hutch-version.log") });
+	assert.equal(version.trim(), expectedVersion,
+		"production installer must install the release's exact Hutch version before reading a project pragma");
+	return hutch;
 }
 
 const stoppedChildren = new WeakSet();
@@ -123,28 +175,35 @@ async function fixtureCatalog(work, version, pins, revision) {
 	return { base, close: () => new Promise(done => server.close(done)) };
 }
 
-export async function acceptPublishedTemplate({ version, platform, output }) {
+export async function acceptPublishedTemplate({ version, platform, output, "hutch-source": hutchSource = "npm" }) {
 	assert.ok(parseStrictSemVer(version), "expected exact release version");
 	validateRunnerPlatform(platform);
 	const work = resolve(output);
 	mkdirSync(work, { recursive: true });
-	const scratch = join(work, `run-${randomUUID()}`);
-	mkdirSync(scratch);
-	writeFileSync(join(scratch, "empty.npmrc"), "");
-	const env = acceptanceEnvironment(process.env, scratch);
 	const pins = parseHutchPragma(readFileSync(join(root, "package/hutch.config.ts"), "utf8"));
+	validateHutchSource(hutchSource, version, pins);
+	return withAcceptanceScratch(scratch => acceptInScratch({ version, platform, work, hutchSource, pins, scratch }));
+}
+
+async function acceptInScratch({ version, platform, work, hutchSource, pins, scratch }) {
+	const env = acceptanceEnvironment(process.env, scratch);
 	const response = await fetch(`${publicBase}/channels/${releaseChannel(version)}.json`, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
 	assert.equal(response.ok, true, `catalog HTTP ${response.status}`);
 	const catalog = await response.json(); validateCatalog(catalog, version, pins);
 	writeFileSync(join(work, "catalog.json"), JSON.stringify(catalog, null, 2));
-	const bootstrap = join(scratch, "bootstrap"); mkdirSync(bootstrap);
-	writeFileSync(join(bootstrap, "package.json"), JSON.stringify({ private: true }));
-	const npm = npmInvocation(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", `electrobun@${version}`]);
-	await run(npm.command, npm.args, { cwd: bootstrap, env, log: join(work, "npm-install.log") });
-	const resolver = createRequire(import.meta.url)(join(bootstrap, "node_modules/electrobun/bin/resolve-hutch.cjs"));
-	assert.equal(resolver.ELECTROBUN_VERSION, version);
-	assert.equal(resolver.PAIRED_HUTCH_VERSION, pins.hutch);
-	const hutch = await resolver.resolveHutchBinary({ environment: env });
+	let hutch;
+	if (hutchSource === "production-installer") {
+		hutch = await installProductionHutch({ scratch, env, work, expectedVersion: pins.hutch });
+	} else {
+		const bootstrap = join(scratch, "bootstrap"); mkdirSync(bootstrap);
+		writeFileSync(join(bootstrap, "package.json"), JSON.stringify({ private: true }));
+		const npm = npmInvocation(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", `electrobun@${version}`]);
+		await run(npm.command, npm.args, { cwd: bootstrap, env, log: join(work, "npm-install.log") });
+		const resolver = createRequire(import.meta.url)(join(bootstrap, "node_modules/electrobun/bin/resolve-hutch.cjs"));
+		assert.equal(resolver.ELECTROBUN_VERSION, version);
+		assert.equal(resolver.PAIRED_HUTCH_VERSION, pins.hutch);
+		hutch = await resolver.resolveHutchBinary({ environment: env });
+	}
 	// Install tasks invoke `hutch` by name; only the downloaded release goes first.
 	const pathKey = Object.keys(env).find(k => k.toLowerCase() === "path") ?? "PATH";
 	env[pathKey] = `${dirname(hutch)}${delimiter}${env[pathKey] ?? ""}`;
@@ -152,7 +211,7 @@ export async function acceptPublishedTemplate({ version, platform, output }) {
 		console.log(`[template-acceptance] ${label}`);
 		return run(hutch, args, { cwd, env: { ...env, ...extra }, log: join(work, `${label}.log`), ...options });
 	};
-	assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
+	if (hutchSource === "npm") assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
 	const channelArgs = releaseChannel(version) === "beta" ? ["--beta"] : [];
 	await invoke("public-init", ["electrobun", "init", "public-app", "--template=hello-world", ...channelArgs]);
 	const publicProject = join(scratch, "public-app"); verifyProject(publicProject, version, pins);
@@ -172,7 +231,7 @@ export async function acceptPublishedTemplate({ version, platform, output }) {
 	await invoke("fixture-build", ["electrobun", "build"], project, fixtureEnv);
 	await invoke("fixture-launch", ["electrobun", "run"], project, fixtureEnv, { timeout: 90_000 });
 	const report = JSON.parse(readFileSync(reportPath, "utf8")); validateReport(report, token);
-	const result = { version, platform, tools: pins, publicTemplate: "hello-world", checks: report.checks };
+	const result = { version, platform, hutchSource, tools: pins, publicTemplate: "hello-world", checks: report.checks };
 	writeFileSync(join(work, "result.json"), JSON.stringify(result, null, 2));
 	console.log(JSON.stringify(result, null, 2));
 	return result;
@@ -182,7 +241,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 	const args = process.argv.slice(2);
 	const options = {};
 	for (let i = 0; i < args.length; i += 2) {
-		assert.ok(["--version", "--platform", "--output"].includes(args[i]) && args[i + 1], "usage: --version X.Y.Z --platform PLATFORM --output DIRECTORY");
+		assert.ok(["--version", "--platform", "--output", "--hutch-source"].includes(args[i]) && args[i + 1], "usage: --version X.Y.Z --platform PLATFORM --output DIRECTORY [--hutch-source npm|production-installer]");
 		options[args[i].slice(2)] = args[i + 1];
 	}
 	await acceptPublishedTemplate(options);

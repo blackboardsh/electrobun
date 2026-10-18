@@ -85,6 +85,14 @@ function validatePublicationContract(source) {
 	}
 	assert.match(templateAcceptance, /xvfb-run -a node scripts\/accept-published-template\.mjs/);
 	assert.match(templateAcceptance, /--version "\$\{\{ steps\.release-type\.outputs\.version \}\}"/);
+	for (const name of ["Accept published templates on Linux", "Accept published templates on desktop"]) {
+		assert.ok(
+			namedStep(templateAcceptance, name).includes(
+				`--hutch-source "\${{ steps.release-type.outputs.prerelease == 'false' && 'production-installer' || 'npm' }}"`,
+			),
+			"stable templates must be accepted with the default production installer on every platform",
+		);
+	}
 	assert.match(templateAcceptance, /name: Retain template acceptance reports\n        if: always\(\)/);
 	const reconcile = namedStep(
 		release,
@@ -426,6 +434,16 @@ function validatePublicationContract(source) {
 
 test("serializes releases, verifies drafts, and gates mutable channels", () => {
 	validatePublicationContract(workflow);
+});
+
+test("contract rejects skipping the production Hutch installer on stable releases", () => {
+	for (const name of ["Accept published templates on Linux", "Accept published templates on desktop"]) {
+		const step = namedStep(workflow, name);
+		assert.throws(() => validatePublicationContract(workflow.replace(
+			step,
+			step.replace("'production-installer'", "'npm'"),
+		)), { code: "ERR_ASSERTION" });
+	}
 });
 
 test("contract rejects tag-local concurrency and premature public uploads", () => {
