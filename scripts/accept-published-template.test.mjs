@@ -26,7 +26,14 @@ test("app report must prove every check and belong to this launch", () => {
 });
 
 test("isolated environment discards local runtime, catalog, and npm overrides", () => {
-	const env = acceptanceEnvironment({ PATH: "/bin", HUTCH_ENGINE_BINARY: "local", COTTONTAIL_BINARY: "local", ELECTROBUN_TEMPLATES_BASE_URL: "local", DASH_ARTIFACTS_BASE_URL: "local", DASH_HOME: "local", NPM_CONFIG_REGISTRY: "local", NODE_OPTIONS: "--require=local" }, "/work");
+	const legacyRuntimeOverrides = {
+		DASH_COTTONTAIL: "/local/cottontail",
+		DASH_COTTONTAIL_SELECTOR: "canary",
+		DASH_USE_LOCAL_COTTONTAIL: "1",
+		DASH_LOCAL_COTTONTAIL_ROOT: "/local/cottontail-checkout",
+	};
+	const env = acceptanceEnvironment({ PATH: "/bin", ...legacyRuntimeOverrides, HUTCH_ENGINE_BINARY: "local", COTTONTAIL_BINARY: "local", ELECTROBUN_TEMPLATES_BASE_URL: "local", DASH_ARTIFACTS_BASE_URL: "local", DASH_HOME: "local", NPM_CONFIG_REGISTRY: "local", NODE_OPTIONS: "--require=local" }, "/work");
+	for (const name of Object.keys(legacyRuntimeOverrides)) assert.equal(env[name], undefined);
 	assert.equal(env.HUTCH_ENGINE_BINARY, undefined);
 	assert.equal(env.COTTONTAIL_BINARY, undefined);
 	assert.equal(env.ELECTROBUN_TEMPLATES_BASE_URL, undefined);

@@ -34,7 +34,7 @@ export function validateReport(report, token) {
 
 export function acceptanceEnvironment(base, work) {
 	const env = Object.fromEntries(Object.entries(base).filter(([key]) =>
-		!/^(HUTCH_|COTTONTAIL_|ELECTROBUN_|DASH_RELEASE_|DASH_ARTIFACTS_BASE_URL$|DASH_HOME$|NPM_CONFIG_|NPM_TOKEN$|NODE_AUTH_TOKEN$|NODE_PATH$|NODE_OPTIONS$)/i.test(key)));
+		!/^(HUTCH_|COTTONTAIL_|ELECTROBUN_|DASH_RELEASE_|DASH_COTTONTAIL(?:_SELECTOR)?$|DASH_USE_LOCAL_COTTONTAIL$|DASH_LOCAL_COTTONTAIL_ROOT$|DASH_ARTIFACTS_BASE_URL$|DASH_HOME$|NPM_CONFIG_|NPM_TOKEN$|NODE_AUTH_TOKEN$|NODE_PATH$|NODE_OPTIONS$)/i.test(key)));
 	return { ...env, HUTCH_HOME: join(work, "hutch-home"), HUTCH_ACTIVE_CHANNEL: "production", HUTCH_NO_UPDATE_CHECK: "1",
 		npm_config_cache: join(work, "npm-cache"), npm_config_userconfig: join(work, "empty.npmrc"),
 		npm_config_registry: "https://registry.npmjs.org", CI: "1" };
