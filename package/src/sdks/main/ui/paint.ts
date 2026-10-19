@@ -1,19 +1,20 @@
 // Flatten the laid-out tree into the instanced-quad command buffer:
-// 12 floats per instance — rect(x,y,w,h), color(r,g,b,a), misc(radius,0,0,0).
-// Boxes, borders, and glyph runs all become colored rectangles. Instances
+// 20 floats per instance: rect, color, misc, clip, and atlas UV rect.
+// Boxes, borders, and built-in glyph runs become quad instances. Instances
 // draw in buffer order, so parents are emitted before children (painter's
 // algorithm). Pure — testable without a GPU.
 
 import { NodeKind, Prop, type UiTree } from "./tree";
 import { GLYPH_ADVANCE, GLYPH_H, glyphRuns } from "./font";
 import { atlasEntry, isNativeTextActive } from "./text";
+import type { UiTextRun } from "./textRenderer";
 
 export const FLOATS_PER_INSTANCE = 20;
 
 // "No clip" sentinel large enough to cover any window.
 const OPEN_CLIP: Clip = { x: -1e7, y: -1e7, w: 2e7, h: 2e7 };
 
-interface Clip {
+export interface Clip {
 	x: number;
 	y: number;
 	w: number;
@@ -31,7 +32,14 @@ function intersectClip(a: Clip, b: Clip): Clip {
 	};
 }
 
+interface PaintTextRun extends UiTextRun {
+	clip: Clip;
+	/** Insert this text before this quad instance to preserve painter order. */
+	beforeInstance: number;
+}
+
 export interface PaintBuffer {
+	texts?: PaintTextRun[];
 	data: Float32Array;
 	count: number;
 }
@@ -54,6 +62,7 @@ export function parseColor(color: string | number): number {
 class InstanceWriter {
 	data = new Float32Array(256 * FLOATS_PER_INSTANCE);
 	count = 0;
+	texts: PaintTextRun[] | undefined;
 
 	emit(
 		x: number,
@@ -115,6 +124,21 @@ function paintText(
 	const node = tree.get(id);
 	const size = node.props[Prop.FontSize]!;
 	const color = node.props[Prop.TextColor]! >>> 0;
+
+	if (writer.texts) {
+		if (node.text.length === 0 || (color & 0xff) === 0 || clip.w <= 0 || clip.h <= 0) return;
+		writer.texts.push({
+			id,
+			text: node.text,
+			size,
+			color,
+			x: node.x,
+			y: node.y,
+			clip,
+			beforeInstance: writer.count,
+		});
+		return;
+	}
 
 	// Native backend: one textured quad sampled from the glyph atlas.
 	if (isNativeTextActive()) {
@@ -189,8 +213,11 @@ function paintNode(
 	}
 }
 
-export function paint(tree: UiTree): PaintBuffer {
+export function paint(tree: UiTree, externalText = false): PaintBuffer {
 	const writer = new InstanceWriter();
+	if (externalText) writer.texts = [];
 	paintNode(writer, tree, tree.root, OPEN_CLIP);
-	return { data: writer.data, count: writer.count };
+	const buffer: PaintBuffer = { data: writer.data, count: writer.count };
+	if (writer.texts) buffer.texts = writer.texts;
+	return buffer;
 }

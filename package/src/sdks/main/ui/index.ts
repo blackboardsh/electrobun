@@ -22,6 +22,12 @@ export { Align, Justify, computeLayout } from "./layout";
 export { FLOATS_PER_INSTANCE, paint, parseColor } from "./paint";
 export { hitChain } from "./hit";
 export { measureText } from "./font";
+export type {
+	UiTextRenderer,
+	UiTextRendererFactory,
+	UiTextRun,
+	UiTextViewport,
+} from "./textRenderer";
 export {
 	createUiContext,
 	getUiContext,

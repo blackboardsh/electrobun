@@ -34,8 +34,11 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { createWindowMountLifecycle } from "./windowMountLifecycle";
 import { runCleanupSteps } from "./cleanupSteps";
 import { createViewMountLifecycle } from "./viewMountLifecycle";
+import type { UiTextRendererFactory } from "./textRenderer";
 
 export interface UIMountOptions {
+	/** Supply text measurement and drawing; Warren retains layout and GPU ownership. */
+	createTextRenderer?: UiTextRendererFactory;
 	/** Painted every frame behind the tree. */
 	background?: string;
 	/** Frame tick in ms: input poll always, render only when dirty. */
@@ -102,7 +105,9 @@ async function mount(
 		target.renderTarget,
 		background,
 		target.getSize(),
+		options.createTextRenderer,
 	);
+	const measureText = renderer.text?.measure.bind(renderer.text);
 	if (target.isAlive && !target.isAlive()) {
 		const error = new Error("UI mount target closed during renderer initialization");
 		try {
@@ -319,10 +324,10 @@ async function mount(
 	const renderFrame = (width: number, height: number) => {
 		if (width <= 0 || height <= 0) return;
 		renderer.resize(width, height);
-		computeLayout(tree, width, height);
+		computeLayout(tree, width, height, measureText);
 		syncAnchors();
 		applyWebviewMasks(width, height);
-		renderer.render(paint(tree), width, height);
+		renderer.render(paint(tree, renderer.text !== undefined), width, height);
 	};
 
 	// A hidden window skips ticks entirely, so nothing marks the tree dirty
