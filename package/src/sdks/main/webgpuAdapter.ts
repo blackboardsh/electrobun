@@ -9,6 +9,7 @@ import {
 	mapLoadOp,
 	mapStoreOp,
 	normalizeRenderPassDepthStencilFields,
+	assertEmptyRenderBundles,
 } from "./webgpuRenderPass";
 import { getWebgpuContextKey } from "./webgpuContextKey";
 import {
@@ -21,6 +22,7 @@ import {
 import { WebgpuPresentationState } from "./webgpuPresentationState";
 import { bufferSourceBytes } from "./webgpuBufferSource";
 import { normalizeExtent3D, type Extent3D } from "./webgpuExtent";
+import { stringViewCallbackAbi } from "./webgpuCallback";
 
 const WGPUNative = WGPU.native;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
@@ -168,6 +170,7 @@ const PRESENTATION_STATE = new WebgpuPresentationState<
 >();
 const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
 const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
+const STRING_VIEW_CALLBACK_ABI = stringViewCallbackAbi(process.platform, process.arch);
 
 const bufferMapCallback = new JSCallback(
 	(
@@ -176,9 +179,8 @@ const bufferMapCallback = new JSCallback(
 		messageLengthOrUserdata: number,
 		userdataOrSecond: number,
 	) => {
-		// WGPUStringView is two integer words on arm64/SysV, indirect on Win64.
 		const key = Number(
-			process.platform === "win32" ? messageLengthOrUserdata : userdataOrSecond,
+			STRING_VIEW_CALLBACK_ABI.indirect ? messageLengthOrUserdata : userdataOrSecond,
 		);
 		const resolve = MAP_ASYNC_RESOLVERS.get(key);
 		if (resolve) {
@@ -187,9 +189,7 @@ const bufferMapCallback = new JSCallback(
 		}
 	},
 	{
-		args: process.platform === "win32"
-			? ["u32", "ptr", "ptr", "ptr"]
-			: ["u32", "ptr", "u64", "ptr", "ptr"],
+		args: STRING_VIEW_CALLBACK_ABI.args,
 		returns: "void",
 		threadsafe: true,
 	},
@@ -203,9 +203,8 @@ const queueWorkDoneCallback = new JSCallback(
 		messageLengthOrUserdata: number,
 		userdataOrSecond: number,
 	) => {
-		// WGPUStringView is two integer words on arm64/SysV, indirect on Win64.
 		const key = Number(
-			process.platform === "win32" ? messageLengthOrUserdata : userdataOrSecond,
+			STRING_VIEW_CALLBACK_ABI.indirect ? messageLengthOrUserdata : userdataOrSecond,
 		);
 		const resolve = WORK_DONE_RESOLVERS.get(key);
 		if (resolve) {
@@ -214,9 +213,7 @@ const queueWorkDoneCallback = new JSCallback(
 		}
 	},
 	{
-		args: process.platform === "win32"
-			? ["u32", "ptr", "ptr", "ptr"]
-			: ["u32", "ptr", "u64", "ptr", "ptr"],
+		args: STRING_VIEW_CALLBACK_ABI.args,
 		returns: "void",
 		threadsafe: true,
 	},
@@ -2341,19 +2338,15 @@ class GPURenderPassEncoder {
 	private _assertLive() {
 		if (!this.ptr) throw new Error("WebGPU render pass has ended");
 	}
-	executeBundles(bundles: Iterable<{ ptr: number }>) {
+	/** Empty execution supports pass detection; bundle encoding is not implemented. */
+	executeBundles(bundles: Iterable<unknown>) {
 		this._assertLive();
-		const values = Array.from(bundles);
-		if (values.some((bundle) => !bundle.ptr)) {
-			throw new Error("WebGPU render bundle has been released");
-		}
-		const pointers = new BigUint64Array(values.map((bundle) => BigInt(bundle.ptr)));
+		assertEmptyRenderBundles(bundles);
 		WGPUNative.symbols.wgpuRenderPassEncoderExecuteBundles(
 			this.ptr,
-			BigInt(values.length),
-			ptrOrNull(pointers),
+			0n,
+			0,
 		);
-		void pointers;
 	}
 	setPipeline(pipeline: GPURenderPipeline) {
 		this._assertLive();

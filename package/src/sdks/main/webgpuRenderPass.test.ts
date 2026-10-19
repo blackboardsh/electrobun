@@ -1,11 +1,29 @@
 import { describe, expect, it } from "bun:test";
 import {
+	assertEmptyRenderBundles,
 	mapLoadOp,
 	mapStoreOp,
 	normalizeRenderPassDepthStencilFields,
 	WGPULoadOp,
 	WGPUStoreOp,
 } from "./webgpuRenderPass";
+
+describe("native render-bundle compatibility", () => {
+	it("accepts empty arrays and iterables", () => {
+		expect(() => assertEmptyRenderBundles([])).not.toThrow();
+		expect(() => assertEmptyRenderBundles(new Set())).not.toThrow();
+	});
+
+	it("rejects nonempty input without interpreting native pointers", () => {
+		try {
+			assertEmptyRenderBundles([{ ptr: 123 }]);
+			throw new Error("Expected unsupported render bundles to throw");
+		} catch (error) {
+			expect(error).toBeInstanceOf(Error);
+			expect((error as Error).name).toBe("NotSupportedError");
+		}
+	});
+});
 
 describe("WebGPU render-pass depth/stencil conversion", () => {
 	it("leaves omitted stencil operations undefined for depth-only formats", () => {
