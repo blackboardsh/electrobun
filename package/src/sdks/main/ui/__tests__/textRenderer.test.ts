@@ -46,6 +46,22 @@ describe("custom text layout and painting", () => {
 		expect(paint(tree).texts).toBeUndefined();
 	});
 
+	test("preserves intrinsic text overflow when its fixed layout box is offscreen", () => {
+		const tree = new UiTree();
+		tree.setProp(tree.root, Prop.Dir, 0);
+		tree.setProp(tree.root, Prop.Overflow, 1);
+		tree.setProp(tree.root, Prop.Scroll, 10);
+		const label = tree.createTextNode("intrinsic text extends into the viewport");
+		tree.setProp(label, Prop.Width, 1);
+		tree.append(tree.root, label);
+		computeLayout(tree, 100, 30, () => ({ w: 200, h: 20 }));
+		expect(tree.get(label).x + tree.get(label).w).toBeLessThan(0);
+		const runs = paint(tree, true).texts!;
+		expect(runs).toHaveLength(1);
+		expect(runs[0]!.x).toBe(-10);
+		expect(runs[0]!.clip).toEqual({ x: 0, y: 0, w: 100, h: 30 });
+	});
+
 	test("omits empty, transparent, and fully clipped text", () => {
 		for (const [value, color, height] of [
 			["", 0xffffffff, 30],

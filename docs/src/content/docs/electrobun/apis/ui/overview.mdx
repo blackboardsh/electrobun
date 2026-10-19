@@ -53,7 +53,7 @@ The renderer implements four methods:
 | Method | Contract |
 | --- | --- |
 | `measure(text, size)` | Return `{ w, h }` in logical points for layout. Keep this synchronous. |
-| `prepare(runs, viewport)` | Prepare the visible text runs before the pass begins; upload resources and retire absent node IDs here. The viewport contains logical `width`/`height` and actual `pixelWidth`/`pixelHeight`. |
+| `prepare(runs, viewport)` | Prepare the frame's text runs before the pass begins; upload resources and retire absent node IDs here. The viewport contains logical `width`/`height` and actual `pixelWidth`/`pixelHeight`. |
 | `draw(pass, run)` | Draw one run into the borrowed pass. Runs carry node `id`, `text`, `size`, packed `0xRRGGBBAA` `color`, and logical `x`/`y`. Warren sets viewport and ancestor clipping before the call and preserves tree paint order. |
 | `dispose()` | Release resources owned by the backend. Warren calls this before destroying its device, including when mount initialization fails. |
 
@@ -62,6 +62,10 @@ Import `UiTextRendererFactory`, `UiTextRenderer`, `UiTextRun`, and
 own drawing pipeline and bindings. Do not retain or end the pass, submit it,
 or destroy the borrowed device. Warren restores its quad state after text.
 A failed draw ends and discards that frame rather than presenting it.
+Runs may include offscreen text: fixed layout dimensions do not bound a
+backend's glyphs. Warren's scissor limits visible drawing; absence from the
+run list, rather than viewport position, determines when a backend can retire
+retained node resources.
 
 The `device` and `pass` are Electrobun's native adapter classes. They implement
 part of WebGPU and are not assignable to the complete `@webgpu/types`
