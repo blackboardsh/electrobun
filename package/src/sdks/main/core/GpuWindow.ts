@@ -10,6 +10,8 @@ export type GpuWindowOptionsType = {
 		y: number;
 	};
 	activate?: boolean;
+	/** Create the native window without displaying an uninitialized surface. */
+	hidden?: boolean;
 	title: string;
 	frame: {
 		x?: number;
@@ -99,9 +101,10 @@ export class GpuWindow {
 	}
 
 	init(
-		{ styleMask, titleBarStyle, transparent, activate }: Partial<GpuWindowOptionsType>,
+		{ styleMask, titleBarStyle, transparent, activate, hidden }: Partial<GpuWindowOptionsType>,
 		centered: boolean,
 	) {
+		this.visible = !(hidden ?? false);
 		const windowId = ffi.request.createWindow({
 			title: this.title,
 			url: "",
@@ -143,6 +146,7 @@ export class GpuWindow {
 			titleBarStyle: titleBarStyle || "default",
 			transparent: transparent ?? false,
 			activate: activate ?? true,
+			hidden: hidden ?? false,
 			centered,
 			trafficLightOffset: this.trafficLightOffset,
 		});

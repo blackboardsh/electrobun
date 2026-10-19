@@ -13,7 +13,7 @@ const isColumn = (tree: UiTree, id: number) => tree.getProp(id, Prop.Dir) === 1;
  * Natural (content) size of a node given no forced dimensions. Fixed props
  * win; boxes sum children along the main axis and take the max cross size.
  */
-function measure(tree: UiTree, id: number): { w: number; h: number } {
+function measure(tree: UiTree, id: number, measureText: typeof import("./text").measure): { w: number; h: number } {
 	const node = tree.get(id);
 	const fixedW = node.props[Prop.Width]!;
 	const fixedH = node.props[Prop.Height]!;
@@ -36,7 +36,7 @@ function measure(tree: UiTree, id: number): { w: number; h: number } {
 	let cross = 0;
 	let count = 0;
 	for (let c = node.first; c !== 0; c = tree.get(c).next) {
-		const size = measure(tree, c);
+		const size = measure(tree, c, measureText);
 		const childMain = column ? size.h : size.w;
 		const childCross = column ? size.w : size.h;
 		main += childMain;
@@ -64,6 +64,7 @@ function place(
 	y: number,
 	w: number,
 	h: number,
+	measureText: typeof import("./text").measure,
 ): void {
 	const node = tree.get(id);
 	node.x = x;
@@ -99,7 +100,7 @@ function place(
 	let usedMain = 0;
 	let totalGrow = 0;
 	for (const child of children) {
-		const size = measure(tree, child);
+		const size = measure(tree, child, measureText);
 		const main = column ? size.h : size.w;
 		const cross = column ? size.w : size.h;
 		mains.push(main);
@@ -160,9 +161,9 @@ function place(
 		else if (align === Align.End) crossOffset = innerCross - cross;
 
 		if (column) {
-			place(tree, child, innerX + crossOffset, cursor, cross, main);
+			place(tree, child, innerX + crossOffset, cursor, cross, main, measureText);
 		} else {
-			place(tree, child, cursor, innerY + crossOffset, main, cross);
+			place(tree, child, cursor, innerY + crossOffset, main, cross, measureText);
 		}
 		cursor += main + spacing;
 	}
@@ -173,6 +174,7 @@ export function computeLayout(
 	tree: UiTree,
 	width: number,
 	height: number,
+	textMeasure = measureText,
 ): void {
-	place(tree, tree.root, 0, 0, width, height);
+	place(tree, tree.root, 0, 0, width, height, textMeasure);
 }

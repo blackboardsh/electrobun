@@ -13,7 +13,7 @@ export const FLOATS_PER_INSTANCE = 20;
 // "No clip" sentinel large enough to cover any window.
 const OPEN_CLIP: Clip = { x: -1e7, y: -1e7, w: 2e7, h: 2e7 };
 
-interface Clip {
+export interface Clip {
 	x: number;
 	y: number;
 	w: number;
@@ -31,7 +31,20 @@ function intersectClip(a: Clip, b: Clip): Clip {
 	};
 }
 
+export interface PaintTextRun {
+	id: number;
+	text: string;
+	size: number;
+	color: number;
+	x: number;
+	y: number;
+	clip: Clip;
+	/** Insert this text before this quad instance to preserve painter order. */
+	beforeInstance: number;
+}
+
 export interface PaintBuffer {
+	texts?: PaintTextRun[];
 	data: Float32Array;
 	count: number;
 }
@@ -54,6 +67,7 @@ export function parseColor(color: string | number): number {
 class InstanceWriter {
 	data = new Float32Array(256 * FLOATS_PER_INSTANCE);
 	count = 0;
+	texts: PaintTextRun[] | undefined;
 
 	emit(
 		x: number,
@@ -115,6 +129,13 @@ function paintText(
 	const node = tree.get(id);
 	const size = node.props[Prop.FontSize]!;
 	const color = node.props[Prop.TextColor]! >>> 0;
+
+	if (writer.texts) {
+		if (node.text.length && (color & 0xff) && clip.w > 0 && clip.h > 0) {
+			writer.texts.push({ id, text: node.text, size, color, x: node.x, y: node.y, clip, beforeInstance: writer.count });
+		}
+		return;
+	}
 
 	// Native backend: one textured quad sampled from the glyph atlas.
 	if (isNativeTextActive()) {
@@ -189,8 +210,9 @@ function paintNode(
 	}
 }
 
-export function paint(tree: UiTree): PaintBuffer {
+export function paint(tree: UiTree, externalText = false): PaintBuffer {
 	const writer = new InstanceWriter();
+	if (externalText) writer.texts = [];
 	paintNode(writer, tree, tree.root, OPEN_CLIP);
-	return { data: writer.data, count: writer.count };
+	return { data: writer.data, count: writer.count, ...(writer.texts ? { texts: writer.texts } : {}) };
 }

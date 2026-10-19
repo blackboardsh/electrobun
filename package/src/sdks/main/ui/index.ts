@@ -19,7 +19,7 @@ export {
 } from "./reactive";
 export { AUTO, NodeKind, Prop, UiTree } from "./tree";
 export { Align, Justify, computeLayout } from "./layout";
-export { FLOATS_PER_INSTANCE, paint, parseColor } from "./paint";
+export { FLOATS_PER_INSTANCE, paint, parseColor, type PaintBuffer, type PaintTextRun, type Clip } from "./paint";
 export { hitChain } from "./hit";
 export { measureText } from "./font";
 export {
@@ -47,9 +47,11 @@ export { textInput, type TextInputProps } from "./textInput";
 export {
 	createUIView,
 	createUIWindow,
+	getWindowPixelRatio,
 	type UIView,
 	type UIWindow,
 	type UIWindowOptions,
+	type UIMountOptions,
 } from "./uiwindow";
 export { registerUIRoot, type UIRootRegistration } from "./uiTagHost";
 export {
@@ -69,3 +71,5 @@ export {
 	type UIChild,
 	type UIElement,
 } from "./jsx-runtime";
+
+export type { UiRenderer } from "./renderer";

@@ -20,6 +20,8 @@ import {
 } from "./webgpuContextRegistry";
 import { WebgpuPresentationState } from "./webgpuPresentationState";
 
+import { bufferSourceBytes } from "./webgpuBufferSource";
+
 const WGPUNative = WGPU.native;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
 const WGPUTextureFormat_BGRA8UnormSrgb = 0x0000001C;
@@ -167,8 +169,9 @@ const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
 const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
 
 const bufferMapCallback = new JSCallback(
-	(status: number, _message: number, userdata1: number, _userdata2: number) => {
-		const key = Number(userdata1);
+	(status: number, _message: number, messageLengthOrUserdata: number, userdataOrSecond: number) => {
+		// WGPUStringView is two integer words on arm64/SysV, indirect on Win64.
+		const key = Number(process.platform === "win32" ? messageLengthOrUserdata : userdataOrSecond);
 		const resolve = MAP_ASYNC_RESOLVERS.get(key);
 		if (resolve) {
 			MAP_ASYNC_RESOLVERS.delete(key);
@@ -176,7 +179,7 @@ const bufferMapCallback = new JSCallback(
 		}
 	},
 	{
-		args: ["u32", "ptr", "ptr", "ptr"],
+		args: process.platform === "win32" ? ["u32", "ptr", "ptr", "ptr"] : ["u32", "ptr", "u64", "ptr", "ptr"],
 		returns: "void",
 		threadsafe: true,
 	},
@@ -184,8 +187,9 @@ const bufferMapCallback = new JSCallback(
 WGPU_CALLBACK_KEEPALIVE.push(bufferMapCallback);
 
 const queueWorkDoneCallback = new JSCallback(
-	(status: number, _message: number, userdata1: number, _userdata2: number) => {
-		const key = Number(userdata1);
+	(status: number, _message: number, messageLengthOrUserdata: number, userdataOrSecond: number) => {
+		// WGPUStringView is two integer words on arm64/SysV, indirect on Win64.
+		const key = Number(process.platform === "win32" ? messageLengthOrUserdata : userdataOrSecond);
 		const resolve = WORK_DONE_RESOLVERS.get(key);
 		if (resolve) {
 			WORK_DONE_RESOLVERS.delete(key);
@@ -193,7 +197,7 @@ const queueWorkDoneCallback = new JSCallback(
 		}
 	},
 	{
-		args: ["u32", "ptr", "ptr", "ptr"],
+		args: process.platform === "win32" ? ["u32", "ptr", "ptr", "ptr"] : ["u32", "ptr", "u64", "ptr", "ptr"],
 		returns: "void",
 		threadsafe: true,
 	},
@@ -240,6 +244,19 @@ function makeStringView(str?: string | null) {
 	}
 	const bytes = new TextEncoder().encode(str);
 	return { ptr: ptr(bytes), len: BigInt(bytes.byteLength), cstr: bytes };
+}
+
+function makeEntryPointView(value?: string) {
+	// A null WGPUStringView uses WGPU_STRLEN, not length zero (the empty name).
+	return value === undefined ? { ptr: 0, len: 0xffffffffffffffffn } : makeStringView(value);
+}
+
+type Extent3D = { width: number; height?: number; depthOrArrayLayers?: number } | readonly [number, number?, number?];
+
+function normalizeExtent3D(size: Extent3D) {
+	return Array.isArray(size)
+		? { width: size[0], height: size[1] ?? 1, depthOrArrayLayers: size[2] ?? 1 }
+		: size;
 }
 
 function ptrOrNull(value: ArrayBuffer | ArrayBufferView) {
@@ -1048,7 +1065,8 @@ class GPUQueue {
 			);
 		}
 	}
-	writeBuffer(buffer: GPUBuffer, offset: number, data: ArrayBufferView) {
+	writeBuffer(buffer: GPUBuffer, offset: number, data: ArrayBuffer | ArrayBufferView, dataOffset = 0, size?: number) {
+		const bytes = bufferSourceBytes(data, dataOffset, size);
 		if (!this.ptr || !this._device?.ptr) {
 			throw new Error("WebGPU queue belongs to a destroyed device");
 		}
@@ -1056,20 +1074,21 @@ class GPUQueue {
 			this.ptr,
 			buffer.ptr,
 			BigInt(offset),
-			ptrOrNull(data),
-			data.byteLength,
+			ptrOrNull(bytes),
+			bytes.byteLength,
 		);
 	}
 	writeTexture(
 		destination: { texture: GPUTexture; mipLevel?: number; origin?: { x?: number; y?: number; z?: number } },
 		data: ArrayBufferView,
 		dataLayout: { bytesPerRow: number; rowsPerImage?: number },
-		size: { width: number; height: number; depthOrArrayLayers?: number },
+		size: Extent3D,
 	) {
 		if (!this.ptr || !this._device?.ptr) {
 			throw new Error("WebGPU queue belongs to a destroyed device");
 		}
 		if (!data || data.byteLength === 0) return;
+		size = normalizeExtent3D(size);
 		let bytesPerPixel = bytesPerPixelForFormat(destination.texture.format);
 		let width =
 			Number.isFinite(size.width) && size.width > 0
@@ -1306,7 +1325,7 @@ class GPUDevice {
 		);
 	}
 	createTexture(descriptor: {
-		size: { width: number; height: number; depthOrArrayLayers?: number };
+		size: Extent3D;
 		format: string;
 		usage: number;
 		mipLevelCount?: number;
@@ -1314,6 +1333,7 @@ class GPUDevice {
 		viewFormats?: string[];
 	}) {
 		this._assertLive();
+		const extent = normalizeExtent3D(descriptor.size);
 		const mappedFormat =
 			mapTextureFormat(descriptor.format) ?? WGPUTextureFormat_BGRA8Unorm;
 		const rawSample = Number(descriptor.sampleCount ?? 1);
@@ -1334,9 +1354,9 @@ class GPUDevice {
 			viewFormatCount = descriptor.viewFormats.length;
 		}
 		const desc = makeTextureDescriptor(
-			descriptor.size.width,
-			descriptor.size.height,
-			descriptor.size.depthOrArrayLayers ?? 1,
+			extent.width,
+			extent.height ?? 1,
+			extent.depthOrArrayLayers ?? 1,
 			mappedFormat,
 			toBigInt(descriptor.usage ?? 0),
 			descriptor.mipLevelCount ?? 1,
@@ -1552,7 +1572,7 @@ class GPUDevice {
 		this._assertLive();
 		const ffiKeepalive: unknown[] = [];
 		const vertexModule = descriptor.vertex.module as GPUShaderModule;
-		const vertexEntry = makeStringView(descriptor.vertex.entryPoint ?? "main");
+		const vertexEntry = makeEntryPointView(descriptor.vertex.entryPoint);
 		ffiKeepalive.push(vertexEntry);
 		const vertexBuffers = descriptor.vertex.buffers ?? [];
 		const vertexLayouts: ArrayBuffer[] = [];
@@ -1604,7 +1624,7 @@ class GPUDevice {
 		let fragmentStatePtr: number | null = null;
 		if (descriptor.fragment) {
 			const fragModule = descriptor.fragment.module as GPUShaderModule;
-			const fragEntry = makeStringView(descriptor.fragment.entryPoint ?? "main");
+			const fragEntry = makeEntryPointView(descriptor.fragment.entryPoint);
 			ffiKeepalive.push(fragEntry);
 			const targets = descriptor.fragment.targets ?? [];
 			const targetBuf = new ArrayBuffer(targets.length * 32);
@@ -1706,7 +1726,7 @@ class GPUDevice {
 		this._assertLive();
 		const ffiKeepalive: unknown[] = [];
 		const module = descriptor.compute.module as GPUShaderModule;
-		const entry = makeStringView(descriptor.compute.entryPoint ?? "main");
+		const entry = makeEntryPointView(descriptor.compute.entryPoint);
 		ffiKeepalive.push(entry);
 		const stage = makeProgrammableStageDescriptor(
 			module.ptr,
@@ -1767,13 +1787,21 @@ class GPUBuffer {
 			throw new Error("WebGPU buffer has been destroyed");
 		}
 	}
+	get mapState() {
+		if (!this.ptr) return "unmapped";
+		const state = WGPUNative.symbols.wgpuBufferGetMapState(this.ptr);
+		return state === 3 ? "mapped" : state === 2 ? "pending" : "unmapped";
+	}
 	getMappedRange(_offset = 0, _size?: number) {
 		this._assertLive();
 		if (!this._mapped) {
 			return new ArrayBuffer(0);
 		}
 		const size = Math.max(0, _size ?? this.size - _offset);
-		const mapped = WGPUNative.symbols.wgpuBufferGetMappedRange(
+		const getRange = (this.usage & WGPUBufferUsage_MapRead) !== 0n
+			? WGPUNative.symbols.wgpuBufferGetConstMappedRange
+			: WGPUNative.symbols.wgpuBufferGetMappedRange;
+		const mapped = getRange(
 			this.ptr,
 			BigInt(_offset),
 			BigInt(size),
@@ -2207,6 +2235,20 @@ class GPUCommandEncoder {
 			size,
 		);
 	}
+	copyTextureToBuffer(
+		source: { texture: GPUTexture; mipLevel?: number; origin?: { x?: number; y?: number; z?: number } },
+		destination: { buffer: GPUBuffer; offset?: number; bytesPerRow?: number; rowsPerImage?: number },
+		copySize: Extent3D,
+	) {
+		this._assertLive();
+		if (!source.texture.ptr || !destination.buffer.ptr) throw new Error("WebGPU copy uses a destroyed resource");
+		const size = normalizeExtent3D(copySize);
+		const src = makeTexelCopyTextureInfo(source.texture.ptr, source.mipLevel ?? 0, source.origin ?? {});
+		const dst = makeImageCopyBuffer(destination.buffer.ptr, destination.offset ?? 0, destination.bytesPerRow ?? 0xffffffff, destination.rowsPerImage ?? 0xffffffff);
+		const extent = makeExtent3D(size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1);
+		WGPUNative.symbols.wgpuCommandEncoderCopyTextureToBuffer(this.ptr, src.ptr, dst.ptr, extent.ptr);
+		void src.buffer; void dst.buffer; void extent.buffer;
+	}
 	copyBufferToBuffer(
 		source: GPUBuffer,
 		sourceOffset: number,
@@ -2251,6 +2293,14 @@ class GPURenderPassEncoder {
 	}
 	private _assertLive() {
 		if (!this.ptr) throw new Error("WebGPU render pass has ended");
+	}
+	executeBundles(bundles: Iterable<{ ptr: number }>) {
+		this._assertLive();
+		const values = Array.from(bundles);
+		if (values.some((bundle) => !bundle.ptr)) throw new Error("WebGPU render bundle has been released");
+		const pointers = new BigUint64Array(values.map((bundle) => BigInt(bundle.ptr)));
+		WGPUNative.symbols.wgpuRenderPassEncoderExecuteBundles(this.ptr, BigInt(values.length), ptrOrNull(pointers));
+		void pointers;
 	}
 	setPipeline(pipeline: GPURenderPipeline) {
 		this._assertLive();
@@ -3547,6 +3597,13 @@ const webgpu = {
 		nav.gpu = webgpu.navigator;
 		(globalThis as any).navigator = nav;
 		(globalThis as any).GPUCanvasContext = GPUCanvasContext;
+		Object.assign(globalThis, {
+			GPUBufferUsage: { MAP_READ: 1, MAP_WRITE: 2, COPY_SRC: 4, COPY_DST: 8, INDEX: 16, VERTEX: 32, UNIFORM: 64, STORAGE: 128, INDIRECT: 256, QUERY_RESOLVE: 512 },
+			GPUTextureUsage: { COPY_SRC: 1, COPY_DST: 2, TEXTURE_BINDING: 4, STORAGE_BINDING: 8, RENDER_ATTACHMENT: 16 },
+			GPUShaderStage: { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 },
+			GPUMapMode: { READ: 1, WRITE: 2 },
+			GPUColorWrite: { RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15 },
+		});
 	},
 };
 

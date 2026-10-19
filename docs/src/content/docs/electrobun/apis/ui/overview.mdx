@@ -47,6 +47,8 @@ const uiWindow = await createUIWindow(options, app);
 
 Creates a `GpuWindow`, mounts the tree, and starts the frame tick. The `app`
 callback builds the UI with the [element API](/electrobun/apis/ui/components/).
+The native window stays hidden during initialization and is shown after its
+first rendered frame completes, avoiding an uninitialized surface at startup.
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
@@ -57,6 +59,8 @@ callback builds the UI with the [element API](/electrobun/apis/ui/components/).
 | `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
 | `background` | `string` | `"#141420"` | Clear color behind the tree. Accepts `#rgb`, `#rrggbb`, `#rrggbbaa`. |
 | `tickMs` | `number` | `8` | Frame tick interval. Input polls every tick; rendering only on dirty ticks. |
+| `pixelRatio` | `number \| (() => number)` | Display scale | Drawable pixels per logical point. The automatic value follows the display with the largest window overlap. |
+| `createRenderer` | Renderer factory | Built-in renderer | Replace GPU painting and optionally text measurement; see below. |
 
 Returns `{ window, context, dispose }`:
 
@@ -77,7 +81,32 @@ const uiView = await createUIView(view, options, app);
 Mounts a tree into an existing [`WGPUView`](/electrobun/apis/webgpu/) instead
 of a whole window — the mechanism behind
 [`<electrobun-ui>`](/electrobun/apis/ui/ui-tag/) overlays. `options` accepts
-`background` and `tickMs`. The view's frame supplies size and pointer offset.
+`background`, `tickMs`, `pixelRatio`, and `createRenderer`. The view's frame supplies size and pointer offset.
+
+## Drawable scale and renderer integration
+
+Layout, pointer coordinates, text measurements, and native webview anchors use
+logical points. The GPU drawable uses rounded `logical size × pixelRatio`.
+For example, a 900×540 window uses an 1800×1080 attachment at 2x, without
+doubling component sizes. Window moves and resizes refresh the display choice;
+an infrequent refresh also detects scale changes on a stationary display.
+
+`createRenderer(target, clearColor, initialLogicalSize)` returns a promise of a
+`UiRenderer`. Warren calls `resize(width, height, pixelRatio)` and
+`render(paintBuffer, width, height, pixelRatio)` on invalidation, and `dispose()`
+on teardown. The renderer owns its resources, including cleanup if creation
+rejects. It must keep logical layout separate from physical attachments.
+Its first `render()` may return a promise that settles after GPU submission;
+Warren awaits that promise before showing a newly created window.
+
+A renderer can supply `text.measure(text, fontSize)` returning `{ w, h }` in
+logical points. Warren then omits built-in text quads and supplies
+`paintBuffer.texts`: retained node IDs, text/style, logical positions, intersected
+scroll clips, and `beforeInstance` indices. Interleave text with quad ranges at
+those indices to preserve painter order; convert clips to physical scissors.
+This permits a Glyph/TypeGPU renderer without changing existing `<text>` JSX or
+installing a process-global measurement backend. Custom text input, selection,
+and accessibility behavior remain separate integration concerns.
 
 ## registerUIRoot
 

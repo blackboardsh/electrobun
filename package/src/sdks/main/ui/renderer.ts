@@ -12,6 +12,8 @@ import { runCleanupSteps } from "./cleanupSteps";
 import { getWebgpuContextKey } from "../webgpuContextKey";
 import { releaseWebgpuContext } from "../webgpuContextRegistry";
 
+import { physicalSize } from "./pixelSize";
+
 const SHADER = /* wgsl */ `
 struct Uniforms {
   viewport: vec4<f32>,
@@ -74,8 +76,9 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
   // derivatives) in uniform control flow.
   let sampled = textureSample(atlasTexture, atlasSampler, in.uv);
   // Scissor to the instance's clip rect (framebuffer pixel space).
-  if (in.pos.x < in.clip.x || in.pos.y < in.clip.y
-      || in.pos.x >= in.clip.x + in.clip.z || in.pos.y >= in.clip.y + in.clip.w) {
+  let logicalPosition = in.pos.xy / u.viewport.zw;
+  if (logicalPosition.x < in.clip.x || logicalPosition.y < in.clip.y
+      || logicalPosition.x >= in.clip.x + in.clip.z || logicalPosition.y >= in.clip.y + in.clip.w) {
     discard;
   }
   var coverage: f32;
@@ -85,7 +88,7 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
   } else {
     let r = clamp(in.radius, 0.0, min(in.halfSize.x, in.halfSize.y));
     let d = sdRoundRect(in.local, in.halfSize, r);
-    coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    coverage = 1.0 - smoothstep(-0.75 / u.viewport.z, 0.75 / u.viewport.z, d);
   }
   if (coverage <= 0.003) {
     discard;
@@ -95,8 +98,11 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 `;
 
 export interface UiRenderer {
-	render(buffer: PaintBuffer, width: number, height: number): void;
-	resize(width: number, height: number): void;
+	/** Optional renderer-owned text implementation; measurements stay in logical points. */
+	readonly text?: { measure(text: string, size: number): { w: number; h: number } };
+	/** An async first frame can defer showing a new window until presentation is ready. */
+	render(buffer: PaintBuffer, width: number, height: number, pixelRatio?: number): void | Promise<void>;
+	resize(width: number, height: number, pixelRatio?: number): void;
 	dispose(): void;
 }
 
@@ -302,17 +308,18 @@ export async function createUiRenderer(
 		};
 
 		let instanceCapacity = 1024;
+		let firstFrame = true;
 		instanceBuffer = device.createBuffer({
 			size: instanceCapacity * FLOATS_PER_INSTANCE * 4,
 			usage: 0x20 | 0x8, // VERTEX | COPY_DST
 		});
 
 		return {
-			resize(width: number, height: number) {
+			resize(width: number, height: number, pixelRatio = 1) {
 				if (disposed) return;
-				ctx._fallbackSize = { width, height };
+				ctx._fallbackSize = physicalSize(width, height, pixelRatio);
 			},
-			render(buffer: PaintBuffer, width: number, height: number) {
+			render(buffer: PaintBuffer, width: number, height: number, pixelRatio = 1) {
 				if (disposed || width <= 0 || height <= 0) return;
 				flushAtlas();
 				if (buffer.count > instanceCapacity) {
@@ -331,7 +338,7 @@ export async function createUiRenderer(
 				device.queue.writeBuffer(
 					uniformBuffer,
 					0,
-					new Float32Array([width, height, 0, 0]),
+					new Float32Array([width, height, pixelRatio, pixelRatio]),
 				);
 				if (buffer.count > 0) {
 					device.queue.writeBuffer(
@@ -359,6 +366,12 @@ export async function createUiRenderer(
 				}
 				pass.end();
 				device.queue.submit([encoder.finish()]);
+				if (firstFrame) {
+					firstFrame = false;
+					return device.queue.onSubmittedWorkDone().then((ok) => {
+						if (!ok) throw new Error("Initial UI GPU submission failed");
+					});
+				}
 			},
 			dispose: disposeResources,
 		};

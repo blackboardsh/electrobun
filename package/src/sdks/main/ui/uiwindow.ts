@@ -21,7 +21,7 @@ import { attachInput } from "./input";
 import { collectWebviewAnchorMasks } from "./nativeLayerGeometry";
 import { tryEnableNativeText } from "./text";
 import { isUIElement, type UIElement } from "./jsx-runtime";
-import { ffi, nativeText } from "../proc/native";
+import { ffi, nativeText, Screen } from "../proc/native";
 import {
 	createUiContext,
 	withUiContext,
@@ -32,10 +32,15 @@ import {
 } from "./ui";
 import electrobunEventEmitter from "../events/eventEmitter";
 import { createWindowMountLifecycle } from "./windowMountLifecycle";
+import { pixelRatioForFrame } from "./pixelSize";
 import { runCleanupSteps } from "./cleanupSteps";
 import { createViewMountLifecycle } from "./viewMountLifecycle";
 
 export interface UIMountOptions {
+	/** Renderer replacement, e.g. a caller-owned TypeGPU/Glyph renderer. */
+	createRenderer?: typeof createUiRenderer;
+	/** Override the drawable scale; layout and input remain in logical points. */
+	pixelRatio?: number | (() => number);
 	/** Painted every frame behind the tree. */
 	background?: string;
 	/** Frame tick in ms: input poll always, render only when dirty. */
@@ -98,7 +103,7 @@ async function mount(
 	// System-font text when the native wrapper provides it (macOS); the
 	// built-in bitmap font otherwise.
 	tryEnableNativeText(nativeText.available() ? nativeText : null);
-	const renderer = await createUiRenderer(
+	const renderer = await (options.createRenderer ?? createUiRenderer)(
 		target.renderTarget,
 		background,
 		target.getSize(),
@@ -251,6 +256,29 @@ async function mount(
 		throw error;
 	}
 
+	let scaleDirty = true;
+	let nextScaleCheck = 0;
+	let automaticRatio = 1;
+	const markScaleDirty = () => { scaleDirty = true; };
+	const getPixelRatio = () => {
+		let ratio: number;
+		if (options.pixelRatio !== undefined) {
+			ratio = typeof options.pixelRatio === "function" ? options.pixelRatio() : options.pixelRatio;
+		} else {
+			const now = Date.now();
+			// Window events update immediately; infrequent refresh also observes
+			// display-scale changes without adding display enumeration to idle ticks.
+			if (scaleDirty || now >= nextScaleCheck) {
+				automaticRatio = getWindowPixelRatio(target.windowId);
+				scaleDirty = false;
+				nextScaleCheck = now + 1000;
+			}
+			ratio = automaticRatio;
+		}
+		if (!Number.isFinite(ratio) || ratio <= 0) throw new RangeError("pixelRatio must be positive and finite");
+		return ratio;
+	};
+	let lastPixelRatio = 0;
 	let lastWidth = 0;
 	let lastHeight = 0;
 	const lastAnchorRects = new Map<number, AnchorRect>();
@@ -316,13 +344,13 @@ async function mount(
 		}
 	};
 
-	const renderFrame = (width: number, height: number) => {
+	const renderFrame = (width: number, height: number, pixelRatio: number) => {
 		if (width <= 0 || height <= 0) return;
-		renderer.resize(width, height);
-		computeLayout(tree, width, height);
+		renderer.resize(width, height, pixelRatio);
+		computeLayout(tree, width, height, renderer.text?.measure);
 		syncAnchors();
 		applyWebviewMasks(width, height);
-		renderer.render(paint(tree), width, height);
+		return renderer.render(paint(tree, !!renderer.text), width, height, pixelRatio);
 	};
 
 	// A hidden window skips ticks entirely, so nothing marks the tree dirty
@@ -340,16 +368,27 @@ async function mount(
 		wasVisible = true;
 		input.poll();
 		const { width, height } = target.getSize();
-		const sizeChanged = width !== lastWidth || height !== lastHeight;
+		const pixelRatio = getPixelRatio();
+		const sizeChanged = width !== lastWidth || height !== lastHeight || pixelRatio !== lastPixelRatio;
 		if (tree.takeDirty() || sizeChanged || becameVisible) {
+			lastPixelRatio = pixelRatio;
 			lastWidth = width;
 			lastHeight = height;
-			renderFrame(width, height);
+			renderFrame(width, height, pixelRatio);
 		}
 	};
 	let timer: ReturnType<typeof setInterval>;
 	try {
+		// Initialize while a newly created window is still hidden. A renderer
+		// may await its first GPU submission rather than expose an empty surface.
+		const initial = target.getSize();
+		lastPixelRatio = getPixelRatio();
+		lastWidth = initial.width;
+		lastHeight = initial.height;
+		await renderFrame(lastWidth, lastHeight, lastPixelRatio);
 		timer = setInterval(tick, options.tickMs ?? 8);
+		electrobunEventEmitter.on(`move-${target.windowId}`, markScaleDirty);
+		electrobunEventEmitter.on(`resize-${target.windowId}`, markScaleDirty);
 	} catch (error) {
 		try {
 			runCleanupSteps([input.dispose, disposeRoot, renderer.dispose]);
@@ -370,6 +409,8 @@ async function mount(
 			stopped = true;
 			runCleanupSteps([
 				() => clearInterval(timer),
+				() => electrobunEventEmitter.off(`move-${target.windowId}`, markScaleDirty),
+				() => electrobunEventEmitter.off(`resize-${target.windowId}`, markScaleDirty),
 				input.dispose,
 				clearWebviewMasks,
 				disposeRoot,
@@ -390,6 +431,7 @@ export async function createUIWindow(
 		// cursor-to-local math needs no title-bar offset.
 		titleBarStyle: options.titleBarStyle ?? "hiddenInset",
 		transparent: options.transparent ?? false,
+		hidden: true,
 	});
 	const closeEvent = `close-${win.id}`;
 	const lifecycle = createWindowMountLifecycle({
@@ -426,6 +468,7 @@ export async function createUIWindow(
 			app,
 		);
 		lifecycle.attach(mounted.stop);
+		if (!lifecycle.isClosed()) win.show();
 
 		return {
 			window: win,
@@ -504,4 +547,9 @@ export async function createUIView(
 		}
 		throw error;
 	}
+}
+
+/** Scale of the display with the largest overlap with this native window. */
+export function getWindowPixelRatio(windowId: number): number {
+	return pixelRatioForFrame(ffi.request.getWindowFrame({ winId: windowId }), Screen.getAllDisplays(), Screen.getPrimaryDisplay().scaleFactor);
 }
