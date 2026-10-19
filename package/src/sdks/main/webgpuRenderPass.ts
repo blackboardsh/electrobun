@@ -13,14 +13,6 @@ export const WGPUStoreOp = {
 type LoadOp = string | number | null | undefined;
 type StoreOp = string | number | null | undefined;
 
-export function assertEmptyRenderBundles(bundles: Iterable<unknown>): void {
-	if (Array.from(bundles).length !== 0) {
-		const error = new Error("Native WebGPU render bundle encoding is not supported");
-		error.name = "NotSupportedError";
-		throw error;
-	}
-}
-
 export type RenderPassDepthStencilFields = {
 	depthClearValue?: number;
 	depthLoadOp?: LoadOp;
