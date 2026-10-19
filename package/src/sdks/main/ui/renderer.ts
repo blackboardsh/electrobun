@@ -11,6 +11,7 @@ import { ATLAS_SIZE, textAtlas } from "./text";
 import { runCleanupSteps } from "./cleanupSteps";
 import { getWebgpuContextKey } from "../webgpuContextKey";
 import { releaseWebgpuContext } from "../webgpuContextRegistry";
+import { physicalSize } from "./pixelSize";
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -73,9 +74,10 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
   // Sample before any branching: WGSL requires textureSample (implicit
   // derivatives) in uniform control flow.
   let sampled = textureSample(atlasTexture, atlasSampler, in.uv);
-  // Scissor to the instance's clip rect (framebuffer pixel space).
-  if (in.pos.x < in.clip.x || in.pos.y < in.clip.y
-      || in.pos.x >= in.clip.x + in.clip.z || in.pos.y >= in.clip.y + in.clip.w) {
+  // Fragment positions are physical pixels; clip rectangles are logical points.
+  let logicalPosition = in.pos.xy / u.viewport.zw;
+  if (logicalPosition.x < in.clip.x || logicalPosition.y < in.clip.y
+      || logicalPosition.x >= in.clip.x + in.clip.z || logicalPosition.y >= in.clip.y + in.clip.w) {
     discard;
   }
   var coverage: f32;
@@ -85,7 +87,8 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
   } else {
     let r = clamp(in.radius, 0.0, min(in.halfSize.x, in.halfSize.y));
     let d = sdRoundRect(in.local, in.halfSize, r);
-    coverage = 1.0 - smoothstep(-0.75, 0.75, d);
+    let aa = 0.75 / u.viewport.z;
+    coverage = 1.0 - smoothstep(-aa, aa, d);
   }
   if (coverage <= 0.003) {
     discard;
@@ -95,8 +98,8 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 `;
 
 export interface UiRenderer {
-	render(buffer: PaintBuffer, width: number, height: number): void;
-	resize(width: number, height: number): void;
+	render(buffer: PaintBuffer, width: number, height: number, pixelRatio?: number): void;
+	resize(width: number, height: number, pixelRatio?: number): void;
 	dispose(): void;
 }
 
@@ -308,11 +311,11 @@ export async function createUiRenderer(
 		});
 
 		return {
-			resize(width: number, height: number) {
+			resize(width: number, height: number, pixelRatio = 1) {
 				if (disposed) return;
-				ctx._fallbackSize = { width, height };
+				ctx._fallbackSize = physicalSize(width, height, pixelRatio);
 			},
-			render(buffer: PaintBuffer, width: number, height: number) {
+			render(buffer: PaintBuffer, width: number, height: number, pixelRatio = 1) {
 				if (disposed || width <= 0 || height <= 0) return;
 				flushAtlas();
 				if (buffer.count > instanceCapacity) {
@@ -328,10 +331,16 @@ export async function createUiRenderer(
 					previous?.destroy();
 				}
 				if (!uniformBuffer || !instanceBuffer) return;
+				const size = physicalSize(width, height, pixelRatio);
 				device.queue.writeBuffer(
 					uniformBuffer,
 					0,
-					new Float32Array([width, height, 0, 0]),
+					new Float32Array([
+						width,
+						height,
+						size.width / width,
+						size.height / height,
+					]),
 				);
 				if (buffer.count > 0) {
 					device.queue.writeBuffer(

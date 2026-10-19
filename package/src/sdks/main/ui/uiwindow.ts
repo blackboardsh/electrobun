@@ -21,7 +21,7 @@ import { attachInput } from "./input";
 import { collectWebviewAnchorMasks } from "./nativeLayerGeometry";
 import { tryEnableNativeText } from "./text";
 import { isUIElement, type UIElement } from "./jsx-runtime";
-import { ffi, nativeText } from "../proc/native";
+import { ffi, nativeText, Screen } from "../proc/native";
 import {
 	createUiContext,
 	withUiContext,
@@ -34,8 +34,11 @@ import electrobunEventEmitter from "../events/eventEmitter";
 import { createWindowMountLifecycle } from "./windowMountLifecycle";
 import { runCleanupSteps } from "./cleanupSteps";
 import { createViewMountLifecycle } from "./viewMountLifecycle";
+import { pixelRatioForFrame } from "./pixelSize";
 
 export interface UIMountOptions {
+	/** Drawable pixels per logical point; defaults to the window's display scale. */
+	pixelRatio?: number | (() => number);
 	/** Painted every frame behind the tree. */
 	background?: string;
 	/** Frame tick in ms: input poll always, render only when dirty. */
@@ -251,6 +254,38 @@ async function mount(
 		throw error;
 	}
 
+	let scaleDirty = true;
+	let nextScaleCheck = 0;
+	let automaticRatio = 1;
+	const markScaleDirty = () => {
+		scaleDirty = true;
+	};
+	const getPixelRatio = () => {
+		let ratio: number;
+		if (options.pixelRatio !== undefined) {
+			ratio = typeof options.pixelRatio === "function"
+				? options.pixelRatio()
+				: options.pixelRatio;
+		} else {
+			const now = Date.now();
+			// Refresh on window movement and stationary display-scale changes.
+			if (scaleDirty || now >= nextScaleCheck) {
+				automaticRatio = pixelRatioForFrame(
+					ffi.request.getWindowFrame({ winId: target.windowId }),
+					Screen.getAllDisplays(),
+					Screen.getPrimaryDisplay().scaleFactor,
+				);
+				scaleDirty = false;
+				nextScaleCheck = now + 1000;
+			}
+			ratio = automaticRatio;
+		}
+		if (!Number.isFinite(ratio) || ratio <= 0) {
+			throw new RangeError("pixelRatio must be positive and finite");
+		}
+		return ratio;
+	};
+	let lastPixelRatio = 0;
 	let lastWidth = 0;
 	let lastHeight = 0;
 	const lastAnchorRects = new Map<number, AnchorRect>();
@@ -316,13 +351,13 @@ async function mount(
 		}
 	};
 
-	const renderFrame = (width: number, height: number) => {
+	const renderFrame = (width: number, height: number, pixelRatio: number) => {
 		if (width <= 0 || height <= 0) return;
-		renderer.resize(width, height);
+		renderer.resize(width, height, pixelRatio);
 		computeLayout(tree, width, height);
 		syncAnchors();
 		applyWebviewMasks(width, height);
-		renderer.render(paint(tree), width, height);
+		renderer.render(paint(tree), width, height, pixelRatio);
 	};
 
 	// A hidden window skips ticks entirely, so nothing marks the tree dirty
@@ -340,16 +375,21 @@ async function mount(
 		wasVisible = true;
 		input.poll();
 		const { width, height } = target.getSize();
-		const sizeChanged = width !== lastWidth || height !== lastHeight;
+		const pixelRatio = getPixelRatio();
+		const sizeChanged =
+			width !== lastWidth || height !== lastHeight || pixelRatio !== lastPixelRatio;
 		if (tree.takeDirty() || sizeChanged || becameVisible) {
+			lastPixelRatio = pixelRatio;
 			lastWidth = width;
 			lastHeight = height;
-			renderFrame(width, height);
+			renderFrame(width, height, pixelRatio);
 		}
 	};
 	let timer: ReturnType<typeof setInterval>;
 	try {
 		timer = setInterval(tick, options.tickMs ?? 8);
+		electrobunEventEmitter.on(`move-${target.windowId}`, markScaleDirty);
+		electrobunEventEmitter.on(`resize-${target.windowId}`, markScaleDirty);
 	} catch (error) {
 		try {
 			runCleanupSteps([input.dispose, disposeRoot, renderer.dispose]);
@@ -370,6 +410,8 @@ async function mount(
 			stopped = true;
 			runCleanupSteps([
 				() => clearInterval(timer),
+				() => electrobunEventEmitter.off(`move-${target.windowId}`, markScaleDirty),
+				() => electrobunEventEmitter.off(`resize-${target.windowId}`, markScaleDirty),
 				input.dispose,
 				clearWebviewMasks,
 				disposeRoot,

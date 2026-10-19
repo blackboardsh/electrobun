@@ -9302,17 +9302,16 @@ extern "C" void setWindowFrame(NSWindow *window, double x, double y,
 extern "C" void getWindowFrame(NSWindow *window, double *outX, double *outY,
                                double *outWidth, double *outHeight) {
   __block NSRect frame = NSZeroRect;
-  __block CGFloat screenHeight = 0;
+  __block CGFloat primaryHeight = 0;
   runOnMainThreadSyncVoid(^{
     if (!window)
       return;
     frame = window.frame;
-    NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
-    screenHeight = screen.frame.size.height;
+    primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
   });
-  // Convert from bottom-left origin to top-left origin
+  // Match the global top-left coordinate space used by getAllDisplays().
   *outX = frame.origin.x;
-  *outY = screenHeight - frame.origin.y - frame.size.height;
+  *outY = primaryHeight - frame.origin.y - frame.size.height;
   *outWidth = frame.size.width;
   *outHeight = frame.size.height;
 }
