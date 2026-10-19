@@ -4,3 +4,4 @@ dist/
 artifacts/
 templates/
 *.tsbuildinfo
+cottontail-tmp/
