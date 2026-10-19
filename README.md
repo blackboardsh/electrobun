@@ -82,6 +82,7 @@ Don't miss our:
 - [act-track-ai](https://github.com/IrdanGu/act-track-ai) - personal desktop productivity tracker
 - [Agents Council](https://github.com/MrLesk/agents-council) - agent-to-agent MCP communication tool for feedback requests
 - [ai-wrapped](https://github.com/gulivan/ai-wrapped) - Wrapped-style desktop dashboard for your AI coding agent activity
+- [akou](https://github.com/GeiserX/akou) - macOS call and meeting recorder with on-device transcription that terminal agents can follow and question over MCP
 - [Audio TTS](https://github.com/blackboardsh/audio-tts) - desktop text-to-speech app using Qwen3-TTS for voice design, cloning, and generation
 - [aueio-player-desktop](https://github.com/tuomashatakka/aueio-player-desktop) - beautiful, minimal cross-platform audio player
 - [bestdiff](https://github.com/tesmond/bestdiff) - a git diff checker with curved connectors
