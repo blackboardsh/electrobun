@@ -71,6 +71,9 @@ The `device` and `pass` are Electrobun's native adapter classes. They implement
 part of WebGPU and are not assignable to the complete `@webgpu/types`
 interfaces. A library such as TypeGPU needs an application-owned compatibility
 adapter at this boundary, covering the native methods that library exercises.
+The adapter must also manage native resource lifetimes: browser libraries may
+drop references to GPU objects that Electrobun releases explicitly with
+`release()`. Retire those references without destroying Warren's borrowed device.
 This hook does not add missing WebGPU features or a text-library dependency.
 
 ## createUIWindow
