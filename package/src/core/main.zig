@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const synchronization = @import("synchronization.zig");
 
 const allocator = std.heap.c_allocator;
 const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
@@ -33,7 +34,7 @@ fn installRootNameOverride() ?[:0]u8 {
     const value = processEnviron().getAlloc(allocator, install_root_name_environment_variable) catch return null;
     defer allocator.free(value);
     if (!isSafeInstallRootName(value)) return null;
-    return allocator.dupeZ(u8, value) catch null;
+    return allocator.dupeSentinel(u8, value, 0) catch null;
 }
 
 // Lazily-initialized event-loop-free Io implementation. The library keeps its
@@ -377,33 +378,33 @@ var next_webview_id: u32 = 1;
 var next_wgpu_view_id: u32 = 1;
 var tray_registry = std.AutoHashMap(u32, TrayState).init(allocator);
 var window_registry = std.AutoHashMap(u32, WindowState).init(allocator);
-var window_registry_mutex: std.Io.Mutex = .init;
+var window_registry_mutex: synchronization.Mutex = .init;
 var webview_registry = std.AutoHashMap(u32, WebviewState).init(allocator);
-var webview_registry_mutex: std.Io.Mutex = .init;
+var webview_registry_mutex: synchronization.Mutex = .init;
 var wgpu_view_registry = std.AutoHashMap(u32, WgpuViewState).init(allocator);
-var wgpu_view_registry_mutex: std.Io.Mutex = .init;
+var wgpu_view_registry_mutex: synchronization.Mutex = .init;
 var pending_host_messages: std.ArrayList(PendingHostMessage) = .empty;
 var pending_host_messages_head: usize = 0;
-var pending_host_messages_mutex: std.Io.Mutex = .init;
+var pending_host_messages_mutex: synchronization.Mutex = .init;
 var pending_host_transport_sends: std.ArrayList(PendingHostTransportSend) = .empty;
 var pending_host_transport_sends_head: usize = 0;
-var pending_host_transport_sends_mutex: std.Io.Mutex = .init;
-var pending_host_transport_sends_condition: std.Io.Condition = .init;
+var pending_host_transport_sends_mutex: synchronization.Mutex = .init;
+var pending_host_transport_sends_condition: synchronization.Condition = .init;
 var pending_host_transport_send_worker_started = false;
-var host_transport_socket_write_mutex: std.Io.Mutex = .init;
+var host_transport_socket_write_mutex: synchronization.Mutex = .init;
 var webview_runtime_state = WebviewRuntimeState{};
 var host_transport_state = HostTransportState{};
-var host_transport_mutex: std.Io.Mutex = .init;
+var host_transport_mutex: synchronization.Mutex = .init;
 var host_transport_debug_state = HostTransportDebugState{};
-var host_transport_debug_mutex: std.Io.Mutex = .init;
+var host_transport_debug_mutex: synchronization.Mutex = .init;
 var default_webview_callbacks = DefaultWebviewCallbacks{};
 var managed_quit_requested_handler: ?QuitRequestedHandler = null;
 var exit_on_last_window_closed: bool = true;
 var host_message_wakeup_state = HostMessageWakeupState{};
-var host_message_wakeup_mutex: std.Io.Mutex = .init;
+var host_message_wakeup_mutex: synchronization.Mutex = .init;
 var runtime_callbacks_async = false;
 var pending_runtime_callback_payloads = std.AutoHashMap(usize, [:0]u8).init(allocator);
-var pending_runtime_callback_payloads_mutex: std.Io.Mutex = .init;
+var pending_runtime_callback_payloads_mutex: synchronization.Mutex = .init;
 
 const empty_rect_json: [*:0]const u8 = "{\"x\":0,\"y\":0,\"width\":0,\"height\":0}";
 
@@ -456,7 +457,7 @@ fn setLastError(comptime fmt: []const u8, args: anytype) void {
 }
 
 fn dupeZ(input: [*:0]const u8) ![:0]u8 {
-    return allocator.dupeZ(u8, std.mem.span(input));
+    return allocator.dupeSentinel(u8, std.mem.span(input), 0);
 }
 
 fn replaceOwnedZ(target: *[:0]u8, input: [*:0]const u8) bool {
@@ -623,7 +624,7 @@ fn dispatchRuntimePostMessage(
     webview_id: u32,
     message: []const u8,
 ) void {
-    const owned_message = allocator.dupeZ(u8, message) catch return;
+    const owned_message = allocator.dupeSentinel(u8, message, 0) catch return;
 
     if (!runtime_callbacks_async) {
         defer allocator.free(owned_message);
@@ -755,7 +756,7 @@ export fn popQueuedHostMessageBatch(max_count: u32, out_length: *u32) ?[*:0]u8 {
         setLastError("Queued host message batch exceeds the ABI length limit", .{});
         return null;
     }
-    const owned_batch_json = allocator.dupeZ(u8, batch_json) catch |err| {
+    const owned_batch_json = allocator.dupeSentinel(u8, batch_json, 0) catch |err| {
         out_length.* = host_message_batch_error_length;
         setLastError("Failed to own queued host message batch: {s}", .{@errorName(err)});
         return null;
@@ -828,7 +829,7 @@ export fn getHostTransportDebugJSON() ?[*:0]u8 {
         return null;
     };
     defer allocator.free(json);
-    return allocator.dupeZ(u8, json) catch |err| {
+    return allocator.dupeSentinel(u8, json, 0) catch |err| {
         setLastError("Failed to allocate host transport debug JSON: {s}", .{@errorName(err)});
         return null;
     };
@@ -843,6 +844,15 @@ export fn getHostMessageWakeupReadFD() c_int {
         return -1;
     }
     return @intCast(host_message_wakeup_state.read_fd orelse return -1);
+}
+
+// The runtime stream owns this duplicate. It may close it on error or EOF
+// without invalidating the descriptor used to drain the core's wakeup pipe.
+export fn duplicateHostMessageWakeupReadFD() c_int {
+    if (builtin.os.tag == .windows) return -1;
+    const fd = getHostMessageWakeupReadFD();
+    if (fd < 0) return -1;
+    return std.c.fcntl(fd, std.c.F.DUPFD_CLOEXEC, @as(c_int, 0));
 }
 
 fn ensureWebviewRuntimeConfigured() bool {
@@ -861,7 +871,7 @@ fn ensureWebviewRuntimeConfigured() bool {
 
 fn parseWebviewSecretKey(secret_key: [*:0]const u8) ?WebviewSecretKey {
     const input = std.mem.trim(u8, std.mem.span(secret_key), " \t\r\n");
-    var parsed: WebviewSecretKey = [_]u8{0} ** Aes256Gcm.key_length;
+    var parsed: WebviewSecretKey = @splat(0);
     var iterator = std.mem.splitScalar(u8, input, ',');
     var index: usize = 0;
 
@@ -1406,7 +1416,7 @@ fn enqueueHostTransportPlaintext(webview_id: u32, context: WebviewTransportConte
         markWebviewTransportReady(webview_id, socket_handle);
     }
 
-    const message_z = allocator.dupeZ(u8, plaintext) catch return;
+    const message_z = allocator.dupeSentinel(u8, plaintext, 0) catch return;
     defer allocator.free(message_z);
 
     enqueuePendingHostMessage(webview_id, message_z.ptr);
@@ -2008,7 +2018,7 @@ fn jsonF64(value: std.json.Value) ?f64 {
 }
 
 fn duplicateSentinelString(value: []const u8) ?[:0]u8 {
-    return allocator.dupeZ(u8, value) catch null;
+    return allocator.dupeSentinel(u8, value, 0) catch null;
 }
 
 const InternalRect = struct {
@@ -2066,9 +2076,9 @@ fn dispatchStoredWebviewEvent(source_webview_id: u32, payload: std.json.Value) v
     const event_name = jsonString(payload_object.get("eventName") orelse return) orelse return;
     const detail = jsonString(payload_object.get("detail") orelse return) orelse return;
 
-    const event_name_z = allocator.dupeZ(u8, event_name) catch return;
+    const event_name_z = allocator.dupeSentinel(u8, event_name, 0) catch return;
     defer allocator.free(event_name_z);
-    const detail_z = allocator.dupeZ(u8, detail) catch return;
+    const detail_z = allocator.dupeSentinel(u8, detail, 0) catch return;
     defer allocator.free(detail_z);
 
     handler(webview_id, event_name_z.ptr, detail_z.ptr);
@@ -4500,4 +4510,79 @@ test "asynchronous runtime bridge payloads require explicit release" {
     try std.testing.expectEqualStrings("owned payload", std.mem.span(payload));
     try std.testing.expect(releaseRuntimeCallbackPayload(payload));
     try std.testing.expect(!releaseRuntimeCallbackPayload(payload));
+}
+
+test "contended host queue preserves every producer's message order" {
+    const Producer = struct {
+        const count = 10_000;
+        fn run(id: u32) void {
+            for (0..count) |sequence| {
+                var buffer: [32]u8 = undefined;
+                const message = std.fmt.bufPrintSentinel(&buffer, "{d}", .{sequence}, 0) catch unreachable;
+                hostBridgeQueueTrampoline(id, message.ptr);
+            }
+        }
+    };
+    var threads: [4]std.Thread = undefined;
+    var started: usize = 0;
+    defer for (threads[0..started]) |thread| thread.join();
+    for (&threads, 0..) |*thread, id| {
+        thread.* = try std.Thread.spawn(.{}, Producer.run, .{@as(u32, @intCast(id))});
+        started += 1;
+    }
+    var received: [4]usize = @splat(0);
+    var total: usize = 0;
+    while (total < threads.len * Producer.count) {
+        var id: u32 = undefined;
+        if (popNextQueuedHostMessage(&id)) |message| {
+            defer freeCoreString(message);
+            try std.testing.expect(id < received.len);
+            const sequence = try std.fmt.parseInt(usize, std.mem.span(message), 10);
+            try std.testing.expectEqual(received[id], sequence);
+            received[id] += 1;
+            total += 1;
+        } else {
+            std.atomic.spinLoopHint();
+        }
+    }
+    for (received) |count| try std.testing.expectEqual(Producer.count, count);
+    var id: u32 = undefined;
+    try std.testing.expect(popNextQueuedHostMessage(&id) == null);
+}
+
+test "contended asynchronous callbacks release their owned payloads" {
+    const Callbacks = struct {
+        var received: std.atomic.Value(usize) = .init(0);
+        var failed: std.atomic.Value(bool) = .init(false);
+        fn consume(id: u32, payload: [*:0]const u8) callconv(.c) void {
+            if (id != 7 or !std.mem.eql(u8, std.mem.span(payload), "owned concurrent payload")) {
+                failed.store(true, .monotonic);
+            }
+            if (!releaseRuntimeCallbackPayload(payload)) failed.store(true, .monotonic);
+            _ = received.fetchAdd(1, .monotonic);
+        }
+        fn produce() void {
+            for (0..10_000) |_| dispatchRuntimePostMessage(consume, 7, "owned concurrent payload");
+        }
+    };
+    clearPendingRuntimeCallbackPayloads();
+    runtime_callbacks_async = true;
+    defer {
+        runtime_callbacks_async = false;
+        clearPendingRuntimeCallbackPayloads();
+    }
+    Callbacks.received.store(0, .monotonic);
+    Callbacks.failed.store(false, .monotonic);
+    {
+        var threads: [4]std.Thread = undefined;
+        var started: usize = 0;
+        defer for (threads[0..started]) |thread| thread.join();
+        for (&threads) |*thread| {
+            thread.* = try std.Thread.spawn(.{}, Callbacks.produce, .{});
+            started += 1;
+        }
+    }
+    try std.testing.expect(!Callbacks.failed.load(.monotonic));
+    try std.testing.expectEqual(40_000, Callbacks.received.load(.monotonic));
+    try std.testing.expectEqual(0, pending_runtime_callback_payloads.count());
 }

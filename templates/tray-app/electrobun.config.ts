@@ -10,8 +10,8 @@ export default {
 		exitOnLastWindowClosed: false,
 	},
 	build: {
-		mainProcess: "cottontail",
-		cottontail: {
+		mainProcess: "bun",
+		bun: {
 			entrypoint: "src/bun/index.ts",
 		},
 		views: {

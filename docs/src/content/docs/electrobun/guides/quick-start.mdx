@@ -122,7 +122,7 @@ A typical project looks like this:
 my-app/
 |-- src/
 |   |-- bun/
-|   |   `-- index.ts        # Cottontail main process
+|   |   `-- index.ts        # Bun main process
 |   `-- mainview/
 |       |-- index.html
 |       |-- index.css
@@ -135,7 +135,7 @@ my-app/
 ```
 
 The split under `src/` mirrors how the app actually runs. `src/bun/index.ts`
-is the **main process** — it runs on Cottontail, owns windows and native
+is the **main process** — it runs on Bun, owns windows and native
 state, and is where the privileged side of your app lives. `src/mainview/` is
 the **webview UI** — ordinary HTML, CSS, and TypeScript rendered in a native
 webview. `hutch.config.ts` owns tasks and any optional release or package-manager
@@ -171,7 +171,7 @@ for each target.
   pins.
 - [Project Ownership and the Devkit](/electrobun/guides/project-ownership/)
   explains the config split, generated SDK projection, and external bundlers.
-- [Cottontail](/electrobun/guides/cottontail/) explains the default runtime.
+- Bun is the default runtime; [Cottontail](/electrobun/guides/cottontail/) is an experimental alternative.
 - [Main Process Runtimes](/electrobun/guides/native-main-process/) covers
   Cottontail, Bun, Zig, Rust, Go, and Odin.
 - [Bundling and Distribution](/electrobun/guides/bundling-and-distribution/)

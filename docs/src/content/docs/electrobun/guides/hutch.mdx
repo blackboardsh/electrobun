@@ -13,19 +13,26 @@ that prefer npm, Bun, pnpm, or Yarn can delegate to them instead. Non-JS
 dependencies stay with their own tools: Cargo for Rust, Go modules for Go,
 and so on.
 
-Hutch is build-time tooling — it's what *you* run. It uses Cottontail for
-TypeScript and shell execution during builds, but that does not select the
-application runtime. Cottontail ships as the default JavaScript main process;
-when `build.mainProcess` selects Bun, the actual Bun runtime ships instead.
-Hutch itself stays out of the finished bundle.
+Hutch defaults to Bun for JavaScript/TypeScript scripts, tests, and string
+shell tasks. Electrobun also defaults to Bun for the packaged application main
+process. These are independent selections: changing the script runner does not
+change `build.mainProcess`.
+
+Cottontail remains an experimental option. Set `HUTCH_RUNTIME=cottontail` for
+Hutch scripts, or `build.mainProcess: "cottontail"` with a `build.cottontail`
+entrypoint for an application. `HUTCH_RUNTIME=bun` explicitly selects Bun even
+when a local Cottontail override is present. The `// @hutch ... cottontail=...`
+pragma pins a Cottontail version; it does not opt scripts into that runtime.
+Hutch's internal config loading and Electrobun bundling still use its paired
+Cottontail. Hutch stays out of the finished application bundle.
 
 ## Install Hutch
 
 Regular npm commands need no separate machine-wide installation. There is one
 dependency-free `electrobun` package, with no `@electrobun/hutch-*` platform
-packages and no postinstall script. Each Electrobun GitHub Release carries four
-mirrors from its exact paired Hutch release. `hutch-artifacts.json` binds every
-host archive to its immutable GitHub Release URL, declared byte size, and
+packages and no postinstall script. Electrobun releases carry five
+platform archives from their exact paired Hutch release, including Windows
+ARM64. `hutch-artifacts.json` binds every host archive to its immutable GitHub Release URL, declared byte size, and
 SHA-256 digest. On first use the npm command reads that index, downloads and
 verifies the host archive, safely caches the extracted launcher and engine, then
 runs it.
@@ -70,7 +77,8 @@ Coming from npm or Bun? `npx electrobun init` and `bunx electrobun init` both
 work, defaulting `init` to stable templates; pass `--beta` explicitly for beta
 templates. Each published template pins the exact Electrobun release it was
 tested with. The npm bootstrap still supplies its paired Hutch automatically;
-direct Hutch validates the template catalog and installs the pinned release.
+direct Hutch validates the template catalog and, when needed, downloads its
+matching Hutch toolchain before initializing the project.
 
 <Aside type="caution" title="Upgrade global Hutch before using current Vite templates">
 The current Vite templates require Hutch 0.24 or later for built-in
@@ -123,6 +131,11 @@ hutch electrobun build --env=stable
 
 Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
+Template channels are separate from Hutch's release channel. Electrobun beta
+templates can require stable Hutch; `--beta` selects the template catalog,
+not a canary toolchain. Follow any minimum-version error from init and upgrade
+the appropriate launcher. See [init's channel behavior](/electrobun/apis/cli/cli-args/#hutch-electrobun-init).
+
 The publisher guarantees that a published template's exact Electrobun pin
 matches its catalog. After extracting it, `init` syncs that release and the
 required native toolchain, then runs the template's configured `install` task
@@ -143,7 +156,7 @@ manager. When a name is unambiguous, `hutch <name>` works as shorthand:
 // hutch.config.ts
 export default {
   // Optional exact override:
-  // electrobun: { version: "2.0.1-beta.0" },
+  // electrobun: { version: "2.0.4" },
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
     ui: ["hutch", "pm", "exec", "--", "vite", "build"],
@@ -187,6 +200,17 @@ to be on `PATH`. With an external manager selected, `hutch install` spawns its
 example, with npm selected, `hutch pm install zod` and
 `hutch pm exec -- tsc --version` delegate those operations to npm.
 
+## Paired toolchain
+
+Each Electrobun release declares its paired Hutch and build-time Cottontail
+versions in the release manifests. Hutch uses Zig `0.17.0` and selects a native
+ARM64 compiler on Windows ARM64 even when the caller is an emulated x64 process.
+
+Native Zig app builds retain their compiler cache under
+`.hutch/cache/zig/<os>-<arch>` across bundle rebuilds. The install output is
+still regenerated inside the build directory. Keep `.hutch` generated and
+untracked; a clean bundle does not require deleting this compiler cache.
+
 ## Versions and updates
 
 The global launchers have independent production and canary selections. Each
@@ -203,10 +227,11 @@ hutch cottontail version
 Interactive use checks for updates periodically. CI and other non-interactive
 invocations never prompt.
 
-Cottontail is paired with the Hutch release: an unpinned project runs the
-Cottontail this launcher was built and tested with, and `hutch upgrade`
-advances both together. (`hutch self update` remains as the explicit long
-form of `hutch upgrade`.) This pairing covers the build-time runtime only —
+The build-time Cottontail is paired with the Hutch release. Unless its version
+is explicitly pinned, internal build helpers use the Cottontail this launcher
+was built and tested with, and `hutch upgrade` advances the pair together.
+Ordinary scripts still use Bun by default. (`hutch self update` remains as the
+explicit long form of `hutch upgrade`.) This pairing covers the build-time runtime only —
 the Cottontail bundled into an app by `mainProcess: "cottontail"` is a
 runtime component pinned by the selected Electrobun release's devkit
 manifest, exactly like the bundled Bun. Projects that install through npm
@@ -300,7 +325,7 @@ version, or `build:<full-git-revision>`. `stable` and `latest` resolve to
 `production`:
 
 ```ts
-// @hutch cli=0.5.0 cottontail=0.3.0
+// @hutch cli=0.27.1 cottontail=0.7.1
 ```
 
 The pragma selects versions only for that project. It never rewrites the global
@@ -344,7 +369,7 @@ alongside tasks and an optional external package-manager selection:
 ```ts docs=syntax
 export default {
   // Optional: omit this object to use the npm or channel default.
-  electrobun: { version: "2.0.1-beta.0" },
+  electrobun: { version: "2.0.4" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
   },

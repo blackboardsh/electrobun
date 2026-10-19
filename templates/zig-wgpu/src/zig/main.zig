@@ -42,7 +42,28 @@ const AppState = struct {
     mutex: Mutex = .{},
 };
 
-const surface_format = 0x0000001c;
+const SurfaceCapabilities = extern struct {
+    next_in_chain: ?*anyopaque = null,
+    usages: u64 = 0,
+    format_count: usize = 0,
+    formats: ?[*]const u32 = null,
+    present_mode_count: usize = 0,
+    present_modes: ?[*]const u32 = null,
+    alpha_mode_count: usize = 0,
+    alpha_modes: ?[*]const u32 = null,
+};
+
+const SurfaceSettings = struct { format: u32, alpha_mode: u32 };
+
+fn selectSurfaceSettings(api: WgpuApi, context: electrobun.WgpuContext) !SurfaceSettings {
+    var caps: SurfaceCapabilities = .{};
+    const status = api.surface_get_capabilities(context.surface_ptr, context.adapter_ptr, &caps);
+    defer api.surface_capabilities_free_members(caps);
+    if (status != 1 or caps.format_count == 0 or caps.formats == null or
+        caps.alpha_mode_count == 0 or caps.alpha_modes == null)
+        return error.UnsupportedSurface;
+    return .{ .format = caps.formats.?[0], .alpha_mode = caps.alpha_modes.?[0] };
+}
 const vertex_count = 3;
 const floats_per_vertex = 9;
 const vertex_stride = floats_per_vertex * @sizeOf(f32);
@@ -148,6 +169,8 @@ const mandelbrot_shader: [:0]const u8 =
 ;
 
 const WgpuApi = struct {
+    surface_get_capabilities: SurfaceGetCapabilitiesFn,
+    surface_capabilities_free_members: SurfaceCapabilitiesFreeMembersFn,
     device_create_shader_module: DeviceCreateShaderModuleFn,
     device_create_render_pipeline: DeviceCreateRenderPipelineFn,
     device_create_buffer: DeviceCreateBufferFn,
@@ -167,6 +190,8 @@ const WgpuApi = struct {
     command_buffer_release: ReleaseFn,
     command_encoder_release: ReleaseFn,
 
+    const SurfaceGetCapabilitiesFn = *const fn (?*anyopaque, ?*anyopaque, *SurfaceCapabilities) callconv(.c) u32;
+    const SurfaceCapabilitiesFreeMembersFn = *const fn (SurfaceCapabilities) callconv(.c) void;
     const DeviceCreateShaderModuleFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
     const DeviceCreateRenderPipelineFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
     const DeviceCreateBufferFn = *const fn (?*anyopaque, ?*anyopaque) callconv(.c) ?*anyopaque;
@@ -185,6 +210,8 @@ const WgpuApi = struct {
 
     fn load(native: *electrobun.WgpuNative) !WgpuApi {
         return .{
+            .surface_get_capabilities = native.lookup(SurfaceGetCapabilitiesFn, "wgpuSurfaceGetCapabilities") orelse return error.MissingWgpuSymbol,
+            .surface_capabilities_free_members = native.lookup(SurfaceCapabilitiesFreeMembersFn, "wgpuSurfaceCapabilitiesFreeMembers") orelse return error.MissingWgpuSymbol,
             .device_create_shader_module = native.lookup(DeviceCreateShaderModuleFn, "wgpuDeviceCreateShaderModule") orelse return error.MissingWgpuSymbol,
             .device_create_render_pipeline = native.lookup(DeviceCreateRenderPipelineFn, "wgpuDeviceCreateRenderPipeline") orelse return error.MissingWgpuSymbol,
             .device_create_buffer = native.lookup(DeviceCreateBufferFn, "wgpuDeviceCreateBuffer") orelse return error.MissingWgpuSymbol,
@@ -354,22 +381,21 @@ fn configureGpuFromParams(state: *AppState, webview_id: u32, params_value: ?std.
     state.gpu.motion = @min(@max(jsonU32(&params.object, "motion", state.gpu.motion), 1), 8);
 }
 
-fn configureSurface(core: *electrobun.Core, context: electrobun.WgpuContext, width: u32, height: u32) !void {
+fn configureSurface(core: *electrobun.Core, context: electrobun.WgpuContext, width: u32, height: u32, settings: SurfaceSettings) !void {
     const WGPUTextureUsage_RenderAttachment = 0x0000000000000010;
-    const WGPUCompositeAlphaMode_Opaque = 0x00000001;
     const WGPUPresentMode_Fifo = 0x00000001;
 
-    var config = [_]u8{0} ** 64;
+    var config: [64]u8 = @splat(0);
     writePtr(config[0..], 0, null);
     writePtr(config[0..], 8, context.device_ptr);
-    writeU32(config[0..], 16, surface_format);
+    writeU32(config[0..], 16, settings.format);
     writeU32(config[0..], 20, 0);
     writeU64(config[0..], 24, WGPUTextureUsage_RenderAttachment);
     writeU32(config[0..], 32, width);
     writeU32(config[0..], 36, height);
     writeU64(config[0..], 40, 0);
     writePtr(config[0..], 48, null);
-    writeU32(config[0..], 56, WGPUCompositeAlphaMode_Opaque);
+    writeU32(config[0..], 56, settings.alpha_mode);
     writeU32(config[0..], 60, WGPUPresentMode_Fifo);
     try core.wgpuSurfaceConfigureMainThread(context.surface_ptr, ptrFromBytes(config[0..]));
 }
@@ -378,7 +404,7 @@ fn makeShaderSourceWGSL(code: [:0]const u8) [32]u8 {
     const WGPUSType_ShaderSourceWGSL = 0x00000002;
     const WGPU_STRLEN = std.math.maxInt(u64);
 
-    var bytes = [_]u8{0} ** 32;
+    var bytes: [32]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writeU32(bytes[0..], 8, WGPUSType_ShaderSourceWGSL);
     writePtr(bytes[0..], 16, ptrFromConstBytes(code));
@@ -387,7 +413,7 @@ fn makeShaderSourceWGSL(code: [:0]const u8) [32]u8 {
 }
 
 fn makeShaderModuleDescriptor(source_ptr: ?*anyopaque) [24]u8 {
-    var bytes = [_]u8{0} ** 24;
+    var bytes: [24]u8 = @splat(0);
     writePtr(bytes[0..], 0, source_ptr);
     writePtr(bytes[0..], 8, null);
     writeU64(bytes[0..], 16, 0);
@@ -405,7 +431,7 @@ fn writeVertexAttribute(bytes: []u8, index: usize, offset: u64, shader_location:
 fn makeVertexBufferLayout(attributes_ptr: ?*anyopaque, attribute_count: u64) [40]u8 {
     const WGPUVertexStepMode_Vertex = 0x00000001;
 
-    var bytes = [_]u8{0} ** 40;
+    var bytes: [40]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writeU32(bytes[0..], 8, WGPUVertexStepMode_Vertex);
     writeU64(bytes[0..], 16, vertex_stride);
@@ -417,7 +443,7 @@ fn makeVertexBufferLayout(attributes_ptr: ?*anyopaque, attribute_count: u64) [40
 fn makeColorTargetState(format: u32) [32]u8 {
     const WGPUColorWriteMask_All = 0x000000000000000f;
 
-    var bytes = [_]u8{0} ** 32;
+    var bytes: [32]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writeU32(bytes[0..], 8, format);
     writePtr(bytes[0..], 16, null);
@@ -428,7 +454,7 @@ fn makeColorTargetState(format: u32) [32]u8 {
 fn makeVertexState(module: ?*anyopaque, entry: [:0]const u8, vertex_layout_ptr: ?*anyopaque) [64]u8 {
     const WGPU_STRLEN = std.math.maxInt(u64);
 
-    var bytes = [_]u8{0} ** 64;
+    var bytes: [64]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writePtr(bytes[0..], 8, module);
     writePtr(bytes[0..], 16, ptrFromConstBytes(entry));
@@ -443,7 +469,7 @@ fn makeVertexState(module: ?*anyopaque, entry: [:0]const u8, vertex_layout_ptr: 
 fn makeFragmentState(module: ?*anyopaque, entry: [:0]const u8, color_target_ptr: ?*anyopaque) [64]u8 {
     const WGPU_STRLEN = std.math.maxInt(u64);
 
-    var bytes = [_]u8{0} ** 64;
+    var bytes: [64]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writePtr(bytes[0..], 8, module);
     writePtr(bytes[0..], 16, ptrFromConstBytes(entry));
@@ -460,7 +486,7 @@ fn makePrimitiveState() [32]u8 {
     const WGPUFrontFace_CCW = 0x00000001;
     const WGPUCullMode_None = 0x00000001;
 
-    var bytes = [_]u8{0} ** 32;
+    var bytes: [32]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writeU32(bytes[0..], 8, WGPUPrimitiveTopology_TriangleList);
     writeU32(bytes[0..], 16, WGPUFrontFace_CCW);
@@ -469,7 +495,7 @@ fn makePrimitiveState() [32]u8 {
 }
 
 fn makeMultisampleState() [24]u8 {
-    var bytes = [_]u8{0} ** 24;
+    var bytes: [24]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writeU32(bytes[0..], 8, 1);
     writeU32(bytes[0..], 12, 0xffffffff);
@@ -477,7 +503,7 @@ fn makeMultisampleState() [24]u8 {
 }
 
 fn makeRenderPipelineDescriptor(vertex_state: *const [64]u8, primitive_state: *const [32]u8, multisample_state: *const [24]u8, fragment_state_ptr: ?*anyopaque) [168]u8 {
-    var bytes = [_]u8{0} ** 168;
+    var bytes: [168]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writePtr(bytes[0..], 8, null);
     writeU64(bytes[0..], 16, 0);
@@ -494,7 +520,7 @@ fn makeBufferDescriptor(size: u64) [48]u8 {
     const WGPUBufferUsage_Vertex = 0x0000000000000020;
     const WGPUBufferUsage_CopyDst = 0x0000000000000008;
 
-    var bytes = [_]u8{0} ** 48;
+    var bytes: [48]u8 = @splat(0);
     writePtr(bytes[0..], 0, null);
     writePtr(bytes[0..], 8, null);
     writeU64(bytes[0..], 16, 0);
@@ -503,7 +529,7 @@ fn makeBufferDescriptor(size: u64) [48]u8 {
     return bytes;
 }
 
-fn createMandelbrotPipeline(api: WgpuApi, context: electrobun.WgpuContext) !GpuPipeline {
+fn createMandelbrotPipeline(api: WgpuApi, context: electrobun.WgpuContext, surface_format: u32) !GpuPipeline {
     const WGPUVertexFormat_Float32 = 0x0000001c;
     const WGPUVertexFormat_Float32x2 = 0x0000001d;
     const WGPUVertexFormat_Float32x4 = 0x0000001f;
@@ -514,7 +540,7 @@ fn createMandelbrotPipeline(api: WgpuApi, context: electrobun.WgpuContext) !GpuP
     var shader_descriptor = makeShaderModuleDescriptor(ptrFromBytes(shader_source[0..]));
     const shader_module = api.device_create_shader_module(context.device_ptr, ptrFromBytes(shader_descriptor[0..])) orelse return error.MissingShaderModule;
 
-    var attributes = [_]u8{0} ** (32 * 4);
+    var attributes: [32 * 4]u8 = @splat(0);
     writeVertexAttribute(attributes[0..], 0, 0, 0, WGPUVertexFormat_Float32x2);
     writeVertexAttribute(attributes[0..], 1, 8, 1, WGPUVertexFormat_Float32);
     writeVertexAttribute(attributes[0..], 2, 12, 2, WGPUVertexFormat_Float32x2);
@@ -545,7 +571,7 @@ fn makeFrameVertices(frame: u64, width: u32, height: u32, mode: u32, motion: u32
     const mode_f = @as(f32, @floatFromInt(mode));
     const motion_f = @as(f32, @floatFromInt(motion));
     const positions = [_]f32{ -1.0, -1.0, 3.0, -1.0, -1.0, 3.0 };
-    var vertices = [_]f32{0} ** (vertex_count * floats_per_vertex);
+    var vertices: [vertex_count * floats_per_vertex]f32 = @splat(0);
 
     var i: usize = 0;
     while (i < vertex_count) : (i += 1) {
@@ -574,7 +600,7 @@ fn renderFrame(core: *electrobun.Core, api: WgpuApi, context: electrobun.WgpuCon
     var vertices = makeFrameVertices(frame, width, height, mode, motion);
     api.queue_write_buffer(queue, pipeline.vertex_buffer, 0, @ptrCast(&vertices), vertex_buffer_size);
 
-    var surface_texture = [_]u8{0} ** 24;
+    var surface_texture: [24]u8 = @splat(0);
     try core.wgpuSurfaceGetCurrentTextureMainThread(context.surface_ptr, ptrFromBytes(surface_texture[0..]));
     const texture_ptr: ?*anyopaque = @ptrFromInt(std.mem.readInt(u64, surface_texture[8..][0..8], .little));
     const status = std.mem.readInt(u32, surface_texture[16..][0..4], .little);
@@ -592,7 +618,7 @@ fn renderFrame(core: *electrobun.Core, api: WgpuApi, context: electrobun.WgpuCon
     const encoder = api.device_create_command_encoder(context.device_ptr, null) orelse return error.MissingCommandEncoder;
     defer api.command_encoder_release(encoder);
 
-    var color_attachment = [_]u8{0} ** 72;
+    var color_attachment: [72]u8 = @splat(0);
     writePtr(color_attachment[0..], 8, texture_view);
     writeU32(color_attachment[0..], 16, WGPU_DEPTH_SLICE_UNDEFINED);
     writePtr(color_attachment[0..], 24, null);
@@ -603,7 +629,7 @@ fn renderFrame(core: *electrobun.Core, api: WgpuApi, context: electrobun.WgpuCon
     writeF64(color_attachment[0..], 56, 0.012);
     writeF64(color_attachment[0..], 64, 1.0);
 
-    var pass_descriptor = [_]u8{0} ** 64;
+    var pass_descriptor: [64]u8 = @splat(0);
     writeU64(pass_descriptor[0..], 24, 1);
     writePtr(pass_descriptor[0..], 32, ptrFromBytes(color_attachment[0..]));
 
@@ -638,6 +664,7 @@ fn gpuRenderLoop() void {
     var context: ?electrobun.WgpuContext = null;
     var pipeline: ?GpuPipeline = null;
     var queue: ?*anyopaque = null;
+    var settings: SurfaceSettings = undefined;
     var configured_width: u32 = 0;
     var configured_height: u32 = 0;
     var frame: u64 = 0;
@@ -673,8 +700,14 @@ fn gpuRenderLoop() void {
                 sleepMs(250);
                 continue;
             }
+            settings = selectSurfaceSettings(api, context.?) catch |err| {
+                std.debug.print("[zig-wgpu] failed to query surface capabilities: {s}\n", .{@errorName(err)});
+                context = null;
+                sleepMs(250);
+                continue;
+            };
             active_view_id = view_id;
-            pipeline = createMandelbrotPipeline(api, context.?) catch |err| {
+            pipeline = createMandelbrotPipeline(api, context.?, settings.format) catch |err| {
                 std.debug.print("[zig-wgpu] failed to create Mandelbrot pipeline: {s}\n", .{@errorName(err)});
                 context = null;
                 queue = null;
@@ -687,7 +720,7 @@ fn gpuRenderLoop() void {
         }
 
         if (configured_width != width or configured_height != height) {
-            configureSurface(current_state.core, context.?, width, height) catch |err| {
+            configureSurface(current_state.core, context.?, width, height, settings) catch |err| {
                 std.debug.print("[zig-wgpu] failed to configure surface: {s}\n", .{@errorName(err)});
                 sleepMs(250);
                 continue;

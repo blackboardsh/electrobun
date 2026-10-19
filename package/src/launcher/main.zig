@@ -6,11 +6,19 @@ const uninstall = @import("uninstall.zig");
 const windows_spawn = @import("windows_spawn.zig");
 const windows_process_identity = @import("windows_process_identity.zig");
 const launcher_pid_environment_variable = "ELECTROBUN_LAUNCHER_PID";
-const c = @cImport({
-    @cInclude("signal.h");
-    @cInclude("unistd.h");
-    @cInclude("stdlib.h");
-});
+// Signal handlers use the POSIX libc ABI and Zig's target-specific signal values.
+const c = if (builtin.os.tag == .windows) struct {} else struct {
+    const SignalHandler = ?*const fn (c_int) callconv(.c) void;
+    const SIGINT: c_int = @backingInt(std.c.SIG.INT);
+    const SIGTERM: c_int = @backingInt(std.c.SIG.TERM);
+    const SIGHUP: c_int = @backingInt(std.c.SIG.HUP);
+    const SIGALRM: c_int = @backingInt(std.c.SIG.ALRM);
+    const SIGKILL: c_int = @backingInt(std.c.SIG.KILL);
+    const alarm = std.c.alarm;
+    const getpid = std.c.getpid;
+    extern "c" fn signal(sig: c_int, handler: SignalHandler) SignalHandler;
+    extern "c" fn kill(pid: std.c.pid_t, sig: c_int) c_int;
+};
 
 // Initialized at the top of main().
 var g_io: std.Io = undefined;
@@ -122,14 +130,8 @@ fn isDevBuild(allocator: std.mem.Allocator, exe_dir: []const u8) bool {
     return false;
 }
 
-const MainProcess = enum {
-    bun,
-    cottontail,
-    zig,
-    rust,
-    go,
-    odin,
-};
+const main_process_config = @import("main_process.zig");
+const MainProcess = main_process_config.MainProcess;
 
 fn uninstallPlatform() uninstall.Platform {
     return switch (builtin.os.tag) {
@@ -321,43 +323,19 @@ fn delegateUninstall(
     const result = try manager.wait(io);
     switch (result) {
         .exited => |code| if (code != 0) std.process.exit(code),
-        .signal => |signal| std.process.exit(@intCast(128 + @intFromEnum(signal))),
+        .signal => |signal| std.process.exit(@intCast(128 + @backingInt(signal))),
         else => std.process.exit(1),
     }
 }
 
 fn detectMainProcess(allocator: std.mem.Allocator, exe_dir: []const u8) MainProcess {
-    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .cottontail;
+    const build_path = std.fs.path.join(allocator, &.{ exe_dir, "..", "Resources", "build.json" }) catch return .bun;
     defer allocator.free(build_path);
 
-    const content = std.Io.Dir.cwd().readFileAlloc(g_io, build_path, allocator, .limited(1024 * 10)) catch return .cottontail;
+    const content = std.Io.Dir.cwd().readFileAlloc(g_io, build_path, allocator, .limited(1024 * 10)) catch return .bun;
     defer allocator.free(content);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, allocator, content, .{}) catch return .cottontail;
-    defer parsed.deinit();
-
-    if (parsed.value.object.get("mainProcess")) |main_process_value| {
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "bun")) {
-            return .bun;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "cottontail")) {
-            return .cottontail;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "zig")) {
-            return .zig;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "rust")) {
-            return .rust;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "go")) {
-            return .go;
-        }
-        if (main_process_value == .string and std.mem.eql(u8, main_process_value.string, "odin")) {
-            return .odin;
-        }
-    }
-
-    return .cottontail;
+    return main_process_config.fromMetadata(allocator, content);
 }
 
 fn configureCottontailEnv(allocator: std.mem.Allocator, exe_dir: []const u8, env_map: *std.process.Environ.Map) !void {
@@ -736,7 +714,7 @@ pub fn main(init: std.process.Init) !void {
                 }
             },
             .signal => |sig| {
-                const sig_value: u32 = @intFromEnum(sig);
+                const sig_value: u32 = @backingInt(sig);
                 // Don't print on SIGINT/SIGTERM - these are expected during graceful shutdown
                 if (builtin.os.tag != .windows and sig_value != c.SIGINT and sig_value != c.SIGTERM) {
                     std.debug.print("Child process terminated by signal: {d}\n", .{sig_value});

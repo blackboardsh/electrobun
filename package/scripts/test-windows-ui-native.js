@@ -1,14 +1,18 @@
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
+import { assertWindowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
+import { msvcEnvironment } from "./windows-msvc-environment.mjs";
 
 if (process.platform !== "win32") {
 	console.log("Skipping Windows native UI test on non-Windows host");
@@ -16,9 +20,8 @@ if (process.platform !== "win32") {
 }
 
 const packageRoot = resolve(import.meta.dirname, "..");
+const compilerEnvironment = msvcEnvironment();
 const requireNativeWrapper = process.argv.includes("--require-native-wrapper");
-const zig =
-	process.env["ZIG_BINARY"] ?? join(packageRoot, "vendors", "zig", "zig.exe");
 const source = join(
 	packageRoot,
 	"src",
@@ -27,15 +30,19 @@ const source = join(
 	"windows_ui_test.cpp",
 );
 
-if (!existsSync(zig)) {
-	throw new Error(`Vendored Zig was not found at ${zig}`);
-}
-
-const temporaryDirectory = mkdtempSync(join(tmpdir(), "electrobun-windows-ui-"));
+const temporaryRoot = realpathSync(tmpdir());
+const temporaryDirectory = mkdtempSync(join(temporaryRoot, "electrobun-windows-ui-"));
 const binary = join(temporaryDirectory, "windows-ui-test.exe");
 const cleanupWaiter = new Int32Array(new SharedArrayBuffer(4));
 
 function removeTemporaryDirectory(directory) {
+	const target = resolve(directory);
+	if (dirname(target).toLowerCase() !== temporaryRoot.toLowerCase()
+		|| !basename(target).startsWith("electrobun-windows-ui-")
+		|| lstatSync(target).isSymbolicLink()
+		|| realpathSync(target).toLowerCase() !== target.toLowerCase()) {
+		throw new Error("Windows UI cleanup escaped its temporary directory");
+	}
 	for (let attempt = 0; attempt < 20; attempt += 1) {
 		try {
 			rmSync(directory, { recursive: true, force: true });
@@ -78,6 +85,7 @@ function resolveNativeWrapper() {
 	const nativeInputs = [
 		join(packageRoot, "src", "native", "win", "nativeWrapper.cpp"),
 		...[
+			"retained_view_callback.h",
 			"windows_dialog_options.h",
 			"windows_dpi.h",
 			"windows_resource_paths.h",
@@ -103,12 +111,13 @@ function createUnicodeAsar(directory) {
 		packageRoot,
 		"vendors",
 		"zig-asar",
-		"x64",
+		process.arch,
 		"zig-asar.exe",
 	);
 	if (!existsSync(zigAsar)) {
 		throw new Error(`Vendored zig-asar was not found at ${zigAsar}`);
 	}
+	assertWindowsBinaryArchitecture(zigAsar, process.arch);
 	const asarDirectory = join(
 		directory,
 		"\u8d44\u6e90-\u0434\u0430\u043d\u043d\u044b\u0435",
@@ -124,6 +133,7 @@ function createUnicodeAsar(directory) {
 	const asarPath = join(asarDirectory, "\u5e94\u7528.asar");
 	const pack = spawnSync(zigAsar, ["pack", sourceDirectory, asarPath], {
 		cwd: packageRoot,
+		env: compilerEnvironment,
 		stdio: "inherit",
 	});
 	if (pack.error) throw pack.error;
@@ -135,26 +145,37 @@ function createUnicodeAsar(directory) {
 
 try {
 	const compile = spawnSync(
-		zig,
+		"cl.exe",
 		[
-			"c++",
-			"-std=c++20",
+			"/nologo",
+			"/std:c++20",
+			"/EHsc",
+			"/utf-8",
+			"/DNOMINMAX",
+			"/DUNICODE",
+			"/D_UNICODE",
+			"/UNDEBUG",
 			source,
-			"-o",
-			binary,
-			"-luser32",
-			"-lcomctl32",
+			`/Fo${join(temporaryDirectory, "windows-ui-test.obj")}`,
+			`/Fe${binary}`,
+			"user32.lib",
+			"comctl32.lib",
 		],
-		{ cwd: packageRoot, stdio: "inherit" },
+		{ cwd: packageRoot, env: compilerEnvironment, stdio: "inherit", windowsHide: true, timeout: 180_000 },
 	);
+	if (compile.error?.code === "ENOENT") {
+		throw new Error(`Run this test in an MSVC developer environment targeting ${process.arch}.`, { cause: compile.error });
+	}
 	if (compile.error) throw compile.error;
 	if (compile.status !== 0) {
 		throw new Error(
 			`Windows native UI test compilation exited with ${compile.status ?? 1}`,
 		);
 	}
+	assertWindowsBinaryArchitecture(binary, process.arch);
 
 	const nativeWrapper = resolveNativeWrapper();
+	if (nativeWrapper) assertWindowsBinaryArchitecture(nativeWrapper, process.arch);
 	const testArguments = nativeWrapper ? [nativeWrapper] : [];
 	if (!nativeWrapper) {
 		if (requireNativeWrapper) {
@@ -168,17 +189,17 @@ try {
 	}
 
 	const pathKey =
-		Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
+		Object.keys(compilerEnvironment).find((key) => key.toLowerCase() === "path") ??
 		"PATH";
 	const dependencyDirectories = [
 		...(nativeWrapper ? [dirname(nativeWrapper)] : []),
 		join(packageRoot, "dist"),
 	];
 	const environment = {
-		...process.env,
+		...compilerEnvironment,
 		[pathKey]: [
 			...dependencyDirectories,
-			process.env[pathKey] ?? "",
+			compilerEnvironment[pathKey] ?? "",
 		].join(delimiter),
 	};
 	if (nativeWrapper) {

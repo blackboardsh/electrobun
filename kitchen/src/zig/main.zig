@@ -1,6 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const electrobun = @import("electrobun");
+const WebviewObservations = @import("webview_observations.zig").WebviewObservations;
 
 // Zig 0.16 moved Mutex to std.Io.Mutex, whose lock/unlock take an Io
 // instance. Wrap it so the argument-free lock()/unlock() call sites keep
@@ -1275,20 +1276,15 @@ const CallbackState = struct {
     window_focus_count: u32 = 0,
     last_resize_width: f64 = 0,
     last_resize_height: f64 = 0,
-    webview_will_navigate_count: u32 = 0,
-    webview_did_navigate_count: u32 = 0,
-    webview_did_commit_navigation_count: u32 = 0,
-    webview_dom_ready_count: u32 = 0,
+    webview_observations: WebviewObservations = .{},
     webview_tag_init_count: u32 = 0,
     wgpu_tag_init_count: u32 = 0,
     wgpu_tag_ready_count: u32 = 0,
     before_quit_count: u32 = 0,
     reopen_count: u32 = 0,
     url_open_count: u32 = 0,
-    last_open_url: [1024]u8 = [_]u8{0} ** 1024,
+    last_open_url: [1024]u8 = @splat(0),
     last_open_url_len: usize = 0,
-    last_webview_detail: [1024]u8 = [_]u8{0} ** 1024,
-    last_webview_detail_len: usize = 0,
 
     fn reset(self: *CallbackState) void {
         self.mutex.lock();
@@ -1299,10 +1295,7 @@ const CallbackState = struct {
         self.window_focus_count = 0;
         self.last_resize_width = 0;
         self.last_resize_height = 0;
-        self.webview_will_navigate_count = 0;
-        self.webview_did_navigate_count = 0;
-        self.webview_did_commit_navigation_count = 0;
-        self.webview_dom_ready_count = 0;
+        self.webview_observations.clear(std.heap.page_allocator);
         self.webview_tag_init_count = 0;
         self.wgpu_tag_init_count = 0;
         self.wgpu_tag_ready_count = 0;
@@ -1310,7 +1303,6 @@ const CallbackState = struct {
         self.reopen_count = 0;
         self.url_open_count = 0;
         self.last_open_url_len = 0;
-        self.last_webview_detail_len = 0;
     }
 };
 
@@ -1369,28 +1361,10 @@ fn getLastResizeSize() electrobun.Rect {
     };
 }
 
-fn getWebviewWillNavigateCount() u32 {
+fn observedWebviewEventContains(webview_id: u32, event_name: []const u8, detail: ?[]const u8) bool {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
-    return g_callback_state.webview_will_navigate_count;
-}
-
-fn getWebviewDidNavigateCount() u32 {
-    g_callback_state.mutex.lock();
-    defer g_callback_state.mutex.unlock();
-    return g_callback_state.webview_did_navigate_count;
-}
-
-fn getWebviewDidCommitNavigationCount() u32 {
-    g_callback_state.mutex.lock();
-    defer g_callback_state.mutex.unlock();
-    return g_callback_state.webview_did_commit_navigation_count;
-}
-
-fn getWebviewDomReadyCount() u32 {
-    g_callback_state.mutex.lock();
-    defer g_callback_state.mutex.unlock();
-    return g_callback_state.webview_dom_ready_count;
+    return g_callback_state.webview_observations.contains(webview_id, event_name, detail);
 }
 
 fn getWebviewTagInitCount() u32 {
@@ -1435,16 +1409,6 @@ fn getLastOpenUrl() []const u8 {
     return g_callback_state.last_open_url[0..g_callback_state.last_open_url_len];
 }
 
-fn lastWebviewDetailContains(needle: []const u8) bool {
-    g_callback_state.mutex.lock();
-    defer g_callback_state.mutex.unlock();
-    return std.mem.indexOf(
-        u8,
-        g_callback_state.last_webview_detail[0..g_callback_state.last_webview_detail_len],
-        needle,
-    ) != null;
-}
-
 fn observedWindowClose(_: u32) callconv(.c) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
@@ -1476,26 +1440,12 @@ fn observedWindowFocus(_: u32) callconv(.c) void {
     g_callback_state.window_focus_count += 1;
 }
 
-fn recordObservedWebviewEvent(event_name_slice: []const u8, detail_slice: []const u8) void {
+fn recordObservedWebviewEvent(webview_id: u32, event_name_slice: []const u8, detail_slice: []const u8) void {
     g_callback_state.mutex.lock();
     defer g_callback_state.mutex.unlock();
 
-    if (std.mem.eql(u8, event_name_slice, "will-navigate")) {
-        g_callback_state.webview_will_navigate_count += 1;
-    } else if (std.mem.eql(u8, event_name_slice, "did-navigate")) {
-        g_callback_state.webview_did_navigate_count += 1;
-    } else if (std.mem.eql(u8, event_name_slice, "did-commit-navigation")) {
-        g_callback_state.webview_did_commit_navigation_count += 1;
-    } else if (std.mem.eql(u8, event_name_slice, "dom-ready")) {
-        g_callback_state.webview_dom_ready_count += 1;
-    }
-
-    const copy_len = @min(detail_slice.len, g_callback_state.last_webview_detail.len - 1);
-    @memcpy(g_callback_state.last_webview_detail[0..copy_len], detail_slice[0..copy_len]);
-    g_callback_state.last_webview_detail_len = copy_len;
-    if (copy_len < g_callback_state.last_webview_detail.len) {
-        g_callback_state.last_webview_detail[copy_len] = 0;
-    }
+    g_callback_state.webview_observations.record(std.heap.page_allocator, webview_id, event_name_slice, detail_slice) catch
+        @panic("Could not record webview test observation");
 }
 
 fn recordWebviewTagInit() void {
@@ -1540,11 +1490,11 @@ fn recordUrlOpen(url: []const u8) void {
     }
 }
 
-fn observedWebviewEvent(_: u32, event_name: [*:0]const u8, detail: [*:0]const u8) callconv(.c) void {
-    recordObservedWebviewEvent(std.mem.span(event_name), std.mem.span(detail));
+fn observedWebviewEvent(webview_id: u32, event_name: [*:0]const u8, detail: [*:0]const u8) callconv(.c) void {
+    recordObservedWebviewEvent(webview_id, std.mem.span(event_name), std.mem.span(detail));
 }
 
-fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.c) void {
+fn observedWebviewBridge(webview_id: u32, message: [*:0]const u8) callconv(.c) void {
     const message_slice = std.mem.span(message);
     if (message_slice.len == 0) {
         return;
@@ -1580,7 +1530,7 @@ fn observedWebviewBridge(_: u32, message: [*:0]const u8) callconv(.c) void {
         return;
     }
 
-    recordObservedWebviewEvent(event_name_value.string, detail_value.string);
+    recordObservedWebviewEvent(webview_id, event_name_value.string, detail_value.string);
 }
 
 fn childWebviewRenderer(webview_id: u32) electrobun.Renderer {
@@ -2287,7 +2237,7 @@ fn playgroundInternalBridge(host_webview_id: u32, message: [*:0]const u8) callco
             if (payload_value == .object) {
                 const event_name = getJsonStringField(&payload_value.object, "eventName") orelse return;
                 const detail = getJsonStringField(&payload_value.object, "detail") orelse return;
-                recordObservedWebviewEvent(event_name, detail);
+                recordObservedWebviewEvent(host_webview_id, event_name, detail);
             }
             return;
         }
@@ -3209,7 +3159,7 @@ fn runWebviewTagPlaygroundIntegrationTest(state: *AppState) !void {
         clearChildWebviews();
     }
 
-    _ = try state.core.createWebview(.{
+    const webview_id = try state.core.createWebview(.{
         .window_id = window_id,
         .renderer = .cef,
         .url = "views://playgrounds/webviewtag/index.html",
@@ -3232,7 +3182,7 @@ fn runWebviewTagPlaygroundIntegrationTest(state: *AppState) !void {
 
     const deadline_ms = nowMs() + 8000;
     while (nowMs() < deadline_ms) {
-        if (getWebviewDomReadyCount() > 0 and getWebviewTagInitCount() >= 2) {
+        if (observedWebviewEventContains(webview_id, "dom-ready", null) and getWebviewTagInitCount() >= 2) {
             sleepMs(medium_wait_ms);
             return;
         }
@@ -3253,7 +3203,7 @@ fn runWgpuTagPlaygroundIntegrationTest(state: *AppState) !void {
     });
     defer state.core.closeWindow(window_id) catch {};
 
-    _ = try state.core.createWebview(.{
+    const webview_id = try state.core.createWebview(.{
         .window_id = window_id,
         .renderer = .native,
         .url = "views://playgrounds/wgpu-tag/index.html",
@@ -3276,7 +3226,7 @@ fn runWgpuTagPlaygroundIntegrationTest(state: *AppState) !void {
 
     const deadline_ms = nowMs() + 8000;
     while (nowMs() < deadline_ms) {
-        if (getWebviewDomReadyCount() > 0 and getWgpuTagInitCount() > 0 and getWgpuTagReadyCount() > 0) {
+        if (observedWebviewEventContains(webview_id, "dom-ready", null) and getWgpuTagInitCount() > 0 and getWgpuTagReadyCount() > 0) {
             sleepMs(medium_wait_ms);
             return;
         }
@@ -3397,7 +3347,7 @@ fn runNavigationLoadUrlTest(state: *AppState) !void {
     try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
     sleepMs(1500);
 
-    if (getWebviewWillNavigateCount() == 0) {
+    if (!observedWebviewEventContains(created.webview_id, "will-navigate", "test-runner")) {
         return error.LoadUrlDidNotTriggerWillNavigate;
     }
 }
@@ -3424,7 +3374,7 @@ fn runNavigationLoadHtmlTest(state: *AppState) !void {
     );
     sleepMs(1500);
 
-    if (getWebviewWillNavigateCount() == 0) {
+    if (!observedWebviewEventContains(created.webview_id, "will-navigate", null)) {
         return error.LoadHtmlDidNotTriggerWillNavigate;
     }
 }
@@ -3448,7 +3398,7 @@ fn runNavigationDomReadyEventTest(state: *AppState) !void {
     try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
     sleepMs(1500);
 
-    if (getWebviewDomReadyCount() == 0) {
+    if (!observedWebviewEventContains(created.webview_id, "dom-ready", null)) {
         return error.DomReadyDidNotFire;
     }
 }
@@ -3472,10 +3422,10 @@ fn runNavigationDidNavigateEventTest(state: *AppState) !void {
     try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
     sleepMs(2000);
 
-    if (getWebviewDidNavigateCount() == 0) {
+    if (!observedWebviewEventContains(created.webview_id, "did-navigate", null)) {
         return error.DidNavigateDidNotFire;
     }
-    if (!lastWebviewDetailContains("test-runner")) {
+    if (!observedWebviewEventContains(created.webview_id, "did-navigate", "test-runner")) {
         return error.DidNavigateMissingExpectedUrl;
     }
 }
@@ -3505,10 +3455,10 @@ fn runNavigationDidCommitNavigationEventTest(state: *AppState) !void {
     try state.core.loadURLInWebview(created.webview_id, "views://test-runner/index.html");
     sleepMs(2000);
 
-    if (getWebviewDidCommitNavigationCount() == 0) {
+    if (!observedWebviewEventContains(created.webview_id, "did-commit-navigation", null)) {
         return error.DidCommitNavigationDidNotFire;
     }
-    if (!lastWebviewDetailContains("test-runner")) {
+    if (!observedWebviewEventContains(created.webview_id, "did-commit-navigation", "test-runner")) {
         return error.DidCommitNavigationMissingExpectedUrl;
     }
 }
@@ -3576,10 +3526,10 @@ fn runAppDataProtocolTest(state: *AppState, enabled: bool) !void {
     defer state.allocator.free(script);
     try state.core.evaluateJavaScriptWithNoCompletion(webview_id, script);
     const deadline = nowMs() + 5000;
-    while (!lastWebviewDetailContains("appdataResult=ok") and nowMs() < deadline) {
+    while (!observedWebviewEventContains(webview_id, "will-navigate", "appdataResult=ok") and nowMs() < deadline) {
         sleepMs(25);
     }
-    if (!lastWebviewDetailContains("appdataResult=ok")) {
+    if (!observedWebviewEventContains(webview_id, "will-navigate", "appdataResult=ok")) {
         return error.AppDataProtocolUnexpectedResult;
     }
 }
@@ -4164,6 +4114,7 @@ fn executeSingleTestAndBroadcast(webview_id: u32, zig_test: ZigTest) TestResult 
 
     const result = runZigTest(zig_test);
     if (result.@"error") |message| {
+        std.debug.print("[kitchen zig] failed test: {s}: {s}\n", .{ zig_test.name, message });
         sendTestLog(webview_id, zig_test.id, message);
     }
 

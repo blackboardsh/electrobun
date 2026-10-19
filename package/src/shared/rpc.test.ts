@@ -37,6 +37,19 @@ function createControlledRPC(maxRequestTime: number) {
 }
 
 describe("createRPC request timeouts", () => {
+	it("rejects late responses even when the timeout callback has not run", async () => {
+		const { rpc, receive } = createControlledRPC(10);
+		const result = rpc.request.quickRequest({ value: "late" }).then(
+			value => ({ success: true, value }),
+			(error: Error) => ({ success: false, error: error.message }),
+		);
+		// Simulate a throttled renderer: wall time advances while its timer
+		// callback is unable to run, then transport delivery wins the race.
+		Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+		receive({ type: "response", id: 1, success: true, payload: "late" });
+		expect(await result).toEqual({ success: false, error: "RPC request timed out." });
+	});
+
 	it("starts an async transport timeout after the packet is sent", async () => {
 		let markSent!: () => void;
 		let receive!: (packet: any) => void;
@@ -113,5 +126,18 @@ describe("createRPC request timeouts", () => {
 			success: false,
 			error: "RPC request timed out.",
 		});
+	});
+});
+
+
+describe("RPC message backpressure", () => {
+	it("returns the transport handoff promise to message producers", async () => {
+		let finish!: () => void;
+		const handoff = new Promise<void>(resolve => { finish = resolve; });
+		const rpc = createRPC({ transport: { send: () => handoff } });
+		const delivery = (rpc.send as any)("terminalOutput", { data: "hello" });
+		expect(delivery).toBe(handoff);
+		finish();
+		await delivery;
 	});
 });

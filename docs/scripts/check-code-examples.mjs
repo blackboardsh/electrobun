@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { dirname, extname, join, relative, resolve } from "node:path";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { dirname, extname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseFragment } from "parse5";
 import postcss from "postcss";
@@ -120,6 +120,9 @@ function validateInternalLink(file, node, url, routes) {
 	counts.links += 1;
 	const pathname = url.split(/[?#]/, 1)[0];
 	const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+	const publicRoot = resolve(docsRoot, "public");
+	const asset = resolve(publicRoot, `.${pathname}`);
+	if (asset.startsWith(`${publicRoot}${sep}`) && existsSync(asset) && statSync(asset).isFile()) return;
 	if (!routes.has(normalized)) {
 		addError(file, node.position?.start.line ?? 1, `internal link has no page: ${url}`);
 	}

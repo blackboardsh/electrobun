@@ -37,6 +37,20 @@ hutch run build:canary
 hutch run build:stable
 ```
 
+## Cottontail capability packaging
+
+For `build.mainProcess: "cottontail"`, Hutch scans the final main-process bundle
+and packages the core runtime plus selected standard-library capabilities and
+their dependencies. Unused optional modules stay out of the app. Keep the
+generated runtime directories with the executable when distributing a bundle.
+
+Code loaded dynamically may need explicit includes in
+`build.cottontail.capabilities` in `electrobun.config.ts`. These add to automatic
+detection; they do not replace it. Before publishing, exercise those code paths
+in the built app on every supported platform. See the
+[Cottontail guide](/electrobun/guides/cottontail/#modular-standard-library)
+for examples and troubleshooting.
+
 ## Release Host
 
 Artifacts are flat files and can be served from R2, S3, another object store,
@@ -73,12 +87,13 @@ Run the same build on each published target:
 | --- | --- | --- |
 | macOS ARM64 | `macos-arm64-` | `stable-macos-arm64-` |
 | Windows x64 | `win-x64-` | `stable-win-x64-` |
+| Windows ARM64 | `win-arm64-` | `stable-win-arm64-` |
 | Linux x64 | `linux-x64-` | `stable-linux-x64-` |
 | Linux ARM64 | `linux-arm64-` | `stable-linux-arm64-` |
 
-Canary builds prepend `canary-` to both prefixes. Windows ARM uses
-the x64 artifact through system emulation. Electrobun's current release matrix
-does not publish a macOS x64 core artifact.
+Canary builds prepend `canary-` to both prefixes. The updater keeps the
+installed architecture, so an existing x64 app needs an explicit ARM64 install.
+Electrobun's current release matrix does not publish a macOS x64 core artifact.
 
 ## Artifact Names
 

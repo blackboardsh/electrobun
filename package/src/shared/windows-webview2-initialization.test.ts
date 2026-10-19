@@ -23,6 +23,13 @@ const view = section("class WebView2View : public AbstractView", "ComPtr<ICoreWe
 const controllerCompletion = section("auto controllerCompletedHandler =", "const auto held = g_webview2TestHeldControllers.find(view->webviewId);");
 
 describe("Windows WebView2 asynchronous initialization source contracts", () => {
+	test("registers ownership before controller creation can enqueue initial navigation", () => {
+		const creation = section("// Store URL and scripts in view to survive async callbacks", "// Create WebView2 environment");
+		precedes(creation, "retainAbstractView(view);", "MainThreadDispatcher::dispatch_sync(");
+		const factoryCall = section("ELECTROBUN_EXPORT AbstractView* initWebview(", "ELECTROBUN_EXPORT AbstractView* initWGPUView(");
+		expect(factoryCall).not.toContain("retainAbstractView(webview2View)");
+	});
+
 	test("retains the latest visibility request before checking controller readiness", () => {
 		const transparent = section("void setTransparent(bool transparent) override", "// Override passthrough implementation", view);
 		precedes(transparent, "if (removed) return;", "pendingStartTransparent = transparent;");

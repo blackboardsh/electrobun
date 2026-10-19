@@ -32,9 +32,10 @@ commands, so the single `electrobun` dependency and its immutable GitHub Release
 assets ride the project lockfile together. Hutch
 downloads the matching runtime and SDK into the shared
 `~/.hutch/releases/electrobun` store and projects the SDKs into the project's
-`.hutch/devkit` sysroot. Hutch's paired Cottontail is the build-time runtime;
-the Cottontail bundled into an app is separately pinned by that resolved
-Electrobun devkit. Installing a beta bootstrap still uses stable templates
+`.hutch/devkit` sysroot. Bun is the default application runtime and Hutch script runner. Cottontail
+is experimental and opt-in; Hutch still uses its paired Cottontail for internal
+config loading and bundling. Application runtimes are independently pinned by
+the resolved Electrobun devkit. Installing a beta bootstrap still uses stable templates
 unless `init` receives `--beta`.
 
 `DASH_RELEASE_OFFLINE=1` prevents this bootstrap from downloading a missing

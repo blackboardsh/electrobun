@@ -1,4 +1,4 @@
-// Interactive test: the Cottontail UI demo window — reactive counter card
+// Interactive test: the Electrobun UI demo window — reactive counter card
 // rendered by Dawn with embedded native-layer elements (wgpuSurface +
 // OOPIF webview) positioned by the UI layout.
 
@@ -64,7 +64,7 @@ async function openDemoWindow(): Promise<UIWindow> {
 
 	return createUIWindow(
 		{
-			title: "Cottontail UI (kitchen)",
+			title: "Electrobun UI (kitchen)",
 			width: 860,
 			height: 480,
 			background: "#13131c",
@@ -72,7 +72,7 @@ async function openDemoWindow(): Promise<UIWindow> {
 		() => {
 			ui.row({ grow: 1 }, () => {
 				ui.column({ grow: 3, justify: "center", align: "center", gap: 16 }, () => {
-					ui.text("Cottontail UI - reactive GPU chrome", {
+					ui.text("Electrobun UI - reactive GPU chrome", {
 						size: 12,
 						color: "#8c8ca8",
 					});
@@ -197,12 +197,12 @@ async function openDemoWindow(): Promise<UIWindow> {
 
 export const cottontailUiTests = [
 	defineTest({
-		name: "Cottontail UI demo window",
-		category: "Cottontail UI",
+		name: "Electrobun UI demo window",
+		category: "Electrobun UI",
 		description:
 			"Reactive counter card rendered by Dawn, with an accent-colored wgpuSurface and a blackboard.sh OOPIF webview panel laid out by the UI tree.",
 		instructions: [
-			"A dark window titled 'Cottontail UI (kitchen)' should be open.",
+			"A dark window titled 'Electrobun UI (kitchen)' should be open.",
 			"Hover the three buttons: their borders should tint to the accent color.",
 			"Click +1 / -1: the large number and the right-hand color panel should change together.",
 			"Press space (or +/-): the counter should respond to the keyboard.",

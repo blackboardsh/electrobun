@@ -65,6 +65,24 @@ The `dev` channel never reports an available update. Exercise updater behavior
 with a packaged canary or stable build.
 </Aside>
 
+## Disk space during preparation
+
+Patching writes a new tar rather than modifying its input
+in place. After validating the next archive's metadata, the updater deletes the
+consumed patch and any superseded intermediate tar before the next hop. The
+original cached tar is normally kept so a failed attempt can be retried.
+
+When patch-chain preparation detects a disk-full error, it also deletes that
+original cached tar before falling back to the latest full bundle. Detection
+covers `ENOSPC`, Windows disk-full codes, and native patcher disk-full
+diagnostics. This removes update-cache files, not the installed app or user data.
+Other patch failures preserve the original cache.
+
+Fallback still needs space for the full download, decompressed archive, and
+installation staging. It can fail if the disk remains full; do not treat a
+completed download as an applied update. Observe `updateReady`, status events,
+and `error`, and confirm the new version after relaunch.
+
 ## Local and update metadata
 
 `getLocalInfo()` returns the packaged `version.json` data:

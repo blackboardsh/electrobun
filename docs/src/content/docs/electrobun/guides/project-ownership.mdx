@@ -52,8 +52,8 @@ export default {
     version: "0.1.0",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
   },
@@ -161,9 +161,8 @@ tree. `node_modules` remains outside the SDK path.
 
 ## Default path and compatibility edge
 
-The architectural center of Electrobun is Cottontail-native: Hutch runs project
-TypeScript and shell tasks with Cottontail, and Cottontail is the default
-JavaScript main process. Bun remains a first-class `build.mainProcess` option
-and a separate, explicit `packageManager` choice; neither is a legacy mode.
-Node-compatible packages, npm, and Vite are supported integration edges, but
-none of them becomes the owner or source of Electrobun's SDK.
+Bun is the default JavaScript main process and Hutch script runner. Cottontail
+remains an experimental, explicit option. Hutch's internal configuration and
+bundling helpers still use its paired Cottontail. Package-manager selection is
+independent of both runtime choices. Node-compatible packages, npm, and Vite
+are supported, but none becomes the owner or source of Electrobun's SDK.

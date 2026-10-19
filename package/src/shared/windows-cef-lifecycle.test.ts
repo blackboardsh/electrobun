@@ -150,8 +150,8 @@ describe("Windows CEF lifecycle", () => {
 		expect(cefView).toContain("has_pending_html = true");
 		expect(cefView).toContain("if (browser && has_pending_html)");
 		expect(cefView).toContain("else if (browser && has_pending_url)");
-		expect(source).toContain("MainThreadDispatcher::dispatch_sync([abstractView, url]");
-		expect(source).toContain("MainThreadDispatcher::dispatch_sync([abstractView, html]");
+		expect(source).toContain("dispatchWebviewOperation(abstractView, [url]");
+		expect(source).toContain("dispatchWebviewOperation(abstractView, [html]");
 	});
 
 	test("serializes removal with asynchronous browser creation", () => {
@@ -161,7 +161,19 @@ describe("Windows CEF lifecycle", () => {
 			source.indexOf("ELECTROBUN_EXPORT BOOL webviewCanGoBack", removeStart),
 		);
 
-		expect(remove).toContain("MainThreadDispatcher::dispatch_sync");
+		expect(remove).toContain("dispatchWebviewOperation(abstractView");
+		expect(remove).toContain("releaseRetainedAbstractView(abstractView)");
+		expect(remove).toContain("abstractView->remove()");
+		expect(remove.indexOf("releaseRetainedAbstractView(abstractView)")).toBeLessThan(
+			remove.indexOf("abstractView->remove()"),
+		);
+		const containerStart = source.indexOf("~ContainerView()");
+		const container = source.slice(containerStart, source.indexOf("HWND GetHwnd()", containerStart));
+		expect(container).toContain("releaseRetainedAbstractView(view.get())");
+		expect(container).toContain("view->remove()");
+		expect(container.indexOf("releaseRetainedAbstractView(view.get())")).toBeLessThan(
+			container.indexOf("view->remove()"),
+		);
 		expect(source).toContain("DetachOwnerCallback()");
 		expect(source).toContain("pendingClient->PrepareForBrowserClose()");
 	});
@@ -173,7 +185,10 @@ describe("Windows CEF lifecycle", () => {
 			source.indexOf("ELECTROBUN_EXPORT void testFFI", navigationStart),
 		);
 
-		expect(navigation.match(/MainThreadDispatcher::dispatch_sync/g)?.length).toBe(7);
+		expect(navigation.match(/dispatchWebviewOperation\(abstractView/g)?.length).toBe(7);
+		const helperStart = source.indexOf("static auto dispatchWebviewOperation(");
+		const helper = source.slice(helperStart, source.indexOf("static void releaseRetainedAbstractView", helperStart));
+		expect(helper).toContain("MainThreadDispatcher::dispatch_sync(retainedWebviewCallback(");
 		expect(navigation).toContain("const std::string scriptCopy(script)");
 		expect(navigation).toContain("abstractView->hasCreationFailed()");
 	});

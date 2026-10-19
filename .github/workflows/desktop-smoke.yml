@@ -1,0 +1,192 @@
+name: Published desktop smoke tests
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Exact published Electrobun version or tag
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published Electrobun version or tag
+        type: string
+        required: true
+      windows_only:
+        description: Diagnose only the two Windows runners
+        type: boolean
+        default: false
+      scenarios:
+        description: Comma-separated scenario IDs for diagnostics, or all
+        type: string
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows ARM uses x64 Python for pywinpty; Hutch and apps stay ARM64.
+        include: ${{ fromJSON(inputs.windows_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+          architecture: ${{ matrix.python }}
+      - name: Select published version
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import { appendFileSync } from 'node:fs';
+          import { parseStrictSemVer } from './package/src/shared/strict-semver.js';
+          let version = process.env.INPUT_VERSION?.replace(/^v/, '');
+          if (!version && process.env.GITHUB_EVENT_NAME === 'push') {
+            const response = await fetch('https://electrobun-artifacts.blackboard.sh/electrobun/templates/channels/beta.json');
+            if (!response.ok) throw new Error(`Catalog HTTP ${response.status}`);
+            version = (await response.json()).version;
+          }
+          if (!parseStrictSemVer(version || '')) throw new Error('An exact published version is required');
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
+          JS
+      - name: Install Linux desktop tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 libvulkan1 mesa-vulkan-drivers xvfb xauth openbox dbus-x11 xdotool scrot python3-tk tesseract-ocr
+      - name: Install macOS OCR
+        if: runner.os == 'macOS'
+        uses: ./.github/actions/install-macos-ocr
+      - name: Install Windows OCR
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install tesseract --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'Tesseract installation failed' }
+          "SMOKE_TESSERACT=C:\Program Files\Tesseract-OCR\tesseract.exe" >> $env:GITHUB_ENV
+      - name: Install desktop driver
+        run: python -m pip install -r scripts/desktop-smoke/requirements.txt
+      - name: Check desktop driver regressions
+        shell: bash
+        run: |
+          python scripts/desktop-smoke/test_desktop.py
+          python scripts/desktop-smoke/test_picker.py
+      - name: Prepare Windows desktop shell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Windows ARM images can leave first-sign-in privacy setup covering
+          # all app windows and blocking Shell_NotifyIcon, even with Explorer
+          # running. Suppress that experience on this disposable CI machine.
+          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
+          foreach ($root in @('HKLM:', 'HKCU:')) {
+            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
+            New-Item -Path $policy -Force | Out-Null
+            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+          }
+          $runnerSession = (Get-Process -Id $PID).SessionId
+          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
+          if ($setupProcesses) {
+            $setupProcesses | Stop-Process -Force
+            Start-Sleep -Seconds 3
+          }
+          # First-login setup can leave a Start menu flyout covering the apps.
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Seconds 1
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class DesktopShell {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string title);
+          }
+          '@
+          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
+          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            Write-Host 'Starting Explorer for notification-area tests.'
+            Start-Process "$env:WINDIR\explorer.exe"
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            if ((Get-Date) -gt $deadline) {
+              throw 'Windows shell notification area is unavailable in the runner session.'
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          Write-Host 'Windows shell notification area is ready.'
+
+      - name: Smoke published templates (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SMOKE_PLATFORM: ${{ matrix.platform }}
+          SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+          XDG_SESSION_TYPE: x11
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -eo pipefail -c '
+            openbox > "$RUNNER_TEMP/openbox-smoke.log" 2>&1 &
+            mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
+            python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
+            node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results" --scenarios "$SMOKE_SCENARIOS"
+          '
+      - name: Smoke published templates (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SMOKE_PLATFORM: ${{ matrix.platform }}
+          SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
+          python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
+          node scripts/desktop-smoke/run.mjs --version "$RELEASE_VERSION" --platform "$SMOKE_PLATFORM" --output "$RUNNER_TEMP/desktop-smoke-results" --scenarios "$SMOKE_SCENARIOS"
+      - name: Smoke published templates (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          SMOKE_PLATFORM: ${{ matrix.platform }}
+          SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+        run: |
+          $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
+          New-Item -ItemType Directory -Force -Path $output | Out-Null
+          python scripts/desktop-smoke/preflight.py "$output" 2>&1 | Tee-Object -FilePath "$output/preflight.log"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/desktop-smoke/run.mjs --version "$env:RELEASE_VERSION" --platform "$env:SMOKE_PLATFORM" --output "$output" --scenarios "$env:SMOKE_SCENARIOS"
+          exit $LASTEXITCODE
+      - name: Upload screenshots and logs
+        if: always()
+        id: artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: smoke-screenshots-${{ matrix.platform }}
+          retention-days: 30
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/desktop-smoke-results/**
+            !${{ runner.temp }}/desktop-smoke-results/scratch-*/**
+      - name: Link screenshot artifact
+        if: always() && steps.artifact.outputs.artifact-url != ''
+        shell: bash
+        env:
+          ARTIFACT_URL: ${{ steps.artifact.outputs.artifact-url }}
+        run: echo "[Download screenshots and logs]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"

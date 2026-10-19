@@ -11,6 +11,14 @@ belong in `hutch.config.ts`; the release and external package-manager fields are
 optional. This file owns the app, build, tool overrides, and distribution
 description.
 
+Bun is the default `build.mainProcess`. Use `build.bun` for its entrypoint and
+bundler options. Cottontail is experimental and requires an explicit
+`mainProcess: "cottontail"` selection with a `build.cottontail.entrypoint`.
+Cottontail-only capability and bytecode options do not apply to Bun. See the
+[migration guide](/electrobun/guides/migrating-to-v2/) for existing configurations.
+Hutch scripts and tests also default to Bun; internal build helpers still use
+Cottontail.
+
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
 
@@ -21,8 +29,8 @@ export default {
     version: "1.0.0",
   },
   build: {
-    mainProcess: "cottontail",
-    cottontail: {
+    mainProcess: "bun",
+    bun: {
       entrypoint: "src/bun/index.ts",
     },
     views: {
@@ -171,7 +179,7 @@ export default {
   },
   build: {
     mainProcess: "zig",
-    zig: { version: "0.16.0" },
+    zig: { version: "0.17.0" },
   },
 } satisfies ElectrobunConfig;
 ```
@@ -217,20 +225,35 @@ The JavaScript bundler options described below can also be set in this object.
 Cottontail keeps optional standard-library APIs outside its core executable and
 loads each capability on demand through module imports or `Cottontail.*`
 namespace access. When `build.mainProcess` is `"cottontail"`, Hutch scans the
-final tree-shaken main-process bundle and packages only the capability bytecode
-and native libraries it discovers. Each build reports the automatic result:
+final tree-shaken main-process bundle for recognized `bun:*`, `node:*`, and
+`Cottontail.*` references. It packages the core runtime plus the selected
+capability bytecode and native libraries, including transitive dependencies
+declared by the runtime's capability manifest. Each build reports the automatic
+result:
 
 ```text
 hutch electrobun: Cottontail capabilities discovered by scan: [sqlite, compression]
 ```
 
 This message contains the scan result only. Explicit configuration entries are
-merged afterward.
+merged afterward, followed by dependency expansion. This is not a complete
+inventory of the packaged runtime.
+
+Detection matches known text in the bundle rather than evaluating JavaScript.
+For example, `bun:sqlite`, `node:sqlite`, and `Cottontail.sqlite` select
+`sqlite`; `node:zlib` and `Cottontail.compression` select `compression`.
+The scan includes bundled dependency code, but cannot reliably infer aliased
+or destructured namespaces, computed property access, or code loaded later.
+Global Bun compatibility APIs are not all scan markers: `Bun.SQL` alone, for
+example, needs an explicit `sql` include or a recognized `bun:sql` import.
 
 Set `build.cottontail.capabilities` when a capability is reached through a
 computed dynamic import, generated source, a plugin loader, or another path the
 bundle scan cannot see. These entries are additive: Hutch still includes every
-capability found by its scan.
+capability found by its scan. An empty list does not disable detection, and
+the list cannot exclude automatically selected modules. This is a packaging
+setting, not a runtime permission policy, and does not change Hutch's build-time
+runtime or a Bun main process.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -262,79 +285,15 @@ Cottontail's error identifies the missing name and points back to
 
 ## Bytecode And Obfuscation
 
-:::caution[Coming soon]
-This option is declared but **not yet wired** — setting `build.cottontail.bytecode`
-is currently a no-op (your app ships normal source). Build-time bytecode and
-obfuscation land as a fast-follow after Electrobun 2.0; the underlying
-Cottontail/JSC support is already in place.
-:::
+The precompiled standard-library capability modules above are already packaged
+by Hutch. The setting below concerns compilation of your application's own
+main-process source, which is separate.
 
-When the main process runs on Cottontail, `build.cottontail.bytecode` can ship
-it as precompiled JavaScriptCore bytecode instead of source. This is a
-Cottontail-only option — Bun main processes are unaffected.
-
-There are three levels, and the two "on" levels are deliberately distinct
-because they carry different trade-offs:
-
-| `bytecode` | Ships | Startup | Source protection | Debuggable | Risk |
-| --- | --- | --- | --- | --- | --- |
-| `false` (default) | `.js` | normal | none | yes | — |
-| `true` | `.jsc` + `.js` | faster (skips parsing) | none | yes | low — falls back to parsing the source |
-| `"obfuscate"` | `.jsc` only | faster | source not shipped | no | see below |
-
-```typescript
-import type { ElectrobunConfig } from "electrobun";
-
-export default {
-  app: {
-    name: "My App",
-    identifier: "com.example.my-app",
-    version: "1.0.0",
-  },
-  build: {
-    mainProcess: "cottontail",
-    cottontail: {
-      entrypoint: "src/bun/index.ts",
-      // Faster startup, source still shipped and debuggable:
-      bytecode: true,
-      // Or protect your source (accept the trade-offs below):
-      // bytecode: "obfuscate",
-    },
-  },
-} satisfies ElectrobunConfig;
-```
-
-**`bytecode: true`** compiles the main process to bytecode so the runtime skips
-parsing at launch. Your source is still shipped alongside the bytecode as a
-fallback, so `Function.prototype.toString` returns real source, error stacks
-show source frames, and a version mismatch simply reparses the source. This is
-the safe "just make my app start faster" choice.
-
-**`bytecode: "obfuscate"`** additionally strips the source, so only bytecode is
-distributed. Consider the trade-offs before enabling it:
-
-- `Function.prototype.toString` returns `[native code]` for your functions. Some
-  libraries introspect function source (certain dependency-injection, ORM, and
-  validation frameworks) and can break.
-- Error stacks keep line and column numbers but lose source frames, and no
-  sourcemaps are emitted — shipped-app debugging is degraded.
-- There is no source fallback, so a runtime/version mismatch is a hard error
-  rather than a silent reparse.
-
-This is source *obfuscation*, not encryption: the bytecode ships without your
-source text, comments, or original identifiers, which makes it materially
-harder to read than minified JavaScript, but a determined party with the
-matching Cottontail binary can still disassemble it.
-
-Two things hold regardless of the setting:
-
-- **Dev builds ignore `bytecode`** (`hutch electrobun dev` / `--env=dev`) and
-  always ship source, so sourcemaps and the debugger keep working. In watch
-  mode, Hutch rebuilds and relaunches the app from that source. Bytecode applies
-  to canary and stable builds.
-- The bytecode is generated against the **exact Cottontail bundled into your
-  app** and regenerated on every build, so it never drifts from the runtime
-  that will execute it.
+`build.cottontail.bytecode` is declared in the configuration type but has no
+effect on application packaging. Its accepted values are `false` (the default),
+`true`, and `"obfuscate"`; all currently ship normal source in dev, canary, and
+stable builds. Setting it does not improve startup time or remove source from
+the bundle. It does not apply to Bun main processes.
 
 ## JavaScript Bundling
 
@@ -609,7 +568,8 @@ console.log(config.runtime?.serviceEndpoint);
 ## Build Hooks
 
 Hook paths are relative to the project root. Hutch transpiles each TypeScript
-or JavaScript file and executes it with the host-platform Cottontail binary.
+or JavaScript file and executes it with the pinned host-platform Bun binary
+by default. Set `HUTCH_RUNTIME=cottontail` to use experimental Cottontail for hooks.
 
 | Hook | Timing |
 | --- | --- |

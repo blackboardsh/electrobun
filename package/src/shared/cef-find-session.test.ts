@@ -18,7 +18,7 @@ function removeTemporaryDirectory(directory: string) {
 			return;
 		} catch (error) {
 			const code = (error as NodeJS.ErrnoException).code;
-			if (process.platform !== "win32" || (code !== "EACCES" && code !== "EPERM")) {
+			if (process.platform !== "win32" || (code !== "EACCES" && code !== "EPERM" && code !== "EBUSY")) {
 				throw error;
 			}
 			Atomics.wait(delay, 0, 0, 100);
@@ -38,7 +38,9 @@ function compileAndRunBehaviorProgram() {
 		const vendoredZig = join(import.meta.dirname, "../../vendors/zig/zig.exe");
 		const compiler =
 			process.env["CXX"] ||
-			(process.platform === "win32" && existsSync(vendoredZig)
+			(process.platform === "win32" && process.env["VCToolsInstallDir"]
+				? "cl.exe"
+				: process.platform === "win32" && existsSync(vendoredZig)
 				? vendoredZig
 				: process.platform === "win32"
 					? "cl.exe"
@@ -93,7 +95,7 @@ function compileAndRunBehaviorProgram() {
 describe("CEF find session", () => {
 	it("advances repeated searches and resets changed or stopped searches", () => {
 		compileAndRunBehaviorProgram();
-	});
+	}, 120_000);
 
 	it("is used by the Windows and Linux CEF views", () => {
 		for (const source of [windowsSource, linuxSource]) {

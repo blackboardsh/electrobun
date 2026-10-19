@@ -491,7 +491,7 @@ describe("Electrobun template package boundaries", () => {
 		expect(threeSource).toContain('import * as three from "three";');
 	});
 
-	test("Zig WGPU owns its Zig 0.16 build graph", () => {
+	test("Zig WGPU owns its Zig 0.17 build graph", () => {
 		const templateRoot = join(templatesRoot, "zig-wgpu");
 		const buildPath = join(templateRoot, "build.zig");
 		expect(existsSync(buildPath)).toBe(true);
@@ -510,7 +510,7 @@ describe("Electrobun template package boundaries", () => {
 			join(templateRoot, "electrobun.config.ts"),
 			"utf8",
 		);
-		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.16\.0"/);
+		expect(config).toMatch(/\bzig:\s*\{[\s\S]*?version:\s*"0\.17\.0"/);
 		expect(config).not.toContain('entrypoint: "src/zig/main.zig"');
 	});
 
@@ -604,3 +604,17 @@ describe("Electrobun template package boundaries", () => {
 		expect(bunnyMain).not.toMatch(/\bpassthrough:\s*true\b/);
 	});
 });
+
+ test("JavaScript templates select Cottontail for UI and Bun otherwise, preserving entrypoints", async () => {
+   for (const entry of readdirSync(templatesRoot, { withFileTypes: true })) {
+     if (!entry.isDirectory()) continue;
+     const configPath = join(templatesRoot, entry.name, "electrobun.config.ts");
+     if (!existsSync(configPath)) continue;
+     const { default: config } = await import(configPath);
+     if (["zig", "rust", "go", "odin"].includes(config.build.mainProcess)) continue;
+     const runtime = entry.name.startsWith("ui-") ? "cottontail" : "bun";
+     expect(config.build.mainProcess).toBe(runtime);
+     expect(config.build[runtime === "bun" ? "cottontail" : "bun"]).toBeUndefined();
+     expect(existsSync(join(templatesRoot, entry.name, config.build[runtime].entrypoint))).toBe(true);
+   }
+ });

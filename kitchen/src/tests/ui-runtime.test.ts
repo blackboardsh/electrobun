@@ -1,4 +1,4 @@
-// Automated tests for the Cottontail UI runtime (electrobun/main/ui):
+// Automated tests for the Electrobun UI runtime (electrobun/main/ui):
 // mounting a UIWindow, reactive tree updates, hit testing, and the
 // native-layer elements (wgpuSurface, webview) positioned by layout.
 
@@ -21,7 +21,7 @@ const TICKS = 120;
 export const uiRuntimeTests = [
 	defineTest({
 		name: "UIWindow mounts, lays out, and disposes",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"createUIWindow renders a retained tree sized to the window and tears down cleanly.",
 		async run({ log }) {
@@ -53,7 +53,7 @@ export const uiRuntimeTests = [
 
 	defineTest({
 		name: "Reactive props update the mounted tree",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"A signal-backed prop becomes a fine-grained effect writing one tree prop; text thunks re-render.",
 		async run({ log }) {
@@ -86,7 +86,7 @@ export const uiRuntimeTests = [
 
 	defineTest({
 		name: "Hit testing resolves the innermost hittable node",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"hitChain over the laid-out tree returns the dispatch chain for pointer coordinates.",
 		async run({ log }) {
@@ -118,7 +118,7 @@ export const uiRuntimeTests = [
 
 	defineTest({
 		name: "wgpuSurface creates a native Dawn view positioned by layout",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"The <electrobun-wgpu> equivalent: an anchor node that owns a real WGPUView, framed by the UI layout.",
 		async run({ log }) {
@@ -155,7 +155,7 @@ export const uiRuntimeTests = [
 
 	defineTest({
 		name: "webview element creates and removes an OOPIF webview",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"The <electrobun-webview> equivalent: an anchor node that owns a BrowserView, framed by the UI layout and torn down with its reactive scope.",
 		async run({ log }) {

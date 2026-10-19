@@ -136,7 +136,7 @@ type RPCMessagesProxy<MS extends RPCMessagesSchema> = {
 			: undefined extends MS[K]
 				? [payload?: MS[K]]
 				: [payload: MS[K]]
-	) => void;
+	) => void | PromiseLike<void>;
 };
 
 // ---- Transport ----
@@ -256,6 +256,7 @@ export function createRPC<
 		{ resolve: (v: any) => void; reject: (e: Error) => void }
 	>();
 	const requestTimeouts = new Map<number, ReturnType<typeof setTimeout>>();
+	const requestDeadlines = new Map<number, number>();
 
 	function startRequestTimeout(
 		requestId: number,
@@ -269,10 +270,14 @@ export function createRPC<
 		)
 			return;
 
+		// Renderer timers can be throttled. Check the monotonic deadline on
+		// response delivery too, so a late response cannot beat a delayed timer.
+		requestDeadlines.set(requestId, performance.now() + requestMaxRequestTime);
 		requestTimeouts.set(
 			requestId,
 			setTimeout(() => {
 				requestTimeouts.delete(requestId);
+				requestDeadlines.delete(requestId);
 				const listener = requestListeners.get(requestId);
 				requestListeners.delete(requestId);
 				listener?.reject(new Error("RPC request timed out."));
@@ -364,7 +369,7 @@ export function createRPC<
 			payload,
 		};
 		debugHooks.onSend?.(rpcMessage);
-		transport.send(rpcMessage);
+		return transport.send(rpcMessage);
 	}
 
 	const send = new Proxy(sendFn, {
@@ -467,10 +472,14 @@ export function createRPC<
 			const timeout = requestTimeouts.get(message.id);
 			if (timeout != null) clearTimeout(timeout);
 			requestTimeouts.delete(message.id);
+			const deadline = requestDeadlines.get(message.id);
+			requestDeadlines.delete(message.id);
 			const { resolve, reject } =
 				requestListeners.get(message.id) ?? {};
 			requestListeners.delete(message.id);
-			if (!message.success) reject?.(new Error(message.error));
+			if (deadline !== undefined && performance.now() >= deadline)
+				reject?.(new Error("RPC request timed out."));
+			else if (!message.success) reject?.(new Error(message.error));
 			else resolve?.(message.payload);
 			return;
 		}

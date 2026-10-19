@@ -13,7 +13,7 @@ import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { parseStrictSemVer } from "../src/shared/strict-semver.js";
-import { parseAppCottontailVersion, parseHutchPragma } from "./verify-release-toolchain.mjs";
+import { parseAppCottontailVersion, parseHutchPragma, resolvePairedCottontailVersion } from "./verify-release-toolchain.mjs";
 
 const scriptPath = fileURLToPath(import.meta.url);
 const defaultRepositoryRoot = dirname(dirname(dirname(scriptPath)));
@@ -66,6 +66,7 @@ export function updateReleaseWorkflowPins(source, pins) {
 	assertExactVersion(pins.hutch, "canonical Hutch pin");
 	assertExactVersion(pins.cottontail, "canonical Cottontail pin");
 	assertExactVersion(pins.appCottontail, "canonical app Cottontail pin");
+	assertExactVersion(pins.pairedCottontail, "paired Cottontail pin");
 	let updated = replaceWorkflowField(
 		source,
 		"EXPECTED_HUTCH_VERSION",
@@ -80,6 +81,11 @@ export function updateReleaseWorkflowPins(source, pins) {
 		updated,
 		"EXPECTED_APP_COTTONTAIL_VERSION",
 		pins.appCottontail,
+	);
+	updated = replaceWorkflowField(
+		updated,
+		"EXPECTED_PAIRED_COTTONTAIL_VERSION",
+		pins.pairedCottontail,
 	);
 	return updated;
 }
@@ -156,7 +162,9 @@ function atomicWriteFile(path, source) {
 	}
 }
 
-export function syncReleaseToolchainPins(repositoryRoot = defaultRepositoryRoot) {
+export function syncReleaseToolchainPins(repositoryRoot = defaultRepositoryRoot, {
+	resolvePairedVersion = resolvePairedCottontailVersion,
+} = {}) {
 	const root = resolve(repositoryRoot);
 	const configPath = join(root, "package", "hutch.config.ts");
 	const workflowPath = join(root, ".github", "workflows", "release.yml");
@@ -185,6 +193,11 @@ export function syncReleaseToolchainPins(repositoryRoot = defaultRepositoryRoot)
 			join(root, "package", "src", "shared", "cottontail-version.ts"), "utf8",
 		)),
 	};
+	// Ask the exact pinned Hutch release for its compiled pair. A project runtime
+	// upgrade must never silently rewrite this independent provenance expectation.
+	pins.pairedCottontail = assertExactVersion(
+		resolvePairedVersion(pins.hutch, undefined, root), "paired Cottontail pin",
+	);
 
 	// Compute and validate every update before replacing any target. This
 	// prevents a malformed later target from leaving an earlier one synchronized
@@ -229,7 +242,7 @@ if (invokedPath === import.meta.url) {
 			? `updated ${result.changed.join(", ")}`
 			: "already synchronized";
 		console.log(
-			`Hutch ${result.pins.hutch}, build Cottontail ${result.pins.cottontail}, app Cottontail ${result.pins.appCottontail}: ${detail}.`,
+			`Hutch ${result.pins.hutch}, paired Cottontail ${result.pins.pairedCottontail}, build Cottontail ${result.pins.cottontail}, app Cottontail ${result.pins.appCottontail}: ${detail}.`,
 		);
 	} catch (error) {
 		console.error(error instanceof Error ? error.message : error);

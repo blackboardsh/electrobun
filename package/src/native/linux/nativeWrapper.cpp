@@ -74,6 +74,7 @@
 #include "../shared/linux_dpi.h"
 #include "../shared/linux_x11_geometry.h"
 #include "wayland_screen_capture.h"
+#include "window_resize_handles.h"
 
 using namespace electrobun;
 
@@ -238,8 +239,13 @@ static std::string deriveLinuxWindowClass(
         result = "Electrobun";
     }
     if (!channel.empty() && channel != "stable") {
-        result += "-";
-        result += channel;
+        // version.json.name is already the channel-qualified bundle name.
+        // Also accept unqualified names from callers supplying AppInfo directly.
+        const std::string suffix = "-" + channel;
+        if (result.size() < suffix.size() ||
+            result.compare(result.size() - suffix.size(), suffix.size(), suffix) != 0) {
+            result += suffix;
+        }
     }
     return result;
 }
@@ -4758,7 +4764,7 @@ public:
         rememberLogicalBounds(initialBounds);
         
         // Store the parameters
-        this->deferredUrl = url ? url : "";
+        this->deferredUrl = url && url[0] ? url : "https://www.wikipedia.org";
         this->deferredX = initialBounds.x;
         this->deferredY = initialBounds.y;
         this->deferredWidth = initialBounds.width;
@@ -4873,6 +4879,11 @@ public:
                 registerOSRClientForWindow(x11win->windowId, this->client);
                 printf("CEF: Transparent window input handling enabled for window %u\n", x11win->windowId);
             }
+
+            // Creation is asynchronous: loadURL/loadHTML may have replaced the
+            // initial URL before this callback. Start only the latest request.
+            browser->GetMainFrame()->LoadURL(CefString(this->deferredUrl));
+            this->deferredUrl.clear();
         });
         
         // Set up browser close callback to clear browser reference
@@ -4914,7 +4925,6 @@ public:
         }
         
         // Create the browser with partition-specific request context
-        std::string loadUrl = deferredUrl.empty() ? "https://www.wikipedia.org" : deferredUrl;
         CefRefPtr<CefRequestContext> requestContext = CreateRequestContextForPartition(partition.c_str(), webviewId);
         if (!requestContext) {
             printf("CEF: ERROR - CreateRequestContextForPartition returned null\n");
@@ -4927,7 +4937,9 @@ public:
         extra_info->SetBool("sandbox", isSandboxed);
 
         client->MarkInitialBrowserCreationPending();
-        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, loadUrl, browser_settings, extra_info, requestContext);
+        // Navigate in the creation callback so an initial URL scheduled by CEF
+        // cannot overwrite a loadURL request made while creation was pending.
+        bool create_result = CefBrowserHost::CreateBrowser(window_info, client, "", browser_settings, extra_info, requestContext);
         
         if (!create_result) {
             client->ResolveInitialBrowserCreationPending();
@@ -5068,25 +5080,22 @@ public:
     
     void loadURL(const char* urlString) override {
         OperationGuard guard;
-        if (!guard.isValid()) return;
+        if (!guard.isValid() || !urlString) return;
         
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
         if (browser) {
             browser->GetMainFrame()->LoadURL(CefString(urlString));
+        } else {
+            deferredUrl = urlString;
         }
     }
     
     void loadHTML(const char* htmlString) override {
-        OperationGuard guard;
-        if (!guard.isValid() || !htmlString) return;
-        
-        std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
-        if (browser) {
-            // Create a data URI for the HTML content
-            std::string dataUri = "data:text/html;charset=utf-8,";
-            dataUri += htmlString;
-            browser->GetMainFrame()->LoadURL(CefString(dataUri));
-        }
+        if (!htmlString) return;
+        // Use the same pending-navigation path as loadURL during creation.
+        std::string dataUri = "data:text/html;charset=utf-8,";
+        dataUri += htmlString;
+        loadURL(dataUri.c_str());
     }
     
     void goBack() override {
@@ -7511,10 +7520,13 @@ ELECTROBUN_EXPORT void* createGTKWindow(uint32_t windowId, double x, double y, d
         }
         
         // Handle titleBarStyle for custom titlebars
-        if (titleBarStyle && strcmp(titleBarStyle, "hidden") == 0) {
-            // Remove window decorations for borderless windows
+        if (titleBarStyle && (strcmp(titleBarStyle, "hidden") == 0 ||
+                             strcmp(titleBarStyle, "hiddenInset") == 0)) {
+            // Both custom-titlebar styles need client resize handles when
+            // server decorations are disabled. In particular, existing apps
+            // using hidden must not need a style change to become resizable.
             gtk_window_set_decorated(GTK_WINDOW(window), FALSE);
-            printf("GTK: Created window without decorations (custom titlebar)\n");
+            attachGtkWindowResizeHandles(window);
         }
         
         // Handle transparency
@@ -12155,22 +12167,83 @@ ELECTROBUN_EXPORT bool isGlobalShortcutRegistered(const char* accelerator) {
 
 // Get all displays as JSON array
 ELECTROBUN_EXPORT const char* getAllDisplays() {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) {
-        return strdup("[]");
-    }
+    waitForGTKInit();
+    return dispatch_sync_main([]() -> const char* {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return strdup("[]");
+        }
 
-    int numMonitors = gdk_display_get_n_monitors(display);
-    GdkMonitor* primaryMonitor = gdk_display_get_primary_monitor(display);
+        int numMonitors = gdk_display_get_n_monitors(display);
+        GdkMonitor* primaryMonitor = gdk_display_get_primary_monitor(display);
 
-    std::ostringstream result;
-    result << "[";
+        std::ostringstream result;
+        result << "[";
 
-    for (int i = 0; i < numMonitors; i++) {
-        GdkMonitor* monitor = gdk_display_get_monitor(display, i);
-        if (!monitor) continue;
+        for (int i = 0; i < numMonitors; i++) {
+            GdkMonitor* monitor = gdk_display_get_monitor(display, i);
+            if (!monitor) continue;
 
-        if (i > 0) result << ",";
+            if (i > 0) result << ",";
+
+            // Get geometry (full bounds)
+            GdkRectangle geometry;
+            gdk_monitor_get_geometry(monitor, &geometry);
+
+            // Get work area (excludes panels/taskbars)
+            GdkRectangle workarea;
+            gdk_monitor_get_workarea(monitor, &workarea);
+
+            // Get scale factor
+            int scaleFactor = gdk_monitor_get_scale_factor(monitor);
+
+            // Check if primary
+            bool isPrimary = (monitor == primaryMonitor);
+
+            // Use monitor index as ID (GdkMonitor doesn't have a persistent ID)
+            result << "{";
+            result << "\"id\":" << i << ",";
+            result << "\"bounds\":{";
+            result << "\"x\":" << geometry.x << ",";
+            result << "\"y\":" << geometry.y << ",";
+            result << "\"width\":" << geometry.width << ",";
+            result << "\"height\":" << geometry.height;
+            result << "},";
+            result << "\"workArea\":{";
+            result << "\"x\":" << workarea.x << ",";
+            result << "\"y\":" << workarea.y << ",";
+            result << "\"width\":" << workarea.width << ",";
+            result << "\"height\":" << workarea.height;
+            result << "},";
+            result << "\"scaleFactor\":" << scaleFactor << ",";
+            result << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+            result << "}";
+        }
+
+        result << "]";
+        return strdup(result.str().c_str());
+    });
+}
+
+// Get primary display as JSON
+ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
+    waitForGTKInit();
+    return dispatch_sync_main([]() -> const char* {
+        GdkDisplay* display = gdk_display_get_default();
+        if (!display) {
+            return strdup("{}");
+        }
+
+        GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+        if (!monitor) {
+            // Fallback to first monitor if no primary is set
+            if (gdk_display_get_n_monitors(display) > 0) {
+                monitor = gdk_display_get_monitor(display, 0);
+            }
+            if (!monitor) {
+                return strdup("{}");
+            }
+        }
 
         // Get geometry (full bounds)
         GdkRectangle geometry;
@@ -12183,12 +12256,9 @@ ELECTROBUN_EXPORT const char* getAllDisplays() {
         // Get scale factor
         int scaleFactor = gdk_monitor_get_scale_factor(monitor);
 
-        // Check if primary
-        bool isPrimary = (monitor == primaryMonitor);
-
-        // Use monitor index as ID (GdkMonitor doesn't have a persistent ID)
+        std::ostringstream result;
         result << "{";
-        result << "\"id\":" << i << ",";
+        result << "\"id\":0,";
         result << "\"bounds\":{";
         result << "\"x\":" << geometry.x << ",";
         result << "\"y\":" << geometry.y << ",";
@@ -12202,63 +12272,11 @@ ELECTROBUN_EXPORT const char* getAllDisplays() {
         result << "\"height\":" << workarea.height;
         result << "},";
         result << "\"scaleFactor\":" << scaleFactor << ",";
-        result << "\"isPrimary\":" << (isPrimary ? "true" : "false");
+        result << "\"isPrimary\":true";
         result << "}";
-    }
 
-    result << "]";
-    return strdup(result.str().c_str());
-}
-
-// Get primary display as JSON
-ELECTROBUN_EXPORT const char* getPrimaryDisplay() {
-    GdkDisplay* display = gdk_display_get_default();
-    if (!display) {
-        return strdup("{}");
-    }
-
-    GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
-    if (!monitor) {
-        // Fallback to first monitor if no primary is set
-        if (gdk_display_get_n_monitors(display) > 0) {
-            monitor = gdk_display_get_monitor(display, 0);
-        }
-        if (!monitor) {
-            return strdup("{}");
-        }
-    }
-
-    // Get geometry (full bounds)
-    GdkRectangle geometry;
-    gdk_monitor_get_geometry(monitor, &geometry);
-
-    // Get work area (excludes panels/taskbars)
-    GdkRectangle workarea;
-    gdk_monitor_get_workarea(monitor, &workarea);
-
-    // Get scale factor
-    int scaleFactor = gdk_monitor_get_scale_factor(monitor);
-
-    std::ostringstream result;
-    result << "{";
-    result << "\"id\":0,";
-    result << "\"bounds\":{";
-    result << "\"x\":" << geometry.x << ",";
-    result << "\"y\":" << geometry.y << ",";
-    result << "\"width\":" << geometry.width << ",";
-    result << "\"height\":" << geometry.height;
-    result << "},";
-    result << "\"workArea\":{";
-    result << "\"x\":" << workarea.x << ",";
-    result << "\"y\":" << workarea.y << ",";
-    result << "\"width\":" << workarea.width << ",";
-    result << "\"height\":" << workarea.height;
-    result << "},";
-    result << "\"scaleFactor\":" << scaleFactor << ",";
-    result << "\"isPrimary\":true";
-    result << "}";
-
-    return strdup(result.str().c_str());
+        return strdup(result.str().c_str());
+    });
 }
 
 // Get current cursor position as JSON: {"x": 123, "y": 456}

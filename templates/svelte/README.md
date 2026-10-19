@@ -37,7 +37,7 @@ When you run `hutch run dev` (without HMR):
 ```
 ├── src/
 │   ├── bun/
-│   │   └── index.ts        # Main process (Electrobun/Cottontail)
+│   │   └── index.ts        # Main process (Electrobun/Bun)
 │   └── mainview/
 │       ├── App.svelte      # Svelte app component
 │       ├── main.ts         # Svelte entry point

@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 
 pub const install_root_name_environment_variable = "ELECTROBUN_INSTALL_ROOT_NAME";
 
-// Zig 0.16's std.DynLib does not support Windows. Keep the SDK's loader
+// Zig's std.DynLib does not support Windows. Keep the SDK's loader
 // surface consistent there by using the equivalent Win32 APIs directly.
 const WindowsDynamicLibrary = struct {
     const win = std.os.windows;
@@ -1223,7 +1223,7 @@ pub const Core = struct {
     }
 
     fn dupeZ(self: *Core, value: []const u8) ![:0]u8 {
-        return try self.allocator.dupeZ(u8, value);
+        return try self.allocator.dupeSentinel(u8, value, 0);
     }
 
     pub fn configureWebviewRuntimeFromExecutableDir(self: *Core, bundle_paths: *const BundlePaths, rpc_port: u32) !void {
@@ -2320,7 +2320,7 @@ test "native paths validate the launcher install root override" {
 fn readFileZ(allocator: std.mem.Allocator, path: []const u8) ![:0]u8 {
     const content = try readFileAlloc(allocator, path);
     defer allocator.free(content);
-    return try allocator.dupeZ(u8, content);
+    return try allocator.dupeSentinel(u8, content, 0);
 }
 
 fn readFileAlloc(allocator: std.mem.Allocator, path: []const u8) ![]u8 {

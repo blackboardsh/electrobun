@@ -14,17 +14,25 @@ import { join } from "node:path";
 import test from "node:test";
 
 import {
-	syncReleaseToolchainPins,
+	syncReleaseToolchainPins as syncPins,
 	updateMigrationGuideHutchPin,
 	updateNpmResolverPin,
 	updateReleaseWorkflowPins,
 } from "./sync-release-toolchain-pins.mjs";
 
-const oldPins = { hutch: "0.23.0", cottontail: "0.5.0", appCottontail: "0.4.0" };
-const newPins = { hutch: "0.24.0", cottontail: "0.6.0+release.1", appCottontail: "0.5.1" };
+const oldPins = { hutch: "0.23.0", cottontail: "0.5.0", appCottontail: "0.4.0", pairedCottontail: "0.4.1" };
+const newPins = { hutch: "0.24.0", cottontail: "0.6.0+release.1", appCottontail: "0.5.1", pairedCottontail: "0.5.0" };
+
+function syncReleaseToolchainPins(root) {
+	return syncPins(root, { resolvePairedVersion(hutch, _run, cwd) {
+		assert.equal(hutch, newPins.hutch);
+		assert.equal(cwd, root);
+		return newPins.pairedCottontail;
+	} });
+}
 
 function workflow(pins = oldPins) {
-	return `name: Release\r\n\r\njobs:\r\n  build:\r\n    env:\r\n      EXPECTED_HUTCH_VERSION: '${pins.hutch}'\r\n      EXPECTED_COTTONTAIL_VERSION: '${pins.cottontail}'\r\n      EXPECTED_APP_COTTONTAIL_VERSION: '${pins.appCottontail}'\r\n`;
+	return `name: Release\r\n\r\njobs:\r\n  build:\r\n    env:\r\n      EXPECTED_HUTCH_VERSION: '${pins.hutch}'\r\n      EXPECTED_COTTONTAIL_VERSION: '${pins.cottontail}'\r\n      EXPECTED_APP_COTTONTAIL_VERSION: '${pins.appCottontail}'\r\n      EXPECTED_PAIRED_COTTONTAIL_VERSION: '${pins.pairedCottontail}'\r\n`;
 }
 
 function resolver(version = oldPins.hutch) {
@@ -145,6 +153,30 @@ test("build pin synchronization preserves the independent app runtime pin", (t) 
 	assert.deepEqual(syncReleaseToolchainPins(fixture.root), { pins: newPins, changed: [] });
 });
 
+test("project Cottontail upgrades preserve Hutch's independently discovered compiled pair", (t) => {
+	const pins = { hutch: "0.28.0-canary.8", cottontail: "0.7.2-canary.7", appCottontail: "0.7.2-canary.7", pairedCottontail: "0.7.2-canary.6" };
+	const fixture = createRepositoryFixture(t, {
+		config: `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\n`,
+		appVersion: `export const COTTONTAIL_VERSION = "${pins.appCottontail}";\n`,
+	});
+	const result = syncPins(fixture.root, { resolvePairedVersion(hutch) {
+		assert.equal(hutch, pins.hutch);
+		return pins.pairedCottontail;
+	} });
+	assert.deepEqual(result.pins, pins);
+	assert.equal(readFileSync(fixture.paths.workflow, "utf8"), workflow(pins));
+});
+
+test("a missing or non-exact compiled pair prevents every target mutation", (t) => {
+	for (const paired of [undefined, "canary", "^0.7.2"]) {
+		const fixture = createRepositoryFixture(t);
+		assert.throws(() => syncPins(fixture.root, { resolvePairedVersion: () => paired }), /paired Cottontail pin must be an exact SemVer/);
+		assert.equal(readFileSync(fixture.paths.workflow, "utf8"), workflow());
+		assert.equal(readFileSync(fixture.paths.resolver, "utf8"), resolver());
+		assert.equal(readFileSync(fixture.paths.migrationGuide, "utf8"), migrationGuide());
+	}
+});
+
 test("a malformed canonical app pin prevents every target mutation", (t) => {
 	const fixture = createRepositoryFixture(t, {
 		appVersion: 'export const COTTONTAIL_VERSION = "canary";\n',
@@ -201,6 +233,14 @@ test("pin synchronization rejects malformed canonical pragma pins", (t) => {
 });
 
 test("workflow synchronization rejects missing, duplicate, and malformed fields", () => {
+	assert.throws(
+		() => updateReleaseWorkflowPins(workflow().replace(/^.*EXPECTED_PAIRED_COTTONTAIL_VERSION[^\n]*\n/m, ""), newPins),
+		/exactly one EXPECTED_PAIRED_COTTONTAIL_VERSION field; found 0/,
+	);
+	assert.throws(
+		() => updateReleaseWorkflowPins(`${workflow()}      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.4.0'\n`, newPins),
+		/exactly one EXPECTED_PAIRED_COTTONTAIL_VERSION field; found 2/,
+	);
 	assert.throws(
 		() => updateReleaseWorkflowPins(workflow().replace(/^.*EXPECTED_APP_COTTONTAIL_VERSION[^\n]*\n/m, ""), newPins),
 		/exactly one EXPECTED_APP_COTTONTAIL_VERSION field; found 0/,

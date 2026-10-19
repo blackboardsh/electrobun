@@ -27,7 +27,9 @@ Hutch is the only build orchestrator. When you run a build, it:
    built-in resolver or the project's explicitly selected external manager.
 5. Bundles a Cottontail or Bun main process, or compiles a Zig, Rust, Go, or
    Odin main process.
-6. Assembles the platform application bundle.
+6. Assembles the platform application bundle. For Cottontail, scans the bundled
+   main process, merges explicit capability includes, and packages the core
+   runtime plus selected standard-library modules and their dependencies.
 7. For canary and stable builds, creates the self-extracting wrapper,
    compressed update archive, metadata, optional patch, and platform
    installer.
@@ -71,6 +73,10 @@ your application JavaScript on a worker while Electrobun Core owns the
 main-thread event loop. Native SDKs expose the same arrangement directly:
 application code initializes the core, starts its work on another thread
 where needed, and enters `runMainThread`.
+
+The Go SDK pins the main goroutine to the main OS thread during package
+initialization. Call `RunMainThread` from `main()`, keeping application work
+on other goroutines as needed.
 
 ## Application resources
 

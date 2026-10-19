@@ -22,6 +22,7 @@
 #include <windows.h>
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
+#include "../shared/retained_view_callback.h"
 #include "dawn/webgpu.h"
 #include "dawn/native/D3D12Backend.h"
 #include <wrl.h>
@@ -72,6 +73,7 @@
 #include "../shared/accelerator_parser.h"
 #include "../shared/chromium_flags.h"
 #include "../shared/webview2_permissions.h"
+#include "../shared/webview2_window.h"
 #include "../shared/cache_migration.h"
 #include "../shared/views_url.h"
 #include "../shared/console_forwarding.h"
@@ -3628,6 +3630,37 @@ static void retainAbstractView(std::shared_ptr<AbstractView> view) {
     g_retainedAbstractViews[view->webviewId] = view;
 }
 
+static std::shared_ptr<AbstractView> findRetainedAbstractView(AbstractView* handle) {
+    // The core can race a window close before reaching the native dispatcher.
+    // Compare opaque addresses without dereferencing a possibly retired handle.
+    std::lock_guard<std::mutex> lock(g_retainedAbstractViewsMutex);
+    for (const auto& [id, view] : g_retainedAbstractViews) {
+        if (view.get() == handle) return view;
+    }
+    return nullptr;
+}
+
+template <typename Operation, typename OnRemoved>
+static auto retainedWebviewCallback(AbstractView* handle, Operation operation,
+                                   OnRemoved onRemoved) {
+    return electrobun::retainedViewCallback(
+        findRetainedAbstractView(handle),
+        [](AbstractView* view) { return findRetainedAbstractView(view) != nullptr; },
+        std::move(operation), std::move(onRemoved));
+}
+
+template <typename Operation, typename OnRemoved>
+static auto dispatchWebviewOperation(AbstractView* handle, Operation operation,
+                                    OnRemoved onRemoved) {
+    return MainThreadDispatcher::dispatch_sync(retainedWebviewCallback(
+        handle, std::move(operation), std::move(onRemoved)));
+}
+
+template <typename Operation>
+static void dispatchWebviewOperation(AbstractView* handle, Operation operation) {
+    dispatchWebviewOperation(handle, std::move(operation), []() {});
+}
+
 static void releaseRetainedAbstractView(AbstractView* view) {
     if (!view) return;
 
@@ -3723,6 +3756,7 @@ private:
     HandlePostMessage internalBridgeCallbackHandler;
     bool isSandboxed;
     HWND containerHwnd = nullptr;  // Container window for masking
+    electrobun::WebView2Window nativeWindow;
     double pageZoomFactor = 1.0;
     bool removed = false;
 
@@ -3757,6 +3791,18 @@ public:
 
     void setContainerHwnd(HWND hwnd) {
         containerHwnd = hwnd;
+    }
+
+    HRESULT bindNativeChildWindow() {
+        return nativeWindow.bind(controller.Get(), containerHwnd);
+    }
+
+    HWND getNativeChildWindow() const {
+        return nativeWindow.get(containerHwnd);
+    }
+
+    void bringNativeChildWindowToFront() {
+        nativeWindow.bringToFront(containerHwnd);
     }
 
     ComPtr<ICoreWebView2> getWebView() const {
@@ -3878,19 +3924,21 @@ public:
         std::string urlStr(urlString);
 
         // Navigate must happen on the UI thread — WebView2 APIs are single-threaded
-        MainThreadDispatcher::dispatch_async([this, urlStr]() {
-            if (webview) {
+        MainThreadDispatcher::dispatch_async(retainedWebviewCallback(this, [urlStr](AbstractView* target) {
+            auto* view = static_cast<WebView2View*>(target);
+            if (view->removed) return;
+            if (view->webview) {
                 std::wstring url;
                 if (!electrobun::utf8ToWide(urlStr, url)) {
                     ::log("[WebView2] Refusing navigation URL that is not valid UTF-8");
                     return;
                 }
-                webview->Navigate(url.c_str());
+                view->webview->Navigate(url.c_str());
             } else {
                 // WebView2 not ready — store URL for creation callback to load
-                pendingUrl = urlStr;
+                view->pendingUrl = urlStr;
             }
-        });
+        }, []() {}));
     }
     
     void loadHTML(const char* htmlString) override {
@@ -3898,19 +3946,21 @@ public:
         std::string htmlCopy(htmlString);
         // Dispatch to main thread to avoid race with async WebView2 creation callback.
         // Both this and the creation callback run on the main thread, so they can't interleave.
-        MainThreadDispatcher::dispatch_async([this, htmlCopy]() {
-            if (webview) {
+        MainThreadDispatcher::dispatch_async(retainedWebviewCallback(this, [htmlCopy](AbstractView* target) {
+            auto* view = static_cast<WebView2View*>(target);
+            if (view->removed) return;
+            if (view->webview) {
                 std::wstring html;
                 if (!electrobun::utf8ToWide(htmlCopy, html)) {
                     ::log("[WebView2] Refusing HTML that is not valid UTF-8");
                     return;
                 }
-                webview->NavigateToString(html.c_str());
+                view->webview->NavigateToString(html.c_str());
             } else {
                 // WebView2 not ready — creation callback will load this
-                pendingHtml = htmlCopy;
+                view->pendingHtml = htmlCopy;
             }
-        });
+        }, []() {}));
     }
     
     void goBack() override {
@@ -3934,6 +3984,7 @@ public:
     void remove() override {
         removed = true;
         isCreationComplete = false;
+        nativeWindow.reset();
         g_pendingResizeQueue.remove(this);
         g_webview2TestHeldControllers.erase(webviewId);
         for (auto it = g_webview2Views.begin(); it != g_webview2Views.end();) {
@@ -3963,6 +4014,9 @@ public:
             return;
         }
 
+        // Revealing a previously hidden tab must restore its own stacking
+        // position without raising a sibling that happens to share its bounds.
+        if (!transparent) bringNativeChildWindowToFront();
         // Use WebView2's built-in visibility control
         controller->put_IsVisible(transparent ? FALSE : TRUE);
     }
@@ -3977,54 +4031,7 @@ public:
             return;
         }
 
-        // Get the bounds of this WebView to identify its child windows
-        RECT viewBounds;
-        controller->get_Bounds(&viewBounds);
-
-        // Find WebView2's Chrome child windows and apply/remove WS_EX_TRANSPARENT
-        struct PassthroughEnumData {
-            RECT targetBounds;
-            HWND containerHwnd;
-            bool enablePassthrough;
-        };
-
-        PassthroughEnumData enumData;
-        enumData.targetBounds = viewBounds;
-        enumData.containerHwnd = containerHwnd;
-        enumData.enablePassthrough = enable;
-
-        EnumChildWindows(containerHwnd, [](HWND child, LPARAM lParam) -> BOOL {
-            PassthroughEnumData* data = (PassthroughEnumData*)lParam;
-
-            char className[256];
-            GetClassNameA(child, className, sizeof(className));
-
-            // Look for WebView2/Chrome child windows
-            if (strstr(className, "Chrome_WidgetWin") ||
-                strstr(className, "Chrome_RenderWidgetHostHWND")) {
-
-                RECT childRect;
-                GetWindowRect(child, &childRect);
-
-                // Convert to container coordinates
-                POINT topLeft = {childRect.left, childRect.top};
-                ScreenToClient(data->containerHwnd, &topLeft);
-
-                // Check if this matches our WebView's bounds (with some tolerance)
-                if (abs(topLeft.x - data->targetBounds.left) < 5 &&
-                    abs(topLeft.y - data->targetBounds.top) < 5) {
-                    // This is our WebView's child window - apply WS_EX_TRANSPARENT
-                    LONG exStyle = GetWindowLong(child, GWL_EXSTYLE);
-                    if (data->enablePassthrough) {
-                        SetWindowLong(child, GWL_EXSTYLE, exStyle | WS_EX_TRANSPARENT);
-                    } else {
-                        SetWindowLong(child, GWL_EXSTYLE, exStyle & ~WS_EX_TRANSPARENT);
-                    }
-                    return FALSE; // Stop enumeration
-                }
-            }
-            return TRUE; // Continue enumeration
-        }, (LPARAM)&enumData);
+        nativeWindow.setPassthrough(containerHwnd, enable);
     }
 
     bool canGoBack() override {
@@ -5205,57 +5212,9 @@ private:
     }
     
 
-    struct EnumChildData {
-        RECT targetBounds;
-        HWND containerHwnd;
-    };
-    
-    static BOOL CALLBACK EnumChildCallback(HWND child, LPARAM lParam) {
-        EnumChildData* data = (EnumChildData*)lParam;
-        
-        char className[256];
-        GetClassNameA(child, className, sizeof(className));
-        
-        // Look for WebView2/Chrome child windows
-        if (strstr(className, "Chrome_WidgetWin") || 
-            strstr(className, "Chrome_RenderWidgetHostHWND")) {
-            
-            RECT childRect;
-            GetWindowRect(child, &childRect);
-            
-            // Convert to container coordinates
-            POINT topLeft = {childRect.left, childRect.top};
-            POINT bottomRight = {childRect.right, childRect.bottom};
-            ScreenToClient(data->containerHwnd, &topLeft);
-            ScreenToClient(data->containerHwnd, &bottomRight);
-            
-            // Check if this matches our WebView's bounds (with some tolerance)
-            if (abs(topLeft.x - data->targetBounds.left) < 5 && 
-                abs(topLeft.y - data->targetBounds.top) < 5) {
-                // This is likely our WebView's child window
-                SetWindowPos(child, HWND_TOP, 0, 0, 0, 0,
-                           SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-                return FALSE; // Stop enumeration
-            }
-        }
-        return TRUE; // Continue enumeration
-    }
-    
     void BringWebView2ChildWindowToFront(AbstractView* view) {
-        // Cast to WebView2View to access controller
         auto webview2 = dynamic_cast<WebView2View*>(view);
-        if (!webview2 || !webview2->getController()) return;
-        
-        // Get the bounds of this WebView to identify its child window
-        RECT viewBounds;
-        webview2->getController()->get_Bounds(&viewBounds);
-        
-        EnumChildData enumData;
-        enumData.targetBounds = viewBounds;
-        enumData.containerHwnd = m_hwnd;
-        
-        // Find and bring the WebView2's child window to front
-        EnumChildWindows(m_hwnd, EnumChildCallback, (LPARAM)&enumData);
+        if (webview2) webview2->bringNativeChildWindowToFront();
     }
     
     void BringCEFChildWindowToFront(AbstractView* view) {
@@ -5487,6 +5446,14 @@ public:
         // on an already-destroyed HWND (which would crash).
         for (auto& view : m_abstractViews) {
             g_pendingResizeQueue.remove(view.get());
+            // Retire handles before Close() can pump another queued operation.
+            // The container keeps each object alive throughout teardown.
+            if (dynamic_cast<WGPUView*>(view.get())) {
+                releaseRetainedWGPUView(view.get());
+            } else {
+                untrackAbstractView(view.get());
+                releaseRetainedAbstractView(view.get());
+            }
             if (g_eventLoopStopping.load()) {
                 if (auto cefView = std::dynamic_pointer_cast<CEFView>(view)) {
                     // The parent hierarchy is already being destroyed by the
@@ -5498,12 +5465,6 @@ public:
                 }
             } else {
                 view->remove();
-            }
-            if (dynamic_cast<WGPUView*>(view.get())) {
-                releaseRetainedWGPUView(view.get());
-            } else {
-                untrackAbstractView(view.get());
-                releaseRetainedAbstractView(view.get());
             }
         }
         if (m_hwnd) {
@@ -7260,6 +7221,54 @@ extern "C" ELECTROBUN_EXPORT bool webview2TestGetState(uint32_t webviewId, char*
         } else {
             state << ",\"bounds\":null,\"visible\":null";
         }
+        const HWND child = view->getNativeChildWindow();
+        state << ",\"childOwned\":" << (child != nullptr);
+        if (child) {
+            const HWND parent = GetParent(child);
+            auto handleJSON = [](HWND handle) {
+                std::ostringstream result;
+                result << "\"0x" << std::hex << reinterpret_cast<uintptr_t>(handle) << "\"";
+                return result.str();
+            };
+            int siblingIndex = 0;
+            HWND sibling = GetWindow(parent, GW_CHILD);
+            while (sibling && sibling != child) {
+                ++siblingIndex;
+                sibling = GetWindow(sibling, GW_HWNDNEXT);
+            }
+            state << ",\"childHwnd\":" << handleJSON(child)
+                << ",\"childParentHwnd\":" << handleJSON(parent)
+                << ",\"childVisible\":" << (IsWindowVisible(child) != FALSE)
+                << ",\"childExStyle\":" << static_cast<uint32_t>(GetWindowLongPtrW(child, GWL_EXSTYLE))
+                << ",\"childSiblingIndex\":" << (sibling == child ? siblingIndex : -1);
+            // Observe actual desktop composition, including sibling occlusion.
+            // CapturePreview/PrintWindow could report a rendered but covered
+            // guest as visible and would miss this regression.
+            RECT bounds = {};
+            COLORREF pixel = CLR_INVALID;
+            if (controller && SUCCEEDED(controller->get_Bounds(&bounds)) &&
+                bounds.right > bounds.left && bounds.bottom > bounds.top) {
+                POINT center = {bounds.left + (bounds.right - bounds.left) / 2,
+                    bounds.top + (bounds.bottom - bounds.top) / 2};
+                if (ClientToScreen(parent, &center)) {
+                    const HDC desktop = GetDC(nullptr);
+                    if (desktop) {
+                        pixel = GetPixel(desktop, center.x, center.y);
+                        ReleaseDC(nullptr, desktop);
+                    }
+                }
+            }
+            if (pixel == CLR_INVALID) {
+                state << ",\"screenPixel\":null";
+            } else {
+                state << ",\"screenPixel\":{\"r\":" << static_cast<unsigned>(GetRValue(pixel))
+                    << ",\"g\":" << static_cast<unsigned>(GetGValue(pixel))
+                    << ",\"b\":" << static_cast<unsigned>(GetBValue(pixel)) << "}";
+            }
+        } else {
+            state << ",\"childHwnd\":null,\"childParentHwnd\":null,\"childVisible\":null"
+                << ",\"childExStyle\":null,\"childSiblingIndex\":null,\"screenPixel\":null";
+        }
         state << "}";
         const std::string json = state.str();
         if (json.size() + 1 > capacity) return false;
@@ -7296,6 +7305,7 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
         view->pendingStartTransparent = startTransparent;
         view->pendingStartPassthrough = startPassthrough;
         view->setCreationFailed(true);
+        retainAbstractView(view);
         return view;
     }
     if (versionInfo) {
@@ -7322,6 +7332,10 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
     view->pendingUrl = urlString;
     view->electrobunScript = electrobunScript;
     view->customScript = customScript;
+
+    // A controller callback may run before the creating FFI thread resumes.
+    // Register before scheduling it so its initial navigation has an owner.
+    retainAbstractView(view);
 
     // Create WebView2 on main thread
     MainThreadDispatcher::dispatch_sync([view, urlString, x, y, width, height, hwnd, partitionStr, transparent]() {
@@ -7461,6 +7475,20 @@ static std::shared_ptr<WebView2View> createWebView2View(uint32_t webviewId,
 
                             // Store container HWND for masking support
                             view->setContainerHwnd(container->GetHwnd());
+
+                            // Associate this controller with its own native
+                            // child before any stacking or input changes.
+                            const HRESULT nativeWindowResult = view->bindNativeChildWindow();
+                            if (FAILED(nativeWindowResult)) {
+                                char errorLog[256];
+                                sprintf_s(errorLog,
+                                    "[WebView2] Native child ownership failed for webview %u, HRESULT: 0x%08X",
+                                    view->webviewId, nativeWindowResult);
+                                ::log(errorLog);
+                                view->setCreationFailed(true);
+                                view->remove();
+                                return nativeWindowResult;
+                            }
 
                             // Set up JavaScript bridge objects
                             view->setupJavaScriptBridges();
@@ -8957,7 +8985,6 @@ ELECTROBUN_EXPORT AbstractView* initWebview(uint32_t webviewId,
                                               electrobunPreloadScript, customPreloadScript,
                                               startTransparent, startPassthrough,
                                               transparent, sandbox);
-        retainAbstractView(webview2View);
         view = webview2View.get();
     }
 
@@ -9081,7 +9108,7 @@ ELECTROBUN_EXPORT void loadURLInWebView(AbstractView *abstractView, const char *
     }
     
     const std::string url(urlString);
-    MainThreadDispatcher::dispatch_sync([abstractView, url]() {
+    dispatchWebviewOperation(abstractView, [url](AbstractView* abstractView) {
         abstractView->loadURL(url.c_str());
     });
 }
@@ -10959,7 +10986,7 @@ ELECTROBUN_EXPORT void loadHTMLInWebView(AbstractView *abstractView, const char 
     }
 
     const std::string html(htmlString);
-    MainThreadDispatcher::dispatch_sync([abstractView, html]() {
+    dispatchWebviewOperation(abstractView, [html](AbstractView* abstractView) {
         abstractView->loadHTML(html.c_str());
     });
 }
@@ -10970,7 +10997,7 @@ ELECTROBUN_EXPORT void webviewGoBack(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->goBack();
     });
 }
@@ -10981,7 +11008,7 @@ ELECTROBUN_EXPORT void webviewGoForward(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->goForward();
     });
 }
@@ -10992,7 +11019,7 @@ ELECTROBUN_EXPORT void webviewReload(AbstractView *abstractView) {
         return;
     }
     
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
         abstractView->reload();
     });
 }
@@ -11003,19 +11030,21 @@ ELECTROBUN_EXPORT void webviewRemove(AbstractView *abstractView) {
         return;
     }
 
-    g_pendingResizeQueue.remove(abstractView);
-    {
-        std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
-        g_allowedProtocols.erase(abstractView->webviewId);
-    }
     // CEF browser creation and lifecycle callbacks run on the native UI
     // thread. Serialize removal with OnAfterCreated so a pending async browser
     // cannot attach itself to a view while the runtime is releasing it.
-    MainThreadDispatcher::dispatch_sync([abstractView]() {
+    dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
+        g_pendingResizeQueue.remove(abstractView);
+        {
+            std::lock_guard<std::mutex> lock(g_allowedProtocolsMutex);
+            g_allowedProtocols.erase(abstractView->webviewId);
+        }
+        // Retire before calling COM/CEF: close can pump messages reentrantly.
+        // The dispatch callback retains ownership through the entire removal.
+        untrackAbstractView(abstractView);
+        releaseRetainedAbstractView(abstractView);
         abstractView->remove();
     });
-    untrackAbstractView(abstractView);
-    releaseRetainedAbstractView(abstractView);
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
@@ -11024,9 +11053,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoBack(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> BOOL {
         return abstractView->canGoBack() ? TRUE : FALSE;
-    });
+    }, []() -> BOOL { return FALSE; });
 }
 
 ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
@@ -11035,9 +11064,9 @@ ELECTROBUN_EXPORT BOOL webviewCanGoForward(AbstractView *abstractView) {
         return FALSE;
     }
     
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> BOOL {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> BOOL {
         return abstractView->canGoForward() ? TRUE : FALSE;
-    });
+    }, []() -> BOOL { return FALSE; });
 }
 
 ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstractView, const char *script) {
@@ -11047,7 +11076,7 @@ ELECTROBUN_EXPORT void evaluateJavaScriptWithNoCompletion(AbstractView *abstract
     }
 
     const std::string scriptCopy(script);
-    MainThreadDispatcher::dispatch_sync([abstractView, scriptCopy]() {
+    dispatchWebviewOperation(abstractView, [scriptCopy](AbstractView* abstractView) {
         if (abstractView->hasCreationFailed()) {
             ::log("ERROR: Cannot evaluate JavaScript on a webview that failed creation");
             return;
@@ -11075,7 +11104,7 @@ ELECTROBUN_EXPORT void callAsyncJavaScript(const char *messageId,
 
 ELECTROBUN_EXPORT void addPreloadScriptToWebView(AbstractView *abstractView, const char *scriptContent, BOOL forMainFrameOnly) {
     if (abstractView && scriptContent) {
-        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+        dispatchWebviewOperation(abstractView, [scriptContent](AbstractView* abstractView) {
             abstractView->addPreloadScriptToWebView(scriptContent);
         });
     }
@@ -11086,7 +11115,7 @@ ELECTROBUN_EXPORT void updatePreloadScriptToWebView(AbstractView *abstractView,
                                  const char *scriptContent,
                                  BOOL forMainFrameOnly) {
     if (abstractView && scriptContent) {
-        MainThreadDispatcher::dispatch_sync([abstractView, scriptContent]() {
+        dispatchWebviewOperation(abstractView, [scriptContent](AbstractView* abstractView) {
             abstractView->updateCustomPreloadScript(scriptContent);
         });
     }
@@ -11111,28 +11140,30 @@ ELECTROBUN_EXPORT const char* getBodyFromScriptMessage(void *message) {
     return emptyString;
 }
 
-ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, BOOL transparent) {
+// These exports use C++ bool to match the core and SDK FFI declarations.
+// Win32 BOOL reads four bytes; a bool caller only guarantees the low byte.
+ELECTROBUN_EXPORT void webviewSetTransparent(AbstractView *abstractView, bool transparent) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, transparent]() {
+        dispatchWebviewOperation(abstractView, [transparent](AbstractView* abstractView) {
             abstractView->setTransparent(transparent);
         });
     }
 }
 
-ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, BOOL enablePassthrough) {
+ELECTROBUN_EXPORT void webviewSetPassthrough(AbstractView *abstractView, bool enablePassthrough) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, enablePassthrough]() {
+        dispatchWebviewOperation(abstractView, [enablePassthrough](AbstractView* abstractView) {
             abstractView->setPassthrough(enablePassthrough);
         });
     }
 }
 
-ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, BOOL hidden) {
+ELECTROBUN_EXPORT void webviewSetHidden(AbstractView *abstractView, bool hidden) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, hidden]() {
+        dispatchWebviewOperation(abstractView, [hidden](AbstractView* abstractView) {
             abstractView->setTransparent(hidden);
         });
     }
@@ -11148,7 +11179,7 @@ ELECTROBUN_EXPORT bool webviewSetSpellCheck(AbstractView* abstractView, bool ena
 ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, const char *rulesJson) {
     if (abstractView) {
         // UI operations must be performed on the main thread
-        MainThreadDispatcher::dispatch_sync([abstractView, rulesJson]() {
+        dispatchWebviewOperation(abstractView, [rulesJson](AbstractView* abstractView) {
             abstractView->setNavigationRulesFromJSON(rulesJson);
         });
     }
@@ -11156,7 +11187,7 @@ ELECTROBUN_EXPORT void setWebviewNavigationRules(AbstractView *abstractView, con
 
 ELECTROBUN_EXPORT void webviewFindInPage(AbstractView *abstractView, const char *searchText, bool forward, bool matchCase) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView, searchText, forward, matchCase]() {
+        dispatchWebviewOperation(abstractView, [searchText, forward, matchCase](AbstractView* abstractView) {
             abstractView->findInPage(searchText, forward, matchCase);
         });
     }
@@ -11182,7 +11213,7 @@ void toggleRemoteDevTools(uint32_t webviewId) {
 
 ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->stopFindInPage();
         });
     }
@@ -11190,7 +11221,7 @@ ELECTROBUN_EXPORT void webviewStopFind(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->openDevTools();
         });
     }
@@ -11198,7 +11229,7 @@ ELECTROBUN_EXPORT void webviewOpenDevTools(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->closeDevTools();
         });
     }
@@ -11206,7 +11237,7 @@ ELECTROBUN_EXPORT void webviewCloseDevTools(AbstractView *abstractView) {
 
 ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
     if (abstractView) {
-        MainThreadDispatcher::dispatch_sync([abstractView]() {
+        dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) {
             abstractView->toggleDevTools();
         });
     }
@@ -11215,7 +11246,7 @@ ELECTROBUN_EXPORT void webviewToggleDevTools(AbstractView *abstractView) {
 ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoomLevel) {
     if (!abstractView) return;
 
-    MainThreadDispatcher::dispatch_sync([abstractView, zoomLevel]() {
+    dispatchWebviewOperation(abstractView, [zoomLevel](AbstractView* abstractView) {
         if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
             webview2->setPageZoom(zoomLevel);
             return;
@@ -11233,7 +11264,7 @@ ELECTROBUN_EXPORT void webviewSetPageZoom(AbstractView *abstractView, double zoo
 ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
     if (!abstractView) return 1.0;
 
-    return MainThreadDispatcher::dispatch_sync([abstractView]() -> double {
+    return dispatchWebviewOperation(abstractView, [](AbstractView* abstractView) -> double {
         if (auto webview2 = dynamic_cast<WebView2View*>(abstractView)) {
             return webview2->getPageZoom();
         }
@@ -11246,7 +11277,7 @@ ELECTROBUN_EXPORT double webviewGetPageZoom(AbstractView *abstractView) {
         }
 
         return 1.0;
-    });
+    }, []() { return 1.0; });
 }
 
 ELECTROBUN_EXPORT NSRect createNSRectWrapper(double x, double y, double width, double height) {

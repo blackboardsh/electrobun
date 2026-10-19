@@ -48,7 +48,10 @@ titlebar.
 ## Window Configuration
 
 Use `titleBarStyle: "hidden"` for fully custom chrome. `hiddenInset` retains
-the inset native controls on macOS.
+the inset native controls on macOS and keeps resize handles without a system
+titlebar on Windows and Linux's native GTK backend.
+On the Linux GTK backend, `hidden` also includes edge and corner resize handles
+without adding a system titlebar.
 
 ```typescript
 import { BrowserWindow } from "electrobun/main";

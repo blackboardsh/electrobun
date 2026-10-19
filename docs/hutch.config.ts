@@ -1,4 +1,4 @@
-// @hutch cli=0.27.0 cottontail=0.7.0
+// @hutch cli=0.28.1 cottontail=0.7.2
 export default {
   packageManager: "npm",
   scripts: {
@@ -15,7 +15,5 @@ export default {
       "scripts/project-boundary.test.mjs",
     ],
     clean: "rm -rf dist .astro",
-    deploy:
-      'hutch pm exec -- wrangler pages deploy dist --project-name=framework-docs --branch="$PAGES_BRANCH"',
   },
 };

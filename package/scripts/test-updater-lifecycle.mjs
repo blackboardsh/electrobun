@@ -25,6 +25,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 import { fileURLToPath } from "node:url";
 
 import { systemTarBinary } from "./windows-tar.mjs";
+import { updaterLifecycleBuildTarget, updaterLifecycleHutchBinary } from "./updater-lifecycle-target.mjs";
 
 const FOCUSES = new Set(["build", "install", "update", "uninstall", "full"]);
 const INITIAL_VERSION = "1.0.0";
@@ -68,10 +69,13 @@ const fallbackRelaunchSentinelPath = join(signalDirectory, "v4-relaunched.json")
 const updateActivationPath = join(signalDirectory, "activate-update");
 const bootstrapVerificationPath = join(signalDirectory, "verify-v2-bootstrap");
 const executableSuffix = process.platform === "win32" ? ".exe" : "";
-let hutchLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH || "hutch";
+let hutchLauncher = updaterLifecycleHutchBinary();
 let hutchEngine = process.env.HUTCH_ENGINE_BINARY;
 const timeoutMs = Number(
 	process.env.ELECTROBUN_UPDATER_E2E_TIMEOUT_MS || DEFAULT_TIMEOUT_MS,
+);
+const relaunchTimeoutMs = Number(
+	process.env.ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS || timeoutMs,
 );
 const keepTemporary = process.env.ELECTROBUN_UPDATER_E2E_KEEP === "1";
 const v1CompatibilitySimulationEnabled =
@@ -94,10 +98,18 @@ assert.equal(
 	"ELECTROBUN_UPDATER_E2E_TIMEOUT_MS must be at least 10000",
 );
 assert.equal(
+	Number.isFinite(relaunchTimeoutMs) && relaunchTimeoutMs >= 10_000,
+	true,
+	"ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS must be at least 10000",
+);
+assert.equal(
 	existsSync(join(devkitRoot, "native-devkit.json")),
 	true,
 	`local Electrobun devkit is missing at ${devkitRoot}; run hutch build:release first`,
 );
+const fixtureTarget = updaterLifecycleBuildTarget({
+	manifest: readJson(join(devkitRoot, "native-devkit.json")),
+});
 
 const platform = platformAdapter();
 const profile = platform.createProfile(temporaryRoot, identifier);
@@ -267,7 +279,7 @@ function run(command, args = [], options = {}) {
 }
 
 async function prepareHutch() {
-	const explicitLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH;
+	const explicitLauncher = process.env.ELECTROBUN_UPDATER_E2E_HUTCH || process.env.HUTCH_BINARY;
 	if (explicitLauncher) {
 		hutchLauncher = resolve(explicitLauncher);
 		if (!hutchEngine) {
@@ -349,9 +361,28 @@ function assertLauncherHealthy(description) {
 	}
 }
 
+async function logWindowsUpdateDiagnostics(description) {
+	if (process.platform !== "win32" || process.env.ELECTROBUN_UPDATER_E2E_DIAGNOSTICS !== "1") return;
+	try {
+		console.log(`[updater-e2e] ${description}; app TEMP=${profile.environment.TEMP}; relaunch limit=${relaunchTimeoutMs}ms`);
+		await run("powershell.exe", [
+			"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+			"-File", join(packageRoot, "scripts", "updater-windows-diagnostics.ps1"),
+			"-ChannelRoot", channelRoot,
+		], { timeout: 20_000, echo: true, label: "Windows updater task/process snapshot" });
+	} catch (error) {
+		console.error(`[updater-e2e] Diagnostic snapshot failed: ${error.message}`);
+	}
+}
+
 async function waitFor(description, predicate, limit = timeoutMs) {
 	const deadline = Date.now() + limit;
+	let nextDiagnostic = Date.now() + 30_000;
 	while (Date.now() < deadline) {
+		if (description.includes("relaunch") && Date.now() >= nextDiagnostic) {
+			await logWindowsUpdateDiagnostics(`Waiting for ${description}`);
+			nextDiagnostic = Date.now() + 60_000;
+		}
 		assertLauncherHealthy(description);
 		if (pathExists(failurePath)) {
 			throw new Error(
@@ -440,7 +471,7 @@ function createFixtureProject(projectRoot, builtVersion) {
 
 function buildEnvironment(version, baseUrl) {
 	const environment = {
-		...process.env,
+		...fixtureTarget.environment,
 		HUTCH_ELECTROBUN_DEVKIT_ROOT: devkitRoot,
 		ELECTROBUN_UPDATER_E2E_SDK_VERSION: packageJson.version,
 		ELECTROBUN_UPDATER_E2E_VERSION: version,
@@ -1152,7 +1183,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: false,
 			installerRelaunches: true,
 			updatePlatform: "win",
-			updateArch: "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith(".zip") && name.includes("Setup"),
 			createProfile(root, identifierValue) {
 				const value = commonProfile(root, identifierValue);
@@ -1164,7 +1195,9 @@ function platformAdapter() {
 					process.env.APPDATA ||
 						join(process.env.USERPROFILE || process.env.HOME || "", "AppData", "Roaming"),
 				);
-				const temp = resolve(process.env.TEMP || process.env.TMP || join(localAppData, "Temp"));
+				// Only the installed app and its helpers need the Task Scheduler TEMP.
+				// Keep build fixtures and diagnostics in the suite's short workspace temp.
+				const temp = resolve(process.env.ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP || process.env.TEMP || process.env.TMP || join(localAppData, "Temp"));
 				for (const path of [localAppData, roaming, temp]) {
 					assert.equal(resolve(path).length > 3, true, `unsafe Windows profile path: ${path}`);
 				}
@@ -1178,6 +1211,7 @@ function platformAdapter() {
 						APPDATA: roaming,
 						TEMP: temp,
 						TMP: temp,
+						TMPDIR: temp,
 						ELECTROBUN_INSTALLER_UI_AUTOCLOSE: "1",
 					},
 				};
@@ -1375,7 +1409,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: true,
 			installerRelaunches: true,
 			updatePlatform: "macos",
-			updateArch: process.arch === "arm64" ? "arm64" : "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith(".dmg"),
 			createProfile(_root, identifierValue) {
 				const home = resolve(homedir());
@@ -1495,7 +1529,7 @@ function platformAdapter() {
 			uninstallManifestHasVersion: true,
 			installerRelaunches: true,
 			updatePlatform: "linux",
-			updateArch: process.arch === "arm64" ? "arm64" : "x64",
+			updateArch: fixtureTarget.arch,
 			isInstaller: (name) => name.endsWith("-Setup.tar.gz"),
 			createProfile(root, identifierValue) {
 				const value = commonProfile(root, identifierValue);
@@ -1588,6 +1622,7 @@ function platformAdapter() {
 
 async function main() {
 	console.log(`[updater-e2e] platform=${platform.name} focus=${focus}`);
+	console.log(`[updater-e2e] devkit target=${fixtureTarget.os}-${fixtureTarget.arch}; runner=${process.arch}`);
 	console.log(`[updater-e2e] isolated root=${temporaryRoot}`);
 	await prepareHutch();
 	const baseUrl = await startReleaseServer();
@@ -1635,7 +1670,7 @@ async function main() {
 	const firstEventStart = recordedEvents().length;
 	const firstPriorResults = new Set(resultFiles());
 	launchInstalledApp(PATCH_TARGET_VERSION);
-	await waitFor("v3 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath));
+	await waitFor("v3 relaunch sentinel", () => pathExists(patchRelaunchSentinelPath), relaunchTimeoutMs);
 	await waitFor("first durable updater result", () =>
 		resultFiles().some((path) => !firstPriorResults.has(path)),
 	);
@@ -1672,7 +1707,7 @@ async function main() {
 	const secondEventStart = recordedEvents().length;
 	const secondPriorResults = new Set(resultFiles());
 	launchInstalledApp(FALLBACK_TARGET_VERSION);
-	await waitFor("v4 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath));
+	await waitFor("v4 relaunch sentinel", () => pathExists(fallbackRelaunchSentinelPath), relaunchTimeoutMs);
 	await waitFor("second durable updater result", () =>
 		resultFiles().some((path) => !secondPriorResults.has(path)),
 	);
@@ -1698,7 +1733,27 @@ try {
 	);
 } catch (error) {
 	failure = error;
+	await logWindowsUpdateDiagnostics("Failure before cleanup");
 	console.error(`[updater-e2e] FAIL: ${error.stack || error}`);
+	// Cleanup removes the fixture tree. Preserve its small event/sentinel files
+	// separately so CI can explain a relaunch failure after uninstalling it.
+	if (existsSync(signalDirectory)) {
+		try {
+			const diagnosticsRoot = mkdtempSync(join(temporaryBase, "updater-lifecycle-e2e-diagnostics-"));
+			cpSync(signalDirectory, join(diagnosticsRoot, "signals"), { recursive: true });
+			// Keep the native manager's result before uninstall removes the app.
+			for (const path of resultFiles()) {
+				copyFileSync(path, join(diagnosticsRoot, "signals", basename(path)));
+				console.error(`[updater-e2e] Native update result: ${readFileSync(path, "utf8")}`);
+			}
+			if (existsSync(eventLogPath)) {
+				console.error(`[updater-e2e] Fixture events:\n${readFileSync(eventLogPath, "utf8")}`);
+			}
+			console.error(`[updater-e2e] Failure signals: ${diagnosticsRoot}`);
+		} catch (diagnosticError) {
+			console.error(`[updater-e2e] Could not preserve failure signals: ${diagnosticError}`);
+		}
+	}
 } finally {
 	try {
 		await bestEffortCleanup();

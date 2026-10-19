@@ -20,7 +20,7 @@
 	},
 	"toolchains": {
 		"zig": {
-			"defaultVersion": "0.16.0"
+			"defaultVersion": "0.17.0"
 		},
 		"rust": {
 			"defaultVersion": "1.88.0"
@@ -35,7 +35,7 @@
 			"defaultVersion": "1.4.0"
 		},
 		"cottontail": {
-			"defaultVersion": "0.7.0"
+			"defaultVersion": "0.7.2"
 		}
 	},
 	"layout": {

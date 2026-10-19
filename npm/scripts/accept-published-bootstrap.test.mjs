@@ -186,6 +186,7 @@ test("binds each workflow label to its native runner architecture", () => {
 		["linux", "x64", "linux-x64"],
 		["linux", "arm64", "linux-arm64"],
 		["win32", "x64", "windows-x64"],
+		["win32", "arm64", "windows-arm64"],
 	]) {
 		assert.equal(validateRunnerPlatform(expected, platform, arch), expected);
 		if (expected !== "linux-x64") {
@@ -206,6 +207,7 @@ test("accepts only the exact public same-version Hutch asset matrix", () => {
 		"linux-x64",
 		"macos-arm64",
 		"windows-x64",
+		"windows-arm64",
 	]) {
 		platforms[platformKey] = {
 			archive: {
@@ -260,6 +262,7 @@ test("maps every release runner to the exact versioned Hutch cache", () => {
 		["linux", "x64", "linux-x64", "hutch"],
 		["linux", "arm64", "linux-arm64", "hutch"],
 		["win32", "x64", "windows-x64", "hutch.exe"],
+		["win32", "arm64", "windows-arm64", "hutch.exe"],
 	]) {
 		const cache = expectedHutchCache({
 			arch,

@@ -46,6 +46,14 @@ A missing or failed edge discards the attempted chain and downloads the latest
 full archive instead. Hosts should retain old hash-named patches and return a
 normal `404` for unavailable ones.
 
+On the client, consumed patches and superseded intermediate tars are cleaned
+up between hops. A detected disk-full error also releases the original cached
+tar before full-download fallback. This does not eliminate the need for free
+space to stage and install an update; see
+[Updater disk space](/electrobun/apis/updater/#disk-space-during-preparation).
+Linux builds use USTAR for compatibility with installed update extractors;
+packaging fails if an archive path cannot be represented in that format.
+
 The bundle hash is a release-routing identifier, not a code-signing or
 content-authentication mechanism. Serve updates over HTTPS and sign distributed
 applications with the platform's normal code-signing system when authenticity

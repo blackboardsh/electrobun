@@ -51,6 +51,8 @@ const expectedReleaseTasks = [
 	"typecheck",
 	"dev:test",
 	"test:core-host-transport",
+	"test:core-synchronization",
+	"test:windows-threaded-shutdown",
 	"test:native-symbol-contract",
 	"test:devkit-manifest",
 	"test:version-bump",
@@ -90,16 +92,24 @@ assertArray(
 		"scripts/dev.test.ts",
 		"scripts/dev-template.test.ts",
 		"scripts/clean-template-artifacts.test.mjs",
-		"scripts/run-cottontail-test.test.mjs",
+		"scripts/test-run-diagnostics.test.mjs",
 		"scripts/check-release.test.ts",
 	],
 	"Development test command order",
 );
+assert(
+	devCommands.some((command) => command.args.includes("scripts/dev-output.test.mjs")),
+	"dev:test should exercise real subprocess output capture and signal forwarding",
+);
+assert(
+	devCommands.some((command) => command.args.includes("scripts/hutch-launcher.test.mjs")),
+	"dev:test should exercise Hutch launcher and architecture handoff",
+);
 
 const templateCommands = createTemplateTestCommands(options);
 assert(
-	templateCommands.length === 2,
-	"test:templates should expose both independent checks",
+	templateCommands.length === 3,
+	"test:templates should expose three independent checks",
 );
 
 const attempted: string[] = [];

@@ -24,10 +24,10 @@ export default {
 		exitOnLastWindowClosed: false,
 	},
 	build: {
-		mainProcess: "cottontail",
+		mainProcess: "bun",
 		buildFolder: "build",
 		artifactFolder: "artifacts",
-		cottontail: {
+		bun: {
 			entrypoint: "src/bun/index.ts",
 		},
 		copy: {

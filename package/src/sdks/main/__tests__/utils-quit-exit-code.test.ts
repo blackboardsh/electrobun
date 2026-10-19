@@ -28,7 +28,7 @@ describe("Utils.quit exit codes", () => {
 			encoding: "utf8",
 		});
 		expect(result.error).toBeUndefined();
-		expect(result.status).toBe(7);
+		expect(result.status, `Child output:\n${result.stdout}\n${result.stderr}`).toBe(7);
 	});
 
 	test("forwards the requested status to native graceful shutdown", () => {

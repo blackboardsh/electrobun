@@ -1,0 +1,238 @@
+name: VM test matrix
+
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release tag or commit to build and test
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      windows_arm_only:
+        description: Run only Windows ARM when verifying a platform-specific fix
+        type: boolean
+        default: false
+  push:
+    branches: [ci/test-vm-matrix]
+    paths:
+      - '.github/workflows/test-vm.yml'
+      - '.github/actions/**'
+      - 'package/**'
+      - 'kitchen/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-vm-${{ github.ref }}
+  # Preserve diagnostics from every started matrix while iterating on failures.
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: test:vm (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 330
+    env:
+      ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
+      # Windows hosted VMs can take longer to relaunch after an update.
+      ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS: ${{ startsWith(matrix.runner, 'windows-') && '900000' || '300000' }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: package/package-lock.json
+      - name: Preserve scheduled-task user temporary directory (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Scheduled helpers validate against the original user TEMP spelling.
+          if ([string]::IsNullOrWhiteSpace($env:TEMP)) {
+            throw 'The Windows runner must provide its default user TEMP'
+          }
+          "ELECTROBUN_UPDATER_E2E_WINDOWS_TEMP=$env:TEMP" >> $env:GITHUB_ENV
+      - name: Set diagnostics temporary directory
+        shell: bash
+        run: |
+          echo "TMPDIR=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "ELECTROBUN_DIAGNOSTICS_TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+        with:
+          arch: ${{ matrix.arch }}
+      - name: Free disk space (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Remove large preinstalled software we don't need
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache/CodeQL
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Free disk space (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          echo "Disk space before cleanup:"
+          df -h /
+          # Keep the selected Xcode, but remove the other full Xcode installs
+          # preloaded on GitHub's macOS image. Kitchen only needs the selected
+          # macOS SDK and its multiple signed bundles otherwise exhaust the
+          # runner disk while hdiutil creates the final image.
+          selected_xcode_root="$(cd "$(xcode-select -p)/../.." && pwd -P)"
+          case "$selected_xcode_root" in
+            /Applications/Xcode*.app) ;;
+            *)
+              echo "Refusing to remove Xcode installs: unexpected selected Xcode root: $selected_xcode_root" >&2
+              exit 1
+              ;;
+          esac
+          echo "Preserving selected Xcode: $selected_xcode_root"
+          for xcode_root in /Applications/Xcode_*.app; do
+            [[ -d "$xcode_root" && ! -L "$xcode_root" ]] || continue
+            resolved_xcode_root="$(cd "$xcode_root" && pwd -P)"
+            case "$resolved_xcode_root" in
+              /Applications/Xcode_*.app) ;;
+              *)
+                echo "Refusing to remove unexpected Xcode root: $resolved_xcode_root" >&2
+                exit 1
+                ;;
+            esac
+            if [[ "$resolved_xcode_root" != "$selected_xcode_root" ]]; then
+              echo "Removing unused Xcode: $resolved_xcode_root"
+              sudo rm -rf "$resolved_xcode_root"
+            fi
+          done
+          # Remove Xcode caches and simulators to free space.
+          rm -rf "$HOME/Library/Developer/Xcode/DerivedData" || true
+          rm -rf "$HOME/Library/Developer/Xcode/Archives" || true
+          rm -rf "$HOME/Library/Developer/Xcode/iOS DeviceSupport" || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Caches || true
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes || true
+          # Clear common caches.
+          rm -rf "$HOME/Library/Caches" || true
+          rm -rf "$HOME/Library/Logs" || true
+          echo "Disk space after cleanup:"
+          df -h /
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            libpipewire-0.3-dev \
+            build-essential \
+            cmake \
+            pkg-config \
+            xvfb xauth openbox dbus-x11 mesa-utils mesa-vulkan-drivers vulkan-tools
+
+      - name: Install dependencies
+        working-directory: package
+        run: hutch run install
+
+      - name: Run full VM suite (Linux desktop)
+        timeout-minutes: 300
+        if: runner.os == 'Linux'
+        working-directory: package
+        shell: bash
+        env:
+          # Match the release template acceptance environment on virtual displays.
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        run: |
+          dbus-run-session -- xvfb-run -a -s '-screen 0 1920x1080x24' bash -e -c '
+            openbox > "$RUNNER_TEMP/openbox.log" 2>&1 &
+            vulkaninfo --summary
+            hutch test:vm
+          '
+
+      - name: Prepare Windows desktop shell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          # Windows ARM images can leave first-sign-in privacy setup covering
+          # all app windows and blocking Shell_NotifyIcon, even with Explorer
+          # running. Suppress that experience on this disposable CI machine.
+          # https://learn.microsoft.com/windows/client-management/mdm/policy-csp-privacy#disableprivacyexperience
+          foreach ($root in @('HKLM:', 'HKCU:')) {
+            $policy = "$root\SOFTWARE\Policies\Microsoft\Windows\OOBE"
+            New-Item -Path $policy -Force | Out-Null
+            New-ItemProperty -Path $policy -Name DisablePrivacyExperience -Value 1 -PropertyType DWord -Force | Out-Null
+          }
+          $runnerSession = (Get-Process -Id $PID).SessionId
+          $setupProcesses = Get-Process -Name UserOOBEBroker,CloudExperienceHostBroker,WWAHost -ErrorAction SilentlyContinue | Where-Object SessionId -eq $runnerSession
+          if ($setupProcesses) {
+            $setupProcesses | Stop-Process -Force
+            Start-Sleep -Seconds 3
+          }
+          # First-login setup can leave a Start menu flyout covering the apps.
+          Add-Type -AssemblyName System.Windows.Forms
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          [System.Windows.Forms.SendKeys]::SendWait('{ESC}')
+          Start-Sleep -Seconds 1
+          Add-Type @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class DesktopShell {
+            [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+            public static extern IntPtr FindWindow(string className, string title);
+          }
+          '@
+          Write-Host "Runner session: $((Get-Process -Id $PID).SessionId)"
+          if ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            Write-Host 'Starting Explorer for notification-area tests.'
+            Start-Process "$env:WINDIR\explorer.exe"
+          }
+          $deadline = (Get-Date).AddSeconds(30)
+          while ([DesktopShell]::FindWindow('Shell_TrayWnd', $null) -eq [IntPtr]::Zero) {
+            if ((Get-Date) -gt $deadline) {
+              throw 'Windows shell notification area is unavailable in the runner session.'
+            }
+            Start-Sleep -Milliseconds 500
+          }
+          Write-Host 'Windows shell notification area is ready.'
+
+      - name: Run full VM suite (macOS and Windows desktop)
+        timeout-minutes: 300
+        if: runner.os != 'Linux'
+        working-directory: package
+        run: hutch test:vm
+
+      - name: Upload test diagnostics
+        if: always()
+        timeout-minutes: 10
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-vm-${{ matrix.runner }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-test-vm-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-check-release-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
+            ${{ runner.temp }}/openbox.log
+            kitchen/test-results/**

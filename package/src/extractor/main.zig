@@ -230,12 +230,11 @@ fn readBootstrapMetadata(
     allocator: std.mem.Allocator,
     version_path: []const u8,
 ) !BootstrapMetadata {
-    var file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+    const file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer file.close(g_io);
-    prepareNoFollowFileForRead(&file);
     var read_buffer: [4096]u8 = undefined;
     var reader = file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
@@ -727,7 +726,7 @@ const ProgressIndicator = struct {
         }
 
         if (builtin.os.tag == .macos) {
-            const app_name_z = try self.allocator.dupeZ(u8, metadata.name);
+            const app_name_z = try self.allocator.dupeSentinel(u8, metadata.name, 0);
             defer self.allocator.free(app_name_z);
             self.native_handle = macos_installer_ui.electrobun_macos_installer_ui_start(app_name_z.ptr);
             if (self.native_handle == null) return error.NoProgressDialog;
@@ -900,7 +899,7 @@ const ProgressIndicator = struct {
         } else if (builtin.os.tag == .macos) {
             if (self.native_handle) |ui| {
                 if (phase_changed or marquee_changed) {
-                    const phase_z = self.allocator.dupeZ(u8, phase.text()) catch return;
+                    const phase_z = self.allocator.dupeSentinel(u8, phase.text(), 0) catch return;
                     defer self.allocator.free(phase_z);
                     macos_installer_ui.electrobun_macos_installer_ui_set_phase(
                         ui,
@@ -974,7 +973,7 @@ const ProgressIndicator = struct {
             }
         } else if (builtin.os.tag == .macos) {
             if (self.native_handle) |ui| {
-                const message_z = self.allocator.dupeZ(u8, message) catch return;
+                const message_z = self.allocator.dupeSentinel(u8, message, 0) catch return;
                 defer self.allocator.free(message_z);
                 macos_installer_ui.electrobun_macos_installer_ui_complete(
                     ui,
@@ -1137,7 +1136,7 @@ fn runInstallerUiPreview(allocator: std.mem.Allocator, mode: []const u8) !void {
             _ = windows_uninstall_ui.electrobun_preview_windows_uninstall_prompt(name_w.ptr);
         },
         .macos => {
-            const name_z = try allocator.dupeZ(u8, preview_name);
+            const name_z = try allocator.dupeSentinel(u8, preview_name, 0);
             defer allocator.free(name_z);
             _ = macos_uninstall_ui.electrobun_preview_macos_uninstall_prompt(name_z.ptr);
         },
@@ -1912,7 +1911,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
                 continue;
             }
 
-            const exe_path_z = try allocator.dupeZ(u8, exe_path);
+            const exe_path_z = try allocator.dupeSentinel(u8, exe_path, 0);
             defer allocator.free(exe_path_z);
 
             const result = std.c.chmod(exe_path_z.ptr, 0o755);
@@ -1945,7 +1944,7 @@ fn fixExecutablePermissions(allocator: std.mem.Allocator, app_dir: []const u8) !
                         const script_path = try std.fs.path.join(allocator, &.{ app_dir, entry.name });
                         defer allocator.free(script_path);
 
-                        const script_path_z = try allocator.dupeZ(u8, script_path);
+                        const script_path_z = try allocator.dupeSentinel(u8, script_path, 0);
                         defer allocator.free(script_path_z);
 
                         const result = std.c.chmod(script_path_z.ptr, 0o755);
@@ -3879,12 +3878,11 @@ fn loadAndValidateLinuxManifest(
     allocator: std.mem.Allocator,
     scope: LinuxInstallScope,
 ) !struct { contents: []u8, parsed: std.json.Parsed(LinuxUninstallManifest) } {
-    var manifest_file = try scope.channel_dir.openFile(g_io, LINUX_UNINSTALL_MANIFEST_NAME, .{
+    const manifest_file = try scope.channel_dir.openFile(g_io, LINUX_UNINSTALL_MANIFEST_NAME, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer manifest_file.close(g_io);
-    prepareNoFollowFileForRead(&manifest_file);
     const manifest_stat = try manifest_file.stat(g_io);
     if (manifest_stat.kind != .file) return error.InvalidUninstallManifest;
     var read_buffer: [4096]u8 = undefined;
@@ -4010,12 +4008,11 @@ fn prepareLinuxDesktopEntry(
         else => return err,
     };
     if (stat.kind != .file) return .{ .parent = parent, .basename = basename };
-    var file = try parent.openFile(g_io, basename, .{
+    const file = try parent.openFile(g_io, basename, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer file.close(g_io);
-    prepareNoFollowFileForRead(&file);
     var read_buffer: [4096]u8 = undefined;
     var reader = file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
@@ -4141,12 +4138,11 @@ fn installLinuxManagerFromResource(
     defer allocator.free(resources_path);
     var resources_dir = try openLinuxAbsoluteDirNoSymlinks(resources_path);
     defer resources_dir.close(g_io);
-    var source_file = try resources_dir.openFile(g_io, LINUX_UNINSTALL_EXE_NAME, .{
+    const source_file = try resources_dir.openFile(g_io, LINUX_UNINSTALL_EXE_NAME, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer source_file.close(g_io);
-    prepareNoFollowFileForRead(&source_file);
     const source_stat = try source_file.stat(g_io);
     if (source_stat.kind != .file) return error.InvalidUninstallManager;
 
@@ -5610,12 +5606,11 @@ fn readAndValidateInstalledMacosIdentity(
         &.{ app_bundle_path, "Contents", "Resources", "version.json" },
     );
     defer allocator.free(version_path);
-    var version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+    const version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer version_file.close(g_io);
-    prepareNoFollowFileForRead(&version_file);
     var read_buffer: [4096]u8 = undefined;
     var version_reader = version_file.reader(g_io, &read_buffer);
     const contents = version_reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
@@ -5688,12 +5683,11 @@ fn validateExistingMacosAppIdentityIfReadable(
         &.{ app_bundle_path, "Contents", "Resources", "version.json" },
     );
     defer allocator.free(version_path);
-    var version_file = std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+    const version_file = std.Io.Dir.openFileAbsolute(g_io, version_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     }) catch return;
     defer version_file.close(g_io);
-    prepareNoFollowFileForRead(&version_file);
     var read_buffer: [4096]u8 = undefined;
     var reader = version_file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch return;
@@ -5805,12 +5799,11 @@ fn loadAndValidateMacosManifest(
     manifest_path: []const u8,
     base_dir: []const u8,
 ) !struct { contents: []u8, parsed: std.json.Parsed(MacosUninstallManifest) } {
-    var manifest_file = try std.Io.Dir.openFileAbsolute(g_io, manifest_path, .{
+    const manifest_file = try std.Io.Dir.openFileAbsolute(g_io, manifest_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer manifest_file.close(g_io);
-    prepareNoFollowFileForRead(&manifest_file);
     var read_buffer: [4096]u8 = undefined;
     var manifest_reader = manifest_file.reader(g_io, &read_buffer);
     const contents = manifest_reader.interface.allocRemaining(allocator, .limited(64 * 1024)) catch |err| switch (err) {
@@ -5883,12 +5876,11 @@ fn installMacosUninstallManagerAtRoot(
         &.{ canonical_source_path, "Contents", "Resources", MACOS_UNINSTALL_EXE_NAME },
     );
     defer allocator.free(source_path);
-    var source_file = try std.Io.Dir.openFileAbsolute(g_io, source_path, .{
+    const source_file = try std.Io.Dir.openFileAbsolute(g_io, source_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer source_file.close(g_io);
-    prepareNoFollowFileForRead(&source_file);
     const source_stat = try source_file.stat(g_io);
     if (source_stat.kind != .file) return error.InvalidUninstallManager;
     const uninstall_path = try std.fs.path.join(allocator, &.{ base_dir, MACOS_UNINSTALL_EXE_NAME });
@@ -6059,7 +6051,7 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
     const manifest = document.parsed.value;
 
     const mode: MacosUninstallMode = requested_mode orelse blk: {
-        const name_z = try allocator.dupeZ(u8, manifest.name);
+        const name_z = try allocator.dupeSentinel(u8, manifest.name, 0);
         defer allocator.free(name_z);
         break :blk switch (macos_uninstall_ui.electrobun_show_uninstall_prompt(name_z.ptr)) {
             1 => .app,
@@ -6105,7 +6097,7 @@ fn uninstallMacos(allocator: std.mem.Allocator, requested_mode: ?MacosUninstallM
         );
     }
 
-    const app_path_z = try allocator.dupeZ(u8, manifest.app_bundle_path);
+    const app_path_z = try allocator.dupeSentinel(u8, manifest.app_bundle_path, 0);
     defer allocator.free(app_path_z);
     _ = macos_uninstall_ui.electrobun_terminate_app_at_path(app_path_z.ptr);
 
@@ -6356,15 +6348,6 @@ fn requireApplyUpdateDirectory(path: []const u8) !void {
     if (stat.kind != .directory) return error.InvalidUpdatePath;
 }
 
-fn prepareNoFollowFileForRead(file: *std.Io.File) void {
-    if (builtin.os.tag == .windows) {
-        // Zig opens no-follow Windows handles with asynchronous NT semantics,
-        // but this vendored stdlib currently reports them as blocking files.
-        // Correct the flag before reading so pending reads are awaited safely.
-        file.flags.nonblocking = true;
-    }
-}
-
 fn requirePhysicalApplyUpdateChild(
     allocator: std.mem.Allocator,
     parent_path: []const u8,
@@ -6442,12 +6425,11 @@ fn loadApplyUpdatePlan(
 ) !LoadedApplyUpdatePlan {
     try requireResolvedApplyUpdatePath(allocator, plan_path);
     try requireApplyUpdateFile(plan_path);
-    var file = try std.Io.Dir.openFileAbsolute(g_io, plan_path, .{
+    const file = try std.Io.Dir.openFileAbsolute(g_io, plan_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer file.close(g_io);
-    prepareNoFollowFileForRead(&file);
     const stat = try file.stat(g_io);
     if (stat.kind != .file or stat.size > 64 * 1024) return error.InvalidUpdatePlan;
     var read_buffer: [4096]u8 = undefined;
@@ -6519,12 +6501,11 @@ fn currentApplyUpdateIdentity(
         "version.json",
     );
     defer allocator.free(version_path);
-    var file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+    const file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer file.close(g_io);
-    prepareNoFollowFileForRead(&file);
     var read_buffer: [4096]u8 = undefined;
     var reader = file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
@@ -7003,7 +6984,7 @@ fn waitForApplyUpdateParent(parent_pid: u32) !void {
     const attempts = APPLY_UPDATE_PARENT_WAIT_MILLISECONDS / 100;
     var attempt: u64 = 0;
     while (attempt < attempts) : (attempt += 1) {
-        std.posix.kill(pid, @enumFromInt(0)) catch |err| switch (err) {
+        std.posix.kill(pid, @fromBackingInt(@intCast(0))) catch |err| switch (err) {
             error.ProcessNotFound => return,
             error.PermissionDenied => {},
             else => return err,
@@ -7059,12 +7040,11 @@ fn validateApplyUpdateBundleIdentity(
     const version_path = try applyUpdateBundleResourcePath(allocator, bundle_path, "version.json");
     defer allocator.free(version_path);
     try requirePhysicalApplyUpdateChild(allocator, resources_path, version_path, .file);
-    var version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
+    const version_file = try std.Io.Dir.openFileAbsolute(g_io, version_path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     });
     defer version_file.close(g_io);
-    prepareNoFollowFileForRead(&version_file);
     var read_buffer: [4096]u8 = undefined;
     var reader = version_file.reader(g_io, &read_buffer);
     const contents = reader.interface.allocRemaining(allocator, .limited(1024 * 1024)) catch |err| switch (err) {
@@ -7612,12 +7592,11 @@ fn applyUpdatePreparedStateMatchesPlan(
 ) bool {
     const path = std.fs.path.join(allocator, &.{ extraction_path, name }) catch return false;
     defer allocator.free(path);
-    var file = std.Io.Dir.openFileAbsolute(g_io, path, .{
+    const file = std.Io.Dir.openFileAbsolute(g_io, path, .{
         .allow_directory = false,
         .follow_symlinks = false,
     }) catch return false;
     defer file.close(g_io);
-    prepareNoFollowFileForRead(&file);
     const stat = file.stat(g_io) catch return false;
     if (stat.kind != .file or stat.size > 64 * 1024) return false;
     var read_buffer: [4096]u8 = undefined;
@@ -9402,8 +9381,8 @@ pub const Header = struct {
     }
 
     pub fn fileType(header: Header) FileType {
-        const result = @as(FileType, @enumFromInt(header.bytes[156]));
-        return if (result == @as(FileType, @enumFromInt(0))) .normal else result;
+        const result = @as(FileType, @fromBackingInt(@intCast(header.bytes[156])));
+        return if (result == @as(FileType, @fromBackingInt(@intCast(0)))) .normal else result;
     }
 
     fn str(header: Header, start: usize, end: usize) []const u8 {

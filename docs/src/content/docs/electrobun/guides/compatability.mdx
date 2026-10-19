@@ -9,11 +9,12 @@ description: "Supported operating systems, architectures, runtimes, and webview 
 | --- | --- | --- | --- |
 | macOS | arm64 | WKWebView | CEF |
 | Windows | x64 | WebView2 | CEF |
+| Windows | arm64 | WebView2 | CEF |
 | Linux | x64 | WebKitGTK 4.1 | CEF |
 | Linux | arm64 | WebKitGTK 4.1 | CEF |
 
-Windows on ARM runs Electrobun's x64 build through Windows emulation. Windows
-ARM64 is not a separate build target.
+Windows ARM64 builds run natively. Existing x64 installations continue to run
+under emulation; install the ARM64 build explicitly to switch architectures.
 
 Hutch builds for the current host operating system and architecture. Produce a
 cross-platform release with native CI runners; native main-process compilers do
@@ -21,14 +22,20 @@ not currently cross-compile Electrobun apps.
 
 ## Main process runtimes
 
+Bun is the default JavaScript main process. For existing applications, see the
+[2.0.4 migration guide](/electrobun/guides/migrating-to-v2/#upgrading-from-202-to-204).
+
 | Runtime | Status | Notes |
 | --- | --- | --- |
-| Cottontail | Default | Node.js and Bun-compatible TypeScript runtime |
-| Bun | Optional | Actual Bun runtime, built and packaged by Hutch |
-| Zig | Supported | Pinned Zig 0.16.0 toolchain |
+| Bun | Default | Bun 1.4.0, acquired and packaged by Hutch |
+| Cottontail | Experimental, opt-in | Node.js and Bun-compatible TypeScript runtime |
+| Zig | Supported | Pinned Zig 0.17.0 toolchain |
 | Rust | Supported | Pinned Rust 1.88.0 toolchain |
 | Go | Supported | Pinned Go 1.26.4 toolchain |
 | Odin | Supported | Pinned pre-1.0 Odin dev-2026-07a toolchain |
+
+Odin does not support the Windows ARM64 target. Cottontail on Windows ARM64
+supports JavaScriptCore's Baseline, DFG, and FTL JIT tiers and WebAssembly.
 
 Hutch accepts an exact matching system compiler. Otherwise it downloads the
 pinned compiler into its shared global toolchain store.
@@ -59,3 +66,10 @@ Electrobun builds, versioned devkits, and compiler toolchains.
 Native addons and code that depends on undocumented runtime internals can still
 be platform- or runtime-specific. Test the application on every target before a
 production release.
+
+Cottontail's optional standard-library APIs are packaged as capability modules.
+Hutch detects recognized references in the bundled main process and includes
+their dependencies. Dynamic usage may need additive
+`build.cottontail.capabilities` entries; runtime API support does not by itself
+guarantee that a module is included in a particular app bundle. See the
+[modular runtime guide](/electrobun/guides/cottontail/#modular-standard-library).

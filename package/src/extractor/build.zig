@@ -25,7 +25,6 @@ pub fn build(b: *std.Build) void {
         const output = b.run(&.{ "xcrun", "--sdk", "macosx", "--show-sdk-path" });
         const path = std.mem.trim(u8, output, " \t\r\n");
         if (path.len == 0) @panic("xcrun returned an empty macOS SDK path");
-        b.sysroot = path;
         break :blk path;
     } else null;
 
@@ -47,6 +46,7 @@ pub fn build(b: *std.Build) void {
     });
 
     if (target.result.os.tag == .macos) {
+        exe.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ macos_sdk.?, "usr", "lib" }) });
         exe.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{
             macos_sdk.?,
             "usr",
@@ -75,7 +75,9 @@ pub fn build(b: *std.Build) void {
         // Installers are user-facing GUI executables. The console subsystem
         // both flashes a debug terminal and can keep the parent terminal tied
         // to the installer process. Keep an explicit opt-in for diagnostics.
-        exe.subsystem = if (windows_console) .Console else .Windows;
+        exe.subsystem = if (windows_console) .console else .windows;
+        // Keep libc initialization for Zig's main with either PE subsystem.
+        exe.entry = .{ .symbol_name = "mainCRTStartup" };
     }
 
     // Developer ID signing must be able to add LC_CODE_SIGNATURE without
@@ -121,6 +123,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     if (target.result.os.tag == .macos) {
+        unit_tests.root_module.addLibraryPath(.{ .cwd_relative = b.pathJoin(&.{ macos_sdk.?, "usr", "lib" }) });
         unit_tests.root_module.addSystemIncludePath(.{ .cwd_relative = b.pathJoin(&.{
             macos_sdk.?,
             "usr",

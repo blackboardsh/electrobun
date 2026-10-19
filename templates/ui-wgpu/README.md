@@ -1,4 +1,4 @@
-# ui-wgpu — Cottontail UI
+# ui-wgpu — Electrobun UI
 
 A reactive, Solid-inspired UI runtime rendered by Dawn (WebGPU) directly from
 the Cottontail main process, consumed from `electrobun/main/ui`. No webview

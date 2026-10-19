@@ -177,7 +177,7 @@ export function hostDevkitTarget(
 
 	if (platform === "darwin") return { os: "macos", arch };
 	if (platform === "linux") return { os: "linux", arch };
-	if (platform === "win32") return { os: "win", arch: "x64" };
+	if (platform === "win32") return { os: "win", arch };
 	throw new Error(`Unsupported host platform ${JSON.stringify(platform)}`);
 }
 
@@ -391,7 +391,7 @@ export function createTemplateDevPlan(options: {
 				'process.stdout.write(process.versions.cottontail ?? "")',
 			],
 			cwd: templateDir,
-			env: { ...localDevkitEnvironment },
+			env: { ...localDevkitEnvironment, HUTCH_RUNTIME: "cottontail" },
 		},
 		install: {
 			label: "Install template dependencies",

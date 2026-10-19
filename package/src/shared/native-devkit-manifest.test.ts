@@ -45,6 +45,18 @@ const targets: Array<{
 		},
 	},
 	{
+		target: { os: "win", arch: "arm64" },
+		expected: {
+			launcher: "launcher.exe",
+			extractor: "extractor.exe",
+			coreLibrary: "ElectrobunCore.dll",
+			nativeWrapper: "libNativeWrapper.dll",
+			wgpuLibrary: "webgpu_dawn.dll",
+			wgpuAuxiliaryLibraries: ["d3dcompiler_47.dll"],
+			zigAsar: "zig-asar/arm64/zig-asar.exe",
+		},
+	},
+	{
 		target: { os: "win", arch: "x64" },
 		expected: {
 			launcher: "launcher.exe",
@@ -173,15 +185,19 @@ describe("native devkit manifest", () => {
 		expect(manifest.layout.runtime).not.toHaveProperty("bun");
 	});
 
-	it("normalizes every Windows host to the shipped x64 runtime", () => {
+	it("preserves the requested Windows and Linux architectures", () => {
 		expect(nativeDevkitTarget("win", "arm64")).toEqual({
 			os: "win",
-			arch: "x64",
+			arch: "arm64",
 		});
 		expect(nativeDevkitTarget("linux", "arm64")).toEqual({
 			os: "linux",
 			arch: "arm64",
 		});
+	});
+	it("marks Odin unsupported on Windows ARM64", () => {
+		const manifest = createNativeDevkitManifest({ productVersion: "2.0.3-beta.0", target: { os: "win", arch: "arm64" } });
+		expect(manifest.layout.sdks.odin.supported).toBe(false);
 	});
 
 	for (const { target, expected } of targets) {

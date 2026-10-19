@@ -12,10 +12,10 @@ build tool for every option, and switching runtimes is a config change, not a
 different framework.
 
 The practical decision is simpler than six options suggests: start with
-Cottontail (the default), select Bun when you want the actual Bun runtime, and
+Bun (the default), try experimental Cottontail explicitly, or
 reach for a native language when you want compiled performance or a
 smaller-than-JavaScript footprint. Each runtime has a dedicated walkthrough:
-[Cottontail](/electrobun/guides/hello-world/),
+[Cottontail](/electrobun/guides/cottontail/),
 [Bun](/electrobun/guides/hello-world-bun/),
 [Zig](/electrobun/guides/hello-world-zig/),
 [Rust](/electrobun/guides/hello-world-rust/),
@@ -26,16 +26,16 @@ in every language, including a per-feature coverage matrix.
 
 | Runtime | `build.mainProcess` | Project build input | Default toolchain |
 | --- | --- | --- | --- |
-| Cottontail | `"cottontail"` | `src/bun/index.ts` | Downloaded runtime |
-| Bun | `"bun"` | `src/bun/index.ts` | Downloaded runtime |
-| Zig | `"zig"` | `build.zig` | Zig 0.16.0 |
+| Cottontail (experimental) | `"cottontail"` | `src/bun/index.ts` | Downloaded runtime |
+| Bun (default) | `"bun"` | `src/bun/index.ts` | Downloaded runtime |
+| Zig | `"zig"` | `build.zig` | Zig 0.17.0 |
 | Rust | `"rust"` | `Cargo.toml` / binary `main` | Rust 1.88.0 |
 | Go | `"go"` | `go.mod` / package `./src/go` | Go 1.26.4 |
 | Odin | `"odin"` | package containing `src/odin/main.odin` | Odin dev-2026-07a |
 
 ## Cottontail
 
-Cottontail is the default. It executes TypeScript and supports the Node.js and
+Cottontail is experimental and opt-in. It executes TypeScript and supports the Node.js and
 Bun-compatible APIs used by Electrobun applications.
 
 ```typescript
@@ -65,8 +65,7 @@ new BrowserWindow({
 
 ## Bun
 
-Choose Bun only when the application intentionally depends on the actual Bun
-runtime. Hutch bundles source and packages the app; its built-in resolver owns
+Bun is the default JavaScript and TypeScript runtime. Hutch bundles source and packages the app; its built-in resolver owns
 JavaScript dependencies by default, or the project's explicitly selected
 package manager owns them instead.
 
@@ -107,7 +106,7 @@ export default {
   },
   build: {
     mainProcess: "zig",
-    zig: { version: "0.16.0" },
+    zig: { version: "0.17.0" },
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
     },
@@ -166,7 +165,8 @@ project to the current channel head.
 
 - Native main processes currently build for the host operating system and
   architecture. Use native CI runners for a release matrix.
-- Windows targets are x64. Windows on ARM runs the x64 build through emulation.
+- Windows supports x64 and ARM64 for Zig, Rust and Go main
+  processes. Odin remains Windows x64-only.
 - Windows Rust and Odin builds require Visual Studio Build Tools and the Windows
   SDK.
 - macOS needs Xcode Command Line Tools. Linux needs the platform compiler and

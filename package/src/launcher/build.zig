@@ -36,9 +36,12 @@ pub fn build(b: *std.Build) void {
     // For production Windows builds, use GUI subsystem to hide console window
     // For dev builds (Debug mode), use default console subsystem for CLI interaction
     const is_windows = target.result.os.tag == .windows;
-    const is_production = optimize != .Debug;
+    const is_production = optimize != .debug;
     if (is_windows and is_production) {
-        exe.subsystem = .Windows;
+        exe.subsystem = .windows;
+        // Zig's libc entry point exports main; select its CRT startup even
+        // though the packaged launcher intentionally has no console window.
+        exe.entry = .{ .symbol_name = "mainCRTStartup" };
     }
 
     b.installArtifact(exe);
@@ -90,7 +93,15 @@ pub fn build(b: *std.Build) void {
     });
     const run_uninstall_tests = b.addRunArtifact(uninstall_tests);
 
+    const runtime_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("main_process.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
     const test_step = b.step("test", "Run launcher tests");
+    test_step.dependOn(&b.addRunArtifact(runtime_tests).step);
     test_step.dependOn(&run_unit_tests.step);
     test_step.dependOn(&run_automation_tests.step);
     test_step.dependOn(&run_windows_spawn_tests.step);

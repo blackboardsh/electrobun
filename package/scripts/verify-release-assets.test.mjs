@@ -37,6 +37,10 @@ const platforms = {
 		archiveTarget: "win-x64",
 		target: { os: "win", arch: "x64" },
 	},
+	"windows-arm64": {
+		archiveTarget: "win-arm64",
+		target: { os: "win", arch: "arm64" },
+	},
 };
 
 function fixture() {
@@ -116,7 +120,7 @@ test("accepts a complete release that is self-consistent with both indexes", asy
 	const value = fixture();
 	try {
 		const names = await verifyReleaseAssets(value);
-		assert.equal(names.length, 11);
+		assert.equal(names.length, 13);
 		assert.ok(names.includes("electrobun-artifacts.json"));
 		assert.ok(names.includes("hutch-artifacts.json"));
 	} finally {

@@ -1,10 +1,11 @@
 ---
 title: "Cottontail"
-description: "Understand Electrobun's default JavaScript runtime."
+description: "Use Electrobun's experimental JavaScript runtime."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
-Cottontail is the default runtime for a TypeScript main process. It's built
+Bun is the default runtime for TypeScript main processes and Hutch scripts.
+Cottontail is an experimental, opt-in alternative. It's built
 with Zig on JavaScriptCore and provides the Node.js and Bun-compatible APIs
 Electrobun applications need — which means existing code and npm packages can
 work without a Cottontail-based app shipping Node or Bun.
@@ -22,16 +23,23 @@ external dependency tool. Separately, Cottontail implements Bun-compatible
 application APIs including the `Bun.$` shell interface.
 
 Hutch uses Cottontail in two separate roles. The build-time Cottontail that
-loads config and runs scripts is paired with the Hutch release, unless a project
+loads internal build config and bundles code is paired with the Hutch release, unless a project
 pragma overrides it. For a Cottontail main process, the selected Electrobun
 devkit separately pins the exact runtime placed in the application bundle; it
 does not inherit Hutch's build-time pair. End users install neither one. A Bun
 main process bundles the devkit-pinned Bun runtime instead.
 
+## Windows ARM64
+
+On Windows ARM64, Cottontail supports JavaScriptCore's Baseline, DFG, and FTL
+JIT tiers and WebAssembly. Native npm addons also need Windows ARM64 binaries
+or a working build from source. Existing x64 installations keep receiving x64
+updates; users can download and install your ARM64 build to switch architectures.
+
 ## Select Cottontail
 
-New projects use Cottontail by default. Spelled out explicitly, the
-configuration is:
+To opt into experimental Cottontail for an application, set both
+`build.mainProcess` and its entrypoint configuration explicitly:
 
 ```ts
 import type { ElectrobunConfig } from "electrobun";
@@ -63,6 +71,58 @@ new BrowserWindow({
   url: "views://mainview/index.html",
 });
 ```
+
+## Modular standard library
+
+Cottontail 0.6.0 and later separate optional standard-library APIs into
+capability modules. Hutch always packages the core runtime. It scans the final,
+tree-shaken main-process bundle for recognized module specifiers and namespace
+accesses, then includes the selected capabilities and their dependencies from
+the runtime's manifest. At runtime, capabilities load on demand.
+
+For example, `import { Database } from "bun:sqlite"` selects `sqlite`, and
+`import { gzipSync } from "node:zlib"` selects `compression`. Direct
+`Cottontail.sqlite` and `Cottontail.compression` accesses are also recognized.
+Your application's bundled dependencies participate in the same scan.
+
+The scanner matches known text in the output bundle; it does not execute your
+code or infer every JavaScript access. Computed imports, aliased namespaces,
+destructuring, and files loaded later may hide usage. In particular, do not
+assume a global compatibility access such as `Bun.SQL` selects `sql`.
+Use a recognized module import or explicitly include the capability in
+`electrobun.config.ts`:
+
+```ts
+import type { ElectrobunConfig } from "electrobun";
+
+export default {
+  app: {
+    name: "Plugin App",
+    identifier: "dev.example.plugin-app",
+    version: "0.1.0",
+  },
+  build: {
+    mainProcess: "cottontail",
+    cottontail: {
+      entrypoint: "src/bun/index.ts",
+      capabilities: ["sqlite", "sql"],
+    },
+  },
+} satisfies ElectrobunConfig;
+```
+
+The list is **additive**: it keeps everything automatically detected and adds
+these modules. An empty list does not disable scanning, and there is no
+exclusion list. Capability names describe packaging, not a permissions sandbox.
+This setting affects Cottontail app bundles, not Bun main processes or Hutch's
+build-time runtime.
+
+Each build logs the capabilities discovered by the scan, before explicit
+includes and transitive dependencies are added. If a packaged app reports a
+missing capability, add the name to this list, rebuild, and exercise that path
+in the resulting app on each target platform. See the
+[configuration reference](/electrobun/apis/cli/build-configuration/#capability-modules)
+for the full list of names.
 
 ## Runtime and build ownership
 
@@ -103,7 +163,7 @@ advances the pair. Pin only when the build pipeline needs a different exact
 version:
 
 ```ts
-// @hutch cottontail=0.3.0
+// @hutch cottontail=0.7.1
 ```
 
 Inspect the active version with `hutch cottontail version`.

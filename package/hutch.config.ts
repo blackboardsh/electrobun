@@ -1,4 +1,4 @@
-// @hutch cli=0.27.0 cottontail=0.7.0
+// @hutch cli=0.28.1 cottontail=0.7.2
 export default {
 	packageManager: "npm",
 	scripts: {
@@ -37,27 +37,32 @@ export default {
 		"test:linux-dpi-native": "hutch scripts/test-linux-dpi-native.js",
 		"test:linux-x11-geometry-native":
 			"hutch scripts/test-linux-x11-geometry-native.js",
+		"test:linux-window-resize-native":
+			"node scripts/test-linux-window-resize-native.js",
 		"test:wayland-screen-capture-frame-native":
 			"hutch scripts/test-wayland-screen-capture-frame-native.js",
 		"test:views-url-native": "hutch scripts/test-views-url-native.js",
 		"test:core-host-transport": "node --test scripts/core-host-transport.test.mjs",
-		"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js",
+		"test:core-synchronization": "node scripts/core-synchronization-stress.mjs",
+		"test:windows-ui-native": "node --test scripts/windows-msvc-environment.test.mjs && hutch scripts/test-windows-ui-native.js",
 		"test:windows-profile-paths": "node scripts/test-windows-profile-paths.mjs",
+		"test:windows-webview2-window": "node scripts/test-windows-webview2-window.mjs",
 		"test:windows-launcher-identity": "node --test src/launcher/windows_process_identity.integration.test.mjs",
-		"test:windows-release-contract": "node --test scripts/windows-release-validation.test.mjs",
+		"test:windows-threaded-shutdown": "node scripts/test-windows-threaded-shutdown.mjs",
+		"test:windows-release-contract": "node --test scripts/windows-release-validation.test.mjs scripts/webview2-runtime.test.mjs scripts/windows-msvc-environment.test.mjs scripts/updater-lifecycle-target.test.mjs",
 		"test:windows-ui-native-integration":
 			"hutch scripts/test-windows-ui-native.js --require-native-wrapper",
 		"test:installer-ui":
-			"node scripts/run-cottontail-test.js src/shared/windows-installer-progress.test.ts",
-		"test:unit": "node scripts/run-cottontail-test.js src/shared src/sdks/main src/config src/preload && hutch test:spell-check && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:wayland-screen-capture-frame-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
+			"node scripts/run-bun-test.js src/shared/windows-installer-progress.test.ts",
+		"test:unit": "node scripts/run-bun-test.js src/shared src/sdks/main src/config src/preload && hutch test:spell-check && hutch test:dialog-paths-native && hutch test:linux-dpi-native && hutch test:linux-x11-geometry-native && hutch test:wayland-screen-capture-frame-native && hutch test:views-url-native && hutch test:webview2-permissions && hutch test:windows-ui-native",
 		"test:native-symbol-contract":
-			"node scripts/run-cottontail-test.js src/shared/native-symbol-contract.test.ts",
+			"node scripts/run-bun-test.js src/shared/native-symbol-contract.test.ts",
 		"test:devkit-manifest":
-			"node scripts/run-cottontail-test.js src/shared/native-devkit-manifest.test.ts && node --test scripts/validate-native-devkit.test.mjs scripts/electrobun-version-runtime.test.mjs",
+			"node scripts/run-bun-test.js src/shared/native-devkit-manifest.test.ts && node --test scripts/validate-native-devkit.test.mjs scripts/electrobun-version-runtime.test.mjs",
 		"test:version-bump":
-			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs scripts/verify-release-assets.test.mjs scripts/release-publication-contract.test.mjs scripts/sync-release-toolchain-pins.test.mjs scripts/windows-release-validation.test.mjs",
+			"node --test scripts/version-config.test.mjs scripts/release-git.test.mjs scripts/verify-release-version.test.mjs scripts/create-artifact-index.test.mjs scripts/verify-release-assets.test.mjs scripts/release-publication-contract.test.mjs scripts/sync-release-toolchain-pins.test.mjs scripts/verify-release-toolchain.test.mjs scripts/windows-release-validation.test.mjs",
 		"test:linux-native-dialog":
-			"node scripts/run-cottontail-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
+			"node scripts/run-bun-test.js src/shared/linux-native-file-dialog.test.ts && scripts/test-linux-native-file-dialog.sh",
 		"test:cef-debug": ["hutch", "scripts/test-cef-remote-debugging.ts"],
 		"test:webview2-permissions": [
 			"hutch",
@@ -67,15 +72,15 @@ export default {
 		"test:templates": ["hutch", "scripts/check-release.ts", "templates"],
 		"test:odin-templates": "node scripts/test-odin-templates.mjs",
 		"test:template-publisher": "node --test ../scripts/publish-templates.test.mjs",
-		"test:signing": "node scripts/run-cottontail-test.js scripts/verify-macho-code-signing.test.ts",
-		"test:deployment-target": "node scripts/run-cottontail-test.js scripts/verify-macho-deployment-target.test.ts",
-		"test:linux-abi": "node scripts/run-cottontail-test.js scripts/verify-linux-elf-abi.test.ts",
+		"test:signing": "node scripts/run-bun-test.js scripts/verify-macho-code-signing.test.ts",
+		"test:deployment-target": "node scripts/run-bun-test.js scripts/verify-macho-deployment-target.test.ts",
+		"test:linux-abi": "node scripts/run-bun-test.js scripts/verify-linux-elf-abi.test.ts",
 		"test:linux-extractor": "node scripts/test-linux-adjacent-extractor.mjs",
 		"test:macos-uninstaller": "node scripts/test-macos-uninstaller.mjs",
 		"test:windows-uninstaller":
 			"node scripts/test-windows-uninstaller.mjs",
 		"test:updater-unit":
-			"node scripts/run-cottontail-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts",
+			"node scripts/run-bun-test.js src/sdks/main/core/UpdaterPreparation.test.ts src/sdks/main/core/UpdaterResult.test.ts src/sdks/main/core/UtilsInstalledRoot.test.ts src/sdks/main/core/UtilsQuitApproval.test.ts src/sdks/main/core/WindowsUpdateTask.test.ts && node --test scripts/updater-lifecycle-target.test.mjs",
 		"test:updater-lifecycle":
 			"hutch build:release && node scripts/test-updater-lifecycle.mjs",
 		"test:npm-bootstrap":

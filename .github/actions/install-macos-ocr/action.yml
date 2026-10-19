@@ -1,0 +1,23 @@
+name: Install macOS OCR
+description: Install isolated Tesseract binaries without depending on Homebrew bottle support
+runs:
+  using: composite
+  steps:
+    - uses: mamba-org/setup-micromamba@v3
+      id: ocr
+      with:
+        environment-name: electrobun-ocr
+        create-args: >-
+          -c conda-forge
+          tesseract=5.5.1
+        init-shell: none
+        generate-run-shell: false
+        cache-environment: true
+    - name: Verify OCR executable and English data
+      shell: bash
+      env:
+        OCR_ENVIRONMENT: ${{ steps.ocr.outputs.environment-path }}
+      run: |
+        "$OCR_ENVIRONMENT/bin/tesseract" --version
+        "$OCR_ENVIRONMENT/bin/tesseract" --list-langs | grep -Fx eng
+        echo "SMOKE_TESSERACT=$OCR_ENVIRONMENT/bin/tesseract" >> "$GITHUB_ENV"

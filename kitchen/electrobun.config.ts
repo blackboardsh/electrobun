@@ -5,7 +5,7 @@ import {
 } from "./scripts/kitchen-matrix-plan";
 
 const matrixVariant = readKitchenVariant(process.env);
-const mainProcess = matrixVariant?.mainProcess ?? "cottontail";
+const mainProcess = matrixVariant?.mainProcess ?? "bun";
 const defaultRenderer = matrixVariant?.renderer ?? "native";
 const bundleCEF = matrixVariant ? defaultRenderer === "cef" : true;
 const variantKey = matrixVariant ? kitchenVariantKey(matrixVariant) : null;
@@ -20,7 +20,7 @@ export default {
 	app: {
 		name: appName,
 		identifier: appIdentifier,
-		version: "2.0.2-beta.35",
+		version: "2.0.4",
 		urlSchemes: ["electrobun-playground"],
 	},
 	runtime: {

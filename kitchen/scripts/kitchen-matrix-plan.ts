@@ -1,6 +1,6 @@
 export const KITCHEN_MAIN_PROCESSES = [
-	"cottontail",
 	"bun",
+	"cottontail",
 	"zig",
 	"rust",
 	"go",
@@ -24,26 +24,45 @@ export function kitchenVariantKey(variant: KitchenVariant): string {
 	return `${variant.mainProcess}-${variant.renderer}`;
 }
 
+export function supportedKitchenMainProcesses(
+	platform = process.platform,
+	arch: string = process.arch,
+): KitchenMainProcess[] {
+	return KITCHEN_MAIN_PROCESSES.filter(
+		(main) => !(platform === "win32" && arch === "arm64" && main === "odin"),
+	);
+}
+
 export function createKitchenMatrix(
 	full: boolean,
 	selectedVariants?: readonly KitchenVariant[],
+	platform = process.platform,
+	arch: string = process.arch,
 ): KitchenVariant[] {
-	if (selectedVariants) return selectedVariants.map((variant) => ({ ...variant }));
+	const mainProcesses = supportedKitchenMainProcesses(platform, arch);
+	if (selectedVariants) {
+		for (const variant of selectedVariants) {
+			if (!mainProcesses.includes(variant.mainProcess)) {
+				throw new Error(`${variant.mainProcess} is unsupported on ${platform}-${arch}`);
+			}
+		}
+		return selectedVariants.map((variant) => ({ ...variant }));
+	}
 
 	if (full) {
-		return KITCHEN_MAIN_PROCESSES.flatMap((mainProcess) =>
+		return mainProcesses.flatMap((mainProcess) =>
 			KITCHEN_RENDERERS.map((renderer) => ({ mainProcess, renderer })),
 		);
 	}
 
 	// Quick interactive pass: every bridge against the system renderer, plus CEF
-	// through the first-class Cottontail path. SDK bridges do interact with
+	// through the default Bun path. SDK bridges do interact with
 	// CEF's callback threading, so `hutch test:vm` auto-runs every backend with
 	// both renderers; use --full here when renderer or build-config plumbing changes.
 	return [
-		{ mainProcess: "cottontail", renderer: "native" },
-		{ mainProcess: "cottontail", renderer: "cef" },
-		...KITCHEN_MAIN_PROCESSES.slice(1).map((mainProcess) => ({
+		{ mainProcess: "bun", renderer: "native" },
+		{ mainProcess: "bun", renderer: "cef" },
+		...mainProcesses.slice(1).map((mainProcess) => ({
 			mainProcess,
 			renderer: "native" as const,
 		})),

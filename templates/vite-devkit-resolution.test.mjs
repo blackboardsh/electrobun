@@ -14,14 +14,17 @@ import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import { parseRepositoryPragmaPins } from "../package/scripts/version-config.mjs";
+import { selectHutchBinary } from "../package/scripts/hutch-launcher.mjs";
 
 const templatesRoot = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = dirname(templatesRoot);
+const selectedHutch = selectHutchBinary();
 const hutch = process.env.HUTCH_BINARY
-	? resolve(process.env.HUTCH_BINARY)
-	: process.platform === "win32"
+	? resolve(selectedHutch)
+	: selectedHutch === "hutch" && process.platform === "win32"
 		? "hutch.exe"
-		: "hutch";
+		: selectedHutch;
 const siblingHutchEngine = process.env.HUTCH_BINARY
 	? join(
 			dirname(hutch),
@@ -62,16 +65,36 @@ function run(command, args, cwd) {
 	});
 }
 
+function pinFixtureToolchain(project) {
+	// Source templates deliberately have no release pins. A copied test fixture
+	// lives outside the repository, so it must carry the repository's toolchain
+	// pin instead of selecting the user's global Hutch release. Explicit local
+	// launcher/engine overrides retain their existing behavior.
+	if (process.env.HUTCH_BINARY || process.env.HUTCH_ENGINE_BINARY) return;
+	const pins = parseRepositoryPragmaPins(
+		readFileSync(join(repositoryRoot, "package", "hutch.config.ts"), "utf8"),
+	);
+	const configPath = join(project, "hutch.config.ts");
+	const config = readFileSync(configPath, "utf8");
+	assert.doesNotMatch(config, /^\/\/\s*@hutch\b/m, "source templates must remain unpinned");
+	writeFileSync(configPath, `// @hutch cli=${pins.hutch} cottontail=${pins.cottontail}\n${config}`);
+	const selected = run(hutch, ["--version"], project);
+	assert.equal(selected.status, 0, `fixture Hutch selection failed\n${selected.error || ""}\n${selected.stderr}`);
+	assert.equal(selected.stdout.trim(), pins.hutch, "the fixture must select the repository's pinned Hutch");
+}
+
 test(
 	"a clean Vite template bundles electrobun/view from the projected devkit",
 	{ timeout: 240_000 },
 	() => {
 		const fixture = mkdtempSync(join(tmpdir(), "electrobun-vite-devkit-"));
 		const project = join(fixture, "app");
+		let passed = false;
 		try {
 			cpSync(join(templatesRoot, "vanilla-vite"), project, {
 				recursive: true,
 			});
+			pinFixtureToolchain(project);
 			assert.equal(existsSync(join(project, "node_modules")), false);
 			assert.equal(
 				existsSync(join(project, ".hutch")),
@@ -198,8 +221,10 @@ test(
 				"the output must contain code from the projected Electrobun view SDK",
 			);
 			assert.doesNotMatch(javascript, /from["']electrobun\/view["']/);
+			passed = true;
 		} finally {
-			rmSync(fixture, { recursive: true, force: true });
+			if (passed) rmSync(fixture, { recursive: true, force: true });
+			else console.error(`Vite test failure fixture retained at ${fixture}`);
 		}
 	},
 );
@@ -210,8 +235,10 @@ test(
 	() => {
 		const fixture = mkdtempSync(join(tmpdir(), "electrobun-tray-install-"));
 		const project = join(fixture, "app");
+		let passed = false;
 		try {
 			cpSync(join(templatesRoot, "tray-app"), project, { recursive: true });
+			pinFixtureToolchain(project);
 			assert.equal(existsSync(join(project, "hutch.lock")), false);
 			assert.equal(existsSync(join(project, "node_modules")), false);
 
@@ -226,8 +253,10 @@ test(
 				false,
 				"an empty dependency graph must not create an empty lockfile",
 			);
+			passed = true;
 		} finally {
-			rmSync(fixture, { recursive: true, force: true });
+			if (passed) rmSync(fixture, { recursive: true, force: true });
+			else console.error(`Tray test failure fixture retained at ${fixture}`);
 		}
 	},
 );

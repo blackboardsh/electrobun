@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { selectHutchBinary } from "./hutch-launcher.mjs";
 
 const packageDirectory = fileURLToPath(new URL("../", import.meta.url));
 const packageManifest = JSON.parse(
@@ -10,7 +11,7 @@ const packageManifest = JSON.parse(
 );
 
 test("Hutch evaluates the bundled Electrobun product version", () => {
-	const hutch = process.env.HUTCH_BINARY || "hutch";
+	const hutch = selectHutchBinary();
 	const result = spawnSync(
 		hutch,
 		["scripts/fixtures/electrobun-version-runtime.ts"],

@@ -107,6 +107,7 @@ function assertAllStressMessagesArrived(label: string, stats: StressMessageStats
 
 // Create RPC config for test harness
 type StressHandlers = {
+  ready?: () => void;
   bunStressMessages?: ReturnType<typeof createStressMessageCollector>;
   webviewMessageSummary?: StressValueCollector<StressMessageStats>;
   webviewRequestSummary?: StressValueCollector<StressRequestSummary>;
@@ -132,6 +133,7 @@ export function createTestHarnessRPC(
         },
       },
       messages: {
+        ready: () => stressHandlers.ready?.(),
         ping: ({ timestamp }) => {
           console.log(`Received ping at ${timestamp}`);
         },
@@ -318,7 +320,8 @@ export const rpcTests = [
       "Verify mixed-script UTF-8 remains exact across the Windows native RPC fallback after idle periods",
     timeout: 30000,
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC(20000);
+      const ready = createStressValueCollector<boolean>();
+      const rpc = createTestHarnessRPC(20000, { ready: () => ready.set(true) });
       const win = await createWindow({
         url: "views://test-harness/index.html",
         rpc,
@@ -331,7 +334,7 @@ export const rpcTests = [
         throw new Error("Expected webview RPC to be available");
       }
 
-      await sleep(1000);
+      await ready.wait("native test harness initialization");
       const scripts =
         "Български Ελληνικά 日本語 测试 한국어 café 🧪🚀";
       const boundaryPayload = Array.from(
@@ -339,14 +342,18 @@ export const rpcTests = [
         (_, index) => `${index}:${scripts}\n`,
       ).join("");
 
+      log("Checking native RPC readiness with a short Unicode echo");
+      expect(await webviewRpc.request.echoFromHost({ value: scripts })).toBe(scripts);
       for (let round = 0; round < 3; round++) {
         // Leave the transport idle between requests. This is safe to automate
         // while still exercising the resume-sensitive native transport path.
         await sleep(250);
+        log(`Native Unicode round ${round + 1}: sending ${boundaryPayload.length} UTF-16 code units`);
         const result = await webviewRpc.request.echoFromHost({
           value: `${round}:${boundaryPayload}`,
         });
         expect(result).toBe(`${round}:${boundaryPayload}`);
+        log(`Native Unicode round ${round + 1}: exact echo received`);
       }
 
       log(

@@ -1,4 +1,4 @@
-// Cottontail UI color picker: a tray eyedropper in a transparent, rounded,
+// Electrobun UI color picker: a tray eyedropper in a transparent, rounded,
 // always-on-top UI window — the "webview is too much, raw GpuWindow is too
 // little" showcase. Left: zoomed pixels around the cursor. Right: the color
 // in several formats — click a row to copy it, or cmd+C to copy your

@@ -14,6 +14,7 @@ import {
 import { availableParallelism } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
+import { selectHutchBinary } from "../../package/scripts/hutch-launcher.mjs";
 import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
@@ -301,7 +302,7 @@ Options:
   -h, --help      Show this help
 
 The default matrix launches all six main-process backends with the system
-renderer, plus Cottontail with CEF. Use --with for a focused pass or --full
+renderer, plus Bun with CEF. Use --with for a focused pass or --full
 after renderer-plumbing changes.`);
 }
 
@@ -512,7 +513,7 @@ export async function runKitchenMatrix(args: string[]): Promise<void> {
 	if (options.list) return;
 
 	const kitchenRoot = resolve(import.meta.dirname, "..");
-	const hutchBinary = process.env["HUTCH_BINARY"] || "hutch";
+	const hutchBinary = selectHutchBinary();
 	let interruptedBy: NodeJS.Signals | null = null;
 	const interrupt = (signal: NodeJS.Signals) => {
 		if (interruptedBy) return;

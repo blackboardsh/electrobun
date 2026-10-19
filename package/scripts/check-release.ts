@@ -4,12 +4,15 @@ import {
 	runCommandWithSignalForwarding,
 	type DevCommand,
 } from "./dev";
+import { createTestRunDiagnostics } from "./test-run-diagnostics.mjs";
 
 export const releaseCheckTasks = [
 	["Clean template artifacts", "clean:templates"],
 	["Typecheck", "typecheck"],
 	["Development command tests", "dev:test"],
 	["Core host transport tests", "test:core-host-transport"],
+	["Core synchronization stress", "test:core-synchronization"],
+	["Windows Threaded shutdown stress", "test:windows-threaded-shutdown"],
 	["Native symbol contract tests", "test:native-symbol-contract"],
 	["Native devkit manifest tests", "test:devkit-manifest"],
 	["Version bump tests", "test:version-bump"],
@@ -74,9 +77,16 @@ export function createDevTestCommands({
 			cwd: packageDir,
 		},
 		{
-			label: "Cottontail test wrapper tests",
+			label: "Runtime test wrapper tests",
 			command: "node",
-			args: ["--test", "scripts/run-cottontail-test.test.mjs"],
+			args: [
+				"--test",
+				"scripts/run-cottontail-test.test.mjs",
+				"scripts/run-bun-test.test.mjs",
+				"scripts/dev-output.test.mjs",
+				"scripts/hutch-launcher.test.mjs",
+				"scripts/test-run-diagnostics.test.mjs",
+			],
 			cwd: packageDir,
 		},
 		{
@@ -93,10 +103,10 @@ export function createTemplateTestCommands({
 }: CreateCheckCommandsOptions): DevCommand[] {
 	return [
 		{
-			label: "Cottontail template tests",
+			label: "Bun template tests",
 			command: "node",
 			args: [
-				"scripts/run-cottontail-test.js",
+				"scripts/run-bun-test.js",
 				"../templates/template-manifests.test.ts",
 				"../templates/all-template-orchestrator.test.ts",
 				"src/shared/ui-color-picker.test.ts",
@@ -107,6 +117,12 @@ export function createTemplateTestCommands({
 			label: "Vite devkit resolution tests",
 			command: "node",
 			args: ["--test", "../templates/vite-devkit-resolution.test.mjs"],
+			cwd: packageDir,
+		},
+		{
+			label: "Published template acceptance harness tests",
+			command: "node",
+			args: ["--test", "../scripts/accept-published-template.test.mjs"],
 			cwd: packageDir,
 		},
 	];
@@ -170,7 +186,19 @@ async function main(): Promise<void> {
 			: suite === "templates"
 				? createTemplateTestCommands(options)
 				: createReleaseCheckCommands(options);
-	const failures = await runCheckCommands(commands);
+	const diagnostics = createTestRunDiagnostics(`check-${suite}`, commands);
+	console.log(`[check:release] Logs and runtime details: ${diagnostics.summaryPath}`);
+	let failures: CheckFailure[];
+	try {
+		failures = await runCheckCommands(commands, (command) =>
+			diagnostics.run(command, runCommandWithSignalForwarding),
+		);
+		diagnostics.finish(failures);
+	} catch (error) {
+		diagnostics.finish([], error);
+		console.error(`[check:release] Logs and runtime details: ${diagnostics.summaryPath}`);
+		throw error;
+	}
 
 	if (checkExitCode(failures) === 0) {
 		console.log(`[check:release] All ${suite} checks passed.`);
@@ -180,7 +208,7 @@ async function main(): Promise<void> {
 	console.error(
 		`[check:release] ${failures.length} of ${commands.length} ${suite} checks failed:\n${failures
 			.map((failure) => `  - ${failure.command.label}`)
-			.join("\n")}`,
+			.join("\n")}\n[check:release] Logs and runtime details: ${diagnostics.summaryPath}`,
 	);
 	process.exitCode = checkExitCode(failures);
 }

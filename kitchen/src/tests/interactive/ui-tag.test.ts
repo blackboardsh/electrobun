@@ -1,4 +1,4 @@
-// Interactive test: <electrobun-ui> — a Cottontail UI tree mounted from the
+// Interactive test: <electrobun-ui> — a Electrobun UI tree mounted from the
 // main process into a native Dawn layer composited over a webview, anchored
 // by a custom element in the page.
 
@@ -22,7 +22,7 @@ const PAGE = `<!doctype html><html><head><style>
 	<h2>Web content (webview)</h2>
 	<p>The framed panel below is <b>not</b> DOM: it is an
 	&lt;electrobun-ui&gt; tag anchoring a native Dawn layer whose content is a
-	reactive Cottontail UI tree running in the main process.</p>
+	reactive Electrobun UI tree running in the main process.</p>
 	<electrobun-ui name="kitchen-overlay"></electrobun-ui>
 	<p>Scroll and resize this window: the panel should track its anchor.</p>
 	<div style="height: 60vh"></div>
@@ -32,7 +32,7 @@ const PAGE = `<!doctype html><html><head><style>
 export const uiTagTests = [
 	defineTest({
 		name: "<electrobun-ui> overlay on a webview",
-		category: "Cottontail UI",
+		category: "Electrobun UI",
 		description:
 			"registerUIRoot mounts a reactive counter into a Dawn layer anchored by an <electrobun-ui> tag inside web content.",
 		instructions: [

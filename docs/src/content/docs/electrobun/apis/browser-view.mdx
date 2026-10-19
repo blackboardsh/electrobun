@@ -192,6 +192,17 @@ process owns its geometry.
 
 ## Loading and scripting
 
+`allowedProtocols` controls filesystem access for this view. Enabling
+`appData` permits reads from the app's `userData` directory through
+`appdata://`, including after navigation to remote content. See
+[Bundled and app-owned assets](/electrobun/apis/bundled-assets/) for examples
+and protocol boundaries.
+
+On Windows WebView2, unsafe, uppercase, Unicode, reserved, or over-80-character
+partition names map to hashed profile directories. Safe lowercase ASCII names
+use their original paths. For migration of existing profiles, see the
+[Electrobun 2.0.2 migration notes](/electrobun/guides/changelog/v2-0-2/#windows-profiles-and-lifecycle).
+
 ```ts
 import { BrowserWindow } from "electrobun/main";
 
@@ -220,6 +231,49 @@ void spellCheckChanged;
 
 `executeJavascript()` does not return the evaluated value. Use typed RPC when
 the browser must return data to the main process.
+
+Navigation and JavaScript evaluation are asynchronous native operations.
+Wait for the target document's readiness (for example `dom-ready`, or an
+application-level RPC readiness message) before evaluating code that depends
+on it. `executeJavascript()` is not a readiness barrier or a promise of
+execution: a view without a native browser/frame can discard the request.
+
+While Linux CEF creates its browser, it retains the latest `loadURL()` or
+`loadHTML()` request and starts that navigation when the browser is ready.
+On macOS, WKWebView uses file-URL loading for local files. `getPageZoom()` reads
+on the main thread after pending initialization and zoom changes.
+
+## Host message queue diagnostics
+
+`getHostMessageQueueStats()` reports the main
+process's outgoing queue for this view. Use it to investigate a backlog when
+sending bursts of RPC messages:
+
+```ts
+import { BrowserWindow } from "electrobun/main";
+
+const win = new BrowserWindow({
+  title: "Queue diagnostics",
+  url: "views://mainview/index.html",
+});
+
+console.log(win.webview.getHostMessageQueueStats());
+```
+
+| Field | Meaning |
+| --- | --- |
+| `queuedMessages` | Messages and RPC responses currently waiting in the host queue. |
+| `queuedBytes` | Serialized UTF-8 bytes currently queued. |
+| `oldestMessageAgeMs` | Age of the oldest queued message, or `0` when empty. |
+| `enqueuedMessages` | Total messages added to this view's host queue. |
+| `drainedMessages` | Total messages removed from the queue for transport. |
+| `peakQueuedMessages` | Highest recorded queued message count. |
+| `peakQueuedBytes` | Highest recorded serialized byte count. |
+
+These are host queue measurements. Byte counts are not retained heap usage,
+and draining a message does not acknowledge delivery or rendering in the
+WebView. Delivery uses byte-limited batches and yields between turns to keep
+I/O responsive under load; the diagnostics do not impose a queue size limit.
 
 ## Find in page
 

@@ -188,5 +188,5 @@ describe("private devkit source contract", () => {
 		} finally {
 			rmSync(tempDir, { force: true, recursive: true });
 		}
-	});
+	}, 30_000);
 });

@@ -38,6 +38,10 @@ import { RUST_VERSION } from "./src/shared/rust-version";
 import { GO_VERSION } from "./src/shared/go-version";
 import { ODIN_VERSION } from "./src/shared/odin-version";
 import { ELECTROBUN_VERSION } from "./src/shared/electrobun-version";
+import { resolveBuildArch, windowsBuildTarget } from "./src/shared/windows-build-target";
+import { goHostTuple, rustHostTriple, verifyGoToolchain, verifyRustToolchain } from "./src/shared/vendored-toolchain-host";
+import { assertWindowsBinaryArchitecture } from "./scripts/windows-binary-architecture.mjs";
+import { zigCompilerHostArchitecture } from "./scripts/zig-compiler-host.mjs";
 import {
 	NATIVE_DEVKIT_MANIFEST_FILENAME,
 	createNativeDevkitManifest,
@@ -68,6 +72,13 @@ const { values: args } = parseArgs({
 		"core-only": {
 			type: "boolean",
 		},
+		"vendor-rust-only": {
+			type: "boolean",
+		},
+		"vendor-go-only": {
+			type: "boolean",
+		},
+		arch: { type: "string" },
 		npm: {
 			type: "boolean",
 		},
@@ -81,6 +92,9 @@ const IS_NPM_BUILD = args.npm || false;
 const CORE_ONLY_BUILD = args["core-only"] || false;
 const OS: "win" | "linux" | "macos" = getPlatform();
 const ARCH: "arm64" | "x64" = getArch();
+const HOST_ARCH = resolveBuildArch(arch());
+const ZIG_HOST_ARCH = zigCompilerHostArchitecture();
+const WINDOWS_TARGET = windowsBuildTarget(ARCH);
 
 const isWindows = platform() === "win32";
 const binExt = OS === "win" ? ".exe" : "";
@@ -203,7 +217,19 @@ function outputMissingOrOlder(outputPath: string, inputPaths: string[]): boolean
 
 // TODO: setup file watchers
 try {
-	if (IS_NPM_BUILD) {
+	if (args["vendor-rust-only"] || args["vendor-go-only"]) {
+		// Core release archives deliberately omit SDK compilers. Allow native
+		// regression gates to provision this exact toolchain without building
+		// Electrobun again or downloading the other SDK toolchains.
+		if (args["vendor-rust-only"]) {
+			console.log(`Preparing pinned Rust ${RUST_VERSION} only...`);
+			await vendorRust();
+		}
+		if (args["vendor-go-only"]) {
+			console.log(`Preparing pinned Go ${GO_VERSION} only...`);
+			await vendorGo();
+		}
+	} else if (IS_NPM_BUILD) {
 		console.log("Building for npm (JS/TS files only)...");
 		await buildForNpm();
 	} else {
@@ -378,7 +404,7 @@ function findVisualStudioInstallation() {
 			"-products",
 			"*",
 			"-requires",
-			"Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+			WINDOWS_TARGET.vcComponent,
 			"-property",
 			"installationPath",
 		],
@@ -430,7 +456,8 @@ async function runMsvcCommand(command: string) {
 	const tempBat = join(tempDir, "build.cmd");
 	const batContent = [
 		"@echo off",
-		VCVARSALL_PATH ? `call "${VCVARSALL_PATH}" x64 >nul` : null,
+		VCVARSALL_PATH ? `call "${VCVARSALL_PATH}" ${WINDOWS_TARGET.vcvars} >nul` : null,
+		"if errorlevel 1 exit /b %errorlevel%",
 		`cd /D "${commandCwd}"`,
 		command,
 	]
@@ -657,7 +684,7 @@ async function setup() {
 	if (!CORE_ONLY_BUILD) {
 		await vendorRust(); // static.rust-lang.org
 		await vendorGo(); // go.dev
-		await vendorOdin(); // GitHub
+		if (!(OS === "win" && ARCH === "arm64")) await vendorOdin(); // No Windows ARM64 Odin toolchain.
 	}
 	await vendorCEF(); // Spotify CDN (not GitHub)
 	await vendorWebview2();
@@ -816,15 +843,11 @@ async function copyToDist() {
 	}
 
 	if (OS === "win") {
-		// Electrobun ships an x64 Windows runtime and relies on Windows emulation
-		// on ARM machines, so every library loaded by that process must also be x64.
-		mkdirSync(join("dist", "zig-asar", "x64"), { recursive: true });
-
-		cpSync("vendors/zig-asar/x64/zig-asar.exe", "dist/zig-asar/x64/zig-asar.exe", { force: true });
-		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/zig-asar/x64/libasar.dll", { force: true });
-		cpSync("vendors/zig-asar/x64/libasar.dll", "dist/libasar.dll", { force: true });
-
-		console.log("✓ Copied x64 zig-asar to dist");
+		mkdirSync(join("dist", "zig-asar", ARCH), { recursive: true });
+		cpSync(`vendors/zig-asar/${ARCH}/zig-asar.exe`, `dist/zig-asar/${ARCH}/zig-asar.exe`, { force: true });
+		cpSync(`vendors/zig-asar/${ARCH}/libasar.dll`, `dist/zig-asar/${ARCH}/libasar.dll`, { force: true });
+		cpSync(`vendors/zig-asar/${ARCH}/libasar.dll`, "dist/libasar.dll", { force: true });
+		console.log(`✓ Copied ${ARCH} zig-asar to dist`);
 	} else {
 		// Unix: single architecture
 		await $`cp vendors/zig-asar/zig-asar${binExt} dist/zig-asar${binExt}`;
@@ -881,8 +904,7 @@ async function copyToDist() {
 		);
 	} else if (OS === "win") {
 		cpSync("src/native/win/build/libNativeWrapper.dll", "dist/libNativeWrapper.dll", { force: true });
-		// native system webview library - always use x64 for Windows
-		const webview2Arch = "x64";
+		const webview2Arch = WINDOWS_TARGET.webview2;
 		cpSync(
 			join("vendors", "webview2", "Microsoft.Web.WebView2", "build", "native", webview2Arch, "WebView2Loader.dll"),
 			join("dist", "WebView2Loader.dll"),
@@ -1069,14 +1091,9 @@ function getPlatform() {
 }
 
 function getArch() {
-	switch (arch()) {
-		case "arm64":
-			return "arm64";
-		case "x64":
-			return "x64";
-		default:
-			throw new Error("unsupported arch");
-	}
+	const target = resolveBuildArch(arch(), args.arch ?? process.env["ELECTROBUN_BUILD_ARCH"]);
+	if (platform() !== "win32" && target !== arch()) throw new Error("Architecture cross compilation is only configured for Windows");
+	return target;
 }
 
 async function createDistFolder() {
@@ -1102,6 +1119,7 @@ async function installPackageDependencies() {
 
 
 function verifyVendoredZig() {
+	if (OS === "win") assertWindowsBinaryArchitecture(PATH.zig.BIN, ZIG_HOST_ARCH);
 	const versionOutput = runCaptured(PATH.zig.BIN, ["version"]).trim();
 	if (versionOutput !== ZIG_VERSION) {
 		throw new Error(
@@ -1136,8 +1154,8 @@ async function vendorZig() {
 		const zigFolder = `zig-${zigArch}-macos-${ZIG_VERSION}`;
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.tar.xz | tar -xJ --strip-components=1 -C vendors/zig ${zigFolder}/zig ${zigFolder}/lib ${zigFolder}/doc`;
 	} else if (OS === "win") {
-		// Always use x64 for Windows since we only build x64 Windows binaries
-		const zigArch = "x86_64";
+		// Compiler architecture follows the host, independently of --arch.
+		const zigArch = ZIG_HOST_ARCH === "arm64" ? "aarch64" : "x86_64";
 		const zigFolder = `zig-${zigArch}-windows-${ZIG_VERSION}`;
 		await $`rm -rf vendors/zig-temp vendors/zig.zip`;
 		await $`mkdir -p vendors/zig && curl -fL --retry 5 https://ziglang.org/download/${ZIG_VERSION}/${zigFolder}.zip -o vendors/zig.zip && powershell -ExecutionPolicy Bypass -Command Expand-Archive -Path vendors/zig.zip -DestinationPath vendors/zig-temp && mv vendors/zig-temp/${zigFolder}/zig.exe vendors/zig && mv vendors/zig-temp/${zigFolder}/lib vendors/zig/`;
@@ -1153,28 +1171,12 @@ async function vendorZig() {
 }
 
 function getRustHostTriple(): string {
-	if (OS === "macos") {
-		return ARCH === "arm64" ? "aarch64-apple-darwin" : "x86_64-apple-darwin";
-	}
-	if (OS === "linux") {
-		return ARCH === "arm64"
-			? "aarch64-unknown-linux-gnu"
-			: "x86_64-unknown-linux-gnu";
-	}
-	if (OS === "win") {
-		// Keep Windows aligned with the current Electrobun target policy.
-		return "x86_64-pc-windows-msvc";
-	}
-	throw new Error(`Unsupported platform: ${OS}`);
+	return rustHostTriple({ os: OS, arch: HOST_ARCH });
 }
 
 async function verifyVendoredRust() {
-	const versionOutput = runCaptured(PATH.rust.BIN, ["--version"]).trim();
-	if (!versionOutput.startsWith(`rustc ${RUST_VERSION}`)) {
-		throw new Error(
-			`Vendored Rust version mismatch: expected rustc ${RUST_VERSION}, got "${versionOutput}"`,
-		);
-	}
+	const versionOutput = runCaptured(PATH.rust.BIN, ["-vV"]);
+	verifyRustToolchain(versionOutput, RUST_VERSION, { os: OS, arch: HOST_ARCH });
 }
 
 async function vendorRust() {
@@ -1182,23 +1184,20 @@ async function vendorRust() {
 	const rustVersionFile = join(rustDir, ".rust-version");
 
 	if (existsSync(PATH.rust.BIN)) {
-		if (existsSync(rustVersionFile)) {
-			const vendoredVersion = readFileSync(rustVersionFile, "utf-8").trim();
+		try {
+			const vendoredVersion = existsSync(rustVersionFile)
+				? readFileSync(rustVersionFile, "utf-8").trim()
+				: RUST_VERSION;
 			if (vendoredVersion === RUST_VERSION) {
 				await verifyVendoredRust();
+				writeFileSync(rustVersionFile, RUST_VERSION);
 				return;
 			}
 			console.log(
 				`Rust version mismatch: vendored "${vendoredVersion}" vs expected "${RUST_VERSION}"`,
 			);
-		} else {
-			try {
-				await verifyVendoredRust();
-				writeFileSync(rustVersionFile, RUST_VERSION);
-				return;
-			} catch {
-				console.log("Rust vendor directory found without a valid version stamp.");
-			}
+		} catch (error) {
+			console.log(`Existing Rust toolchain is not valid for this host: ${error instanceof Error ? error.message : error}`);
 		}
 
 		console.log("Cleaning stale Rust toolchain and re-vendoring...");
@@ -1257,18 +1256,12 @@ async function vendorRust() {
 }
 
 function getGoHostTuple(): { goOS: string; goArch: string } {
-	const goOS = OS === "macos" ? "darwin" : OS === "win" ? "windows" : "linux";
-	const goArch = ARCH === "arm64" ? "arm64" : "amd64";
-	return { goOS, goArch };
+	return goHostTuple({ os: OS, arch: HOST_ARCH });
 }
 
 async function verifyVendoredGo() {
-	const versionOutput = runCaptured(PATH.go.BIN, ["version"]).trim();
-	if (!versionOutput.startsWith(`go version go${GO_VERSION} `)) {
-		throw new Error(
-			`Vendored Go version mismatch: expected go${GO_VERSION}, got "${versionOutput}"`,
-		);
-	}
+	const versionOutput = runCaptured(PATH.go.BIN, ["version"]);
+	verifyGoToolchain(versionOutput, GO_VERSION, { os: OS, arch: HOST_ARCH });
 }
 
 async function vendorGo() {
@@ -1276,23 +1269,20 @@ async function vendorGo() {
 	const goVersionFile = join(goDir, ".go-version");
 
 	if (existsSync(PATH.go.BIN)) {
-		if (existsSync(goVersionFile)) {
-			const vendoredVersion = readFileSync(goVersionFile, "utf-8").trim();
+		try {
+			const vendoredVersion = existsSync(goVersionFile)
+				? readFileSync(goVersionFile, "utf-8").trim()
+				: GO_VERSION;
 			if (vendoredVersion === GO_VERSION) {
 				await verifyVendoredGo();
+				writeFileSync(goVersionFile, GO_VERSION);
 				return;
 			}
 			console.log(
 				`Go version mismatch: vendored "${vendoredVersion}" vs expected "${GO_VERSION}"`,
 			);
-		} else {
-			try {
-				await verifyVendoredGo();
-				writeFileSync(goVersionFile, GO_VERSION);
-				return;
-			} catch {
-				console.log("Go vendor directory found without a valid version stamp.");
-			}
+		} catch (error) {
+			console.log(`Existing Go toolchain is not valid for this host: ${error instanceof Error ? error.message : error}`);
 		}
 
 		console.log("Cleaning stale Go toolchain and re-vendoring...");
@@ -1443,6 +1433,7 @@ async function vendorOdin() {
 
 async function vendorBsdiff() {
 	const BSDIFF_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-bsdiff"];
+	const buildKey = `${BSDIFF_VERSION}-${OS}-${ARCH}`;
 	const bsdiffDir = join(process.cwd(), "vendors", "zig-bsdiff");
 	const bsdiffBin = join(bsdiffDir, "bsdiff" + binExt);
 	const bspatchBin = join(bsdiffDir, "bspatch" + binExt);
@@ -1452,7 +1443,7 @@ async function vendorBsdiff() {
 		existsSync(bsdiffBin) &&
 		existsSync(bspatchBin) &&
 		existsSync(versionFile) &&
-		readFileSync(versionFile, "utf8").trim() === BSDIFF_VERSION
+		readFileSync(versionFile, "utf8").trim() === buildKey
 	) {
 		return;
 	}
@@ -1478,7 +1469,7 @@ async function vendorBsdiff() {
 		if (OS !== "win") {
 			await $`chmod +x ${bsdiffBin} ${bspatchBin}`;
 		}
-		writeFileSync(versionFile, BSDIFF_VERSION);
+		writeFileSync(versionFile, buildKey);
 
 		console.log("✓ zig-bsdiff binaries downloaded successfully");
 	} catch (error: unknown) {
@@ -1494,6 +1485,7 @@ async function vendorBsdiff() {
 
 async function vendorZstd() {
 	const ZSTD_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-zstd"];
+	const buildKey = `${ZSTD_VERSION}-${OS}-${ARCH}`;
 	const zstdDir = join(process.cwd(), "vendors", "zig-zstd");
 	const zstdBin = join(zstdDir, "zig-zstd" + binExt);
 	const versionFile = join(zstdDir, ".version");
@@ -1501,7 +1493,7 @@ async function vendorZstd() {
 	if (
 		existsSync(zstdBin) &&
 		existsSync(versionFile) &&
-		readFileSync(versionFile, "utf8").trim() === ZSTD_VERSION
+		readFileSync(versionFile, "utf8").trim() === buildKey
 	) {
 		return;
 	}
@@ -1527,7 +1519,7 @@ async function vendorZstd() {
 		if (OS !== "win") {
 			await $`chmod +x ${zstdBin}`;
 		}
-		writeFileSync(versionFile, ZSTD_VERSION);
+		writeFileSync(versionFile, buildKey);
 
 		console.log("✓ zig-zstd binaries downloaded successfully");
 	} catch (error: unknown) {
@@ -1545,7 +1537,7 @@ async function vendorWGPU() {
 	const WGPU_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["electrobun-dawn"];
 	const wgpuBaseDir = join(process.cwd(), "vendors", "wgpu");
 	const wgpuDir = join(wgpuBaseDir, `${OS}-${ARCH}`);
-	const wgpuVersionFile = join(wgpuBaseDir, ".wgpu-version");
+	const wgpuVersionFile = join(wgpuDir, ".wgpu-version");
 	const currentVersion = existsSync(wgpuVersionFile)
 		? readFileSync(wgpuVersionFile, "utf8").trim()
 		: null;
@@ -1735,7 +1727,7 @@ async function buildMacCefWrapper(): Promise<string> {
 
 async function vendorCEF() {
 	// CEF_VERSION, CHROMIUM_VERSION, and DEFAULT_CEF_VERSION_STRING are imported from src/shared/cef-version.ts
-	const expectedVersionString = DEFAULT_CEF_VERSION_STRING;
+	const expectedVersionString = `${DEFAULT_CEF_VERSION_STRING}-${OS}-${ARCH}`;
 
 	// Keep per-platform aliases for backward compatibility in URL construction below.
 	const CEF_VERSION_MAC = CEF_VERSION;
@@ -1920,9 +1912,8 @@ async function vendorCEF() {
 
 			// Download CEF - using URL encoding for the + character
 			console.log("Downloading CEF binaries...");
-			// Always use x64 for Windows since we only build x64 Windows binaries
-			const cefArch = "windows64";
-			console.log("Downloading CEF for Windows x64...");
+			const cefArch = WINDOWS_TARGET.cef;
+			console.log(`Downloading CEF for Windows ${ARCH}...`);
 			await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
 
 			// Validate download
@@ -1971,14 +1962,14 @@ async function vendorCEF() {
 			const cmakeGenerator = getWindowsCmakeGenerator();
 			const generatorArgs =
 				cmakeGenerator === "Visual Studio 17 2022"
-					? `-G "${cmakeGenerator}" -A x64`
+					? `-G "${cmakeGenerator}" -A ${WINDOWS_TARGET.cmake}`
 					: `-G "${cmakeGenerator}"`;
 
 			// Generate the CEF wrapper project with sandbox disabled.
 			// When vcvarsall is available, prefer an MSVC toolchain generator that
 			// does not require a full Visual Studio IDE instance to be discoverable.
 			await runMsvcCommand(
-				`cd vendors\\cef\\build && "${CMAKE_BIN}" ${generatorArgs} -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`,
+				`cd vendors\\cef\\build && "${CMAKE_BIN}" ${generatorArgs} -DPROJECT_ARCH=${ARCH === "arm64" ? "arm64" : "x86_64"} -DCEF_USE_SANDBOX=OFF -DCMAKE_BUILD_TYPE=Release ..`,
 			);
 			// Build the wrapper library only.
 			await runMsvcCommand(
@@ -2310,8 +2301,7 @@ async function buildNative() {
 			"native",
 			"include",
 		);
-		// Always use x64 for Windows since we only build x64 Windows binaries
-		const webview2Arch = "x64";
+		const webview2Arch = WINDOWS_TARGET.webview2;
 		const webview2Lib = `./vendors/webview2/Microsoft.Web.WebView2/build/native/${webview2Arch}/WebView2LoaderStatic.lib`;
 		const cefInclude = join(process.cwd(), "vendors", "cef");
 		const cefLib = `./vendors/cef/Release/libcef.lib`;
@@ -2600,8 +2590,7 @@ async function buildLauncher() {
 	let zigArgs: string[] = [];
 
 	if (OS === "win") {
-		// Windows always x64 for now
-		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+		zigArgs = [`-Dtarget=${WINDOWS_TARGET.zig}`, "-Dcpu=baseline"];
 	} else if (OS === "linux") {
 		if (ARCH === "arm64") {
 			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
@@ -2621,7 +2610,7 @@ async function buildCore() {
 	let zigArgs: string[] = [];
 
 	if (OS === "win") {
-		zigArgs = ["-Dtarget=x86_64-windows", "-Dcpu=baseline"];
+		zigArgs = [`-Dtarget=${WINDOWS_TARGET.zig}`, "-Dcpu=baseline"];
 	} else if (OS === "linux") {
 		if (ARCH === "arm64") {
 			zigArgs = ["-Dtarget=aarch64-linux-gnu"];
@@ -2659,7 +2648,7 @@ async function buildMainJs() {
 async function buildSelfExtractor() {
 	const zigArgs =
 		OS === "win"
-			? ["-Dtarget=x86_64-windows", "-Dcpu=baseline"]
+			? [`-Dtarget=${WINDOWS_TARGET.zig}`, "-Dcpu=baseline"]
 			: OS === "macos"
 				? [
 						`-Dtarget=${macosZigTarget(ARCH)}`,

@@ -1,7 +1,7 @@
-// @hutch cli=0.27.0 cottontail=0.7.0
+// @hutch cli=0.28.1 cottontail=0.7.2
 export default {
 	electrobun: {
-		version: "2.0.2-beta.35",
+		version: "2.0.4",
 	},
 	packageManager: "npm",
 	scripts: {
@@ -16,12 +16,15 @@ export default {
 			"--test",
 			"scripts/package-boundary.test.mjs",
 		],
+		"test:rust-webview-observations": ["node", "scripts/test-rust-webview-observations.mjs"],
+		"test:go-webview-observations": ["node", "scripts/test-go-webview-observations.mjs"],
+		"test:zig-webview-observations": ["node", "scripts/test-zig-webview-observations.mjs"],
 		"check:zig-mirrors": ["hutch", "scripts/check-zig-test-mirrors.ts"],
 		"check:odin-mirrors": ["hutch", "scripts/check-odin-test-mirrors.ts"],
 		// Kitchen's own tooling tests (not the in-app suite). The node:test files
-		// need Node's runner; the rest use Cottontail's bun:test runner.
+		// need Node's runner; the rest use Hutch's default Bun test runner.
 		"test:tooling":
-			"hutch test scripts/kitchen-matrix.test.ts && hutch test src/test-framework/auto-run-exit.test.ts && hutch test src/test-framework/exclusive-run.test.ts && hutch test src/test-framework/native-auto-run-exit.test.ts && hutch test src/test-framework/requirements.test.ts && hutch test src/test-runner/test-summary.test.ts && node --experimental-strip-types --test src/test-runner/interactive-contract.test.ts src/test-runner/test-order.test.ts && node --test scripts/package-boundary.test.mjs && hutch check:zig-mirrors && hutch check:odin-mirrors",
+			"hutch test scripts/kitchen-matrix.test.ts && hutch test src/test-framework/auto-run-exit.test.ts && hutch test src/test-framework/exclusive-run.test.ts && hutch test src/test-framework/native-auto-run-exit.test.ts && hutch test src/test-framework/requirements.test.ts && hutch test src/test-runner/test-summary.test.ts && node --experimental-strip-types --test src/test-runner/interactive-contract.test.ts src/test-runner/test-order.test.ts && node --test scripts/package-boundary.test.mjs && hutch check:zig-mirrors && hutch check:odin-mirrors && hutch test:rust-webview-observations && hutch test:go-webview-observations && hutch test:zig-webview-observations",
 		"build:canary":
 			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
 		"build:stable":

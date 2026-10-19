@@ -1,0 +1,7 @@
+PyAutoGUI==0.9.54
+Pillow==11.3.0
+pytesseract==0.3.13
+pexpect==4.9.0; sys_platform != 'win32'
+pywinpty==2.0.15; sys_platform == 'win32'
+pyobjc-framework-Quartz==11.1; sys_platform == 'darwin'
+pyobjc-framework-Cocoa==11.1; sys_platform == 'darwin'

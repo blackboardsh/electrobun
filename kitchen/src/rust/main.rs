@@ -11,6 +11,9 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
+mod webview_observations;
+use webview_observations::WebviewObservations;
+
 const APP_VERSION: &str = "1.18.1";
 const DEFAULT_SECRET_KEY: &str =
     "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32";
@@ -156,17 +159,13 @@ struct CallbackState {
     window_should_close_count: u32,
     window_resize_count: u32,
     window_focus_count: u32,
-    webview_will_navigate_count: u32,
-    webview_did_navigate_count: u32,
-    webview_did_commit_navigation_count: u32,
-    webview_dom_ready_count: u32,
+    webview_events: WebviewObservations,
     webview_tag_init_count: u32,
     wgpu_tag_init_count: u32,
     wgpu_tag_ready_count: u32,
     before_quit_count: u32,
     last_resize_width: f64,
     last_resize_height: f64,
-    last_webview_detail: String,
 }
 
 impl CallbackState {
@@ -176,17 +175,13 @@ impl CallbackState {
             window_should_close_count: 0,
             window_resize_count: 0,
             window_focus_count: 0,
-            webview_will_navigate_count: 0,
-            webview_did_navigate_count: 0,
-            webview_did_commit_navigation_count: 0,
-            webview_dom_ready_count: 0,
+            webview_events: WebviewObservations::new(),
             webview_tag_init_count: 0,
             wgpu_tag_init_count: 0,
             wgpu_tag_ready_count: 0,
             before_quit_count: 0,
             last_resize_width: 0.0,
             last_resize_height: 0.0,
-            last_webview_detail: String::new(),
         }
     }
 
@@ -194,17 +189,13 @@ impl CallbackState {
         self.window_close_count = 0;
         self.window_resize_count = 0;
         self.window_focus_count = 0;
-        self.webview_will_navigate_count = 0;
-        self.webview_did_navigate_count = 0;
-        self.webview_did_commit_navigation_count = 0;
-        self.webview_dom_ready_count = 0;
+        self.webview_events.clear();
         self.webview_tag_init_count = 0;
         self.wgpu_tag_init_count = 0;
         self.wgpu_tag_ready_count = 0;
         self.before_quit_count = 0;
         self.last_resize_width = 0.0;
         self.last_resize_height = 0.0;
-        self.last_webview_detail.clear();
     }
 }
 
@@ -996,10 +987,10 @@ fn last_resize_size() -> (f64, f64) {
         .unwrap_or((0.0, 0.0))
 }
 
-fn last_webview_detail_contains(needle: &str) -> bool {
+fn observed_webview_event_contains(webview_id: u32, event_name: &str, detail: Option<&str>) -> bool {
     CALLBACK_STATE
         .lock()
-        .map(|state| state.last_webview_detail.contains(needle))
+        .map(|state| state.webview_events.contains(webview_id, event_name, detail))
         .unwrap_or(false)
 }
 
@@ -1035,13 +1026,13 @@ extern "C" fn observed_window_focus(_: u32) {
     }
 }
 
-extern "C" fn observed_webview_event(_: u32, event_name: *const c_char, detail: *const c_char) {
+extern "C" fn observed_webview_event(webview_id: u32, event_name: *const c_char, detail: *const c_char) {
     let event_name = electrobun::c_string_to_string(event_name);
     let detail = electrobun::c_string_to_string(detail);
-    record_observed_webview_event(&event_name, &detail);
+    record_observed_webview_event(webview_id, &event_name, &detail);
 }
 
-extern "C" fn observed_webview_bridge(_: u32, message: *const c_char) {
+extern "C" fn observed_webview_bridge(webview_id: u32, message: *const c_char) {
     let message = electrobun::c_string_to_string(message);
     let Some(message_id) = electrobun::json_string_field(&message, "id") else {
         return;
@@ -1053,19 +1044,12 @@ extern "C" fn observed_webview_bridge(_: u32, message: *const c_char) {
         return;
     };
     let detail = electrobun::json_string_field(&message, "detail").unwrap_or_default();
-    record_observed_webview_event(&event_name, &detail);
+    record_observed_webview_event(webview_id, &event_name, &detail);
 }
 
-fn record_observed_webview_event(event_name: &str, detail: &str) {
+fn record_observed_webview_event(webview_id: u32, event_name: &str, detail: &str) {
     if let Ok(mut state) = CALLBACK_STATE.lock() {
-        match event_name {
-            "will-navigate" => state.webview_will_navigate_count += 1,
-            "did-navigate" => state.webview_did_navigate_count += 1,
-            "did-commit-navigation" => state.webview_did_commit_navigation_count += 1,
-            "dom-ready" => state.webview_dom_ready_count += 1,
-            _ => {}
-        }
-        state.last_webview_detail = detail.to_string();
+        state.webview_events.record(webview_id, event_name, detail);
     }
 }
 
@@ -1507,6 +1491,9 @@ fn execute_single_test_and_broadcast(webview_id: u32, test: RustTest) -> (String
 
     let result = run_rust_test(test);
     if let Some(error) = &result.error {
+        // Keep the assertion in unattended-run logs even if the renderer or
+        // its RPC bridge is the component that failed.
+        eprintln!("[kitchen rust] failed test: {} ({}): {error}", test.name, test.id);
         send_test_log(webview_id, test.id, error);
     }
 
@@ -2784,7 +2771,11 @@ fn run_webview_page_zoom_test() -> Result<(), String> {
         app_state()
             .core
             .set_webview_page_zoom(created.webview_id, 1.25)?;
-        sleep_ms(SHORT_WAIT_MS);
+        // On macOS the getter must serialize with deferred view creation and
+        // the preceding setter, even when called immediately after creation.
+        if std::env::consts::OS != "macos" {
+            sleep_ms(SHORT_WAIT_MS);
+        }
         let zoom = app_state().core.get_webview_page_zoom(created.webview_id);
         if !approx_eq(zoom, 1.25, 0.01) {
             return Err(format!("unexpected page zoom {zoom}"));
@@ -2926,8 +2917,7 @@ fn run_navigation_load_url_test() -> Result<(), String> {
             .core
             .load_url_in_webview(created.webview_id, ZIG_VIEW_URL)?;
         if !wait_until(3_000, || {
-            callback_count(|state| state.webview_did_navigate_count) > 0
-                || last_webview_detail_contains("views://zig")
+            observed_webview_event_contains(created.webview_id, "did-navigate", Some(ZIG_VIEW_URL))
         }) {
             return Err("did-navigate did not fire after loadURL".to_string());
         }
@@ -2948,11 +2938,26 @@ fn run_navigation_load_html_test() -> Result<(), String> {
         observed_harness_webview_callbacks(),
     )?;
     let result = (|| {
-        app_state().core.load_html_in_webview(
-            created.webview_id,
-            "<html><body><h1>Rust loadHTML</h1></body></html>",
-        )?;
-        sleep_ms(MEDIUM_WAIT_MS);
+        // Load immediately: the constructor's initial URL must not overwrite
+        // this request, and HTML must survive the SDK's temporary CString.
+        const RENDERED_URL: &str = "views://test-harness/index.html?loadHtml=rust-rendered";
+        let html = format!(
+            r#"<html><body><h1>Rust loadHTML ✓</h1><script>
+                if (document.querySelector("h1").textContent === "Rust loadHTML ✓") {{
+                    location.href = "{RENDERED_URL}";
+                }}
+            </script></body></html>"#
+        );
+        app_state()
+            .core
+            .load_html_in_webview(created.webview_id, &html)?;
+        if !wait_until(3_000, || {
+            observed_webview_event_contains(created.webview_id, "did-navigate", Some(RENDERED_URL))
+        }) {
+            return Err(
+                "loadHTML did not render the supplied document after immediate creation".to_string(),
+            );
+        }
         Ok(())
     })();
     finish_with_window(created.window_id, result)
@@ -2970,7 +2975,7 @@ fn run_navigation_dom_ready_event_test() -> Result<(), String> {
         observed_harness_webview_callbacks(),
     )?;
     let result = if wait_until(3_000, || {
-        callback_count(|state| state.webview_dom_ready_count) > 0
+        observed_webview_event_contains(created.webview_id, "dom-ready", None)
     }) {
         Ok(())
     } else {
@@ -2995,8 +3000,7 @@ fn run_navigation_did_navigate_event_test() -> Result<(), String> {
             .core
             .load_url_in_webview(created.webview_id, ZIG_VIEW_URL)?;
         if !wait_until(3_000, || {
-            callback_count(|state| state.webview_did_navigate_count) > 0
-                || last_webview_detail_contains("views://zig")
+            observed_webview_event_contains(created.webview_id, "did-navigate", Some(ZIG_VIEW_URL))
         }) {
             return Err("did-navigate did not fire".to_string());
         }
@@ -3029,12 +3033,13 @@ fn run_navigation_did_commit_navigation_event_test() -> Result<(), String> {
             .core
             .load_url_in_webview(created.webview_id, ZIG_VIEW_URL)?;
         if !wait_until(3_000, || {
-            callback_count(|state| state.webview_did_commit_navigation_count) > 0
+            observed_webview_event_contains(
+                created.webview_id,
+                "did-commit-navigation",
+                Some(ZIG_VIEW_URL),
+            )
         }) {
-            return Err("did-commit-navigation did not fire".to_string());
-        }
-        if !last_webview_detail_contains("views://zig") {
-            return Err("did-commit-navigation URL was not forwarded".to_string());
+            return Err("did-commit-navigation did not forward the expected URL".to_string());
         }
         Ok(())
     })();
@@ -3103,7 +3108,9 @@ fn run_appdata_protocol_test(enabled: bool) -> Result<(), String> {
         state
             .core
             .evaluate_javascript_with_no_completion(webview_id, &script)?;
-        if !wait_until(5_000, || last_webview_detail_contains("appdataResult=ok")) {
+        if !wait_until(5_000, || {
+            observed_webview_event_contains(webview_id, "will-navigate", Some("appdataResult=ok"))
+        }) {
             return Err(
                 "webview did not observe the expected appdata contents/access result".to_string(),
             );
@@ -3556,7 +3563,7 @@ extern "C" fn playground_internal_bridge(host_webview_id: u32, message: *const c
         if let Some(payload) = json_object_field(&message, "payload") {
             if let Some(event_name) = electrobun::json_string_field(payload, "eventName") {
                 let detail = electrobun::json_string_field(payload, "detail").unwrap_or_default();
-                record_observed_webview_event(&event_name, &detail);
+                record_observed_webview_event(host_webview_id, &event_name, &detail);
             }
         }
         return;

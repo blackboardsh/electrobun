@@ -1,4 +1,4 @@
-// Cottontail UI command palette: an always-on-top pill you can drag anywhere
+// Electrobun UI command palette: an always-on-top pill you can drag anywhere
 // on screen; click it (or hit the global shortcut) to expand into a palette
 // that's a calculator when you type math and an app launcher otherwise.
 // Exercises the full experimental UI stack: textInput (focus, caret,

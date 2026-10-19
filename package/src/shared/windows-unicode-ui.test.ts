@@ -86,9 +86,9 @@ describe("Windows Unicode native UI source contract", () => {
 	});
 
 	test("wires native Unicode UI coverage without compiling it off Windows", () => {
-		expect(hutchConfig).toContain(
-			'"test:windows-ui-native": "hutch scripts/test-windows-ui-native.js"',
-		);
+		const task = hutchConfig.match(/"test:windows-ui-native": "([^"\r\n]+)"/)?.[1] ?? "";
+		expect(task).toContain("node --test scripts/windows-msvc-environment.test.mjs");
+		expect(task).toContain("&& hutch scripts/test-windows-ui-native.js");
 		expect(hutchConfig).toContain("hutch test:windows-ui-native");
 		expect(nativeUiTestScript).toContain(
 			'if (process.platform !== "win32")',
@@ -96,6 +96,9 @@ describe("Windows Unicode native UI source contract", () => {
 		expect(nativeUiTestScript).toContain("windows_ui_test.cpp");
 		expect(nativeUiTestScript).toContain("ELECTROBUN_NATIVE_WRAPPER_DLL");
 		expect(nativeUiTestScript).toContain("libNativeWrapper.dll");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(binary, process.arch)");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(nativeWrapper, process.arch)");
+		expect(nativeUiTestScript).toContain("assertWindowsBinaryArchitecture(zigAsar, process.arch)");
 	});
 });
 
@@ -134,7 +137,7 @@ describe("Windows RPC Unicode transport source contract", () => {
 			'const HOST_MESSAGE_SOCKET_AVAILABLE = process.platform !== "win32";',
 		);
 		expect(browserView).toContain(
-			"message: JSON.stringify(queuedMessage.message)",
+			"serialized = JSON.stringify(message)",
 		);
 		expect(browserView).toContain("sendHostMessagesToWebviewViaExecute(");
 		expect(browserView).toContain(

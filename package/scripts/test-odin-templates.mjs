@@ -16,6 +16,12 @@ import { fileURLToPath } from "node:url";
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const repositoryRoot = resolve(packageRoot, "..");
 const templatesRoot = join(repositoryRoot, "templates");
+// The vendored Odin toolchain has no Windows ARM64 target, matching the
+// supported Kitchen matrix and package dependency installation.
+if (process.platform === "win32" && process.arch === "arm64") {
+	console.log("Odin template tests skipped: Windows ARM64 is unsupported.");
+	process.exit(0);
+}
 const odinBinary = join(
 	packageRoot,
 	"vendors",

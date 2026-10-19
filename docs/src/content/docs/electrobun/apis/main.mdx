@@ -5,7 +5,7 @@ description: "The Electrobun main-process SDK in Cottontail, Bun, Zig, Rust, Go,
 import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Electrobun exposes the same native core to **six main-process runtimes**:
-Cottontail (the default), Bun, Zig, Rust, Go, and Odin. The TypeScript SDK
+Bun (the default), Cottontail (experimental), Zig, Rust, Go, and Odin. The TypeScript SDK
 (`electrobun/main`) serves Cottontail and Bun; each native language has its
 own SDK that loads `ElectrobunCore` directly. Pick your runtime once — code
 snippets across these docs follow your selection.
@@ -169,6 +169,16 @@ A default namespace export is also available (`import Electrobun from
 the same main-process SDK; use `electrobun/view` inside browser bundles. The
 former `electrobun/bun` namespace remains a deprecated alias for
 `electrobun/main` so imports can migrate incrementally.
+
+### Cottontail standard-library APIs
+
+The Electrobun SDK and Cottontail's standard library are separate surfaces.
+For Cottontail apps, Hutch scans the bundled main process and includes optional
+standard-library capabilities used by the SDK, your code, and bundled
+dependencies. Computed imports or namespace access may need an explicit,
+additive `build.cottontail.capabilities` entry in `electrobun.config.ts`.
+See [Cottontail's modular standard library](/electrobun/guides/cottontail/#modular-standard-library)
+for examples and detection limits.
 
 ## Runtime coverage
 

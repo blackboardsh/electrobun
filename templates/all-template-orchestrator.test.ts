@@ -71,7 +71,7 @@ function catalog(
 			id,
 			name: id,
 			description: `${id} description`,
-			mainProcess: "cottontail",
+			mainProcess: "bun",
 		})),
 	};
 }

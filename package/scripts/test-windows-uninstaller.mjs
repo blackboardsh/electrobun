@@ -22,6 +22,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ZIG_VERSION } from "../src/shared/build-dependencies.ts";
+import { assertWindowsBinaryArchitecture } from "./windows-binary-architecture.mjs";
 
 if (process.platform !== "win32") {
 	console.log("Windows uninstaller integration: skipped on non-Windows host");
@@ -31,6 +33,8 @@ if (process.platform !== "win32") {
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const extractorRoot = join(packageRoot, "src", "extractor");
 const launcherRoot = join(packageRoot, "src", "launcher");
+assert.ok(["x64", "arm64"].includes(process.arch), "unsupported Windows test architecture");
+const zigTarget = process.arch === "arm64" ? "aarch64-windows-gnu" : "x86_64-windows-gnu";
 const token = randomBytes(6).toString("hex");
 const identifier = "com.example.electrobun-uninstaller-e2e." + token;
 const unrelatedIdentifier = identifier + ".unrelated";
@@ -634,12 +638,12 @@ function findZig() {
 	for (const candidate of candidates) {
 		if (!pathExists(candidate)) continue;
 		const probe = runRaw(candidate, ["version"], { timeout: 10_000 });
-		if (probe.status === 0 && /^0\.16\./.test((probe.stdout || "").trim())) {
+		if (probe.status === 0 && (probe.stdout || "").trim() === ZIG_VERSION) {
 			return candidate;
 		}
 	}
 	throw new Error(
-		"Windows uninstaller integration requires Zig 0.16; set ELECTROBUN_ZIG or refresh package/vendors/zig",
+		`Windows uninstaller integration requires Zig ${ZIG_VERSION}; set ELECTROBUN_ZIG or refresh package/vendors/zig`,
 	);
 }
 
@@ -653,14 +657,20 @@ function runZigBuild(zig, projectRoot, buildArguments) {
 				[
 					"build",
 					...buildArguments,
+					"-Dtarget=" + zigTarget,
 					"--cache-dir",
 					join(temporaryRoot, "zig-cache-" + cacheName + retrySuffix),
-					"--global-cache-dir",
-					join(temporaryRoot, "zig-global-cache" + retrySuffix),
 				],
 				// A clean Windows global cache can spend several minutes compiling LLVM
 				// compiler-rt and the native UI bridge before any fixture executes.
-				{ cwd: projectRoot, timeout: 600_000 },
+				{
+					cwd: projectRoot,
+					timeout: 600_000,
+					env: {
+						...process.env,
+						ZIG_GLOBAL_CACHE_DIR: join(temporaryRoot, "zig-global-cache" + retrySuffix),
+					},
+				},
 			);
 		} catch (error) {
 			if (error.cause?.code !== "ETIMEDOUT") throw error;
@@ -2031,6 +2041,8 @@ try {
 	for (const path of [extractor, launcher, zigZstd]) {
 		assert.equal(pathExists(path), true, "required test binary is missing: " + path);
 	}
+	assertWindowsBinaryArchitecture(extractor, process.arch);
+	assertWindowsBinaryArchitecture(launcher, process.arch);
 
 	buildSetup("stable", extractor, launcher, zigZstd);
 	buildSetup("canary", extractor, launcher, zigZstd);
