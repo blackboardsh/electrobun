@@ -1344,6 +1344,10 @@ NSMenu *createMenuFromConfig(NSArray *menuConfig, StatusItemTarget *target) {
       if (submenuConfig) {
         NSMenu *submenu = createMenuFromConfig(submenuConfig, target);
         [menu setSubmenu:submenu forItem:menuItem];
+        // A parent item opens its submenu; with an action and target
+        // of its own, clicking it would close the menu instead.
+        menuItem.target = nil;
+        menuItem.action = nil;
       }
     }
     [menu addItem:menuItem];
