@@ -71,6 +71,7 @@ test("npm acceptance exercises the installed CLI from an unpinned environment an
 		assert.equal(calls[0].options.env[key], undefined, `${key} must be selected by the public npm CLI`);
 	}
 	assert.equal(calls[0].options.env.HUTCH_HOME, env.HUTCH_HOME);
+	assert.equal(calls[0].options.env.PATH, "existing-tools", "public init must resolve recursive Hutch tasks without adding its cached bin directory to PATH");
 
 	await commands.invokeHutch("hutch-version", ["--version"]);
 	const project = join(scratch, "public-app");
@@ -86,6 +87,7 @@ test("npm acceptance exercises the installed CLI from an unpinned environment an
 	assert.equal(calls[2].options.env.ELECTROBUN_ACCEPTANCE_TOKEN, "this-launch");
 	assert.equal(calls[2].options.timeout, 1234);
 	assert.equal(env.HUTCH_DEFAULT_CLI, undefined, "direct invocations must not pin the public init environment");
+	assert.equal(env.PATH, "existing-tools");
 });
 
 test("production installer acceptance invokes the installed launcher without npm defaults", async () => {

@@ -6,7 +6,7 @@ import { createServer } from "node:http";
 import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, delimiter, join, parse, resolve } from "node:path";
+import { dirname, join, parse, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { npmInvocation, validateRunnerPlatform } from "../npm/scripts/accept-published-bootstrap.mjs";
 import { parseStrictSemVer } from "../package/src/shared/strict-semver.js";
@@ -228,9 +228,6 @@ async function acceptInScratch({ version, platform, work, hutchSource, pins, scr
 		assert.equal(resolver.PAIRED_HUTCH_VERSION, pins.hutch);
 		hutch = await resolver.resolveHutchBinary({ environment: env });
 	}
-	// Install tasks invoke `hutch` by name; only the downloaded release goes first.
-	const pathKey = Object.keys(env).find(k => k.toLowerCase() === "path") ?? "PATH";
-	env[pathKey] = `${dirname(hutch)}${delimiter}${env[pathKey] ?? ""}`;
 	const { invokeHutch: invoke, initPublicTemplate } = createAcceptanceCommands({ hutch, npmCli, resolver, env, scratch, work });
 	if (hutchSource === "npm") assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
 	const channelArgs = releaseChannel(version) === "beta" ? ["--beta"] : [];
