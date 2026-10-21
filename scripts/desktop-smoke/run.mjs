@@ -9,9 +9,18 @@ import { acceptanceEnvironment, run, validateCatalog } from '../accept-published
 import { npmInvocation, validateRunnerPlatform } from '../../npm/scripts/accept-published-bootstrap.mjs';
 import { parseHutchPragma, releaseChannel } from '../publish-templates.mjs';
 import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
+import { verifyMachORelease } from '../../package/scripts/verify-macho-deployment-target.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templates';
+
+// Desktop launch on a newer runner cannot prove the app still supports the
+// release's minimum macOS version. Validate generated language-SDK binaries as
+// well as their downloaded devkit libraries after each template build.
+export function verifyBuiltMacOSApp(buildRoot, platform) {
+  if (!platform.startsWith('macos-')) return [];
+  return verifyMachORelease([buildRoot], undefined, platform.slice('macos-'.length));
+}
 
 export async function prepareRelease({ version, platform, output }) {
   validateRunnerPlatform(platform);
@@ -83,6 +92,8 @@ export async function smokeRelease(options) {
         const planPath = join(output, 'desktop-plan.json');
         writeFileSync(planPath, JSON.stringify(plan));
         await run(python, [join(here, 'desktop.py'), planPath], { env, cwd: scratch, log: join(output, 'desktop-driver.log'), timeout: 900_000 });
+        const verified = verifyBuiltMacOSApp(join(project, 'build'), options.platform);
+        if (verified.length) writeFileSync(join(output, 'macho-verification.json'), JSON.stringify(verified, null, 2));
         const result = JSON.parse(readFileSync(join(output, 'result.json'), 'utf8'));
         assert.equal(result.ok, true);
         results.push({ ...result, status: 'passed' });
@@ -112,6 +123,8 @@ export async function smokeRelease(options) {
       await run(hutch, ['run', 'install'], { cwd: kitchen, env, log: join(work, 'kitchen-install.log') });
       await run(hutch, ['scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--build-only'],
         { cwd: kitchen, env, log: join(work, 'kitchen-build.log'), timeout: 1_200_000 });
+      const verified = verifyBuiltMacOSApp(join(kitchen, 'build', 'matrix', 'cottontail-cef'), options.platform);
+      if (verified.length) writeFileSync(join(work, 'kitchen-macho-verification.json'), JSON.stringify(verified, null, 2));
       for (const scenario of selectedKitchen) {
         const output = join(work, scenario.id);
         mkdirSync(output);

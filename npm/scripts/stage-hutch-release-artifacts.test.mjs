@@ -185,13 +185,13 @@ test("stages the complete verified Hutch matrix and immutable artifact index", a
 	}
 });
 
-test("rejects a partial release matrix without leaving partial output", async () => {
+test("rejects a release missing Intel macOS without leaving partial output", async () => {
 	const temporary = mkdtempSync(join(tmpdir(), "electrobun-hutch-stage-"));
 	const outputRoot = join(temporary, "output");
 	try {
 		const fixture = releaseFixture(temporary);
 		const manifest = JSON.parse(fixture.archives.get(fixture.manifestUrl));
-		delete manifest.platforms["linux-arm64"];
+		delete manifest.platforms["macos-x64"];
 		fixture.archives.set(fixture.manifestUrl, Buffer.from(JSON.stringify(manifest)));
 		await assert.rejects(
 			stageHutchReleaseArtifacts(

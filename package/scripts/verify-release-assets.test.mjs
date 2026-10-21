@@ -33,6 +33,10 @@ const platforms = {
 		archiveTarget: "darwin-arm64",
 		target: { os: "macos", arch: "arm64" },
 	},
+	"macos-x64": {
+		archiveTarget: "darwin-x64",
+		target: { os: "macos", arch: "x64" },
+	},
 	"windows-x64": {
 		archiveTarget: "win-x64",
 		target: { os: "win", arch: "x64" },
@@ -64,7 +68,7 @@ function fixture() {
 				`core:${key}`,
 			),
 		};
-		if (key === "macos-arm64") {
+		if (key.startsWith("macos-")) {
 			productEntries[key].cef = descriptor(
 				`electrobun-cef-${platform.archiveTarget}.tar.gz`,
 				`cef:${key}`,
@@ -120,7 +124,7 @@ test("accepts a complete release that is self-consistent with both indexes", asy
 	const value = fixture();
 	try {
 		const names = await verifyReleaseAssets(value);
-		assert.equal(names.length, 13);
+		assert.equal(names.length, 16);
 		assert.ok(names.includes("electrobun-artifacts.json"));
 		assert.ok(names.includes("hutch-artifacts.json"));
 	} finally {
@@ -176,6 +180,18 @@ test("rejects mismatched index identities, URLs, pairs, and platform matrices", 
 			"hutch-artifacts.json",
 			(index) => {
 				delete index.platforms["windows-x64"];
+			},
+		],
+		[
+			"electrobun-artifacts.json",
+			(index) => {
+				delete index.platforms["macos-x64"];
+			},
+		],
+		[
+			"hutch-artifacts.json",
+			(index) => {
+				delete index.platforms["macos-x64"];
 			},
 		],
 	]) {

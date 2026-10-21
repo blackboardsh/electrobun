@@ -359,7 +359,7 @@ test("release provenance probes the exact Hutch engine's compiled Cottontail pai
 	);
 });
 
-test("release CI verifies provenance before all five Kitchen builds", () => {
+test("release CI verifies provenance before all six Kitchen builds", () => {
 	// Normalize CRLF -> LF: on Windows runners Git checks the workflow out with
 	// CRLF, which breaks the explicit `\n` line separators in the regexes below.
 	const workflow = readFileSync(
@@ -378,9 +378,10 @@ test("release CI verifies provenance before all five Kitchen builds", () => {
 		workflow.indexOf("        include:"),
 		workflow.indexOf("    runs-on:", workflow.indexOf("        include:")),
 	);
-	assert.equal((matrix.match(/^          - os:/gm) ?? []).length, 5);
+	assert.equal((matrix.match(/^          - os:/gm) ?? []).length, 6);
 	for (const runner of [
 		"macos-14",
+		"macos-26-intel",
 		"ubuntu-24.04",
 		"ubuntu-24.04-arm",
 		"windows-2025",

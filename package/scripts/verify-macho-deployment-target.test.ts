@@ -1,14 +1,20 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
+	assertMachOArchitecture,
 	assertMachODeploymentTargets,
 	formatVersion,
 	inspectMachODeploymentTargets,
 	MACOS_DEPLOYMENT_TARGET,
+	verifyMachORelease,
 } from "./verify-macho-deployment-target.js";
-import { macosZigTarget } from "./macos-release.js";
+import { macosNativeArchitecture, macosZigTarget } from "./macos-release.js";
 
 const MH_MAGIC_64 = 0xfeedfacf;
 const CPU_TYPE_ARM64 = 0x0100000c;
+const CPU_TYPE_X86_64 = 0x01000007;
 const LC_BUILD_VERSION = 0x32;
 const LC_VERSION_MIN_MACOSX = 0x24;
 const PLATFORM_MACOS = 1;
@@ -20,14 +26,16 @@ const encodeVersion = (major: number, minor = 0, patch = 0) =>
 function makeThinMachO({
 	version,
 	legacy = false,
+	cpuType = CPU_TYPE_ARM64,
 }: {
 	version: [number, number?, number?];
 	legacy?: boolean;
+	cpuType?: number;
 }) {
 	const commandSize = legacy ? 16 : 24;
 	const buffer = Buffer.alloc(HEADER_SIZE + commandSize);
 	buffer.writeUInt32LE(MH_MAGIC_64, 0);
-	buffer.writeUInt32LE(CPU_TYPE_ARM64, 4);
+	buffer.writeUInt32LE(cpuType, 4);
 	buffer.writeUInt32LE(1, 16);
 	buffer.writeUInt32LE(commandSize, 20);
 	buffer.writeUInt32LE(
@@ -59,7 +67,7 @@ function makeUniversalMachO(slices: Buffer[]) {
 	buffer.writeUInt32BE(slices.length, 4);
 	for (const [index, slice] of slices.entries()) {
 		const entry = 8 + index * entrySize;
-		buffer.writeUInt32BE(CPU_TYPE_ARM64, entry);
+		buffer.writeUInt32BE(slice.readUInt32LE(4), entry);
 		buffer.writeUInt32BE(offsets[index]!, entry + 8);
 		buffer.writeUInt32BE(slice.length, entry + 12);
 		slice.copy(buffer, offsets[index]);
@@ -71,6 +79,8 @@ describe("Mach-O deployment target verification", () => {
 	test("uses versioned Zig target triples for every macOS architecture", () => {
 		expect(macosZigTarget("arm64")).toBe("aarch64-macos.14.0");
 		expect(macosZigTarget("x64")).toBe("x86_64-macos.14.0");
+		expect(macosNativeArchitecture("x64")).toBe("x86_64");
+		expect(macosNativeArchitecture("arm64")).toBe("arm64");
 	});
 
 	test("accepts the Electrobun macOS 14 release target", () => {
@@ -118,5 +128,39 @@ describe("Mach-O deployment target verification", () => {
 		expect(inspectMachODeploymentTargets(Buffer.from("not a binary"))).toEqual(
 			[],
 		);
+	});
+
+	test("rejects ARM-only binaries in Intel releases and Intel-only binaries in ARM releases", () => {
+		const arm = inspectMachODeploymentTargets(makeThinMachO({ version: [14, 0] }));
+		const intel = inspectMachODeploymentTargets(makeThinMachO({ version: [14, 0], cpuType: CPU_TYPE_X86_64 }));
+		expect(() => assertMachOArchitecture(arm, "x64")).toThrow("requires x86_64 Mach-O slice; found arm64");
+		expect(() => assertMachOArchitecture(intel, "arm64")).toThrow("requires arm64 Mach-O slice; found x86_64");
+		expect(() => assertMachOArchitecture(intel, "x64")).not.toThrow();
+	});
+
+	test("accepts a universal binary containing the requested architecture", () => {
+		const inspections = inspectMachODeploymentTargets(makeUniversalMachO([
+			makeThinMachO({ version: [14, 0] }),
+			makeThinMachO({ version: [14, 0], cpuType: CPU_TYPE_X86_64 }),
+		]));
+		for (const arch of ["x64", "arm64"]) {
+			expect(() => assertMachOArchitecture(inspections, arch)).not.toThrow();
+		}
+	});
+
+	test("release validation catches a wrong-architecture nested framework", () => {
+		const directory = mkdtempSync(join(tmpdir(), "electrobun-macho-release-"));
+		try {
+			const framework = join(directory, "cef", "Chromium Embedded Framework.framework");
+			mkdirSync(framework, { recursive: true });
+			writeFileSync(join(directory, "launcher"), makeThinMachO({ version: [14, 0], cpuType: CPU_TYPE_X86_64 }));
+			writeFileSync(join(directory, "native-devkit.json"), "{}");
+			writeFileSync(join(framework, "Chromium Embedded Framework"), makeThinMachO({ version: [14, 0] }));
+			expect(() => verifyMachORelease([directory], MACOS_DEPLOYMENT_TARGET, "x64")).toThrow("requires x86_64 Mach-O slice; found arm64");
+			writeFileSync(join(framework, "Chromium Embedded Framework"), makeThinMachO({ version: [14, 0], cpuType: CPU_TYPE_X86_64 }));
+			expect(verifyMachORelease([directory], MACOS_DEPLOYMENT_TARGET, "x64")).toHaveLength(2);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+		}
 	});
 });

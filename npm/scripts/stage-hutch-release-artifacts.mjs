@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 export const HUTCH_RELEASE_PLATFORMS = [
 	"macos-arm64",
+	"macos-x64",
 	"linux-arm64",
 	"linux-x64",
 	"windows-x64",
@@ -36,6 +37,7 @@ const require = createRequire(import.meta.url);
 const { installDownloadedArchive } = require(resolverPath);
 const runtimePlatforms = {
 	"macos-arm64": "darwin",
+	"macos-x64": "darwin",
 	"linux-arm64": "linux",
 	"linux-x64": "linux",
 	"windows-x64": "win32",

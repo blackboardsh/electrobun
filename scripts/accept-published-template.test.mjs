@@ -5,6 +5,8 @@ import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
 import { acceptanceEnvironment, installProductionHutch, requiredChecks, run, validateCatalog, validateHutchSource, validateReport, withAcceptanceScratch } from "./accept-published-template.mjs";
 
+import { verifyBuiltMacOSApp } from "./desktop-smoke/run.mjs";
+
 const pins = { hutch: "0.27.1", cottontail: "0.7.1" };
 const catalog = { schema: 1, kind: "electrobun-template-channel", channel: "stable", version: "2.0.2", tools: pins, templates: [{ id: "hello-world" }] };
 
@@ -143,4 +145,33 @@ test("command runner rejects failure and hangs rather than accepting an absent r
 
 test("a startup marker followed by an immediate crash is not successful startup", async () => {
 	await assert.rejects(run(process.execPath, ["-e", "console.log('ready');process.exit(1)"], { timeout: 5000, startupMarker: "ready" }), /failed/);
+});
+
+
+test("published desktop acceptance rejects SDK app binaries with the wrong Mac architecture or minimum OS", t => {
+	const scratch = mkdtempSync(join(tmpdir(), "electrobun-macos-app-test-"));
+	t.after(() => rmSync(scratch, { recursive: true, force: true }));
+	const app = join(scratch, "dev-macos-x64", "SDK App.app", "Contents", "MacOS");
+	mkdirSync(app, { recursive: true });
+	const main = join(app, "main");
+	// A minimal executable with one LC_BUILD_VERSION load command exercises
+	// the real byte parser used against built Zig/Rust/Go/Odin main binaries.
+	const binary = Buffer.alloc(56);
+	binary.writeUInt32LE(0xfeedfacf, 0);
+	binary.writeUInt32LE(0x01000007, 4);
+	binary.writeUInt32LE(2, 12);
+	binary.writeUInt32LE(1, 16);
+	binary.writeUInt32LE(24, 20);
+	binary.writeUInt32LE(0x32, 32);
+	binary.writeUInt32LE(24, 36);
+	binary.writeUInt32LE(1, 40);
+	binary.writeUInt32LE(14 << 16, 44);
+	writeFileSync(main, binary);
+	assert.equal(verifyBuiltMacOSApp(scratch, "macos-x64")[0].path, main);
+	assert.throws(() => verifyBuiltMacOSApp(scratch, "macos-arm64"), /requires arm64 Mach-O slice/);
+	binary.writeUInt32LE(26 << 16, 44);
+	writeFileSync(main, binary);
+	assert.throws(() => verifyBuiltMacOSApp(scratch, "macos-x64"), /requires macOS 26.0/);
+	assert.deepEqual(verifyBuiltMacOSApp(join(scratch, "no-build"), "linux-x64"), []);
+	assert.throws(() => verifyBuiltMacOSApp(join(scratch, "no-build"), "macos-x64"), /ENOENT/);
 });

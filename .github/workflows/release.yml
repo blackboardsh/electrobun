@@ -38,6 +38,11 @@ jobs:
             arch: arm64
             platform_name: darwin
             artifact_platform: macos
+          - os: macos-26-intel
+            platform: darwin
+            arch: x64
+            platform_name: darwin
+            artifact_platform: macos
           - os: ubuntu-24.04
             platform: linux
             arch: x64
@@ -89,6 +94,18 @@ jobs:
           node-version: '24'
           cache: npm
           cache-dependency-path: package/package-lock.json
+
+      - name: Verify native macOS runner architecture
+        if: matrix.platform == 'darwin'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          expected_machine=x86_64
+          if [[ "$EXPECTED_ARCH" == arm64 ]]; then expected_machine=arm64; fi
+          test "$(uname -m)" = "$expected_machine"
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected native ${process.env.EXPECTED_ARCH} Node, got ${process.arch}`)'
 
       - name: Verify release tag and version
         id: release-type
@@ -524,7 +541,7 @@ jobs:
           --output artifacts/electrobun-artifacts.json
           --repository "$GITHUB_REPOSITORY"
           --tag "$RELEASE_TAG"
-          --expect macos-arm64,linux-arm64,linux-x64,windows-x64,windows-arm64
+          --expect macos-arm64,macos-x64,linux-arm64,linux-x64,windows-x64,windows-arm64
 
       - name: Reuse or prepare a draft Electrobun release
         id: release-state
@@ -786,6 +803,8 @@ jobs:
         include:
           - os: macos-14
             platform: macos-arm64
+          - os: macos-26-intel
+            platform: macos-x64
           - os: ubuntu-24.04
             platform: linux-x64
           - os: ubuntu-24.04-arm
@@ -909,6 +928,8 @@ jobs:
         include:
           - os: macos-14
             platform: macos-arm64
+          - os: macos-26-intel
+            platform: macos-x64
           - os: ubuntu-24.04
             platform: linux-x64
           - os: ubuntu-24.04-arm

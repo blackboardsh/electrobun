@@ -40,6 +40,10 @@ const productPlatforms = {
 		archiveTarget: "darwin-arm64",
 		target: { os: "macos", arch: "arm64" },
 	},
+	"macos-x64": {
+		archiveTarget: "darwin-x64",
+		target: { os: "macos", arch: "x64" },
+	},
 	"windows-x64": {
 		archiveTarget: "win-x64",
 		target: { os: "win", arch: "x64" },

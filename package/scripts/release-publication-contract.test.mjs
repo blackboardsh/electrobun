@@ -78,9 +78,12 @@ function validatePublicationContract(source) {
 	const npmAcceptance = job(source, "npm-acceptance");
 	const mutablePublication = job(source, "publish-templates");
 	const templateAcceptance = job(source, "template-acceptance");
+	assert.match(build, /- os: macos-26-intel\n            platform: darwin\n            arch: x64\n            platform_name: darwin\n            artifact_platform: macos/);
+	assert.match(build, /name: Verify native macOS runner architecture/);
+	assert.match(release, /--expect macos-arm64,macos-x64,linux-arm64,linux-x64,windows-x64,windows-arm64/);
 	assert.match(templateAcceptance, /^    needs: \[publish-templates\]$/m);
 	assert.match(templateAcceptance, /^    timeout-minutes: 25$/m);
-	for (const platform of ["macos-arm64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"]) {
+	for (const platform of ["macos-arm64", "macos-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"]) {
 		assert.ok(templateAcceptance.includes(`platform: ${platform}`));
 	}
 	assert.match(templateAcceptance, /xvfb-run -a node scripts\/accept-published-template\.mjs/);
@@ -357,6 +360,7 @@ function validatePublicationContract(source) {
 	assert.match(npmAcceptance, /^      fail-fast: false$/m);
 	for (const [runner, platform] of [
 		["macos-14", "macos-arm64"],
+		["macos-26-intel", "macos-x64"],
 		["ubuntu-24.04", "linux-x64"],
 		["ubuntu-24.04-arm", "linux-arm64"],
 		["windows-2025", "windows-x64"],

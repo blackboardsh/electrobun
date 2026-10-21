@@ -263,7 +263,8 @@ All commands are run from the `/package` directory:
 
 | OS | Status |
 |---|---|
-| macOS 14+ | Official |
+| macOS 14+ Apple Silicon | Official |
+| macOS 14+ Intel x64 | Beta |
 | Windows 11+ x64 | Official |
 | Windows 11+ ARM64 | Beta |
 | Ubuntu 24.04+ | Official |

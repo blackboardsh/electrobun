@@ -432,6 +432,7 @@ describe("Template QA catalog and readiness contracts", () => {
 			),
 		).toThrow(/does not list Electrobun 2\.0\.0-beta\.8 for linux-arm64/);
 		expect(hutchPlatformForHost("darwin", "arm64")).toBe("macos-arm64");
+		expect(hutchPlatformForHost("darwin", "x64")).toBe("macos-x64");
 		expect(hutchPlatformForHost("win32", "x64")).toBe("windows-x64");
 		expect(hutchPlatformForHost("linux", "arm64")).toBe("linux-arm64");
 		expect(() => hutchPlatformForHost("freebsd", "x64")).toThrow(

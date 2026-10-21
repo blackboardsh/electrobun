@@ -149,6 +149,7 @@ function artifactIndex(baseUrl, selectedPlatform, selectedArchive) {
 	const platforms = {};
 	for (const platform of [
 		"macos-arm64",
+		"macos-x64",
 		"linux-arm64",
 		"linux-x64",
 		"windows-x64",
@@ -294,67 +295,73 @@ test("paired-version probes cannot inherit a shared-temp Hutch project config", 
 	}
 });
 
-test("maps exactly the five published Hutch release platforms", () => {
+test("maps exactly the six published Hutch release platforms", () => {
 	assert.equal(resolver.hutchPlatformKey("darwin", "arm64"), "macos-arm64");
 	assert.equal(resolver.hutchPlatformKey("linux", "arm64"), "linux-arm64");
 	assert.equal(resolver.hutchPlatformKey("linux", "x64"), "linux-x64");
 	assert.equal(resolver.hutchPlatformKey("win32", "x64"), "windows-x64");
-	assert.equal(resolver.hutchPlatformKey("darwin", "x64"), null);
+	assert.equal(resolver.hutchPlatformKey("darwin", "x64"), "macos-x64");
 	assert.equal(resolver.hutchPlatformKey("win32", "arm64"), "windows-arm64");
+	assert.equal(resolver.hutchPlatformKey("freebsd", "x64"), null);
 });
 
-test("downloads, verifies, safely extracts, and reuses the exact cached release offline", async () => {
-	const temporary = mkdtempSync(join(tmpdir(), "electrobun-npm-hutch-"));
-	const cacheRoot = join(temporary, "cache");
-	const baseUrl = "https://releases.test";
-	try {
-		const archive = makeArchive(temporary);
-		const downloads = artifactDownloads(baseUrl, "linux-x64", archive);
-		const calls = [];
-		const binary = await resolver.resolveHutchBinary({
-			arch: "x64",
-			cacheRoot,
-			download: async (url) => {
-				calls.push(url);
-				const bytes = downloads.get(url);
-				if (!bytes) throw new Error(`unexpected download ${url}`);
-				return bytes;
-			},
-			environment: {
-				ELECTROBUN_RELEASES_BASE_URL: baseUrl,
-				HUTCH_HOME: join(temporary, "hutch-home"),
-			},
-			installHutch: async () => {
-				throw new Error("global fallback must not run");
-			},
-			platform: "linux",
-			userHome: temporary,
-		});
-		assert.equal(binary, join(cacheRoot, "bin", "hutch"));
-		assert.equal(readFileSync(binary, "utf8"), "downloaded");
-		assert.deepEqual(calls, [...downloads.keys()]);
+for (const [platform, platformKey] of [
+	["linux", "linux-x64"],
+	["darwin", "macos-x64"],
+]) {
+	test(`downloads, verifies, safely extracts, and reuses the exact ${platformKey} cached release offline`, async () => {
+		const temporary = mkdtempSync(join(tmpdir(), "electrobun-npm-hutch-"));
+		const cacheRoot = join(temporary, "cache");
+		const baseUrl = "https://releases.test";
+		try {
+			const archive = makeArchive(temporary, platformKey, platform);
+			const downloads = artifactDownloads(baseUrl, platformKey, archive);
+			const calls = [];
+			const binary = await resolver.resolveHutchBinary({
+				arch: "x64",
+				cacheRoot,
+				download: async (url) => {
+					calls.push(url);
+					const bytes = downloads.get(url);
+					if (!bytes) throw new Error(`unexpected download ${url}`);
+					return bytes;
+				},
+				environment: {
+					ELECTROBUN_RELEASES_BASE_URL: baseUrl,
+					HUTCH_HOME: join(temporary, "hutch-home"),
+				},
+				installHutch: async () => {
+					throw new Error("global fallback must not run");
+				},
+				platform,
+				userHome: temporary,
+			});
+			assert.equal(binary, join(cacheRoot, "bin", "hutch"));
+			assert.equal(readFileSync(binary, "utf8"), "downloaded");
+			assert.deepEqual(calls, [...downloads.keys()]);
 
-		let offlineDownloads = 0;
-		const warm = await resolver.resolveHutchBinary({
-			arch: "x64",
-			cacheRoot,
-			download: async () => {
-				offlineDownloads += 1;
-				throw new Error("offline cache must not download");
-			},
-			environment: {
-				DASH_RELEASE_OFFLINE: "1",
-				HUTCH_HOME: join(temporary, "hutch-home"),
-			},
-			platform: "linux",
-			userHome: temporary,
-		});
-		assert.equal(warm, binary);
-		assert.equal(offlineDownloads, 0);
-	} finally {
-		rmSync(temporary, { recursive: true, force: true });
-	}
-});
+			let offlineDownloads = 0;
+			const warm = await resolver.resolveHutchBinary({
+				arch: "x64",
+				cacheRoot,
+				download: async () => {
+					offlineDownloads += 1;
+					throw new Error("offline cache must not download");
+				},
+				environment: {
+					DASH_RELEASE_OFFLINE: "1",
+					HUTCH_HOME: join(temporary, "hutch-home"),
+				},
+				platform,
+				userHome: temporary,
+			});
+			assert.equal(warm, binary);
+			assert.equal(offlineDownloads, 0);
+		} finally {
+			rmSync(temporary, { recursive: true, force: true });
+		}
+	});
+}
 
 test("offline warm-cache validation rejects modified Hutch bytes", async () => {
 	const temporary = mkdtempSync(join(tmpdir(), "electrobun-npm-hutch-corrupt-"));

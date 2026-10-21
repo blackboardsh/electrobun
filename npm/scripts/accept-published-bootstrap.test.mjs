@@ -183,6 +183,7 @@ test("invokes the Windows npm.cmd shim without shell:true or path interpolation"
 test("binds each workflow label to its native runner architecture", () => {
 	for (const [platform, arch, expected] of [
 		["darwin", "arm64", "macos-arm64"],
+		["darwin", "x64", "macos-x64"],
 		["linux", "x64", "linux-x64"],
 		["linux", "arm64", "linux-arm64"],
 		["win32", "x64", "windows-x64"],
@@ -206,6 +207,7 @@ test("accepts only the exact public same-version Hutch asset matrix", () => {
 		"linux-arm64",
 		"linux-x64",
 		"macos-arm64",
+		"macos-x64",
 		"windows-x64",
 		"windows-arm64",
 	]) {
@@ -259,6 +261,7 @@ test("maps every release runner to the exact versioned Hutch cache", () => {
 	const hutchHome = join("root", "isolated-hutch");
 	for (const [platform, arch, platformKey, executable] of [
 		["darwin", "arm64", "macos-arm64", "hutch"],
+		["darwin", "x64", "macos-x64", "hutch"],
 		["linux", "x64", "linux-x64", "hutch"],
 		["linux", "arm64", "linux-arm64", "hutch"],
 		["win32", "x64", "windows-x64", "hutch.exe"],
@@ -288,7 +291,7 @@ test("maps every release runner to the exact versioned Hutch cache", () => {
 			expectedHutchCache({
 				arch: "x64",
 				hutchHome,
-				platform: "darwin",
+				platform: "freebsd",
 				version: "2.3.4-beta.5",
 			}),
 		/unsupported acceptance host/,

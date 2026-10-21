@@ -1,6 +1,7 @@
 import { join, resolve } from "node:path";
 import {
 	KITCHEN_MAIN_PROCESSES,
+	kitchenVariantKey,
 	supportedKitchenMainProcesses,
 } from "../../kitchen/scripts/kitchen-matrix-plan";
 import {
@@ -92,19 +93,41 @@ export function createVmTestCommands({
 		},
 		// Launch one at a time: concurrent apps contend for focus, the CEF
 		// remote-debugging port, and window-manager state that tests assert.
-		...variants.map(({ main, webview }) => ({
-			label: `Kitchen automated tests (${displayNames[main]} + ${webviewNames[webview]})`,
-			command: hutchBinary,
-			args: [
-				"scripts/kitchen-matrix.ts",
-				"--launch-only",
-				`--with=${main}:${webview}`,
-				`--timeout=${VM_KITCHEN_TIMEOUT_SECONDS}`,
-			],
-			cwd: kitchenDir,
-			env: { ...kitchenEnv, AUTO_RUN: "1" },
-			requires: buildLabel,
-		})),
+		...variants.flatMap(({ main, webview }): VmTestCommand[] => {
+			const variantName = `${displayNames[main]} + ${webviewNames[webview]}`;
+			const verifyLabel = `Verify Kitchen macOS binaries (${variantName})`;
+			const variantKey = kitchenVariantKey({
+				mainProcess: main,
+				renderer: webview === "system" ? "native" : "cef",
+			});
+			const verification: VmTestCommand[] = platform === "darwin" ? [{
+				// Compiler defaults can match the CI image and silently raise an
+				// app's minimum OS. Check generated SDK executables and their bundled
+				// libraries, in addition to the separately verified devkit archives.
+				label: verifyLabel,
+				command: "node",
+				args: [
+					"scripts/verify-macho-deployment-target.js",
+					`--arch=${arch}`,
+					join(kitchenDir, "build", "matrix", variantKey),
+				],
+				cwd: packageDir,
+				requires: buildLabel,
+			}] : [];
+			return [...verification, {
+				label: `Kitchen automated tests (${variantName})`,
+				command: hutchBinary,
+				args: [
+					"scripts/kitchen-matrix.ts",
+					"--launch-only",
+					`--with=${main}:${webview}`,
+					`--timeout=${VM_KITCHEN_TIMEOUT_SECONDS}`,
+				],
+				cwd: kitchenDir,
+				env: { ...kitchenEnv, AUTO_RUN: "1" },
+				requires: platform === "darwin" ? verifyLabel : buildLabel,
+			}];
+		}),
 		{
 			// Includes the desktop-only native tests (dialogs, DPI, X11 geometry,
 			// Wayland capture, views URLs, WebView2, Windows UI) that need a real

@@ -2,7 +2,7 @@
 
 // Resolve the exact Hutch release paired with this electrobun npm version.
 // The single npm package stays platform-neutral: each Electrobun GitHub
-// Release carries the five Hutch archives, and this shim verifies and caches
+// Release carries the six Hutch archives, and this shim verifies and caches
 // the host archive on first use. A compatible machine-wide launcher remains
 // a fallback, but Hutch before 0.22 cannot honor the paired default variables.
 
@@ -64,6 +64,7 @@ const strictSemver =
 
 const releasedPlatforms = {
 	"darwin-arm64": "macos-arm64",
+	"darwin-x64": "macos-x64",
 	"linux-arm64": "linux-arm64",
 	"linux-x64": "linux-x64",
 	"win32-x64": "windows-x64",

@@ -7,11 +7,15 @@ permissions:
   contents: read
 
 jobs:
-  windows:
+  native:
     strategy:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-26-intel
+            arch: x64
           - runner: windows-2025
             arch: x64
           - runner: windows-11-arm
@@ -23,10 +27,22 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Verify native macOS runner architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          expected_machine=x86_64
+          if [[ "$EXPECTED_ARCH" == arm64 ]]; then expected_machine=arm64; fi
+          test "$(uname -m)" = "$expected_machine"
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected native ${process.env.EXPECTED_ARCH} Node, got ${process.arch}`)'
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
       - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
         with:
           arch: ${{ matrix.arch }}
       - name: Install dependencies

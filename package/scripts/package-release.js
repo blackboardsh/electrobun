@@ -79,15 +79,15 @@ if (platform === "darwin") {
 		__dirname,
 		"verify-macho-deployment-target.js",
 	);
-	execFileSync(process.execPath, [deploymentVerifier, distPath], {
+	execFileSync(process.execPath, [deploymentVerifier, `--arch=${archName}`, distPath], {
 		stdio: "inherit",
 	});
 	console.log(
-		`Verified all release Mach-O files support macOS ${MACOS_DEPLOYMENT_TARGET}`,
+		`Verified all release Mach-O files support macOS ${MACOS_DEPLOYMENT_TARGET} ${archName}`,
 	);
 
 	const verifier = path.join(__dirname, "verify-macho-code-signing.js");
-	const signedRuntimeArtifacts = ["launcher", "extractor", "libasar.dylib"].map(
+	const signedRuntimeArtifacts = ["launcher", "extractor", "libasar.dylib", "libElectrobunCore.dylib"].map(
 		(filename) => path.join(distPath, filename),
 	);
 	execFileSync(process.execPath, [verifier, ...signedRuntimeArtifacts], {

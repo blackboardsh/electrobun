@@ -3,7 +3,8 @@
 import { lstatSync, readFileSync, readdirSync } from "fs";
 import { join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
+import { parseArgs } from "node:util";
+import { MACOS_DEPLOYMENT_TARGET, macosNativeArchitecture } from "./macos-release.js";
 
 export { MACOS_DEPLOYMENT_TARGET } from "./macos-release.js";
 
@@ -236,6 +237,14 @@ export function assertMachODeploymentTargets(
 	}
 }
 
+export function assertMachOArchitecture(inspections, arch, label = "Mach-O artifact") {
+	const expected = macosNativeArchitecture(arch);
+	if (!inspections.some((inspection) => inspection.architecture === expected)) {
+		const actual = inspections.map((inspection) => inspection.architecture).join(", ") || "none";
+		throw new Error(`${label}: requires ${expected} Mach-O slice; found ${actual}`);
+	}
+}
+
 export function verifyMachODeploymentTarget(
 	path,
 	maximum = MACOS_DEPLOYMENT_TARGET,
@@ -255,7 +264,8 @@ const collectFiles = (path) => {
 		.flatMap((entry) => collectFiles(join(path, entry)));
 };
 
-export function verifyMachORelease(paths, maximum = MACOS_DEPLOYMENT_TARGET) {
+export function verifyMachORelease(paths, maximum = MACOS_DEPLOYMENT_TARGET, arch) {
+	if (arch !== undefined) macosNativeArchitecture(arch);
 	const verified = [];
 	const failures = [];
 	for (const path of paths.flatMap(collectFiles)) {
@@ -265,6 +275,7 @@ export function verifyMachORelease(paths, maximum = MACOS_DEPLOYMENT_TARGET) {
 			if (inspections.length === 0) continue;
 			verified.push({ path, inspections });
 			assertMachODeploymentTargets(inspections, path, maximum);
+			if (arch !== undefined) assertMachOArchitecture(inspections, arch, path);
 		} catch (error) {
 			failures.push(error instanceof Error ? error.message : String(error));
 		}
@@ -274,7 +285,7 @@ export function verifyMachORelease(paths, maximum = MACOS_DEPLOYMENT_TARGET) {
 	}
 	if (failures.length > 0) {
 		throw new Error(
-			`Mach-O deployment target verification failed:\n${failures.map((failure) => `- ${failure}`).join("\n")}`,
+			`Mach-O release verification failed:\n${failures.map((failure) => `- ${failure}`).join("\n")}`,
 		);
 	}
 	return verified;
@@ -284,16 +295,20 @@ const isMain =
 	process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 if (isMain) {
-	const paths = process.argv.slice(2);
+	const { values, positionals: paths } = parseArgs({
+		args: process.argv.slice(2),
+		options: { arch: { type: "string" } },
+		allowPositionals: true,
+	});
 	if (paths.length === 0) {
 		console.error(
-			"usage: verify-macho-deployment-target.js <Mach-O-or-directory> [...]",
+			"usage: verify-macho-deployment-target.js [--arch=x64|arm64] <Mach-O-or-directory> [...]",
 		);
 		process.exit(2);
 	}
 
 	try {
-		const verified = verifyMachORelease(paths);
+		const verified = verifyMachORelease(paths, MACOS_DEPLOYMENT_TARGET, values.arch);
 		for (const artifact of verified) {
 			const targets = artifact.inspections
 				.map(

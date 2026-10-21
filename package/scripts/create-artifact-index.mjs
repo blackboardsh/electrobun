@@ -26,6 +26,7 @@ const defaultExpectedPlatforms = [
 	"linux-arm64",
 	"linux-x64",
 	"macos-arm64",
+	"macos-x64",
 	"windows-x64",
 	"windows-arm64",
 ];

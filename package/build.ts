@@ -50,6 +50,7 @@ import {
 } from "./src/shared/native-devkit-manifest";
 import {
 	MACOS_DEPLOYMENT_TARGET,
+	macosNativeArchitecture,
 	macosZigTarget,
 } from "./scripts/macos-release.js";
 import {
@@ -103,7 +104,11 @@ const rustBinary = OS === "win" ? "rustc.exe" : "rustc";
 const cargoBinary = OS === "win" ? "cargo.exe" : "cargo";
 const goBinary = OS === "win" ? "go.exe" : "go";
 const odinBinary = OS === "win" ? "odin.exe" : "odin";
-const macosClangDeploymentFlag = `-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`;
+const macosClangTargetFlags = [
+	"-arch",
+	macosNativeArchitecture(ARCH),
+	`-mmacosx-version-min=${MACOS_DEPLOYMENT_TARGET}`,
+];
 // Note: We want all binaries in /dist to be extensionless to simplify our cross platform code
 // (no .exe on windows)
 
@@ -1627,11 +1632,12 @@ async function vendorWGPU() {
 
 async function vendorAsar() {
 	const ASAR_VERSION = OWNED_BUILD_DEPENDENCY_VERSIONS["zig-asar"];
+	const buildKey = `${ASAR_VERSION}-${OS}-${ARCH}`;
 	const asarBaseDir = join(process.cwd(), "vendors", "zig-asar");
 	const versionFile = join(asarBaseDir, ".version");
 	const versionMatches =
 		existsSync(versionFile) &&
-		readFileSync(versionFile, "utf8").trim() === ASAR_VERSION;
+		readFileSync(versionFile, "utf8").trim() === buildKey;
 	const archsToDownload: BuildDependencyArch[] = [ARCH];
 
 	if (!versionMatches) {
@@ -1690,7 +1696,7 @@ async function vendorAsar() {
 			rmSync(tempTarball, { force: true });
 		}
 	}
-	writeFileSync(versionFile, ASAR_VERSION);
+	writeFileSync(versionFile, buildKey);
 }
 
 function macCefBuildDir(): string {
@@ -1705,23 +1711,23 @@ function macCefBuildIsCurrent(wrapperPath: string): boolean {
 	return (
 		existsSync(wrapperPath) &&
 		existsSync(macCefBuildStamp()) &&
-		readFileSync(macCefBuildStamp(), "utf8").trim() === MACOS_DEPLOYMENT_TARGET
+		readFileSync(macCefBuildStamp(), "utf8").trim() === `${ARCH}-${MACOS_DEPLOYMENT_TARGET}`
 	);
 }
 
 async function buildMacCefWrapper(): Promise<string> {
 	const buildDir = macCefBuildDir();
 	const wrapperPath = join(buildDir, "libcef_dll_wrapper", "libcef_dll_wrapper.a");
-	const buildArch = ARCH === "arm64" ? "arm64" : "x86_64";
+	const buildArch = macosNativeArchitecture(ARCH);
 
 	rmSync(buildDir, { recursive: true, force: true });
 	mkdirSync(buildDir, { recursive: true });
-	await $`cd ${buildDir} && "${CMAKE_BIN}" -DPROJECT_ARCH=${buildArch} -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET} .. && make -j8 libcef_dll_wrapper`;
+	await $`cd ${buildDir} && "${CMAKE_BIN}" -DPROJECT_ARCH=${buildArch} -DCMAKE_OSX_ARCHITECTURES=${buildArch} -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_DEPLOYMENT_TARGET=${MACOS_DEPLOYMENT_TARGET} .. && make -j8 libcef_dll_wrapper`;
 
 	if (!existsSync(wrapperPath)) {
 		throw new Error(`CEF wrapper library not found at ${wrapperPath}`);
 	}
-	writeFileSync(macCefBuildStamp(), `${MACOS_DEPLOYMENT_TARGET}\n`);
+	writeFileSync(macCefBuildStamp(), `${ARCH}-${MACOS_DEPLOYMENT_TARGET}\n`);
 	return wrapperPath;
 }
 
@@ -1897,9 +1903,9 @@ async function vendorCEF() {
 			}
 
 			// build helper
-			await $`xcrun --sdk macosx clang++ ${macosClangDeploymentFlag} -std=c++20 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
+			await $`xcrun --sdk macosx clang++ ${macosClangTargetFlags} -std=c++20 -ObjC++ -fobjc-arc -I./vendors/cef -c src/native/macos/cef_process_helper_mac.cc -o src/native/build/process_helper_mac.o`;
 			// link
-			await $`xcrun --sdk macosx clang++ ${macosClangDeploymentFlag} -std=c++20 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
+			await $`xcrun --sdk macosx clang++ ${macosClangTargetFlags} -std=c++20 src/native/build/process_helper_mac.o -o src/native/build/process_helper -framework Cocoa -framework WebKit -framework QuartzCore -F./vendors/cef/Release -framework "Chromium Embedded Framework" -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++`;
 			// fix internal path
 			// Note: Can use `otool -L src/native/build/process_helper` to check the value
 			await $`install_name_tool -change "@executable_path/../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" "@executable_path/../../../../Frameworks/Chromium Embedded Framework.framework/Chromium Embedded Framework" src/native/build/process_helper`;
@@ -2278,7 +2284,7 @@ async function buildNative() {
 			throw new Error("xcrun did not return a macOS SDK path");
 		}
 		const compileFlags = [
-			macosClangDeploymentFlag,
+			...macosClangTargetFlags,
 			"-fobjc-arc",
 			"-fno-objc-msgsend-selector-stubs",
 			`-I${cefInclude}`,
@@ -2290,7 +2296,7 @@ async function buildNative() {
 		writeNativeCompileFlags("macos", compileFlags);
 		await $`mkdir -p src/native/macos/build`;
 		await $`xcrun --sdk macosx clang++ -c src/native/macos/nativeWrapper.mm -o src/native/macos/build/nativeWrapper.o ${compileFlags}`;
-		await $`mkdir -p src/native/build && xcrun --sdk macosx clang++ ${macosClangDeploymentFlag} -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -framework Metal -framework MetalKit -framework UserNotifications -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
+		await $`mkdir -p src/native/build && xcrun --sdk macosx clang++ ${macosClangTargetFlags} -o src/native/build/libNativeWrapper.dylib src/native/macos/build/nativeWrapper.o ./vendors/zig-asar/libasar.dylib -framework Cocoa -framework WebKit -framework QuartzCore -framework Metal -framework MetalKit -framework UserNotifications -F./vendors/cef/Release -weak_framework 'Chromium Embedded Framework' -L./vendors/cef/build/libcef_dll_wrapper -lcef_dll_wrapper -stdlib=libc++ -shared -install_name @executable_path/libNativeWrapper.dylib -Wl,-rpath,@executable_path`;
 	} else if (OS === "win") {
 		const webview2Include = join(
 			process.cwd(),

@@ -145,7 +145,7 @@ assert(
 	"Kitchen matrix should preserve the local Electrobun devkit override",
 );
 
-const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir, arch: "x64" });
+const vmTestCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "linux", arch: "x64" });
 const armVmCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "win32", arch: "arm64" });
 assert(armVmCommands.length === 15, "Windows ARM64 should test ten supported Kitchen variants and five common stages");
 assert(armVmCommands[0]!.args.includes("--jobs=1"), "Windows ARM64 builds run serially");
@@ -169,7 +169,6 @@ const expectedBuildArgs = [
 	"dev:matrix",
 	"--build-only",
 	`--with=${vmVariants.join(",")}`,
-	...(process.platform === "win32" ? ["--jobs=1"] : []),
 ];
 assertArray(
 	kitchenBuild?.args ?? [],
@@ -251,5 +250,42 @@ assertArray(
 	["Kitchen automated tests (Zig + CEF)"],
 	"VM runner should report the failing CEF backend by name",
 );
+
+
+// Generated native SDK apps must pass the same target contract as the devkit.
+// A failed binary check prevents that launch while preserving diagnostics from
+// the other backends; a failed build must also skip both dependent stages.
+for (const arch of ["x64", "arm64"]) {
+	const macCommands = createVmTestCommands({ hutchBinary, packageDir, platform: "darwin", arch });
+	const verifications = macCommands.filter(command => command.label.startsWith("Verify Kitchen macOS binaries"));
+	assert(verifications.length === vmVariants.length, `${arch} should validate every system and CEF app bundle`);
+	for (const [index, variant] of vmVariants.entries()) {
+		const [main, webview] = variant.split(":");
+		const verification = verifications[index]!;
+		assertArray(verification.args, [
+			"scripts/verify-macho-deployment-target.js", `--arch=${arch}`,
+			join(kitchenDir, "build", "matrix", `${main}-${webview === "system" ? "native" : "cef"}`),
+		], `${arch} ${variant} should verify the generated bundle using the release contract`);
+	}
+	const failedVerification = verifications.find(command => command.label.includes("Zig + CEF"))!;
+	const attempted: string[] = [];
+	const failures = await runVmTestCommands(macCommands, async command => {
+		attempted.push(command.label);
+		if (command === failedVerification) throw new Error("main requires macOS 26.0");
+	}, () => {});
+	assertArray(failures.map(failure => failure.command.label), [
+		failedVerification.label,
+		"Kitchen automated tests (Zig + CEF)",
+	], `${arch} incompatible SDK binary must fail verification and skip its launch`);
+	assert(!attempted.includes("Kitchen automated tests (Zig + CEF)"), `${arch} must not launch an incompatible bundle`);
+	assert(attempted.includes("Kitchen automated tests (Odin + CEF)"), `${arch} must continue testing other SDKs`);
+	const attemptedAfterFailedBuild: string[] = [];
+	await runVmTestCommands(macCommands, async command => {
+		attemptedAfterFailedBuild.push(command.label);
+		if (command === macCommands[0]) throw new Error("build failed");
+	}, () => {});
+	assertArray(attemptedAfterFailedBuild, [macCommands[0]!.label, ...macCommands.slice(-4).map(command => command.label)],
+		`${arch} a failed build must not verify or launch stale app bundles`);
+}
 
 console.log("Electrobun dev command plan passed");

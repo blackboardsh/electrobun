@@ -107,6 +107,22 @@ test("indexes the Windows ARM64 devkit and rejects x64 contents under its name",
 	}
 });
 
+test("indexes the macOS Intel devkit and rejects ARM64 contents under its name", () => {
+	const root = mkdtempSync(join(tmpdir(), "electrobun-intel-index-"));
+	const options = { artifactRoot: root, repository: "blackboardsh/electrobun", tag: `v${version}`, version, expectedPlatforms: ["macos-x64"] };
+	try {
+		writeCore(root, "darwin-x64", { os: "macos", arch: "x64" });
+		writeFileSync(join(root, "electrobun-cef-darwin-x64.tar.gz"), "Intel CEF");
+		const platform = createArtifactIndex(options).platforms["macos-x64"];
+		assert.deepEqual(platform.target, { os: "macos", arch: "x64" });
+		assert.ok(platform.cef.url.endsWith("/electrobun-cef-darwin-x64.tar.gz"));
+		writeCore(root, "darwin-x64", { os: "macos", arch: "arm64" });
+		assert.throws(() => createArtifactIndex(options), /does not match archive target/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("rejects an archive whose native devkit target disagrees with its name", () => {
 	const root = fixture();
 	try {
