@@ -1,0 +1,103 @@
+name: Intel fullscreen diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Release run containing the immutable Intel core and CEF artifacts
+        required: true
+        default: '39653805579'
+      artifact_sha:
+        description: Exact commit which produced those artifacts
+        required: true
+        default: '5555c3057d2733c965852ad883896de7c283c104'
+      rebuild_native:
+        description: Rebuild the native window wrapper from this checkout
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: fullscreen-intel-diagnostic-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fullscreen:
+    runs-on: macos-26-intel
+    timeout-minutes: 25
+    env:
+      ELECTROBUN_BUILD_ARCH: x64
+      ELECTROBUN_DEBUG_FULLSCREEN: '1'
+      HUTCH_NO_UPDATE_CHECK: '1'
+      FULLSCREEN_DIAGNOSTICS: ${{ github.workspace }}/fullscreen-diagnostics
+      HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify native Intel runner and source artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+          ARTIFACT_SHA: ${{ inputs.artifact_sha }}
+        run: |
+          test "$(uname -m)" = x86_64
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.arch !== "x64") throw new Error("Expected native Intel Node")'
+          mkdir -p "$FULLSCREEN_DIAGNOSTICS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" > "$FULLSCREEN_DIAGNOSTICS/artifact-run.json"
+          node -e 'const fs = require("fs"); const run = JSON.parse(fs.readFileSync(process.env.FULLSCREEN_DIAGNOSTICS + "/artifact-run.json")); if (run.head_sha !== process.env.ARTIFACT_SHA || run.path !== ".github/workflows/release.yml") throw new Error("Unexpected artifact source run")'
+          git rev-parse HEAD > "$FULLSCREEN_DIAGNOSTICS/diagnostic-source-sha.txt"
+          for source in package/src/shared/cef-version.ts package/src/shared/build-dependencies.ts; do
+            gh api -H 'Accept: application/vnd.github.raw+json' "repos/$GITHUB_REPOSITORY/contents/$source?ref=$ARTIFACT_SHA" > "$RUNNER_TEMP/artifact-source"
+            cmp "$source" "$RUNNER_TEMP/artifact-source"
+          done
+      - uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id }}
+          name: electrobun-core-darwin-x64
+          path: diagnostic-artifacts
+      - uses: actions/download-artifact@v7
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.artifact_run_id }}
+          name: electrobun-cef-darwin-x64
+          path: diagnostic-artifacts
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - name: Stage immutable devkit and optionally rebuild native window wrapper
+        timeout-minutes: 15
+        env:
+          REBUILD_NATIVE: ${{ inputs.rebuild_native }}
+        run: node package/scripts/fullscreen-intel-diagnostic.mjs prepare 2>&1 | tee "$FULLSCREEN_DIAGNOSTICS/prepare.log"
+      - name: Install Kitchen dependencies
+        working-directory: kitchen
+        run: hutch run install
+      - name: Build focused Kitchen variants
+        working-directory: kitchen
+        timeout-minutes: 5
+        run: hutch scripts/kitchen-matrix.ts --build-only --with=bun:native,bun:cef --jobs=2
+      - name: Verify packaged Intel binaries
+        run: node package/scripts/verify-macho-deployment-target.js --arch=x64 kitchen/build/matrix
+      - name: Run both fullscreen cases with native and CEF renderers
+        timeout-minutes: 5
+        run: node package/scripts/fullscreen-intel-diagnostic.mjs run
+      - name: Retain fullscreen diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fullscreen-intel-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            ${{ env.FULLSCREEN_DIAGNOSTICS }}/**
+            !${{ env.FULLSCREEN_DIAGNOSTICS }}/build/**
+            kitchen/test-results/**
