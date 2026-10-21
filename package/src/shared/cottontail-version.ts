@@ -4,4 +4,4 @@
 // It is deliberately distinct from the build-time Cottontail (the
 // `// @hutch` pragma pairing) used for config loading and bundling, which
 // never ships in a bundle.
-export const COTTONTAIL_VERSION = "0.7.2";
+export const COTTONTAIL_VERSION = "0.7.3-canary.4";
