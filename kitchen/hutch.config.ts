@@ -1,4 +1,4 @@
-// @hutch cli=0.28.2-canary.0 cottontail=0.7.3-canary.4
+// @hutch cli=0.28.2-canary.3 cottontail=0.7.3-canary.4
 export default {
 	electrobun: {
 		version: "2.0.5-beta.0",
