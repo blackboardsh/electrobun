@@ -925,10 +925,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Intel desktop validation uses macOS 15 because stock Cocoa fullscreen
+        # also fails on the hosted macOS 26 Intel image (IconServices).
+        # Related runner graphics issue:
+        # https://github.com/actions/runner-images/issues/14751
         include:
           - os: macos-14
             platform: macos-arm64
-          - os: macos-26-intel
+          - os: macos-15-intel
             platform: macos-x64
           - os: ubuntu-24.04
             platform: linux-x64

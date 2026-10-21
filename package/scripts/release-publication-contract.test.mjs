@@ -83,6 +83,11 @@ function validatePublicationContract(source) {
 	assert.match(release, /--expect macos-arm64,macos-x64,linux-arm64,linux-x64,windows-x64,windows-arm64/);
 	assert.match(templateAcceptance, /^    needs: \[publish-templates\]$/m);
 	assert.match(templateAcceptance, /^    timeout-minutes: 25$/m);
+	assert.match(
+		templateAcceptance,
+		/- os: macos-15-intel\n            platform: macos-x64/,
+		"published app launches need the Intel runner with a working desktop session",
+	);
 	for (const platform of ["macos-arm64", "macos-x64", "linux-x64", "linux-arm64", "windows-x64", "windows-arm64"]) {
 		assert.ok(templateAcceptance.includes(`platform: ${platform}`));
 	}
@@ -440,6 +445,21 @@ test("serializes releases, verifies drafts, and gates mutable channels", () => {
 	validatePublicationContract(workflow);
 });
 
+test("contract keeps Intel build and CLI acceptance on 26 and app acceptance on 15", () => {
+	for (const [name, before, after] of [
+		["build", "macos-26-intel", "macos-15-intel"],
+		["npm-acceptance", "macos-26-intel", "macos-15-intel"],
+		["template-acceptance", "macos-15-intel", "macos-26-intel"],
+	]) {
+		const original = job(workflow, name);
+		const changed = original.replace(before, after);
+		assert.notEqual(changed, original);
+		assert.throws(() => validatePublicationContract(workflow.replace(original, changed)), {
+			code: "ERR_ASSERTION",
+		});
+	}
+});
+
 test("contract rejects skipping the production Hutch installer on stable releases", () => {
 	for (const name of ["Accept published templates on Linux", "Accept published templates on desktop"]) {
 		const step = namedStep(workflow, name);
@@ -565,3 +585,50 @@ test("test gate contract rejects early publication or premature desktop smoke", 
 		assert.throws(() => validateReleaseTestGates(workflow.replace(before, after)), { code: "ERR_ASSERTION" });
 	}
 });
+
+function validateIntelGuiMatrices(source, intelSelector) {
+	const expression = source.match(/^        include: \$\{\{ fromJSON\((.+)\) \}\}$/m)?.[1];
+	assert.ok(expression, "GUI workflow must expose its selectable runner matrices");
+	const alternatives = [...expression.matchAll(/'(\[[^']+\])'/g)];
+	assert.ok(alternatives.length > 1, "validate both targeted and full GUI matrices");
+	assert.equal(expression.slice(0, alternatives[0].index).trim(), `${intelSelector} &&`);
+	const matrices = alternatives.map(([, json]) => JSON.parse(json));
+	assert.equal(matrices[0].length, 1, "the Intel-only selector must schedule one runner");
+	assert.equal(matrices[0][0].runner, "macos-15-intel");
+	assert.ok(matrices.at(-1).length > 1, "the default must retain the full platform matrix");
+	for (const matrix of matrices) {
+		const macOS = matrix.filter(({ runner }) => runner.startsWith("macos-"));
+		if (macOS.length === 0) continue;
+		const intel = macOS.filter(({ runner, platform, arch }) =>
+			runner.endsWith("-intel") || platform === "macos-x64" || arch === "x64");
+		assert.equal(intel.length, 1, "every macOS GUI group must retain native Intel coverage");
+		assert.equal(intel[0].runner, "macos-15-intel", "all Intel GUI routes need a desktop session");
+		if ("platform" in intel[0]) {
+			assert.equal(intel[0].platform, "macos-x64");
+			assert.equal(intel[0].python, "x64");
+		} else {
+			assert.equal(intel[0].arch, "x64");
+		}
+	}
+}
+
+for (const [filename, intelSelector] of [
+	["test-vm.yml", "inputs.macos_intel_only"],
+	["source-desktop-smoke.yml", "inputs.runners == 'macos-intel'"],
+	["desktop-smoke.yml", "inputs.macos_intel_only"],
+]) {
+	const source = readFileSync(new URL(`../../.github/workflows/${filename}`, import.meta.url), "utf8")
+		.replace(/\r\n/g, "\n");
+	test(`${filename} routes every Intel GUI selection to macOS 15`, () => {
+		validateIntelGuiMatrices(source, intelSelector);
+	});
+	test(`${filename} rejects a single Intel GUI branch reverting to macOS 26`, () => {
+		const runner = '"runner":"macos-15-intel"';
+		const occurrences = [...source.matchAll(new RegExp(runner, "g"))];
+		assert.ok(occurrences.length >= 2, "check both targeted and default Intel routes");
+		for (const { index } of occurrences) {
+			const changed = source.slice(0, index) + source.slice(index).replace(runner, '"runner":"macos-26-intel"');
+			assert.throws(() => validateIntelGuiMatrices(changed, intelSelector), { code: "ERR_ASSERTION" });
+		}
+	});
+}

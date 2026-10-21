@@ -39,7 +39,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-26-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-26-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+        # Intel desktop validation uses macOS 15 because stock Cocoa fullscreen
+        # also fails on the hosted macOS 26 Intel image (IconServices).
+        # Related runner graphics issue:
+        # https://github.com/actions/runner-images/issues/14751
+        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 330
     env:
