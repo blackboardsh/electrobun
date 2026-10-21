@@ -1,0 +1,124 @@
+name: macOS ARM window size diagnostic
+
+on:
+  workflow_dispatch:
+    inputs:
+      artifact_run_id:
+        description: Release workflow run containing the native ARM core artifact
+        type: string
+        required: true
+        default: '39689150638'
+      artifact_sha:
+        description: Exact source commit of the release core artifact
+        type: string
+        required: true
+        default: '42b451923daa2255009467e35e40cf2335cf4b7e'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: macos-14
+    timeout-minutes: 35
+    env:
+      ARTIFACT_RUN_ID: ${{ inputs.artifact_run_id }}
+      ARTIFACT_SHA: ${{ inputs.artifact_sha }}
+      WINDOW_SIZE_DIAGNOSTICS: ${{ github.workspace }}/window-size-diagnostics
+      HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+      HUTCH_NO_UPDATE_CHECK: '1'
+      ELECTROBUN_BUILD_ARCH: arm64
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify native macOS ARM runner
+        shell: bash
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error(`Expected native macOS ARM Node, got ${process.platform}/${process.arch}`)'
+      - name: Verify release artifact provenance
+        id: source
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node -e 'if (!/^[1-9][0-9]*$/.test(process.env.ARTIFACT_RUN_ID) || !/^[0-9a-f]{40}$/.test(process.env.ARTIFACT_SHA)) throw new Error("An exact workflow run ID and 40-character source SHA are required")'
+          mkdir -p "$WINDOW_SIZE_DIAGNOSTICS"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" > "$WINDOW_SIZE_DIAGNOSTICS/artifact-run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/jobs?per_page=100" > "$WINDOW_SIZE_DIAGNOSTICS/source-jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/artifacts?per_page=100" > "$WINDOW_SIZE_DIAGNOSTICS/source-artifacts.json"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const read = name => JSON.parse(readFileSync(join(process.env.WINDOW_SIZE_DIAGNOSTICS, name), 'utf8'));
+          const run = read('artifact-run.json');
+          assert.equal(String(run.id), process.env.ARTIFACT_RUN_ID);
+          assert.equal(run.path, '.github/workflows/release.yml');
+          assert.equal(run.head_sha, process.env.ARTIFACT_SHA);
+          assert.equal(run.head_repository.full_name, process.env.GITHUB_REPOSITORY);
+          const build = read('source-jobs.json').jobs.find(job => job.name === 'build (macos-14, darwin, arm64, darwin, macos)');
+          assert.ok(build, 'The release run must contain its macOS ARM build job');
+          assert.equal(build.status, 'completed');
+          assert.equal(build.conclusion, 'success');
+          const artifacts = read('source-artifacts.json').artifacts.filter(artifact => artifact.name === 'electrobun-core-darwin-arm64');
+          assert.equal(artifacts.length, 1, 'Expected exactly one macOS ARM core artifact');
+          const artifact = artifacts[0];
+          assert.equal(artifact.expired, false);
+          assert.equal(String(artifact.workflow_run.id), process.env.ARTIFACT_RUN_ID);
+          assert.equal(artifact.workflow_run.head_sha, process.env.ARTIFACT_SHA);
+          appendFileSync(process.env.GITHUB_OUTPUT, `artifact-id=${artifact.id}\n`);
+          console.log(`Verified core artifact ${artifact.id} from release run ${run.id} at ${run.head_sha}`);
+          JS
+      - name: Download exact native ARM core artifact
+        uses: actions/download-artifact@v6
+        with:
+          artifact-ids: ${{ steps.source.outputs.artifact-id }}
+          run-id: ${{ inputs.artifact_run_id }}
+          github-token: ${{ github.token }}
+          path: diagnostic-artifacts
+          merge-multiple: true
+      - uses: ./.github/actions/install-hutch
+        with:
+          channel: canary
+      - name: Prepare diagnostic sources and artifact devkit
+        run: node package/scripts/window-size-diagnostic.mjs prepare
+      - name: Install Kitchen dependencies
+        working-directory: kitchen
+        run: hutch run install
+      - name: Build only the Go native diagnostic app
+        timeout-minutes: 10
+        working-directory: kitchen
+        run: hutch scripts/kitchen-matrix.ts --build-only --with=go:native --jobs=1
+      - name: Verify diagnostic bundle architecture and macOS minimum
+        shell: bash
+        run: |
+          node --input-type=module <<'JS'
+          import { writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { verifyMachORelease } from './package/scripts/verify-macho-deployment-target.js';
+          const binaries = verifyMachORelease(['kitchen/build/matrix/go-native'], '14.0', 'arm64');
+          writeFileSync(join(process.env.WINDOW_SIZE_DIAGNOSTICS, 'bundle-mach-o.json'), JSON.stringify(binaries, null, 2) + '\n');
+          console.log(`Verified ${binaries.length} native ARM Mach-O files with minimum macOS <= 14.0`);
+          JS
+      - name: Run window size diagnostics
+        timeout-minutes: 18
+        run: node package/scripts/window-size-diagnostic.mjs run
+      - name: Upload window size diagnostics
+        if: always()
+        timeout-minutes: 3
+        uses: actions/upload-artifact@v6
+        with:
+          name: window-size-diagnostic-macos-arm64-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: |
+            window-size-diagnostics/**
+            kitchen/test-results/**
