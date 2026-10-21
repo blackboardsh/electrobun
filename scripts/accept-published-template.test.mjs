@@ -3,7 +3,8 @@ import test from "node:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, parse } from "node:path";
 import { tmpdir } from "node:os";
-import { acceptanceEnvironment, installProductionHutch, requiredChecks, run, validateCatalog, validateHutchSource, validateReport, withAcceptanceScratch } from "./accept-published-template.mjs";
+import { acceptanceEnvironment, createAcceptanceCommands, installProductionHutch, requiredChecks, run, validateCatalog, validateHutchSource, validateReport, withAcceptanceScratch } from "./accept-published-template.mjs";
+import hutchResolver from "../npm/electrobun/bin/resolve-hutch.cjs";
 
 import { verifyBuiltMacOSApp } from "./desktop-smoke/run.mjs";
 
@@ -44,6 +45,65 @@ test("isolated environment discards local runtime, catalog, and npm overrides", 
 	assert.equal(env.NODE_OPTIONS, undefined);
 	assert.equal(env.HUTCH_HOME, join("/work", "hutch-home"));
 	assert.equal(env.npm_config_registry, "https://registry.npmjs.org");
+});
+
+test("npm acceptance exercises the installed CLI from an unpinned environment and pins direct global-launcher calls", async () => {
+	const scratch = join(tmpdir(), "electrobun-npm-command-test");
+	const work = join(scratch, "reports");
+	const env = acceptanceEnvironment({
+		PATH: "existing-tools",
+		HUTCH_ACTIVE_CHANNEL: "canary",
+		HUTCH_DEFAULT_CLI: "0.1.0",
+		HUTCH_DEFAULT_ELECTROBUN: "0.1.0",
+	}, scratch, "npm");
+	const hutch = join(env.HUTCH_HOME, "bin", "hutch");
+	const npmCli = join(scratch, "bootstrap", "node_modules", "electrobun", "bin", "electrobun.cjs");
+	const calls = [];
+	const commands = createAcceptanceCommands({ hutch, npmCli, resolver: hutchResolver, env, scratch, work },
+		async (command, args, options) => { calls.push({ command, args, options }); return "ok"; });
+	const initArgs = ["init", "public-app", "--template=hello-world", "--beta"];
+	await commands.initPublicTemplate(initArgs);
+	assert.equal(calls[0].command, process.execPath);
+	assert.deepEqual(calls[0].args, [npmCli, ...initArgs]);
+	assert.equal(calls[0].options.cwd, scratch);
+	assert.equal(calls[0].options.log, join(work, "public-init.log"));
+	for (const key of ["HUTCH_ACTIVE_CHANNEL", "HUTCH_DEFAULT_CLI", "HUTCH_DEFAULT_ELECTROBUN"]) {
+		assert.equal(calls[0].options.env[key], undefined, `${key} must be selected by the public npm CLI`);
+	}
+	assert.equal(calls[0].options.env.HUTCH_HOME, env.HUTCH_HOME);
+
+	await commands.invokeHutch("hutch-version", ["--version"]);
+	const project = join(scratch, "public-app");
+	await commands.invokeHutch("public-build", ["electrobun", "build"], project,
+		{ ELECTROBUN_ACCEPTANCE_TOKEN: "this-launch" }, { timeout: 1234 });
+	for (const call of calls.slice(1)) {
+		assert.equal(call.command, hutch);
+		assert.equal(call.options.env.HUTCH_DEFAULT_CLI, hutchResolver.PAIRED_HUTCH_VERSION);
+		assert.equal(call.options.env.HUTCH_DEFAULT_ELECTROBUN, hutchResolver.ELECTROBUN_VERSION);
+		assert.equal(call.options.env.HUTCH_ACTIVE_CHANNEL, undefined);
+	}
+	assert.equal(calls[2].options.cwd, project);
+	assert.equal(calls[2].options.env.ELECTROBUN_ACCEPTANCE_TOKEN, "this-launch");
+	assert.equal(calls[2].options.timeout, 1234);
+	assert.equal(env.HUTCH_DEFAULT_CLI, undefined, "direct invocations must not pin the public init environment");
+});
+
+test("production installer acceptance invokes the installed launcher without npm defaults", async () => {
+	const scratch = join(tmpdir(), "electrobun-production-command-test");
+	const env = acceptanceEnvironment({ PATH: "existing-tools", HUTCH_ACTIVE_CHANNEL: "canary" }, scratch, "production-installer");
+	const hutch = join(env.HUTCH_HOME, "bin", "hutch");
+	const calls = [];
+	const commands = createAcceptanceCommands({ hutch, env, scratch, work: scratch },
+		async (command, args, options) => { calls.push({ command, args, options }); });
+	await commands.initPublicTemplate(["init", "public-app", "--template=hello-world"]);
+	await commands.invokeHutch("public-build", ["electrobun", "build"]);
+	assert.deepEqual(calls[0].args, ["electrobun", "init", "public-app", "--template=hello-world"]);
+	for (const call of calls) {
+		assert.equal(call.command, hutch);
+		assert.equal(call.options.env.HUTCH_ACTIVE_CHANNEL, "production");
+		assert.equal(call.options.env.HUTCH_DEFAULT_CLI, undefined);
+		assert.equal(call.options.env.HUTCH_DEFAULT_ELECTROBUN, undefined);
+	}
 });
 
 test("production installer acceptance only permits a stable release and stable toolchain", () => {

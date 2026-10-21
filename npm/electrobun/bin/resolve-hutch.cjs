@@ -77,12 +77,14 @@ function normalizeHutchChannel(value) {
 	return null;
 }
 
-function hutchChannel(environment) {
+function hutchChannel(environment, pairedVersion = PAIRED_HUTCH_VERSION) {
 	for (const key of ["ELECTROBUN_HUTCH_CHANNEL", "HUTCH_ACTIVE_CHANNEL"]) {
 		const selected = normalizeHutchChannel(environment[key]);
 		if (selected) return selected;
 	}
-	return "production";
+	const paired = parseVersion(pairedVersion);
+	if (!paired) throw new Error("paired Hutch version must be an exact SemVer");
+	return paired.prerelease === null ? "production" : "canary";
 }
 
 function environmentFlagEnabled(environment, name) {
@@ -246,19 +248,22 @@ function checkedSpawn(command, args, options) {
 	}
 }
 
-async function installHutch({ channel, environment, platform }) {
+async function installHutch(
+	{ channel, environment, platform },
+	{ downloadInstaller = download, execute = checkedSpawn } = {},
+) {
 	const temporary = mkdtempSync(path.join(tmpdir(), "electrobun-hutch-installer-"));
 	try {
 		if (platform === "win32") {
 			const installer = path.join(temporary, "install.ps1");
 			writeFileSync(
 				installer,
-				await download(`${defaultInstallerBaseUrl}/install.ps1`, {
+				await downloadInstaller(`${defaultInstallerBaseUrl}/install.ps1`, {
 					label: "Hutch installer",
 					maxBytes: maxInstallerBytes,
 				}),
 			);
-			checkedSpawn(
+			execute(
 				"powershell.exe",
 				[
 					"-NoProfile",
@@ -269,6 +274,8 @@ async function installHutch({ channel, environment, platform }) {
 					installer,
 					"-Channel",
 					channel,
+					"-Version",
+					PAIRED_HUTCH_VERSION,
 				],
 				{ env: environment, stdio: "inherit" },
 			);
@@ -276,13 +283,13 @@ async function installHutch({ channel, environment, platform }) {
 			const installer = path.join(temporary, "install.sh");
 			writeFileSync(
 				installer,
-				await download(`${defaultInstallerBaseUrl}/install.sh`, {
+				await downloadInstaller(`${defaultInstallerBaseUrl}/install.sh`, {
 					label: "Hutch installer",
 					maxBytes: maxInstallerBytes,
 				}),
 				{ mode: 0o700 },
 			);
-			checkedSpawn("sh", [installer, "--channel", channel], {
+			execute("sh", [installer, "--channel", channel, "--version", PAIRED_HUTCH_VERSION], {
 				env: environment,
 				stdio: "inherit",
 			});
@@ -1243,7 +1250,7 @@ async function ensureCompatibleGlobal(options) {
 		);
 	}
 	console.error(
-		`Electrobun projects use Hutch; installing the latest ${channel} release...`,
+		`Electrobun projects use Hutch; installing paired Hutch ${PAIRED_HUTCH_VERSION} (${channel})...`,
 	);
 	await options.install({
 		channel,
@@ -1391,6 +1398,7 @@ module.exports = {
 	hutchChannel,
 	hutchBinaryVersion,
 	hutchPlatformKey,
+	installHutch,
 	installDownloadedArchive,
 	resolveHutchBinary,
 	runHutch,

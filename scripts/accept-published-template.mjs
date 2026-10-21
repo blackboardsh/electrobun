@@ -32,10 +32,11 @@ export function validateReport(report, token) {
 	for (const check of requiredChecks) assert.ok(report.checks?.includes(check), `missing ${check}`);
 }
 
-export function acceptanceEnvironment(base, work) {
+export function acceptanceEnvironment(base, work, hutchSource = "production-installer") {
 	const env = Object.fromEntries(Object.entries(base).filter(([key]) =>
 		!/^(HUTCH_|COTTONTAIL_|ELECTROBUN_|DASH_RELEASE_|DASH_COTTONTAIL(?:_SELECTOR)?$|DASH_USE_LOCAL_COTTONTAIL$|DASH_LOCAL_COTTONTAIL_ROOT$|DASH_ARTIFACTS_BASE_URL$|DASH_HOME$|NPM_CONFIG_|NPM_TOKEN$|NODE_AUTH_TOKEN$|NODE_PATH$|NODE_OPTIONS$)/i.test(key)));
-	return { ...env, HUTCH_HOME: join(work, "hutch-home"), HUTCH_ACTIVE_CHANNEL: "production", HUTCH_NO_UPDATE_CHECK: "1",
+	return { ...env, HUTCH_HOME: join(work, "hutch-home"), HUTCH_NO_UPDATE_CHECK: "1",
+		...(hutchSource === "production-installer" ? { HUTCH_ACTIVE_CHANNEL: "production" } : {}),
 		npm_config_cache: join(work, "npm-cache"), npm_config_userconfig: join(work, "empty.npmrc"),
 		npm_config_registry: "https://registry.npmjs.org", CI: "1" };
 }
@@ -140,6 +141,28 @@ export async function run(command, args, { cwd, env, log, timeout = 600_000, sta
 	}
 }
 
+export function createAcceptanceCommands({ hutch, npmCli, resolver, env, scratch, work }, runCommand = run) {
+	const invoke = (command, label, args, environment, cwd = scratch, extra = {}, options = {}) => {
+		console.log(`[template-acceptance] ${label}`);
+		return runCommand(command, args, { cwd, env: { ...environment, ...extra }, log: join(work, `${label}.log`), ...options });
+	};
+	return {
+		invokeHutch(label, args, cwd, extra, options) {
+			// A resolver fallback can return the global launcher. Supply the same
+			// exact defaults as the npm CLI when invoking that launcher directly.
+			const environment = resolver ? resolver.environmentWithPairedDefaults(env) : env;
+			return invoke(hutch, label, args, environment, cwd, extra, options);
+		},
+		initPublicTemplate(args) {
+			// Run the installed npm entry point so init must install global Hutch
+			// itself, starting from the same unpinned environment as a new user.
+			return npmCli
+				? invoke(process.execPath, "public-init", [npmCli, ...args], env)
+				: invoke(hutch, "public-init", ["electrobun", ...args], env);
+		},
+	};
+}
+
 function verifyProject(project, version, pins) {
 	const config = readFileSync(join(project, "hutch.config.ts"), "utf8");
 	assert.deepEqual(parseHutchPragma(config), pins);
@@ -186,12 +209,12 @@ export async function acceptPublishedTemplate({ version, platform, output, "hutc
 }
 
 async function acceptInScratch({ version, platform, work, hutchSource, pins, scratch }) {
-	const env = acceptanceEnvironment(process.env, scratch);
+	const env = acceptanceEnvironment(process.env, scratch, hutchSource);
 	const response = await fetch(`${publicBase}/channels/${releaseChannel(version)}.json`, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
 	assert.equal(response.ok, true, `catalog HTTP ${response.status}`);
 	const catalog = await response.json(); validateCatalog(catalog, version, pins);
 	writeFileSync(join(work, "catalog.json"), JSON.stringify(catalog, null, 2));
-	let hutch;
+	let hutch, npmCli, resolver;
 	if (hutchSource === "production-installer") {
 		hutch = await installProductionHutch({ scratch, env, work, expectedVersion: pins.hutch });
 	} else {
@@ -199,7 +222,8 @@ async function acceptInScratch({ version, platform, work, hutchSource, pins, scr
 		writeFileSync(join(bootstrap, "package.json"), JSON.stringify({ private: true }));
 		const npm = npmInvocation(["install", "--ignore-scripts", "--no-audit", "--no-fund", "--save-exact", `electrobun@${version}`]);
 		await run(npm.command, npm.args, { cwd: bootstrap, env, log: join(work, "npm-install.log") });
-		const resolver = createRequire(import.meta.url)(join(bootstrap, "node_modules/electrobun/bin/resolve-hutch.cjs"));
+		npmCli = join(bootstrap, "node_modules/electrobun/bin/electrobun.cjs");
+		resolver = createRequire(import.meta.url)(join(bootstrap, "node_modules/electrobun/bin/resolve-hutch.cjs"));
 		assert.equal(resolver.ELECTROBUN_VERSION, version);
 		assert.equal(resolver.PAIRED_HUTCH_VERSION, pins.hutch);
 		hutch = await resolver.resolveHutchBinary({ environment: env });
@@ -207,13 +231,10 @@ async function acceptInScratch({ version, platform, work, hutchSource, pins, scr
 	// Install tasks invoke `hutch` by name; only the downloaded release goes first.
 	const pathKey = Object.keys(env).find(k => k.toLowerCase() === "path") ?? "PATH";
 	env[pathKey] = `${dirname(hutch)}${delimiter}${env[pathKey] ?? ""}`;
-	const invoke = (label, args, cwd = scratch, extra = {}, options = {}) => {
-		console.log(`[template-acceptance] ${label}`);
-		return run(hutch, args, { cwd, env: { ...env, ...extra }, log: join(work, `${label}.log`), ...options });
-	};
+	const { invokeHutch: invoke, initPublicTemplate } = createAcceptanceCommands({ hutch, npmCli, resolver, env, scratch, work });
 	if (hutchSource === "npm") assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
 	const channelArgs = releaseChannel(version) === "beta" ? ["--beta"] : [];
-	await invoke("public-init", ["electrobun", "init", "public-app", "--template=hello-world", ...channelArgs]);
+	await initPublicTemplate(["init", "public-app", "--template=hello-world", ...channelArgs]);
 	const publicProject = join(scratch, "public-app"); verifyProject(publicProject, version, pins);
 	assert.ok(existsSync(join(publicProject, "node_modules/@types/bun/package.json")), "public template install task did not install dependencies");
 	await invoke("public-build", ["electrobun", "build"], publicProject);

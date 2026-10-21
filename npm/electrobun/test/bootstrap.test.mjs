@@ -50,6 +50,7 @@ function writeCachedHutch(
 	platform = "linux",
 	body = "cached",
 	sealed = true,
+	pairedVersion = resolver.PAIRED_HUTCH_VERSION,
 ) {
 	const extension = platform === "win32" ? ".exe" : "";
 	mkdirSync(join(root, "bin"), { recursive: true });
@@ -70,7 +71,7 @@ function writeCachedHutch(
 			schema: 1,
 			kind: "archive",
 			product: "hutch",
-			version: resolver.PAIRED_HUTCH_VERSION,
+			version: pairedVersion,
 			platform: platformKey,
 			launcher: `bin/hutch${extension}`,
 			executable: `bin/hutch-engine${extension}`,
@@ -98,7 +99,7 @@ function writeCachedHutch(
 			`${JSON.stringify({
 				schemaVersion: 1,
 				electrobunVersion: manifest.version,
-				hutchVersion: resolver.PAIRED_HUTCH_VERSION,
+				hutchVersion: pairedVersion,
 				platform: platformKey,
 				archiveSha256: "0".repeat(64),
 				files,
@@ -131,11 +132,12 @@ function makeArchive(
 	platformKey = "linux-x64",
 	platform = "linux",
 	binaryMode = null,
+	pairedVersion = resolver.PAIRED_HUTCH_VERSION,
 ) {
-	const rootName = `hutch-v${resolver.PAIRED_HUTCH_VERSION}-${platformKey}`;
+	const rootName = `hutch-v${pairedVersion}-${platformKey}`;
 	const staging = join(temporary, "archive-staging");
 	const root = join(staging, rootName);
-	writeCachedHutch(root, platformKey, platform, "downloaded", false);
+	writeCachedHutch(root, platformKey, platform, "downloaded", false, pairedVersion);
 	if (binaryMode !== null && platform !== "win32") {
 		chmodSync(join(root, "bin", "hutch"), binaryMode);
 		chmodSync(join(root, "bin", "hutch-engine"), binaryMode);
@@ -1317,7 +1319,7 @@ test("global and explicit fallbacks must prove they select the paired Hutch", as
 	const common = {
 		arch: "x64",
 		cacheRoot: join(tmpdir(), `missing-electrobun-cache-${process.pid}`),
-		environment: { DASH_RELEASE_OFFLINE: "1" },
+		environment: { DASH_RELEASE_OFFLINE: "1", HUTCH_ACTIVE_CHANNEL: "production" },
 		existsSync: (candidate) => candidate === global,
 		platform: "linux",
 		userHome: "/home/dev",
@@ -1369,7 +1371,7 @@ test("global and explicit fallbacks must prove they select the paired Hutch", as
 
 test("init installs a compatible global Hutch but runs the exact cached copy", async () => {
 	const temporary = mkdtempSync(join(tmpdir(), "electrobun-npm-init-"));
-	const environment = { HUTCH_HOME: join(temporary, "home") };
+	const environment = { HUTCH_HOME: join(temporary, "home"), HUTCH_ACTIVE_CHANNEL: "production" };
 	const global = resolver.globalHutchBinaryPath(
 		"production",
 		environment,
@@ -1427,6 +1429,102 @@ test("supports an explicit canary global path", () => {
 		),
 		"/opt/dash/bin/hutch-canary",
 	);
+});
+
+test("default installation channel follows the exact paired release and honors explicit overrides", () => {
+	for (const [paired, channel] of [
+		["0.28.1", "production"],
+		["0.28.2-canary.0", "canary"],
+		["0.28.2-beta.1+build.2", "canary"],
+		["0.28.2+canary-build.1", "production"],
+	]) {
+		assert.equal(resolver.hutchChannel({}, paired), channel);
+		assert.equal(resolver.hutchChannel({ HUTCH_ACTIVE_CHANNEL: "stable" }, paired), "production");
+		assert.equal(resolver.hutchChannel({ HUTCH_ACTIVE_CHANNEL: "canary" }, paired), "canary");
+		assert.equal(resolver.hutchChannel({
+			ELECTROBUN_HUTCH_CHANNEL: "production", HUTCH_ACTIVE_CHANNEL: "canary",
+		}, paired), "production");
+	}
+});
+
+for (const platform of ["darwin", "linux", "win32"]) {
+	test(`${platform} installer selects the paired version independently of the channel head`, async () => {
+		const environment = { HUTCH_HOME: "/isolated/home" };
+		let installer;
+		await resolver.installHutch({ channel: "canary", environment, platform }, {
+			downloadInstaller: async (url) => {
+				assert.equal(url, `https://hutch.blackboard.sh/hutch/install.${platform === "win32" ? "ps1" : "sh"}`);
+				return Buffer.from("installer fixture");
+			},
+			execute: (command, args, options) => {
+				assert.equal(command, platform === "win32" ? "powershell.exe" : "sh");
+				const channelFlag = platform === "win32" ? "-Channel" : "--channel";
+				const versionFlag = platform === "win32" ? "-Version" : "--version";
+				assert.equal(args[args.indexOf(channelFlag) + 1], "canary");
+				assert.equal(args[args.indexOf(versionFlag) + 1], resolver.PAIRED_HUTCH_VERSION);
+				installer = platform === "win32" ? args[args.indexOf("-File") + 1] : args[0];
+				assert.equal(readFileSync(installer, "utf8"), "installer fixture");
+				assert.equal(options.env, environment);
+			},
+		});
+		assert.equal(existsSync(installer), false);
+	});
+}
+
+test("cold Intel init uses its paired canary when the production release has no Intel build", async () => {
+	const temporary = mkdtempSync(join(tmpdir(), "electrobun-intel-canary-init-"));
+	const pairedVersion = "0.28.2-canary.0";
+	const fixtureRoot = join(temporary, "bootstrap");
+	const cacheRoot = join(temporary, "cache");
+	const baseUrl = "https://releases.test";
+	try {
+		mkdirSync(join(fixtureRoot, "bin"), { recursive: true });
+		writeFileSync(join(fixtureRoot, "package.json"), JSON.stringify(manifest));
+		writeFileSync(join(fixtureRoot, "bin", "resolve-hutch.cjs"),
+			readFileSync(join(testRoot, "../bin/resolve-hutch.cjs"), "utf8")
+				.replace(/const PAIRED_HUTCH_VERSION = "[^"]+";/, `const PAIRED_HUTCH_VERSION = "${pairedVersion}";`));
+		writeFileSync(join(fixtureRoot, "bin", "electrobun.cjs"), readFileSync(join(testRoot, "../bin/electrobun.cjs")));
+		const pairedResolver = require(join(fixtureRoot, "bin", "resolve-hutch.cjs"));
+		const pairedBootstrap = require(join(fixtureRoot, "bin", "electrobun.cjs"));
+		const archive = makeArchive(temporary, "macos-x64", "darwin", null, pairedVersion);
+		const index = JSON.parse(artifactIndex(baseUrl, "macos-x64", archive));
+		index.hutch.version = pairedVersion;
+		const downloads = artifactDownloads(baseUrl, "macos-x64", archive, Buffer.from(JSON.stringify(index)));
+		const environment = { HUTCH_HOME: join(temporary, "home"), ELECTROBUN_RELEASES_BASE_URL: baseUrl };
+		const global = pairedResolver.globalHutchBinaryPath("canary", environment, "darwin", temporary);
+		let installed = false;
+		const events = [];
+		await pairedBootstrap.main({
+			args: ["init", "intel-app", "--beta"],
+			arch: "x64", platform: "darwin", cacheRoot, environment, userHome: temporary,
+			existsSync: (candidate) => candidate === global && installed,
+			hutchBinaryVersion: () => pairedVersion,
+			installHutch: (options) => pairedResolver.installHutch(options, {
+				downloadInstaller: async () => Buffer.from("installer fixture"),
+				execute: (_command, args) => {
+					assert.equal(args[args.indexOf("--channel") + 1], "canary");
+					assert.equal(args[args.indexOf("--version") + 1], pairedVersion);
+					installed = true;
+					events.push("installed exact canary");
+				},
+			}),
+			download: async (url) => {
+				assert.equal(installed, true, "init must install a usable global launcher first");
+				assert.ok(downloads.has(url), `unexpected download ${url}`);
+				return downloads.get(url);
+			},
+			runHutch: ({ binary, args }) => {
+				assert.equal(binary, join(cacheRoot, "bin", "hutch"));
+				assert.equal(readFileSync(binary, "utf8"), "downloaded");
+				assert.deepEqual(args, ["electrobun", "init", "intel-app", "--beta"]);
+				events.push("ran paired cache");
+				return 0;
+			},
+		});
+		assert.deepEqual(events, ["installed exact canary", "ran paired cache"]);
+	} finally {
+		rmSync(temporary, { recursive: true, force: true });
+	}
 });
 
 test("an explicit ELECTROBUN_HUTCH_BINARY must exist", async () => {
