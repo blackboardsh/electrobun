@@ -1142,11 +1142,40 @@ static NSMutableDictionary<NSNumber *, AbstractView *> *globalAbstractViews =
 @property(nonatomic, assign) BOOL fullscreenTransitioning;
 @property(nonatomic, assign) BOOL hasPendingFullscreenTarget;
 @property(nonatomic, assign) BOOL pendingFullscreenTarget;
+@property(nonatomic, assign) NSTimeInterval lastFullscreenDiagnosticTime;
 - (void)requestFullscreen:(BOOL)fullscreen forWindow:(NSWindow *)window;
 - (void)finishFullscreenTransitionForWindow:(NSWindow *)window;
 @property(nonatomic, assign) double buttonPositionX;
 @property(nonatomic, assign) double buttonPositionY;
 @end
+
+static bool fullscreenDebugEnabled() {
+  static const bool enabled = [] {
+    const char *value = getenv("ELECTROBUN_DEBUG_FULLSCREEN");
+    return value && strcmp(value, "1") == 0;
+  }();
+  return enabled;
+}
+
+static void traceFullscreenState(const char *event, WindowDelegate *delegate,
+                                 NSWindow *window, int target = -1) {
+  if (!fullscreenDebugEnabled())
+    return;
+  NSLog(@"[electrobun fullscreen] t=%.6f event=%s id=%u window=%p "
+        @"delegate=%p attached=%p target=%d style=0x%lx fullscreen=%d "
+        @"transitioning=%d pending=%d pendingTarget=%d main=%d mode=%@ "
+        @"visible=%d key=%d active=%d",
+        NSProcessInfo.processInfo.systemUptime, event, delegate.windowId,
+        (__bridge void *)window, (__bridge void *)delegate,
+        (__bridge void *)window.delegate, target,
+        (unsigned long)window.styleMask,
+        (window.styleMask & NSWindowStyleMaskFullScreen) != 0,
+        (int)delegate.fullscreenTransitioning,
+        (int)delegate.hasPendingFullscreenTarget,
+        (int)delegate.pendingFullscreenTarget, (int)NSThread.isMainThread,
+        NSRunLoop.currentRunLoop.currentMode ?: @"none",
+        (int)window.visible, (int)window.keyWindow, (int)NSApp.active);
+}
 
 @interface StatusItemTarget : NSObject
 @property(nonatomic, assign) NSStatusItem *statusItem;
@@ -8036,21 +8065,29 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
 
 @implementation WindowDelegate
 - (void)requestFullscreen:(BOOL)fullscreen forWindow:(NSWindow *)window {
+  traceFullscreenState("request", self, window, (int)fullscreen);
   if (self.fullscreenTransitioning) {
     self.hasPendingFullscreenTarget = YES;
     self.pendingFullscreenTarget = fullscreen;
+    traceFullscreenState("queued", self, window, (int)fullscreen);
     return;
   }
   BOOL current = (window.styleMask & NSWindowStyleMaskFullScreen) != 0;
   if (current != fullscreen) {
+    traceFullscreenState("toggle-before", self, window, (int)fullscreen);
     [window toggleFullScreen:nil];
+    traceFullscreenState("toggle-return", self, window, (int)fullscreen);
+  } else {
+    traceFullscreenState("already-at-target", self, window, (int)fullscreen);
   }
 }
 - (void)finishFullscreenTransitionForWindow:(NSWindow *)window {
+  traceFullscreenState("finish-scheduled", self, window);
   // AppKit is still unwinding the transition when it invokes the delegate.
   // A reversal from inside that callback can still be rejected; let the
   // notification return before draining the latest requested target.
   dispatch_async(dispatch_get_main_queue(), ^{
+    traceFullscreenState("finish-draining", self, window);
     self.fullscreenTransitioning = NO;
     if (self.hasPendingFullscreenTarget) {
       BOOL target = self.pendingFullscreenTarget;
@@ -8061,15 +8098,19 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
 }
 - (void)windowWillEnterFullScreen:(NSNotification *)notification {
   self.fullscreenTransitioning = YES;
+  traceFullscreenState("will-enter", self, notification.object);
 }
 - (void)windowDidEnterFullScreen:(NSNotification *)notification {
+  traceFullscreenState("did-enter", self, notification.object);
   [self finishFullscreenTransitionForWindow:notification.object];
 }
 - (void)windowDidFailToEnterFullScreen:(NSWindow *)window {
+  traceFullscreenState("failed-enter", self, window);
   self.fullscreenTransitioning = NO;
   self.hasPendingFullscreenTarget = NO;
 }
 - (void)windowDidFailToExitFullScreen:(NSWindow *)window {
+  traceFullscreenState("failed-exit", self, window);
   self.fullscreenTransitioning = NO;
   self.hasPendingFullscreenTarget = NO;
 }
@@ -8081,6 +8122,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
   return YES;
 }
 - (void)windowWillClose:(NSNotification *)notification {
+  traceFullscreenState("will-close", self, notification.object);
   self.hasPendingFullscreenTarget = NO;
   NSWindow *window = [notification object];
   if (self.closeHandler) {
@@ -8121,6 +8163,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
 }
 - (void)windowWillExitFullScreen:(NSNotification *)notification {
   self.fullscreenTransitioning = YES;
+  traceFullscreenState("will-exit", self, notification.object);
   if (self.hasCustomButtonPosition) {
     NSWindow *window = [notification object];
     [[window standardWindowButton:NSWindowCloseButton] setHidden:YES];
@@ -8130,6 +8173,7 @@ CreateRequestContextForPartition(const char *partitionIdentifier,
 }
 - (void)windowDidExitFullScreen:(NSNotification *)notification {
   NSWindow *window = [notification object];
+  traceFullscreenState("did-exit", self, window);
   if (self.hasCustomButtonPosition) {
     applyWindowButtonPosition(window, self.buttonPositionX,
                               self.buttonPositionY);
@@ -8971,6 +9015,7 @@ NSWindow *createNSWindowWithFrameAndStyle(
   [window setDelegate:delegate];
   objc_setAssociatedObject(window, "WindowDelegate", delegate,
                            OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+  traceFullscreenState("created", delegate, window);
   window.releasedWhenClosed = NO;
 
   ContainerView *contentView =
@@ -9157,6 +9202,13 @@ extern "C" bool isWindowMaximized(NSWindow *window) {
 }
 
 extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
+  if (fullscreenDebugEnabled()) {
+    NSLog(@"[electrobun fullscreen] t=%.6f event=api-request window=%p "
+          @"cppBool=%d objcBOOL=%d sizeofBool=%zu sizeofBOOL=%zu main=%d",
+          NSProcessInfo.processInfo.systemUptime, (__bridge void *)window,
+          (int)fullScreen, (int)(BOOL)fullScreen, sizeof(bool), sizeof(BOOL),
+          (int)NSThread.isMainThread);
+  }
   runOnMainThreadSyncVoid(^{
     // The style mask changes before AppKit finishes the Space animation.
     // Queue a reversal until the delegate reports completion; toggling during
@@ -9168,6 +9220,14 @@ extern "C" void setWindowFullScreen(NSWindow *window, bool fullScreen) {
 
 extern "C" bool isWindowFullScreen(NSWindow *window) {
   return runOnMainThreadSyncBool(^{
+    if (fullscreenDebugEnabled()) {
+      WindowDelegate *delegate = (WindowDelegate *)window.delegate;
+      NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+      if (now - delegate.lastFullscreenDiagnosticTime >= 0.5) {
+        delegate.lastFullscreenDiagnosticTime = now;
+        traceFullscreenState("get-state", delegate, window);
+      }
+    }
     return ([window styleMask] & NSWindowStyleMaskFullScreen) != 0;
   });
 }

@@ -2929,7 +2929,7 @@ waitForWindowFullscreen :: proc(state: ^AppState, window_id: u32, expected: bool
 		observed = electrobun.isWindowFullScreen(state.core, window_id)
 	}
 	if observed != expected {
-		fmt.eprintf("[kitchen odin] fullscreen transition timed out: expected=%v, observed=%v after %dms\n", expected, observed, time.duration_milliseconds(time.tick_since(started)))
+		fmt.eprintf("[kitchen odin] fullscreen transition timed out: expected=%v, observed=%v after %.0fms\n", expected, observed, time.duration_milliseconds(time.tick_since(started)))
 	}
 	return observed == expected
 }
