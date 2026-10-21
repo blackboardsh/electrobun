@@ -3,6 +3,13 @@ name: Intel fullscreen diagnostic
 on:
   workflow_dispatch:
     inputs:
+      integration_runner:
+        description: Native Intel runner for the actual Electrobun integration cases
+        type: choice
+        options:
+          - macos-26-intel
+          - macos-15-intel
+        default: macos-26-intel
       artifact_run_id:
         description: Release run containing the immutable Intel core and CEF artifacts
         required: true
@@ -31,6 +38,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - runner: macos-26-intel
+            arch: x64
+            machine: x86_64
           - runner: macos-15-intel
             arch: x64
             machine: x86_64
@@ -67,7 +77,7 @@ jobs:
           if-no-files-found: warn
           path: ${{ env.FULLSCREEN_DIAGNOSTICS }}/**
   fullscreen:
-    runs-on: macos-26-intel
+    runs-on: ${{ inputs.integration_runner }}
     timeout-minutes: 40
     env:
       ELECTROBUN_BUILD_ARCH: x64
