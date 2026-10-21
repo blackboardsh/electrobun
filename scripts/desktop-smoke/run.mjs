@@ -12,6 +12,7 @@ import { parseHutchPragma, releaseChannel } from '../publish-templates.mjs';
 import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
 import { verifyMachORelease } from '../../package/scripts/verify-macho-deployment-target.js';
 import { startBunnyDiagnostics } from './bunny-diagnostics.mjs';
+import { applyBunnySourceOverlay } from './bunny-source-overlay.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templates';
@@ -70,6 +71,8 @@ export async function smokeRelease(options) {
     selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
     assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
     const bunnyDiagnostics = process.env.SMOKE_BUNNY_DIAGNOSTICS === '1';
+    const bunnySourceOverlay = process.env.SMOKE_BUNNY_SOURCE_OVERLAY === '1';
+    if (bunnySourceOverlay) assert.ok(bunnyDiagnostics, 'Bunny source overlay requires diagnostic provenance');
     if (bunnyDiagnostics) {
       assert.equal(options.platform, 'macos-x64', 'Bunny diagnostics require the native Intel macOS runner');
       assert.deepEqual(selected, ['bunny'], 'Bunny diagnostics require the focused bunny scenario');
@@ -98,10 +101,14 @@ export async function smokeRelease(options) {
         const projection = JSON.parse(readFileSync(join(project, '.hutch/devkit/projection.json'), 'utf8'));
         assert.equal(projection.product.version, options.version);
         if (bunnyDiagnostics) {
+          const sourceOverlay = bunnySourceOverlay ? applyBunnySourceOverlay({
+            project, output, sourceRoot: resolve(here, '../..'), revision: process.env.GITHUB_SHA,
+          }) : undefined;
           diagnostic = await startBunnyDiagnostics({ project, output });
           writeFileSync(join(output, 'diagnostic-release.json'), JSON.stringify({
             version: options.version, platform: options.platform, revision: catalog.revision,
             tools: catalog.tools, projection, harnessRevision: process.env.GITHUB_SHA,
+            ...(sourceOverlay ? { sourceOverlay } : {}),
             hutch: { path: hutch, sha256: createHash('sha256').update(readFileSync(hutch)).digest('hex') },
           }, null, 2));
         }

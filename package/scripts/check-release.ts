@@ -125,6 +125,12 @@ export function createTemplateTestCommands({
 			args: ["--test", "../scripts/accept-published-template.test.mjs"],
 			cwd: packageDir,
 		},
+		{
+			label: "Bunny optional WebGL effect tests",
+			command: "node",
+			args: ["--test", "../scripts/bunny-spark.test.mjs"],
+			cwd: packageDir,
+		},
 	];
 }
 

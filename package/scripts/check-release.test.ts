@@ -108,8 +108,13 @@ assert(
 
 const templateCommands = createTemplateTestCommands(options);
 assert(
-	templateCommands.length === 3,
-	"test:templates should expose three independent checks",
+	templateCommands.length === 4,
+	"test:templates should expose four independent checks",
+);
+assert(
+	templateCommands.some((command) => command.command === "node" &&
+		command.args.includes("../scripts/bunny-spark.test.mjs")),
+	"test:templates should exercise the actual Bunny renderer with failed and healthy WebGL",
 );
 
 const attempted: string[] = [];
