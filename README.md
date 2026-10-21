@@ -117,6 +117,7 @@ Don't miss our:
 - [Quiver](https://ataraxy-labs.github.io/quiver/) - desktop app for GitHub PR reviews, merge conflict resolution, and AI commit messages
 - [Sideleaf](https://sideleaf.xyz/) - simple Markdown and text editor with previews and notes
 - [StoryForge](https://github.com/StoryForgeApp/StoryForge) - desktop app for Vintage Story players to switch between game versions, modpacks, servers, and accounts
+- [ThinkRail](https://thinkrail.ai/) - agentic IDE built around the Pi coding agent that learns your project through living specs and reusable skills
 - [tokenpass-desktop](https://github.com/b-open-io/tokenpass-desktop) - desktop app that runs the Sigma Identity stack locally for Bitcoin-backed authentication
 - [Toonflow](https://github.com/HBAI-Ltd/Toonflow-app) - AI video creation app with scriptwriting, storyboarding, and image and video generation on an infinite canvas
 - [VibesOS](https://github.com/popmechanic/VibesOS) - A GUI for Claude Code that makes it easy to vibe code simple, un-hackable apps
