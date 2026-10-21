@@ -1,7 +1,7 @@
 # Electrobun release channels
 
 Every Electrobun release has one exact version and one `v<version>` tag. Its
-core and optional CEF archives plus `electrobun-artifacts.json`, four mirrored
+core and optional CEF archives plus `electrobun-artifacts.json`, six mirrored
 paired-Hutch archives plus `hutch-artifacts.json`, single dependency-free npm
 bootstrap, Kitchen release fixture, and template catalog metadata move together.
 
@@ -65,21 +65,21 @@ that tag, and pushes it. For example, a beta bump from `2.0.0` produces
 The single release workflow then:
 
 1. builds the per-platform core archives and Kitchen artifacts;
-2. downloads and verifies the four archives from the independently published,
+2. downloads and verifies the six archives from the independently published,
    exactly paired Hutch release, mirrors them into the Electrobun release, and
    creates `electrobun-artifacts.json` and `hutch-artifacts.json`; every indexed
    archive is bound to its immutable GitHub Release URL, byte size, and SHA-256
    digest before the draft release is verified and finalized;
 3. tests and publishes the single dependency-free `npm/electrobun` package with
    npm's `beta` dist-tag;
-4. on macOS arm64, Linux x64/arm64, and Windows x64, upgrades an isolated real
+4. on macOS x64/ARM64, Linux x64/ARM64, and Windows x64/ARM64, upgrades an isolated real
    v1.18.1 npm project to the exact public release, verifies the one-package
    layout, downloads its paired Hutch from that version's public GitHub
    Release, and proves the warm cache works offline; and
 5. only after that acceptance matrix passes, publishes the Kitchen artifacts
    to R2, stamps the exact release version into each staged template's
    `hutch.config.ts`, and then advances the matching beta template catalog;
-6. runs template acceptance on macOS ARM64, Windows x64, and Linux x64/ARM64.
+6. runs template acceptance on macOS x64/ARM64, Windows x64/ARM64, and Linux x64/ARM64.
    From an isolated Hutch home it resolves the published release's paired Hutch,
    uses `hutch electrobun init` to download and install the public `hello-world`
    template, checks the generated pins, builds it, and observes native startup.
@@ -98,7 +98,8 @@ To run the same acceptance test locally against a published release:
 node scripts/accept-published-template.mjs --version 2.0.2 --platform macos-arm64 --output /tmp/template-acceptance
 ```
 
-Use `windows-x64`, `linux-x64`, or `linux-arm64` for the other supported hosts.
+Use `macos-x64`, `windows-x64`, `windows-arm64`, `linux-x64`, or `linux-arm64`
+for the other supported hosts.
 The exact version must still be current in its stable/beta template catalog;
 the harness fails rather than silently testing a different release. A desktop
 session (or Xvfb on Linux) is required. The private fixture lives under
