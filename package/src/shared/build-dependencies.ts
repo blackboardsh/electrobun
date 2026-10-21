@@ -7,7 +7,7 @@ export const OWNED_BUILD_DEPENDENCY_VERSIONS = {
 	"zig-bsdiff": "0.1.26",
 	"zig-zstd": "0.1.9",
 	"zig-asar": "0.2.8",
-	"electrobun-dawn": "0.2.6",
+	"electrobun-dawn": "0.2.7",
 } as const;
 
 export type OwnedBuildDependency =
