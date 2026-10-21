@@ -137,6 +137,10 @@ export function updateMigrationGuideHutchPin(source, hutchVersion) {
 		candidate[0],
 		"docs/src/content/docs/electrobun/guides/migrating-to-v2.mdx documented pragma",
 	);
+	// Release validation may use prerelease toolchains while the public install
+	// example continues to recommend the last stable Hutch release. Validate the
+	// documented pragma above even when this sync leaves its contents unchanged.
+	if (parseStrictSemVer(hutchVersion).prerelease !== null) return source;
 	const replacement = `// @hutch cli=${hutchVersion} cottontail=${pins.cottontail}`;
 	return `${source.slice(0, candidate.index)}${replacement}${source.slice(
 		candidate.index + candidate[0].length,
