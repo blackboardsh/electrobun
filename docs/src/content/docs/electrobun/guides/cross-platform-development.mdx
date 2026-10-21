@@ -11,14 +11,15 @@ it is running. Produce and test each release on a native runner.
 
 | Platform | Architecture | System renderer |
 | --- | --- | --- |
-| macOS | ARM64 | WKWebView |
+| macOS 14+ | x64 (Intel) and ARM64 (Apple Silicon) | WKWebView |
 | Windows | x64 and ARM64 | WebView2 |
 | Linux | x64 and ARM64 | GTK WebKit 4.1 |
 
 Windows ARM64 builds use a native ARM64 Zig `0.17.0` host compiler and produce
 native ARM64 applications. Test both WebView2 and CEF on ARM64 hardware.
 Existing x64 applications remain emulated until the ARM64 build is explicitly installed.
-The current release workflow does not publish a macOS x64 core artifact.
+macOS releases include separate Intel x64 and Apple Silicon ARM64 artifacts,
+both targeting macOS 14 or later. Build and test each on its native architecture.
 
 On each runner, install Hutch and execute the same stable-release command:
 
@@ -131,8 +132,9 @@ inherit standard output and error.
 
 ## Test Matrix
 
-Automated tests should cover the four published targets. Interactive tests
-that exercise renderer output need a display session and should cover system
+Automated tests should cover all six targets: macOS, Windows, and Linux on
+x64 and ARM64. Interactive tests that exercise renderer output need a display
+session and should cover system
 webviews everywhere plus CEF where the application enables it. Native
 main-process SDKs share the Electrobun core, but each wrapper should retain a
 smoke test for initialization, RPC, event dispatch, and shutdown.

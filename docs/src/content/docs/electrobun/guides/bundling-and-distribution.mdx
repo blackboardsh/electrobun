@@ -81,11 +81,13 @@ constructs URLs from this base and the channel/platform prefix.
 
 ## Host-Native Matrix
 
-Run the same build on each published target:
+Run the same build on all six targets. Both macOS architectures require macOS
+14 or later:
 
 | Runner | Stable installer prefix | Stable updater prefix |
 | --- | --- | --- |
 | macOS ARM64 | `macos-arm64-` | `stable-macos-arm64-` |
+| macOS x64 (Intel) | `macos-x64-` | `stable-macos-x64-` |
 | Windows x64 | `win-x64-` | `stable-win-x64-` |
 | Windows ARM64 | `win-arm64-` | `stable-win-arm64-` |
 | Linux x64 | `linux-x64-` | `stable-linux-x64-` |
@@ -93,7 +95,6 @@ Run the same build on each published target:
 
 Canary builds prepend `canary-` to both prefixes. The updater keeps the
 installed architecture, so an existing x64 app needs an explicit ARM64 install.
-Electrobun's current release matrix does not publish a macOS x64 core artifact.
 
 ## Artifact Names
 
