@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
+import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,6 +11,7 @@ import { npmInvocation, validateRunnerPlatform } from '../../npm/scripts/accept-
 import { parseHutchPragma, releaseChannel } from '../publish-templates.mjs';
 import { templateScenarios, kitchenScenarios, skipReason } from './scenarios.mjs';
 import { verifyMachORelease } from '../../package/scripts/verify-macho-deployment-target.js';
+import { startBunnyDiagnostics } from './bunny-diagnostics.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templates';
@@ -67,17 +69,24 @@ export async function smokeRelease(options) {
     const selection = options.scenarios || options.templates || 'all';
     selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
     assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
+    const bunnyDiagnostics = process.env.SMOKE_BUNNY_DIAGNOSTICS === '1';
+    if (bunnyDiagnostics) {
+      assert.equal(options.platform, 'macos-x64', 'Bunny diagnostics require the native Intel macOS runner');
+      assert.deepEqual(selected, ['bunny'], 'Bunny diagnostics require the focused bunny scenario');
+    }
     for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
       const output = join(work, scenario.id);
       mkdirSync(output);
       const reason = skipReason(scenario, options.platform);
       if (reason) { results.push({ name: scenario.id, status: 'skipped', reason }); continue; }
       console.log(`[desktop-smoke] ${scenario.id}: interactive init → hutch dev → desktop interaction`);
+      let diagnostic;
+      let project;
       try {
         const index = catalog.templates.findIndex(t => t.id === scenario.id);
         assert.ok(index >= 0, `Published template missing: ${scenario.id}`);
         const projectName = `smoke-${scenario.id}`;
-        const project = join(scratch, projectName);
+        project = join(scratch, projectName);
         const picker = { hutch, channel, cwd: scratch, index, id: scenario.id, label: catalog.templates[index].name,
           projectName, version: options.version, log: join(output, 'picker.log') };
         const pickerPath = join(output, 'picker-plan.json');
@@ -88,7 +97,16 @@ export async function smokeRelease(options) {
         assert.ok(config.includes(`version: "${options.version}"`), 'Project product pin differs from release');
         const projection = JSON.parse(readFileSync(join(project, '.hutch/devkit/projection.json'), 'utf8'));
         assert.equal(projection.product.version, options.version);
-        const plan = { ...scenario, name: scenario.id, output, cwd: project, command: [hutch, 'dev'] };
+        if (bunnyDiagnostics) {
+          diagnostic = await startBunnyDiagnostics({ project, output });
+          writeFileSync(join(output, 'diagnostic-release.json'), JSON.stringify({
+            version: options.version, platform: options.platform, revision: catalog.revision,
+            tools: catalog.tools, projection, harnessRevision: process.env.GITHUB_SHA,
+            hutch: { path: hutch, sha256: createHash('sha256').update(readFileSync(hutch)).digest('hex') },
+          }, null, 2));
+        }
+        const plan = { ...scenario, name: scenario.id, output, cwd: project, command: [hutch, 'dev'],
+          ...(bunnyDiagnostics ? { diagnostics: true } : {}) };
         const planPath = join(output, 'desktop-plan.json');
         writeFileSync(planPath, JSON.stringify(plan));
         await run(python, [join(here, 'desktop.py'), planPath], { env, cwd: scratch, log: join(output, 'desktop-driver.log'), timeout: 900_000 });
@@ -102,6 +120,17 @@ export async function smokeRelease(options) {
         const report = existsSync(reportPath) ? JSON.parse(readFileSync(reportPath, 'utf8')) : {};
         results.push({ ...report, name: scenario.id, status: 'failed', error: error.message });
         console.error(`[desktop-smoke] ${scenario.id}: ${error.message}`);
+      } finally {
+        if (diagnostic) {
+          try {
+            const identities = verifyBuiltMacOSApp(join(project, 'build'), options.platform).map(binary => ({
+              ...binary, sha256: createHash('sha256').update(readFileSync(binary.path)).digest('hex'),
+            }));
+            writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify(identities, null, 2));
+          } catch (error) {
+            writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify({ error: error.message }, null, 2));
+          } finally { await diagnostic.close(); }
+        }
       }
     }
     // Build the exact tagged Kitchen sources against the published devkit. Do

@@ -246,6 +246,16 @@ def inspect_app(plan):
     rect = None
     process = None
 
+    def record_pointer(label, requested=None):
+        if plan.get('diagnostics'):
+            observation = {'label': label, 'time': time.time(), 'actual': list(gui.position()),
+                           'windowBounds': list(rect) if rect else None}
+            if requested is not None:
+                observation['requested'] = list(requested)
+            result.setdefault('pointerReadings', []).append(observation)
+            with (output / 'pointer-diagnostics.jsonl').open('a', encoding='utf-8') as log:
+                log.write(json.dumps(observation) + '\n')
+
     def require_running():
         if process.poll() is not None:
             raise RuntimeError(f'dev command exited with {process.returncode}')
@@ -264,6 +274,7 @@ def inspect_app(plan):
 
     def capture(label):
         refresh_bounds()
+        record_pointer('capture:' + label)
         image = gui.screenshot()
         label = f'{len(shots) + 1:02d}-{label}'
         image.save(output / f'{label}.png')
@@ -440,7 +451,10 @@ def inspect_app(plan):
                     gui.press(action['key'])
                 if 'move' in action:
                     x, y = action['move']
-                    gui.moveTo(rect[0] + rect[2] * x, rect[1] + rect[3] * y, duration=0.3)
+                    target = (rect[0] + rect[2] * x, rect[1] + rect[3] * y)
+                    record_pointer('before-move', target)
+                    gui.moveTo(*target, duration=0.3)
+                    record_pointer('after-move', target)
                 if 'expectText' in action:
                     await_text(action['expectText'])
                     checks.append('visible-text:' + action['expectText'])
@@ -507,6 +521,8 @@ def inspect_app(plan):
                 after = capture(f'{index + 2:02d}-interaction')
                 if action.get('expectChange'):
                     difference = ImageStat.Stat(ImageChops.difference(before.convert('RGB'), after.convert('RGB')))
+                    if plan.get('diagnostics'):
+                        result.setdefault('visibleChangeMeans', []).append(list(difference.mean))
                     if max(difference.mean) < 0.1:
                         raise AssertionError('Input did not produce a visible change')
                     checks.append('visible-response-to-input')

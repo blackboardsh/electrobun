@@ -25,6 +25,10 @@ on:
         description: Comma-separated scenario IDs for diagnostics, or all
         type: string
         default: all
+      bunny_diagnostics:
+        description: Trace the generated Bunny app on the native Intel runner
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -49,6 +53,12 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
+      - name: Validate focused Bunny diagnostic selection
+        if: github.event_name == 'workflow_dispatch' && inputs.bunny_diagnostics
+        env:
+          INTEL_ONLY: ${{ inputs.macos_intel_only }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: node -e 'if (process.env.INTEL_ONLY !== "true" || process.env.SCENARIOS !== "bunny") throw new Error("Bunny diagnostics require macos_intel_only=true and scenarios=bunny")'
       - name: Verify native macOS runner architecture
         if: runner.os == 'macOS'
         shell: bash
@@ -104,6 +114,7 @@ jobs:
         run: |
           python scripts/desktop-smoke/test_desktop.py
           python scripts/desktop-smoke/test_picker.py
+          node --test scripts/desktop-smoke/bunny-diagnostics.test.mjs
       - name: Prepare Windows desktop shell
         if: runner.os == 'Windows'
         shell: powershell
@@ -174,6 +185,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           SMOKE_PLATFORM: ${{ matrix.platform }}
           SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+          SMOKE_BUNNY_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.bunny_diagnostics && '1' || '0' }}
         run: |
           mkdir -p "$RUNNER_TEMP/desktop-smoke-results"
           python scripts/desktop-smoke/preflight.py "$RUNNER_TEMP/desktop-smoke-results" 2>&1 | tee "$RUNNER_TEMP/desktop-smoke-results/preflight.log"
