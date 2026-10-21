@@ -1,0 +1,139 @@
+name: Published template acceptance
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published Electrobun version or tag
+        type: string
+        required: true
+      release_revision:
+        description: Full immutable commit SHA of the published release
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  acceptance:
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos-arm64
+          # Keep GUI tests on the functional Intel desktop image; native release
+          # compilation and signing remain on macOS 26 in release.yml.
+          - os: macos-15-intel
+            platform: macos-x64
+          - os: ubuntu-24.04
+            platform: linux-x64
+          - os: ubuntu-24.04-arm
+            platform: linux-arm64
+          - os: windows-2025
+            platform: windows-x64
+          - os: windows-11-arm
+            platform: windows-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify native macOS runner architecture
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
+        run: |
+          expected_machine=x86_64
+          if [[ "$EXPECTED_ARCH" == arm64 ]]; then expected_machine=arm64; fi
+          test "$(uname -m)" = "$expected_machine"
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error(`Expected native ${process.env.EXPECTED_ARCH} Node, got ${process.arch}`)'
+      - name: Verify exact published release provenance
+        id: release
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          RELEASE_REVISION: ${{ inputs.release_revision }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+          import { parseStrictSemVer } from './package/src/shared/strict-semver.js';
+          import { parseHutchPragma, releaseChannel } from './scripts/publish-templates.mjs';
+          import { validateCatalog } from './scripts/accept-published-template.mjs';
+          const version = process.env.INPUT_VERSION.replace(/^v/, '');
+          assert.ok(parseStrictSemVer(version), 'An exact published version is required');
+          assert.match(process.env.RELEASE_REVISION, /^[0-9a-f]{40}$/);
+          assert.equal(JSON.parse(readFileSync('package/package.json', 'utf8')).version, version,
+            'Acceptance source must retain the tested release version and paired toolchain');
+          const api = async path => {
+            const response = await fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/${path}`, {
+              headers: { Authorization: `Bearer ${process.env.GH_TOKEN}`, Accept: 'application/vnd.github+json' },
+              signal: AbortSignal.timeout(30_000),
+            });
+            assert.equal(response.ok, true, `GitHub ${path}: HTTP ${response.status}`);
+            return response.json();
+          };
+          let object = (await api(`git/ref/tags/v${version}`)).object;
+          for (let depth = 0; object.type === 'tag' && depth < 4; depth++) {
+            object = (await api(`git/tags/${object.sha}`)).object;
+          }
+          assert.equal(object.type, 'commit');
+          assert.equal(object.sha, process.env.RELEASE_REVISION, 'Published tag revision differs');
+          const response = await fetch(`https://electrobun-artifacts.blackboard.sh/electrobun/templates/channels/${releaseChannel(version)}.json`, {
+            cache: 'no-store', signal: AbortSignal.timeout(30_000),
+          });
+          assert.equal(response.ok, true, `Template catalog HTTP ${response.status}`);
+          const catalog = await response.json();
+          const pins = parseHutchPragma(readFileSync('package/hutch.config.ts', 'utf8'));
+          validateCatalog(catalog, version, pins);
+          assert.equal(catalog.revision, process.env.RELEASE_REVISION, 'Published template revision differs');
+          mkdirSync('template-acceptance-results', { recursive: true });
+          writeFileSync('template-acceptance-results/provenance.json', JSON.stringify({
+            version, releaseRevision: object.sha, harnessRevision: process.env.GITHUB_SHA, tools: pins,
+          }, null, 2));
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\nhutch-source=${releaseChannel(version) === 'stable' ? 'production-installer' : 'npm'}\n`);
+          JS
+      - name: Test template acceptance harness
+        run: node --test scripts/accept-published-template.test.mjs
+      - name: Install Linux webview and virtual display
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-0 libgtk-3-0 libayatana-appindicator3-1 xvfb xauth
+      - name: Accept published templates on Linux
+        if: runner.os == 'Linux'
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+        run: >-
+          xvfb-run -a node scripts/accept-published-template.mjs
+          --version "${{ steps.release.outputs.version }}"
+          --platform "${{ matrix.platform }}"
+          --hutch-source "${{ steps.release.outputs.hutch-source }}"
+          --output template-acceptance-results
+      - name: Accept published templates on desktop
+        if: runner.os != 'Linux'
+        run: >-
+          node scripts/accept-published-template.mjs
+          --version "${{ steps.release.outputs.version }}"
+          --platform "${{ matrix.platform }}"
+          --hutch-source "${{ steps.release.outputs.hutch-source }}"
+          --output template-acceptance-results
+      - name: Retain template acceptance reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: template-acceptance-${{ matrix.platform }}
+          path: |
+            template-acceptance-results/*.log
+            template-acceptance-results/*.json
+          if-no-files-found: warn

@@ -148,17 +148,22 @@ export function createAcceptanceCommands({ hutch, npmCli, resolver, env, scratch
 	};
 	return {
 		invokeHutch(label, args, cwd, extra, options) {
+			assert.ok(hutch, "public init must succeed before resolving Hutch for acceptance commands");
 			// A resolver fallback can return the global launcher. Supply the same
 			// exact defaults as the npm CLI when invoking that launcher directly.
 			const environment = resolver ? resolver.environmentWithPairedDefaults(env) : env;
 			return invoke(hutch, label, args, environment, cwd, extra, options);
 		},
-		initPublicTemplate(args) {
+		async initPublicTemplate(args) {
 			// Run the installed npm entry point so init must install global Hutch
 			// itself, starting from the same unpinned environment as a new user.
-			return npmCli
-				? invoke(process.execPath, "public-init", [npmCli, ...args], env)
-				: invoke(hutch, "public-init", ["electrobun", ...args], env);
+			const output = npmCli
+				? await invoke(process.execPath, "public-init", [npmCli, ...args], env)
+				: await invoke(hutch, "public-init", ["electrobun", ...args], env);
+			// Resolving the npm cache creates HUTCH_HOME/npm. Leave the home
+			// untouched until the public CLI has installed and initialized it.
+			if (resolver && !hutch) hutch = await resolver.resolveHutchBinary({ environment: env });
+			return output;
 		},
 	};
 }
@@ -226,12 +231,11 @@ async function acceptInScratch({ version, platform, work, hutchSource, pins, scr
 		resolver = createRequire(import.meta.url)(join(bootstrap, "node_modules/electrobun/bin/resolve-hutch.cjs"));
 		assert.equal(resolver.ELECTROBUN_VERSION, version);
 		assert.equal(resolver.PAIRED_HUTCH_VERSION, pins.hutch);
-		hutch = await resolver.resolveHutchBinary({ environment: env });
 	}
 	const { invokeHutch: invoke, initPublicTemplate } = createAcceptanceCommands({ hutch, npmCli, resolver, env, scratch, work });
-	if (hutchSource === "npm") assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
 	const channelArgs = releaseChannel(version) === "beta" ? ["--beta"] : [];
 	await initPublicTemplate(["init", "public-app", "--template=hello-world", ...channelArgs]);
+	if (hutchSource === "npm") assert.equal((await invoke("hutch-version", ["--version"])).trim(), pins.hutch);
 	const publicProject = join(scratch, "public-app"); verifyProject(publicProject, version, pins);
 	assert.ok(existsSync(join(publicProject, "node_modules/@types/bun/package.json")), "public template install task did not install dependencies");
 	await invoke("public-build", ["electrobun", "build"], publicProject);

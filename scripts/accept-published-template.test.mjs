@@ -90,6 +90,53 @@ test("npm acceptance exercises the installed CLI from an unpinned environment an
 	assert.equal(env.PATH, "existing-tools");
 });
 
+test("npm acceptance leaves a cold home untouched until public init succeeds", async t => {
+	const scratch = mkdtempSync(join(tmpdir(), "electrobun-cold-init-test-"));
+	t.after(() => rmSync(scratch, { recursive: true, force: true }));
+	const npmCli = join(scratch, "public-cli.cjs");
+	// Run a real child process against the filesystem: its installer refuses
+	// the same preexisting cache that the acceptance harness used to create.
+	writeFileSync(npmCli, `
+		const assert = require("node:assert/strict");
+		const fs = require("node:fs");
+		const path = require("node:path");
+		assert.deepEqual(process.argv.slice(2), ["init", "public-app", "--template=hello-world", "--beta"]);
+		assert.equal(fs.existsSync(process.env.HUTCH_HOME), false, "public init received a populated home");
+		fs.mkdirSync(path.join(process.env.HUTCH_HOME, "state"), { recursive: true });
+		fs.writeFileSync(path.join(process.env.HUTCH_HOME, "state", "store.json"), "installed");
+	`);
+	for (const populated of [false, true]) {
+		const work = join(scratch, populated ? "populated" : "cold");
+		mkdirSync(work);
+		const env = acceptanceEnvironment(process.env, work, "npm");
+		if (populated) mkdirSync(join(env.HUTCH_HOME, "npm"), { recursive: true });
+		let resolutions = 0;
+		const resolver = {
+			async resolveHutchBinary({ environment }) {
+				resolutions++;
+				assert.equal(readFileSync(join(environment.HUTCH_HOME, "state", "store.json"), "utf8"), "installed");
+				mkdirSync(join(environment.HUTCH_HOME, "npm"));
+				return process.execPath;
+			},
+			environmentWithPairedDefaults: hutchResolver.environmentWithPairedDefaults,
+		};
+		const commands = createAcceptanceCommands({ npmCli, resolver, env, scratch: work, work });
+		assert.throws(() => commands.invokeHutch("hutch-version", ["--version"]), /public init must succeed/);
+		assert.equal(existsSync(env.HUTCH_HOME), populated);
+		const operation = commands.initPublicTemplate(["init", "public-app", "--template=hello-world", "--beta"]);
+		if (populated) {
+			await assert.rejects(operation, /public init received a populated home/);
+			assert.equal(resolutions, 0, "a failed public init must not resolve or run a fallback Hutch");
+			assert.throws(() => commands.invokeHutch("hutch-version", ["--version"]), /public init must succeed/);
+		} else {
+			await operation;
+			assert.equal(resolutions, 1);
+			assert.equal(existsSync(join(env.HUTCH_HOME, "npm")), true);
+			assert.equal((await commands.invokeHutch("hutch-version", ["--version"])).trim(), process.version);
+		}
+	}
+});
+
 test("production installer acceptance invokes the installed launcher without npm defaults", async () => {
 	const scratch = join(tmpdir(), "electrobun-production-command-test");
 	const env = acceptanceEnvironment({ PATH: "existing-tools", HUTCH_ACTIVE_CHANNEL: "canary" }, scratch, "production-installer");
