@@ -1678,16 +1678,23 @@ func runWindowFullscreenToggleTest(hiddenTitlebar bool) error {
 		if err := state.core.SetWindowFullScreen(windowID, true); err != nil {
 			return err
 		}
-		time.Sleep(longWait)
-		if !state.core.IsWindowFullScreen(windowID) {
-			return fmt.Errorf("window did not enter fullscreen")
+		enterStarted := time.Now()
+		observedFullscreen := false
+		if !waitUntil(5*time.Second, func() bool {
+			observedFullscreen = state.core.IsWindowFullScreen(windowID)
+			return observedFullscreen
+		}) {
+			return fmt.Errorf("window did not enter fullscreen: expected true, observed %t after %dms", observedFullscreen, time.Since(enterStarted).Milliseconds())
 		}
 		if err := state.core.SetWindowFullScreen(windowID, false); err != nil {
 			return err
 		}
-		time.Sleep(longWait)
-		if state.core.IsWindowFullScreen(windowID) {
-			return fmt.Errorf("window still reported fullscreen after exit")
+		exitStarted := time.Now()
+		if !waitUntil(5*time.Second, func() bool {
+			observedFullscreen = state.core.IsWindowFullScreen(windowID)
+			return !observedFullscreen
+		}) {
+			return fmt.Errorf("window still reported fullscreen after exit: expected false, observed %t after %dms", observedFullscreen, time.Since(exitStarted).Milliseconds())
 		}
 		return nil
 	}()

@@ -25,6 +25,29 @@ async function readViewportSize(webview: { rpc?: any }): Promise<ViewportSize> {
   return viewport;
 }
 
+async function waitForFullscreen(
+  window: { isFullScreen(): boolean },
+  expected: boolean,
+  log: (message: string) => void,
+): Promise<void> {
+  // The macOS style bit changes before its Space animation completes. An exit
+  // requested as soon as entry is observed can remain queued until did-enter.
+  const started = performance.now();
+  const timeout = 5000 * (process.platform === "win32" ? 3 : 1);
+  let observed = window.isFullScreen();
+  while (observed !== expected && performance.now() - started < timeout) {
+    await sleep(25);
+    observed = window.isFullScreen();
+  }
+  const elapsed = Math.round(performance.now() - started);
+  log(`Fullscreen expected=${expected}, observed=${observed} after ${elapsed}ms`);
+  if (observed !== expected) {
+    throw new Error(
+      `Fullscreen transition timed out: expected=${expected}, observed=${observed} after ${elapsed}ms`,
+    );
+  }
+}
+
 export const windowTests = [
   defineTest({
     name: "Window native viewport is correct before first resize",
@@ -352,12 +375,12 @@ export const windowTests = [
 
       log("Entering fullscreen");
       win.window.setFullScreen(true);
-      await sleep(1000);
+      await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen");
       win.window.setFullScreen(false);
-      await sleep(1000);
+      await waitForFullscreen(win.window, false, log);
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Fullscreen toggle completed");
@@ -389,12 +412,12 @@ export const windowTests = [
 
       log("Entering fullscreen with hidden titlebar");
       win.window.setFullScreen(true);
-      await sleep(1000);
+      await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen with hidden titlebar");
       win.window.setFullScreen(false);
-      await sleep(1000);
+      await waitForFullscreen(win.window, false, log);
       expect(win.window.isFullScreen()).toBe(false);
     },
   }),

@@ -2294,14 +2294,29 @@ fn run_window_fullscreen_toggle_test(hidden_titlebar: bool) -> Result<(), String
     let result = (|| {
         sleep_ms(MEDIUM_WAIT_MS);
         state.core.set_window_full_screen(window_id, true)?;
-        sleep_ms(LONG_WAIT_MS);
-        if !state.core.is_window_full_screen(window_id) {
-            return Err("window did not enter fullscreen".to_string());
+        let enter_started = Instant::now();
+        let mut observed_fullscreen = false;
+        if !wait_until(5_000, || {
+            observed_fullscreen = state.core.is_window_full_screen(window_id);
+            observed_fullscreen
+        }) {
+            return Err(format!(
+                "window did not enter fullscreen: expected true, observed {} after {}ms",
+                observed_fullscreen,
+                enter_started.elapsed().as_millis()
+            ));
         }
         state.core.set_window_full_screen(window_id, false)?;
-        sleep_ms(LONG_WAIT_MS);
-        if state.core.is_window_full_screen(window_id) {
-            return Err("window still reported fullscreen after exit".to_string());
+        let exit_started = Instant::now();
+        if !wait_until(5_000, || {
+            observed_fullscreen = state.core.is_window_full_screen(window_id);
+            !observed_fullscreen
+        }) {
+            return Err(format!(
+                "window still reported fullscreen after exit: expected false, observed {} after {}ms",
+                observed_fullscreen,
+                exit_started.elapsed().as_millis()
+            ));
         }
         Ok(())
     })();

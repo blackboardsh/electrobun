@@ -2591,6 +2591,22 @@ fn runWindowMinimizeUnminimizeTest(state: *AppState) !void {
     }
 }
 
+fn waitForWindowFullscreen(state: *AppState, window_id: u32, expected: bool) bool {
+    // AppKit exposes the style bit before the Space animation completes and
+    // queues an immediate reversal until its did-enter callback.
+    const started = nowMs();
+    const timeout: i64 = @intCast(5000 * slowPlatformScale());
+    var observed = state.core.isWindowFullScreen(window_id);
+    while (observed != expected and nowMs() - started < timeout) {
+        sleepMs(25);
+        observed = state.core.isWindowFullScreen(window_id);
+    }
+    if (observed != expected) {
+        std.debug.print("[kitchen zig] fullscreen transition timed out: expected={}, observed={} after {d}ms\n", .{ expected, observed, nowMs() - started });
+    }
+    return observed == expected;
+}
+
 fn runWindowFullscreenToggleTest(state: *AppState) !void {
     const created = try createWindowWithTestHarness(
         state,
@@ -2607,14 +2623,12 @@ fn runWindowFullscreenToggleTest(state: *AppState) !void {
     }
 
     try state.core.setWindowFullScreen(created.window_id, true);
-    sleepMs(long_wait_ms);
-    if (!state.core.isWindowFullScreen(created.window_id)) {
+    if (!waitForWindowFullscreen(state, created.window_id, true)) {
         return error.WindowDidNotEnterFullscreen;
     }
 
     try state.core.setWindowFullScreen(created.window_id, false);
-    sleepMs(long_wait_ms);
-    if (state.core.isWindowFullScreen(created.window_id)) {
+    if (!waitForWindowFullscreen(state, created.window_id, false)) {
         return error.WindowDidNotExitFullscreen;
     }
 }
@@ -2648,14 +2662,12 @@ fn runWindowFullscreenToggleHiddenTitlebarTest(state: *AppState) !void {
     }
 
     try state.core.setWindowFullScreen(created.window_id, true);
-    sleepMs(long_wait_ms);
-    if (!state.core.isWindowFullScreen(created.window_id)) {
+    if (!waitForWindowFullscreen(state, created.window_id, true)) {
         return error.WindowDidNotEnterFullscreen;
     }
 
     try state.core.setWindowFullScreen(created.window_id, false);
-    sleepMs(long_wait_ms);
-    if (state.core.isWindowFullScreen(created.window_id)) {
+    if (!waitForWindowFullscreen(state, created.window_id, false)) {
         return error.WindowDidNotExitFullscreen;
     }
 }

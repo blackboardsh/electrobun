@@ -2918,6 +2918,22 @@ runWindowMinimizeUnminimizeTest :: proc(state: ^AppState) -> string {
 	return ""
 }
 
+waitForWindowFullscreen :: proc(state: ^AppState, window_id: u32, expected: bool) -> bool {
+	// AppKit exposes the style bit before the Space animation completes and
+	// queues an immediate reversal until its did-enter callback.
+	started := time.tick_now()
+	timeout := time.Duration(5000 * slow_platform_scale()) * time.Millisecond
+	observed := electrobun.isWindowFullScreen(state.core, window_id)
+	for observed != expected && time.tick_since(started) < timeout {
+		sleepMs(25)
+		observed = electrobun.isWindowFullScreen(state.core, window_id)
+	}
+	if observed != expected {
+		fmt.eprintf("[kitchen odin] fullscreen transition timed out: expected=%v, observed=%v after %dms\n", expected, observed, time.duration_milliseconds(time.tick_since(started)))
+	}
+	return observed == expected
+}
+
 runWindowFullscreenToggleTest :: proc(state: ^AppState) -> string {
 	created, create_err := createWindowWithTestHarness(
 		state,
@@ -2939,16 +2955,14 @@ runWindowFullscreenToggleTest :: proc(state: ^AppState) -> string {
 	if err := electrobun.setWindowFullScreen(state.core, created.window_id, true); err != .None {
 		return errName(err)
 	}
-	sleepMs(long_wait_ms)
-	if !electrobun.isWindowFullScreen(state.core, created.window_id) {
+	if !waitForWindowFullscreen(state, created.window_id, true) {
 		return "WindowDidNotEnterFullscreen"
 	}
 
 	if err := electrobun.setWindowFullScreen(state.core, created.window_id, false); err != .None {
 		return errName(err)
 	}
-	sleepMs(long_wait_ms)
-	if electrobun.isWindowFullScreen(state.core, created.window_id) {
+	if !waitForWindowFullscreen(state, created.window_id, false) {
 		return "WindowDidNotExitFullscreen"
 	}
 	return ""
@@ -2981,16 +2995,14 @@ runWindowFullscreenToggleHiddenTitlebarTest :: proc(state: ^AppState) -> string 
 		if err := electrobun.setWindowFullScreen(state.core, created.window_id, true); err != .None {
 			return errName(err)
 		}
-		sleepMs(long_wait_ms)
-		if !electrobun.isWindowFullScreen(state.core, created.window_id) {
+		if !waitForWindowFullscreen(state, created.window_id, true) {
 			return "WindowDidNotEnterFullscreen"
 		}
 
 		if err := electrobun.setWindowFullScreen(state.core, created.window_id, false); err != .None {
 			return errName(err)
 		}
-		sleepMs(long_wait_ms)
-		if electrobun.isWindowFullScreen(state.core, created.window_id) {
+		if !waitForWindowFullscreen(state, created.window_id, false) {
 			return "WindowDidNotExitFullscreen"
 		}
 		return ""
