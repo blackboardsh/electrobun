@@ -25,9 +25,50 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  stock-cocoa:
+    name: Stock Cocoa (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x64
+            machine: x86_64
+          - runner: macos-26
+            arch: arm64
+            machine: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 8
+    env:
+      FULLSCREEN_DIAGNOSTICS: ${{ github.workspace }}/fullscreen-stock-diagnostics
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Verify native control runner
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(uname -m)" = "$EXPECTED_MACHINE"
+          test "$(sysctl -in sysctl.proc_translated 2>/dev/null || true)" != 1
+          node -e 'if (process.arch !== process.env.EXPECTED_ARCH) throw new Error("Unexpected Node architecture")'
+      - name: Run normal and hidden stock Cocoa controls
+        run: node package/scripts/fullscreen-intel-diagnostic.mjs stock-only
+      - name: Retain stock Cocoa diagnostics
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: fullscreen-stock-${{ matrix.runner }}-${{ github.run_id }}
+          retention-days: 14
+          if-no-files-found: warn
+          path: ${{ env.FULLSCREEN_DIAGNOSTICS }}/**
   fullscreen:
     runs-on: macos-26-intel
-    timeout-minutes: 25
+    timeout-minutes: 40
     env:
       ELECTROBUN_BUILD_ARCH: x64
       ELECTROBUN_DEBUG_FULLSCREEN: '1'
@@ -87,8 +128,8 @@ jobs:
         run: hutch scripts/kitchen-matrix.ts --build-only --with=bun:native,bun:cef --jobs=2
       - name: Verify packaged Intel binaries
         run: node package/scripts/verify-macho-deployment-target.js --arch=x64 kitchen/build/matrix
-      - name: Run both fullscreen cases with native and CEF renderers
-        timeout-minutes: 5
+      - name: Compare Cocoa controls and both fullscreen cases with native and CEF renderers
+        timeout-minutes: 15
         run: node package/scripts/fullscreen-intel-diagnostic.mjs run
       - name: Retain fullscreen diagnostics
         if: always()
