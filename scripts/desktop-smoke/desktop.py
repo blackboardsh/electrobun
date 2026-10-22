@@ -451,6 +451,89 @@ def rendered_surface(frame, region):
     return max(ImageStat.Stat(frame.crop(box).convert('RGB')).stddev) >= 10
 
 
+def bunny_rendered(frame, reference):
+    """Match the published Bunny silhouette, not pixels behind its transparent window."""
+    from PIL import Image, ImageChops
+
+    def components(image):
+        image = image.convert('RGBA')
+        pixels = image.load()
+        remaining = {(x, y) for y in range(image.height) for x in range(image.width)
+                     if min(pixels[x, y][:3]) >= 200 and
+                     max(pixels[x, y][:3]) - min(pixels[x, y][:3]) <= 35 and pixels[x, y][3] >= 200}
+        found = []
+        while remaining:
+            seed = remaining.pop()
+            component, pending = {seed}, [seed]
+            while pending:
+                x, y = pending.pop()
+                # Diagonal antialiasing pixels must not connect the small
+                # rabbit body to a white desktop behind the transparent view.
+                for point in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if point in remaining:
+                        remaining.remove(point)
+                        component.add(point)
+                        pending.append(point)
+            xs, ys = zip(*component)
+            found.append((component, (min(xs), min(ys), max(xs) + 1, max(ys) + 1)))
+        return sorted(found, key=lambda entry: len(entry[0]), reverse=True)
+
+    def silhouette(component, box):
+        left, top, right, bottom = box
+        mask = Image.new('L', (right - left, bottom - top))
+        for x, y in component:
+            mask.putpixel((x - left, y - top), 255)
+        return mask.resize((64, 96), Image.Resampling.NEAREST)
+
+    def has_eye(component, box):
+        left, top, right, bottom = box
+        remaining = {(x, y) for y in range(top, bottom) for x in range(left, right)
+                     if (x, y) not in component}
+        while remaining:
+            seed = remaining.pop()
+            hole, pending, touches_edge = {seed}, [seed], False
+            while pending:
+                x, y = pending.pop()
+                touches_edge |= x in (left, right - 1) or y in (top, bottom - 1)
+                for point in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if point in remaining:
+                        remaining.remove(point)
+                        hole.add(point)
+                        pending.append(point)
+            if touches_edge:
+                continue
+            xs, ys = zip(*hole)
+            x = ((min(xs) + max(xs)) / 2 - left) / (right - left)
+            y = ((min(ys) + max(ys)) / 2 - top) / (bottom - top)
+            # The enclosed eye distinguishes the known rabbit from bright
+            # punctuation and simple shapes with a similar overall outline.
+            if 0.15 <= x <= 0.40 and 0.30 <= y <= 0.60 and 0.005 <= len(hole) / len(component) <= 0.12:
+                return True
+        return False
+
+    reference_components = components(reference)
+    if not reference_components:
+        raise ValueError('Bunny readiness reference has no visible silhouette')
+    expected = silhouette(*reference_components[0])
+    width, height = frame.size
+    for component, box in components(frame):
+        left, top, right, bottom = box
+        # The published image is 50vmin. Its solid body occupies only part of
+        # that square. Ignore the Linux white background and terminal glyphs.
+        if left == 0 or top == 0 or right == width or bottom == height:
+            continue
+        if not (0.008 <= len(component) / (width * height) <= 0.07 and
+                0.12 <= (right - left) / width <= 0.35 and
+                0.22 <= (bottom - top) / height <= 0.42):
+            continue
+        observed = silhouette(component, box)
+        intersection = sum(ImageChops.darker(expected, observed).getdata())
+        union = sum(ImageChops.lighter(expected, observed).getdata())
+        if union and intersection / union >= 0.45 and has_eye(component, box):
+            return True
+    return False
+
+
 def counter_region(frame):
     return frame.crop((round(frame.width * 0.15), round(frame.height * 0.25),
                        round(frame.width * 0.45), round(frame.height * 0.55))).convert('RGB')
@@ -587,7 +670,7 @@ def app_failure(log_text):
 def inspect_app(plan):
     import pyautogui as gui
     import pytesseract
-    from PIL import ImageChops, ImageStat
+    from PIL import Image, ImageChops, ImageStat
     output = Path(plan['output'])
     output.mkdir(parents=True, exist_ok=True)
     if os.environ.get('SMOKE_TESSERACT'):
@@ -728,6 +811,10 @@ def inspect_app(plan):
                 await_text(plan['readyText'])
                 checks.append('rendered-ready-text')
             time.sleep(2)
+            reference = None
+            if plan.get('readyImage'):
+                with Image.open(Path(plan['cwd']) / plan['readyImage']) as image:
+                    reference = image.copy()
             render_deadline = time.monotonic() + 30
             while True:
                 require_running()
@@ -735,12 +822,18 @@ def inspect_app(plan):
                 visible = max(ImageStat.Stat(before.convert('RGB')).stddev) >= 5
                 if plan.get('gpuRegion'):
                     visible = visible and rendered_surface(before, plan['gpuRegion'])
+                if reference is not None:
+                    visible = visible and bunny_rendered(before, reference)
                 if visible:
                     break
                 if time.monotonic() >= render_deadline:
+                    if reference is not None:
+                        raise AssertionError('Published Bunny image did not appear within the 30-second render deadline')
                     raise AssertionError('Window or required GPU surface remained blank or nearly uniform for 30 seconds')
                 time.sleep(2)
             checks.append('nonblank-desktop-capture')
+            if reference is not None:
+                checks.append('rendered-bunny-image')
             if plan.get('gpuRegion'):
                 checks.append('rendered-gpu-surface')
             initial_counter = counter_region(before)

@@ -1,0 +1,217 @@
+{
+  "description": "Lossless original window crops from actual CI screenshots. Painted readiness does not prove input responsiveness. Native pixel dimensions are preserved; no resizing or synthetic references.",
+  "reference": {
+    "path": "templates/bunny/src/mainview/assets/bunny.png",
+    "sha256": "96e6b4eab1c89550236fd655ad4f428a9d281128a549bc4b8ae359292bf622dc"
+  },
+  "fixtures": [
+    {
+      "file": "negative-windows-x64-attempt2.png",
+      "platform": "windows-x64",
+      "expectedPainted": false,
+      "size": [
+        239,
+        239
+      ],
+      "sha256": "34bf7140bdefc9d93add8d0388d331986b269935063a93391d3e1177aa3affc7",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782550,
+      "artifactId": 12394731205,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "failed",
+      "originalError": "Input did not produce a visible change"
+    },
+    {
+      "file": "negative-windows-x64-attempt3.png",
+      "platform": "windows-x64",
+      "expectedPainted": false,
+      "size": [
+        160,
+        160
+      ],
+      "sha256": "4f1e1c047b2f058568c2a658c570ee4bda650f072d0b15422cc5f8f4e4cd6aa4",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 3,
+      "jobId": 119591746119,
+      "artifactId": 12395608410,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "failed",
+      "originalError": "Input did not produce a visible change"
+    },
+    {
+      "file": "negative-windows-x64-native-only.png",
+      "platform": "windows-x64",
+      "expectedPainted": false,
+      "size": [
+        144,
+        144
+      ],
+      "sha256": "77ff414475de342ec4dc15b834e5658529b117d8d6b3d1e605c128f22fa4d04f",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39711306003,
+      "runAttempt": 1,
+      "jobId": 119603031934,
+      "artifactId": 12397021664,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "identicalArtifactPaths": [
+        "bunny/02-02-interaction-window.png",
+        "bunny/failure-later-01-window.png",
+        "bunny/failure-later-02-window.png",
+        "bunny/failure-later-03-window.png",
+        "bunny/failure-later-04-window.png"
+      ],
+      "originalOutcome": "failed",
+      "originalError": "Input did not produce a visible change",
+      "harnessSha": "1957da31bdcee8a498fedefc7389c416621e6596",
+      "nativeOnlyDiagnostics": true
+    },
+    {
+      "file": "positive-linux-arm64.png",
+      "platform": "linux-arm64",
+      "expectedPainted": true,
+      "size": [
+        185,
+        185
+      ],
+      "sha256": "0ad52fe9cfc33eb3d1f6a159369e9caabfe365bd0a160d2c3eccd64ca394f0cb",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782453,
+      "artifactId": 12394218194,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    },
+    {
+      "file": "positive-linux-x64.png",
+      "platform": "linux-x64",
+      "expectedPainted": true,
+      "size": [
+        116,
+        116
+      ],
+      "sha256": "99352892b729652bcb3cdefe1667bdc8a6a3cb4c68c18334492a81c46cc8c7cf",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782484,
+      "artifactId": 12394686146,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    },
+    {
+      "file": "positive-macos-arm64.png",
+      "platform": "macos-arm64",
+      "expectedPainted": true,
+      "size": [
+        229,
+        229
+      ],
+      "sha256": "5b25ef5bb948db8d728514495f30598be998fdd290e128ae5768466e2631de74",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782655,
+      "artifactId": 12393384999,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    },
+    {
+      "file": "positive-macos-x64.png",
+      "platform": "macos-x64",
+      "expectedPainted": true,
+      "size": [
+        106,
+        106
+      ],
+      "sha256": "bd94bdcae60f3ca5bb98f7028ec67da0db12e0ad75bf8b923bac7e109e965f90",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782545,
+      "artifactId": 12395031696,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    },
+    {
+      "file": "positive-windows-arm64.png",
+      "platform": "windows-arm64",
+      "expectedPainted": true,
+      "size": [
+        194,
+        194
+      ],
+      "sha256": "ebd943b536c0727b99eed6ff1e239f85039ce44cada1089576fe27950b0c69c9",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39689150638,
+      "runAttempt": 2,
+      "jobId": 119580782501,
+      "artifactId": 12394957672,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    },
+    {
+      "file": "positive-windows-x64-late.png",
+      "platform": "windows-x64",
+      "expectedPainted": true,
+      "size": [
+        144,
+        144
+      ],
+      "sha256": "105f749dc07f6a94e10b8f1d25bbd40d0592560948ed192c908a9ad4041e1e82",
+      "version": "2.0.5-beta.3",
+      "releaseSha": "42b451923daa2255009467e35e40cf2335cf4b7e",
+      "runId": 39711306003,
+      "runAttempt": 1,
+      "jobId": 119603031934,
+      "artifactId": 12397021664,
+      "artifactPath": "bunny/failure-later-05-window.png",
+      "note": "First later painted sample, about 9.261 seconds after the failed state. This proves painting only; the original interaction remains failed.",
+      "originalOutcome": "failed",
+      "originalError": "Input did not produce a visible change",
+      "harnessSha": "1957da31bdcee8a498fedefc7389c416621e6596",
+      "nativeOnlyDiagnostics": true
+    },
+    {
+      "file": "positive-windows-x64.png",
+      "platform": "windows-x64",
+      "expectedPainted": true,
+      "size": [
+        206,
+        206
+      ],
+      "sha256": "18b5a4c513e1b258326a4bfc676b6487444b8ea020c500b5c862c3e94297ac71",
+      "version": "2.0.5-beta.2",
+      "releaseSha": "690ae9dab14fe6566dba3e2d70a2487b26e0a075",
+      "runId": 39670497519,
+      "runAttempt": 1,
+      "jobId": 119517002538,
+      "artifactId": 12386682956,
+      "artifactPath": "bunny/01-rendered-window.png",
+      "originalOutcome": "passed"
+    }
+  ],
+  "syntheticDistractors": [
+    {
+      "file": "distractor-oversized-parenthesis.png",
+      "expectedPainted": false,
+      "size": [
+        160,
+        160
+      ],
+      "sha256": "422cdc1797b73e9e28e46b0192d496d412d5ad3f6769f4b059494a28a77a2da9",
+      "description": "Oversized white Arial Bold left parenthesis on black. This silhouette can match the Bunny body without a Bunny eye; stored pixels make the regression independent of installed fonts."
+    }
+  ]
+}

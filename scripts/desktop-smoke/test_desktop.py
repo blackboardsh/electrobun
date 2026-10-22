@@ -685,6 +685,153 @@ class CounterImageTests(unittest.TestCase):
             counter_difference(self.zero, Image.new('RGB', self.zero.size, '#13131c'))
 
 
+class BunnyReadinessTests(unittest.TestCase):
+    def setUp(self):
+        from PIL import Image
+        self.reference_path = Path(__file__).resolve().parents[2] / 'templates/bunny/src/mainview/assets/bunny.png'
+        with Image.open(self.reference_path) as reference:
+            self.reference = reference.convert('RGBA')
+        self.fixtures = Path(__file__).parent / 'fixtures/bunny-readiness'
+
+    def test_actual_host_captures_distinguish_bunny_from_console_text_and_later_paint(self):
+        from PIL import Image
+        positive = ['positive-macos-x64.png', 'positive-macos-arm64.png',
+                    'positive-windows-arm64.png', 'positive-linux-x64.png',
+                    'positive-linux-arm64.png', 'positive-windows-x64.png',
+                    'positive-windows-x64-late.png']
+        negative = ['negative-windows-x64-attempt2.png', 'negative-windows-x64-attempt3.png',
+                    'negative-windows-x64-native-only.png']
+        # The late capture is positive image evidence only: its original CI
+        # interaction failed before painting. The manifest keeps that provenance.
+        for expected, names in [(True, positive), (False, negative)]:
+            for name in names:
+                with self.subTest(fixture=name), Image.open(self.fixtures / name) as frame:
+                    self.assertEqual(desktop.bunny_rendered(frame, self.reference), expected)
+
+    def test_minimum_window_size_keeps_linux_bunny_separate_from_white_background(self):
+        from PIL import Image
+        # Bunny permits 100px windows. Diagonal antialiasing must not merge
+        # its body with the white background when this real crop is smaller.
+        with Image.open(self.fixtures / 'positive-linux-arm64.png') as frame:
+            resized = frame.resize((100, 100), Image.Resampling.LANCZOS)
+            self.assertTrue(desktop.bunny_rendered(resized, self.reference))
+
+    def test_simple_bright_shapes_and_oversized_parenthesis_are_not_a_bunny(self):
+        from PIL import Image, ImageDraw
+        for shape in ['ellipse', 'rectangle', 'triangle', 'parenthesis']:
+            with self.subTest(shape=shape):
+                if shape == 'parenthesis':
+                    # This exact portable capture fooled the outline-only
+                    # detector; no installed font is needed to reproduce it.
+                    with Image.open(self.fixtures / 'distractor-oversized-parenthesis.png') as frame:
+                        self.assertFalse(desktop.bunny_rendered(frame, self.reference))
+                    continue
+                frame = Image.new('RGB', (200, 200), 'black')
+                draw = ImageDraw.Draw(frame)
+                if shape == 'ellipse':
+                    draw.ellipse((80, 65, 120, 130), fill='white')
+                elif shape == 'rectangle':
+                    draw.rectangle((80, 65, 120, 130), fill='white')
+                else:
+                    draw.polygon([(100, 65), (120, 130), (80, 130)], fill='white')
+                self.assertFalse(desktop.bunny_rendered(frame, self.reference))
+
+    def exercise_wait(self, *, never_ready=False, unchanged=False):
+        from contextlib import ExitStack
+        from PIL import Image, ImageChops
+        frame = Image.new('RGB', (160, 100), 'black')
+        frame.paste('white', (0, 0, 80, 100))
+        changed = ImageChops.invert(frame)
+        clock = [0.0]
+        ready = [False]
+        actions = []
+        sleep_times = []
+        size = namedtuple('Size', 'width height')(160, 100)
+        gui = SimpleNamespace(size=Mock(return_value=size), moveTo=Mock(), screenshot=Mock())
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'))
+        process = Mock()
+        process.poll.return_value = None
+
+        def sleep(seconds):
+            sleep_times.append(seconds)
+            clock[0] += seconds
+
+        def move(*args, **kwargs):
+            if not kwargs:
+                self.assertFalse(actions)
+                self.assertEqual(args, (2, 2), 'only the existing preparatory move may precede readiness')
+                return
+            self.assertTrue(ready[0], 'input action ran before Bunny pixels became ready')
+            self.assertEqual(kwargs, {'duration': 0.3})
+            actions.append(args)
+
+        def screenshot():
+            return changed if actions and len(actions) % 2 and not unchanged else frame
+
+        def predicate(capture, reference):
+            self.assertFalse(actions, 'readiness must precede the original interaction sequence')
+            self.assertEqual(capture.size, frame.size)
+            self.assertEqual(reference.convert('RGBA').tobytes(), self.reference.tobytes())
+            ready[0] = not never_ready and detector.call_count >= 3
+            return ready[0]
+
+        gui.moveTo.side_effect = move
+        gui.screenshot.side_effect = screenshot
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'reports'
+            image_path = Path(directory) / 'src/mainview/assets/bunny.png'
+            image_path.parent.mkdir(parents=True)
+            image_path.write_bytes(self.reference_path.read_bytes())
+            plan = {'name': 'bunny', 'title': 'Bunny', 'cwd': directory, 'output': str(output),
+                    'command': ['unused'], 'readyImage': 'src/mainview/assets/bunny.png',
+                    'actions': [{'move': [0.5, 0.5], 'expectChange': True, 'settle': 0},
+                                {'move': [0.85, 0.5], 'expectChange': True, 'settle': 0}]}
+            with ExitStack() as patches:
+                patches.enter_context(patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}))
+                patches.enter_context(patch.object(desktop.sys, 'platform', 'linux'))
+                patches.enter_context(patch.object(desktop.subprocess, 'Popen', return_value=process))
+                patches.enter_context(patch.object(desktop, 'stop'))
+                patches.enter_context(patch.object(desktop, 'window', return_value=(0, 0, 160, 100)))
+                patches.enter_context(patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]))
+                patches.enter_context(patch.object(desktop.time, 'sleep', side_effect=sleep))
+                detector = patches.enter_context(patch.object(desktop, 'bunny_rendered', side_effect=predicate))
+                if never_ready or unchanged:
+                    with self.assertRaises(AssertionError) as raised:
+                        desktop.inspect_app(plan)
+                    self.assertTrue((output / 'failure.png').exists())
+                    if unchanged:
+                        self.assertEqual(str(raised.exception), 'Input did not produce a visible change')
+                else:
+                    desktop.inspect_app(plan)
+            result = json.loads((output / 'result.json').read_text())
+            return SimpleNamespace(result=result, actions=actions, elapsed=clock[0],
+                                   sleeps=sleep_times, detector_calls=detector.call_count)
+
+    def test_render_wait_blocks_both_original_actions_until_bunny_predicate_passes(self):
+        run = self.exercise_wait()
+        self.assertTrue(run.result['ok'])
+        self.assertEqual(run.detector_calls, 3)
+        self.assertEqual(run.actions, [(80.0, 50.0), (136.0, 50.0)])
+        self.assertEqual(run.result['checks'].count('visible-response-to-input'), 2)
+        self.assertEqual(run.sleeps, [2, 2, 2, 2, 0, 0])
+
+    def test_render_wait_exhausts_original_thirty_seconds_before_any_input_actions(self):
+        run = self.exercise_wait(never_ready=True)
+        self.assertFalse(run.result['ok'])
+        self.assertEqual(run.actions, [])
+        self.assertNotIn('visible-response-to-input', run.result['checks'])
+        self.assertEqual(run.sleeps[:2], [2, 2])
+        self.assertEqual(sum(run.sleeps[2:]), 30)
+        self.assertEqual(run.elapsed, 34)
+
+    def test_ready_bunny_still_fails_original_visible_change_assertion_when_input_changes_nothing(self):
+        run = self.exercise_wait(unchanged=True)
+        self.assertFalse(run.result['ok'])
+        self.assertEqual(run.result['error'], 'Input did not produce a visible change')
+        self.assertEqual(run.actions, [(80.0, 50.0)])
+        self.assertNotIn('visible-response-to-input', run.result['checks'])
+
+
 class SurfaceImageTests(unittest.TestCase):
     def test_visible_controls_do_not_hide_a_blank_gpu_surface(self):
         from PIL import Image, ImageDraw

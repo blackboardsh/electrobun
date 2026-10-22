@@ -1,6 +1,6 @@
 // Real published templates; each interaction names an observable UI response.
 export const templateScenarios = [
-  { id: 'bunny', title: 'Bunny', actions: [
+  { id: 'bunny', title: 'Bunny', readyImage: 'src/mainview/assets/bunny.png', actions: [
     { move: [0.5, 0.5], expectChange: true },
     { move: [0.9, 0.9], expectChange: true },
   ] },
