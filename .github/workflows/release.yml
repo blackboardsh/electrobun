@@ -137,6 +137,9 @@ jobs:
         run: hutch test:npm-bootstrap
         working-directory: package
 
+      - name: Test complete-platform CEF version selection
+        run: node --test package/scripts/cef-release-index.test.mjs
+
       - name: Test macOS docked Web Inspector layout
         if: matrix.platform == 'darwin'
         run: hutch test:macos-inspector-layout
