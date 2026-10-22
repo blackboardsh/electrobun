@@ -64,10 +64,22 @@ function rendererProbe(endpoint) {
   const snapshot = () => {
     const bunny = document.getElementById('bunny');
     const canvas = document.querySelector('.spark-canvas');
+    const styles = element => {
+      if (!element) return null;
+      const value = getComputedStyle(element);
+      return { display: value.display, visibility: value.visibility, opacity: value.opacity, transform: value.transform };
+    };
     report('snapshot', {
       readyState: document.readyState, visibility: document.visibilityState,
+      focused: document.hasFocus(),
       transform: bunny?.style.transform, computedTransform: bunny ? getComputedStyle(bunny).transform : null,
       rect: bunny ? bunny.getBoundingClientRect().toJSON() : null,
+      bunnyStyle: styles(bunny), bodyStyle: styles(document.body),
+      images: [...document.images].slice(0, 20).map(image => ({
+        src: image.src, currentSrc: image.currentSrc, complete: image.complete,
+        naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+        rect: image.getBoundingClientRect().toJSON(), style: styles(image),
+      })),
       canvas: canvas ? { width: canvas.width, height: canvas.height, display: canvas.style.display } : null,
       rafRequested: state.rafRequested, rafCompleted: state.rafCompleted,
       rpcReceived: state.rpcReceived, lastCursor: state.lastCursor,

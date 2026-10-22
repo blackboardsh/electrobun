@@ -21,12 +21,16 @@ on:
         description: Diagnose only the two Windows runners
         type: boolean
         default: false
+      windows_x64_only:
+        description: Diagnose only the native Windows x64 runner
+        type: boolean
+        default: false
       scenarios:
         description: Comma-separated scenario IDs for diagnostics, or all
         type: string
         default: all
       bunny_diagnostics:
-        description: Trace the generated Bunny app on the native Intel runner
+        description: Trace the generated Bunny app on one selected Intel macOS or Windows x64 runner
         type: boolean
         default: false
       bunny_source_overlay:
@@ -47,7 +51,7 @@ jobs:
         # also fails on the hosted macOS 26 Intel image (IconServices).
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.windows_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.windows_x64_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"}]' || inputs.windows_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
@@ -61,9 +65,13 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && (inputs.bunny_diagnostics || inputs.bunny_source_overlay)
         env:
           INTEL_ONLY: ${{ inputs.macos_intel_only }}
+          WINDOWS_X64_ONLY: ${{ inputs.windows_x64_only }}
+          WINDOWS_ONLY: ${{ inputs.windows_only }}
           SCENARIOS: ${{ inputs.scenarios }}
           DIAGNOSTICS: ${{ inputs.bunny_diagnostics }}
-        run: node -e 'if (process.env.INTEL_ONLY !== "true" || process.env.SCENARIOS !== "bunny" || process.env.DIAGNOSTICS !== "true") throw new Error("Bunny diagnostics and source overlay require macos_intel_only=true, scenarios=bunny, and bunny_diagnostics=true")'
+          SOURCE_OVERLAY: ${{ inputs.bunny_source_overlay }}
+        run: |
+          node -e 'const e = process.env; const intel = e.INTEL_ONLY === "true"; const windows = e.WINDOWS_X64_ONLY === "true"; if (intel === windows || e.WINDOWS_ONLY === "true" || e.SCENARIOS !== "bunny" || e.DIAGNOSTICS !== "true" || (e.SOURCE_OVERLAY === "true" && !intel)) throw new Error("Bunny diagnostics require exactly one native Intel macOS or Windows x64 runner and scenarios=bunny; source overlay remains Intel-only")'
       - name: Verify native macOS runner architecture
         if: runner.os == 'macOS'
         shell: bash
@@ -203,6 +211,7 @@ jobs:
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
           SMOKE_PLATFORM: ${{ matrix.platform }}
           SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
+          SMOKE_BUNNY_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.bunny_diagnostics && '1' || '0' }}
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
           New-Item -ItemType Directory -Force -Path $output | Out-Null

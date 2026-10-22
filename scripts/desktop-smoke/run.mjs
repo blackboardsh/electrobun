@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { acceptanceEnvironment, run, validateCatalog } from '../accept-published-template.mjs';
@@ -23,6 +23,43 @@ const publicBase = 'https://electrobun-artifacts.blackboard.sh/electrobun/templa
 export function verifyBuiltMacOSApp(buildRoot, platform) {
   if (!platform.startsWith('macos-')) return [];
   return verifyMachORelease([buildRoot], undefined, platform.slice('macos-'.length));
+}
+
+export function validateBunnyDiagnosticSelection({ platform, selected, diagnostics, sourceOverlay }) {
+  if (sourceOverlay) {
+    assert.ok(diagnostics, 'Bunny source overlay requires diagnostic provenance');
+    assert.equal(platform, 'macos-x64', 'Bunny source overlay remains Intel macOS only');
+  }
+  if (diagnostics) {
+    assert.ok(['macos-x64', 'windows-x64'].includes(platform), 'Bunny diagnostics require native Intel macOS or Windows x64');
+    assert.deepEqual(selected, ['bunny'], 'Bunny diagnostics require the focused bunny scenario');
+  }
+}
+
+export function diagnosticNativeArtifacts(buildRoot, platform) {
+  if (platform.startsWith('macos-')) return verifyBuiltMacOSApp(buildRoot, platform).map(binary => ({
+    ...binary, sha256: createHash('sha256').update(readFileSync(binary.path)).digest('hex'),
+  }));
+  assert.equal(platform, 'windows-x64', 'Unexpected diagnostic native target');
+  const identities = [];
+  function walk(directory) {
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.isFile() && /\.(dll|exe)$/i.test(entry.name)) {
+        const bytes = readFileSync(path);
+        assert.ok(bytes.length >= 64 && bytes.toString('ascii', 0, 2) === 'MZ', `Invalid PE binary: ${path}`);
+        const offset = bytes.readUInt32LE(0x3c);
+        assert.ok(offset + 6 <= bytes.length && bytes.toString('ascii', offset, offset + 4) === 'PE\0\0', `Invalid PE header: ${path}`);
+        const machine = bytes.readUInt16LE(offset + 4);
+        assert.equal(machine, 0x8664, `Expected x64 native binary: ${path}`);
+        identities.push({ path, architecture: 'x64', machine, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') });
+      }
+    }
+  }
+  walk(buildRoot);
+  assert.ok(identities.length > 0, 'No diagnostic native binaries found');
+  return identities;
 }
 
 export async function prepareRelease({ version, platform, output }) {
@@ -72,11 +109,7 @@ export async function smokeRelease(options) {
     assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
     const bunnyDiagnostics = process.env.SMOKE_BUNNY_DIAGNOSTICS === '1';
     const bunnySourceOverlay = process.env.SMOKE_BUNNY_SOURCE_OVERLAY === '1';
-    if (bunnySourceOverlay) assert.ok(bunnyDiagnostics, 'Bunny source overlay requires diagnostic provenance');
-    if (bunnyDiagnostics) {
-      assert.equal(options.platform, 'macos-x64', 'Bunny diagnostics require the native Intel macOS runner');
-      assert.deepEqual(selected, ['bunny'], 'Bunny diagnostics require the focused bunny scenario');
-    }
+    validateBunnyDiagnosticSelection({ platform: options.platform, selected, diagnostics: bunnyDiagnostics, sourceOverlay: bunnySourceOverlay });
     for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
       const output = join(work, scenario.id);
       mkdirSync(output);
@@ -130,12 +163,11 @@ export async function smokeRelease(options) {
       } finally {
         if (diagnostic) {
           try {
-            const identities = verifyBuiltMacOSApp(join(project, 'build'), options.platform).map(binary => ({
-              ...binary, sha256: createHash('sha256').update(readFileSync(binary.path)).digest('hex'),
-            }));
+            const identities = diagnosticNativeArtifacts(join(project, 'build'), options.platform);
             writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify(identities, null, 2));
           } catch (error) {
             writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify({ error: error.message }, null, 2));
+            throw error;
           } finally { await diagnostic.close(); }
         }
       }

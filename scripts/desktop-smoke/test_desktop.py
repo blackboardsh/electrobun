@@ -1,5 +1,8 @@
 """Regression checks for desktop process ownership without touching the desktop."""
 import os
+import ctypes
+import json
+from collections import namedtuple
 from pathlib import Path
 import signal
 import subprocess
@@ -7,8 +10,172 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import Mock, patch
+from types import SimpleNamespace
 
+import desktop
 from desktop import stop, counter_difference, ocr_regions, ocr_token, rendered_surface, app_failure
+
+
+class WindowsDiagnosticTests(unittest.TestCase):
+    def fake_user(self):
+        # High bits catch accidental 32-bit HWND conversions even when these
+        # tests run on macOS/Linux without loading user32.
+        target, child, other = 0x1234567887654321, 0x1234567887654322, 0x1234567887654323
+        def rect(hwnd, pointer):
+            value = pointer._obj
+            value.left, value.top, value.right, value.bottom = 10, 20, 210, 120
+            return 1
+        def owner(hwnd, pointer):
+            pointer._obj.value = 77 if hwnd in (target, child) else 88
+            return 99
+        def layered(hwnd, color, alpha, flags):
+            color._obj.value, alpha._obj.value, flags._obj.value = 0, 255, 2
+            return 1
+        user = SimpleNamespace(**{name: Mock(side_effect=effect) for name, effect in {
+            'SetProcessDPIAware': lambda: 1,
+            'FindWindowW': lambda cls, title: target,
+            'IsWindow': lambda hwnd: bool(hwnd),
+            'IsWindowVisible': lambda hwnd: bool(hwnd),
+            'GetWindowRect': rect,
+            'GetWindowThreadProcessId': owner,
+            'GetForegroundWindow': lambda: target,
+            'GetWindow': lambda hwnd, direction: other if hwnd == target else target,
+            'WindowFromPoint': lambda point: child,
+            'GetAncestor': lambda hwnd, flag: target,
+            'GetWindowLongPtrW': lambda hwnd, index: 8 if index == -20 else -2147483648,
+            'GetLayeredWindowAttributes': layered,
+            'GetWindowDisplayAffinity': lambda hwnd, pointer: 0,
+            'ShowWindow': lambda hwnd, command: 0,
+            'SetWindowPos': lambda *args: 1,
+            'SetForegroundWindow': lambda hwnd: 1,
+        }.items()})
+        return user, target, child, other
+
+    def test_windows_observation_preserves_hwnd_width_and_child_hit_and_bounds_z_order(self):
+        from ctypes import wintypes
+        user, target, child, other = self.fake_user()
+        with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            state = desktop.windows_window_state(target)
+        self.assertEqual(state['hwnd'], target)
+        self.assertEqual(state['pid'], 77)
+        self.assertEqual(state['style'], 0x80000000)
+        self.assertTrue(state['topmost'])
+        self.assertEqual(state['windowFromPointHwnd'], child)
+        self.assertEqual(state['windowFromPointRootHwnd'], target)
+        self.assertEqual(state['windowFromPoint']['pid'], 77)
+        self.assertEqual(state['occlusionCandidates'][0]['hwnd'], other)
+        self.assertEqual(state['zOrderWindowsExamined'], 1)
+        self.assertFalse(state['zOrderTruncated'])
+        self.assertEqual(state['layeredWindowAttributes']['alpha'], 255)
+        self.assertEqual(state['displayAffinity'], {'return': 0, 'value': None})
+        for name in ('GetForegroundWindow', 'GetWindow', 'WindowFromPoint', 'GetAncestor'):
+            self.assertIs(getattr(user, name).restype, wintypes.HWND)
+        self.assertEqual(user.WindowFromPoint.argtypes, [wintypes.POINT])
+        self.assertIs(user.GetWindowLongPtrW.restype, ctypes.c_ssize_t)
+
+    def test_activation_records_original_calls_once_and_never_adds_input(self):
+        user, target, _, _ = self.fake_user()
+        ordering = Mock()
+        for name in ('ShowWindow', 'GetWindowRect', 'SetWindowPos', 'SetForegroundWindow'):
+            ordering.attach_mock(getattr(user, name), name)
+        diagnostics = Mock()
+        with patch.object(desktop.sys, 'platform', 'win32'), patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            self.assertEqual(desktop.window('Bunny', diagnostics=diagnostics), (10, 20, 200, 100))
+        self.assertEqual([call[0] for call in ordering.mock_calls],
+                         ['ShowWindow', 'GetWindowRect', 'SetWindowPos', 'SetForegroundWindow'])
+        label, handle, returns = diagnostics.record.call_args.args
+        self.assertEqual((label, handle), ('activation', target))
+        self.assertEqual(returns, {'SetProcessDPIAware': 1, 'ShowWindowPreviousVisibility': 0,
+                                   'GetWindowRect': 1, 'SetWindowPos': 1, 'SetForegroundWindow': 1})
+
+    def exercise_failure(self, enabled, platform='win32', broken_diagnostics=False):
+        from PIL import Image
+        frame = Image.new('RGB', (160, 100), 'black')
+        frame.paste('white', (0, 0, 80, 100))
+        size = namedtuple('Size', 'width height')(160, 100)
+        gui = SimpleNamespace(position=Mock(return_value=(4, 5)), size=Mock(return_value=size),
+                              moveTo=Mock(), screenshot=Mock(return_value=frame))
+        process = Mock()
+        process.poll.return_value = None
+        state = {'hwnd': 123, 'pid': 77, 'isWindow': True, 'visible': True, 'bounds': [0, 0, 160, 100]}
+        active_finished = []
+        def lookup(title, activate=True, diagnostics=None):
+            if diagnostics is not None:
+                diagnostics.record('activation' if activate else 'observation', 123)
+            return 0, 0, 160, 100
+        def observe(handle):
+            if broken_diagnostics and active_finished:
+                raise OSError('diagnostic read failed')
+            return state.copy()
+        def sleep(seconds):
+            # Every added one-second wait must occur after the original
+            # expectChange failure and its unchanged failure.png capture.
+            if seconds == 1:
+                self.assertTrue(active_finished)
+        def screenshot():
+            if gui.screenshot.call_count == 3:
+                active_finished.append(True)
+            if broken_diagnostics and gui.screenshot.call_count > 3:
+                raise OSError('diagnostic screenshot failed')
+            return frame if gui.screenshot.call_count <= 3 else Image.new('RGB', frame.size, 'red')
+        gui.screenshot.side_effect = screenshot
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {'name': 'bunny', 'title': 'Bunny', 'output': directory, 'cwd': directory,
+                    'command': ['unused'], 'diagnostics': enabled,
+                    'actions': [{'move': [0.5, 0.5], 'expectChange': True, 'settle': 0}]}
+            with patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': SimpleNamespace()}), \
+                    patch.object(desktop.sys, 'platform', platform), patch.object(desktop, 'window', side_effect=lookup), \
+                    patch.object(desktop, 'windows_window_state', side_effect=observe) as observations, \
+                    patch.object(desktop.subprocess, 'Popen', return_value=process), patch.object(desktop, 'stop'), \
+                    patch.object(desktop.time, 'sleep', side_effect=sleep) as sleeps:
+                with self.assertRaisesRegex(AssertionError, '^Input did not produce a visible change$'):
+                    desktop.inspect_app(plan)
+            result = json.loads((Path(directory) / 'result.json').read_text())
+            self.assertFalse(result['ok'])
+            self.assertEqual(result['error'], 'Input did not produce a visible change')
+            self.assertNotIn('visible-response-to-input', result['checks'])
+            self.assertEqual(gui.moveTo.call_count, 2)
+            self.assertIn('failure.png', result['screenshots'])
+            return result, [call.args[0] for call in sleeps.call_args_list], observations.call_count
+
+    def test_diagnostics_are_opt_in_and_add_no_delay_to_original_assertion(self):
+        result, sleeps, observations = self.exercise_failure(False)
+        self.assertEqual(sleeps, [2, 2, 0])
+        self.assertEqual(observations, 0)
+        self.assertNotIn('windowReadings', result)
+        result, sleeps, observations = self.exercise_failure(True, platform='darwin')
+        self.assertEqual(sleeps, [2, 2, 0])
+        self.assertEqual(observations, 0)
+        result, sleeps, observations = self.exercise_failure(True)
+        self.assertEqual(sleeps, [2, 2, 0, 1, 1, 1])
+        self.assertGreater(observations, 3)
+        self.assertEqual([item['hwnd'] for item in result['windowReadings'] if item['label'].startswith('failure-later')], [123] * 3)
+        self.assertTrue(result['pointerReadings'])
+
+    def test_diagnostic_read_and_capture_errors_preserve_original_failure(self):
+        result, sleeps, _ = self.exercise_failure(True, broken_diagnostics=True)
+        self.assertEqual(sleeps, [2, 2, 0, 1, 1, 1])
+        self.assertEqual(len(result['diagnosticErrors']), 6)
+
+    def test_post_failure_never_follows_reused_hwnd_to_another_pid(self):
+        from PIL import Image
+        with tempfile.TemporaryDirectory() as directory:
+            result = {'ok': False, 'error': 'original'}
+            diagnostic = desktop.WindowsWindowDiagnostics(Path(directory), result)
+            state = {'hwnd': 123, 'pid': 77, 'isWindow': True, 'visible': True, 'bounds': [0, 0, 2, 2]}
+            with patch.object(desktop, 'windows_window_state', return_value=state):
+                diagnostic.record('activation', 123)
+            state = {**state, 'pid': 88}
+            gui = Mock()
+            gui.screenshot.return_value = Image.new('RGB', (2, 2))
+            with patch.object(desktop, 'windows_window_state', return_value=state) as observations, patch.object(desktop.time, 'sleep'):
+                diagnostic.after_failure(gui, [])
+            self.assertEqual([call.args for call in observations.call_args_list], [(123,)] * 3)
+            self.assertTrue(all(not row['sameOriginalWindow'] for row in result['windowReadings'][1:]))
+            gui.size.assert_not_called()
+            self.assertEqual(result['error'], 'original')
+            self.assertFalse(result['ok'])
 
 
 class CleanupTests(unittest.TestCase):

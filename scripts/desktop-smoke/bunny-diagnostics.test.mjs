@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { startBunnyDiagnostics } from "./bunny-diagnostics.mjs";
+import { diagnosticNativeArtifacts, validateBunnyDiagnosticSelection } from "./run.mjs";
 
 function fixture(t, { module = false, missing } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "electrobun-bunny-diagnostics-"));
@@ -218,4 +219,62 @@ test("closing without renderer startup rejects and still shuts down the telemetr
 	await assert.rejects(fetch(metadata.endpoint, { method: "POST", body: "{}" }));
 	const persisted = JSON.parse(readFileSync(join(f.output, "bunny-diagnostics-metadata.json"), "utf8"));
 	assert.equal(persisted.summary.rendererStarted, false);
+});
+
+test("Windows diagnostics are focused and cannot apply a template source overlay", () => {
+	const options = { platform: "windows-x64", selected: ["bunny"], diagnostics: true, sourceOverlay: false };
+	assert.doesNotThrow(() => validateBunnyDiagnosticSelection(options));
+	assert.throws(() => validateBunnyDiagnosticSelection({ ...options, sourceOverlay: true }), /Intel macOS only/);
+	assert.throws(() => validateBunnyDiagnosticSelection({ ...options, selected: ["bunny", "ui-wgpu"] }), /focused bunny/);
+	assert.throws(() => validateBunnyDiagnosticSelection({ ...options, platform: "windows-arm64" }), /native Intel macOS or Windows x64/);
+	assert.doesNotThrow(() => validateBunnyDiagnosticSelection({ ...options, platform: "windows-arm64", diagnostics: false }));
+});
+
+test("Windows native provenance hashes exact PE bytes and rejects missing or wrong architecture", t => {
+	const f = fixture(t);
+	const build = join(f.project, "build");
+	mkdirSync(build);
+	const bytes = Buffer.alloc(256);
+	bytes.write("MZ"); bytes.writeUInt32LE(128, 0x3c); bytes.write("PE\0\0", 128); bytes.writeUInt16LE(0x8664, 132);
+	const path = join(build, "libElectrobunCore.dll");
+	assert.throws(() => diagnosticNativeArtifacts(build, "windows-x64"), /No diagnostic native/);
+	writeFileSync(path, bytes);
+	assert.deepEqual(diagnosticNativeArtifacts(build, "windows-x64"), [{ path, architecture: "x64", machine: 0x8664, size: bytes.length, sha256: sha256(bytes) }]);
+	bytes.writeUInt16LE(0xaa64, 132); writeFileSync(path, bytes);
+	assert.throws(() => diagnosticNativeArtifacts(build, "windows-x64"), /Expected x64/);
+});
+
+test("renderer snapshots distinguish unloaded images from completed paint inputs without changing them", async t => {
+	const f = fixture(t);
+	const { metadata } = await start(t, f, { rendererStarted: false });
+	const requests = [];
+	const image = { src: "views://mainview/assets/bunny.png", currentSrc: "", complete: false, naturalWidth: 0, naturalHeight: 0,
+		getBoundingClientRect() { return { toJSON() { return { x: 1, y: 2, width: 100, height: 100 }; } }; } };
+	const bunny = { style: { transform: "rotateX(0deg)" }, getBoundingClientRect: image.getBoundingClientRect };
+	const browser = {
+		HTMLCanvasElement: class { getContext() { return null; } }, location: { href: "views://mainview/index.html" }, navigator: { userAgent: "test" },
+		console: { log() {} }, addEventListener() {}, requestAnimationFrame() {}, setInterval() {}, clearInterval() {},
+		setTimeout, clearTimeout, AbortController,
+		getComputedStyle() { return { display: "block", visibility: "visible", opacity: "1", transform: "none" }; },
+		document: { readyState: "loading", visibilityState: "visible", body: {}, images: [image], hasFocus() { return false; },
+			getElementById() { return bunny; }, querySelector() { return null; } },
+		fetch(url, options) { const request = fetch(url, options); requests.push(request); return request; },
+	};
+	browser.window = browser;
+	for (const script of inlineScripts(readFileSync(f.html, "utf8"))) vm.runInNewContext(script.code, browser, { timeout: 1000 });
+	browser.__bunnyDiagnostics.snapshot();
+	Object.assign(image, { complete: true, naturalWidth: 256, naturalHeight: 256, currentSrc: image.src });
+	browser.document.readyState = "complete";
+	browser.__bunnyDiagnostics.snapshot();
+	await Promise.all(requests);
+	const records = readFileSync(metadata.logPath, "utf8").trim().split("\n").map(line => JSON.parse(line).payload).filter(item => item.event === "snapshot");
+	assert.equal(records.length, 2);
+	assert.equal(records[0].images[0].complete, false);
+	assert.equal(records[0].images[0].naturalWidth, 0);
+	assert.equal(records[0].focused, false);
+	assert.equal(records[1].images[0].complete, true);
+	assert.equal(records[1].images[0].naturalWidth, 256);
+	assert.equal(records[1].images[0].currentSrc, image.src);
+	assert.equal(records[1].bunnyStyle.opacity, "1");
+	assert.equal(image.complete, true);
 });

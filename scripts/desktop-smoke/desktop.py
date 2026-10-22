@@ -9,7 +9,131 @@ import sys
 import time
 
 
-def window(title, activate=True):
+def diagnostic_error(result, label, error):
+    result.setdefault('diagnosticErrors', []).append({'label': label, 'error': str(error)})
+
+
+def windows_window_state(handle):
+    """Read the desktop state without activating, moving, or replacing the HWND."""
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    signatures = {
+        'IsWindow': ([wintypes.HWND], wintypes.BOOL),
+        'IsWindowVisible': ([wintypes.HWND], wintypes.BOOL),
+        'GetWindowRect': ([wintypes.HWND, ctypes.POINTER(wintypes.RECT)], wintypes.BOOL),
+        'GetWindowThreadProcessId': ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
+        'GetForegroundWindow': ([], wintypes.HWND),
+        'GetWindow': ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+        'WindowFromPoint': ([wintypes.POINT], wintypes.HWND),
+        'GetAncestor': ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+        'GetWindowLongPtrW': ([wintypes.HWND, ctypes.c_int], ctypes.c_ssize_t),
+        'GetLayeredWindowAttributes': ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_ubyte), ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+        'GetWindowDisplayAffinity': ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.BOOL),
+    }
+    for name, (args, returns) in signatures.items():
+        function = getattr(user, name)
+        function.argtypes, function.restype = args, returns
+
+    def details(hwnd):
+        pid, rect = wintypes.DWORD(), wintypes.RECT()
+        thread = user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        rect_ok = user.GetWindowRect(hwnd, ctypes.byref(rect))
+        extended = user.GetWindowLongPtrW(hwnd, -20) & 0xffffffff  # GWL_EXSTYLE
+        return {'hwnd': int(hwnd or 0), 'pid': pid.value, 'threadId': thread,
+                'isWindow': bool(user.IsWindow(hwnd)), 'visible': bool(user.IsWindowVisible(hwnd)),
+                'style': user.GetWindowLongPtrW(hwnd, -16) & 0xffffffff, 'extendedStyle': extended,
+                'topmost': bool(extended & 0x00000008),
+                'bounds': [rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top] if rect_ok else None,
+                'getWindowRectReturn': rect_ok, 'getWindowThreadProcessIdReturn': thread}
+
+    state = details(handle)
+    color, alpha, flags, affinity = wintypes.DWORD(), ctypes.c_ubyte(), wintypes.DWORD(), wintypes.DWORD()
+    layered_ok = user.GetLayeredWindowAttributes(handle, ctypes.byref(color), ctypes.byref(alpha), ctypes.byref(flags))
+    affinity_ok = user.GetWindowDisplayAffinity(handle, ctypes.byref(affinity))
+    state['layeredWindowAttributes'] = {'return': layered_ok, 'colorKey': color.value if layered_ok else None,
+                                        'alpha': alpha.value if layered_ok else None, 'flags': flags.value if layered_ok else None}
+    state['displayAffinity'] = {'return': affinity_ok, 'value': affinity.value if affinity_ok else None}
+    foreground = user.GetForegroundWindow()
+    state['foregroundHwnd'] = int(foreground or 0)
+    state['foreground'] = details(foreground) if foreground else None
+    state['isForeground'] = bool(handle and handle == foreground)
+    state['occlusionCandidates'] = []
+    if state['bounds'] and state['isWindow']:
+        x, y, width, height = state['bounds']
+        center = wintypes.POINT(x + width // 2, y + height // 2)
+        hit = user.WindowFromPoint(center)
+        state['center'] = [center.x, center.y]
+        state['windowFromPointHwnd'] = int(hit or 0)
+        state['windowFromPointRootHwnd'] = int(user.GetAncestor(hit, 2) or 0) if hit else 0
+        state['windowFromPoint'] = details(hit) if hit else None
+        # GW_HWNDPREV walks toward the front of the Z order. These are only
+        # geometric candidates; transparency/regions can prevent occlusion.
+        previous, seen = user.GetWindow(handle, 3), {handle}
+        examined = 0
+        while previous and previous not in seen and examined < 32:
+            seen.add(previous)
+            examined += 1
+            candidate = details(previous)
+            if candidate['visible'] and candidate['bounds']:
+                cx, cy, cw, ch = candidate['bounds']
+                if cx < x + width and cx + cw > x and cy < y + height and cy + ch > y:
+                    candidate['coversCenter'] = cx <= center.x < cx + cw and cy <= center.y < cy + ch
+                    state['occlusionCandidates'].append(candidate)
+            previous = user.GetWindow(previous, 3)
+        state['zOrderWindowsExamined'] = examined
+        state['zOrderTruncated'] = bool(previous and examined == 32)
+    return state
+
+
+class WindowsWindowDiagnostics:
+    def __init__(self, output, result):
+        self.output, self.result = output, result
+        self.handle = None
+        self.pid = None
+
+    def record(self, label, handle, activation=None):
+        try:
+            state = windows_window_state(handle)
+            if self.handle is None and state['isWindow'] and state['visible']:
+                self.handle, self.pid = handle, state['pid']
+            observation = {'label': label, 'time': time.time(), **state}
+            if activation is not None:
+                observation['activationReturns'] = activation
+            if self.handle is not None:
+                observation['originalHwnd'] = int(self.handle)
+                observation['originalPid'] = self.pid
+                observation['sameOriginalWindow'] = handle == self.handle and state['pid'] == self.pid
+            self.result.setdefault('windowReadings', []).append(observation)
+            with (self.output / 'window-diagnostics.jsonl').open('a', encoding='utf-8') as log:
+                log.write(json.dumps(observation) + '\n')
+            return observation
+        except Exception as error:
+            diagnostic_error(self.result, label, error)
+            return None
+
+    def after_failure(self, gui, shots):
+        # Called only after the original exception and failed result are fixed.
+        # Never rerun an assertion or activate/re-find a window by its title.
+        if self.handle is None:
+            return
+        for sample in range(1, 4):
+            label = f'failure-later-{sample:02d}'
+            try:
+                time.sleep(1)
+                state = self.record(label, self.handle)
+                image = gui.screenshot()
+                image.save(self.output / f'{label}.png')
+                shots.append(f'{label}.png')
+                if state and state['sameOriginalWindow'] and state['isWindow'] and state['bounds']:
+                    scale = image.width / gui.size().width
+                    x, y, width, height = state['bounds']
+                    image.crop(tuple(round(n * scale) for n in (x, y, x + width, y + height))).save(
+                        self.output / f'{label}-window.png')
+            except Exception as error:
+                diagnostic_error(self.result, label, error)
+
+
+def window(title, activate=True, diagnostics=None):
     if sys.platform == 'darwin':
         import Quartz
         import AppKit
@@ -22,28 +146,39 @@ def window(title, activate=True):
     elif sys.platform == 'win32':
         from ctypes import wintypes
         user = ctypes.windll.user32
-        user.SetProcessDPIAware()
+        dpi_return = user.SetProcessDPIAware()
         user.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
         user.FindWindowW.restype = wintypes.HWND
         user.IsWindowVisible.argtypes = [wintypes.HWND]
+        user.IsWindowVisible.restype = wintypes.BOOL
         user.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        user.GetWindowRect.restype = wintypes.BOOL
         user.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user.ShowWindow.restype = wintypes.BOOL
         user.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user.SetForegroundWindow.restype = wintypes.BOOL
         user.SetWindowPos.argtypes = [wintypes.HWND, wintypes.HWND, ctypes.c_int,
                                      ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user.SetWindowPos.restype = wintypes.BOOL
         handle = user.FindWindowW(None, title)
         if handle and user.IsWindowVisible(handle):
             rect = wintypes.RECT()
+            returns = {'SetProcessDPIAware': dpi_return}
             if activate:
-                user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
-            user.GetWindowRect(handle, ctypes.byref(rect))
+                # ShowWindow returns the previous visibility, not success.
+                returns['ShowWindowPreviousVisibility'] = user.ShowWindow(handle, 9 if title == "Bunny" or title.startswith("Electrobun UI") else 3)
+            returns['GetWindowRect'] = user.GetWindowRect(handle, ctypes.byref(rect))
             if activate:
                 # Hosted ARM runners can open background console windows after
                 # startup. Keep the app under test above them for actual input
                 # and screenshots; the process teardown removes this window.
-                user.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002)
-                user.SetForegroundWindow(handle)
+                returns['SetWindowPos'] = user.SetWindowPos(handle, wintypes.HWND(-1), 0, 0, 0, 0, 0x0001 | 0x0002)
+                returns['SetForegroundWindow'] = user.SetForegroundWindow(handle)
+            if diagnostics is not None:
+                diagnostics.record('activation' if activate else 'observation', handle, returns if activate else None)
             return rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top
+        if diagnostics is not None:
+            diagnostics.record('window-not-visible', handle)
     else:
         found = subprocess.run(['xdotool', 'search', '--onlyvisible', '--name', '^' + re.escape(title) + '$'], capture_output=True, text=True)
         if found.returncode == 0:
@@ -245,16 +380,20 @@ def inspect_app(plan):
     result = {'name': plan['name'], 'ok': False, 'screenshots': shots, 'checks': checks}
     rect = None
     process = None
+    window_diagnostics = WindowsWindowDiagnostics(output, result) if plan.get('diagnostics') and sys.platform == 'win32' else None
 
     def record_pointer(label, requested=None):
         if plan.get('diagnostics'):
-            observation = {'label': label, 'time': time.time(), 'actual': list(gui.position()),
-                           'windowBounds': list(rect) if rect else None}
-            if requested is not None:
-                observation['requested'] = list(requested)
-            result.setdefault('pointerReadings', []).append(observation)
-            with (output / 'pointer-diagnostics.jsonl').open('a', encoding='utf-8') as log:
-                log.write(json.dumps(observation) + '\n')
+            try:
+                observation = {'label': label, 'time': time.time(), 'actual': list(gui.position()),
+                               'windowBounds': list(rect) if rect else None}
+                if requested is not None:
+                    observation['requested'] = list(requested)
+                result.setdefault('pointerReadings', []).append(observation)
+                with (output / 'pointer-diagnostics.jsonl').open('a', encoding='utf-8') as log:
+                    log.write(json.dumps(observation) + '\n')
+            except Exception as error:
+                diagnostic_error(result, 'pointer:' + label, error)
 
     def require_running():
         if process.poll() is not None:
@@ -267,7 +406,7 @@ def inspect_app(plan):
 
     def refresh_bounds():
         nonlocal rect
-        current = window(plan['title'], activate=False)
+        current = window(plan['title'], activate=False, diagnostics=window_diagnostics) if window_diagnostics else window(plan['title'], activate=False)
         if not current:
             raise AssertionError('App window is no longer visible')
         rect = current
@@ -349,7 +488,7 @@ def inspect_app(plan):
                         time.sleep(0.1)
                         continue
                     checks.append('minimized-test-runner')
-                rect = window(plan['title'])
+                rect = window(plan['title'], diagnostics=window_diagnostics) if window_diagnostics else window(plan['title'])
                 if rect:
                     break
                 time.sleep(1)
@@ -537,6 +676,11 @@ def inspect_app(plan):
             shots.append('failure.png')
         except Exception as capture_error:
             result['captureError'] = str(capture_error)
+        if window_diagnostics is not None:
+            try:
+                window_diagnostics.after_failure(gui, shots)
+            except Exception as diagnostic_failure:
+                diagnostic_error(result, 'post-failure', diagnostic_failure)
         raise
     finally:
         (output / 'result.json').write_text(json.dumps(result, indent=2), encoding='utf-8')
