@@ -96,6 +96,7 @@ class WindowsDiagnosticTests(unittest.TestCase):
         size = namedtuple('Size', 'width height')(160, 100)
         gui = SimpleNamespace(position=Mock(return_value=(4, 5)), size=Mock(return_value=size),
                               moveTo=Mock(), screenshot=Mock(return_value=frame))
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'))
         process = Mock()
         process.poll.return_value = None
         state = {'hwnd': 123, 'pid': 77, 'isWindow': True, 'visible': True, 'bounds': [0, 0, 160, 100]}
@@ -124,13 +125,15 @@ class WindowsDiagnosticTests(unittest.TestCase):
             plan = {'name': 'bunny', 'title': 'Bunny', 'output': directory, 'cwd': directory,
                     'command': ['unused'], 'diagnostics': enabled,
                     'actions': [{'move': [0.5, 0.5], 'expectChange': True, 'settle': 0}]}
-            with patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': SimpleNamespace()}), \
+            with patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}), \
+                    patch.dict(desktop.os.environ, {'SMOKE_TESSERACT': 'mock-tesseract'}), \
                     patch.object(desktop.sys, 'platform', platform), patch.object(desktop, 'window', side_effect=lookup), \
                     patch.object(desktop, 'windows_window_state', side_effect=observe) as observations, \
                     patch.object(desktop.subprocess, 'Popen', return_value=process), patch.object(desktop, 'stop'), \
                     patch.object(desktop.time, 'sleep', side_effect=sleep) as sleeps:
                 with self.assertRaisesRegex(AssertionError, '^Input did not produce a visible change$'):
                     desktop.inspect_app(plan)
+                self.assertEqual(ocr.pytesseract.tesseract_cmd, 'mock-tesseract')
             result = json.loads((Path(directory) / 'result.json').read_text())
             self.assertFalse(result['ok'])
             self.assertEqual(result['error'], 'Input did not produce a visible change')
