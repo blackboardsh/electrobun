@@ -50,7 +50,9 @@ inline std::string describeCefPermissions(uint32_t mask) {
     if (mask & CEF_PERMISSION_TYPE_WEB_APP_INSTALLATION) add("Web app installation");
     if (mask & CEF_PERMISSION_TYPE_WINDOW_MANAGEMENT) add("Window management");
     if (mask & CEF_PERMISSION_TYPE_FILE_SYSTEM_ACCESS) add("File system access");
-#if CEF_API_ADDED(13600)
+#if CEF_API_ADDED(15000)
+    if (mask & CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS_DEPRECATED) add("Local network access");
+#elif CEF_API_ADDED(13600)
     if (mask & CEF_PERMISSION_TYPE_LOCAL_NETWORK_ACCESS) add("Local network access");
 #endif
 #if CEF_API_ADDED(14500)
@@ -59,6 +61,9 @@ inline std::string describeCefPermissions(uint32_t mask) {
 #endif
 #if CEF_API_ADDED(14700)
     if (mask & CEF_PERMISSION_TYPE_SENSORS) add("Sensors");
+#endif
+#if CEF_API_ADDED(15600)
+    if (mask & CEF_PERMISSION_TYPE_AMBIENT_LOGIN) add("Ambient login");
 #endif
 
     if (out.empty()) {

@@ -13,6 +13,7 @@
 import { CEF_VERSION, CHROMIUM_VERSION } from "../src/shared/cef-version";
 import { appendFileSync, writeFileSync } from "fs";
 import { resolve } from "path";
+import { latestCommonStableCEF } from "./cef-release-index.mjs";
 
 const CEF_INDEX_URL =
 	"https://cef-builds.spotifycdn.com/index.json";
@@ -30,34 +31,7 @@ async function getLatestStableCEFVersion(): Promise<StableVersion> {
 		);
 	}
 
-	const data = (await response.json()) as {
-		linux64: {
-			versions: Array<{
-				cef_version: string;
-				chromium_version: string;
-				channel: string;
-			}>;
-		};
-	};
-
-	const versions = data.linux64?.versions;
-	if (!versions || versions.length === 0) {
-		throw new Error("No versions found in CEF builds index");
-	}
-
-	const stable = versions.find((v) => v.channel === "stable");
-	if (!stable) {
-		throw new Error("No stable CEF version found in builds index");
-	}
-
-	// The CDN's cef_version includes "+chromium-..." suffix, but cef-version.ts
-	// stores just the CEF part (e.g. "144.0.11+ge135be2").
-	const cefOnly = stable.cef_version.replace(/\+chromium-.*$/, "");
-
-	return {
-		cef_version: cefOnly,
-		chromium_version: stable.chromium_version,
-	};
+	return latestCommonStableCEF(await response.json());
 }
 
 function setOutput(key: string, value: string) {

@@ -1782,35 +1782,14 @@ async function vendorCEF() {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
 			const cefArch = ARCH === "arm64" ? "macosarm64" : "macosx64";
 			console.log(`Downloading CEF for macOS ${ARCH}...`);
-			// Try a different URL format - encode all + symbols
-			let cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}+chromium-${CHROMIUM_VERSION_MAC}_${cefArch}_minimal.tar.bz2`;
+			const cefUrl = `https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_MAC}+chromium-${CHROMIUM_VERSION_MAC}_${cefArch}_minimal.tar.bz2`;
 			console.log("CEF URL:", cefUrl);
 
-			// Test if URL is accessible first
-			console.log("Testing CEF URL accessibility...");
-			try {
-				await $`curl -I "${cefUrl}"`;
-				console.log("CEF URL is accessible");
-			} catch (error) {
-				console.log("CEF URL test failed, trying alternative format...");
-				// Try simpler format without the complex version encoding
-				const altUrl = `https://cef-builds.spotifycdn.com/cef_binary_125.0.22_${cefArch}.tar.bz2`;
-				console.log("Alternative CEF URL:", altUrl);
-				try {
-					await $`curl -I "${altUrl}"`;
-					console.log("Alternative URL works, using it");
-					cefUrl = altUrl;
-				} catch (altError) {
-					throw new Error(
-						"Neither CEF URL format worked. Manual intervention needed.",
-					);
-				}
-			}
-
-			// Download to temp file first, then extract
+			// Never fall back to an older Chromium build when the pinned artifact
+			// is temporarily unavailable: that silently removes security updates.
 			await $`mkdir -p vendors`;
 			const tempFile = "vendors/cef_temp.tar.bz2";
-			await $`curl -L "${cefUrl}" -o "${tempFile}"`;
+			await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 "${cefUrl}" -o "${tempFile}"`;
 
 			// Validate download
 			validateDownload(tempFile, "cef");
@@ -1920,7 +1899,7 @@ async function vendorCEF() {
 			console.log("Downloading CEF binaries...");
 			const cefArch = WINDOWS_TARGET.cef;
 			console.log(`Downloading CEF for Windows ${ARCH}...`);
-			await $`curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
+			await $`curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_WIN}%2Bchromium-${CHROMIUM_VERSION_WIN}_${cefArch}_minimal.tar.bz2" -o "${tempPath}"`;
 
 			// Validate download
 			validateDownload(tempPath, "cef");
@@ -2019,7 +1998,10 @@ async function vendorCEF() {
 		if (!existsSync(join(process.cwd(), "vendors", "cef"))) {
 			const cefArch = ARCH === "arm64" ? "linuxarm64" : "linux64";
 			console.log(`Downloading CEF for Linux ${ARCH}...`);
-			await $`mkdir -p vendors/cef && curl -L "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" | tar -xj --strip-components=1 -C vendors/cef`;
+			await $`mkdir -p vendors/cef && curl -fL --retry 5 --retry-delay 2 --retry-all-errors --connect-timeout 30 "https://cef-builds.spotifycdn.com/cef_binary_${CEF_VERSION_LINUX}%2Bchromium-${CHROMIUM_VERSION_LINUX}_${cefArch}_minimal.tar.bz2" -o vendors/cef_temp.tar.bz2`;
+			validateDownload("vendors/cef_temp.tar.bz2", "cef");
+			await $`tar -xjf vendors/cef_temp.tar.bz2 --strip-components=1 -C vendors/cef`;
+			await $`rm vendors/cef_temp.tar.bz2`;
 			// Write version stamp so future builds can detect staleness
 			writeFileSync(
 				join(process.cwd(), "vendors", "cef", ".cef-version"),
