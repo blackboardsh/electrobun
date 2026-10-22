@@ -23,7 +23,7 @@
 			"defaultVersion": "0.17.0"
 		},
 		"rust": {
-			"defaultVersion": "1.88.0"
+			"defaultVersion": "1.99.1"
 		},
 		"go": {
 			"defaultVersion": "1.26.10"
