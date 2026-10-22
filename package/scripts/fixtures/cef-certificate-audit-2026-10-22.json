@@ -1,0 +1,94 @@
+{
+  "scope": "Exact Chromium source audit; this is not a renderer or binary acceptance test",
+  "chromiumVersion": "156.0.8078.17",
+  "status": "missing-static-key-distrust",
+  "builtinSpkiCount": 101,
+  "requiredSpkiCount": 8,
+  "missingSpkis": [
+    "49dd353dc2b919a3770645117d0e60c16115e7d1bc259eefe734b00ea434fe5f",
+    "5c0660a2b164910d8ff589c18e14552e9e0ec237dcefe2cb736d41a4811f81a0",
+    "63ecefee431d49523bc1136c4e72d0206a477086caf606cd5cf025686c109cf8",
+    "92c063d67e8f14db71d288e11266ffdaf69cbf115f7bab14f3bc2f68d25e0e30",
+    "ebed6475c2c2d80fcb199f3fe8dd6e6b3ce60b77eb15d4e42c3dec0c6f5b5105",
+    "ec4ffa1ad0ac88081314b7aaffef6a91f97cd57291bb5ba686c5415f5eb4f6b6",
+    "43bffa19d6ef651451f6841e019931e96f6f2eaeff28ab4b6f1ce4576de2717b",
+    "e0254c7fcdc265e2f0f8a428dabb75ab4ae039b4872d62f5ee57f0877d5a8a41"
+  ],
+  "sources": [
+    {
+      "path": "net/cert/crl_set.cc",
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/net/cert/crl_set.cc",
+      "sha256": "7a061da16ea3f1005de09f0311c1bc6eb60b00e860c6f2f5fa3f2a691dbcadeb"
+    },
+    {
+      "path": "net/cert/cert_verify_proc_blocklist.inc",
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/net/cert/cert_verify_proc_blocklist.inc",
+      "sha256": "5609dd4d604eeb48d5c7c5734d036cbae318cdfb7d2234d1760f051557d16b44"
+    }
+  ],
+  "notes": [
+    "Google's dynamic CRLSet and root-store updates are separate from this compiled blocklist.",
+    "A missing entry does not establish that every default-root chain is accepted; it means static SPKI distrust is unproven, including alternate or explicitly trusted chains.",
+    "CEF's asynchronous CefLoadCRLSetsFile call has no completion callback. Calling it before creating a browser does not establish first-request protection.",
+    "Renderer acceptance must distinguish ERR_CERT_REVOKED from untrusted, expired, hostname, connection, and Certificate Transparency failures, and include a valid control."
+  ],
+  "auditedAt": "2026-10-22",
+  "command": "node package/scripts/audit-cef-certificate-revocation.mjs --require-emsign-revocation",
+  "strictExitCode": 1,
+  "cefVersion": "156.0.7+g47dbc1d",
+  "runtimeObservation": {
+    "platform": "macos-arm64",
+    "scope": "Standalone application linked against the downloaded CEF156 library; not Electrobun release acceptance",
+    "atContextInitialized": {
+      "componentCount": 0
+    },
+    "afterFiveSeconds": {
+      "componentCount": 20,
+      "crlSet": {
+        "id": "hfnkpimlhhgieaddgfemjhofmfblmnib",
+        "version": "0.0.0.0",
+        "state": "NEW"
+      }
+    },
+    "navigation": "about:blank loaded before component registration completed",
+    "conclusion": "CEF156 provides Chromium component updates, but a fresh profile does not start with the incident revocations installed."
+  },
+  "startupOrdering": [
+    {
+      "url": "https://github.com/chromiumembedded/cef/blob/47dbc1d/libcef/browser/net/crlset_file_util_impl.cc",
+      "finding": "CefLoadCRLSetsFile starts asynchronous file loading and supplies DoNothing as the verifier update completion callback."
+    },
+    {
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/services/cert_verifier/cert_verifier_service_factory.cc",
+      "finding": "UpdateCRLSet schedules another asynchronous parse; callback fires after parse and verifier updates, including malformed or obsolete inputs. UI task ordering alone cannot establish readiness."
+    },
+    {
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/chrome/browser/component_updater/crl_set_component_installer.cc",
+      "finding": "The CRLSet component installer also starts asynchronous reading and supplies DoNothing on verifier update."
+    },
+    {
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/components/component_updater/component_installer.cc",
+      "finding": "ComponentReady and component-install completion are separate notifications. UPDATED state or an update callback does not confirm verifier policy application."
+    },
+    {
+      "url": "https://github.com/chromium/chromium/blob/156.0.8078.17/net/cert/cert_verify_proc_builtin.cc",
+      "finding": "CRLSet checking is skipped when a certificate path is already invalid; an unrelated self-signed or incomplete chain cannot prove compromised-key revocation."
+    }
+  ],
+  "recommendedRemediation": {
+    "preferred": "Compile the eight compromised SPKIs into Chromium cert_verify_proc_blocklist.inc in the distributed CEF binaries. This applies from first verification and survives later CRLSet replacement.",
+    "alternative": "Expose successful verifier application through CEF, distribute a complete authenticated CRLSet containing the keys, and gate application networking until confirmed policy application, including network-service restarts.",
+    "avoid": [
+      "Fixed startup delays",
+      "Treating component update completion as verifier readiness",
+      "Treating any TLS failure as compromised-key rejection",
+      "Replacing a complete CRLSet with only eight keys and an artificially high sequence"
+    ]
+  },
+  "verificationStillRequired": [
+    "Real renderer acceptance that rejects an otherwise trusted compromised-key chain specifically as ERR_CERT_REVOKED and accepts an unrelated valid chain",
+    "Default-root and explicitly trusted/cross-signed paths",
+    "First request on an empty profile and after network-service restart",
+    "All six supported target platforms"
+  ]
+}
