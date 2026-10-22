@@ -241,7 +241,7 @@ function validatePublicationContract(source) {
 	assert.match(npmPreflight, /node npm\/scripts\/check-published-bootstrap\.mjs/);
 	assert.match(npmPreflight, /--tag "\$NPM_DIST_TAG"/);
 	assert.match(releaseNodeSetup, /^        uses: actions\/setup-node@v6$/m);
-	assert.match(releaseNodeSetup, /^          node-version: '18'$/m);
+	assert.match(releaseNodeSetup, /^          node-version: '24\.22\.1'$/m);
 	assert.ok(
 		release.indexOf("- name: Set up Node for npm integrity") <
 			release.indexOf("- name: Preflight npm channel monotonicity"),

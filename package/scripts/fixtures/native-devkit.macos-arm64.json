@@ -26,13 +26,13 @@
 			"defaultVersion": "1.88.0"
 		},
 		"go": {
-			"defaultVersion": "1.26.4"
+			"defaultVersion": "1.26.10"
 		},
 		"odin": {
 			"defaultVersion": "dev-2026-07a"
 		},
 		"bun": {
-			"defaultVersion": "1.4.0"
+			"defaultVersion": "1.4.4"
 		},
 		"cottontail": {
 			"defaultVersion": "0.7.3-canary.4"

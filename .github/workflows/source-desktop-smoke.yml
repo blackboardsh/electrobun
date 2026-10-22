@@ -38,7 +38,7 @@ jobs:
           submodules: recursive
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
       - name: Verify native macOS runner architecture
         if: runner.os == 'macOS'
         shell: bash

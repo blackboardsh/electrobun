@@ -374,7 +374,7 @@ test("rejects malformed or unsupported Go SDK language baselines", () => {
 	try {
 		assert.throws(
 			() => validateNativeDevkitManifest({ coreRoot: tooNewRoot, ...expected }),
-			/requires Go 1\.27\.0, newer than toolchains\.go\.defaultVersion 1\.26\.4/,
+		/requires Go 1\.27\.0, newer than toolchains\.go\.defaultVersion 1\.26\.10/,
 		);
 	} finally {
 		rmSync(tooNewRoot, { recursive: true, force: true });

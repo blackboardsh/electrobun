@@ -57,7 +57,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
       - name: Verify native control runner
         env:
           EXPECTED_ARCH: ${{ matrix.arch }}
@@ -91,7 +91,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
       - name: Verify native Intel runner and source artifact identity
         env:
           GH_TOKEN: ${{ github.token }}

@@ -91,7 +91,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: package/package-lock.json
 
@@ -497,7 +497,7 @@ jobs:
       - name: Set up Node for npm integrity
         uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24.22.1'
 
       - name: Preflight npm channel monotonicity
         env:
@@ -735,7 +735,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24.22.1'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify matching npm bootstrap version
@@ -824,7 +824,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Verify exact published npm acceptance version
@@ -856,7 +856,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '18'
+          node-version: '24.22.1'
 
       - name: Verify matching npm bootstrap version
         id: release-type
@@ -950,7 +950,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
-          node-version: '24'
+          node-version: '24.22.1'
       - name: Verify template acceptance version
         id: release-type
         env:

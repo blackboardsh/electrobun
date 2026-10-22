@@ -63,7 +63,6 @@ describe("private devkit source contract", () => {
 		expect(Object.keys(manifest.dependencies ?? {}).sort()).toEqual([
 			"@types/bun",
 			"png-to-ico",
-			"proxy-agent",
 			"rcedit",
 		]);
 		expect(Object.keys(manifest.devDependencies ?? {})).toEqual(["typescript"]);

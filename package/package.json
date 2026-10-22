@@ -75,7 +75,6 @@
 	"dependencies": {
 		"@types/bun": "^1.4.0",
 		"png-to-ico": "^2.1.8",
-		"proxy-agent": "^6.5.0",
 		"rcedit": "^4.0.1"
 	}
 }
