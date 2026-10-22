@@ -115,6 +115,10 @@ jobs:
           EXPLICIT_PRERELEASE: ${{ github.event.inputs.prerelease || 'false' }}
         run: node package/scripts/verify-release-version.mjs
 
+      - name: Require compiled certificate distrust for stable releases
+        if: steps.release-type.outputs.prerelease == 'false'
+        run: node package/scripts/audit-cef-certificate-revocation.mjs --require-emsign-revocation
+
       - name: Log disk space (job start - Windows)
         if: matrix.platform == 'win32'
         shell: pwsh
@@ -138,7 +142,7 @@ jobs:
         working-directory: package
 
       - name: Test complete-platform CEF version selection
-        run: node --test package/scripts/cef-release-index.test.mjs
+        run: node --test package/scripts/cef-release-index.test.mjs package/scripts/audit-cef-certificate-revocation.test.mjs
 
       - name: Test macOS docked Web Inspector layout
         if: matrix.platform == 'darwin'
