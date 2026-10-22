@@ -25,6 +25,10 @@ on:
         description: Diagnose only the native Windows x64 runner
         type: boolean
         default: false
+      linux_arm_only:
+        description: Validate only the native Linux ARM runner
+        type: boolean
+        default: false
       scenarios:
         description: Comma-separated scenario IDs for diagnostics, or all
         type: string
@@ -55,7 +59,7 @@ jobs:
         # also fails on the hosted macOS 26 Intel image (IconServices).
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.windows_x64_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"}]' || inputs.windows_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.windows_x64_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"}]' || inputs.windows_only && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || inputs.linux_arm_only && '[{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 120
     steps:
@@ -71,12 +75,13 @@ jobs:
           INTEL_ONLY: ${{ inputs.macos_intel_only }}
           WINDOWS_X64_ONLY: ${{ inputs.windows_x64_only }}
           WINDOWS_ONLY: ${{ inputs.windows_only }}
+          LINUX_ARM_ONLY: ${{ inputs.linux_arm_only }}
           SCENARIOS: ${{ inputs.scenarios }}
           DIAGNOSTICS: ${{ inputs.bunny_diagnostics }}
           NATIVE_ONLY: ${{ inputs.bunny_native_only }}
           SOURCE_OVERLAY: ${{ inputs.bunny_source_overlay }}
         run: |
-          node -e 'const e = process.env; const intel = e.INTEL_ONLY === "true"; const windows = e.WINDOWS_X64_ONLY === "true"; const native = e.NATIVE_ONLY === "true"; if (intel === windows || e.WINDOWS_ONLY === "true" || e.SCENARIOS !== "bunny" || (native ? !windows || e.DIAGNOSTICS === "true" || e.SOURCE_OVERLAY === "true" : e.DIAGNOSTICS !== "true" || (e.SOURCE_OVERLAY === "true" && !intel))) throw new Error("Bunny diagnostics require one focused runner; native-only requires Windows x64 without renderer probes or source overlay")'
+          node -e 'const e = process.env; const intel = e.INTEL_ONLY === "true"; const windows = e.WINDOWS_X64_ONLY === "true"; const native = e.NATIVE_ONLY === "true"; if (intel === windows || e.WINDOWS_ONLY === "true" || e.LINUX_ARM_ONLY === "true" || e.SCENARIOS !== "bunny" || (native ? !windows || e.DIAGNOSTICS === "true" || e.SOURCE_OVERLAY === "true" : e.DIAGNOSTICS !== "true" || (e.SOURCE_OVERLAY === "true" && !intel))) throw new Error("Bunny diagnostics require one focused runner; native-only requires Windows x64 without renderer probes or source overlay")'
       - name: Verify native macOS runner architecture
         if: runner.os == 'macOS'
         shell: bash
@@ -130,6 +135,7 @@ jobs:
       - name: Check desktop driver regressions
         shell: bash
         run: |
+          python scripts/desktop-smoke/test_preflight.py
           python scripts/desktop-smoke/test_desktop.py
           python scripts/desktop-smoke/test_picker.py
           node --test scripts/desktop-smoke/bunny-diagnostics.test.mjs scripts/desktop-smoke/bunny-source-overlay.test.mjs scripts/bunny-spark.test.mjs
