@@ -33,6 +33,10 @@ on:
         description: Trace the generated Bunny app on one selected Intel macOS or Windows x64 runner
         type: boolean
         default: false
+      bunny_native_only:
+        description: Observe Windows Bunny only after the original outcome, without app source probes
+        type: boolean
+        default: false
       bunny_source_overlay:
         description: Validate the reviewed Bunny renderer against the published native artifacts
         type: boolean
@@ -62,16 +66,17 @@ jobs:
         with:
           node-version: '24'
       - name: Validate focused Bunny diagnostic selection
-        if: github.event_name == 'workflow_dispatch' && (inputs.bunny_diagnostics || inputs.bunny_source_overlay)
+        if: github.event_name == 'workflow_dispatch' && (inputs.bunny_diagnostics || inputs.bunny_source_overlay || inputs.bunny_native_only)
         env:
           INTEL_ONLY: ${{ inputs.macos_intel_only }}
           WINDOWS_X64_ONLY: ${{ inputs.windows_x64_only }}
           WINDOWS_ONLY: ${{ inputs.windows_only }}
           SCENARIOS: ${{ inputs.scenarios }}
           DIAGNOSTICS: ${{ inputs.bunny_diagnostics }}
+          NATIVE_ONLY: ${{ inputs.bunny_native_only }}
           SOURCE_OVERLAY: ${{ inputs.bunny_source_overlay }}
         run: |
-          node -e 'const e = process.env; const intel = e.INTEL_ONLY === "true"; const windows = e.WINDOWS_X64_ONLY === "true"; if (intel === windows || e.WINDOWS_ONLY === "true" || e.SCENARIOS !== "bunny" || e.DIAGNOSTICS !== "true" || (e.SOURCE_OVERLAY === "true" && !intel)) throw new Error("Bunny diagnostics require exactly one native Intel macOS or Windows x64 runner and scenarios=bunny; source overlay remains Intel-only")'
+          node -e 'const e = process.env; const intel = e.INTEL_ONLY === "true"; const windows = e.WINDOWS_X64_ONLY === "true"; const native = e.NATIVE_ONLY === "true"; if (intel === windows || e.WINDOWS_ONLY === "true" || e.SCENARIOS !== "bunny" || (native ? !windows || e.DIAGNOSTICS === "true" || e.SOURCE_OVERLAY === "true" : e.DIAGNOSTICS !== "true" || (e.SOURCE_OVERLAY === "true" && !intel))) throw new Error("Bunny diagnostics require one focused runner; native-only requires Windows x64 without renderer probes or source overlay")'
       - name: Verify native macOS runner architecture
         if: runner.os == 'macOS'
         shell: bash
@@ -212,6 +217,7 @@ jobs:
           SMOKE_PLATFORM: ${{ matrix.platform }}
           SMOKE_SCENARIOS: ${{ github.event_name == 'workflow_dispatch' && inputs.scenarios || 'all' }}
           SMOKE_BUNNY_DIAGNOSTICS: ${{ github.event_name == 'workflow_dispatch' && inputs.bunny_diagnostics && '1' || '0' }}
+          SMOKE_BUNNY_NATIVE_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.bunny_native_only && '1' || '0' }}
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
           New-Item -ItemType Directory -Force -Path $output | Out-Null

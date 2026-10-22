@@ -181,6 +181,414 @@ class WindowsDiagnosticTests(unittest.TestCase):
             self.assertFalse(result['ok'])
 
 
+class NativeOnlyDiagnosticTests(unittest.TestCase):
+    def exercise_outcome(self, *, success=False, enabled=True, legacy=True,
+                         platform='win32', ownership=True, reused=False, initial_reused=False,
+                         broken=False, thread_errors=False):
+        from contextlib import ExitStack
+        from PIL import Image, ImageChops
+        frame = Image.new('RGB', (160, 100), 'black')
+        frame.paste('white', (0, 0, 80, 100))
+        changed = ImageChops.invert(frame)
+        size = namedtuple('Size', 'width height')(160, 100)
+        gui = SimpleNamespace(position=Mock(return_value=(80, 50)), size=Mock(return_value=size),
+                              moveTo=Mock(), screenshot=Mock())
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'))
+        process = Mock(pid=9)
+        process.poll.return_value = None
+        user, handle, _, _ = WindowsDiagnosticTests().fake_user()
+        events = []
+        fixed = []
+        active_shots = 2 if success else 3
+        original_error = 'Input did not produce a visible change'
+        original_helper = desktop.native_only_after_outcome
+        original_constructor = desktop.WindowsWindowDiagnostics
+        original_find = desktop.windows_find_window
+
+        def assert_fixed(operation):
+            self.assertTrue(fixed, f'{operation} ran before the original outcome was fixed')
+            outcome = fixed[0]
+            self.assertEqual(outcome['ok'], success)
+            self.assertEqual(outcome.get('error'), None if success else original_error)
+            events.append(('native', operation))
+
+        def construct(output, result):
+            assert_fixed('constructor')
+            self.assertIs(result, fixed[0])
+            return original_constructor(output, result)
+
+        def find(title):
+            assert_fixed('FindWindowW')
+            return original_find(title)
+
+        def ancestry(window_pid, root_pid):
+            assert_fixed('process ancestry')
+            self.assertEqual((window_pid, root_pid), (77, process.pid))
+            return {'verified': ownership, 'windowPid': window_pid, 'rootPid': root_pid,
+                    'chain': [77, 55, 9] if ownership else [77, 55]}
+
+        def observe(hwnd):
+            assert_fixed('window state')
+            self.assertEqual(hwnd, handle)
+            if broken and observations.call_count > 1:
+                raise OSError('post-outcome native read failed')
+            return {'hwnd': hwnd, 'pid': 88 if initial_reused or reused and observations.call_count > 1 else 77,
+                    'threadId': 99, 'isWindow': True, 'visible': True, 'bounds': [0, 0, 160, 100]}
+
+        def thread_read(kind, *args):
+            assert_fixed(kind)
+            self.assertTrue(ownership)
+            self.assertFalse(initial_reused)
+            self.assertEqual(ancestries.call_count, 1)
+            self.assertEqual(observations.call_count, 1, 'thread reads require the verified initial window state')
+            self.assertEqual(args, (77, 99, handle) if kind == 'child threads' else (77, 99))
+            if thread_errors:
+                if kind == 'process threads':
+                    raise subprocess.TimeoutExpired('powershell', 3)
+                raise OSError(kind + ' read failed')
+            return {'windowThreadId': 99, 'inspectedPid': 77}
+
+        def pointer():
+            assert_fixed('pointer position')
+            return 80, 50
+
+        def lookup(title, activate=True, diagnostics=None):
+            self.assertFalse(fixed, 'post-outcome diagnostics must not re-find or reactivate through window()')
+            self.assertIsNone(diagnostics, 'legacy native diagnostics must be suppressed during active assertions')
+            events.append(('window', activate))
+            return 0, 0, 160, 100
+
+        def move(*args, **kwargs):
+            self.assertFalse(fixed, 'diagnostics must not add mouse input after the outcome')
+            events.append(('move', args, kwargs))
+
+        def sleep(seconds):
+            events.append(('sleep', seconds, bool(fixed)))
+            if fixed:
+                self.assertFalse(success, 'successful checks must not gain diagnostic waits')
+                self.assertEqual(seconds, 1)
+
+        def screenshot():
+            count = gui.screenshot.call_count
+            events.append(('screenshot', count, bool(fixed)))
+            if count <= active_shots:
+                self.assertFalse(fixed, 'all original screenshots must precede diagnostics')
+                return changed if success and count == 2 else frame
+            assert_fixed('later screenshot')
+            if broken:
+                raise OSError('post-outcome screenshot failed')
+            # Later painting is intentionally dramatic. It cannot rescue the
+            # original expectChange assertion or overwrite its failure.png.
+            return Image.new('RGB', frame.size, 'red')
+
+        def after_outcome(plan, output, result, child, actual_gui, shots):
+            self.assertEqual(result['ok'], success)
+            self.assertEqual(result.get('error'), None if success else original_error)
+            self.assertEqual(gui.screenshot.call_count, active_shots)
+            self.assertEqual(shots, ['01-rendered.png', '02-02-interaction.png'] + ([] if success else ['failure.png']))
+            if not success:
+                with Image.open(Path(output) / 'failure.png') as failure:
+                    self.assertIsNone(ImageChops.difference(failure.convert('RGB'), frame).getbbox())
+            self.assertIs(child, process)
+            self.assertIs(actual_gui, gui)
+            fixed.append(result)
+            original_outcome = (result['ok'], result.get('error'), list(result['checks']))
+            original_helper(plan, output, result, child, actual_gui, shots)
+            self.assertEqual((result['ok'], result.get('error'), result['checks']), original_outcome)
+
+        gui.position.side_effect = pointer
+        gui.moveTo.side_effect = move
+        gui.screenshot.side_effect = screenshot
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {'name': 'bunny', 'title': 'Bunny', 'output': directory, 'cwd': directory,
+                    'command': ['unused'], 'nativeOnlyDiagnostics': enabled, 'diagnostics': legacy,
+                    'actions': [{'move': [0.5, 0.5], 'expectChange': True, 'settle': 0}]}
+            with ExitStack() as patches:
+                patches.enter_context(patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}))
+                patches.enter_context(patch.object(desktop.sys, 'platform', platform))
+                patches.enter_context(patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True))
+                patches.enter_context(patch.object(desktop.subprocess, 'Popen', return_value=process))
+                patches.enter_context(patch.object(desktop, 'stop'))
+                patches.enter_context(patch.object(desktop, 'window', side_effect=lookup))
+                patches.enter_context(patch.object(desktop.time, 'sleep', side_effect=sleep))
+                patches.enter_context(patch.object(desktop, 'native_only_after_outcome', side_effect=after_outcome))
+                constructors = patches.enter_context(patch.object(desktop, 'WindowsWindowDiagnostics', side_effect=construct))
+                finds = patches.enter_context(patch.object(desktop, 'windows_find_window', side_effect=find))
+                ancestries = patches.enter_context(patch.object(desktop, 'windows_process_ancestry', side_effect=ancestry))
+                observations = patches.enter_context(patch.object(desktop, 'windows_window_state', side_effect=observe))
+                dispatcher_threads = patches.enter_context(patch.object(desktop, 'windows_dispatcher_threads',
+                    side_effect=lambda *args: thread_read('dispatcher threads', *args)))
+                child_threads = patches.enter_context(patch.object(desktop, 'windows_child_threads',
+                    side_effect=lambda *args: thread_read('child threads', *args)))
+                process_threads = patches.enter_context(patch.object(desktop, 'windows_thread_snapshot',
+                    side_effect=lambda *args: thread_read('process threads', *args)))
+                if success:
+                    desktop.inspect_app(plan)
+                else:
+                    with self.assertRaisesRegex(AssertionError, '^Input did not produce a visible change$'):
+                        desktop.inspect_app(plan)
+            result = json.loads((Path(directory) / 'result.json').read_text())
+            self.assertEqual(result['ok'], success)
+            self.assertEqual(result.get('error'), None if success else original_error)
+            for reader in (dispatcher_threads, child_threads, process_threads):
+                self.assertEqual(reader.call_count,
+                    int(enabled and platform == 'win32' and ownership and not initial_reused))
+            self.assertNotIn('visibleChangeMeans', result, 'legacy metrics must also be suppressed by native-only mode')
+            self.assertEqual([event for event in events if event[0] == 'window'],
+                             [('window', True)] + [('window', False)] * 4)
+            self.assertEqual([event for event in events if event[0] == 'move'],
+                             [('move', (2, 2), {}), ('move', (80.0, 50.0), {'duration': 0.3})])
+            self.assertEqual([event[1] for event in events if event[0] == 'sleep' and not event[2]], [2, 2, 0])
+            user.ShowWindow.assert_not_called()
+            user.SetWindowPos.assert_not_called()
+            user.SetForegroundWindow.assert_not_called()
+            if not success:
+                with Image.open(Path(directory) / 'failure.png') as failure:
+                    self.assertIsNone(ImageChops.difference(failure.convert('RGB'), frame).getbbox())
+            return SimpleNamespace(result=result, events=events, gui=gui, constructors=constructors,
+                                   finds=finds, ancestries=ancestries, observations=observations,
+                                   thread_readers=(dispatcher_threads, child_threads, process_threads),
+                                   user=user, handle=handle)
+
+    def test_native_only_failure_observes_after_original_assertion_and_keeps_late_paint_a_failure(self):
+        run = self.exercise_outcome()
+        self.assertEqual(run.constructors.call_count, 1)
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual(run.user.FindWindowW.call_count, 1)
+        self.assertEqual(run.ancestries.call_count, 1)
+        self.assertEqual(run.observations.call_args_list, [unittest.mock.call(run.handle)] * 11)
+        self.assertEqual([event[1] for event in run.events if event[0] == 'sleep' and event[2]], [1] * 10)
+        self.assertEqual(run.gui.screenshot.call_count, 13)
+        self.assertNotIn('visible-response-to-input', run.result['checks'])
+
+    def test_native_only_success_is_fixed_before_summary_and_adds_no_waits_or_screenshots(self):
+        run = self.exercise_outcome(success=True)
+        self.assertEqual(run.constructors.call_count, 1)
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual(run.ancestries.call_count, 1)
+        self.assertEqual(run.observations.call_count, 1)
+        self.assertEqual(run.gui.screenshot.call_count, 2)
+        self.assertFalse([event for event in run.events if event[0] == 'sleep' and event[2]])
+        self.assertIn('visible-response-to-input', run.result['checks'])
+
+    def test_native_only_diagnostic_errors_preserve_original_assertion(self):
+        run = self.exercise_outcome(broken=True)
+        self.assertTrue(run.result['diagnosticErrors'])
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual([event[1] for event in run.events if event[0] == 'sleep' and event[2]], [1] * 10)
+        self.assertEqual(run.gui.screenshot.call_count, 13)
+
+    def test_native_only_thread_errors_preserve_both_outcomes_and_do_not_stop_later_evidence(self):
+        for success in (False, True):
+            with self.subTest(success=success):
+                run = self.exercise_outcome(success=success, thread_errors=True)
+                self.assertEqual({error['label'] for error in run.result['diagnosticErrors']},
+                                 {'native-only-dispatcherThreads', 'native-only-childThreads', 'native-only-processThreads'})
+                self.assertEqual(run.gui.screenshot.call_count, 2 if success else 13)
+                self.assertEqual(run.observations.call_count, 1 if success else 11)
+                self.assertEqual([event[1] for event in run.events if event[0] == 'sleep' and event[2]],
+                                 [] if success else [1] * 10)
+
+    def test_native_only_disabled_or_nonwindows_has_no_diagnostic_side_effects(self):
+        for options in [{'enabled': False, 'legacy': False}, {'platform': 'darwin'}, {'platform': 'linux'}]:
+            with self.subTest(options=options):
+                run = self.exercise_outcome(**options)
+                run.constructors.assert_not_called()
+                run.finds.assert_not_called()
+                run.ancestries.assert_not_called()
+                run.observations.assert_not_called()
+                run.gui.position.assert_not_called()
+                self.assertEqual(run.gui.screenshot.call_count, 3)
+                self.assertFalse([event for event in run.events if event[0] == 'sleep' and event[2]])
+
+    def test_native_only_rejects_a_window_outside_the_launched_process_tree(self):
+        run = self.exercise_outcome(ownership=False)
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual(run.ancestries.call_count, 1)
+        self.assertTrue(run.result['diagnosticErrors'])
+        self.assertEqual(run.gui.screenshot.call_count, 3)
+        self.assertFalse([event for event in run.events if event[0] == 'sleep' and event[2]])
+
+    def test_native_only_reused_hwnd_never_redirects_samples_or_crops_another_process(self):
+        run = self.exercise_outcome(reused=True)
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual(run.user.FindWindowW.call_count, 1)
+        self.assertEqual(run.observations.call_args_list, [unittest.mock.call(run.handle)] * 11)
+        self.assertEqual(run.gui.size.call_count, 3, 'only original assertion screenshots may be cropped')
+        self.assertTrue(all(not row['sameOriginalWindow'] for row in run.result['windowReadings'][1:]))
+
+    def test_native_only_rejects_pid_reuse_between_discovery_and_the_first_state_read(self):
+        run = self.exercise_outcome(initial_reused=True)
+        self.assertEqual(run.finds.call_count, 1)
+        self.assertEqual(run.ancestries.call_count, 1)
+        self.assertEqual(run.observations.call_args_list, [unittest.mock.call(run.handle)])
+        self.assertEqual(run.gui.screenshot.call_count, 3)
+        self.assertFalse([event for event in run.events if event[0] == 'sleep' and event[2]])
+        self.assertTrue(run.result['diagnosticErrors'])
+        self.assertFalse(run.result['windowReadings'][0]['sameOriginalWindow'])
+        self.assertEqual(run.result['windowReadings'][0]['originalPid'], 77)
+        self.assertEqual(run.result['windowReadings'][0]['pid'], 88)
+
+    def test_post_failure_observation_stops_when_its_remaining_time_cannot_cover_another_wait(self):
+        from PIL import Image
+        clock = [0.0]
+        state = {'hwnd': 123, 'pid': 77, 'isWindow': True, 'visible': True, 'bounds': [0, 0, 2, 2]}
+        gui = Mock()
+        gui.size.return_value = SimpleNamespace(width=2)
+        def screenshot():
+            clock[0] += 0.25
+            return Image.new('RGB', (2, 2))
+        def sleep(seconds):
+            clock[0] += seconds
+        gui.screenshot.side_effect = screenshot
+        with tempfile.TemporaryDirectory() as directory:
+            result = {'ok': False, 'error': 'original assertion'}
+            diagnostic = desktop.WindowsWindowDiagnostics(Path(directory), result)
+            diagnostic.handle, diagnostic.pid = 123, 77
+            shots = []
+            with patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]), \
+                    patch.object(desktop.time, 'sleep', side_effect=sleep) as sleeps, \
+                    patch.object(desktop, 'windows_window_state', return_value=state) as observations:
+                diagnostic.after_failure(gui, shots, samples=10, deadline=2.75)
+            self.assertEqual([call.args for call in sleeps.call_args_list], [(1,), (1,)])
+            self.assertEqual(observations.call_args_list, [unittest.mock.call(123)] * 2)
+            self.assertEqual(gui.screenshot.call_count, 2)
+            self.assertEqual(len(shots), 2)
+            self.assertLessEqual(clock[0], 2.75)
+            self.assertEqual((result['ok'], result['error']), (False, 'original assertion'))
+
+
+class WindowsThreadDiagnosticTests(unittest.TestCase):
+    def enumerate_threads(self, records, *, children=False, cycle=False):
+        from ctypes import wintypes
+        parent = 0x1234567887654000
+        handles = [row[0] for row in records]
+        owners = {row[0]: row[1:] for row in records}
+        sequence = handles + ([handles[0]] if cycle else [0])
+        def owner(handle, pointer):
+            pid, thread_id = owners[handle]
+            pointer._obj.value = pid
+            return thread_id
+        user = SimpleNamespace(FindWindowExW=Mock(side_effect=sequence),
+                               GetWindowThreadProcessId=Mock(side_effect=owner))
+        with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            result = desktop.windows_child_threads(77, 99, parent) if children else desktop.windows_dispatcher_threads(77, 99)
+        expected_parent = parent if children else ctypes.c_void_p(-3).value
+        expected_class = 'ContainerViewClass' if children else 'MessageWindowClass'
+        for index, call in enumerate(user.FindWindowExW.call_args_list):
+            actual_parent, previous, class_name, title = call.args
+            self.assertEqual(actual_parent.value, expected_parent)
+            self.assertEqual(previous, 0 if index == 0 else handles[index - 1])
+            self.assertEqual(class_name, expected_class)
+            self.assertIsNone(title)
+        self.assertIs(user.FindWindowExW.restype, wintypes.HWND)
+        self.assertEqual(user.GetWindowThreadProcessId.argtypes,
+                         [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)])
+        return result, user
+
+    def test_dispatcher_and_direct_child_reads_filter_pid_and_preserve_full_hwnd(self):
+        base = 0x1234567887654321
+        records = [(base, 77, 99), (base + 1, 88, 99), (base + 2, 77, 100)]
+        for children in (False, True):
+            with self.subTest(children=children):
+                result, user = self.enumerate_threads(records, children=children)
+                windows = result['children' if children else 'dispatchers']
+                self.assertEqual([window['hwnd'] for window in windows], [base, base + 2])
+                self.assertEqual([window['pid'] for window in windows], [77, 77])
+                self.assertEqual([window['threadId'] for window in windows], [99, 100])
+                self.assertEqual(result['windowsExamined'], 3)
+                self.assertFalse(result['truncated'])
+                self.assertFalse(result['cycleDetected'])
+                self.assertEqual(user.FindWindowExW.call_count, 4)
+                if children:
+                    self.assertTrue(result['childFound'])
+                    self.assertFalse(result['allChildrenMatchWindowThread'])
+                else:
+                    self.assertTrue(result['windowThreadMatchesDispatcher'])
+
+    def test_foreign_process_threads_cannot_establish_a_match(self):
+        for children in (False, True):
+            with self.subTest(children=children):
+                result, _ = self.enumerate_threads([(123, 88, 99)], children=children)
+                self.assertEqual(result['children' if children else 'dispatchers'], [])
+                self.assertIsNone(result['allChildrenMatchWindowThread' if children else 'windowThreadMatchesDispatcher'])
+                if children:
+                    self.assertFalse(result['childFound'])
+
+    def test_window_thread_enumeration_caps_native_reads_even_when_more_windows_exist(self):
+        records = [(1000 + i, 77, 99) for i in range(65)]
+        for children in (False, True):
+            with self.subTest(children=children):
+                result, user = self.enumerate_threads(records, children=children)
+                self.assertEqual(user.FindWindowExW.call_count, 64)
+                self.assertEqual(user.GetWindowThreadProcessId.call_count, 64)
+                self.assertEqual(result['windowsExamined'], 64)
+                self.assertTrue(result['truncated'])
+                self.assertFalse(result['cycleDetected'])
+                self.assertEqual(len(result['children' if children else 'dispatchers']), 64)
+
+    def test_window_thread_enumeration_stops_on_a_cycle_without_rereading_the_owner(self):
+        for children in (False, True):
+            with self.subTest(children=children):
+                result, user = self.enumerate_threads([(123, 77, 99), (456, 77, 100)],
+                                                     children=children, cycle=True)
+                self.assertEqual(user.FindWindowExW.call_count, 3)
+                self.assertEqual(user.GetWindowThreadProcessId.call_count, 2)
+                self.assertEqual(result['windowsExamined'], 2)
+                self.assertTrue(result['truncated'])
+                self.assertTrue(result['cycleDetected'])
+
+    def test_process_thread_snapshot_is_bounded_hidden_and_labels_creation_order_as_inference(self):
+        threads = [{'threadId': 100, 'startTimeUtc': '2026-10-22T01:02:04Z'},
+                   {'threadId': 98, 'startTimeUtc': None, 'error': 'StartTime unavailable'},
+                   {'threadId': 99, 'startTimeUtc': '2026-10-22T01:02:03Z'}]
+        payload = {'pid': 77, 'threads': threads, 'totalThreads': 3, 'truncated': False}
+        with patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(payload))) as run:
+            snapshot = desktop.windows_thread_snapshot(77, 99)
+        run.assert_called_once()
+        args, kwargs = run.call_args
+        command = args[0]
+        self.assertEqual(command[:5], ['powershell', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command'])
+        self.assertIn('Get-Process -Id 77 ', command[5])
+        self.assertRegex(command[5], r'Select-Object\s+-First\s+256\b')
+        self.assertEqual(kwargs, {'capture_output': True, 'text': True, 'check': True,
+                                  'timeout': 3, 'creationflags': 0x08000000})
+        self.assertEqual(snapshot['threads'], threads)
+        self.assertEqual(snapshot['earliestObservedThreadId'], 99)
+        self.assertTrue(snapshot['windowThreadMatchesEarliestObserved'])
+        self.assertIn('candidate', snapshot['inference'])
+        self.assertIn('missing or terminated', snapshot['inference'])
+
+    def test_missing_thread_start_times_leave_creation_order_unknown(self):
+        payload = {'pid': 77, 'threads': [{'threadId': 99, 'startTimeUtc': None, 'error': 'access denied'}]}
+        with patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout=json.dumps(payload))):
+            snapshot = desktop.windows_thread_snapshot(77, 99)
+        self.assertIsNone(snapshot['earliestObservedThreadId'])
+        self.assertIsNone(snapshot['windowThreadMatchesEarliestObserved'])
+
+    def test_process_thread_timeout_and_command_errors_propagate_without_retry(self):
+        for error in (subprocess.TimeoutExpired('powershell', 3),
+                      subprocess.CalledProcessError(1, 'powershell', stderr='process exited')):
+            with self.subTest(error=type(error).__name__), \
+                    patch.object(desktop.subprocess, 'run', side_effect=error) as run:
+                with self.assertRaises(type(error)) as raised:
+                    desktop.windows_thread_snapshot(77, 99)
+                self.assertIs(raised.exception, error)
+                run.assert_called_once()
+                self.assertEqual(run.call_args.kwargs['timeout'], 3)
+                self.assertEqual(run.call_args.kwargs['creationflags'], 0x08000000)
+
+    def test_process_thread_snapshot_rejects_bad_json_wrong_pid_and_wrong_shape(self):
+        for payload, error in [('not json', json.JSONDecodeError),
+                               ('[]', RuntimeError),
+                               (json.dumps({'pid': 88, 'threads': []}), RuntimeError),
+                               (json.dumps({'pid': 77, 'threads': {}}), RuntimeError)]:
+            with self.subTest(payload=payload), \
+                    patch.object(desktop.subprocess, 'run', return_value=SimpleNamespace(stdout=payload)):
+                with self.assertRaises(error):
+                    desktop.windows_thread_snapshot(77, 99)
+
+
 class CleanupTests(unittest.TestCase):
     @unittest.skipIf(sys.platform == 'win32', 'POSIX detached process groups')
     def test_launcher_can_clean_up_its_detached_app(self):

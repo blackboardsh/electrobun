@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { basename, delimiter, dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { acceptanceEnvironment, run, validateCatalog } from '../accept-published-template.mjs';
 import { npmInvocation, validateRunnerPlatform } from '../../npm/scripts/accept-published-bootstrap.mjs';
@@ -25,7 +25,12 @@ export function verifyBuiltMacOSApp(buildRoot, platform) {
   return verifyMachORelease([buildRoot], undefined, platform.slice('macos-'.length));
 }
 
-export function validateBunnyDiagnosticSelection({ platform, selected, diagnostics, sourceOverlay }) {
+export function validateBunnyDiagnosticSelection({ platform, selected, diagnostics, sourceOverlay, nativeOnlyDiagnostics }) {
+  if (nativeOnlyDiagnostics) {
+    assert.equal(platform, 'windows-x64', 'Native-only Bunny diagnostics require Windows x64');
+    assert.deepEqual(selected, ['bunny'], 'Native-only Bunny diagnostics require the focused bunny scenario');
+    assert.ok(!diagnostics && !sourceOverlay, 'Native-only diagnostics cannot enable renderer probes or source overlays');
+  }
   if (sourceOverlay) {
     assert.ok(diagnostics, 'Bunny source overlay requires diagnostic provenance');
     assert.equal(platform, 'macos-x64', 'Bunny source overlay remains Intel macOS only');
@@ -60,6 +65,63 @@ export function diagnosticNativeArtifacts(buildRoot, platform) {
   walk(buildRoot);
   assert.ok(identities.length > 0, 'No diagnostic native binaries found');
   return identities;
+}
+
+// No collector, injected code, prebuild, or app interaction: hash the existing
+// published inputs, then verify them again after the ordinary driver finishes.
+export function startBunnyNativeOnlyDiagnostics({ project, output, devkitRoot }) {
+  const sourceIdentities = () => {
+    const paths = ['hutch.config.ts', '.hutch/devkit/projection.json'];
+    function walk(directory) {
+      for (const entry of readdirSync(directory, { withFileTypes: true })) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.isFile()) paths.push(relative(project, path));
+        else throw new Error(`Unexpected non-file Bunny source: ${path}`);
+      }
+    }
+    walk(join(project, 'src'));
+    return paths.sort().map(path => {
+      const bytes = readFileSync(join(project, path));
+      return { path: path.replaceAll('\\', '/'), size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+    });
+  };
+  const metadataPath = join(output, 'bunny-native-only-provenance.json');
+  const manifestBytes = readFileSync(join(devkitRoot, 'native-devkit.json'));
+  const manifest = JSON.parse(manifestBytes);
+  const manifestSha256 = createHash('sha256').update(manifestBytes).digest('hex');
+  const projection = JSON.parse(readFileSync(join(project, '.hutch/devkit/projection.json'), 'utf8'));
+  assert.equal(manifestSha256, projection.sourceManifestSha256, 'Published devkit manifest differs from project projection');
+  const coreArchiveSha256 = readFileSync(join(devkitRoot, '.core-complete'), 'utf8').trim();
+  assert.match(coreArchiveSha256, /^[a-f0-9]{64}$/, 'Invalid published core archive identity');
+  const metadata = { mode: 'native-only-after-outcome', rendererInstrumentation: false, sourceOverlay: false,
+    sourceBefore: sourceIdentities(), coreArchiveSha256, manifestSha256,
+    devkitNativeBefore: diagnosticNativeArtifacts(devkitRoot, 'windows-x64') };
+  mkdirSync(output, { recursive: true });
+  const save = () => writeFileSync(metadataPath, JSON.stringify(metadata, null, 2) + '\n');
+  save();
+  return { metadata, close(nativeArtifacts) {
+    try {
+      metadata.sourceAfter = sourceIdentities();
+      assert.deepEqual(metadata.sourceAfter, metadata.sourceBefore, 'Native-only diagnostic changed original project sources');
+      metadata.sourcesUnchanged = true;
+      assert.ok(Array.isArray(nativeArtifacts) && nativeArtifacts.length, 'Native-only diagnostic requires actual built native identities');
+      const required = { coreLibrary: 'ElectrobunCore.dll', nativeWrapper: 'libNativeWrapper.dll',
+        asarLibrary: 'libasar.dll', bspatch: 'bspatch.exe', launcher: 'launcher.exe', zigZstd: 'zig-zstd.exe' };
+      metadata.nativeMatches = Object.entries(required).map(([key, name]) => {
+        const publishedPath = manifest.layout?.runtime?.[key];
+        assert.equal(typeof publishedPath, 'string', `Missing published devkit runtime path: ${key}`);
+        const before = metadata.devkitNativeBefore.filter(file => file.path === join(devkitRoot, publishedPath));
+        const after = nativeArtifacts.filter(file => basename(file.path) === name);
+        assert.equal(before.length, 1, `Expected one published devkit ${name}`);
+        assert.equal(after.length, 1, `Expected one built ${name}`);
+        assert.equal(after[0].sha256, before[0].sha256, `Built native differs from published devkit: ${name}`);
+        return { name, sha256: after[0].sha256, matchesPublishedDevkit: true };
+      });
+      metadata.nativeUnchanged = true;
+    } catch (error) { metadata.error = error.message; throw error; }
+    finally { save(); }
+  } };
 }
 
 export async function prepareRelease({ version, platform, output }) {
@@ -109,7 +171,8 @@ export async function smokeRelease(options) {
     assert.ok(selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown smoke scenario');
     const bunnyDiagnostics = process.env.SMOKE_BUNNY_DIAGNOSTICS === '1';
     const bunnySourceOverlay = process.env.SMOKE_BUNNY_SOURCE_OVERLAY === '1';
-    validateBunnyDiagnosticSelection({ platform: options.platform, selected, diagnostics: bunnyDiagnostics, sourceOverlay: bunnySourceOverlay });
+    const bunnyNativeOnly = process.env.SMOKE_BUNNY_NATIVE_ONLY === '1';
+    validateBunnyDiagnosticSelection({ platform: options.platform, selected, diagnostics: bunnyDiagnostics, sourceOverlay: bunnySourceOverlay, nativeOnlyDiagnostics: bunnyNativeOnly });
     for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
       const output = join(work, scenario.id);
       mkdirSync(output);
@@ -133,20 +196,24 @@ export async function smokeRelease(options) {
         assert.ok(config.includes(`version: "${options.version}"`), 'Project product pin differs from release');
         const projection = JSON.parse(readFileSync(join(project, '.hutch/devkit/projection.json'), 'utf8'));
         assert.equal(projection.product.version, options.version);
-        if (bunnyDiagnostics) {
+        if (bunnyDiagnostics || bunnyNativeOnly) {
           const sourceOverlay = bunnySourceOverlay ? applyBunnySourceOverlay({
             project, output, sourceRoot: resolve(here, '../..'), revision: process.env.GITHUB_SHA,
           }) : undefined;
-          diagnostic = await startBunnyDiagnostics({ project, output });
+          diagnostic = bunnyNativeOnly ? startBunnyNativeOnlyDiagnostics({ project, output,
+            devkitRoot: join(env.HUTCH_HOME, 'releases', 'electrobun', options.version, options.platform) })
+            : await startBunnyDiagnostics({ project, output });
           writeFileSync(join(output, 'diagnostic-release.json'), JSON.stringify({
             version: options.version, platform: options.platform, revision: catalog.revision,
             tools: catalog.tools, projection, harnessRevision: process.env.GITHUB_SHA,
+            ...(bunnyNativeOnly ? { mode: 'native-only-after-outcome', rendererInstrumentation: false } : {}),
             ...(sourceOverlay ? { sourceOverlay } : {}),
             hutch: { path: hutch, sha256: createHash('sha256').update(readFileSync(hutch)).digest('hex') },
           }, null, 2));
         }
         const plan = { ...scenario, name: scenario.id, output, cwd: project, command: [hutch, 'dev'],
-          ...(bunnyDiagnostics ? { diagnostics: true } : {}) };
+          ...(bunnyDiagnostics ? { diagnostics: true } : {}),
+          ...(bunnyNativeOnly ? { nativeOnlyDiagnostics: true } : {}) };
         const planPath = join(output, 'desktop-plan.json');
         writeFileSync(planPath, JSON.stringify(plan));
         await run(python, [join(here, 'desktop.py'), planPath], { env, cwd: scratch, log: join(output, 'desktop-driver.log'), timeout: 900_000 });
@@ -162,13 +229,14 @@ export async function smokeRelease(options) {
         console.error(`[desktop-smoke] ${scenario.id}: ${error.message}`);
       } finally {
         if (diagnostic) {
+          let identities;
           try {
-            const identities = diagnosticNativeArtifacts(join(project, 'build'), options.platform);
+            identities = diagnosticNativeArtifacts(join(project, 'build'), options.platform);
             writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify(identities, null, 2));
           } catch (error) {
             writeFileSync(join(output, 'diagnostic-native-artifacts.json'), JSON.stringify({ error: error.message }, null, 2));
             throw error;
-          } finally { await diagnostic.close(); }
+          } finally { await diagnostic.close(identities); }
         }
       }
     }

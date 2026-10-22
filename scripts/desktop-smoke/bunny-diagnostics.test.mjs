@@ -6,7 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import test from "node:test";
 import vm from "node:vm";
 import { startBunnyDiagnostics } from "./bunny-diagnostics.mjs";
-import { diagnosticNativeArtifacts, validateBunnyDiagnosticSelection } from "./run.mjs";
+import { diagnosticNativeArtifacts, startBunnyNativeOnlyDiagnostics, validateBunnyDiagnosticSelection } from "./run.mjs";
 
 function fixture(t, { module = false, missing } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "electrobun-bunny-diagnostics-"));
@@ -228,6 +228,73 @@ test("Windows diagnostics are focused and cannot apply a template source overlay
 	assert.throws(() => validateBunnyDiagnosticSelection({ ...options, selected: ["bunny", "ui-wgpu"] }), /focused bunny/);
 	assert.throws(() => validateBunnyDiagnosticSelection({ ...options, platform: "windows-arm64" }), /native Intel macOS or Windows x64/);
 	assert.doesNotThrow(() => validateBunnyDiagnosticSelection({ ...options, platform: "windows-arm64", diagnostics: false }));
+});
+
+test("native-only diagnostics reject every source-probe or overlay combination and other targets", () => {
+	const options = { platform: "windows-x64", selected: ["bunny"], diagnostics: false, sourceOverlay: false, nativeOnlyDiagnostics: true };
+	assert.doesNotThrow(() => validateBunnyDiagnosticSelection(options));
+	for (const change of [{ diagnostics: true }, { sourceOverlay: true }, { platform: "macos-x64" }, { selected: ["bunny", "ui-wgpu"] }]) {
+		assert.throws(() => validateBunnyDiagnosticSelection({ ...options, ...change }), /Native-only/);
+	}
+});
+
+function nativeOnlyFixture(t) {
+	const f = fixture(t);
+	const devkitRoot = join(f.project, "published-devkit");
+	mkdirSync(devkitRoot);
+	mkdirSync(join(f.project, ".hutch/devkit"), { recursive: true });
+	writeFileSync(join(f.project, "hutch.config.ts"), "// unchanged public config\n");
+	const manifest = JSON.stringify({ schemaVersion: 1, layout: { runtime: {
+		coreLibrary: 'ElectrobunCore.dll', nativeWrapper: 'libNativeWrapper.dll', asarLibrary: 'libasar.dll',
+		bspatch: 'bspatch.exe', launcher: 'launcher.exe', zigZstd: 'zig-zstd.exe',
+	} } });
+	writeFileSync(join(devkitRoot, "native-devkit.json"), manifest);
+	writeFileSync(join(devkitRoot, ".core-complete"), "a".repeat(64));
+	writeFileSync(join(f.project, ".hutch/devkit/projection.json"), JSON.stringify({ sourceManifestSha256: sha256(manifest) }));
+	for (const name of ["ElectrobunCore.dll", "libNativeWrapper.dll", "libasar.dll", "bspatch.exe", "launcher.exe", "zig-zstd.exe"]) {
+		const bytes = Buffer.alloc(256);
+		bytes.write("MZ"); bytes.writeUInt32LE(128, 0x3c); bytes.write("PE\0\0", 128); bytes.writeUInt16LE(0x8664, 132);
+		writeFileSync(join(devkitRoot, name), bytes);
+	}
+	return { ...f, devkitRoot };
+}
+
+test("native-only evidence leaves all source bytes intact and needs no renderer or collector", t => {
+	const f = nativeOnlyFixture(t);
+	const actualBuilt = diagnosticNativeArtifacts(f.devkitRoot, "windows-x64");
+	// Published core archives also contain ASAR inside the zig-asar SDK. Only
+	// the manifest's runtime entry identifies the library copied into the app.
+	mkdirSync(join(f.devkitRoot, "zig-asar/x64"), { recursive: true });
+	writeFileSync(join(f.devkitRoot, "zig-asar/x64/libasar.dll"), readFileSync(join(f.devkitRoot, "libasar.dll")));
+	const before = f.sources.map(source => readFileSync(source.path));
+	const diagnostic = startBunnyNativeOnlyDiagnostics(f);
+	assert.equal(diagnostic.metadata.rendererInstrumentation, false);
+	assert.equal(diagnostic.metadata.endpoint, undefined);
+	assert.equal(existsSync(join(f.output, "bunny-diagnostics.jsonl")), false);
+	diagnostic.close(actualBuilt);
+	f.sources.forEach((source, index) => assert.deepEqual(readFileSync(source.path), before[index]));
+	const persisted = JSON.parse(readFileSync(join(f.output, "bunny-native-only-provenance.json")));
+	assert.equal(persisted.sourcesUnchanged, true);
+	assert.equal(persisted.nativeUnchanged, true);
+	assert.equal(persisted.nativeMatches.length, 6);
+});
+
+test("native-only evidence fails and persists a changed original source", t => {
+	const f = nativeOnlyFixture(t);
+	const diagnostic = startBunnyNativeOnlyDiagnostics(f);
+	writeFileSync(f.renderer, "unexpected instrumentation");
+	assert.throws(() => diagnostic.close(diagnosticNativeArtifacts(f.devkitRoot, "windows-x64")), /changed original project sources/);
+	const persisted = JSON.parse(readFileSync(join(f.output, "bunny-native-only-provenance.json")));
+	assert.ok(persisted.error);
+	assert.notEqual(persisted.sourcesUnchanged, true);
+});
+
+test("native-only evidence rejects a missing or different runtime library", t => {
+	const f = nativeOnlyFixture(t);
+	const diagnostic = startBunnyNativeOnlyDiagnostics(f);
+	const binaries = diagnosticNativeArtifacts(f.devkitRoot, "windows-x64");
+	assert.throws(() => diagnostic.close(binaries.filter(file => !file.path.endsWith("ElectrobunCore.dll"))), /Expected one built ElectrobunCore/);
+	assert.throws(() => diagnostic.close(binaries.map(file => file.path.endsWith("ElectrobunCore.dll") ? { ...file, sha256: "b".repeat(64) } : file)), /differs from published devkit/);
 });
 
 test("Windows native provenance hashes exact PE bytes and rejects missing or wrong architecture", t => {

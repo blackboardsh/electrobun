@@ -13,6 +13,166 @@ def diagnostic_error(result, label, error):
     result.setdefault('diagnosticErrors', []).append({'label': label, 'error': str(error)})
 
 
+def windows_find_window(title):
+    """Find the diagnostic candidate once, without activation or geometry changes."""
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    user.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user.FindWindowW.restype = wintypes.HWND
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowThreadProcessId.restype = wintypes.DWORD
+    handle = user.FindWindowW(None, title)
+    pid = wintypes.DWORD()
+    if handle:
+        user.GetWindowThreadProcessId(handle, ctypes.byref(pid))
+    return int(handle or 0), pid.value
+
+
+def windows_process_ancestry(pid, root_pid):
+    """Prove ownership from one bounded, read-only snapshot after the outcome."""
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [('dwSize', wintypes.DWORD), ('cntUsage', wintypes.DWORD),
+                    ('th32ProcessID', wintypes.DWORD), ('th32DefaultHeapID', ctypes.c_size_t),
+                    ('th32ModuleID', wintypes.DWORD), ('cntThreads', wintypes.DWORD),
+                    ('th32ParentProcessID', wintypes.DWORD), ('pcPriClassBase', wintypes.LONG),
+                    ('dwFlags', wintypes.DWORD), ('szExeFile', wintypes.WCHAR * 260)]
+
+    kernel = ctypes.windll.kernel32
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for name in ('Process32FirstW', 'Process32NextW'):
+        function = getattr(kernel, name)
+        function.argtypes = [wintypes.HANDLE, ctypes.POINTER(ProcessEntry)]
+        function.restype = wintypes.BOOL
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if snapshot in (None, ctypes.c_void_p(-1).value):
+        raise OSError('Could not snapshot Windows process ownership')
+    parents, processes = {}, {}
+    try:
+        entry = ProcessEntry()
+        entry.dwSize = ctypes.sizeof(entry)
+        available = kernel.Process32FirstW(snapshot, ctypes.byref(entry))
+        for _ in range(4096):
+            if not available:
+                break
+            parents[entry.th32ProcessID] = entry.th32ParentProcessID
+            processes[entry.th32ProcessID] = {'pid': entry.th32ProcessID,
+                                             'parentPid': entry.th32ParentProcessID,
+                                             'executable': entry.szExeFile}
+            available = kernel.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        kernel.CloseHandle(snapshot)
+    children = {}
+    for process_pid, parent_pid in parents.items():
+        children.setdefault(parent_pid, []).append(process_pid)
+    owned, pending = set(), [root_pid]
+    while pending and len(owned) < 4096:
+        current = pending.pop()
+        if current in owned:
+            continue
+        owned.add(current)
+        pending.extend(children.get(current, []))
+    ownership = {'verified': False, 'windowPid': pid, 'rootPid': root_pid,
+                 'snapshotProcesses': len(parents), 'snapshotTruncated': bool(available),
+                 'ownedProcesses': [processes[owned_pid] for owned_pid in sorted(owned) if owned_pid in processes]}
+    chain, current = [], pid
+    while current and current not in chain and len(chain) < 64:
+        chain.append(current)
+        if current == root_pid:
+            ownership.update(verified=True, chain=chain)
+            return ownership
+        current = parents.get(current)
+    ownership['chain'] = chain
+    return ownership
+
+
+def windows_class_threads(pid, parent, class_name):
+    """Read a bounded set of same-process window owners without messages."""
+    from ctypes import wintypes
+    user = ctypes.windll.user32
+    user.FindWindowExW.argtypes = [wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR]
+    user.FindWindowExW.restype = wintypes.HWND
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowThreadProcessId.restype = wintypes.DWORD
+    previous, seen, windows = 0, set(), []
+    truncated, cycle = False, False
+    for _ in range(64):
+        handle = int(user.FindWindowExW(wintypes.HWND(parent), previous, class_name, None) or 0)
+        if not handle:
+            break
+        if handle in seen:
+            truncated, cycle = True, True
+            break
+        seen.add(handle)
+        owner = wintypes.DWORD()
+        thread_id = user.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+        if owner.value == pid:
+            windows.append({'hwnd': handle, 'pid': owner.value, 'threadId': thread_id, 'className': class_name})
+        previous = handle
+    else:
+        truncated = True
+    return {'windows': windows, 'windowsExamined': len(seen), 'truncated': truncated, 'cycleDetected': cycle}
+
+
+def windows_dispatcher_threads(pid, window_thread_id):
+    """MessageWindowClass is created by the native startEventLoop dispatcher."""
+    snapshot = windows_class_threads(pid, -3, 'MessageWindowClass')  # HWND_MESSAGE
+    dispatchers = snapshot.pop('windows')
+    return {**snapshot, 'windowThreadId': window_thread_id, 'dispatchers': dispatchers,
+            'windowThreadMatchesDispatcher': any(item['threadId'] == window_thread_id for item in dispatchers)
+            if dispatchers else None}
+
+
+def windows_child_threads(pid, window_thread_id, handle):
+    """Read only direct ContainerViewClass children of the verified Bunny HWND."""
+    snapshot = windows_class_threads(pid, handle, 'ContainerViewClass')
+    children = snapshot.pop('windows')
+    return {**snapshot, 'parentHwnd': handle, 'windowThreadId': window_thread_id,
+            'children': children, 'childFound': bool(children),
+            'allChildrenMatchWindowThread': all(item['threadId'] == window_thread_id for item in children)
+            if children else None}
+
+
+def windows_thread_snapshot(pid, window_thread_id):
+    """Bound the passive thread snapshot; earliest creation is only an inference."""
+    script = r"""
+$ErrorActionPreference = 'Stop'
+$process = Get-Process -Id __PROCESS_ID__ -ErrorAction Stop
+$allThreads = $process.Threads
+$threads = @($allThreads | Select-Object -First 256 | ForEach-Object {
+    $entry = [ordered]@{ threadId = $_.Id; startTimeUtc = $null }
+    try { $entry.startTimeUtc = $_.StartTime.ToUniversalTime().ToString('o') }
+    catch { $entry.error = $_.Exception.Message }
+    [pscustomobject]$entry
+})
+[ordered]@{
+    pid = $process.Id
+    processStartTimeUtc = $process.StartTime.ToUniversalTime().ToString('o')
+    totalThreads = $allThreads.Count
+    truncated = ($allThreads.Count -gt 256)
+    threads = $threads
+} | ConvertTo-Json -Depth 4 -Compress
+""".replace('__PROCESS_ID__', str(int(pid)))
+    completed = subprocess.run(['powershell', '-NoLogo', '-NoProfile', '-NonInteractive', '-Command', script],
+                               capture_output=True, text=True, check=True, timeout=3,
+                               creationflags=0x08000000)  # CREATE_NO_WINDOW: preserve desktop state
+    snapshot = json.loads(completed.stdout)
+    if not isinstance(snapshot, dict) or snapshot.get('pid') != pid or not isinstance(snapshot.get('threads'), list):
+        raise RuntimeError('Unexpected Windows process thread snapshot')
+    dated = [thread for thread in snapshot['threads'] if thread.get('startTimeUtc')]
+    earliest = min(dated, key=lambda thread: thread['startTimeUtc']) if dated else None
+    snapshot.update(windowThreadId=window_thread_id,
+                    earliestObservedThreadId=earliest['threadId'] if earliest else None,
+                    windowThreadMatchesEarliestObserved=window_thread_id == earliest['threadId'] if earliest else None,
+                    inference='Earliest observed creation time is only a candidate for the main thread; '
+                              'missing or terminated threads can change that inference.')
+    return snapshot
+
+
 def windows_window_state(handle):
     """Read the desktop state without activating, moving, or replacing the HWND."""
     from ctypes import wintypes
@@ -111,16 +271,31 @@ class WindowsWindowDiagnostics:
             diagnostic_error(self.result, label, error)
             return None
 
-    def after_failure(self, gui, shots):
+    def record_pointer(self, gui, label):
+        try:
+            observation = {'label': label, 'time': time.time(), 'actual': list(gui.position())}
+            self.result.setdefault('pointerReadings', []).append(observation)
+            with (self.output / 'pointer-diagnostics.jsonl').open('a', encoding='utf-8') as log:
+                log.write(json.dumps(observation) + '\n')
+        except Exception as error:
+            diagnostic_error(self.result, 'pointer:' + label, error)
+
+    def after_failure(self, gui, shots, samples=3, observe_pointer=False, deadline=None):
         # Called only after the original exception and failed result are fixed.
         # Never rerun an assertion or activate/re-find a window by its title.
         if self.handle is None:
             return
-        for sample in range(1, 4):
+        for sample in range(1, samples + 1):
+            if deadline is not None and time.monotonic() + 1 > deadline:
+                break
             label = f'failure-later-{sample:02d}'
             try:
                 time.sleep(1)
+                if deadline is not None and time.monotonic() >= deadline:
+                    break
                 state = self.record(label, self.handle)
+                if observe_pointer:
+                    self.record_pointer(gui, label)
                 image = gui.screenshot()
                 image.save(self.output / f'{label}.png')
                 shots.append(f'{label}.png')
@@ -131,6 +306,49 @@ class WindowsWindowDiagnostics:
                         self.output / f'{label}-window.png')
             except Exception as error:
                 diagnostic_error(self.result, label, error)
+
+
+def native_only_after_outcome(plan, output, result, process, gui, shots):
+    """Observe original app bytes only after the original assertion result is fixed."""
+    if not plan.get('nativeOnlyDiagnostics') or sys.platform != 'win32':
+        return
+    try:
+        if not result.get('ok') and 'error' not in result:
+            raise RuntimeError('Native-only diagnostics require a completed original outcome')
+        outcome = 'passed' if result['ok'] else 'failed'
+        metadata = {'outcome': outcome, 'initializedAfterOutcome': True,
+                    'maximumLaterSamples': 0 if result['ok'] else 10,
+                    'maximumLaterObservationSeconds': 0 if result['ok'] else 15}
+        result['nativeOnlyDiagnostics'] = metadata
+        diagnostics = WindowsWindowDiagnostics(output, result)
+        diagnostics.record_pointer(gui, 'native-only-' + outcome)
+        handle, pid = windows_find_window(plan['title'])
+        metadata['candidateHwnd'], metadata['candidatePid'] = handle, pid
+        if not handle or not pid or process is None:
+            raise RuntimeError('No diagnostic window with a verifiable launched process')
+        ownership = windows_process_ancestry(pid, process.pid)
+        metadata['processOwnership'] = ownership
+        if not ownership['verified']:
+            raise RuntimeError('Diagnostic window PID is not a verified app descendant')
+        # Pin the verified pair before reading state; a reused HWND must never
+        # become the new original window, even during the first observation.
+        diagnostics.handle, diagnostics.pid = handle, pid
+        state = diagnostics.record('native-only-' + outcome, handle)
+        if state is None or not state['sameOriginalWindow'] or not state['isWindow']:
+            raise RuntimeError('Diagnostic window identity changed after discovery')
+        for key, reader, arguments in (
+                ('dispatcherThreads', windows_dispatcher_threads, (pid, state['threadId'])),
+                ('childThreads', windows_child_threads, (pid, state['threadId'], handle)),
+                ('processThreads', windows_thread_snapshot, (pid, state['threadId']))):
+            try:
+                metadata[key] = reader(*arguments)
+            except Exception as error:
+                diagnostic_error(result, 'native-only-' + key, error)
+        if not result['ok']:
+            diagnostics.after_failure(gui, shots, samples=10, observe_pointer=True,
+                                      deadline=time.monotonic() + 15)
+    except Exception as error:
+        diagnostic_error(result, 'native-only-post-outcome', error)
 
 
 def window(title, activate=True, diagnostics=None):
@@ -380,10 +598,11 @@ def inspect_app(plan):
     result = {'name': plan['name'], 'ok': False, 'screenshots': shots, 'checks': checks}
     rect = None
     process = None
-    window_diagnostics = WindowsWindowDiagnostics(output, result) if plan.get('diagnostics') and sys.platform == 'win32' else None
+    active_diagnostics = bool(plan.get('diagnostics')) and not plan.get('nativeOnlyDiagnostics')
+    window_diagnostics = WindowsWindowDiagnostics(output, result) if active_diagnostics and sys.platform == 'win32' else None
 
     def record_pointer(label, requested=None):
-        if plan.get('diagnostics'):
+        if active_diagnostics:
             try:
                 observation = {'label': label, 'time': time.time(), 'actual': list(gui.position()),
                                'windowBounds': list(rect) if rect else None}
@@ -660,7 +879,7 @@ def inspect_app(plan):
                 after = capture(f'{index + 2:02d}-interaction')
                 if action.get('expectChange'):
                     difference = ImageStat.Stat(ImageChops.difference(before.convert('RGB'), after.convert('RGB')))
-                    if plan.get('diagnostics'):
+                    if active_diagnostics:
                         result.setdefault('visibleChangeMeans', []).append(list(difference.mean))
                     if max(difference.mean) < 0.1:
                         raise AssertionError('Input did not produce a visible change')
@@ -669,6 +888,8 @@ def inspect_app(plan):
             if process.poll() is not None:
                 raise RuntimeError('App exited during interaction')
             result['ok'] = True
+            if plan.get('nativeOnlyDiagnostics') and sys.platform == 'win32':
+                native_only_after_outcome(plan, output, result, process, gui, shots)
     except Exception as error:
         result['error'] = str(error)
         try:
@@ -676,6 +897,8 @@ def inspect_app(plan):
             shots.append('failure.png')
         except Exception as capture_error:
             result['captureError'] = str(capture_error)
+        if plan.get('nativeOnlyDiagnostics') and sys.platform == 'win32':
+            native_only_after_outcome(plan, output, result, process, gui, shots)
         if window_diagnostics is not None:
             try:
                 window_diagnostics.after_failure(gui, shots)
