@@ -14,10 +14,18 @@ export default defineConfig({
       title: "Electrobun Docs",
       description:
         "Build ultra fast, tiny, cross-platform desktop apps with TypeScript.",
-      social: {
-        github: "https://github.com/blackboardsh/electrobun",
-        discord: "https://discord.gg/ueKE4tjaCE",
-      },
+      social: [
+        {
+          icon: "github",
+          label: "GitHub",
+          href: "https://github.com/blackboardsh/electrobun",
+        },
+        {
+          icon: "discord",
+          label: "Discord",
+          href: "https://discord.gg/ueKE4tjaCE",
+        },
+      ],
       sidebar,
     }),
   ],
