@@ -14,7 +14,19 @@ import { fileURLToPath } from "node:url";
 
 const defaultRegistry = "https://registry.npmjs.org";
 const maxMetadataBytes = 1024 * 1024;
-const requestTimeoutMs = 15_000;
+const requestTimeoutMs = 30_000;
+const maxRequestAttempts = 3;
+const retryableStatuses = new Set([408, 429, 500, 502, 503, 504]);
+const retryableNetworkCodes = new Set([
+	"ECONNRESET",
+	"ECONNREFUSED",
+	"ETIMEDOUT",
+	"EAI_AGAIN",
+	"UND_ERR_CONNECT_TIMEOUT",
+	"UND_ERR_HEADERS_TIMEOUT",
+	"UND_ERR_BODY_TIMEOUT",
+	"UND_ERR_SOCKET",
+]);
 const strictSemver =
 	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 
@@ -51,13 +63,21 @@ export async function checkPublishedBootstrap(options) {
 	const registry = registryBaseUrl(options.registry ?? defaultRegistry);
 	const url = `${registry}/${encodeURIComponent(manifest.name)}/${encodeURIComponent(manifest.version)}`;
 	const fetchImpl = options.fetchImpl ?? fetch;
-	const metadata = await registryJson(fetchImpl, url, "version metadata", true);
+	const requestOptions = {
+		timeoutMs: options.requestTimeoutMs,
+		sleep: options.sleepImpl,
+		log: options.log,
+	};
+	const metadata = await registryJson(
+		fetchImpl, url, "version metadata", true, requestOptions,
+	);
 	const tags =
 		(await registryJson(
 			fetchImpl,
 			`${registry}/-/package/${encodeURIComponent(manifest.name)}/dist-tags`,
 			"dist-tag metadata",
 			true,
+			requestOptions,
 		)) ?? {};
 	const taggedVersion = tags[options.distTag];
 	if (!metadata) {
@@ -171,25 +191,74 @@ export function npmInvocation(
 	};
 }
 
-async function registryJson(fetchImpl, url, label, allowNotFound = false) {
-	const controller = new AbortController();
-	const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
-	let response;
+async function registryJson(
+	fetchImpl, url, label, allowNotFound = false,
+	{
+		timeoutMs = requestTimeoutMs,
+		sleep = (milliseconds) => new Promise((done) => setTimeout(done, milliseconds)),
+		log = console.error,
+	} = {},
+) {
+	if (
+		!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > requestTimeoutMs
+	) {
+		fail(`registry request timeout must be an integer from 1 to ${requestTimeoutMs}ms`);
+	}
+	const parsedUrl = new URL(url);
+	const displayUrl = `${parsedUrl.origin}${parsedUrl.pathname}`;
 	let bytes;
-	try {
-		response = await fetchImpl(url, {
-			headers: { accept: "application/json" },
-			signal: controller.signal,
-		});
-		if (response.status === 404 && allowNotFound) return null;
-		if (!response.ok) fail(`${label} returned HTTP ${response.status}`);
-		const declared = Number(response.headers?.get?.("content-length"));
-		if (Number.isFinite(declared) && declared > maxMetadataBytes) {
-			fail(`${label} exceeds its size limit`);
+	for (let attempt = 1; attempt <= maxRequestAttempts; attempt += 1) {
+		const controller = new AbortController();
+		let timedOut = false;
+		const started = performance.now();
+		const timeout = setTimeout(() => {
+			timedOut = true;
+			controller.abort();
+		}, timeoutMs);
+		try {
+			const response = await fetchImpl(url, {
+				headers: { accept: "application/json" },
+				signal: controller.signal,
+			});
+			if (response.status === 404 && allowNotFound) return null;
+			if (!response.ok) {
+				try {
+					await response.body?.cancel();
+				} catch {
+					// Preserve the HTTP failure.
+				}
+				const error = new Error(`HTTP ${response.status}`);
+				error.registryStatus = response.status;
+				throw error;
+			}
+			const declared = Number(response.headers?.get?.("content-length"));
+			if (Number.isFinite(declared) && declared > maxMetadataBytes) {
+				fail(`${label} exceeds its size limit`);
+			}
+			bytes = Buffer.from(await response.arrayBuffer());
+			break;
+		} catch (error) {
+			// Data and publication-policy failures must never become retries.
+			if (error?.message?.startsWith("npm bootstrap publication: ")) throw error;
+			const code = error?.cause?.code ?? error?.code;
+			const retryable = error?.registryStatus !== undefined
+				? retryableStatuses.has(error.registryStatus)
+				: timedOut || retryableNetworkCodes.has(code);
+			const detail = timedOut && error?.registryStatus === undefined
+				? `timed out after ${timeoutMs}ms`
+				: `${error?.message ?? String(error)}${code ? ` (${code})` : ""}`
+					.replaceAll(url, displayUrl);
+			const message =
+				`${label} GET ${displayUrl} failed on attempt ${attempt}/${maxRequestAttempts} ` +
+				`after ${Math.round(performance.now() - started)}ms (deadline ${timeoutMs}ms): ${detail}`;
+			if (!retryable || attempt === maxRequestAttempts) {
+				throw new Error(`npm bootstrap publication: ${message}`, { cause: error });
+			}
+			log(`${message}; retrying in ${attempt * 1_000}ms`);
+		} finally {
+			clearTimeout(timeout);
 		}
-		bytes = Buffer.from(await response.arrayBuffer());
-	} finally {
-		clearTimeout(timeout);
+		await sleep(attempt * 1_000);
 	}
 	if (bytes.length > maxMetadataBytes) fail(`${label} exceeds its size limit`);
 	let metadata;
