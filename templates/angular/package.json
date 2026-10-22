@@ -4,22 +4,22 @@
 	"type": "module",
 	"description": "Electrobun app with Angular and Vite HMR",
 	"dependencies": {
-		"@angular/common": "^19.0.0",
-		"@angular/compiler": "^19.0.0",
-		"@angular/core": "^19.0.0",
-		"@angular/platform-browser": "^19.0.0",
-		"@angular/platform-browser-dynamic": "^19.0.0",
+		"@angular/common": "^20.3.34",
+		"@angular/compiler": "^20.3.34",
+		"@angular/core": "^20.3.34",
+		"@angular/platform-browser": "^20.3.34",
+		"@angular/platform-browser-dynamic": "^20.3.34",
 		"rxjs": "^7.8.1",
 		"zone.js": "^0.15.0"
 	},
 	"devDependencies": {
-		"@analogjs/vite-plugin-angular": "^1.11.0",
-		"@angular/build": "^19.0.0",
-		"@angular/compiler-cli": "^19.0.0",
+		"@analogjs/vite-plugin-angular": "^2.9.2",
+		"@angular/build": "^20.3.41",
+		"@angular/compiler-cli": "^20.3.34",
 		"@types/bun": "latest",
-		"concurrently": "^9.1.0",
-		"typescript": "~5.8.0",
-		"vite": "^6.0.3"
+		"concurrently": "^9.2.5",
+		"typescript": "~5.9.3",
+		"vite": "^7.3.7"
 	},
 	"trustedDependencies": [
 		"@parcel/watcher"

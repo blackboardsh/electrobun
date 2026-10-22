@@ -52,7 +52,7 @@ import { Component } from "@angular/core";
 						</div>
 						<div class="stack-item">
 							<span class="icon">🅰️</span>
-							<span>Angular 19</span>
+							<span>Angular 20</span>
 						</div>
 						<div class="stack-item">
 							<span class="icon">🔥</span>

@@ -4,7 +4,7 @@ function App() {
 	const [count, setCount] = useState(0);
 
 	return (
-		<div className="min-h-screen bg-gradient-to-br from-indigo-500 to-purple-600 text-gray-900">
+		<div className="min-h-screen bg-linear-to-br from-indigo-500 to-purple-600 text-gray-900">
 			<div className="container mx-auto px-4 py-10 max-w-3xl">
 				<h1 className="text-5xl font-bold text-center text-white mb-2 drop-shadow-lg">
 					React + Tailwind + Vite
@@ -98,7 +98,7 @@ function App() {
 					</div>
 				</div>
 
-				<div className="text-center text-white/80 mt-10 p-6 bg-white/10 rounded-lg backdrop-blur">
+				<div className="text-center text-white/80 mt-10 p-6 bg-white/10 rounded-lg backdrop-blur-sm">
 					<p>
 						Edit{" "}
 						<code className="bg-white/20 px-2 py-1 rounded text-sm">

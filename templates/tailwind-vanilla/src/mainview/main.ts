@@ -6,7 +6,7 @@ let count = 0;
 
 function render() {
 	app.innerHTML = `
-		<main class="min-h-screen bg-gradient-to-br from-cyan-500 to-blue-600 p-10">
+		<main class="min-h-screen bg-linear-to-br from-cyan-500 to-blue-600 p-10">
 			<div class="max-w-3xl mx-auto">
 				<h1 class="text-5xl font-bold text-white text-center mb-2 drop-shadow-lg">
 					Tailwind + Electrobun
@@ -73,7 +73,7 @@ function render() {
 					</div>
 				</div>
 
-				<div class="text-center text-white/80 mt-8 p-5 bg-white/10 rounded-lg backdrop-blur">
+				<div class="text-center text-white/80 mt-8 p-5 bg-white/10 rounded-lg backdrop-blur-sm">
 					<p>
 						Edit <code class="bg-white/20 text-white px-2 py-0.5 rounded text-sm font-mono">src/mainview/main.ts</code> and save to see HMR in action
 					</p>

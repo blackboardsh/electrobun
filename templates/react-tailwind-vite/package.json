@@ -7,15 +7,14 @@
 		"react-dom": "^18.3.1"
 	},
 	"devDependencies": {
+		"@tailwindcss/vite": "^4.3.3",
 		"@types/bun": "latest",
 		"@types/react": "^18.3.12",
 		"@types/react-dom": "^18.3.1",
-		"@vitejs/plugin-react": "^4.3.4",
-		"autoprefixer": "^10.4.20",
-		"concurrently": "^9.1.0",
-		"postcss": "^8.4.49",
-		"tailwindcss": "^3.4.16",
-		"typescript": "^5.7.2",
-		"vite": "^6.0.3"
+		"@vitejs/plugin-react": "^5.2.0",
+		"concurrently": "^9.2.5",
+		"tailwindcss": "^4.3.3",
+		"typescript": "~5.9.3",
+		"vite": "^7.3.7"
 	}
 }

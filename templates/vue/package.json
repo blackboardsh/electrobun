@@ -5,11 +5,11 @@
 	"description": "Electrobun app with Vue and Vite HMR",
 	"devDependencies": {
 		"@types/bun": "latest",
-		"@vitejs/plugin-vue": "^5.2.1",
-		"concurrently": "^9.1.0",
-		"typescript": "^5.7.2",
-		"vite": "^6.0.3",
-		"vue": "^3.5.13",
-		"vue-tsc": "^2.2.0"
+		"@vitejs/plugin-vue": "^6.0.10",
+		"concurrently": "^9.2.5",
+		"typescript": "~5.9.3",
+		"vite": "^7.3.7",
+		"vue": "^3.5.44",
+		"vue-tsc": "^3.3.13"
 	}
 }

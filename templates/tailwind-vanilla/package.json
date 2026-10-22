@@ -4,11 +4,11 @@
 	"type": "module",
 	"description": "Electrobun app with Tailwind CSS and vanilla TypeScript",
 	"devDependencies": {
-		"@tailwindcss/vite": "^4.0.0",
+		"@tailwindcss/vite": "^4.3.3",
 		"@types/bun": "latest",
-		"concurrently": "^9.1.0",
-		"tailwindcss": "^4.0.0",
-		"typescript": "^5.7.2",
-		"vite": "^6.0.3"
+		"concurrently": "^9.2.5",
+		"tailwindcss": "^4.3.3",
+		"typescript": "~5.9.3",
+		"vite": "^7.3.7"
 	}
 }
