@@ -180,6 +180,7 @@ class Electroview<T extends RPCWithTransport> {
 					return that.sendMessageToHost(messageString);
 				} catch (error) {
 					console.error("host: failed to serialize message to webview", error);
+					return undefined;
 				}
 			},
 			registerHandler(handler: (msg: unknown) => void) {
