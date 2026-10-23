@@ -1737,28 +1737,23 @@ func runWindowSetSizeTest() error {
 	}
 	err = func() error {
 		time.Sleep(shortWait)
+		readSize := func() (float64, float64, error) {
+			frame, err := state.core.GetWindowFrame(created.windowID)
+			return frame.Width, frame.Height, err
+		}
+		resizeTimeout := 3 * time.Second * time.Duration(slowPlatformScaleFactor())
 		if err := state.core.SetWindowSize(created.windowID, 600, 500); err != nil {
 			return err
 		}
-		time.Sleep(shortWait)
-		grown, err := state.core.GetWindowFrame(created.windowID)
-		if err != nil {
-			return err
-		}
-		if !approxEq(grown.Width, 600, 24) || !approxEq(grown.Height, 500, 24) {
-			return fmt.Errorf("unexpected grown size %vx%v", grown.Width, grown.Height)
+		if err := waitForWindowSize(600, 500, 24, resizeTimeout, readSize); err != nil {
+			return fmt.Errorf("growing window: %w", err)
 		}
 
 		if err := state.core.SetWindowSize(created.windowID, 320, 240); err != nil {
 			return err
 		}
-		time.Sleep(shortWait)
-		shrunk, err := state.core.GetWindowFrame(created.windowID)
-		if err != nil {
-			return err
-		}
-		if !approxEq(shrunk.Width, 320, 24) || !approxEq(shrunk.Height, 240, 24) {
-			return fmt.Errorf("unexpected shrunk size %vx%v", shrunk.Width, shrunk.Height)
+		if err := waitForWindowSize(320, 240, 24, resizeTimeout, readSize); err != nil {
+			return fmt.Errorf("shrinking window: %w", err)
 		}
 		return nil
 	}()
