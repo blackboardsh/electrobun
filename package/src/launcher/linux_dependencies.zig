@@ -133,7 +133,7 @@ pub fn formatDiagnostic(
     try writer.writeAll(
         "[LAUNCHER] Install the runtime packages for your distro family:\n" ++
             "  Ubuntu/Debian: sudo apt install libgtk-3-0 libwebkit2gtk-4.1-0 libayatana-appindicator3-1 librsvg2-2\n" ++
-            "  Fedora/RHEL:   sudo dnf install gtk3 webkit2gtk4.1 libappindicator-gtk3 librsvg2\n" ++
+            "  Fedora/RHEL:   sudo dnf install gtk3 webkit2gtk4.1 libayatana-appindicator-gtk3 librsvg2\n" ++
             "  Arch/Manjaro:  sudo pacman -S gtk3 webkit2gtk-4.1 libayatana-appindicator librsvg\n",
     );
     try writer.print(
@@ -251,6 +251,7 @@ test "deduplicates missing libraries and formats package guidance" {
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "libwebkit2gtk-4.1.so.0") != null);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "Ubuntu/Debian: sudo apt install") != null);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "Fedora/RHEL:   sudo dnf install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, diagnostic, "libayatana-appindicator-gtk3") != null);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "Arch/Manjaro:  sudo pacman -S") != null);
     try std.testing.expect(std.mem.indexOf(u8, diagnostic, "ldd /opt/MyApp/libNativeWrapper.so") != null);
 }
