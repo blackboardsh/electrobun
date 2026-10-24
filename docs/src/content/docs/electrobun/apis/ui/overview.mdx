@@ -57,6 +57,7 @@ callback builds the UI with the [element API](/electrobun/apis/ui/components/).
 | `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
 | `background` | `string` | `"#141420"` | Clear color behind the tree. Accepts `#rgb`, `#rrggbb`, `#rrggbbaa`. |
 | `tickMs` | `number` | `8` | Frame tick interval. Input polls every tick; rendering only on dirty ticks. |
+| `pixelRatio` | `number \| (() => number)` | Display scale | Drawable pixels per logical point. Must be positive and finite. |
 
 Returns `{ window, context, dispose }`:
 
@@ -77,7 +78,20 @@ const uiView = await createUIView(view, options, app);
 Mounts a tree into an existing [`WGPUView`](/electrobun/apis/webgpu/) instead
 of a whole window — the mechanism behind
 [`<electrobun-ui>`](/electrobun/apis/ui/ui-tag/) overlays. `options` accepts
-`background` and `tickMs`. The view's frame supplies size and pointer offset.
+`background`, `tickMs`, and `pixelRatio`. The view's frame supplies size and pointer offset.
+
+## Drawable scale
+
+Layout, pointer coordinates, text measurements, and native webview anchors use
+logical points. GPU attachments use rounded `logical size × pixelRatio`.
+A 900×540 window therefore uses an 1800×1080 attachment at 2x without doubling
+component sizes. Clipping converts physical fragment positions back to logical
+points, and rounded edges keep their antialiasing width in physical pixels.
+
+By default, the scale follows the display with the largest overlap with the
+window. Moves and resizes refresh the display choice; a periodic check also
+detects scale changes while the window is stationary. Set `pixelRatio` to a
+positive, finite number, or a function returning one, to override that choice.
 
 ## registerUIRoot
 
