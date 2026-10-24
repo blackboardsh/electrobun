@@ -1,0 +1,67 @@
+name: UI core
+
+# Builds and tests the Electrobun UI engine (package/src/ui-core) on every
+# desktop platform. Tests are headless (CPU renderer, mock or pure-Zig
+# backends), so no GPU or display is needed.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [agent/gpu-ui-research, agent/gpu-ui-ci]
+    paths:
+      - 'package/src/ui-core/**'
+      - '.github/workflows/ui-core.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ui-core-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, platform: macos-arm64 }
+          - { runner: ubuntu-24.04, platform: linux-x64 }
+          - { runner: ubuntu-24.04-arm, platform: linux-arm64 }
+          - { runner: windows-2025, platform: windows-x64 }
+          - { runner: windows-11-arm, platform: windows-arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: package/src/ui-core
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Same pinned version as package/build.ts vendors (ZIG_VERSION).
+      # setup-zig caches the Zig global cache between runs.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+
+      - name: Test
+        run: zig build test --summary all
+
+      - name: Build release library
+        run: zig build -Dtools=false -Doptimize=ReleaseSmall --prefix zig-out-small
+
+      - name: Report library size
+        run: |
+          {
+            echo "### ${{ matrix.platform }}"
+            echo ""
+            echo "| File | Bytes |"
+            echo "| --- | ---: |"
+            find zig-out-small -type f \( -name '*ElectrobunUI*' \) | while read -r f; do
+              echo "| $(basename "$f") | $(wc -c < "$f" | tr -d ' ') |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

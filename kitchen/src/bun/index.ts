@@ -290,7 +290,7 @@ testRunnerWindow = new BrowserWindow({
 
 // Keep interactive results visible, but let automated test windows become
 // unobscured. Covering them throttles browser timers and animation frames.
-if (!process.env["AUTO_RUN"] && !process.env["AUTO_RUN_TEST_NAME"]) {
+if (!process.env["AUTO_RUN"] && !process.env["AUTO_RUN_TEST_NAME"] && !process.env["AUTO_RUN_CATEGORY"]) {
 	testRunnerWindow.setAlwaysOnTop(true);
 }
 
@@ -394,6 +394,27 @@ if (autoRunTestName) {
 			console.error("Auto-run test failed unexpectedly:", error);
 		}
 		console.log(`\nAuto-run test complete. Exiting with code ${exitCode}...`);
+		scheduleAutoRunExit(exitCode, Utils.quit);
+	}, 2000);
+}
+
+// Usage: AUTO_RUN_CATEGORY="Native UI" hutch dev
+const autoRunCategory = process.env["AUTO_RUN_CATEGORY"];
+if (autoRunCategory) {
+	console.log(`Auto-running "${autoRunCategory}" tests in 2 seconds...\n`);
+	setTimeout(async () => {
+		let exitCode = 1;
+		try {
+			const results = [];
+			for (const test of executor.getTests()) {
+				if (test.category !== autoRunCategory || test.interactive) continue;
+				results.push(await executor.runTest(test));
+			}
+			exitCode = results.length ? autoRunExitCode(results) : 1;
+		} catch (error) {
+			console.error("Auto-run category failed unexpectedly:", error);
+		}
+		console.log(`\nAuto-run category complete. Exiting with code ${exitCode}...`);
 		scheduleAutoRunExit(exitCode, Utils.quit);
 	}, 2000);
 }

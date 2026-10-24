@@ -3805,8 +3805,104 @@ extern "C" uint8_t *uiRasterizeText(const char *text, const char *fontName,
 
 extern "C" void uiFreeTextBitmap(uint8_t *pixels) { free(pixels); }
 
-@interface WGPUInputView : NSView
+// Per-view hooks used by the native UI core (ElectrobunCore ebui_*). When a
+// view has UI handlers they take precedence over the global WGPU handlers, the
+// view becomes an NSTextInputClient (text input + IME), and frames are driven
+// by a display link on request.
+typedef void (*UIViewPointerCallback)(void *ctx, uint32_t eventType, double x,
+                                      double y, double buttonOrDx, double dy,
+                                      uint32_t modifiers);
+// Returns 1 when the key was handled (it is then not sent to the input
+// method system unless a composition is active).
+typedef uint32_t (*UIViewKeyCallback)(void *ctx, uint32_t keyCode,
+                                      uint32_t modifiers, uint32_t isDown,
+                                      uint32_t isRepeat, const char *characters,
+                                      const char *charactersIgnoringModifiers);
+// kind: 0 insert (committed text), 1 set marked text (selection = selLoc),
+// 2 unmark
+typedef void (*UIViewTextCallback)(void *ctx, uint32_t kind, const char *text,
+                                   uint32_t selLoc);
+typedef void (*UIViewFrameCallback)(void *ctx, double timestamp);
+// Accessibility: the UI core builds the tree on request and performs actions
+// (0 press, 1 focus, 2 increment, 3 decrement, 4 set value).
+typedef void (*UIViewA11yRequestCallback)(void *ctx);
+typedef void (*UIViewA11yActionCallback)(void *ctx, uint32_t nodeId,
+                                         uint32_t action, const char *value);
+
+@interface EBAXElement : NSAccessibilityElement
+@property(nonatomic, assign) uint32_t nodeId;
+@property(nonatomic, assign) uint32_t roleCode;
+@property(nonatomic, assign) uint16_t stateBits;
+@property(nonatomic, assign) NSRect localFrame;
+@property(nonatomic, weak) NSView *hostView;
+@property(nonatomic, assign) void *ctx;
+@property(nonatomic, assign) UIViewA11yActionCallback action;
+@property(nonatomic, strong) NSMutableArray *kids;
+@property(nonatomic, assign) BOOL fromTree;
+@end
+
+@interface WGPUInputView : NSView <NSTextInputClient>
 @property(nonatomic, assign) uint32_t wgpuViewId;
+@property(nonatomic, assign) void *uiCtx;
+@property(nonatomic, assign) UIViewPointerCallback uiPointer;
+@property(nonatomic, assign) UIViewKeyCallback uiKey;
+@property(nonatomic, assign) UIViewTextCallback uiText;
+@property(nonatomic, assign) UIViewFrameCallback uiFrame;
+@property(nonatomic, strong) id uiDisplayLink;
+@property(nonatomic, assign) NSRect uiImeRect;
+@property(nonatomic, assign) BOOL uiComposing;
+@property(nonatomic, assign) BOOL uiFrameRequested;
+@property(nonatomic, assign) UIViewA11yRequestCallback uiA11yRequest;
+@property(nonatomic, assign) UIViewA11yActionCallback uiA11yAction;
+@property(nonatomic, strong) NSMutableArray *uiA11yRoots;
+@property(nonatomic, strong) NSMutableDictionary *uiA11yElements;
+@property(nonatomic, assign) BOOL uiA11yBuilt;
+- (void)uiRequestFrame;
+@end
+
+@implementation EBAXElement
+- (NSRect)accessibilityFrame {
+  NSView *v = self.hostView;
+  if (!v || !v.window)
+    return NSZeroRect;
+  NSRect r = self.localFrame;
+  if (!v.isFlipped)
+    r.origin.y = v.bounds.size.height - r.origin.y - r.size.height;
+  return NSAccessibilityFrameInView(v, r);
+}
+- (NSArray *)accessibilityChildren {
+  return self.kids;
+}
+- (BOOL)isAccessibilityFocused {
+  return (self.stateBits & 1) != 0;
+}
+- (void)setAccessibilityFocused:(BOOL)focused {
+  if (focused && self.action)
+    self.action(self.ctx, self.nodeId, 1, "");
+}
+- (BOOL)isAccessibilityEnabled {
+  return (self.stateBits & 2) == 0;
+}
+- (BOOL)accessibilityPerformPress {
+  if (self.action)
+    self.action(self.ctx, self.nodeId, 0, "");
+  return YES;
+}
+- (BOOL)accessibilityPerformIncrement {
+  if (self.action)
+    self.action(self.ctx, self.nodeId, 2, "");
+  return YES;
+}
+- (BOOL)accessibilityPerformDecrement {
+  if (self.action)
+    self.action(self.ctx, self.nodeId, 3, "");
+  return YES;
+}
+- (void)setAccessibilityValue:(id)value {
+  [super setAccessibilityValue:value];
+  if (!self.fromTree && self.action && [value isKindOfClass:[NSString class]])
+    self.action(self.ctx, self.nodeId, 4, [(NSString *)value UTF8String]);
+}
 @end
 
 @implementation WGPUInputView
@@ -3858,6 +3954,18 @@ extern "C" void uiFreeTextBitmap(uint8_t *pixels) { free(pixels); }
   return YES;
 }
 - (void)keyDown:(NSEvent *)event {
+  if (self.uiKey) {
+    const char *chars = [[event characters] UTF8String];
+    const char *raw = [[event charactersIgnoringModifiers] UTF8String];
+    uint32_t handled =
+        self.uiKey(self.uiCtx, (uint32_t)[event keyCode],
+                   [self modifierMaskFromEvent:event], 1,
+                   [event isARepeat] ? 1 : 0, chars ? chars : "", raw ? raw : "");
+    if (self.uiText && (!handled || self.uiComposing)) {
+      [self interpretKeyEvents:@[ event ]];
+    }
+    return;
+  }
   if (g_wgpuKeyHandler) {
     const char *chars = [[event characters] UTF8String];
     g_wgpuKeyHandler(self.wgpuViewId, (uint32_t)[event keyCode],
@@ -3872,6 +3980,12 @@ extern "C" void uiFreeTextBitmap(uint8_t *pixels) { free(pixels); }
   }
 }
 - (void)keyUp:(NSEvent *)event {
+  if (self.uiKey) {
+    const char *raw = [[event charactersIgnoringModifiers] UTF8String];
+    self.uiKey(self.uiCtx, (uint32_t)[event keyCode],
+               [self modifierMaskFromEvent:event], 0, 0, "", raw ? raw : "");
+    return;
+  }
   if (g_wgpuKeyHandler) {
     g_wgpuKeyHandler(self.wgpuViewId, (uint32_t)[event keyCode],
                      [self modifierMaskFromEvent:event], 0, 0, "");
@@ -3903,6 +4017,13 @@ extern "C" void uiFreeTextBitmap(uint8_t *pixels) { free(pixels); }
               event:(NSEvent *)event
                  dx:(double)dx
                  dy:(double)dy {
+  if (self.uiPointer) {
+    NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
+    double localY = self.isFlipped ? p.y : self.bounds.size.height - p.y;
+    self.uiPointer(self.uiCtx, type, p.x, localY, dx, dy,
+                   [self modifierMaskFromEvent:event]);
+    return;
+  }
   if (!g_wgpuPointerHandler)
     return;
   NSPoint p = [self convertPoint:[event locationInWindow] fromView:nil];
@@ -3956,6 +4077,142 @@ extern "C" void uiFreeTextBitmap(uint8_t *pixels) { free(pixels); }
     dy *= 10.0;
   }
   [self emitPointer:3 event:event dx:dx dy:dy];
+}
+
+// ---- UI core: accessibility ----
+
+- (NSArray *)accessibilityChildren {
+  if (!self.uiA11yRequest)
+    return [super accessibilityChildren];
+  if (!self.uiA11yBuilt) {
+    // an assistive technology is asking: build the tree now
+    self.uiA11yBuilt = YES;
+    self.uiA11yRequest(self.uiCtx);
+  }
+  return self.uiA11yRoots ?: @[];
+}
+- (BOOL)isAccessibilityElement {
+  return self.uiA11yRequest ? NO : [super isAccessibilityElement];
+}
+- (NSAccessibilityRole)accessibilityRole {
+  return self.uiA11yRequest ? NSAccessibilityGroupRole : [super accessibilityRole];
+}
+
+// ---- UI core: frames ----
+
+- (void)uiRequestFrame {
+  if (!self.uiFrame || self.uiFrameRequested)
+    return;
+  self.uiFrameRequested = YES;
+  if (!self.uiDisplayLink && [self respondsToSelector:@selector(displayLinkWithTarget:selector:)]) {
+    CADisplayLink *link = [self displayLinkWithTarget:self selector:@selector(uiOnDisplayLink:)];
+    [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    self.uiDisplayLink = link;
+  }
+  if (self.uiDisplayLink) {
+    ((CADisplayLink *)self.uiDisplayLink).paused = NO;
+  } else {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_MSEC),
+                   dispatch_get_main_queue(), ^{
+                     [self uiOnDisplayLink:nil];
+                   });
+  }
+}
+
+- (void)uiOnDisplayLink:(id)link {
+  if (self.uiDisplayLink)
+    ((CADisplayLink *)self.uiDisplayLink).paused = YES;
+  self.uiFrameRequested = NO;
+  if (self.uiFrame)
+    self.uiFrame(self.uiCtx, CACurrentMediaTime());
+}
+
+- (void)setFrameSize:(NSSize)newSize {
+  [super setFrameSize:newSize];
+  if (self.uiFrame) {
+    // render synchronously so live resize never shows stale content
+    self.uiFrame(self.uiCtx, CACurrentMediaTime());
+  }
+}
+
+- (void)viewDidChangeBackingProperties {
+  [super viewDidChangeBackingProperties];
+  [self uiRequestFrame];
+}
+
+// ---- UI core: NSTextInputClient ----
+
+- (NSString *)uiStringOf:(id)string {
+  if ([string isKindOfClass:[NSAttributedString class]])
+    return [(NSAttributedString *)string string];
+  return (NSString *)string;
+}
+
+- (void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+  if (!self.uiText)
+    return;
+  self.uiComposing = NO;
+  const char *t = [[self uiStringOf:string] UTF8String];
+  self.uiText(self.uiCtx, 0, t ? t : "", 0);
+}
+
+- (void)setMarkedText:(id)string
+        selectedRange:(NSRange)selectedRange
+     replacementRange:(NSRange)replacementRange {
+  if (!self.uiText)
+    return;
+  NSString *s = [self uiStringOf:string];
+  self.uiComposing = s.length > 0;
+  // convert the UTF-16 selection offset to UTF-8 bytes
+  NSString *prefix = [s substringToIndex:MIN(selectedRange.location, s.length)];
+  uint32_t sel = (uint32_t)strlen([prefix UTF8String]);
+  const char *t = [s UTF8String];
+  self.uiText(self.uiCtx, 1, t ? t : "", sel);
+}
+
+- (void)unmarkText {
+  if (!self.uiText)
+    return;
+  self.uiComposing = NO;
+  self.uiText(self.uiCtx, 2, "", 0);
+}
+
+- (BOOL)hasMarkedText {
+  return self.uiComposing;
+}
+
+- (NSRange)markedRange {
+  return self.uiComposing ? NSMakeRange(0, 1) : NSMakeRange(NSNotFound, 0);
+}
+
+- (NSRange)selectedRange {
+  return NSMakeRange(0, 0);
+}
+
+- (NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range
+                                                actualRange:(NSRangePointer)actualRange {
+  return nil;
+}
+
+- (NSArray<NSAttributedStringKey> *)validAttributesForMarkedText {
+  return @[];
+}
+
+- (NSRect)firstRectForCharacterRange:(NSRange)range
+                         actualRange:(NSRangePointer)actualRange {
+  NSRect r = self.uiImeRect;
+  if (!self.isFlipped)
+    r.origin.y = self.bounds.size.height - r.origin.y - r.size.height;
+  NSRect inWindow = [self convertRect:r toView:nil];
+  return self.window ? [self.window convertRectToScreen:inWindow] : inWindow;
+}
+
+- (NSUInteger)characterIndexForPoint:(NSPoint)point {
+  return 0;
+}
+
+- (void)doCommandBySelector:(SEL)selector {
+  // named keys are delivered through the key callback
 }
 @end
 
@@ -8656,6 +8913,265 @@ extern "C" void wgpuViewRemove(AbstractView *abstractView) {
     return;
   runOnMainThreadAsyncVoid(^{
     [abstractView remove];
+  });
+}
+
+static WGPUInputView *uiInputViewOf(AbstractView *abstractView) {
+  if (!abstractView || ![abstractView.nsView isKindOfClass:[WGPUInputView class]])
+    return nil;
+  return (WGPUInputView *)abstractView.nsView;
+}
+
+// Route a WGPU view's input and frames to the native UI core.
+extern "C" void wgpuViewSetUIHandlers(AbstractView *abstractView, void *ctx,
+                                      UIViewPointerCallback pointer,
+                                      UIViewKeyCallback key,
+                                      UIViewTextCallback text,
+                                      UIViewFrameCallback frame) {
+  runOnMainThreadSyncVoid(^{
+    WGPUInputView *view = uiInputViewOf(abstractView);
+    if (!view)
+      return;
+    view.uiCtx = ctx;
+    view.uiPointer = pointer;
+    view.uiKey = key;
+    view.uiText = text;
+    view.uiFrame = frame;
+    if (!frame && view.uiDisplayLink) {
+      [(CADisplayLink *)view.uiDisplayLink invalidate];
+      view.uiDisplayLink = nil;
+    }
+  });
+}
+
+// Request one frame callback at the next display refresh (any thread).
+extern "C" void wgpuViewRequestFrame(AbstractView *abstractView) {
+  runOnMainThreadAsyncVoid(^{
+    [uiInputViewOf(abstractView) uiRequestFrame];
+  });
+}
+
+// Caret rectangle (view coordinates, top-left origin) for IME candidates.
+extern "C" void wgpuViewSetImeRect(AbstractView *abstractView, double x,
+                                   double y, double w, double h) {
+  runOnMainThreadAsyncVoid(^{
+    WGPUInputView *view = uiInputViewOf(abstractView);
+    if (view)
+      view.uiImeRect = NSMakeRect(x, y, w, h);
+  });
+}
+
+// View size in points and backing scale. Call on the main thread.
+extern "C" void wgpuViewGetMetrics(AbstractView *abstractView, double *width,
+                                   double *height, double *scale) {
+  WGPUInputView *view = uiInputViewOf(abstractView);
+  if (!view) {
+    *width = 0;
+    *height = 0;
+    *scale = 1;
+    return;
+  }
+  *width = view.bounds.size.width;
+  *height = view.bounds.size.height;
+  *scale = view.window ? view.window.backingScaleFactor : 2.0;
+  CAMetalLayer *layer = (CAMetalLayer *)view.layer;
+  if ([layer isKindOfClass:[CAMetalLayer class]]) {
+    layer.contentsScale = *scale;
+  }
+}
+
+// Begin a window drag from the current mouse-down event (main thread).
+// Modal: returns once the button is released. Reports whether the window
+// actually moved so the UI engine can still deliver a click for a press in a
+// drag region that wasn't dragged.
+extern "C" bool wgpuViewBeginWindowDrag(AbstractView *abstractView) {
+  WGPUInputView *view = uiInputViewOf(abstractView);
+  NSEvent *event = [NSApp currentEvent];
+  if (!view || !view.window || !event) return false;
+  NSPoint before = view.window.frame.origin;
+  [view.window performWindowDragWithEvent:event];
+  NSPoint after = view.window.frame.origin;
+  return before.x != after.x || before.y != after.y;
+}
+
+static NSAccessibilityRole ebaxRole(uint32_t code, NSAccessibilitySubrole *subrole) {
+  *subrole = nil;
+  switch (code) {
+  case 1: return NSAccessibilityButtonRole;
+  case 2: return NSAccessibilityLinkRole;
+  case 3: return NSAccessibilityCheckBoxRole;
+  case 4: return NSAccessibilityRadioButtonRole;
+  case 5: return NSAccessibilityTextFieldRole;
+  case 6: return NSAccessibilityTextAreaRole;
+  case 7: return NSAccessibilityStaticTextRole;
+  case 8: return NSAccessibilityStaticTextRole; // heading (subrole below)
+  case 9: return NSAccessibilityImageRole;
+  case 10: return NSAccessibilityListRole;
+  case 11: return NSAccessibilityGroupRole;
+  case 12: return NSAccessibilitySliderRole;
+  case 13: return NSAccessibilityProgressIndicatorRole;
+  case 14: return NSAccessibilityPopUpButtonRole;
+  case 15: return NSAccessibilityRadioButtonRole; // tab
+  case 16: return NSAccessibilityTabGroupRole;
+  case 17: *subrole = NSAccessibilityDialogSubrole; return NSAccessibilityGroupRole;
+  case 18: return NSAccessibilityMenuRole;
+  case 19: return NSAccessibilityMenuItemRole;
+  case 20: *subrole = NSAccessibilitySwitchSubrole; return NSAccessibilityCheckBoxRole;
+  case 21: return NSAccessibilityTableRole;
+  case 22: return NSAccessibilityRowRole;
+  case 23: return NSAccessibilityCellRole;
+  case 24: return NSAccessibilityToolbarRole;
+  case 28: return NSAccessibilitySplitterRole;
+  default: return NSAccessibilityGroupRole;
+  }
+}
+
+extern "C" void wgpuViewSetAccessibilityHandlers(AbstractView *abstractView, void *ctx,
+                                                 UIViewA11yRequestCallback request,
+                                                 UIViewA11yActionCallback action) {
+  runOnMainThreadSyncVoid(^{
+    WGPUInputView *view = uiInputViewOf(abstractView);
+    if (!view)
+      return;
+    view.uiCtx = ctx;
+    view.uiA11yRequest = request;
+    view.uiA11yAction = action;
+    view.uiA11yBuilt = NO;
+  });
+}
+
+// Replace the accessibility tree (format: ui-core a11y.serialize). Main thread.
+extern "C" void wgpuViewSetAccessibilityTree(AbstractView *abstractView, const uint8_t *buf,
+                                             size_t len) {
+  WGPUInputView *view = uiInputViewOf(abstractView);
+  if (!view || !buf || len < 4)
+    return;
+  if (!view.uiA11yElements)
+    view.uiA11yElements = [NSMutableDictionary dictionary];
+  size_t o = 0;
+  auto u32 = [&](void) -> uint32_t {
+    uint32_t v = 0;
+    if (o + 4 <= len) memcpy(&v, buf + o, 4);
+    o += 4;
+    return v;
+  };
+  auto f32 = [&](void) -> float {
+    float v = 0;
+    if (o + 4 <= len) memcpy(&v, buf + o, 4);
+    o += 4;
+    return v;
+  };
+  auto str = [&](void) -> NSString * {
+    uint32_t n = u32();
+    if (o + n > len)
+      return @"";
+    NSString *s = [[NSString alloc] initWithBytes:buf + o length:n encoding:NSUTF8StringEncoding];
+    o += n;
+    return s ?: @"";
+  };
+  uint32_t count = u32();
+  NSMutableArray *ordered = [NSMutableArray arrayWithCapacity:count];
+  NSMutableArray *roots = [NSMutableArray array];
+  NSMutableDictionary *seen = [NSMutableDictionary dictionary];
+  BOOL focusChanged = NO;
+  for (uint32_t i = 0; i < count && o < len; i++) {
+    uint32_t nodeId = u32();
+    uint32_t parent = u32();
+    uint8_t role = o < len ? buf[o] : 0;
+    uint8_t level = o + 1 < len ? buf[o + 1] : 0;
+    o += 2;
+    uint16_t state = 0;
+    if (o + 2 <= len) memcpy(&state, buf + o, 2);
+    o += 2;
+    float x = f32(), y = f32(), w = f32(), h = f32();
+    float mn = f32(), mx = f32(), now = f32();
+    NSString *name = str();
+    NSString *value = str();
+    NSString *desc = str();
+    EBAXElement *el = view.uiA11yElements[@(nodeId)];
+    if (!el) {
+      el = [[EBAXElement alloc] init];
+      el.nodeId = nodeId;
+      view.uiA11yElements[@(nodeId)] = el;
+    }
+    seen[@(nodeId)] = el;
+    BOOL wasFocused = (el.stateBits & 1) != 0;
+    el.hostView = view;
+    el.ctx = view.uiCtx;
+    el.action = view.uiA11yAction;
+    el.roleCode = role;
+    el.stateBits = state;
+    el.localFrame = NSMakeRect(x, y, w, h);
+    el.kids = [NSMutableArray array];
+    el.fromTree = YES;
+    NSAccessibilitySubrole sub = nil;
+    [el setAccessibilityRole:ebaxRole(role, &sub)];
+    if (sub) [el setAccessibilitySubrole:sub];
+    [el setAccessibilityLabel:name];
+    if (role == 8) [el setAccessibilityValue:name];
+    if (role == 3 || role == 4 || role == 20) {
+      [el setAccessibilityValue:@((state & 4) ? 1 : 0)];
+    } else if (role == 12 || role == 13) {
+      [el setAccessibilityMinValue:@(mn)];
+      [el setAccessibilityMaxValue:@(mx)];
+      [el setAccessibilityValue:@(now)];
+    } else if (value.length > 0 || role == 5 || role == 6) {
+      [el setAccessibilityValue:value];
+    }
+    if (desc.length) [el setAccessibilityHelp:desc];
+    el.fromTree = NO;
+    (void)level;
+    if ((state & 1) && !wasFocused) focusChanged = YES;
+    [ordered addObject:el];
+    if (parent < i && parent < ordered.count) {
+      EBAXElement *p = ordered[parent];
+      [p.kids addObject:el];
+      [el setAccessibilityParent:p];
+    } else {
+      [roots addObject:el];
+      [el setAccessibilityParent:view];
+    }
+  }
+  // drop elements whose nodes went away
+  for (NSNumber *key in [view.uiA11yElements allKeys]) {
+    if (!seen[key]) [view.uiA11yElements removeObjectForKey:key];
+  }
+  view.uiA11yRoots = roots;
+  NSAccessibilityPostNotification(view, NSAccessibilityLayoutChangedNotification);
+  if (focusChanged) {
+    for (EBAXElement *el in ordered) {
+      if (el.stateBits & 1) {
+        NSAccessibilityPostNotification(el, NSAccessibilityFocusedUIElementChangedNotification);
+        break;
+      }
+    }
+  }
+}
+
+// Set the mouse cursor by CSS cursor name.
+extern "C" void uiSetCursor(const char *name) {
+  NSString *n = [NSString stringWithUTF8String:name ? name : "default"];
+  runOnMainThreadAsyncVoid(^{
+    NSCursor *c = [NSCursor arrowCursor];
+    if ([n isEqualToString:@"pointer"])
+      c = [NSCursor pointingHandCursor];
+    else if ([n isEqualToString:@"text"] || [n isEqualToString:@"vertical-text"])
+      c = [NSCursor IBeamCursor];
+    else if ([n isEqualToString:@"crosshair"] || [n isEqualToString:@"cell"])
+      c = [NSCursor crosshairCursor];
+    else if ([n isEqualToString:@"grab"] || [n isEqualToString:@"move"])
+      c = [NSCursor openHandCursor];
+    else if ([n isEqualToString:@"grabbing"])
+      c = [NSCursor closedHandCursor];
+    else if ([n isEqualToString:@"not-allowed"] || [n isEqualToString:@"no-drop"])
+      c = [NSCursor operationNotAllowedCursor];
+    else if ([n hasSuffix:@"ew-resize"] || [n isEqualToString:@"col-resize"] ||
+             [n isEqualToString:@"e-resize"] || [n isEqualToString:@"w-resize"])
+      c = [NSCursor resizeLeftRightCursor];
+    else if ([n hasSuffix:@"ns-resize"] || [n isEqualToString:@"row-resize"] ||
+             [n isEqualToString:@"n-resize"] || [n isEqualToString:@"s-resize"])
+      c = [NSCursor resizeUpDownCursor];
+    [c set];
   });
 }
 

@@ -1,113 +1,204 @@
 ---
-title: "UI Overview"
-description: "Electrobun UI concepts: windows, mounting, rendering, and input."
+title: "UI API Overview"
+description: "Electrobun UI windows, mounting, the UI object, native views, and testing helpers."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Warren is experimental and its APIs may change between releases.
+Electrobun UI is experimental and macOS-only today. APIs may change between
+releases.
 </Aside>
 
 Everything lives in the `electrobun/main/ui` entrypoint. It is import-gated:
-apps that never import it pay nothing for it.
+apps that never import it pay nothing for it. It works in the Bun and
+Cottontail main processes and needs `bundleWGPU: true` (which also bundles the
+UI engine library on macOS). Start with the
+[setup guide](/electrobun/guides/electrobun-ui/#hello-world).
 
-The Cottontail UI templates configure `build.mainProcess: "cottontail"` and
-`build.cottontail.entrypoint`. Follow the
-[Warren setup guide](/electrobun/guides/electrobun-ui/#hello-world).
-
-```ts
-import { live, signal, ui, createUIWindow } from "electrobun/main/ui";
+```tsx
+import {
+  createUIWindow, createUI, createUIView, registerUIRoot, isUIAvailable,
+  signal, store, live, memo, inert, cleanup, batch,
+  Show, For, Switch, Match, Fragment, Portal,
+} from "electrobun/main/ui";
 ```
 
-Warren has two renderers over one core: this page covers the **GPU
-renderer** (main process, Dawn); the same reactivity, JSX, and control flow
-also render into real DOM inside webviews via
-[`electrobun/browser/ui`](/electrobun/apis/ui/browser-dom/). Store and
-model code written against the primitives runs unchanged on both sides.
+## How it works
 
-## How rendering works
-
-Your components build a **retained tree** of nodes (boxes, text, native-layer
-anchors). Reactive props are fine-grained: each thunk prop becomes one effect
-that writes one tree property. A frame tick polls input and — only when
-something marked the tree dirty — runs layout, flattens the tree into an
-instance buffer, and issues **one instanced draw call** to the window's Dawn
-surface. Idle UI does no layout, paint, or GPU work; hidden windows skip the
-tick entirely.
-
-UIWindows are regular [`GpuWindow`](/electrobun/apis/webgpu/)s underneath —
-same native window, same full-window `WGPUView`, same surface. The UI runtime
-is a layer on top, not a different GPU stack.
+Your JSX is rendered by Warren's DOM renderer into a lightweight DOM shim
+(`UIDocument` / `UINode`). Every mutation the renderer makes — create node,
+set attribute, insert, set text — is encoded into a command buffer and
+applied to the Zig engine's retained DOM in one FFI call. The engine runs the
+CSS cascade, layout, and paint on the main thread and presents through the
+window's Dawn surface. Input is handled natively by the engine (hover, focus,
+text editing, scrolling, form controls) and events are queued back to
+JavaScript, where your handlers run.
 
 ## createUIWindow
 
-```ts docs=syntax
-const uiWindow = await createUIWindow(options, app);
+```tsx
+const { window, ui, dispose } = createUIWindow(options, () => <App />);
 ```
 
-Creates a `GpuWindow`, mounts the tree, and starts the frame tick. The `app`
-callback builds the UI with the [element API](/electrobun/apis/ui/components/).
+Opens a [`GpuWindow`](/electrobun/apis/webgpu/), mounts a `UI` into its
+full-window view, and renders the app.
 
 | Option | Type | Default | Purpose |
 | --- | --- | --- | --- |
-| `title` | `string` | — | Window title. |
-| `width`, `height` | `number` | — | Initial content size. |
-| `titleBarStyle` | `"hidden" \| "hiddenInset" \| "default"` | `"hiddenInset"` | `hiddenInset` keeps the window frame equal to the content area. |
-| `transparent` | `boolean` | `false` | Alpha-composited window. Pair with an alpha `background` and a rounded root box for floating panels. |
+| `title` | `string` | `"Electrobun"` | Window title. |
+| `width`, `height` | `number` | `800`, `600` | Initial content size. |
+| `x`, `y` | `number` | — | Initial position. |
+| `titleBarStyle` | `"hidden" \| "hiddenInset" \| "default"` | `"default"` | `hiddenInset` keeps native window controls over full-size content. |
+| `transparent` | `boolean` | `false` | Alpha-composited window: only what the page paints is visible. |
 | `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
-| `background` | `string` | `"#141420"` | Clear color behind the tree. Accepts `#rgb`, `#rrggbb`, `#rrggbbaa`. |
-| `tickMs` | `number` | `8` | Frame tick interval. Input polls every tick; rendering only on dirty ticks. |
+| `background` | `string` | white / dark canvas | Page background (`html { background }`). Transparent windows default to none. |
+| `css` | `string \| string[]` | — | Stylesheets to add. |
+| `components` | `boolean` | `false` | Add the built-in [`eb-*` stylesheet](/electrobun/apis/ui/components/). |
+| `dark` | `boolean` | — | Force `prefers-color-scheme: dark` (or light). |
 
-Returns `{ window, context, dispose }`:
+The app argument is optional; you can call `ui.render()` later. Returns:
 
-- `window` — the underlying `GpuWindow` (`show()`, `hide()`, `isVisible()`,
-  `setPosition()`, `setSize()`, `setAlwaysOnTop()`, ...). Hiding the window
-  suspends all UI work until it is shown again.
-- `context` — the mount's `UiContext` (tree, reactive `focusedId` /
-  `hoveredId`, handler registries). Mostly useful for advanced integrations
-  and tests.
-- `dispose()` — tears down the reactive scope and closes the window.
+- `window` — the `GpuWindow` (`setSize`, `setPosition`, `setAlwaysOnTop`,
+  `on("close", ...)`, ...).
+- `ui` — the [`UI`](#the-ui-object).
+- `dispose()` — unmounts the app, destroys the UI, and closes the window.
+
+The UI also tears itself down when its window closes.
+
+A transparent, frameless, rounded panel is just CSS:
+
+```tsx
+createUIWindow(
+  {
+    width: 320, height: 120, transparent: true, titleBarStyle: "hidden",
+    css: `.panel { margin: 0; height: 100vh; border-radius: 14px;
+                   background: rgba(22, 22, 30, .93); -webkit-app-region: drag; }`,
+  },
+  () => <div class="panel">Drag me</div>,
+);
+```
+
+## createUI
+
+```tsx
+const ui = createUI(target, { css, components: true });
+ui.render(() => <App />);
+```
+
+Mounts a `UI` into a `GpuWindow` you created yourself (its full-window
+`WGPUView` is used) or into any `WGPUView`. Accepts the `css`, `components`,
+and `dark` options. Throws if the view can't be attached — usually because
+`bundleWGPU` is off.
 
 ## createUIView
 
-```ts docs=syntax
-const uiView = await createUIView(view, options, app);
+```tsx
+const { view, ui, dispose } = createUIView(wgpuView, { background: "#1b1b28" }, () => <Panel />);
 ```
 
-Mounts a tree into an existing [`WGPUView`](/electrobun/apis/webgpu/) instead
-of a whole window — the mechanism behind
-[`<electrobun-ui>`](/electrobun/apis/ui/ui-tag/) overlays. `options` accepts
-`background` and `tickMs`. The view's frame supplies size and pointer offset.
+Like `createUIWindow`, but into an existing `WGPUView`. Without a
+`background` the page is transparent. This is what
+[`registerUIRoot`](/electrobun/apis/ui/ui-tag/) uses for `<electrobun-ui>` tags.
 
-## registerUIRoot
+## isUIAvailable
 
-```ts docs=syntax
-const registration = registerUIRoot("overlay-name", { background: "#1b1b28" }, app);
+`isUIAvailable()` returns whether the UI engine library could be loaded — for
+example to fall back to a webview on platforms the engine doesn't support yet.
+
+## The UI object
+
+| Member | Description |
+| --- | --- |
+| `render(app)` | Mount a JSX app into `<body>`; returns an unmount function. |
+| `body` | The `<body>` element (`UINode`). |
+| `document` | The `UIDocument` (`createElement`, `createTextNode`, ...). |
+| `addStylesheet(css)` | Add a stylesheet; returns a handle. |
+| `removeStylesheet(handle)` | Remove a stylesheet added with `addStylesheet`. |
+| `setDark(dark)` | Switch `prefers-color-scheme`. |
+| `anchor(element, view, options?)` | Keep a native view positioned over an element; see [below](#anchoring-native-views). |
+| `querySelector(sel)` | Find an element created from JavaScript. Supports simple selectors: `tag`, `#id`, `.class`, `[attr]`, `[attr=value]` and combinations of them on one element. |
+| `destroy()` | Detach from the view and free the engine instance. |
+
+Elements (`UINode`) implement the DOM subset that Warren's renderer and
+typical app code use: `appendChild`/`insertBefore`/`remove`,
+`setAttribute`/`getAttribute`/`toggleAttribute`, `className`, `classList`,
+`style` (string or object, including `--custom-properties`), `textContent`,
+`innerHTML` (parsed by the engine), `value`, `checked`, `selected`,
+`disabled`, `focus()`, `blur()`, `scrollIntoView()`,
+`getBoundingClientRect()`, and `addEventListener`/`removeEventListener`.
+See [Events & input](/electrobun/apis/ui/events/).
+
+## Anchoring native views
+
+The UI renders into one Dawn view. Native views — a `WGPUView` running your
+own render loop, or a `BrowserView` webview — sit on top of it.
+`ui.anchor(element, view, options?)` keeps such a view positioned over an
+element's border box:
+
+```tsx
+let panel!: UINode;
+const { ui, window } = createUIWindow({ title: "Viewer", components: true }, () => (
+  <div class="eb-row" style="height: 100vh">
+    <nav class="eb-nav" style="width: 200px">...</nav>
+    <div class="eb-grow" style="align-self: stretch" ref={(el) => (panel = el)} />
+  </div>
+));
+const view = new WGPUView({ windowId: window.id, frame: { x: 0, y: 0, width: 1, height: 1 }, autoResize: false });
+const stop = ui.anchor(panel, view); // follows layout, scrolling, and resizes
 ```
 
-Mounts `app` into every
-[`<electrobun-ui name="overlay-name">`](/electrobun/apis/ui/ui-tag/) tag that
-appears in your webviews. Each tag instance gets its own tree. Views removed
-by the page are detected and disposed. Call `registration.dispose()` to stop.
+The engine reports the element's window rect after every frame in which it
+changed — layout, scrolling, window resizes — and when the element is hidden
+or removed the view is hidden too. The target can be a `WGPUView`, a
+`BrowserView`, or any object with `setFrame(x, y, width, height)` (and
+optionally `setHidden(hidden)`); several targets may anchor to one element.
+`options.onFrame(rect)` is called after each move with
+`{ x, y, width, height, visible }`. Native views draw above the UI and aren't clipped by `overflow: hidden`
+ancestors. `anchor` returns a function that stops anchoring. The `ui-wgpu`
+template embeds a custom WGPU scene and a webview this way.
 
-## Input model
+## Testing helpers
 
-- **Pointer** — native view events on macOS (move, press, release, wheel,
-  enter/exit), with a polling fallback elsewhere: hover enter/leave, press,
-  release, click. Mouse wheel scrolls the innermost `overflow: "scroll"`
-  container. A press outside any hittable node blurs focus. Nodes opt in
-  via handlers (`onClick`, `onPointerDown`, `onPointerUp`,
-  `onPointerEnter`, `onPointerLeave`).
-- **Keyboard** — native key events route to the focused node's `onKeyDown`
-  first (bubbling through ancestors; return `true` to stop), then to
-  window-level handlers registered with `onKey(handler)`. On macOS, events
-  carry the keyboard layout's characters (`e.chars`).
-- **Focus** — `focusable: true` nodes take focus on click; `textInput`
-  autofocuses when asked. `ctx.focusedId()` is reactive.
-- **Window dragging** — `windowDrag: true` nodes move the window when
-  dragged; a press without movement still delivers `onClick`.
+`UI` includes helpers that drive the engine through the same paths native
+input uses. Electrobun's own Kitchen tests use them:
 
-## Coordinates and units
+| Member | Description |
+| --- | --- |
+| `frames` | Number of frames presented so far. |
+| `nextFrame(timeoutMs?)` | Resolves after at least one more frame has been presented. |
+| `pixel(x, y)` | Premultiplied RGBA of the presented frame at a point (CSS px). |
+| `accessibilityTree()` | Accessibility nodes as `"role\|name\|value\|flags"` lines. |
+| `simulate.move(x, y)` | Pointer move (updates `:hover`). |
+| `simulate.click(el \| { x, y }, mods?)` | Press and release at an element's centre or a point. |
+| `simulate.wheel(x, y, dx, dy)` | Wheel scroll at a point. |
+| `simulate.key(key, mods?)` | Key down and up (`"Enter"`, `"ArrowDown"`, `"a"`, ...). |
+| `simulate.type(text)` | Text input into the focused control. |
 
-All sizes and positions are logical points with the origin at the window
-content's top-left. Colors are hex strings (or `0xRRGGBBAA` numbers).
+```tsx
+const { ui, dispose } = createUIWindow({ css: "body { background: #fff }" }, () => (
+  <button id="b" onClick={() => setClicked(true)}>Go</button>
+));
+await ui.simulate.click(ui.querySelector("#b")!);
+await ui.nextFrame();
+const [r, g, b] = await ui.pixel(10, 10);
+dispose();
+```
+
+`mods` is `{ shift?, ctrl?, alt?, meta? }`.
+
+## Rendering, threading, and frames
+
+The engine runs on the native main thread and renders only when the document
+changed or an animation is running. JavaScript mutations are buffered and
+flushed before reads (`getBoundingClientRect()`, `value`, ...) and before
+each frame. Events produced by native input are queued and delivered to your
+handlers asynchronously, right after the engine has applied its own default
+behavior.
+
+## Platform support
+
+| Platform | Status |
+| --- | --- |
+| macOS | Supported (CoreText text, ImageIO images, NSAccessibility) |
+| Windows | Not yet supported |
+| Linux | Not yet supported |

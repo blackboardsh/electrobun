@@ -18,14 +18,6 @@ const wgpuTag = readFileSync(
 	join(import.meta.dirname, "../preload/wgpuTag.ts"),
 	"utf8",
 );
-const uiInput = readFileSync(
-	join(import.meta.dirname, "../sdks/main/ui/input.ts"),
-	"utf8",
-);
-const uiWindow = readFileSync(
-	join(import.meta.dirname, "../sdks/main/ui/uiwindow.ts"),
-	"utf8",
-);
 
 function sourceBetween(start: string, end: string) {
 	const startIndex = windowsWrapper.indexOf(start);
@@ -107,8 +99,6 @@ describe("Windows per-monitor DPI and window shell", () => {
 
 		expect(contentOrigin).toContain("ClientToScreen(hwnd, &clientOrigin)");
 		expect(contentOrigin).toContain("physicalScreenPointToLogical(");
-		expect(uiInput).toContain('process.platform === "win32"');
-		expect(uiInput).toContain("ffi.request.getWindowContentOrigin");
 	});
 
 	it("sizes full-window UI surfaces from the drawable client area", () => {
@@ -124,7 +114,6 @@ describe("Windows per-monitor DPI and window shell", () => {
 		expect(contentSize).toContain("GetClientRect(hwnd, &clientRect)");
 		expect(contentSize).toContain("physicalToLogicalCoordinate(");
 		expect(initialization).toContain("GetClientRect(containerHwnd, &physicalBounds)");
-		expect(uiWindow).toContain("ffi.request.getWindowContentSize");
 	});
 
 	it("routes committed WM_CHAR text separately from virtual-key events", () => {
@@ -144,8 +133,6 @@ describe("Windows per-monitor DPI and window shell", () => {
 		expect(textBridge).toContain("0x10000 + ((high - 0xd800) << 10)");
 		expect(inputMessages).toContain("if (data && msg == WM_CHAR)");
 		expect(inputMessages).toContain("dispatchWindowText(");
-		expect(uiInput).toContain("dispatchText(text)");
-		expect(uiWindow).toContain("?.onTextInput");
 	});
 
 	it("registers WGPU child views on their owning UI thread", () => {

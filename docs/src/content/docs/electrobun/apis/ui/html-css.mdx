@@ -1,0 +1,144 @@
+---
+title: "HTML & CSS Support"
+description: "The HTML elements and CSS features Electrobun UI supports."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and macOS-only today. The supported subset grows
+between releases.
+</Aside>
+
+Electrobun UI implements a stable, practical subset of HTML and CSS — what app
+interfaces use — rather than browser compatibility. Anything not listed here
+is either ignored (unknown properties and at-rules don't break a stylesheet) or
+listed under [Not supported](#not-supported). Tailwind v4's generated CSS
+(cascade layers, `@property`, nested `@media`, `oklch()` colors) works.
+
+## HTML
+
+The engine parses forgiving HTML (implicit `<html>`/`<head>`/`<body>`) and
+applies a small user-agent stylesheet with browser-like defaults.
+
+| Elements | Notes |
+| --- | --- |
+| `div`, `span`, `p`, `section`, `header`, `footer`, `main`, `nav`, `aside`, `article`, `h1`–`h6`, `pre`, `blockquote`, `figure`, `hr`, ... | Block and inline elements with browser default styles. |
+| `b`, `strong`, `i`, `em`, `u`, `s`, `code`, `kbd`, `small`, `sub`, `sup`, `mark`, `a` | Inline text styles. Links are styled and clickable (handle `onClick`); they don't navigate. |
+| `ul`, `ol`, `li`, `dl`, `dt`, `dd` | Lists with `disc`, `circle`, `square`, `decimal` markers. |
+| `button` | Clickable, focusable, activates with Enter/Space. |
+| `input` | Text-like types (`text`, `password`, `email`, `search`, ...) with full editing; `checkbox`, `radio`, `range`, `color`, `button`/`submit`/`reset`, `hidden`. |
+| `textarea` | Multi-line editing. |
+| `select`, `option` | Opens an engine-drawn popup; keyboard navigable. |
+| `label` | Clicking a label activates its control (`for=` or nested). |
+| `details`, `summary` | Toggle open on click. |
+| `dialog` | Shown when it has the `open` attribute. |
+| `progress` | Track box; style the bar with CSS. |
+| `img` | `data:` URLs and file paths (no network). PNG/JPEG/GIF/... via ImageIO. |
+| `svg` | Inline SVG, rasterized with CoreGraphics (follows `currentColor`). |
+| `table`, `tr`, `td`, `th` | Laid out as flex rows — fine for simple data, not full table layout. |
+
+Elements that don't render: `head`, `script`, `style`, `template`, `title`,
+`meta`, `link`, `[hidden]`.
+
+## Selectors
+
+| Feature | Support |
+| --- | --- |
+| Type, `.class`, `#id`, `*` | ✓ |
+| Attributes: `[a]`, `=`, `~=`, `\|=`, `^=`, `$=`, `*=`, `i` flag | ✓ |
+| Combinators: descendant, `>`, `+`, `~` | ✓ |
+| `:is()`, `:where()`, `:not()`, `:has()` | ✓ |
+| `:nth-child()`, `:nth-last-child()`, `:nth-of-type()`, `:nth-last-of-type()` | ✓ |
+| `:first-child`, `:last-child`, `:only-child`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:empty`, `:root` | ✓ |
+| `:hover`, `:active`, `:focus`, `:focus-visible`, `:focus-within` | ✓ |
+| `:checked`, `:indeterminate`, `:disabled`, `:enabled`, `:required`, `:optional`, `:read-only`, `:read-write`, `:placeholder-shown`, `:open` | ✓ |
+| `::before`, `::after` (with `content`), `::placeholder`, `::marker` | ✓ |
+| Nesting (`&`) | ✓ |
+
+## Cascade and values
+
+| Feature | Support |
+| --- | --- |
+| Specificity, source order, `!important`, inheritance, `initial`/`inherit`/`unset` | ✓ |
+| `@layer` (named, anonymous, statement form) | ✓ |
+| Custom properties and `var()` with fallbacks | ✓ |
+| `@property` | ✓ |
+| `@media`: `width`/`height` (min/max and range syntax), `prefers-color-scheme`, `prefers-reduced-motion`, `orientation`, `hover`, `pointer` | ✓ |
+| `@supports` | ✓ |
+| `calc()`, `min()`, `max()`, `clamp()` | ✓ |
+| Units: `px`, `%`, `em`, `rem`, `vw`, `vh` (and `dvh`/`svh`/`lvh`, `dvw`/...), `pt`, `pc`, `in`, `cm`, `mm`, `ch`/`ex` (approximated) | ✓ |
+| Colors: hex, named, `rgb()`, `hsl()`, `oklch()`, `oklab()`, `lch()`, `lab()`, `currentColor`, `transparent` | ✓ |
+| `@keyframes` | ✓ |
+| `@font-face` | Parsed; fonts are not loaded (system fonts only) |
+| `@container`, `@scope`, `@starting-style` | Ignored |
+
+## Layout
+
+| Feature | Support |
+| --- | --- |
+| `display`: `block`, `inline`, `inline-block`, `flex`, `inline-flex`, `grid`, `inline-grid`, `list-item`, `none` | ✓ |
+| Box model: `margin` (with collapsing), `padding`, `border`, `box-sizing`, `width`/`height`, `min-*`/`max-*`, `aspect-ratio` | ✓ |
+| Flexbox: direction, wrap, grow/shrink/basis, `order`, `justify-content`, `align-items`/`-self`/`-content`, `gap` | ✓ |
+| Grid: `grid-template-columns`/`-rows`, `repeat()` incl. `auto-fill`/`auto-fit`, `minmax()`, `fr`, line and `span` placement, `grid-auto-flow` (incl. `dense`), `grid-auto-*`, gaps, alignment | ✓ |
+| `position`: `relative`, `absolute`, `fixed`; `top`/`right`/`bottom`/`left`/`inset`; `z-index` stacking | ✓ |
+| `position: sticky` | Treated as `relative` |
+| `overflow`: `visible`, `hidden`, `clip`, `scroll`, `auto` — scroll containers scroll with the wheel/trackpad | ✓ |
+| Inline layout: wrapping, baselines, `vertical-align`, `text-align` incl. `justify` | ✓ |
+
+## Visuals
+
+| Feature | Support |
+| --- | --- |
+| `background-color`, `background-image` (`url()`, gradients), `background-size`/`-position`/`-repeat`/`-clip` | ✓ |
+| Gradients: `linear-`, `radial-`, `conic-gradient()` and `repeating-*` | ✓ |
+| Borders: per-side width/color, `solid`, `dashed`, `dotted`; `border-radius` per corner | ✓ |
+| `box-shadow` (multiple, `inset`), `text-shadow` | ✓ |
+| `opacity`, `visibility` | ✓ |
+| `filter`: `blur`, `brightness`, `contrast`, `grayscale`, `saturate`, `invert`, `sepia`, `opacity`, `hue-rotate`, `drop-shadow` | ✓ |
+| `backdrop-filter` | ✓ |
+| `transform` (2D: `translate`, `scale`, `rotate`, `skew`, `matrix`), `transform-origin`, individual `translate`/`scale`/`rotate` | ✓ |
+| `outline` (+ `outline-offset`) | ✓ |
+| `object-fit` | ✓ |
+
+## Text
+
+| Feature | Support |
+| --- | --- |
+| `font-family` (system fonts, fallback incl. color emoji), `font-size`, `font-weight`, `font-style`, `font` shorthand | ✓ |
+| `line-height`, `letter-spacing`, `word-spacing`, `text-indent`, `tab-size` | ✓ |
+| `text-decoration` (underline, overline, line-through, color), `text-transform` | ✓ |
+| `white-space`: `normal`, `nowrap`, `pre`, `pre-wrap`, `pre-line`, `break-spaces` | ✓ |
+| `word-break`, `overflow-wrap` | ✓ |
+| `text-overflow: ellipsis`, `line-clamp` / `-webkit-line-clamp` | ✓ |
+| `caret-color`, `accent-color` | ✓ |
+
+## Motion
+
+| Feature | Support |
+| --- | --- |
+| `transition` (property, duration, delay, timing) — interruptible, reversals shorten like browsers | ✓ |
+| `animation` with `@keyframes`: iteration count, direction, fill mode, play state | ✓ |
+| Timing functions: `ease`, `ease-in`, `ease-out`, `ease-in-out`, `linear`, `cubic-bezier()`, `steps()`, `step-start`/`-end` | ✓ |
+
+Animatable properties: colors (text, background, borders, outline,
+decoration), sizes and offsets (`width`/`height` and their min/max,
+`top`/`right`/`bottom`/`left`, margins, paddings, border widths and radii,
+gaps), `opacity`, `transform`, `box-shadow`, `filter`, `backdrop-filter`,
+`font-size`, `letter-spacing`, `flex-grow`/`-shrink`/`-basis`,
+`outline-width`/`-offset`, `visibility`, `z-index`.
+
+## Interaction
+
+| Feature | Support |
+| --- | --- |
+| `cursor` (all standard keywords) | ✓ |
+| `pointer-events: none` | ✓ |
+| `user-select` | ✓ |
+| `-webkit-app-region: drag` / `no-drag` — drag the window from an element | ✓ |
+
+## Not supported
+
+`float`, `display: contents`, full table layout, 3D transforms, `clip-path`, `mask`,
+`mix-blend-mode`, `color-mix()`, `vmin`/`vmax`, container queries, web fonts
+(`@font-face` loading), and network images. `position: sticky` lays out as
+`relative`.

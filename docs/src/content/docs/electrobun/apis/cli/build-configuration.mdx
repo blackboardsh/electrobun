@@ -394,7 +394,7 @@ locations with `build.watch`; suppress generated or high-churn paths with
 
 Watch mode rebuilds and relaunches the whole app; it is distinct from
 webview-only hot module replacement. See [Hot Reloading](/electrobun/guides/hot-reloading/)
-for the main-process, Vite, and Warren reload boundaries.
+for the main-process, Vite, and Electrobun UI reload boundaries.
 
 ```typescript
 import type { ElectrobunConfig } from "electrobun";
@@ -427,6 +427,9 @@ export default {
 | `chromiumFlags` | `Record<string, string \| boolean>` | none |
 | `entitlements` | `Record<string, boolean \| string \| string[]>` | JIT defaults |
 | `icons` | `string` | `icon.iconset` |
+
+On macOS, `bundleWGPU` also bundles the [Electrobun UI](/electrobun/guides/electrobun-ui/)
+engine (`libElectrobunUI.dylib`) next to Dawn.
 
 An icon source can be an `.iconset` directory or an Icon Composer `.icon`
 file. `notarize` requires signing credentials; see [Code

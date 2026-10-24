@@ -1,20 +1,21 @@
 ---
-title: "Warren in the Browser (DOM)"
-description: "The DOM renderer: the same Warren reactivity and JSX, rendered into real DOM inside a webview."
+title: "DOM Renderer (Webviews)"
+description: "The same reactivity and JSX as Electrobun UI, rendered into real DOM inside a webview."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Warren is experimental. APIs may change between releases.
+Warren, Electrobun's reactivity and JSX library, is experimental. APIs may
+change between releases.
 </Aside>
 
-`electrobun/browser/ui` is Warren's DOM renderer. It shares the exact same
-reactivity core and JSX semantics as `electrobun/main/ui` — components run
-once, reactivity is explicit via `live()`, control flow is
-`For`/`Show`/`Switch`/`Match` — but renders into real DOM nodes inside a
-webview (or any web page). One mental model across your whole app: GPU
-chrome in the main process, DOM documents in webviews, the same signals and
-stores in both.
+`electrobun/browser/ui` is Warren's DOM renderer. It is the same renderer
+[Electrobun UI](/electrobun/guides/electrobun-ui/) uses in the main process —
+there it drives the GPU engine's document; here it drives the browser's real
+DOM inside a webview (or any web page). Components run once, reactivity is
+explicit via `live()`, control flow is `For`/`Show`/`Switch`/`Match`, and the
+markup is plain HTML in both places, so a component can move between a GPU
+window and a webview unchanged.
 
 There is still no compiler: Electrobun's view bundler transpiles `.tsx`
 natively. Point TypeScript at the DOM runtime (type-checking configuration
@@ -25,8 +26,8 @@ only):
 { "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/browser/ui" } }
 ```
 
-If the same project also contains main-process Warren code, use a per-file
-pragma instead of the global setting:
+If the same project also contains main-process Electrobun UI code
+(`electrobun/main/ui`), use a per-file pragma instead of the global setting:
 
 ```tsx
 /** @jsxImportSource electrobun/browser/ui */
@@ -71,7 +72,7 @@ Prop handling:
 | `ref` | `ref={(el) => ...}` called with the created element |
 | anything else | `setAttribute` (name passed through — SVG's `viewBox` works) |
 
-Reactivity is explicit, exactly like the GPU renderer: `class={live(() =>
+Reactivity is explicit, exactly like Electrobun UI: `class={live(() =>
 ...)}` updates in place; `class={value}` is static; a bare function in a
 value position is an error.
 
@@ -90,7 +91,7 @@ Text inputs are explicit two-way:
 
 ## Control flow
 
-`Show`, `For`, `Switch`/`Match` behave identically to the GPU renderer: a
+`Show`, `For`, `Switch`/`Match` behave identically in Electrobun UI: a
 `live()` prop reconciles on change, a plain value is a frozen snapshot.
 `For` reconciles keyed rows against real DOM nodes — reordering moves the
 same elements (scroll position, focus, and animation state survive):
@@ -143,8 +144,10 @@ import { cleanup, currentParent } from "electrobun/browser/ui";
 The reactivity primitives (`signal`, `store`, `live`, `memo`, `inert`,
 `cleanup`, `batch`) are the same implementation in both entries — model and
 store modules written against them run unchanged in the main process and in
-views. Only the element vocabulary differs: `box`/`row`/`column`/`text` on
-the GPU renderer, HTML on the DOM renderer.
+views. Components share too: both renderers take the same HTML elements and
+props. What differs is the platform underneath — a browser engine here, the
+Electrobun UI engine's [HTML & CSS subset](/electrobun/apis/ui/html-css/)
+there — so stick to that subset for components you want to run in both.
 
-See [Warren reactivity](/electrobun/apis/ui/reactivity/) for the full
-semantics — everything there applies verbatim in the browser.
+See [Reactivity](/electrobun/apis/ui/reactivity/) for the full semantics —
+everything there applies verbatim in the browser.

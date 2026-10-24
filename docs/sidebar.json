@@ -71,7 +71,7 @@
             "link": "/electrobun/guides/creating-ui/"
           },
           {
-            "label": "Warren UI (Experimental)",
+            "label": "Electrobun UI (Experimental)",
             "link": "/electrobun/guides/electrobun-ui/"
           },
           {
@@ -171,11 +171,15 @@
         ]
       },
       {
-        "label": "Warren UI (Experimental)",
+        "label": "Electrobun UI (Experimental)",
         "items": [
           {
             "label": "Overview",
             "link": "/electrobun/apis/ui/overview/"
+          },
+          {
+            "label": "HTML & CSS",
+            "link": "/electrobun/apis/ui/html-css/"
           },
           {
             "label": "Components",
@@ -186,12 +190,20 @@
             "link": "/electrobun/apis/ui/reactivity/"
           },
           {
-            "label": "Browser (DOM)",
-            "link": "/electrobun/apis/ui/browser-dom/"
+            "label": "Events & Input",
+            "link": "/electrobun/apis/ui/events/"
           },
           {
             "label": "UI Tag",
             "link": "/electrobun/apis/ui/ui-tag/"
+          },
+          {
+            "label": "Zig",
+            "link": "/electrobun/apis/ui/zig/"
+          },
+          {
+            "label": "DOM Renderer (Webviews)",
+            "link": "/electrobun/apis/ui/browser-dom/"
           }
         ]
       },

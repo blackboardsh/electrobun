@@ -1,38 +1,61 @@
 ---
-title: "Warren (Electrobun UI)"
-description: "Build reactive, GPU-rendered app UI in plain TypeScript — no webview, no build tooling."
+title: "Electrobun UI"
+description: "Build app UI with HTML, CSS, and JSX rendered straight to the GPU from the main process — no webview."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Warren — Electrobun's UI framework — is experimental. APIs may change between releases. See
-[current limitations](#current-limitations).
+Electrobun UI is experimental and currently runs on **macOS only**. APIs may
+change between releases. See [current limitations](#current-limitations).
 </Aside>
 
-Warren is a small, reactive UI framework that renders through Dawn
-(WebGPU) directly from the main process. There is no webview, no browser
-DOM, and no build tooling: you write `.tsx` against `electrobun/main/ui`,
-and Hutch's transpiler — the same one that already handles
-your TypeScript — does the rest. Nothing gets added to your toolchain.
+Electrobun UI renders HTML, CSS, and JSX directly to the GPU from your main
+process. There is no webview and no browser engine: a small UI engine written
+in Zig parses your markup and CSS, runs layout and text shaping, and draws the
+result with instanced SDF quads through Dawn (WebGPU). Your app code drives it
+with fine-grained reactivity, so an update touches exactly the nodes that
+changed.
 
 ```text
-signals / stores (signal, store with mutator setters)
-        ↓  explicit live() scopes, one binding per expression
-retained UI tree
+your JSX + signals/stores (electrobun/main/ui)
+        ↓  one DOM mutation per changed binding, batched over FFI
+Zig UI core: DOM → CSS cascade → layout → text → paint
         ↓
-layout + hit testing
-        ↓
-one instanced draw call → Dawn surface
+instanced SDF quads → Dawn surface (WGPUView)
 ```
 
-Rendering is invalidation-driven: layout, paint, and the GPU draw only run
-when something changed. An idle window costs almost nothing, and a hidden
-window costs literally nothing.
+Rendering is invalidation-driven: style, layout, and paint only run when
+something changed, and frames are only presented while something is
+animating or invalidated. An idle window does no work.
+
+## A stable subset, not a browser
+
+The engine implements a practical subset of HTML and CSS — the parts app UIs
+actually use — and aims to keep that subset stable rather than chase browser
+compatibility. Flexbox, grid, positioning, the cascade with `@layer`,
+`var()`, nesting, media queries, transitions, keyframes, shadows, gradients,
+filters and `backdrop-filter`, form controls, text editing, and IME all work,
+and Tailwind v4 output styles correctly. Some browser features are
+deliberately absent (floats, real tables, web fonts, network images). The
+[HTML & CSS reference](/electrobun/apis/ui/html-css/) lists exactly what is
+supported.
+
+The same components and CSS also work in a regular webview through the
+[DOM renderer](/electrobun/apis/ui/browser-dom/), so you can move a view
+between a GPU window and a webview without rewriting it.
 
 ## Hello world
 
-The `ui-wgpu`, `ui-color-picker`, and `ui-launcher` templates use Cottontail.
-Point the Cottontail entrypoint at a `.tsx` file:
+The fastest start is a template:
+
+```bash
+hutch electrobun init my-app --template=bun-ui      # Bun main process
+hutch electrobun init my-app --template=zig-ui      # Zig main process
+```
+
+To set it up by hand, enable `bundleWGPU` — on macOS it bundles Dawn and the
+UI engine library (`libElectrobunUI.dylib`) into the app. Electrobun UI works
+with the Bun and Cottontail main processes; this example uses Bun:
 
 ```ts
 // electrobun.config.ts
@@ -41,170 +64,103 @@ import type { ElectrobunConfig } from "electrobun";
 export default {
   app: { name: "hello-ui", identifier: "hello-ui.example.com", version: "0.0.1" },
   build: {
-    mainProcess: "cottontail",
-    cottontail: { entrypoint: "src/main.tsx" },
+    mainProcess: "bun",
+    bun: { entrypoint: "src/main.tsx" },
     mac: { bundleCEF: false, bundleWGPU: true },
-    linux: { bundleCEF: false, bundleWGPU: true },
-    win: { bundleCEF: false, bundleWGPU: true },
   },
 } satisfies ElectrobunConfig;
 ```
 
-Tell TypeScript (your editor and `tsc`) which JSX types to use. This is
-type-checking configuration, not a build step — Hutch transpiles `.tsx`
-natively either way:
+Tell TypeScript which JSX runtime to use. This is type-checking
+configuration only — the transpiler already handles `.tsx`:
 
 ```jsonc
-// tsconfig.json (for editor/typechecking only)
+// tsconfig.json
 { "compilerOptions": { "jsx": "react-jsx", "jsxImportSource": "electrobun/main/ui" } }
 ```
 
-Then write components:
+Then write ordinary HTML-flavoured JSX and CSS:
 
 ```tsx
 // src/main.tsx
-import { live, signal, createUIWindow } from "electrobun/main/ui";
+import { createUIWindow, live, signal } from "electrobun/main/ui";
+
+const css = `
+  body { margin: 0; height: 100vh; display: grid; place-items: center; }
+  .count { font-size: 32px; font-weight: 600; }
+`;
 
 function Counter() {
   const [count, setCount] = signal(0);
   return (
-    <column grow={1} justify="center" align="center" gap={16}>
-      <text size={32} color="#e4e4f0">{live(() => `Count: ${count()}`)}</text>
-      <box
-        pad={12}
-        radius={8}
-        bg="#1b1b28"
-        border={1}
-        borderColor="#3b3b58"
-        onClick={() => setCount((c) => c + 1)}
-      >
-        <text size={14} color="#e4e4f0">Click me</text>
-      </box>
-    </column>
+    <div class="eb-col" style="gap: 16px; align-items: center">
+      <div class="count">{live(() => `Count: ${count()}`)}</div>
+      <button class="eb-btn" onClick={() => setCount((c) => c + 1)}>Click me</button>
+    </div>
   );
 }
 
-await createUIWindow({ title: "Hello UI", width: 420, height: 240 }, () => <Counter />);
+createUIWindow(
+  { title: "Hello UI", width: 420, height: 260, css, components: true },
+  () => <Counter />,
+);
 ```
 
-Run it with `hutch electrobun dev`. Three rules cover everything:
+Run it with `hutch electrobun dev`. `components: true` adds the built-in
+[`eb-*` component stylesheet](/electrobun/apis/ui/components/); everything
+else is plain CSS you write.
 
-- **Reactivity is explicit.** `live(() => ...)` creates a reactive scope —
-  one binding updating exactly one thing when its dependencies change.
-  Static values stay bare (`bg="#1b1b28"`), and bare functions in value
-  positions are an error. Search a file for `live(` to find every reactive
-  boundary; see [Warren reactivity](/electrobun/apis/ui/reactivity/).
-- **Components are plain functions** called once with their props — no
-  re-rendering, no hooks rules, no registration.
-- **Handlers are plain functions** (`onClick={() => ...}`) — never tracked.
+Three rules cover the programming model:
 
-## What the JSX becomes
+- **Reactivity is explicit.** `live(() => ...)` is a reactive binding that
+  updates exactly one thing when its dependencies change. Unmarked values are
+  static. See [Reactivity](/electrobun/apis/ui/reactivity/).
+- **Components are plain functions** called once — no re-rendering, no hooks
+  rules.
+- **Handlers are plain functions** (`onClick={() => ...}`) and are never
+  tracked.
 
-There is exactly one transform, and Cottontail's transpiler applies it
-automatically: each JSX tag becomes a `jsx()` call that returns a lazy
-element, and mounting runs those elements against the retained tree. This:
+## Templates
 
-```tsx
-<column gap={16}>
-  <text size={32}>{live(() => `Count: ${count()}`)}</text>
-</column>
-```
+| Template | Main process | Shows |
+| --- | --- | --- |
+| `bun-ui` | Bun | a starter app: components, forms, reactive state |
+| `zig-ui` | Zig | driving the UI engine from a Zig main process |
+| `ui-launcher` | Cottontail | transparent always-on-top command palette, global shortcut, keyed list, text input |
+| `ui-color-picker` | Cottontail | tray eyedropper in a transparent rounded window |
+| `ui-wgpu` | Cottontail | UI with an embedded custom WGPU render and webview |
 
-is transpiled to (and behaves identically to):
+## Mixing in native views
 
-```ts docs=syntax
-jsx("column", {
-  gap: 16,
-  children: jsx("text", { size: 32, children: live(() => `Count: ${count()}`) }),
-});
-```
-
-which, when mounted, drives the underlying builder API —
-`ui.column(...)` / `ui.text(...)` — the same functions you can call directly
-from plain `.ts` if you prefer no JSX at all. The two styles are one API.
-
-## Embedding a webview
-
-The UI tree can position real out-of-process webviews. A bare function child
-is a *builder escape* — it runs builder-API code (here the `webview`
-element) at that spot in the tree:
-
-```tsx
-import { webview, createUIWindow } from "electrobun/main/ui";
-
-await createUIWindow({ title: "Hybrid", width: 900, height: 600 }, () => (
-  <row grow={1}>
-    <column width={240} pad={16} gap={8} bg="#16161e">
-      <text size={13} color="#e4e4f0">GPU-rendered sidebar</text>
-    </column>
-    {() => webview({ grow: 1, url: "https://electrobun.dev" })}
-  </row>
-));
-```
-
-Resize the window and both panes reflow together: the sidebar is drawn by
-the UI runtime, the page is a real webview, and one layout tree owns both
-rectangles. `webview` also accepts `html`, `partition`, and `sandbox` like
-[`BrowserView`](/electrobun/apis/browser-view/).
-
-## Embedding a WGPU layer
-
-`wgpuSurface` gives you a raw Dawn view positioned by the layout — your own
-render pipeline inside a UI-managed rectangle:
-
-```tsx
-import { webgpu } from "electrobun/main";
-import { wgpuSurface, createUIWindow } from "electrobun/main/ui";
-
-await createUIWindow({ title: "GPU panel", width: 720, height: 480 }, () => (
-  <column grow={1} pad={12} gap={8}>
-    <text size={12} color="#8c8ca8">Custom WGPU below</text>
-    {() =>
-      wgpuSurface({
-        grow: 1,
-        onReady: async (view) => {
-          const { context } = webgpu.createContext(view);
-          const adapter = await webgpu.navigator.requestAdapter({
-            compatibleSurface: context,
-          });
-          const device = await adapter.requestDevice();
-          context.configure({ device, format: "bgra8unorm" });
-          // ...create your pipeline, render into context.getCurrentTexture()...
-        },
-      })
-    }
-  </column>
-));
-```
-
-The `view` handed to `onReady` is a regular
-[`WGPUView`](/electrobun/apis/webgpu/) — everything in the WebGPU adapter
-API works against it. The `ui-wgpu` template renders an animated Mandelbrot
-this way.
+The UI owns one full-window Dawn view. Native views — your own
+[`WGPUView`](/electrobun/apis/webgpu/) render loop, or a webview — can be
+positioned over elements so they participate in the layout; see
+[anchoring native views](/electrobun/apis/ui/overview/#anchoring-native-views).
+To put Electrobun UI *inside* web content instead, use the
+[`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/).
 
 ## Where to go next
 
-- [UI overview](/electrobun/apis/ui/overview/) — windows, mounting, and how
-  rendering works.
-- [Components](/electrobun/apis/ui/components/) — every element and its props.
-- [Warren reactivity](/electrobun/apis/ui/reactivity/) — signal, store, live, memo.
-- [Warren in the browser](/electrobun/apis/ui/browser-dom/) — the DOM
-  renderer (`electrobun/browser/ui`): same reactivity and JSX, rendered into
-  real DOM inside a webview.
-- [`<electrobun-ui>` tag](/electrobun/apis/ui/ui-tag/) — layering reactive
-  native UI on top of web content.
-- Templates: `ui-wgpu` (JSX counter + embedded webview + Mandelbrot),
-  `ui-color-picker` (tray eyedropper), `ui-launcher` (command palette).
+- [API overview](/electrobun/apis/ui/overview/) — windows, mounting, the `UI`
+  object, testing helpers.
+- [HTML & CSS](/electrobun/apis/ui/html-css/) — the supported subset.
+- [Components](/electrobun/apis/ui/components/) — the `eb-*` design system.
+- [Reactivity](/electrobun/apis/ui/reactivity/) — signal, store, live, memo.
+- [Events & input](/electrobun/apis/ui/events/) — pointer, keyboard, focus,
+  text editing, accessibility.
+- [Zig](/electrobun/apis/ui/zig/) — using the engine from a Zig main process.
 
 ## Current limitations
 
-- On macOS, text renders with system fonts (CoreText) and input is native
-  events (pointer, wheel scrolling, keyboard-layout characters). Other
-  platforms currently fall back to a built-in 5x7 bitmap font and polled
-  input with a US-layout keymap.
-- No text wrapping or truncation yet: long strings widen layout instead of
-  clipping. Size strings to their containers.
-- Layout is a flex subset: row/column, gap, padding, fixed/auto sizes,
-  grow, justify, align, and scroll containers (wheel-scrollable on macOS).
-- Electrobun UI runs in the privileged main process — use it for trusted
-  application UI, not untrusted content (that's what webviews are for).
+- **macOS only.** The engine uses CoreText, ImageIO, and the macOS native
+  wrapper today; Windows and Linux are not supported yet.
+- **Fonts:** system fonts only. `@font-face` rules are parsed but web fonts
+  are not loaded.
+- **Images:** `<img>` loads `data:` URLs and file paths; there is no network
+  loading. Inline `<svg>` is rasterized.
+- **Layout gaps:** no floats; `position: sticky` behaves like `relative`;
+  tables lay out as flex rows; transforms are 2D.
+- **Dark mode** follows the `dark` option / `ui.setDark()`, not the system
+  appearance automatically.
+- Electrobun UI runs in the privileged main process — use it for trusted app
+  UI, not untrusted content (that is what webviews are for).

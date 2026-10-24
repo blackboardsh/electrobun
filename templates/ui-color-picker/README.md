@@ -1,9 +1,9 @@
-# ui-color-picker — tray eyedropper in a Electrobun UI window
+# ui-color-picker — tray eyedropper in an Electrobun UI window
 
 The "webview is too much, raw GpuWindow is too little" showcase: a color
 picker that lives in the system tray. The window is transparent with rounded
-corners, always on top, and rendered entirely by the `electrobun/main/ui`
-runtime — no webview.
+corners and always on top. Its UI is HTML/CSS written as JSX and rendered by
+`electrobun/main/ui` straight to the GPU — no webview.
 
 - **Left:** an 11x11 zoomed loupe of the pixels around your cursor,
   refreshed live (sampling pauses automatically while your cursor is over
@@ -12,6 +12,15 @@ runtime — no webview.
   copy that format; `cmd+C` copies your preferred format, selected in the
   dropdown and persisted across launches (`userData/ui-color-picker.json`).
 - **Tray:** click the tray glyph to show/hide; Escape hides too.
+
+What it exercises:
+
+- `createUIWindow` with a transparent, rounded, always-on-top window
+- a CSS grid of 121 cells whose `style` is bound with `live()` — only the
+  cells whose color changed are touched each sample
+- `:hover` states, `-webkit-app-region: drag` on the loupe (clicks inside it,
+  like the permission status, still work)
+- `<Show>` / `<For>` and a `keydown` listener on `ui.body` (cmd+C, space, esc)
 
 ## Run it
 
@@ -47,4 +56,5 @@ attribute the permission to your terminal app rather than the dev bundle.
 - After the first Wayland grant, monitor sharing remains active until the app
   exits; the desktop's sharing indicator shows that state.
 - Drag the loupe (left panel) to move the window.
-- Keyboard mapping uses macOS virtual key codes.
+- The UI engine ships on macOS first; the template's Windows/Linux capture
+  paths are kept for when it does.

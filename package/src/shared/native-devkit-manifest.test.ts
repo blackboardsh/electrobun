@@ -30,7 +30,7 @@ const targets: Array<{
 			coreLibrary: "libElectrobunCore.dylib",
 			nativeWrapper: "libNativeWrapper.dylib",
 			wgpuLibrary: "libwebgpu_dawn.dylib",
-			wgpuAuxiliaryLibraries: [],
+			wgpuAuxiliaryLibraries: ["libElectrobunUI.dylib"],
 		},
 	},
 	{
