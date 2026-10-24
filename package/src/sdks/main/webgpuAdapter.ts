@@ -19,6 +19,9 @@ import {
 	releaseNativeWebgpuContext,
 } from "./webgpuContextRegistry";
 import { WebgpuPresentationState } from "./webgpuPresentationState";
+import { bufferSourceBytes } from "./webgpuBufferSource";
+import { normalizeExtent3D, type Extent3D } from "./webgpuExtent";
+import { stringViewCallbackAbi } from "./webgpuCallback";
 
 const WGPUNative = WGPU.native;
 const WGPUTextureFormat_BGRA8Unorm = 0x0000001B;
@@ -126,6 +129,7 @@ const WGPUBufferUsage_QueryResolve = 0x0000000000000200n;
 const WGPUMapMode_Read = 0x0000000000000001n;
 const WGPUMapMode_Write = 0x0000000000000002n;
 const WGPUCallbackMode_AllowSpontaneous = 0x00000003;
+const WGPUBufferMapState_Pending = 0x00000002;
 const WGPUBufferMapState_Mapped = 0x00000003;
 const WGPUMapAsyncStatus_Success = 0x00000001;
 const WGPUQueueWorkDoneStatus_Success = 0x00000001;
@@ -165,10 +169,18 @@ const PRESENTATION_STATE = new WebgpuPresentationState<
 >();
 const MAP_ASYNC_RESOLVERS = new Map<number, (mapped: boolean) => void>();
 const WORK_DONE_RESOLVERS = new Map<number, (ok: boolean) => void>();
+const STRING_VIEW_CALLBACK_ABI = stringViewCallbackAbi(process.platform, process.arch);
 
 const bufferMapCallback = new JSCallback(
-	(status: number, _message: number, userdata1: number, _userdata2: number) => {
-		const key = Number(userdata1);
+	(
+		status: number,
+		_message: number,
+		messageLengthOrUserdata: number,
+		userdataOrSecond: number,
+	) => {
+		const key = Number(
+			STRING_VIEW_CALLBACK_ABI.indirect ? messageLengthOrUserdata : userdataOrSecond,
+		);
 		const resolve = MAP_ASYNC_RESOLVERS.get(key);
 		if (resolve) {
 			MAP_ASYNC_RESOLVERS.delete(key);
@@ -176,7 +188,7 @@ const bufferMapCallback = new JSCallback(
 		}
 	},
 	{
-		args: ["u32", "ptr", "ptr", "ptr"],
+		args: STRING_VIEW_CALLBACK_ABI.args,
 		returns: "void",
 		threadsafe: true,
 	},
@@ -184,8 +196,15 @@ const bufferMapCallback = new JSCallback(
 WGPU_CALLBACK_KEEPALIVE.push(bufferMapCallback);
 
 const queueWorkDoneCallback = new JSCallback(
-	(status: number, _message: number, userdata1: number, _userdata2: number) => {
-		const key = Number(userdata1);
+	(
+		status: number,
+		_message: number,
+		messageLengthOrUserdata: number,
+		userdataOrSecond: number,
+	) => {
+		const key = Number(
+			STRING_VIEW_CALLBACK_ABI.indirect ? messageLengthOrUserdata : userdataOrSecond,
+		);
 		const resolve = WORK_DONE_RESOLVERS.get(key);
 		if (resolve) {
 			WORK_DONE_RESOLVERS.delete(key);
@@ -193,7 +212,7 @@ const queueWorkDoneCallback = new JSCallback(
 		}
 	},
 	{
-		args: ["u32", "ptr", "ptr", "ptr"],
+		args: STRING_VIEW_CALLBACK_ABI.args,
 		returns: "void",
 		threadsafe: true,
 	},
@@ -240,6 +259,11 @@ function makeStringView(str?: string | null) {
 	}
 	const bytes = new TextEncoder().encode(str);
 	return { ptr: ptr(bytes), len: BigInt(bytes.byteLength), cstr: bytes };
+}
+
+function makeEntryPointView(value?: string) {
+	// A null WGPUStringView uses WGPU_STRLEN, not length zero (the empty name).
+	return value === undefined ? { ptr: 0, len: WGPU_STRLEN } : makeStringView(value);
 }
 
 function ptrOrNull(value: ArrayBuffer | ArrayBufferView) {
@@ -1048,7 +1072,14 @@ class GPUQueue {
 			);
 		}
 	}
-	writeBuffer(buffer: GPUBuffer, offset: number, data: ArrayBufferView) {
+	writeBuffer(
+		buffer: GPUBuffer,
+		offset: number,
+		data: ArrayBuffer | ArrayBufferView,
+		dataOffset = 0,
+		size?: number,
+	) {
+		const bytes = bufferSourceBytes(data, dataOffset, size);
 		if (!this.ptr || !this._device?.ptr) {
 			throw new Error("WebGPU queue belongs to a destroyed device");
 		}
@@ -1056,20 +1087,21 @@ class GPUQueue {
 			this.ptr,
 			buffer.ptr,
 			BigInt(offset),
-			ptrOrNull(data),
-			data.byteLength,
+			ptrOrNull(bytes),
+			bytes.byteLength,
 		);
 	}
 	writeTexture(
 		destination: { texture: GPUTexture; mipLevel?: number; origin?: { x?: number; y?: number; z?: number } },
 		data: ArrayBufferView,
 		dataLayout: { bytesPerRow: number; rowsPerImage?: number },
-		size: { width: number; height: number; depthOrArrayLayers?: number },
+		size: Extent3D,
 	) {
 		if (!this.ptr || !this._device?.ptr) {
 			throw new Error("WebGPU queue belongs to a destroyed device");
 		}
 		if (!data || data.byteLength === 0) return;
+		size = normalizeExtent3D(size);
 		let bytesPerPixel = bytesPerPixelForFormat(destination.texture.format);
 		let width =
 			Number.isFinite(size.width) && size.width > 0
@@ -1306,7 +1338,7 @@ class GPUDevice {
 		);
 	}
 	createTexture(descriptor: {
-		size: { width: number; height: number; depthOrArrayLayers?: number };
+		size: Extent3D;
 		format: string;
 		usage: number;
 		mipLevelCount?: number;
@@ -1314,6 +1346,7 @@ class GPUDevice {
 		viewFormats?: string[];
 	}) {
 		this._assertLive();
+		const extent = normalizeExtent3D(descriptor.size);
 		const mappedFormat =
 			mapTextureFormat(descriptor.format) ?? WGPUTextureFormat_BGRA8Unorm;
 		const rawSample = Number(descriptor.sampleCount ?? 1);
@@ -1334,9 +1367,9 @@ class GPUDevice {
 			viewFormatCount = descriptor.viewFormats.length;
 		}
 		const desc = makeTextureDescriptor(
-			descriptor.size.width,
-			descriptor.size.height,
-			descriptor.size.depthOrArrayLayers ?? 1,
+			extent.width,
+			extent.height ?? 1,
+			extent.depthOrArrayLayers ?? 1,
 			mappedFormat,
 			toBigInt(descriptor.usage ?? 0),
 			descriptor.mipLevelCount ?? 1,
@@ -1552,7 +1585,7 @@ class GPUDevice {
 		this._assertLive();
 		const ffiKeepalive: unknown[] = [];
 		const vertexModule = descriptor.vertex.module as GPUShaderModule;
-		const vertexEntry = makeStringView(descriptor.vertex.entryPoint ?? "main");
+		const vertexEntry = makeEntryPointView(descriptor.vertex.entryPoint);
 		ffiKeepalive.push(vertexEntry);
 		const vertexBuffers = descriptor.vertex.buffers ?? [];
 		const vertexLayouts: ArrayBuffer[] = [];
@@ -1604,7 +1637,7 @@ class GPUDevice {
 		let fragmentStatePtr: number | null = null;
 		if (descriptor.fragment) {
 			const fragModule = descriptor.fragment.module as GPUShaderModule;
-			const fragEntry = makeStringView(descriptor.fragment.entryPoint ?? "main");
+			const fragEntry = makeEntryPointView(descriptor.fragment.entryPoint);
 			ffiKeepalive.push(fragEntry);
 			const targets = descriptor.fragment.targets ?? [];
 			const targetBuf = new ArrayBuffer(targets.length * 32);
@@ -1706,7 +1739,7 @@ class GPUDevice {
 		this._assertLive();
 		const ffiKeepalive: unknown[] = [];
 		const module = descriptor.compute.module as GPUShaderModule;
-		const entry = makeStringView(descriptor.compute.entryPoint ?? "main");
+		const entry = makeEntryPointView(descriptor.compute.entryPoint);
 		ffiKeepalive.push(entry);
 		const stage = makeProgrammableStageDescriptor(
 			module.ptr,
@@ -1727,6 +1760,48 @@ class GPUDevice {
 		void ffiKeepalive;
 		return new GPUComputePipeline(pipelinePtr);
 	}
+	createRenderBundleEncoder(descriptor: {
+		label?: string;
+		colorFormats: Iterable<string | number | null>;
+		depthStencilFormat?: string | number;
+		sampleCount?: number;
+		depthReadOnly?: boolean;
+		stencilReadOnly?: boolean;
+	}) {
+		this._assertLive();
+		const formats = Uint32Array.from(descriptor.colorFormats, (format) => {
+			if (format === null) return 0;
+			const mapped = mapTextureFormat(format);
+			if (!mapped) throw new TypeError(`Unknown WebGPU texture format: ${format}`);
+			return mapped;
+		});
+		const label = makeStringView(descriptor.label ?? "");
+		// WGPURenderBundleEncoderDescriptor on the supported 64-bit targets.
+		const buffer = new ArrayBuffer(56);
+		const view = new DataView(buffer);
+		writePtr(view, 8, label.ptr);
+		writeU64(view, 16, label.len);
+		writeU64(view, 24, BigInt(formats.length));
+		writePtr(view, 32, ptrOrNull(formats));
+		const depthFormat = mapTextureFormat(descriptor.depthStencilFormat);
+		if (descriptor.depthStencilFormat !== undefined && !depthFormat) {
+			throw new TypeError(`Unknown WebGPU texture format: ${descriptor.depthStencilFormat}`);
+		}
+		writeU32(view, 40, depthFormat ?? 0);
+		writeU32(view, 44, descriptor.sampleCount ?? 1);
+		writeU32(view, 48, descriptor.depthReadOnly ? 1 : 0);
+		writeU32(view, 52, descriptor.stencilReadOnly ? 1 : 0);
+		const encoderPtr = WGPUNative.symbols.wgpuDeviceCreateRenderBundleEncoder(
+			this.ptr,
+			ptr(buffer),
+		);
+		void formats;
+		void label.cstr;
+		void buffer;
+		if (!encoderPtr) throw new Error("Failed to create WebGPU render bundle encoder");
+		return new GPURenderBundleEncoder(encoderPtr, this, descriptor.label ?? "");
+	}
+
 	createCommandEncoder() {
 		this._assertLive();
 		const desc = makeCommandEncoderDescriptor();
@@ -1767,13 +1842,24 @@ class GPUBuffer {
 			throw new Error("WebGPU buffer has been destroyed");
 		}
 	}
+	get mapState() {
+		if (!this.ptr) return "unmapped";
+		const state = WGPUNative.symbols.wgpuBufferGetMapState(this.ptr);
+		if (state === WGPUBufferMapState_Mapped) return "mapped";
+		if (state === WGPUBufferMapState_Pending) return "pending";
+		return "unmapped";
+	}
 	getMappedRange(_offset = 0, _size?: number) {
 		this._assertLive();
 		if (!this._mapped) {
 			return new ArrayBuffer(0);
 		}
 		const size = Math.max(0, _size ?? this.size - _offset);
-		const mapped = WGPUNative.symbols.wgpuBufferGetMappedRange(
+		const getRange =
+			(this.usage & WGPUBufferUsage_MapRead) !== 0n
+				? WGPUNative.symbols.wgpuBufferGetConstMappedRange
+				: WGPUNative.symbols.wgpuBufferGetMappedRange;
+		const mapped = getRange(
 			this.ptr,
 			BigInt(_offset),
 			BigInt(size),
@@ -2207,6 +2293,47 @@ class GPUCommandEncoder {
 			size,
 		);
 	}
+	copyTextureToBuffer(
+		source: {
+			texture: GPUTexture;
+			mipLevel?: number;
+			origin?: { x?: number; y?: number; z?: number };
+		},
+		destination: {
+			buffer: GPUBuffer;
+			offset?: number;
+			bytesPerRow?: number;
+			rowsPerImage?: number;
+		},
+		copySize: Extent3D,
+	) {
+		this._assertLive();
+		if (!source.texture.ptr || !destination.buffer.ptr) {
+			throw new Error("WebGPU copy uses a destroyed resource");
+		}
+		const size = normalizeExtent3D(copySize);
+		const src = makeTexelCopyTextureInfo(
+			source.texture.ptr,
+			source.mipLevel ?? 0,
+			source.origin ?? {},
+		);
+		const dst = makeImageCopyBuffer(
+			destination.buffer.ptr,
+			destination.offset ?? 0,
+			destination.bytesPerRow ?? 0xffffffff,
+			destination.rowsPerImage ?? 0xffffffff,
+		);
+		const extent = makeExtent3D(size.width, size.height ?? 1, size.depthOrArrayLayers ?? 1);
+		WGPUNative.symbols.wgpuCommandEncoderCopyTextureToBuffer(
+			this.ptr,
+			src.ptr,
+			dst.ptr,
+			extent.ptr,
+		);
+		void src.buffer;
+		void dst.buffer;
+		void extent.buffer;
+	}
 	copyBufferToBuffer(
 		source: GPUBuffer,
 		sourceOffset: number,
@@ -2244,6 +2371,193 @@ class GPUCommandEncoder {
 	}
 }
 
+// Standard WebGPU bundles have no destroy() method. Keep explicit release()
+// available for deterministic native cleanup, with GC as the default owner.
+const renderBundleFinalizer = new FinalizationRegistry<number>((handle) => {
+	WGPUNative.symbols.wgpuRenderBundleRelease(handle);
+});
+const renderBundleEncoderFinalizer = new FinalizationRegistry<number>((handle) => {
+	WGPUNative.symbols.wgpuRenderBundleEncoderRelease(handle);
+});
+
+/** A reusable Dawn command recording. release() drops the adapter's reference. */
+class GPURenderBundle {
+	ptr: number;
+	private _label: string;
+	constructor(ptr: number, label = "") {
+		this.ptr = ptr;
+		this._label = label;
+		renderBundleFinalizer.register(this, ptr, this);
+	}
+	get label() { return this._label; }
+	set label(value: string) {
+		if (!this.ptr) throw new Error("WebGPU render bundle has been released");
+		setBundleString(WGPUNative.symbols.wgpuRenderBundleSetLabel, this.ptr, value);
+		this._label = value;
+	}
+	release() {
+		if (!this.ptr) return;
+		const bundlePtr = this.ptr;
+		this.ptr = 0;
+		renderBundleFinalizer.unregister(this);
+		WGPUNative.symbols.wgpuRenderBundleRelease(bundlePtr);
+	}
+}
+
+// These functions take WGPUStringView by value: indirect on Windows x64,
+// otherwise a pointer/length pair on the supported 64-bit ABIs.
+function setBundleString(fn: (...args: any[]) => unknown, handle: number, value: string) {
+	const text = makeStringView(value);
+	if (STRING_VIEW_CALLBACK_ABI.indirect) {
+		const buffer = new ArrayBuffer(16);
+		const view = new DataView(buffer);
+		writePtr(view, 0, text.ptr);
+		writeU64(view, 8, text.len);
+		fn(handle, ptr(buffer));
+		void buffer;
+	} else {
+		fn(handle, text.ptr, text.len);
+	}
+	void text.cstr;
+}
+
+class GPURenderBundleEncoder {
+	ptr: number;
+	private readonly _device: GPUDevice;
+	private _label: string;
+	constructor(ptr: number, device: GPUDevice, label = "") {
+		this.ptr = ptr;
+		this._device = device;
+		this._label = label;
+		renderBundleEncoderFinalizer.register(this, ptr, this);
+	}
+	private _assertLive() {
+		if (!this.ptr || !this._device.ptr) {
+			throw new Error("WebGPU render bundle encoder has been released");
+		}
+	}
+	get label() { return this._label; }
+	set label(value: string) {
+		this._assertLive();
+		setBundleString(WGPUNative.symbols.wgpuRenderBundleEncoderSetLabel, this.ptr, value);
+		this._label = value;
+	}
+	setPipeline(pipeline: GPURenderPipeline) {
+		this._assertLive();
+		if (!pipeline.ptr) throw new Error("WebGPU render pipeline has been released");
+		WGPUNative.symbols.wgpuRenderBundleEncoderSetPipeline(this.ptr, pipeline.ptr);
+	}
+	setBindGroup(
+		index: number,
+		bindGroup: GPUBindGroup | null | undefined,
+		dynamicOffsets: Iterable<number> = [],
+		dynamicOffsetsDataStart?: number,
+		dynamicOffsetsDataLength?: number,
+	) {
+		this._assertLive();
+		if (bindGroup && !bindGroup.ptr) throw new Error("WebGPU bind group has been released");
+		let offsets: Uint32Array;
+		if (dynamicOffsetsDataStart !== undefined) {
+			if (!(dynamicOffsets instanceof Uint32Array) || dynamicOffsetsDataLength === undefined) {
+				throw new TypeError("Dynamic offset ranges require a Uint32Array and length");
+			}
+			const start = dynamicOffsetsDataStart;
+			const length = dynamicOffsetsDataLength;
+			if (!Number.isInteger(start) || !Number.isInteger(length) ||
+				start < 0 || length < 0 || start + length > dynamicOffsets.length) {
+				throw new RangeError("Dynamic offset range is out of bounds");
+			}
+			offsets = dynamicOffsets.subarray(start, start + length);
+		} else {
+			offsets = Uint32Array.from(dynamicOffsets);
+		}
+		WGPUNative.symbols.wgpuRenderBundleEncoderSetBindGroup(
+			this.ptr, index, bindGroup?.ptr ?? 0, BigInt(offsets.length), ptrOrNull(offsets),
+		);
+		void offsets;
+	}
+	setVertexBuffer(slot: number, buffer: GPUBuffer | null | undefined, offset = 0, size?: number) {
+		this._assertLive();
+		if (buffer && !buffer.ptr) throw new Error("WebGPU buffer has been destroyed");
+		WGPUNative.symbols.wgpuRenderBundleEncoderSetVertexBuffer(
+			this.ptr, slot, buffer?.ptr ?? 0, BigInt(offset),
+			BigInt(size ?? (buffer ? buffer.size - offset : 0)),
+		);
+	}
+	setIndexBuffer(buffer: GPUBuffer, indexFormat: string, offset = 0, size?: number) {
+		this._assertLive();
+		if (!buffer.ptr) throw new Error("WebGPU buffer has been destroyed");
+		const format = mapIndexFormat(indexFormat);
+		if (!format) throw new TypeError(`Unknown WebGPU index format: ${indexFormat}`);
+		WGPUNative.symbols.wgpuRenderBundleEncoderSetIndexBuffer(
+			this.ptr, buffer.ptr, format, BigInt(offset), BigInt(size ?? buffer.size - offset),
+		);
+	}
+	draw(vertexCount: number, instanceCount = 1, firstVertex = 0, firstInstance = 0) {
+		this._assertLive();
+		WGPUNative.symbols.wgpuRenderBundleEncoderDraw(
+			this.ptr, vertexCount, instanceCount, firstVertex, firstInstance,
+		);
+	}
+	drawIndexed(indexCount: number, instanceCount = 1, firstIndex = 0, baseVertex = 0, firstInstance = 0) {
+		this._assertLive();
+		WGPUNative.symbols.wgpuRenderBundleEncoderDrawIndexed(
+			this.ptr, indexCount, instanceCount, firstIndex, baseVertex, firstInstance,
+		);
+	}
+	drawIndirect(indirectBuffer: GPUBuffer, indirectOffset: number) {
+		this._assertLive();
+		if (!indirectBuffer.ptr) throw new Error("WebGPU buffer has been destroyed");
+		WGPUNative.symbols.wgpuRenderBundleEncoderDrawIndirect(this.ptr, indirectBuffer.ptr, BigInt(indirectOffset));
+	}
+	drawIndexedIndirect(indirectBuffer: GPUBuffer, indirectOffset: number) {
+		this._assertLive();
+		if (!indirectBuffer.ptr) throw new Error("WebGPU buffer has been destroyed");
+		WGPUNative.symbols.wgpuRenderBundleEncoderDrawIndexedIndirect(this.ptr, indirectBuffer.ptr, BigInt(indirectOffset));
+	}
+	insertDebugMarker(markerLabel: string) {
+		this._assertLive();
+		setBundleString(WGPUNative.symbols.wgpuRenderBundleEncoderInsertDebugMarker, this.ptr, markerLabel);
+	}
+	pushDebugGroup(groupLabel: string) {
+		this._assertLive();
+		setBundleString(WGPUNative.symbols.wgpuRenderBundleEncoderPushDebugGroup, this.ptr, groupLabel);
+	}
+	popDebugGroup() {
+		this._assertLive();
+		WGPUNative.symbols.wgpuRenderBundleEncoderPopDebugGroup(this.ptr);
+	}
+	finish(descriptor: { label?: string } = {}) {
+		this._assertLive();
+		const label = makeStringView(descriptor.label ?? "");
+		const buffer = new ArrayBuffer(24);
+		const view = new DataView(buffer);
+		writePtr(view, 8, label.ptr);
+		writeU64(view, 16, label.len);
+		const encoderPtr = this.ptr;
+		this.ptr = 0;
+		renderBundleEncoderFinalizer.unregister(this);
+		let bundlePtr = 0;
+		try {
+			bundlePtr = Number(WGPUNative.symbols.wgpuRenderBundleEncoderFinish(encoderPtr, ptr(buffer)));
+		} finally {
+			WGPUNative.symbols.wgpuRenderBundleEncoderRelease(encoderPtr);
+		}
+		void label.cstr;
+		void buffer;
+		if (!bundlePtr) throw new Error("Failed to finish WebGPU render bundle encoder");
+		return new GPURenderBundle(bundlePtr, descriptor.label ?? "");
+	}
+	/** Discard an unfinished recording without creating a bundle. */
+	release() {
+		if (!this.ptr) return;
+		const encoderPtr = this.ptr;
+		this.ptr = 0;
+		renderBundleEncoderFinalizer.unregister(this);
+		WGPUNative.symbols.wgpuRenderBundleEncoderRelease(encoderPtr);
+	}
+}
+
 class GPURenderPassEncoder {
 	ptr: number;
 	constructor(ptr: number) {
@@ -2252,6 +2566,23 @@ class GPURenderPassEncoder {
 	private _assertLive() {
 		if (!this.ptr) throw new Error("WebGPU render pass has ended");
 	}
+	executeBundles(bundles: Iterable<GPURenderBundle>) {
+		this._assertLive();
+		const handles = BigUint64Array.from(bundles, (bundle) => {
+			if (!(bundle instanceof GPURenderBundle)) {
+				throw new TypeError("Expected a native GPURenderBundle");
+			}
+			if (!bundle.ptr) throw new Error("WebGPU render bundle has been released");
+			return BigInt(bundle.ptr);
+		});
+		WGPUNative.symbols.wgpuRenderPassEncoderExecuteBundles(
+			this.ptr,
+			BigInt(handles.length),
+			ptrOrNull(handles),
+		);
+		void handles;
+	}
+
 	setPipeline(pipeline: GPURenderPipeline) {
 		this._assertLive();
 		if (!pipeline.ptr) throw new Error("WebGPU render pipeline has been released");
@@ -3547,6 +3878,37 @@ const webgpu = {
 		nav.gpu = webgpu.navigator;
 		(globalThis as any).navigator = nav;
 		(globalThis as any).GPUCanvasContext = GPUCanvasContext;
+		Object.assign(globalThis, {
+			GPUBufferUsage: {
+				MAP_READ: Number(WGPUBufferUsage_MapRead),
+				MAP_WRITE: Number(WGPUBufferUsage_MapWrite),
+				COPY_SRC: Number(WGPUBufferUsage_CopySrc),
+				COPY_DST: Number(WGPUBufferUsage_CopyDst),
+				INDEX: Number(WGPUBufferUsage_Index),
+				VERTEX: Number(WGPUBufferUsage_Vertex),
+				UNIFORM: Number(WGPUBufferUsage_Uniform),
+				STORAGE: Number(WGPUBufferUsage_Storage),
+				INDIRECT: Number(WGPUBufferUsage_Indirect),
+				QUERY_RESOLVE: Number(WGPUBufferUsage_QueryResolve),
+			},
+			GPUTextureUsage: {
+				COPY_SRC: Number(WGPUTextureUsage_CopySrc),
+				COPY_DST: Number(WGPUTextureUsage_CopyDst),
+				TEXTURE_BINDING: Number(WGPUTextureUsage_TextureBinding),
+				STORAGE_BINDING: Number(WGPUTextureUsage_StorageBinding),
+				RENDER_ATTACHMENT: Number(WGPUTextureUsage_RenderAttachment),
+			},
+			GPUShaderStage: {
+				VERTEX: WGPUShaderStage_Vertex,
+				FRAGMENT: WGPUShaderStage_Fragment,
+				COMPUTE: WGPUShaderStage_Compute,
+			},
+			GPUMapMode: {
+				READ: Number(WGPUMapMode_Read),
+				WRITE: Number(WGPUMapMode_Write),
+			},
+			GPUColorWrite: { RED: 1, GREEN: 2, BLUE: 4, ALPHA: 8, ALL: 15 },
+		});
 	},
 };
 
@@ -3569,6 +3931,8 @@ export {
 	GPUCommandEncoder,
 	GPUCommandBuffer,
 	GPURenderPassEncoder,
+	GPURenderBundleEncoder,
+	GPURenderBundle,
 	createCanvasShim,
 	decodePngRGBA,
 };
