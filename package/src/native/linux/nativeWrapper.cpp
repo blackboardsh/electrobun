@@ -6501,9 +6501,14 @@ void initializeGTK() {
             // callbacks. OSR's state mutex closes the parent/paint race.
             ensureXlibThreadSupport();
 
-            // Force X11 backend on Wayland systems
-            setenv("GDK_BACKEND", "x11", 1);
-            
+            // CEF renders through X11 (--ozone-platform=x11), so its windows
+            // need GDK's X11 backend, on Wayland through XWayland. WebKitGTK
+            // windows are plain GTK windows: leave GDK_BACKEND to the user,
+            // and GTK opens Wayland when WAYLAND_DISPLAY is set, X11 if not.
+            if (isCEFAvailable()) {
+                setenv("GDK_BACKEND", "x11", 1);
+            }
+
             // Disable setlocale before gtk_init to prevent CEF conflicts
             gtk_disable_setlocale();
             gtk_init(nullptr, nullptr);
@@ -7296,8 +7301,6 @@ void runGTKEventLoop() {
     // Initialize GTK on the main thread (this MUST be done here)
     initializeGTK();
     printf("=== ELECTROBUN NATIVE WRAPPER VERSION 1.0.2 === GTK EVENT LOOP STARTED ===\n");
-
-    // Note: GDK_BACKEND=x11 forced for Wayland compatibility
 
     gtk_main();
     g_shutdownComplete.store(true);
@@ -12379,9 +12382,9 @@ ELECTROBUN_EXPORT bool captureScreenRegion(
 
         GdkDisplay* display = gdk_display_get_default();
         if (!display || !GDK_IS_X11_DISPLAY(display)) {
-            // GTK is intentionally initialized with GDK_BACKEND=x11. Do not
-            // pretend capture succeeded if that contract ever changes (for
-            // example, on a native Wayland backend without portal capture).
+            // A native Wayland display has no root window to read, and the
+            // portal capture above didn't apply: don't pretend capture
+            // succeeded.
             return false;
         }
 
