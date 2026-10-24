@@ -1,0 +1,8 @@
+{
+	"name": "electrobun-bun-ui",
+	"version": "1.0.0",
+	"description": "Electrobun UI starter: HTML/CSS + JSX on the GPU from a Bun main process, no webview",
+	"devDependencies": {
+		"@types/bun": "latest"
+	}
+}

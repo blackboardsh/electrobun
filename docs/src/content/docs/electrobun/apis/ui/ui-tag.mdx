@@ -1,18 +1,19 @@
 ---
 title: "UI Tag (<electrobun-ui>)"
-description: "Layer reactive native UI over web content with the <electrobun-ui> custom element."
+description: "Layer Electrobun UI over web content with the <electrobun-ui> custom element."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Warren is experimental and its APIs may change between releases.
+Electrobun UI is experimental and macOS-only today. APIs may change between
+releases.
 </Aside>
 
-`<electrobun-ui>` puts a GPU-rendered, reactive UI layer *on top of* web
+`<electrobun-ui>` puts a GPU-rendered Electrobun UI layer *on top of* web
 content. The custom element is only an anchor: it reserves space in the page,
 Electrobun's native compositor places a Dawn view over it (exactly like
 [`<electrobun-wgpu>`](/electrobun/apis/browser/electrobun-wgpu-tag/)), and
-the trusted main process renders a UI tree into that view.
+the trusted main process renders a UI into that view.
 
 Use it when a webview-based app needs chrome the page shouldn't own —
 overlays, HUDs, privileged controls — without giving the page access to them.
@@ -32,31 +33,43 @@ attribute selects which registered UI root mounts here.
 ```tsx
 import { live, signal, registerUIRoot } from "electrobun/main/ui";
 
-const registration = registerUIRoot("inspector", { background: "#1b1b28" }, () => {
-  const [clicks, setClicks] = signal(0);
-  return (
-    <column grow={1} pad={12} gap={8} justify="center" align="center">
-      <text size={18} color="#e4e4f0">{live(() => `clicks: ${clicks()}`)}</text>
-      <box pad={8} radius={6} bg="#232336" onClick={() => setClicks((c) => c + 1)}>
-        <text size={12} color="#e4e4f0">Click me</text>
-      </box>
-    </column>
-  );
-});
+const registration = registerUIRoot(
+  "inspector",
+  {
+    background: "#1b1b28",
+    css: `body { margin: 0; height: 100vh; display: grid; place-items: center;
+                 color: #e4e4f0; font: 13px system-ui }`,
+    components: true,
+  },
+  () => {
+    const [clicks, setClicks] = signal(0);
+    return (
+      <div class="eb-col" style="align-items: center">
+        <div>{live(() => `clicks: ${clicks()}`)}</div>
+        <button class="eb-btn" onClick={() => setClicks((c) => c + 1)}>Click me</button>
+      </div>
+    );
+  },
+);
 
 // later: registration.dispose()
 ```
 
+`registerUIRoot(name, options, app)` takes the same options as
+[`createUIView`](/electrobun/apis/ui/overview/#createuiview) (`css`,
+`components`, `dark`, `background`). Without a `background` the layer is
+transparent and the web page shows through wherever your UI doesn't paint.
+
 Every `<electrobun-ui name="inspector">` instance — across webviews and
-windows — gets its own tree (the builder runs per mount). When the element is
-removed from the DOM, its native view and reactive scope are disposed.
+windows — gets its own UI (the app function runs per mount). When the element
+is removed from the page, its native view and reactive scope are disposed.
+`registration.dispose()` stops accepting new mounts and disposes the live ones.
 
 ## Notes
 
-- The UI tree runs in the **main process** with full privileges; the page
-  can position the anchor but cannot reach into the overlay.
-- Pointer input works over the overlay; keyboard events go to the host
-  window, so window-level `onKey` handlers apply.
-- Under the hood this is [`createUIView`](/electrobun/apis/ui/overview/#createuiview)
-  mounted into the tag's `WGPUView` — you can use that API directly for
-  views you create yourself.
+- The UI runs in the **main process** with full privileges; the page can
+  position the anchor but cannot reach into the overlay.
+- Under the hood this is
+  [`createUIView`](/electrobun/apis/ui/overview/#createuiview) mounted into
+  the tag's `WGPUView` — you can use that API directly for views you create
+  yourself.

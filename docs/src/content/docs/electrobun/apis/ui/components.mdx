@@ -1,239 +1,234 @@
 ---
 title: "UI Components"
-description: "Every Electrobun UI element and its props."
+description: "The eb-* component stylesheet: buttons, forms, cards, navigation, menus, dialogs, and more in plain CSS."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Electrobun UI is experimental and its APIs may change between releases.
+Electrobun UI is experimental. Class names and tokens may change between
+releases.
 </Aside>
 
-This page documents the **GPU renderer's** element vocabulary
-(`electrobun/main/ui`). The [DOM renderer](/electrobun/apis/ui/browser-dom/)
-(`electrobun/browser/ui`) shares the same reactivity and control flow but
-speaks HTML — any tag works there.
-
-In JSX, elements are the intrinsics `<box>`, `<row>`, `<column>`, `<text>`,
-and `<spacer>`; everything else here (`each`, `dynamic`, `textInput`,
-`webview`, `wgpuSurface`) is a builder function used inside a JSX
-builder-escape child: `{() => ui.each(...)}`. The same functions are also a
-complete JSX-free API for plain `.ts` files — see
-[What the JSX becomes](/electrobun/guides/electrobun-ui/#what-the-jsx-becomes).
+Electrobun UI ships a small design system as one plain CSS file. There are no
+component functions to import: components are HTML elements with `eb-*`
+classes, so they work with any markup, any framework, and identically in a
+webview. Enable it with `components: true`:
 
 ```tsx
-import { live, ui, textInput, webview, wgpuSurface, onKey } from "electrobun/main/ui";
+createUIWindow({ title: "App", components: true }, () => <App />);
+// or: createUI(win, { components: true })
 ```
 
-Any prop typed `Reactive<T>` accepts a plain value or a `live()` scope:
-`bg={live(() => hover() ? "#232336" : "#1b1b28")}` re-runs only when its
-dependencies change and updates only that property. Bare functions in value
-positions throw — so `live(` is a complete, greppable index of a component's
-reactivity. Event handlers and builder-escape children stay plain functions.
-Control-flow components (`<Show>`, `<For>`, `<Switch>`/`<Match>`) follow the
-same rule: a `live()` prop reconciles; a plain value is a frozen snapshot.
+Wrap your app in `class="eb-app"` to get the base font, colors, and
+`box-sizing: border-box`.
 
-## ui.box(props, children?)
+## Theming
 
-The universal building block: a flex container, an optionally painted
-rectangle, and an input target.
+Everything is driven by `--eb-*` custom properties on `:root`. Override any of
+them in your own CSS:
 
-**Layout props**
+| Token | Purpose |
+| --- | --- |
+| `--eb-bg`, `--eb-surface`, `--eb-card` | Backgrounds |
+| `--eb-fg`, `--eb-muted`, `--eb-subtle` | Text colors |
+| `--eb-border`, `--eb-input` | Borders and input outlines |
+| `--eb-primary`, `--eb-primary-hover`, `--eb-primary-fg` | Primary actions |
+| `--eb-secondary`, `--eb-secondary-hover`, `--eb-accent`, `--eb-accent-fg` | Secondary surfaces, selection |
+| `--eb-danger`, `--eb-success`, `--eb-warning` (+ `-bg`) | Status colors |
+| `--eb-ring` | Focus ring |
+| `--eb-radius`, `--eb-radius-lg` | Corner radii |
+| `--eb-shadow-sm`, `--eb-shadow`, `--eb-shadow-lg` | Elevation |
+| `--eb-font`, `--eb-mono` | Font stacks |
 
-| Prop | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `dir` | `"row" \| "column"` | `"row"` | Main axis. |
-| `gap` | `Reactive<number>` | `0` | Space between children. |
-| `pad` | `Reactive<number>` | `0` | Uniform padding. |
-| `width`, `height` | `Reactive<number>` | auto | Fixed size; auto sizes to content. |
-| `grow` | `Reactive<number>` | `0` | Share of leftover main-axis space. |
-| `justify` | `"start" \| "center" \| "end" \| "between"` | `"start"` | Main-axis distribution. |
-| `align` | `"start" \| "center" \| "end" \| "stretch"` | `"stretch"` | Cross-axis placement. Stretch fills auto-sized, non-text children (flexbox rule). |
-| `overflow` | `"visible" \| "scroll"` | `"visible"` | `"scroll"` clips children and offsets them by `scroll` on the main axis. |
-| `scroll` | `Reactive<number>` | `0` | Scroll offset for `overflow: "scroll"` boxes. |
-
-**Paint props**
-
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `bg` | `Reactive<string \| number>` | Background color; alpha 0 paints nothing. |
-| `radius` | `Reactive<number>` | Corner radius (SDF, antialiased). |
-| `border` | `Reactive<number>` | Border width. |
-| `borderColor` | `Reactive<string \| number>` | Border color. |
-
-**Interaction props**
-
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `onClick`, `onPointerDown`, `onPointerUp`, `onPointerEnter`, `onPointerLeave` | `(e: PointerEventInfo) => void` | Pointer handlers; any handler makes the node hittable. |
-| `onKeyDown` | `(e: KeyEventInfo) => boolean \| void` | Receives keys while this node (or a descendant) is focused; return `true` to stop bubbling. |
-| `focusable` | `boolean` | Click-to-focus target; participates in focused key routing. |
-| `windowDrag` | `boolean` | Dragging this node moves the host window; a still click delivers `onClick`. |
-
-## ui.row / ui.column
-
-`ui.box` with `dir` preset. `ui.column({ pad: 16 }, () => { ... })`.
-
-## ui.text(content, props?)
-
-Single-line text. `content` is `Reactive<string | number>`.
-
-| Prop | Type | Default | Purpose |
-| --- | --- | --- | --- |
-| `size` | `Reactive<number>` | `14` | Glyph height in points. |
-| `color` | `Reactive<string \| number>` | white | Text color. |
-
-Text measures its intrinsic size; there is no wrapping or truncation yet, so
-size strings to their containers.
-
-## ui.spacer(grow?)
-
-Flexible (default `grow: 1`) or weighted empty space on the main axis.
-`ui.row({}, () => { left(); ui.spacer(); right(); })` right-aligns `right()`.
-
-## ui.dynamic(props, builder)
-
-A reactive region: `builder` re-runs — and the subtree rebuilds — whenever a
-signal it reads changes. Props are `ui.box` props. Use it for conditionals
-and small lists; prefer `ui.each` for keyed lists.
-
-```tsx
-<column>
-  {() =>
-    ui.dynamic({}, () => {
-      if (!loggedIn()) ui.text("Sign in");
-      else ui.text("Welcome back");
-    })
-  }
-</column>
+```css
+:root { --eb-primary: #e11d48; --eb-primary-hover: #be123c; --eb-radius: 6px; }
 ```
 
-## ui.each(props, items, key, render)
+Dark tokens apply under `prefers-color-scheme: dark` (set with the `dark`
+option or `ui.setDark()`), or force a scheme on any subtree with
+`class="eb-dark"` / `class="eb-light"`.
 
-Keyed list reconciliation. Rows are diffed by key: unchanged rows keep their
-subtree (and any per-row state) across filters and reorders; removed rows are
-disposed with their reactive scope.
+## Buttons
 
-```tsx
-<column grow={1}>
-  {() =>
-    ui.each(
-      { dir: "column", gap: 4 },
-      () => state.todos,          // Accessor<readonly T[]>
-      (todo) => todo.id,          // stable key
-      (todo, index) => {          // index is a reactive accessor
-        ui.row({ pad: 8, bg: live(() => (index() % 2 ? "#16161e" : "#1b1b28")) }, () => {
-          ui.text(todo.title);
-        });
-      },
-    )
-  }
-</column>
+```html
+<button class="eb-btn">Save</button>
+<button class="eb-btn secondary">Cancel</button>
+<button class="eb-btn outline">Outline</button>
+<button class="eb-btn ghost">Ghost</button>
+<button class="eb-btn danger">Delete</button>
+<button class="eb-btn link">Learn more</button>
+<button class="eb-btn sm">Small</button>
+<button class="eb-btn lg">Large</button>
+<button class="eb-btn icon" aria-label="Close">✕</button>
 ```
 
-## ui.anchor(props)
+## Form controls
 
-A layout-only rectangle that paints nothing and reports its computed frame —
-the primitive that native layers build on.
+```html
+<label class="eb-field">
+  <span class="eb-label">Email</span>
+  <input class="eb-input" type="email" placeholder="ada@example.com">
+  <span class="eb-hint">We never share it.</span>
+</label>
 
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
-| `onFrame` | `(rect: { x, y, width, height }) => void` | Called whenever layout moves or resizes the anchor. |
+<select class="eb-select"><option>Free</option><option>Pro</option></select>
+<textarea class="eb-textarea"></textarea>
 
-## wgpuSurface(props)
+<label class="eb-check-row"><input class="eb-checkbox" type="checkbox"> I agree</label>
+<label class="eb-check-row"><input class="eb-radio" type="radio" name="r"> Monthly</label>
 
-A real Dawn [`WGPUView`](/electrobun/apis/webgpu/) positioned by the layout —
-the UIWindow equivalent of the
-[`<electrobun-wgpu>` tag](/electrobun/apis/browser/electrobun-wgpu-tag/). The
-view is created lazily on first layout and removed with its reactive scope.
+<!-- switch: an input and an empty span inside the label -->
+<label class="eb-switch"><input type="checkbox"><span></span></label>
 
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
-| `transparent` | `boolean` | Start the native view transparent. |
-| `onReady` | `(view: WGPUView) => void` | Called once, after first layout. Render into the view with the [WebGPU adapter](/electrobun/apis/webgpu/). |
-| `onFrame` | `(view, rect) => void` | Called on every subsequent layout move/resize. |
-
-## webview(props)
-
-An out-of-process webview positioned by the layout — the UIWindow equivalent
-of the [`<electrobun-webview>` tag](/electrobun/apis/browser/electrobun-webview-tag/).
-Created lazily on first layout, removed with its scope.
-
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `url` | `string` | Remote or `views://` URL. |
-| `html` | `string` | Inline HTML instead of `url`. |
-| `width`, `height`, `grow` | `Reactive<number>` | Layout sizing. |
-| `partition` | `string` | Session partition (see [BrowserView](/electrobun/apis/browser-view/)). |
-| `sandbox` | `boolean` | Sandboxed (events-only) webview. |
-| `onReady` | `(view: BrowserView) => void` | The created `BrowserView` — use it for RPC, navigation, etc. |
-
-## textInput(props)
-
-A controlled single-line text input: focus ring, caret with blink, editing
-(insert, backspace, word/line navigation via alt/cmd), placeholder, submit.
-
-```tsx
-const [query, setQuery] = createSignal("");
-
-<column pad={10}>
-  {() =>
-    textInput({
-      value: query,
-      onInput: setQuery,
-      onSubmit: (value) => run(value),
-      placeholder: "Search...",
-      autofocus: true,
-    })
-  }
-</column>
+<input class="eb-slider" type="range" min="0" max="100">
 ```
 
-| Prop | Type | Purpose |
-| --- | --- | --- |
-| `value` | `() => string` | Controlled value accessor. |
-| `onInput` | `(next: string) => void` | Called with each edit. |
-| `onSubmit` | `(value: string) => void` | Enter. |
-| `placeholder` | `string` | Shown while empty. |
-| `autofocus` | `boolean` | Focus on mount. |
-| `size` | `number` | Font size (default 14). |
-| `grow`, `width`, `pad`, `radius`, `bg`, `border`, `borderColor` | `Reactive<...>` | Container styling. |
-| `focusBorderColor` | `Reactive<string \| number>` | Border while focused. |
-| `color`, `placeholderColor`, `caretColor` | `string` | Text/caret colors. |
+## Surfaces
 
-Unhandled keys (arrows up/down, Escape) bubble to window-level `onKey`
-handlers — which is how list navigation under an input works.
+```html
+<div class="eb-card">
+  <div class="eb-card-header">
+    <h3 class="eb-card-title">Card</h3>
+    <p class="eb-card-desc">A short description.</p>
+  </div>
+  <div class="eb-card-body">Content</div>
+  <div class="eb-card-footer"><button class="eb-btn">OK</button></div>
+</div>
 
-## Control flow: Show, For, Switch/Match
-
-```tsx
-<Show when={live(() => state.threads.length > 0)} fallback={<text>empty</text>}>
-  <For each={live(() => state.threads)}>
-    {(thread) => <text size={12}>{thread.subject}</text>}
-  </For>
-</Show>
+<div class="eb-panel">Inset panel</div>
+<hr class="eb-separator">
 ```
 
-Both forms are valid on every control-flow prop: `when={live(...)}` /
-`each={live(...)}` reconcile on change, while a plain value —
-`<For each={state.threads}>` — renders a frozen snapshot once and never
-updates. `<For>` accepts `key={(item) => id}` (defaults to item identity) and
-`fallback`; `<Switch fallback={...}>` picks the first `<Match when={...}>`
-whose condition is truthy.
+## Badges, avatars, keys
 
-## Window-level keyboard: onKey(handler)
+```html
+<span class="eb-badge">Default</span>
+<span class="eb-badge primary">New</span>
+<span class="eb-badge success">Done</span>
+<span class="eb-badge warning">Pending</span>
+<span class="eb-badge danger">Failed</span>
+<span class="eb-badge outline">Draft</span>
 
-```ts docs=syntax
-import { onKey, Key, Mod } from "electrobun/main/ui";
+<div class="eb-avatar-group">
+  <div class="eb-avatar">AL</div>
+  <div class="eb-avatar sm">GH</div>
+  <div class="eb-avatar lg"><img src="data:image/png;base64,..." alt="Ada"></div>
+</div>
 
-onKey((e) => {
-  if (e.keyCode === Key.Escape) close();
-  if (e.modifiers & Mod.Cmd && charForKey(e.keyCode, 0) === "c") copy();
-});
+<kbd class="eb-kbd">⌘K</kbd>
 ```
 
-`Key` (Return, Tab, Space, Backspace, Escape, arrows) and `Mod` (Shift, Ctrl,
-Alt, Cmd) are exported constants; `charForKey(keyCode, modifiers)` maps key
-codes to characters (US layout), and `applyEditKey` is the pure text-editing
-reducer `textInput` uses — both usable for custom widgets.
+## Feedback
+
+```html
+<div class="eb-alert success">
+  <div><div class="eb-alert-title">Saved</div>Your changes are live.</div>
+</div>
+<div class="eb-progress"><div style="width: 40%"></div></div>
+<div class="eb-spinner"></div>
+<div class="eb-skeleton" style="height: 14px; width: 120px"></div>
+
+<div class="eb-toasts">
+  <div class="eb-toast">Copied to clipboard</div>
+</div>
+```
+
+`.eb-alert` also has `warning` and `danger` variants. `.eb-toast` animates in
+when added; render toasts into `.eb-toasts` with a keyed `<For>`.
+
+## Navigation
+
+```html
+<div class="eb-tabs" role="tablist">
+  <button class="eb-tab" aria-selected="true">General</button>
+  <button class="eb-tab">Advanced</button>
+</div>
+
+<div class="eb-underline-tabs">
+  <button class="eb-tab active">Overview</button>
+  <button class="eb-tab">Activity</button>
+</div>
+
+<nav class="eb-nav">
+  <button class="eb-nav-item" aria-current="page">Inbox</button>
+  <button class="eb-nav-item">Archive</button>
+</nav>
+
+<div class="eb-breadcrumb"><span>Home</span><span>/</span><span>Settings</span></div>
+```
+
+The selected tab is `aria-selected="true"` or `.active`; the current nav item
+is `aria-current="page"` or `.active`.
+
+## Menus, popovers, tooltips
+
+```html
+<div class="eb-menu">
+  <div class="eb-menu-label">File</div>
+  <div class="eb-menu-item">New <kbd class="eb-kbd">⌘N</kbd></div>
+  <div class="eb-menu-item danger">Delete</div>
+</div>
+
+<div class="eb-tooltip-host">
+  <button class="eb-btn outline">Hover me</button>
+  <div class="eb-tooltip">Tooltips are pure CSS :hover</div>
+</div>
+```
+
+`.eb-popover` is an absolutely positioned wrapper whose child pops in; put it
+inside a `position: relative` parent and show it with `<Show>`.
+
+## Dialogs
+
+```html
+<div class="eb-overlay">
+  <div class="eb-dialog" role="dialog">
+    <div class="eb-dialog-header">
+      <h2 class="eb-dialog-title">Delete file?</h2>
+      <p class="eb-dialog-desc">This can't be undone.</p>
+    </div>
+    <div class="eb-dialog-body">...</div>
+    <div class="eb-dialog-footer">
+      <button class="eb-btn outline">Cancel</button>
+      <button class="eb-btn danger">Delete</button>
+    </div>
+  </div>
+</div>
+```
+
+The overlay blurs what's behind it with `backdrop-filter`. Render it inside a
+`<Show>` (optionally in a `<Portal>`) to open and close it.
+
+## Disclosure
+
+```html
+<div class="eb-accordion">
+  <details open><summary>What is it?</summary><div>A GPU-rendered UI.</div></details>
+  <details><summary>Does it need a webview?</summary><div>No.</div></details>
+</div>
+```
+
+## Data
+
+```html
+<div class="eb-table">
+  <div class="eb-tr head"><div class="eb-td">Name</div><div class="eb-td">Status</div></div>
+  <div class="eb-tr"><div class="eb-td">build.zig</div><div class="eb-td">ok</div></div>
+</div>
+
+<div class="eb-list">
+  <div class="eb-list-item">First</div>
+  <div class="eb-list-item">Second</div>
+</div>
+```
+
+## Layout helpers
+
+| Class | Effect |
+| --- | --- |
+| `eb-row` | Horizontal flex, centered, 8px gap |
+| `eb-col` | Vertical flex, 8px gap |
+| `eb-grow` | `flex: 1; min-width: 0` |
+| `eb-scroll` | `overflow: auto` |
+| `eb-muted` | Muted text color |
+| `eb-title` | Large page title |

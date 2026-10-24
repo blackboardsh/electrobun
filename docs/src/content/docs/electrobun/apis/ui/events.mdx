@@ -1,0 +1,95 @@
+---
+title: "Events & Input"
+description: "Pointer, keyboard, focus, text editing, and accessibility in Electrobun UI."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and macOS-only today.
+</Aside>
+
+Input is handled natively by the UI engine: it hit-tests, updates `:hover` /
+`:active` / `:focus` styles, edits text, scrolls, toggles checkboxes, and
+opens `<select>` popups on its own. Your handlers then receive DOM-style
+events.
+
+## Listening
+
+Use `on*` props in JSX (Warren maps `onClick` to the `click` event) or
+`addEventListener` on an element:
+
+```tsx
+<input
+  value={live(name)}
+  onInput={(e) => setName(e.target.value)}
+  onKeyDown={(e) => e.key === "Enter" && submit()}
+/>
+```
+
+| Event | Notes |
+| --- | --- |
+| `pointerdown`, `pointerup`, `pointermove`, `pointerenter`, `pointerleave`, `pointerover`, `pointerout` | `mousedown`/`mouseup`/`mousemove`/... are aliases. |
+| `click`, `dblclick`, `contextmenu` | |
+| `wheel`, `scroll` | Wheel scrolls the innermost scroll container. |
+| `keydown`, `keyup` | `key` uses DOM names (`"Enter"`, `"ArrowDown"`, `"a"`). |
+| `input`, `beforeinput`, `change` | `e.target.value` is current. |
+| `focus`, `blur`, `focusin`, `focusout` | |
+| `compositionstart`, `compositionupdate`, `compositionend` | IME composition. |
+| `submit`, `toggle`, `resize` | |
+
+Event objects carry `type`, `target`, `currentTarget`, `clientX`/`clientY`
+(and `x`/`y`), `button`, `detail`, `key`, `shiftKey`/`ctrlKey`/`altKey`/`metaKey`,
+`deltaX`/`deltaY`, `data`, and `stopPropagation()`. Events bubble from the
+target through its ancestors.
+
+<Aside type="note">
+Handlers run asynchronously, after the engine has already applied its default
+behavior (typing, toggling, focus moves, scrolling). `preventDefault()` is
+recorded on the event but does not cancel built-in behavior. Make controlled
+inputs explicit instead: write the value back from your state.
+</Aside>
+
+## Keyboard and focus
+
+- **Tab** / **Shift+Tab** move focus through focusable elements in document
+  order, honoring `tabindex`. Buttons, inputs, selects, textareas, summaries,
+  and elements with `tabindex` are focusable.
+- **Enter** / **Space** activate the focused button, summary, checkbox, or
+  radio.
+- `:focus-visible` matches keyboard focus; pointer clicks focus without the
+  ring.
+- `el.focus()`, `el.blur()`, and `el.scrollIntoView()` work from JavaScript.
+
+Window-level shortcuts: listen for `keydown` on a top-level element (events
+from the focused element bubble to it), or use `GlobalShortcut` from
+`electrobun/main` for system-wide keys.
+
+## Text editing
+
+`<input>` and `<textarea>` edit natively:
+
+- caret movement with the arrow keys, Home/End, and vertical movement in
+  textareas;
+- selection with Shift and with the mouse;
+- Cmd+A, Cmd+C/X/V (system clipboard), Cmd+Z undo, Cmd+Shift+Z or Cmd+Y redo;
+- input methods (IME) with marked text, and emoji/CJK through font fallback;
+- `placeholder`, `maxlength`, `readonly`, `disabled`, and password masking.
+
+## Scrolling and dragging
+
+Elements with `overflow: auto` or `scroll` scroll with the wheel and
+trackpad. `-webkit-app-region: drag` on an element makes it drag the window —
+useful for frameless and transparent windows; mark interactive children
+`no-drag`.
+
+## Accessibility
+
+The engine builds an accessibility tree from the DOM and exposes it to
+VoiceOver through NSAccessibility. Roles come from semantics (`button`,
+links, inputs by type, headings, lists, images, `select`, `dialog`, `nav`,
+`main`, `form`, `hr`, tables) or an explicit `role` attribute. Names come from
+text content, `<label>`, `aria-label`, `alt`, or `title`;
+`aria-hidden="true"` hides a subtree, and `aria-checked`, `aria-selected`,
+and `aria-expanded` set states.
+
+`ui.accessibilityTree()` returns the tree as text for tests.

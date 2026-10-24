@@ -1,21 +1,16 @@
-# ui-wgpu — Electrobun UI
+# ui-wgpu — Electrobun UI showcase
 
-A reactive, Solid-inspired UI runtime rendered by Dawn (WebGPU) directly from
-the Cottontail main process, consumed from `electrobun/main/ui`. No webview
-for the chrome, no browser DOM, no CEF — and no compile step: plain
-TypeScript through Electrobun's bundler.
+HTML/CSS + JSX rendered by Electrobun's UI engine (`electrobun/main/ui`)
+straight to the GPU through Dawn, from the Cottontail main process. No
+webview for the app chrome and no build tooling beyond the TypeScript
+transpiler Hutch already ships.
 
-```
-signals / stores (createSignal, createStore + produce)
-        ↓  fine-grained per-prop effects
-retained UI tree (u32 ids, POD props — ABI-shaped)
-        ↓
-flex-lite layout + hit testing
-        ↓
-flat rect/glyph instance buffer
-        ↓
-one instanced draw call → Dawn surface in a GpuWindow
-```
+The right-hand column mixes in two **native layers**, positioned by the UI
+layout with `ui.anchor(element, view)`:
+
+- a `WGPUView` running a WebGPU Mandelbrot zoom (its palette follows the
+  counter signal), and
+- a `BrowserView` (an out-of-process webview).
 
 ## Run it
 
@@ -28,32 +23,29 @@ Production packaging: `hutch run build`.
 
 ## What it demonstrates
 
-- **Fine-grained reactivity without a compiler.** Any prop can be a thunk:
-  `bg: () => hover() ? "#232336" : "#1b1b28"` becomes one effect updating one
-  tree prop. `createStore` + `produce()` give Solid-style immutable-feeling
-  batch updates with path-level invalidation.
-- **Builder API that reads like markup.** `ui.column({...}, () => { ... })`;
-  components are plain functions (see `Button` in `src/main.ts`).
-- **Native layers as elements.** The right side of the demo embeds
-  `wgpuSurface` (a real Dawn view whose clear color follows the accent
-  signal) and `webview` (an out-of-process webview) — the UIWindow
-  equivalents of `<electrobun-wgpu>` and `<electrobun-webview>`, positioned
-  by the UI layout with nativeWrapper as the compositor.
-- **Invalidation-only rendering.** The frame tick polls input; layout, paint,
-  and the draw call only happen when something marked the tree dirty.
+- **Familiar authoring.** Components are plain functions returning JSX; the
+  look is a CSS string with variables, nesting, `:hover`/`:active`,
+  transitions and keyframes (see `css` in `src/main.tsx`).
+- **Fine-grained reactivity.** `signal`, `memo` and `store` from
+  `electrobun/main/ui`; `live(() => ...)` marks each reactive expression, so
+  a click updates one text node and one style — nothing re-renders.
+- **Control flow.** `<For>` (keyed) renders the event log, `<Show>` its empty
+  state.
+- **Native layers in the layout.** `ref={attach}` hands each slot element to
+  `ui.anchor`, which keeps the native view over it through layout changes,
+  window resizes and scrolling, and hides it with the element.
+- **Window-level keys.** Key events bubble to `<body>`:
+  `app.ui.body.addEventListener("keydown", ...)`.
 
-The runtime itself lives in the Electrobun SDK
-(`package/src/sdks/main/ui/`), with headless unit tests beside it and
-kitchen-sink coverage (automated + interactive, including the
-`<electrobun-ui>` overlay tag) in `kitchen/src/tests/`.
+Rendering is invalidation-driven: style, layout, paint and the draw only run
+when something changed.
 
-## Prototype limitations
+## Layout
 
-- Input is polled (cursor point + global button bitmask, edge-detected);
-  keyboard arrives via native window key events. Production work is native
-  pointer/move/button/wheel events on WGPUView.
-- Typography is a built-in 5x7 bitmap font: no shaping, wrapping, selection,
-  bidi, system fonts, or accessibility yet.
-- Layout is a flex subset: row/column, gap, padding, fixed/auto sizes, grow,
-  justify, align. No wrapping, no absolute positioning, no min/max.
-- Keyboard mapping in the demo uses macOS virtual key codes.
+```
+src/main.tsx            window, CSS, components, WebGPU scene
+electrobun.config.ts    Cottontail entrypoint, bundleWGPU (ships Dawn + the UI engine)
+tsconfig.json           jsxImportSource: electrobun/main/ui (editor/typecheck only)
+```
+
+The UI engine is macOS-only for now.

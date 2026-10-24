@@ -1,0 +1,94 @@
+/* User-agent stylesheet: the subset of browser defaults that app markup relies on. */
+html, address, blockquote, body, center, dialog, div, figure, figcaption, footer, form,
+header, hr, legend, main, p, pre, search, article, aside, h1, h2, h3, h4, h5, h6, hgroup,
+nav, section, dd, dl, dt, menu, ol, ul, fieldset, details, summary, table, thead, tbody,
+tfoot, caption, optgroup { display: block; }
+li { display: list-item; }
+tr { display: flex; }
+td, th { display: block; flex: 1 1 0; padding: 1px; }
+th { font-weight: bold; text-align: center; }
+head, script, style, template, title, meta, link, base, noscript, datalist, [hidden],
+dialog:not([open]), slot { display: none; }
+html { font-family: system-ui; font-size: 16px; line-height: normal; color: #000; }
+body { margin: 8px; }
+p, blockquote, figure, dl, ul, ol, pre, menu { margin-top: 1em; margin-bottom: 1em; }
+blockquote, figure { margin-left: 40px; margin-right: 40px; }
+dd { margin-left: 40px; }
+h1 { font-size: 2em; margin-top: .67em; margin-bottom: .67em; font-weight: bold; }
+h2 { font-size: 1.5em; margin-top: .83em; margin-bottom: .83em; font-weight: bold; }
+h3 { font-size: 1.17em; margin-top: 1em; margin-bottom: 1em; font-weight: bold; }
+h4 { margin-top: 1.33em; margin-bottom: 1.33em; font-weight: bold; }
+h5 { font-size: .83em; margin-top: 1.67em; margin-bottom: 1.67em; font-weight: bold; }
+h6 { font-size: .67em; margin-top: 2.33em; margin-bottom: 2.33em; font-weight: bold; }
+ul, ol, menu { padding-left: 40px; }
+ol { list-style-type: decimal; }
+ul ul, ol ul { list-style-type: circle; }
+ul ul ul { list-style-type: square; }
+b, strong { font-weight: bolder; }
+i, em, cite, dfn, var { font-style: italic; }
+u, ins { text-decoration: underline; }
+s, del, strike { text-decoration: line-through; }
+code, kbd, samp, pre, tt { font-family: monospace; }
+small { font-size: smaller; }
+big { font-size: larger; }
+sub { vertical-align: sub; font-size: smaller; }
+sup { vertical-align: super; font-size: smaller; }
+mark { background-color: yellow; color: black; }
+a:any-link { color: #0000ee; text-decoration: underline; cursor: pointer; }
+pre { white-space: pre; }
+hr { border-top: 1px solid #c0c0c0; margin: .5em 0; }
+img, svg, canvas, video, electrobun-webview, electrobun-wgpu { display: inline-block; }
+center { text-align: center; }
+fieldset { margin: 0 2px; padding: .35em .75em .625em; border: 2px groove #c0c0c0; }
+legend { padding: 0 2px; }
+summary { display: list-item; cursor: default; }
+details > :not(summary) { display: none; }
+details[open] > :not(summary) { display: block; }
+dialog[open] { position: fixed; left: 0; right: 0; margin: auto; padding: 1em; border: 1px solid #000; background-color: #fff; width: fit-content; }
+progress { display: inline-block; width: 10em; height: 1em; border-radius: 4px; background-color: #e5e5e5; overflow: hidden; }
+
+button, input, select, textarea {
+  font-family: system-ui; font-size: 13.333px; line-height: normal; color: #000;
+  letter-spacing: normal; text-transform: none; text-align: start;
+}
+button, select {
+  display: inline-block; padding: 1px 6px; border: 1px solid #767676; border-radius: 3px;
+  background-color: #efefef; cursor: default; text-align: center; user-select: none;
+}
+button:hover, select:hover { background-color: #e5e5e5; }
+button:active { background-color: #f5f5f5; }
+input, textarea {
+  display: inline-block; padding: 1px 2px; border: 1px solid #767676; border-radius: 2px;
+  background-color: #fff; cursor: text;
+}
+/* text inputs and textareas are width/height: auto with an intrinsic size
+   from size / cols / rows (as in browsers), so they stretch in flex and grid */
+textarea { white-space: pre-wrap; overflow: auto; font-family: monospace; }
+input[type=checkbox], input[type=radio] {
+  width: 13px; height: 13px; padding: 0; margin: 3px 3px 3px 4px; cursor: default;
+  border-radius: 2px; vertical-align: middle;
+}
+input[type=radio] { border-radius: 50%; }
+input[type=checkbox]:checked, input[type=radio]:checked { background-color: #0075ff; border-color: #0075ff; }
+input[type=range] { width: 129px; height: 16px; border: none; padding: 0; background-color: transparent; cursor: default; }
+input[type=button], input[type=submit], input[type=reset] {
+  width: auto; padding: 1px 6px; background-color: #efefef; cursor: default; text-align: center; border-radius: 3px;
+}
+input[type=hidden] { display: none; }
+::placeholder { color: #757575; }
+:disabled { color: #6d6d6d; cursor: default; }
+button:disabled { background-color: #f0f0f0; border-color: #c4c4c4; }
+:focus-visible { outline: 2px solid #005fcc; outline-offset: 1px; }
+input:focus-visible, textarea:focus-visible, select:focus-visible { outline-offset: 0; }
+
+/* <select> popup rendered by the core */
+ebui-listbox { display: block; position: fixed; z-index: 2147483647; box-sizing: border-box; max-height: 320px; overflow: auto;
+  background-color: #fff; color: #1d1d1f; border: 1px solid rgba(0,0,0,.14); border-radius: 8px; padding: 4px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.18), 0 2px 6px rgba(0,0,0,.08); font: 13px system-ui; }
+ebui-option { display: block; padding: 5px 10px 5px 24px; border-radius: 5px; white-space: nowrap; cursor: default; position: relative; }
+ebui-option[aria-selected]::before { content: "\2713"; position: absolute; left: 8px; }
+ebui-option.highlighted { background-color: #0a64d8; color: #fff; }
+ebui-option[aria-disabled] { color: #a0a0a0; }
+@media (prefers-color-scheme: dark) {
+  ebui-listbox { background-color: #2a2b30; color: #ececf0; border-color: rgba(255,255,255,.12); }
+}

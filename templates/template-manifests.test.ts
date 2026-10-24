@@ -52,6 +52,7 @@ const expectedPackageFreeTemplates = [
 	"go-maze-wgpu",
 	...odinWgpuTemplates,
 	"rust-flock-wgpu",
+	"zig-ui",
 	"zig-wgpu",
 ] as const;
 const templateNames = readdirSync(templatesRoot, { withFileTypes: true })

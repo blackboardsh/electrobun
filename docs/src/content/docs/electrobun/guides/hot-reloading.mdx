@@ -23,8 +23,8 @@ so their UI can reload independently from the main process.
 | Zig, Rust, Go, or Odin main process | `hutch electrobun dev --watch` | The native main process is rebuilt and the app is relaunched. State resets. |
 | Webview bundled by Hutch | `hutch electrobun dev --watch` | The view bundle is rebuilt and the app is relaunched. |
 | Webview served by Vite | `hutch run dev:hmr` in a Vite template | Vite applies HMR when the change is accepted, or reloads the page otherwise. The native app is not relaunched. |
-| Warren native UI (`electrobun/main/ui`) | `hutch electrobun dev --watch` | The main process and its GPU-rendered UI restart together. |
-| Warren DOM UI (`electrobun/browser/ui`) | Your webview bundler's development server | It can use the webview reload pipeline, but Electrobun does not currently provide Warren-specific state-preserving HMR. |
+| Electrobun UI (`electrobun/main/ui`) | `hutch electrobun dev --watch` | The main process and its GPU-rendered UI restart together. |
+| Warren DOM renderer (`electrobun/browser/ui`) | Your webview bundler's development server | It can use the webview reload pipeline, but Electrobun does not currently provide Warren-specific state-preserving HMR. |
 
 ## Whole-app watch mode
 
@@ -137,25 +137,25 @@ relaunches the app for those changes, but does not keep rebuilding the Vite UI.
 Production and canary builds never depend on the development server. They load
 the webview assets copied into the application bundle through `views://` URLs.
 
-## Warren UI
+## Electrobun UI and the DOM renderer
 
-[Warren](/electrobun/guides/electrobun-ui/) has two renderers with different
-reload boundaries:
+The two UI entrypoints have different reload boundaries:
 
-- `electrobun/main/ui` renders native GPU UI from the main process. Changes use
-  whole-app watch mode and reset the UI with the rest of the main process.
+- [`electrobun/main/ui`](/electrobun/guides/electrobun-ui/) renders GPU UI from
+  the main process. Changes use whole-app watch mode and reset the UI with the
+  rest of the main process.
 - [`electrobun/browser/ui`](/electrobun/apis/ui/browser-dom/) renders DOM inside
   a webview. It can be served by Vite like other browser code, but there is no
   first-party Warren HMR adapter that promises component-state preservation.
 
-The `ui-wgpu`, `ui-color-picker`, and `ui-launcher` templates demonstrate native
-Warren UI. Use `hutch run dev` in those projects for automatic rebuild and
-relaunch.
+The `bun-ui`, `zig-ui`, `ui-wgpu`, `ui-color-picker`, and `ui-launcher`
+templates demonstrate Electrobun UI. Use `hutch run dev` in those projects for
+automatic rebuild and relaunch.
 
 ## Which loop should I use?
 
 - Use **`hutch run dev`** for main-process work, native main-process languages,
-  native Warren UI, or a simple project that does not need browser HMR.
+  Electrobun UI, or a simple project that does not need browser HMR.
 - Use **`hutch run dev:hmr`** in a Vite template when most edits are in the
   webview and you want the fastest UI feedback loop.
 - Restart **`dev:hmr`** after changing main-process code or configuration.

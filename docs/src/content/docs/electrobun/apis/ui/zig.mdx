@@ -1,0 +1,165 @@
+---
+title: "Electrobun UI from Zig"
+description: "Build GPU-rendered UI in a Zig main process: Zig state, HTML templates, CSS."
+---
+import { Aside } from "@astrojs/starlight/components";
+
+<Aside type="caution" title="Experimental">
+Electrobun UI is experimental and macOS-only today. APIs may change between releases.
+</Aside>
+
+A Zig main process can use the same UI engine as TypeScript apps, compiled
+directly into your executable. State is a plain Zig struct, markup is an HTML
+template with `{bindings}`, and styling is CSS. There is no JavaScript and no
+webview, and the compiler leaves out the parts of the engine you don't use.
+
+The fastest start is the template:
+
+```bash
+hutch electrobun init my-app --template=zig-ui
+```
+
+## How it fits together
+
+The Electrobun Zig SDK ships the engine's source next to `electrobun.zig`
+(`.hutch/devkit/zig-sdk/ui/root.zig`). Your `build.zig` adds it as the
+`electrobun_ui` module and links the system frameworks it uses. The `zig-ui`
+template's `build.zig` does this; copy it as is. With `bundleWGPU: true`,
+the app bundle includes Dawn, which the engine renders through.
+
+At runtime you create a window and a full-window WGPU view with the Zig SDK,
+then mount your app into the view:
+
+```zig
+const electrobun = @import("electrobun");
+const ui = @import("electrobun_ui");
+
+var state = App{};
+
+fn run(core: *electrobun.Core, bundle_paths: *const electrobun.BundlePaths) !void {
+    const frame: electrobun.Rect = .{ .x = 0, .y = 0, .width = 640, .height = 620 };
+    const window_id = try core.createWindow(.{ .title = "Todos", .frame = frame, .centered = true });
+    const view_id = try core.createWGPUView(.{ .window_id = window_id, .frame = frame, .auto_resize = true });
+    const view = (try core.getWGPUViewPointer(view_id)) orelse return error.NoWGPUView;
+
+    var buf: [std.fs.max_path_bytes]u8 = undefined;
+    const dawn = try std.fmt.bufPrintSentinel(&buf, "{s}/libwebgpu_dawn.dylib", .{bundle_paths.exe_dir}, 0);
+
+    _ = try ui.electrobun.mountApp(App, &state, .{ .view = view, .dawn_path = dawn });
+}
+```
+
+## Writing an app
+
+An app is a struct. The engine reads it at compile time:
+
+- **`Signal(T)` fields** are reactive values (`bool`, integers, floats,
+  enums, `[]const u8`). Read with `get()` (tracked) or `peek()`, write with
+  `set()`.
+- **`List(T)` fields** are keyed lists of item structs for `each={...}`.
+  Use `append`, `insert`, `remove`, `removeItem`, `clear`, `at`, `len` and
+  `slice`. Item structs can have their own signals and methods.
+- **Plain `bool`, number, enum and `[]const u8` fields** are bound once, as
+  constants.
+- **Methods returning `void`** are event handlers: `onclick={add}`. Extra
+  parameters are filled from the call: `*ui.Event` receives the DOM event,
+  `*Item` receives a list item (from the `each` scope or an argument such as
+  `remove(t)`), and other types convert from literal arguments such as
+  `show('active')`.
+- **Methods returning a value** are computed values: `{remaining}` re-runs
+  when the signals it reads change.
+- **`pub const template`** is the markup, `pub const style` (optional) the
+  CSS, and `pub fn init` (optional) runs once after binding.
+
+```zig
+const Todo = struct {
+    title: ui.Signal([]const u8) = .init(""),
+    done: ui.Signal(bool) = .init(false),
+};
+
+const App = struct {
+    draft: ui.Signal([]const u8) = .init(""),
+    todos: ui.List(Todo) = .{},
+
+    pub fn add(self: *App) void {
+        const text = std.mem.trim(u8, self.draft.peek(), " ");
+        if (text.len == 0) return;
+        _ = self.todos.append(.{ .title = .init(text) }) catch return;
+        self.draft.set("");
+    }
+
+    pub fn remove(self: *App, t: *Todo) void {
+        self.todos.removeItem(t);
+    }
+
+    pub fn remaining(self: *App) i64 {
+        var n: i64 = 0;
+        for (self.todos.slice()) |t| {
+            if (!t.done.get()) n += 1;
+        }
+        return n;
+    }
+
+    pub const template =
+        \\<input bind:value={draft} placeholder="What needs to be done?">
+        \\<button onclick={add} disabled={draft.length == 0}>Add</button>
+        \\<ul>
+        \\  <li each={todos} as="t" class:done={t.done}>
+        \\    <input type="checkbox" bind:checked={t.done}> {t.title}
+        \\    <button onclick={remove(t)}>×</button>
+        \\  </li>
+        \\</ul>
+        \\<p>{remaining} left</p>
+    ;
+
+    pub const style =
+        \\.done { color: #888; text-decoration: line-through }
+    ;
+};
+```
+
+## Template syntax
+
+| Syntax | Meaning |
+| --- | --- |
+| `{expr}` | Text or attribute interpolation. |
+| `class:name={expr}` | Toggle a class. |
+| `style:prop={expr}` | Set one style property. |
+| `on<event>={handler}` | Call a handler (`onclick={add}`, `onclick={remove(t)}`) or run a statement (`{count++}`, `{open = !open}`). |
+| `bind:value={signal}`, `bind:checked={signal}` | Two-way binding for form controls. |
+| `if={expr}`, `else` | Conditional rendering. |
+| `each={list} as="item" index="i" key={item.id}` | Keyed list rendering. |
+
+Expressions support literals, paths (`t.title`, `draft.length`), `!`, unary
+`-`, arithmetic, comparisons, `&&`/`||` and the ternary operator.
+
+The [HTML & CSS](/electrobun/apis/ui/html-css/) and
+[components](/electrobun/apis/ui/components/) references apply unchanged.
+Pass `.components = true` to `mountApp` to add the `eb-*` stylesheet.
+
+## mountApp options
+
+| Option | Type | Default | Purpose |
+| --- | --- | --- | --- |
+| `view` | `*anyopaque` | — | The WGPU view's native pointer (`Core.getWGPUViewPointer`). |
+| `dawn_path` | `?[:0]const u8` | `null` | Path to `libwebgpu_dawn`; the bundle puts it next to the executable. |
+| `components` | `bool` | `false` | Add the built-in `eb-*` component stylesheet. |
+| `css` | `[]const []const u8` | `&.{}` | Extra stylesheets, applied after `style`. |
+| `dark` | `?bool` | `null` | Force the color scheme (`null` follows the system). |
+
+`mountApp` returns a handle with `setDark(bool)` and `destroy()`.
+
+## Threads
+
+Handlers, event listeners and rendering run on the main thread with the UI
+locked, so handlers can change state freely. To change state from another
+thread, such as after a background task finishes, take the lock:
+
+```zig
+const mounted = try ui.electrobun.mountApp(App, &state, .{ .view = view });
+
+// on a worker thread
+mounted.lock();
+defer mounted.unlock(); // schedules a frame
+state.status.set("done");
+```

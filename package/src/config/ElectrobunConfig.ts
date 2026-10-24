@@ -397,10 +397,12 @@ export interface ElectrobunConfig {
 			bundleCEF?: boolean;
 
 			/**
-			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * Bundle Dawn (WebGPU) for GPU-native rendering. Also ships the
+			 * Electrobun UI engine (electrobun/main/ui) on macOS.
 			 * @default false
 			 */
 			bundleWGPU?: boolean;
+
 
 			/**
 			 * Default renderer for webviews when not explicitly specified
@@ -460,10 +462,12 @@ export interface ElectrobunConfig {
 			bundleCEF?: boolean;
 
 			/**
-			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * Bundle Dawn (WebGPU) for GPU-native rendering. Also ships the
+			 * Electrobun UI engine (electrobun/main/ui) on macOS.
 			 * @default false
 			 */
 			bundleWGPU?: boolean;
+
 
 			/**
 			 * Default renderer for webviews when not explicitly specified
@@ -525,10 +529,12 @@ export interface ElectrobunConfig {
 			bundleCEF?: boolean;
 
 			/**
-			 * Bundle Dawn (WebGPU) for GPU-native rendering
+			 * Bundle Dawn (WebGPU) for GPU-native rendering. Also ships the
+			 * Electrobun UI engine (electrobun/main/ui) on macOS.
 			 * @default false
 			 */
 			bundleWGPU?: boolean;
+
 
 			/**
 			 * Default renderer for webviews when not explicitly specified

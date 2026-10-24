@@ -1,12 +1,17 @@
 ---
-title: "Warren Reactivity"
-description: "Warren's reactivity model: signal, store, live, memo, inert, cleanup, batch."
+title: "Reactivity"
+description: "Electrobun UI's reactivity model (Warren): signal, store, live, memo, inert, cleanup, batch, and control flow."
 ---
 import { Aside } from "@astrojs/starlight/components";
 
 <Aside type="caution" title="Experimental">
-Warren is experimental and its APIs may change between releases.
+Electrobun UI is experimental and its APIs may change between releases.
 </Aside>
+
+Electrobun UI uses Warren, Electrobun's fine-grained reactivity library. The
+same primitives are exported from `electrobun/main/ui` (GPU UI) and
+`electrobun/browser/ui` ([DOM renderer](/electrobun/apis/ui/browser-dom/)),
+so state and model code is shared between the two.
 
 Warren's reactivity has one rule: **nothing is reactive unless you can see
 why.** Component bodies, event handlers, and helpers are inert. Reactivity
@@ -48,14 +53,16 @@ function Profile() {
   });
 
   return (
-    <column>
-      <text size={11}>Since {joined}</text>            {/* renders once */}
-      <text size={18}>{live(() => state.user.name)}</text>  {/* live */}
-      <box
-        bg={live(() => (tab() === "info" ? "#232336" : "#1b1b28"))}
+    <div class="profile">
+      <small>Since {joined}</small>                   {/* renders once */}
+      <h2>{live(() => state.user.name)}</h2>           {/* live */}
+      <button
+        class={live(() => (tab() === "info" ? "eb-tab active" : "eb-tab"))}
         onClick={() => setTab("billing")}
-      />
-    </column>
+      >
+        Billing
+      </button>
+    </div>
   );
 }
 ```
@@ -76,9 +83,9 @@ live(() => {
 });
 
 // 2. JSX position — a binding. the value becomes the node or attribute.
-<text>{live(() => state.user.name)}</text>
-// In the DOM renderer a live child may also return elements — the region
-// remounts on change: <div>{live(() => open() && <Panel/>)}</div>
+<h2>{live(() => state.user.name)}</h2>
+// A live child may also return elements — the region remounts on change:
+// <div>{live(() => open() && <Panel/>)}</div>
 
 // 3. nested inside another tracked scope — redundant (that scope already
 //    tracks the dynamic extent); Warren warns and passes the value through.
@@ -163,6 +170,33 @@ Warren never catches or logs exceptions from your functions — they propagate
 untouched — but its own ambient state (batch depth, tracking stack, inert
 flag) is always restored, so a throw can't silently freeze propagation or
 leak phantom subscriptions.
+
+## Control flow
+
+`Show`, `For`, and `Switch`/`Match` are components. A `live()` prop
+reconciles on change; a plain value is a frozen snapshot.
+
+```tsx
+<>
+  <Show when={live(loggedIn)} fallback={<button onClick={login}>Sign in</button>}>
+    <Account />
+  </Show>
+
+  <For each={live(() => state.todos)} key={(t) => t.id} fallback={<p>Nothing to do.</p>}>
+    {(todo, index) => <li class={live(() => (index() === 0 ? "first" : ""))}>{todo.text}</li>}
+  </For>
+
+  <Switch>
+    <Match when={live(() => status() === "loading")}><div class="eb-spinner" /></Match>
+    <Match when={live(() => status() === "error")}><div class="eb-alert danger">Failed</div></Match>
+  </Switch>
+</>
+```
+
+`For` reconciles keyed rows: reordering moves the same elements, so focus,
+scroll position, and running transitions survive. `Portal` renders its
+children into another parent (`<body>` by default) while keeping reactive
+ownership — useful for dialogs and toasts.
 
 ## Hard errors
 

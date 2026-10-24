@@ -199,7 +199,7 @@ What exists where:
 | [Paths](/electrobun/apis/paths/) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Typed RPC (`createRPC`) | ✓ | ✓ | raw bridge ² | raw bridge ² | raw bridge ² | raw bridge ² |
 | [Updater](/electrobun/apis/updater/) | ✓ | ✓ | — | — | — | — |
-| [Warren UI](/electrobun/apis/ui/overview/) (`main/ui`) | ✓ | ✓ | — | — | — | — |
+| [Electrobun UI](/electrobun/apis/ui/overview/) (`main/ui`) ³ | ✓ | ✓ | ✓ ⁴ | — | — | — |
 | three.js / Babylon WebGPU adapters | ✓ | ✓ | — | — | — | — |
 
 ¹ Zig, Rust, and Odin create and manage tray items, but their wrappers do
@@ -208,6 +208,8 @@ them. Tray menus remain TypeScript-only everywhere.
 ² Native SDKs exchange raw JSON messages with `Electroview` in the webview
 (the request/response envelope is implemented by hand; the templates show
 the full pattern). The webview-side SDK is identical for every runtime.
+³ Electrobun UI is experimental and macOS-only today.
+⁴ Through the `zig-ui` template; see [Electrobun UI from Zig](/electrobun/apis/ui/zig/).
 
 Pages for TypeScript-only features say so at the top; everything else shows
 a tab per supported runtime.
