@@ -590,6 +590,13 @@ pub const WgpuAdapterDevice = struct {
     device: ?*anyopaque,
 };
 
+/// File name of the bundled Dawn (WebGPU) library, next to the executable.
+pub const wgpu_library_name = switch (builtin.os.tag) {
+    .windows => "webgpu_dawn.dll",
+    .macos => "libwebgpu_dawn.dylib",
+    else => "libwebgpu_dawn.so",
+};
+
 pub const WgpuNative = struct {
     lib: DynamicLibrary,
     symbols: Symbols,
@@ -606,12 +613,7 @@ pub const WgpuNative = struct {
         const bundle_paths = try resolveBundlePaths(allocator);
         defer bundle_paths.deinit(allocator);
 
-        const lib_name = switch (builtin.os.tag) {
-            .windows => "webgpu_dawn.dll",
-            .macos => "libwebgpu_dawn.dylib",
-            else => "libwebgpu_dawn.so",
-        };
-        const lib_path = try std.fs.path.join(allocator, &.{ bundle_paths.exe_dir, lib_name });
+        const lib_path = try std.fs.path.join(allocator, &.{ bundle_paths.exe_dir, wgpu_library_name });
         defer allocator.free(lib_path);
 
         var lib = try openDynamicLibrary(allocator, lib_path);

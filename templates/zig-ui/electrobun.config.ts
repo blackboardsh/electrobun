@@ -11,8 +11,16 @@ export default {
 		zig: {
 			version: "0.17.0",
 		},
-		// bundleWGPU ships Dawn and, on macOS, the Electrobun UI runtime files
+		// bundleWGPU ships Dawn and the Electrobun UI engine; no webview needed
 		mac: {
+			bundleCEF: false,
+			bundleWGPU: true,
+		},
+		linux: {
+			bundleCEF: false,
+			bundleWGPU: true,
+		},
+		win: {
 			bundleCEF: false,
 			bundleWGPU: true,
 		},

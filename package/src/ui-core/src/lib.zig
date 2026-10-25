@@ -2,5 +2,5 @@
 //! (src/capi.zig) and the Electrobun WGPU-view host (src/host/electrobun.zig).
 comptime {
     _ = @import("capi.zig");
-    if (@import("builtin").os.tag == .macos) _ = @import("host/electrobun.zig");
+    _ = @import("host/electrobun.zig");
 }

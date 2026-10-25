@@ -27,7 +27,10 @@ const Native = struct {
     requestFrame: *const fn (?*anyopaque) callconv(.c) void,
     setImeRect: *const fn (?*anyopaque, f64, f64, f64, f64) callconv(.c) void,
     getMetrics: *const fn (?*anyopaque, *f64, *f64, *f64) callconv(.c) void,
+    /// macOS: the CAMetalLayer; Windows: the HWND; Linux: the X11 window XID
     getNativeHandle: *const fn (?*anyopaque) callconv(.c) ?*anyopaque,
+    /// Linux: the Xlib Display* the view's window lives on
+    getNativeDisplay: ?*const fn (?*anyopaque) callconv(.c) ?*anyopaque,
     /// modal on macOS: returns after release, true if the window moved
     beginWindowDrag: *const fn (?*anyopaque) callconv(.c) bool,
     setCursor: *const fn ([*:0]const u8) callconv(.c) void,
@@ -59,6 +62,7 @@ fn loadNative() ?Native {
         .setImeRect = sym(@FieldType(Native, "setImeRect"), "wgpuViewSetImeRect") orelse return null,
         .getMetrics = sym(@FieldType(Native, "getMetrics"), "wgpuViewGetMetrics") orelse return null,
         .getNativeHandle = sym(@FieldType(Native, "getNativeHandle"), "wgpuViewGetNativeHandle") orelse return null,
+        .getNativeDisplay = sym(*const fn (?*anyopaque) callconv(.c) ?*anyopaque, "wgpuViewGetNativeDisplay"),
         .beginWindowDrag = sym(@FieldType(Native, "beginWindowDrag"), "wgpuViewBeginWindowDrag") orelse return null,
         .setCursor = sym(@FieldType(Native, "setCursor"), "uiSetCursor") orelse return null,
         .setA11yHandlers = sym(*const fn (?*anyopaque, ?*anyopaque, ?A11yRequestCb, ?A11yActionCb) callconv(.c) void, "wgpuViewSetAccessibilityHandlers"),
@@ -82,6 +86,7 @@ const View = struct {
     px_w: u32 = 0,
     px_h: u32 = 0,
     scale: f32 = 2,
+    alpha_mode: u32 = wgpu.alpha_mode_premultiplied,
     start: f64 = 0,
     force: bool = true,
     in_frame: bool = false,
@@ -104,6 +109,61 @@ fn viewFor(ui_id: u32) ?*View {
     return null;
 }
 
+/// The view behind a native callback's ctx, or null once it is detached.
+/// Callbacks run on the main thread and can race ebui_detach_view on the app
+/// thread (a callback already dispatched when the handlers are cleared), so
+/// every callback resolves its ctx here, under the lock, before using it.
+fn liveView(ctx: ?*anyopaque) ?*View {
+    const p = ctx orelse return null;
+    for (views.items) |v| if (@as(*anyopaque, v) == p) return v;
+    return null;
+}
+
+/// A Dawn surface for the view's native handle.
+fn createSurface(api: *wgpu.Api, instance: wgpu.Instance, n: Native, v: *anyopaque) ?wgpu.Surface {
+    const handle = n.getNativeHandle(v) orelse {
+        std.log.err("ebui: view has no native surface handle", .{});
+        return null;
+    };
+    switch (builtin.os.tag) {
+        .macos => {
+            var src = wgpu.SurfaceSourceMetalLayer{ .layer = handle };
+            return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
+        },
+        .windows => {
+            var src = wgpu.SurfaceSourceWindowsHWND{ .hinstance = GetModuleHandleW(null), .hwnd = handle };
+            return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
+        },
+        else => {
+            const getDisplay = n.getNativeDisplay orelse {
+                std.log.err("ebui: native wrapper lacks wgpuViewGetNativeDisplay", .{});
+                return null;
+            };
+            const display = getDisplay(v) orelse {
+                std.log.err("ebui: view has no X11 display", .{});
+                return null;
+            };
+            var src = wgpu.SurfaceSourceXlibWindow{ .display = display, .window = @intFromPtr(handle) };
+            return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
+        },
+    }
+}
+
+extern "kernel32" fn GetModuleHandleW(name: ?[*:0]const u16) callconv(.winapi) ?*anyopaque;
+
+/// Premultiplied alpha where the surface supports it (Metal, DirectComposition),
+/// opaque otherwise (X11/Vulkan surfaces usually offer only opaque/inherit).
+fn pickAlphaMode(api: *wgpu.Api, surface: wgpu.Surface, adapter: wgpu.Adapter) u32 {
+    var caps = wgpu.SurfaceCapabilities{};
+    if (api.surfaceGetCapabilities(surface, adapter, &caps) != wgpu.status_success) return wgpu.alpha_mode_auto;
+    defer api.surfaceCapabilitiesFreeMembers(caps);
+    const modes = if (caps.alpha_modes) |m| m[0..caps.alpha_mode_count] else &[_]u32{};
+    for ([_]u32{ wgpu.alpha_mode_premultiplied, wgpu.alpha_mode_opaque }) |want| {
+        for (modes) |m| if (m == want) return want;
+    }
+    return wgpu.alpha_mode_auto;
+}
+
 /// Attach a UI instance to an Electrobun WGPU view (AbstractView*). Call
 /// from any thread; returns false if the native wrapper or Dawn is missing.
 pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[*:0]const u8) bool {
@@ -115,10 +175,6 @@ pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[
     };
     const v = view orelse return false;
     const ui = capi.engine(ui_id) orelse return false;
-    const layer = n.getNativeHandle(v) orelse {
-        std.log.err("ebui: view has no metal layer", .{});
-        return false;
-    };
     if (dawn_api == null) {
         const api = gpa.create(wgpu.Api) catch return false;
         const path = if (dawn_path) |p| std.mem.span(p) else wgpu.defaultLibraryPath();
@@ -132,14 +188,18 @@ pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[
     }
     const api = dawn_api.?;
     const instance = dawn_instance orelse return false;
-    var src = wgpu.SurfaceSourceMetalLayer{ .layer = layer };
-    const sd = wgpu.SurfaceDescriptor{ .next = &src.chain };
-    const surface = api.instanceCreateSurface(instance, &sd) orelse return false;
-    if (dawn_ctx == null) dawn_ctx = wgpu.Context.createWithInstance(api, instance, surface) catch return false;
+    const surface = createSurface(api, instance, n, v) orelse return false;
+    if (dawn_ctx == null) {
+        dawn_ctx = wgpu.Context.createWithInstance(api, instance, surface) catch |e| {
+            std.log.err("ebui: no WebGPU device: {}", .{e});
+            return false;
+        };
+        dawn_ctx.?.logAdapter();
+    }
     const r = gpu.Renderer.init(gpa, api, dawn_ctx.?, ui.fonts, wgpu.TextureFormat.bgra8_unorm) catch return false;
     r.store = &ui.images;
     const hv = gpa.create(View) catch return false;
-    hv.* = .{ .ui_id = ui_id, .view = v, .surface = surface, .renderer = r, .start = now() };
+    hv.* = .{ .ui_id = ui_id, .view = v, .surface = surface, .renderer = r, .start = now(), .alpha_mode = pickAlphaMode(api, surface, dawn_ctx.?.adapter) };
     views.append(gpa, hv) catch return false;
     ui.ix.host = .{
         .ctx = hv,
@@ -192,7 +252,7 @@ extern "kernel32" fn QueryPerformanceFrequency(freq: *i64) callconv(.winapi) c_i
 extern "kernel32" fn QueryPerformanceCounter(count: *i64) callconv(.winapi) c_int;
 
 fn requestFrameFromCapi(ctx: ?*anyopaque) void {
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     if (hv.in_frame) return;
     if (native) |n| n.requestFrame(hv.view);
 }
@@ -208,7 +268,7 @@ fn uiOf(hv: *View) ?*ui_mod.Ui {
 fn onPointer(ctx: ?*anyopaque, kind: u32, x: f64, y: f64, a: f64, b: f64, mods_raw: u32) callconv(.c) void {
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
     const m = mods(mods_raw);
     const fx: f32 = @floatCast(x);
@@ -229,7 +289,27 @@ fn mods(raw: u32) events.Modifiers {
     return .{ .shift = raw & 1 != 0, .ctrl = raw & 2 != 0, .alt = raw & 4 != 0, .meta = raw & 8 != 0 };
 }
 
-fn namedKey(code: u32) ?[]const u8 {
+/// The DOM key name of a non-printable key, or null for printable keys.
+///
+/// Key contract: on Windows and Linux `code` is unused (0) and
+/// `charactersIgnoringModifiers` carries the DOM `key` value ("Enter",
+/// "ArrowLeft", "a", "A", ...), so each wrapper maps its own key codes once.
+/// The macOS wrapper still sends virtual key codes (TODO: move it to the same
+/// contract and drop macNamedKey).
+fn namedKey(code: u32, key: []const u8) ?[]const u8 {
+    if (builtin.os.tag == .macos) return macNamedKey(code);
+    return if (isNamedKeyValue(key)) key else null;
+}
+
+/// DOM named key values are ASCII identifiers ("Enter", "F5"); printable key
+/// values are a single character (possibly multi-byte).
+fn isNamedKeyValue(key: []const u8) bool {
+    if (key.len < 2) return false;
+    for (key) |c| if (!std.ascii.isAlphanumeric(c)) return false;
+    return std.ascii.isUpper(key[0]);
+}
+
+fn macNamedKey(code: u32) ?[]const u8 {
     return switch (code) {
         36, 76 => "Enter",
         48 => "Tab",
@@ -252,11 +332,11 @@ fn onKey(ctx: ?*anyopaque, code: u32, mods_raw: u32, down: u32, repeat: u32, cha
     _ = repeat;
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return 0;
     const ui = uiOf(hv) orelse return 0;
     const m = mods(mods_raw);
     defer if (native) |n| n.requestFrame(hv.view);
-    if (namedKey(code)) |k| {
+    if (namedKey(code, std.mem.span(raw))) |k| {
         if (down != 0) ui.ix.keyDown(k, m) else ui.ix.keyUp(k, m);
         return 1;
     }
@@ -274,7 +354,7 @@ fn onKey(ctx: ?*anyopaque, code: u32, mods_raw: u32, down: u32, repeat: u32, cha
 fn onText(ctx: ?*anyopaque, kind: u32, text: [*:0]const u8, sel: u32) callconv(.c) void {
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
     const t = std.mem.span(text);
     switch (kind) {
@@ -298,7 +378,7 @@ fn onFrame(ctx: ?*anyopaque, t: f64) callconv(.c) void {
     _ = t;
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
     const n = native orelse return;
     hv.in_frame = true;
@@ -315,7 +395,7 @@ fn onFrame(ctx: ?*anyopaque, t: f64) callconv(.c) void {
         hv.px_w = pw;
         hv.px_h = ph;
         hv.scale = @floatCast(scale);
-        api.surfaceConfigure(hv.surface, &.{ .device = dawn_ctx.?.device, .format = wgpu.TextureFormat.bgra8_unorm, .width = pw, .height = ph, .alpha_mode = wgpu.alpha_mode_premultiplied });
+        api.surfaceConfigure(hv.surface, &.{ .device = dawn_ctx.?.device, .format = wgpu.TextureFormat.bgra8_unorm, .width = pw, .height = ph, .alpha_mode = hv.alpha_mode });
         ui.resize(@floatCast(w), @floatCast(h), hv.scale);
         hv.force = true;
     }
@@ -357,7 +437,7 @@ fn pushA11y(hv: *View, ui: *ui_mod.Ui) void {
 fn onA11yRequest(ctx: ?*anyopaque) callconv(.c) void {
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
     hv.a11y_active = true;
     pushA11y(hv, ui);
@@ -366,7 +446,7 @@ fn onA11yRequest(ctx: ?*anyopaque) callconv(.c) void {
 fn onA11yAction(ctx: ?*anyopaque, node: u32, action: u32, value: [*:0]const u8) callconv(.c) void {
     capi.lock();
     defer capi.unlock();
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     const ui = uiOf(hv) orelse return;
     const act = std.enums.fromInt(a11y.Action, action) orelse return;
     a11y.perform(ui, node, act, std.mem.span(value));
@@ -453,7 +533,11 @@ fn clipboardRead(ctx: ?*anyopaque, a: std.mem.Allocator) ?[]u8 {
     _ = ctx;
     const n = native orelse return null;
     const f = n.clipboardReadText orelse return null;
+    // the wrappers return a malloc'd copy owned by the caller. On Windows the
+    // wrapper's CRT may differ from ours, so it is not freed here (TODO: a
+    // wrapper-side free export).
     const p = f() orelse return null;
+    defer if (builtin.os.tag != .windows) std.c.free(@constCast(p));
     return a.dupe(u8, std.mem.span(p)) catch null;
 }
 
@@ -467,12 +551,12 @@ fn clipboardWrite(ctx: ?*anyopaque, text: []const u8) void {
 }
 
 fn imeRect(ctx: ?*anyopaque, r: geom.Rect) void {
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return;
     if (native) |n| n.setImeRect(hv.view, r.x, r.y, r.w, r.h);
 }
 
 fn beginDrag(ctx: ?*anyopaque) bool {
-    const hv: *View = @ptrCast(@alignCast(ctx.?));
+    const hv = liveView(ctx) orelse return false;
     const n = native orelse return false;
     return n.beginWindowDrag(hv.view);
 }

@@ -21,6 +21,73 @@ Branch `agent/gpu-ui-research`. The native UI engine lives in
 - **Missing, and your job**: the native host on your OS. Nothing draws in a
   window on Windows or Linux yet.
 
+## Linux status (done on `agent/gpu-ui-research`)
+
+Linux host works in GTK windows (the default renderer); Windows is next.
+Verified on an arm64 Ubuntu 25.04 VM (GNOME Wayland, XWayland, Dawn on
+Vulkan/llvmpipe):
+
+- `bun-ui`, `zig-ui`, `ui-launcher`, `ui-color-picker`, `ui-wgpu` render and
+  take input: hover, click, wheel scroll, select popup, cursors, typing,
+  editing keys, Ctrl+A/C/V, Tab focus, Enter submit, IME composition and
+  commit (ibus XIM, Cangjie), resize, crisp at `GDK_SCALE=2`.
+- Kitchen `Native UI`: 14/14. ui-core tests: 103 pass, 2 skipped.
+
+What Windows can reuse or must know:
+
+- **Key contract (landed, platform-neutral on Windows/Linux)**: `code` is 0
+  and `charactersIgnoringModifiers` is the DOM `key` value ("Enter",
+  "ArrowLeft", "a", "A"; Ctrl/Alt ignored, Shift applied). `characters` is
+  the text the key types, empty for non-text keys. Return value as before.
+  See `namedKey()` in `host/electrobun.zig`; macOS still sends virtual key
+  codes (`macNamedKey`) until its wrapper moves to the same contract.
+- `host/electrobun.zig` is compiled on every OS now and creates the surface
+  per OS (`createSurface`): Windows uses `SurfaceSourceWindowsHWND` with
+  `wgpuViewGetNativeHandle` = HWND (untested). Linux adds an optional export
+  `wgpuViewGetNativeDisplay(view)` (the Xlib `Display*`).
+- The alpha mode comes from the surface capabilities (premultiplied if
+  offered, else opaque).
+- Callbacks resolve their ctx through `liveView()`, so a callback that races
+  `ebui_detach_view` is dropped. Still, make `wgpuViewSetUIHandlers` (and the
+  a11y handler setter) **not wait on the main thread**: the app thread calls
+  it holding the UI lock, which main-thread callbacks also take.
+- `clipboardReadText` returns a malloc'd string; the host frees it on
+  macOS/Linux but not on Windows (CRT mismatch risk). Add a wrapper-side free
+  or confirm both sides share the CRT.
+- Still Windows-only TODOs in step 1: `buildUI()` returns early on Windows;
+  Zig puts `ElectrobunUI.dll` in `zig-out/bin` (not `lib`), see
+  `copyToDist`; the devkit manifest lists no UI library for Windows yet.
+- `zig-ui` now bundles Dawn on all platforms and takes the library name from
+  the Zig SDK (`electrobun.wgpu_library_name`).
+
+Linux implementation notes (in `src/native/linux/nativeWrapper.cpp`,
+"Native UI core host"): input comes from the view's InputOnly X window via a
+global GDK filter (GTK windows) or the CEF X11 loop; frames are paced by a
+GLib timer at the monitor refresh rate; XIM on-the-spot preedit (the IM is
+opened under a UTF-8 `LC_CTYPE` because the process locale may be "C");
+window drag is modal until the 4 px threshold, then `_NET_WM_MOVERESIZE`;
+X-child WGPU views now scale their frames by the GDK window scale.
+
+Known Linux gaps, by user impact:
+
+1. A `BrowserView` anchored with `ui.anchor` is hidden: WebKitGTK draws in
+   the GTK toplevel, below the UI's X child window. Needs a hole (XShape
+   mask) in the UI view for anchored GTK views.
+2. `transparent: true` windows show black corners: the X child uses the
+   default (opaque) visual.
+3. Window drag sends `_NET_WM_MOVERESIZE` correctly but could not be
+   confirmed with XTest on mutter/XWayland; check with a real mouse.
+4. No AT-SPI accessibility yet (the engine tree and kitchen test work).
+5. Wheel uses core buttons 4-7 (48 px/notch); no XInput2 smooth scrolling.
+6. Fractional scale only via `Xft.dpi`/`GDK_DPI_SCALE` (UI zoom; not
+   verified on this VM, which hung its XWayland during that test).
+7. Candidate-window placement (XNSpotLocation) is set but unverified (the
+   VM's ibus panel is disabled). CEF windows (separate X11 path) are
+   untested.
+8. Engine (likely all platforms): in `bun-ui`, a task appended while the
+   list is scrolled draws below its card's border until the next relayout.
+   A headless test of the same DOM does not reproduce it.
+
 ## How the host works (read the macOS one first)
 
 The engine does not create windows. It renders into an existing Electrobun

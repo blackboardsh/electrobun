@@ -14,6 +14,10 @@
 #include <X11/cursorfont.h>
 #include <X11/keysymdef.h>
 #include <X11/XF86keysym.h>
+#include <X11/XKBlib.h>
+#include <X11/Xutil.h>
+#include <poll.h>
+#include <locale.h>
 #include <string>
 #include <vector>
 #include <memory>
@@ -4112,6 +4116,71 @@ public:
 
 };
 
+// Per-view hooks used by the native UI core (libElectrobunUI ebui_*). The
+// callback types and their semantics mirror the macOS wrapper; see "Per-view
+// hooks used by the native UI core" in nativeWrapper.mm and
+// src/ui-core/src/host/electrobun.zig.
+typedef void (*UIViewPointerCallback)(void* ctx, uint32_t eventType, double x,
+                                      double y, double buttonOrDx, double dy,
+                                      uint32_t modifiers);
+// Key contract (Linux/Windows): keyCode is 0 and charactersIgnoringModifiers
+// is the DOM `key` value ("Enter", "ArrowLeft", "a", "A"). Returns 1 when the
+// key was handled; printable keys return 0 and their text then arrives
+// through the text callback.
+typedef uint32_t (*UIViewKeyCallback)(void* ctx, uint32_t keyCode,
+                                      uint32_t modifiers, uint32_t isDown,
+                                      uint32_t isRepeat, const char* characters,
+                                      const char* charactersIgnoringModifiers);
+// kind: 0 insert (committed text), 1 set marked text (selection = selLoc,
+// UTF-8 bytes), 2 unmark
+typedef void (*UIViewTextCallback)(void* ctx, uint32_t kind, const char* text,
+                                   uint32_t selLoc);
+typedef void (*UIViewFrameCallback)(void* ctx, double timestamp);
+typedef void (*UIViewA11yRequestCallback)(void* ctx);
+typedef void (*UIViewA11yActionCallback)(void* ctx, uint32_t nodeId,
+                                         uint32_t action, const char* value);
+
+struct UIViewHandlers {
+    void* ctx = nullptr;
+    UIViewPointerCallback pointer = nullptr;
+    UIViewKeyCallback key = nullptr;
+    UIViewTextCallback text = nullptr;
+    UIViewFrameCallback frame = nullptr;
+};
+
+// UI-core state of one WGPU view. `handlers` is set from any thread (under
+// `mutex`) and read on the main thread, which copies it and invokes the
+// callbacks without holding the mutex; everything else is main-thread only.
+struct UIViewHost {
+    std::mutex mutex;
+    UIViewHandlers handlers;
+    bool installed = false;      // input mask/XIC set up on the X window
+    bool frameRequested = false;
+    guint frameSource = 0;
+    double lastFrameStart = 0;
+    XIC xic = nullptr;
+    std::u32string preedit;
+    std::set<unsigned int> keysDown;
+    // the UI view takes keyboard focus whenever its toplevel is focused (it
+    // is the window's first responder, as on macOS) until the user clicks
+    // into another view of the window
+    bool wantsFocus = true;
+    double imeX = 0, imeY = 0, imeW = 0, imeH = 0;
+    Time pressTime = 0;
+    int pressRootX = 0, pressRootY = 0;
+    bool pressValid = false;
+};
+
+class WGPUViewImpl;
+// defined with the exports, inside their extern "C" block
+extern "C" {
+static void uiHostViewResized(WGPUViewImpl* view);
+static void uiHostViewRemoved(WGPUViewImpl* view);
+static bool uiHostIsInputWindow(Window window);
+static bool uiHostHandleXEvent(XEvent* event);
+static gboolean uiOnToplevelFocusIn(GtkWidget* widget, GdkEvent* event, gpointer data);
+}
+
 // WGPUView implementation (non-webview rendering surface)
 class WGPUViewImpl : public AbstractView {
 public:
@@ -4121,6 +4190,11 @@ public:
     Window xWindow = 0;
     Window inputXWindow = 0;
     Cursor inputCursor = 0;
+    // physical X pixels per logical px for this X-child view: the GDK window
+    // scale in GTK windows (frames arrive in GTK logical px), 1 in CEF X11
+    // windows (already physical)
+    int xScale = 1;
+    UIViewHost ui;
 
     WGPUViewImpl(uint32_t webviewId)
         : AbstractView(webviewId) {}
@@ -4265,7 +4339,7 @@ public:
             const LinuxXRectangleFields fields =
                 linuxPhysicalRectToXRectangleFields(
                     logicalToLinuxPhysicalRect(
-                        mask.x, mask.y, mask.width, mask.height, 1.0));
+                        mask.x, mask.y, mask.width, mask.height, xScale));
             if (fields.width == 0 || fields.height == 0) continue;
             XRectangle rect = {
                 fields.x,
@@ -4317,7 +4391,12 @@ public:
     void addPreloadScriptToWebView(const char* jsString) override {}
     void updateCustomPreloadScript(const char* jsString) override {}
 
-    void resize(const GdkRectangle& frame, const char* masksJson) override {
+    void resize(const GdkRectangle& logicalFrame, const char* masksJson) override {
+        // X-child views take physical pixels; the GtkDrawingArea fallback logical
+        const GdkRectangle frame = xDisplay && xWindow
+            ? GdkRectangle{logicalFrame.x * xScale, logicalFrame.y * xScale,
+                           logicalFrame.width * xScale, logicalFrame.height * xScale}
+            : logicalFrame;
         if (xDisplay && xWindow) {
             XMoveResizeWindow(
                 xDisplay,
@@ -4342,6 +4421,7 @@ public:
             }
             XFlush(xDisplay);
             visualBounds = frame;
+            uiHostViewResized(this);
         } else if (viewWidget) {
             if (fullSize) {
                 gtk_widget_set_size_request(viewWidget, -1, -1);
@@ -4412,7 +4492,7 @@ public:
             const LinuxXRectangleFields fields =
                 linuxPhysicalRectToXRectangleFields(
                     logicalToLinuxPhysicalRect(
-                        mask.x, mask.y, mask.width, mask.height, 1.0));
+                        mask.x, mask.y, mask.width, mask.height, xScale));
             if (fields.width == 0 || fields.height == 0) continue;
             XRectangle rect = {
                 fields.x,
@@ -4492,6 +4572,7 @@ public:
     void toggleDevTools() override {}
 
     void remove() override {
+        uiHostViewRemoved(this);
         if (xDisplay && xWindow) {
             stopWgpuTestForWindow(xWindow);
             if (inputXWindow) {
@@ -7060,6 +7141,13 @@ gboolean process_x11_events(gpointer data) {
             XEvent event;
             XNextEvent(x11win->display, &event);
 
+            // Input-method protocol traffic (XIM). Key events are filtered
+            // by their consumer (uiHostHandleXEvent), as GDK does.
+            if (event.type != KeyPress && event.type != KeyRelease &&
+                XFilterEvent(&event, None)) {
+                continue;
+            }
+
             std::shared_ptr<X11Window> childParentWindow;
             {
                 std::lock_guard<std::mutex> lock(g_x11WindowsMutex);
@@ -7073,11 +7161,21 @@ gboolean process_x11_events(gpointer data) {
             }
 
             if (childParentWindow) {
+                // A native-UI view keeps X keyboard focus on its own input
+                // window, so only activate (raise) the parent for it.
+                const bool uiInput = uiHostIsInputWindow(event.xany.window);
                 if (event.type == ButtonPress || event.type == FocusIn) {
-                    focusX11Window(childParentWindow->display, childParentWindow->window);
+                    if (uiInput) {
+                        XRaiseWindow(childParentWindow->display, childParentWindow->window);
+                    } else {
+                        focusX11Window(childParentWindow->display, childParentWindow->window);
+                    }
                     if (childParentWindow->focusCallback) {
                         childParentWindow->focusCallback(childParentWindow->windowId);
                     }
+                }
+                if (uiInput) {
+                    uiHostHandleXEvent(&event);
                 }
                 continue;
             }
@@ -7140,6 +7238,7 @@ gboolean process_x11_events(gpointer data) {
 
                 case FocusIn:
                     // Window received focus
+                    uiHostHandleXEvent(&event);
                     if (x11win->focusCallback) {
                         x11win->focusCallback(x11win->windowId);
                     }
@@ -8204,12 +8303,16 @@ ELECTROBUN_EXPORT AbstractView* initWGPUView(uint32_t webviewId,
         if (parentGdkWindow) {
             Display* display = gdk_x11_display_get_xdisplay(gdk_window_get_display(parentGdkWindow));
             Window parentXWindow = GDK_WINDOW_XID(parentGdkWindow);
+            view->xScale = std::max(1, gdk_window_get_scale_factor(parentGdkWindow));
 
             if (view->createX11Child(display, parentXWindow, x, y, width, height, "GTK")) {
                 if (!view->createX11InputChild(display, parentXWindow, x, y, width, height, "GTK")) {
                     fprintf(stderr, "WARNING: WGPUView will use drawing-window input for GTK\n");
                 }
                 container->abstractViews.insert(container->abstractViews.begin(), view);
+                // a native-UI view takes keyboard focus with its window
+                g_signal_connect(windowWidget, "focus-in-event", G_CALLBACK(uiOnToplevelFocusIn),
+                                 GUINT_TO_POINTER(webviewId));
                 XMapRaised(display, view->xWindow);
                 if (view->inputXWindow) {
                     XMapRaised(display, view->inputXWindow);
@@ -8356,6 +8459,827 @@ ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView* abstractView) {
         }
     }
     return nullptr;
+}
+
+ELECTROBUN_EXPORT void* wgpuViewGetNativeDisplay(AbstractView* abstractView) {
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return nullptr;
+    if (view->xDisplay) return view->xDisplay;
+    if (view->viewWidget) {
+        GdkWindow* gdkWindow = gtk_widget_get_window(view->viewWidget);
+        if (gdkWindow) return gdk_x11_display_get_xdisplay(gdk_window_get_display(gdkWindow));
+    }
+    return nullptr;
+}
+
+// ----------------------- Native UI core host -----------------------
+//
+// Input for a UI view arrives on its X11 input window (an InputOnly child
+// stacked over the drawing window). GTK windows share GDK's Display, so a
+// global GDK filter sees those events; CEF windows own their Display and
+// their event loop forwards them (see uiHostIsInputWindow). Everything here
+// runs on the main thread unless noted.
+
+static std::atomic<int> g_uiHostViewCount{0};
+
+static double uiMonotonicSeconds() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + (double)ts.tv_nsec / 1e9;
+}
+
+// The view's device scale: GDK_SCALE (times GDK_DPI_SCALE) when set, else
+// Xft.dpi / 96 (what GNOME and KDE publish for the X11 display scale).
+static double uiScaleFactor(Display* display) {
+    const char* gdkScale = getenv("GDK_SCALE");
+    if (gdkScale && *gdkScale) {
+        double scale = atof(gdkScale);
+        const char* dpiScale = getenv("GDK_DPI_SCALE");
+        if (dpiScale && *dpiScale) scale *= atof(dpiScale);
+        if (scale >= 0.5 && scale <= 8) return scale;
+    }
+    if (display) {
+        const char* resources = XResourceManagerString(display);
+        const char* dpi = resources ? strstr(resources, "Xft.dpi:") : nullptr;
+        if (dpi) {
+            double value = atof(dpi + strlen("Xft.dpi:"));
+            if (value >= 48 && value <= 768) return value / 96.0;
+        }
+    }
+    return 1.0;
+}
+
+static double uiRefreshInterval() {
+    static double interval = 0;
+    if (interval > 0) return interval;
+    interval = 1.0 / 60.0;
+    GdkDisplay* display = gdk_display_get_default();
+    if (display) {
+        GdkMonitor* monitor = gdk_display_get_primary_monitor(display);
+        if (!monitor && gdk_display_get_n_monitors(display) > 0)
+            monitor = gdk_display_get_monitor(display, 0);
+        int mhz = monitor ? gdk_monitor_get_refresh_rate(monitor) : 0;
+        if (mhz >= 20000 && mhz <= 500000) interval = 1000.0 / mhz;
+    }
+    return interval;
+}
+
+static WGPUViewImpl* uiViewById(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+    auto it = g_wgpuViewMap.find(webviewId);
+    if (it == g_wgpuViewMap.end()) return nullptr;
+    return dynamic_cast<WGPUViewImpl*>(it->second.get());
+}
+
+static Window uiInputWindowOf(WGPUViewImpl* view) {
+    return view->inputXWindow ? view->inputXWindow : view->xWindow;
+}
+
+static UIViewHandlers uiHandlersOf(WGPUViewImpl* view) {
+    std::lock_guard<std::mutex> lock(view->ui.mutex);
+    return view->ui.handlers;
+}
+
+static WGPUViewImpl* uiViewForInputWindow(Window window) {
+    if (!window || g_uiHostViewCount.load() == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+    for (auto& [id, abstractView] : g_wgpuViewMap) {
+        auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
+        if (view && view->ui.installed && view->xDisplay && uiInputWindowOf(view) == window) return view;
+    }
+    return nullptr;
+}
+
+static bool uiHostIsInputWindow(Window window) {
+    return uiViewForInputWindow(window) != nullptr;
+}
+
+static double uiScaleOf(WGPUViewImpl* view) {
+    return uiScaleFactor(view->xDisplay);
+}
+
+// ---- frames ----
+
+static gboolean uiFrameTick(gpointer data) {
+    WGPUViewImpl* view = uiViewById(GPOINTER_TO_UINT(data));
+    if (!view) return G_SOURCE_REMOVE;
+    view->ui.frameSource = 0;
+    view->ui.frameRequested = false;
+    view->ui.lastFrameStart = uiMonotonicSeconds();
+    UIViewHandlers h = uiHandlersOf(view);
+    if (h.frame) h.frame(h.ctx, view->ui.lastFrameStart);
+    return G_SOURCE_REMOVE;
+}
+
+// Schedule one frame callback at the next refresh tick; repeated requests
+// coalesce, and a request made during a frame schedules the next one.
+static void uiScheduleFrame(WGPUViewImpl* view) {
+    if (view->ui.frameRequested || view->isRemoved) return;
+    if (!uiHandlersOf(view).frame) return;
+    view->ui.frameRequested = true;
+    const double wait = view->ui.lastFrameStart + uiRefreshInterval() - uiMonotonicSeconds();
+    const guint ms = wait > 0 ? (guint)std::ceil(wait * 1000.0) : 0;
+    view->ui.frameSource = g_timeout_add_full(
+        G_PRIORITY_DEFAULT, ms, uiFrameTick, GUINT_TO_POINTER(view->webviewId), nullptr);
+}
+
+static void uiHostViewResized(WGPUViewImpl* view) {
+    if (view->ui.installed) uiScheduleFrame(view);
+}
+
+// ---- input method (XIM, on-the-spot preedit) ----
+
+struct UIXim {
+    Display* display;
+    XIM im;
+    XIMStyle style;
+};
+static std::vector<UIXim> g_uiXims;
+
+static XIM uiXimFor(Display* display, XIMStyle* style) {
+    for (auto& x : g_uiXims) {
+        if (x.display == display) {
+            *style = x.style;
+            return x.im;
+        }
+    }
+    UIXim entry = {display, nullptr, 0};
+    // An input method converts its text with the locale current when it is
+    // opened. The process locale may be "C" (GTK's setlocale is disabled for
+    // CEF), which would turn every non-ASCII preedit and commit into nothing,
+    // so open it under a UTF-8 LC_CTYPE and restore the process locale after.
+    const char* current = setlocale(LC_CTYPE, nullptr);
+    const std::string savedCtype = current ? current : "C";
+    auto isUtf8 = [](const char* l) {
+        return l && (strcasestr(l, "utf-8") || strcasestr(l, "utf8"));
+    };
+    if (!isUtf8(savedCtype.c_str())) {
+        if (!isUtf8(setlocale(LC_CTYPE, ""))) setlocale(LC_CTYPE, "C.UTF-8");
+    }
+    if (XSupportsLocale()) {
+        XSetLocaleModifiers("");  // honours XMODIFIERS (@im=ibus, @im=fcitx)
+        entry.im = XOpenIM(display, nullptr, nullptr, nullptr);
+        if (!entry.im) {
+            XSetLocaleModifiers("@im=none");
+            entry.im = XOpenIM(display, nullptr, nullptr, nullptr);
+        }
+    }
+    setlocale(LC_CTYPE, savedCtype.c_str());
+    if (entry.im) {
+        XIMStyles* styles = nullptr;
+        if (!XGetIMValues(entry.im, XNQueryInputStyle, &styles, nullptr) && styles) {
+            const XIMStyle preferred[] = {
+                XIMPreeditCallbacks | XIMStatusNothing,
+                XIMPreeditCallbacks | XIMStatusNone,
+                XIMPreeditNothing | XIMStatusNothing,
+                XIMPreeditNothing | XIMStatusNone,
+                XIMPreeditNone | XIMStatusNone,
+            };
+            for (XIMStyle want : preferred) {
+                for (unsigned short i = 0; i < styles->count_styles && !entry.style; i++) {
+                    if (styles->supported_styles[i] == want) entry.style = want;
+                }
+                if (entry.style) break;
+            }
+            XFree(styles);
+        }
+        if (!entry.style) {
+            XCloseIM(entry.im);
+            entry.im = nullptr;
+        }
+    }
+    g_uiXims.push_back(entry);
+    *style = entry.style;
+    return entry.im;
+}
+
+static std::string uiUtf8(const std::u32string& s, size_t count) {
+    std::string out;
+    for (size_t i = 0; i < s.size() && i < count; i++) {
+        char32_t c = s[i];
+        if (c < 0x80) {
+            out += (char)c;
+        } else if (c < 0x800) {
+            out += (char)(0xC0 | (c >> 6));
+            out += (char)(0x80 | (c & 0x3F));
+        } else if (c < 0x10000) {
+            out += (char)(0xE0 | (c >> 12));
+            out += (char)(0x80 | ((c >> 6) & 0x3F));
+            out += (char)(0x80 | (c & 0x3F));
+        } else {
+            out += (char)(0xF0 | (c >> 18));
+            out += (char)(0x80 | ((c >> 12) & 0x3F));
+            out += (char)(0x80 | ((c >> 6) & 0x3F));
+            out += (char)(0x80 | (c & 0x3F));
+        }
+    }
+    return out;
+}
+
+static std::u32string uiDecodeUtf8(const char* s) {
+    std::u32string out;
+    if (!s) return out;
+    const unsigned char* p = (const unsigned char*)s;
+    while (*p) {
+        char32_t c = *p;
+        int extra = c >= 0xF0 ? 3 : c >= 0xE0 ? 2 : c >= 0xC0 ? 1 : 0;
+        c &= extra == 3 ? 0x07 : extra == 2 ? 0x0F : extra == 1 ? 0x1F : 0x7F;
+        p++;
+        for (int i = 0; i < extra && (*p & 0xC0) == 0x80; i++, p++) c = (c << 6) | (*p & 0x3F);
+        out += c;
+    }
+    return out;
+}
+
+static void uiSendPreedit(WGPUViewImpl* view, size_t caret) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.text) return;
+    const std::string text = uiUtf8(view->ui.preedit, view->ui.preedit.size());
+    const std::string prefix = uiUtf8(view->ui.preedit, caret);
+    h.text(h.ctx, 1, text.c_str(), (uint32_t)prefix.size());
+}
+
+static int uiPreeditStart(XIC, XPointer clientData, XPointer) {
+    if (WGPUViewImpl* view = uiViewById((uint32_t)(uintptr_t)clientData)) view->ui.preedit.clear();
+    return -1;
+}
+
+static void uiPreeditDone(XIC, XPointer clientData, XPointer) {
+    WGPUViewImpl* view = uiViewById((uint32_t)(uintptr_t)clientData);
+    if (!view || view->ui.preedit.empty()) return;
+    view->ui.preedit.clear();
+    uiSendPreedit(view, 0);
+}
+
+static void uiPreeditDraw(XIC, XPointer clientData, XPointer callData) {
+    WGPUViewImpl* view = uiViewById((uint32_t)(uintptr_t)clientData);
+    auto* draw = (XIMPreeditDrawCallbackStruct*)callData;
+    if (!view || !draw) return;
+    std::u32string& preedit = view->ui.preedit;
+    const size_t first = std::min((size_t)std::max(0, draw->chg_first), preedit.size());
+    const size_t length = std::min((size_t)std::max(0, draw->chg_length), preedit.size() - first);
+    std::u32string inserted;
+    if (draw->text) {
+        if (draw->text->encoding_is_wchar) {
+            const wchar_t* w = draw->text->string.wide_char;
+            for (unsigned short i = 0; w && i < draw->text->length; i++) inserted += (char32_t)w[i];
+        } else {
+            inserted = uiDecodeUtf8(draw->text->string.multi_byte);
+        }
+    }
+    preedit.replace(first, length, inserted);
+    uiSendPreedit(view, std::min((size_t)std::max(0, draw->caret), preedit.size()));
+}
+
+static void uiPreeditCaret(XIC, XPointer clientData, XPointer callData) {
+    WGPUViewImpl* view = uiViewById((uint32_t)(uintptr_t)clientData);
+    auto* caret = (XIMPreeditCaretCallbackStruct*)callData;
+    if (!view || !caret) return;
+    if (caret->direction == XIMAbsolutePosition) {
+        caret->position = std::min(std::max(0, caret->position), (int)view->ui.preedit.size());
+        uiSendPreedit(view, caret->position);
+    }
+}
+
+static void uiUpdateImeSpot(WGPUViewImpl* view) {
+    if (!view->ui.xic) return;
+    const double scale = uiScaleOf(view);
+    XPoint spot;
+    spot.x = (short)std::lround(view->ui.imeX * scale);
+    spot.y = (short)std::lround((view->ui.imeY + view->ui.imeH) * scale);
+    XVaNestedList attrs = XVaCreateNestedList(0, XNSpotLocation, &spot, nullptr);
+    XSetICValues(view->ui.xic, XNPreeditAttributes, attrs, nullptr);
+    XFree(attrs);
+}
+
+static void uiCreateXic(WGPUViewImpl* view, Window window, long* filterMask) {
+    *filterMask = 0;
+    XIMStyle style = 0;
+    XIM im = uiXimFor(view->xDisplay, &style);
+    if (!im) return;
+    XPointer client = (XPointer)(uintptr_t)view->webviewId;
+    XIMCallback start = {client, (XIMProc)uiPreeditStart};
+    XIMCallback done = {client, (XIMProc)uiPreeditDone};
+    XIMCallback draw = {client, (XIMProc)uiPreeditDraw};
+    XIMCallback caret = {client, (XIMProc)uiPreeditCaret};
+    XPoint spot = {0, 0};
+    XVaNestedList preedit = nullptr;
+    if (style & XIMPreeditCallbacks) {
+        preedit = XVaCreateNestedList(0, XNPreeditStartCallback, &start, XNPreeditDoneCallback, &done,
+                                      XNPreeditDrawCallback, &draw, XNPreeditCaretCallback, &caret,
+                                      XNSpotLocation, &spot, nullptr);
+    }
+    view->ui.xic = preedit
+        ? XCreateIC(im, XNInputStyle, style, XNClientWindow, window, XNFocusWindow, window,
+                    XNPreeditAttributes, preedit, nullptr)
+        : XCreateIC(im, XNInputStyle, style, XNClientWindow, window, XNFocusWindow, window, nullptr);
+    if (preedit) XFree(preedit);
+    if (view->ui.xic) {
+        XGetICValues(view->ui.xic, XNFilterEvents, filterMask, nullptr);
+    }
+}
+
+// ---- keyboard ----
+
+// DOM `key` names for X keysyms that do not produce text.
+static const char* uiNamedKey(KeySym keysym) {
+    switch (keysym) {
+    case XK_Return: case XK_KP_Enter: case XK_ISO_Enter: return "Enter";
+    case XK_Tab: case XK_ISO_Left_Tab: case XK_KP_Tab: return "Tab";
+    case XK_BackSpace: return "Backspace";
+    case XK_Escape: return "Escape";
+    case XK_Delete: case XK_KP_Delete: return "Delete";
+    case XK_Insert: case XK_KP_Insert: return "Insert";
+    case XK_Home: case XK_KP_Home: return "Home";
+    case XK_End: case XK_KP_End: return "End";
+    case XK_Page_Up: case XK_KP_Page_Up: return "PageUp";
+    case XK_Page_Down: case XK_KP_Page_Down: return "PageDown";
+    case XK_Left: case XK_KP_Left: return "ArrowLeft";
+    case XK_Right: case XK_KP_Right: return "ArrowRight";
+    case XK_Up: case XK_KP_Up: return "ArrowUp";
+    case XK_Down: case XK_KP_Down: return "ArrowDown";
+    case XK_Menu: return "ContextMenu";
+    case XK_F1: return "F1"; case XK_F2: return "F2"; case XK_F3: return "F3";
+    case XK_F4: return "F4"; case XK_F5: return "F5"; case XK_F6: return "F6";
+    case XK_F7: return "F7"; case XK_F8: return "F8"; case XK_F9: return "F9";
+    case XK_F10: return "F10"; case XK_F11: return "F11"; case XK_F12: return "F12";
+    default: return nullptr;
+    }
+}
+
+static bool uiIsModifierKeysym(KeySym keysym) {
+    return IsModifierKey(keysym) || keysym == XK_ISO_Level3_Shift || keysym == XK_ISO_Level5_Shift ||
+           keysym == XK_Super_L || keysym == XK_Super_R || keysym == XK_Hyper_L || keysym == XK_Hyper_R;
+}
+
+static std::string uiKeysymText(KeySym keysym) {
+    const guint32 c = gdk_keyval_to_unicode((guint)keysym);
+    if (c < 0x20 || c == 0x7F) return "";
+    return uiUtf8(std::u32string(1, (char32_t)c), 1);
+}
+
+static bool uiIsPrintable(const std::string& text) {
+    for (unsigned char c : text) {
+        if (c < 0x20 || c == 0x7F) return false;
+    }
+    return !text.empty();
+}
+
+static void uiHandleKey(WGPUViewImpl* view, XKeyEvent* ev) {
+    UIViewHandlers h = uiHandlersOf(view);
+    const bool down = ev->type == KeyPress;
+    char buf[256];
+    KeySym keysym = NoSymbol;
+    std::string text;
+    if (down && view->ui.xic) {
+        Status status = 0;
+        int n = Xutf8LookupString(view->ui.xic, ev, buf, sizeof(buf) - 1, &keysym, &status);
+        if (status == XBufferOverflow) {
+            std::vector<char> big(n + 1);
+            n = Xutf8LookupString(view->ui.xic, ev, big.data(), n, &keysym, &status);
+            text.assign(big.data(), std::max(0, n));
+        } else if (status == XLookupChars || status == XLookupBoth) {
+            text.assign(buf, std::max(0, n));
+        }
+        if (status != XLookupKeySym && status != XLookupBoth) keysym = NoSymbol;
+        // committed input-method text (no key behind it)
+        if (keysym == NoSymbol) {
+            if (!text.empty() && h.text) {
+                view->ui.preedit.clear();
+                h.text(h.ctx, 0, text.c_str(), 0);
+            }
+            return;
+        }
+    } else {
+        XLookupString(ev, buf, sizeof(buf) - 1, &keysym, nullptr);
+        if (down) text = uiKeysymText(keysym);
+    }
+    if (keysym == NoSymbol || uiIsModifierKeysym(keysym)) return;
+    if (!h.key) return;
+
+    // DOM key: the named key, else the character with Shift/AltGr applied
+    // but Ctrl/Alt/Super ignored (what Ctrl+C reports as "c").
+    std::string key;
+    if (const char* named = uiNamedKey(keysym)) {
+        key = named;
+    } else {
+        XKeyEvent plain = *ev;
+        plain.state &= ~(ControlMask | Mod1Mask | Mod4Mask);
+        KeySym plainSym = NoSymbol;
+        XLookupString(&plain, buf, sizeof(buf) - 1, &plainSym, nullptr);
+        key = uiKeysymText(plainSym);
+        if (key.empty()) key = "Unidentified";
+    }
+    const uint32_t mods = modifiersFromX11State(ev->state);
+    const unsigned int keycode = ev->keycode;
+    const bool repeat = down && view->ui.keysDown.count(keycode) > 0;
+    if (down) {
+        view->ui.keysDown.insert(keycode);
+    } else {
+        view->ui.keysDown.erase(keycode);
+    }
+    if (!uiIsPrintable(text)) text.clear();
+    const uint32_t handled = h.key(h.ctx, 0, mods, down ? 1 : 0, repeat ? 1 : 0,
+                                   down ? text.c_str() : "", key.c_str());
+    if (down && !handled && !text.empty() && h.text) {
+        h.text(h.ctx, 0, text.c_str(), 0);
+    }
+}
+
+// ---- pointer ----
+
+static void uiPointer(WGPUViewImpl* view, uint32_t kind, int x, int y, double a, double b, unsigned int state) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.pointer) return;
+    const double scale = uiScaleOf(view);
+    h.pointer(h.ctx, kind, x / scale, y / scale, a, b, modifiersFromX11State(state));
+}
+
+// One wheel notch, in logical px (positive = towards the top/left, as on macOS).
+static const double kUIWheelStep = 48.0;
+
+// Give X keyboard focus back to the toplevel when a UI view had it and the
+// user clicked elsewhere in the window (another view, a webview).
+static void uiReleaseFocusOnPressElsewhere(Window pressed) {
+    std::vector<std::pair<Display*, Window>> refocus;
+    {
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        for (auto& [id, abstractView] : g_wgpuViewMap) {
+            auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
+            if (!view || !view->ui.wantsFocus || uiInputWindowOf(view) == pressed) continue;
+            view->ui.wantsFocus = false;
+            refocus.push_back({view->xDisplay, view->parentXWindow});
+        }
+    }
+    for (auto& [display, window] : refocus) {
+        if (display && window) XSetInputFocus(display, window, RevertToParent, CurrentTime);
+    }
+}
+
+// When a toplevel (or the toolkit's focus window inside it) gains keyboard
+// focus, hand it to the UI view that wants it. CEF windows report core
+// FocusIn; GTK tracks focus with XInput2, so GTK windows call this from their
+// focus-in-event (uiOnToplevelFocusIn).
+static void uiRedirectFocus(XFocusChangeEvent* focus) {
+    if (focus->mode != NotifyNormal && focus->mode != NotifyWhileGrabbed) return;
+    if (focus->detail == NotifyInferior || focus->detail == NotifyPointer || focus->detail == NotifyPointerRoot)
+        return;
+    Window parent = 0;
+    Window root = 0;
+    Window* children = nullptr;
+    unsigned int count = 0;
+    if (XQueryTree(focus->display, focus->window, &root, &parent, &children, &count) && children) XFree(children);
+    std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+    for (auto& [id, abstractView] : g_wgpuViewMap) {
+        auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
+        if (!view || !view->ui.installed || !view->ui.wantsFocus || view->isRemoved) continue;
+        if (view->xDisplay != focus->display) continue;
+        if (view->parentXWindow != focus->window && view->parentXWindow != parent) continue;
+        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
+        XFlush(view->xDisplay);
+        return;
+    }
+}
+
+static gboolean uiOnToplevelFocusIn(GtkWidget*, GdkEvent*, gpointer data) {
+    WGPUViewImpl* view = uiViewById(GPOINTER_TO_UINT(data));
+    if (view && view->ui.installed && view->ui.wantsFocus && view->xDisplay) {
+        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
+        XFlush(view->xDisplay);
+    }
+    return FALSE;
+}
+
+// The toolkit moved focus from the UI view to another window of the same
+// toplevel (GDK refocuses its own focus window when the window is activated
+// while it already has focus, without a focus-in-event): take it back,
+// unless the user clicked into another view (wantsFocus is then false).
+static gboolean uiReclaimFocus(gpointer data) {
+    WGPUViewImpl* view = uiViewById(GPOINTER_TO_UINT(data));
+    if (!view || !view->ui.installed || !view->ui.wantsFocus || !view->xDisplay) return G_SOURCE_REMOVE;
+    Window focused = 0;
+    int revert = 0;
+    XGetInputFocus(view->xDisplay, &focused, &revert);
+    if (focused == None || focused == PointerRoot || focused == uiInputWindowOf(view)) return G_SOURCE_REMOVE;
+    Window root = 0, parent = 0, *children = nullptr;
+    unsigned int count = 0;
+    if (XQueryTree(view->xDisplay, focused, &root, &parent, &children, &count) && children) XFree(children);
+    if (focused == view->parentXWindow || parent == view->parentXWindow) {
+        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
+        XFlush(view->xDisplay);
+    }
+    return G_SOURCE_REMOVE;
+}
+
+static bool uiHostHandleXEvent(XEvent* event) {
+    if (g_uiHostViewCount.load() == 0) return false;
+    WGPUViewImpl* view = uiViewForInputWindow(event->xany.window);
+    if (!view) {
+        if (event->type == ButtonPress) uiReleaseFocusOnPressElsewhere(event->xany.window);
+        if (event->type == FocusIn) uiRedirectFocus(&event->xfocus);
+        return false;
+    }
+    switch (event->type) {
+    case MotionNotify: {
+        // coalesce consecutive queued motion (never across other events)
+        while (XEventsQueued(view->xDisplay, QueuedAlready) > 0) {
+            XEvent next;
+            XPeekEvent(view->xDisplay, &next);
+            if (next.type != MotionNotify || next.xany.window != event->xany.window) break;
+            XNextEvent(view->xDisplay, event);
+        }
+        uiPointer(view, 0, event->xmotion.x, event->xmotion.y, 0, 0, event->xmotion.state);
+        return true;
+    }
+    case ButtonPress:
+    case ButtonRelease: {
+        const XButtonEvent& b = event->xbutton;
+        if (b.button >= 4 && b.button <= 7) {
+            if (event->type == ButtonPress) {
+                const double dx = b.button == 6 ? kUIWheelStep : b.button == 7 ? -kUIWheelStep : 0;
+                const double dy = b.button == 4 ? kUIWheelStep : b.button == 5 ? -kUIWheelStep : 0;
+                uiPointer(view, 3, b.x, b.y, dx, dy, b.state);
+            }
+            return true;
+        }
+        // DOM button numbers: 0 primary, 1 middle... macOS sends right = 1,
+        // other = 2 through this contract; keep that.
+        const double button = b.button == 1 ? 0 : b.button == 3 ? 1 : 2;
+        if (event->type == ButtonPress) {
+            uiReleaseFocusOnPressElsewhere(event->xany.window);
+            view->ui.wantsFocus = true;
+            XSetInputFocus(view->xDisplay, event->xany.window, RevertToParent, b.time);
+            view->ui.pressTime = b.time;
+            view->ui.pressRootX = b.x_root;
+            view->ui.pressRootY = b.y_root;
+            view->ui.pressValid = b.button == 1;
+        } else if (b.button == 1) {
+            view->ui.pressValid = false;
+        }
+        uiPointer(view, event->type == ButtonPress ? 1 : 2, b.x, b.y, button, 0, b.state);
+        return true;
+    }
+    case EnterNotify:
+        if (event->xcrossing.mode == NotifyNormal)
+            uiPointer(view, 4, event->xcrossing.x, event->xcrossing.y, 0, 0, event->xcrossing.state);
+        return true;
+    case LeaveNotify:
+        if (event->xcrossing.mode == NotifyNormal)
+            uiPointer(view, 5, event->xcrossing.x, event->xcrossing.y, 0, 0, event->xcrossing.state);
+        return true;
+    case KeyPress:
+    case KeyRelease:
+        // Consumed by the input method, except Xlib's fabricated commit event
+        // (keycode 0): Xlib recognizes it by a one-shot flag that an
+        // intervening forwarded key event can clear, so never drop it.
+        if (XFilterEvent(event, None) && event->xkey.keycode != 0) return true;
+        uiHandleKey(view, &event->xkey);
+        return true;
+    case FocusIn:
+        if (view->ui.xic) XSetICFocus(view->ui.xic);
+        return true;
+    case FocusOut:
+        if (view->ui.xic) XUnsetICFocus(view->ui.xic);
+        view->ui.keysDown.clear();
+        if (event->xfocus.mode == NotifyNormal && view->ui.wantsFocus)
+            g_idle_add(uiReclaimFocus, GUINT_TO_POINTER(view->webviewId));
+        return true;
+    default:
+        return false;
+    }
+}
+
+static GdkFilterReturn uiGdkFilter(GdkXEvent* xevent, GdkEvent*, gpointer) {
+    return uiHostHandleXEvent((XEvent*)xevent) ? GDK_FILTER_REMOVE : GDK_FILTER_CONTINUE;
+}
+
+// Select pointer/keyboard input on the view's input window and create its
+// input context. Main thread.
+static void uiInstallInput(WGPUViewImpl* view) {
+    if (view->ui.installed || !view->xDisplay || view->isRemoved) return;
+    const Window window = uiInputWindowOf(view);
+    if (!window) return;
+    static bool filterAdded = false;
+    if (!filterAdded) {
+        filterAdded = true;
+        gdk_window_add_filter(nullptr, uiGdkFilter, nullptr);
+    }
+    Bool detectable = False;
+    XkbSetDetectableAutoRepeat(view->xDisplay, True, &detectable);
+    long imMask = 0;
+    uiCreateXic(view, window, &imMask);
+    XWindowAttributes attrs;
+    long mask = 0;
+    if (XGetWindowAttributes(view->xDisplay, window, &attrs)) mask = attrs.your_event_mask;
+    mask |= ButtonPressMask | ButtonReleaseMask | PointerMotionMask | EnterWindowMask | LeaveWindowMask |
+            KeyPressMask | KeyReleaseMask | FocusChangeMask | imMask;
+    XSelectInput(view->xDisplay, window, mask);
+    XFlush(view->xDisplay);
+    view->ui.installed = true;
+    g_uiHostViewCount.fetch_add(1);
+    // the toplevel may already be focused
+    Window focused = 0;
+    int revert = 0;
+    XGetInputFocus(view->xDisplay, &focused, &revert);
+    if (focused != None && focused != PointerRoot) {
+        XFocusChangeEvent focus = {};
+        focus.type = FocusIn;
+        focus.display = view->xDisplay;
+        focus.window = focused;
+        focus.mode = NotifyNormal;
+        focus.detail = NotifyNonlinear;
+        uiRedirectFocus(&focus);
+    }
+}
+
+static void uiUninstallInput(WGPUViewImpl* view) {
+    if (view->ui.frameSource) {
+        g_source_remove(view->ui.frameSource);
+        view->ui.frameSource = 0;
+    }
+    view->ui.frameRequested = false;
+    if (!view->ui.installed) return;
+    view->ui.installed = false;
+    g_uiHostViewCount.fetch_sub(1);
+    if (view->ui.xic) {
+        XDestroyIC(view->ui.xic);
+        view->ui.xic = nullptr;
+    }
+    view->ui.preedit.clear();
+    view->ui.keysDown.clear();
+    view->ui.wantsFocus = true;
+}
+
+static void uiHostViewRemoved(WGPUViewImpl* view) {
+    {
+        std::lock_guard<std::mutex> lock(view->ui.mutex);
+        view->ui.handlers = {};
+    }
+    uiUninstallInput(view);
+}
+
+// Route a WGPU view's input and frames to the native UI core. Any thread;
+// does not wait for the main thread (the caller holds the UI lock, which
+// main-thread callbacks also take).
+ELECTROBUN_EXPORT void wgpuViewSetUIHandlers(AbstractView* abstractView, void* ctx,
+                                             UIViewPointerCallback pointer, UIViewKeyCallback key,
+                                             UIViewTextCallback text, UIViewFrameCallback frame) {
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return;
+    {
+        std::lock_guard<std::mutex> lock(view->ui.mutex);
+        view->ui.handlers = {ctx, pointer, key, text, frame};
+    }
+    const uint32_t id = view->webviewId;
+    const bool enable = pointer || key || text || frame;
+    dispatch_async_main_void([id, enable]() {
+        WGPUViewImpl* view = uiViewById(id);
+        if (!view) return;
+        if (enable) {
+            uiInstallInput(view);
+        } else {
+            uiUninstallInput(view);
+        }
+    });
+}
+
+// Request one frame callback at the next refresh tick (any thread).
+ELECTROBUN_EXPORT void wgpuViewRequestFrame(AbstractView* abstractView) {
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return;
+    const uint32_t id = view->webviewId;
+    dispatch_async_main_void([id]() {
+        if (WGPUViewImpl* view = uiViewById(id)) uiScheduleFrame(view);
+    });
+}
+
+// View size in logical px and the device scale. Main thread.
+ELECTROBUN_EXPORT void wgpuViewGetMetrics(AbstractView* abstractView, double* width, double* height,
+                                          double* scale) {
+    *width = 0;
+    *height = 0;
+    *scale = 1;
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view || !view->xDisplay) return;
+    *scale = uiScaleOf(view);
+    *width = view->visualBounds.width / *scale;
+    *height = view->visualBounds.height / *scale;
+}
+
+// Caret rectangle (view coordinates, logical px) for the IME candidate window.
+ELECTROBUN_EXPORT void wgpuViewSetImeRect(AbstractView* abstractView, double x, double y, double w,
+                                          double h) {
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view) return;
+    const uint32_t id = view->webviewId;
+    dispatch_async_main_void([id, x, y, w, h]() {
+        WGPUViewImpl* view = uiViewById(id);
+        if (!view) return;
+        view->ui.imeX = x;
+        view->ui.imeY = y;
+        view->ui.imeW = w;
+        view->ui.imeH = h;
+        uiUpdateImeSpot(view);
+    });
+}
+
+// Begin a window move from the current primary-button press (main thread,
+// from the pointer callback). Like the macOS version it is modal: it waits
+// until the pointer moves past the drag threshold (then hands the move to
+// the window manager via _NET_WM_MOVERESIZE and returns true) or the button
+// is released (returns false, so the press still counts as a click).
+ELECTROBUN_EXPORT bool wgpuViewBeginWindowDrag(AbstractView* abstractView) {
+    WGPUViewImpl* view = dynamic_cast<WGPUViewImpl*>(abstractView);
+    if (!view || !view->xDisplay || !view->ui.pressValid) return false;
+    Display* display = view->xDisplay;
+    const Window window = uiInputWindowOf(view);
+    const int threshold = 4;
+    int rootX = view->ui.pressRootX;
+    int rootY = view->ui.pressRootY;
+    for (;;) {
+        XEvent ev;
+        if (XCheckTypedWindowEvent(display, window, ButtonRelease, &ev) && ev.xbutton.button == 1) {
+            view->ui.pressValid = false;
+            return false;
+        }
+        bool moved = false;
+        while (XCheckTypedWindowEvent(display, window, MotionNotify, &ev)) {
+            rootX = ev.xmotion.x_root;
+            rootY = ev.xmotion.y_root;
+            moved = std::abs(rootX - view->ui.pressRootX) > threshold ||
+                    std::abs(rootY - view->ui.pressRootY) > threshold;
+            if (moved) break;
+        }
+        if (moved) break;
+        // the release may have gone elsewhere (grab broken): check the button
+        Window root, child;
+        int rx, ry, wx, wy;
+        unsigned int state = 0;
+        if (XQueryPointer(display, window, &root, &child, &rx, &ry, &wx, &wy, &state) && !(state & Button1Mask)) {
+            view->ui.pressValid = false;
+            return false;
+        }
+        struct pollfd pfd = {ConnectionNumber(display), POLLIN, 0};
+        poll(&pfd, 1, 50);
+    }
+    view->ui.pressValid = false;
+    XUngrabPointer(display, CurrentTime);
+    XEvent msg = {};
+    msg.xclient.type = ClientMessage;
+    msg.xclient.window = view->parentXWindow;
+    msg.xclient.message_type = XInternAtom(display, "_NET_WM_MOVERESIZE", False);
+    msg.xclient.format = 32;
+    msg.xclient.data.l[0] = rootX;
+    msg.xclient.data.l[1] = rootY;
+    msg.xclient.data.l[2] = 8;  // _NET_WM_MOVERESIZE_MOVE
+    msg.xclient.data.l[3] = Button1;
+    msg.xclient.data.l[4] = 1;  // source: application
+    XSendEvent(display, DefaultRootWindow(display), False,
+               SubstructureRedirectMask | SubstructureNotifyMask, &msg);
+    XFlush(display);
+    return true;
+}
+
+// Set the mouse cursor (CSS cursor name) on the UI view under the pointer.
+// GDK resolves the name in the cursor theme; X cursors are server
+// resources, so the XID also works on CEF windows' own Display.
+ELECTROBUN_EXPORT void uiSetCursor(const char* name) {
+    std::string css = name && *name ? name : "default";
+    dispatch_async_main_void([css]() {
+        static std::map<std::string, Cursor> cache;
+        GdkDisplay* gdkDisplay = gdk_display_get_default();
+        Cursor cursor = 0;
+        auto it = cache.find(css);
+        if (it != cache.end()) {
+            cursor = it->second;
+        } else if (gdkDisplay && GDK_IS_X11_DISPLAY(gdkDisplay)) {
+            GdkCursor* c = gdk_cursor_new_from_name(gdkDisplay, css.c_str());
+            if (!c && css == "grab") c = gdk_cursor_new_from_name(gdkDisplay, "openhand");
+            if (!c && css == "grabbing") c = gdk_cursor_new_from_name(gdkDisplay, "closedhand");
+            if (!c) c = gdk_cursor_new_from_name(gdkDisplay, "default");
+            // cached cursors (and their XIDs) live for the process
+            if (c) cursor = gdk_x11_cursor_get_xcursor(c);
+            cache[css] = cursor;
+        }
+        Window root, child;
+        int rx, ry, wx, wy;
+        unsigned int mask;
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        for (auto& [id, abstractView] : g_wgpuViewMap) {
+            auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
+            if (!view || !view->ui.installed || !view->xDisplay) continue;
+            const Window window = uiInputWindowOf(view);
+            // only the view that has the pointer
+            if (!XQueryPointer(view->xDisplay, window, &root, &child, &rx, &ry, &wx, &wy, &mask)) continue;
+            if (wx < 0 || wy < 0 || wx >= view->visualBounds.width || wy >= view->visualBounds.height) continue;
+            if (cursor) {
+                XDefineCursor(view->xDisplay, window, cursor);
+            } else {
+                XUndefineCursor(view->xDisplay, window);
+            }
+            XFlush(view->xDisplay);
+        }
+    });
 }
 
 // ----------------------- WGPU Main-Thread Shims -----------------------
