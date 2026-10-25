@@ -70,11 +70,11 @@ jobs:
 
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
-      EXPECTED_HUTCH_VERSION: '0.28.2-canary.8'
+      EXPECTED_HUTCH_VERSION: '0.28.2'
       # Track the compiled pair explicitly; the published template catalog must match it.
-      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.3-canary.8'
-      EXPECTED_COTTONTAIL_VERSION: '0.7.3-canary.8'
-      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.3-canary.8'
+      EXPECTED_PAIRED_COTTONTAIL_VERSION: '0.7.3'
+      EXPECTED_COTTONTAIL_VERSION: '0.7.3'
+      EXPECTED_APP_COTTONTAIL_VERSION: '0.7.3'
 
     steps:
       - uses: actions/checkout@v6
