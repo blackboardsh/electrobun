@@ -201,7 +201,11 @@ function targetRuntimeLayout(
 					: "libwebgpu_dawn.so",
 		// shipped next to Dawn whenever bundleWGPU is on; the Electrobun UI
 		// engine (libElectrobunUI) renders through Dawn
-		wgpuAuxiliaryLibraries: windows ? ["d3dcompiler_47.dll"] : target.os === "macos" ? ["libElectrobunUI.dylib"] : [],
+		wgpuAuxiliaryLibraries: windows
+			? ["d3dcompiler_47.dll"]
+			: target.os === "macos"
+				? ["libElectrobunUI.dylib"]
+				: ["libElectrobunUI.so"],
 		processHelper: `process_helper${extension}`,
 		bsdiff: `bsdiff${extension}`,
 		bspatch: `bspatch${extension}`,

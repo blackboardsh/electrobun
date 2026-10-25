@@ -803,8 +803,9 @@ async function copyToDist() {
 				: "libElectrobunCore.so";
 	const coreLibSourceDir = OS === "win" ? "bin" : "lib";
 	cpSync(join("src", "core", "zig-out", coreLibSourceDir, coreLibName), join("dist", coreLibName), { force: true });
-	if (OS === "macos") {
-		cpSync(join("src", "ui-core", "zig-out", "lib", "libElectrobunUI.dylib"), join("dist", "libElectrobunUI.dylib"), { force: true });
+	if (OS === "macos" || OS === "linux") {
+		const uiLibName = OS === "macos" ? "libElectrobunUI.dylib" : "libElectrobunUI.so";
+		cpSync(join("src", "ui-core", "zig-out", "lib", uiLibName), join("dist", uiLibName), { force: true });
 	}
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	cpSync(`vendors/zig-bsdiff/bsdiff${binExt}`, `dist/bsdiff${binExt}`, { force: true });
@@ -2603,10 +2604,15 @@ async function buildLauncher() {
 // apps do not pay for it. Debug builds of the engine are too slow to be
 // useful, so dev builds still compile it optimized.
 async function buildUI() {
-	if (OS !== "macos") return; // TODO(ui-core): linux/windows hosts
+	if (OS === "win") return; // TODO(ui-core): windows host
 	console.log(`Building ElectrobunUI for ${OS} ${ARCH}...`);
-	const sdk = runCaptured("xcrun", ["--sdk", "macosx", "--show-sdk-path"]).trim();
-	const zigArgs = [`-Dtarget=${macosZigTarget(ARCH)}`, `-Dmacos-sdk=${sdk}`, `-Dtools=false`];
+	let zigArgs: string[];
+	if (OS === "macos") {
+		const sdk = runCaptured("xcrun", ["--sdk", "macosx", "--show-sdk-path"]).trim();
+		zigArgs = [`-Dtarget=${macosZigTarget(ARCH)}`, `-Dmacos-sdk=${sdk}`, `-Dtools=false`];
+	} else {
+		zigArgs = [`-Dtarget=${ARCH === "arm64" ? "aarch64" : "x86_64"}-linux-gnu`, `-Dtools=false`];
+	}
 	// dev builds keep safety checks: bounds, null and stale-id misuse panic
 	// with a stack trace at the faulty line instead of corrupting memory
 	const optimize = CHANNEL === "release" ? "ReleaseSmall" : "ReleaseSafe";

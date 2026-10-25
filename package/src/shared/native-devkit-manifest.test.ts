@@ -41,7 +41,7 @@ const targets: Array<{
 			nativeWrapper: "libNativeWrapper.so",
 			nativeWrapperCef: "libNativeWrapper_cef.so",
 			wgpuLibrary: "libwebgpu_dawn.so",
-			wgpuAuxiliaryLibraries: [],
+			wgpuAuxiliaryLibraries: ["libElectrobunUI.so"],
 		},
 	},
 	{

@@ -163,7 +163,7 @@ fn run(core: *electrobun.Core, bundle_paths: *const electrobun.BundlePaths) !voi
     const view = (try core.getWGPUViewPointer(view_id)) orelse return error.NoWGPUView;
 
     var dawn_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const dawn_path = try std.fmt.bufPrintSentinel(&dawn_buf, "{s}/libwebgpu_dawn.dylib", .{bundle_paths.exe_dir}, 0);
+    const dawn_path = try std.fmt.bufPrintSentinel(&dawn_buf, "{s}/{s}", .{ bundle_paths.exe_dir, electrobun.wgpu_library_name }, 0);
 
     _ = try ui.electrobun.mountApp(App, &app_state, .{ .view = view, .dawn_path = dawn_path });
 }

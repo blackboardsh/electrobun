@@ -82,6 +82,7 @@ pub const present_mode_fifo: u32 = 0x01;
 pub const surface_status_optimal: u32 = 0x01;
 pub const surface_status_suboptimal: u32 = 0x02;
 pub const request_status_success: u32 = 0x01;
+pub const status_success: u32 = 0x01;
 pub const feature_level_core: u32 = 0x02;
 pub const power_low: u32 = 0x01;
 pub const power_high: u32 = 0x02;
@@ -193,6 +194,19 @@ pub const SurfaceSourceMetalLayer = extern struct {
     layer: *anyopaque,
 };
 
+/// X11 window (Xlib); `window` is the XID.
+pub const SurfaceSourceXlibWindow = extern struct {
+    chain: ChainedStruct = .{ .s_type = stype_surface_source_xlib_window },
+    display: *anyopaque,
+    window: u64,
+};
+
+pub const SurfaceSourceWindowsHWND = extern struct {
+    chain: ChainedStruct = .{ .s_type = stype_surface_source_windows_hwnd },
+    hinstance: ?*anyopaque,
+    hwnd: *anyopaque,
+};
+
 pub const SurfaceConfiguration = extern struct {
     next: ?*const ChainedStruct = null,
     device: Device,
@@ -210,6 +224,20 @@ pub const SurfaceTexture = extern struct {
     next: ?*const ChainedStruct = null,
     texture: ?Texture = null,
     status: u32 = 0,
+};
+
+pub const AdapterInfo = extern struct {
+    next: ?*const ChainedStruct = null,
+    vendor: StringView = .{},
+    architecture: StringView = .{},
+    device: StringView = .{},
+    description: StringView = .{},
+    backend_type: u32 = 0,
+    adapter_type: u32 = 0,
+    vendor_id: u32 = 0,
+    device_id: u32 = 0,
+    subgroup_min_size: u32 = 0,
+    subgroup_max_size: u32 = 0,
 };
 
 pub const SurfaceCapabilities = extern struct {
@@ -531,6 +559,8 @@ pub const Api = struct {
     shaderModuleRelease: *const fn (ShaderModule) callconv(.c) void,
     deviceRelease: *const fn (Device) callconv(.c) void,
     adapterRelease: *const fn (Adapter) callconv(.c) void,
+    adapterGetInfo: *const fn (Adapter, *AdapterInfo) callconv(.c) u32,
+    adapterInfoFreeMembers: *const fn (AdapterInfo) callconv(.c) void,
     instanceRelease: *const fn (Instance) callconv(.c) void,
     queueRelease: *const fn (Queue) callconv(.c) void,
 
@@ -590,6 +620,8 @@ pub const Api = struct {
             .{ "shaderModuleRelease", "wgpuShaderModuleRelease" },
             .{ "deviceRelease", "wgpuDeviceRelease" },
             .{ "adapterRelease", "wgpuAdapterRelease" },
+            .{ "adapterGetInfo", "wgpuAdapterGetInfo" },
+            .{ "adapterInfoFreeMembers", "wgpuAdapterInfoFreeMembers" },
             .{ "instanceRelease", "wgpuInstanceRelease" },
             .{ "queueRelease", "wgpuQueueRelease" },
         };
@@ -661,6 +693,16 @@ pub const Context = struct {
         return .{ .api = api, .instance = instance, .adapter = adapter, .device = device, .queue = api.deviceGetQueue(device) };
     }
 
+    /// Log the adapter and backend Dawn picked (once per process, at info level).
+    pub fn logAdapter(ctx: *const Context) void {
+        var info = AdapterInfo{};
+        if (ctx.api.adapterGetInfo(ctx.adapter, &info) != status_success) return;
+        defer ctx.api.adapterInfoFreeMembers(info);
+        const backends = [_][]const u8{ "undefined", "null", "webgpu", "d3d11", "d3d12", "metal", "vulkan", "opengl", "opengles" };
+        const backend = if (info.backend_type < backends.len) backends[info.backend_type] else "?";
+        std.log.info("webgpu adapter: {s} ({s}) backend={s} type={d}", .{ viewString(info.device), viewString(info.description), backend, info.adapter_type });
+    }
+
     /// Context for a surface; the instance must be the one that created it.
     pub fn createWithInstance(api: *const Api, instance: Instance, surface: ?Surface) !Context {
         var req = Req{};
@@ -678,6 +720,12 @@ pub const Context = struct {
         return .{ .api = api, .instance = instance, .adapter = adapter, .device = device, .queue = api.deviceGetQueue(device) };
     }
 };
+
+fn viewString(sv: StringView) []const u8 {
+    const d = sv.data orelse return "";
+    const len = if (sv.length == std.math.maxInt(usize)) std.mem.len(@as([*:0]const u8, @ptrCast(d))) else sv.length;
+    return d[0..len];
+}
 
 fn logMessage(prefix: []const u8, m: StringView) void {
     if (m.data) |d| {
