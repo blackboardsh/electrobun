@@ -30,7 +30,8 @@ Vulkan/llvmpipe):
 - `bun-ui`, `zig-ui`, `ui-launcher`, `ui-color-picker`, `ui-wgpu` render and
   take input: hover, click, wheel scroll, select popup, cursors, typing,
   editing keys, Ctrl+A/C/V, Tab focus, Enter submit, IME composition and
-  commit (ibus XIM, Cangjie), resize, crisp at `GDK_SCALE=2`.
+  commit (ibus XIM, Cangjie), resize, crisp with correct hit-testing at
+  `GDK_SCALE=2` and at 150% (`GDK_DPI_SCALE=1.5`).
 - Kitchen `Native UI`: 14/14. ui-core tests: 103 pass, 2 skipped.
 
 What Windows can reuse or must know:
@@ -79,8 +80,8 @@ Known Linux gaps, by user impact:
    confirmed with XTest on mutter/XWayland; check with a real mouse.
 4. No AT-SPI accessibility yet (the engine tree and kitchen test work).
 5. Wheel uses core buttons 4-7 (48 px/notch); no XInput2 smooth scrolling.
-6. Fractional scale only via `Xft.dpi`/`GDK_DPI_SCALE` (UI zoom; not
-   verified on this VM, which hung its XWayland during that test).
+6. Fractional scale only via `Xft.dpi`/`GDK_DPI_SCALE` (UI zoom inside a
+   window whose pixel size is unchanged, matching GTK's behavior).
 7. Candidate-window placement (XNSpotLocation) is set but unverified (the
    VM's ibus panel is disabled). CEF windows (separate X11 path) are
    untested.
