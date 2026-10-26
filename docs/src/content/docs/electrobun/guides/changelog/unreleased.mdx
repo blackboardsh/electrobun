@@ -2,31 +2,6 @@
 title: "Unreleased"
 ---
 
-Changes since [v2.0.4](/electrobun/guides/changelog/v2-0-4/).
+Changes since [v2.0.5](/electrobun/guides/changelog/v2-0-5/).
 
-## Certificate security
-
-- Updated bundled Bun to `1.4.4` to reject certificate chains containing
-  compromised eMudhra/emSign public keys. The paired Hutch toolchain also uses
-  this version for scripts and package operations. This protects apps that
-  select Bun as their main process. See the [upstream fix](https://github.com/oven-sh/bun/pull/46300).
-- Hardened the optional Cottontail runtime's native TLS verification to reject
-  all eight compromised public keys, including cross-signed certificates and
-  explicitly trusted chains. Resumed TLS sessions and session tickets must
-  satisfy the same policy. Updated its OpenSSL dependencies, including `3.6.5`
-  on macOS and Windows and security patch requirements for Linux system builds.
-- Patched certificate verification in Hutch's native HTTP client and the
-  managed and vendored Zig toolchains used for builds and dependency downloads.
-  Setup and build checks reject missing or incomplete certificate protections.
-- Updated the Go main-process toolchain to `1.26.10`, including Go's
-  [certificate-authority mitigation](https://github.com/golang/go/issues/82345).
-  Updated Node used by build and CI tooling to `24.22.1`, whose
-  [security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)
-  also addresses the eMudhra certificate compromise.
-- Added regression checks that reject compromised certificate chains while
-  accepting unrelated valid certificates, including coverage for native TLS
-  and the managed Bun runtime.
-
-CEF's permanent certificate blocklist fix will follow in a separate update
-when upstream prebuilt binaries include it. System webviews continue to use
-operating-system certificate trust.
+No additional changes recorded yet.

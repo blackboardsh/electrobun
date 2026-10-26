@@ -54,6 +54,8 @@ npm run dev                   # your existing `electrobun ...` scripts still wor
 That's the whole migration for most apps. The sections below cover the
 details and the situational cases.
 
+<span id="upgrading-from-202-to-204"></span>
+
 ## Upgrading from 2.0.2 to 2.0.5
 
 Install the release dependency:
@@ -66,6 +68,15 @@ If `hutch.config.ts` pins `electrobun.version`, update that exact pin to the
 release you installed as well. An explicit project pin wins over the npm
 version. `hutch electrobun update` updates the project to the latest stable
 release; set `electrobun.version` to `2.0.5` to select this release exactly.
+
+An older first-line `// @hutch` pragma also overrides the npm defaults. Update
+it to `cli=0.28.2 cottontail=0.7.3`, or remove it when using the npm bootstrap
+so the release can select its paired toolchain. Direct Hutch users can run
+`hutch upgrade` to update their global installation.
+
+Electrobun 2.0.5 includes native Intel Mac support on macOS 14 or later.
+Build Intel apps on an Intel Mac or native Intel CI runner; cross-compiling
+from Apple Silicon is not supported.
 
 Choose the app runtime explicitly when migrating:
 

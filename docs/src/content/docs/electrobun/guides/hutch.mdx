@@ -30,10 +30,10 @@ Cottontail. Hutch stays out of the finished application bundle.
 
 Regular npm commands need no separate machine-wide installation. There is one
 dependency-free `electrobun` package, with no `@electrobun/hutch-*` platform
-packages and no postinstall script. Electrobun releases carry five
-platform archives from their exact paired Hutch release, including Windows
-ARM64. `hutch-artifacts.json` binds every host archive to its immutable GitHub Release URL, declared byte size, and
-SHA-256 digest. On first use the npm command reads that index, downloads and
+packages and no postinstall script. Electrobun releases carry six
+platform archives from their exact paired Hutch release, including Intel Macs
+and Windows ARM64. `hutch-artifacts.json` binds every host archive to its
+immutable GitHub Release URL, declared byte size, and SHA-256 digest. On first use the npm command reads that index, downloads and
 verifies the host archive, safely caches the extracted launcher and engine, then
 runs it.
 `npx electrobun` and package.json scripts that call `electrobun ...` therefore
@@ -52,24 +52,16 @@ macOS or Linux:
 curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
 ```
 
-Want to try prerelease builds without touching your daily setup? Install the
-canary channel alongside it as `hutch-canary`:
-
-```bash
-curl -fsSL https://hutch.blackboard.sh/hutch/install.sh |
-  sh -s -- --channel canary
-```
-
 On Windows PowerShell:
 
 ```powershell
 & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
 ```
 
-Pass `-Channel canary` to install `hutch-canary.exe`. The installers also
-accept an exact semantic version or build revision. Production and canary
-live side by side under `~/.hutch/releases`, with launchers in `~/.hutch/bin`
-and their exact local selections in `~/.hutch/state/selections.json`. Set
+The installers also accept an exact semantic version or build revision.
+Installed releases live side by side under `~/.hutch/releases`, with launchers
+in `~/.hutch/bin` and their exact local selections in
+`~/.hutch/state/selections.json`. Set
 `HUTCH_HOME` to relocate the store. `stable` is accepted as an alias for the
 production channel.
 
@@ -133,8 +125,8 @@ Hutch's Electrobun build environments are `dev`, `canary`, and `stable`.
 
 Template channels are separate from Hutch's release channel. Electrobun beta
 templates can require stable Hutch; `--beta` selects the template catalog,
-not a canary toolchain. Follow any minimum-version error from init and upgrade
-the appropriate launcher. See [init's channel behavior](/electrobun/apis/cli/cli-args/#hutch-electrobun-init).
+not a Hutch release version. Follow any minimum-version error from init and
+upgrade the appropriate launcher. See [init's channel behavior](/electrobun/apis/cli/cli-args/#hutch-electrobun-init).
 
 The publisher guarantees that a published template's exact Electrobun pin
 matches its catalog. After extracting it, `init` syncs that release and the
@@ -156,7 +148,7 @@ manager. When a name is unambiguous, `hutch <name>` works as shorthand:
 // hutch.config.ts
 export default {
   // Optional exact override:
-  // electrobun: { version: "2.0.4" },
+  // electrobun: { version: "2.0.5" },
   scripts: {
     install: ["hutch", "install", "--frozen-lockfile"],
     ui: ["hutch", "pm", "exec", "--", "vite", "build"],
@@ -203,7 +195,8 @@ example, with npm selected, `hutch pm install zod` and
 ## Paired toolchain
 
 Each Electrobun release declares its paired Hutch and build-time Cottontail
-versions in the release manifests. Hutch uses Zig `0.17.0` and selects a native
+versions in the release manifests. Electrobun 2.0.5 pairs Hutch 0.28.2 with
+Cottontail 0.7.3. Hutch uses Zig `0.17.0` and selects a native
 ARM64 compiler on Windows ARM64 even when the caller is an emulated x64 process.
 
 Native Zig app builds retain their compiler cache under
@@ -213,10 +206,9 @@ untracked; a clean bundle does not require deleting this compiler cache.
 
 ## Versions and updates
 
-The global launchers have independent production and canary selections. Each
-selection names an exact installed release. Hutch engines and Cottontail
-runtimes are stored side by side, so one project can pin an older release
-without replacing your global selection.
+The global launcher's selection names an exact installed release. Hutch engines
+and Cottontail runtimes are stored side by side, so one project can pin an
+older release without replacing your global selection.
 
 ```bash
 hutch upgrade
@@ -320,12 +312,12 @@ installed globally? Place an optional pragma on the first line of
 // @hutch cli=production cottontail=production
 ```
 
-Selectors may be `production`, `stable`, `canary`, `latest`, an exact semantic
-version, or `build:<full-git-revision>`. `stable` and `latest` resolve to
+Use `production`, `stable`, `latest`, an exact semantic version, or
+`build:<full-git-revision>` as a selector. `stable` and `latest` resolve to
 `production`:
 
 ```ts
-// @hutch cli=0.27.1 cottontail=0.7.1
+// @hutch cli=0.28.2 cottontail=0.7.3
 ```
 
 The pragma selects versions only for that project. It never rewrites the global
@@ -347,7 +339,7 @@ hutch self pin
 hutch cottontail pin
 
 # Pin an explicit selector, including the floating `latest`
-hutch self pin 0.5.0
+hutch self pin 0.28.2
 hutch self pin latest
 
 # Walk the tree below the current directory and move every config whose
@@ -369,7 +361,7 @@ alongside tasks and an optional external package-manager selection:
 ```ts docs=syntax
 export default {
   // Optional: omit this object to use the npm or channel default.
-  electrobun: { version: "2.0.4" },
+  electrobun: { version: "2.0.5" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
   },
@@ -387,9 +379,9 @@ always wins.
 Run `hutch electrobun update` from an app directory to upgrade an exact pin.
 Hutch finds the nearest parent `hutch.config.ts`, resolves the latest stable
 Electrobun release, rewrites only its exact `electrobun.version` string literal,
-and then syncs the current app. The command always targets stable even when the
-active Hutch or template channel is canary/beta. It requires network access and
-fails instead of guessing when the pin is missing, computed, or ambiguous.
+and then syncs the current app. The command always targets stable, including
+projects initialized from beta templates. It requires network access and fails
+instead of guessing when the pin is missing, computed, or ambiguous.
 
 `hutch electrobun prepare` resolves and verifies the selected release in the global
 `~/.hutch/releases/electrobun` store, then copies its SDKs and editor facade into

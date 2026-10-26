@@ -1,0 +1,91 @@
+---
+title: "v2.0.5"
+---
+
+Released **2026-10-26**. Changes since [v2.0.4](/electrobun/guides/changelog/v2-0-4/).
+
+## Intel Mac support
+
+- Restored native Intel Mac builds across Electrobun and its dependency chain:
+  `zig-asar`, `zig-bsdiff`, `zig-zstd`, Electrobun's Dawn and JavaScriptCore
+  forks, Cottontail, and Hutch. The release includes a paired Intel Hutch
+  archive that the npm bootstrap downloads automatically, so a private fork
+  or separate toolchain is not required.
+- Intel x64 and Apple Silicon ARM64 applications both target macOS 14 or later.
+  Build on the matching native architecture; cross-compiling from Apple Silicon
+  to Intel is not supported. Native Intel CI runners can build and test Intel
+  releases.
+- Release validation now covers all six operating-system/architecture targets,
+  including Intel builds, VM tests, macOS signing and notarization, and public
+  npm-package, template, and desktop acceptance.
+
+## Paired tools and runtimes
+
+| Component | Version |
+| --- | --- |
+| Hutch | 0.28.2 |
+| Build-time and optional app Cottontail | 0.7.3 |
+| Default app and Hutch script Bun | 1.4.4 |
+| Go main-process compiler | 1.26.10 |
+| Rust main-process compiler | 1.99.1 |
+| Node used by build and CI tooling | 24.22.1 |
+
+The application main process and Hutch's script runner remain independent
+selections. Hutch's matching-version Bun lookup now works when Bun is already
+on `PATH`.
+
+## Certificate security
+
+- Updated bundled Bun to `1.4.4` to reject certificate chains containing
+  compromised eMudhra/emSign public keys. The paired Hutch toolchain also uses
+  this version for scripts and package operations. This protects apps that
+  select Bun as their main process. See the [upstream fix](https://github.com/oven-sh/bun/pull/46300).
+- Hardened the optional Cottontail runtime's native TLS verification to reject
+  all eight compromised public keys, including cross-signed certificates and
+  explicitly trusted chains. Resumed TLS sessions and session tickets must
+  satisfy the same policy. Updated its OpenSSL dependencies, including `3.6.5`
+  on macOS and Windows and security patch requirements for Linux system builds.
+- Patched certificate verification in Hutch's native HTTP client and the
+  managed and vendored Zig toolchains used for builds and dependency downloads.
+  Setup and build checks reject missing or incomplete certificate protections.
+- Updated the Go main-process toolchain to `1.26.10`, including Go's
+  [certificate-authority mitigation](https://github.com/golang/go/issues/82345).
+  Updated Node used by build and CI tooling to `24.22.1`, whose
+  [security release](https://nodejs.org/en/blog/vulnerability/october-2026-security-releases)
+  also addresses the eMudhra certificate compromise.
+- Added regression checks that reject compromised certificate chains while
+  accepting unrelated valid certificates, including coverage for native TLS
+  and the managed Bun runtime.
+
+CEF's permanent certificate blocklist fix will follow in a separate update
+when upstream prebuilt binaries include it. System webviews continue to use
+operating-system certificate trust.
+
+## Browser and starter updates
+
+- Updated bundled CEF to `156.0.7+g47dbc1d` / Chromium `156.0.8078.17` across
+  all six targets using the existing upstream prebuilt binaries. The certificate
+  limitation above still applies to this CEF version.
+- Updated starter framework dependencies, including the patched Svelte release,
+  and refreshed the Angular, Vite, and Tailwind dependency trees.
+- Kept Odin `dev-2026-07a` for Intel support and the existing deployment target.
+  The pinned Apple Silicon Odin compiler itself requires macOS 15 or later;
+  this does not raise the application's macOS 14 minimum.
+
+## Migration notes
+
+Install the stable npm release and run the app:
+
+```bash
+npm install --save-dev electrobun@2.0.5
+npx electrobun dev
+```
+
+Update any explicit `electrobun.version` in `hutch.config.ts` to `2.0.5` too.
+An older `// @hutch` pragma also overrides the npm defaults: update it to
+`cli=0.28.2 cottontail=0.7.3`, or remove it to use the npm release's paired
+versions. Direct Hutch users can run `hutch upgrade` before initializing a
+project. See the [migration guide](/electrobun/guides/migrating-to-v2/).
+
+[Release](https://github.com/blackboardsh/electrobun/releases/tag/v2.0.5) ·
+[Complete release validation](https://github.com/blackboardsh/electrobun/actions/runs/40239483342)

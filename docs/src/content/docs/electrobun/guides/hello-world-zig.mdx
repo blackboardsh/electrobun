@@ -22,7 +22,7 @@ project does not need a `package.json`:
 
 ```ts docs=syntax
 export default {
-  electrobun: { version: "2.0.4" },
+  electrobun: { version: "2.0.5" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
@@ -256,7 +256,7 @@ compiler is not bundled into the finished app.
 
 Native main processes build for the host OS/arch only — there is no
 cross-compilation, so use native CI runners for a release matrix. Windows
-targets are x64.
+targets include x64 and ARM64.
 
 Next: [Native main process](/electrobun/guides/native-main-process/) for the
 runtime comparison and deeper build details, and the

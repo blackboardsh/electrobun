@@ -110,12 +110,16 @@ jobs:
         include:
           - runner: macos-14
             target: macos-arm64
+          - runner: macos-15-intel
+            target: macos-x64
           - runner: ubuntu-24.04
             target: linux-x64
           - runner: ubuntu-24.04-arm
             target: linux-arm64
           - runner: windows-2025
             target: win-x64
+          - runner: windows-11-arm
+            target: win-arm64
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6

@@ -22,7 +22,7 @@ project does not need a `package.json`:
 
 ```ts docs=syntax
 export default {
-  electrobun: { version: "2.0.4" },
+  electrobun: { version: "2.0.5" },
   scripts: {
     dev: ["hutch", "electrobun", "dev", "--watch"],
     build: ["hutch", "electrobun", "build", "--env=stable"],
@@ -252,12 +252,14 @@ Focused Odin graphics templates also exist: `odin-fluid-wgpu`,
 ## Toolchain
 
 Odin is pre-1.0 and ships monthly dev releases with breaking changes;
-Electrobun 2.0.0 defaults to **Odin dev-2026-07a** and guarantees the SDK only
+Electrobun 2.0.5 defaults to **Odin dev-2026-07a** and guarantees the SDK only
 against that release. Override it exactly with `build.odin.version`. Hutch uses
 a system compiler only on an exact version match; otherwise it downloads the
 selected toolchain into
 `~/.hutch/toolchains/odin/<version>/<platform>` and reuses it across projects.
-The compiler is not bundled into the finished app.
+The compiler is not bundled into the finished app. The pinned Apple Silicon
+compiler requires macOS 15 or later to run; the resulting application can still
+target macOS 14.
 
 Platform requirements: macOS needs the Xcode Command Line Tools, Linux needs
 `clang`, and Windows needs Visual Studio Build Tools (MSVC `link.exe`) plus
