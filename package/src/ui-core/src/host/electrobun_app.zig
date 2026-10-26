@@ -28,6 +28,9 @@ pub const MountOptions = struct {
     css: []const []const u8 = &.{},
     /// force the color scheme (null follows the system)
     dark: ?bool = null,
+    /// the window or view is alpha-composited: with no html/body background
+    /// the canvas stays transparent instead of white
+    transparent: bool = false,
 };
 
 pub const Error = error{ CreateFailed, AttachFailed, MountFailed };
@@ -74,6 +77,8 @@ pub fn mountApp(comptime T: type, state: *T, opts: MountOptions) Error!Mounted(T
     const id = capi.ebui_create();
     if (id == 0) return error.CreateFailed;
     errdefer capi.ebui_destroy(id);
+    // before attaching: the host picks how to present from it at the first frame
+    if (opts.transparent) capi.ebui_set_transparent(id, true);
     if (!host.ebui_attach_wgpu_view(id, opts.view, if (opts.dawn_path) |p| p.ptr else null)) return error.AttachFailed;
     errdefer host.ebui_detach_view(id);
 

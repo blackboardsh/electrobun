@@ -167,6 +167,8 @@ pub const Painter = struct {
     transforms: std.ArrayList(geom.Transform) = .empty,
     order: u32 = 0,
     scale: f32 = 1,
+    /// no html/body background leaves the canvas transparent, not white
+    transparent_canvas: bool = false,
 
     pub fn paint(p: *Painter) !void {
         const doc = p.doc;
@@ -182,7 +184,7 @@ pub const Painter = struct {
             const body = firstChildTag(doc, root, doc.atoms.body);
             if (body != null_id) bg = style_mod.of(doc, body).background_color;
         }
-        p.dl.background = if (bg.a == 0) Color.white else bg;
+        p.dl.background = if (bg.a != 0) bg else if (p.transparent_canvas) Color.transparent else Color.white;
         try p.paintStackingContext(.{ .node = root }, 0, 0, true);
     }
 

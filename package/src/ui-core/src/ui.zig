@@ -53,6 +53,10 @@ pub const Ui = struct {
     height: f32 = 600,
     scale: f32 = 1,
     dark: bool = false,
+    /// The surface is alpha-composited (a transparent window, an overlay
+    /// view): with no html/body background the canvas stays transparent
+    /// instead of painting the default white.
+    transparent: bool = false,
     reduced_motion: bool = false,
     /// set when the display list changed since the last `takeFrame`
     frame_dirty: bool = true,
@@ -210,6 +214,13 @@ pub const Ui = struct {
         ui.dark = dark;
     }
 
+    /// See `transparent`.
+    pub fn setTransparent(ui: *Ui, on: bool) void {
+        if (ui.transparent == on) return;
+        ui.transparent = on;
+        ui.doc.needs_paint = true;
+    }
+
     /// Advance the clock (seconds). Drives caret blinking and animations.
     pub fn tick(ui: *Ui, now: f64) void {
         ui.now = now;
@@ -239,7 +250,7 @@ pub const Ui = struct {
         ui.animator.apply(ui.now);
         _ = try ui.layout.run(ui.width, ui.height);
         if (!ui.doc.needs_paint) return false;
-        var painter = paint.Painter{ .doc = ui.doc, .L = &ui.layout, .dl = &ui.dl, .hooks = ui.paint_hooks, .scale = ui.scale };
+        var painter = paint.Painter{ .doc = ui.doc, .L = &ui.layout, .dl = &ui.dl, .hooks = ui.paint_hooks, .scale = ui.scale, .transparent_canvas = ui.transparent };
         try painter.paint();
         ui.doc.needs_paint = false;
         ui.frame_dirty = true;
@@ -269,6 +280,22 @@ const Counter = struct {
         c.last = ev.type;
     }
 };
+
+test "transparent surfaces keep an unpainted canvas transparent" {
+    const ui = try testUi(
+        \\<style>html, body { background: transparent; margin: 0 }</style><div>x</div>
+    );
+    defer ui.destroy();
+    // an opaque window gets the default white canvas
+    try std.testing.expect(ui.dl.background.eql(geom.Color.white));
+    ui.setTransparent(true);
+    _ = try ui.update();
+    try std.testing.expectEqual(@as(u8, 0), ui.dl.background.a);
+    // a page background still wins
+    try ui.addCss("body { background: #123456 }");
+    _ = try ui.update();
+    try std.testing.expect(ui.dl.background.eql(geom.Color.hex(0x123456)));
+}
 
 test "hover restyles and click dispatches" {
     const ui = try testUi(

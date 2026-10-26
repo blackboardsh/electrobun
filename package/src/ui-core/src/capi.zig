@@ -1078,6 +1078,16 @@ export fn ebui_set_dark(id: u32, dark: bool) void {
     inst.ui.doc.markAllStyleDirty();
 }
 
+/// The surface is alpha-composited (transparent window, overlay view): with
+/// no html/body background the canvas stays transparent instead of white.
+pub export fn ebui_set_transparent(id: u32, on: bool) void {
+    lock();
+    defer unlock();
+    const inst = get(id) orelse return;
+    inst.ui.setTransparent(on);
+    if (inst.request_frame) |f| f(inst.request_frame_ctx);
+}
+
 /// Advance time and run style/layout/paint. Returns true if a frame is ready.
 export fn ebui_update(id: u32, now: f64) bool {
     lock();
