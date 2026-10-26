@@ -39,6 +39,12 @@ function near(actual: number[], expected: number[], tol = 6) {
 
 const base = `body { margin: 0; font: 14px system-ui; background: #ffffff; }`;
 
+// Unscaled wait for tests that measure animation time (sleep() stretches its
+// waits on Windows to absorb slow page loads, which would overshoot them).
+function realSleep(ms: number) {
+	return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export const nativeUiTests = [
 	defineTest({
 		name: "Native UI renders HTML/CSS into a GpuWindow",
@@ -324,6 +330,8 @@ export const nativeUiTests = [
 		name: "Native UI: hover sweep over styled components",
 		category: "Native UI",
 		description: "Sweeps the pointer across nav items, buttons and a placeholder input repeatedly; paint-only restyles must not leave stale style pointers in cached layout.",
+		// ~340 painted frames: seconds on a GPU, ~35 s on software rendering (VMs)
+		timeout: 20000,
 		async run({ log }) {
 			await withUI(
 				"native-ui-hover-sweep",
@@ -457,18 +465,20 @@ export const nativeUiTests = [
 		description: "A width transition produces intermediate values over time and settles at the target.",
 		async run({ log }) {
 			const [wide, setWide] = signal(false);
+			// long enough that a mid-transition sample stays mid-transition
+			// even when frames are slow (software rendering takes ~200 ms)
 			await withUI(
 				"native-ui-transition",
-				`${base} #t { height: 20px; width: 100px; background: #000; transition: width .4s linear } #t.wide { width: 300px }`,
+				`${base} #t { height: 20px; width: 100px; background: #000; transition: width 1.2s linear } #t.wide { width: 300px }`,
 				() => <div id="t" class={live(() => (wide() ? "wide" : ""))} />,
 				async (ui) => {
 					const el = ui.querySelector("#t")!;
 					setWide(true);
 					await ui.nextFrame();
-					await sleep(180);
+					await realSleep(200);
 					await ui.nextFrame();
 					const mid = el.getBoundingClientRect().width;
-					await sleep(400);
+					await realSleep(1200);
 					await ui.nextFrame();
 					const end = el.getBoundingClientRect().width;
 					expect(mid).toBeGreaterThan(110);
