@@ -38,6 +38,8 @@ const Native = struct {
     setA11yTree: ?*const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void,
     clipboardReadText: ?*const fn () callconv(.c) ?[*:0]const u8,
     clipboardWriteText: ?*const fn ([*:0]const u8) callconv(.c) void,
+    /// frees clipboardReadText's result with the wrapper's C runtime
+    clipboardFreeText: ?*const fn ([*:0]const u8) callconv(.c) void,
 };
 
 var native: ?Native = null;
@@ -69,6 +71,7 @@ fn loadNative() ?Native {
         .setA11yTree = sym(*const fn (?*anyopaque, [*]const u8, usize) callconv(.c) void, "wgpuViewSetAccessibilityTree"),
         .clipboardReadText = sym(*const fn () callconv(.c) ?[*:0]const u8, "clipboardReadText"),
         .clipboardWriteText = sym(*const fn ([*:0]const u8) callconv(.c) void, "clipboardWriteText"),
+        .clipboardFreeText = sym(*const fn ([*:0]const u8) callconv(.c) void, "clipboardFreeText"),
     };
     return native;
 }
@@ -533,11 +536,11 @@ fn clipboardRead(ctx: ?*anyopaque, a: std.mem.Allocator) ?[]u8 {
     _ = ctx;
     const n = native orelse return null;
     const f = n.clipboardReadText orelse return null;
-    // the wrappers return a malloc'd copy owned by the caller. On Windows the
-    // wrapper's CRT may differ from ours, so it is not freed here (TODO: a
-    // wrapper-side free export).
+    // the wrappers return a malloc'd copy owned by the caller. The wrapper's C
+    // runtime may not be ours (Windows links it statically), so free it with
+    // the wrapper's own free where it exports one.
     const p = f() orelse return null;
-    defer if (builtin.os.tag != .windows) std.c.free(@constCast(p));
+    defer if (n.clipboardFreeText) |free| free(p) else if (builtin.os.tag != .windows) std.c.free(@constCast(p));
     return a.dupe(u8, std.mem.span(p)) catch null;
 }
 

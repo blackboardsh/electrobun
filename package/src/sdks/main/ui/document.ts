@@ -375,9 +375,15 @@ export class NativeElement extends NativeNode {
 			this.setAttribute("value", String(v ?? ""));
 			return;
 		}
+		const s = v == null ? "" : String(v);
+		// A controlled input echoes each input event's value back. Events are
+		// handled after the fact, so by then the user may have typed more:
+		// writing the echo would undo those keystrokes. The engine already
+		// holds the value it last reported (or that was last set), so skip it.
+		if (this.ownerDocument.valueCache.get(this.id) === s) return;
 		this.ownerDocument.cmd(Op.setValue).u32(this.id);
-		this.ownerDocument.buf.str(v == null ? "" : String(v));
-		this.ownerDocument.valueCache.set(this.id, String(v ?? ""));
+		this.ownerDocument.buf.str(s);
+		this.ownerDocument.valueCache.set(this.id, s);
 	}
 	get checked(): boolean {
 		return this.ownerDocument.readChecked(this);

@@ -48,6 +48,13 @@
 #include <locale>      // For string conversion
 #include <codecvt>     // For UTF-8 to wide string conversion
 #include <d2d1.h>      // For Direct2D
+#include <imm.h>       // IMM32 composition for native UI views
+#include <dwmapi.h>    // DwmFlush frame pacing for native UI views
+#include <UIAutomation.h> // UI Automation providers for native UI views
+#include <condition_variable>
+#ifndef WM_DPICHANGED_AFTERPARENT
+#define WM_DPICHANGED_AFTERPARENT 0x02E3
+#endif
 #include <direct.h>    // For _getcwd
 
 // Shared cross-platform utilities
@@ -404,6 +411,9 @@ extern "C" __declspec(dllexport) void asar_close(void* archive) {
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d2d1.lib")
+#pragma comment(lib, "imm32.lib")
+#pragma comment(lib, "dwmapi.lib")
+#pragma comment(lib, "uiautomationcore.lib")
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(linker, "/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='*' publicKeyToken='6595b64144ccf1df' language='*'\"")
@@ -4879,9 +4889,63 @@ public:
     }
 };
 
+// Per-view hooks used by the native UI core (ElectrobunUI ebui_*). Callback
+// typedefs and semantics match the macOS wrapper ("Per-view hooks used by the
+// native UI core"); see "Native UI core host" below for the Windows side.
+typedef void (*UIViewPointerCallback)(void* ctx, uint32_t eventType, double x, double y,
+                                      double buttonOrDx, double dy, uint32_t modifiers);
+typedef uint32_t (*UIViewKeyCallback)(void* ctx, uint32_t keyCode, uint32_t modifiers,
+                                      uint32_t isDown, uint32_t isRepeat, const char* characters,
+                                      const char* charactersIgnoringModifiers);
+typedef void (*UIViewTextCallback)(void* ctx, uint32_t kind, const char* text, uint32_t selLoc);
+typedef void (*UIViewFrameCallback)(void* ctx, double timestamp);
+typedef void (*UIViewA11yRequestCallback)(void* ctx);
+typedef void (*UIViewA11yActionCallback)(void* ctx, uint32_t nodeId, uint32_t action,
+                                         const char* value);
+
+struct UIViewHandlers {
+    void* ctx = nullptr;
+    UIViewPointerCallback pointer = nullptr;
+    UIViewKeyCallback key = nullptr;
+    UIViewTextCallback text = nullptr;
+    UIViewFrameCallback frame = nullptr;
+    void* a11yCtx = nullptr;
+    UIViewA11yRequestCallback a11yRequest = nullptr;
+    UIViewA11yActionCallback a11yAction = nullptr;
+};
+
+struct UIHostState {
+    // handlers are set from the app thread; everything else is main-thread only
+    std::mutex mutex;
+    UIViewHandlers handlers;
+    bool installed = false;
+    WNDPROC originalProc = nullptr;
+    bool pointerInside = false;
+    bool inFrame = false;
+    // the view takes keyboard focus with its window, as on macOS, until the
+    // user focuses another view of the same window
+    bool wantsFocus = true;
+    // the WM_CHARs of a key the UI consumed (shortcuts) are not text
+    bool suppressChar = false;
+    wchar_t highSurrogate = 0;
+    bool composing = false;
+    double imeX = 0, imeY = 0, imeW = 0, imeH = 0;
+    void* a11y = nullptr;  // UIA provider root (see uiA11y*)
+};
+
+class WGPUView;
+// defined in the "Native UI core host" section (inside extern "C")
+extern "C" {
+static void uiHostViewRemoved(WGPUView* view);
+// Give keyboard focus to a UI view of this top-level window that wants it.
+static bool uiHostRedirectFocus(HWND topLevel);
+}
+
 // WGPUView class - simple native child window surface
 class WGPUView : public AbstractView {
 public:
+    UIHostState ui;
+
     WGPUView(uint32_t webviewId) {
         this->webviewId = webviewId;
     }
@@ -5035,6 +5099,7 @@ public:
     void toggleDevTools() override {}
 
     void remove() override {
+        uiHostViewRemoved(this);
         if (hwnd) {
             DestroyWindow(hwnd);
             hwnd = NULL;
@@ -6069,6 +6134,12 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                         electrobun::physicalToLogicalCoordinate(height, dpi));
                 }
             }
+            break;
+
+        case WM_SETFOCUS:
+            // DefWindowProc gives an activated window the focus itself; a
+            // native UI view in it takes it instead (first responder)
+            if (uiHostRedirectFocus(hwnd)) return 0;
             break;
 
         case WM_ACTIVATE:
@@ -8348,12 +8419,12 @@ static bool drainCEFForShutdownOnMainThread(int timeoutMs) {
         CefDoMessageLoopWork();
 
         MSG message;
-        while (PeekMessage(&message, nullptr, 0, 0, PM_REMOVE)) {
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
             if (message.message == WM_QUIT) {
                 continue;
             }
             TranslateMessage(&message);
-            DispatchMessage(&message);
+            DispatchMessageW(&message);
         }
         Sleep(1);
     }
@@ -8780,12 +8851,12 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
 
             // Standard Windows message loop
             MSG msg;
-            while (GetMessage(&msg, NULL, 0, 0)) {
-                if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+            while (GetMessageW(&msg, NULL, 0, 0)) {
+                if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                     continue;
                 }
                 TranslateMessage(&msg);
-                DispatchMessage(&msg);
+                DispatchMessageW(&msg);
             }
             // Clean up after shutdown
             std::cout << "[CEF] CEF message loop ended, performing cleanup..." << std::endl;
@@ -8815,26 +8886,26 @@ ELECTROBUN_EXPORT void startEventLoop(const char* identifier, const char* name, 
         } else {
             // Fall back to Windows message loop if CEF init fails
             MSG msg;
-            while (GetMessage(&msg, NULL, 0, 0)) {
+            while (GetMessageW(&msg, NULL, 0, 0)) {
                 // Check for menu accelerators first
-                if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+                if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                     continue;
                 }
                 TranslateMessage(&msg);
-                DispatchMessage(&msg);
+                DispatchMessageW(&msg);
             }
             g_shutdownComplete.store(true);
         }
     } else {
         // Use Windows message loop if CEF is not available
         MSG msg;
-        while (GetMessage(&msg, NULL, 0, 0)) {
+        while (GetMessageW(&msg, NULL, 0, 0)) {
             // Check for menu accelerators first
-            if (g_hAccelTable && TranslateAccelerator(msg.hwnd, g_hAccelTable, &msg)) {
+            if (g_hAccelTable && TranslateAcceleratorW(msg.hwnd, g_hAccelTable, &msg)) {
                 continue;
             }
             TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            DispatchMessageW(&msg);
         }
         g_shutdownComplete.store(true);
     }
@@ -9159,6 +9230,1491 @@ ELECTROBUN_EXPORT void wgpuViewRemove(AbstractView *abstractView) {
 ELECTROBUN_EXPORT void* wgpuViewGetNativeHandle(AbstractView *abstractView) {
     if (!abstractView) return nullptr;
     return abstractView->hwnd;
+}
+
+// ----------------------- Native UI core host -----------------------
+//
+// A UI view is a WGPUView whose child HWND is subclassed while the UI core's
+// handlers are installed: pointer, keyboard, IMM32 composition, cursor and
+// focus messages go to the handlers, and frames are paced by a helper thread
+// that waits for DWM composition (DwmFlush) and posts the frame callback to
+// the main thread. Everything here runs on the main thread unless noted.
+
+static const wchar_t* kUIViewProp = L"ElectrobunUIView";
+
+// EBUI_HOST_DEBUG=1 logs the view's keyboard/IME messages to stderr.
+static bool uiHostDebug() {
+    static const bool on = getenv("EBUI_HOST_DEBUG") != nullptr;
+    return on;
+}
+
+static double uiMonotonicSeconds() {
+    static LARGE_INTEGER freq = {};
+    if (!freq.QuadPart) QueryPerformanceFrequency(&freq);
+    LARGE_INTEGER counter;
+    QueryPerformanceCounter(&counter);
+    return (double)counter.QuadPart / (double)freq.QuadPart;
+}
+
+// The retained WGPU view for an id; main thread (views are removed there).
+static WGPUView* uiViewById(uint32_t webviewId) {
+    std::lock_guard<std::mutex> lock(g_retainedWGPUViewsMutex);
+    auto it = g_retainedWGPUViews.find(webviewId);
+    if (it == g_retainedWGPUViews.end()) return nullptr;
+    return dynamic_cast<WGPUView*>(it->second.get());
+}
+
+static UIViewHandlers uiHandlersOf(WGPUView* view) {
+    std::lock_guard<std::mutex> lock(view->ui.mutex);
+    return view->ui.handlers;
+}
+
+static double uiScaleOf(WGPUView* view) {
+    return view->hwnd ? electrobun::windowsDpiForWindow(view->hwnd) / 96.0 : 1.0;
+}
+
+static uint32_t uiModifiers() {
+    uint32_t mods = 0;
+    if (GetKeyState(VK_SHIFT) & 0x8000) mods |= 1;
+    if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
+    if (GetKeyState(VK_MENU) & 0x8000) mods |= 4;
+    if ((GetKeyState(VK_LWIN) | GetKeyState(VK_RWIN)) & 0x8000) mods |= 8;
+    return mods;
+}
+
+static std::string uiUtf8(const std::wstring& s) {
+    std::string out;
+    if (!electrobun::wideToUtf8(s, out)) out.clear();
+    return out;
+}
+
+// ---- frames ----
+//
+// wgpuViewRequestFrame marks the view; the pacing thread waits for the next
+// DWM composition and posts one frame per marked view. A view with a frame
+// posted but not yet run is not posted again (requests made meanwhile, or
+// from inside the frame, get the next vsync), so frames never stack up or
+// run re-entrantly.
+
+struct UIFrameState {
+    bool requested = false;
+    bool inFlight = false;
+};
+static std::mutex g_uiFrameMutex;
+static std::condition_variable g_uiFrameCv;
+static std::map<uint32_t, UIFrameState> g_uiFrames;
+
+static double uiRefreshInterval() {
+    DEVMODEW mode = {};
+    mode.dmSize = sizeof(mode);
+    if (EnumDisplaySettingsW(nullptr, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1 &&
+        mode.dmDisplayFrequency <= 500) {
+        return 1.0 / mode.dmDisplayFrequency;
+    }
+    return 1.0 / 60.0;
+}
+
+static void uiRunFrame(WGPUView* view) {
+    if (view->ui.inFrame || !view->ui.installed) return;
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.frame) return;
+    view->ui.inFrame = true;
+    h.frame(h.ctx, uiMonotonicSeconds());
+    view->ui.inFrame = false;
+}
+
+static void uiFrameThread() {
+    const double interval = uiRefreshInterval();
+    double lastTick = 0;
+    for (;;) {
+        {
+            std::unique_lock<std::mutex> lock(g_uiFrameMutex);
+            g_uiFrameCv.wait(lock, [] {
+                for (auto& [id, state] : g_uiFrames) {
+                    if (state.requested && !state.inFlight) return true;
+                }
+                return false;
+            });
+        }
+        // DwmFlush returns at the next composition; never tick faster than
+        // half the refresh interval if it returns early (DWM off, RDP)
+        const double before = uiMonotonicSeconds();
+        if (FAILED(DwmFlush()) || before - lastTick < interval * 0.5) {
+            const double wait = lastTick + interval - uiMonotonicSeconds();
+            if (wait > 0) Sleep((DWORD)std::ceil(wait * 1000.0));
+        }
+        lastTick = uiMonotonicSeconds();
+        std::vector<uint32_t> ids;
+        {
+            std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+            for (auto& [id, state] : g_uiFrames) {
+                if (state.requested && !state.inFlight) {
+                    state.requested = false;
+                    state.inFlight = true;
+                    ids.push_back(id);
+                }
+            }
+        }
+        if (ids.empty() || !MainThreadDispatcher::message_window()) continue;
+        MainThreadDispatcher::dispatch_async([ids]() {
+            for (uint32_t id : ids) {
+                {
+                    std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+                    auto it = g_uiFrames.find(id);
+                    if (it != g_uiFrames.end()) it->second.inFlight = false;
+                }
+                if (WGPUView* view = uiViewById(id)) uiRunFrame(view);
+            }
+        });
+    }
+}
+
+// Any thread.
+static void uiScheduleFrame(uint32_t webviewId) {
+    static std::once_flag started;
+    std::call_once(started, [] { std::thread(uiFrameThread).detach(); });
+    {
+        std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+        g_uiFrames[webviewId].requested = true;
+    }
+    g_uiFrameCv.notify_one();
+}
+
+// ---- input method (IMM32) ----
+
+// Place the composition and candidate windows at the caret.
+static void uiUpdateImeWindow(WGPUView* view) {
+    if (!view->hwnd || !view->ui.installed) return;
+    HIMC imc = ImmGetContext(view->hwnd);
+    if (!imc) return;
+    const double s = uiScaleOf(view);
+    const LONG x = (LONG)std::lround(view->ui.imeX * s);
+    const LONG y = (LONG)std::lround(view->ui.imeY * s);
+    const LONG bottom = (LONG)std::lround((view->ui.imeY + view->ui.imeH) * s);
+    const LONG right = (LONG)std::lround((view->ui.imeX + std::max(1.0, view->ui.imeW)) * s);
+    COMPOSITIONFORM composition = {};
+    composition.dwStyle = CFS_POINT;
+    composition.ptCurrentPos = {x, y};
+    ImmSetCompositionWindow(imc, &composition);
+    CANDIDATEFORM candidate = {};
+    candidate.dwIndex = 0;
+    candidate.dwStyle = CFS_EXCLUDE;
+    candidate.ptCurrentPos = {x, bottom};
+    candidate.rcArea = {x, y, right, bottom};
+    ImmSetCandidateWindow(imc, &candidate);
+    ImmReleaseContext(view->hwnd, imc);
+}
+
+static std::wstring uiImeString(HIMC imc, DWORD kind) {
+    const LONG bytes = ImmGetCompositionStringW(imc, kind, nullptr, 0);
+    if (bytes <= 0) return L"";
+    std::wstring s(bytes / sizeof(wchar_t), L'\0');
+    ImmGetCompositionStringW(imc, kind, s.data(), bytes);
+    return s;
+}
+
+static void uiSetMarkedText(WGPUView* view, const std::wstring& text, size_t caret) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.text) return;
+    const std::string utf8 = uiUtf8(text);
+    const std::string prefix = uiUtf8(text.substr(0, std::min(caret, text.size())));
+    h.text(h.ctx, 1, utf8.c_str(), (uint32_t)prefix.size());
+}
+
+static void uiImeComposition(WGPUView* view, LPARAM flags) {
+    HIMC imc = ImmGetContext(view->hwnd);
+    if (!imc) return;
+    UIViewHandlers h = uiHandlersOf(view);
+    if (flags & GCS_RESULTSTR) {
+        const std::string result = uiUtf8(uiImeString(imc, GCS_RESULTSTR));
+        view->ui.composing = false;
+        if (h.text && !result.empty()) h.text(h.ctx, 0, result.c_str(), 0);
+    }
+    if (flags & GCS_COMPSTR) {
+        const std::wstring comp = uiImeString(imc, GCS_COMPSTR);
+        LONG caret = (flags & GCS_CURSORPOS) ? ImmGetCompositionStringW(imc, GCS_CURSORPOS, nullptr, 0)
+                                             : (LONG)comp.size();
+        if (caret < 0) caret = (LONG)comp.size();
+        view->ui.composing = !comp.empty();
+        uiSetMarkedText(view, comp, (size_t)caret);
+    } else if (!(flags & GCS_RESULTSTR) && view->ui.composing) {
+        // composition cancelled (Esc): nothing left to show
+        view->ui.composing = false;
+        uiSetMarkedText(view, L"", 0);
+    }
+    ImmReleaseContext(view->hwnd, imc);
+    uiUpdateImeWindow(view);
+}
+
+// Finish an active composition, e.g. when the view loses focus.
+static void uiCompleteComposition(WGPUView* view) {
+    if (!view->ui.composing || !view->hwnd) return;
+    if (HIMC imc = ImmGetContext(view->hwnd)) {
+        ImmNotifyIME(imc, NI_COMPOSITIONSTR, CPS_COMPLETE, 0);
+        ImmReleaseContext(view->hwnd, imc);
+    }
+    if (view->ui.composing) {
+        view->ui.composing = false;
+        uiSetMarkedText(view, L"", 0);
+    }
+}
+
+// ---- keyboard ----
+
+// DOM `key` values of virtual keys that do not produce text.
+static const char* uiNamedKey(UINT vk) {
+    static const char* fkeys[] = {"F1",  "F2",  "F3",  "F4",  "F5",  "F6",  "F7",  "F8",
+                                  "F9",  "F10", "F11", "F12", "F13", "F14", "F15", "F16",
+                                  "F17", "F18", "F19", "F20", "F21", "F22", "F23", "F24"};
+    if (vk >= VK_F1 && vk <= VK_F24) return fkeys[vk - VK_F1];
+    switch (vk) {
+    case VK_RETURN: return "Enter";
+    case VK_TAB: return "Tab";
+    case VK_BACK: return "Backspace";
+    case VK_ESCAPE: return "Escape";
+    case VK_DELETE: return "Delete";
+    case VK_INSERT: return "Insert";
+    case VK_HOME: return "Home";
+    case VK_END: return "End";
+    case VK_PRIOR: return "PageUp";
+    case VK_NEXT: return "PageDown";
+    case VK_LEFT: return "ArrowLeft";
+    case VK_RIGHT: return "ArrowRight";
+    case VK_UP: return "ArrowUp";
+    case VK_DOWN: return "ArrowDown";
+    case VK_APPS: return "ContextMenu";
+    case VK_CLEAR: return "Clear";
+    case VK_PAUSE: return "Pause";
+    case VK_SNAPSHOT: return "PrintScreen";
+    default: return nullptr;
+    }
+}
+
+static bool uiIsModifierKey(UINT vk) {
+    switch (vk) {
+    case VK_SHIFT: case VK_LSHIFT: case VK_RSHIFT:
+    case VK_CONTROL: case VK_LCONTROL: case VK_RCONTROL:
+    case VK_MENU: case VK_LMENU: case VK_RMENU:
+    case VK_LWIN: case VK_RWIN:
+    case VK_CAPITAL: case VK_NUMLOCK: case VK_SCROLL:
+        return true;
+    default:
+        return false;
+    }
+}
+
+// The text a key produces with the given keyboard state, without touching
+// the layout's dead-key state (flag 0x4). Dead keys report "Dead".
+static std::string uiKeyText(UINT vk, UINT scanCode, BYTE* state) {
+    wchar_t buf[8] = {};
+    const int n = ToUnicodeEx(vk, scanCode, state, buf, 8, 0x4, GetKeyboardLayout(0));
+    if (n < 0) return "Dead";
+    if (n == 0) return "";
+    std::wstring text(buf, (size_t)n);
+    for (wchar_t c : text) {
+        if (c < 0x20 || c == 0x7f) return "";
+    }
+    return uiUtf8(text);
+}
+
+static void uiHandleKey(WGPUView* view, UINT msg, WPARAM wParam, LPARAM lParam) {
+    const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+    UINT vk = (UINT)wParam;
+    // VK_PROCESSKEY: the input method consumed the key (composition).
+    // VK_PACKET: text injected without a key (SendInput, on-screen keyboards,
+    // some IMEs); it arrives as WM_CHAR, like an input method's insertText.
+    if (vk == VK_PROCESSKEY || vk == VK_PACKET || uiIsModifierKey(vk)) return;
+    if (down) view->ui.suppressChar = false;
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.key) return;
+    const UINT scanCode = (lParam >> 16) & 0xff;
+    uint32_t mods = uiModifiers();
+    std::string text;
+    std::string key;
+    if (const char* named = uiNamedKey(vk)) {
+        key = named;
+    } else {
+        BYTE state[256];
+        GetKeyboardState(state);
+        text = uiKeyText(vk, scanCode, state);
+        // DOM key: Shift (and caps lock) applied, Ctrl/Alt ignored
+        BYTE plain[256];
+        memcpy(plain, state, sizeof(plain));
+        plain[VK_CONTROL] = plain[VK_LCONTROL] = plain[VK_RCONTROL] = 0;
+        plain[VK_MENU] = plain[VK_LMENU] = plain[VK_RMENU] = 0;
+        key = uiKeyText(vk, scanCode, plain);
+        if (text == "Dead") text.clear();
+        // AltGr arrives as Ctrl+Alt; when it types a character it is text,
+        // not a shortcut
+        if ((mods & 6) == 6 && !text.empty() && text != key) {
+            mods &= ~6u;
+            key = text;
+        }
+        // a key whose base character is unknown still types its text; never
+        // report it as a named key (the UI consumes those)
+        if (key.empty()) key = text.empty() ? "Unidentified" : text;
+    }
+    const bool repeat = down && (lParam & (1 << 30));
+    const uint32_t handled = h.key(h.ctx, 0, mods, down ? 1 : 0, repeat ? 1 : 0, down ? text.c_str() : "",
+                                   key.c_str());
+    if (uiHostDebug()) fprintf(stderr, "[ebui host] key %s text=%s mods=%u down=%d handled=%u\n", key.c_str(), text.c_str(), mods, down, handled);
+    if (down && handled) view->ui.suppressChar = true;
+}
+
+static void uiHandleChar(WGPUView* view, wchar_t c) {
+    if (view->ui.suppressChar) return;
+    if (c >= 0xd800 && c <= 0xdbff) {
+        view->ui.highSurrogate = c;
+        return;
+    }
+    std::wstring text;
+    if (c >= 0xdc00 && c <= 0xdfff) {
+        if (!view->ui.highSurrogate) return;
+        text = {view->ui.highSurrogate, c};
+    } else {
+        text = c;
+    }
+    view->ui.highSurrogate = 0;
+    if (c < 0x20 || c == 0x7f) return;
+    UIViewHandlers h = uiHandlersOf(view);
+    if (h.text) h.text(h.ctx, 0, uiUtf8(text).c_str(), 0);
+}
+
+// An edit command routed to the focused window (application menu roles):
+// deliver it as its keyboard shortcut.
+static void uiShortcut(WGPUView* view, const char* key, uint32_t mods) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.key) return;
+    h.key(h.ctx, 0, mods, 1, 0, "", key);
+    h.key(h.ctx, 0, mods, 0, 0, "", key);
+}
+
+// ---- pointer ----
+
+// One wheel notch, in logical px (positive = towards the top/left, as on macOS).
+static const double kUIWheelStep = 48.0;
+
+static void uiPointer(WGPUView* view, uint32_t kind, LONG x, LONG y, double a, double b) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.pointer) return;
+    const double s = uiScaleOf(view);
+    h.pointer(h.ctx, kind, x / s, y / s, a, b, uiModifiers());
+}
+
+static void uiWheel(WGPUView* view, WPARAM wParam, LPARAM lParam, bool horizontal) {
+    POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    ScreenToClient(view->hwnd, &pt);
+    UINT lines = 3;
+    SystemParametersInfoW(horizontal ? SPI_GETWHEELSCROLLCHARS : SPI_GETWHEELSCROLLLINES, 0, &lines, 0);
+    if (lines == WHEEL_PAGESCROLL || lines == 0) lines = 3;
+    const double notches = (double)GET_WHEEL_DELTA_WPARAM(wParam) / WHEEL_DELTA;
+    const double px = notches * kUIWheelStep * lines / 3.0;
+    // WM_MOUSEHWHEEL is positive to the right
+    uiPointer(view, 3, pt.x, pt.y, horizontal ? -px : 0, horizontal ? 0 : px);
+}
+
+// ---- cursor ----
+
+static std::atomic<HCURSOR> g_uiCursor{nullptr};
+static std::atomic<bool> g_uiCursorHidden{false};
+
+static bool uiIsInstalledView(HWND hwnd) {
+    return hwnd && GetPropW(hwnd, kUIViewProp) != nullptr;
+}
+
+static void uiApplyCursor() {
+    POINT pt;
+    if (!GetCursorPos(&pt)) return;
+    if (!uiIsInstalledView(WindowFromPoint(pt))) return;
+    SetCursor(g_uiCursorHidden.load() ? nullptr : g_uiCursor.load());
+}
+
+// ---- focus ----
+
+static bool uiTakeFocus(WGPUView* view) {
+    if (!view->hwnd || !view->ui.installed || !IsWindowVisible(view->hwnd)) return false;
+    if (GetFocus() != view->hwnd) SetFocus(view->hwnd);
+    return GetFocus() == view->hwnd;
+}
+
+static bool uiHostRedirectFocus(HWND topLevel) {
+    std::vector<WGPUView*> candidates;
+    {
+        std::lock_guard<std::mutex> lock(g_retainedWGPUViewsMutex);
+        for (auto& [id, abstractView] : g_retainedWGPUViews) {
+            auto* view = dynamic_cast<WGPUView*>(abstractView.get());
+            if (view && view->ui.installed && view->ui.wantsFocus && view->hwnd &&
+                GetAncestor(view->hwnd, GA_ROOT) == topLevel) {
+                candidates.push_back(view);
+            }
+        }
+    }
+    for (WGPUView* view : candidates) {
+        if (uiTakeFocus(view)) return true;
+    }
+    return false;
+}
+
+
+// ---- accessibility (UI Automation) ----
+//
+// The UI core serializes its semantic tree (ui-core a11y.serialize) on
+// request; the view's HWND answers WM_GETOBJECT with a fragment root whose
+// fragments are the tree's nodes. Providers use COM threading, so UIA calls
+// them on the main thread, where the tree is updated. Actions go back to the
+// UI core: 0 press, 1 focus, 2 increment, 3 decrement, 4 set value.
+
+#ifndef UIA_LandmarkTypePropertyId
+#define UIA_LandmarkTypePropertyId 30157
+#endif
+#ifndef UIA_HeadingLevelPropertyId
+#define UIA_HeadingLevelPropertyId 30173
+#endif
+#ifndef UIA_IsDialogPropertyId
+#define UIA_IsDialogPropertyId 30174
+#endif
+
+struct UIA11yNode {
+    uint32_t id = 0;
+    uint32_t parent = UINT32_MAX;  // index into nodes
+    uint8_t role = 0;
+    uint8_t level = 0;
+    uint16_t state = 0;
+    float x = 0, y = 0, w = 0, h = 0;
+    float min = 0, max = 0, now = 0;
+    std::wstring name, value, description;
+    std::vector<uint32_t> kids;  // indices
+};
+
+enum : uint16_t {
+    kA11yFocused = 1 << 0,
+    kA11yDisabled = 1 << 1,
+    kA11yChecked = 1 << 2,
+    kA11yMixed = 1 << 3,
+    kA11yExpanded = 1 << 4,
+    kA11yCollapsed = 1 << 5,
+    kA11ySelected = 1 << 6,
+    kA11yReadonly = 1 << 8,
+    kA11yFocusable = 1 << 9,
+};
+
+enum UIA11yRole : uint8_t {
+    kRoleGroup = 0, kRoleButton, kRoleLink, kRoleCheckbox, kRoleRadio, kRoleTextField, kRoleTextArea,
+    kRoleStaticText, kRoleHeading, kRoleImage, kRoleList, kRoleListItem, kRoleSlider, kRoleProgress,
+    kRoleComboBox, kRoleTab, kRoleTabList, kRoleDialog, kRoleMenu, kRoleMenuItem, kRoleSwitch,
+    kRoleTable, kRoleRow, kRoleCell, kRoleToolbar, kRoleNavigation, kRoleMain, kRoleForm,
+    kRoleSeparator,
+};
+
+class UIARoot;
+
+struct UIA11yState {
+    std::vector<UIA11yNode> nodes;
+    std::vector<uint32_t> roots;
+    std::map<uint32_t, uint32_t> index;  // node id -> index
+    UIARoot* root = nullptr;  // owned reference
+};
+
+// main thread only
+static std::map<uint32_t, UIA11yState> g_uiA11y;
+
+static UIA11yState* uiA11yStateOf(uint32_t viewId) {
+    auto it = g_uiA11y.find(viewId);
+    return it == g_uiA11y.end() ? nullptr : &it->second;
+}
+
+static const UIA11yNode* uiA11yNode(uint32_t viewId, uint32_t nodeId) {
+    UIA11yState* st = uiA11yStateOf(viewId);
+    if (!st) return nullptr;
+    auto it = st->index.find(nodeId);
+    return it == st->index.end() ? nullptr : &st->nodes[it->second];
+}
+
+static void uiA11yAction(uint32_t viewId, uint32_t nodeId, uint32_t action, const std::string& value) {
+    WGPUView* view = uiViewById(viewId);
+    if (!view) return;
+    UIViewHandlers h = uiHandlersOf(view);
+    if (h.a11yAction) h.a11yAction(h.a11yCtx, nodeId, action, value.c_str());
+}
+
+static long uiA11yControlType(uint8_t role) {
+    switch (role) {
+    case kRoleButton: return UIA_ButtonControlTypeId;
+    case kRoleLink: return UIA_HyperlinkControlTypeId;
+    case kRoleCheckbox: return UIA_CheckBoxControlTypeId;
+    case kRoleRadio: return UIA_RadioButtonControlTypeId;
+    case kRoleTextField: case kRoleTextArea: return UIA_EditControlTypeId;
+    case kRoleStaticText: case kRoleHeading: return UIA_TextControlTypeId;
+    case kRoleImage: return UIA_ImageControlTypeId;
+    case kRoleList: return UIA_ListControlTypeId;
+    case kRoleListItem: return UIA_ListItemControlTypeId;
+    case kRoleSlider: return UIA_SliderControlTypeId;
+    case kRoleProgress: return UIA_ProgressBarControlTypeId;
+    case kRoleComboBox: return UIA_ComboBoxControlTypeId;
+    case kRoleTab: return UIA_TabItemControlTypeId;
+    case kRoleTabList: return UIA_TabControlTypeId;
+    case kRoleDialog: return UIA_PaneControlTypeId;
+    case kRoleMenu: return UIA_MenuControlTypeId;
+    case kRoleMenuItem: return UIA_MenuItemControlTypeId;
+    case kRoleSwitch: return UIA_ButtonControlTypeId;  // toggle switch, as WinUI reports it
+    case kRoleTable: return UIA_TableControlTypeId;
+    case kRoleRow: return UIA_DataItemControlTypeId;
+    case kRoleCell: return UIA_TextControlTypeId;
+    case kRoleToolbar: return UIA_ToolBarControlTypeId;
+    case kRoleSeparator: return UIA_SeparatorControlTypeId;
+    default: return UIA_GroupControlTypeId;
+    }
+}
+
+static bool uiA11ySupports(uint8_t role, PATTERNID pattern) {
+    switch (pattern) {
+    case UIA_InvokePatternId:
+        return role == kRoleButton || role == kRoleLink || role == kRoleMenuItem;
+    case UIA_TogglePatternId:
+        return role == kRoleCheckbox || role == kRoleSwitch;
+    case UIA_SelectionItemPatternId:
+        return role == kRoleRadio || role == kRoleTab;
+    case UIA_ValuePatternId:
+        return role == kRoleTextField || role == kRoleTextArea || role == kRoleComboBox;
+    case UIA_RangeValuePatternId:
+        return role == kRoleSlider || role == kRoleProgress;
+    default:
+        return false;
+    }
+}
+
+static HRESULT uiBstr(const std::wstring& s, BSTR* out) {
+    if (!out) return E_INVALIDARG;
+    *out = SysAllocStringLen(s.data(), (UINT)s.size());
+    return *out ? S_OK : E_OUTOFMEMORY;
+}
+
+static RECT uiA11yScreenRect(uint32_t viewId, float x, float y, float w, float h) {
+    WGPUView* view = uiViewById(viewId);
+    if (!view || !view->hwnd) return {};
+    const double s = uiScaleOf(view);
+    POINT origin = {0, 0};
+    ClientToScreen(view->hwnd, &origin);
+    return {origin.x + (LONG)std::lround(x * s), origin.y + (LONG)std::lround(y * s),
+            origin.x + (LONG)std::lround((x + w) * s), origin.y + (LONG)std::lround((y + h) * s)};
+}
+
+class UIANode : public IRawElementProviderSimple,
+                public IRawElementProviderFragment,
+                public IInvokeProvider,
+                public IToggleProvider,
+                public ISelectionItemProvider,
+                public IValueProvider,
+                public IRangeValueProvider {
+public:
+    UIANode(uint32_t viewId, uint32_t nodeId) : viewId_(viewId), nodeId_(nodeId) {}
+
+    // IUnknown
+    IFACEMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&refs_); }
+    IFACEMETHODIMP_(ULONG) Release() override {
+        const LONG n = InterlockedDecrement(&refs_);
+        if (!n) delete this;
+        return n;
+    }
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IRawElementProviderSimple)) {
+            *out = static_cast<IRawElementProviderSimple*>(this);
+        } else if (riid == __uuidof(IRawElementProviderFragment)) {
+            *out = static_cast<IRawElementProviderFragment*>(this);
+        } else if (riid == __uuidof(IInvokeProvider)) {
+            *out = static_cast<IInvokeProvider*>(this);
+        } else if (riid == __uuidof(IToggleProvider)) {
+            *out = static_cast<IToggleProvider*>(this);
+        } else if (riid == __uuidof(ISelectionItemProvider)) {
+            *out = static_cast<ISelectionItemProvider*>(this);
+        } else if (riid == __uuidof(IValueProvider)) {
+            *out = static_cast<IValueProvider*>(this);
+        } else if (riid == __uuidof(IRangeValueProvider)) {
+            *out = static_cast<IRangeValueProvider*>(this);
+        } else {
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+
+    // IRawElementProviderSimple
+    IFACEMETHODIMP get_ProviderOptions(ProviderOptions* out) override {
+        if (!out) return E_INVALIDARG;
+        *out = (ProviderOptions)(ProviderOptions_ServerSideProvider | ProviderOptions_UseComThreading);
+        return S_OK;
+    }
+    IFACEMETHODIMP GetPatternProvider(PATTERNID pattern, IUnknown** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (uiA11ySupports(n->role, pattern)) {
+            *out = static_cast<IRawElementProviderSimple*>(this);
+            AddRef();
+        }
+        return S_OK;
+    }
+    IFACEMETHODIMP GetPropertyValue(PROPERTYID property, VARIANT* out) override {
+        if (!out) return E_INVALIDARG;
+        VariantInit(out);
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        auto setBool = [out](bool v) {
+            out->vt = VT_BOOL;
+            out->boolVal = v ? VARIANT_TRUE : VARIANT_FALSE;
+        };
+        auto setI4 = [out](long v) {
+            out->vt = VT_I4;
+            out->lVal = v;
+        };
+        switch (property) {
+        case UIA_ControlTypePropertyId: setI4(uiA11yControlType(n->role)); break;
+        case UIA_NamePropertyId:
+            if (!n->name.empty()) {
+                out->vt = VT_BSTR;
+                uiBstr(n->name, &out->bstrVal);
+            }
+            break;
+        case UIA_HelpTextPropertyId:
+            if (!n->description.empty()) {
+                out->vt = VT_BSTR;
+                uiBstr(n->description, &out->bstrVal);
+            }
+            break;
+        case UIA_AutomationIdPropertyId: {
+            out->vt = VT_BSTR;
+            uiBstr(L"ebui-" + std::to_wstring(n->id), &out->bstrVal);
+            break;
+        }
+        case UIA_IsEnabledPropertyId: setBool(!(n->state & kA11yDisabled)); break;
+        case UIA_HasKeyboardFocusPropertyId: setBool((n->state & kA11yFocused) != 0); break;
+        case UIA_IsKeyboardFocusablePropertyId: setBool((n->state & kA11yFocusable) != 0); break;
+        case UIA_IsControlElementPropertyId:
+        case UIA_IsContentElementPropertyId:
+            setBool(true);
+            break;
+        case UIA_IsOffscreenPropertyId: setBool(n->w <= 0 || n->h <= 0); break;
+        case UIA_IsRequiredForFormPropertyId: setBool((n->state & (1 << 7)) != 0); break;
+        case UIA_LocalizedControlTypePropertyId:
+            if (n->role == kRoleSwitch) {
+                out->vt = VT_BSTR;
+                uiBstr(L"toggle switch", &out->bstrVal);
+            } else if (n->role == kRoleDialog) {
+                out->vt = VT_BSTR;
+                uiBstr(L"dialog", &out->bstrVal);
+            }
+            break;
+        case UIA_HeadingLevelPropertyId:
+            // HeadingLevel1..9 = 80051..80059, HeadingLevel_None = 80050
+            if (n->role == kRoleHeading) setI4(80050 + std::min<long>(9, std::max<long>(1, n->level)));
+            break;
+        case UIA_LandmarkTypePropertyId:
+            // Form 80001, Main 80002, Navigation 80003
+            if (n->role == kRoleForm) setI4(80001);
+            else if (n->role == kRoleMain) setI4(80002);
+            else if (n->role == kRoleNavigation) setI4(80003);
+            break;
+        case UIA_IsDialogPropertyId:
+            if (n->role == kRoleDialog) setBool(true);
+            break;
+        case UIA_ExpandCollapseExpandCollapseStatePropertyId:
+            break;
+        default:
+            break;
+        }
+        return S_OK;
+    }
+    IFACEMETHODIMP get_HostRawElementProvider(IRawElementProviderSimple** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+
+    // IRawElementProviderFragment
+    IFACEMETHODIMP Navigate(NavigateDirection direction, IRawElementProviderFragment** out) override;
+    IFACEMETHODIMP GetRuntimeId(SAFEARRAY** out) override {
+        if (!out) return E_INVALIDARG;
+        int ids[] = {UiaAppendRuntimeId, (int)nodeId_};
+        *out = SafeArrayCreateVector(VT_I4, 0, 2);
+        if (!*out) return E_OUTOFMEMORY;
+        for (LONG i = 0; i < 2; i++) SafeArrayPutElement(*out, &i, &ids[i]);
+        return S_OK;
+    }
+    IFACEMETHODIMP get_BoundingRectangle(UiaRect* out) override {
+        if (!out) return E_INVALIDARG;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        const RECT r = uiA11yScreenRect(viewId_, n->x, n->y, n->w, n->h);
+        *out = {(double)r.left, (double)r.top, (double)(r.right - r.left), (double)(r.bottom - r.top)};
+        return S_OK;
+    }
+    IFACEMETHODIMP GetEmbeddedFragmentRoots(SAFEARRAY** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFocus() override { return act(1); }
+    IFACEMETHODIMP get_FragmentRoot(IRawElementProviderFragmentRoot** out) override;
+
+    // IInvokeProvider
+    IFACEMETHODIMP Invoke() override { return act(0); }
+
+    // IToggleProvider
+    IFACEMETHODIMP Toggle() override { return act(0); }
+    IFACEMETHODIMP get_ToggleState(ToggleState* out) override {
+        if (!out) return E_INVALIDARG;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        *out = (n->state & kA11yMixed)     ? ToggleState_Indeterminate
+               : (n->state & kA11yChecked) ? ToggleState_On
+                                           : ToggleState_Off;
+        return S_OK;
+    }
+
+    // ISelectionItemProvider
+    IFACEMETHODIMP Select() override { return act(0); }
+    IFACEMETHODIMP AddToSelection() override { return act(0); }
+    IFACEMETHODIMP RemoveFromSelection() override { return S_OK; }
+    IFACEMETHODIMP get_IsSelected(BOOL* out) override {
+        if (!out) return E_INVALIDARG;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        *out = (n->state & (kA11yChecked | kA11ySelected)) ? TRUE : FALSE;
+        return S_OK;
+    }
+    IFACEMETHODIMP get_SelectionContainer(IRawElementProviderSimple** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+
+    // IValueProvider
+    IFACEMETHODIMP SetValue(LPCWSTR value) override {
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (n->state & (kA11yReadonly | kA11yDisabled)) return UIA_E_ELEMENTNOTENABLED;
+        return act(4, uiUtf8(value ? value : L""));
+    }
+    IFACEMETHODIMP get_Value(BSTR* out) override {
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        return uiBstr(n->value, out);
+    }
+    IFACEMETHODIMP get_IsReadOnly(BOOL* out) override {
+        if (!out) return E_INVALIDARG;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        *out = (n->role == kRoleProgress || (n->state & (kA11yReadonly | kA11yDisabled))) ? TRUE : FALSE;
+        return S_OK;
+    }
+
+    // IRangeValueProvider
+    IFACEMETHODIMP SetValue(double value) override {
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        if (n->role == kRoleProgress || (n->state & (kA11yReadonly | kA11yDisabled)))
+            return UIA_E_ELEMENTNOTENABLED;
+        if (value < n->min || value > n->max) return E_INVALIDARG;
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%g", value);
+        return act(4, buf);
+    }
+    IFACEMETHODIMP get_Value(double* out) override { return number(out, &UIA11yNode::now); }
+    IFACEMETHODIMP get_Maximum(double* out) override { return number(out, &UIA11yNode::max); }
+    IFACEMETHODIMP get_Minimum(double* out) override { return number(out, &UIA11yNode::min); }
+    IFACEMETHODIMP get_LargeChange(double* out) override {
+        if (!out) return E_INVALIDARG;
+        *out = 10;
+        return S_OK;
+    }
+    IFACEMETHODIMP get_SmallChange(double* out) override {
+        if (!out) return E_INVALIDARG;
+        *out = 1;
+        return S_OK;
+    }
+
+    uint32_t nodeId() const { return nodeId_; }
+
+private:
+    const UIA11yNode* node() const { return uiA11yNode(viewId_, nodeId_); }
+    HRESULT act(uint32_t action, const std::string& value = "") {
+        if (!node()) return UIA_E_ELEMENTNOTAVAILABLE;
+        uiA11yAction(viewId_, nodeId_, action, value);
+        return S_OK;
+    }
+    HRESULT number(double* out, float UIA11yNode::*field) const {
+        if (!out) return E_INVALIDARG;
+        const UIA11yNode* n = node();
+        if (!n) return UIA_E_ELEMENTNOTAVAILABLE;
+        *out = n->*field;
+        return S_OK;
+    }
+
+    LONG refs_ = 1;
+    uint32_t viewId_;
+    uint32_t nodeId_;
+};
+
+class UIARoot : public IRawElementProviderSimple,
+                public IRawElementProviderFragment,
+                public IRawElementProviderFragmentRoot {
+public:
+    UIARoot(uint32_t viewId, HWND hwnd) : viewId_(viewId), hwnd_(hwnd) {}
+
+    IFACEMETHODIMP_(ULONG) AddRef() override { return InterlockedIncrement(&refs_); }
+    IFACEMETHODIMP_(ULONG) Release() override {
+        const LONG n = InterlockedDecrement(&refs_);
+        if (!n) delete this;
+        return n;
+    }
+    IFACEMETHODIMP QueryInterface(REFIID riid, void** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        if (riid == __uuidof(IUnknown) || riid == __uuidof(IRawElementProviderSimple)) {
+            *out = static_cast<IRawElementProviderSimple*>(this);
+        } else if (riid == __uuidof(IRawElementProviderFragment)) {
+            *out = static_cast<IRawElementProviderFragment*>(this);
+        } else if (riid == __uuidof(IRawElementProviderFragmentRoot)) {
+            *out = static_cast<IRawElementProviderFragmentRoot*>(this);
+        } else {
+            return E_NOINTERFACE;
+        }
+        AddRef();
+        return S_OK;
+    }
+
+    IFACEMETHODIMP get_ProviderOptions(ProviderOptions* out) override {
+        if (!out) return E_INVALIDARG;
+        *out = (ProviderOptions)(ProviderOptions_ServerSideProvider | ProviderOptions_UseComThreading);
+        return S_OK;
+    }
+    IFACEMETHODIMP GetPatternProvider(PATTERNID, IUnknown** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+    IFACEMETHODIMP GetPropertyValue(PROPERTYID property, VARIANT* out) override {
+        if (!out) return E_INVALIDARG;
+        VariantInit(out);
+        if (property == UIA_ControlTypePropertyId) {
+            out->vt = VT_I4;
+            out->lVal = UIA_PaneControlTypeId;
+        }
+        return S_OK;
+    }
+    IFACEMETHODIMP get_HostRawElementProvider(IRawElementProviderSimple** out) override {
+        if (!out) return E_INVALIDARG;
+        return UiaHostProviderFromHwnd(hwnd_, out);
+    }
+
+    IFACEMETHODIMP Navigate(NavigateDirection direction, IRawElementProviderFragment** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        UIA11yState* st = uiA11yStateOf(viewId_);
+        if (!st || st->roots.empty()) return S_OK;
+        if (direction == NavigateDirection_FirstChild) {
+            *out = new UIANode(viewId_, st->nodes[st->roots.front()].id);
+        } else if (direction == NavigateDirection_LastChild) {
+            *out = new UIANode(viewId_, st->nodes[st->roots.back()].id);
+        }
+        return S_OK;
+    }
+    IFACEMETHODIMP GetRuntimeId(SAFEARRAY** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+    IFACEMETHODIMP get_BoundingRectangle(UiaRect* out) override {
+        if (!out) return E_INVALIDARG;
+        *out = {};
+        return S_OK;
+    }
+    IFACEMETHODIMP GetEmbeddedFragmentRoots(SAFEARRAY** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        return S_OK;
+    }
+    IFACEMETHODIMP SetFocus() override { return S_OK; }
+    IFACEMETHODIMP get_FragmentRoot(IRawElementProviderFragmentRoot** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = this;
+        AddRef();
+        return S_OK;
+    }
+
+    // IRawElementProviderFragmentRoot
+    IFACEMETHODIMP ElementProviderFromPoint(double x, double y, IRawElementProviderFragment** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        UIA11yState* st = uiA11yStateOf(viewId_);
+        WGPUView* view = uiViewById(viewId_);
+        if (st && view && view->hwnd) {
+            POINT pt = {(LONG)x, (LONG)y};
+            ScreenToClient(view->hwnd, &pt);
+            const double s = uiScaleOf(view);
+            const float lx = (float)(pt.x / s), ly = (float)(pt.y / s);
+            // pre-order: the last node containing the point is the deepest
+            for (size_t i = st->nodes.size(); i-- > 0;) {
+                const UIA11yNode& n = st->nodes[i];
+                if (lx >= n.x && ly >= n.y && lx < n.x + n.w && ly < n.y + n.h) {
+                    *out = new UIANode(viewId_, n.id);
+                    return S_OK;
+                }
+            }
+        }
+        *out = this;
+        AddRef();
+        return S_OK;
+    }
+    IFACEMETHODIMP GetFocus(IRawElementProviderFragment** out) override {
+        if (!out) return E_INVALIDARG;
+        *out = nullptr;
+        UIA11yState* st = uiA11yStateOf(viewId_);
+        if (!st) return S_OK;
+        for (const UIA11yNode& n : st->nodes) {
+            if (n.state & kA11yFocused) {
+                *out = new UIANode(viewId_, n.id);
+                break;
+            }
+        }
+        return S_OK;
+    }
+
+private:
+    LONG refs_ = 1;
+    uint32_t viewId_;
+    HWND hwnd_;
+};
+
+IFACEMETHODIMP UIANode::Navigate(NavigateDirection direction, IRawElementProviderFragment** out) {
+    if (!out) return E_INVALIDARG;
+    *out = nullptr;
+    UIA11yState* st = uiA11yStateOf(viewId_);
+    if (!st) return UIA_E_ELEMENTNOTAVAILABLE;
+    auto it = st->index.find(nodeId_);
+    if (it == st->index.end()) return UIA_E_ELEMENTNOTAVAILABLE;
+    const uint32_t self = it->second;
+    const UIA11yNode& n = st->nodes[self];
+    const bool hasParent = n.parent < st->nodes.size();
+    switch (direction) {
+    case NavigateDirection_Parent:
+        if (hasParent) {
+            *out = new UIANode(viewId_, st->nodes[n.parent].id);
+        } else if (st->root) {
+            *out = st->root;
+            (*out)->AddRef();
+        }
+        break;
+    case NavigateDirection_NextSibling:
+    case NavigateDirection_PreviousSibling: {
+        const std::vector<uint32_t>& siblings = hasParent ? st->nodes[n.parent].kids : st->roots;
+        auto pos = std::find(siblings.begin(), siblings.end(), self);
+        if (pos == siblings.end()) break;
+        if (direction == NavigateDirection_NextSibling && pos + 1 != siblings.end()) {
+            *out = new UIANode(viewId_, st->nodes[*(pos + 1)].id);
+        } else if (direction == NavigateDirection_PreviousSibling && pos != siblings.begin()) {
+            *out = new UIANode(viewId_, st->nodes[*(pos - 1)].id);
+        }
+        break;
+    }
+    case NavigateDirection_FirstChild:
+        if (!n.kids.empty()) *out = new UIANode(viewId_, st->nodes[n.kids.front()].id);
+        break;
+    case NavigateDirection_LastChild:
+        if (!n.kids.empty()) *out = new UIANode(viewId_, st->nodes[n.kids.back()].id);
+        break;
+    }
+    return S_OK;
+}
+
+IFACEMETHODIMP UIANode::get_FragmentRoot(IRawElementProviderFragmentRoot** out) {
+    if (!out) return E_INVALIDARG;
+    *out = nullptr;
+    UIA11yState* st = uiA11yStateOf(viewId_);
+    if (!st || !st->root) return UIA_E_ELEMENTNOTAVAILABLE;
+    *out = st->root;
+    (*out)->AddRef();
+    return S_OK;
+}
+
+// The view's UIA root; asks the UI core for its tree the first time.
+static UIARoot* uiA11yRootFor(WGPUView* view) {
+    UIViewHandlers h = uiHandlersOf(view);
+    if (!h.a11yRequest) return nullptr;
+    UIA11yState& st = g_uiA11y[view->webviewId];
+    if (!st.root) {
+        // providers use COM threading: UIA calls them in this (main) STA
+        CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+        st.root = new UIARoot(view->webviewId, view->hwnd);
+        // builds the tree synchronously (wgpuViewSetAccessibilityTree)
+        h.a11yRequest(h.a11yCtx);
+    }
+    return st.root;
+}
+
+static void uiA11yDisconnect(uint32_t viewId) {
+    auto it = g_uiA11y.find(viewId);
+    if (it == g_uiA11y.end()) return;
+    if (UIARoot* root = it->second.root) {
+        UiaDisconnectProvider(root);
+        root->Release();
+    }
+    g_uiA11y.erase(it);
+}
+
+static void uiA11yParseTree(const uint8_t* buf, size_t len, UIA11yState& st) {
+    size_t o = 0;
+    auto u32 = [&]() -> uint32_t {
+        uint32_t v = 0;
+        if (o + 4 <= len) memcpy(&v, buf + o, 4);
+        o += 4;
+        return v;
+    };
+    auto f32 = [&]() -> float {
+        float v = 0;
+        if (o + 4 <= len) memcpy(&v, buf + o, 4);
+        o += 4;
+        return v;
+    };
+    auto str = [&]() -> std::wstring {
+        const uint32_t n = u32();
+        if (o + n > len) {
+            o = len;
+            return L"";
+        }
+        std::wstring out;
+        if (!electrobun::utf8ToWide(std::string_view((const char*)buf + o, n), out)) out.clear();
+        o += n;
+        return out;
+    };
+    st.nodes.clear();
+    st.roots.clear();
+    st.index.clear();
+    const uint32_t count = u32();
+    for (uint32_t i = 0; i < count && o < len; i++) {
+        UIA11yNode n;
+        n.id = u32();
+        n.parent = u32();
+        n.role = o < len ? buf[o] : 0;
+        n.level = o + 1 < len ? buf[o + 1] : 0;
+        o += 2;
+        if (o + 2 <= len) memcpy(&n.state, buf + o, 2);
+        o += 2;
+        n.x = f32();
+        n.y = f32();
+        n.w = f32();
+        n.h = f32();
+        n.min = f32();
+        n.max = f32();
+        n.now = f32();
+        n.name = str();
+        n.value = str();
+        n.description = str();
+        if (n.role == kRoleHeading && n.value.empty()) n.value = n.name;
+        // parents precede their children; anything else becomes a root
+        if (n.parent >= i) n.parent = UINT32_MAX;
+        st.index[n.id] = (uint32_t)st.nodes.size();
+        st.nodes.push_back(std::move(n));
+        const uint32_t self = (uint32_t)st.nodes.size() - 1;
+        if (st.nodes[self].parent != UINT32_MAX) {
+            st.nodes[st.nodes[self].parent].kids.push_back(self);
+        } else {
+            st.roots.push_back(self);
+        }
+    }
+}
+
+ELECTROBUN_EXPORT void wgpuViewSetAccessibilityHandlers(AbstractView* abstractView, void* ctx,
+                                                        UIViewA11yRequestCallback request,
+                                                        UIViewA11yActionCallback action) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view) return;
+    {
+        std::lock_guard<std::mutex> lock(view->ui.mutex);
+        view->ui.handlers.a11yCtx = ctx;
+        view->ui.handlers.a11yRequest = request;
+        view->ui.handlers.a11yAction = action;
+    }
+    if (!request) {
+        const uint32_t id = view->webviewId;
+        MainThreadDispatcher::dispatch_async([id]() { uiA11yDisconnect(id); });
+    }
+}
+
+// Replace the accessibility tree (format: ui-core a11y.serialize). Main thread.
+ELECTROBUN_EXPORT void wgpuViewSetAccessibilityTree(AbstractView* abstractView, const uint8_t* buf,
+                                                    size_t len) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view || !buf || len < 4) return;
+    UIA11yState& st = g_uiA11y[view->webviewId];
+    // what changed, for UIA events
+    std::map<uint32_t, std::pair<uint16_t, std::wstring>> before;
+    uint32_t focusedBefore = 0;
+    for (const UIA11yNode& n : st.nodes) {
+        before[n.id] = {n.state, n.value};
+        if (n.state & kA11yFocused) focusedBefore = n.id;
+    }
+    uiA11yParseTree(buf, len, st);
+    if (!st.root || !UiaClientsAreListening()) return;
+    UiaRaiseStructureChangedEvent(st.root, StructureChangeType_ChildrenInvalidated, nullptr, 0);
+    uint32_t focused = 0;
+    for (const UIA11yNode& n : st.nodes) {
+        if (n.state & kA11yFocused) focused = n.id;
+        auto it = before.find(n.id);
+        if (it == before.end()) continue;
+        if (it->second.second != n.value && uiA11ySupports(n.role, UIA_ValuePatternId)) {
+            UIANode* p = new UIANode(view->webviewId, n.id);
+            VARIANT oldV, newV;
+            VariantInit(&oldV);
+            VariantInit(&newV);
+            oldV.vt = newV.vt = VT_BSTR;
+            uiBstr(it->second.second, &oldV.bstrVal);
+            uiBstr(n.value, &newV.bstrVal);
+            UiaRaiseAutomationPropertyChangedEvent(p, UIA_ValueValuePropertyId, oldV, newV);
+            VariantClear(&oldV);
+            VariantClear(&newV);
+            p->Release();
+        }
+        const uint16_t toggleBits = kA11yChecked | kA11yMixed;
+        if ((it->second.first & toggleBits) != (n.state & toggleBits) && uiA11ySupports(n.role, UIA_TogglePatternId)) {
+            UIANode* p = new UIANode(view->webviewId, n.id);
+            auto toggle = [](uint16_t s) {
+                return (long)((s & kA11yMixed) ? ToggleState_Indeterminate
+                               : (s & kA11yChecked) ? ToggleState_On : ToggleState_Off);
+            };
+            VARIANT oldV, newV;
+            VariantInit(&oldV);
+            VariantInit(&newV);
+            oldV.vt = newV.vt = VT_I4;
+            oldV.lVal = toggle(it->second.first);
+            newV.lVal = toggle(n.state);
+            UiaRaiseAutomationPropertyChangedEvent(p, UIA_ToggleToggleStatePropertyId, oldV, newV);
+            p->Release();
+        }
+    }
+    if (focused && focused != focusedBefore && GetFocus() == view->hwnd) {
+        UIANode* p = new UIANode(view->webviewId, focused);
+        UiaRaiseAutomationEvent(p, UIA_AutomationFocusChangedEventId);
+        p->Release();
+    }
+}
+// ---- window procedure ----
+
+static LRESULT CALLBACK uiViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    auto* view = static_cast<WGPUView*>(GetPropW(hwnd, kUIViewProp));
+    if (uiHostDebug() && ((msg >= WM_KEYFIRST && msg <= WM_KEYLAST) || (msg >= WM_IME_STARTCOMPOSITION && msg <= WM_IME_KEYLAST) || msg == WM_IME_ENDCOMPOSITION || msg == WM_SETFOCUS || msg == WM_KILLFOCUS)) {
+        fprintf(stderr, "[ebui host] msg=0x%04x wp=0x%llx lp=0x%llx\n", msg, (unsigned long long)wParam, (unsigned long long)lParam);
+    }
+    if (!view) return DefWindowProcW(hwnd, msg, wParam, lParam);
+    const WNDPROC original = view->ui.originalProc;
+    switch (msg) {
+    case WM_NCHITTEST:
+        // STATIC windows are transparent to the mouse
+        return view->isMousePassthroughEnabled ? HTTRANSPARENT : HTCLIENT;
+    case WM_SETCURSOR:
+        if (LOWORD(lParam) == HTCLIENT) {
+            SetCursor(g_uiCursorHidden.load() ? nullptr : g_uiCursor.load());
+            return TRUE;
+        }
+        break;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_PAINT: {
+        ValidateRect(hwnd, nullptr);
+        uiScheduleFrame(view->webviewId);
+        return 0;
+    }
+    case WM_SIZE:
+    case WM_DPICHANGED_AFTERPARENT:
+        // draw at the new size now, so live resizes don't show stale frames
+        uiRunFrame(view);
+        break;
+    case WM_MOUSEMOVE:
+        if (!view->ui.pointerInside) {
+            view->ui.pointerInside = true;
+            TRACKMOUSEEVENT track = {sizeof(track), TME_LEAVE, hwnd, 0};
+            TrackMouseEvent(&track);
+            uiPointer(view, 4, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, 0);
+        }
+        uiPointer(view, 0, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), 0, 0);
+        return 0;
+    case WM_MOUSELEAVE:
+        view->ui.pointerInside = false;
+        uiPointer(view, 5, 0, 0, 0, 0);
+        return 0;
+    case WM_LBUTTONDOWN: case WM_LBUTTONDBLCLK:
+    case WM_RBUTTONDOWN: case WM_RBUTTONDBLCLK:
+    case WM_MBUTTONDOWN: case WM_MBUTTONDBLCLK: {
+        view->ui.wantsFocus = true;
+        uiTakeFocus(view);
+        SetCapture(hwnd);
+        // DOM-ish button numbers as on macOS: 0 primary, 1 secondary, 2 other
+        const double button = (msg == WM_LBUTTONDOWN || msg == WM_LBUTTONDBLCLK) ? 0
+                              : (msg == WM_RBUTTONDOWN || msg == WM_RBUTTONDBLCLK) ? 1 : 2;
+        uiPointer(view, 1, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), button, 0);
+        return 0;
+    }
+    case WM_LBUTTONUP: case WM_RBUTTONUP: case WM_MBUTTONUP: {
+        const double button = msg == WM_LBUTTONUP ? 0 : msg == WM_RBUTTONUP ? 1 : 2;
+        if (!(wParam & (MK_LBUTTON | MK_RBUTTON | MK_MBUTTON)) && GetCapture() == hwnd) ReleaseCapture();
+        uiPointer(view, 2, GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam), button, 0);
+        return 0;
+    }
+    case WM_MOUSEWHEEL:
+    case WM_MOUSEHWHEEL:
+        uiWheel(view, wParam, lParam, msg == WM_MOUSEHWHEEL);
+        return 0;
+    case WM_MOUSEACTIVATE:
+        return MA_ACTIVATE;
+    case WM_GETOBJECT:
+        if ((LONG)lParam == UiaRootObjectId) {
+            if (UIARoot* root = uiA11yRootFor(view)) return UiaReturnRawElementProvider(hwnd, wParam, lParam, root);
+        }
+        break;
+    case WM_GETDLGCODE:
+        return DLGC_WANTALLKEYS | DLGC_WANTCHARS | DLGC_WANTARROWS | DLGC_WANTTAB;
+    case WM_KEYDOWN:
+    case WM_KEYUP:
+        uiHandleKey(view, msg, wParam, lParam);
+        return 0;
+    case WM_SYSKEYDOWN:
+    case WM_SYSKEYUP:
+        uiHandleKey(view, msg, wParam, lParam);
+        // keep Alt+F4, Alt+Space and menu access
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
+    case WM_CHAR:
+        uiHandleChar(view, (wchar_t)wParam);
+        return 0;
+    case WM_UNICHAR:
+        if (wParam == UNICODE_NOCHAR) return TRUE;
+        break;
+    case WM_SETFOCUS:
+        view->ui.highSurrogate = 0;
+        uiUpdateImeWindow(view);
+        uiScheduleFrame(view->webviewId);
+        return 0;
+    case WM_KILLFOCUS: {
+        uiCompleteComposition(view);
+        view->ui.highSurrogate = 0;
+        // focus moved to another view of this window: stop reclaiming it
+        HWND next = (HWND)wParam;
+        if (next && GetAncestor(next, GA_ROOT) == GetAncestor(hwnd, GA_ROOT) &&
+            next != GetAncestor(hwnd, GA_ROOT)) {
+            view->ui.wantsFocus = false;
+        }
+        return 0;
+    }
+    case WM_IME_SETCONTEXT:
+        // the UI draws the composition inline
+        return DefWindowProcW(hwnd, msg, wParam, lParam & ~ISC_SHOWUICOMPOSITIONWINDOW);
+    case WM_IME_STARTCOMPOSITION:
+        view->ui.composing = true;
+        uiUpdateImeWindow(view);
+        return 0;
+    case WM_IME_COMPOSITION:
+        uiImeComposition(view, lParam);
+        return 0;
+    case WM_IME_ENDCOMPOSITION:
+        if (view->ui.composing) {
+            view->ui.composing = false;
+            uiSetMarkedText(view, L"", 0);
+        }
+        return 0;
+    case WM_UNDO:
+        uiShortcut(view, "z", 2);
+        return TRUE;
+    case WM_CUT:
+        uiShortcut(view, "x", 2);
+        return 0;
+    case WM_COPY:
+        uiShortcut(view, "c", 2);
+        return 0;
+    case WM_PASTE:
+        uiShortcut(view, "v", 2);
+        return 0;
+    case EM_SETSEL:
+        uiShortcut(view, "a", 2);
+        return 0;
+    case WM_NCDESTROY: {
+        RemovePropW(hwnd, kUIViewProp);
+        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, (LONG_PTR)original);
+        view->ui.installed = false;
+        view->ui.originalProc = nullptr;
+        return CallWindowProcW(original, hwnd, msg, wParam, lParam);
+    }
+    default:
+        break;
+    }
+    return CallWindowProcW(original, hwnd, msg, wParam, lParam);
+}
+
+static void uiInstallInput(WGPUView* view) {
+    if (view->ui.installed || !view->hwnd) return;
+    SetPropW(view->hwnd, kUIViewProp, view);
+    view->ui.originalProc =
+        (WNDPROC)SetWindowLongPtrW(view->hwnd, GWLP_WNDPROC, (LONG_PTR)uiViewWndProc);
+    view->ui.installed = true;
+    view->ui.wantsFocus = true;
+    if (!g_uiCursor.load()) g_uiCursor.store(LoadCursor(nullptr, IDC_ARROW));
+    // the window may already be active
+    HWND root = GetAncestor(view->hwnd, GA_ROOT);
+    HWND focus = GetFocus();
+    if (root && GetForegroundWindow() == root && (!focus || focus == root || GetParent(focus) == root)) {
+        uiTakeFocus(view);
+    }
+}
+
+static void uiUninstallInput(WGPUView* view) {
+    if (!view->ui.installed) return;
+    uiCompleteComposition(view);
+    if (view->hwnd) {
+        if (GetCapture() == view->hwnd) ReleaseCapture();
+        SetWindowLongPtrW(view->hwnd, GWLP_WNDPROC, (LONG_PTR)view->ui.originalProc);
+        RemovePropW(view->hwnd, kUIViewProp);
+    }
+    view->ui.installed = false;
+    view->ui.originalProc = nullptr;
+    view->ui.pointerInside = false;
+    view->ui.highSurrogate = 0;
+}
+
+static void uiHostViewRemoved(WGPUView* view) {
+    {
+        std::lock_guard<std::mutex> lock(view->ui.mutex);
+        view->ui.handlers = {};
+    }
+    uiA11yDisconnect(view->webviewId);
+    uiUninstallInput(view);
+    std::lock_guard<std::mutex> lock(g_uiFrameMutex);
+    g_uiFrames.erase(view->webviewId);
+}
+
+// Route a WGPU view's input and frames to the native UI core. Any thread;
+// does not wait for the main thread (the caller holds the UI lock, which
+// main-thread callbacks also take).
+ELECTROBUN_EXPORT void wgpuViewSetUIHandlers(AbstractView* abstractView, void* ctx,
+                                             UIViewPointerCallback pointer, UIViewKeyCallback key,
+                                             UIViewTextCallback text, UIViewFrameCallback frame) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view) return;
+    {
+        std::lock_guard<std::mutex> lock(view->ui.mutex);
+        view->ui.handlers.ctx = ctx;
+        view->ui.handlers.pointer = pointer;
+        view->ui.handlers.key = key;
+        view->ui.handlers.text = text;
+        view->ui.handlers.frame = frame;
+    }
+    const uint32_t id = view->webviewId;
+    const bool enable = pointer || key || text || frame;
+    MainThreadDispatcher::dispatch_async([id, enable]() {
+        WGPUView* view = uiViewById(id);
+        if (!view) return;
+        if (enable) {
+            uiInstallInput(view);
+        } else {
+            uiUninstallInput(view);
+        }
+    });
+}
+
+// Request one frame callback at the next display refresh (any thread).
+ELECTROBUN_EXPORT void wgpuViewRequestFrame(AbstractView* abstractView) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view) return;
+    uiScheduleFrame(view->webviewId);
+}
+
+// View size in logical px and the device scale. Main thread.
+ELECTROBUN_EXPORT void wgpuViewGetMetrics(AbstractView* abstractView, double* width, double* height,
+                                          double* scale) {
+    *width = 0;
+    *height = 0;
+    *scale = 1;
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view || !view->hwnd) return;
+    RECT rc = {};
+    GetClientRect(view->hwnd, &rc);
+    *scale = uiScaleOf(view);
+    *width = (rc.right - rc.left) / *scale;
+    *height = (rc.bottom - rc.top) / *scale;
+}
+
+// Caret rectangle (view coordinates, logical px) for the IME windows.
+ELECTROBUN_EXPORT void wgpuViewSetImeRect(AbstractView* abstractView, double x, double y, double w,
+                                          double h) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view) return;
+    const uint32_t id = view->webviewId;
+    auto apply = [id, x, y, w, h]() {
+        WGPUView* view = uiViewById(id);
+        if (!view) return;
+        view->ui.imeX = x;
+        view->ui.imeY = y;
+        view->ui.imeW = w;
+        view->ui.imeH = h;
+        uiUpdateImeWindow(view);
+    };
+    if (MainThreadDispatcher::is_main_thread()) {
+        apply();
+    } else {
+        MainThreadDispatcher::dispatch_async(apply);
+    }
+}
+
+// Begin a window move from the current primary-button press (main thread,
+// from the pointer callback). Modal like the macOS version: the system move
+// loop runs until the button is released; returns true if the window moved,
+// so a press that didn't move it still counts as a click.
+ELECTROBUN_EXPORT bool wgpuViewBeginWindowDrag(AbstractView* abstractView) {
+    WGPUView* view = dynamic_cast<WGPUView*>(abstractView);
+    if (!view || !view->hwnd || !(GetKeyState(VK_LBUTTON) & 0x8000)) return false;
+    HWND root = GetAncestor(view->hwnd, GA_ROOT);
+    if (!root) return false;
+    RECT before = {}, after = {};
+    GetWindowRect(root, &before);
+    POINT pt;
+    GetCursorPos(&pt);
+    ReleaseCapture();
+    SendMessageW(root, WM_NCLBUTTONDOWN, HTCAPTION, MAKELPARAM(pt.x, pt.y));
+    GetWindowRect(root, &after);
+    return before.left != after.left || before.top != after.top || before.right != after.right ||
+           before.bottom != after.bottom;
+}
+
+// Set the mouse cursor (CSS cursor name) for UI views. Any thread.
+ELECTROBUN_EXPORT void uiSetCursor(const char* name) {
+    const std::string css = name && *name ? name : "default";
+    LPCTSTR id = IDC_ARROW;
+    if (css == "pointer") id = IDC_HAND;
+    else if (css == "text" || css == "vertical-text") id = IDC_IBEAM;
+    else if (css == "move" || css == "all-scroll" || css == "grabbing") id = IDC_SIZEALL;
+    else if (css == "grab") id = IDC_HAND;
+    else if (css == "not-allowed" || css == "no-drop") id = IDC_NO;
+    else if (css == "wait") id = IDC_WAIT;
+    else if (css == "progress") id = IDC_APPSTARTING;
+    else if (css == "crosshair" || css == "cell") id = IDC_CROSS;
+    else if (css == "help" || css == "context-menu") id = IDC_HELP;
+    else if (css == "ew-resize" || css == "col-resize" || css == "e-resize" || css == "w-resize") id = IDC_SIZEWE;
+    else if (css == "ns-resize" || css == "row-resize" || css == "n-resize" || css == "s-resize") id = IDC_SIZENS;
+    else if (css == "nesw-resize" || css == "ne-resize" || css == "sw-resize") id = IDC_SIZENESW;
+    else if (css == "nwse-resize" || css == "nw-resize" || css == "se-resize") id = IDC_SIZENWSE;
+    g_uiCursorHidden.store(css == "none");
+    g_uiCursor.store(LoadCursor(nullptr, id));
+    if (MainThreadDispatcher::is_main_thread()) {
+        uiApplyCursor();
+    } else {
+        MainThreadDispatcher::dispatch_async([]() { uiApplyCursor(); });
+    }
+}
+
+// Free a string returned by clipboardReadText (the caller's C runtime may
+// not be this library's).
+ELECTROBUN_EXPORT void clipboardFreeText(const char* text) {
+    free((void*)text);
 }
 
 // ----------------------- WGPU Main-Thread Shims -----------------------
@@ -13872,9 +15428,9 @@ static void hotkeyMessageLoop() {
     }
 
     MSG msg;
-    while (g_hotkeyThreadRunning && GetMessage(&msg, NULL, 0, 0)) {
+    while (g_hotkeyThreadRunning && GetMessageW(&msg, NULL, 0, 0)) {
         TranslateMessage(&msg);
-        DispatchMessage(&msg);
+        DispatchMessageW(&msg);
     }
 
     DestroyWindow(g_hotkeyWindow);
