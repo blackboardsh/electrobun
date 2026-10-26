@@ -84,6 +84,13 @@ pub const surface_status_suboptimal: u32 = 0x02;
 pub const request_status_success: u32 = 0x01;
 pub const status_success: u32 = 0x01;
 pub const feature_level_core: u32 = 0x02;
+/// Dawn: import DXGI shared textures and fences (Windows composition, see
+/// windows_composition_features)
+pub const feature_shared_texture_memory_dxgi_shared_handle: u32 = 0x00050022;
+pub const feature_shared_fence_dxgi_shared_handle: u32 = 0x00050029;
+/// What the Windows host needs to composite through DirectComposition with
+/// alpha (the native wrapper's shared-texture bridge).
+pub const windows_composition_features = [_]u32{ feature_shared_texture_memory_dxgi_shared_handle, feature_shared_fence_dxgi_shared_handle };
 pub const power_low: u32 = 0x01;
 pub const power_high: u32 = 0x02;
 pub const front_face_ccw: u32 = 0x01;
@@ -560,6 +567,7 @@ pub const Api = struct {
     deviceRelease: *const fn (Device) callconv(.c) void,
     adapterRelease: *const fn (Adapter) callconv(.c) void,
     adapterGetInfo: *const fn (Adapter, *AdapterInfo) callconv(.c) u32,
+    adapterHasFeature: *const fn (Adapter, u32) callconv(.c) u32,
     adapterInfoFreeMembers: *const fn (AdapterInfo) callconv(.c) void,
     instanceRelease: *const fn (Instance) callconv(.c) void,
     queueRelease: *const fn (Queue) callconv(.c) void,
@@ -621,6 +629,7 @@ pub const Api = struct {
             .{ "deviceRelease", "wgpuDeviceRelease" },
             .{ "adapterRelease", "wgpuAdapterRelease" },
             .{ "adapterGetInfo", "wgpuAdapterGetInfo" },
+            .{ "adapterHasFeature", "wgpuAdapterHasFeature" },
             .{ "adapterInfoFreeMembers", "wgpuAdapterInfoFreeMembers" },
             .{ "instanceRelease", "wgpuInstanceRelease" },
             .{ "queueRelease", "wgpuQueueRelease" },
@@ -678,19 +687,7 @@ pub const Context = struct {
 
     pub fn create(api: *const Api, compatible: ?Surface) !Context {
         const instance = api.createInstance(null) orelse return error.NoInstance;
-        var req = Req{};
-        const opts = RequestAdapterOptions{ .power_preference = power_low, .compatible_surface = compatible };
-        _ = api.instanceRequestAdapter(instance, &opts, .{ .callback = onAdapter, .userdata1 = &req });
-        var spins: usize = 0;
-        while (!req.done and spins < 100000) : (spins += 1) api.instanceProcessEvents(instance);
-        const adapter = req.adapter orelse return error.NoAdapter;
-        req = .{};
-        const desc = DeviceDescriptor{ .uncaptured_error = .{ .callback = onError } };
-        _ = api.adapterRequestDevice(adapter, &desc, .{ .callback = onDevice, .userdata1 = &req });
-        spins = 0;
-        while (!req.done and spins < 100000) : (spins += 1) api.instanceProcessEvents(instance);
-        const device = req.device orelse return error.NoDevice;
-        return .{ .api = api, .instance = instance, .adapter = adapter, .device = device, .queue = api.deviceGetQueue(device) };
+        return createWithInstance(api, instance, compatible);
     }
 
     /// Log the adapter and backend Dawn picked (once per process, at info level).
@@ -712,7 +709,16 @@ pub const Context = struct {
         while (!req.done and spins < 100000) : (spins += 1) api.instanceProcessEvents(instance);
         const adapter = req.adapter orelse return error.NoAdapter;
         req = .{};
-        const desc = DeviceDescriptor{ .uncaptured_error = .{ .callback = onError } };
+        // optional features the host uses when the adapter has them
+        var features: [windows_composition_features.len]u32 = undefined;
+        var feature_count: usize = 0;
+        if (@import("builtin").os.tag == .windows) {
+            for (windows_composition_features) |f| if (api.adapterHasFeature(adapter, f) != 0) {
+                features[feature_count] = f;
+                feature_count += 1;
+            };
+        }
+        const desc = DeviceDescriptor{ .uncaptured_error = .{ .callback = onError }, .required_feature_count = feature_count, .required_features = &features };
         _ = api.adapterRequestDevice(adapter, &desc, .{ .callback = onDevice, .userdata1 = &req });
         spins = 0;
         while (!req.done and spins < 100000) : (spins += 1) api.instanceProcessEvents(instance);

@@ -59,6 +59,8 @@ export interface UIOptions {
 	css?: string | string[];
 	/** follow / force the color scheme for prefers-color-scheme */
 	dark?: boolean;
+	/** the surface is alpha-composited: with no page background, nothing is painted behind it */
+	transparent?: boolean;
 	/** add the built-in eb-* component stylesheet */
 	components?: boolean;
 }
@@ -89,6 +91,8 @@ export class UI {
 		const lib = uiLib();
 		this.id = lib.ebui_create();
 		if (!this.id) throw new Error("electrobun UI: failed to create instance");
+		// before attaching: the host picks how to present from it at the first frame
+		if (options.transparent) lib.ebui_set_transparent(this.id, true);
 		this.document = new NativeDocument(this.id);
 		const view = viewPointer(target);
 		if (!view) throw new Error("electrobun UI: target has no WGPU view");
@@ -343,7 +347,7 @@ export function createUIWindow(options: UIWindowOptions = {}, app?: UIApp): UIWi
 	});
 	if (options.alwaysOnTop) window.setAlwaysOnTop(true);
 	const css = [backgroundCss(options.background, transparent)].concat(options.css ?? []);
-	const ui = new UI(window, { ...options, css });
+	const ui = new UI(window, { ...options, css, transparent });
 	const unmount = app ? ui.render(app) : () => {};
 	return {
 		window,
@@ -365,7 +369,7 @@ export interface UIView {
 /** Render `app` into an existing WGPUView (e.g. an <electrobun-ui> tag's view). */
 export function createUIView(view: WGPUView, options: UIOptions & { background?: string } = {}, app?: UIApp): UIView {
 	const css = [backgroundCss(options.background, !options.background)].concat(options.css ?? []);
-	const ui = new UI(view, { ...options, css });
+	const ui = new UI(view, { ...options, css, transparent: !options.background });
 	const unmount = app ? ui.render(app) : () => {};
 	return {
 		view,

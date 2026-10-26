@@ -40,6 +40,29 @@ const Native = struct {
     clipboardWriteText: ?*const fn ([*:0]const u8) callconv(.c) void,
     /// frees clipboardReadText's result with the wrapper's C runtime
     clipboardFreeText: ?*const fn ([*:0]const u8) callconv(.c) void,
+    /// Windows: render through a premultiplied DirectComposition swapchain
+    /// instead of the view's (opaque) HWND surface; see `Composition`
+    composition: ?Composition = null,
+};
+
+/// The Windows wrapper's composition bridge (wgpuViewComposition*). Dawn's
+/// own swapchains ignore alpha on Windows, so a transparent UI renders into
+/// a texture the wrapper shows with DirectComposition. Main thread.
+const Composition = struct {
+    configure: *const fn (?*anyopaque, wgpu.Device, u32, u32) callconv(.c) bool,
+    acquire: *const fn (?*anyopaque) callconv(.c) ?wgpu.Texture,
+    present: *const fn (?*anyopaque) callconv(.c) bool,
+    release: *const fn (?*anyopaque) callconv(.c) void,
+
+    fn load() ?Composition {
+        if (builtin.os.tag != .windows) return null;
+        return .{
+            .configure = sym(@FieldType(Composition, "configure"), "wgpuViewCompositionConfigure") orelse return null,
+            .acquire = sym(@FieldType(Composition, "acquire"), "wgpuViewCompositionAcquire") orelse return null,
+            .present = sym(@FieldType(Composition, "present"), "wgpuViewCompositionPresent") orelse return null,
+            .release = sym(@FieldType(Composition, "release"), "wgpuViewCompositionRelease") orelse return null,
+        };
+    }
 };
 
 var native: ?Native = null;
@@ -72,6 +95,7 @@ fn loadNative() ?Native {
         .clipboardReadText = sym(*const fn () callconv(.c) ?[*:0]const u8, "clipboardReadText"),
         .clipboardWriteText = sym(*const fn ([*:0]const u8) callconv(.c) void, "clipboardWriteText"),
         .clipboardFreeText = sym(*const fn ([*:0]const u8) callconv(.c) void, "clipboardFreeText"),
+        .composition = Composition.load(),
     };
     return native;
 }
@@ -90,6 +114,11 @@ const View = struct {
     px_h: u32 = 0,
     scale: f32 = 2,
     alpha_mode: u32 = wgpu.alpha_mode_premultiplied,
+    /// how frames reach the screen; decided at the first frame from
+    /// Ui.transparent (a transparent UI on Windows needs composition)
+    present_path: enum { undecided, surface, composition } = .undecided,
+    /// the surface or composition bridge matches px_w x px_h
+    configured: bool = false,
     start: f64 = 0,
     force: bool = true,
     in_frame: bool = false,
@@ -227,7 +256,10 @@ pub export fn ebui_detach_view(ui_id: u32) void {
     capi.lock();
     defer capi.unlock();
     const hv = viewFor(ui_id) orelse return;
-    if (native) |n| n.setUIHandlers(hv.view, null, null, null, null, null);
+    if (native) |n| {
+        n.setUIHandlers(hv.view, null, null, null, null, null);
+        if (hv.present_path == .composition) if (n.composition) |c| c.release(hv.view);
+    }
     hv.renderer.deinit();
     if (dawn_api) |api| api.surfaceRelease(hv.surface);
     for (views.items, 0..) |x, i| if (x == hv) {
@@ -393,14 +425,17 @@ fn onFrame(ctx: ?*anyopaque, t: f64) callconv(.c) void {
     if (w < 1 or h < 1) return;
     const pw: u32 = @intFromFloat(@round(w * scale));
     const ph: u32 = @intFromFloat(@round(h * scale));
-    const api = dawn_api.?;
     if (pw != hv.px_w or ph != hv.px_h or @as(f32, @floatCast(scale)) != hv.scale) {
         hv.px_w = pw;
         hv.px_h = ph;
         hv.scale = @floatCast(scale);
-        api.surfaceConfigure(hv.surface, &.{ .device = dawn_ctx.?.device, .format = wgpu.TextureFormat.bgra8_unorm, .width = pw, .height = ph, .alpha_mode = hv.alpha_mode });
+        hv.configured = false;
         ui.resize(@floatCast(w), @floatCast(h), hv.scale);
         hv.force = true;
+    }
+    if (!hv.configured) {
+        configurePresent(hv, ui, n);
+        hv.configured = true;
     }
     ui.tick(now() - hv.start);
     const changed = ui.update() catch false;
@@ -456,9 +491,28 @@ fn onA11yAction(ctx: ?*anyopaque, node: u32, action: u32, value: [*:0]const u8) 
     if (native) |n| n.requestFrame(hv.view);
 }
 
+/// Size the surface (or composition bridge) to px_w x px_h. A transparent UI
+/// composites with alpha where the platform needs a separate path for it
+/// (Windows: Dawn's HWND swapchains are opaque); if that is unavailable the
+/// view falls back to its surface, with opaque transparent areas.
+fn configurePresent(hv: *View, ui: *ui_mod.Ui, n: Native) void {
+    const device = dawn_ctx.?.device;
+    if (hv.present_path == .undecided) {
+        hv.present_path = if (ui.transparent and n.composition != null) .composition else .surface;
+    }
+    if (hv.present_path == .composition) {
+        if (n.composition.?.configure(hv.view, device, hv.px_w, hv.px_h)) return;
+        std.log.warn("ebui: no DirectComposition for a transparent view; drawing it opaque", .{});
+        n.composition.?.release(hv.view);
+        hv.present_path = .surface;
+    }
+    dawn_api.?.surfaceConfigure(hv.surface, &.{ .device = device, .format = wgpu.TextureFormat.bgra8_unorm, .width = hv.px_w, .height = hv.px_h, .alpha_mode = hv.alpha_mode });
+}
+
 fn render(hv: *View, ui: *ui_mod.Ui) !void {
     const api = dawn_api.?;
     try hv.renderer.render(&ui.dl, hv.px_w, hv.px_h, hv.scale);
+    if (hv.present_path == .composition) return renderComposited(hv);
     var st = wgpu.SurfaceTexture{};
     api.surfaceGetCurrentTexture(hv.surface, &st);
     if (st.status != wgpu.surface_status_optimal and st.status != wgpu.surface_status_suboptimal) {
@@ -471,6 +525,27 @@ fn render(hv: *View, ui: *ui_mod.Ui) !void {
     defer api.textureViewRelease(view);
     try hv.renderer.present(view);
     _ = api.surfacePresent(hv.surface);
+    hv.frames += 1;
+}
+
+fn renderComposited(hv: *View) !void {
+    const api = dawn_api.?;
+    const comp = native.?.composition.?;
+    // a failed bridge is retired by the wrapper; configure it again next frame
+    const tex = comp.acquire(hv.view) orelse {
+        hv.configured = false;
+        hv.force = true;
+        return;
+    };
+    defer api.textureRelease(tex);
+    const view = api.textureCreateView(tex, null) orelse return;
+    defer api.textureViewRelease(view);
+    try hv.renderer.present(view);
+    if (!comp.present(hv.view)) {
+        hv.configured = false;
+        hv.force = true;
+        return;
+    }
     hv.frames += 1;
 }
 

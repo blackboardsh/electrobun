@@ -5,7 +5,7 @@
 
 import { defineTest, expect, sleep } from "../test-framework/types";
 import { GpuWindow, WGPUView } from "electrobun/main";
-import { createUI, isUIAvailable, live, signal, store, For, type UI } from "electrobun/main/ui";
+import { createUI, createUIWindow, isUIAvailable, live, signal, store, For, type UI } from "electrobun/main/ui";
 
 async function withUI(
 	title: string,
@@ -519,6 +519,39 @@ export const nativeUiTests = [
 					log(lines.join(" ; "));
 				},
 			);
+		},
+	}),
+
+	defineTest({
+		name: "Native UI: transparent windows show only what the page paints",
+		category: "Native UI",
+		description: "With transparent: true and no page background, unpainted pixels stay transparent (not the default white canvas) and translucent colours keep their alpha.",
+		async run({ log }) {
+			const { ui, dispose } = createUIWindow(
+				{
+					title: "native-ui-transparent",
+					width: 240,
+					height: 160,
+					titleBarStyle: "hidden",
+					transparent: true,
+					css: `body { margin: 0 } .card { margin: 20px; height: 100px; border-radius: 16px; background: rgba(20, 20, 30, 0.5) }`,
+				},
+				() => <div class="card" />,
+			);
+			try {
+				await ui.nextFrame();
+				await ui.nextFrame();
+				const outside = await ui.pixel(5, 5);
+				const card = await ui.pixel(120, 70);
+				expect(outside[3]).toBe(0);
+				// premultiplied: alpha ~128, colour scaled by it
+				expect(Math.abs(card[3] - 128)).toBeLessThan(4);
+				expect(card[0]).toBeLessThan(16);
+				log(`outside=${JSON.stringify(outside)} card=${JSON.stringify(card)}`);
+			} finally {
+				dispose();
+				await sleep(50);
+			}
 		},
 	}),
 ];

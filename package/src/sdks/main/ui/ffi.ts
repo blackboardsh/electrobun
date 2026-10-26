@@ -46,6 +46,7 @@ export const uiSymbols = {
 	ebui_focus: { args: [u32, u32], returns: v },
 	ebui_scroll_into_view: { args: [u32, u32], returns: v },
 	ebui_set_dark: { args: [u32, bool], returns: v },
+	ebui_set_transparent: { args: [u32, bool], returns: v },
 	ebui_attach_wgpu_view: { args: [u32, ptr, ptr], returns: bool },
 	ebui_detach_view: { args: [u32], returns: v },
 	ebui_serialize: { args: [u32, u32, ptr], returns: ptr },

@@ -1969,6 +1969,13 @@ public:
             GetWindowRect(parent_, &rect);
             POINT ptDest = {rect.left, rect.top};
 
+            // Transparent windows are created for composition
+            // (WS_EX_NOREDIRECTIONBITMAP); this CPU path needs a layered one.
+            const LONG exStyle = GetWindowLong(parent_, GWL_EXSTYLE);
+            if (!(exStyle & WS_EX_LAYERED)) {
+                SetWindowLong(parent_, GWL_EXSTYLE, exStyle | WS_EX_LAYERED);
+            }
+
             // Update the parent window's layer with the CEF-rendered content
             ::UpdateLayeredWindow(parent_, hdc, &ptDest, &size, memDC, &ptSrc, 0, &blend, ULW_ALPHA);
 
@@ -10591,11 +10598,14 @@ static void uiUninstallInput(WGPUView* view) {
     view->ui.highSurrogate = 0;
 }
 
+ELECTROBUN_EXPORT void wgpuViewCompositionRelease(AbstractView* abstractView);
+
 static void uiHostViewRemoved(WGPUView* view) {
     {
         std::lock_guard<std::mutex> lock(view->ui.mutex);
         view->ui.handlers = {};
     }
+    wgpuViewCompositionRelease(view);
     uiA11yDisconnect(view->webviewId);
     uiUninstallInput(view);
     std::lock_guard<std::mutex> lock(g_uiFrameMutex);
@@ -11617,7 +11627,8 @@ ELECTROBUN_EXPORT void* wgpuCreateSurfaceForView(void* wgpuInstance, AbstractVie
 
 // Helper: Initialize DComp zero-copy bridge for a surface.
 // Returns true on success, false if DComp is unavailable or init fails.
-static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t width, uint32_t height) {
+static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t width, uint32_t height,
+                                      bool nativeResize = true) {
     if (!isDCompAvailable()) return false;
     if (!ensureDCompSymbols()) return false;
 
@@ -11851,9 +11862,11 @@ static bool initDCompBridgeForSurface(void* surface, void* devicePtr, uint32_t w
     // Install the HWND subclass only after every fallible initialization step
     // has succeeded. A partial bridge can then be destroyed without leaving a
     // callback/property that points at freed state.
-    MainThreadDispatcher::dispatch_sync([&]() {
-        bridge->compositor.enableNativeResize();
-    });
+    if (nativeResize) {
+        MainThreadDispatcher::dispatch_sync([&]() {
+            bridge->compositor.enableNativeResize();
+        });
+    }
 
     // Zero-copy bridge initialized
 
@@ -11927,9 +11940,9 @@ ELECTROBUN_EXPORT void wgpuReleaseSurfaceForView(void* surface) {
     }
 }
 
-ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
-    if (!ensureWgpuSymbols()) return;
-
+// The DComp bridge's texture for the next frame, as a WGPUSurfaceTexture.
+// False when the surface has no usable bridge (a failing bridge is retired).
+static bool dcompBridgeAcquire(void* surface, void* surfaceTexture) {
     // Check for DComp bridge
     std::shared_ptr<DCompBridgeState> bridge;
     {
@@ -11961,9 +11974,7 @@ ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, voi
                     "[DComp] Failed to abandon previous access (status=%d); retiring bridge\n",
                     abandonedStatus);
                 retireBridge();
-                runOnMainThreadSyncVoid(
-                    [&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
-                return;
+                return false;
             }
         }
 
@@ -11997,19 +12008,25 @@ ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, voi
             *((void**)surfaceTexture) = nullptr;                          // nextInChain = NULL
             *((void**)((uint8_t*)surfaceTexture + 8)) = bridge->zeroCopyTexture;  // texture
             *((uint32_t*)((uint8_t*)surfaceTexture + 16)) = WGPUSurfaceGetCurrentTextureStatus_SuccessOptimal;  // status
-            return;
+            return true;
         }
         printf("[DComp] BeginAccess failed (status=%d); retiring bridge\n", status);
         retireBridge();
     }
+    return false;
+}
+
+ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(void* surface, void* surfaceTexture) {
+    if (!ensureWgpuSymbols()) return;
+    if (dcompBridgeAcquire(surface, surfaceTexture)) return;
 
     // Normal HWND path
     runOnMainThreadSyncVoid([&]() { p_wgpuSurfaceGetCurrentTexture(surface, surfaceTexture); });
 }
 
-ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
-    if (!ensureWgpuSymbols()) return 0;
-
+// Present the bridge's frame: 1 presented, 0 failed (the bridge is retired),
+// -1 the surface has no active bridge frame.
+static int32_t dcompBridgePresent(void* surface) {
     // Check for DComp bridge
     std::shared_ptr<DCompBridgeState> bridge;
     {
@@ -12127,11 +12144,103 @@ ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
         }
         return 1;  // success
     }
+    return -1;
+}
+
+ELECTROBUN_EXPORT int32_t wgpuSurfacePresentMainThread(void* surface) {
+    if (!ensureWgpuSymbols()) return 0;
+    const int32_t bridged = dcompBridgePresent(surface);
+    if (bridged >= 0) return bridged;
 
     // Normal HWND path
     return (int32_t)(intptr_t)runOnMainThreadSyncPtr([&]() -> void* {
         return (void*)(intptr_t)p_wgpuSurfacePresent(surface);
     });
+}
+
+// ---- native UI views: composition without a Dawn surface ----
+//
+// A UI view in a transparent window (or an overlay view) renders into the DComp
+// bridge's shared texture, which the bridge copies into a premultiplied
+// composition swapchain on the view's HWND. Dawn's own swapchains ignore
+// alpha (DXGI_ALPHA_MODE_IGNORE), so they can't show what is behind the
+// window. The bridge is keyed by the view, and no Dawn surface is configured
+// on its HWND. Main thread (the UI core's frame callback).
+
+// (Re)create the bridge for this device and size. False if composition is
+// unavailable (the caller then falls back to an opaque HWND surface).
+ELECTROBUN_EXPORT bool wgpuViewCompositionConfigure(AbstractView* abstractView, void* device,
+                                                    uint32_t width, uint32_t height) {
+    if (!abstractView || !abstractView->hwnd || !device || !width || !height) return false;
+    if (!ensureWgpuSymbols() || !ensureDCompSymbols()) return false;
+    void* key = abstractView;
+    std::shared_ptr<DCompBridgeState> stale;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(key);
+        if (it != g_dcompBridges.end()) {
+            if (it->second->wgpuDevice == device && it->second->width == width &&
+                it->second->height == height && !it->second->unusable.load()) {
+                return true;
+            }
+            stale = std::move(it->second);
+            g_dcompBridges.erase(it);
+        }
+    }
+    destroyDCompBridgeOnMainThread(std::move(stale));
+    {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        g_surfaceToHwnd[key] = abstractView->hwnd;
+    }
+    // no resize subclass: the UI view subclasses its HWND itself, and the
+    // bridge reconfigures on size changes here
+    if (!initDCompBridgeForSurface(key, device, width, height, false)) return false;
+    std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+    return g_dcompBridges.count(key) > 0;
+}
+
+// The texture to render this frame into (a new reference), or null.
+ELECTROBUN_EXPORT void* wgpuViewCompositionAcquire(AbstractView* abstractView) {
+    if (!abstractView) return nullptr;
+    struct {
+        void* next;
+        void* texture;
+        uint32_t status;
+    } surfaceTexture = {};
+    if (!dcompBridgeAcquire(abstractView, &surfaceTexture)) return nullptr;
+    return surfaceTexture.texture;
+}
+
+// Show the acquired frame. False if the bridge failed (it is then retired
+// and the next configure recreates it).
+ELECTROBUN_EXPORT bool wgpuViewCompositionPresent(AbstractView* abstractView) {
+    if (!abstractView) return false;
+    return dcompBridgePresent(abstractView) == 1;
+}
+
+ELECTROBUN_EXPORT void wgpuViewCompositionRelease(AbstractView* abstractView) {
+    if (!abstractView) return;
+    std::shared_ptr<DCompBridgeState> bridge;
+    {
+        std::lock_guard<std::mutex> lock(g_dcompBridgeMapMutex);
+        auto it = g_dcompBridges.find(abstractView);
+        if (it != g_dcompBridges.end()) {
+            bridge = std::move(it->second);
+            g_dcompBridges.erase(it);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_surfaceToHwndMutex);
+        g_surfaceToHwnd.erase(abstractView);
+    }
+    if (!bridge) return;
+    // the UI core detaches from its own thread while holding the UI lock that
+    // main-thread callbacks take: never wait for the main thread here
+    if (MainThreadDispatcher::is_main_thread()) {
+        destroyDCompBridgeOnMainThread(std::move(bridge));
+    } else {
+        MainThreadDispatcher::dispatch_async([bridge]() mutable { bridge.reset(); });
+    }
 }
 
 ELECTROBUN_EXPORT uint64_t wgpuQueueOnSubmittedWorkDoneShim(void* queue, void* callbackInfo) {
@@ -12946,8 +13055,13 @@ ELECTROBUN_EXPORT HWND createWindowWithFrameAndStyleFromWorker(
 
         // Handle transparent windows
         if (transparent) {
-            // For transparent windows, we need WS_EX_LAYERED to support per-pixel alpha
-            windowExStyle |= WS_EX_LAYERED;
+            // Per-pixel alpha through composition: GPU content (Dawn and UI
+            // views via DirectComposition, WebView2, windowed CEF) blends
+            // with the desktop, and no opaque GDI redirection surface sits
+            // behind it. Only settable at creation. CEF off-screen rendering
+            // still draws with UpdateLayeredWindow and makes the window
+            // layered when it starts (OSRWindow::UpdateLayeredWindow).
+            windowExStyle |= WS_EX_NOREDIRECTIONBITMAP;
         }
 
         // Electrobun's cross-platform window geometry is expressed in DIPs.

@@ -35,7 +35,10 @@ Windows host works. Verified on an x64 Windows 11 VM (Dawn on D3D12, WARP:
 - UI Automation: the engine tree shows up in UIA clients with roles, names,
   focus, toggle/value state and screen rects; SetValue, Invoke and Toggle
   work (checked with the UIAutomationClient API, not yet with Narrator).
-- Kitchen `Native UI`: 14/14. ui-core tests: 103 pass, 2 skipped.
+- Transparent windows: a `transparent: true` UI window (`ui-launcher`)
+  shows the desktop through unpainted and translucent pixels; transparent
+  WebView2 and CEF (off-screen) windows still work (`bunny`).
+- Kitchen `Native UI`: 15/15. ui-core tests: 104 pass, 2 skipped.
 
 Implementation (`src/native/win/nativeWrapper.cpp`, "Native UI core host"):
 the view's child HWND is subclassed while handlers are installed; frames
@@ -44,6 +47,26 @@ are paced by a thread waiting on `DwmFlush` and posted to the main thread
 candidate window at the caret; UIA fragment-root provider with COM
 threading; `clipboardFreeText` export (the wrapper links the CRT
 statically). `EBUI_HOST_DEBUG=1` logs key/IME messages and frame times.
+
+Transparency on Windows:
+- Dawn creates every D3D swapchain with `DXGI_ALPHA_MODE_IGNORE` (it
+  advertises premultiplied but ignores it), so a Dawn surface can never show
+  what is behind a window. A transparent UI instead renders into the
+  wrapper's existing DirectComposition bridge (`wgpuViewComposition*`: a
+  Dawn shared texture copied into a premultiplied composition swapchain on
+  the view's HWND); its Dawn device requests the DXGI shared texture/fence
+  features. Opaque UIs keep the zero-copy HWND surface. Fixing Dawn
+  (`SwapChainD3D.cpp`, composition swapchains) would remove the copy.
+- Transparent windows are created with `WS_EX_NOREDIRECTIONBITMAP` (no
+  opaque GDI surface behind composited content) instead of `WS_EX_LAYERED`;
+  CEF's off-screen renderer still uses `UpdateLayeredWindow` and makes its
+  window layered on its first frame.
+- Engine (all platforms): with no html/body background the canvas used to be
+  painted white even in transparent windows. `Ui.transparent`
+  (`ebui_set_transparent`, set by `createUIWindow({ transparent })`,
+  `createUIView` without a background and Zig `MountOptions.transparent`)
+  leaves it transparent. On macOS/Linux this changes what a transparent
+  window or background-less view shows in unpainted areas: now nothing.
 
 Fixed on the way (affect more than the UI host):
 - the process message loops were ANSI (`GetMessage`/`DispatchMessage`), so
@@ -59,14 +82,11 @@ Known Windows gaps, by user impact:
    Japanese IME ignores injected keystrokes (also in Notepad), so it needs a
    check with a real keyboard (composition inline, candidates at the caret,
    commit, Esc cancel).
-2. `transparent: true` UI windows draw opaque (white corners on the
-   `ui-launcher` pill): an HWND swapchain only offers opaque alpha; needs a
-   DirectComposition surface.
-3. WARP repaints take 100-350 ms per frame at ~600x600, so everything is
+2. WARP repaints take 100-350 ms per frame at ~600x600, so everything is
    correct but slow in the VM; real-GPU numbers still to be measured.
-4. Narrator not tried; no UIA text pattern (caret/selection reading in
+3. Narrator not tried; no UIA text pattern (caret/selection reading in
    inputs), no ExpandCollapse for selects.
-5. `ui-launcher` finds no apps (it scans macOS app folders) and shows
+4. `ui-launcher` finds no apps (it scans macOS app folders) and shows
    "cmd+shift+space"; template-level, not host.
 
 ## Linux status (done on `agent/gpu-ui-research`)
