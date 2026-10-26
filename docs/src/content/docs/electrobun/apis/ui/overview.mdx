@@ -31,13 +31,50 @@ Your components build a **retained tree** of nodes (boxes, text, native-layer
 anchors). Reactive props are fine-grained: each thunk prop becomes one effect
 that writes one tree property. A frame tick polls input and — only when
 something marked the tree dirty — runs layout, flattens the tree into an
-instance buffer, and issues **one instanced draw call** to the window's Dawn
-surface. Idle UI does no layout, paint, or GPU work; hidden windows skip the
-tick entirely.
+instance buffer, and draws it to the window's Dawn surface. The default text
+backend shares the quad pipeline; custom text draws are interleaved in tree
+order. Idle UI does no layout, paint, or GPU work; hidden windows skip the tick
+entirely.
 
 UIWindows are regular [`GpuWindow`](/electrobun/apis/webgpu/)s underneath —
 same native window, same full-window `WGPUView`, same surface. The UI runtime
 is a layer on top, not a different GPU stack.
+
+## Custom text rendering
+
+Both `createUIWindow` and `createUIView` accept `createTextRenderer`, a
+per-mount factory that receives Warren's borrowed `device` and target `format`.
+It may return a `UiTextRenderer` asynchronously, allowing fonts and pipelines
+to load before the UI mounts. Omitting it keeps the built-in text backend.
+Existing JSX and `ui.text()` calls use the supplied backend automatically.
+
+The renderer implements four methods:
+
+| Method | Contract |
+| --- | --- |
+| `measure(text, size)` | Return `{ w, h }` in logical points for layout. Keep this synchronous. |
+| `prepare(runs, viewport)` | Prepare the frame's text runs before the pass begins; upload resources and retire absent node IDs here. The viewport contains logical `width`/`height` and actual `pixelWidth`/`pixelHeight`. |
+| `draw(pass, run)` | Draw one run into the borrowed pass. Runs carry node `id`, `text`, `size`, packed `0xRRGGBBAA` `color`, and logical `x`/`y`. Warren sets viewport and ancestor clipping before the call and preserves tree paint order. |
+| `dispose()` | Release resources owned by the backend. Warren calls this before destroying its device, including when mount initialization fails. |
+
+Import `UiTextRendererFactory`, `UiTextRenderer`, `UiTextRun`, and
+`UiTextViewport` as types from `electrobun/main/ui`. The backend must set its
+own drawing pipeline and bindings. Do not retain or end the pass, submit it,
+or destroy the borrowed device. Warren restores its quad state after text.
+A failed draw ends and discards that frame rather than presenting it.
+Runs may include offscreen text: fixed layout dimensions do not bound a
+backend's glyphs. Warren's scissor limits visible drawing; absence from the
+run list, rather than viewport position, determines when a backend can retire
+retained node resources.
+
+The `device` and `pass` are Electrobun's native adapter classes. They implement
+part of WebGPU and are not assignable to the complete `@webgpu/types`
+interfaces. A library such as TypeGPU needs an application-owned compatibility
+adapter at this boundary, covering the native methods that library exercises.
+The adapter must also manage native resource lifetimes: browser libraries may
+drop references to GPU objects that Electrobun releases explicitly with
+`release()`. Retire those references without destroying Warren's borrowed device.
+This hook does not add missing WebGPU features or a text-library dependency.
 
 ## createUIWindow
 
@@ -56,6 +93,7 @@ callback builds the UI with the [element API](/electrobun/apis/ui/components/).
 | `transparent` | `boolean` | `false` | Alpha-composited window. Pair with an alpha `background` and a rounded root box for floating panels. |
 | `alwaysOnTop` | `boolean` | `false` | Keep the window above normal windows. |
 | `background` | `string` | `"#141420"` | Clear color behind the tree. Accepts `#rgb`, `#rrggbb`, `#rrggbbaa`. |
+| `createTextRenderer` | `UiTextRendererFactory` | Built-in text | Supply per-mount text measurement and GPU drawing. |
 | `tickMs` | `number` | `8` | Frame tick interval. Input polls every tick; rendering only on dirty ticks. |
 
 Returns `{ window, context, dispose }`:
@@ -77,7 +115,7 @@ const uiView = await createUIView(view, options, app);
 Mounts a tree into an existing [`WGPUView`](/electrobun/apis/webgpu/) instead
 of a whole window — the mechanism behind
 [`<electrobun-ui>`](/electrobun/apis/ui/ui-tag/) overlays. `options` accepts
-`background` and `tickMs`. The view's frame supplies size and pointer offset.
+`background`, `tickMs`, and `createTextRenderer`. The view's frame supplies size and pointer offset.
 
 ## registerUIRoot
 

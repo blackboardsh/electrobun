@@ -1,9 +1,10 @@
 // Dawn renderer: one instanced-quad pipeline drawing the whole command
-// buffer in a single draw call. Rounded corners via SDF with ~1px AA.
+// buffer. Optional text drawing is interleaved with the quad ranges.
+// Rounded corners via SDF with ~1px AA.
 // Uses Electrobun's browser-style WebGPU adapter, so this reads like
 // standard WebGPU.
 
-import webgpu from "../webgpuAdapter";
+import webgpu, { type GPUTextureView } from "../webgpuAdapter";
 import type { GpuWindow } from "../core/GpuWindow";
 import type { WGPUView } from "../core/WGPUView";
 import { FLOATS_PER_INSTANCE, parseColor, type PaintBuffer } from "./paint";
@@ -11,6 +12,7 @@ import { ATLAS_SIZE, textAtlas } from "./text";
 import { runCleanupSteps } from "./cleanupSteps";
 import { getWebgpuContextKey } from "../webgpuContextKey";
 import { releaseWebgpuContext } from "../webgpuContextRegistry";
+import { textScissor, type UiTextRenderer, type UiTextRendererFactory } from "./textRenderer";
 
 const SHADER = /* wgsl */ `
 struct Uniforms {
@@ -95,6 +97,7 @@ fn fs(in: VSOut) -> @location(0) vec4<f32> {
 `;
 
 export interface UiRenderer {
+	readonly text?: UiTextRenderer;
 	render(buffer: PaintBuffer, width: number, height: number): void;
 	resize(width: number, height: number): void;
 	dispose(): void;
@@ -110,6 +113,7 @@ export async function createUiRenderer(
 	target: GpuWindow | WGPUView,
 	clearColor: string | number,
 	initialSize: { width: number; height: number },
+	createTextRenderer?: UiTextRendererFactory,
 ): Promise<UiRenderer> {
 	const { context: ctx } = webgpu.createContext(target as any);
 	ctx._fallbackSize = { ...initialSize };
@@ -133,6 +137,7 @@ export async function createUiRenderer(
 	> | null = null;
 	let atlasSampler: ReturnType<typeof device.createSampler> | null = null;
 	let bindGroup: ReturnType<typeof device.createBindGroup> | null = null;
+	let textRenderer: UiTextRenderer | undefined;
 
 	const disposeResources = () => {
 		if (disposed) return;
@@ -159,7 +164,10 @@ export async function createUiRenderer(
 		shaderModule = null;
 		const shouldDestroyDevice = deviceAlive;
 		deviceAlive = false;
+		const text = textRenderer;
+		textRenderer = undefined;
 		runCleanupSteps([
+			() => text?.dispose(),
 			() => {
 				if (shouldUnconfigure) ctx.unconfigure();
 			},
@@ -306,8 +314,10 @@ export async function createUiRenderer(
 			size: instanceCapacity * FLOATS_PER_INSTANCE * 4,
 			usage: 0x20 | 0x8, // VERTEX | COPY_DST
 		});
+		textRenderer = await createTextRenderer?.({ device, format: ctx.format });
 
 		return {
+			text: textRenderer,
 			resize(width: number, height: number) {
 				if (disposed) return;
 				ctx._fallbackSize = { width, height };
@@ -340,25 +350,75 @@ export async function createUiRenderer(
 						buffer.data.subarray(0, buffer.count * FLOATS_PER_INSTANCE),
 					);
 				}
+				const size = ctx._fallbackSize ?? { width: ctx.width, height: ctx.height };
+				const viewport = {
+					width,
+					height,
+					pixelWidth: size.width,
+					pixelHeight: size.height,
+				};
+				textRenderer?.prepare(buffer.texts ?? [], viewport);
 				const encoder = device.createCommandEncoder();
-				const pass = encoder.beginRenderPass({
-					colorAttachments: [
-						{
-							view: ctx.getCurrentTexture().createView(),
-							loadOp: "clear",
-							storeOp: "store",
-							clearValue,
-						},
-					],
-				});
-				pass.setPipeline(pipeline);
-				pass.setBindGroup(0, rendererBindGroup);
-				pass.setVertexBuffer(0, instanceBuffer);
-				if (buffer.count > 0) {
-					pass.draw(6, buffer.count);
+				let view: GPUTextureView | undefined;
+				try {
+					view = ctx.getCurrentTexture().createView();
+					const pass = encoder.beginRenderPass({
+						colorAttachments: [
+							{
+								view,
+								loadOp: "clear",
+								storeOp: "store",
+								clearValue,
+							},
+						],
+					});
+					const drawQuads = (first: number, end: number) => {
+						if (first === end) return;
+						pass.setViewport(0, 0, viewport.pixelWidth, viewport.pixelHeight, 0, 1);
+						pass.setScissorRect(0, 0, viewport.pixelWidth, viewport.pixelHeight);
+						pass.setPipeline(pipeline);
+						pass.setBindGroup(0, rendererBindGroup);
+						pass.setVertexBuffer(0, instanceBuffer!);
+						pass.draw(6, end - first, 0, first);
+					};
+					try {
+						let first = 0;
+						for (const run of buffer.texts ?? []) {
+							drawQuads(first, run.beforeInstance);
+							first = run.beforeInstance;
+							const clip = textScissor(run.clip, viewport);
+							if (clip.width > 0 && clip.height > 0) {
+								pass.setViewport(0, 0, viewport.pixelWidth, viewport.pixelHeight, 0, 1);
+								pass.setScissorRect(clip.x, clip.y, clip.width, clip.height);
+								textRenderer?.draw(pass, run);
+							}
+						}
+						drawQuads(first, buffer.count);
+					} finally {
+						pass.end();
+					}
+					device.queue.submit([encoder.finish()]);
+				} catch (error) {
+					// End/discard failed recordings without presenting a partial frame.
+					try {
+						runCleanupSteps([
+							() => { if (encoder.ptr) encoder.finish()._releaseReference(); },
+							() => {
+								// Unconfigure detaches pending presentation and releases the
+								// acquired texture; reconfigure before the next frame.
+								ctx.unconfigure();
+								configured = false;
+								ctx.configure({ device, format: "bgra8unorm", alphaMode: "premultiplied" });
+								configured = true;
+							},
+						]);
+					} catch (cleanupError) {
+						throw new AggregateError([error, cleanupError], "Failed to discard UI frame");
+					}
+					throw error;
+				} finally {
+					view?.release();
 				}
-				pass.end();
-				device.queue.submit([encoder.finish()]);
 			},
 			dispose: disposeResources,
 		};
