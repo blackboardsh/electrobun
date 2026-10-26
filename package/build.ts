@@ -803,10 +803,10 @@ async function copyToDist() {
 				: "libElectrobunCore.so";
 	const coreLibSourceDir = OS === "win" ? "bin" : "lib";
 	cpSync(join("src", "core", "zig-out", coreLibSourceDir, coreLibName), join("dist", coreLibName), { force: true });
-	if (OS === "macos" || OS === "linux") {
-		const uiLibName = OS === "macos" ? "libElectrobunUI.dylib" : "libElectrobunUI.so";
-		cpSync(join("src", "ui-core", "zig-out", "lib", uiLibName), join("dist", uiLibName), { force: true });
-	}
+	const uiLibName =
+		OS === "win" ? "ElectrobunUI.dll" : OS === "macos" ? "libElectrobunUI.dylib" : "libElectrobunUI.so";
+	// like the core, Zig installs the Windows DLL in bin (lib holds the import library)
+	cpSync(join("src", "ui-core", "zig-out", coreLibSourceDir, uiLibName), join("dist", uiLibName), { force: true });
 	// Copy bsdiff/bspatch from vendored zig-bsdiff
 	cpSync(`vendors/zig-bsdiff/bsdiff${binExt}`, `dist/bsdiff${binExt}`, { force: true });
 	cpSync(`vendors/zig-bsdiff/bspatch${binExt}`, `dist/bspatch${binExt}`, { force: true });
@@ -2604,18 +2604,23 @@ async function buildLauncher() {
 // apps do not pay for it. Debug builds of the engine are too slow to be
 // useful, so dev builds still compile it optimized.
 async function buildUI() {
-	if (OS === "win") return; // TODO(ui-core): windows host
 	console.log(`Building ElectrobunUI for ${OS} ${ARCH}...`);
 	let zigArgs: string[];
 	if (OS === "macos") {
 		const sdk = runCaptured("xcrun", ["--sdk", "macosx", "--show-sdk-path"]).trim();
 		zigArgs = [`-Dtarget=${macosZigTarget(ARCH)}`, `-Dmacos-sdk=${sdk}`, `-Dtools=false`];
+	} else if (OS === "win") {
+		zigArgs = [`-Dtarget=${WINDOWS_TARGET.zig}`, "-Dcpu=baseline", `-Dtools=false`];
 	} else {
 		zigArgs = [`-Dtarget=${ARCH === "arm64" ? "aarch64" : "x86_64"}-linux-gnu`, `-Dtools=false`];
 	}
 	// dev builds keep safety checks: bounds, null and stale-id misuse panic
 	// with a stack trace at the faulty line instead of corrupting memory
 	const optimize = CHANNEL === "release" ? "ReleaseSmall" : "ReleaseSafe";
+	if (OS === "win") {
+		runInherited(PATH.zig.BIN, ["build", `-Doptimize=${optimize}`, ...zigArgs], join(process.cwd(), "src", "ui-core"));
+		return;
+	}
 	await $`cd src/ui-core && ../../vendors/zig/zig build -Doptimize=${optimize} ${zigArgs}`;
 }
 
