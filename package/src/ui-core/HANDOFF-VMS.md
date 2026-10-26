@@ -21,6 +21,54 @@ Branch `agent/gpu-ui-research`. The native UI engine lives in
 - **Missing, and your job**: the native host on your OS. Nothing draws in a
   window on Windows or Linux yet.
 
+## Windows status (branch `agent/gpu-ui-windows`)
+
+Windows host works. Verified on an x64 Windows 11 VM (Dawn on D3D12, WARP:
+"Microsoft Basic Render Driver"):
+
+- `bun-ui`, `zig-ui`, `ui-launcher`, `ui-color-picker`, `ui-wgpu` render and
+  take input: hover, click, wheel scroll, select popup (mouse and keyboard),
+  CSS cursors, typing incl. CJK/emoji, editing keys, Ctrl+A/C/V, Tab focus,
+  Enter submit, clipboard, drag regions (system move loop), live resize, and
+  crisp hit-tested output at 100/150/200% with live DPI changes. Anchored
+  WGPUView and WebView2 BrowserView sit above the UI (`ui-wgpu`).
+- UI Automation: the engine tree shows up in UIA clients with roles, names,
+  focus, toggle/value state and screen rects; SetValue, Invoke and Toggle
+  work (checked with the UIAutomationClient API, not yet with Narrator).
+- Kitchen `Native UI`: 14/14. ui-core tests: 103 pass, 2 skipped.
+
+Implementation (`src/native/win/nativeWrapper.cpp`, "Native UI core host"):
+the view's child HWND is subclassed while handlers are installed; frames
+are paced by a thread waiting on `DwmFlush` and posted to the main thread
+(drawn synchronously on `WM_SIZE`); IMM32 inline composition with the
+candidate window at the caret; UIA fragment-root provider with COM
+threading; `clipboardFreeText` export (the wrapper links the CRT
+statically). `EBUI_HOST_DEBUG=1` logs key/IME messages and frame times.
+
+Fixed on the way (affect more than the UI host):
+- the process message loops were ANSI (`GetMessage`/`DispatchMessage`), so
+  WM_CHAR went through the code page: CJK text and emoji became `?` in every
+  window. They now use the W APIs.
+- TS DOM shim: a controlled input echoing each input event's value back
+  undid keystrokes typed meanwhile (seen when typing fast on a slow machine);
+  the echo of the value the engine just reported is no longer sent.
+
+Known Windows gaps, by user impact:
+
+1. IME composition is implemented but unverified: the Windows 11 Microsoft
+   Japanese IME ignores injected keystrokes (also in Notepad), so it needs a
+   check with a real keyboard (composition inline, candidates at the caret,
+   commit, Esc cancel).
+2. `transparent: true` UI windows draw opaque (white corners on the
+   `ui-launcher` pill): an HWND swapchain only offers opaque alpha; needs a
+   DirectComposition surface.
+3. WARP repaints take 100-350 ms per frame at ~600x600, so everything is
+   correct but slow in the VM; real-GPU numbers still to be measured.
+4. Narrator not tried; no UIA text pattern (caret/selection reading in
+   inputs), no ExpandCollapse for selects.
+5. `ui-launcher` finds no apps (it scans macOS app folders) and shows
+   "cmd+shift+space"; template-level, not host.
+
 ## Linux status (done on `agent/gpu-ui-research`)
 
 Linux host works in GTK windows (the default renderer); Windows is next.
