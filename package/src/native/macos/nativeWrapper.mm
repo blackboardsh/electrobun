@@ -9252,13 +9252,12 @@ extern "C" void setWindowPosition(NSWindow *window, double x, double y) {
   runOnMainThreadAsyncVoid(^{
     if (!window)
       return;
-    // macOS uses bottom-left origin, so we need to convert from top-left
-    NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
-    CGFloat screenHeight = screen.frame.size.height;
+    // Use the same global top-left coordinates as getWindowFrame().
+    CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
     CGFloat windowHeight = window.frame.size.height;
     // Convert from top-left origin (what users expect) to bottom-left origin
     // (what macOS uses)
-    CGFloat adjustedY = screenHeight - y - windowHeight;
+    CGFloat adjustedY = primaryHeight - y - windowHeight;
     [window setFrameOrigin:NSMakePoint(x, adjustedY)];
   });
 }
@@ -9350,10 +9349,9 @@ extern "C" void setWindowFrame(NSWindow *window, double x, double y,
   runOnMainThreadAsyncVoid(^{
     if (!window)
       return;
-    // macOS uses bottom-left origin, convert from top-left
-    NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
-    CGFloat screenHeight = screen.frame.size.height;
-    CGFloat adjustedY = screenHeight - y - height;
+    // Use the same global top-left coordinates as getWindowFrame().
+    CGFloat primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
+    CGFloat adjustedY = primaryHeight - y - height;
     NSRect frame = NSMakeRect(x, adjustedY, width, height);
     [window setFrame:frame display:YES animate:NO];
   });
@@ -9362,17 +9360,16 @@ extern "C" void setWindowFrame(NSWindow *window, double x, double y,
 extern "C" void getWindowFrame(NSWindow *window, double *outX, double *outY,
                                double *outWidth, double *outHeight) {
   __block NSRect frame = NSZeroRect;
-  __block CGFloat screenHeight = 0;
+  __block CGFloat primaryHeight = 0;
   runOnMainThreadSyncVoid(^{
     if (!window)
       return;
     frame = window.frame;
-    NSScreen *screen = [window screen] ?: [NSScreen mainScreen];
-    screenHeight = screen.frame.size.height;
+    primaryHeight = [[[NSScreen screens] firstObject] frame].size.height;
   });
-  // Convert from bottom-left origin to top-left origin
+  // Match the global top-left coordinate space used by getAllDisplays().
   *outX = frame.origin.x;
-  *outY = screenHeight - frame.origin.y - frame.size.height;
+  *outY = primaryHeight - frame.origin.y - frame.size.height;
   *outWidth = frame.size.width;
   *outHeight = frame.size.height;
 }
