@@ -9319,7 +9319,9 @@ static void uiRunFrame(WGPUView* view) {
     UIViewHandlers h = uiHandlersOf(view);
     if (!h.frame) return;
     view->ui.inFrame = true;
-    h.frame(h.ctx, uiMonotonicSeconds());
+    const double start = uiMonotonicSeconds();
+    h.frame(h.ctx, start);
+    if (uiHostDebug()) fprintf(stderr, "[ebui host] frame %.1f ms\n", (uiMonotonicSeconds() - start) * 1000.0);
     view->ui.inFrame = false;
 }
 
@@ -9520,11 +9522,13 @@ static std::string uiKeyText(UINT vk, UINT scanCode, BYTE* state) {
 static void uiHandleKey(WGPUView* view, UINT msg, WPARAM wParam, LPARAM lParam) {
     const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
     UINT vk = (UINT)wParam;
+    // TranslateMessage posts a key's WM_CHARs before the next key-down is
+    // read, so every key-down ends the previous key's suppression
+    if (down) view->ui.suppressChar = false;
     // VK_PROCESSKEY: the input method consumed the key (composition).
     // VK_PACKET: text injected without a key (SendInput, on-screen keyboards,
     // some IMEs); it arrives as WM_CHAR, like an input method's insertText.
     if (vk == VK_PROCESSKEY || vk == VK_PACKET || uiIsModifierKey(vk)) return;
-    if (down) view->ui.suppressChar = false;
     UIViewHandlers h = uiHandlersOf(view);
     if (!h.key) return;
     const UINT scanCode = (lParam >> 16) & 0xff;
@@ -10492,6 +10496,12 @@ static LRESULT CALLBACK uiViewWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         if (wParam == UNICODE_NOCHAR) return TRUE;
         break;
     case WM_SETFOCUS:
+        if (uiHostDebug()) {
+            HIMC imc = ImmGetContext(hwnd);
+            fprintf(stderr, "[ebui host] focus himc=%p open=%d hkl=%p\n", (void*)imc,
+                    imc ? ImmGetOpenStatus(imc) : -1, (void*)GetKeyboardLayout(0));
+            if (imc) ImmReleaseContext(hwnd, imc);
+        }
         view->ui.highSurrogate = 0;
         uiUpdateImeWindow(view);
         uiScheduleFrame(view->webviewId);
