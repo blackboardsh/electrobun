@@ -216,7 +216,7 @@ test "portable SVG matches CoreGraphics" {
             try std.testing.expect(max < 80);
         }
     }
-    std.debug.print("svg portable vs CoreGraphics: worst mean abs diff {d:.3}, worst max {d}\n", .{ worst_mean, worst_max });
+    @import("testdata").log("svg portable vs CoreGraphics: worst mean abs diff {d:.3}, worst max {d}\n", .{ worst_mean, worst_max });
 }
 
 test "portable SVG survives degenerate pictures" {

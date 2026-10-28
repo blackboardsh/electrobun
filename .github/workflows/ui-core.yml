@@ -49,6 +49,9 @@ jobs:
           version: 0.17.0
 
       - name: Test
+        # print which system fonts resolved and the measured image diffs
+        env:
+          ELECTROBUN_UI_TEST_VERBOSE: "1"
         run: zig build test --summary all
 
       - name: Build release library

@@ -1,5 +1,17 @@
 //! Test fixtures, available to tests as @import("testdata"). Kept outside
 //! src/ so they don't ship with the engine sources in the Zig SDK.
+const std = @import("std");
+
+/// Informational output from passing tests (measured diffs, which system
+/// fonts resolved). Silent unless ELECTROBUN_UI_TEST_VERBOSE is set: the
+/// build runner shows any test stderr under a "failed command:" header, so
+/// unconditional prints make passing runs look like failures. Print
+/// failure details directly instead, right before returning the error.
+pub fn log(comptime fmt: []const u8, args: anytype) void {
+    const v = std.c.getenv("ELECTROBUN_UI_TEST_VERBOSE") orelse return;
+    if (v[0] == 0 or v[0] == '0') return;
+    std.debug.print(fmt, args);
+}
 pub const fonts = struct {
     /// Roboto (Apache-2.0) subset: Latin-1, Greek, punctuation; glyf outlines, GPOS kern
     pub const roboto = @embedFile("fonts/Roboto-Subset.ttf");

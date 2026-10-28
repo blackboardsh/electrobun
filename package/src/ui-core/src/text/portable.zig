@@ -1036,7 +1036,7 @@ test "system fonts: discover, resolve generic families, shape and rasterize" {
         const id = b.resolve(.{ .families = &.{generic_name}, .size = 16 });
         const fi = s.instances.items[id].face orelse return error.NoFontResolved;
         var nb: [128]u8 = undefined;
-        std.debug.print("  {s} -> {s} ({d} system faces)\n", .{ generic_name, s.faces.items[fi].font.familyName(&nb) orelse "?", s.sys.items.len });
+        testdata.log("  {s} -> {s} ({d} system faces)\n", .{ generic_name, s.faces.items[fi].font.familyName(&nb) orelse "?", s.sys.items.len });
         out.clearRetainingCapacity();
         try b.shape(id, "Hello, world", &out, gpa);
         try std.testing.expectEqual(@as(usize, 12), out.items.len);
