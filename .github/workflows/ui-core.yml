@@ -5,6 +5,13 @@ name: UI core
 # backends), so no GPU or display is needed.
 
 on:
+  # release.yml runs these before publishing
+  workflow_call:
+    inputs:
+      ref:
+        description: Exact release tag or commit to build and test
+        type: string
+        required: true
   workflow_dispatch:
   push:
     branches: [agent/gpu-ui-research, agent/gpu-ui-ci]
@@ -16,8 +23,10 @@ permissions:
   contents: read
 
 concurrency:
-  group: ui-core-${{ github.ref }}
-  cancel-in-progress: true
+  # github.workflow is the caller's name when called, so a release never
+  # shares a group with (or gets cancelled by) branch pushes
+  group: ui-core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.workflow == 'UI core' }}
 
 jobs:
   test:
@@ -40,6 +49,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
 
       # Same pinned version as package/build.ts vendors (ZIG_VERSION).

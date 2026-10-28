@@ -28,6 +28,11 @@ jobs:
     with:
       ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
 
+  ui-core:
+    uses: ./.github/workflows/ui-core.yml
+    with:
+      ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', github.event.inputs.tag) || github.ref }}
+
   build:
     strategy:
       fail-fast: false
@@ -466,7 +471,7 @@ jobs:
           rm -rf kitchen/build
 
   release:
-    needs: [build, test-vm]
+    needs: [build, test-vm, ui-core]
     runs-on: ubuntu-latest
     permissions:
       contents: write
