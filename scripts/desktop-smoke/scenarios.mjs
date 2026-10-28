@@ -38,8 +38,9 @@ export const kitchenScenarios = [
     { scrollHost: 2, hostAnchor: 'Mask & Passthrough Controls', childAnchor: 'Search Target A', expectChange: true },
     { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
   ] },
-  { id: 'kitchen-cottontail-ui', title: 'Electrobun UI (kitchen)', minimizeWindow: 'Electrobun Integration Tests', test: 'Electrobun UI demo window', readyText: 'reactive GPU chrome', actions: [
-    { click: '+ 1', aliases: ['+ i', '+ l'], expectCounter: 'incremented', expectChange: true },
-    { click: 'Reset', expectCounter: 'reset', expectChange: true },
+  { id: 'kitchen-native-ui', title: 'Native UI kitchen sink', minimizeWindow: 'Electrobun Integration Tests', test: 'Native GPU UI kitchen sink', readyText: 'Open dialog', actions: [
+    { click: 'Clicked', expectChange: true },
+    { click: 'Open dialog', expectText: 'Rendered in a Portal', expectChange: true },
+    { click: 'Cancel', absentText: 'Rendered in a Portal', expectChange: true },
   ] },
 ];
