@@ -176,8 +176,9 @@ describe("Windows per-monitor DPI and window shell", () => {
 			"static bool initDCompBridgeForSurface(",
 			"ELECTROBUN_EXPORT void wgpuSurfaceConfigureMainThread(",
 		);
+		// acquire and present are shared by Dawn surfaces and UI views
 		const bridgeFrames = sourceBetween(
-			"ELECTROBUN_EXPORT void wgpuSurfaceGetCurrentTextureMainThread(",
+			"static bool dcompBridgeAcquire(",
 			"ELECTROBUN_EXPORT uint64_t wgpuQueueOnSubmittedWorkDoneShim(",
 		);
 		const deviceCreation = sourceBetween(
