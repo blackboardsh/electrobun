@@ -2,6 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const electrobun = @import("electrobun");
 const WebviewObservations = @import("webview_observations.zig").WebviewObservations;
+const WindowSizeObservation = @import("window_size_observation.zig").Observation;
 
 // Zig 0.16 moved Mutex to std.Io.Mutex, whose lock/unlock take an Io
 // instance. Wrap it so the argument-free lock()/unlock() call sites keep
@@ -2690,6 +2691,32 @@ fn runWindowSetPositionTest(state: *AppState) !void {
     }
 }
 
+fn waitForWindowSize(state: *AppState, window_id: u32, width: f64, height: f64, tolerance: f64) !void {
+    const io = electrobun.defaultIo();
+    const started = std.Io.Clock.now(.awake, io);
+    var observed: WindowSizeObservation = .{
+        .target = .{ .width = width, .height = height },
+        .tolerance = tolerance,
+        .timeout_ns = 3000 * slowPlatformScale() * std.time.ns_per_ms,
+    };
+    while (true) {
+        const frame = state.core.getWindowFrame(window_id) catch |err| {
+            const elapsed = started.durationTo(std.Io.Clock.now(.awake, io)).toMilliseconds();
+            std.debug.print("[kitchen zig] reading window size {d}x{d} failed after {d}ms: {s}; first={any}, last={any}\n", .{ width, height, elapsed, @errorName(err), observed.first, observed.last });
+            return err;
+        };
+        const elapsed_ns: u64 = @intCast(started.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        switch (observed.observe(.{ .width = frame.width, .height = frame.height }, elapsed_ns)) {
+            .reached => return,
+            .timed_out => {
+                std.debug.print("[kitchen zig] window size {d}x{d} timed out (tolerance {d}) after {d}ms: first={any}, last={any}\n", .{ width, height, tolerance, elapsed_ns / std.time.ns_per_ms, observed.first, observed.last });
+                return error.WindowSizeDidNotConverge;
+            },
+            .waiting => try io.sleep(.{ .nanoseconds = @intCast(@min(25 * std.time.ns_per_ms, observed.timeout_ns - elapsed_ns)) }, .awake),
+        }
+    }
+}
+
 fn runWindowSetSizeTest(state: *AppState) !void {
     const created = try createWindowWithTestHarness(
         state,
@@ -2702,20 +2729,10 @@ fn runWindowSetSizeTest(state: *AppState) !void {
 
     sleepMs(short_wait_ms);
     try state.core.setWindowSize(created.window_id, 600, 500);
-    sleepMs(short_wait_ms);
-
-    const grown_frame = try state.core.getWindowFrame(created.window_id);
-    if (!approxEq(grown_frame.width, 600, 24) or !approxEq(grown_frame.height, 500, 24)) {
-        return error.UnexpectedWindowSize;
-    }
+    try waitForWindowSize(state, created.window_id, 600, 500, 24);
 
     try state.core.setWindowSize(created.window_id, 320, 240);
-    sleepMs(short_wait_ms);
-
-    const shrunk_frame = try state.core.getWindowFrame(created.window_id);
-    if (!approxEq(shrunk_frame.width, 320, 24) or !approxEq(shrunk_frame.height, 240, 24)) {
-        return error.UnexpectedWindowSize;
-    }
+    try waitForWindowSize(state, created.window_id, 320, 240, 24);
 }
 
 fn runWindowSetFrameTest(state: *AppState) !void {
@@ -2739,10 +2756,7 @@ fn runWindowSetFrameTest(state: *AppState) !void {
         .height = 480,
     });
 
-    const frame = try state.core.getWindowFrame(window_id);
-    if (frame.width != 640 or frame.height != 480) {
-        return error.UnexpectedWindowFrame;
-    }
+    try waitForWindowSize(state, window_id, 640, 480, 0);
 }
 
 fn runWindowGetFrameTest(state: *AppState) !void {

@@ -1770,15 +1770,11 @@ func runWindowSetFrameTest() error {
 		if err := state.core.SetWindowFrame(windowID, target); err != nil {
 			return err
 		}
-		time.Sleep(shortWait)
-		frame, err := state.core.GetWindowFrame(windowID)
-		if err != nil {
-			return err
-		}
-		if !approxEq(frame.Width, target.Width, 24) || !approxEq(frame.Height, target.Height, 24) {
-			return fmt.Errorf("setFrame size did not round-trip")
-		}
-		return nil
+		return waitForWindowSize(target.Width, target.Height, 24,
+			3*time.Second*time.Duration(slowPlatformScaleFactor()), func() (float64, float64, error) {
+				frame, err := state.core.GetWindowFrame(windowID)
+				return frame.Width, frame.Height, err
+			})
 	}()
 	return finishWithWindow(windowID, err)
 }

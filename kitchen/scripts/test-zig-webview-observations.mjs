@@ -16,7 +16,6 @@ assert.equal(version.stdout.trim(), ZIG_VERSION, "Use the pinned release compile
 const hostArch = zigCompilerHostArchitecture();
 if (process.platform === "win32") assertWindowsBinaryArchitecture(zig, hostArch);
 const scratch = mkdtempSync(join(realpathSync(tmpdir()), "electrobun-zig-observations-"));
-const executable = join(scratch, process.platform === "win32" ? "observations.exe" : "observations");
 
 function run(command, args) {
 	const result = spawnSync(command, args, { cwd: scratch, stdio: "inherit", windowsHide: true });
@@ -24,7 +23,10 @@ function run(command, args) {
 }
 
 console.log(`[zig-observations] Compiler: Zig ${ZIG_VERSION} ${hostArch}`);
-console.log(`[zig-observations] Test executable: ${executable}`);
-run(zig, ["test", join(kitchen, "src", "zig", "webview_observations.zig"), "-O", "ReleaseSafe", "--cache-dir", join(scratch, "cache"), "--test-no-exec", `-femit-bin=${executable}`]);
-if (process.platform === "win32") assertWindowsBinaryArchitecture(executable, hostArch);
-run(executable, []);
+for (const name of ["webview_observations", "window_size_observation"]) {
+	const executable = join(scratch, `${name}${process.platform === "win32" ? ".exe" : ""}`);
+	console.log(`[zig-observations] Test executable: ${executable}`);
+	run(zig, ["test", join(kitchen, "src", "zig", `${name}.zig`), "-O", "ReleaseSafe", "--cache-dir", join(scratch, "cache"), "--test-no-exec", `-femit-bin=${executable}`]);
+	if (process.platform === "win32") assertWindowsBinaryArchitecture(executable, hostArch);
+	run(executable, []);
+}

@@ -19,12 +19,13 @@ export default {
 		"test:rust-webview-observations": ["node", "scripts/test-rust-webview-observations.mjs"],
 		"test:go-webview-observations": ["node", "scripts/test-go-webview-observations.mjs"],
 		"test:zig-webview-observations": ["node", "scripts/test-zig-webview-observations.mjs"],
+		"test:odin-window-size-observation": ["node", "scripts/test-odin-window-size-observation.mjs"],
 		"check:zig-mirrors": ["hutch", "scripts/check-zig-test-mirrors.ts"],
 		"check:odin-mirrors": ["hutch", "scripts/check-odin-test-mirrors.ts"],
 		// Kitchen's own tooling tests (not the in-app suite). The node:test files
 		// need Node's runner; the rest use Hutch's default Bun test runner.
 		"test:tooling":
-			"hutch test scripts/kitchen-matrix.test.ts && hutch test src/test-framework/auto-run-exit.test.ts && hutch test src/test-framework/exclusive-run.test.ts && hutch test src/test-framework/native-auto-run-exit.test.ts && hutch test src/test-framework/requirements.test.ts && hutch test src/test-runner/test-summary.test.ts && node --experimental-strip-types --test src/test-runner/interactive-contract.test.ts src/test-runner/test-order.test.ts && node --test scripts/package-boundary.test.mjs && hutch check:zig-mirrors && hutch check:odin-mirrors && hutch test:rust-webview-observations && hutch test:go-webview-observations && hutch test:zig-webview-observations",
+			"hutch test scripts/kitchen-matrix.test.ts && hutch test src/test-framework/auto-run-exit.test.ts && hutch test src/test-framework/exclusive-run.test.ts && hutch test src/test-framework/native-auto-run-exit.test.ts && hutch test src/test-framework/requirements.test.ts && hutch test src/test-framework/window-observation.test.ts && hutch test src/test-runner/test-summary.test.ts && node --experimental-strip-types --test src/test-runner/interactive-contract.test.ts src/test-runner/test-order.test.ts && node --test scripts/package-boundary.test.mjs && hutch check:zig-mirrors && hutch check:odin-mirrors && hutch test:rust-webview-observations && hutch test:go-webview-observations && hutch test:zig-webview-observations && hutch test:odin-window-size-observation",
 		"build:canary":
 			"cd ../package && hutch build:release && cd ../kitchen && hutch electrobun build --env=canary",
 		"build:stable":

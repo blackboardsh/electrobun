@@ -24,7 +24,7 @@ if (process.platform === "win32") {
 
 const temporaryRoot = realpathSync(tmpdir());
 const scratch = mkdtempSync(join(temporaryRoot, "electrobun-rust-observations-"));
-// Compile only the observation store, without the app or native SDK. Use the
+// Compile only the observation helpers, without the app or native SDK. Use the
 // app's exact serde_json and transitive package versions/checksums, even when
 // CI has not built Kitchen or populated its Cargo cache yet.
 const packageBlocks = readFileSync(join(kitchen, "Cargo.lock"), "utf8").split("[[package]]").slice(1);
@@ -34,13 +34,16 @@ const serdeVersion = serdeJson?.match(/^version = "([^"]+)"$/m)?.[1];
 if (!serdeVersion) throw new Error("Kitchen Cargo.lock does not pin serde_json");
 const packageName = "electrobun-webview-observation-tests";
 const manifest = join(scratch, "Cargo.toml");
+writeFileSync(join(scratch, "lib.rs"), ["webview_observations", "window_size_observation"].map((module) =>
+    `#[path = ${JSON.stringify(join(kitchen, "src", "rust", `${module}.rs`))}]\npub mod ${module};\n`
+).join("\n"));
 writeFileSync(manifest, `[package]
 name = "${packageName}"
 version = "0.0.0"
 edition = "2021"
 
 [lib]
-path = ${JSON.stringify(join(kitchen, "src", "rust", "webview_observations.rs"))}
+path = "lib.rs"
 
 [dependencies]
 serde_json = "=${serdeVersion}"

@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 
 mod webview_observations;
 use webview_observations::WebviewObservations;
+mod window_size_observation;
+use window_size_observation::wait_for_window_size;
 
 const APP_VERSION: &str = "1.18.1";
 const DEFAULT_SECRET_KEY: &str =
@@ -2352,6 +2354,27 @@ fn run_window_set_position_test() -> Result<(), String> {
     finish_with_window(window_id, result)
 }
 
+fn await_window_size(window_id: u32, width: f64, height: f64) -> Result<(), String> {
+    let observation = wait_for_window_size(
+        width,
+        height,
+        24.0,
+        Duration::from_millis(3_000 * slow_platform_scale()),
+        || {
+            app_state().core.get_window_frame(window_id)
+                .map(|frame| (frame.width, frame.height))
+        },
+    )?;
+    if observation.elapsed >= Duration::from_millis(SHORT_WAIT_MS * slow_platform_scale()) {
+        eprintln!(
+            "[kitchen rust] window {window_id} reached {width}x{height} after {:?}: first observed {}x{}, last observed {}x{} ({} observations)",
+            observation.elapsed, observation.first.0, observation.first.1,
+            observation.last.0, observation.last.1, observation.reads,
+        );
+    }
+    Ok(())
+}
+
 fn run_window_set_size_test() -> Result<(), String> {
     let state = app_state();
     let created = create_window_with_test_harness(
@@ -2365,26 +2388,14 @@ fn run_window_set_size_test() -> Result<(), String> {
         state
             .core
             .set_window_size(created.window_id, 600.0, 500.0)?;
-        sleep_ms(SHORT_WAIT_MS);
-        let grown = state.core.get_window_frame(created.window_id)?;
-        if !approx_eq(grown.width, 600.0, 24.0) || !approx_eq(grown.height, 500.0, 24.0) {
-            return Err(format!(
-                "unexpected grown size {}x{}",
-                grown.width, grown.height
-            ));
-        }
+        await_window_size(created.window_id, 600.0, 500.0)
+            .map_err(|error| format!("growing window: {error}"))?;
 
         state
             .core
             .set_window_size(created.window_id, 320.0, 240.0)?;
-        sleep_ms(SHORT_WAIT_MS);
-        let shrunk = state.core.get_window_frame(created.window_id)?;
-        if !approx_eq(shrunk.width, 320.0, 24.0) || !approx_eq(shrunk.height, 240.0, 24.0) {
-            return Err(format!(
-                "unexpected shrunk size {}x{}",
-                shrunk.width, shrunk.height
-            ));
-        }
+        await_window_size(created.window_id, 320.0, 240.0)
+            .map_err(|error| format!("shrinking window: {error}"))?;
         Ok(())
     })();
     finish_with_window(created.window_id, result)
@@ -2399,14 +2410,8 @@ fn run_window_set_frame_test() -> Result<(), String> {
     let target = Rect::new(170.0, 150.0, 540.0, 380.0);
     let result = (|| {
         state.core.set_window_frame(window_id, target)?;
-        sleep_ms(SHORT_WAIT_MS);
-        let frame = state.core.get_window_frame(window_id)?;
-        if !approx_eq(frame.width, target.width, 24.0)
-            || !approx_eq(frame.height, target.height, 24.0)
-        {
-            return Err("setFrame size did not round-trip".to_string());
-        }
-        Ok(())
+        await_window_size(window_id, target.width, target.height)
+            .map_err(|error| format!("setFrame size did not round-trip: {error}"))
     })();
     finish_with_window(window_id, result)
 }

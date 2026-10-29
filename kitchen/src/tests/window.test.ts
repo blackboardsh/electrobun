@@ -3,6 +3,7 @@
 import { defineTest, expect, sleep, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
+import { waitForWindowObservation } from "../test-framework/window-observation";
 
 type ViewportSize = {
   width: number;
@@ -62,28 +63,33 @@ export const windowTests = [
 
       const initialOuterSize = { width: 640, height: 480 };
       const resizedOuterSize = { width: 800, height: 620 };
+      let ready = false;
       const win = await createWindow({
         url: "views://test-harness/index.html",
-        rpc: createTestHarnessRPC(),
+        rpc: createTestHarnessRPC(10000, { ready: () => { ready = true; } }),
         title: "WebView2 Viewport Test",
         ...initialOuterSize,
         renderer: "native",
       });
 
-      await sleep(1000);
+      await waitForWindowObservation("Native viewport harness ready", () => ready, (value) => value, { log });
       const initialViewport = await readViewportSize(win.webview);
 
       win.window.setSize(resizedOuterSize.width, resizedOuterSize.height);
-      await sleep(300);
-      const resizedViewport = await readViewportSize(win.webview);
+      const resizedViewport = await waitForWindowObservation(
+        "Native viewport grows after resize", () => readViewportSize(win.webview),
+        (size) => size.width > initialViewport.width && size.height > initialViewport.height, { log },
+      );
 
       expect(resizedViewport.width).toBeGreaterThan(initialViewport.width);
       expect(resizedViewport.height).toBeGreaterThan(initialViewport.height);
 
       // Returning to the original outer size must reproduce the initial viewport.
       win.window.setSize(initialOuterSize.width, initialOuterSize.height);
-      await sleep(300);
-      const restoredViewport = await readViewportSize(win.webview);
+      const restoredViewport = await waitForWindowObservation(
+        "Native viewport returns to its initial size", () => readViewportSize(win.webview),
+        (size) => Math.abs(size.width - initialViewport.width) < 2 && Math.abs(size.height - initialViewport.height) < 2, { log },
+      );
 
       expect(Math.abs(restoredViewport.width - initialViewport.width)).toBeLessThan(2);
       expect(Math.abs(restoredViewport.height - initialViewport.height)).toBeLessThan(2);
@@ -772,7 +778,10 @@ export const windowTests = [
       expect(Math.abs(runtimePosition.y - 22)).toBeLessThan(0.5);
 
       win.window.setSize(540, 380);
-      await sleep(300);
+      await waitForWindowObservation(
+        "Traffic light window resize to 540x380", () => win.window.getFrame(),
+        (frame) => Math.abs(frame.width - 540) < 50 && Math.abs(frame.height - 380) < 50, { log },
+      );
       const resizedPosition = win.window.getWindowButtonPosition();
       expect(Math.abs(resizedPosition.x - 52)).toBeLessThan(0.5);
       expect(Math.abs(resizedPosition.y - 22)).toBeLessThan(0.5);
@@ -861,7 +870,8 @@ export const windowTests = [
     // WasResized path. Separate tests cover the system renderer's viewport.
     requires: { renderer: "cef" },
     async run({ createWindow, log }) {
-      const rpc = createTestHarnessRPC();
+      let ready = false;
+      const rpc = createTestHarnessRPC(10000, { ready: () => { ready = true; } });
       const win = await createWindow({
         url: "views://test-harness/index.html",
         rpc,
@@ -873,7 +883,7 @@ export const windowTests = [
         renderer: "cef", // This assertion covers the CEF viewport, not renderer fallback.
       });
 
-      await sleep(1000);
+      await waitForWindowObservation("CEF viewport harness ready", () => ready, (value) => value, { log });
 
       log("Getting initial frame");
       const initialFrame = win.window.getFrame();
@@ -884,12 +894,13 @@ export const windowTests = [
 
       log("Resizing window to 600x500");
       win.window.setSize(600, 500);
-      await sleep(500);
-
-      const newFrame = win.window.getFrame();
-      const newViewport = await win.webview.rpc?.request.evaluateJavascriptWithResponse({
-        script: "return { width: window.innerWidth, height: window.innerHeight }",
-      });
+      const { frame: newFrame, viewport: newViewport } = await waitForWindowObservation(
+        "Window resize to 600x500 and CEF viewport growth",
+        async () => ({ frame: win.window.getFrame(), viewport: await readViewportSize(win.webview) }),
+        ({ frame, viewport }) => Math.abs(frame.width - 600) < 50 && Math.abs(frame.height - 500) < 50
+          && viewport.width > (initialViewport?.width ?? 0) + 100 && viewport.height > (initialViewport?.height ?? 0) + 100,
+        { log },
+      );
       log(`New size: ${newFrame.width}x${newFrame.height}`);
 
       // Allow some tolerance for window manager decorations
@@ -921,16 +932,18 @@ export const windowTests = [
 
       await sleep(500);
       win.window.setSize(600, 500);
-      await sleep(500);
-
-      const grownFrame = win.window.getFrame();
+      const grownFrame = await waitForWindowObservation(
+        "Window grows to 600x500", () => win.window.getFrame(),
+        (frame) => Math.abs(frame.width - 600) < 50 && Math.abs(frame.height - 500) < 50, { log },
+      );
       expect(Math.abs(grownFrame.width - 600)).toBeLessThan(50);
       expect(Math.abs(grownFrame.height - 500)).toBeLessThan(50);
 
       win.window.setSize(320, 240);
-      await sleep(500);
-
-      const shrunkFrame = win.window.getFrame();
+      const shrunkFrame = await waitForWindowObservation(
+        "Window shrinks to 320x240", () => win.window.getFrame(),
+        (frame) => Math.abs(frame.width - 320) < 50 && Math.abs(frame.height - 240) < 50, { log },
+      );
       expect(Math.abs(shrunkFrame.width - 320)).toBeLessThan(50);
       expect(Math.abs(shrunkFrame.height - 240)).toBeLessThan(50);
       log(`Window grew to ${grownFrame.width}x${grownFrame.height} and shrank to ${shrunkFrame.width}x${shrunkFrame.height}`);
@@ -960,9 +973,11 @@ export const windowTests = [
 
       log("Setting frame to (300, 250) 500x400");
       win.window.setFrame(300, 250, 500, 400);
-      await sleep(500);
-
-      const newFrame = win.window.getFrame();
+      const newFrame = await waitForWindowObservation(
+        "Window frame becomes (300, 250) 500x400", () => win.window.getFrame(),
+        (frame) => Math.abs(frame.x - 300) < 50 && Math.abs(frame.y - 250) < 50
+          && Math.abs(frame.width - 500) < 50 && Math.abs(frame.height - 400) < 50, { log },
+      );
       log(`New frame: (${newFrame.x}, ${newFrame.y}) ${newFrame.width}x${newFrame.height}`);
 
       // Allow some tolerance for window manager decorations

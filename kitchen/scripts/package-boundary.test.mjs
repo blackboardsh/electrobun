@@ -60,6 +60,7 @@ test("Kitchen resolves tasks and SDK types through Hutch", () => {
 		"start",
 		"start:canary",
 		"test:go-webview-observations",
+		"test:odin-window-size-observation",
 		"test:rust-webview-observations",
 		"test:tooling",
 		"test:zig-webview-observations",

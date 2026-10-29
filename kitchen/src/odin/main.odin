@@ -19,6 +19,7 @@ import "core:thread"
 import "core:time"
 
 import electrobun "electrobun_sdk:electrobun"
+import window_size "window_size_observation"
 
 app_version :: "1.18.1"
 default_secret_key :: "1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32"
@@ -3069,6 +3070,32 @@ runWindowOmittedPositionCentersOnPrimaryDisplayTest :: proc(state: ^AppState) ->
 	return ""
 }
 
+waitForWindowSize :: proc(state: ^AppState, window_id: u32, width, height, tolerance: f64) -> string {
+	started := time.tick_now()
+	observed := window_size.Observation{
+		target = {width, height},
+		tolerance = tolerance,
+		timeout_ns = i64(3000 * slow_platform_scale()) * i64(time.Millisecond),
+	}
+	for {
+		frame, err := electrobun.getWindowFrame(state.core, window_id)
+		elapsed := time.tick_since(started)
+		if err != .None {
+			fmt.eprintf("[kitchen odin] reading window size %gx%g failed after %.0fms: %s; first=%v, last=%v\n", width, height, time.duration_milliseconds(elapsed), errName(err), observed.first, observed.last)
+			return errName(err)
+		}
+		switch window_size.observe(&observed, {frame.width, frame.height}, i64(elapsed)) {
+		case .Reached:
+			return ""
+		case .Timed_Out:
+			fmt.eprintf("[kitchen odin] window size %gx%g timed out (tolerance %g) after %.0fms: first=%v, last=%v\n", width, height, tolerance, time.duration_milliseconds(elapsed), observed.first, observed.last)
+			return "WindowSizeDidNotConverge"
+		case .Waiting:
+			time.sleep(min(25 * time.Millisecond, time.Duration(observed.timeout_ns) - elapsed))
+		}
+	}
+}
+
 runWindowSetSizeTest :: proc(state: ^AppState) -> string {
 	created, create_err := createWindowWithTestHarness(
 		state,
@@ -3086,27 +3113,15 @@ runWindowSetSizeTest :: proc(state: ^AppState) -> string {
 	if err := electrobun.setWindowSize(state.core, created.window_id, 600, 500); err != .None {
 		return errName(err)
 	}
-	sleepMs(short_wait_ms)
-
-	grown_frame, grown_frame_err := electrobun.getWindowFrame(state.core, created.window_id)
-	if grown_frame_err != .None {
-		return errName(grown_frame_err)
-	}
-	if !approxEq(grown_frame.width, 600, 24) || !approxEq(grown_frame.height, 500, 24) {
-		return "UnexpectedWindowSize"
+	if err := waitForWindowSize(state, created.window_id, 600, 500, 24); err != "" {
+		return err
 	}
 
 	if err := electrobun.setWindowSize(state.core, created.window_id, 320, 240); err != .None {
 		return errName(err)
 	}
-	sleepMs(short_wait_ms)
-
-	shrunk_frame, shrunk_frame_err := electrobun.getWindowFrame(state.core, created.window_id)
-	if shrunk_frame_err != .None {
-		return errName(shrunk_frame_err)
-	}
-	if !approxEq(shrunk_frame.width, 320, 24) || !approxEq(shrunk_frame.height, 240, 24) {
-		return "UnexpectedWindowSize"
+	if err := waitForWindowSize(state, created.window_id, 320, 240, 24); err != "" {
+		return err
 	}
 	return ""
 }
@@ -3127,14 +3142,7 @@ runWindowSetFrameTest :: proc(state: ^AppState) -> string {
 		return errName(err)
 	}
 
-	frame, frame_err := electrobun.getWindowFrame(state.core, window_id)
-	if frame_err != .None {
-		return errName(frame_err)
-	}
-	if frame.width != 640 || frame.height != 480 {
-		return "UnexpectedWindowFrame"
-	}
-	return ""
+	return waitForWindowSize(state, window_id, 640, 480, 0)
 }
 
 runWindowGetFrameTest :: proc(state: ^AppState) -> string {
