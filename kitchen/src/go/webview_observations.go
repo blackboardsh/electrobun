@@ -35,3 +35,8 @@ func (observations *webviewObservations) contains(webviewID uint32, eventName, d
 	}
 	return false
 }
+
+func (observations *webviewObservations) equals(webviewID uint32, eventName, detail string) bool {
+	_, found := observations.events[webviewObservation{webviewID, eventName, detail}]
+	return found
+}

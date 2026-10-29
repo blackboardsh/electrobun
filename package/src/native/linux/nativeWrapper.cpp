@@ -38,6 +38,7 @@
 #include <cmath>
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
+#include "../shared/deferred_navigation.h"
 #include <gio/gio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -134,6 +135,7 @@ using electrobun::OperationGuard;
 #include "include/cef_client.h"
 #include "include/views/cef_display.h"
 #include "include/cef_load_handler.h"
+#include "include/cef_task.h"
 #include "include/cef_request_handler.h"
 #include "include/cef_context_menu_handler.h"
 #include "include/cef_keyboard_handler.h"
@@ -1065,6 +1067,24 @@ private:
 };
 
 
+// Opt-in lifecycle evidence for constructor-adjacent navigation failures. Keep
+// data URLs bounded and on one line; normal application runs remain silent.
+static void traceCEFNavigation(uint32_t webviewId, const char* event,
+                               const std::string& detail, int code = 0) {
+    static const bool enabled = [] {
+        const char* value = getenv("ELECTROBUN_TRACE_CEF_NAVIGATION");
+        return value && strcmp(value, "1") == 0;
+    }();
+    if (!enabled) return;
+    std::string summary = detail.substr(0, 240);
+    for (char& character : summary) {
+        if (character == '\n' || character == '\r' || character == '\t') character = ' ';
+    }
+    fprintf(stderr, "[CEF navigation] time=%lldms view=%u event=%s code=%d detail=%s\n",
+            static_cast<long long>(g_get_monotonic_time() / 1000), webviewId,
+            event, code, summary.c_str());
+}
+
 // ElectrobunClient implementation for Linux
 class ElectrobunClient : public CefClient,
                         public CefLoadHandler,
@@ -1099,6 +1119,7 @@ private:
     std::function<void()> load_commit_callback_;  // Callback after a main-frame commit
     std::atomic<bool> owner_detached_{false};
     std::atomic<bool> initial_browser_creation_pending_{false};
+    electrobun::DeferredNavigation navigation_;
     guint layout_interval_source_id_ = 0;
     
     // OSR (Off-Screen Rendering) members for transparency
@@ -1168,6 +1189,37 @@ public:
         return browser_;
     }
 
+    void QueueNavigation(const std::string& url) {
+        CEF_REQUIRE_UI_THREAD();
+        if (owner_detached_.load() || g_shuttingDown.load()) return;
+
+        class NavigationTask : public CefTask {
+        public:
+            explicit NavigationTask(electrobun::DeferredNavigation::Action action)
+                : action_(std::move(action)) {}
+            void Execute() override { action_(); }
+        private:
+            electrobun::DeferredNavigation::Action action_;
+            IMPLEMENT_REFCOUNTING(NavigationTask);
+        };
+
+        // CEF locks navigation during OnAfterCreated and posts a LoadURL made
+        // there for later. An inline LoadURL from our GLib source can overtake
+        // that task, letting the stale constructor URL overwrite the new one.
+        // Put both initial and subsequent requests on CEF's task queue, and
+        // discard a queued request when a newer one supersedes it.
+        CefRefPtr<ElectrobunClient> self(this);
+        navigation_.request(url, [](electrobun::DeferredNavigation::Action action) {
+            return CefPostTask(TID_UI, new NavigationTask(std::move(action)));
+        }, [self](const std::string& nextUrl) {
+            if (self->owner_detached_.load() || g_shuttingDown.load() || !self->browser_) return;
+            auto frame = self->browser_->GetMainFrame();
+            if (!frame) return;
+            traceCEFNavigation(self->webview_id_, "execute-url", nextUrl);
+            frame->LoadURL(nextUrl);
+        });
+    }
+
     void MarkInitialBrowserCreationPending() {
         bool expected = false;
         if (initial_browser_creation_pending_.compare_exchange_strong(expected, true)) {
@@ -1211,6 +1263,7 @@ public:
 
     void DetachOwnerCallbacks() {
         owner_detached_.store(true);
+        navigation_.cancel();
         CancelLayoutInterval();
         DisableOSR();
         browser_created_callback_ = nullptr;
@@ -1454,6 +1507,7 @@ public:
                                        "\",\"isCmdClick\":true,\"modifierFlags\":0}";
                 // Use strdup to create persistent copies for the FFI callback
                 webview_event_handler_(webview_id_, strdup("new-window-open"), strdup(eventData.c_str()));
+                traceCEFNavigation(webview_id_, "cancel-modifier-navigation", url);
                 return true;  // Cancel navigation
             }
         }
@@ -1486,6 +1540,7 @@ public:
             webview_event_handler_(webview_id_, strdup("will-navigate"), strdup(eventData.c_str()));
         }
 
+        traceCEFNavigation(webview_id_, shouldAllow ? "allow-navigation" : "deny-navigation", url);
         return !shouldAllow;  // Return true to cancel navigation
     }
 
@@ -1525,6 +1580,7 @@ public:
                      TransitionType transition_type) override {
         if (frame->IsMain() && webview_event_handler_) {
             std::string url = frame->GetURL().ToString();
+            traceCEFNavigation(webview_id_, "load-start", url);
             webview_event_handler_(webview_id_, strdup("did-commit-navigation"), strdup(url.c_str()));
         }
         if (frame->IsMain() && !owner_detached_.load() && load_commit_callback_) {
@@ -1537,6 +1593,7 @@ public:
                   int httpStatusCode) override {
         if (frame->IsMain() && webview_event_handler_) {
             std::string url = frame->GetURL().ToString();
+            traceCEFNavigation(webview_id_, "load-end", url, httpStatusCode);
             webview_event_handler_(webview_id_, strdup("did-navigate"), strdup(url.c_str()));
         }
         
@@ -1545,6 +1602,24 @@ public:
             load_end_callback_();
         }
         
+    }
+
+    void OnLoadError(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame,
+                     ErrorCode errorCode, const CefString& errorText,
+                     const CefString& failedUrl) override {
+        if (frame->IsMain()) {
+            traceCEFNavigation(webview_id_, "load-error",
+                               failedUrl.ToString() + " " + errorText.ToString(),
+                               static_cast<int>(errorCode));
+        }
+    }
+
+    void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser,
+                                   TerminationStatus status, int errorCode,
+                                   const CefString& errorString) override {
+        traceCEFNavigation(webview_id_, "renderer-terminated",
+                           "status=" + std::to_string(static_cast<int>(status)) +
+                           " " + errorString.ToString(), errorCode);
     }
 
     // Context menu handler with DevTools option
@@ -1650,6 +1725,7 @@ public:
     }
     
     void OnAfterCreated(CefRefPtr<CefBrowser> browser) override {
+        traceCEFNavigation(webview_id_, "browser-created", "");
         
         // Set the browser reference
         SetBrowser(browser);
@@ -1822,6 +1898,8 @@ public:
 
     // Critical: Handle browser cleanup to prevent use-after-free
     void OnBeforeClose(CefRefPtr<CefBrowser> browser) override {
+        traceCEFNavigation(webview_id_, "browser-close", "");
+        navigation_.cancel();
         printf("CEF: OnBeforeClose called for browser %d\n", browser->GetIdentifier());
         CancelLayoutInterval();
 
@@ -4963,7 +5041,8 @@ public:
 
             // Creation is asynchronous: loadURL/loadHTML may have replaced the
             // initial URL before this callback. Start only the latest request.
-            browser->GetMainFrame()->LoadURL(CefString(this->deferredUrl));
+            traceCEFNavigation(webviewId, "apply-pending-url", this->deferredUrl);
+            client->QueueNavigation(this->deferredUrl);
             this->deferredUrl.clear();
         });
         
@@ -5165,8 +5244,10 @@ public:
         
         std::lock_guard<std::mutex> lock(g_cefBrowserMutex);
         if (browser) {
-            browser->GetMainFrame()->LoadURL(CefString(urlString));
+            traceCEFNavigation(webviewId, "request-url", urlString);
+            client->QueueNavigation(urlString);
         } else {
+            traceCEFNavigation(webviewId, "queue-url", urlString);
             deferredUrl = urlString;
         }
     }
@@ -9116,6 +9197,13 @@ static void uiHostViewRemoved(WGPUViewImpl* view) {
         view->ui.handlers = {};
     }
     uiUninstallInput(view);
+}
+
+// Synthetic UI input enters the event thread before taking the UI core lock:
+// clipboard and window-drag operations may synchronously call GTK/X11 here.
+ELECTROBUN_EXPORT void uiRunOnMainThread(void (*callback)(void*), void* ctx) {
+    if (!callback) return;
+    dispatch_sync_main_void([callback, ctx]() { callback(ctx); });
 }
 
 // Route a WGPU view's input and frames to the native UI core. Any thread;

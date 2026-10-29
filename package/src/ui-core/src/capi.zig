@@ -62,6 +62,24 @@ pub fn unlock() void {
     }
 }
 
+pub const ThreadCallback = *const fn (?*anyopaque) callconv(.c) void;
+/// Synchronous dispatch: the callback and its borrowed arguments have finished
+/// being used when this returns. Hosts may leave it null to use the caller.
+pub const ThreadDispatch = *const fn (ThreadCallback, ?*anyopaque) callconv(.c) void;
+
+/// Always dispatch BEFORE taking the UI lock. A host's event thread can be
+/// waiting for this lock in a frame/input callback while the app calls us.
+pub fn runOnThreadLocked(dispatch: ?ThreadDispatch, comptime T: type, args: *T, comptime operation: fn (*T) void) void {
+    const Call = struct {
+        fn run(ctx: ?*anyopaque) callconv(.c) void {
+            lock();
+            defer unlock();
+            operation(@ptrCast(@alignCast(ctx.?)));
+        }
+    };
+    if (dispatch) |f| f(Call.run, args) else Call.run(args);
+}
+
 pub const WatchedRect = struct {
     client: u32,
     /// x, y, w, h in window CSS px; null until first reported
@@ -87,6 +105,9 @@ pub const Instance = struct {
     /// set by hosts that render this ui (electrobun host)
     request_frame: ?*const fn (ctx: ?*anyopaque) void = null,
     request_frame_ctx: ?*anyopaque = null,
+    /// Native input may call thread-affine APIs (clipboard, window dragging).
+    /// Snapshot this under the lock, then dispatch before taking it again.
+    input_dispatch: ?ThreadDispatch = null,
     id: u32 = 0,
     event_serial: u32 = 0,
     last_event: usize = 0,
@@ -1106,47 +1127,70 @@ export fn ebui_wants_frames(id: u32) bool {
     return inst.ui.wantsFrames();
 }
 
-export fn ebui_pointer(id: u32, kind: u8, x: f32, y: f32, button: u8, mods: u8) void {
-    lock();
-    defer unlock();
-    const inst = get(id) orelse return;
-    const m: events.Modifiers = @bitCast(mods);
-    switch (kind) {
-        0 => inst.ui.ix.pointerMove(x, y, m),
-        1 => inst.ui.ix.pointerDown(x, y, button, m),
-        2 => inst.ui.ix.pointerUp(x, y, button, m),
-        5 => inst.ui.ix.pointerLeaveWindow(),
-        else => {},
+const InputCall = struct {
+    id: u32,
+    event: union(enum) {
+        pointer: struct { kind: u8, x: f32, y: f32, button: u8, mods: u8 },
+        wheel: struct { x: f32, y: f32, dx: f32, dy: f32, mods: u8 },
+        key: struct { down: bool, text: []const u8, mods: u8 },
+        text: []const u8,
+        composition: struct { text: []const u8, sel: u32 },
+    },
+
+    fn run(a: *InputCall) void {
+        const inst = get(a.id) orelse return;
+        const ix = &inst.ui.ix;
+        switch (a.event) {
+            .pointer => |p| {
+                const m: events.Modifiers = @bitCast(p.mods);
+                switch (p.kind) {
+                    0 => ix.pointerMove(p.x, p.y, m),
+                    1 => ix.pointerDown(p.x, p.y, p.button, m),
+                    2 => ix.pointerUp(p.x, p.y, p.button, m),
+                    5 => ix.pointerLeaveWindow(),
+                    else => {},
+                }
+            },
+            .wheel => |w| ix.wheel(w.x, w.y, w.dx, w.dy, @bitCast(w.mods)),
+            .key => |k| if (k.down) ix.keyDown(k.text, @bitCast(k.mods)) else ix.keyUp(k.text, @bitCast(k.mods)),
+            .text => |text| ix.textInput(text),
+            .composition => |c| ix.setComposition(c.text, c.sel),
+        }
     }
+
+    fn dispatch(a: *InputCall) void {
+        lock();
+        const dispatcher = if (get(a.id)) |inst| inst.input_dispatch else null;
+        unlock();
+        // Re-resolve the ID in run(): it may have been destroyed while waiting
+        // for the host thread. Dispatch is synchronous, so text slices stay live.
+        runOnThreadLocked(dispatcher, InputCall, a, run);
+    }
+};
+
+export fn ebui_pointer(id: u32, kind: u8, x: f32, y: f32, button: u8, mods: u8) void {
+    var call = InputCall{ .id = id, .event = .{ .pointer = .{ .kind = kind, .x = x, .y = y, .button = button, .mods = mods } } };
+    call.dispatch();
 }
 
 export fn ebui_wheel(id: u32, x: f32, y: f32, dx: f32, dy: f32, mods: u8) void {
-    lock();
-    defer unlock();
-    const inst = get(id) orelse return;
-    inst.ui.ix.wheel(x, y, dx, dy, @bitCast(mods));
+    var call = InputCall{ .id = id, .event = .{ .wheel = .{ .x = x, .y = y, .dx = dx, .dy = dy, .mods = mods } } };
+    call.dispatch();
 }
 
 export fn ebui_key(id: u32, down: bool, key: ?[*]const u8, len: usize, mods: u8) void {
-    lock();
-    defer unlock();
-    const inst = get(id) orelse return;
-    const k = span(key, len);
-    if (down) inst.ui.ix.keyDown(k, @bitCast(mods)) else inst.ui.ix.keyUp(k, @bitCast(mods));
+    var call = InputCall{ .id = id, .event = .{ .key = .{ .down = down, .text = span(key, len), .mods = mods } } };
+    call.dispatch();
 }
 
 export fn ebui_text_input(id: u32, text: ?[*]const u8, len: usize) void {
-    lock();
-    defer unlock();
-    const inst = get(id) orelse return;
-    inst.ui.ix.textInput(span(text, len));
+    var call = InputCall{ .id = id, .event = .{ .text = span(text, len) } };
+    call.dispatch();
 }
 
 export fn ebui_composition(id: u32, text: ?[*]const u8, len: usize, sel: u32) void {
-    lock();
-    defer unlock();
-    const inst = get(id) orelse return;
-    inst.ui.ix.setComposition(span(text, len), sel);
+    var call = InputCall{ .id = id, .event = .{ .composition = .{ .text = span(text, len), .sel = sel } } };
+    call.dispatch();
 }
 
 /// Accessibility tree as text lines "role|name|value|flags" (tests, debugging).
@@ -1319,4 +1363,90 @@ test "c abi: watched rects are reported only when they change" {
 fn inst_watch_count(id: u32) u32 {
     const inst = get(id) orelse return 0;
     return inst.watches.count();
+}
+
+test "host dispatch enters the event thread before taking the UI lock" {
+    const Harness = struct {
+        queued: std.atomic.Value(bool) = .init(false),
+        done: std.atomic.Value(bool) = .init(false),
+        callback: ?ThreadCallback = null,
+        ctx: ?*anyopaque = null,
+        operation_thread: u64 = 0,
+        operation_locked: bool = false,
+
+        fn dispatch(callback: ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
+            const h: *@This() = @ptrCast(@alignCast(ctx.?));
+            h.callback = callback;
+            h.ctx = ctx;
+            h.queued.store(true, .release);
+            // Models synchronous main-thread dispatch. The caller cannot return
+            // (and its stack arguments cannot expire) before main completes it.
+            while (!h.done.load(.acquire)) std.Thread.yield() catch {};
+        }
+
+        fn operation(h: *@This()) void {
+            h.operation_thread = threadId();
+            h.operation_locked = lock_owner.load(.acquire) == threadId() and lock_depth > 0;
+        }
+
+        fn worker(h: *@This()) void {
+            runOnThreadLocked(dispatch, @This(), h, operation);
+        }
+    };
+    var h: Harness = .{};
+    // Simulate a main-thread frame holding the UI lock. The app must still be
+    // able to enqueue its lifecycle operation instead of waiting for this lock
+    // before dispatch. Bound the wait and drain the worker even on regression.
+    lock();
+    const worker = std.Thread.spawn(.{}, Harness.worker, .{&h}) catch |err| {
+        unlock();
+        return err;
+    };
+    const start = std.Io.Clock.awake.now(std.testing.io);
+    while (!h.queued.load(.acquire) and start.durationTo(std.Io.Clock.awake.now(std.testing.io)).toMilliseconds() < 5_000) {
+        std.Thread.yield() catch {};
+    }
+    const queued_without_lock = h.queued.load(.acquire);
+    unlock();
+    if (queued_without_lock) h.callback.?(h.ctx);
+    h.done.store(true, .release);
+    worker.join();
+    try std.testing.expect(queued_without_lock);
+    try std.testing.expect(h.operation_locked);
+    try std.testing.expectEqual(threadId(), h.operation_thread);
+}
+
+test "c abi: synthetic input dispatches outside the lock and rechecks UI lifetime" {
+    const Host = struct {
+        var dispatched: usize = 0;
+        var dispatched_unlocked: bool = true;
+        var destroy_before_callback: bool = false;
+        var ui_id: u32 = 0;
+
+        fn dispatch(callback: ThreadCallback, ctx: ?*anyopaque) callconv(.c) void {
+            dispatched += 1;
+            dispatched_unlocked = dispatched_unlocked and lock_owner.load(.acquire) != threadId();
+            if (destroy_before_callback) ebui_destroy(ui_id);
+            callback(ctx);
+        }
+    };
+    const id = ebui_create_headless();
+    Host.ui_id = id;
+    get(id).?.input_dispatch = Host.dispatch;
+    const input = ebui_create_element(id, "input".ptr, 5);
+    ebui_insert_before(id, ebui_body(id), input, 0);
+    ebui_focus(id, input);
+    ebui_text_input(id, "hello".ptr, 5);
+    ebui_key(id, true, "Backspace".ptr, 9, 0);
+    ebui_key(id, false, "Backspace".ptr, 9, 0);
+    var len: usize = 0;
+    const value = ebui_get_value(id, input, &len).?;
+    try std.testing.expectEqualStrings("hell", value[0..len]);
+    try std.testing.expectEqual(@as(usize, 3), Host.dispatched);
+    try std.testing.expect(Host.dispatched_unlocked);
+    // A queued call must not keep an Instance* alive across dispatch. Re-resolve
+    // its integer ID when it reaches the host thread and safely ignore removal.
+    Host.destroy_before_callback = true;
+    ebui_text_input(id, "gone".ptr, 4);
+    try std.testing.expect(get(id) == null);
 }

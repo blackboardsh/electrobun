@@ -26,6 +26,95 @@ import {
 	runKitchenMatrix,
 	stopChildProcessTree,
 } from "./kitchen-matrix";
+import {
+	captureKitchenHangDiagnostics,
+	runDiagnosticCommand,
+	selectMacosHangProcesses,
+} from "./kitchen-hang-diagnostics";
+
+describe("Kitchen hang diagnostics", () => {
+	const listing = [
+		"100 1 100 /Users/runner/.hutch/bin/hutch-canary",
+		"101 100 100 /tmp/Kitchen.app/Contents/MacOS/launcher",
+		"102 101 100 /tmp/Kitchen.app/Contents/MacOS/cottontail",
+		"103 102 100 /tmp/Kitchen.app/Contents/Frameworks/Helper.app/Contents/MacOS/Helper",
+		"104 1 100 /tmp/Kitchen.app/Contents/MacOS/main",
+		"105 1 105 /tmp/Other.app/Contents/MacOS/cottontail",
+	].join("\n");
+
+	it("finds the app runtime rather than its launcher, CEF helpers, or other apps", () => {
+		const result = selectMacosHangProcesses(listing, 100, "cottontail", true);
+		expect(result.targets.map((info) => info.pid)).toEqual([102]);
+		expect(result.tree.map((info) => info.pid)).toEqual([100, 101, 102, 103, 104]);
+		expect(selectMacosHangProcesses(listing, 100, "main", true).targets.map((info) => info.pid)).toEqual([104]);
+		expect(selectMacosHangProcesses(listing, 100, "main", false).targets).toEqual([]);
+	});
+
+	it("preserves a native app's sample and process provenance before returning", async () => {
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
+		const commands: string[] = [];
+		try {
+			const directory = await captureKitchenHangDiagnostics({
+				pid: 100, key: "cottontail-cef", mainProcess: "cottontail", isolatedProcessGroup: true,
+				platform: "darwin", temporaryDirectory,
+			}, async (file, args, timeout) => {
+				commands.push(file);
+				if (file === "/bin/ps") return { stdout: listing, stderr: "", error: null };
+				expect(args.slice(0, 3)).toEqual(["102", "2", "-file"]);
+				expect(timeout).toBe(8000);
+				writeFileSync(args[3]!, "Thread 0: ebui_destroy -> dispatch_sync\n");
+				return { stdout: "", stderr: "Sampling complete", error: null };
+			});
+			expect(commands).toEqual(["/bin/ps", "/usr/bin/sample"]);
+			expect(readFileSync(join(directory!, "sample-102.txt"), "utf8")).toContain("ebui_destroy");
+			const provenance = JSON.parse(readFileSync(join(directory!, "processes.json"), "utf8"));
+			expect(provenance.targets).toEqual([102]);
+			expect(JSON.stringify(provenance)).not.toContain("Other.app");
+		} finally {
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps failed sampler diagnostics without preventing watchdog shutdown", async () => {
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
+		try {
+			const directory = await captureKitchenHangDiagnostics({
+				pid: 100, key: "cottontail-cef", mainProcess: "cottontail", isolatedProcessGroup: true,
+				platform: "darwin", temporaryDirectory,
+			}, async (file) => file === "/bin/ps"
+				? { stdout: listing, stderr: "", error: null }
+				: { stdout: "", stderr: "Cannot examine process", error: "sample failed" });
+			expect(readFileSync(join(directory!, "sample-102-command.json"), "utf8")).toContain("Cannot examine process");
+		} finally {
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("does not sample unrelated processes if process discovery fails", async () => {
+		const temporaryDirectory = mkdtempSync(join(tmpdir(), "kitchen-diagnostics-test-"));
+		try {
+			let calls = 0;
+			const directory = await captureKitchenHangDiagnostics({
+				pid: 100, key: "bun-cef", mainProcess: "bun", isolatedProcessGroup: true,
+				platform: "darwin", temporaryDirectory,
+			}, async () => {
+				calls++;
+				return { stdout: "", stderr: "ps unavailable", error: "failed" };
+			});
+			expect(calls).toBe(1);
+			expect(readFileSync(join(directory!, "sample-error.txt"), "utf8")).toContain("No live application runtime");
+		} finally {
+			rmSync(temporaryDirectory, { recursive: true, force: true });
+		}
+	});
+
+	it("bounds a diagnostic command that never exits", async () => {
+		const startedAt = Date.now();
+		const result = await runDiagnosticCommand(process.execPath, ["-e", "setInterval(() => {}, 1000)"], 100);
+		expect(result.error).not.toBeNull();
+		expect(Date.now() - startedAt).toBeLessThan(3000);
+	});
+});
 
 describe("kitchen matrix", () => {
 	it("avoids Cottontail's rounded-inode copy fallback on Windows", () => {

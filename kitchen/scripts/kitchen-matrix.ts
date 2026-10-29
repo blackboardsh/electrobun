@@ -15,6 +15,7 @@ import { availableParallelism } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { Readable } from "node:stream";
 import { selectHutchBinary } from "../../package/scripts/hutch-launcher.mjs";
+import { captureKitchenHangDiagnostics } from "./kitchen-hang-diagnostics";
 import {
 	createKitchenMatrix,
 	KITCHEN_MAIN_PROCESSES,
@@ -362,15 +363,37 @@ function runHutchForVariant(
 			if (killTimer) clearTimeout(killTimer);
 		};
 		if (timeoutSeconds !== null) {
-			timeoutTimer = setTimeout(() => {
+			timeoutTimer = setTimeout(async () => {
 				timedOut = true;
 				console.error(
 					`[${key}] still running after ${timeoutSeconds}s; stopping it (likely hung).`,
 				);
-				forceStopChildProcessTree(child, isolatedProcessGroup, "SIGTERM");
-				killTimer = setTimeout(() => {
-					forceStopChildProcessTree(child, isolatedProcessGroup, "SIGKILL");
-				}, LAUNCH_TIMEOUT_KILL_GRACE_MS);
+				// Capture native stacks while the hang still exists. Each tool is
+				// bounded, and this outer deadline keeps shutdown independent of
+				// diagnostic failures. Never turn a timeout into a successful run.
+				let diagnosticTimer: ReturnType<typeof setTimeout> | undefined;
+				try {
+					await Promise.race([
+						captureKitchenHangDiagnostics({
+							pid: child.pid, key, mainProcess: variant.mainProcess, isolatedProcessGroup,
+						}).then((directory) => {
+							if (directory) console.error(`[${key}] Hang diagnostics: ${directory}`);
+						}),
+						new Promise<void>((resolve) => {
+							diagnosticTimer = setTimeout(resolve, 12000);
+						}),
+					]);
+				} catch (error) {
+					console.error(`[${key}] Could not collect hang diagnostics: ${error}`);
+				} finally {
+					clearTimeout(diagnosticTimer);
+					if (!settled) {
+						forceStopChildProcessTree(child, isolatedProcessGroup, "SIGTERM");
+						killTimer = setTimeout(() => {
+							forceStopChildProcessTree(child, isolatedProcessGroup, "SIGKILL");
+						}, LAUNCH_TIMEOUT_KILL_GRACE_MS);
+					}
+				}
 			}, timeoutSeconds * 1000);
 		}
 		const reject = (error: Error) => {

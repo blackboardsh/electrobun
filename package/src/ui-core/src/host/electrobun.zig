@@ -23,6 +23,9 @@ const A11yRequestCb = *const fn (?*anyopaque) callconv(.c) void;
 const A11yActionCb = *const fn (?*anyopaque, u32, u32, [*:0]const u8) callconv(.c) void;
 
 const Native = struct {
+    /// Synthetic input can call native clipboard/window-drag APIs. Dispatch
+    /// input before acquiring capi.lock, just like real native input.
+    runOnMainThread: ?capi.ThreadDispatch,
     setUIHandlers: *const fn (?*anyopaque, ?*anyopaque, ?PointerCb, ?KeyCb, ?TextCb, ?FrameCb) callconv(.c) void,
     requestFrame: *const fn (?*anyopaque) callconv(.c) void,
     setImeRect: *const fn (?*anyopaque, f64, f64, f64, f64) callconv(.c) void,
@@ -82,6 +85,7 @@ fn sym(comptime T: type, name: [:0]const u8) ?T {
 fn loadNative() ?Native {
     if (native) |n| return n;
     native = .{
+        .runOnMainThread = sym(capi.ThreadDispatch, "uiRunOnMainThread") orelse return null,
         .setUIHandlers = sym(@FieldType(Native, "setUIHandlers"), "wgpuViewSetUIHandlers") orelse return null,
         .requestFrame = sym(@FieldType(Native, "requestFrame"), "wgpuViewRequestFrame") orelse return null,
         .setImeRect = sym(@FieldType(Native, "setImeRect"), "wgpuViewSetImeRect") orelse return null,
@@ -106,6 +110,9 @@ var dawn_instance: ?wgpu.Instance = null;
 var dawn_ctx: ?wgpu.Context = null;
 
 const View = struct {
+    /// Never reused: a queued callback must not resolve to a new attachment
+    /// merely because its predecessor's allocation address was recycled.
+    callback_id: usize,
     ui_id: u32,
     view: *anyopaque,
     surface: wgpu.Surface,
@@ -135,6 +142,7 @@ const View = struct {
 };
 
 var views: std.ArrayList(*View) = .empty;
+var next_callback_id: usize = 1;
 
 fn viewFor(ui_id: u32) ?*View {
     for (views.items) |v| if (v.ui_id == ui_id) return v;
@@ -144,38 +152,56 @@ fn viewFor(ui_id: u32) ?*View {
 /// The view behind a native callback's ctx, or null once it is detached.
 /// Callbacks run on the main thread and can race ebui_detach_view on the app
 /// thread (a callback already dispatched when the handlers are cleared), so
-/// every callback resolves its ctx here, under the lock, before using it.
+/// every callback resolves its opaque attachment ID here, under the lock,
+/// before using it. Native callbacks never retain a dereferenceable View*.
 fn liveView(ctx: ?*anyopaque) ?*View {
     const p = ctx orelse return null;
-    for (views.items) |v| if (@as(*anyopaque, v) == p) return v;
+    for (views.items) |v| if (v.callback_id == @intFromPtr(p)) return v;
     return null;
 }
 
-/// A Dawn surface for the view's native handle.
-fn createSurface(api: *wgpu.Api, instance: wgpu.Instance, n: Native, v: *anyopaque) ?wgpu.Surface {
-    const handle = n.getNativeHandle(v) orelse {
-        std.log.err("ebui: view has no native surface handle", .{});
-        return null;
-    };
+fn callbackContext(hv: *View) ?*anyopaque {
+    return @ptrFromInt(hv.callback_id);
+}
+
+const SurfaceHandles = struct {
+    handle: *anyopaque,
+    display: ?*anyopaque = null,
+
+    /// Native handle lookup may synchronously dispatch to the event thread
+    /// (AppKit's CAMetalLayer). Do this before locking the shared UI state.
+    /// The caller owns the native view for the entire attach/detach operation.
+    fn resolve(n: Native, v: *anyopaque) ?SurfaceHandles {
+        const handle = n.getNativeHandle(v) orelse {
+            std.log.err("ebui: view has no native surface handle", .{});
+            return null;
+        };
+        if (builtin.os.tag == .macos or builtin.os.tag == .windows) return .{ .handle = handle };
+        const getDisplay = n.getNativeDisplay orelse {
+            std.log.err("ebui: native wrapper lacks wgpuViewGetNativeDisplay", .{});
+            return null;
+        };
+        const display = getDisplay(v) orelse {
+            std.log.err("ebui: view has no X11 display", .{});
+            return null;
+        };
+        return .{ .handle = handle, .display = display };
+    }
+};
+
+/// A Dawn surface using handles already sampled outside the UI lock.
+fn createSurface(api: *wgpu.Api, instance: wgpu.Instance, handles: SurfaceHandles) ?wgpu.Surface {
     switch (builtin.os.tag) {
         .macos => {
-            var src = wgpu.SurfaceSourceMetalLayer{ .layer = handle };
+            var src = wgpu.SurfaceSourceMetalLayer{ .layer = handles.handle };
             return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
         },
         .windows => {
-            var src = wgpu.SurfaceSourceWindowsHWND{ .hinstance = GetModuleHandleW(null), .hwnd = handle };
+            var src = wgpu.SurfaceSourceWindowsHWND{ .hinstance = GetModuleHandleW(null), .hwnd = handles.handle };
             return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
         },
         else => {
-            const getDisplay = n.getNativeDisplay orelse {
-                std.log.err("ebui: native wrapper lacks wgpuViewGetNativeDisplay", .{});
-                return null;
-            };
-            const display = getDisplay(v) orelse {
-                std.log.err("ebui: view has no X11 display", .{});
-                return null;
-            };
-            var src = wgpu.SurfaceSourceXlibWindow{ .display = display, .window = @intFromPtr(handle) };
+            var src = wgpu.SurfaceSourceXlibWindow{ .display = handles.display.?, .window = @intFromPtr(handles.handle) };
             return api.instanceCreateSurface(instance, &.{ .next = &src.chain });
         },
     }
@@ -200,41 +226,59 @@ fn pickAlphaMode(api: *wgpu.Api, surface: wgpu.Surface, adapter: wgpu.Adapter) u
 /// from any thread; returns false if the native wrapper or Dawn is missing.
 pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[*:0]const u8) bool {
     capi.lock();
-    defer capi.unlock();
-    const n = loadNative() orelse {
+    const resolved = loadNative();
+    capi.unlock();
+    const n = resolved orelse {
         std.log.err("ebui: native wrapper symbols missing", .{});
         return false;
     };
     const v = view orelse return false;
-    const ui = capi.engine(ui_id) orelse return false;
+    const handles = SurfaceHandles.resolve(n, v) orelse return false;
+    capi.lock();
+    const hv = attachLocked(ui_id, v, dawn_path, n, handles);
+    capi.unlock();
+    const attached = hv orelse return false;
+    // Publish only the fully initialized context. AppKit handler registration
+    // waits for main, whose existing frame callbacks may need the UI lock.
+    n.setUIHandlers(attached.view, callbackContext(attached), onPointer, onKey, onText, onFrame);
+    if (n.setA11yHandlers) |f| f(attached.view, callbackContext(attached), onA11yRequest, onA11yAction);
+    n.requestFrame(attached.view);
+    return true;
+}
+
+fn attachLocked(ui_id: u32, v: *anyopaque, dawn_path: ?[*:0]const u8, n: Native, handles: SurfaceHandles) ?*View {
+    const ui = capi.engine(ui_id) orelse return null;
+    if (viewFor(ui_id) != null) return null;
+    if (next_callback_id == std.math.maxInt(usize)) return null;
     if (dawn_api == null) {
-        const api = gpa.create(wgpu.Api) catch return false;
+        const api = gpa.create(wgpu.Api) catch return null;
         const path = if (dawn_path) |p| std.mem.span(p) else wgpu.defaultLibraryPath();
         api.* = wgpu.Api.load(path) catch |e| {
             std.log.err("ebui: cannot load Dawn from {s}: {}", .{ path, e });
             gpa.destroy(api);
-            return false;
+            return null;
         };
         dawn_api = api;
         dawn_instance = api.createInstance(null);
     }
     const api = dawn_api.?;
-    const instance = dawn_instance orelse return false;
-    const surface = createSurface(api, instance, n, v) orelse return false;
+    const instance = dawn_instance orelse return null;
+    const surface = createSurface(api, instance, handles) orelse return null;
     if (dawn_ctx == null) {
         dawn_ctx = wgpu.Context.createWithInstance(api, instance, surface) catch |e| {
             std.log.err("ebui: no WebGPU device: {}", .{e});
-            return false;
+            return null;
         };
         dawn_ctx.?.logAdapter();
     }
-    const r = gpu.Renderer.init(gpa, api, dawn_ctx.?, ui.fonts, wgpu.TextureFormat.bgra8_unorm) catch return false;
+    const r = gpu.Renderer.init(gpa, api, dawn_ctx.?, ui.fonts, wgpu.TextureFormat.bgra8_unorm) catch return null;
     r.store = &ui.images;
-    const hv = gpa.create(View) catch return false;
-    hv.* = .{ .ui_id = ui_id, .view = v, .surface = surface, .renderer = r, .start = now(), .alpha_mode = pickAlphaMode(api, surface, dawn_ctx.?.adapter) };
-    views.append(gpa, hv) catch return false;
+    const hv = gpa.create(View) catch return null;
+    hv.* = .{ .callback_id = next_callback_id, .ui_id = ui_id, .view = v, .surface = surface, .renderer = r, .start = now(), .alpha_mode = pickAlphaMode(api, surface, dawn_ctx.?.adapter) };
+    next_callback_id += 1;
+    views.append(gpa, hv) catch return null;
     ui.ix.host = .{
-        .ctx = hv,
+        .ctx = callbackContext(hv),
         .set_cursor = setCursor,
         .clipboard_read = clipboardRead,
         .clipboard_write = clipboardWrite,
@@ -244,29 +288,57 @@ pub export fn ebui_attach_wgpu_view(ui_id: u32, view: ?*anyopaque, dawn_path: ?[
     };
     if (capi.instance(ui_id)) |inst| {
         inst.request_frame = requestFrameFromCapi;
-        inst.request_frame_ctx = hv;
+        inst.request_frame_ctx = callbackContext(hv);
+        inst.input_dispatch = n.runOnMainThread;
     }
-    n.setUIHandlers(v, hv, onPointer, onKey, onText, onFrame);
-    if (n.setA11yHandlers) |f| f(v, hv, onA11yRequest, onA11yAction);
-    n.requestFrame(v);
-    return true;
+    return hv;
 }
 
 pub export fn ebui_detach_view(ui_id: u32) void {
+    detachView(ui_id, releaseView);
+}
+
+fn detachView(ui_id: u32, comptime release: fn (*View) void) void {
+    capi.lock();
+    const hv = retireView(ui_id);
+    const n = native;
+    capi.unlock();
+    const retired = hv orelse return;
+    // Keep the context allocated until main has removed its handlers. A frame
+    // already dispatched before retirement can acquire the lock and find no
+    // liveView; it cannot mistake this address for a subsequently attached UI.
+    // Never wait for main while holding capi.lock (main may be in onFrame).
+    if (n) |api| {
+        api.setUIHandlers(retired.view, null, null, null, null, null);
+        if (api.setA11yHandlers) |f| f(retired.view, null, null, null);
+        if (retired.present_path == .composition) if (api.composition) |c| c.release(retired.view);
+    }
     capi.lock();
     defer capi.unlock();
-    const hv = viewFor(ui_id) orelse return;
-    if (native) |n| {
-        n.setUIHandlers(hv.view, null, null, null, null, null);
-        if (hv.present_path == .composition) if (n.composition) |c| c.release(hv.view);
-    }
-    hv.renderer.deinit();
-    if (dawn_api) |api| api.surfaceRelease(hv.surface);
+    release(retired);
+}
+
+/// Stop accepting callbacks before dropping the lock to unregister with the
+/// native host. An in-progress callback holds this lock, so it finishes first.
+fn retireView(ui_id: u32) ?*View {
+    const hv = viewFor(ui_id) orelse return null;
     for (views.items, 0..) |x, i| if (x == hv) {
         _ = views.swapRemove(i);
         break;
     };
-    if (capi.instance(ui_id)) |inst| inst.request_frame = null;
+    if (capi.instance(ui_id)) |inst| {
+        inst.request_frame = null;
+        inst.request_frame_ctx = null;
+        inst.input_dispatch = null;
+        inst.ui.ix.host = .{};
+    }
+    return hv;
+}
+
+fn releaseView(hv: *View) void {
+    hv.renderer.deinit();
+    if (dawn_api) |api| api.surfaceRelease(hv.surface);
+    if (hv.capture) |pixels| gpa.free(pixels);
     gpa.destroy(hv);
 }
 
@@ -637,4 +709,126 @@ fn beginDrag(ctx: ?*anyopaque) bool {
     const hv = liveView(ctx) orelse return false;
     const n = native orelse return false;
     return n.beginWindowDrag(hv.view);
+}
+
+test "host attach resolves native handles without holding the UI lock" {
+    const Harness = struct {
+        callback_done: std.atomic.Value(bool) = .init(false),
+        completed_during_lookup: bool = false,
+        worker: ?std.Thread = null,
+
+        fn callback(h: *@This()) void {
+            // Models another UI's frame callback already running on main
+            // when the app requests the new view's native surface handle.
+            capi.lock();
+            capi.unlock();
+            h.callback_done.store(true, .release);
+        }
+
+        fn getHandle(view: ?*anyopaque) callconv(.c) ?*anyopaque {
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            h.worker = std.Thread.spawn(.{}, callback, .{h}) catch @panic("cannot start attach test callback");
+            const start = std.Io.Clock.awake.now(std.testing.io);
+            // A synchronous AppKit lookup waits behind the frame callback.
+            // Bound the wait so regressions fail without hanging the runner.
+            while (!h.callback_done.load(.acquire) and start.durationTo(std.Io.Clock.awake.now(std.testing.io)).toMilliseconds() < 5_000) {
+                std.Thread.yield() catch {};
+            }
+            h.completed_during_lookup = h.callback_done.load(.acquire);
+            return view;
+        }
+
+        fn getDisplay(view: ?*anyopaque) callconv(.c) ?*anyopaque {
+            return view;
+        }
+    };
+    var h: Harness = .{};
+    const saved_native = native;
+    defer native = saved_native;
+    var fixture: Native = undefined;
+    fixture.getNativeHandle = Harness.getHandle;
+    fixture.getNativeDisplay = Harness.getDisplay;
+    native = fixture;
+    // Exercise the exported attach entrypoint. A missing UI ID stops it after
+    // handle resolution, before Dawn initialization, so no GPU is necessary.
+    const attached = ebui_attach_wgpu_view(std.math.maxInt(u32), &h, null);
+    if (h.worker) |worker| worker.join();
+    try std.testing.expect(!attached);
+    try std.testing.expect(h.completed_during_lookup);
+}
+
+test "host detach retires callbacks before native unregister without holding the UI lock" {
+    const Harness = struct {
+        ctx: ?*anyopaque = null,
+        callback_done: std.atomic.Value(bool) = .init(false),
+        callback_saw_retired: bool = false,
+        completed_during_unregister: bool = false,
+        released: bool = false,
+        a11y_cleared: bool = false,
+        worker: ?std.Thread = null,
+
+        fn callback(h: *@This()) void {
+            capi.lock();
+            h.callback_saw_retired = liveView(h.ctx) == null;
+            capi.unlock();
+            // Real stale callbacks must return without reading the renderer or
+            // engine. This fixture deliberately has neither GPU resource.
+            onFrame(h.ctx, 0);
+            onPointer(h.ctx, 0, 10, 10, 0, 0, 0);
+            h.callback_done.store(true, .release);
+        }
+
+        fn unregister(view: ?*anyopaque, ctx: ?*anyopaque, pointer: ?PointerCb, key: ?KeyCb, text: ?TextCb, frame: ?FrameCb) callconv(.c) void {
+            std.debug.assert(ctx == null and pointer == null and key == null and text == null and frame == null);
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            h.worker = std.Thread.spawn(.{}, callback, .{h}) catch @panic("cannot start lifecycle test callback");
+            const start = std.Io.Clock.awake.now(std.testing.io);
+            // Models unregister dispatch_sync waiting for an in-flight native
+            // callback. Bound this so the old lock inversion fails rather than
+            // hanging the test runner; join only after detach releases its lock.
+            while (!h.callback_done.load(.acquire) and start.durationTo(std.Io.Clock.awake.now(std.testing.io)).toMilliseconds() < 5_000) {
+                std.Thread.yield() catch {};
+            }
+            h.completed_during_unregister = h.callback_done.load(.acquire);
+            std.debug.assert(!h.released);
+        }
+
+        fn unregisterA11y(view: ?*anyopaque, ctx: ?*anyopaque, request: ?A11yRequestCb, action: ?A11yActionCb) callconv(.c) void {
+            const h: *@This() = @ptrCast(@alignCast(view.?));
+            h.a11y_cleared = ctx == null and request == null and action == null;
+        }
+
+        fn release(hv: *View) void {
+            const h: *@This() = @ptrCast(@alignCast(hv.view));
+            h.released = true;
+        }
+    };
+    var h: Harness = .{};
+    var hv = View{ .callback_id = std.math.maxInt(usize) - 2, .ui_id = std.math.maxInt(u32), .view = &h, .surface = undefined, .renderer = undefined };
+    h.ctx = callbackContext(&hv);
+    const saved_native = native;
+    defer native = saved_native;
+    // Only these native methods participate in detach. No GPU or OS window is
+    // needed to exercise its real registry, synchronization and release order.
+    var fixture: Native = undefined;
+    fixture.setUIHandlers = Harness.unregister;
+    fixture.setA11yHandlers = Harness.unregisterA11y;
+    fixture.composition = null;
+    native = fixture;
+    try views.append(gpa, &hv);
+    detachView(hv.ui_id, Harness.release);
+    h.worker.?.join();
+    try std.testing.expect(h.completed_during_unregister);
+    try std.testing.expect(h.callback_saw_retired);
+    try std.testing.expect(h.a11y_cleared);
+    try std.testing.expect(h.released);
+
+    // Reuse exactly the same View address for another attachment. A delayed
+    // native callback carrying the previous token must still be ignored.
+    hv.callback_id += 1;
+    try views.append(gpa, &hv);
+    defer _ = retireView(hv.ui_id);
+    try std.testing.expect(liveView(h.ctx) == null);
+    try std.testing.expect(liveView(callbackContext(&hv)) == &hv);
+    onFrame(h.ctx, 0);
 }

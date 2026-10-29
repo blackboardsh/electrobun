@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { readFileSync, mkdtempSync, rmSync } from "fs";
 import { join } from "path";
+import { tmpdir } from "os";
+import { spawnSync } from "child_process";
 
 const source = readFileSync(
 	join(import.meta.dirname, "../native/linux/nativeWrapper.cpp"),
@@ -15,6 +17,22 @@ const countNoArgumentCalls = (functionName: string) =>
 	].length;
 
 describe("Linux CEF view lifecycle", () => {
+	test.skipIf(process.platform !== "linux")("queues navigation without stale startup loads or callbacks after close", () => {
+		const scratch = mkdtempSync(join(tmpdir(), "electrobun-navigation-"));
+		try {
+			const binary = join(scratch, "navigation-test");
+			const fixture = join(import.meta.dirname, "../native/shared/deferred_navigation_test.cpp");
+			const compile = spawnSync(process.env["CXX"] || "c++", [
+				"-std=c++17", "-Wall", "-Wextra", "-Werror", fixture, "-o", binary,
+			], { encoding: "utf8", timeout: 30_000 });
+			expect(compile.status, `${compile.error?.message ?? ""}\n${compile.stderr}`).toBe(0);
+			const run = spawnSync(binary, { encoding: "utf8", timeout: 5_000 });
+			expect(run.status, `${run.error?.message ?? ""}\n${run.stderr}`).toBe(0);
+		} finally {
+			rmSync(scratch, { recursive: true, force: true });
+		}
+	}, 40_000);
+
 	test("detaches owner callbacks on explicit removal and destruction", () => {
 		const cefClass = source.indexOf(
 			"class CEFWebViewImpl : public AbstractView",

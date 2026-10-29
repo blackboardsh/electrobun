@@ -2351,7 +2351,7 @@ func runNavigationLoadHTMLTest() error {
 			return err
 		}
 		if !waitUntil(3*time.Second, func() bool {
-			return observedWebviewEventContains(created.webviewID, "did-navigate", renderedURL)
+			return observedWebviewEventEquals(created.webviewID, "did-navigate", renderedURL)
 		}) {
 			return fmt.Errorf("loadHTML did not render the supplied document after immediate creation")
 		}
@@ -3279,6 +3279,12 @@ func observedWebviewEventContains(webviewID uint32, eventName, detail string) bo
 	callbacksMu.Lock()
 	defer callbacksMu.Unlock()
 	return callbacks.webviewEvents.contains(webviewID, eventName, detail)
+}
+
+func observedWebviewEventEquals(webviewID uint32, eventName, detail string) bool {
+	callbacksMu.Lock()
+	defer callbacksMu.Unlock()
+	return callbacks.webviewEvents.equals(webviewID, eventName, detail)
 }
 
 func observedWindowClose(windowID uint32) {

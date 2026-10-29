@@ -48,6 +48,10 @@ jobs:
     timeout-minutes: 330
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
+      # Exercise navigation during asynchronous browser creation repeatedly.
+      # A failed deadline stays a failure; the Rust tests retain event history.
+      ELECTROBUN_NAVIGATION_STRESS_ROUNDS: ${{ startsWith(matrix.runner, 'ubuntu-') && '30' || '1' }}
+      ELECTROBUN_TRACE_CEF_NAVIGATION: ${{ startsWith(matrix.runner, 'ubuntu-') && '1' || '0' }}
       # Windows hosted VMs can take longer to relaunch after an update.
       ELECTROBUN_UPDATER_E2E_RELAUNCH_TIMEOUT_MS: ${{ startsWith(matrix.runner, 'windows-') && '900000' || '300000' }}
     steps:
@@ -252,6 +256,7 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-test-vm-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-check-release-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
+            ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-kitchen-hang-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
             ${{ runner.temp }}/openbox.log
             kitchen/test-results/**

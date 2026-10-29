@@ -994,6 +994,13 @@ fn observed_webview_event_contains(webview_id: u32, event_name: &str, detail: Op
         .unwrap_or(false)
 }
 
+fn observed_webview_event_equals(webview_id: u32, event_name: &str, detail: &str) -> bool {
+    CALLBACK_STATE
+        .lock()
+        .map(|state| state.webview_events.contains_exact(webview_id, event_name, detail))
+        .unwrap_or(false)
+}
+
 extern "C" fn observed_window_close(_: u32) {
     if let Ok(mut state) = CALLBACK_STATE.lock() {
         state.window_close_count += 1;
@@ -1561,9 +1568,13 @@ fn run_rust_test(test: RustTest) -> TestRunResult {
             "views://playgrounds/wgpu-tag/index.html",
         ),
         TestKind::NavigationLoadUrl => run_navigation_load_url_test(),
-        TestKind::NavigationLoadHtml => run_navigation_load_html_test(),
+        TestKind::NavigationLoadHtml => {
+            repeat_navigation_test("loadHTML", run_navigation_load_html_test)
+        }
         TestKind::NavigationDomReadyEvent => run_navigation_dom_ready_event_test(),
-        TestKind::NavigationDidNavigateEvent => run_navigation_did_navigate_event_test(),
+        TestKind::NavigationDidNavigateEvent => {
+            repeat_navigation_test("did-navigate", run_navigation_did_navigate_event_test)
+        }
         TestKind::NavigationDidCommitNavigationEvent => {
             run_navigation_did_commit_navigation_event_test()
         }
@@ -2941,6 +2952,51 @@ fn run_navigation_load_url_test() -> Result<(), String> {
     finish_with_window(created.window_id, result)
 }
 
+// Repeat the constructor-adjacent cases without adding a readiness wait: a
+// sleep before loadURL/loadHTML would hide a lost-navigation regression.
+fn repeat_navigation_test(name: &str, run: fn() -> Result<(), String>) -> Result<(), String> {
+    let rounds = match std::env::var("ELECTROBUN_NAVIGATION_STRESS_ROUNDS") {
+        Ok(value) => value.parse::<usize>().ok()
+            .filter(|rounds| (1..=1000).contains(rounds))
+            .ok_or_else(|| "ELECTROBUN_NAVIGATION_STRESS_ROUNDS must be between 1 and 1000".to_string())?,
+        Err(std::env::VarError::NotPresent) => 1,
+        Err(err) => return Err(format!("Invalid ELECTROBUN_NAVIGATION_STRESS_ROUNDS: {err}")),
+    };
+    for round in 1..=rounds {
+        if rounds > 1 {
+            eprintln!("[kitchen rust] navigation stress {name}: {round}/{rounds}");
+        }
+        run().map_err(|err| format!("{name} round {round}/{rounds}: {err}"))?;
+    }
+    Ok(())
+}
+
+fn await_navigation(webview_id: u32, expected_url: &str, failure: &str) -> Result<(), String> {
+    let started = Instant::now();
+    let completed = || observed_webview_event_equals(webview_id, "did-navigate", expected_url);
+    if wait_until(3_000, completed) {
+        return Ok(());
+    }
+    let history = || {
+        CALLBACK_STATE.lock()
+            .map(|state| state.webview_events.history(webview_id))
+            .unwrap_or_else(|_| "(observation lock poisoned)".to_string())
+    };
+    eprintln!("[kitchen rust] navigation deadline at {}ms: view={webview_id} expected={expected_url:?}{}", started.elapsed().as_millis(), history());
+    // Diagnose a late completion without turning it into a pass. Keep the view
+    // alive briefly so CI can distinguish a strict deadline from lost work.
+    let grace = Instant::now();
+    while grace.elapsed() < Duration::from_secs(5) && !completed() {
+        thread::sleep(Duration::from_millis(25));
+    }
+    let outcome = if completed() {
+        "completed after assertion deadline"
+    } else {
+        "still missing after diagnostic grace period"
+    };
+    Err(format!("{failure}; view={webview_id}, expected={expected_url:?}, {outcome} at {}ms{}", started.elapsed().as_millis(), history()))
+}
+
 fn run_navigation_load_html_test() -> Result<(), String> {
     reset_callback_state();
     let created = create_window_with_harness_custom(
@@ -2966,14 +3022,11 @@ fn run_navigation_load_html_test() -> Result<(), String> {
         app_state()
             .core
             .load_html_in_webview(created.webview_id, &html)?;
-        if !wait_until(3_000, || {
-            observed_webview_event_contains(created.webview_id, "did-navigate", Some(RENDERED_URL))
-        }) {
-            return Err(
-                "loadHTML did not render the supplied document after immediate creation".to_string(),
-            );
-        }
-        Ok(())
+        await_navigation(
+            created.webview_id,
+            RENDERED_URL,
+            "loadHTML did not render the supplied document after immediate creation",
+        )
     })();
     finish_with_window(created.window_id, result)
 }
@@ -3014,12 +3067,7 @@ fn run_navigation_did_navigate_event_test() -> Result<(), String> {
         app_state()
             .core
             .load_url_in_webview(created.webview_id, ZIG_VIEW_URL)?;
-        if !wait_until(3_000, || {
-            observed_webview_event_contains(created.webview_id, "did-navigate", Some(ZIG_VIEW_URL))
-        }) {
-            return Err("did-navigate did not fire".to_string());
-        }
-        Ok(())
+        await_navigation(created.webview_id, ZIG_VIEW_URL, "did-navigate did not fire")
     })();
     finish_with_window(created.window_id, result)
 }

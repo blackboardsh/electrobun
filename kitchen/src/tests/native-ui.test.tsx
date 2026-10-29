@@ -47,6 +47,48 @@ function realSleep(ms: number) {
 
 export const nativeUiTests = [
 	defineTest({
+		name: "Native UI: attach and destroy while another UI is animating",
+		category: "Native UI",
+		description: "Repeated synchronous UI lifecycle operations complete while native frame and input callbacks contend for the UI lock.",
+		timeout: 60000,
+		async run({ log }) {
+			const animated = `${base} @keyframes pulse { from { opacity: 0.4 } to { opacity: 1 } } .pulse { width: 80px; height: 40px; background: #6366f1; animation: pulse 120ms infinite alternate; }`;
+			await withUI("native-ui-lifecycle-survivor", animated, () => <div class="pulse" />, async (survivor) => {
+				for (let i = 0; i < 12; i++) {
+					const win = new GpuWindow({ title: `native-ui-lifecycle-${i}`, frame: { x: 640, y: 120, width: 320, height: 240 } });
+					let ui: UI | undefined;
+					try {
+						log(`cycle ${i}: attach`);
+						ui = createUI(win, { css: animated, components: true });
+						let submits = 0;
+						ui.render(() => <form onSubmit={() => submits++} style="margin: 12px">
+							<input id="entry" class="eb-input" />
+							<div class="pulse" />
+						</form>);
+						await ui.nextFrame();
+						await ui.simulate.click(ui.querySelector("#entry")!);
+						await ui.simulate.type("pending frame");
+						await ui.simulate.key("Enter");
+						ui.document.pump();
+						expect(submits).toBe(1);
+					} finally {
+						// Do not wait for animations to settle: both this UI and the
+						// survivor must still be requesting frames during detach.
+						log(`cycle ${i}: destroy`);
+						ui?.destroy();
+						log(`cycle ${i}: close window`);
+						win.close();
+						log(`cycle ${i}: closed`);
+					}
+					const frames = survivor.frames;
+					await survivor.nextFrame();
+					expect(survivor.frames).toBeGreaterThan(frames);
+				}
+			});
+		},
+	}),
+
+	defineTest({
 		name: "Native UI renders HTML/CSS into a GpuWindow",
 		category: "Native UI",
 		description: "Background, borders and layout reach the screen through Dawn; frames are presented on demand.",

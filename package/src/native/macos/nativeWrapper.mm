@@ -8922,7 +8922,22 @@ static WGPUInputView *uiInputViewOf(AbstractView *abstractView) {
   return (WGPUInputView *)abstractView.nsView;
 }
 
-// Route a WGPU view's input and frames to the native UI core.
+// Synthetic UI input must enter the main thread before acquiring the UI
+// core lock (clipboard and window dragging use AppKit). Dispatching here
+// while an app thread holds that lock can deadlock against a display-link or
+// input callback already waiting for it.
+// The call is synchronous: the caller's context and borrowed buffers stay live
+// until the input operation has completed.
+extern "C" void uiRunOnMainThread(void (*callback)(void *), void *ctx) {
+  if (!callback)
+    return;
+  runOnMainThreadSyncVoid(^{
+    callback(ctx);
+  });
+}
+
+// Route a WGPU view's input and frames to the native UI core. The UI host
+// installs/removes these handlers outside its lock.
 extern "C" void wgpuViewSetUIHandlers(AbstractView *abstractView, void *ctx,
                                       UIViewPointerCallback pointer,
                                       UIViewKeyCallback key,

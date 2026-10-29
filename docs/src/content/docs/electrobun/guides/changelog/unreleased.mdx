@@ -4,4 +4,10 @@ title: "Unreleased"
 
 Changes since [v2.0.5](/electrobun/guides/changelog/v2-0-5/).
 
-No additional changes recorded yet.
+## Fixes
+
+- Fixed a macOS native UI deadlock when creating or destroying a UI while a
+  display-frame or input callback is pending. Handler registration and removal
+  no longer wait for the main thread while holding the UI lock.
+- Fixed a Linux CEF navigation race where the constructor's initial page could
+  overwrite an immediate `loadURL` or `loadHTML` request.

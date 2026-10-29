@@ -2,6 +2,27 @@ package main
 
 import "testing"
 
+func TestHTMLContainingRedirectTargetIsNotCompletedNavigation(t *testing.T) {
+	var observations webviewObservations
+	const target = "views://test-harness/index.html?loadHtml=go-rendered"
+	observations.record(18, "did-navigate", "data:text/html,<script>location.href='"+target+"'</script>")
+	if !observations.contains(18, "did-navigate", target) {
+		t.Fatal("substring search should remain available for event payloads")
+	}
+	if observations.equals(18, "did-navigate", target) {
+		t.Fatal("HTML document containing the target was mistaken for completed navigation")
+	}
+	observations.record(19, "did-navigate", target)
+	observations.record(18, "will-navigate", target)
+	if observations.equals(18, "did-navigate", target) {
+		t.Fatal("wrong view or event completed the expected navigation")
+	}
+	observations.record(18, "did-navigate", target)
+	if !observations.equals(18, "did-navigate", target) {
+		t.Fatal("exact target navigation was not observed")
+	}
+}
+
 func TestOldViewsLateCallbackCannotCompleteNextTest(t *testing.T) {
 	var observations webviewObservations
 	observations.record(15, "will-navigate", "about:blank")

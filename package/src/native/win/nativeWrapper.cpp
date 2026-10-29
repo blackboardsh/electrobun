@@ -10612,6 +10612,13 @@ static void uiHostViewRemoved(WGPUView* view) {
     g_uiFrames.erase(view->webviewId);
 }
 
+// Synthetic UI input enters the event thread before taking the UI core lock:
+// clipboard and window-drag operations may synchronously call Win32 here.
+ELECTROBUN_EXPORT void uiRunOnMainThread(void (*callback)(void*), void* ctx) {
+    if (!callback) return;
+    MainThreadDispatcher::dispatch_sync([callback, ctx]() { callback(ctx); });
+}
+
 // Route a WGPU view's input and frames to the native UI core. Any thread;
 // does not wait for the main thread (the caller holds the UI lock, which
 // main-thread callbacks also take).
