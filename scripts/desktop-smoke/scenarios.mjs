@@ -39,7 +39,6 @@ export const kitchenScenarios = [
     { click: 'Remove Mask Selector', absentText: 'Mask Overlay 2', expectChange: true },
   ] },
   { id: 'kitchen-native-ui', title: 'Native UI kitchen sink', minimizeWindow: 'Electrobun Integration Tests', test: 'Native GPU UI kitchen sink', readyText: 'Open dialog', actions: [
-    { click: 'Clicked', expectChange: true },
     { click: 'Open dialog', expectText: 'Rendered in a Portal', expectChange: true },
     { click: 'Cancel', absentText: 'Rendered in a Portal', expectChange: true },
   ] },

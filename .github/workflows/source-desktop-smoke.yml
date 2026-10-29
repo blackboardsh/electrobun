@@ -125,9 +125,16 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          choco install tesseract --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'Tesseract installation failed' }
-          "SMOKE_TESSERACT=C:\Program Files\Tesseract-OCR\tesseract.exe" >> $env:GITHUB_ENV
+          # Chocolatey can exit 0 after a feed timeout without installing the
+          # package, so retry until the binary itself runs.
+          $tesseract = 'C:\Program Files\Tesseract-OCR\tesseract.exe'
+          foreach ($attempt in 1..3) {
+            choco install tesseract --yes --no-progress
+            if (Test-Path $tesseract) { & $tesseract --version; if ($LASTEXITCODE -eq 0) { break } }
+            if ($attempt -eq 3) { throw 'Tesseract installation failed' }
+            Start-Sleep -Seconds (20 * $attempt)
+          }
+          "SMOKE_TESSERACT=$tesseract" >> $env:GITHUB_ENV
       - name: Install desktop driver
         run: python -m pip install -r scripts/desktop-smoke/requirements.txt
       - name: Check desktop driver regressions
