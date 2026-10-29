@@ -994,10 +994,10 @@ fn observed_webview_event_contains(webview_id: u32, event_name: &str, detail: Op
         .unwrap_or(false)
 }
 
-fn observed_webview_event_equals(webview_id: u32, event_name: &str, detail: &str) -> bool {
+fn observed_webview_event_url(webview_id: u32, event_name: &str, url: &str) -> bool {
     CALLBACK_STATE
         .lock()
-        .map(|state| state.webview_events.contains_exact(webview_id, event_name, detail))
+        .map(|state| state.webview_events.contains_url(webview_id, event_name, url))
         .unwrap_or(false)
 }
 
@@ -2973,7 +2973,7 @@ fn repeat_navigation_test(name: &str, run: fn() -> Result<(), String>) -> Result
 
 fn await_navigation(webview_id: u32, expected_url: &str, failure: &str) -> Result<(), String> {
     let started = Instant::now();
-    let completed = || observed_webview_event_equals(webview_id, "did-navigate", expected_url);
+    let completed = || observed_webview_event_url(webview_id, "did-navigate", expected_url);
     if wait_until(3_000, completed) {
         return Ok(());
     }

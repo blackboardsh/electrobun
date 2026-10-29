@@ -1,6 +1,9 @@
 package main
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 type webviewObservation struct {
 	webviewID uint32
@@ -36,7 +39,23 @@ func (observations *webviewObservations) contains(webviewID uint32, eventName, d
 	return false
 }
 
-func (observations *webviewObservations) equals(webviewID uint32, eventName, detail string) bool {
-	_, found := observations.events[webviewObservation{webviewID, eventName, detail}]
-	return found
+// Navigation details are raw URLs on Linux/macOS and JSON objects on Windows.
+// Match only the entire URL, never a redirect target embedded in source HTML
+// or another JSON field.
+func (observations *webviewObservations) containsURL(webviewID uint32, eventName, url string) bool {
+	for event := range observations.events {
+		if event.webviewID != webviewID || event.eventName != eventName {
+			continue
+		}
+		if event.detail == url {
+			return true
+		}
+		var payload map[string]json.RawMessage
+		var observedURL *string
+		if json.Unmarshal([]byte(event.detail), &payload) == nil &&
+			json.Unmarshal(payload["url"], &observedURL) == nil && observedURL != nil && *observedURL == url {
+			return true
+		}
+	}
+	return false
 }

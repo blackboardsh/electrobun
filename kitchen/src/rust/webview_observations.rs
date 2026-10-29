@@ -69,9 +69,14 @@ impl WebviewObservations {
         })
     }
 
-    pub fn contains_exact(&self, webview_id: u32, name: &str, detail: &str) -> bool {
+    /// Navigation details are raw URLs on Linux/macOS and {"url": "..."}
+    /// on Windows. Compare the complete URL, never text embedded in HTML or
+    /// another JSON field, so redirect-based loadHTML assertions remain strict.
+    pub fn contains_url(&self, webview_id: u32, name: &str, url: &str) -> bool {
         self.events.iter().any(|event| {
-            event.webview_id == webview_id && event.name == name && event.detail == detail
+            event.webview_id == webview_id && event.name == name
+                && (event.detail == url || serde_json::from_str::<serde_json::Value>(&event.detail)
+                    .is_ok_and(|value| value.get("url").and_then(serde_json::Value::as_str) == Some(url)))
         })
     }
 }
@@ -90,12 +95,47 @@ mod tests {
         // Substring searches remain available for events carrying JSON, but
         // cannot establish that the requested navigation actually completed.
         assert!(observations.contains(18, "did-navigate", Some(target)));
-        assert!(!observations.contains_exact(18, "did-navigate", target));
+        assert!(!observations.contains_url(18, "did-navigate", target));
         observations.record(19, "did-navigate", target);
         observations.record(18, "will-navigate", target);
-        assert!(!observations.contains_exact(18, "did-navigate", target));
+        assert!(!observations.contains_url(18, "did-navigate", target));
         observations.record(18, "did-navigate", target);
-        assert!(observations.contains_exact(18, "did-navigate", target));
+        assert!(observations.contains_url(18, "did-navigate", target));
+    }
+
+    #[test]
+    fn windows_json_navigation_matches_only_the_complete_top_level_url() {
+        let target = "views://test-harness/index.html?loadHtml=rust-rendered";
+        let mut observations = WebviewObservations::new();
+        let detail = format!(r#"{{"url":"{target}"}}"#);
+        observations.record(19, "did-navigate", &detail);
+        observations.record(18, "will-navigate", &detail);
+        assert!(!observations.contains_url(18, "did-navigate", target));
+        observations.record(18, "did-navigate", &detail);
+        assert!(observations.contains_url(18, "did-navigate", target));
+
+        for detail in [
+            format!(r#"{{"url":"data:text/html,<script>location='{target}'</script>"}}"#),
+            format!(r#"{{"url":"about:blank","expected":"{target}"}}"#),
+            format!(r#"{{"nested":{{"url":"{target}"}}}}"#),
+            format!(r#"[{{"url":"{target}"}}]"#),
+            format!(r#"{{"url":"{target}#other"}}"#),
+            format!(r#"{{"url":"{target}"}} trailing"#),
+            format!(r#""{target}""#),
+            r#"{"url":null}"#.to_string(),
+            r#"{"url":42}"#.to_string(),
+        ] {
+            observations.clear();
+            observations.record(18, "did-navigate", &detail);
+            assert!(!observations.contains_url(18, "did-navigate", target), "accepted {detail}");
+        }
+    }
+
+    #[test]
+    fn navigation_json_decodes_escaped_urls() {
+        let mut observations = WebviewObservations::new();
+        observations.record(18, "did-navigate", r#" { "url" : "views:\/\/test-harness\/index.html?q=\u2713", "extra": true } "#);
+        assert!(observations.contains_url(18, "did-navigate", "views://test-harness/index.html?q=✓"));
     }
 
     #[test]
