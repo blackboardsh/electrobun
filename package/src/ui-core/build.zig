@@ -78,7 +78,8 @@ pub fn build(b: *std.Build) void {
     // fixtures for tests only (@import("testdata")); lazily referenced, so
     // library builds never pull them in
     mod.addImport("testdata", b.createModule(.{ .root_source_file = b.path("testdata/testdata.zig") }));
-    const tests = b.addTest(.{ .root_module = mod });
+    const test_filters: []const []const u8 = if (b.option([]const u8, "test-filter", "Only run tests whose name contains this")) |f| b.dupeStrings(&.{f}) else &.{};
+    const tests = b.addTest(.{ .root_module = mod, .filters = test_filters });
     const run_tests = b.addRunArtifact(tests);
     // run the suite against the pure-Zig SVG rasterizer on macOS too
     if (b.option(bool, "portable-svg", "Use the pure-Zig SVG rasterizer on macOS (tests)") orelse false) {

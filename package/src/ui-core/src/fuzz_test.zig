@@ -2,21 +2,27 @@
 //! pointer, keyboard, text, DOM-mutation and animation steps, and checks
 //! engine invariants after every frame. Runs under the test allocator with
 //! safety checks, so leaks, double frees, out-of-bounds and stale ids panic
-//! at the faulty line instead of corrupting memory.
+//! at the faulty line instead of corrupting memory. A few seeds also run
+//! under the guard-page Quarantine allocator, which makes any read of freed
+//! memory fault deterministically (the general-purpose allocator would hand
+//! freed blocks to the next allocation and hide it).
 const std = @import("std");
 const dom = @import("dom.zig");
 const font = @import("text/font.zig");
 const style_mod = @import("style.zig");
 const ui_mod = @import("ui.zig");
 const Ui = ui_mod.Ui;
+const Quarantine = @import("quarantine.zig").Quarantine;
 
 const page =
     \\<style>
-    \\ body { margin: 0; font-size: 12px }
+    \\ body { margin: 0; font-size: 12px; --f: "Inter", sans-serif; font-family: var(--f) }
     \\ .b { padding: 4px; background: #eee; transition: background-color .2s, transform .15s }
     \\ .b:hover { background: #ccc; transform: translateY(-1px) }
     \\ .b:active { box-shadow: 0 2px 6px rgba(0,0,0,.3) }
-    \\ .card { padding: 6px; border: 1px solid #ddd; box-shadow: 0 4px 12px rgba(0,0,0,.2); opacity: .9 }
+    \\ .card { padding: 6px; border: 1px solid #ddd; box-shadow: 0 4px 12px rgba(0,0,0,.2); opacity: .9; --fg: #222 }
+    \\ .card:hover { --f: "Mono", monospace; text-shadow: 0 1px 1px rgba(0,0,0,.2) }
+    \\ .card:hover p, .scroll:hover li { color: var(--fg) }
     \\ .card::after { content: "!"; color: red }
     \\ .card:hover::after { color: blue }
     \\ @keyframes pop { from { opacity: 0; transform: scale(.9) } }
@@ -73,8 +79,7 @@ fn checkInvariants(ui: *Ui) !void {
     }
 }
 
-fn run(seed: u64, steps: usize) !void {
-    const gpa = std.testing.allocator;
+fn run(gpa: std.mem.Allocator, seed: u64, steps: usize) !void {
     const ui = try Ui.create(gpa, .{ .fonts = try font.MockBackend.create(gpa) });
     ui.owns_fonts = true;
     defer ui.destroy();
@@ -89,7 +94,7 @@ fn run(seed: u64, steps: usize) !void {
     for (0..steps) |_| {
         const x = r.float(f32) * 440 - 10;
         const y = r.float(f32) * 340 - 10;
-        switch (r.uintLessThan(u8, 14)) {
+        switch (r.uintLessThan(u8, 15)) {
             0, 1, 2 => ui.ix.pointerMove(x, y, .{}),
             3 => ui.ix.pointerDown(x, y, 0, .{ .shift = r.boolean() }),
             4 => ui.ix.pointerUp(x, y, 0, .{}),
@@ -119,6 +124,23 @@ fn run(seed: u64, steps: usize) !void {
                 if (ui.doc.node(id).kind == .element) ui.ix.focus(id, r.boolean());
             },
             12 => ui.ix.pointerLeaveWindow(),
+            13 => {
+                // move a subtree elsewhere (it keeps styles inherited from
+                // its old ancestors until restyled), sometimes destroying
+                // the old parent in the same frame
+                const id = randomNode(r, ui.doc);
+                const to = randomNode(r, ui.doc);
+                const n = ui.doc.node(id);
+                const old_parent = n.parent;
+                if (n.tag != ui.doc.atoms.html and n.tag != ui.doc.atoms.body and n.tag != ui.doc.atoms.head and old_parent != dom.null_id and
+                    ui.doc.node(to).kind == .element and !ui.doc.isInclusiveAncestor(id, to))
+                {
+                    ui.doc.appendChild(to, id);
+                    const op = ui.doc.node(old_parent);
+                    if (r.boolean() and op.tag != ui.doc.atoms.html and op.tag != ui.doc.atoms.body and op.tag != ui.doc.atoms.head and
+                        !ui.doc.isInclusiveAncestor(old_parent, to)) ui.destroyNode(old_parent);
+                }
+            },
             else => {},
         }
         // frames at irregular intervals, sometimes several events per frame
@@ -134,8 +156,20 @@ fn run(seed: u64, steps: usize) !void {
 test "interaction fuzz" {
     var seed: u64 = 1;
     while (seed <= 24) : (seed += 1) {
-        run(seed, 1500) catch |err| {
+        run(std.testing.allocator, seed, 1500) catch |err| {
             std.debug.print("interaction fuzz failed with seed {d}\n", .{seed});
+            return err;
+        };
+    }
+}
+
+test "interaction fuzz under use-after-free guard pages" {
+    var seed: u64 = 101;
+    while (seed <= 104) : (seed += 1) {
+        var q = Quarantine.init(std.testing.allocator);
+        defer q.deinit();
+        run(q.allocator(), seed, 400) catch |err| {
+            std.debug.print("guarded interaction fuzz failed with seed {d}\n", .{seed});
             return err;
         };
     }

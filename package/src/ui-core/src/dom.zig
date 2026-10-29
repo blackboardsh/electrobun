@@ -163,6 +163,13 @@ pub const Document = struct {
     observer_ctx: ?*anyopaque = null,
     /// teardown hook for the style/layout/render data hung off nodes
     node_finalizer: ?*const fn (doc: *Document, node: *Node) void = null,
+    /// Per-node data that was replaced or whose node was destroyed, but that
+    /// other per-node data may still point into: computed styles shallow-copy
+    /// inherited slices (font_family, text_shadow, custom properties) from
+    /// their ancestors' style arenas, and cached layout holds *Style
+    /// pointers. Everything is recomputed from live data by the next complete
+    /// style + layout pass, after which the owner calls `releaseRetired`.
+    retired: std.ArrayList(Retired) = .empty,
 
     pub fn init(gpa: Allocator) !*Document {
         const doc = try gpa.create(Document);
@@ -174,11 +181,36 @@ pub const Document = struct {
         return doc;
     }
 
+    pub const Retired = struct {
+        ptr: *anyopaque,
+        free: *const fn (gpa: Allocator, ptr: *anyopaque) void,
+    };
+
+    /// Defer freeing `ptr` until `releaseRetired`. Reserve with
+    /// `reserveRetired` first where a failure must not leak.
+    pub fn retire(doc: *Document, ptr: *anyopaque, free: *const fn (gpa: Allocator, ptr: *anyopaque) void) void {
+        // out of memory: leaking is safe, freeing early is not
+        doc.retired.append(doc.gpa, .{ .ptr = ptr, .free = free }) catch {};
+    }
+
+    pub fn reserveRetired(doc: *Document, n: usize) Allocator.Error!void {
+        try doc.retired.ensureUnusedCapacity(doc.gpa, n);
+    }
+
+    /// Free retired data. Only valid once no live style or layout can refer
+    /// to it: after a complete style + layout pass (or at teardown).
+    pub fn releaseRetired(doc: *Document) void {
+        for (doc.retired.items) |r| r.free(doc.gpa, r.ptr);
+        doc.retired.clearRetainingCapacity();
+    }
+
     pub fn deinit(doc: *Document) void {
         const gpa = doc.gpa;
         for (doc.nodes.items) |maybe| {
             if (maybe) |n| doc.freeNodeMemory(n);
         }
+        doc.releaseRetired();
+        doc.retired.deinit(gpa);
         doc.nodes.deinit(gpa);
         doc.gens.deinit(gpa);
         doc.free_ids.deinit(gpa);

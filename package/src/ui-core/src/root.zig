@@ -46,4 +46,5 @@ pub const css_stylesheet = @import("css/stylesheet.zig");
 test {
     @import("std").testing.refAllDecls(@This());
     _ = fuzz_test;
+    _ = @import("lifetime_test.zig");
 }

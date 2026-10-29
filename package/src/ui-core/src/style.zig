@@ -490,6 +490,9 @@ pub const Engine = struct {
 
     /// Recompute styles for every dirty node. Returns true if anything changed.
     pub fn update(e: *Engine, doc: *Document) !bool {
+        // A partial pass leaves styles still pointing into retired data that
+        // a later pass might not revisit: recompute everything next time.
+        errdefer doc.markAllStyleDirty();
         if (doc.sheets_dirty or e.ua_sheet == null) {
             try e.rebuildIndex(doc);
             doc.sheets_dirty = false;
@@ -539,11 +542,15 @@ pub const Engine = struct {
         var child_force = false;
         if (needs) {
             const old = get(n);
+            // reserve first so retiring the replaced arena below cannot fail
+            if (old != null) try doc.reserveRetired(1);
             const fresh = try e.computeNode(doc, id, if (parent) |p| &p.s else null);
             if (doc.documentElement() == id) e.root_font_size = fresh.s.font_size;
             // Children always recompute: they shallow-copy inherited slices
             // (font_family, text_shadow, custom properties) out of this
-            // node's arena, which is replaced below.
+            // node's arena, which is replaced below. Their old styles keep
+            // pointing into the replaced arena (layoutEqual and
+            // on_style_change read them), so it is retired, not freed.
             child_force = true;
             const layout_changed = if (old) |o| !layoutEqual(&o.s, &fresh.s) or hasPseudo(o) or hasPseudo(fresh) else true;
             if (layout_changed) {
@@ -556,14 +563,15 @@ pub const Engine = struct {
                 // Keep the NodeStyle address stable: inline layouts cache
                 // *Style pointers and are reused when layout is unchanged.
                 // Pseudo styles live in the arena, so their presence above
-                // forces a relayout that drops those cached pointers.
+                // forces a relayout that drops those cached pointers (and
+                // until then the retired arena keeps them valid).
                 o.s = fresh.s;
                 o.before = fresh.before;
                 o.after = fresh.after;
                 o.placeholder = fresh.placeholder;
                 o.marker = fresh.marker;
                 std.mem.swap(std.heap.ArenaAllocator, &o.arena, &fresh.arena);
-                destroyNodeStyle(e.gpa, fresh);
+                doc.retire(fresh, retiredNodeStyleFree);
             } else n.style = fresh;
             e.restyled += 1;
             doc.needs_paint = true;
@@ -711,9 +719,14 @@ pub fn destroyNodeStyle(gpa: Allocator, ns: *NodeStyle) void {
     gpa.destroy(ns);
 }
 
-/// node_finalizer hook for Document
+fn retiredNodeStyleFree(gpa: Allocator, ptr: *anyopaque) void {
+    destroyNodeStyle(gpa, @ptrCast(@alignCast(ptr)));
+}
+
+/// node_finalizer hook for Document. A node moved out of this subtree still
+/// inherits from these styles until its next restyle, so they are retired.
 pub fn finalizeNode(doc: *Document, n: *Node) void {
-    if (get(n)) |ns| destroyNodeStyle(doc.gpa, ns);
+    if (get(n)) |ns| doc.retire(ns, retiredNodeStyleFree);
     n.style = null;
 }
 

@@ -249,6 +249,8 @@ pub const Ui = struct {
         _ = try ui.styles.update(ui.doc);
         ui.animator.apply(ui.now);
         _ = try ui.layout.run(ui.width, ui.height);
+        // styles and layout now reference only live style data
+        ui.doc.releaseRetired();
         if (!ui.doc.needs_paint) return false;
         var painter = paint.Painter{ .doc = ui.doc, .L = &ui.layout, .dl = &ui.dl, .hooks = ui.paint_hooks, .scale = ui.scale, .transparent_canvas = ui.transparent };
         try painter.paint();
