@@ -1,4 +1,4 @@
-name: VM test matrix
+name: macOS ARM beta.8 startup probe
 
 on:
   workflow_call:
@@ -39,13 +39,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Intel desktop validation uses macOS 15 because stock Cocoa fullscreen
-        # also fails on the hosted macOS 26 Intel image (IconServices).
-        # Related runner graphics issue:
-        # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.macos_intel_only && '[{"runner":"macos-15-intel","arch":"x64"}]' || inputs.windows_arm_only && '[{"runner":"windows-11-arm","arch":"arm64"}]' || '[{"runner":"macos-14","arch":"arm64"},{"runner":"macos-15-intel","arch":"x64"},{"runner":"ubuntu-24.04","arch":"x64"},{"runner":"ubuntu-24.04-arm","arch":"arm64"},{"runner":"windows-2025","arch":"x64"},{"runner":"windows-11-arm","arch":"arm64"}]') }}
+        # Diagnostic-only branch: keep runtime code exactly at beta.8.
+        include:
+          - runner: macos-14
+            arch: arm64
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 330
+    timeout-minutes: 60
     env:
       ELECTROBUN_BUILD_ARCH: ${{ matrix.arch }}
       # Exercise navigation during asynchronous browser creation repeatedly.
@@ -59,6 +58,7 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@v6
         with:
@@ -238,11 +238,121 @@ jobs:
           }
           Write-Host 'Windows shell notification area is ready.'
 
-      - name: Run full VM suite (macOS and Windows desktop)
-        timeout-minutes: 300
-        if: runner.os != 'Linux'
+      - name: Build beta.8 Bun and Cottontail CEF probes
+        timeout-minutes: 25
         working-directory: package
-        run: hutch test:vm
+        shell: bash
+        env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+        run: |
+          set -euo pipefail
+          probe_root="$RUNNER_TEMP/macos-startup-probe"
+          mkdir -p "$probe_root"
+          touch "$probe_root/started"
+          {
+            date -u '+%Y-%m-%dT%H:%M:%SZ'
+            git rev-parse HEAD
+            git diff --name-only v2.0.6-beta.8 HEAD
+            git diff --exit-code v2.0.6-beta.8 HEAD -- package kitchen
+            sw_vers
+            uname -a
+            hutch --version
+          } | tee "$probe_root/environment.log"
+          probe_build_started_at="$(date +%s)"
+          hutch build:dev 2>&1 | tee "$probe_root/package-build.log"
+          cd ../kitchen
+          npm ci 2>&1 | tee "$probe_root/kitchen-install.log"
+          hutch scripts/kitchen-matrix.ts --build-only --with=bun:cef,cottontail:cef 2>&1 | tee "$probe_root/kitchen-build.log"
+          printf 'Probe builds completed in %ss\n' "$(( $(date +%s) - probe_build_started_at ))" | tee -a "$probe_root/summary.log"
+
+      - name: Reproduce preceding Bun CEF teardown
+        timeout-minutes: 22
+        working-directory: kitchen
+        shell: bash
+        env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+          AUTO_RUN: '1'
+        run: |
+          set -euo pipefail
+          probe_root="$RUNNER_TEMP/macos-startup-probe"
+          probe_launch_started_at="$(date +%s)"
+          printf 'Bun CEF full-suite prelude started at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee -a "$probe_root/summary.log"
+          if hutch scripts/kitchen-matrix.ts --launch-only --with=bun:cef --timeout=1200 2>&1 | tee "$probe_root/bun-cef-full.log"; then
+            printf 'Bun CEF full-suite prelude passed in %ss\n' "$(( $(date +%s) - probe_launch_started_at ))" | tee -a "$probe_root/summary.log"
+          else
+            probe_status=$?
+            printf 'Bun CEF prelude failed: status=%s elapsed=%ss; stopping before Cottontail trials\n' "$probe_status" "$(( $(date +%s) - probe_launch_started_at ))" | tee -a "$probe_root/summary.log"
+            exit "$probe_status"
+          fi
+
+      - name: Exercise 30 fresh Cottontail CEF startups
+        timeout-minutes: 35
+        working-directory: kitchen
+        shell: bash
+        env:
+          HUTCH_ELECTROBUN_DEVKIT_ROOT: ${{ github.workspace }}/package/dist
+          AUTO_RUN_TEST_NAME: Window creation with URL
+        run: |
+          set -euo pipefail
+          probe_root="$RUNNER_TEMP/macos-startup-probe"
+          for ((probe_iteration=1; probe_iteration<=30; probe_iteration++)); do
+            probe_log="$probe_root/cottontail-cef-$(printf '%02d' "$probe_iteration").log"
+            probe_launch_started_at="$(date +%s)"
+            printf 'Cottontail CEF launch %s/30 started at %s\n' "$probe_iteration" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" | tee -a "$probe_root/summary.log"
+            if hutch scripts/kitchen-matrix.ts --launch-only --with=cottontail:cef --timeout=60 2>&1 | tee "$probe_log"; then
+              printf 'Cottontail CEF launch %s/30 passed in %ss\n' "$probe_iteration" "$(( $(date +%s) - probe_launch_started_at ))" | tee -a "$probe_root/summary.log"
+            else
+              probe_status=$?
+              printf 'Cottontail CEF launch %s/30 failed: status=%s elapsed=%ss; stopping at first failure\n' "$probe_iteration" "$probe_status" "$(( $(date +%s) - probe_launch_started_at ))" | tee -a "$probe_root/summary.log"
+              exit "$probe_status"
+            fi
+          done
+
+      - name: Collect fresh macOS crash reports
+        if: always()
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          # ReportCrash writes asynchronously after SIGTRAP; allow a bounded flush.
+          sleep 5
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+
+          probe_root = Path(os.environ["RUNNER_TEMP"]) / "macos-startup-probe"
+          destination = Path(os.environ["RUNNER_TEMP"]) / "mac-crash-reports"
+          destination.mkdir(parents=True, exist_ok=True)
+          started = probe_root / "started"
+          if not started.exists():
+              print("Probe never started; no crash reports selected")
+              raise SystemExit(0)
+          cutoff = started.stat().st_mtime
+          roots = [("user", Path.home() / "Library/Logs/DiagnosticReports"),
+                   ("system", Path("/Library/Logs/DiagnosticReports"))]
+          selected = []
+          for label, root in roots:
+              if not root.exists():
+                  continue
+              for report in root.rglob("*"):
+                  try:
+                      if not report.is_file() or report.stat().st_mtime < cutoff:
+                          continue
+                      if report.suffix not in (".ips", ".crash"):
+                          continue
+                      if not re.search(r"(?:^|[^a-z])bun(?:[^a-z]|$)|cottontail|electrobun|cef", report.name, re.I):
+                          continue
+                      target = destination / (label + "-" + "--".join(report.relative_to(root).parts))
+                      shutil.copy2(report, target)
+                      selected.append({"source": str(report), "saved": target.name,
+                                       "modified": report.stat().st_mtime})
+                  except (OSError, PermissionError) as error:
+                      print(f"Could not inspect crash report {report}: {error}")
+          (destination / "index.json").write_text(json.dumps({"started": cutoff, "reports": selected}, indent=2))
+          print(f"Collected {len(selected)} fresh Bun/Cottontail/Electrobun/CEF crash reports")
+          PYTHON
 
       - name: Upload test diagnostics
         if: always()
@@ -260,3 +370,5 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
             ${{ runner.temp }}/openbox.log
             kitchen/test-results/**
+            ${{ runner.temp }}/macos-startup-probe/**
+            ${{ runner.temp }}/mac-crash-reports/**
