@@ -66,6 +66,7 @@ export const nativeUiTests = [
 							<div class="pulse" />
 						</form>);
 						await ui.nextFrame();
+						log(`cycle ${i}: input`);
 						await ui.simulate.click(ui.querySelector("#entry")!);
 						await ui.simulate.type("pending frame");
 						await ui.simulate.key("Enter");

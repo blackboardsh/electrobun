@@ -11,3 +11,5 @@ Changes since [v2.0.5](/electrobun/guides/changelog/v2-0-5/).
   no longer wait for the main thread while holding the UI lock.
 - Fixed a Linux CEF navigation race where the constructor's initial page could
   overwrite an immediate `loadURL` or `loadHTML` request.
+- Fixed Linux native UI windows repeatedly stealing focus from each other when
+  stale focus events arrived, which could leave the app unresponsive.

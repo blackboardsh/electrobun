@@ -39,6 +39,7 @@
 #include <atomic>
 #include "../shared/pending_resize_queue.h"
 #include "../shared/deferred_navigation.h"
+#include "ui_focus.h"
 #include <gio/gio.h>
 #include <stdlib.h>
 #include <sys/stat.h>
@@ -9010,23 +9011,27 @@ static void uiRedirectFocus(XFocusChangeEvent* focus) {
     Window* children = nullptr;
     unsigned int count = 0;
     if (XQueryTree(focus->display, focus->window, &root, &parent, &children, &count) && children) XFree(children);
-    std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
-    for (auto& [id, abstractView] : g_wgpuViewMap) {
-        auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
-        if (!view || !view->ui.installed || !view->ui.wantsFocus || view->isRemoved) continue;
-        if (view->xDisplay != focus->display) continue;
-        if (view->parentXWindow != focus->window && view->parentXWindow != parent) continue;
-        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
-        XFlush(view->xDisplay);
-        return;
+    std::shared_ptr<AbstractView> retained;
+    {
+        std::lock_guard<std::mutex> lock(g_wgpuViewMapMutex);
+        for (auto& [id, abstractView] : g_wgpuViewMap) {
+            auto* view = dynamic_cast<WGPUViewImpl*>(abstractView.get());
+            if (!view || !view->ui.installed || !view->ui.wantsFocus || view->isRemoved) continue;
+            if (view->xDisplay != focus->display) continue;
+            if (view->parentXWindow != focus->window && view->parentXWindow != parent) continue;
+            retained = abstractView;
+            break;
+        }
+    }
+    if (auto* view = dynamic_cast<WGPUViewImpl*>(retained.get())) {
+        electrobun::focusChildOfCurrentToplevel(view->xDisplay, view->parentXWindow, uiInputWindowOf(view));
     }
 }
 
 static gboolean uiOnToplevelFocusIn(GtkWidget*, GdkEvent*, gpointer data) {
     WGPUViewImpl* view = uiViewById(GPOINTER_TO_UINT(data));
     if (view && view->ui.installed && view->ui.wantsFocus && view->xDisplay) {
-        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
-        XFlush(view->xDisplay);
+        electrobun::focusChildOfCurrentToplevel(view->xDisplay, view->parentXWindow, uiInputWindowOf(view));
     }
     return FALSE;
 }
@@ -9038,17 +9043,7 @@ static gboolean uiOnToplevelFocusIn(GtkWidget*, GdkEvent*, gpointer data) {
 static gboolean uiReclaimFocus(gpointer data) {
     WGPUViewImpl* view = uiViewById(GPOINTER_TO_UINT(data));
     if (!view || !view->ui.installed || !view->ui.wantsFocus || !view->xDisplay) return G_SOURCE_REMOVE;
-    Window focused = 0;
-    int revert = 0;
-    XGetInputFocus(view->xDisplay, &focused, &revert);
-    if (focused == None || focused == PointerRoot || focused == uiInputWindowOf(view)) return G_SOURCE_REMOVE;
-    Window root = 0, parent = 0, *children = nullptr;
-    unsigned int count = 0;
-    if (XQueryTree(view->xDisplay, focused, &root, &parent, &children, &count) && children) XFree(children);
-    if (focused == view->parentXWindow || parent == view->parentXWindow) {
-        XSetInputFocus(view->xDisplay, uiInputWindowOf(view), RevertToParent, CurrentTime);
-        XFlush(view->xDisplay);
-    }
+    electrobun::focusChildOfCurrentToplevel(view->xDisplay, view->parentXWindow, uiInputWindowOf(view));
     return G_SOURCE_REMOVE;
 }
 
