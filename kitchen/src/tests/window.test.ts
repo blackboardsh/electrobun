@@ -3,7 +3,7 @@
 import { defineTest, expect, sleep, type TitleBarStyle } from "../test-framework/types";
 import { BrowserWindow, Screen } from "electrobun/main";
 import { createTestHarnessRPC } from "./rpc.test";
-import { waitForWindowObservation } from "../test-framework/window-observation";
+import { isFullscreenRestored, waitForWindowObservation, type FullscreenSnapshot } from "../test-framework/window-observation";
 
 type ViewportSize = {
   width: number;
@@ -47,6 +47,24 @@ async function waitForFullscreen(
       `Fullscreen transition timed out: expected=${expected}, observed=${observed} after ${elapsed}ms`,
     );
   }
+}
+
+function readFullscreenSnapshot(window: Pick<BrowserWindow, "isFullScreen" | "getFrame">): FullscreenSnapshot {
+  return {
+    fullscreen: window.isFullScreen(),
+    frame: { ...window.getFrame() },
+    workArea: { ...Screen.getPrimaryDisplay().workArea },
+  };
+}
+
+async function waitForFullscreenRestoration(
+  window: Pick<BrowserWindow, "isFullScreen" | "getFrame">,
+  original: FullscreenSnapshot,
+  log: (message: string) => void,
+): Promise<void> {
+  await waitForWindowObservation(`Fullscreen restoration to ${JSON.stringify(original)}`, () => readFullscreenSnapshot(window),
+    (observed) => isFullscreenRestored(observed, original),
+    { timeoutMs: 5000 * (process.platform === "win32" ? 3 : 1), log });
 }
 
 export const windowTests = [
@@ -380,13 +398,14 @@ export const windowTests = [
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Entering fullscreen");
+      const original = readFullscreenSnapshot(win.window);
       win.window.setFullScreen(true);
       await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen");
       win.window.setFullScreen(false);
-      await waitForFullscreen(win.window, false, log);
+      await waitForFullscreenRestoration(win.window, original, log);
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Fullscreen toggle completed");
@@ -417,13 +436,14 @@ export const windowTests = [
       expect(win.window.isFullScreen()).toBe(false);
 
       log("Entering fullscreen with hidden titlebar");
+      const original = readFullscreenSnapshot(win.window);
       win.window.setFullScreen(true);
       await waitForFullscreen(win.window, true, log);
       expect(win.window.isFullScreen()).toBe(true);
 
       log("Exiting fullscreen with hidden titlebar");
       win.window.setFullScreen(false);
-      await waitForFullscreen(win.window, false, log);
+      await waitForFullscreenRestoration(win.window, original, log);
       expect(win.window.isFullScreen()).toBe(false);
     },
   }),
