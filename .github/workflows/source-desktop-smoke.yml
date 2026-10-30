@@ -14,12 +14,18 @@ on:
           - macos-windows
           - linux-arm64
           - windows
+      scenarios:
+        description: Comma-separated scenario IDs for focused source diagnostics, or all
+        type: string
+        default: all
 
 permissions:
   contents: read
 
 jobs:
   smoke:
+    env:
+      SMOKE_SCENARIOS: ${{ inputs.scenarios || 'all' }}
     strategy:
       fail-fast: false
       matrix:
