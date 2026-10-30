@@ -23,7 +23,7 @@ function run(command, args) {
 }
 
 console.log(`[zig-observations] Compiler: Zig ${ZIG_VERSION} ${hostArch}`);
-for (const name of ["webview_observations", "window_size_observation"]) {
+for (const name of ["webview_observations", "window_size_observation", "fullscreen_observation"]) {
 	const executable = join(scratch, `${name}${process.platform === "win32" ? ".exe" : ""}`);
 	console.log(`[zig-observations] Test executable: ${executable}`);
 	run(zig, ["test", join(kitchen, "src", "zig", `${name}.zig`), "-O", "ReleaseSafe", "--cache-dir", join(scratch, "cache"), "--test-no-exec", `-femit-bin=${executable}`]);

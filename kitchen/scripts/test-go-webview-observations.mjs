@@ -31,5 +31,7 @@ const result = spawnSync(go, ["test", "-count=1", "-v",
     join(kitchen, "src", "go", "webview_observations_test.go"),
     join(kitchen, "src", "go", "window_size_observation.go"),
     join(kitchen, "src", "go", "window_size_observation_test.go"),
+    join(kitchen, "src", "go", "fullscreen_restoration.go"),
+    join(kitchen, "src", "go", "fullscreen_restoration_test.go"),
 ], { env, cwd: scratch, stdio: "inherit", windowsHide: true });
 if (result.error || result.status !== 0) throw new Error(`Go callback and window observation tests failed (${result.error?.message || result.status})`);

@@ -5,7 +5,23 @@ type ObservationOptions = {
   log?: (message: string) => void;
 };
 
-// Observe an already submitted resize. Never reissue the mutation: an ignored
+type WindowRect = { x: number; y: number; width: number; height: number };
+export type FullscreenSnapshot = {
+  fullscreen: boolean;
+  frame: WindowRect;
+  workArea: WindowRect;
+};
+
+// AppKit clears the fullscreen style bit before restoring its window and Space.
+export function isFullscreenRestored(observed: FullscreenSnapshot, original: FullscreenSnapshot): boolean {
+  const coordinates = ["x", "y", "width", "height"] as const;
+  return !observed.fullscreen && coordinates.every((key) =>
+    Number.isFinite(observed.frame[key]) && Number.isFinite(original.frame[key]) &&
+    Math.abs(observed.frame[key] - original.frame[key]) <= 1 &&
+    Number.isFinite(observed.workArea[key]) && observed.workArea[key] === original.workArea[key]);
+}
+
+// Observe an already submitted window change. Never reissue it: an ignored
 // request must still fail, while intermediate window-manager frames may settle.
 export async function waitForWindowObservation<T>(
   label: string,

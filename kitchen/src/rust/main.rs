@@ -15,6 +15,8 @@ mod webview_observations;
 use webview_observations::WebviewObservations;
 mod window_size_observation;
 use window_size_observation::wait_for_window_size;
+mod fullscreen_observation;
+use fullscreen_observation::{wait_for_fullscreen_restoration, FullscreenSnapshot};
 
 const APP_VERSION: &str = "1.18.1";
 const DEFAULT_SECRET_KEY: &str =
@@ -2294,6 +2296,18 @@ fn run_window_minimize_unminimize_test() -> Result<(), String> {
     finish_with_window(window_id, result)
 }
 
+fn read_fullscreen_snapshot(window_id: u32) -> Result<FullscreenSnapshot, String> {
+    let core = app_state().core;
+    let fullscreen = core.is_window_full_screen(window_id);
+    let frame = core.get_window_frame(window_id)?;
+    let work_area = core.get_primary_display()?.work_area;
+    Ok(FullscreenSnapshot {
+        fullscreen,
+        frame: [frame.x, frame.y, frame.width, frame.height],
+        work_area: [work_area.x, work_area.y, work_area.width, work_area.height],
+    })
+}
+
 fn run_window_fullscreen_toggle_test(hidden_titlebar: bool) -> Result<(), String> {
     let state = app_state();
     let mut options = WindowOptions::new(
@@ -2306,6 +2320,7 @@ fn run_window_fullscreen_toggle_test(hidden_titlebar: bool) -> Result<(), String
     let window_id = state.core.create_window(options)?;
     let result = (|| {
         sleep_ms(MEDIUM_WAIT_MS);
+        let original = read_fullscreen_snapshot(window_id)?;
         state.core.set_window_full_screen(window_id, true)?;
         let enter_started = Instant::now();
         let mut observed_fullscreen = false;
@@ -2320,18 +2335,11 @@ fn run_window_fullscreen_toggle_test(hidden_titlebar: bool) -> Result<(), String
             ));
         }
         state.core.set_window_full_screen(window_id, false)?;
-        let exit_started = Instant::now();
-        if !wait_until(5_000, || {
-            observed_fullscreen = state.core.is_window_full_screen(window_id);
-            !observed_fullscreen
-        }) {
-            return Err(format!(
-                "window still reported fullscreen after exit: expected false, observed {} after {}ms",
-                observed_fullscreen,
-                exit_started.elapsed().as_millis()
-            ));
-        }
-        Ok(())
+        wait_for_fullscreen_restoration(
+            original,
+            Duration::from_millis(5_000 * slow_platform_scale()),
+            || read_fullscreen_snapshot(window_id),
+        )
     })();
     finish_with_window(window_id, result)
 }

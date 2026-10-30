@@ -34,7 +34,7 @@ const serdeVersion = serdeJson?.match(/^version = "([^"]+)"$/m)?.[1];
 if (!serdeVersion) throw new Error("Kitchen Cargo.lock does not pin serde_json");
 const packageName = "electrobun-webview-observation-tests";
 const manifest = join(scratch, "Cargo.toml");
-writeFileSync(join(scratch, "lib.rs"), ["webview_observations", "window_size_observation"].map((module) =>
+writeFileSync(join(scratch, "lib.rs"), ["webview_observations", "window_size_observation", "fullscreen_observation"].map((module) =>
     `#[path = ${JSON.stringify(join(kitchen, "src", "rust", `${module}.rs`))}]\npub mod ${module};\n`
 ).join("\n"));
 writeFileSync(manifest, `[package]

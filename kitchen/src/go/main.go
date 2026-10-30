@@ -1664,6 +1664,23 @@ func runWindowMinimizeUnminimizeTest() error {
 	return finishWithWindow(windowID, err)
 }
 
+func readFullscreenSnapshot(windowID uint32) (fullscreenSnapshot, error) {
+	fullscreen := state.core.IsWindowFullScreen(windowID)
+	frame, err := state.core.GetWindowFrame(windowID)
+	if err != nil {
+		return fullscreenSnapshot{}, fmt.Errorf("reading window frame: %w", err)
+	}
+	display, err := state.core.GetPrimaryDisplay()
+	if err != nil {
+		return fullscreenSnapshot{}, fmt.Errorf("reading primary workArea: %w", err)
+	}
+	return fullscreenSnapshot{
+		Fullscreen: fullscreen,
+		Frame:      fullscreenRect{frame.X, frame.Y, frame.Width, frame.Height},
+		WorkArea:   fullscreenRect{display.WorkArea.X, display.WorkArea.Y, display.WorkArea.Width, display.WorkArea.Height},
+	}, nil
+}
+
 func runWindowFullscreenToggleTest(hiddenTitlebar bool) error {
 	options := electrobun.NewWindowOptions("Go Fullscreen Test", electrobun.NewRect(140, 100, 640, 420))
 	if hiddenTitlebar {
@@ -1675,6 +1692,10 @@ func runWindowFullscreenToggleTest(hiddenTitlebar bool) error {
 	}
 	err = func() error {
 		time.Sleep(mediumWait)
+		before, err := readFullscreenSnapshot(windowID)
+		if err != nil {
+			return fmt.Errorf("capturing pre-fullscreen geometry: %w", err)
+		}
 		if err := state.core.SetWindowFullScreen(windowID, true); err != nil {
 			return err
 		}
@@ -1689,14 +1710,9 @@ func runWindowFullscreenToggleTest(hiddenTitlebar bool) error {
 		if err := state.core.SetWindowFullScreen(windowID, false); err != nil {
 			return err
 		}
-		exitStarted := time.Now()
-		if !waitUntil(5*time.Second, func() bool {
-			observedFullscreen = state.core.IsWindowFullScreen(windowID)
-			return !observedFullscreen
-		}) {
-			return fmt.Errorf("window still reported fullscreen after exit: expected false, observed %t after %dms", observedFullscreen, time.Since(exitStarted).Milliseconds())
-		}
-		return nil
+		return waitForFullscreenRestoration(before, time.Duration(slowPlatformScaleFactor())*5*time.Second, func() (fullscreenSnapshot, error) {
+			return readFullscreenSnapshot(windowID)
+		})
 	}()
 	return finishWithWindow(windowID, err)
 }
@@ -1826,10 +1842,13 @@ func runWindowOmittedPositionCentersDisplayTest() error {
 		expectedCenterY := display.WorkArea.Y + display.WorkArea.Height/2
 		const tolerance = 24.0
 		if !approxEq(actualCenterX, expectedCenterX, tolerance) || !approxEq(actualCenterY, expectedCenterY, tolerance) {
+			afterDisplay, afterErr := state.core.GetPrimaryDisplay()
 			return fmt.Errorf(
-				"window was not centered on primary display: frame=%+v workArea=%+v actualCenter=(%v,%v) expectedCenter=(%v,%v)",
+				"window was not centered on primary display: frame=%+v preCreateWorkArea=%+v postCreateWorkArea=%+v postCreateError=%v actualCenter=(%v,%v) expectedCenter=(%v,%v)",
 				frame,
 				display.WorkArea,
+				afterDisplay.WorkArea,
+				afterErr,
 				actualCenterX,
 				actualCenterY,
 				expectedCenterX,

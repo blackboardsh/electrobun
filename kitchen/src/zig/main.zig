@@ -3,6 +3,7 @@ const builtin = @import("builtin");
 const electrobun = @import("electrobun");
 const WebviewObservations = @import("webview_observations.zig").WebviewObservations;
 const WindowSizeObservation = @import("window_size_observation.zig").Observation;
+const FullscreenObservation = @import("fullscreen_observation.zig");
 
 // Zig 0.16 moved Mutex to std.Io.Mutex, whose lock/unlock take an Io
 // instance. Wrap it so the argument-free lock()/unlock() call sites keep
@@ -2608,6 +2609,44 @@ fn waitForWindowFullscreen(state: *AppState, window_id: u32, expected: bool) boo
     return observed == expected;
 }
 
+fn readFullscreenSnapshot(state: *AppState, window_id: u32) !FullscreenObservation.Snapshot {
+    const fullscreen = state.core.isWindowFullScreen(window_id);
+    const frame = try state.core.getWindowFrame(window_id);
+    const work_area = (try state.core.getPrimaryDisplay()).workArea;
+    return .{
+        .fullscreen = fullscreen,
+        .frame = .{ frame.x, frame.y, frame.width, frame.height },
+        .work_area = .{ work_area.x, work_area.y, work_area.width, work_area.height },
+    };
+}
+
+fn waitForFullscreenRestoration(state: *AppState, window_id: u32, original: FullscreenObservation.Snapshot) !void {
+    const io = electrobun.defaultIo();
+    const started = std.Io.Clock.now(.awake, io);
+    var observed: FullscreenObservation.Observation = .{
+        .original = original,
+        .timeout_ns = 5000 * slowPlatformScale() * std.time.ns_per_ms,
+    };
+    while (true) {
+        const snapshot = readFullscreenSnapshot(state, window_id) catch |err| {
+            std.debug.print("[kitchen zig] reading fullscreen restoration failed: {s}; original={any}, first={any}, last={any}\n", .{ @errorName(err), original, observed.first, observed.last });
+            return err;
+        };
+        const elapsed_ns: u64 = @intCast(started.durationTo(std.Io.Clock.now(.awake, io)).nanoseconds);
+        switch (observed.observe(snapshot, elapsed_ns)) {
+            .restored => {
+                std.debug.print("[kitchen zig] fullscreen restored after {d}ms: original={any}, first={any}, last={any}\n", .{ elapsed_ns / std.time.ns_per_ms, original, observed.first, observed.last });
+                return;
+            },
+            .timed_out => {
+                std.debug.print("[kitchen zig] fullscreen restoration timed out after {d}ms: original={any}, first={any}, last={any}\n", .{ elapsed_ns / std.time.ns_per_ms, original, observed.first, observed.last });
+                return error.WindowFullscreenDidNotRestore;
+            },
+            .waiting => try io.sleep(.{ .nanoseconds = @intCast(@min(25 * std.time.ns_per_ms, observed.timeout_ns - elapsed_ns)) }, .awake),
+        }
+    }
+}
+
 fn runWindowFullscreenToggleTest(state: *AppState) !void {
     const created = try createWindowWithTestHarness(
         state,
@@ -2623,15 +2662,14 @@ fn runWindowFullscreenToggleTest(state: *AppState) !void {
         return error.UnexpectedInitialFullscreenState;
     }
 
+    const original = try readFullscreenSnapshot(state, created.window_id);
     try state.core.setWindowFullScreen(created.window_id, true);
     if (!waitForWindowFullscreen(state, created.window_id, true)) {
         return error.WindowDidNotEnterFullscreen;
     }
 
     try state.core.setWindowFullScreen(created.window_id, false);
-    if (!waitForWindowFullscreen(state, created.window_id, false)) {
-        return error.WindowDidNotExitFullscreen;
-    }
+    try waitForFullscreenRestoration(state, created.window_id, original);
 }
 
 fn runWindowFullscreenToggleHiddenTitlebarTest(state: *AppState) !void {
@@ -2662,15 +2700,14 @@ fn runWindowFullscreenToggleHiddenTitlebarTest(state: *AppState) !void {
         return error.UnexpectedInitialFullscreenState;
     }
 
+    const original = try readFullscreenSnapshot(state, created.window_id);
     try state.core.setWindowFullScreen(created.window_id, true);
     if (!waitForWindowFullscreen(state, created.window_id, true)) {
         return error.WindowDidNotEnterFullscreen;
     }
 
     try state.core.setWindowFullScreen(created.window_id, false);
-    if (!waitForWindowFullscreen(state, created.window_id, false)) {
-        return error.WindowDidNotExitFullscreen;
-    }
+    try waitForFullscreenRestoration(state, created.window_id, original);
 }
 
 fn runWindowSetPositionTest(state: *AppState) !void {

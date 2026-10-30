@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { waitForWindowObservation } from "./window-observation";
+import { isFullscreenRestored, waitForWindowObservation, type FullscreenSnapshot } from "./window-observation";
 
 function fakeClock(timeoutMs = 1000) {
   let elapsed = 0;
@@ -57,5 +57,39 @@ describe("window resize observation", () => {
       await clock.sleep(61);
       return { width: 600, height: 500 };
     }, target, clock)).rejects.toThrow("timed out after 61ms");
+  });
+});
+
+describe("fullscreen restoration", () => {
+  const original: FullscreenSnapshot = {
+    fullscreen: false,
+    frame: { x: 140, y: 100, width: 640, height: 448 },
+    workArea: { x: 0, y: 24, width: 1920, height: 1056 },
+  };
+
+  test("a cleared style bit and restored frame still wait for the original work area", async () => {
+    const clock = fakeClock();
+    await waitForWindowObservation("fullscreen exit", () => ({
+      ...original,
+      workArea: clock.now() < 200 ? { ...original.workArea, y: 0 } : original.workArea,
+    }), (observed) => isFullscreenRestored(observed, original), clock);
+    expect(clock.now()).toBe(200);
+  });
+
+  test("requires false state, all frame coordinates within one pixel and exact work area", () => {
+    expect(isFullscreenRestored({ ...original, fullscreen: true }, original)).toBe(false);
+    for (const key of ["x", "y", "width", "height"] as const) {
+      expect(isFullscreenRestored({ ...original, frame: { ...original.frame, [key]: original.frame[key] + 1 } }, original)).toBe(true);
+      expect(isFullscreenRestored({ ...original, frame: { ...original.frame, [key]: original.frame[key] + 1.01 } }, original)).toBe(false);
+      expect(isFullscreenRestored({ ...original, workArea: { ...original.workArea, [key]: original.workArea[key] + 0.01 } }, original)).toBe(false);
+    }
+  });
+
+  test("work area that never restores fails at the deadline", async () => {
+    const clock = fakeClock(60);
+    await expect(waitForWindowObservation("fullscreen exit", () => ({
+      ...original, workArea: { ...original.workArea, y: 0 },
+    }), (observed) => isFullscreenRestored(observed, original), clock)).rejects.toThrow("timed out after 60ms");
+    expect(clock.now()).toBe(60);
   });
 });

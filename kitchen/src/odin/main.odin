@@ -19,6 +19,7 @@ import "core:thread"
 import "core:time"
 
 import electrobun "electrobun_sdk:electrobun"
+import fullscreen_restore "fullscreen_restoration"
 import window_size "window_size_observation"
 
 app_version :: "1.18.1"
@@ -2935,6 +2936,47 @@ waitForWindowFullscreen :: proc(state: ^AppState, window_id: u32, expected: bool
 	return observed == expected
 }
 
+readFullscreenSnapshot :: proc(state: ^AppState, window_id: u32) -> (fullscreen_restore.Snapshot, string) {
+	fullscreen := electrobun.isWindowFullScreen(state.core, window_id)
+	frame, frame_err := electrobun.getWindowFrame(state.core, window_id)
+	if frame_err != .None {
+		return {}, errName(frame_err)
+	}
+	display, display_err := electrobun.getPrimaryDisplay(state.core)
+	if display_err != .None {
+		return {}, errName(display_err)
+	}
+	return {
+		fullscreen = fullscreen,
+		frame = {frame.x, frame.y, frame.width, frame.height},
+		work_area = {display.workArea.x, display.workArea.y, display.workArea.width, display.workArea.height},
+	}, ""
+}
+
+waitForFullscreenRestoration :: proc(state: ^AppState, window_id: u32, before: fullscreen_restore.Snapshot) -> string {
+	started := time.tick_now()
+	observed := fullscreen_restore.Observation{
+		before = before,
+		timeout_ns = i64(5000 * slow_platform_scale()) * i64(time.Millisecond),
+	}
+	for {
+		sample, read_error := readFullscreenSnapshot(state, window_id)
+		elapsed := time.tick_since(started)
+		switch fullscreen_restore.observe(&observed, sample, i64(elapsed), read_error != "") {
+		case .Restored:
+			return ""
+		case .Read_Failed:
+			fmt.eprintf("[kitchen odin] reading fullscreen restoration failed after %.0fms: %s; expected=%v hasObservation=%v first=%v last=%v\n", time.duration_milliseconds(elapsed), read_error, before, observed.has_observation, observed.first, observed.last)
+			return read_error
+		case .Timed_Out:
+			fmt.eprintf("[kitchen odin] fullscreen exit did not restore frame/workArea after %.0fms (frame tolerance 1): expected=%v first=%v last=%v\n", time.duration_milliseconds(elapsed), before, observed.first, observed.last)
+			return "FullscreenGeometryDidNotRestore"
+		case .Waiting:
+			time.sleep(min(25 * time.Millisecond, time.Duration(observed.timeout_ns) - elapsed))
+		}
+	}
+}
+
 runWindowFullscreenToggleTest :: proc(state: ^AppState) -> string {
 	created, create_err := createWindowWithTestHarness(
 		state,
@@ -2952,6 +2994,10 @@ runWindowFullscreenToggleTest :: proc(state: ^AppState) -> string {
 	if electrobun.isWindowFullScreen(state.core, created.window_id) {
 		return "UnexpectedInitialFullscreenState"
 	}
+	before, before_err := readFullscreenSnapshot(state, created.window_id)
+	if before_err != "" {
+		return before_err
+	}
 
 	if err := electrobun.setWindowFullScreen(state.core, created.window_id, true); err != .None {
 		return errName(err)
@@ -2963,10 +3009,7 @@ runWindowFullscreenToggleTest :: proc(state: ^AppState) -> string {
 	if err := electrobun.setWindowFullScreen(state.core, created.window_id, false); err != .None {
 		return errName(err)
 	}
-	if !waitForWindowFullscreen(state, created.window_id, false) {
-		return "WindowDidNotExitFullscreen"
-	}
-	return ""
+	return waitForFullscreenRestoration(state, created.window_id, before)
 }
 
 runWindowFullscreenToggleHiddenTitlebarTest :: proc(state: ^AppState) -> string {
@@ -2992,6 +3035,10 @@ runWindowFullscreenToggleHiddenTitlebarTest :: proc(state: ^AppState) -> string 
 		if electrobun.isWindowFullScreen(state.core, created.window_id) {
 			return "UnexpectedInitialFullscreenState"
 		}
+		before, before_err := readFullscreenSnapshot(state, created.window_id)
+		if before_err != "" {
+			return before_err
+		}
 
 		if err := electrobun.setWindowFullScreen(state.core, created.window_id, true); err != .None {
 			return errName(err)
@@ -3003,10 +3050,7 @@ runWindowFullscreenToggleHiddenTitlebarTest :: proc(state: ^AppState) -> string 
 		if err := electrobun.setWindowFullScreen(state.core, created.window_id, false); err != .None {
 			return errName(err)
 		}
-		if !waitForWindowFullscreen(state, created.window_id, false) {
-			return "WindowDidNotExitFullscreen"
-		}
-		return ""
+		return waitForFullscreenRestoration(state, created.window_id, before)
 	}
 }
 
@@ -3068,6 +3112,8 @@ runWindowOmittedPositionCentersOnPrimaryDisplayTest :: proc(state: ^AppState) ->
 	center_tolerance: f64 = 8
 	if !approxEq(frame.x, expected_x, center_tolerance) ||
 	   !approxEq(frame.y, expected_y, center_tolerance) {
+		after_display, after_err := electrobun.getPrimaryDisplay(state.core)
+		fmt.eprintf("[kitchen odin] window was not centered: frame=%v preCreateWorkArea=%v postCreateWorkArea=%v postCreateError=%v expected=(%g,%g) tolerance=%g\n", frame, display.workArea, after_display.workArea, after_err, expected_x, expected_y, center_tolerance)
 		return "WindowNotCenteredOnPrimaryDisplay"
 	}
 	return ""
