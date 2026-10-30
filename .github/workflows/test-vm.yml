@@ -1,4 +1,4 @@
-name: Intel beta.8 centering diagnostic
+name: Intel beta.8 fullscreen cleanup validation
 
 on:
   workflow_dispatch:
