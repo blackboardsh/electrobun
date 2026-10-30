@@ -1,5 +1,6 @@
 """Desktop-level smoke checks. Never substitutes a DOM capture for visible pixels."""
 import ctypes
+from concurrent.futures import Future
 import json
 import math
 import os
@@ -7,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
 import time
 
 
@@ -775,7 +777,7 @@ def normalized_text(value):
 
 
 def image_has_text(image, expected, recognize, *, deadline, observation=None,
-                   clock=None, regions=None):
+                   clock=None, regions=None, cancelled=None):
     """Inspect one fixed image; incomplete OCR can never establish absence."""
     clock = clock or time.monotonic
     regions = regions or ocr_regions
@@ -786,8 +788,15 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
     if not needle:
         raise ValueError('Expected text must not be empty')
     parts = []
+
+    def check_cancelled():
+        if cancelled is not None and cancelled.is_set():
+            raise RuntimeError('Text OCR observation cancelled')
+
     try:
+        check_cancelled()
         for region, _, config, _, _ in regions(image):
+            check_cancelled()
             remaining = deadline - clock()
             if remaining <= 0:
                 raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
@@ -797,6 +806,7 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
             observation['ocrPasses'] += 1
             parts.append(recognize(region, config=config, timeout=remaining))
             observation['ocrText'] = '\n'.join(parts)[-4096:]
+            check_cancelled()
             if clock() >= deadline:
                 raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
             if needle in normalized_text('\n'.join(parts)):
@@ -815,15 +825,51 @@ def image_has_text(image, expected, recognize, *, deadline, observation=None,
         observation['ocrElapsedSeconds'] = clock() - started
 
 
+class TextAnalysis:
+    """One immutable frame; its private result never updates driver state."""
+    def __init__(self, image, expected, recognize, *, deadline, clock, regions):
+        self.future = Future()
+        self.cancelled = threading.Event()
+
+        def analyze():
+            evidence, found, error = {}, None, None
+            try:
+                found = image_has_text(image, expected, recognize, deadline=deadline,
+                                       observation=evidence, clock=clock, regions=regions,
+                                       cancelled=self.cancelled)
+            except Exception as failure:
+                error = failure
+            self.future.set_result((found, evidence, error, clock()))
+
+        self.thread = threading.Thread(target=analyze, name='desktop-smoke-ocr', daemon=True)
+        self.thread.start()
+
+    def done(self):
+        return self.future.done()
+
+    def result(self):
+        return self.future.result()
+
+    def close(self, timeout):
+        # Stop between OCR passes. A currently running Tesseract process has
+        # its own remaining-budget timeout; join lets it be reaped on errors.
+        self.cancelled.set()
+        self.thread.join(timeout)
+        return not self.thread.is_alive()
+
+
 def observe_text(expected, capture, recognize, *, present=True, response_timeout=45,
-                 analysis_timeout=120, interval=0.25, observation=None,
-                 require_running=None, clock=None, sleep=None, regions=None):
+                 analysis_timeout=120, interval=0.5, observation=None,
+                 require_running=None, clock=None, sleep=None, regions=None,
+                 start_analysis=None):
     """Observe timely desktop frames; bound slow OCR separately from UI response.
 
     A frame must finish capture inside the response window. Its OCR may finish
     later, inside the analysis budget, and proves only what that saved frame
     showed. Neither an OCR error nor an image captured late can pass the check.
-    All captures and OCR remain sequential on the caller's thread.
+    The caller owns every GUI/capture operation. One OCR worker analyzes a
+    fixed image while fresh captures replace the latest eligible image. Only
+    that latest image and the active analysis image remain in memory.
     """
     for name, value in (('response_timeout', response_timeout),
                         ('analysis_timeout', analysis_timeout), ('interval', interval)):
@@ -831,10 +877,14 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
             raise ValueError(f'{name} must be finite and positive')
     clock, sleep = clock or time.monotonic, sleep or time.sleep
     require_running = require_running or (lambda: None)
+    start_analysis = start_analysis or TextAnalysis
     observation = observation if observation is not None else {}
     started = clock()
     response_deadline, analysis_deadline = started + response_timeout, started + analysis_timeout
     samples = []
+    pending, latest = None, None
+    analyzed_index = -1
+    next_capture = started
     observation.update(expected=expected, condition='present' if present else 'absent',
                        responseTimeoutSeconds=response_timeout, analysisTimeoutSeconds=analysis_timeout,
                        samples=samples, outcome='pending')
@@ -845,41 +895,65 @@ def observe_text(expected, capture, recognize, *, present=True, response_timeout
 
     try:
         while True:
-            require_running()
-            if clock() >= response_deadline:
-                raise response_expired()
+            if pending is not None and pending[0].done():
+                future, index, image = pending
+                found, evidence, error, completed = future.result()
+                samples[index].update(evidence)
+                samples[index]['analysisFinishedSeconds'] = completed - started
+                pending, analyzed_index = None, index
+                if error is not None:
+                    raise error
+                require_running()
+                if clock() >= analysis_deadline or completed >= analysis_deadline:
+                    raise TextObservationTimeout('Text observation exceeded its analysis deadline')
+                if found == present:
+                    observation.update(outcome='passed', matchedSample=index,
+                                       responseObservedSeconds=samples[index]['captureFinishedSeconds'])
+                    return image
             if clock() >= analysis_deadline:
                 raise TextObservationTimeout('Text observation exceeded its analysis deadline')
-            sample = {'captureStartedSeconds': clock() - started, 'eligible': False}
-            samples.append(sample)
-            try:
-                image = capture(sample)
-            finally:
-                sample['captureFinishedSeconds'] = clock() - started
-            if clock() > response_deadline:
+            if clock() < response_deadline and clock() >= next_capture:
+                require_running()
+                if clock() < response_deadline:
+                    sample = {'captureStartedSeconds': clock() - started, 'eligible': False}
+                    samples.append(sample)
+                    try:
+                        captured_image = capture(sample)
+                    finally:
+                        sample['captureFinishedSeconds'] = clock() - started
+                    sample['eligible'] = clock() <= response_deadline
+                    if sample['eligible']:
+                        latest = (len(samples) - 1, captured_image)
+                    del captured_image
+                    next_capture = clock() + interval
+            if pending is None and latest is not None and latest[0] > analyzed_index:
+                index, image = latest
+                samples[index]['analysisStartedSeconds'] = clock() - started
+                future = start_analysis(image, expected, recognize, deadline=analysis_deadline,
+                                        clock=clock, regions=regions)
+                pending = (future, index, image)
+                # Pick up an immediately completed analysis before waiting.
+                continue
+            if clock() >= response_deadline and pending is None:
                 raise response_expired()
-            sample['eligible'] = True
-            try:
-                found = image_has_text(image, expected, recognize, deadline=analysis_deadline,
-                                       observation=sample, clock=clock, regions=regions)
-            finally:
-                sample['analysisFinishedSeconds'] = clock() - started
-            require_running()
-            if clock() >= analysis_deadline:
-                raise TextObservationTimeout('Text observation exceeded its analysis deadline')
-            if found == present:
-                observation.update(outcome='passed', matchedSample=len(samples) - 1,
-                                   responseObservedSeconds=sample['captureFinishedSeconds'])
-                return image
-            remaining = response_deadline - clock()
-            if remaining <= 0:
-                raise response_expired()
-            sleep(min(interval, remaining))
+            remaining = analysis_deadline - clock()
+            if clock() < response_deadline:
+                remaining = min(remaining, response_deadline - clock(), next_capture - clock())
+            if remaining > 0:
+                sleep(min(interval, remaining))
     except Exception as error:
         observation.update(outcome='failed', error=str(error))
         raise
     finally:
         observation['elapsedSeconds'] = clock() - started
+        if pending is not None:
+            cleanup_started = clock()
+            try:
+                observation['ocrCleanupComplete'] = pending[0].close(max(0, analysis_deadline - clock()) + 2)
+            except Exception as error:
+                observation['ocrCleanupComplete'] = False
+                observation['ocrCleanupError'] = str(error)
+            observation['ocrCleanupElapsedSeconds'] = clock() - cleanup_started
         if samples:
             observation['initialScreenshot'] = samples[0].get('screenshot')
             observation['lastScreenshot'] = samples[-1].get('screenshot')
