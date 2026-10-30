@@ -40,3 +40,40 @@ zig build test                      # unit tests (style, layout, events, templat
 zig build -Doptimize=ReleaseFast    # tools: shot (CPU → PNG), gpushot (Dawn → PNG + CPU diff), devhost, todo
 zig-out/bin/devhost page.html --dawn path/to/libwebgpu_dawn.dylib   # live-reloading window
 ```
+
+### Reviewing native host changes
+
+Review the OS wrapper and the UI host together. A passing renderer test does
+not exercise the native event loop, focus handling, or window destruction.
+For changes across this boundary, spell out these contracts in the review:
+
+- **Thread and lock order:** dispatch to the OS event thread before acquiring
+  `capi.lock`. Do not hold that lock while synchronously waiting for the OS
+  thread, including native handle lookup and handler registration/removal.
+  Check nested callers as well as the immediate function.
+- **Callback lifetime:** retire the attachment's callback token under the lock
+  before unregistering native handlers or freeing the view. A queued callback
+  must resolve a live attachment, never dereference a retired view or acquire
+  a newly allocated view through a reused address.
+- **Event ordering:** distinguish an OS notification from a request to change
+  state. Stale focus notifications must not initiate another focus transfer;
+  deferred navigation must not overwrite a newer request.
+- **Completion:** a setter returning is not proof that animation, layout, or
+  presentation has completed. Tests issue the action once, observe the required
+  state within a deadline, and retain the actual failing observation. A later
+  screenshot is separate evidence.
+
+The lock-order and stale-callback regressions live in
+[`src/capi.zig`](src/capi.zig) and
+[`src/host/electrobun.zig`](src/host/electrobun.zig). The Kitchen native UI suite
+also exercises repeated creation and destruction of animated windows. Keep a
+regression that fails without the fix; a longer timeout alone is not evidence
+that a runtime defect is resolved.
+
+Validate native host changes on macOS, Windows, and Linux with the
+[`VM test matrix`](../../../.github/workflows/test-vm.yml), in addition to
+[`UI core tests`](../../../.github/workflows/ui-core.yml). Use
+[`source desktop smoke diagnostics`](../../../.github/workflows/source-desktop-smoke.yml)
+for focused visible interactions while developing. The
+[publication acceptance tests](../../../BETA_RELEASE.md) still run after
+publication and verify the artifacts users actually download.
