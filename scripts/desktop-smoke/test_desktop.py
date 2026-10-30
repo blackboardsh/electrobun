@@ -17,6 +17,323 @@ import desktop
 from desktop import stop, counter_difference, ocr_regions, ocr_token, rendered_surface, app_failure
 
 
+class TextObservationTests(unittest.TestCase):
+    def inspect_image(self, outputs, *, deadline=5, costs=None, regions=None):
+        clock = [0.0]
+        calls = []
+        observation = {}
+        outputs = iter(outputs)
+        costs = iter(costs or [])
+
+        def recognize(image, *, config, timeout):
+            calls.append((image, config, timeout))
+            clock[0] += next(costs, 0)
+            value = next(outputs)
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        def default_regions(image):
+            for index in range(3):
+                yield index, 0, f'pass-{index}', 1, 0
+
+        def inspect():
+            return desktop.image_has_text('frame', 'Rendered in a Portal', recognize,
+                deadline=deadline, clock=lambda: clock[0], regions=regions or default_regions,
+                observation=observation)
+
+        return SimpleNamespace(inspect=inspect, clock=clock, calls=calls, observation=observation)
+
+    def test_present_text_short_circuits_remaining_ocr_passes(self):
+        run = self.inspect_image(['Rendered  IN\na Portal'], costs=[0.25])
+        self.assertTrue(run.inspect())
+        self.assertEqual(run.calls, [(0, 'pass-0', 5)])
+        self.assertTrue(run.observation['present'])
+        self.assertFalse(run.observation['ocrComplete'])
+        self.assertEqual(run.observation['ocrElapsedSeconds'], 0.25)
+
+    def test_absence_requires_every_region_and_decreasing_subprocess_budgets(self):
+        run = self.inspect_image(['Open dialog', 'Cancel', ''], costs=[0.5, 1, 0.25])
+        self.assertFalse(run.inspect())
+        self.assertEqual([call[2] for call in run.calls], [5, 4.5, 3.5])
+        self.assertTrue(run.observation['ocrComplete'])
+        self.assertFalse(run.observation['present'])
+        self.assertEqual(run.observation['ocrPasses'], 3)
+
+    def test_later_region_can_find_text_without_false_absence(self):
+        run = self.inspect_image(['', 'Rendered in a Portal'])
+        self.assertTrue(run.inspect())
+        self.assertEqual(len(run.calls), 2)
+
+    def test_slow_matching_or_empty_ocr_cannot_succeed_after_analysis_deadline(self):
+        for value in ('Rendered in a Portal', ''):
+            with self.subTest(value=value):
+                run = self.inspect_image([value], deadline=1, costs=[1])
+                with self.assertRaises(desktop.TextObservationTimeout):
+                    run.inspect()
+                self.assertIsNone(run.observation['present'])
+                self.assertFalse(run.observation['ocrComplete'])
+
+    def test_ocr_timeout_or_read_error_never_becomes_absence(self):
+        for error in (RuntimeError('Tesseract process timeout'), OSError('OCR unavailable')):
+            with self.subTest(error=error):
+                run = self.inspect_image(['', error])
+                with self.assertRaises(type(error)) as raised:
+                    run.inspect()
+                self.assertIs(raised.exception, error)
+                self.assertEqual(len(run.calls), 2)
+                self.assertIsNone(run.observation['present'])
+                self.assertFalse(run.observation['ocrComplete'])
+                self.assertEqual(run.observation['ocrError'], str(error))
+
+    def test_expired_budget_never_starts_unbounded_zero_timeout_ocr(self):
+        run = self.inspect_image([], deadline=0)
+        with self.assertRaises(desktop.TextObservationTimeout):
+            run.inspect()
+        self.assertEqual(run.calls, [])
+
+    def test_region_generation_time_counts_toward_analysis_deadline(self):
+        def slow_regions(image):
+            yield 0, 0, 'first', 1, 0
+            run.clock[0] = 5
+
+        run = self.inspect_image([''], regions=slow_regions)
+        with self.assertRaises(desktop.TextObservationTimeout):
+            run.inspect()
+        self.assertEqual(len(run.calls), 1)
+        self.assertIsNone(run.observation['present'])
+
+    def test_empty_region_set_cannot_establish_absence(self):
+        run = self.inspect_image([], regions=lambda image: iter(()))
+        with self.assertRaisesRegex(RuntimeError, 'no regions'):
+            run.inspect()
+        self.assertIsNone(run.observation['present'])
+
+
+class TextResponseTests(unittest.TestCase):
+    def observe(self, frames, *, present=False, capture_costs=(), ocr_costs=(),
+                response=15, analysis=120, interval=0.25, error=None, crash_after_ocr=False):
+        clock, captures, reads, sleeps, observation = [0.0], [], [], [], {}
+        frame_values = iter(frames)
+        capture_costs, ocr_costs = iter(capture_costs), iter(ocr_costs)
+
+        def capture(sample):
+            frame = next(frame_values)
+            captures.append(frame)
+            sample['screenshot'] = f'{len(captures)}-frame.png'
+            clock[0] += next(capture_costs, 0)
+            if isinstance(frame, Exception):
+                raise frame
+            return frame
+
+        def recognize(frame, *, config, timeout):
+            reads.append((frame, timeout))
+            clock[0] += next(ocr_costs, 0)
+            if error:
+                raise error
+            return frame
+
+        def health():
+            if crash_after_ocr and reads:
+                raise RuntimeError('App worker crashed')
+
+        def sleep(seconds):
+            sleeps.append(seconds)
+            clock[0] += seconds
+
+        def run():
+            return desktop.observe_text('Portal', capture, recognize, present=present,
+                response_timeout=response, analysis_timeout=analysis, interval=interval,
+                observation=observation, clock=lambda: clock[0], sleep=sleep,
+                require_running=health, regions=lambda frame: [(frame, 0, '--psm 11', 1, 0)])
+
+        return SimpleNamespace(run=run, captures=captures, reads=reads, sleeps=sleeps,
+                               clock=clock, observation=observation)
+
+    def test_timely_closed_frame_can_finish_analysis_after_response_deadline(self):
+        run = self.observe(['closed'], capture_costs=[1], ocr_costs=[76])
+        self.assertEqual(run.run(), 'closed')
+        self.assertEqual(run.observation['responseObservedSeconds'], 1)
+        self.assertEqual(run.observation['elapsedSeconds'], 77)
+        self.assertEqual(run.observation['samples'][0]['analysisFinishedSeconds'], 77)
+        self.assertEqual(run.reads, [('closed', 119)])
+
+    def test_presence_has_same_separate_capture_and_analysis_semantics(self):
+        run = self.observe(['Portal'], present=True, response=45, capture_costs=[44], ocr_costs=[10])
+        self.assertEqual(run.run(), 'Portal')
+        self.assertEqual(run.observation['responseObservedSeconds'], 44)
+        self.assertEqual(run.observation['elapsedSeconds'], 54)
+
+    def test_each_failed_observation_uses_a_fresh_frame_without_extending_deadlines(self):
+        run = self.observe(['Portal', 'closed'], ocr_costs=[4, 76])
+        self.assertEqual(run.run(), 'closed')
+        self.assertEqual(run.captures, ['Portal', 'closed'])
+        self.assertEqual(run.reads, [('Portal', 120), ('closed', 115.75)])
+        self.assertEqual(run.observation['responseObservedSeconds'], 4.25)
+        self.assertEqual(run.observation['elapsedSeconds'], 80.25)
+        self.assertEqual(run.observation['initialScreenshot'], '1-frame.png')
+        self.assertEqual(run.observation['lastScreenshot'], '2-frame.png')
+
+    def test_late_capture_is_rejected_before_ocr_even_when_it_shows_closed_dialog(self):
+        run = self.observe(['closed'], capture_costs=[15.01])
+        with self.assertRaisesRegex(desktop.TextObservationTimeout, 'capture deadline'):
+            run.run()
+        self.assertEqual(run.reads, [])
+        self.assertFalse(run.observation['samples'][0]['eligible'])
+        self.assertEqual(run.observation['outcome'], 'failed')
+
+    def test_capture_completed_exactly_at_response_deadline_is_eligible(self):
+        run = self.observe(['closed'], capture_costs=[15])
+        self.assertEqual(run.run(), 'closed')
+        self.assertEqual(run.observation['responseObservedSeconds'], 15)
+
+    def test_analysis_overrun_cannot_pass_a_timely_closed_frame(self):
+        run = self.observe(['closed'], ocr_costs=[120])
+        with self.assertRaisesRegex(desktop.TextObservationTimeout, 'analysis deadline'):
+            run.run()
+        self.assertTrue(run.observation['samples'][0]['eligible'])
+        self.assertEqual(run.observation['outcome'], 'failed')
+        self.assertNotIn('matchedSample', run.observation)
+
+    def test_wrong_frame_with_slow_ocr_cannot_trigger_capture_after_response_deadline(self):
+        run = self.observe(['Portal', 'closed'], ocr_costs=[16])
+        with self.assertRaisesRegex(desktop.TextObservationTimeout, 'capture deadline'):
+            run.run()
+        self.assertEqual(run.captures, ['Portal'])
+        self.assertEqual(run.sleeps, [])
+
+    def test_poll_wait_is_clamped_and_no_capture_starts_at_expired_deadline(self):
+        run = self.observe(['Portal', 'closed'], response=1, ocr_costs=[0.8])
+        with self.assertRaises(desktop.TextObservationTimeout):
+            run.run()
+        self.assertEqual(run.captures, ['Portal'])
+        self.assertEqual(len(run.sleeps), 1)
+        self.assertAlmostEqual(run.sleeps[0], 0.2)
+        self.assertEqual(run.clock[0], 1)
+
+    def test_ocr_errors_and_capture_errors_preserve_failure_and_evidence(self):
+        for capture_error in (False, True):
+            with self.subTest(capture_error=capture_error):
+                error = OSError('read failed')
+                run = self.observe([error] if capture_error else ['closed'],
+                                   error=None if capture_error else error)
+                with self.assertRaises(OSError) as raised:
+                    run.run()
+                self.assertIs(raised.exception, error)
+                self.assertEqual(run.observation['outcome'], 'failed')
+                self.assertEqual(run.observation['lastScreenshot'], '1-frame.png')
+                self.assertNotIn('matchedSample', run.observation)
+
+    def test_app_crash_during_ocr_prevents_success(self):
+        run = self.observe(['closed'], crash_after_ocr=True)
+        with self.assertRaisesRegex(RuntimeError, 'App worker crashed'):
+            run.run()
+        self.assertEqual(run.observation['outcome'], 'failed')
+        self.assertNotIn('matchedSample', run.observation)
+
+
+class TextActionTests(unittest.TestCase):
+    def exercise_action(self, *, present=False, never_changes=False):
+        from contextlib import ExitStack
+        from PIL import Image, ImageChops
+        opened = Image.new('RGB', (160, 100), 'black')
+        opened.paste('white', (0, 0, 80, 100))
+        closed = ImageChops.invert(opened)
+        initial, changed = (closed, opened) if present else (opened, closed)
+        clock, clicked, input_time, post_click_captures, reads = [0.0], [False], [None], [0], []
+        size = namedtuple('Size', 'width height')(160, 100)
+        label = 'Open' if present else 'Cancel'
+        gui = SimpleNamespace(size=Mock(return_value=size), moveTo=Mock(), mouseDown=Mock(), mouseUp=Mock())
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'),
+            Output=SimpleNamespace(DICT='dict'), image_to_data=Mock(return_value={
+                'text': [label], 'left': [60], 'top': [40], 'width': [40], 'height': [20]}))
+        process = Mock()
+        process.poll.return_value = None
+
+        def release():
+            clicked[0], input_time[0] = True, clock[0]
+
+        def screenshot():
+            if not clicked[0]:
+                return initial
+            post_click_captures[0] += 1
+            if never_changes:
+                # The later failure screenshot changes, while every eligible
+                # assertion frame remains unchanged. It cannot rescue failure.
+                return changed if clock[0] - input_time[0] >= 15 else initial
+            return initial if post_click_captures[0] == 1 else changed
+
+        def recognize(image, *, config, timeout):
+            reads.append(timeout)
+            clock[0] += 2 if len(reads) == 1 or never_changes else 76
+            return 'Rendered in a Portal' if image.getpixel((0, 0)) == (255, 255, 255) else 'Open dialog'
+
+        def sleep(seconds):
+            clock[0] += seconds
+
+        gui.mouseUp.side_effect = release
+        gui.screenshot = Mock(side_effect=screenshot)
+        ocr.image_to_string = Mock(side_effect=recognize)
+        with tempfile.TemporaryDirectory() as directory:
+            plan = {'name': 'native-ui', 'title': 'Native UI kitchen sink', 'output': directory,
+                    'cwd': directory, 'command': ['unused'], 'actions': [{'click': label,
+                        'expectText' if present else 'absentText': 'Rendered in a Portal',
+                        'expectChange': True, 'settle': 0}]}
+            with ExitStack() as patches:
+                patches.enter_context(patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}))
+                patches.enter_context(patch.object(desktop.sys, 'platform', 'linux'))
+                patches.enter_context(patch.object(desktop.subprocess, 'Popen', return_value=process))
+                patches.enter_context(patch.object(desktop, 'stop'))
+                windows = patches.enter_context(patch.object(desktop, 'window', return_value=(0, 0, 160, 100)))
+                patches.enter_context(patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]))
+                patches.enter_context(patch.object(desktop.time, 'sleep', side_effect=sleep))
+                patches.enter_context(patch.object(desktop, 'ocr_regions',
+                    side_effect=lambda image: [(image, 0, '--psm 11', 1, 0)]))
+                if never_changes:
+                    with self.assertRaisesRegex(desktop.TextObservationTimeout, 'capture deadline'):
+                        desktop.inspect_app(plan)
+                else:
+                    desktop.inspect_app(plan)
+            result = json.loads((Path(directory) / 'result.json').read_text())
+            evidence = json.loads((Path(directory) / 'text-observations.jsonl').read_text())
+            self.assertEqual(result['textObservations'], [evidence])
+            self.assertEqual(gui.mouseDown.call_count, 1)
+            self.assertEqual(gui.mouseUp.call_count, 1)
+            self.assertEqual(gui.moveTo.call_args_list, [unittest.mock.call(2, 2), unittest.mock.call(80.0, 50.0)])
+            self.assertEqual(windows.call_args_list[0].kwargs, {})
+            self.assertTrue(all(call.kwargs == {'activate': False} for call in windows.call_args_list[1:]))
+            for sample in evidence['samples']:
+                self.assertTrue((Path(directory) / sample['screenshot']).exists())
+                self.assertTrue((Path(directory) / sample['windowScreenshot']).exists())
+            if never_changes:
+                with Image.open(Path(directory) / evidence['samples'][-1]['windowScreenshot']) as last:
+                    self.assertIsNone(ImageChops.difference(last, initial).getbbox())
+                with Image.open(Path(directory) / 'failure.png') as later:
+                    self.assertIsNone(ImageChops.difference(later, changed).getbbox())
+            return result, evidence
+
+    def test_presence_and_absence_observe_fresh_frames_after_exactly_one_original_click(self):
+        for present in (False, True):
+            with self.subTest(present=present):
+                result, evidence = self.exercise_action(present=present)
+                self.assertTrue(result['ok'])
+                self.assertEqual(len(evidence['samples']), 2)
+                self.assertEqual(evidence['responseObservedSeconds'], 2.25)
+                self.assertEqual(evidence['elapsedSeconds'], 78.25)
+                self.assertIn('visible-response-to-input', result['checks'])
+                prefix = 'visible-text:' if present else 'occluded-text:'
+                self.assertIn(prefix + 'Rendered in a Portal', result['checks'])
+
+    def test_later_failure_screenshot_cannot_replace_original_deadline_evidence(self):
+        result, evidence = self.exercise_action(never_changes=True)
+        self.assertFalse(result['ok'])
+        self.assertEqual(evidence['outcome'], 'failed')
+        self.assertNotIn('occluded-text:Rendered in a Portal', result['checks'])
+        self.assertNotIn('visible-response-to-input', result['checks'])
+        self.assertTrue(all(sample['captureFinishedSeconds'] <= 15 for sample in evidence['samples']))
+        self.assertNotEqual(evidence['lastScreenshot'], 'failure.png')
+
+
 class WindowsDiagnosticTests(unittest.TestCase):
     def fake_user(self):
         # High bits catch accidental 32-bit HWND conversions even when these

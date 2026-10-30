@@ -1,6 +1,7 @@
 """Desktop-level smoke checks. Never substitutes a DOM capture for visible pixels."""
 import ctypes
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -667,6 +668,125 @@ def app_failure(log_text):
     return None
 
 
+class TextObservationTimeout(AssertionError):
+    pass
+
+
+def normalized_text(value):
+    return ''.join(value.casefold().split())
+
+
+def image_has_text(image, expected, recognize, *, deadline, observation=None,
+                   clock=None, regions=None):
+    """Inspect one fixed image; incomplete OCR can never establish absence."""
+    clock = clock or time.monotonic
+    regions = regions or ocr_regions
+    observation = observation if observation is not None else {}
+    started = clock()
+    observation.update(ocrPasses=0, ocrComplete=False, present=None)
+    needle = normalized_text(expected)
+    if not needle:
+        raise ValueError('Expected text must not be empty')
+    parts = []
+    try:
+        for region, _, config, _, _ in regions(image):
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+            # pytesseract's timeout=0 means unbounded: never start a pass with
+            # an exhausted budget. File preparation can also take time, so
+            # check the clock again after the subprocess returns.
+            observation['ocrPasses'] += 1
+            parts.append(recognize(region, config=config, timeout=remaining))
+            observation['ocrText'] = '\n'.join(parts)[-4096:]
+            if clock() >= deadline:
+                raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+            if needle in normalized_text('\n'.join(parts)):
+                observation['present'] = True
+                return True
+        if clock() >= deadline:
+            raise TextObservationTimeout('Text OCR exceeded its analysis deadline')
+        if not observation['ocrPasses']:
+            raise RuntimeError('Text OCR produced no regions')
+        observation.update(ocrComplete=True, present=False)
+        return False
+    except Exception as error:
+        observation['ocrError'] = str(error)
+        raise
+    finally:
+        observation['ocrElapsedSeconds'] = clock() - started
+
+
+def observe_text(expected, capture, recognize, *, present=True, response_timeout=45,
+                 analysis_timeout=120, interval=0.25, observation=None,
+                 require_running=None, clock=None, sleep=None, regions=None):
+    """Observe timely desktop frames; bound slow OCR separately from UI response.
+
+    A frame must finish capture inside the response window. Its OCR may finish
+    later, inside the analysis budget, and proves only what that saved frame
+    showed. Neither an OCR error nor an image captured late can pass the check.
+    All captures and OCR remain sequential on the caller's thread.
+    """
+    for name, value in (('response_timeout', response_timeout),
+                        ('analysis_timeout', analysis_timeout), ('interval', interval)):
+        if not math.isfinite(value) or value <= 0:
+            raise ValueError(f'{name} must be finite and positive')
+    clock, sleep = clock or time.monotonic, sleep or time.sleep
+    require_running = require_running or (lambda: None)
+    observation = observation if observation is not None else {}
+    started = clock()
+    response_deadline, analysis_deadline = started + response_timeout, started + analysis_timeout
+    samples = []
+    observation.update(expected=expected, condition='present' if present else 'absent',
+                       responseTimeoutSeconds=response_timeout, analysisTimeoutSeconds=analysis_timeout,
+                       samples=samples, outcome='pending')
+
+    def response_expired():
+        requirement = f'Visible text {expected!r} not found' if present else f'Text should be occluded: {expected}'
+        return TextObservationTimeout(f'{requirement} within the {response_timeout:g}-second capture deadline')
+
+    try:
+        while True:
+            require_running()
+            if clock() >= response_deadline:
+                raise response_expired()
+            if clock() >= analysis_deadline:
+                raise TextObservationTimeout('Text observation exceeded its analysis deadline')
+            sample = {'captureStartedSeconds': clock() - started, 'eligible': False}
+            samples.append(sample)
+            try:
+                image = capture(sample)
+            finally:
+                sample['captureFinishedSeconds'] = clock() - started
+            if clock() > response_deadline:
+                raise response_expired()
+            sample['eligible'] = True
+            try:
+                found = image_has_text(image, expected, recognize, deadline=analysis_deadline,
+                                       observation=sample, clock=clock, regions=regions)
+            finally:
+                sample['analysisFinishedSeconds'] = clock() - started
+            require_running()
+            if clock() >= analysis_deadline:
+                raise TextObservationTimeout('Text observation exceeded its analysis deadline')
+            if found == present:
+                observation.update(outcome='passed', matchedSample=len(samples) - 1,
+                                   responseObservedSeconds=sample['captureFinishedSeconds'])
+                return image
+            remaining = response_deadline - clock()
+            if remaining <= 0:
+                raise response_expired()
+            sleep(min(interval, remaining))
+    except Exception as error:
+        observation.update(outcome='failed', error=str(error))
+        raise
+    finally:
+        observation['elapsedSeconds'] = clock() - started
+        if samples:
+            observation['initialScreenshot'] = samples[0].get('screenshot')
+            observation['lastScreenshot'] = samples[-1].get('screenshot')
+
+
 def inspect_app(plan):
     import pyautogui as gui
     import pytesseract
@@ -728,25 +848,26 @@ def inspect_app(plan):
         crop.save(output / f'{label}-window.png')
         return crop
 
-    def text(image):
-        return '\n'.join(pytesseract.image_to_string(region, config=config)
-                         for region, _, config, _, _ in ocr_regions(image))
+    def await_text(expected, limit=45, present=True):
+        observation = {'startedAtEpochSeconds': time.time()}
+        result.setdefault('textObservations', []).append(observation)
 
-    def await_text(expected, limit=45):
-        deadline = time.monotonic() + limit
-        last = ''
-        while time.monotonic() < deadline:
-            require_running()
-            refresh_bounds()
-            image = gui.screenshot()
-            scale = image.width / gui.size().width
-            x, y, w, h = rect
-            image = image.crop(tuple(round(n * scale) for n in (x, y, x+w, y+h)))
-            last = text(image)
-            if ''.join(expected.casefold().split()) in ''.join(last.casefold().split()):
-                return image
-            time.sleep(1)
-        raise AssertionError(f'Visible text {expected!r} not found. Last OCR: {last}')
+        def capture_text(sample):
+            image = capture('presence-check' if present else 'absence-check')
+            sample['screenshot'] = shots[-1]
+            sample['windowScreenshot'] = shots[-1].replace('.png', '-window.png')
+            return image
+
+        try:
+            return observe_text(expected, capture_text, pytesseract.image_to_string,
+                                present=present, response_timeout=limit, analysis_timeout=120,
+                                observation=observation, require_running=require_running)
+        finally:
+            try:
+                with (output / 'text-observations.jsonl').open('a', encoding='utf-8') as log:
+                    log.write(json.dumps(observation) + '\n')
+            except Exception as error:
+                diagnostic_error(result, 'text-observation-evidence', error)
 
     def locate_text(label, image=None, occurrence="first"):
         candidates = []
@@ -963,10 +1084,7 @@ def inspect_app(plan):
                         raise AssertionError(f'Counter did not visibly {expected}: difference from initial={difference:.2f}')
                     checks.append('visible-counter:' + expected)
                 if 'absentText' in action:
-                    time.sleep(1)
-                    observed = ''.join(text(capture('absence-check')).casefold().split())
-                    if ''.join(action['absentText'].casefold().split()) in observed:
-                        raise AssertionError(f'Text should be occluded: {action["absentText"]}')
+                    await_text(action['absentText'], limit=15, present=False)
                     checks.append('occluded-text:' + action['absentText'])
                 time.sleep(action.get('settle', 1))
                 after = capture(f'{index + 2:02d}-interaction')
