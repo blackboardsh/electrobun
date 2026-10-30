@@ -1,4 +1,4 @@
-name: Beta.8 Windows native UI input diagnostic
+name: Beta.8 Windows text observation validation
 
 on:
   workflow_dispatch:
