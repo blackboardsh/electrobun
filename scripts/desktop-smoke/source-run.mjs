@@ -24,9 +24,13 @@ const env = { ...process.env, HUTCH_ELECTROBUN_DEVKIT_ROOT: join(root, 'package/
 assert.equal((await run(hutch, ['--version'], { cwd: scratch, env })).trim(), cli,
   'Source smoke must use the package-pinned Hutch, not the installed channel head');
 const results = [];
+const selection = process.env.SMOKE_SCENARIOS || 'all';
+const allScenarios = [...templateScenarios, ...kitchenScenarios];
+const selected = selection === 'all' ? allScenarios.map(s => s.id) : selection.split(',');
+assert.ok(selected.length > 0 && selected.every(id => allScenarios.some(s => s.id === id)), 'Unknown source smoke scenario');
 // The other UI templates are tray utilities; verify their Cottontail builds
 // without granting screen-recording permissions or opening system settings.
-for (const id of ['ui-color-picker', 'ui-launcher']) {
+for (const id of selection === 'all' ? ['ui-color-picker', 'ui-launcher'] : []) {
   const work = join(output, id), project = join(scratch, id);
   mkdirSync(work);
   try {
@@ -38,7 +42,7 @@ for (const id of ['ui-color-picker', 'ui-launcher']) {
     results.push({ name: `${id} (build)`, status: 'failed', error: error.message });
   }
 }
-for (const scenario of templateScenarios) {
+for (const scenario of templateScenarios.filter(s => selected.includes(s.id))) {
   const reason = skipReason(scenario, `${process.platform === 'win32' ? 'windows' : os}-${process.arch}`);
   if (reason) { results.push({ name: scenario.id, status: 'skipped', reason }); continue; }
   const work = join(output, scenario.id), project = join(scratch, scenario.id);
@@ -64,6 +68,8 @@ for (const scenario of templateScenarios) {
 // A short workspace keeps Windows resource-update paths below MAX_PATH.
 const kitchen = join(scratch, 'kitchen');
 let kitchenBuildError;
+const selectedKitchen = kitchenScenarios.filter(s => selected.includes(s.id));
+if (selectedKitchen.length) {
 try {
   cpSync(join(root, 'kitchen'), kitchen, { recursive: true, filter: path => !/(?:^|[/\\])(?:node_modules|build|artifacts|\.hutch|target|test-results)(?:[/\\]|$)/.test(path) });
   mkdirSync(join(scratch, 'package/scripts'), { recursive: true });
@@ -72,7 +78,8 @@ try {
   await run(hutch, ['scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--build-only'],
     { cwd: kitchen, env, log: join(output, 'kitchen-build.log'), timeout: 1_200_000 });
 } catch (error) { kitchenBuildError = error.message; }
-for (const scenario of kitchenScenarios) {
+}
+for (const scenario of selectedKitchen) {
   const work = join(output, scenario.id);
   mkdirSync(work);
   try {
