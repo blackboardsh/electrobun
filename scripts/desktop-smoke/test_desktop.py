@@ -181,10 +181,96 @@ class WindowsDiagnosticTests(unittest.TestCase):
             self.assertFalse(result['ok'])
 
 
+class WindowsInputDiagnosticTests(unittest.TestCase):
+    def fake_input_user(self):
+        user, target, child, other = WindowsDiagnosticTests().fake_user()
+
+        def name(hwnd, buffer, length):
+            buffer.value = 'Static' if hwnd == child else 'ContainerViewClass'
+            return len(buffer.value)
+
+        def client(hwnd, pointer):
+            pointer._obj.x -= 10
+            pointer._obj.y -= 20
+            return 1
+
+        def thread(thread_id, pointer):
+            info = pointer._obj
+            self.assertEqual(info.cbSize, ctypes.sizeof(info))
+            info.flags = 2
+            info.hwndActive = target
+            info.hwndFocus = child
+            info.hwndCapture = child
+            return 1
+
+        user.GetClassNameW = Mock(side_effect=name)
+        user.ScreenToClient = Mock(side_effect=client)
+        user.GetDpiForWindow = Mock(return_value=144)
+        user.GetPropW = Mock(side_effect=lambda hwnd, key: child if hwnd == child and key == 'ElectrobunUIView' else 0)
+        user.GetGUIThreadInfo = Mock(side_effect=thread)
+        user.ChildWindowFromPointEx = Mock(side_effect=lambda hwnd, point, flags: child if hwnd == target else hwnd)
+        return user, target, child, other
+
+    def test_actual_point_preserves_64_bit_handles_and_reads_static_ui_child_without_input(self):
+        from ctypes import wintypes
+        user, target, child, _ = self.fake_input_user()
+        # WindowFromPoint may skip the subclassed STATIC; retain both observations.
+        user.WindowFromPoint.return_value = target
+        user.WindowFromPoint.side_effect = None
+        with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            state = desktop.windows_input_state(target, 77, [577.5, 414.5])
+        self.assertEqual(state['screenPoint'], [577, 414])
+        self.assertEqual(state['hit']['hwnd'], target)
+        ui = state['childPath'][0]
+        self.assertEqual(ui['hwnd'], child)
+        self.assertEqual(ui['rootHwnd'], target)
+        self.assertTrue(ui['sameOriginalRoot'])
+        self.assertEqual((ui['className'], ui['pid'], ui['threadId']), ('Static', 77, 99))
+        self.assertEqual(ui['clientPoint'], [567, 394])
+        self.assertEqual(ui['dpi'], 144)
+        self.assertTrue(ui['hasElectrobunUIView'])
+        self.assertFalse(state['childPathTruncated'])
+        self.assertEqual(state['windowThread']['hwndCapture'], child)
+        self.assertEqual(state['windowThread']['hwndFocus'], child)
+        for api in ('WindowFromPoint', 'ChildWindowFromPointEx', 'GetAncestor'):
+            self.assertIs(getattr(user, api).restype, wintypes.HWND)
+        self.assertIs(user.GetPropW.restype, wintypes.HANDLE)
+        user.ShowWindow.assert_not_called()
+        user.SetWindowPos.assert_not_called()
+        user.SetForegroundWindow.assert_not_called()
+
+    def test_input_snapshot_rechecks_pid_before_querying_point_or_gui_thread(self):
+        user, target, _, _ = self.fake_input_user()
+        with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            with self.assertRaisesRegex(RuntimeError, 'identity changed'):
+                desktop.windows_input_state(target, 88, [577, 414])
+        user.WindowFromPoint.assert_not_called()
+        user.ChildWindowFromPointEx.assert_not_called()
+        user.GetGUIThreadInfo.assert_not_called()
+
+    def test_input_snapshot_keeps_failed_native_returns_and_bounds_child_traversal(self):
+        user, target, _, _ = self.fake_input_user()
+        user.GetGUIThreadInfo.return_value = 0
+        user.GetGUIThreadInfo.side_effect = None
+        user.GetClassNameW.return_value = 0
+        user.GetClassNameW.side_effect = None
+        user.ScreenToClient.return_value = 0
+        user.ScreenToClient.side_effect = None
+        user.GetDpiForWindow.return_value = 0
+        with patch.object(ctypes, 'windll', SimpleNamespace(user32=user), create=True):
+            state = desktop.windows_input_state(target, 77, [577, 414])
+        self.assertEqual(state['windowThread']['return'], 0)
+        self.assertIsNone(state['windowThread']['hwndCapture'])
+        self.assertIsNone(state['hit']['className'])
+        self.assertIsNone(state['hit']['clientPoint'])
+        self.assertEqual(state['hit']['dpi'], 0)
+        user.ChildWindowFromPointEx.assert_not_called()
+
+
 class NativeOnlyDiagnosticTests(unittest.TestCase):
     def exercise_outcome(self, *, success=False, enabled=True, legacy=True,
                          platform='win32', ownership=True, reused=False, initial_reused=False,
-                         broken=False, thread_errors=False):
+                         broken=False, thread_errors=False, click=False, input_errors=False):
         from contextlib import ExitStack
         from PIL import Image, ImageChops
         frame = Image.new('RGB', (160, 100), 'black')
@@ -192,14 +278,17 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
         changed = ImageChops.invert(frame)
         size = namedtuple('Size', 'width height')(160, 100)
         gui = SimpleNamespace(position=Mock(return_value=(80, 50)), size=Mock(return_value=size),
-                              moveTo=Mock(), screenshot=Mock())
-        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'))
+                              moveTo=Mock(), mouseDown=Mock(), mouseUp=Mock(), screenshot=Mock())
+        ocr = SimpleNamespace(pytesseract=SimpleNamespace(tesseract_cmd='unused'),
+                              Output=SimpleNamespace(DICT='dict'),
+                              image_to_data=Mock(return_value={'text': ['Cancel'], 'left': [60],
+                                  'top': [40], 'width': [40], 'height': [20]}))
         process = Mock(pid=9)
         process.poll.return_value = None
         user, handle, _, _ = WindowsDiagnosticTests().fake_user()
         events = []
         fixed = []
-        active_shots = 2 if success else 3
+        active_shots = (4 if success else 5) if click else (2 if success else 3)
         original_error = 'Input did not produce a visible change'
         original_helper = desktop.native_only_after_outcome
         original_constructor = desktop.WindowsWindowDiagnostics
@@ -252,6 +341,18 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
             assert_fixed('pointer position')
             return 80, 50
 
+        def input_read(hwnd, pid, point):
+            assert_fixed('input state')
+            self.assertTrue(ownership)
+            self.assertFalse(initial_reused)
+            self.assertEqual((hwnd, pid), (handle, 77))
+            self.assertGreaterEqual(observations.call_count, 1)
+            if reused:
+                self.assertEqual(observations.call_count, 1, 'never inspect input after HWND identity changed')
+            if input_errors:
+                raise OSError('input state unavailable')
+            return {'screenPoint': list(point), 'originalHwnd': hwnd, 'originalPid': pid}
+
         def lookup(title, activate=True, diagnostics=None):
             self.assertFalse(fixed, 'post-outcome diagnostics must not re-find or reactivate through window()')
             self.assertIsNone(diagnostics, 'legacy native diagnostics must be suppressed during active assertions')
@@ -261,6 +362,9 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
         def move(*args, **kwargs):
             self.assertFalse(fixed, 'diagnostics must not add mouse input after the outcome')
             events.append(('move', args, kwargs))
+
+        def button():
+            self.assertFalse(fixed, 'diagnostics must not add button input after the outcome')
 
         def sleep(seconds):
             events.append(('sleep', seconds, bool(fixed)))
@@ -273,7 +377,7 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
             events.append(('screenshot', count, bool(fixed)))
             if count <= active_shots:
                 self.assertFalse(fixed, 'all original screenshots must precede diagnostics')
-                return changed if success and count == 2 else frame
+                return changed if success and count == active_shots else frame
             assert_fixed('later screenshot')
             if broken:
                 raise OSError('post-outcome screenshot failed')
@@ -285,7 +389,9 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
             self.assertEqual(result['ok'], success)
             self.assertEqual(result.get('error'), None if success else original_error)
             self.assertEqual(gui.screenshot.call_count, active_shots)
-            self.assertEqual(shots, ['01-rendered.png', '02-02-interaction.png'] + ([] if success else ['failure.png']))
+            original_shots = ['01-rendered.png', '02-target-Cancel.png', '03-02-interaction.png'] if click else ['01-rendered.png', '02-02-interaction.png']
+            self.assertEqual(shots, original_shots + ([] if success else ['failure.png']))
+            self.assertEqual(result['lastClickTarget'], [80, 50] if click else None)
             if not success:
                 with Image.open(Path(output) / 'failure.png') as failure:
                     self.assertIsNone(ImageChops.difference(failure.convert('RGB'), frame).getbbox())
@@ -298,11 +404,14 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
 
         gui.position.side_effect = pointer
         gui.moveTo.side_effect = move
+        gui.mouseDown.side_effect = button
+        gui.mouseUp.side_effect = button
         gui.screenshot.side_effect = screenshot
         with tempfile.TemporaryDirectory() as directory:
             plan = {'name': 'bunny', 'title': 'Bunny', 'output': directory, 'cwd': directory,
                     'command': ['unused'], 'nativeOnlyDiagnostics': enabled, 'diagnostics': legacy,
-                    'actions': [{'move': [0.5, 0.5], 'expectChange': True, 'settle': 0}]}
+                    'actions': [{**({'click': 'Cancel'} if click else {'move': [0.5, 0.5]}),
+                                 'expectChange': True, 'settle': 0}]}
             with ExitStack() as patches:
                 patches.enter_context(patch.dict(sys.modules, {'pyautogui': gui, 'pytesseract': ocr}))
                 patches.enter_context(patch.object(desktop.sys, 'platform', platform))
@@ -316,6 +425,7 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
                 finds = patches.enter_context(patch.object(desktop, 'windows_find_window', side_effect=find))
                 ancestries = patches.enter_context(patch.object(desktop, 'windows_process_ancestry', side_effect=ancestry))
                 observations = patches.enter_context(patch.object(desktop, 'windows_window_state', side_effect=observe))
+                input_reads = patches.enter_context(patch.object(desktop, 'windows_input_state', side_effect=input_read))
                 dispatcher_threads = patches.enter_context(patch.object(desktop, 'windows_dispatcher_threads',
                     side_effect=lambda *args: thread_read('dispatcher threads', *args)))
                 child_threads = patches.enter_context(patch.object(desktop, 'windows_child_threads',
@@ -335,10 +445,13 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
                     int(enabled and platform == 'win32' and ownership and not initial_reused))
             self.assertNotIn('visibleChangeMeans', result, 'legacy metrics must also be suppressed by native-only mode')
             self.assertEqual([event for event in events if event[0] == 'window'],
-                             [('window', True)] + [('window', False)] * 4)
+                             [('window', True)] + [('window', False)] * (5 if click else 4))
             self.assertEqual([event for event in events if event[0] == 'move'],
-                             [('move', (2, 2), {}), ('move', (80.0, 50.0), {'duration': 0.3})])
-            self.assertEqual([event[1] for event in events if event[0] == 'sleep' and not event[2]], [2, 2, 0])
+                             [('move', (2, 2), {}), ('move', (80.0, 50.0), {} if click else {'duration': 0.3})])
+            self.assertEqual([event[1] for event in events if event[0] == 'sleep' and not event[2]],
+                             [2, 2, 0.15, 0] if click else [2, 2, 0])
+            self.assertEqual(gui.mouseDown.call_count, int(click))
+            self.assertEqual(gui.mouseUp.call_count, int(click))
             user.ShowWindow.assert_not_called()
             user.SetWindowPos.assert_not_called()
             user.SetForegroundWindow.assert_not_called()
@@ -348,7 +461,25 @@ class NativeOnlyDiagnosticTests(unittest.TestCase):
             return SimpleNamespace(result=result, events=events, gui=gui, constructors=constructors,
                                    finds=finds, ancestries=ancestries, observations=observations,
                                    thread_readers=(dispatcher_threads, child_threads, process_threads),
-                                   user=user, handle=handle)
+                                   input_reads=input_reads, user=user, handle=handle)
+
+    def test_last_click_and_actual_point_are_read_only_after_original_click_outcome(self):
+        for success in (False, True):
+            with self.subTest(success=success):
+                run = self.exercise_outcome(success=success, click=True)
+                self.assertEqual(run.result['lastClickTarget'], [80, 50])
+                self.assertEqual(run.input_reads.call_count, 2 if success else 22)
+                first = run.result['pointerReadings'][0]
+                self.assertEqual(first['actualPoint']['screenPoint'], [80, 50])
+                self.assertEqual(first['lastClickPoint']['screenPoint'], [80, 50])
+
+    def test_input_snapshot_errors_preserve_original_result_and_later_observations(self):
+        for success in (False, True):
+            with self.subTest(success=success):
+                run = self.exercise_outcome(success=success, click=True, input_errors=True)
+                self.assertTrue(all(error['label'].startswith('input:') for error in run.result['diagnosticErrors']))
+                self.assertEqual(len(run.result['pointerReadings']), 1 if success else 11)
+                self.assertEqual(run.gui.screenshot.call_count, 4 if success else 15)
 
     def test_native_only_failure_observes_after_original_assertion_and_keeps_late_paint_a_failure(self):
         run = self.exercise_outcome()

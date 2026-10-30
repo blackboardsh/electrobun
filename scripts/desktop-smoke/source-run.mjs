@@ -85,6 +85,7 @@ for (const scenario of selectedKitchen) {
   try {
     if (kitchenBuildError) throw new Error(kitchenBuildError);
     const plan = { ...scenario, name: scenario.id, output: work, cwd: kitchen,
+      ...(process.platform === 'win32' && scenario.id === 'kitchen-native-ui' ? { nativeOnlyDiagnostics: true } : {}),
       command: [hutch, 'scripts/kitchen-matrix.ts', '--with=cottontail:cef', '--launch-only', '--timeout=300'],
       env: { AUTO_RUN_TEST_NAME: scenario.test } };
     const planPath = join(work, 'desktop-plan.json');

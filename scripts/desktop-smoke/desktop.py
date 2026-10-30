@@ -245,6 +245,95 @@ def windows_window_state(handle):
     return state
 
 
+def windows_input_state(handle, expected_pid, point):
+    """Read point/window candidates after the outcome, without sending window messages."""
+    from ctypes import wintypes
+
+    class GuiThreadInfo(ctypes.Structure):
+        _fields_ = [('cbSize', wintypes.DWORD), ('flags', wintypes.DWORD),
+                    ('hwndActive', wintypes.HWND), ('hwndFocus', wintypes.HWND),
+                    ('hwndCapture', wintypes.HWND), ('hwndMenuOwner', wintypes.HWND),
+                    ('hwndMoveSize', wintypes.HWND), ('hwndCaret', wintypes.HWND),
+                    ('rcCaret', wintypes.RECT)]
+
+    user = ctypes.windll.user32
+    signatures = {
+        'IsWindow': ([wintypes.HWND], wintypes.BOOL),
+        'GetWindowThreadProcessId': ([wintypes.HWND, ctypes.POINTER(wintypes.DWORD)], wintypes.DWORD),
+        'WindowFromPoint': ([wintypes.POINT], wintypes.HWND),
+        'GetAncestor': ([wintypes.HWND, wintypes.UINT], wintypes.HWND),
+        'ChildWindowFromPointEx': ([wintypes.HWND, wintypes.POINT, wintypes.UINT], wintypes.HWND),
+        'GetClassNameW': ([wintypes.HWND, wintypes.LPWSTR, ctypes.c_int], ctypes.c_int),
+        'ScreenToClient': ([wintypes.HWND, ctypes.POINTER(wintypes.POINT)], wintypes.BOOL),
+        'GetDpiForWindow': ([wintypes.HWND], wintypes.UINT),
+        'GetPropW': ([wintypes.HWND, wintypes.LPCWSTR], wintypes.HANDLE),
+        'GetGUIThreadInfo': ([wintypes.DWORD, ctypes.POINTER(GuiThreadInfo)], wintypes.BOOL),
+    }
+    for name, (args, returns) in signatures.items():
+        function = getattr(user, name)
+        function.argtypes, function.restype = args, returns
+
+    owner = wintypes.DWORD()
+    window_thread = user.GetWindowThreadProcessId(handle, ctypes.byref(owner))
+    if not user.IsWindow(handle) or owner.value != expected_pid or not window_thread:
+        raise RuntimeError('Original window identity changed before input observation')
+
+    def gui_thread(thread):
+        info = GuiThreadInfo()
+        info.cbSize = ctypes.sizeof(info)
+        ok = user.GetGUIThreadInfo(thread, ctypes.byref(info))
+        return {'threadId': thread, 'return': int(ok), 'flags': info.flags if ok else None,
+                **{field: int(getattr(info, field) or 0) if ok else None for field in
+                   ('hwndActive', 'hwndFocus', 'hwndCapture', 'hwndMenuOwner', 'hwndMoveSize', 'hwndCaret')}}
+
+    screen = wintypes.POINT(int(point[0]), int(point[1]))
+
+    def details(hwnd):
+        pid = wintypes.DWORD()
+        thread = user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        root = int(user.GetAncestor(hwnd, 2) or 0)  # GA_ROOT
+        name = ctypes.create_unicode_buffer(256)
+        name_length = user.GetClassNameW(hwnd, name, len(name))
+        client = wintypes.POINT(screen.x, screen.y)
+        converted = user.ScreenToClient(hwnd, ctypes.byref(client))
+        return {'hwnd': hwnd, 'rootHwnd': root, 'pid': pid.value, 'threadId': thread,
+                'sameOriginalRoot': root == handle and pid.value == expected_pid,
+                'className': name.value if name_length else None, 'classNameReturn': name_length,
+                'clientPoint': [client.x, client.y] if converted else None,
+                'screenToClientReturn': int(converted), 'dpi': user.GetDpiForWindow(hwnd),
+                'hasElectrobunUIView': bool(user.GetPropW(hwnd, 'ElectrobunUIView'))}
+
+    hit = int(user.WindowFromPoint(screen) or 0)
+    state = {'screenPoint': [screen.x, screen.y], 'originalHwnd': handle,
+             'originalPid': expected_pid, 'windowThread': gui_thread(window_thread),
+             'hit': details(hit) if hit else None, 'childPath': [], 'childPathTruncated': False}
+    # WindowFromPoint can skip STATIC controls; the native UI surface is a
+    # subclassed STATIC. Keep this bounded geometric child path separately,
+    # rather than treating WindowFromPoint as proof of actual message delivery.
+    parent, seen = handle, {handle}
+    for _ in range(8):
+        client = wintypes.POINT(screen.x, screen.y)
+        if not user.ScreenToClient(parent, ctypes.byref(client)):
+            break
+        child = int(user.ChildWindowFromPointEx(parent, client, 3) or 0)  # skip invisible/disabled
+        if not child or child in seen:
+            break
+        seen.add(child)
+        row = details(child)
+        state['childPath'].append(row)
+        if not row['sameOriginalRoot']:
+            break
+        parent = child
+    else:
+        state['childPathTruncated'] = True
+    for label, candidate in (('hitThread', state['hit']),
+                             ('childThread', state['childPath'][-1] if state['childPath'] else None)):
+        if candidate and candidate['pid'] == expected_pid and candidate['threadId'] and candidate['threadId'] != window_thread:
+            state[label] = gui_thread(candidate['threadId'])
+    return state
+
+
+
 class WindowsWindowDiagnostics:
     def __init__(self, output, result):
         self.output, self.result = output, result
@@ -271,9 +360,17 @@ class WindowsWindowDiagnostics:
             diagnostic_error(self.result, label, error)
             return None
 
-    def record_pointer(self, gui, label):
+    def record_pointer(self, gui, label, inspect_input=False):
         try:
             observation = {'label': label, 'time': time.time(), 'actual': list(gui.position())}
+            if inspect_input:
+                observation['lastClickTarget'] = self.result.get('lastClickTarget')
+                try:
+                    observation['actualPoint'] = windows_input_state(self.handle, self.pid, observation['actual'])
+                    if observation['lastClickTarget'] is not None:
+                        observation['lastClickPoint'] = windows_input_state(self.handle, self.pid, observation['lastClickTarget'])
+                except Exception as error:
+                    diagnostic_error(self.result, 'input:' + label, error)
             self.result.setdefault('pointerReadings', []).append(observation)
             with (self.output / 'pointer-diagnostics.jsonl').open('a', encoding='utf-8') as log:
                 log.write(json.dumps(observation) + '\n')
@@ -295,7 +392,8 @@ class WindowsWindowDiagnostics:
                     break
                 state = self.record(label, self.handle)
                 if observe_pointer:
-                    self.record_pointer(gui, label)
+                    self.record_pointer(gui, label, inspect_input=bool(
+                        state and state['sameOriginalWindow'] and state['isWindow']))
                 image = gui.screenshot()
                 image.save(self.output / f'{label}.png')
                 shots.append(f'{label}.png')
@@ -321,7 +419,6 @@ def native_only_after_outcome(plan, output, result, process, gui, shots):
                     'maximumLaterObservationSeconds': 0 if result['ok'] else 15}
         result['nativeOnlyDiagnostics'] = metadata
         diagnostics = WindowsWindowDiagnostics(output, result)
-        diagnostics.record_pointer(gui, 'native-only-' + outcome)
         handle, pid = windows_find_window(plan['title'])
         metadata['candidateHwnd'], metadata['candidatePid'] = handle, pid
         if not handle or not pid or process is None:
@@ -336,6 +433,7 @@ def native_only_after_outcome(plan, output, result, process, gui, shots):
         state = diagnostics.record('native-only-' + outcome, handle)
         if state is None or not state['sameOriginalWindow'] or not state['isWindow']:
             raise RuntimeError('Diagnostic window identity changed after discovery')
+        diagnostics.record_pointer(gui, 'native-only-' + outcome, inspect_input=True)
         for key, reader, arguments in (
                 ('dispatcherThreads', windows_dispatcher_threads, (pid, state['threadId'])),
                 ('childThreads', windows_child_threads, (pid, state['threadId'], handle)),
@@ -681,6 +779,7 @@ def inspect_app(plan):
     result = {'name': plan['name'], 'ok': False, 'screenshots': shots, 'checks': checks}
     rect = None
     process = None
+    last_click = None
     active_diagnostics = bool(plan.get('diagnostics')) and not plan.get('nativeOnlyDiagnostics')
     window_diagnostics = WindowsWindowDiagnostics(output, result) if active_diagnostics and sys.platform == 'win32' else None
 
@@ -840,7 +939,6 @@ def inspect_app(plan):
             counter_changed = False
             result['windowBounds'] = list(rect)
             result['desktopSize'] = list(gui.size())
-            last_click = None
             cursor_readings = []
             for index, action in enumerate(plan['actions']):
                 refresh_bounds()
@@ -982,6 +1080,7 @@ def inspect_app(plan):
                 raise RuntimeError('App exited during interaction')
             result['ok'] = True
             if plan.get('nativeOnlyDiagnostics') and sys.platform == 'win32':
+                result['lastClickTarget'] = list(last_click) if last_click is not None else None
                 native_only_after_outcome(plan, output, result, process, gui, shots)
     except Exception as error:
         result['error'] = str(error)
@@ -991,6 +1090,7 @@ def inspect_app(plan):
         except Exception as capture_error:
             result['captureError'] = str(capture_error)
         if plan.get('nativeOnlyDiagnostics') and sys.platform == 'win32':
+            result['lastClickTarget'] = list(last_click) if last_click is not None else None
             native_only_after_outcome(plan, output, result, process, gui, shots)
         if window_diagnostics is not None:
             try:

@@ -1,31 +1,20 @@
-name: Source desktop smoke diagnostics
+name: Beta.8 Windows native UI input diagnostic
 
 on:
   workflow_dispatch:
-    inputs:
-      runners:
-        description: Runner group to validate
-        type: choice
-        default: all
-        options:
-          - all
-          - macos-intel
-          - macos-linux
-          - macos-windows
-          - linux-arm64
-          - windows
-      scenarios:
-        description: Comma-separated scenario IDs for focused source diagnostics, or all
-        type: string
-        default: all
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   smoke:
     env:
-      SMOKE_SCENARIOS: ${{ inputs.scenarios || 'all' }}
+      SMOKE_SCENARIOS: kitchen-native-ui
+      ARTIFACT_RUN_ID: '40964564750'
+      ARTIFACT_SHA: '3c4b81a8eaaa141029a1c273f2522e77a59ac5ac'
+      ARTIFACT_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
+      PROBE_RUNNER: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +23,13 @@ jobs:
         # also fails on the hosted macOS 26 Intel image (IconServices).
         # Related runner graphics issue:
         # https://github.com/actions/runner-images/issues/14751
-        include: ${{ fromJSON(inputs.runners == 'macos-intel' && '[{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"}]' || inputs.runners == 'linux-arm64' && '[{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"}]' || inputs.runners == 'windows' && '[{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || inputs.runners == 'macos-linux' && '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"}]' || inputs.runners == 'macos-windows' && '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]' || '[{"runner":"macos-14","platform":"macos-arm64","python":"arm64"},{"runner":"macos-15-intel","platform":"macos-x64","python":"x64"},{"runner":"ubuntu-24.04","platform":"linux-x64","python":"x64"},{"runner":"ubuntu-24.04-arm","platform":"linux-arm64","python":"arm64"},{"runner":"windows-2025","platform":"windows-x64","python":"x64"},{"runner":"windows-11-arm","platform":"windows-arm64","python":"x64"}]') }}
+        include:
+          - runner: windows-2025
+            platform: windows-x64
+            python: x64
+          - runner: windows-11-arm
+            platform: windows-arm64
+            python: x64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 240
     steps:
@@ -42,6 +37,7 @@ jobs:
         with:
           persist-credentials: false
           submodules: recursive
+          fetch-depth: 0
       - uses: actions/setup-node@v6
         with:
           node-version: '24.22.1'
@@ -201,13 +197,78 @@ jobs:
         if: runner.os == 'Windows'
         with:
           arch: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
-      - name: Build source devkit
-        working-directory: package
+      - name: Verify exact beta.8 release artifact provenance
+        id: artifacts
+        shell: bash
         env:
-          ELECTROBUN_BUILD_ARCH: ${{ endsWith(matrix.platform, 'arm64') && 'arm64' || 'x64' }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          hutch run install
-          hutch build:dev
+          set -euo pipefail
+          test "$RUNNER_OS" = Windows
+          test "$SMOKE_SCENARIOS" = kitchen-native-ui
+          git diff --exit-code "$ARTIFACT_SHA" HEAD -- package kitchen
+          mkdir -p "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/run.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/jobs?per_page=100&filter=all" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/jobs.json"
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/artifacts.json"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          const read = name => JSON.parse(readFileSync(join(process.env.RUNNER_TEMP, 'desktop-smoke-results/artifact-provenance', name + '.json'), 'utf8'));
+          const run = read('run');
+          assert.equal(String(run.id), process.env.ARTIFACT_RUN_ID);
+          assert.equal(run.path, '.github/workflows/release.yml');
+          assert.equal(run.head_sha, process.env.ARTIFACT_SHA);
+          assert.equal(run.head_repository.full_name, process.env.GITHUB_REPOSITORY);
+          const arch = process.env.ARTIFACT_ARCH;
+          assert.equal(process.platform, 'win32');
+          assert.equal(process.arch, arch);
+          const buildName = `build (${process.env.PROBE_RUNNER}, win32, ${arch}, win, win)`;
+          assert.ok(read('jobs').jobs.some(job => job.name === buildName && job.conclusion === 'success'), 'Missing successful matching release build');
+          const ids = ['core', 'cef'].map(kind => {
+            const candidates = read('artifacts').artifacts.filter(item => item.name === `electrobun-${kind}-win-${arch}`);
+            assert.equal(candidates.length, 1);
+            const artifact = candidates[0];
+            assert.equal(artifact.expired, false);
+            assert.equal(String(artifact.workflow_run.id), process.env.ARTIFACT_RUN_ID);
+            assert.equal(artifact.workflow_run.head_sha, process.env.ARTIFACT_SHA);
+            return artifact.id;
+          });
+          appendFileSync(process.env.GITHUB_OUTPUT, `ids=${ids.join(',')}\n`);
+          JS
+      - name: Download exact beta.8 core and CEF artifacts
+        uses: actions/download-artifact@v7
+        with:
+          artifact-ids: ${{ steps.artifacts.outputs.ids }}
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ github.token }}
+          path: diagnostic-artifacts
+          merge-multiple: true
+      - name: Stage and verify unchanged beta.8 native devkit
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e package/dist
+          mkdir -p package/dist
+          tar -xzf "diagnostic-artifacts/electrobun-core-win-$ARTIFACT_ARCH.tar.gz" -C package/dist
+          tar -xzf "diagnostic-artifacts/electrobun-cef-win-$ARTIFACT_ARCH.tar.gz" -C package/dist
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { join } from 'node:path';
+          import { validateNativeDevkitManifest } from './package/scripts/validate-native-devkit.mjs';
+          import { validateWindowsReleaseArchitecture } from './package/scripts/windows-binary-architecture.mjs';
+          const arch = process.env.ARTIFACT_ARCH;
+          validateNativeDevkitManifest({ coreRoot: 'package/dist', expectedVersion: '2.0.6-beta.8', expectedTarget: { os: 'win', arch } });
+          assert.ok(validateWindowsReleaseArchitecture('package/dist', arch) > 0);
+          const hashes = Object.fromEntries(['core', 'cef'].map(kind => {
+            const file = `electrobun-${kind}-win-${arch}.tar.gz`;
+            return [file, createHash('sha256').update(readFileSync(join('diagnostic-artifacts', file))).digest('hex')];
+          }));
+          writeFileSync(join(process.env.RUNNER_TEMP, 'desktop-smoke-results/artifact-provenance/archive-sha256.json'), JSON.stringify(hashes, null, 2));
+          JS
       - name: Check native text bitmap (macOS)
         if: runner.os == 'macOS'
         working-directory: package
