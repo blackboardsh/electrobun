@@ -17,6 +17,36 @@ import desktop
 from desktop import stop, counter_difference, ocr_regions, ocr_token, rendered_surface, app_failure
 
 
+class ResponseTimingTests(unittest.TestCase):
+    def exercise(self, capture_seconds):
+        clock, captures = [0.0], []
+        def capture(index):
+            captures.append((index, clock[0]))
+            clock[0] += capture_seconds
+        def sleep(seconds):
+            clock[0] += seconds
+        with patch.object(desktop.time, 'monotonic', side_effect=lambda: clock[0]), \
+                patch.object(desktop.time, 'sleep', side_effect=sleep):
+            desktop.sample_response_frames(capture)
+        return clock[0], captures
+
+    def test_samples_quarter_seconds_and_never_starts_at_or_after_deadline(self):
+        elapsed, captures = self.exercise(0.02)
+        self.assertEqual([started for _, started in captures], [index * 0.25 for index in range(20)])
+        self.assertEqual(elapsed, 5)
+
+    def test_slow_capture_does_not_catch_up_or_start_another_after_deadline(self):
+        elapsed, captures = self.exercise(2.6)
+        self.assertEqual(captures, [(1, 0), (12, 2.75)])
+        self.assertAlmostEqual(elapsed, 5.35)
+
+    def test_capture_failure_stops_sampling_without_retry(self):
+        capture = Mock(side_effect=OSError('capture unavailable'))
+        with self.assertRaisesRegex(OSError, 'capture unavailable'):
+            desktop.sample_response_frames(capture)
+        capture.assert_called_once_with(1)
+
+
 class WindowsDiagnosticTests(unittest.TestCase):
     def fake_user(self):
         # High bits catch accidental 32-bit HWND conversions even when these

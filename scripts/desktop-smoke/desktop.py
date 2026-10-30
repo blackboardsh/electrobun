@@ -13,6 +13,28 @@ def diagnostic_error(result, label, error):
     result.setdefault('diagnosticErrors', []).append({'label': label, 'error': str(error)})
 
 
+def response_timing_stamp():
+    return {'monotonic': time.monotonic(), 'wallTime': time.time()}
+
+
+def sample_response_frames(capture, duration=5, interval=0.25):
+    """Observe for a fixed interval; never retry input or consume a late frame as success."""
+    started = time.monotonic()
+    deadline = started + duration
+    index = 0
+    while time.monotonic() < deadline:
+        due = started + index * interval
+        remaining = min(due, deadline) - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+        if time.monotonic() >= deadline:
+            break
+        capture(index + 1)
+        index += 1
+        # Slow capture/write work must not cause a burst of catch-up samples.
+        index = max(index, int((time.monotonic() - started) / interval) + 1)
+
+
 def windows_find_window(title):
     """Find the diagnostic candidate once, without activation or geometry changes."""
     from ctypes import wintypes
@@ -780,6 +802,7 @@ def inspect_app(plan):
     rect = None
     process = None
     last_click = None
+    response_timing = None
     active_diagnostics = bool(plan.get('diagnostics')) and not plan.get('nativeOnlyDiagnostics')
     window_diagnostics = WindowsWindowDiagnostics(output, result) if active_diagnostics and sys.platform == 'win32' else None
 
@@ -812,10 +835,14 @@ def inspect_app(plan):
             raise AssertionError('App window is no longer visible')
         rect = current
 
-    def capture(label):
+    def capture(label, timing=None):
         refresh_bounds()
         record_pointer('capture:' + label)
+        if timing is not None:
+            timing['screenshotStarted'] = response_timing_stamp()
         image = gui.screenshot()
+        if timing is not None:
+            timing['screenshotFinished'] = response_timing_stamp()
         label = f'{len(shots) + 1:02d}-{label}'
         image.save(output / f'{label}.png')
         shots.append(f'{label}.png')
@@ -825,6 +852,9 @@ def inspect_app(plan):
         box = tuple(round(n * scale) for n in (x, y, x + w, y + h))
         crop = image.crop(box)
         crop.save(output / f'{label}-window.png')
+        if timing is not None:
+            timing.update(screenshot=label + '.png', crop=label + '-window.png',
+                          windowBounds=list(rect), saved=response_timing_stamp())
         return crop
 
     def text(image):
@@ -951,6 +981,13 @@ def inspect_app(plan):
                             if label == [action['click'], *action.get('aliases', [])][-1]:
                                 raise
                     click_control(gui, last_click)
+                    if (sys.platform == 'win32' and plan.get('id') == 'kitchen-native-ui'
+                            and action['click'] == 'Cancel' and 'absentText' in action):
+                        response_timing = {'clickReturned': response_timing_stamp(),
+                                           'requestedPoint': list(last_click), 'samples': [],
+                                           'observationSeconds': 5, 'sampleIntervalSeconds': 0.25,
+                                           'assertionUsesOriginalCapture': True}
+                        result['responseTiming'] = response_timing
                 if action.get('clickAgain'):
                     if last_click is None:
                         raise AssertionError('No previous control to click again')
@@ -1062,7 +1099,31 @@ def inspect_app(plan):
                     checks.append('visible-counter:' + expected)
                 if 'absentText' in action:
                     time.sleep(1)
-                    observed = ''.join(text(capture('absence-check')).casefold().split())
+                    original_timing = {} if response_timing is not None else None
+                    original = capture('absence-check', original_timing)
+                    if response_timing is not None:
+                        response_timing['originalAbsenceCapture'] = original_timing
+                        response_timing['observationStarted'] = response_timing_stamp()
+                        def sample(index):
+                            timing = {'sample': index}
+                            response_timing['samples'].append(timing)
+                            capture(f'response-timing-{index:02d}', timing)
+                        try:
+                            sample_response_frames(sample)
+                        except Exception as error:
+                            diagnostic_error(result, 'response-timing', error)
+                        response_timing['observationFinished'] = response_timing_stamp()
+                        response_timing['ocrStarted'] = response_timing_stamp()
+                    try:
+                        # Always judge the ORIGINAL one-second screenshot.
+                        observed = ''.join(text(original).casefold().split())
+                    finally:
+                        if response_timing is not None:
+                            response_timing['ocrFinished'] = response_timing_stamp()
+                            response_timing['ocrElapsedSeconds'] = (
+                                response_timing['ocrFinished']['monotonic']
+                                - response_timing['ocrStarted']['monotonic'])
+                            print('[response-timing] ' + json.dumps(response_timing), flush=True)
                     if ''.join(action['absentText'].casefold().split()) in observed:
                         raise AssertionError(f'Text should be occluded: {action["absentText"]}')
                     checks.append('occluded-text:' + action['absentText'])
