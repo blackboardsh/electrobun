@@ -193,6 +193,9 @@ jobs:
       - uses: ./.github/actions/install-hutch
         with:
           channel: canary
+      - name: Install the package-pinned Hutch before resolving its executable
+        working-directory: package
+        run: hutch self path 0.28.2
       - uses: ilammy/msvc-dev-cmd@v1
         if: runner.os == 'Windows'
         with:
