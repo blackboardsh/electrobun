@@ -1,4 +1,4 @@
-name: Beta.8 Windows native UI response timing diagnostic
+name: Beta.8 Windows native UI event and frame timing diagnostic
 
 on:
   workflow_dispatch:
@@ -209,8 +209,10 @@ jobs:
           set -euo pipefail
           test "$RUNNER_OS" = Windows
           test "$SMOKE_SCENARIOS" = kitchen-native-ui
-          git diff --exit-code "$ARTIFACT_SHA" HEAD -- package kitchen
           mkdir -p "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance"
+          git diff --exit-code "$ARTIFACT_SHA" HEAD -- package
+          git diff --exit-code "$ARTIFACT_SHA" HEAD -- kitchen ':(exclude)kitchen/src/tests/interactive/native-ui.test.tsx'
+          git diff "$ARTIFACT_SHA" HEAD -- kitchen/src/tests/interactive/native-ui.test.tsx > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/fixture-diagnostic.patch"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/run.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/jobs?per_page=100&filter=all" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/jobs.json"
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ARTIFACT_RUN_ID/artifacts?per_page=100" > "$RUNNER_TEMP/desktop-smoke-results/artifact-provenance/artifacts.json"
@@ -300,6 +302,9 @@ jobs:
       - name: Smoke source templates (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          EBUI_HOST_DEBUG: '1'
+          EBUI_EVENT_TIMING: '1'
         run: |
           $output = Join-Path $env:RUNNER_TEMP 'desktop-smoke-results'
           New-Item -ItemType Directory -Force -Path $output | Out-Null

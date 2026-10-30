@@ -29,7 +29,7 @@ const css = `
 
 type Todo = { id: number; text: string; done: boolean };
 
-function KitchenSink(props: { toggleDark: () => void }) {
+function KitchenSink(props: { toggleDark: () => void; diagnosticBufferLength?: () => number }) {
 	const [page, setPage] = signal(process.env["NATIVE_UI_SINK_PAGE"] || "Components");
 	const [count, setCount] = signal(0);
 	const [form, setForm] = store({ name: "", email: "", plan: "pro", notify: true, volume: 40, bio: "" });
@@ -43,6 +43,23 @@ function KitchenSink(props: { toggleDark: () => void }) {
 	const [wide, setWide] = signal(false);
 	const [tab, setTab] = signal("One");
 	const [dialog, setDialog] = signal(false);
+	const changeDialog = (open: boolean, action: "Open" | "Cancel") => {
+		const trace = (phase: string) => {
+			if (props.diagnosticBufferLength) {
+				console.log("[ebui fixture] " + JSON.stringify({
+					action, phase, wallTimeMs: Date.now(), dialog: dialog(),
+					bufferBytes: props.diagnosticBufferLength(),
+				}));
+			}
+		};
+		trace("handler-before");
+		setDialog(open);
+		trace("handler-after");
+		if (props.diagnosticBufferLength) {
+			// Observe after the setter's already-queued work; never force a flush.
+			queueMicrotask(() => trace("queued-after-setter"));
+		}
+	};
 	const [toasts, setToasts] = signal<{ id: number; msg: string }[]>([]);
 	const remaining = memo(() => todos().filter((t) => !t.done).length);
 	let nextId = 4;
@@ -81,7 +98,7 @@ function KitchenSink(props: { toggleDark: () => void }) {
 					<div class="eb-row" style="gap: 8px; flex-wrap: wrap">
 						<button class="eb-btn" onClick={() => setCount((c) => c + 1)}>{live(() => `Clicked ${count()}×`)}</button>
 						<button class="eb-btn secondary" onClick={() => toast("Saved!")}>Show toast</button>
-						<button class="eb-btn outline" onClick={() => setDialog(true)}>Open dialog</button>
+						<button class="eb-btn outline" onClick={() => changeDialog(true, "Open")}>Open dialog</button>
 						<button class="eb-btn ghost">Ghost</button>
 						<button class="eb-btn danger">Danger</button>
 						<button class="eb-btn" disabled>Disabled</button>
@@ -241,7 +258,7 @@ function KitchenSink(props: { toggleDark: () => void }) {
 								<div class="eb-dialog-desc">Rendered in a Portal over a blurred backdrop.</div>
 							</div>
 							<div class="eb-dialog-footer">
-								<button class="eb-btn outline" onClick={() => setDialog(false)}>Cancel</button>
+								<button class="eb-btn outline" onClick={() => changeDialog(false, "Cancel")}>Cancel</button>
 								<button class="eb-btn" onClick={() => { setDialog(false); toast("Confirmed"); }}>Confirm</button>
 							</div>
 						</div>
@@ -283,7 +300,8 @@ export const nativeUiInteractiveTests = [
 			const ui = createUI(win, { css, components: true });
 			let dark = !!process.env["NATIVE_UI_SINK_DARK"];
 			if (dark) ui.setDark(true);
-			ui.render(() => <KitchenSink toggleDark={() => ui.setDark((dark = !dark))} />);
+			ui.render(() => <KitchenSink toggleDark={() => ui.setDark((dark = !dark))}
+				diagnosticBufferLength={process.env["EBUI_EVENT_TIMING"] === "1" ? () => ui.document.buf.len : undefined} />);
 			log("kitchen sink rendered");
 			await new Promise<void>((resolve) => win.on("close", () => resolve()));
 		},
