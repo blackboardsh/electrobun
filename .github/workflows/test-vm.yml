@@ -238,11 +238,79 @@ jobs:
           }
           Write-Host 'Windows shell notification area is ready.'
 
+      - name: Mark macOS VM crash-report interval
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/electrobun-macos-crash-reports"
+          touch "$RUNNER_TEMP/electrobun-macos-crash-reports/suite-started"
+
       - name: Run full VM suite (macOS and Windows desktop)
         timeout-minutes: 300
         if: runner.os != 'Linux'
         working-directory: package
         run: hutch test:vm
+
+      - name: Collect fresh macOS VM crash reports
+        if: always() && runner.os == 'macOS'
+        continue-on-error: true
+        timeout-minutes: 2
+        shell: bash
+        run: |
+          python3 - <<'PYTHON'
+          import json
+          import os
+          from pathlib import Path
+          import re
+          import shutil
+          import time
+
+          destination = Path(os.environ["RUNNER_TEMP"]) / "electrobun-macos-crash-reports"
+          started = destination / "suite-started"
+          if not started.exists():
+              print("VM crash-report interval marker is unavailable; no reports selected")
+              raise SystemExit(0)
+          cutoff = started.stat().st_mtime
+          # ReportCrash writes asynchronously after SIGTRAP; allow a bounded flush.
+          time.sleep(5)
+          deadline = time.monotonic() + 60
+          roots = [("user", Path.home() / "Library/Logs/DiagnosticReports"),
+                   ("system", Path("/Library/Logs/DiagnosticReports"))]
+          process_name = re.compile(r"(?:^|[^a-z0-9])(?:electrobunkitchensink|kitchensink|kitchen|main|launcher|bun|cottontail|electrobun|cef)(?:[^a-z0-9]|$)", re.I)
+          selected, errors = [], []
+          truncated = False
+          for label, root in roots:
+              if not root.exists():
+                  continue
+              for directory, _, names in os.walk(root, onerror=lambda error: errors.append(str(error))):
+                  if time.monotonic() >= deadline:
+                      truncated = True
+                      break
+                  for name in names:
+                      if time.monotonic() >= deadline:
+                          truncated = True
+                          break
+                      report = Path(directory) / name
+                      if report.suffix.lower() not in (".ips", ".crash") or not process_name.search(name):
+                          continue
+                      try:
+                          if report.is_symlink() or not report.is_file():
+                              continue
+                          info = report.stat()
+                          if info.st_mtime < cutoff:
+                              continue
+                          target = destination / label / report.relative_to(root)
+                          target.parent.mkdir(parents=True, exist_ok=True)
+                          shutil.copy2(report, target)
+                          selected.append({"source": str(report), "saved": str(target.relative_to(destination)),
+                                           "modified": info.st_mtime, "size": info.st_size})
+                      except OSError as error:
+                          errors.append(f"{report}: {error}")
+          (destination / "index.json").write_text(json.dumps({"started": cutoff, "reports": selected,
+              "errors": errors, "scanDeadlineExceeded": truncated}, indent=2))
+          print(f"Collected {len(selected)} fresh VM crash reports; scan errors: {len(errors)}; truncated: {truncated}")
+          PYTHON
 
       - name: Upload test diagnostics
         if: always()
@@ -258,5 +326,6 @@ jobs:
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-core-sync-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/electrobun-kitchen-hang-*/**
             ${{ env.ELECTROBUN_DIAGNOSTICS_TEMP }}/updater-lifecycle-e2e-*/signals/**
+            ${{ runner.temp }}/electrobun-macos-crash-reports/**
             ${{ runner.temp }}/openbox.log
             kitchen/test-results/**
