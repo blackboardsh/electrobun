@@ -109,15 +109,16 @@ function stopTree(child) {
 // Own each command's process tree, enforce a deadline, and retain per-stage logs.
 // Hello-world is intentionally left unchanged: observe its startup marker and
 // require it to remain alive briefly before stopping it. The fixture must exit 0.
-export async function run(command, args, { cwd, env, log, timeout = 600_000, startupMarker } = {}) {
-	let output = "", observed = false, expired = false;
+export async function run(command, args, { cwd, env, log, timeout = 600_000, startupMarker, stdoutOnly = false } = {}) {
+	let output = "", stdout = "", observed = false, expired = false;
 	if (log) writeFileSync(log, "");
 	const child = spawn(command, args, { cwd, env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
 	let settled;
 	const done = new Promise((resolveDone, reject) => {
 		settled = resolveDone;
 		child.once("error", reject);
-		child.once("exit", (code, signal) => resolveDone({ code, signal }));
+		// Machine-readable output is complete only after both pipes close.
+		child.once("close", (code, signal) => resolveDone({ code, signal }));
 	});
 	let readyTimer;
 	const consume = chunk => {
@@ -127,7 +128,10 @@ export async function run(command, args, { cwd, env, log, timeout = 600_000, sta
 			readyTimer = setTimeout(() => { observed = true; stopTree(child); }, 3000);
 		}
 	};
-	child.stdout.on("data", consume);
+	child.stdout.on("data", chunk => {
+		if (stdoutOnly) stdout = (stdout + chunk.toString()).slice(-2_000_000);
+		consume(chunk);
+	});
 	child.stderr.on("data", consume);
 	const timer = setTimeout(() => { expired = true; stopTree(child); settled({ code: null, signal: "deadline" }); }, timeout);
 	try {
@@ -135,7 +139,7 @@ export async function run(command, args, { cwd, env, log, timeout = 600_000, sta
 		if (expired || (startupMarker ? !observed : result.code !== 0)) {
 			throw new Error(`${command} ${args.join(" ")} ${expired ? "timed out" : `failed (${result.code}/${result.signal})`}\n${output.slice(-6000)}`);
 		}
-		return output;
+		return stdoutOnly ? stdout : output;
 	} finally {
 		clearTimeout(timer); clearTimeout(readyTimer); stopTree(child);
 	}

@@ -19,7 +19,8 @@ const os = { darwin: 'macos', linux: 'linux', win32: 'win' }[process.platform];
 validateNativeDevkitManifest({ coreRoot: join(root, 'package/dist'), expectedVersion: version, expectedTarget: { os, arch: process.arch } });
 const pragma = readFileSync(join(root, 'package/hutch.config.ts'), 'utf8').split('\n')[0];
 const cli = pragma.match(/cli=(\S+)/)[1];
-const hutch = (await run('hutch', ['self', 'path', cli], { cwd: join(root, 'package'), env: { ...process.env, HUTCH_DEFAULT_CLI: cli } })).trim();
+// A cold resolution prints download progress on stderr. Only stdout is a path.
+const hutch = (await run('hutch', ['self', 'path', cli], { cwd: join(root, 'package'), env: { ...process.env, HUTCH_DEFAULT_CLI: cli }, stdoutOnly: true })).trim();
 const env = { ...process.env, HUTCH_ELECTROBUN_DEVKIT_ROOT: join(root, 'package/dist'), HUTCH_DEFAULT_ELECTROBUN: version, HUTCH_DEFAULT_CLI: cli, HUTCH_ENGINE_BINARY: hutch };
 assert.equal((await run(hutch, ['--version'], { cwd: scratch, env })).trim(), cli,
   'Source smoke must use the package-pinned Hutch, not the installed channel head');

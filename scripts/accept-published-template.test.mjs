@@ -252,6 +252,19 @@ test("command runner rejects failure and hangs rather than accepting an absent r
 	await assert.rejects(run(process.execPath, ["-e", "setInterval(()=>{},1000)"], { timeout: 100 }), /timed out/);
 });
 
+test("machine-readable stdout excludes progress but logs and failures retain stderr", async t => {
+	const scratch = mkdtempSync(join(tmpdir(), "electrobun-command-output-"));
+	t.after(() => rmSync(scratch, { recursive: true, force: true }));
+	const log = join(scratch, "command.log");
+	const script = "console.error('downloading pinned CLI'); console.log('/path with spaces/hutch');";
+	assert.equal(await run(process.execPath, ["-e", script], { stdoutOnly: true, log }), "/path with spaces/hutch\n");
+	assert.match(readFileSync(log, "utf8"), /downloading pinned CLI/);
+	assert.match(readFileSync(log, "utf8"), /\/path with spaces\/hutch/);
+	assert.match(await run(process.execPath, ["-e", script]), /downloading pinned CLI/);
+	await assert.rejects(run(process.execPath, ["-e", "console.error('download failed'); process.exitCode = 7"],
+		{ stdoutOnly: true }), /download failed/);
+});
+
 test("a startup marker followed by an immediate crash is not successful startup", async () => {
 	await assert.rejects(run(process.execPath, ["-e", "console.log('ready');process.exit(1)"], { timeout: 5000, startupMarker: "ready" }), /failed/);
 });
